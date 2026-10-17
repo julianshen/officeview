@@ -24,6 +24,7 @@ export const DRAWING_MEMORY_REFUSED = 'drawing-memory-refused'
 export const DRAWING_NODE_BUDGET = 'drawing-node-budget'
 /** Accounted bytes of one plain object/array of a drawing model (fields, strings: an estimate). */
 const OBJECT_BYTES = 128
+const ARRAY_SLOT_BYTES = 8
 
 /** Estimated memory of a drawing model: every reachable object plus its binary buffers (each once). */
 export function drawingFootprint(value: unknown): number {
@@ -35,6 +36,9 @@ export function drawingFootprint(value: unknown): number {
     seen.add(item)
     if (ArrayBuffer.isView(item)) { if (!buffers.has(item.buffer)) { buffers.add(item.buffer); bytes += item.buffer.byteLength }; return }
     bytes += OBJECT_BYTES
+    // Indexed storage: one 8-byte slot per array element (numbers, holes and
+    // references alike); referenced objects/strings are counted on their own.
+    if (Array.isArray(item)) bytes += item.length * ARRAY_SLOT_BYTES
     for (const entry of Array.isArray(item) ? item : Object.values(item)) visit(entry)
   }
   visit(value)

@@ -162,8 +162,8 @@ describe('worksheet drawing anchors', () => {
     })
     const sheet = (await parseXlsx(pkg)).sheets[0]
     expect(sheet.drawings?.map(n => n.source.id)).toEqual(['30', '31', 'rInk'])
-    expect(sheet.drawings?.map(n => n.content?.kind)).toEqual(['chart', 'diagram', 'ink'])
-    expect(sheet.drawings?.[0].content?.kind === 'chart' ? sheet.drawings[0].content.series[0].color : '').toBe('123456')
+    expect(sheet.drawings?.map(n => n.content?.kind)).toEqual(['xlsxChart', 'diagram', 'ink'])
+    expect(sheet.drawings?.[0].content?.kind === 'xlsxChart' ? sheet.drawings[0].content.chart.groups[0].series[0].color : '').toBe('123456')
     expect(sheet.drawings?.[1].content?.kind === 'diagram' ? sheet.drawings[1].content.shapes.length : 0).toBe(1)
   })
 
@@ -330,7 +330,7 @@ describe('worksheet drawing anchors', () => {
       zip.file('xl/charts/chart9.xml', '<chartSpace><chart><plotArea><barChart><barDir val="col"/><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></barChart></plotArea></chart></chartSpace>')
     })
     const sheet = (await parseXlsx(pkg)).sheets[0]
-    expect(sheet.drawings?.[0].content?.kind).toBe('chart')
+    expect(sheet.drawings?.[0].content?.kind).toBe('xlsxChart')
     expect(sheet.drawings?.[0].source).toMatchObject({ id: '501', name: 'chart carrier', representation: 'fallback', partPath: 'xl/drawings/drawing7.xml' })
     expect(sheet.drawingDiagnostics?.some(issue => issue.identity === 'missing')).toBe(false)
   })
@@ -357,7 +357,7 @@ describe('worksheet drawing anchors', () => {
     }
   })
 
-  test('recovers native picture fallback after an attempted horizontal-chart Choice at either MC level', async () => {
+  test('recovers native picture fallback after an attempted unsupported (radar) chart Choice at either MC level', async () => {
     const canvas = createCanvas(1, 1)
     canvas.getContext('2d').fillStyle = '#0000FF'; canvas.getContext('2d').fillRect(0, 0, 1, 1)
     const chart = '<c:chart r:id="rChart"/>'
@@ -366,7 +366,7 @@ describe('worksheet drawing anchors', () => {
     for (const markup of [alternate(frameBody(chart), pic(702, 'rImg')), frameBody(alternate(chart, pic(702, 'rImg')))]) {
       const pkg = await fixture(absolute(markup, 0, 0, 100, 100), '', '', zip => {
         zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/hbar.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
-        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><barChart><barDir val="bar"/><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></barChart></plotArea></chart></chartSpace>')
+        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><radarChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></radarChart></plotArea></chart></chartSpace>')
         zip.file('xl/media/blue.png', canvas.toBuffer('image/png'))
       })
       const sheet = (await parseXlsx(pkg)).sheets[0]
@@ -387,7 +387,7 @@ describe('worksheet drawing anchors', () => {
     const sheet = (await parseXlsx(pkg)).sheets[0]
     expect(sheet.drawings?.[0].source.id).toBe('711')
     expect(sheet.drawings?.[0].source.representation).toBe('choice')
-    expect(sheet.drawings?.[0].content?.kind).toBe('chart')
+    expect(sheet.drawings?.[0].content?.kind).toBe('xlsxChart')
     expect(sheet.drawingDiagnostics?.some(issue => issue.identity === 'missing')).toBe(false)
   })
 
@@ -521,7 +521,7 @@ describe('worksheet drawing anchors', () => {
       const doc = await parseXlsx(pkg)
       expect(doc.sheets[0].drawings?.[0].source.id, choice).toBe(id)
       expect(doc.images, choice).toHaveLength(imageCount)
-      if (id === '1601' && choice === supported) expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('chart')
+      if (id === '1601' && choice === supported) expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('xlsxChart')
     }
     const nested = unsupported.replace('<c:chart r:id="rChart"/>', `<mc:AlternateContent><mc:Choice Requires="a"><c:chart r:id="rChart"/></mc:Choice><mc:Fallback>${pic(1603, 'rImg')}</mc:Fallback></mc:AlternateContent>`)
     const nestedPkg = await fixture(absolute(nested, 0, 0, 90, 50), '', '', zip => {

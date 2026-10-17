@@ -628,6 +628,8 @@ export interface FindNavigation {
   /** Per-sheet scroll windows; zoom lives in each window and the retained state. */
   windows: Map<string, ScrollWindow>
   viewport: ViewportSize
+  /** Authored frozen panes of a sheet, for a window created here (first hit on an unvisited sheet). */
+  frozen?: (sheetId: string) => { rows: number; cols: number } | undefined
 }
 export type NavigateHitResult =
   | { kind: 'visible'; sheetId: string; window: ScrollWindow; announcement: string }
@@ -648,7 +650,8 @@ export function navigateToHit(navigation: FindNavigation, hit: FindHit): Navigat
   const projection = state.projection
   if (!projection) return { kind: 'needs-projection', sheetId: hit.sheetId }
   const request = { addressSpace: 'source' as const, at: { row: hit.source.row, col: hit.source.col } }
-  const window = windows.get(hit.sheetId) ?? createScrollWindow(projection, viewport, { zoom: state.zoom })
+  const freeze = navigation.frozen?.(hit.sheetId)
+  const window = windows.get(hit.sheetId) ?? createScrollWindow(projection, viewport, { zoom: state.zoom, ...(freeze ? { frozen: { rows: freeze.rows, cols: freeze.cols } } : {}) })
   const selected = navigateSelection(state.selection, projection, request, state.view)
   if (selected.kind === 'hidden') {
     if (selected.selection !== state.selection) session.setSelection(hit.sheetId, selected.selection)

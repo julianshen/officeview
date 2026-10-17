@@ -74,6 +74,8 @@ interface Entry {
   timer?: ReturnType<typeof setTimeout>
   /** Derived sheet/document shells, memoized per generation. */
   shells?: { gen: number; base: XlsxSheet; sheet: XlsxSheet }
+  /** Sheets a chart of this payload still waits on: read again once they complete. */
+  pendingSheets?: readonly string[]
 }
 const none: SheetGeometry['drawingsIn'] = () => []
 const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
@@ -101,6 +103,9 @@ export class RemoteDrawingCache {
       entry.rearmAt = undefined
     }
     if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
+    // A chart read before a referenced sheet finished importing: asking for the
+    // sheets' state starts their structure polls; once all completed, read again.
+    if (entry.state === 'ready' && entry.pendingSheets?.length && entry.pendingSheets.every(id => this.host.loadState(id).completeness !== 'loading')) this.invalidate(sheetId)
     return entry
   }
   /** Bytes of the retained payloads. */
@@ -113,6 +118,8 @@ export class RemoteDrawingCache {
   structureComplete(sheetId: string): void {
     const entry = this.entries.get(sheetId)
     if (entry?.state === 'waiting' && !entry.timer) void this.load(sheetId, entry)
+    // Charts on other sheets that read this one are read again.
+    for (const [id, other] of [...this.entries]) if (other.state === 'ready' && other.pendingSheets?.includes(sheetId)) this.invalidate(id)
   }
   /** Placement depends on the layout: a newer layout reads the content again. */
   invalidate(sheetId: string): void {
@@ -146,6 +153,7 @@ export class RemoteDrawingCache {
     entry.bytes = 0
     entry.drawingsIn = none
     entry.shells = undefined
+    entry.pendingSheets = undefined
   }
 
   private async load(sheetId: string, entry: Entry): Promise<void> {
@@ -192,6 +200,7 @@ export class RemoteDrawingCache {
     entry.bytes = result.bytes
     entry.drawingsIn = drawingQuery(result.drawings)
     entry.shells = undefined
+    entry.pendingSheets = result.pendingSheets?.length ? [...result.pendingSheets] : undefined
     entry.gen++
     // Least recently used sheets give their payloads back first; the one just adopted stays.
     for (const [id, other] of this.entries) {

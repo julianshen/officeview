@@ -217,6 +217,9 @@ export interface SheetDrawings {
   diagnostics: readonly WorkerDiagnostic[]
   bytes: number
   error?: SourceFailure
+  /** Sheets whose cells a chart reads but whose import has not reached them yet:
+   * the payload is not cached and is read again once they complete. */
+  pendingSheets?: readonly string[]
 }
 
 /** Interval/range shapes only; no per-covered-cell expansion, spec §4.5. */
@@ -380,6 +383,9 @@ export interface ScrollWindow {
   physicalExtent: { width: number; height: number }
   zoom: SheetZoom
   deviceScale: number
+  /** Authored frozen panes: requested counts and the logical extents pinned at
+   * this zoom/viewport (0 = that axis is not pinned). See frozenPanes.ts. */
+  frozen?: { rows: number; cols: number; left: number; top: number }
 }
 export const SHEET_MIN_ZOOM = 0.25
 export const SHEET_MAX_ZOOM = 4
@@ -496,6 +502,8 @@ export interface SheetLayout {
   /** Authored-hidden columns: zero width for paint, navigation, find and copy. */
   hiddenCols?: readonly { start: number; end: number }[]
   used?: SourceRect
+  /** Authored frozen panes. */
+  frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }
 export type WorkerCommand =
   | { kind: 'open'; requestId: string; docId: string; source: SourceHandle; profile: ProfileId }

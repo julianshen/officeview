@@ -1,3 +1,4 @@
+import type { XlsxFrozenPane } from './frozenPane'
 /** XLSX document model. */
 import type { SceneImage, SceneNode } from '../drawing/scene'
 import type { DrawingContent } from '../drawing/content'
@@ -128,6 +129,8 @@ export interface XlsxDrawingAnchors { records: XlsxDrawingAnchorRecord[]; unreso
 
 export interface XlsxSheet {
   drawingCoverage?: DrawingCoverageEntry[]
+  /** Authored frozen panes of the first sheet view (interactive viewer only). */
+  frozen?: XlsxFrozenPane
   name: string
   sourcePartPath?: string
   /** Resolved workbook semantics (date system/locale/zone/clock) so the

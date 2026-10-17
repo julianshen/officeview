@@ -22,9 +22,9 @@ import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type 
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
-import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, intersects, invalidMergeDiagnostic } from './source'
+import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, withFrozen, intersects, invalidMergeDiagnostic } from './source'
 import {
-  F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt,
+  F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt, textPrefix,
   type CellPagePayload, type PageSummary,
 } from '../storage/sourcePages'
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
@@ -32,7 +32,8 @@ import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, value
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
-import type { XlsxSheet } from '../types'
+import type { XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../types'
+import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
 
@@ -461,8 +462,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit) => this.fillCharts(drawings, owner, controller.signal, names, admit) })
       nodes.record(sheetId, parsed.nodes)
+      // A chart still waiting on another sheet's import is answered, never cached.
+      if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) return parsed.drawings
       return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
     } catch (cause) {
       if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
@@ -472,6 +475,218 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       options.signal.removeEventListener('abort', abort)
       this.workbook.parts.signal.removeEventListener('abort', abort)
     }
+  }
+
+  /** Fill uncached chart references from committed pages, as a bounded stream:
+   * 1. The point workspace (points x CHART_CELL_BYTES) is admitted before any
+   *    page is touched; refusal makes the charts placeholders.
+   * 2. The consumed cells are grouped by page from the ordered page summaries
+   *    (binary search, no page load) with the label need merged per cell.
+   * 3. Pages are processed in order, one at a time: each needed cell is
+   *    extracted into compact chart storage (numbers in a Float64Array,
+   *    labels capped at CHART_LABEL_LIMIT) and the page is released before the
+   *    next is loaded, so no decoded page outlives its source charge.
+   * 4. Every string is admitted before it is built, against a running
+   *    reservation: a raw string by its capped prefix (a numeric-role string
+   *    longer than the label limit is not a number and is never built), a
+   *    formatted label by an upper bound of its format's output, then trued
+   *    up to the actual label. The total is capped at CHART_TEXT_BYTES_LIMIT.
+   *    Refusal rolls the reservation back and refuses the read.
+   * Worst case: one decoded page plus the admitted chart storage.
+   * Cells past a loading sheet's frontier stay unknown (pendingSheets); a
+   * failed sheet turns its charts into placeholders and is never cached. */
+  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
+    const charts = await loadChartModule()
+    charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
+    const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
+    const diagnostics: WorkerDiagnostic[] = []
+    const failed = charts.markUnreadableCharts(drawings, owner, name => {
+      const sheet = sheetOf(name)
+      if (!sheet || sheet.state !== 'incomplete') return undefined
+      const reason = `Chart data on sheet “${sheet.name}” could not be read${sheet.failure?.message ? `: ${sheet.failure.message}` : ''}`
+      if (!diagnostics.some(d => d.message === reason)) diagnostics.push({ code: 'chart-data-unavailable', message: reason })
+      return reason
+    })
+    const done = (extra: { refused?: boolean } = {}) => ({ pendingSheets: [...pending], ...extra, ...(failed ? { uncacheable: true, diagnostics } : {}) })
+    const pending = new Set<string>()
+    const lines = charts.pendingLines(drawings, owner).filter(line => sheetOf(line.sheet)?.state !== 'incomplete')
+    const points = lines.reduce((total, line) => total + line.count, 0)
+    const base = points * charts.CHART_CELL_BYTES
+    if (!admit(base)) {
+      charts.refuseCharts(drawings, 'This chart needs more worker memory than the document has free')
+      return done()
+    }
+    // 2. Needed cells, grouped by page (summary search only).
+    const key = (sheet: string, row: number, col: number) => `${sheet.toLowerCase()}\u0000${row}\u0000${col}`
+    const slots = new Map<string, number>()
+    const wantsText: boolean[] = []
+    const groups = new Map<string, { sheetId: string; pageId: string; order: number; cells: Array<{ slot: number; row: number; col: number }> }>()
+    for (const line of lines) {
+      const sheet = sheetOf(line.sheet)
+      if (!sheet) continue
+      const lastRow = line.vertical ? line.start + line.count - 1 : line.fixed
+      if (lastRow > sheet.importedThroughRow) pending.add(sheet.sheetId)
+      const pages = this.workbook.store.pages(sheet.sheetId)
+      let cursor = -1
+      for (let i = 0; i < line.count; i++) {
+        const at = charts.linePoint(line, i)
+        if (at.row > sheet.importedThroughRow) break
+        const id = key(sheet.name, at.row, at.col)
+        const known = slots.get(id)
+        if (known !== undefined) { wantsText[known] ||= line.text; continue }
+        if (cursor < 0 || pages[cursor].r0 > at.row || pages[cursor].r1 < at.row) {
+          let lo = 0, hi = pages.length
+          while (lo < hi) { const mid = (lo + hi) >>> 1; if (pages[mid].r1 < at.row) lo = mid + 1; else hi = mid }
+          cursor = lo < pages.length && pages[lo].r0 <= at.row ? lo : -1
+        }
+        if (cursor < 0) continue
+        const summary = pages[cursor]
+        if (summary.aggregate.records === 0 || at.col < summary.c0 || at.col > summary.c1) continue
+        const slot = wantsText.length
+        slots.set(id, slot)
+        wantsText.push(line.text)
+        const groupKey = `${sheet.sheetId}\u0000${summary.pageId}`
+        let group = groups.get(groupKey)
+        if (!group) groups.set(groupKey, group = { sheetId: sheet.sheetId, pageId: summary.pageId, order: cursor, cells: [] })
+        group.cells.push({ slot, row: at.row, col: at.col })
+      }
+    }
+    // 3./4. Stream the pages in order; strings admitted before they are built.
+    const nums = new Float64Array(wantsText.length)
+    // 0 unknown, 1 number, 2 text that is not a number, 3 present without a value
+    const state = new Uint8Array(wantsText.length)
+    const strings: Array<string | undefined> = new Array(wantsText.length)
+    const labels: Array<string | undefined> = new Array(wantsText.length)
+    let reserved = base
+    // Live charges of the records being read (a page, a string record) that the pool could not keep:
+    // part of EVERY admission until the record is released (ownRecord / disown).
+    // The unretained holders themselves, read at every admission: a lease's charge
+    // can grow while it is held (its RAM owner released the shared buffer).
+    const charges: { page?: { bytes: number }; string?: { bytes: number } } = {}
+    const charged = () => (charges.page?.bytes ?? 0) + (charges.string?.bytes ?? 0)
+    const reserve = (bytes: number): boolean => {
+      if (reserved + bytes - base > charts.CHART_TEXT_BYTES_LIMIT || !admit(reserved + charged() + bytes)) return false
+      reserved += bytes
+      return true
+    }
+    const refuse = (release?: () => void) => { release?.(); admit(0); return done({ refused: true }) }
+    const LIMIT = charts.CHART_LABEL_LIMIT
+    // Formatting runs with an output cap (no builder grows past LIMIT + 1 units): the
+    // capped output is admitted up front, and every further transient the formatter
+    // reports through its allocation observer is admitted before it is allocated.
+    const LABEL_OUTPUT_BYTES = (LIMIT + 1) * 2 * 2
+    class LabelRefused extends Error {}
+    const styles = this.workbook.formatting.styles
+    const display: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(this.workbook.formatting.dateSystem) }
+    /** One ownership path for pages and string records: pinned when the pool keeps
+     * the record, otherwise charged to the read (refused when that charge cannot be
+     * admitted). The charge stays in every admission until `disown`. */
+    const ownRecord = <T extends { retained: boolean; bytes: number; release: () => void }>(held: T, slot: 'page' | 'string'): boolean => {
+      if (held.retained) return true
+      charges[slot] = held
+      if (admit(reserved + charged())) return true
+      held.release(); charges[slot] = undefined
+      return false
+    }
+    const disown = (held: { release: () => void } | undefined, slot: 'page' | 'string') => { held?.release(); charges[slot] = undefined }
+    // Number reading and label construction for one cell's text (record: typed storage).
+    const takeText = (slot: number, kind: number, record: { text: Uint16Array; textStart: Uint32Array }, at: number, style: XlsxCellStyle | undefined): boolean => {
+      const from = record.textStart[at], length = record.textStart[at + 1] - from
+      // The numeric reading streams the typed text (never built); labels are capped prefixes.
+      const scanned = kind === K_ERROR ? undefined : charts.scanChartNumber(length, k => record.text[from + k])
+      if (scanned !== undefined) { nums[slot] = scanned; state[slot] = 1 } else state[slot] = 2
+      if (!wantsText[slot]) return true
+      // Admitted, then built: at most LIMIT + 1 units (one past the limit marks truncation).
+      if (!reserve(Math.min(length, LIMIT + 1) * 2)) return false
+      const value = textPrefix(record, at, LIMIT + 1).text
+      strings[slot] = value
+      return label(slot, value, style)
+    }
+    const label = (slot: number, value: string | number | boolean | null, style: XlsxCellStyle | undefined): boolean => {
+      if (!reserve(LABEL_OUTPUT_BYTES)) return false
+      let live = 0, admitted = LABEL_OUTPUT_BYTES
+      const allocation = {
+        maxOutput: LIMIT + 1,
+        allocate: (bytes: number) => {
+          live += bytes
+          if (live <= admitted) return
+          // Transient formatter work is admitted against the read's memory (the hard cap bounds kept label storage).
+          if (!admit(reserved - LABEL_OUTPUT_BYTES + live + charged())) throw new LabelRefused()
+          admitted = live
+        },
+        release: (bytes: number) => { live -= bytes },
+      }
+      let text: string | undefined
+      try { text = cellDisplayText(display, { value, style }, allocation) }
+      catch (error) { if (error instanceof LabelRefused) return false; text = undefined }
+      // Capped output keeps LIMIT + 1 units: one past the limit marks the label truncated (fillChartRanges cuts it).
+      if (text !== undefined && text.length > LIMIT + 1) text = text.slice(0, LIMIT + 1)
+      // True the reservation down to the label actually kept.
+      reserved -= LABEL_OUTPUT_BYTES - (text?.length ?? 0) * 2
+      labels[slot] = text
+      return true
+    }
+    for (const group of [...groups.values()].sort((a, b) => a.sheetId === b.sheetId ? a.order - b.order : a.sheetId < b.sheetId ? -1 : 1)) {
+      if (signal.aborted) return done()
+      // Pass 1, page owned (its pool charge pinned; a page the pool could not keep
+      // is charged to the read): numbers, inline text and their labels; shared
+      // strings and oversized values are only noted, so no string record is
+      // needed while the page is held.
+      const deferred: Array<{ slot: number; kind: number; source: 'sst' | 'blob'; id: number; style: XlsxCellStyle | undefined }> = []
+      const held = await this.workbook.store.pinnedPage(group.sheetId, group.pageId)
+      if (!ownRecord(held, 'page')) return refuse()
+      try {
+        const p = held.page
+        for (const cell of group.cells) {
+          if (signal.aborted) return done()
+          const index = this.find(p, cell.row, cell.col)
+          if (index < 0) continue
+          if (this.isUnavailable(p, index)) { state[cell.slot] = 3; continue }
+          const kind = p.kinds[index], style = styles[p.styles[index]]
+          if (kind === K_SST) { deferred.push({ slot: cell.slot, kind, source: 'sst', id: p.nums[index], style }); continue }
+          if (kind === K_TEXT || kind === K_ERROR) {
+            if ((p.flags[index] & F_BLOB) !== 0) { deferred.push({ slot: cell.slot, kind, source: 'blob', id: p.nums[index], style }); continue }
+            if (!takeText(cell.slot, kind, p, index, style)) return refuse()
+            continue
+          }
+          const value = await this.valueOf(p, index)
+          if (typeof value === 'number' && Number.isFinite(value)) { nums[cell.slot] = value; state[cell.slot] = 1 } else state[cell.slot] = 3
+          if (wantsText[cell.slot] && !label(cell.slot, value, style)) return refuse()
+        }
+      } finally { disown(held, 'page') }
+      // Pass 2, page released: string records one at a time. The needed ids are grouped
+      // by record (SST chunk / oversized value) so each record is owned once, and the
+      // previous record is released before the next is loaded: at most one string
+      // record is owned at any moment.
+      const byRecord = new Map<string, typeof deferred>()
+      for (const item of deferred) {
+        const recordKey = this.workbook.store.stringRecordKey(item.source, item.id)
+        let items = byRecord.get(recordKey)
+        if (!items) byRecord.set(recordKey, items = [])
+        items.push(item)
+      }
+      for (const items of [...byRecord.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(([, list]) => list)) {
+        if (signal.aborted) return done()
+        const record = await this.workbook.store.pinnedString(items[0].source, items[0].id)
+        if (!record) { for (const item of items) state[item.slot] = 3; continue }
+        if (!ownRecord(record, 'string')) return refuse()
+        try {
+          for (const item of items) {
+            if (signal.aborted) return done()
+            // Entries of one record: an SST id's offset within the chunk follows from the first id's.
+            const index = item.source === 'sst' ? record.index + (item.id - items[0].id) : record.index
+            if (!takeText(item.slot, item.kind, record.record, index, item.style)) return refuse()
+          }
+        } finally { disown(record, 'string') }
+      }
+    }
+    charts.fillDrawings(drawings, owner, (sheet, row, col) => {
+      const slot = slots.get(key(sheet, row, col))
+      if (slot === undefined || state[slot] === 0) return undefined
+      const number = state[slot] === 1 ? nums[slot] : null
+      return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
+    })
+    return done()
   }
 
   /** Keeps a complete payload in the pool (when one is bound and it fits) and
@@ -556,6 +771,8 @@ function memoryRefusal(): SheetDrawings {
 
 function pageFailure(cause: unknown): SourceFailure {
   const code = (cause as { code?: unknown } | null)?.code
+  // A record the source memory cannot admit right now (spec §12.4): typed and retryable.
+  if (code === 'resource-limit') return failure('resource-limit', (cause as Error).message, true)
   if (code === 'storage-error' || code === 'quota' || code === 'parse-error' || code === 'cancelled') {
     return failure(code, (cause as Error).message, code !== 'parse-error')
   }
@@ -620,7 +837,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       let geometry = geometries.get(sheetId)
       if (!geometry) {
         // Row metadata arrives with the rows; cache only once the sheet is complete.
-        geometry = buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata) })
+        geometry = withFrozen(buildGeometry(sheet.metadata.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), sheet.metadata.cols, sheet.metadata.hiddenRows, { hiddenCols: true, columns: pagedColumns(workbook, sheet.metadata) }), sheet.metadata.frozen)
         if (sheet.state === 'complete') geometries.set(sheetId, geometry)
       }
       return geometry

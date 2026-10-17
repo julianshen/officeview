@@ -2,7 +2,9 @@ import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type Mous
 import type { CacheIdentity, GridSelection, SheetView, ScrollWindow, SourceRowInterval, ProfileId } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
-import { visibleLogicalViewport, navigateKey, navigateTo, hitTestViewport, logicalToViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
+import { visibleSpans } from '../../xlsx/view/frozenPanes'
+import type { AxisWindow } from '../../xlsx/view/contracts'
+import { navigateKey, navigateTo, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
@@ -116,6 +118,12 @@ function rowLocalColumn(full: { x: number; width: number }, viewport: ViewportSi
 const hiddenText = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
 /** S5 supplies current presentation snapshots and mounts its bounded canvas in
  * children. This shell never fetches values or renders legacy worksheet paint. */
+/** Visible runs of an axis over one or two disjoint logical spans (frozen strip, body). */
+function spanWindow(axis: { visibleBetween(start: number, end: number): AxisWindow }, spans: ReadonlyArray<[number, number]>): AxisWindow {
+  if (spans.length === 1) return axis.visibleBetween(spans[0][0], spans[0][1])
+  const windows = spans.map(([start, end]) => axis.visibleBetween(start, end))
+  return { runs: windows.flatMap(window => [...window.runs]), count: windows.reduce((sum, window) => sum + window.count, 0) }
+}
 export function GridSemantics(props: GridSemanticsProps): ReactElement {
   const instance = useId(), { projection, window: scroll, viewport, view } = props
   const gutter = props.gutter ?? GRID_HEADER_SIZE
@@ -167,8 +175,9 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   }, [props.popup])
   const current = reconcileSelection(props.selection, projection, view), selection = current.selection
   const multiSelected = multiCellSelection(selection)
-  const pane = visibleLogicalViewport(scroll, viewport)
-  const rowWindow = projection.rows.visibleBetween(pane.y, pane.y + pane.height), colWindow = projection.cols.visibleBetween(pane.x, pane.x + pane.width)
+  // Frozen panes: the pinned strip and the scrolling body are separate logical spans.
+  const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
+  const rowWindow = spanWindow(projection.rows, spans.y), colWindow = spanWindow(projection.cols, spans.x)
   const limits = FRAME_LIMITS[props.profile ?? 'D']
   let coarse = props.renderMode === 'coarse' || rowWindow.count * colWindow.count >= limits.cells || rowWindow.count + colWindow.count >= limits.lines
   let slots: number[] = [], columns: number[] = []
@@ -226,7 +235,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     }
   }
   const activeBox = active && projection.sourceCellToLogical(active)
-  const activeColumnInPane = activeBox && activeBox.x < pane.x + pane.width && activeBox.x + activeBox.width > pane.x
+  const activeColumnInPane = activeBox && spans.x.some(([x0, x1]) => activeBox.x < x1 && activeBox.x + activeBox.width > x0)
   const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
   const headerProps = { gutter, projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
     onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
@@ -258,7 +267,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     },
     onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
   }
-  const rowShift = rowFrameShift(logicalToViewport(scroll, { x: 0, y: 0 }).x)
+  const rowShift = rowFrameShift(-scroll.logicalOrigin.x * scroll.zoom)
   const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
   return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
     <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
@@ -303,14 +312,17 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
           <GridRowHeader props={headerProps} slot={slot} cancelX={extra ? 0 : gutter + rowShift} />
           {cells.map(col => {
             const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
-            const column = rowLocalColumn(gridHeaderBox(projection, scroll, 'column', col), viewport, rowShift)
+            // The row follows the scrolling body. Frozen columns undo that transform
+            // while keeping their own local layout position stable.
+            const pinned = Boolean(scroll.frozen && projection.cols.start(col) < scroll.frozen.left)
+            const column = rowLocalColumn(gridHeaderBox(projection, scroll, 'column', col), viewport, pinned ? 0 : rowShift)
             const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
             const isSelected = cellSelected(selection.ranges, at)
             // Name from contents: the visually hidden text IS the name, so VoiceOver
             // reads the value once (no label + contents) and never "blank" (S13 V1/V5).
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
               aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
-              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
           })}
         </div>
       })}

@@ -1,4 +1,5 @@
 import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
+import type { XlsxFrozenPane } from '../xlsx/frozenPane'
 import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
 import type { AllocationContext } from '../xlsx/view/allocationAccount'
 /**
@@ -175,6 +176,8 @@ export interface SheetGeometry {
   baseHidden: IntervalSet
   /** Authored-hidden (collapsed) column intervals, when the source reports them. */
   hiddenCols?: readonly { start: number; end: number }[]
+  /** Authored frozen panes (leading rows/columns pinned by the interactive viewer). */
+  frozen?: XlsxFrozenPane
 }
 /** Resident workbook source boundary. S1 swaps the implementation (paged
  * adapters, blob/page handles) without changing the session. */
@@ -2308,6 +2311,7 @@ export class DocumentSession {
       hidden: geometry.baseHidden.intervals.map(interval => ({ ...interval })),
       ...(geometry.hiddenCols?.length ? { hiddenCols: geometry.hiddenCols.map(interval => ({ ...interval })) } : {}),
       ...(used ? { used: { ...used } } : {}),
+      ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
     }
   }
   /** One bounded source read for the paged viewer (S5.4), owned by the sheet's

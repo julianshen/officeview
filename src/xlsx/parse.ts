@@ -13,7 +13,9 @@ import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
-import { computeMetrics } from './render'
+import { hasXlsxCharts, loadChartModule } from './chartLoader'
+import { frozenPaneFrom } from './frozenPane'
+import { cellDisplayText, computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
@@ -247,6 +249,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     workbookSheets.push({ sheetId, workbookIndex, name, kind })
     workbookIndex++
   }
+  // Charts without cached values (openpyxl) read their series from the cells.
   const drawingCoverage = sheets.flatMap((sheet, unit) => {
     const entries = (sheet.drawingCoverage ?? []).map(entry => ({ ...entry, unit }))
     const metrics = sheet.drawings?.length ? computeMetrics(sheet) : undefined
@@ -443,6 +446,18 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
   else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  // Labels are formatted with the chart's output cap (no builder grows past it).
+  const CHART_LABEL_OUTPUT = 256
+  // Charts without cached values (openpyxl) read their series from the cells
+  // once values and the date system are final: formatted category text,
+  // workbook defined names, and the document's value policy.
+  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) {
+    // Under the cached policy an uncached formula has no value (view/values isValueUnavailable).
+    const cached = options.valuePolicy === 'cached'
+    try {
+      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: () => {}, release: () => {} }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
+    } catch { /* charts keep their placeholder state; the workbook stays usable */ }
+  }
   return doc
 }
 
@@ -486,6 +501,9 @@ async function parseSheet(
     }
     sheet.mergeRanges = sheet.merges.map(parseMergeRange)
   }
+  const pane = getChildren(getChildren(getChildren(data, 'sheetViews')[0], 'sheetView')[0], 'pane')[0]
+  const frozen = pane ? frozenPaneFrom(attrs(pane) as Record<string, string | undefined>) : undefined
+  if (frozen) sheet.frozen = frozen
   const setupPr = getChildren(getChildren(data, 'sheetPr')[0], 'pageSetUpPr')[0]
   const setupNode = getChildren(data, 'pageSetup')[0]
   if (setupNode || setupPr) {

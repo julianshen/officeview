@@ -789,7 +789,8 @@ describe('machine drawing coverage', () => {
     const entries = doc.drawingCoverage!
     expect(drawingReport(doc).counts).toEqual({ originalObjects: originals, selectedDescendants: descendants, diagnosticEntries: 0 })
     for (const [index, id] of expectedIds.entries()) expect(entries.find(entry => entry.id === String(id))).toMatchObject({
-      partPath: 'xl/drawings/drawing1.xml', referenceId: references[index], status: 'malformed', reason: 'part-not-found', selectedRepresentation: 'none',
+      // A missing chart part keeps a placeholder card on the sheet (never blank space).
+      partPath: 'xl/drawings/drawing1.xml', referenceId: references[index], status: 'malformed', reason: 'part-not-found', selectedRepresentation: references[index] === 'missing' && kinds[index] === 'chart' ? 'chart-placeholder' : 'none',
     })
     if (kinds[0] === 'fallback-pic') expect(entries.filter(entry => entry.id === '2' || entry.id === '4').every(entry => entry.representation === 'fallback')).toBe(true)
     if (kinds[0] === 'group') expect(entries.find(entry => entry.id === '999')).toMatchObject({ status: 'native' })
@@ -892,8 +893,8 @@ describe('machine drawing coverage', () => {
       'xl/drawings/_rels/drawing1.xml.rels': rels(rel('c1', 'chart', '../charts/c1.xml') + rel('c2', 'chart', '../charts/c2.xml')),
       'xl/charts/c1.xml': chart, 'xl/charts/c2.xml': chart,
     }))
-    expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('chart')
-    expect(doc.drawingCoverage![0]).toMatchObject({ id: '701', selectedRepresentation: 'column-chart', feature: 'chart', representation: 'choice' })
+    expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('xlsxChart')
+    expect(doc.drawingCoverage![0]).toMatchObject({ id: '701', selectedRepresentation: 'chart', feature: 'chart', representation: 'choice' })
   })
 
   test('malformed owner relationships follow every selected Word picture and discard a failed picture Choice', async () => {

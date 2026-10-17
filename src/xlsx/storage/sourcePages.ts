@@ -14,7 +14,7 @@
  * reloads the same bytes from the backend under the same source identity.
  */
 import { PackageError, type PackageErrorCode } from '../../core/package-error'
-import { MemoryPool, WORKER_BUDGETS, type PoolEntry } from '../view/tileCache'
+import { MemoryPool, WORKER_BUDGETS, type PoolCharge, type PoolEntry } from '../view/tileCache'
 import { BUILDER_RECORD_BYTES, ConstructionMemory, META_OBJECT_BYTES, PAGE_SUMMARY_BYTES, TEXT_STRING_BYTES, type ConstructionShare } from './constructionMemory'
 import type { QuotaLedger, Reservation } from './quota'
 import type { ImportedPage, PageSink } from './importSession'
@@ -217,6 +217,12 @@ export function textAt(p: { text: Uint16Array; textStart: Uint32Array }, i: numb
   let out = ''
   for (let at = start; at < end; at += 8192) out += String.fromCharCode(...p.text.subarray(at, Math.min(end, at + 8192)))
   return out
+}
+
+/** At most `max` UTF-16 units of text record `i`, plus its full length (no full-length string is built). */
+export function textPrefix(p: { text: Uint16Array; textStart: Uint32Array }, i: number, max: number): { text: string; length: number } {
+  const start = p.textStart[i], end = p.textStart[i + 1]
+  return { text: String.fromCharCode(...p.text.subarray(start, Math.min(end, start + Math.max(0, max)))), length: end - start }
 }
 
 export function summarize(sheetId: string, pageId: string, r0: number, r1: number, p: CellPagePayload, bytes: number): PageSummary {
@@ -821,9 +827,20 @@ export const DECODED_CHUNK_OVERHEAD_BYTES = 1280
 /** Persistent pool entry for the records a RAM-backed (memory) backend retains. */
 const RAM_KEY = 'memory-backend'
 
-/** Typed-lane bytes of a payload. */
-const laneBytes = (p: CellPagePayload): number =>
-  p.nums.byteLength + p.rows.byteLength + p.styles.byteLength + p.textStart.byteLength + p.cols.byteLength + p.text.byteLength + p.kinds.byteLength + p.flags.byteLength
+/** Bytes the given typed views keep alive: each distinct backing buffer once,
+ * in full. A decoded record's lanes all view the one encoded buffer (header,
+ * padding and the formula-JSON lane included), which stays reachable as long as
+ * any view does; a built payload's lanes own their buffers. */
+export function backingBytes(views: readonly ArrayBufferView[]): number {
+  const buffers = new Set<ArrayBufferLike>()
+  let bytes = 0
+  for (const view of views) if (!buffers.has(view.buffer)) { buffers.add(view.buffer); bytes += view.buffer.byteLength }
+  return bytes
+}
+/** Typed-lane bytes of a payload: the backing buffers its lanes keep alive. */
+const laneBytes = (p: CellPagePayload): number => backingBytes([p.nums, p.rows, p.styles, p.textStart, p.cols, p.text, p.kinds, p.flags])
+/** Bytes a string record's views keep alive. */
+const chunkBytes = (c: StringChunk): number => backingBytes([c.text, c.textStart])
 /** Formula metadata a payload owns: per object plus 2 B per JSON character (at least its strings). */
 const metaBytes = (p: CellPagePayload): number => p.meta.size * META_OBJECT_BYTES + 2 * metaArrayLength(p.meta)
 /** Heap held by a payload: its typed lanes and its formula metadata. */
@@ -836,6 +853,107 @@ export class SourcePageStore implements PageSink {
   private readonly index = new Map<string, PageSummary[]>()
   private readonly reservations: Reservation[] = []
   private readonly resident = new Map<string, Resident<CellPagePayload | StringChunk>>()
+  /** Per record written (pages, shared-string chunks, oversized values): its
+   * stored size and the extra heap its decode builds beyond typed views of the
+   * read buffer (a page's formula-metadata JSON string and parsed objects).
+   * Known before a read, so the read is admitted for its exact cost. */
+  private readonly recordCost = new Map<string, { stored: number; extra: number }>()
+  /** Decoded buffers that alias a buffer the RAM backend owns and holdRam charges.
+   * RAM ownership of committed records ends when the store closes: the set is then
+   * replaced (cleared), and recordCharge stops deducting. */
+  private ramShared = new WeakSet<ArrayBufferLike>()
+  /** The heap a decoded record holds beyond what is already charged: its object
+   * overhead, plus its backing buffer unless a RAM backend owns (and charges) it,
+   * plus a page's parsed metadata. One rule for the cache handoff and for leases. */
+  private recordCharge(value: CellPagePayload | StringChunk): number {
+    const cost = this.costOf(value)
+    return this.live && this.ramShared.has(cost.buffer) ? cost.full - cost.backing : cost.full
+  }
+  /** A record's immutable costs, computed once per decoded record (metadata
+   * traversal included) and reused by every charge and lease. */
+  private readonly costs = new WeakMap<object, { full: number; backing: number; buffer: ArrayBufferLike }>()
+  private costOf(value: CellPagePayload | StringChunk): { full: number; backing: number; buffer: ArrayBufferLike } {
+    let cost = this.costs.get(value)
+    if (!cost) {
+      cost = 'rows' in value
+        ? { full: DECODED_PAGE_OVERHEAD_BYTES + payloadBytes(value), backing: laneBytes(value), buffer: value.rows.buffer }
+        : { full: DECODED_CHUNK_OVERHEAD_BYTES + chunkBytes(value), backing: chunkBytes(value), buffer: value.text.buffer }
+      this.costs.set(value, cost)
+    }
+    return cost
+  }
+  /** Live leases (pinnedString / pinnedPage) by record. A lease's charge has two
+   * parts. The record's own heap (object overhead, metadata, and any backing no
+   * RAM backend owns) is funded per record: by its pinned cache entry (kept, as
+   * is, across close) or by the unretained holder, who charges `bytes`. A
+   * RAM-owned backing is funded once per distinct buffer, however many decoded
+   * records alias it (see backings). The last lease of a record ends both. */
+  private readonly leasesByRecord = new Map<CellPagePayload | StringChunk, { leases: Set<{ released: boolean }>; backing?: { bytes: number; holders: number }; kept?: PoolEntry }>()
+  /** RAM-owned backing buffers of leased records, keyed by buffer identity;
+   * `holders` counts the leased records viewing each. While the store is live the
+   * RAM entry (holdRam) funds them. At close/abandon that already-funded entry is
+   * taken over as is (closingRam: no refund and re-admission, so no refusal),
+   * shrunk to the leased buffers, and each buffer is refunded when its last
+   * holder releases. */
+  private readonly backings = new Map<ArrayBufferLike, { bytes: number; holders: number }>()
+  private closingRam: PoolCharge | undefined
+  private lease(record: CellPagePayload | StringChunk, unpin: () => void): () => void {
+    let group = this.leasesByRecord.get(record)
+    if (!group) {
+      this.leasesByRecord.set(record, group = { leases: new Set() })
+      const cost = this.costOf(record)
+      if (this.ramShared.has(cost.buffer)) {
+        let backing = this.backings.get(cost.buffer)
+        if (!backing) this.backings.set(cost.buffer, backing = { bytes: cost.backing, holders: 0 })
+        backing.holders++
+        group.backing = backing
+      }
+    }
+    const held = { released: false }
+    group.leases.add(held)
+    return () => {
+      if (held.released) return
+      held.released = true
+      group!.leases.delete(held)
+      unpin()
+      if (group!.leases.size) return
+      this.leasesByRecord.delete(record)
+      group!.kept?.release()
+      const backing = group!.backing
+      if (!backing || --backing.holders > 0) return
+      this.backings.delete(this.costOf(record).buffer)
+      const owner = this.closingRam
+      if (!owner) return
+      if (this.backings.size === 0) { owner.release(); this.closingRam = undefined }
+      else owner.set(Math.max(0, owner.bytes - backing.bytes))
+    }
+  }
+  /** Synchronous within disposeOnce, before the RAM and cache charges are
+   * released. Every leased byte is already funded (record heap by its entry or
+   * holder, RAM backings by the RAM entry), so ownership only moves: each leased
+   * record keeps its cache entry, and the RAM entry is taken over and shrunk
+   * (never grown) to the distinct leased backings. Returns the entries kept. */
+  private handOverLeases(): Set<PoolEntry> {
+    const kept = new Set<PoolEntry>()
+    for (const res of this.resident.values()) {
+      const group = res.entry ? this.leasesByRecord.get(res.value) : undefined
+      if (group && res.entry) { group.kept = res.entry; kept.add(res.entry) }
+    }
+    let leased = 0
+    for (const backing of this.backings.values()) leased += backing.bytes
+    const ram = this.construction.persistentEntry(RAM_KEY)
+    if (leased > 0 && this.pool && !this.pool.closed && ram?.live && this.pool.get(ram.key) === ram) {
+      const owner = this.pool.charge()
+      owner.take(ram)
+      owner.set(Math.min(leased, owner.bytes))
+      this.closingRam = owner
+    }
+    return kept
+  }
+  /** Bytes reserved in the pool for reads in flight (incoming buffer + decode). */
+  private readingBytesNow = 0
+  /** Pool bytes currently reserved for records being read from storage. */
+  get readingBytes(): number { return this.readingBytesNow }
   private readonly loading = new Map<string, Promise<CellPagePayload | StringChunk>>()
   /** Import/index construction charges (§12.4); see constructionMemory.ts. */
   readonly construction: ConstructionMemory
@@ -961,6 +1079,10 @@ export class SourcePageStore implements PageSink {
       this.inFlight.add(pageKey)
       try {
         await this.backend.put(pageKey, bytes)
+        // Decode cost beyond the typed views: the metadata JSON string (2 B per unit,
+        // header word 3) and the parsed formula objects (the same model metaBytes charges).
+        const metaUnits = bytes.byteLength >= 16 ? new DataView(bytes.buffer, bytes.byteOffset, 16).getUint32(12, true) : 0
+        this.recordCost.set(pageKey, { stored: bytes.byteLength, extra: metaUnits ? 2 * metaUnits + metaBytes(page.payload) : 0 })
       } catch (error) {
         throw storageError(error, 'writing a source page')
       }
@@ -1021,6 +1143,7 @@ export class SourcePageStore implements PageSink {
       blob.ram = this.holdRam(bytes.byteLength)
       try {
         await this.backend.put(blob.key, bytes)
+        this.recordCost.set(blob.key, { stored: bytes.byteLength, extra: 0 })
       } catch (error) {
         throw storageError(error, 'writing an oversized cell value')
       }
@@ -1070,6 +1193,7 @@ export class SourcePageStore implements PageSink {
       attempted = true
       this.inFlight.add(key)
       await this.backend.put(key, bytes)
+      this.recordCost.set(key, { stored: bytes.byteLength, extra: 0 })
       stored = bytes.byteLength
       this.check(docId)
     } catch (error) {
@@ -1175,10 +1299,14 @@ export class SourcePageStore implements PageSink {
    * owner locked until its realm ends, as a crash would.
    */
   private async disposeOnce(): Promise<void> {
+    // One synchronous step (no await): leased records keep their owners.
+    const kept = this.handOverLeases()
     for (const r of this.reservations.splice(0)) r.release()
     this.construction.releaseAll()
     this.ramBytes = 0
-    for (const res of this.resident.values()) res.entry?.release()
+    for (const res of this.resident.values()) if (res.entry && !kept.has(res.entry)) res.entry.release()
+    // RAM ownership of committed records has ended.
+    this.ramShared = new WeakSet()
     this.resident.clear()
     this.loading.clear()
     this.index.clear()
@@ -1204,6 +1332,8 @@ export class SourcePageStore implements PageSink {
 
   /** Registers decoded pages in the document pool's `source` tier from now on. */
   bindMemory(pool: MemoryPool): void {
+    // Leases are funded by the bound pool (see leasesByRecord): bind before leasing.
+    if (this.leasesByRecord.size) throw new RangeError('source page store: bind its memory pool before leasing records')
     // Atomic: throws the typed memory-budget refusal and changes nothing when
     // the pool cannot hold the construction charges and memory-held records.
     this.construction.rebind(pool)
@@ -1239,10 +1369,11 @@ export class SourcePageStore implements PageSink {
     }
   }
   /**
-   * `size` is told whether the decoded value views the very buffer a memory
-   * backend retains (already charged by holdRam), so only the rest is charged.
+   * The cached record is charged by recordCharge: a decoded value viewing the very
+   * buffer a memory backend retains (already charged by holdRam) is marked
+   * ramShared, so only the rest is charged, here and on every lease.
    */
-  private async load<T extends CellPagePayload | StringChunk>(key: string, decode: (bytes: Uint8Array) => T, size: (value: T, sharesHeldBuffer: boolean) => number): Promise<T> {
+  private async load<T extends CellPagePayload | StringChunk>(key: string, decode: (bytes: Uint8Array) => T): Promise<T> {
     if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
     const hit = this.resident.get(key)
     if (hit) {
@@ -1254,14 +1385,44 @@ export class SourcePageStore implements PageSink {
     }
     const pending = this.loading.get(key)
     if (pending) { this.counters.coalesced++; return pending as Promise<T> }
+    // Admission before allocation (spec §12.4): the record's stored size is known
+    // from its write, so room is made (LRU, unpinned) and the incoming buffer plus
+    // its decode are reserved BEFORE the read; the reservation is handed to the
+    // cached record (or released) once decoded. A record that cannot be admitted is
+    // refused with a typed resource result, without reading it.
+    // The exact read cost: the record object (the same overhead the cached record is
+    // charged), the incoming buffer unless a RAM backend already owns it (holdRam
+    // charged it at write), and the decode's extra heap recorded at write time.
+    const cost = this.recordCost.get(key)
+    const readings: PoolEntry[] = []
+    const reserveRead = (bytes: number, part: string): void => {
+      if (!this.pool || this.pool.closed || bytes <= 0) return
+      let entry: PoolEntry | null = null
+      try { entry = this.pool.retain(`source:${this.docId}:reading:${part}:${key}`, { tier: 'source', bytes, evictable: false }) } catch { entry = null }
+      if (!entry) { endReading(); throw new PackageError('resource-limit', `source record ${key} (${bytes} bytes to read) does not fit the source memory budget`) }
+      readings.push(entry)
+      this.readingBytesNow += bytes
+    }
+    const endReading = () => { for (const entry of readings.splice(0)) { this.readingBytesNow -= entry.bytes; entry.release() } }
+    const chunk = key.startsWith('sst/') || key.startsWith('blob/')
+    if (cost) reserveRead((chunk ? DECODED_CHUNK_OVERHEAD_BYTES : DECODED_PAGE_OVERHEAD_BYTES) + (this.backend.kind === 'memory' ? 0 : cost.stored) + cost.extra, 'record')
     const promise = (async () => {
       this.counters.loads++
-      const bytes = await this.backend.get(key)
-      if (bytes === undefined) throw new PackageError('storage-error', `source page ${key} is missing from browser storage`)
-      const value = decode(bytes)
+      let bytes: Uint8Array | undefined, value: T
+      try {
+        bytes = await this.backend.get(key)
+        if (bytes === undefined) throw new PackageError('storage-error', `source page ${key} is missing from browser storage`)
+        // A decoder copies an unaligned or partial view into its own buffer: admit that copy first.
+        const aligned = chunk ? bytes.byteOffset === 0 : bytes.byteOffset % 8 === 0
+        if (cost && !(aligned && bytes.byteLength === bytes.buffer.byteLength)) reserveRead(bytes.byteLength, 'copy')
+        value = decode(bytes)
+      } catch (error) { endReading(); throw error }
+      // Ownership moves from the read reservation to the cached record, synchronously.
+      endReading()
       if (this.live && !this.resident.has(key)) {
         const view = 'rows' in value ? value.rows : value.text
-        const bytesHeld = size(value, this.backend.kind === 'memory' && view.buffer === bytes.buffer)
+        if (this.backend.kind === 'memory' && view.buffer === bytes.buffer) this.ramShared.add(view.buffer)
+        const bytesHeld = this.recordCharge(value)
         this.resident.set(key, { value, bytes: bytesHeld })
         this.counters.residentBytes += bytesHeld
         if (this.counters.residentBytes > this.counters.peakResidentBytes) this.counters.peakResidentBytes = this.counters.residentBytes
@@ -1277,19 +1438,68 @@ export class SourcePageStore implements PageSink {
     try { return await promise } finally { this.loading.delete(key) }
   }
   page(sheetId: string, pageId: string): Promise<CellPagePayload> {
-    return this.load(pageRecordKey(sheetId, pageId), decodePage, (p, shared) => DECODED_PAGE_OVERHEAD_BYTES + (shared ? metaBytes(p) : payloadBytes(p)))
+    return this.load(pageRecordKey(sheetId, pageId), decodePage)
   }
   /** An oversized value by blob id, through the same bounded decoded cache as pages. */
   async blob(id: number): Promise<string> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) throw new PackageError('storage-error', `oversized cell value ${id} is not stored`)
-    const record = await this.load(`blob/${id}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const record = await this.load(`blob/${id}`, decodeStrings)
     if (record.textStart.length !== 2) throw new PackageError('parse-error', `oversized cell value ${id} is malformed`)
     return textAt(record, 0)
+  }
+  /** The typed record holding an oversized value (no string is built); for transient, synchronous use. */
+  async blobRecord(id: number): Promise<{ record: StringChunk; index: number } | undefined> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.blobCount) return undefined
+    const record = await this.load(`blob/${id}`, decodeStrings)
+    return record.textStart.length === 2 ? { record, index: 0 } : undefined
+  }
+  /** The typed chunk holding a shared string and its index (no string is built); for transient, synchronous use. */
+  async sharedStringRecord(id: number): Promise<{ record: StringChunk; index: number } | undefined> {
+    if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
+    const chunk = Math.floor(id / this.stringChunkSize)
+    const record = await this.load(`sst/${chunk}`, decodeStrings)
+    return { record, index: id - chunk * this.stringChunkSize }
+  }
+  /** A decoded string record (SST chunk or oversized value) kept owned for the
+   * caller's lifetime, like pinnedPage; `retained: false` means the caller
+   * must charge `bytes` itself (or refuse). `key` identifies the record, so
+   * consecutive ids in one chunk share one pin. */
+  /** The decoded-record key holding a string (shared-string chunk or oversized value), without loading it. */
+  stringRecordKey(kind: 'sst' | 'blob', id: number): string {
+    return kind === 'sst' ? `sst/${this.stringChunkSize > 0 ? Math.floor(id / this.stringChunkSize) : 0}` : `blob/${id}`
+  }
+  async pinnedString(kind: 'sst' | 'blob', id: number): Promise<{ key: string; record: StringChunk; index: number; retained: boolean; bytes: number; release: () => void } | undefined> {
+    const located = kind === 'sst' ? await this.sharedStringRecord(id) : await this.blobRecord(id)
+    if (!located) return undefined
+    // A lease whose acquisition crosses close is cancelled: its RAM owner is gone.
+    if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
+    const key = this.stringRecordKey(kind, id)
+    const resident = this.resident.get(key)
+    if (resident && resident.value === located.record && resident.entry) return { key, ...located, retained: true, bytes: resident.bytes, release: this.lease(located.record, resident.entry.pin()) }
+    if (resident && resident.value === located.record && !this.pool) return { key, ...located, retained: true, bytes: resident.bytes, release: this.lease(located.record, () => {}) }
+    // Unretained: the holder charges `bytes` (fixed): the record's own heap; a
+    // RAM-owned backing stays funded once per buffer (see backings), across close.
+    const bytes = this.recordCharge(located.record)
+    return { key, ...located, retained: false, bytes, release: this.lease(located.record, () => {}) }
+  }
+  /** A decoded page kept owned for the caller's lifetime: its pool charge is
+   * pinned (no eviction) until `release`. `retained: false` means the pool
+   * could not admit it at all; the caller must charge `bytes` itself. */
+  async pinnedPage(sheetId: string, pageId: string): Promise<{ page: CellPagePayload; retained: boolean; bytes: number; release: () => void }> {
+    const key = pageRecordKey(sheetId, pageId)
+    const page = await this.page(sheetId, pageId)
+    if (!this.live) throw new PackageError('cancelled', 'source page store is closed')
+    const resident = this.resident.get(key)
+    if (resident && resident.value === page && resident.entry) return { page, retained: true, bytes: resident.bytes, release: this.lease(page, resident.entry.pin()) }
+    // Local LRU (no pool): keep it resident by recency only; nothing evicts it during a synchronous extraction.
+    if (resident && resident.value === page && !this.pool) return { page, retained: true, bytes: resident.bytes, release: this.lease(page, () => {}) }
+    const bytes = this.recordCharge(page)
+    return { page, retained: false, bytes, release: this.lease(page, () => {}) }
   }
   async sharedString(id: number): Promise<string | undefined> {
     if (!Number.isSafeInteger(id) || id < 0 || id >= this.stringCount || this.stringChunkSize === 0) return undefined
     const chunk = Math.floor(id / this.stringChunkSize)
-    const strings = await this.load(`sst/${chunk}`, decodeStrings, (c, shared) => DECODED_CHUNK_OVERHEAD_BYTES + (shared ? 0 : c.text.byteLength + c.textStart.byteLength))
+    const strings = await this.load(`sst/${chunk}`, decodeStrings)
     return textAt(strings, id - chunk * this.stringChunkSize)
   }
 }
