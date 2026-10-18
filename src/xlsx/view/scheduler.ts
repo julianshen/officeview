@@ -171,9 +171,9 @@ export class CheckpointBudget {
     this.slice ??= this.owned = new CooperativeSlice<string>({ ...this.pacing, start: this.start })
     return this.slice.due(since)
   }
-  /** A checkpoint now (a final check without a pause). */
+  /** A check now (a final check without a pause). Units since the last
+   * checkpoint stay counted toward the next one and the slice. */
   checkpoint(): void {
-    this.unchecked = 0
     this.check()
   }
   /** Ends a pass with a final check; units below the next checkpoint are

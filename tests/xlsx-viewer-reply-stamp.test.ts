@@ -9,7 +9,7 @@ import { ViewerClient } from '../src/worker/viewerClient'
 import { ViewerKernel, connectInProcess } from '../src/worker/viewerKernel'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
-import { StopWalk, walkPayload } from '../src/worker/replyMeasure'
+import { StopWalk, UNPOOLED_WALK_BYTES, walkAdmission, walkPayload } from '../src/worker/replyMeasure'
 import { boundedQueryStore } from '../src/worker/viewerQueryBudget'
 import { queryPayloadBytes } from '../src/xlsx/view/queryPayload'
 import { CheckpointBudget } from '../src/xlsx/view/scheduler'
@@ -17,6 +17,8 @@ import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { initialIdentity } from '../src/worker/viewerProtocol'
 import { workbookOf } from './helpers/xlsx-find'
 import { kernelFixture } from './helpers/drawing-grant'
+import { WorkerViewportPlans } from '../src/components/xlsx/workerViewport'
+import { accountQueryBytes } from '../src/worker/viewerQueryBudget'
 import { FindError } from '../src/xlsx/view/find'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
 
@@ -24,10 +26,15 @@ vi.mock('../src/xlsx/view/payloadBytes', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/xlsx/view/payloadBytes')>()
   return { ...actual, estimatePayloadBytes: vi.fn(actual.estimatePayloadBytes), measurePayloadBytes: vi.fn(actual.measurePayloadBytes) }
 })
+vi.mock('../src/xlsx/view/queryPayload', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/xlsx/view/queryPayload')>()
+  return { ...actual, queryPayloadBytes: vi.fn(actual.queryPayloadBytes) }
+})
 vi.mock('../src/worker/viewerProtocol', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/worker/viewerProtocol')>()
   return { ...actual, transferablesOf: vi.fn(actual.transferablesOf) }
 })
+const queryPayloadBytesMock = () => vi.mocked(queryPayloadBytes)
 const estimate = vi.mocked(payload.estimatePayloadBytes), measure = vi.mocked(payload.measurePayloadBytes), transfers = vi.mocked(protocol.transferablesOf)
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -177,7 +184,8 @@ describe('bounded query facade accounting (codex E4)', () => {
       if ((this as unknown as { phase: string }).phase === 'query') { pauses++; if (first < 0) first = visits }
       return native.call(this)
     })
-    const page = await boundedQueryStore(store, 8 * 1024 * 1024).readRows({ r0: 0, r1: 0, c0: 0, c1: 8191 }, undefined, { signal: new AbortController().signal, stamp: { ...store.stamp } })
+    const pool = { charge: () => ({ set: () => true, release: () => {} }) } as never
+    const page = await boundedQueryStore(store, 8 * 1024 * 1024, undefined, 20_000, false, false, pool).readRows({ r0: 0, r1: 0, c0: 0, c1: 8191 }, undefined, { signal: new AbortController().signal, stamp: { ...store.stamp } })
     expect(page.items[0].cells).toHaveLength(8192)
     expect(visits).toBe(8192)
     expect(pauses).toBeGreaterThanOrEqual(2)
@@ -267,5 +275,110 @@ describe('residuals closed on the one walker', () => {
     const own = (calls: unknown[][]) => calls.filter(([message]) => (message as { requestId?: string }).requestId === 'g1')
     expect(own(transfers.mock.calls)).toHaveLength(0)
     expect(own(measure.mock.calls)).toHaveLength(1) // the assertion's own call above
+  })
+})
+
+describe('confirmation round (codex F1-F5)', () => {
+  it('F1: an open reply walks against the new document session pool', async () => {
+    const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }])
+    ;(document as { cellStyles?: unknown[] }).cellStyles = Array.from({ length: 2048 }, () => ({ fontSizePt: 11 }))
+    let charges: ReturnType<typeof vi.spyOn> | undefined
+    const kernel: ViewerKernel = new ViewerKernel({ parse: async () => document, afterDispatch: command => { if (command.kind === 'open') charges = vi.spyOn(kernel.session('doc')!.memory, 'charge') } })
+    await kernel.handle({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+    try { expect(charges).toHaveBeenCalled() } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+  })
+  it('F1: a walk with no pool has a small fixed allowance, never an unlimited one', () => {
+    const admit = walkAdmission(undefined)
+    expect(admit(UNPOOLED_WALK_BYTES)).toBe(true)
+    expect(admit(1)).toBe(false)
+  })
+  it('F2: the query walk holds one frame per open container, never pending children, all admitted', async () => {
+    const { items, reads } = counted(10_000)
+    let held = 0, first = -1
+    const outcome = await settle(walkPayload(items, more => { held += more; return true }, frozen(() => { if (first < 0) first = reads.count }), { model: 'query', limit: 8 * 1024 * 1024 }))
+    expect(outcome).toMatchObject({ kind: 'measured', bytes: queryPayloadBytes(Array.from({ length: 10_000 }, () => 0), 8 * 1024 * 1024), peakFrames: 1 })
+    expect(first).toBeLessThanOrEqual(4096)
+    if (outcome.kind !== 'measured') return
+    expect(outcome.peakFrames).toBeLessThanOrEqual(outcome.admittedFrames)
+    // One visited entry chunk (the array) plus its frames, both admitted.
+    expect(held).toBeGreaterThanOrEqual(payload.MEASURE_FIRST_CHUNK_ENTRIES * payload.MEASURE_ENTRY_BYTES + outcome.admittedFrames * 256)
+    const deep: unknown[] = []
+    let at = deep
+    for (let depth = 0; depth < 40; depth++) { const next: unknown[] = []; at.push(next, 1, 'x'); at = next }
+    const nested = await settle(walkPayload(deep, () => true, frozen(), { model: 'query', limit: 8 * 1024 * 1024 }))
+    expect(nested).toMatchObject({ kind: 'measured', bytes: queryPayloadBytes(deep, 8 * 1024 * 1024) })
+    if (nested.kind === 'measured') expect(nested.peakFrames).toBeLessThanOrEqual(nested.admittedFrames)
+  })
+  it('F3: a pool refusal after a sort committed still delivers the committed view', async () => {
+    const document = workbookOf([{ sheetId: 's', cells: Array.from({ length: 2048 }, (_, row) => ({ row, col: 0, value: row })) }])
+    for (const row of document.sheets[0].rows) row.heightPt = 25 + row.index % 2
+    let pressure: { release(): void } | undefined
+    const kernel: ViewerKernel = new ViewerKernel({ parse: async () => document, afterDispatch: command => {
+      if (command.kind !== 'sort') return
+      const memory = kernel.session('doc')!.memory, charge = memory.charge()
+      expect(charge.set(memory.limitBytes - memory.totalBytes)).toBe(true)
+      pressure = charge
+    } })
+    await kernel.handle({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+    const replies: WorkerReply[] = []
+    try {
+      await kernel.handle({ kind: 'sort', requestId: 'sort', owner: initialIdentity('doc', 's'), spec: null }, out => replies.push(out))
+      expect(kernel.session('doc')!.isCurrent(initialIdentity('doc', 's'))).toBe(false)
+      const last = replies.at(-1)!
+      expect(last).toMatchObject({ kind: 'complete', result: { kind: 'view' } })
+      // Measured without deduplication: never less than the exact size.
+      expect(last.replyBytes).toBeGreaterThanOrEqual(payload.measurePayloadBytes({ ...last, replyBytes: 0 })!)
+    } finally { pressure?.release(); await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
+  })
+  it('F4: main computes a 5,000-cell plan\'s bytes as it builds it, with no whole-plan walk', () => {
+    const style = { fontSizePt: 11, bold: true }
+    const plans = new WorkerViewportPlans({ styleOf: () => style } as never)
+    const cells = Array.from({ length: 5000 }, (_, i) => ({ kind: 'cell', source: { row: Math.floor(i / 100), col: i % 100 }, bounds: { x: 0, y: 0, width: 64, height: 20 }, cell: { id: i, row: Math.floor(i / 100), col: i % 100, value: `v${i}`, styleIndex: 1 } }))
+    const proof = new Map(cells.map(cell => [cell.source.row * 16384 + cell.source.col, { left: 0, right: 0 }]))
+    const result = { kind: 'viewport', completeness: 'complete', content: { kind: 'detail', cells }, merges: [], rowLines: [], colLines: [] }
+    const queryBytes = vi.mocked(queryPayloadBytes)
+    queryBytes.mockClear()
+    const { plan, bytes } = (plans as unknown as { decode(...args: unknown[]): { plan: { cells: unknown[] }; bytes: number } }).decode(result, { width: 100, height: 100 }, proof)
+    expect(plan.cells).toHaveLength(5000)
+    // Each measure covered one placement (or the cell-free shell), never the plan.
+    const whole = queryBytes.mock.calls.filter(([value]) => (value as { cells?: unknown[] })?.cells?.length === 5000)
+    expect(whole).toHaveLength(0)
+    expect(queryBytes.mock.calls.length).toBe(5001)
+    expect(bytes).toBe(queryPayloadBytes(plan, Number.POSITIVE_INFINITY))
+  })
+  it('F4: main accounts an 8,192-interval overview request in steps (RemoteSheetStore.queryOverview)', async () => {
+    let visits = 0, first = -1
+    const intervals = Array.from({ length: 8192 }, (_, i) => ({ get r0() { visits++; return i * 2 }, r1: i * 2 }))
+    const request = { maxGroups: 1, groups: [{ groupId: 'g', rows: { kind: 'intervals' as const, intervals }, cols: [{ c0: 0, c1: 0 }] }] }
+    const native = CheckpointBudget.prototype.pause
+    vi.spyOn(CheckpointBudget.prototype, 'pause').mockImplementation(async function (this: CheckpointBudget) {
+      if ((this as unknown as { phase: string }).phase === 'query' && first < 0) first = visits
+      return native.call(this)
+    })
+    const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }])
+    const source = createObjectWorkbookSource(doc, 'ov')
+    const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source })
+    const port = connectInProcess(kernel), client = new ViewerClient(port)
+    await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'ov', source: { kind: 'object', document: doc }, profile: 'D' })
+    const remote = new RemoteWorkbook(client, { docId: 'ov', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map([['s', kernel.session('ov')!.layout('s')]]) })
+    try {
+      const store = remote.store('s')
+      queryPayloadBytesMock().mockClear()
+      await store.queryOverview(request as never, { signal: new AbortController().signal, stamp: { ...store.stamp } })
+      // The main side's first pause comes within 4,096 interval reads; no synchronous whole-request walk on main.
+      expect(first).toBeGreaterThanOrEqual(0)
+      expect(first).toBeLessThanOrEqual(4096)
+      expect(queryPayloadBytesMock().mock.calls.filter(([value]) => value === request)).toHaveLength(0)
+    } finally { await remote.release() }
+  })
+  it('F5: a stopped query walk rethrows StopWalk, and keyBytes reports stale, not quota', async () => {
+    await expect(Promise.resolve().then(() => accountQueryBytes([1], 1024, () => { throw new StopWalk() }))).rejects.toBeInstanceOf(StopWalk)
+    const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }])
+    const kernel = new ViewerKernel({ parse: async () => document })
+    await kernel.handle({ kind: 'open', requestId: 'o', docId: 'doc', source: { kind: 'object', document }, profile: 'D' }, () => {})
+    try {
+      const stopping = new CheckpointBudget(() => { throw new StopWalk() }, undefined, { now: () => 0, yield: async () => {} })
+      expect(await (kernel as unknown as { keyBytes(...args: unknown[]): Promise<unknown> }).keyBytes(kernel.session('doc'), [1], stopping)).toBe('stale')
+    } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
   })
 })

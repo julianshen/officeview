@@ -1,9 +1,10 @@
 import type { AuthoritativeCell, Page, ReadOptions, SourceStore } from '../xlsx/view/contracts'
 import { FindError } from '../xlsx/view/find'
 import { CheckpointBudget } from '../xlsx/view/scheduler'
-import { walkPayload, type WalkOutcome } from './replyMeasure'
+import { StopWalk, walkAdmission, walkPayload, type WalkOutcome } from './replyMeasure'
 import { rememberQueryBytes } from '../xlsx/view/queryBytesMemo'
 import type { PoolCharge } from '../xlsx/view/tileCache'
+import type { MainMemoryLedger, MainPool } from '../xlsx/view/mainLedger'
 
 /** Wire/workspace admission within the existing document pool; never a larger
  * worker budget. Large source pages and long hit texts refuse explicitly. */
@@ -11,21 +12,46 @@ export const WORKER_QUERY_BYTES = { D: 8 * 1024 * 1024, M: 4 * 1024 * 1024 } as 
 
 export { queryPayloadBytes } from '../xlsx/view/queryPayload'
 
-/** A pool whose transient shares admit a walk's workspace (the document pool). */
-export interface QueryPool { charge(): PoolCharge }
+/** A pool whose transient shares admit a walk's workspace (the document pool,
+ * or the main ledger through ledgerPool). */
+export interface QueryPool { charge(): Pick<PoolCharge, 'set' | 'release'> }
+let ledgerSerial = 0
+/** Main-thread walks admit their workspace to the main ledger: a transient
+ * owner in `pool`, refused once the ledger would exceed `limitBytes`. */
+export function ledgerPool(ledger: MainMemoryLedger, pool: MainPool, limitBytes: number): QueryPool {
+  return { charge: () => {
+    const owner = `walk:${++ledgerSerial}`
+    let held = 0
+    return {
+      set(bytes: number) {
+        if (ledger.bytes - held + bytes > limitBytes) return false
+        held = bytes
+        ledger.set(pool, owner, bytes)
+        return true
+      },
+      release() { ledger.release(pool, owner); held = 0 },
+    }
+  } }
+}
 /** queryPayloadBytes of `value` through the worker's one payload walker (spec
  * §10.2): checkpointed by `check` (it throws on cancellation or a stale owner)
  * with real yields (the host's, or the session's injected `hostYield`), its workspace admitted to `pool` in chunks and released
  * after the walk. Synchronous when no pause is due. `undefined`: the pool
- * refused the workspace. */
-export function accountQueryBytes(value: unknown, limit: number, check: () => void, pool?: QueryPool, hostYield?: () => Promise<void>): number | undefined | Promise<number | undefined> {
+ * refused the workspace; a StopWalk from `check` is rethrown. With `shared`,
+ * the walk charges that budget (its own check applies). */
+export function accountQueryBytes(value: unknown, limit: number, check: () => void, pool?: QueryPool, hostYield?: () => Promise<void>, shared?: CheckpointBudget): number | undefined | Promise<number | undefined> {
   const workspace = pool?.charge()
-  const pass = new CheckpointBudget(check, undefined, hostYield ? { yield: hostYield } : {}, 'query')
-  let held = 0
-  const end = () => { pass.dispose(); workspace?.release() }
-  const done = (outcome: WalkOutcome): number | undefined => { end(); return outcome.kind === 'measured' ? outcome.bytes : undefined }
+  // A shared budget carries one operation's work across several passes.
+  const pass = shared ?? new CheckpointBudget(check, undefined, hostYield ? { yield: hostYield } : {}, 'query')
+  const end = () => { if (!shared) pass.dispose(); workspace?.release() }
+  const done = (outcome: WalkOutcome): number | undefined => {
+    end()
+    // A stop (the check threw StopWalk) is not a workspace refusal.
+    if (outcome.kind === 'stopped') throw new StopWalk()
+    return outcome.kind === 'measured' ? outcome.bytes : undefined
+  }
   let run: WalkOutcome | Promise<WalkOutcome>
-  try { run = walkPayload(value, more => !workspace || workspace.set(held += more), pass, { model: 'query', limit }) } catch (error) { end(); throw error }
+  try { run = walkPayload(value, walkAdmission(workspace), pass, { model: 'query', limit }) } catch (error) { end(); throw error }
   return run instanceof Promise ? run.then(done, error => { end(); throw error }) : done(run)
 }
 /** A typed retryable refusal: the walk's workspace does not fit the pool now. */

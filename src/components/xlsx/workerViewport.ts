@@ -146,15 +146,20 @@ export class WorkerViewportPlans {
         this.remote.mainLedger.set('layout', reservation, admission.reserve)
         this.remote.mainLedger.release('layout', measurement)
         measurementLive = false
-        if (queryPayloadBytes(out, cap) > cap) throw new Error('Viewport reply exceeds its bounded byte budget')
+        // The worker measured this result (with its diagnostics, 1 KiB left
+        // for the envelope) with its paced walker and stamped it (spec §10.2):
+        // the bound is checked without a walk on main. An unstamped result is
+        // a protocol error, refused.
+        const stamped = result.queryBytes
+        if (typeof stamped !== 'number' || !Number.isSafeInteger(stamped) || stamped < 0) throw new Error('Viewport reply carries no measured size')
+        if (stamped + 1024 > cap) throw new Error('Viewport reply exceeds its bounded byte budget')
         if (!sameIdentity(out.owner, sourceOwner)) throw new Error('Viewport reply owner mismatch')
         // Shared with remote.geometry(), but created only after joint
         // admission and without materializing full-sheet row geometry.
         const columns = this.remote.columns(owner.sheetId)
         const proof = validateOverflowProof(result, sourceOwner, window, this.remote.profile, 'tile', columns)
-        const plan = this.decode(result, extent, proof)
+        const { plan, bytes } = this.decode(result, extent, proof)
         proof.clear()
-        const bytes = queryPayloadBytes(plan, cap)
         if (bytes > admission.planUpper) throw new Error('Viewport construction exceeded its admitted estimate')
         let retainedBytes = this.bytes + bytes
         const evictions: Array<[string, Entry]> = []
@@ -277,7 +282,12 @@ export class WorkerViewportPlans {
       if (this.entries.get(key) === entry) { this.drop(key, entry); this.remote.notify() }
     }, Math.min(PLAN_RETRY_MAX_MS, PLAN_RETRY_MS * 2 ** (attempt - 1)))
   }
-  private decode(result: OverflowViewportResult, extent: { width: number; height: number }, proof: Map<number, OverflowEntry>): ViewportPlan {
+  /** The plan, and its queryPayloadBytes computed as it is built (spec §10.2):
+   * each placement is measured once when made, with one shared seen set (a
+   * style shared by many cells counts once), so no whole-plan walk follows. */
+  private decode(result: OverflowViewportResult, extent: { width: number; height: number }, proof: Map<number, OverflowEntry>): { plan: ViewportPlan; bytes: number } {
+    const seen = new Set<object>()
+    let cellBytes = 0
     const cells = result.content.kind === 'detail' ? result.content.cells : []
     const unresolved = [...(result.overflowProof?.pending ?? []).map(item => ({ bounds: { ...item.bounds }, error: item.error })), ...cells.filter(cell => cell.kind === 'unknown' || cell.kind === 'error').map(cell => ({ bounds: { ...cell.bounds }, error: cell.kind === 'error' }))]
     const mergeAnchors = new Map((result.merges ?? []).map(m => [`${m.range.minRow}:${m.range.minCol}`, m.range]))
@@ -286,10 +296,15 @@ export class WorkerViewportPlans {
       const style = this.remote.styleOf(item.cell.styleIndex)
       const merge = mergeAnchors.get(`${item.source.row}:${item.source.col}`)
       const overflow = proof.get(item.source.row * 16384 + item.source.col)!
-      return [{ overflow: { left: overflow.left, right: overflow.right }, source: { ...item.source }, ...item.bounds, cell: { ...item.cell, ...(item.cell.sharedFormula ? { sharedFormula: { ...item.cell.sharedFormula } } : {}), ref: formatA1(item.source), value: item.cell.value ?? null, ...(style ? { style } : {}) }, ...(merge ? { merge: { ...merge } } : {}) }]
+      const placement: CellPlacement = { overflow: { left: overflow.left, right: overflow.right }, source: { ...item.source }, ...item.bounds, cell: { ...item.cell, ...(item.cell.sharedFormula ? { sharedFormula: { ...item.cell.sharedFormula } } : {}), ref: formatA1(item.source), value: item.cell.value ?? null, ...(style ? { style } : {}) }, ...(merge ? { merge: { ...merge } } : {}) }
+      cellBytes += queryPayloadBytes(placement, Number.POSITIVE_INFINITY, seen)
+      return [placement]
     })
     const coarse = (result.coarse ?? []).map(group => ({ ...group, bounds: { ...group.bounds }, slots: { ...group.slots }, cols: { ...group.cols } })), work = { ...(result.work ?? emptyWork()) }
-    return { kind: 'detail', ...(unresolved.length ? { pending: unresolved } : {}), cells: placed, merges: (result.merges ?? []).map(m => ({ range: { ...m.range }, ...m.bounds })), drawings: [], rowLines: [...(result.rowLines ?? [])], colLines: [...(result.colLines ?? [])], extent, diagnostics: [], coarse, work }
+    const plan: ViewportPlan = { kind: 'detail', ...(unresolved.length ? { pending: unresolved } : {}), cells: placed, merges: (result.merges ?? []).map(m => ({ range: { ...m.range }, ...m.bounds })), drawings: [], rowLines: [...(result.rowLines ?? [])], colLines: [...(result.colLines ?? [])], extent, diagnostics: [], coarse, work }
+    // The shell with an empty cells array, plus the array's slots and its placements.
+    const bytes = queryPayloadBytes({ ...plan, cells: [] }, Number.POSITIVE_INFINITY, seen) + 16 * placed.length + cellBytes
+    return { plan, bytes }
   }
   private drop(key: string, entry: Entry): void {
     this.ownershipRevision++

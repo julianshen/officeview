@@ -46,7 +46,7 @@ import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawi
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
-import { queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
+import { accountQueryBytes, ledgerPool, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 
 export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
@@ -1109,9 +1109,20 @@ export class RemoteSheetStore implements SourceStore {
     const cap = VIEWPORT_DETAIL_LIMITS[this.workbook.profile].overviewGroups
     const refused = this.guard(options)
     if (refused) return this.failedPage(refused)
-    if (!Array.isArray(request.groups) || request.groups.length > cap || queryPayloadBytes(request, budget) > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    if (!Array.isArray(request.groups) || request.groups.length > cap) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    // One checkpointed walk (workspace admitted to the main ledger) both
+    // checks and charges the request's clone; awaited only when it paused.
+    const accounted = accountQueryBytes(request, budget, () => { if (options.signal.aborted) throw new DOMException('Overview cancelled', 'AbortError') },
+      ledgerPool(this.workbook.mainLedger, 'replies', MAIN_THREAD_BUDGETS[this.workbook.profile]))
+    let bytes: number | undefined
+    try { bytes = accounted instanceof Promise ? await accounted : accounted } catch (cause) {
+      if (options.signal.aborted) return this.failedPage(failure('cancelled', 'Overview cancelled', true))
+      throw cause
+    }
+    if (bytes === undefined) return this.failedPage(failure('resource-limit', 'Overview request accounting exceeds the main memory budget; retry', true))
+    if (bytes > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
     const charge = `overview-clone:${this.workbook.nextRequestId()}`
-    this.workbook.mainLedger.set('replies', charge, queryPayloadBytes(request, budget))
+    this.workbook.mainLedger.set('replies', charge, bytes)
     try {
       const out = await this.read({ op: 'overview', request: structuredClone(request) }, options)
       if ('code' in out) return this.failedPage(out)

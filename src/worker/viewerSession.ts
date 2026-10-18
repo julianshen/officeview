@@ -2220,9 +2220,12 @@ export class DocumentSession {
           if (slice.due(proof.value)) await slice.pause('viewport-overflow')
         }
       } finally { steps.return(undefined as never); slice.dispose() }
-      const extended = { ...result, overflowProof: proof.value }
-      if (await this.queryBytes({ result: extended, diagnostics: out.diagnostics }, budget, live) > budget - 1024) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
-      return { result: extended, diagnostics: out.diagnostics }
+      const measured = { ...result, overflowProof: proof.value, queryBytes: 0 }
+      // The stamp is counted in the measure (a number slot costs the same at any value).
+      const queryBytes = await this.queryBytes({ result: measured, diagnostics: out.diagnostics }, budget, live)
+      if (queryBytes > budget - 1024) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
+      measured.queryBytes = queryBytes
+      return { result: measured, diagnostics: out.diagnostics }
     } catch (cause) {
       if (signal.aborted || cause instanceof FindError && cause.code === 'cancelled') return { kind: 'cancelled' }
       if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }

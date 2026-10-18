@@ -423,6 +423,9 @@ export type ViewportResult = (
 ) & {
   /** Request-local overflow evidence; never a row-cache completeness proof. */
   overflowProof?: import('./overflowProof').OverflowProof
+  /** queryPayloadBytes of this result with its diagnostics, measured by the
+   * worker's paced walker (spec §10.2), so main checks the bound without a walk. */
+  queryBytes?: number
   /** Mixed detail/coarse panes and exact active inspection share the same owner. */
   groups?: readonly ViewportOverviewGroup[]
   active?: ViewportCell

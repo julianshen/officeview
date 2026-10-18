@@ -40,7 +40,7 @@ import { MAX_ROWS } from '../xlsx/view/coordinates'
 import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
 import { accountQueryBytes } from './viewerQueryBudget'
 import { admitReply, replyLimitEnvelope, replyLimitRefusal } from './viewerReplyLimit'
-import { StopWalk, walkPayload } from './replyMeasure'
+import { StopWalk, walkAdmission, walkPayload } from './replyMeasure'
 import { CheckpointBudget } from '../xlsx/view/scheduler'
 import { smallTreeBytes } from '../xlsx/view/payloadBytes'
 import type { PoolCharge } from '../xlsx/view/tileCache'
@@ -222,8 +222,7 @@ export class ViewerKernel {
         // The walk's workspace is a transient share of the document pool,
         // admitted chunk by chunk before it grows and released after the walk.
         const workspace = this.sessions.get((command as CommandOf<'read'>).owner.docId)?.memory.charge()
-        let held = 0
-        try { out = admitReply(command as CommandOf<'read'>, out, limit!, bytes => !workspace || workspace.set(held += bytes), control) }
+        try { out = admitReply(command as CommandOf<'read'>, out, limit!, walkAdmission(workspace), control) }
         finally { workspace?.release() }
       } else if (out.replyBytes === undefined) {
         // A kernel-built reply is a small tree: stamped without a walk. A
@@ -295,7 +294,8 @@ export class ViewerKernel {
       // Of a read's replies, only a complete one carries the provider's result;
       // every other kind (cancelled, stale, error) is built by the kernel.
       if (final !== out || out.kind !== 'complete') emit(conclude(final), final.kind !== 'complete')
-      else await this.publish(command, out, conclude(out), docId, entry, emit, checked ? limit : undefined)
+      // An open's reply walks against the document session it just installed.
+      else await this.publish(command, out, conclude(out), command.kind === 'open' ? command.docId : docId, entry, emit, checked ? limit : undefined)
     } catch (cause) {
       if (entry?.controller.signal.aborted) {
         emit(this.withReason(reply(command as never, entry.owner as never, { kind: 'cancelled' }), entry), true)
@@ -344,11 +344,19 @@ export class ViewerKernel {
     const workspace = docId === undefined ? undefined : this.sessions.get(docId)?.memory.charge()
     const injected = this.walkYield('reply')
     const budget = new CheckpointBudget(() => { if (!published()) throw new StopWalk() }, undefined, injected ? { yield: injected } : {}, 'reply')
-    let held = 0
     try {
       const sized = { ...answer, replyBytes: 0 }
-      const run = walkPayload(sized, more => !workspace || workspace.set(held += more), budget)
-      const outcome = run instanceof Promise ? await run : run
+      const run = walkPayload(sized, walkAdmission(workspace), budget)
+      let outcome = run instanceof Promise ? await run : run
+      // A sort/filter view has committed: its delta must be delivered (the
+      // committed-delta rule). If the pool cannot admit the measuring
+      // workspace, measure it without deduplication in constant workspace: an
+      // over-estimate (shared parts counted at each occurrence), so main's
+      // charge stays conservative.
+      if (outcome.kind === 'refused' && (command.kind === 'sort' || command.kind === 'filter') && published()) {
+        const again = walkPayload(sized, () => true, budget, { dedupe: false })
+        outcome = again instanceof Promise ? await again : again
+      }
       const final = this.finalCheck(command, out, entry)
       if (final !== out) { emit(this.withReason(final, entry), true); return }
       if (grant !== undefined) {
@@ -509,12 +517,17 @@ export class ViewerKernel {
               if (signal.aborted) throw new DOMException('Filter cancelled', 'AbortError')
               if (!this.current(command.owner)) throw new StopWalk()
             }
-            const bytes = await this.keyBytes(session, command.keySets, live)
-            if (bytes === 'stale') return this.stale(command, command.owner)
-            if (bytes === undefined || !incoming.set(bytes)) throw new KeySetQuota(bytes, session.memory.limitBytes)
-            const installed = await this.installKeys(command.owner.docId, command.keySets, live)
-            if (installed === 'stale') return this.stale(command, command.owner)
-            shipped = installed
+            // One budget for both passes: their work is one operation's.
+            const injected = this.walkYield('query')
+            const pass = new CheckpointBudget(live, undefined, injected ? { yield: injected } : {}, 'query')
+            try {
+              const bytes = await this.keyBytes(session, command.keySets, pass)
+              if (bytes === 'stale') return this.stale(command, command.owner)
+              if (bytes === undefined || !incoming.set(bytes)) throw new KeySetQuota(bytes, session.memory.limitBytes)
+              const installed = await this.installKeys(command.owner.docId, command.keySets, pass)
+              if (installed === 'stale') return this.stale(command, command.owner)
+              shipped = installed
+            } finally { pass.dispose() }
           }
           outcome = command.kind === 'sort'
             ? await session.sort(command.owner, command.spec, signal, hooks)
@@ -694,16 +707,16 @@ export class ViewerKernel {
   /** queryPayloadBytes of filter keys through the one walker, admitted to the
    * session pool: undefined when the pool refused the workspace, 'stale' when
    * the command owner changed during the walk. */
-  private async keyBytes(session: DocumentSession, value: unknown, live: () => void): Promise<number | undefined | 'stale'> {
+  private async keyBytes(session: DocumentSession, value: unknown, pass: CheckpointBudget): Promise<number | undefined | 'stale'> {
     try {
-      const accounted = accountQueryBytes(value, session.memory.limitBytes, live, session.memory, this.walkYield('query'))
+      const accounted = accountQueryBytes(value, session.memory.limitBytes, () => {}, session.memory, undefined, pass)
       return accounted instanceof Promise ? await accounted : accounted
     } catch (cause) {
       if (cause instanceof StopWalk) return 'stale'
       throw cause
     }
   }
-  private async installKeys(docId: string, keySets: readonly FilterKeySet[] | undefined, live: () => void): Promise<string[] | 'stale'> {
+  private async installKeys(docId: string, keySets: readonly FilterKeySet[] | undefined, pass: CheckpointBudget): Promise<string[] | 'stale'> {
     if (!Array.isArray(keySets) || !keySets.length) return []
     let map = this.keySets.get(docId)
     if (!map) this.keySets.set(docId, map = new Map())
@@ -720,7 +733,7 @@ export class ViewerKernel {
         if (held) held.holders++
         else {
           const session = this.sessions.get(docId)!
-          const bytes = await this.keyBytes(session, set, live)
+          const bytes = await this.keyBytes(session, set, pass)
           if (bytes === 'stale') { this.removeKeys(docId, installed); return 'stale' }
           // The walk may have paused: re-read the map, where another install
           // of this ref may have landed meanwhile.
