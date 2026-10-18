@@ -19,6 +19,8 @@ export interface LargeOpenOptions {
   signal: AbortSignal
   limits?: ImportLimitOverrides
   storage?: PageStorageEnv
+  /** Background priority hook for the import's source reads (spec §10.2). */
+  beforeRead?(signal: AbortSignal): Promise<void> | void
 }
 export type LargeOpen =
   | { kind: 'paged'; source: WorkbookSource }
@@ -38,7 +40,7 @@ export async function openLargeBlob(blob: Blob, docId: string, options: LargeOpe
   const fallback = await compatibilityFallbackAllowed(blob, limits, options.signal)
   let session
   try {
-    session = await openImportSession({ kind: 'blob', blob }, { docId, profile: options.profile, signal: options.signal, limits: options.limits, storage: options.storage })
+    session = await openImportSession({ kind: 'blob', blob }, { docId, profile: options.profile, signal: options.signal, limits: options.limits, storage: options.storage, ...(options.beforeRead ? { beforeRead: options.beforeRead } : {}) })
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code
     // Storage/quota refusals are actionable and never fall back to unbounded memory.

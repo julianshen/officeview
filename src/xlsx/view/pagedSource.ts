@@ -365,17 +365,28 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         for (const page of this.pagesFor(row, Math.min(range.r1, this.sheet.importedThroughRow))) {
           if (page.aggregate.populated === 0 || page.c1 < range.c0 || page.c0 > range.c1) { row = Math.max(row, page.r1 + 1); continue }
           const p = await this.load(page, options.signal)
-          for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= range.r1; i++) {
-            if (budget.spend(1)) await budget.pause()
-            if (p.cols[i] < range.c0 || p.cols[i] > range.c1 || !recordPopulated(p, i)) continue
-            const next = item(p, i)
-            items.push(next instanceof Promise ? await next : next)
-            if (items.length === request.limit) {
-              yield { items, completeness: 'complete', stamp: this.stamp }
-              items = []
-              const again = this.guard(options)
-              if (again) { yield failedPage(this.stamp, again); return }
+          // Records are visited in batches up to the next checkpoint, each
+          // batch charged once (spec §10.2 bound unchanged).
+          for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= range.r1;) {
+            let from = i
+            const stop = Math.min(p.rows.length, i + budget.batch)
+            for (; i < stop && p.rows[i] <= range.r1; i++) {
+              if (p.cols[i] < range.c0 || p.cols[i] > range.c1 || !recordPopulated(p, i)) continue
+              const next = item(p, i)
+              items.push(next instanceof Promise ? await next : next)
+              if (items.length === request.limit) {
+                // No page escapes before its work is charged and checked: the
+                // batch so far is spent (a due pause runs) and a check runs.
+                if (budget.spend(i + 1 - from)) await budget.pause()
+                from = i + 1
+                budget.checkpoint()
+                yield { items, completeness: 'complete', stamp: this.stamp }
+                items = []
+                const again = this.guard(options)
+                if (again) { yield failedPage(this.stamp, again); return }
+              }
             }
+            if (budget.spend(i - from)) await budget.pause()
           }
           row = Math.max(row, page.r1 + 1)
         }

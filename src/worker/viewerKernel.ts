@@ -652,7 +652,9 @@ export class ViewerKernel {
           // candidates) one bounded verification pass; a paged decision never
           // copies the blob into worker memory (S1.2).
           const { openLargeBlob } = await import('./viewerLargeSource')
-          const routed = await openLargeBlob(handle.blob, docId, { profile, signal, limits: this.env.importLimits, storage: this.env.pageStorage })
+          // The progressive import is background work: it parks at its source
+          // reads while foreground commands run, a bounded wait each time (§10.2).
+          const routed = await openLargeBlob(handle.blob, docId, { profile, signal, limits: this.env.importLimits, storage: this.env.pageStorage, beforeRead: importSignal => this.waitForForeground(importSignal) })
           if (routed.kind === 'paged') { this.pagedSources.add(routed.source); return routed.source }
           if (routed.kind === 'refuse') throw new OpenRefusal(routed.code, routed.message)
           openDiagnostics = routed.diagnostics
