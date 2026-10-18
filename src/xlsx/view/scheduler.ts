@@ -125,3 +125,56 @@ export class CooperativeSlice<Phase extends string = string> {
     if (this.due(units)) await this.pause(phase)
   }
 }
+
+/** Yield budget a batched pass charges work to; CooperativeSlice satisfies it. */
+export interface BatchSlice {
+  due(units: number): boolean
+  pause(phase: string): Promise<void>
+  flush(phase: string): Promise<void>
+}
+/**
+ * Work batching shared by column passes, the owned value adapter's decode and
+ * the shipped SourceStores' request decode (spec §§10.2, 12.1): a batch ends at
+ * the next checkpoint, at most CHECK_WORK_UNITS units apart, where `check`
+ * (cancellation and staleness; it throws) runs and the slice samples its
+ * clock; the slice pauses with a real yield once YIELD_WORK_UNITS units or its
+ * time budget are spent. Without a caller slice, a host-yield slice is created
+ * at the first checkpoint and disposed with the budget.
+ */
+export class CheckpointBudget {
+  private work = 0
+  private unchecked = 0
+  private owned: CooperativeSlice<string> | undefined
+  constructor(
+    private readonly check: () => void,
+    private slice?: BatchSlice,
+    private readonly pacing: Pick<CooperativeOptions, 'now' | 'yield'> = {},
+    private readonly phase = 'filter',
+  ) {}
+  /** Units the next batch may take. */
+  get batch(): number { return Math.max(1, Math.min(CHECK_WORK_UNITS - this.unchecked, YIELD_WORK_UNITS - this.work)) }
+  /** Charges units; true when a pause is due. */
+  spend(units: number): boolean {
+    this.work += units
+    this.unchecked += units
+    if (this.unchecked < CHECK_WORK_UNITS && this.work < YIELD_WORK_UNITS) return false
+    const since = this.unchecked
+    this.unchecked = 0
+    this.check()
+    // The slice counts the same units and owns the clock and the host yield.
+    this.slice ??= this.owned = new CooperativeSlice<string>(this.pacing)
+    return this.slice.due(since)
+  }
+  async pause(): Promise<void> {
+    await this.slice!.pause(this.phase)
+    this.work = 0
+    this.unchecked = 0
+    this.check()
+  }
+  /** Yields work an earlier pass left unyielded on a caller slice. */
+  async flush(): Promise<void> {
+    if (this.slice) await this.slice.flush(this.phase)
+    this.check()
+  }
+  dispose(): void { this.owned?.dispose() }
+}

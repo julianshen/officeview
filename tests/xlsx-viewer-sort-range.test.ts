@@ -1018,4 +1018,10 @@ describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
     expect(marks.length).toBeGreaterThan(0)
     expect(Math.max(...marks)).toBeLessThanOrEqual(256)
   })
+  it('keeps the strip request count of 65,536-cell strips (R5: 10,000 x 9 makes 39 calls)', async () => {
+    const store = denseBlockStore(10_000, 9)
+    const result = await detectOperationRange(request(store, emptyIndex(store), sel(0, 0), { now: () => 0, yield: async () => {} }))
+    expect(result.kind).toBe('complete')
+    expect(store.probe).toEqual({ calls: 39, cells: 90_013 })
+  })
 })

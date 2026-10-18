@@ -3,7 +3,7 @@ import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailu
 import { classifyColumn, type ColumnClassification, type PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
-import { CHECK_WORK_UNITS, CooperativeSlice, YIELD_WORK_UNITS, type CooperativeOptions } from './scheduler'
+import { CHECK_WORK_UNITS, CheckpointBudget, YIELD_WORK_UNITS, type BatchSlice, type CooperativeOptions } from './scheduler'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
@@ -1466,8 +1466,8 @@ export async function compileValuesMembership(
 }
 
 /** Yield budget a column pass charges rows to; CooperativeSlice satisfies it. */
-export interface ColumnPassPacer { due(units: number): boolean; pause(phase: 'filter'): Promise<void>; flush(phase: 'filter'): Promise<void> }
-/** Column classification over lane pages of any size, in RowBudget batches
+export type ColumnPassPacer = BatchSlice
+/** Column classification over lane pages of any size, in CheckpointBudget batches
  * (spec §§10.2, 12.1). Without a caller slice a host-yield slice is used, so a
  * pass whose pages resolve as microtasks still lets a cancel posted as a task
  * land. */
@@ -1477,7 +1477,7 @@ export async function classifyLanePages(
   check: () => void,
   pacer?: ColumnPassPacer,
 ): Promise<ColumnClassification> {
-  const budget = new RowBudget(check, pacer)
+  const budget = new CheckpointBudget(check, pacer)
   let numeric = false, text = false, date = false, loading = false
   try {
     // Work an earlier pass left unyielded is not carried into this one.
@@ -1500,8 +1500,8 @@ export async function classifyLanePages(
  * do not produce lanes. One page per row band; the owner is read live.
  *
  * Bounded input (spec §§10.2, 12.1): placement, coverage checks and the final
- * coverage scan run in RowBudget batches with checkpoints and a host yield, so
- * any pageRows is admissible. The store's own work to answer one queryColumn
+ * coverage scan run in CheckpointBudget batches with checkpoints and a host
+ * yield, so any pageRows is admissible. The store's own work to answer one queryColumn
  * request is outside this adapter: a provider bounds it by the request's limit
  * (see SourceStore). */
 export function valueSourceFromStore(
@@ -1523,7 +1523,7 @@ export function valueSourceFromStore(
       const consumed: object[] = []
       // Placement and coverage run in bounded batches with checkpoints and a
       // real yield (spec §§10.2, 12.1), whatever pageRows the consumer chose.
-      const budget = new RowBudget(() => {
+      const budget = new CheckpointBudget(() => {
         checkSignal(signal, 'Value page read')
         if (!sameStamp(store.stamp, stamp)) throw new ValueIndexError('stale-source', 'Column page owner changed')
       }, undefined, pacing)
@@ -1572,44 +1572,7 @@ export function valueSourceFromStore(
   }
 }
 /** Lane tags share their numbers with SOURCE_* (contracts LANE_*), so they copy straight in. */
-/** Row batching shared by column passes and the owned adapter's decode (spec
- * §§10.2, 12.1): a batch ends at the next checkpoint, at most CHECK_WORK_UNITS
- * rows apart, where `check` (cancellation and staleness) runs and the slice
- * samples its clock; the slice pauses with a real yield once YIELD_WORK_UNITS
- * rows or its time budget are spent. Without a caller slice, a host-yield
- * slice is created at the first checkpoint and disposed with the budget. */
-class RowBudget {
-  private work = 0
-  private unchecked = 0
-  private owned: CooperativeSlice<'filter'> | undefined
-  constructor(private readonly check: () => void, private slice?: ColumnPassPacer, private readonly pacing: Pick<CooperativeOptions, 'now' | 'yield'> = {}) {}
-  get batch(): number { return Math.max(1, Math.min(CHECK_WORK_UNITS - this.unchecked, YIELD_WORK_UNITS - this.work)) }
-  /** Charges rows; true when a pause is due. */
-  spend(units: number): boolean {
-    this.work += units
-    this.unchecked += units
-    if (this.unchecked < CHECK_WORK_UNITS && this.work < YIELD_WORK_UNITS) return false
-    const since = this.unchecked
-    this.unchecked = 0
-    this.check()
-    // The slice counts the same rows and owns the clock and the host yield.
-    this.slice ??= this.owned = new CooperativeSlice<'filter'>(this.pacing)
-    return this.slice.due(since)
-  }
-  async pause(): Promise<void> {
-    await this.slice!.pause('filter')
-    this.work = 0
-    this.unchecked = 0
-    this.check()
-  }
-  /** Yields work an earlier pass left unyielded on a caller slice. */
-  async flush(): Promise<void> {
-    if (this.slice) await this.slice.flush('filter')
-    this.check()
-  }
-  dispose(): void { this.owned?.dispose() }
-}
-async function fillBlank(tags: Uint8Array, from: number, to: number, budget: RowBudget): Promise<void> {
+async function fillBlank(tags: Uint8Array, from: number, to: number, budget: CheckpointBudget): Promise<void> {
   for (let at = from; at < to;) {
     const end = Math.min(to, at + budget.batch)
     tags.fill(SOURCE_BLANK, at, end)
@@ -1619,7 +1582,7 @@ async function fillBlank(tags: Uint8Array, from: number, to: number, budget: Row
 }
 async function placeLanes(
   lanes: ColumnLanes, r0: number,
-  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], budget: RowBudget, account?: AllocationReservation,
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], budget: CheckpointBudget, account?: AllocationReservation,
 ): Promise<ValuePageRead | undefined> {
   const n = lanes.rows.length
   if (lanes.tags.length !== n || lanes.numbers.length !== n || lanes.styles.length !== n || lanes.textStart.length !== n + 1) {
@@ -1660,7 +1623,7 @@ function laneText(lanes: ColumnLanes, i: number, account?: AllocationReservation
 }
 async function place(
   item: ColumnEntry, r0: number, r1: number, col: number,
-  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], budget: RowBudget, account?: AllocationReservation,
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], budget: CheckpointBudget, account?: AllocationReservation,
 ): Promise<ValuePageRead | undefined> {
   if (item.kind === 'unknown') return { kind: 'unknown', pageId: item.pageId }
   if (item.kind === 'error') return { kind: 'error', failure: { code: item.code, retryable: item.retryable, message: 'Column value source failed' } }

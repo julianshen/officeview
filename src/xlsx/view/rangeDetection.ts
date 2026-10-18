@@ -163,8 +163,8 @@ function yieldToHost(): Promise<void> {
  * At every checkpoint (at most CHECK_WORK_UNITS units apart, spec §12.1) and
  * after every yield the signal and the source owner are re-checked; the slice
  * yields once 4,096 units or its time budget are spent, so neither depends on
- * the page size. A store's decoding of one request is not divisible from here
- * (see the SourceStore pacing contract). */
+ * the page size. The store decodes one request in its own steps (see the
+ * SourceStore pacing contract). */
 class Pacer {
   private work = 0
   private unchecked = 0
