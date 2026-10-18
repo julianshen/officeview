@@ -350,10 +350,21 @@ function layoutParagraph(
   }
 
   const flush = (isParagraphEnd: boolean) => {
-    const h =
-      para.lineSpacing?.rule === 'exact'
-        ? twipsToPx(para.lineSpacing.value)
-        : Math.max(lineHeight, inlineImages.length && !segs.length ? 0 : paragraphLineHeight() * 0.9)
+    const exact = para.lineSpacing?.rule === 'exact'
+    // An inline picture sits on the text baseline. When the line also carries
+    // text, the font's descent stays reserved below the picture (as in Word)
+    // so descenders and the next line never collide with it. The descent
+    // mirrors the painter's text baseline (ascent = size * factor * 0.8).
+    let descent = 0
+    if (!exact && inlineImages.length && segs.length) {
+      let size = 0
+      for (const s of segs) size = Math.max(size, s.style.fontSizePt)
+      descent = size * LINE_HEIGHT_FACTOR * (96 / 72 - 0.8)
+      for (const i of inlineImages) lineHeight = Math.max(lineHeight, i.top + i.height + i.bottom + descent)
+    }
+    const h = exact
+      ? twipsToPx(para.lineSpacing!.value)
+      : Math.max(lineHeight, inlineImages.length && !segs.length ? 0 : paragraphLineHeight() * 0.9)
     const lineIndent = indentLeft + (firstLine ? firstLineIndent : 0) + markerGutter
     const marker = firstLine && para.listMarker ? { text: para.listMarker, widthPx: markerGutter } : undefined
     const alignOffset =
@@ -370,7 +381,7 @@ function layoutParagraph(
     const boxes = inlineImages.map((i) => ({
       image: i.image,
       xPx: lineX + lineIndent + alignOffset + i.offset + extra * gapsBefore(i.offset),
-      yPx: y + (h - (i.height + i.bottom)),
+      yPx: y + (h - descent - (i.height + i.bottom)),
       widthPx: i.width,
       heightPx: i.height
     }))
@@ -404,7 +415,7 @@ function layoutParagraph(
       contentWidthPx: lineUsable,
       marker,
       bidi: isBidiRtl,
-      ...(boxes.length ? { inlineImages: boxes, baselinePx: y + h } : {})
+      ...(boxes.length ? { inlineImages: boxes, baselinePx: y + h - descent } : {})
     })
     y += h
     if (para.lineSpacing?.rule === 'atLeast') {
@@ -748,7 +759,7 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
       // Table block: split at row boundaries across pages, repeating header
       // rows (w:tblHeader) on each continuation page.
       const table = autoWidthTable(block.table, measure, defaults, contentWidth)
-      const tableX = m.left
+      const tableX = m.left + twipsToPx(table.indentTwips ?? 0)
       const hasHeader = table.rows.some((r) => r.isHeader)
       const pageHasContent = () => page.lines.length > 0 || page.tables.length > 0 || page.images.length > 0
       let fromRow = 0
@@ -1262,9 +1273,10 @@ function layoutRepeated(hf: HFBlock, measure: MeasureFn, pageNumber: number, tot
       const substituted: DocxTable = { ...block.table, rows: block.table.rows.map(row => ({ ...row, cells: row.cells.map(cell => ({ ...cell, paragraphs: substituteFields(cell.paragraphs, pageNumber, totalPages) })) })) }
       const table = autoWidthTable(substituted, measure, hf.defaults, hf.widthPx)
       const laid = layoutTableRows(table, measure, hf.defaults, { fromRow: 0, repeatHeader: false, maxHeightPx: Infinity, allowFirstRowOverflow: true })
-      out.tables.push({ xPx: hf.xPx, yPx: y, widthPx: laid.widthPx, rows: laid.rows })
-      addLines(laid.lines, hf.xPx, y)
-      floating.push(...laid.floatingAnchors.map(anchor => ({ ...anchor, contentX: anchor.contentX + hf.xPx, flowY: anchor.flowY + y })))
+      const tableX = hf.xPx + twipsToPx(table.indentTwips ?? 0)
+      out.tables.push({ xPx: tableX, yPx: y, widthPx: laid.widthPx, rows: laid.rows })
+      addLines(laid.lines, tableX, y)
+      floating.push(...laid.floatingAnchors.map(anchor => ({ ...anchor, contentX: anchor.contentX + tableX, flowY: anchor.flowY + y })))
       y += laid.heightPx
     }
   }

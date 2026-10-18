@@ -5,7 +5,7 @@
  * fallback for forged packages that lack it.
  */
 import type { OfficePackage } from '../core/zip'
-import { attrs, getChildren } from '../core/xml'
+import { attrs, getChildren, parseXml } from '../core/xml'
 
 export type OdfKind = 'text' | 'spreadsheet' | 'presentation' | 'graphics' | 'formula' | 'chart'
 
@@ -26,16 +26,23 @@ function kindOf(mime: string): OdfKind | undefined {
   return undefined
 }
 
-/** The ODF application kind of a package, or undefined when it is not ODF. */
+/** Caps for the sniffing reads, which run before any format is known: a real
+ * mimetype is a few dozen bytes; the manifest shares the content-types cap. */
+export const MIMETYPE_MAX_BYTES = 1024
+export const MANIFEST_MAX_BYTES = 4 * 1024 * 1024
+
+/** The ODF application kind of a package, or undefined when it is not ODF.
+ * Rejects with PackageError 'resource-limit' when a sniffed part exceeds its cap. */
 export async function odfKind(pkg: OfficePackage): Promise<OdfKind | undefined> {
-  const mimetype = await pkg.text('mimetype')
+  const mimetype = await pkg.boundedText('mimetype', MIMETYPE_MAX_BYTES)
   if (mimetype) {
     const kind = kindOf(mimetype)
     if (kind) return kind
   }
   // forged packages sometimes lack the mimetype entry — the manifest records
   // the root document's media type under full-path "/"
-  const manifest = await pkg.xml('META-INF/manifest.xml')
+  const manifestText = await pkg.boundedText('META-INF/manifest.xml', MANIFEST_MAX_BYTES)
+  const manifest = manifestText === undefined ? undefined : parseXml(manifestText)
   if (manifest) {
     for (const entry of getChildren(manifest, 'file-entry')) {
       const a = attrs(entry)

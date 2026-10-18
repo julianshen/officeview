@@ -154,6 +154,22 @@ export function odfDecimalListStyle(name: string): string {
     + `</text:list-style>`
 }
 
+/**
+ * Writer's common heading styles as LibreOffice writes them to styles.xml:
+ * "Heading" (14pt, keep-with-next) and "Heading_20_1" (130%, bold, outline
+ * level 1). Pass as extraCommonStyles; name the paragraph style
+ * 'Heading_20_1'. A text:h with no text:style-name takes the default
+ * paragraph style, so it renders as body text.
+ */
+export function odfWriterHeadingStyles(): string {
+  return '<style:style style:name="Heading" style:family="paragraph" style:next-style-name="Text_20_body">'
+    + '<style:paragraph-properties fo:margin-top="0.423cm" fo:margin-bottom="0.212cm" fo:keep-with-next="always"/>'
+    + '<style:text-properties fo:font-size="14pt"/></style:style>'
+    + '<style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph"'
+    + ' style:parent-style-name="Heading" style:default-outline-level="1">'
+    + '<style:text-properties fo:font-size="130%" fo:font-weight="bold"/></style:style>'
+}
+
 function esc(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

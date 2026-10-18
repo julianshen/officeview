@@ -1,0 +1,708 @@
+import { SOURCE_ALLOCATION, adoptAllocation, type AllocationReservation, type SourceAllocationOptions } from './allocationAccount'
+import type { FormatAllocation } from '../formula/format'
+/**
+ * Source adapters behind the async SourceStore (spec §§4.1-4.2, plan S1.2).
+ *
+ * `ObjectXlsxSheetAdapter` wraps the current parser output BY REFERENCE (no
+ * clone, no mutation) for admitted small files: it indexes only populated
+ * rows, keeps no per-column caches, and bounds every page by rows AND cells.
+ * Structure comes from parser metadata (S3.3): merges, tables, saved array
+ * extents, engine spill footprints and drawing anchors. Coverage it cannot
+ * resolve (unreadable drawing anchors, a dynamic array with no known extent,
+ * an unavailable table inventory) is reported incomplete with a diagnostic.
+ * The paged adapter for large files lives in ./pagedSource and answers the same
+ * questions from stored pages; adapter parity is asserted within one value policy.
+ */
+import { DEFAULT_COLUMN_METRICS, columnWidthPx, type ColumnMetrics } from '../columnWidth'
+import type {
+  AuthoritativeCell, AxisSizeInterval, CellRead, ColumnEntry, ColumnQuery, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
+  DrawingAnchor, RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
+  SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
+} from './contracts'
+import type { ColumnLanes, DrawingMemory, ProfileId, SheetDrawings } from './contracts'
+import { DRAWING_MEMORY_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from './drawingPayload'
+import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
+import type { XlsxCell, XlsxDocument, XlsxDrawing, XlsxRow, XlsxSheet } from '../types'
+import type { TableMetadata } from '../formula/types'
+import { engineSpillFootprints, type EngineSpillFootprint } from '../formula/workbook'
+import { resolveDrawingAnchors } from './drawingBounds'
+import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, parseA1, type SourceRect } from './coordinates'
+import { createAxisMetrics } from './axes'
+import { createIntervalSet } from './visibility'
+import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
+import {
+  failedPage, failure, lowerBound, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource,
+} from '../../worker/viewerSession'
+import { addRecord, answerOverview, emptyAggregate, type OverviewCellSource } from '../storage/overviewIndex'
+import { cellDisplayText } from '../render'
+import { CheckpointBudget, type CooperativeOptions } from './scheduler'
+
+/** Row-page bounds: at most 200 rows and 262,144 cells (matches the fixture store). */
+export const READ_ROWS_PAGE_ROWS = 200
+export const READ_ROWS_MAX_CELLS = 262_144
+export interface ObjectSourceOptions {
+  readRowsMaxCells?: number
+  /** Drawing transfer budget override (S13.2); default drawingPayloadBudget(profile). */
+  drawingPayloadBytes?: number
+  /** Fixed at admission (§4.4); 'cached' wraps a doc parsed with valuePolicy 'cached'. */
+  valuePolicy?: ValuePolicy
+  /** Request-decode clock and host yield (tests inject both). */
+  pacing?: StorePacing
+}
+export type StorePacing = Pick<CooperativeOptions, 'now' | 'yield'>
+/** A request's decode stopped at a checkpoint (cancelled or a stale owner). */
+export class SourceStop extends Error {
+  constructor(readonly failure: SourceFailure) { super(failure.message) }
+}
+/** Decode budget of one store request (spec §10.2, decision 10): cells are
+ * decoded in steps of at most 4,096 with a real yield between steps, and the
+ * request's guard (signal, owner) runs at every checkpoint, throwing SourceStop. */
+export function requestBudget(guard: () => SourceFailure | undefined, pacing: StorePacing = {}): CheckpointBudget {
+  return new CheckpointBudget(() => { const stop = guard(); if (stop) throw new SourceStop(stop) }, undefined, pacing, 'source')
+}
+/** Initial worker-side defaults; authoritative sheet metrics land with S2.3/S5. */
+const DEFAULT_ROW_CSS = 20
+const DEFAULT_COL_CSS = 64
+
+const isPopulated = (cell: XlsxCell): boolean => cell.value !== null || cell.formula !== undefined
+/** Under 'cached' a formula without a saved value is permanently unavailable (§4.4). */
+const isUnavailable = (cell: XlsxCell, policy: ValuePolicy): boolean => isValueUnavailable(cell, policy)
+function toPayload(cell: XlsxCell, policy: ValuePolicy = 'engine'): SingleCellPayload {
+  const authority = valueAuthority(cell, policy)
+  const payload: SingleCellPayload = {
+    id: cellId(cell.row, cell.col), row: cell.row, col: cell.col, value: authority.value, styleIndex: cell.styleIndex,
+    valueProvenance: authority.provenance,
+  }
+  if (cell.hasCachedValue !== undefined) payload.hasCachedValue = cell.hasCachedValue
+  if (cell.valueIsError !== undefined) payload.valueIsError = authority.valueIsError
+  if (cell.formula !== undefined) payload.formula = cell.formula
+  if (cell.sharedFormula !== undefined) payload.sharedFormula = { ...cell.sharedFormula }
+  if (cell.arrayRef !== undefined) payload.arrayRef = cell.arrayRef
+  if (cell.dynamicArray !== undefined) payload.dynamicArray = cell.dynamicArray
+  if (cell.formulaType !== undefined) payload.formulaType = cell.formulaType
+  if (cell.ca !== undefined) payload.ca = cell.ca
+  return Object.freeze(payload)
+}
+function toRowCell(cell: XlsxCell, policy: ValuePolicy): AuthoritativeCell {
+  return isUnavailable(cell, policy) ? Object.freeze({ ...toPayload(cell, policy), unavailable: true as const }) : toPayload(cell, policy)
+}
+
+/** Accumulates one ColumnLanes run; rows must arrive strictly ascending. */
+export class LaneBuilder {
+  private rows: number[] = []
+  private tags: number[] = []
+  private numbers: number[] = []
+  private styles: number[] = []
+  private texts: string[] = []
+  private textUnits = 0
+  private capacity = 0
+  private length = 0
+  private stagedBytes = 0
+  private finished = false
+  constructor(private readonly account?: AllocationReservation) {}
+  get count(): number { return this.length }
+  private grow(): void {
+    const capacity = Math.max(16, this.capacity * 2), bytes = capacity * 40 + 80
+    this.account?.charge(bytes)
+    try {
+      const rows = new Array<number>(capacity), tags = new Array<number>(capacity), numbers = new Array<number>(capacity)
+      const styles = new Array<number>(capacity), texts = new Array<string>(capacity)
+      for (let i = 0; i < this.length; i++) {
+        rows[i] = this.rows[i]; tags[i] = this.tags[i]; numbers[i] = this.numbers[i]
+        styles[i] = this.styles[i]; texts[i] = this.texts[i]
+      }
+      this.rows = rows; this.tags = tags; this.numbers = numbers; this.styles = styles; this.texts = texts
+      this.account?.release(this.stagedBytes)
+      this.capacity = capacity
+      this.stagedBytes = bytes
+    } catch (error) { this.account?.release(bytes); throw error }
+  }
+  /** Same classification as the value index's cell-entry path (valueIndex.place). */
+  add(row: number, value: string | number | boolean | null | undefined, valueIsError: boolean | undefined, styleIndex: number, unavailable: boolean): void {
+    if (this.finished) throw new RangeError('Local column producer already finished')
+    const { tag, num, text } = laneValue(value, valueIsError, unavailable)
+    if (this.length === this.capacity) this.grow()
+    const i = this.length++
+    this.rows[i] = row; this.tags[i] = tag; this.numbers[i] = num; this.styles[i] = styleIndex; this.texts[i] = text
+    this.textUnits += text.length
+  }
+  build(r0: number, r1: number): ColumnLanes {
+    if (this.finished) throw new RangeError('Local column producer already finished')
+    const n = this.length
+    this.account?.charge(21 * n + 4 + 2 * this.textUnits + 512)
+    const rows = new Uint32Array(n), tags = new Uint8Array(n), numbers = new Float64Array(n), styles = new Uint32Array(n)
+    const text = new Uint16Array(this.textUnits), textStart = new Uint32Array(n + 1)
+    let at = 0
+    for (let i = 0; i < n; i++) {
+      rows[i] = this.rows[i]; tags[i] = this.tags[i]; numbers[i] = this.numbers[i]; styles[i] = this.styles[i]
+      textStart[i] = at
+      const t = this.texts[i]
+      for (let k = 0; k < t.length; k++) text[at++] = t.charCodeAt(k)
+    }
+    textStart[n] = at
+    const result: ColumnLanes = { kind: 'lanes', r0, r1, rows, tags, numbers, styles, text, textStart }
+    if (this.account) {
+      this.rows = []; this.tags = []; this.numbers = []; this.styles = []; this.texts = []
+      this.account.release(this.stagedBytes)
+      this.stagedBytes = 0
+      this.finished = true
+    }
+    return result
+  }
+}
+/** Bytes a lanes run holds (row 4 + tag 1 + number 8 + style 4 per entry, 2 per code unit). */
+export const laneBytes = (lanes: ColumnLanes): number => lanes.rows.length * 17 + lanes.text.length * 2 + lanes.textStart.length * 4
+
+function parseRange(ref: string): SourceRect | null {
+  try {
+    const [first, last = first] = ref.split(':')
+    const a = parseA1(first), b = parseA1(last)
+    return { r0: Math.min(a.row, b.row), r1: Math.max(a.row, b.row), c0: Math.min(a.col, b.col), c1: Math.max(a.col, b.col) }
+  } catch {
+    return null
+  }
+}
+const intersects = (a: SourceRect, b: SourceRect): boolean =>
+  a.r0 <= b.r1 && b.r0 <= a.r1 && a.c0 <= b.c1 && b.c0 <= a.c1
+
+export class ObjectXlsxSheetAdapter implements SourceStore {
+  readonly extent: SourceStore['extent']
+  private readonly rows: readonly XlsxRow[]
+  private readonly rowIndexes: readonly number[]
+  private readonly dynamicAnchors: readonly { row: number; col: number }[]
+  private drawingCache?: DrawingAnchor[]
+  private released = false
+  /** `tables` undefined means the workbook table inventory is unavailable (the
+   * parser's fail-closed signal), never "no tables". `engineSpills` are the
+   * engine's published footprints for this sheet; undefined under the `engine`
+   * policy means no evaluation state is known, so dynamic extents stay unknown. */
+  constructor(
+    readonly stamp: SourceStamp,
+    private readonly sheet: XlsxSheet,
+    private readonly tables: readonly TableMetadata[] | undefined,
+    private readonly maxCells: number,
+    readonly valuePolicy: ValuePolicy = 'engine',
+    private readonly engineSpills?: readonly EngineSpillFootprint[],
+    private readonly drawingPayloadBytes?: number,
+    private readonly pacing: StorePacing = {},
+  ) {
+    const rows = sheet.rows.filter(row => isValidCoordinate(row.index, 0) && row.cells.length)
+      .sort((a, b) => a.index - b.index)
+    this.rows = rows
+    this.rowIndexes = rows.map(row => row.index)
+    const dynamic: { row: number; col: number }[] = []
+    let r0 = MAX_ROWS, r1 = -1, c0 = MAX_COLS, c1 = -1
+    for (const row of rows) {
+      for (const cell of row.cells) {
+        if (!isValidCoordinate(cell.row, cell.col)) continue
+        r0 = Math.min(r0, cell.row); r1 = Math.max(r1, cell.row)
+        c0 = Math.min(c0, cell.col); c1 = Math.max(c1, cell.col)
+        if (cell.dynamicArray) dynamic.push({ row: cell.row, col: cell.col })
+      }
+    }
+    this.dynamicAnchors = dynamic
+    this.extent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
+  }
+  /** parse.ts turns an unreadable merge ref into an A1 merge; when the raw refs
+   * are present, those are dropped (and diagnosed) exactly as the paged adapter does. */
+  private validMerges(): XlsxSheet['mergeRanges'] {
+    const raw = this.sheet.merges
+    if (raw.length !== this.sheet.mergeRanges.length) return this.sheet.mergeRanges
+    return this.sheet.mergeRanges.filter((_, i) => parseRange(raw[i]) !== null)
+  }
+  private get invalidMerges(): number {
+    return this.sheet.mergeRanges.length - this.validMerges().length
+  }
+  /** Per-column caches retained by this store; it builds pages from the row index. */
+  get cachedColumnCount(): number { return 0 }
+  /** Drawing anchors whose placement is unknown: unreadable anchors/parts, or
+   * parsed drawings on a sheet whose anchors were never extracted. */
+  private get unresolvedDrawings(): number {
+    const anchors = this.sheet.drawingAnchors
+    return anchors === undefined ? this.sheet.drawings?.length ?? 0 : anchors.unresolved
+  }
+  /** Dynamic anchors whose spill extent is unknown (no saved ref, no engine footprint). */
+  private unknownSpills(): { row: number; col: number }[] {
+    const footprints = this.valuePolicy === 'cached' ? [] : this.engineSpills
+    return this.dynamicAnchors.filter(at => {
+      const cell = this.cellIn(this.rows[lowerBound(this.rowIndexes, at.row)], at.col)
+      const saved = cell?.arrayRef === undefined ? null : parseRange(cell.arrayRef)
+      if (footprints === undefined) return true
+      return saved === null && !footprints.some(f => f.anchor.row === at.row && f.anchor.col === at.col)
+    })
+  }
+  /** Coverage gaps this adapter can never close by waiting. */
+  coverageDiagnostics(): WorkerDiagnostic[] {
+    const out: WorkerDiagnostic[] = []
+    if (this.unresolvedDrawings > 0) {
+      out.push({ code: 'coverage-unresolvable', message: 'Some drawing anchors could not be read; their placement is unknown' })
+    }
+    const unknown = this.unknownSpills()
+    if (unknown.length) {
+      out.push({ code: 'coverage-unresolvable', message: 'A dynamic-array spill has no known extent', source: unknown[0] })
+    }
+    if (this.invalidMerges) out.push(invalidMergeDiagnostic(this.invalidMerges))
+    if (this.tables === undefined) {
+      out.push({ code: 'coverage-unresolvable', message: 'The workbook table inventory could not be read; table bands are unknown' })
+    }
+    return out
+  }
+  private guard(options: ReadOptions): SourceFailure | undefined {
+    if (this.released) return failure('stale-source', 'Source released')
+    if (options.signal?.aborted) return failure('cancelled', 'Request cancelled')
+    if (!options.stamp || !sameStamp(options.stamp, this.stamp)) return failure('stale-source', 'Source owner changed', true)
+    return undefined
+  }
+  private cellIn(row: XlsxRow, col: number): XlsxCell | undefined {
+    return row.cells.find(cell => cell.col === col && cell.row === row.index)
+  }
+  displayText(cell: AuthoritativeCell, allocation?: FormatAllocation): string {
+    const k = lowerBound(this.rowIndexes, cell.row)
+    const original = this.rowIndexes[k] === cell.row ? this.cellIn(this.rows[k], cell.col) : undefined
+    return cellDisplayText(this.sheet, { value: cell.value, style: original?.style }, allocation)
+  }
+  async readCell(at: { row: number; col: number }, options: ReadOptions): Promise<CellRead> {
+    const error = this.guard(options)
+    if (error) return { kind: 'error', code: error.code, retryable: error.retryable }
+    if (!isValidCoordinate(at.row, at.col)) return { kind: 'error', code: 'invalid-coordinate', retryable: false }
+    const k = lowerBound(this.rowIndexes, at.row)
+    const cell = this.rowIndexes[k] === at.row ? this.cellIn(this.rows[k], at.col) : undefined
+    if (!cell) return { kind: 'blank' }
+    const payload = toPayload(cell, this.valuePolicy)
+    return isUnavailable(cell, this.valuePolicy) ? { kind: 'unavailable', cell: payload, reason: 'formula-value-unavailable' } : { kind: 'cell', cell: payload }
+  }
+  async readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions & SourceAllocationOptions): Promise<Page<SparseRowPage>> {
+    const error = this.guard(options)
+    if (error) return failedPage(this.stamp, error)
+    if (!isValidSourceRect(range)) return failedPage(this.stamp, failure('invalid-source-rect', 'Invalid range'))
+    const key = `objrows:${range.r0}:${range.r1}:${range.c0}:${range.c1}:`
+    let at = lowerBound(this.rowIndexes, range.r0)
+    if (cursor !== undefined) {
+      const offset = cursor.startsWith(key) ? Number(cursor.slice(key.length)) : NaN
+      if (!Number.isSafeInteger(offset) || offset < at || offset > this.rows.length) {
+        return failedPage(this.stamp, failure('invalid-cursor', 'Invalid row cursor'))
+      }
+      at = offset
+    }
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    const budget = requestBudget(() => this.guard(options), this.pacing)
+    try {
+    const items: SparseRowPage[] = []
+    let visited = 0, cellCount = 0
+    while (at < this.rows.length && this.rowIndexes[at] <= range.r1 && visited < READ_ROWS_PAGE_ROWS) {
+      const row = this.rows[at]
+      account?.charge(72)
+      const cells: AuthoritativeCell[] = []
+      for (const cell of row.cells) {
+        if (budget.spend(1)) await budget.pause()
+        if (cell.row === row.index && cell.col >= range.c0 && cell.col <= range.c1) {
+          account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
+          cells.push(toRowCell(cell, this.valuePolicy))
+        }
+      }
+      // Cell bound: stop before a row would push the page past the cap (a row
+      // has at most 16,384 cells, so a first row always fits a sane cap).
+      if (items.length && cellCount + cells.length > this.maxCells) break
+      at++
+      visited++
+      cellCount += cells.length
+      if (cells.length) items.push({ row: row.index, cells: cells.sort((a, b) => a.col - b.col) })
+    }
+    const more = at < this.rows.length && this.rowIndexes[at] <= range.r1
+    await budget.finish()
+    const page = { items, completeness: 'complete' as const, stamp: this.stamp, ...(more ? { nextCursor: `${key}${at}` } : {}) }
+    if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+    return page
+    } catch (stop) {
+      if (stop instanceof SourceStop) return failedPage(this.stamp, stop.failure)
+      throw stop
+    } finally { account?.release(); budget.dispose() }
+  }
+  /** Column page straight from the row index: populated entries plus explicit
+   * blank runs covering every requested row; nothing is cached per column. */
+  async queryColumn(request: ColumnQuery, options: ReadOptions & SourceAllocationOptions): Promise<Page<ColumnEntry>> {
+    const error = this.guard(options)
+    if (error) return failedPage(this.stamp, error)
+    if (!isValidCoordinate(0, request.col)) return failedPage(this.stamp, failure('invalid-coordinate', 'Invalid column'))
+    if (!Number.isSafeInteger(request.limit) || request.limit <= 0) return failedPage(this.stamp, failure('invalid-source-rect', 'Invalid limit'))
+    let intervals: SourceRowInterval[] | null
+    try { intervals = rowSetIntervals(request.rows) } catch (cause) {
+      return failedPage(this.stamp, failure('invalid-source-rect', (cause as Error).message))
+    }
+    if (!intervals) return failedPage(this.stamp, failure('unsupported', 'Resident row-set refs are not resolvable by the object adapter'))
+    const prefix = `objcol${request.col}`
+    let at = 0, row = intervals[0]?.r0 ?? 0
+    if (request.cursor !== undefined) {
+      const parts = request.cursor.split(':')
+      const i = Number(parts[1]), r = Number(parts[2])
+      if (parts.length !== 3 || parts[0] !== prefix || !Number.isSafeInteger(i) || i < 0 || i >= intervals.length
+        || !isValidCoordinate(r, 0) || r < intervals[i].r0 || r > intervals[i].r1) {
+        return failedPage(this.stamp, failure('invalid-cursor', 'Invalid column cursor'))
+      }
+      at = i; row = r
+    }
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    try {
+    const finish = (page: Page<ColumnEntry>) => { if (account) adoptAllocation(account, page, account.bytes, [this.stamp]); return page }
+    if (request.encoding === 'lanes') return finish(this.lanesPage(request, intervals, at, row, prefix, account))
+    const items: ColumnEntry[] = []
+    while (at < intervals.length && items.length < request.limit) {
+      const { r1 } = intervals[at]
+      if (row < intervals[at].r0) row = intervals[at].r0
+      // Next row at or after `row` that has a cell in this column, within r1.
+      let k = lowerBound(this.rowIndexes, row), found: XlsxCell | undefined
+      for (; k < this.rows.length && this.rowIndexes[k] <= r1; k++) {
+        found = this.cellIn(this.rows[k], request.col)
+        if (found) break
+      }
+      if (!found) {
+        account?.charge(72)
+        items.push({ kind: 'blank', r0: row, r1 })
+        at++
+        if (at < intervals.length) row = intervals[at].r0
+        continue
+      }
+      if (found.row > row) {
+        account?.charge(72)
+        items.push({ kind: 'blank', r0: row, r1: found.row - 1 })
+        if (items.length >= request.limit) { row = found.row; break }
+      }
+      account?.charge(384 + (isUnavailable(found, this.valuePolicy) ? 288 : 0) + (found.sharedFormula ? 96 : 0))
+      const payload = toPayload(found, this.valuePolicy)
+      items.push(isUnavailable(found, this.valuePolicy)
+        ? { kind: 'unavailable', row: found.row, cell: payload, reason: 'formula-value-unavailable' }
+        : { kind: 'cell', row: found.row, cell: payload })
+      row = found.row + 1
+      if (row > r1) { at++; if (at < intervals.length) row = intervals[at].r0 }
+    }
+    return finish({ items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) })
+    } finally { account?.release() }
+  }
+  async *scanPopulated(request: PopulatedQuery, options: ReadOptions & SourceAllocationOptions): AsyncIterable<Page<AuthoritativeCell>> {
+    const error = this.guard(options)
+    if (error) { yield failedPage(this.stamp, error); return }
+    if (!isValidSourceRect(request.range) || !Number.isSafeInteger(request.limit) || request.limit <= 0) {
+      yield failedPage(this.stamp, failure('invalid-source-rect', 'Invalid populated query')); return
+    }
+    let account = options[SOURCE_ALLOCATION]?.reserve()
+    account?.charge(96)
+    const budget = requestBudget(() => this.guard(options), this.pacing)
+    try {
+    let items: AuthoritativeCell[] = []
+    for (let at = lowerBound(this.rowIndexes, request.range.r0); at < this.rows.length && this.rowIndexes[at] <= request.range.r1; at++) {
+      for (const cell of this.rows[at].cells) {
+        try { if (budget.spend(1)) await budget.pause() } catch (stop) {
+          if (!(stop instanceof SourceStop)) throw stop
+          yield failedPage(this.stamp, stop.failure); return
+        }
+        if (cell.col < request.range.c0 || cell.col > request.range.c1 || !isPopulated(cell)) continue
+        account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
+        items.push(toRowCell(cell, this.valuePolicy))
+        if (items.length === request.limit) {
+          const page = { items, completeness: 'complete' as const, stamp: this.stamp }
+          if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+          account?.release()
+          yield page
+          account = options[SOURCE_ALLOCATION]?.reserve()
+          account?.charge(96)
+          items = []
+          const again = this.guard(options)
+          if (again) { yield failedPage(this.stamp, again); return }
+        }
+      }
+    }
+    try { await budget.finish() } catch (stop) {
+      if (!(stop instanceof SourceStop)) throw stop
+      yield failedPage(this.stamp, stop.failure); return
+    }
+    const page = { items, completeness: 'complete' as const, stamp: this.stamp }
+    if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
+    account?.release()
+    yield page
+    } finally { account?.release(); budget.dispose() }
+  }
+  async queryStructural(rect: SourceRect, options: ReadOptions & SourceAllocationOptions): Promise<StructuralResult> {
+    const base = { stamp: this.stamp, merges: [], tables: [], spills: [], drawings: [] }
+    const error = this.guard(options) ?? (isValidSourceRect(rect) ? undefined : failure('invalid-source-rect', 'Invalid range'))
+    if (error) return { ...base, completeness: 'incomplete', missing: [rect], error }
+    const account = options[SOURCE_ALLOCATION]?.reserve()
+    // Sparse authored metadata bounds the new records; no full-axis materialization.
+    let spillCount = this.engineSpills?.length ?? 0
+    for (const row of this.rows) for (const cell of row.cells) if (cell.arrayRef !== undefined || cell.dynamicArray) spillCount++
+    // Drawing anchors are the adapter's resolved cache (charged once, below):
+    // a result only adds its own array slots.
+    account?.charge(256 + 320 * (this.sheet.mergeRanges?.length ?? this.sheet.merges.length) + 256 * (this.tables?.length ?? 0) + 448 * spillCount + 16 * (this.sheet.drawingAnchors?.records.length ?? 0))
+    try {
+    const merges = this.validMerges()
+      .map(m => ({ id: `merge:${m.minRow}:${m.minCol}:${m.maxRow}:${m.maxCol}`, range: { r0: m.minRow, r1: m.maxRow, c0: m.minCol, c1: m.maxCol }, anchor: { row: m.minRow, col: m.minCol } }))
+      .filter(m => isValidSourceRect(m.range) && intersects(m.range, rect))
+    const tables = (this.tables ?? [])
+      .map(t => ({ id: t.id, range: { r0: t.extent.firstRow, r1: t.extent.firstRow + t.extent.rows - 1, c0: t.extent.firstCol, c1: t.extent.firstCol + t.extent.cols - 1 }, headerRows: t.headerRowCount, totalsRows: t.totalsRowCount }))
+      .filter(t => isValidSourceRect(t.range) && intersects(t.range, rect))
+    const spills: SpillExtent[] = []
+    const missing: SourceRect[] = []
+    const addMissing = (domain: SourceRect) => {
+      const r0 = Math.max(domain.r0, rect.r0), r1 = Math.min(domain.r1, rect.r1)
+      const c0 = Math.max(domain.c0, rect.c0), c1 = Math.min(domain.c1, rect.c1)
+      if (r0 <= r1 && c0 <= c1) missing.push({ r0, r1, c0, c1 })
+    }
+    // A dynamic array with no known extent may reach anywhere from its anchor to
+    // the sheet edge: that domain stays unknown, never assumed empty.
+    for (const anchor of this.unknownSpills()) addMissing({ r0: anchor.row, r1: MAX_ROWS - 1, c0: anchor.col, c1: MAX_COLS - 1 })
+    // Under `cached` the saved footprint is the published extent; under `engine`
+    // the engine's footprint is, and the saved one stays in the union because a
+    // retained (not recalculated) owner still shows its saved followers.
+    const footprints = new Map<number, SourceRect>()
+    if (this.valuePolicy === 'engine') for (const f of this.engineSpills ?? []) footprints.set(cellId(f.anchor.row, f.anchor.col), { r0: f.r0, r1: f.r1, c0: f.c0, c1: f.c1 })
+    const add = (spill: SpillExtent) => {
+      const anchorRect = { r0: spill.anchor.row, r1: spill.anchor.row, c0: spill.anchor.col, c1: spill.anchor.col }
+      if ([spill.saved, spill.evaluated, anchorRect].some(extent => extent !== undefined && intersects(extent, rect))) spills.push(spill)
+    }
+    for (const row of this.rows) {
+      for (const cell of row.cells) {
+        if (cell.arrayRef === undefined && !(cell.dynamicArray && footprints.has(cellId(cell.row, cell.col)))) continue
+        const saved = cell.arrayRef === undefined ? null : parseRange(cell.arrayRef)
+        const anchor = { row: cell.row, col: cell.col }
+        const evaluated = cell.dynamicArray ? (this.valuePolicy === 'cached' ? saved ?? undefined : footprints.get(cellId(cell.row, cell.col))) : undefined
+        footprints.delete(cellId(cell.row, cell.col))
+        add({ anchor, kind: cell.dynamicArray ? 'dynamic' : 'fixed', ...(saved ? { saved } : {}), ...(evaluated ? { evaluated } : {}) })
+      }
+    }
+    // Owners the engine spilled without file array metadata (explicit dynamic mode).
+    for (const [id, evaluated] of footprints) add({ anchor: { row: Math.floor(id / MAX_COLS), col: id % MAX_COLS }, kind: 'dynamic', evaluated })
+    // Unreadable drawing anchors and an unavailable table inventory cannot prove "none here".
+    if (this.unresolvedDrawings > 0 || this.tables === undefined) addMissing(rect)
+    // The resolved anchors live as long as this adapter: charged once per
+    // ledger, never again by each result that borrows them. A first resolution
+    // is admitted before the cache is built and published; a refusal (or any
+    // failure before its adoption) leaves no cache behind.
+    const memory = options[SOURCE_ALLOCATION], records = this.sheet.drawingAnchors?.records.length ?? 0
+    const fresh = this.drawingCache === undefined
+    let cached: DrawingAnchor[]
+    if (memory && records && (fresh || !memory.owns(this.drawingCache!))) {
+      const cacheAccount = memory.reserve()
+      try {
+        cacheAccount.charge(320 * records)
+        cached = this.drawings()
+        if (cached.length) adoptAllocation(cacheAccount, cached)
+      } catch (error) { if (fresh) this.drawingCache = undefined; throw error }
+      finally { cacheAccount.release() }
+    } else cached = this.drawings()
+    const drawings = cached.filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
+    const result: StructuralResult = { ...base, merges, tables, spills, drawings, completeness: missing.length ? 'incomplete' : 'complete', missing }
+    if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
+    return result
+    } finally { account?.release() }
+  }
+  /** Resolved once: the parsed sheet behind this adapter never changes. Known gap
+   * (pre-existing): this geometry omits `columnMetrics`, so anchors use the
+   * pre-MDW column widths while the grid uses MDW widths (paged passes them). */
+  private drawings(): DrawingAnchor[] {
+    this.drawingCache ??= resolveDrawingAnchors(this.sheet.drawingAnchors?.records ?? [],
+      withFrozen(buildGeometry([...this.sheet.rows].sort((a, b) => a.index - b.index), this.sheet.cols, [], { hiddenCols: true }), this.sheet.frozen))
+    return this.drawingCache
+  }
+  /** One lanes run per interval slice; a page covers at most `limit` rows. */
+  private lanesPage(request: ColumnQuery, intervals: readonly SourceRowInterval[], at: number, row: number, prefix: string, account?: AllocationReservation): Page<ColumnEntry> {
+    const items: ColumnEntry[] = []
+    let budget = request.limit
+    while (at < intervals.length && budget > 0) {
+      if (row < intervals[at].r0) row = intervals[at].r0
+      const r1 = Math.min(intervals[at].r1, row + budget - 1)
+      account?.charge(320)
+      const lanes = new LaneBuilder(account)
+      for (let k = lowerBound(this.rowIndexes, row); k < this.rows.length && this.rowIndexes[k] <= r1; k++) {
+        const cell = this.cellIn(this.rows[k], request.col)
+        if (cell) lanes.add(cell.row, cell.value, cell.valueIsError, cell.styleIndex, isUnavailable(cell, this.valuePolicy))
+      }
+      items.push(lanes.build(row, r1))
+      budget -= r1 - row + 1
+      row = r1 + 1
+      if (row > intervals[at].r1) { at++; if (at < intervals.length) row = intervals[at].r0 }
+    }
+    return { items, completeness: 'complete', stamp: this.stamp, ...(at < intervals.length ? { nextCursor: `${prefix}:${at}:${row}` } : {}) }
+  }
+  /** S13.2: the parsed drawings, cloned (the resident model keeps its own bytes
+   * and workbook-wide picture indexes) and charged against the transfer budget. */
+  async readDrawings(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings> {
+    const error = this.guard(options)
+    if (error) return unavailableDrawings(`Drawings could not be read: ${error.message}`, error)
+    // The clone is this read's working set in the document pool.
+    if (memory && this.sheet.drawings?.length && !memory.set(drawingFootprint(this.sheet.drawings))) {
+      return unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', failure('resource-limit', 'worker memory budget'), DRAWING_MEMORY_REFUSED)
+    }
+    let drawings: XlsxDrawing[]
+    try { drawings = this.sheet.drawings?.length ? structuredClone(this.sheet.drawings) : [] }
+    catch (cause) { return unavailableDrawings(`Drawings could not be prepared: ${cause instanceof Error ? cause.message : String(cause)}`) }
+    return sheetDrawingPayload(drawings, this.sheet.drawingTheme, [], this.drawingPayloadBytes ?? drawingPayloadBudget(profile))
+  }
+
+  async queryOverview(request: OverviewQuery, options: ReadOptions): Promise<Page<OverviewGroup>> {
+    const error = this.guard(options)
+    if (error) return failedPage(this.stamp, error)
+    const source: OverviewCellSource = {
+      aggregate: async (rect) => {
+        const aggregate = emptyAggregate()
+        for (let k = lowerBound(this.rowIndexes, rect.r0); k < this.rows.length && this.rowIndexes[k] <= rect.r1; k++) {
+          for (const cell of this.rows[k].cells) {
+            if (cell.row === this.rows[k].index && cell.col >= rect.c0 && cell.col <= rect.c1) addRecord(aggregate, cell.styleIndex, isPopulated(cell))
+          }
+        }
+        return { kind: 'ok', aggregate }
+      },
+    }
+    return answerOverview(request, source, this.stamp, options.signal)
+  }
+  async ensureComplete(rect: SourceRect, options: ReadOptions): Promise<RangeCompletion> {
+    const error = this.guard(options)
+    if (error) return { range: rect, completeness: 'incomplete', stamp: this.stamp, missing: [rect], error }
+    return { range: rect, completeness: 'complete', stamp: this.stamp, missing: [] }
+  }
+  async release(): Promise<void> {
+    this.released = true
+  }
+}
+
+function sheetGeometry(sheet: XlsxSheet): SheetGeometry {
+  return withFrozen(buildGeometry([...sheet.rows].sort((a, b) => a.index - b.index), sheet.cols, [], { hiddenCols: true, ...(sheet.columnMetrics ? { columns: sheet.columnMetrics } : {}) }), sheet.frozen)
+}
+/** Geometry carrying the sheet's authored frozen panes (copied, frozen). */
+export function withFrozen(geometry: SheetGeometry, frozen: SheetGeometry['frozen']): SheetGeometry {
+  return frozen ? Object.freeze({ ...geometry, frozen: Object.freeze({ ...frozen }) }) : geometry
+}
+/** Source-space geometry from authored rows (ascending) and column specs; shared by both adapters. */
+export function buildGeometry(
+  rows: Iterable<{ index: number; heightPt?: number; hidden?: boolean }>,
+  specs: readonly { min: number; max: number; widthChars?: number; hidden?: boolean }[],
+  hiddenIntervals: readonly SourceRowInterval[] = [],
+  /** S5.4 paged sources: authored-hidden columns collapse (zero width), as the object planner collapses them. */
+  options: { hiddenCols?: boolean; columns?: ColumnMetrics } = {},
+): SheetGeometry {
+  const columns = options.columns ?? DEFAULT_COLUMN_METRICS
+  const rowOverrides: AxisSizeInterval[] = []
+  const hidden: SourceRowInterval[] = []
+  for (const row of rows) {
+    if (!isValidCoordinate(row.index, 0)) continue
+    if (row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0) {
+      rowOverrides.push({ start: row.index, end: row.index, sizeCss: row.heightPt * 96 / 72 })
+    }
+    if (row.hidden) {
+      const last = hidden[hidden.length - 1]
+      if (last && last.r1 + 1 === row.index) hidden[hidden.length - 1] = { r0: last.r0, r1: row.index }
+      else if (!last || last.r1 < row.index) hidden.push({ r0: row.index, r1: row.index })
+    }
+  }
+  const colOverrides: AxisSizeInterval[] = []
+  for (const spec of specs) {
+    if (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) continue
+    const start = Math.max(0, spec.min), end = Math.min(MAX_COLS - 1, spec.max)
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end) {
+      colOverrides.push({ start, end, sizeCss: columnWidthPx(spec.widthChars, columns.maxDigitWidthPx) })
+    }
+  }
+  colOverrides.sort((a, b) => a.start - b.start)
+  // Overlapping authored <col> ranges: the later start wins, keeping intervals disjoint.
+  for (let i = 1; i < colOverrides.length; i++) {
+    if (colOverrides[i].start <= colOverrides[i - 1].end) colOverrides[i - 1] = { ...colOverrides[i - 1], end: colOverrides[i].start - 1 }
+  }
+  const authored = colOverrides.filter(interval => interval.start <= interval.end)
+  // Worker layouts publish only overrides (the remote axis assumes 64px), so a
+  // non-default sheet width is spelled out over every gap between them.
+  const cols: AxisSizeInterval[] = []
+  if (columns.defaultWidthPx === DEFAULT_COL_CSS) cols.push(...authored)
+  else {
+    let next = 0
+    for (const interval of authored) {
+      if (interval.start > next) cols.push({ start: next, end: interval.start - 1, sizeCss: columns.defaultWidthPx })
+      cols.push(interval)
+      next = interval.end + 1
+    }
+    if (next <= MAX_COLS - 1) cols.push({ start: next, end: MAX_COLS - 1, sizeCss: columns.defaultWidthPx })
+  }
+  const hiddenCols: Array<{ start: number; end: number }> = []
+  if (options.hiddenCols) {
+    for (const spec of [...specs].filter(spec => spec.hidden).sort((a, b) => a.min - b.min)) {
+      const start = Math.max(0, spec.min), end = Math.min(MAX_COLS - 1, spec.max)
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end) continue
+      const last = hiddenCols[hiddenCols.length - 1]
+      if (last && start <= last.end + 1) last.end = Math.max(last.end, end)
+      else hiddenCols.push({ start, end })
+    }
+  }
+  return Object.freeze({
+    rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: DEFAULT_ROW_CSS, overrides: rowOverrides }),
+    cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: DEFAULT_COL_CSS, overrides: cols, ...(hiddenCols.length ? { collapsed: hiddenCols } : {}) }),
+    rowOverrides: Object.freeze(rowOverrides),
+    colOverrides: Object.freeze(cols),
+    ...(hiddenCols.length ? { hiddenCols: Object.freeze(hiddenCols) } : {}),
+    baseHidden: createIntervalSet(hiddenIntervals.length ? hiddenIntervals : hidden),
+  })
+}
+/** Wraps an already-parsed workbook by reference (no clone). Sheet ids use the
+ * parser's stable workbook identity; documents are separated by docId. */
+export { toPayload, isUnavailable, isPopulated, intersects, parseRange }
+export const invalidMergeDiagnostic = (n: number): WorkerDiagnostic => ({ code: 'invalid-merge-ref', message: `Ignored ${n} merge${n === 1 ? '' : 's'} with an unreadable range` })
+export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, options: ObjectSourceOptions = {}): WorkbookSource {
+  const maxCells = options.readRowsMaxCells ?? READ_ROWS_MAX_CELLS
+  // The document's own policy decides (§4.4: one policy per document, never
+  // mixed); an explicit option may only restate it.
+  const policy = documentValuePolicy(doc)
+  if (options.valuePolicy !== undefined && options.valuePolicy !== policy) {
+    throw new RangeError(`A document parsed under the '${policy}' value policy cannot be served as '${options.valuePolicy}'`)
+  }
+  if (!Number.isSafeInteger(maxCells) || maxCells <= 0) throw new RangeError('Invalid readRows cell bound')
+  const sheets = doc.sheets.map((sheet, index) => ({ sheet, sheetId: sheet.sheetId ?? String(index + 1) }))
+  const ids = new Set<string>()
+  for (const { sheetId } of sheets) {
+    if (ids.has(sheetId)) throw new RangeError(`Duplicate sheet id ${sheetId}`)
+    ids.add(sheetId)
+  }
+  const stores = new Map<string, ObjectXlsxSheetAdapter>()
+  let footprints: ReturnType<typeof engineSpillFootprints> | null = null
+  const spillFootprints = () => footprints === null ? (footprints = engineSpillFootprints(doc)) : footprints
+  const geometries = new Map<string, SheetGeometry>()
+  const find = (sheetId: string) => {
+    const found = sheets.find(entry => entry.sheetId === sheetId)
+    if (!found) throw new RangeError(`Unknown sheet ${sheetId}`)
+    return found
+  }
+  const storeFor = (sheetId: string): ObjectXlsxSheetAdapter => {
+    let store = stores.get(sheetId)
+    if (!store) {
+      const { sheet } = find(sheetId)
+      const stamp = Object.freeze({ docId, sheetId, valueGen: INITIAL_GENERATION })
+      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy, spillFootprints()?.get(sheet) ?? (spillFootprints() ? [] : undefined), options.drawingPayloadBytes, options.pacing)
+      stores.set(sheetId, store)
+    }
+    return store
+  }
+  const status = valueStatus(policy, countLoadEvaluatedFormulas(doc))
+  return {
+    valuePolicy: policy,
+    valueStatus: () => status,
+    ...(status.message === undefined ? {} : { openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message }]) }),
+    sheets: Object.freeze(sheets.map(({ sheet, sheetId }) => Object.freeze({ sheetId, name: sheet.name }))),
+    store: storeFor,
+    displayText: (cell, sheetId, allocation) => storeFor(sheetId).displayText(cell, allocation),
+    geometry(sheetId) {
+      let geometry = geometries.get(sheetId)
+      if (!geometry) {
+        geometry = sheetGeometry(find(sheetId).sheet)
+        geometries.set(sheetId, geometry)
+      }
+      return geometry
+    },
+    coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
+    declaredFilters: () => doc.declaredFilters ?? [],
+    // Compatibility-mode documents served by the worker style remote cells
+    // through this table (spec §11.1), exactly as paged imports do.
+    ...(doc.cellStyles ? { formatting: () => ({ dateSystem: doc.semantics?.dateSystem ?? '1900', styles: doc.cellStyles! }) } : {}),
+    async release() {
+      await Promise.all([...stores.values()].map(store => store.release()))
+      stores.clear()
+      geometries.clear()
+    },
+  }
+}

@@ -1768,7 +1768,8 @@ describe('xlsx formula integration & canvas rendering', () => {
     expect(b1Call).toBeDefined()
     expect(b1Call?.font).toContain('italic')
     // Text strings are left-aligned (x starts at col 1 start + padding 3)
-    const col0Width = Math.round(10 * 7 + 5)
+    // Excel column model: trunc((256w + trunc(128/mdw))/256 * mdw), mdw 7.
+    const col0Width = Math.trunc((256 * 10 + Math.trunc(128 / 7)) / 256 * 7)
     expect(b1Call?.x).toBe(col0Width + 3)
   })
 
@@ -1830,7 +1831,9 @@ describe('xlsx formula integration & canvas rendering', () => {
       moveTo: () => {},
       lineTo: () => {},
       translate: () => {},
-      measureText: (text: string) => ({ width: text.length * 7 }),
+      // 6 px glyphs keep '12,345.68' inside a default column: this case asserts the
+      // number formats, not the S13 V4 '#' overflow rule (tests/xlsx-number-overflow.test.ts).
+      measureText: (text: string) => ({ width: text.length * 6 }),
       fillText: (text: string) => {
         paintedTexts.push(text)
       },
@@ -1904,10 +1907,10 @@ describe('xlsx formula integration & canvas rendering', () => {
 
     const call = paintedCalls.find(c => c.text === '#DIV/0!')
     expect(call).toBeDefined()
-    // Col width is Math.round(12 * 7 + 5) = 89px.
-    // Center alignment: x = (89 - 49) / 2 = 20px.
+    // Col width is trunc((256*12 + 18)/256 * 7) = 84px (Excel column model).
+    // Center alignment: x = (84 - 49) / 2 = 17.5px.
     // Left alignment would have been x = 3px.
-    const colWidth = Math.round(12 * 7 + 5)
+    const colWidth = Math.trunc((256 * 12 + Math.trunc(128 / 7)) / 256 * 7)
     const expectedCenterX = (colWidth - textWidth) / 2
     expect(call?.x).toBe(expectedCenterX)
   })

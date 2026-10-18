@@ -65,3 +65,19 @@ describe('copyText', () => {
     input.remove()
   })
 })
+test('permission denial never even reads the clipboard property or creates a fallback', async () => {
+  const get = vi.fn(() => ({ writeText: vi.fn() }))
+  Object.defineProperty(navigator, 'clipboard', { get, configurable: true })
+  const create = vi.spyOn(document, 'createElement')
+  expect(await copyText('protected', { allowed: () => false })).toBe('failed')
+  expect(get).not.toHaveBeenCalled()
+  expect(create).not.toHaveBeenCalled()
+})
+
+test('permission withdrawal after clipboard rejection blocks the fallback', async () => {
+  let allowed = true
+  setClipboard({ writeText: vi.fn(async () => { allowed = false; throw new Error('denied') }) })
+  const exec = document.execCommand = vi.fn() as unknown as typeof document.execCommand
+  expect(await copyText('protected', { allowed: () => allowed })).toBe('failed')
+  expect(exec).not.toHaveBeenCalled()
+})

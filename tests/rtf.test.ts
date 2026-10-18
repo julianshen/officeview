@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest'
+import { describe, test, expect, vi } from 'vitest'
 import { parseRtf, isRtf } from '../src/rtf/parse'
 import { loadOfficeFile } from '../src/components/OfficeFile'
 import type { DocxParagraph, DocxTable } from '../src/docx/types'
@@ -1127,5 +1127,59 @@ describe('marker capture: nested group scoping', () => {
     const rtf = fonts + String.raw`{\listtext\f0 {\f1\'c0}\'e9\tab}\ls1 Item\par second\par}`
     const paras = paragraphs(rtf)
     expect(paras.map(textOf)).toEqual(['Item', 'second'])
+  })
+})
+
+describe('visual review: runtime-independent cp1252', () => {
+  // Some Node builds decode windows-1252 bytes 0x80-0x9F as C1 controls
+  // (0x92 -> U+0092) instead of the WHATWG mapping (0x92 -> U+2019). RTF text
+  // must not depend on which TextDecoder the host ships.
+  test('\\\'92 decodes to U+2019 even when TextDecoder maps windows-1252 to latin-1', async () => {
+    const Real = globalThis.TextDecoder
+    class Latin1Decoder {
+      constructor(label = 'utf-8') {
+        if (!/1252|latin1|iso-8859-1|ascii/i.test(label)) return new Real(label) as unknown as Latin1Decoder
+      }
+      decode(bytes: Uint8Array): string { return String.fromCharCode(...bytes) }
+    }
+    vi.stubGlobal('TextDecoder', Latin1Decoder)
+    vi.resetModules()
+    try {
+      const { parseRtf: fresh } = await import('../src/rtf/parse')
+      const rtf = String.raw`{\rtf1\ansi\ansicpg1252 it\'92s \'80\'85\'93q\'94 caf\'e9 \'81\'9f\par}`
+      const text = fresh(rtf).sections[0].paragraphs[0].runs.map((r) => r.text).join('')
+      expect(text).toBe('it’s €…“q” café \u0081Ÿ')
+    } finally {
+      vi.unstubAllGlobals()
+      vi.resetModules()
+    }
+  })
+})
+
+describe('visual review #15: RTF table shading and inline pictures', () => {
+  test('\\clcbpat written before its \\cellx shades that cell', () => {
+    const table = firstTable(preamble + String.raw`\trowd\clcbpat3\cellx3600\cellx7200\intbl Shaded\cell Plain\cell\row}`)
+    expect(table?.rows[0].cells.map((c) => c.fill)).toEqual(['#ffff00', undefined])
+  })
+
+  test('a text line holding an inline picture keeps a descent below the picture', async () => {
+    const { createCanvas } = await import('canvas')
+    const { createMeasurer, layoutDocx } = await import('../src/docx/layout')
+    const measure = createMeasurer(createCanvas(10, 10).getContext('2d') as unknown as CanvasRenderingContext2D)
+    const png = createCanvas(16, 16).toBuffer('image/png')
+    const hex = Array.from(png, (b) => b.toString(16).padStart(2, '0')).join('')
+    const rtf = String.raw`{\rtf1\ansi\deff0\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440 ` +
+      String.raw`\pard\b An inline picture:\b0 {\pict\pngblip\picw16\pich16\picwgoal576\pichgoal576 ` + hex +
+      String.raw`}\par\pard\b A list:\b0\par}`
+    const page = layoutDocx(parseRtf(rtf), measure)[0]
+    const [pic, next] = page.lines
+    const img = pic.inlineImages![0]
+    // The picture sits on the text baseline...
+    expect(img.yPx + img.heightPx).toBeCloseTo(pic.baselinePx!, 5)
+    expect(img.yPx).toBeGreaterThanOrEqual(pic.yPx - 0.01)
+    // ...and the line reserves the font's descent below it, so descenders and
+    // the following line never collide with the picture line.
+    expect(pic.yPx + pic.heightPx - pic.baselinePx!).toBeGreaterThan(3)
+    expect(next.yPx).toBeGreaterThanOrEqual(pic.yPx + pic.heightPx - 0.01)
   })
 })

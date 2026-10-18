@@ -40,7 +40,8 @@ describe('native Excel General and time display profiles', () => {
     expect(formatValue(0.524259259259259, id)).toBe(text)
   })
   it('renders date-plus-time 22 through the shared formatter', () => {
-    expect(formatValue(45351.524259259259, 22)).toBe('2/29/24 12:34')
+    // Excel's en-US display of built-in 22 has a four-digit year (stream F user decision).
+    expect(formatValue(45351.524259259259, 22)).toBe('2/29/2024 12:34')
   })
   it('uses the cell width when choosing General precision', () => {
     const painted:string[]=[]

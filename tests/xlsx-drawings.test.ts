@@ -42,7 +42,8 @@ describe('worksheet drawing anchors', () => {
     const doc = await parseXlsx(pkg)
     const nodes = doc.sheets[0].drawings ?? []
     expect(nodes.map(node => node.source.id)).toEqual(['3', '4'])
-    expect(nodes.map(node => [node.xEmu / 9525, node.yEmu / 9525, node.widthEmu / 9525, node.heightEmu / 9525])).toEqual([[41, 22, 100, 50], [2, 3, 80, 80]])
+    // width="5" is 35px in Excel's column model (mdw 7), so x = 35 + 1.
+    expect(nodes.map(node => [node.xEmu / 9525, node.yEmu / 9525, node.widthEmu / 9525, node.heightEmu / 9525])).toEqual([[36, 22, 100, 50], [2, 3, 80, 80]])
     expect(computeMetrics(doc.sheets[0]).heightPx).toBeGreaterThanOrEqual(83)
   })
 
@@ -89,9 +90,9 @@ describe('worksheet drawing anchors', () => {
     expect(sheet.drawings?.[0].source.id).toBe('10')
     expect(sheet.drawings?.[0].children?.[0].source.id).toBe('11')
     expect(sheet.drawings?.[0].children?.[0].children?.[0].source.id).toBe('12')
-    expect(anchored.xEmu / 9525).toBe(40)
+    expect(anchored.xEmu / 9525).toBe(35) // width="5" is 35px (Excel column model, mdw 7)
     expect(anchored.yEmu / 9525).toBe(20)
-    expect(anchored.widthEmu / 9525).toBe(80)
+    expect(anchored.widthEmu / 9525).toBe(70) // two 35px columns
     expect(anchored.heightEmu / 9525).toBe(50)
     const metrics = computeMetrics(sheet)
     expect(metrics.colWidthsPx[1]).toBe(0)
@@ -161,8 +162,8 @@ describe('worksheet drawing anchors', () => {
     })
     const sheet = (await parseXlsx(pkg)).sheets[0]
     expect(sheet.drawings?.map(n => n.source.id)).toEqual(['30', '31', 'rInk'])
-    expect(sheet.drawings?.map(n => n.content?.kind)).toEqual(['chart', 'diagram', 'ink'])
-    expect(sheet.drawings?.[0].content?.kind === 'chart' ? sheet.drawings[0].content.series[0].color : '').toBe('123456')
+    expect(sheet.drawings?.map(n => n.content?.kind)).toEqual(['xlsxChart', 'diagram', 'ink'])
+    expect(sheet.drawings?.[0].content?.kind === 'xlsxChart' ? sheet.drawings[0].content.chart.groups[0].series[0].color : '').toBe('123456')
     expect(sheet.drawings?.[1].content?.kind === 'diagram' ? sheet.drawings[1].content.shapes.length : 0).toBe(1)
   })
 
@@ -329,7 +330,7 @@ describe('worksheet drawing anchors', () => {
       zip.file('xl/charts/chart9.xml', '<chartSpace><chart><plotArea><barChart><barDir val="col"/><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></barChart></plotArea></chart></chartSpace>')
     })
     const sheet = (await parseXlsx(pkg)).sheets[0]
-    expect(sheet.drawings?.[0].content?.kind).toBe('chart')
+    expect(sheet.drawings?.[0].content?.kind).toBe('xlsxChart')
     expect(sheet.drawings?.[0].source).toMatchObject({ id: '501', name: 'chart carrier', representation: 'fallback', partPath: 'xl/drawings/drawing7.xml' })
     expect(sheet.drawingDiagnostics?.some(issue => issue.identity === 'missing')).toBe(false)
   })
@@ -356,7 +357,7 @@ describe('worksheet drawing anchors', () => {
     }
   })
 
-  test('recovers native picture fallback after an attempted horizontal-chart Choice at either MC level', async () => {
+  test('recovers native picture fallback after an attempted unsupported (radar) chart Choice at either MC level', async () => {
     const canvas = createCanvas(1, 1)
     canvas.getContext('2d').fillStyle = '#0000FF'; canvas.getContext('2d').fillRect(0, 0, 1, 1)
     const chart = '<c:chart r:id="rChart"/>'
@@ -365,7 +366,7 @@ describe('worksheet drawing anchors', () => {
     for (const markup of [alternate(frameBody(chart), pic(702, 'rImg')), frameBody(alternate(chart, pic(702, 'rImg')))]) {
       const pkg = await fixture(absolute(markup, 0, 0, 100, 100), '', '', zip => {
         zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/hbar.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
-        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><barChart><barDir val="bar"/><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></barChart></plotArea></chart></chartSpace>')
+        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><radarChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></radarChart></plotArea></chart></chartSpace>')
         zip.file('xl/media/blue.png', canvas.toBuffer('image/png'))
       })
       const sheet = (await parseXlsx(pkg)).sheets[0]
@@ -386,7 +387,7 @@ describe('worksheet drawing anchors', () => {
     const sheet = (await parseXlsx(pkg)).sheets[0]
     expect(sheet.drawings?.[0].source.id).toBe('711')
     expect(sheet.drawings?.[0].source.representation).toBe('choice')
-    expect(sheet.drawings?.[0].content?.kind).toBe('chart')
+    expect(sheet.drawings?.[0].content?.kind).toBe('xlsxChart')
     expect(sheet.drawingDiagnostics?.some(issue => issue.identity === 'missing')).toBe(false)
   })
 
@@ -409,13 +410,15 @@ describe('worksheet drawing anchors', () => {
     expect(m.heightPx).toBeGreaterThanOrEqual(100)
   })
 
-  test('keeps drawing-free hidden-width metrics and sanitizes invalid drawing-bearing dimensions', async () => {
+  test('collapses drawing-free hidden columns and sanitizes invalid drawing-bearing dimensions', async () => {
     const hidden = await fixture('', '<col min="1" max="1" width="5" hidden="1"/>', '', async zip => {
       let sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
       sheet = sheet.replace('<drawing r:id="rDraw"/>', '')
       zip.file('xl/worksheets/sheet1.xml', sheet)
     })
-    expect(computeMetrics((await parseXlsx(hidden)).sheets[0]).colWidthsPx[0]).toBe(64)
+    // Spec §5.3 / plan S2.3: authored-hidden columns collapse unconditionally,
+    // not only on drawing-bearing sheets (this used to pin the default 64px).
+    expect(computeMetrics((await parseXlsx(hidden)).sheets[0]).colWidthsPx[0]).toBe(0)
     for (const [cols, row] of [['<col min="1" max="1" width="NaN"/>', ''], ['', '<row r="1" ht="NaN" customHeight="1"/>']] as const) {
       const pkg = await fixture(absolute(shape(1001, 'FF0000', 0, 0, 20, 20), 0, 0, 20, 20), cols, row, async zip => {
         if (row) {
@@ -518,7 +521,7 @@ describe('worksheet drawing anchors', () => {
       const doc = await parseXlsx(pkg)
       expect(doc.sheets[0].drawings?.[0].source.id, choice).toBe(id)
       expect(doc.images, choice).toHaveLength(imageCount)
-      if (id === '1601' && choice === supported) expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('chart')
+      if (id === '1601' && choice === supported) expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('xlsxChart')
     }
     const nested = unsupported.replace('<c:chart r:id="rChart"/>', `<mc:AlternateContent><mc:Choice Requires="a"><c:chart r:id="rChart"/></mc:Choice><mc:Fallback>${pic(1603, 'rImg')}</mc:Fallback></mc:AlternateContent>`)
     const nestedPkg = await fixture(absolute(nested, 0, 0, 90, 50), '', '', zip => {

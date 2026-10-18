@@ -1,0 +1,255 @@
+/**
+ * Argument parsing for the bench CLI. Pure: it throws instead of exiting and
+ * touches neither the filesystem nor the network, so it is unit-tested.
+ */
+import { FIXTURE_IDS, MAX_SAMPLE_VALUES } from '../../src/debug/harness/result'
+import type { FixtureId, HarnessMode, HarnessProfile, OperatorMetadata } from '../../src/debug/harness/types'
+import { SCENARIOS, SCENARIO_IDS, isScenarioId, type ScenarioId } from '../../src/debug/harness/scenarios'
+
+export interface BenchArgs {
+  browser: 'chromium' | 'webkit' | 'safari-manual'
+  profile: HarnessProfile
+  fixture: FixtureId
+  /** Measured input→present round-trips, pooled into ONE result. */
+  repeat: number
+  /** Extra discarded round-trips run first; their count is reported. */
+  warmup: number
+  output: string
+  mode: HarnessMode
+  baseline: string | null
+  serve: boolean
+  port: number
+  operator: OperatorMetadata
+  /** S8.4 kernel scenario; null keeps the S0.3 input-to-present round-trips. */
+  scenario: ScenarioId | null
+  /** Reduced fixture rows for a scenario smoke run; null is full scale. */
+  rows: number | null
+  /** Playwright browser channel: bundled Chromium or installed Google Chrome. */
+  channel: 'chromium' | 'chrome'
+  /** Whole-collection time budget in minutes (kernel scenarios can be long). */
+  timeoutMinutes: number
+  /** Scenario diagnostic: do not charge resident harness data to the worker
+   * budget. Such results are labelled and are never admitted-profile evidence. */
+  unadmitted: boolean
+  /** harness: the S0.3/S8.4 scaffold and kernel scenarios. viewer: the S10.2
+   * real-viewer suite (production-built page, true XLSX fixtures). */
+  suite: 'harness' | 'viewer'
+  /** Viewer suite fixture scale; reduced is a labelled smoke size. */
+  scale: 'full' | 'reduced'
+}
+
+/**
+ * The S0.3 scaffold page still loads the 120x10 placeholder and the S8.4 kernel
+ * scenarios run over synthetic fixture stores, so `--mode release` stays
+ * refused for them: a placeholder or kernel-store measurement must not be
+ * labelled release evidence. The S10.2 viewer suite (`--suite viewer`, alias
+ * `--fixture all`) is the one release path: it opens true XLSX packages written
+ * by the S0.2 deterministic builders at full spec scale, in the shipped viewer,
+ * and records each package's SHA-256 in its receipt.
+ */
+export const REAL_FIXTURES_AVAILABLE = false
+
+export const HELP_TEXT = `interactive-viewer bench CLI (S0.3 scaffold — no viewer SLA is claimed)
+
+  bun scripts/bench-interactive-viewer.ts --browser chromium|webkit|safari-manual
+    --profile desktop|mobile --fixture F1 [--repeat N] [--warmup W] [--output DIR]
+    [--mode smoke] [--baseline FILE] [--serve] [--port 4173]
+    [--device-model M] [--os-version V] [--thermal S] [--battery B]
+
+  --repeat N   N measured input-to-present round-trips in ONE page load, pooled
+               into ONE result (max ${MAX_SAMPLE_VALUES}). p95 needs >= 30 samples; the three-run
+               gate prints insufficient-samples, which is the honest outcome.
+  --warmup W   W extra round-trips run first and discarded; the count is recorded
+               in each series' warmupExcluded. W does not count towards --repeat.
+  --mode       smoke only for now: release is refused while the F1..F8 fixtures
+               are placeholders (S0.2).
+  chromium|webkit  automated real-browser collection via Playwright; writes
+               JSON + CSV artifacts to --output. WebKit is labeled
+               webkit-playwright, never Safari.
+  safari-manual    with --serve: serve the harness page on the LAN, print the
+               tokenized device URL, and ingest/validate/hash-verify result JSON
+               POSTed back from the device on the same origin. Operator flags
+               record device model, OS version, thermal and battery state.
+  --baseline FILE  informational p50 deltas; the file is validated and checked
+               for comparability BEFORE any browser launches.
+  --scenario ID    S8.4 kernel scenario (${SCENARIO_IDS.join(', ')}):
+               each iteration records kernel, query-completion, query-roundtrip
+               and input-to-present separately. Sets --fixture to the scenario's
+               fixture (an explicit different --fixture is an error).
+  --rows N     reduced fixture rows for a scenario smoke run (default: full scale)
+  --channel    chromium (bundled, default) | chrome (installed Google Chrome)
+  --timeout-min M  whole-collection budget in minutes (default 15)
+  --unadmitted     scenario diagnostic: resident harness data is not charged to
+               the worker budget; the result is labelled admitted=false
+  --suite viewer   S10.2 real-viewer suite (alias: --fixture all): production
+               build of src/debug/viewer-perf.html, true XLSX F1-F4 + scroll
+               mixes, first viewport, sustained scroll, input acknowledgment,
+               importer throughput and memory; writes one hash-tagged receipt.
+               --repeat is the operation sample count (frames are always 300).
+               --mode release is admitted only here, with --channel chrome,
+               --profile desktop and --scale full.
+  --scale      full (spec catalog, default) | reduced (labelled smoke scale)`
+
+const OPERATOR_FLAGS: Record<string, keyof OperatorMetadata> = {
+  'device-model': 'deviceModel',
+  'os-version': 'osVersion',
+  thermal: 'thermalState',
+  battery: 'batteryState',
+}
+
+const KNOWN_FLAGS = ['browser', 'profile', 'fixture', 'repeat', 'warmup', 'output', 'mode', 'baseline', 'serve', 'port', 'scenario', 'rows', 'channel', 'timeout-min', 'unadmitted', 'suite', 'scale']
+
+export function parseArgs(argv: string[]): BenchArgs | { help: true } {
+  const args: BenchArgs = {
+    browser: 'chromium',
+    profile: 'desktop',
+    fixture: 'F1',
+    repeat: 1,
+    warmup: 0,
+    output: '.tmp/viewer-bench',
+    mode: 'smoke',
+    baseline: null,
+    serve: false,
+    port: 4173,
+    operator: { deviceModel: null, osVersion: null, thermalState: null, batteryState: null },
+    scenario: null,
+    rows: null,
+    channel: 'chromium',
+    timeoutMinutes: 15,
+    unadmitted: false,
+    suite: 'harness',
+    scale: 'full',
+  }
+  let requestedMode: string = args.mode
+  let explicitFixture: FixtureId | null = null
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '-h' || arg === '--help') return { help: true }
+    const match = /^--([^=]+)(?:=(.*))?$/.exec(arg)
+    if (!match) throw new Error(`unexpected argument ${arg}; see --help`)
+    const [, name, inlineValue] = match
+    if (!KNOWN_FLAGS.includes(name) && !(name in OPERATOR_FLAGS)) throw new Error(`unknown flag --${name}; see --help`)
+    let value = inlineValue
+    if (name !== 'serve' && name !== 'unadmitted' && value === undefined) {
+      const next = argv[i + 1]
+      if (next === undefined || next.startsWith('--')) throw new Error(`--${name} requires a value`)
+      value = next
+      i++
+    }
+    const text = value ?? ''
+    switch (name) {
+      case 'browser':
+        if (text !== 'chromium' && text !== 'webkit' && text !== 'safari-manual') throw new Error(`--browser must be chromium|webkit|safari-manual, got ${text}`)
+        args.browser = text
+        break
+      case 'profile':
+        if (text !== 'desktop' && text !== 'mobile') throw new Error(`--profile must be desktop|mobile, got ${text}`)
+        args.profile = text
+        break
+      case 'fixture':
+        // The plan's release command names every fixture: that is the viewer suite.
+        if (text === 'all') { args.suite = 'viewer'; break }
+        if (!FIXTURE_IDS.includes(text as FixtureId)) throw new Error(`--fixture must be one of ${FIXTURE_IDS.join(', ')}, got ${text}`)
+        args.fixture = text as FixtureId
+        explicitFixture = args.fixture
+        break
+      case 'repeat': {
+        const repeat = Number(text)
+        if (!Number.isInteger(repeat) || repeat < 1 || repeat > MAX_SAMPLE_VALUES) throw new Error(`--repeat must be an integer in 1..${MAX_SAMPLE_VALUES}, got ${text}`)
+        args.repeat = repeat
+        break
+      }
+      case 'warmup': {
+        const warmup = Number(text)
+        if (!Number.isInteger(warmup) || warmup < 0 || warmup > 10_000) throw new Error(`--warmup must be an integer in 0..10000, got ${text}`)
+        args.warmup = warmup
+        break
+      }
+      case 'output':
+        args.output = text
+        break
+      case 'mode':
+        if (text !== 'smoke' && text !== 'release') throw new Error(`--mode must be smoke|release, got ${text}`)
+        requestedMode = text
+        break
+      case 'baseline':
+        args.baseline = text
+        break
+      case 'serve':
+        if (value !== undefined && value !== 'true' && value !== 'false' && value !== '') throw new Error(`--serve takes no value (or true|false), got ${value}`)
+        args.serve = value !== 'false'
+        break
+      case 'port': {
+        const port = Number(text)
+        if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`--port must be 1..65535, got ${text}`)
+        args.port = port
+        break
+      }
+      case 'scenario':
+        if (!isScenarioId(text)) throw new Error(`--scenario must be one of ${SCENARIO_IDS.join(', ')}, got ${text}`)
+        args.scenario = text
+        break
+      case 'rows': {
+        const rows = Number(text)
+        if (!Number.isInteger(rows) || rows < 3 || rows > 1_048_576) throw new Error(`--rows must be an integer in 3..1048576, got ${text}`)
+        args.rows = rows
+        break
+      }
+      case 'unadmitted':
+        if (value !== undefined && value !== 'true' && value !== 'false' && value !== '') throw new Error(`--unadmitted takes no value (or true|false), got ${value}`)
+        args.unadmitted = value !== 'false'
+        break
+      case 'suite':
+        if (text !== 'harness' && text !== 'viewer') throw new Error(`--suite must be harness|viewer, got ${text}`)
+        args.suite = text
+        break
+      case 'scale':
+        if (text !== 'full' && text !== 'reduced') throw new Error(`--scale must be full|reduced, got ${text}`)
+        args.scale = text
+        break
+      case 'channel':
+        if (text !== 'chromium' && text !== 'chrome') throw new Error(`--channel must be chromium|chrome, got ${text}`)
+        args.channel = text
+        break
+      case 'timeout-min': {
+        const minutes = Number(text)
+        if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 120) throw new Error(`--timeout-min must be in (0, 120], got ${text}`)
+        args.timeoutMinutes = minutes
+        break
+      }
+      default:
+        args.operator[OPERATOR_FLAGS[name]] = text === '' ? null : text
+    }
+  }
+  if (args.scenario !== null) {
+    const fixture = SCENARIOS[args.scenario].fixture
+    if (explicitFixture !== null && explicitFixture !== fixture) throw new Error(`--scenario ${args.scenario} runs fixture ${fixture}, not --fixture ${explicitFixture}`)
+    args.fixture = fixture
+    if (args.browser === 'safari-manual') throw new Error('--scenario applies to automated browsers only, not safari-manual')
+  } else if (args.rows !== null) throw new Error('--rows applies to --scenario runs only')
+  else if (args.unadmitted) throw new Error('--unadmitted applies to --scenario runs only')
+  if (args.channel === 'chrome' && args.browser !== 'chromium') throw new Error('--channel chrome applies to --browser chromium only')
+  if (args.suite === 'viewer') {
+    if (args.scenario !== null || explicitFixture !== null) throw new Error('--suite viewer runs its own fixture set; drop --scenario/--fixture')
+    if (args.browser === 'safari-manual') throw new Error('--suite viewer is automated (chromium|webkit); actual Safari/iPad collection is a separate manual receipt')
+    if (args.baseline !== null) throw new Error('--baseline applies to the harness suite only')
+    if (args.repeat === 1 && !argv.some(arg => arg === '--repeat' || arg.startsWith('--repeat='))) args.repeat = 30
+    if (requestedMode === 'release') {
+      if (args.browser !== 'chromium' || args.channel !== 'chrome') throw new Error('--mode release needs --browser chromium --channel chrome: release evidence is installed stable Chrome, never bundled Chromium or WebKit emulation')
+      if (args.profile !== 'desktop') throw new Error('--mode release is desktop D only: the mobile M profile needs a physical iPad receipt')
+      if (args.scale !== 'full') throw new Error('--mode release needs --scale full')
+      if (args.repeat < 30) throw new Error('--mode release needs --repeat >= 30 (spec §12.6)')
+    }
+    args.mode = requestedMode as HarnessMode
+    return args
+  }
+  if (args.scale !== 'full') throw new Error('--scale applies to --suite viewer only')
+  if (requestedMode === 'release' && !REAL_FIXTURES_AVAILABLE) {
+    throw new Error('--mode release is refused for the harness suite: the scaffold page still loads the 120x10 placeholder and kernel scenarios use synthetic stores, so a placeholder measurement must not be labeled release evidence (use --suite viewer)')
+  }
+  args.mode = requestedMode as HarnessMode
+  if (args.browser === 'safari-manual' && !args.serve) throw new Error('--browser safari-manual requires --serve')
+  if (args.serve && args.browser !== 'safari-manual') throw new Error('--serve applies to --browser safari-manual only')
+  if (args.baseline !== null && args.browser === 'safari-manual') throw new Error('--baseline applies to automated browsers only, not safari-manual')
+  return args
+}

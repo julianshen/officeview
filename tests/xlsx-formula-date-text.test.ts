@@ -22,6 +22,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { evaluateFormula, evaluateFormulaInternal, formulaError } from '../src/xlsx/formula/evaluator'
 import { evaluateWorkbookFormulas } from '../src/xlsx/formula/workbook'
 import { evaluateArrayFormula } from '../src/xlsx/formula/arrays'
+import { formatValue } from '../src/xlsx/render'
 import { formatCommon } from '../src/xlsx/formula/format'
 import { decodeSerial } from '../src/xlsx/formula/serial'
 import type { EvaluationContext, ResolvedSemantics } from '../src/xlsx/formula/types'
@@ -223,6 +224,10 @@ async function renderFixtureTexts(f: RenderFixture): Promise<{ texts: string[]; 
   const { createCanvas } = await import('canvas')
   const doc = await parseXlsx(await OfficePackage.load(await buildDateFixture(f)))
   const sheet = doc.sheets[0]
+  // Wide columns: these cases assert formatted strings, and with the host's
+  // fallback font a 10-character date overflows a default 64 px column, which
+  // now (S13 V4, Excel fidelity) paints as '#'s instead of the value.
+  sheet.cols = [{ min: 0, max: 2, widthChars: 18 }]
   const canvas = createCanvas(400, 200)
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   const texts: string[] = []
@@ -243,8 +248,9 @@ describe('parse -> shared renderer date display', () => {
       cells: [{ ref: 'A1', value: 0, style: 1 }, { ref: 'B1', value: 60, style: 1 }],
     })
     expect(sheetSemantics?.dateSystem).toBe('1900')
-    expect(texts).toContain('1900-01-00')
-    expect(texts).toContain('1900-02-29')
+    // Built-in 14 is the en-US locale short date (stream F user decision); Excel shows serial 0 as 1/0/1900.
+    expect(texts).toContain('1/0/1900')
+    expect(texts).toContain('2/29/1900')
   })
 
   it('1904 fixture drives render text through the SAME resolved system (serial 0 -> 1904-01-01)', async () => {
@@ -254,8 +260,8 @@ describe('parse -> shared renderer date display', () => {
       cells: [{ ref: 'A1', value: 0, style: 1 }, { ref: 'B1', value: 59, style: 1 }],
     })
     expect(sheetSemantics?.dateSystem).toBe('1904')
-    expect(texts).toContain('1904-01-01')
-    expect(texts).toContain('1904-02-29')
+    expect(texts).toContain('1/1/1904')
+    expect(texts).toContain('2/29/1904')
   })
 
   it('authored custom numFmt formatCode is parsed and used by the renderer', async () => {
@@ -300,7 +306,8 @@ describe('parse -> shared renderer date display', () => {
   it('unsupported authored custom format records a specific sheet diagnostic and keeps raw fallback', async () => {
     const { texts, sheet } = await renderFixtureTexts({
       date1904: false,
-      customNumFmts: { 164: '[Red]0.00' },
+      // Colours and conditions now display (visual review #7); unknown brackets stay unsupported.
+      customNumFmts: { 164: '[Purpleish]0.00' },
       xfs: [0, 164],
       cells: [{ ref: 'A1', value: 3.14159, style: 1 }],
     })
@@ -627,5 +634,15 @@ describe('scalar date/time/TEXT matrix-input gate (unverified profile)', () => {
     evaluateWorkbookFormulas(d, { forceRecalc: true })
     expect(d.sheets[0].rows[0].cells[0].value).toBe('#VALUE!')
     expect(d.diagnostics ?? []).toEqual([])
+  })
+})
+
+describe('negative date presentation stays separate from finite TEXT', () => {
+  it('1900 built-in cells show hashes, while 1904 keeps measured signed dates', () => {
+    expect(formatValue(-1, 14, sem('1900'))).toBe('#')
+    expect(formatValue(-0.5, 20, sem('1900'))).toBe('#')
+    expect(formatValue(-1, 14, sem('1904'))).toBe('-1/2/1904')
+    expect(formatCommon(-1, 'yyyy-mm-dd', sem('1900'))).toEqual({ kind: 'text', text: '-1900-01-01' })
+    expect(ev('TEXT(-1,"yyyy-mm-dd")', '1904')).toBe('-1904-01-02')
   })
 })

@@ -1075,7 +1075,9 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
         const visibleSegment = line.segments.find(segment => !segment.style.noFill && segment.text !== '\n')
         const paragraph = body.paragraphs[line.paragraphIndex]
         const bulletStyle = visibleSegment?.style ?? { ...paragraph.defaultProperties, ...paragraph.endProperties }
-        if (line.bullet && !bulletStyle.noFill && (visibleSegment || !line.segments.length)) {
+        // Only a paragraph with visible text shows its bullet: PowerPoint
+        // paints none for an empty one (visual review #17).
+        if (line.bullet && visibleSegment && !bulletStyle.noFill) {
           const style = bulletStyle
           settings(ctx, style, resolveFont); ctx.fillStyle = style.color ?? '#000000'
           // Bullets carry no shadow model: reset state so a shadowed run on an
@@ -1238,6 +1240,11 @@ export function paintTextBody(body: PptxTextBody, ctx: CanvasRenderingContext2D,
                 }
               }
               continue
+            }
+            if (segment.style.highlight && !needsFrame && segment.text !== '\n') {
+              applyTextShadow(ctx, {})
+              ctx.fillStyle = segment.style.highlight
+              ctx.fillRect(sx, y + line.y, segment.width, line.height)
             }
             paintSegmentInk(segment, line, nativeTracking)
           } finally { if (applyOuterFrame) ctx.restore() }

@@ -15,7 +15,9 @@ export type CopyOutcome = 'clipboard' | 'fallback' | 'failed'
  * http origins). Reports which path was used so callers can tell the user when
  * copying did not work — silently doing nothing is the worst outcome.
  */
-export async function copyText(text: string): Promise<CopyOutcome> {
+export async function copyText(text: string, policy?: { allowed: () => boolean; signal?: AbortSignal }): Promise<CopyOutcome> {
+  const permitted = () => !policy?.signal?.aborted && (policy?.allowed() ?? true)
+  if (!permitted()) return 'failed'
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text)
@@ -24,7 +26,7 @@ export async function copyText(text: string): Promise<CopyOutcome> {
       // fall through to the legacy path
     }
   }
-  if (typeof document === 'undefined') return 'failed'
+  if (!permitted() || typeof document === 'undefined') return 'failed'
   const area = document.createElement('textarea')
   area.value = text
   // keep it out of view and out of the tab order, but still selectable

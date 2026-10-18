@@ -1,5 +1,27 @@
 # PLAN: WordArt Compatibility in OfficeView
 
+## Interactive spreadsheet viewer status
+
+The separate interactive spreadsheet viewer is implemented behind the
+default-off `interactiveSheets` flag; large paged viewing uses a host-supplied
+worker. Integrator usage, resource/copy/print limits and capability restrictions
+are documented in [README](README.md#interactive-spreadsheet-viewer).
+Desktop Chrome release receipts are admitted at three points on the same
+line: **2026-10-16 at `9cfb090` (= `fb0ddc7`) and 2026-10-18 twice — the
+first composed-tree attempt on `6971044` was NOT ADMITTED** (F3
+progressive-first-viewport, fixed by yield-perf, codex APPROVE) **and the
+final re-run on integration `6341b02` is ADMITTED 13/13, closing plan M1.**
+B1 (value-index pacing) is fixed (`d3a3c55`, codex APPROVE after seven
+rounds), Linux CI is green at `d3a3c55` (run 39096574217; plan M2 resolved;
+a final-head re-run comes later), and the M3 browser acceptance legs are
+executed (merged `8e0a5e5`, with the AC-LIFE-02 sheet-switch leak fix, codex
+APPROVE).
+Safari, physical iPad and VoiceOver final-tree evidence and the final release
+decision remain open; a native (iOS Simulator, non-physical) M-profile
+natural-text sort refusal is accepted by design (user decision 6, 2026-10-17).
+See the [interactive viewer plan](docs/superpowers/plans/2026-10-10-interactive-viewer.md)
+for its requirement matrix. The WordArt plan below retains its existing scope.
+
 ## Objective
 Support the reviewed WordArt appearance, eleven implemented text-warp presets, and format adapters across PowerPoint (`.pptx`), Word (`.docx`), and Excel (`.xlsx`) documents in OfficeView. Native Office font fitting and universal raster parity remain unverified.
 This encompasses:

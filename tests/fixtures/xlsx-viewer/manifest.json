@@ -1,0 +1,305 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "F1",
+      "description": "full-extents sparse corners (100k NNZ plus pinned A1/XFD1/A1048576/XFD1048576)",
+      "seed": 549484606,
+      "rowCount": 1048576,
+      "colCount": 16384,
+      "nnz": 100000,
+      "used": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 16383
+      },
+      "samplesSha256": "c4630c8b425a5225986989db7a605e26cfbd519cb31c6a7ae88952f64f3e6a4d",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "a6573e86bd2c4d9d11a91b75f0741dacc3eab59fd27703c9a347d1caf3a9267a",
+        "overviewHead": "e85ffaa95e337a2b15cf8b49ec76f0832961cfa2487096a9e09809083592b7d6"
+      },
+      "package": "f1-small.xlsx",
+      "packageFixture": "F1",
+      "packageParams": {
+        "nnz": 200
+      },
+      "packageNnz": 200,
+      "coverage": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 16383
+      },
+      "extraPackages": [],
+      "files": [
+        {
+          "path": "f1-small.xlsx",
+          "bytes": 17375,
+          "sha256": "c71dda349dd217b18340f729ccbc3c51a1d43133a4e296ce5a8ef65d1f0964bd",
+          "uncompressedBytes": 16585
+        }
+      ]
+    },
+    {
+      "id": "F2",
+      "description": "tall table (1048576x8 with header, totals, blanks, errors, dates)",
+      "seed": 532706987,
+      "rowCount": 1048576,
+      "colCount": 8,
+      "nnz": 8238808,
+      "used": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 7
+      },
+      "samplesSha256": "f02b75b54830acbae7a63334868aa30f1b59791a39fbbe531c6a3dd95a599fb0",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "b0ece49a415729b86ec9e39acae95fe1c4f0b3ddb49150e5236d0f2fffe32bf4",
+        "overviewHead": "3723280cf73382aee9ec9f9339833217c776b62c3b11e3c9335862edb6176872"
+      },
+      "package": null,
+      "packageFixture": null,
+      "packageParams": null,
+      "packageNnz": null,
+      "coverage": null,
+      "extraPackages": [],
+      "files": []
+    },
+    {
+      "id": "F3",
+      "description": "wide table (dense 256x16384 plus sparse-wide lattice variant)",
+      "seed": 515929368,
+      "rowCount": 256,
+      "colCount": 16384,
+      "nnz": 4194304,
+      "used": {
+        "r0": 0,
+        "r1": 255,
+        "c0": 0,
+        "c1": 16383
+      },
+      "samplesSha256": "01e91e82007c3aa40a5bf9dfaf5e3d507bde858722d824dd9c14bc20174e40bf",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "fc6aa0ea650b68edeea06d1078ad178cf14ea204275093274125e88b874fa643",
+        "overviewHead": "24ff14c10b338c5f7233b78dd67f8c611aee9708697f0746f59df89924155392"
+      },
+      "package": null,
+      "packageFixture": null,
+      "packageParams": null,
+      "packageNnz": null,
+      "coverage": null,
+      "extraPackages": [
+        {
+          "path": "f3sparse-small.xlsx",
+          "fixture": "F3",
+          "params": {
+            "rowCount": 256,
+            "colCount": 512,
+            "variant": "sparse-wide"
+          },
+          "nnz": 2048,
+          "coverage": {
+            "r0": 0,
+            "r1": 255,
+            "c0": 0,
+            "c1": 511
+          }
+        }
+      ],
+      "files": [
+        {
+          "path": "f3sparse-small.xlsx",
+          "bytes": 85364,
+          "sha256": "4f7d91790640083d625ffcd432dc7468b8eb2eaea78688f02733a945d67d4b5a",
+          "uncompressedBytes": 84574
+        }
+      ]
+    },
+    {
+      "id": "F4",
+      "description": "string domain (1M unique UTF-16 strings with surrogates and accents)",
+      "seed": 633372701,
+      "rowCount": 1000000,
+      "colCount": 1,
+      "nnz": 1000000,
+      "used": {
+        "r0": 0,
+        "r1": 999999,
+        "c0": 0,
+        "c1": 0
+      },
+      "samplesSha256": "f350926bcf1adbfc626a95a3fa50822d6bd927d253bf0b4bb135b1779c63112e",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "0248659d7193ccede18d55d777960fe5c4f327a2b74d511afc54407e943ca30c",
+        "overviewHead": "c3a6146fa60385ba79310a49cc5ee20ca99b041fcdc055e4b28325548229de58"
+      },
+      "package": null,
+      "packageFixture": null,
+      "packageParams": null,
+      "packageNnz": null,
+      "coverage": null,
+      "extraPackages": [
+        {
+          "path": "f4-small.xlsx",
+          "fixture": "F4",
+          "params": {
+            "rowCount": 500
+          },
+          "nnz": 500,
+          "coverage": {
+            "r0": 0,
+            "r1": 499,
+            "c0": 0,
+            "c1": 0
+          }
+        }
+      ],
+      "files": [
+        {
+          "path": "f4-small.xlsx",
+          "bytes": 70840,
+          "sha256": "fdae1be03858ee3194b7a5cb9fe526321905c98c8444ae53731fe86b7e58e478",
+          "uncompressedBytes": 70050
+        }
+      ]
+    },
+    {
+      "id": "F5",
+      "description": "structural metadata (giant merges, tables, spills, drawings)",
+      "seed": 616595082,
+      "rowCount": 1048576,
+      "colCount": 16384,
+      "nnz": 42,
+      "used": {
+        "r0": 0,
+        "r1": 199999,
+        "c0": 0,
+        "c1": 100
+      },
+      "samplesSha256": "df199fa7045b2baf482265e0ea5a1e76b7f005155f2431f3db1d26c871020f06",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "e9c8c45f5b40967145fdded5c8b51268d2a6f002c9eb44c1abfb950c3f519cd6",
+        "overviewHead": "5919f16df1f37148fe00a6273bc1093547daf3f47634c39831fe0858de238f55"
+      },
+      "package": "f5-small.xlsx",
+      "packageFixture": "F5",
+      "packageParams": {},
+      "packageNnz": 10,
+      "coverage": {
+        "r0": 0,
+        "r1": 4,
+        "c0": 0,
+        "c1": 3
+      },
+      "extraPackages": [],
+      "files": [
+        {
+          "path": "f5-small.xlsx",
+          "bytes": 4267,
+          "sha256": "3be5941151083cbd19d46bbdf7a9d2e521e1b0d60ec6fa93bf3a1e6517935f51",
+          "uncompressedBytes": 3477
+        }
+      ]
+    },
+    {
+      "id": "F6",
+      "description": "full-axis synthetic provider (all 2^34 addresses, analytic)",
+      "seed": 599817463,
+      "rowCount": 1048576,
+      "colCount": 16384,
+      "nnz": 17179869184,
+      "used": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 16383
+      },
+      "samplesSha256": "6dd34043798e2d621e38b6b7d9cbd282fa0a4e215967f93c6219382740b77d79",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "0db0ae751ba9d99da7d99009513250c985fb48793bdb8127dd4dc4ed224001d8",
+        "overviewHead": "6c9ec85c85f786e2da8c2b9a74597a06559789245e1dce9b288183941f86c5d7"
+      },
+      "package": null,
+      "packageFixture": null,
+      "packageParams": null,
+      "packageNnz": null,
+      "coverage": null,
+      "extraPackages": [],
+      "files": []
+    },
+    {
+      "id": "F7",
+      "description": "view stress (eight-key sorts, hidden interleavings, tiny sizes)",
+      "seed": 583039844,
+      "rowCount": 100000,
+      "colCount": 8,
+      "nnz": 800008,
+      "used": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 7
+      },
+      "samplesSha256": "fa191509c91d8387732f2973295869b24533f05c29c7e69431c00da314f9b2a6",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "c120a1c9f0751d00e3c0d30c6063fa05f7dcdf94244815e4293c400cc3cce3cb",
+        "overviewHead": "35dc277747ffa12dd785a084a6c24e01b2483cd74bbec4e93181da98bbdec1e7"
+      },
+      "package": null,
+      "packageFixture": null,
+      "packageParams": null,
+      "packageNnz": null,
+      "coverage": null,
+      "extraPackages": [],
+      "files": []
+    },
+    {
+      "id": "F8",
+      "description": "compatibility parity (cache, error, date, table, unicode cases)",
+      "seed": 432041273,
+      "rowCount": 1048576,
+      "colCount": 16384,
+      "nnz": 16,
+      "used": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 16383
+      },
+      "samplesSha256": "cf8b773a0e05ab1a002e5b3d10047f06df37157079c80f22eca5d4c88ca764f6",
+      "queryScope": "head (readRows r0..r4, overview rows 0..999)",
+      "queryHashes": {
+        "readRowsHead": "9cdd3e61352d1de2a4afc76cb18fa5576129ed825446b552be90e5e4b06406a8",
+        "overviewHead": "477e4f9e28ca48f6a6cac5a69d90bca88864d4f529fff8e7c2ec96c4f87f3f48"
+      },
+      "package": "f8-small.xlsx",
+      "packageFixture": "F8",
+      "packageParams": {},
+      "packageNnz": 16,
+      "coverage": {
+        "r0": 0,
+        "r1": 1048575,
+        "c0": 0,
+        "c1": 16383
+      },
+      "extraPackages": [],
+      "files": [
+        {
+          "path": "f8-small.xlsx",
+          "bytes": 5135,
+          "sha256": "702fd7011344a9fa6545eb7d07d6fee34da551a82bab91cbe44a0e476d1fd47e",
+          "uncompressedBytes": 4213
+        }
+      ]
+    }
+  ]
+}

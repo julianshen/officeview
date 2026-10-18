@@ -4,6 +4,7 @@ import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
 import { buildDocx } from '../src/testdata/ooxml-builders'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 async function docWithPages() {
   const paras = Array.from({ length: 120 }, (_, i) => ({ runs: [{ text: `line ${i}` }] }))
@@ -275,5 +276,53 @@ describe('<OfficeDoc> hi-dpi re-render when zoomed', () => {
       await waitFor(() => expect(canvasOf().width).toBe(base))
       expect(boosted).toBeGreaterThan(base)
     })
+  })
+})
+
+describe('XLSX sheet mode zoom (S5.2, spec §5.5)', () => {
+  async function sheetDoc() {
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const { buildXlsx } = await import('../src/testdata/ooxml-builders')
+    return parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S1', rows: [{ r: 1, cells: [{ ref: 'A1', v: 'zoom' }] }] }])))
+  }
+  const label = (root: HTMLElement) => (root.querySelector('[aria-label="Reset zoom"]') as HTMLElement).textContent
+
+  test('flag off: spreadsheets keep the fit-width page zoom (no zoom-out below fit, pan transform)', async () => {
+    const utils = render(<OfficeDoc document={await sheetDoc()} />)
+    await waitFor(() => expect(utils.container.querySelector('canvas')).toBeTruthy())
+    expect((utils.container.querySelector('[aria-label="Zoom out"]') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement)
+    const content = utils.getByTestId('officeview-content')
+    await waitFor(() => expect(content.style.transform).toContain('scale'))
+    expect(utils.container.querySelector('[role="grid"]')).toBeNull()
+  })
+
+  test('flag on: absolute SheetZoom from 25% to 400% with no page pan transform', FIRST_PAINT_TEST, async () => {
+    const utils = render(<OfficeDoc document={await sheetDoc()} interactiveSheets />)
+    // Cold start: the lazy viewer chunk may still show its loading notice at 1 s.
+    await waitFor(() => expect(utils.container.querySelector('[role="grid"]')).toBeTruthy(), FIRST_PAINT_WAIT)
+    expect(utils.queryByTestId('officeview-content')).toBeNull()
+    expect(label(utils.container)).toBe('100%')
+    const out = utils.container.querySelector('[aria-label="Zoom out"]') as HTMLButtonElement
+    for (let i = 0; i < 8; i++) act(() => { fireEvent.click(out) })
+    expect(label(utils.container)).toBe('25%')
+    expect(out.disabled).toBe(true)
+    const zoomIn = utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement
+    for (let i = 0; i < 14; i++) act(() => { fireEvent.click(zoomIn) })
+    expect(label(utils.container)).toBe('400%')
+    act(() => { fireEvent.click(utils.container.querySelector('[aria-label="Reset zoom"]') as HTMLButtonElement) })
+    expect(label(utils.container)).toBe('100%')
+  })
+
+  test('flag on: typing 0 or - in viewer inputs never changes sheet zoom', async () => {
+    const utils = render(<OfficeDoc document={await sheetDoc()} interactiveSheets />)
+    await waitFor(() => expect(utils.container.querySelector('[role="grid"]')).toBeTruthy())
+    act(() => { fireEvent.click(utils.container.querySelector('[aria-label="Zoom in"]') as HTMLButtonElement) })
+    const goTo = utils.getByRole('textbox', { name: 'Go To cell' })
+    fireEvent.keyDown(goTo, { key: '0' })
+    fireEvent.keyDown(goTo, { key: '-' })
+    const search = utils.getByRole('searchbox', { name: 'Search document' })
+    fireEvent.keyDown(search, { key: '0' })
+    expect(label(utils.container)).toBe('125%')
   })
 })

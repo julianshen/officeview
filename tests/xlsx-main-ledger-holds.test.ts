@@ -1,0 +1,98 @@
+/**
+ * Held lifetime charges (spec §12.4): a charge with explicit owners ends at its
+ * last holder, never twice, and stays a reachability charge until first held.
+ */
+import { describe, expect, it } from 'vitest'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
+
+describe('held lifetime charges (MainMemoryLedger.chargeWhileHeld)', () => {
+  it('ends at the last holder, never twice, and is charged again for a later holder', () => {
+    const ledger = new MainMemoryLedger({ register() {} })
+    const target = {}
+    ledger.chargeWhileHeld('viewBuffers', [target], 100)
+    const a = ledger.hold(target)!, b = ledger.hold(target)!
+    a.release(); a.release()
+    expect(ledger.bytes, 'a second release of the same hold is ignored').toBe(100)
+    b.release()
+    expect(ledger.bytes).toBe(0)
+    expect(ledger.hasLifetime(target)).toBe(false)
+    b.release()
+    expect(ledger.bytes).toBe(0)
+    const late = ledger.hold(target)!
+    expect(ledger.bytes, 'a holder arriving after the last release holds the bytes again').toBe(100)
+    expect(ledger.hasLifetime(target)).toBe(true)
+    late.release()
+    expect(ledger.bytes).toBe(0)
+  })
+  it('stays a reachability charge until first held; unknown targets have no hold', () => {
+    const tokens: string[] = []
+    const ledger = new MainMemoryLedger({ register(_target, token) { tokens.push(token) } })
+    const target = {}
+    ledger.chargeWhileHeld('geometry', [target], 64)
+    expect(ledger.hold({})).toBeNull()
+    expect(ledger.bytes).toBe(64)
+    ledger.collected(tokens[0])
+    expect(ledger.bytes, 'collection still ends an unheld charge').toBe(0)
+  })
+  it('a settle of a held target ends it once; its holders then release nothing more', () => {
+    const ledger = new MainMemoryLedger({ register() {} })
+    const target = {}
+    ledger.chargeWhileHeld('viewBuffers', [target], 10)
+    const hold = ledger.hold(target)!
+    ledger.settle(target)
+    expect(ledger.bytes).toBe(0)
+    ledger.set('viewBuffers', 'other', 5)
+    hold.release()
+    expect(ledger.bytes).toBe(5)
+  })
+  it('a held adoption split across reservations is one charge: one hold covers every part', () => {
+    const ledger = new MainMemoryLedger({ register() {} })
+    ledger.set('controls', 'a', 30); ledger.set('controls', 'b', 20)
+    const mask = {}, targets = [mask]
+    ledger.adoptWhileReachable('controls', 'a', 'controls', targets, 30, undefined, true)
+    ledger.adoptWhileReachable('controls', 'b', 'controls', targets, 20, undefined, true)
+    expect(ledger.bytes).toBe(50)
+    const hold = ledger.hold(mask)!
+    hold.release()
+    expect(ledger.bytes, 'both parts end with the last holder').toBe(0)
+    const again = ledger.hold(mask)!
+    expect(ledger.bytes).toBe(50)
+    again.release()
+    expect(ledger.bytes).toBe(0)
+  })
+  it('a target charged again after its held charge ended is governed by the new charge', () => {
+    const ledger = new MainMemoryLedger({ register() {} })
+    const target = {}
+    ledger.chargeWhileHeld('viewBuffers', [target], 10)
+    ledger.hold(target)!.release()
+    expect(ledger.bytes).toBe(0)
+    ledger.chargeWhileHeld('viewBuffers', [target], 25)
+    const hold = ledger.hold(target)!
+    expect(ledger.bytes, 'the new charge, not a revival of the old one').toBe(25)
+    hold.release()
+    expect(ledger.bytes).toBe(0)
+  })
+  it('a re-admitted target has a lifetime again and settle ends that current charge', () => {
+    const ledger = new MainMemoryLedger({ register() {} }), target = {}
+    ledger.chargeWhileHeld('viewBuffers', [target], 10)
+    ledger.hold(target)!.release()
+    ledger.chargeWhileHeld('viewBuffers', [target], 25)
+    const held = ledger.hold(target)!
+    expect({ bytes: ledger.bytes, owns: ledger.hasLifetime(target) }).toEqual({ bytes: 25, owns: true })
+    ledger.settle(target)
+    expect(ledger.bytes).toBe(0)
+    held.release()
+    expect(ledger.bytes).toBe(0)
+  })
+  it('a re-adopted target keeps a live alias but rebinds a dead one', () => {
+    const ledger = new MainMemoryLedger({ register() {} }), live = {}, dead = {}
+    ledger.chargeWhileReachable('controls', [live], 5)
+    ledger.chargeWhileHeld('controls', [dead], 7)
+    ledger.hold(dead)!.release()
+    ledger.set('controls', 'r', 9)
+    ledger.adoptWhileReachable('controls', 'r', 'controls', [live, dead], 9, undefined, true)
+    expect(ledger.hasLifetime(dead)).toBe(true)
+    ledger.settle(dead)
+    expect(ledger.bytes, 'the dead alias names the new adoption; the live alias keeps its own charge').toBe(5)
+  })
+})

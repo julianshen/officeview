@@ -1,0 +1,405 @@
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react'
+import type { CacheIdentity, GridSelection, SheetView, ScrollWindow, SourceRowInterval, ProfileId } from '../../xlsx/view/contracts'
+import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
+import type { SourceCell } from '../../xlsx/view/coordinates'
+import { visibleSpans } from '../../xlsx/view/frozenPanes'
+import type { AxisWindow } from '../../xlsx/view/contracts'
+import { navigateKey, scrollIntoView, hitTestViewport, type NavigationKey, type ViewportSize } from '../../xlsx/view/scrollWindow'
+import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
+import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
+import { belowDetail } from '../../xlsx/view/viewport'
+import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, HEADER_COLORS, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
+import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
+import { useControlMedia } from './controlMedia'
+import { ResizeHandles, type ResizeRequest } from './sheetResize'
+import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
+
+export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
+export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
+export interface GridPopup { content: ReactNode; invoker: HTMLElement | null; close: () => void; /** Accessible name of the popup (default "Column filter"). */ label?: string }
+export interface GridSemanticsProps {
+  owner: CacheIdentity
+  projection: ProjectedSheetMetrics
+  view: Pick<SheetView, 'visibility' | 'baseHidden' | 'filter' | 'sort'>
+  selection: GridSelection
+  window: ScrollWindow
+  viewport: ViewportSize
+  body: SourceRowInterval | null
+  onChange: (transition: GridTransition) => void
+  cellPresentation?: (at: SourceCell) => GridCellPresentation
+  announcement?: string
+  popup?: GridPopup
+  onFilter?: (col: number, invoker: HTMLElement) => void
+  children?: ReactNode
+  label?: string
+  onSortCycle?: (col: number, shift: boolean, invoker: HTMLElement) => void
+  /** Column whose header sort is pending: the grid is busy and its control shows it. */
+  pendingSortColumn?: number | null
+  onSortDialog?: (col: number, invoker: HTMLElement) => void
+  onNotice?: (message: string) => void
+  status?: Pick<ViewerStatusProps, 'records' | 'countMode' | 'loadReport' | 'inspection'>
+  profile?: ProfileId
+  renderMode?: 'detail' | 'coarse'
+  /** Exact read-only inspection of a hidden Go To/find target (grid focus stays put). */
+  inspection?: HiddenCellInspection
+  /** View-only row/column resize (spec §5.6): header edge handles and the
+   * Alt+Shift+Arrow / Alt+Shift+Enter keyboard route. */
+  onResize?: (request: ResizeRequest) => void
+  /** Row-header gutter width (CSS px); default GRID_HEADER_SIZE. */
+  gutter?: number
+  /** Fill the positioned parent (the viewer pane), so the status line follows the
+   * pane's size at once instead of a render later. */
+  fill?: boolean
+}
+const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
+  ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
+  ArrowUp: { kind: 'row', delta: -RESIZE_KEY_STEP }, ArrowDown: { kind: 'row', delta: RESIZE_KEY_STEP },
+}
+/** The visible status line (§9.1, the sole notice surface) below the cells. */
+export const STATUS_BAR_HEIGHT = 24
+/** Desktop column popup width cap (the filter dropdown's own min(420px, …)). */
+const POPUP_MAX_WIDTH = 420
+const navigationKeys = new Set<string>(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'PageUp', 'PageDown'])
+/** The parent commits viewport and selection together, so the new descendant
+ * is represented in the same React publication as its ID. */
+export function gridNavigationTransition(props: GridSemanticsProps, key: NavigationKey, options: { ctrl?: boolean; extend?: boolean } = {}): GridTransition {
+  const selection = reconcileSelection(props.selection, props.projection, props.view).selection
+  const result = navigateKey(props.window, { metrics: props.projection, viewport: props.viewport, view: { ...props.view, selection } }, key, selection.active, options)
+  if (result.kind !== 'visible') return { window: result.window, selection, announcement: 'No visible records.' }
+  const next = selectCell(selection, props.projection, result.target, { extend: options.extend })
+  return { window: result.window, selection: next, announcement: targetAnnouncement(props.projection, next, result.target, props.cellPresentation?.(result.target).text, options.extend) }
+}
+/** The active-cell announcement; an extension also names what is selected
+ * (spec §9.2: the live region reports selection truthfully), from the gesture
+ * kind: "selected B2:C3" for cells, "selected columns A:C" for a column-header
+ * extension, "selected rows 3:5" for rows, plus any additional (Ctrl) ranges. */
+function targetAnnouncement(projection: ProjectedSheetMetrics, selection: GridSelection, target: SourceCell, text: string | undefined, extend?: boolean): string {
+  const base = activeAnnouncement(projection, target, text)
+  const anchor = selection.gesture?.anchor ?? selection.anchor
+  if (!extend || !anchor) return base
+  const kind = selection.gesture?.kind ?? 'cells'
+  const span = (a: number, b: number, label: (n: number) => string) => a === b ? label(a) : `${label(Math.min(a, b))}:${label(Math.max(a, b))}`
+  const extra = selection.ranges.length > 1 ? ` and ${selection.ranges.length - 1} more range${selection.ranges.length > 2 ? 's' : ''}` : ''
+  if (kind === 'column') {
+    const one = anchor.col === target.col
+    return `${base}; selected column${one ? '' : 's'} ${span(anchor.col, target.col, columnToLetters)}${extra}`
+  }
+  if (kind === 'row') {
+    const a = projection.order.sourceToDisplay(anchor.row) + 1, b = projection.order.sourceToDisplay(target.row) + 1
+    return `${base}; selected row${a === b ? '' : 's'} ${span(a, b, String)}${extra}`
+  }
+  if (anchor.row === target.row && anchor.col === target.col) return base
+  const display = (at: SourceCell) => formatA1({ row: projection.order.sourceToDisplay(at.row), col: at.col })
+  return `${base}; selected ${display(anchor)}:${display(target)}${extra}`
+}
+/** More than one cell selected: the cells then describe themselves as selected
+ * (a lone active cell is always aria-selected, so saying it would be noise). */
+function multiCellSelection(selection: GridSelection): boolean {
+  if (selection.ranges.length !== 1) return selection.ranges.length > 1
+  const part = selection.ranges[0], rows = part.rows
+  if (part.cols.length !== 1 || part.cols[0].c0 !== part.cols[0].c1) return true
+  // Cardinality from each representation's own count, never by enumeration.
+  const count = rows.kind === 'intervals' ? rows.intervals.reduce((n, i) => n + (i.r1 - i.r0 + 1), 0)
+    : rows.kind === 'list' ? rows.rows.length : rows.count
+  return count > 1
+}
+// Spec §12.3 frame/gridline admission; S5 passes the same profile/render mode.
+const FRAME_LIMITS = { D: { cells: 20000, lines: 4096 }, M: { cells: 10000, lines: 2048 } } as const
+/** FNV-1a: a short, stable, ID-safe token for arbitrary doc/sheet IDs. */
+function shortHash(text: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+  return (hash >>> 0).toString(36)
+}
+/** Row-local cell frames are anchored on 4M-px blocks, so CSS lengths stay
+ * small on huge sheets and cell `left`s change only when a block is crossed. */
+const ROW_FRAME_BLOCK = 4_194_304
+/** Viewport x of the row frame's origin (logical 0 snapped to its block). */
+function rowFrameShift(originX: number): number {
+  return originX + Math.floor(-originX / ROW_FRAME_BLOCK) * ROW_FRAME_BLOCK
+}
+/** A column box in the row frame: its unclamped viewport box minus the frame
+ * shift, bounded to a pane-sized margin so a giant cell stays small DOM. */
+function rowLocalColumn(full: { x: number; width: number }, viewport: ViewportSize, shift: number): { x: number; width: number } {
+  const x0 = Math.max(full.x, -viewport.width), x1 = Math.min(full.x + full.width, 2 * viewport.width)
+  return { x: x0 - shift, width: Math.max(0, x1 - x0) }
+}
+const hiddenText = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' } as const
+/** S5 supplies current presentation snapshots and mounts its bounded canvas in
+ * children. This shell never fetches values or renders legacy worksheet paint. */
+/** Visible runs of an axis over one or two disjoint logical spans (frozen strip, body). */
+function spanWindow(axis: { visibleBetween(start: number, end: number): AxisWindow }, spans: ReadonlyArray<[number, number]>): AxisWindow {
+  if (spans.length === 1) return axis.visibleBetween(spans[0][0], spans[0][1])
+  const windows = spans.map(([start, end]) => axis.visibleBetween(start, end))
+  return { runs: windows.flatMap(window => [...window.runs]), count: windows.reduce((sum, window) => sum + window.count, 0) }
+}
+export function GridSemantics(props: GridSemanticsProps): ReactElement {
+  const instance = useId(), { projection, window: scroll, viewport, view } = props
+  const gutter = props.gutter ?? GRID_HEADER_SIZE
+  const { docId, sheetId, valueGen, fontGen, viewGen } = props.owner
+  const touchControls = useControlMedia('(pointer: coarse)')
+  const headerHeight = columnHeaderHeight(touchControls, Boolean(props.onSortCycle || props.onFilter || props.onSortDialog), Boolean(props.onSortDialog))
+  // Value/font republish keeps the same cells, so IDs omit those generations;
+  // the reset key still closes popups/control mode on any owner change.
+  const prefix = `${instance}-${shortHash(docId)}-${shortHash(sheetId)}-${viewGen}`
+  const ownerKey = JSON.stringify([docId, sheetId, valueGen, fontGen, viewGen])
+  const wrapperRef = useRef<HTMLDivElement>(null), gridRef = useRef<HTMLDivElement>(null), popupRef = useRef<HTMLDivElement>(null), previousPopup = useRef<{ popup: GridPopup; owner: string } | null>(null)
+  const previousOwner = useRef(ownerKey)
+  const [controlMode, setControlModeState] = useState(false), [notice, setNotice] = useState('')
+  // Focus handlers run before React re-renders, so they read the mode from a ref.
+  const controlModeRef = useRef(false)
+  const setControlMode = (on: boolean) => { controlModeRef.current = on; setControlModeState(on) }
+  useLayoutEffect(() => {
+    if (previousOwner.current !== ownerKey) {
+      if (gridRef.current?.contains(document.activeElement) || popupRef.current?.contains(document.activeElement)) gridRef.current?.focus()
+      props.popup?.close()
+      setControlMode(false)
+      setNotice('')
+      previousOwner.current = ownerKey
+    }
+    // A removed popup leaves focus on body; focus the user already moved
+    // outside the viewer is theirs to keep.
+    const focus = document.activeElement
+    const focusOwned = !focus || focus === document.body || Boolean(wrapperRef.current?.contains(focus))
+    if (previousPopup.current && !props.popup && focusOwned) {
+      const { popup, owner } = previousPopup.current, invoker = popup.invoker
+      if (owner === ownerKey && invoker?.isConnected && gridRef.current?.contains(invoker)) {
+        // A header invoker is a native control, so restoring it re-enters control mode.
+        if (invoker !== gridRef.current) setControlMode(true)
+        invoker.focus()
+      } else gridRef.current?.focus()
+    }
+    previousPopup.current = props.popup ? { popup: props.popup, owner: previousPopup.current?.owner ?? ownerKey } : null
+  }, [ownerKey, props.popup])
+  // Desktop popup anchor: under the invoking column, clamped inside the wrapper.
+  const [popupLeft, setPopupLeft] = useState(0)
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current, invoker = props.popup?.invoker
+    if (!props.popup || !wrapper) return
+    const header = invoker && invoker !== gridRef.current ? invoker.closest('[role=columnheader]') ?? invoker : null
+    const width = Math.min(POPUP_MAX_WIDTH, wrapper.clientWidth)
+    const x = header ? header.getBoundingClientRect().left - wrapper.getBoundingClientRect().left : gutter
+    setPopupLeft(Math.max(0, Math.min(x, wrapper.clientWidth - width)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.popup])
+  const current = reconcileSelection(props.selection, projection, view), selection = current.selection
+  const multiSelected = multiCellSelection(selection)
+  // Frozen panes: the pinned strip and the scrolling body are separate logical spans.
+  const spans = visibleSpans(scroll.frozen, scroll.logicalOrigin, scroll.zoom, viewport)
+  const rowWindow = spanWindow(projection.rows, spans.y), colWindow = spanWindow(projection.cols, spans.x)
+  const limits = FRAME_LIMITS[props.profile ?? 'D']
+  let coarse = props.renderMode === 'coarse' || rowWindow.count * colWindow.count >= limits.cells || rowWindow.count + colWindow.count >= limits.lines
+  let slots: number[] = [], columns: number[] = []
+  let subDetail = false
+  if (!coarse) {
+    // A line below the painter's detail rule (belowDetail: 4 device px) is
+    // painted as a coarse pixel group (§11.1) and owns no row/cell here;
+    // every other line keeps its owned semantics. One
+    // tiny authored row must not strip the whole viewport (A11Y-01). The window
+    // counts above already bound how many lines this can visit.
+    const scale = scroll.zoom * scroll.deviceScale // the painter's scale expression (viewport.ts detailScale)
+    const detail = (size: number) => !belowDetail(size, scale)
+    for (const run of rowWindow.runs) for (let slot = run.start; slot <= run.end; slot++) if (detail(projection.rows.size(slot))) slots.push(slot); else subDetail = true
+    for (const run of colWindow.runs) for (let col = run.start; col <= run.end; col++) if (detail(projection.cols.size(col))) columns.push(col); else subDetail = true
+    if (!slots.length || !columns.length) { coarse = true; slots = []; columns = [] }
+  }
+  const active = selection.active && projection.sourceCellToLogical(selection.active) ? selection.active : null
+  const activeSlot = active ? projection.order.sourceToDisplay(active.row) : null
+  const transient = activeSlot !== null && !slots.includes(activeSlot)
+  if (transient) slots.push(activeSlot!)
+  slots.sort((a, b) => a - b)
+  const publish = (action: () => GridTransition) => {
+    try { props.onChange(action()); setNotice('') }
+    catch (error) { setNotice(error instanceof Error ? boundedSelectionText(error.message) : 'Navigation unavailable. Please retry.') }
+  }
+  // A resize can replace the focused header control (a column crossing the
+  // 44px touch threshold swaps its buttons for the actions lane and back):
+  // focus moves to the equivalent surviving control, else the owned grid.
+  const resizeFocus = useRef<{ request: ResizeRequest; slot: number; label: string | null } | null>(null)
+  useLayoutEffect(() => {
+    // One-shot: only the commit right after the resize may restore focus, and
+    // only when the control that had it was removed; later focus moves
+    // (inside or outside the viewer) belong to the user.
+    const pending = resizeFocus.current, grid = gridRef.current
+    resizeFocus.current = null
+    if (!pending || !grid) return
+    const focus = document.activeElement
+    if (focus && focus !== document.body) return
+    const { request, slot, label } = pending
+    const escape = (text: string) => text.replace(/["\\]/g, '\\$&')
+    const candidates = request.kind === 'column'
+      ? [label ? `button[aria-label="${escape(label)}"]` : '', `[data-header-column="${request.index}"]`, `[data-header-lane="${request.index}"]`, `[data-action-column="${request.index}"]`]
+      : [label ? `button[aria-label="${escape(label)}"]` : '', `[data-header-row="${slot}"]`]
+    for (const selector of candidates) {
+      const next = selector ? grid.querySelector<HTMLElement>(selector) : null
+      if (next) { setControlMode(true); next.focus(); return }
+    }
+    setControlMode(false)
+    grid.focus()
+  })
+  const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
+    const grid = gridRef.current
+    if (event.key === 'Escape' && props.popup && (grid?.contains(document.activeElement) || popupRef.current?.contains(document.activeElement))) {
+      event.preventDefault(); event.stopPropagation()
+      props.popup.close()
+      return
+    }
+    // Alt+Shift+Arrow resizes (Left/Right: column, Up/Down: row) and
+    // Alt+Shift+Enter auto-fits: the active cell's lines from the grid, or the
+    // focused header's own line in control mode (spec §5.6).
+    if (props.onResize && event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key in resizeArrows || event.key === 'Enter') && grid?.contains(event.target as Node)) {
+      const target = event.target as HTMLElement
+      // Any native header control names its line: select, sort/filter/more
+      // action buttons and the narrow-column actions lane (disclosure and group).
+      const header = target.closest<HTMLElement>('[data-header-column],[data-action-column],[data-header-lane],[data-header-disclosure],[data-header-row]')
+      const arrow = resizeArrows[event.key]
+      const column = header?.dataset.headerColumn ?? header?.dataset.actionColumn ?? header?.dataset.headerLane ?? header?.dataset.headerDisclosure
+      let request: ResizeRequest | null = null
+      if (column !== undefined) {
+        if (!arrow || arrow.kind === 'column') request = { kind: 'column', index: Number(column), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      } else if (header?.dataset.headerRow !== undefined) {
+        if (!arrow || arrow.kind === 'row') request = { kind: 'row', index: projection.order.displayToSource(Number(header.dataset.headerRow)), ...(arrow ? { delta: arrow.delta } : { fit: true }) }
+      } else if (target === grid && active) {
+        request = arrow ? { kind: arrow.kind, index: arrow.kind === 'row' ? active.row : active.col, delta: arrow.delta } : { kind: 'column', index: active.col, fit: true }
+      }
+      if (request) {
+        event.preventDefault(); event.stopPropagation()
+        if (target !== grid) resizeFocus.current = { request, slot: request.kind === 'row' ? projection.order.sourceToDisplay(request.index) : -1, label: target.closest('button')?.getAttribute('aria-label') ?? null }
+        props.onResize(request)
+        return
+      }
+    }
+    if (event.target !== grid) {
+      if (event.key === 'Escape' && grid?.contains(event.target as Node)) {
+        event.preventDefault(); setControlMode(false); grid.focus()
+      }
+      event.stopPropagation()
+      return
+    }
+    if (document.activeElement !== grid) return
+    if (event.key === 'Escape') {
+      if (!selection.ranges.length && !selection.active && !selection.anchor) return
+      event.preventDefault(); event.stopPropagation()
+      publish(() => ({ selection: emptyGridSelection(), window: scroll, announcement: 'Selection cleared.' }))
+    } else if (event.key === 'F2') {
+      const buttons = [...grid.querySelectorAll<HTMLButtonElement>('[data-header-column]')]
+      const button = buttons.find(button => Number(button.dataset.headerColumn) === active?.col) ?? buttons[0]
+      if (button) { event.preventDefault(); event.stopPropagation(); setControlMode(true); button.focus() }
+    } else if (event.altKey && event.key === 'ArrowDown' && active && props.onFilter) {
+      event.preventDefault(); event.stopPropagation(); props.onFilter(active.col, grid)
+    } else if (navigationKeys.has(event.key) && !event.altKey) {
+      event.preventDefault(); event.stopPropagation()
+      publish(() => gridNavigationTransition(props, event.key as NavigationKey, { ctrl: event.ctrlKey || event.metaKey, extend: event.shiftKey }))
+    }
+  }
+  const activeBox = active && projection.sourceCellToLogical(active)
+  const activeColumnInPane = activeBox && spans.x.some(([x0, x1]) => activeBox.x < x1 && activeBox.x + activeBox.width > x0)
+  const headerColumns = coarse && active && activeColumnInPane ? [active.col] : columns
+  const headerProps = { gutter, projection, window: scroll, viewport, coarse, columns: headerColumns, selection, sort: view.sort, filter: view.filter, controlMode, touchControls, onSortCycle: props.onSortCycle, pendingSortColumn: props.pendingSortColumn ?? null, onFilter: props.onFilter, onSortDialog: props.onSortDialog, onNotice: props.onNotice,
+    onSelect: (kind: 'row' | 'column', index: number, options: { toggle: boolean; extend: boolean }, event: MouseEvent<HTMLButtonElement>) => {
+      // A corner-lane button (S13.2) names its column; only strip buttons are re-hit-tested.
+      if (event.detail > 0 && !coarse && gridRef.current && event.currentTarget.dataset.headerLane === undefined) {
+        const bounds = gridRef.current.getBoundingClientRect()
+        const point = { x: event.clientX - bounds.left - gutter, y: event.clientY - bounds.top - headerHeight }
+        if (kind === 'row' ? point.y < 0 || point.y >= viewport.height : point.x < 0 || point.x >= viewport.width) return
+        const target = hitTestViewport(scroll, projection, viewport, { x: kind === 'row' ? 0 : point.x, y: kind === 'row' ? point.y : 0 })
+        let hit: number | undefined
+        if (target) hit = kind === 'row' ? projection.order.sourceToDisplay(target.row) : target.col
+        else {
+          // A header can still select when its orthogonal data axis is all hidden.
+          hit = (kind === 'row' ? slots : headerColumns).find(candidate => {
+            const box = viewportHeaderBox(projection, scroll, viewport, kind, candidate)
+            return kind === 'row' ? point.y >= box.y && point.y < box.y + box.height : point.x >= box.x && point.x < box.x + box.width
+          })
+        }
+        if (hit === undefined) return
+        index = kind === 'row' ? projection.order.displayToSource(hit) : hit
+        // Pointer selection stays in navigation mode: arrows continue from the grid.
+        gridRef.current.focus()
+      }
+      publish(() => {
+        const selected = selectHeader(selection, projection, kind, index, options.toggle, options.extend)
+        // Header selection scrolls minimally, frozen or not (no Go To top-left jump).
+        const moved = selected.active ? scrollIntoView(scroll, { metrics: projection, viewport, view: { ...view, selection: selected } }, selected.active) : scroll
+        return { selection: selected, window: moved, announcement: selected.active ? activeAnnouncement(projection, selected.active) : 'No visible records.' }
+      })
+    },
+    onSelectAll: () => publish(() => ({ selection: { active, anchor: active, ranges: [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: projection.rows.logicalCount - 1 }] }, cols: [{ c0: 0, c1: projection.cols.logicalCount - 1 }] }] }, window: scroll, announcement: 'Worksheet selected.' })),
+  }
+  const rowShift = rowFrameShift(-scroll.logicalOrigin.x * scroll.zoom)
+  const status = [props.announcement, current.announcement, notice, coarse || subDetail ? 'Zoom in or inspect a cell for detail.' : ''].filter(Boolean).join(' ')
+  return <div ref={wrapperRef} onKeyDown={keyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setControlMode(false) }} style={props.fill ? { position: 'absolute', inset: 0 } : { position: 'relative', width: viewport.width + gutter, height: viewport.height + headerHeight + STATUS_BAR_HEIGHT }}>
+    <div ref={gridRef} role="grid" aria-label={props.label ?? 'Worksheet'} aria-busy={props.pendingSortColumn != null ? true : undefined} aria-rowcount={MAX_ROWS + 1} aria-colcount={MAX_COLS + 1}
+      aria-multiselectable="true" aria-activedescendant={active ? `${prefix}-cell-${cellId(active.row, active.col)}` : undefined}
+      aria-description={`Worksheet capacity ${MAX_ROWS} rows by ${MAX_COLS} columns.${coarse ? ' Coarse view. Zoom in or inspect a cell for detail.' : ''}`}
+      tabIndex={controlMode ? -1 : 0} data-officeview-grid=""
+      onFocusCapture={event => {
+        // Only F2 or a restored header invoker enters control mode; incidental
+        // focus (mousedown, screen-reader cursor) returns to the single grid stop.
+        if (event.target === event.currentTarget) { if (controlModeRef.current) setControlMode(false) }
+        else if (!controlModeRef.current) event.currentTarget.focus()
+      }}
+      onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) event.currentTarget.focus() }}
+      onDoubleClick={event => event.stopPropagation()}
+      onClick={event => {
+        if (event.defaultPrevented || event.detail > 1 || (event.target as Element).closest('[data-officeview-ui]')) return
+        const bounds = event.currentTarget.getBoundingClientRect()
+        const target = hitTestViewport(scroll, projection, viewport, { x: event.clientX - bounds.left - gutter, y: event.clientY - bounds.top - headerHeight })
+        if (!target) return
+        event.currentTarget.focus()
+        publish(() => {
+          const next = selectCell(selection, projection, target, { extend: event.shiftKey, toggle: event.ctrlKey || event.metaKey })
+          return { selection: next, window: scroll, announcement: targetAnnouncement(projection, next, target, props.cellPresentation?.(target).text, event.shiftKey) }
+        })
+      }} style={{ position: 'relative', width: '100%', height: viewport.height + headerHeight, overflow: 'hidden' }}>
+      <div aria-hidden="true" style={{ position: 'absolute', left: gutter, top: headerHeight, width: viewport.width, height: viewport.height }}>{props.children}</div>
+      <GridHeaders {...headerProps} />
+      {props.onResize && !coarse && <ResizeHandles key={ownerKey} projection={projection} window={scroll} viewport={viewport} headerHeight={headerHeight} gutter={gutter} touch={touchControls}
+        columns={headerColumns} slots={transient ? slots.filter(slot => slot !== activeSlot) : slots} active={active} onResize={props.onResize} />}
+      {slots.map(slot => {
+        const row = projection.order.displayToSource(slot), extra = transient && slot === activeSlot
+        // Horizontal scroll moves each row by transform; its cells keep fixed
+        // `left`s in a row-local frame anchored on a coarse block, and the row
+        // header cancels the row's horizontal transform.
+        const cells = extra ? [active!.col] : [...columns]
+        if (!extra && slot === activeSlot && active && !cells.includes(active.col)) cells.push(active.col)
+        const box = viewportHeaderBox(projection, scroll, viewport, 'row', slot)
+        // Rows and header controls follow the scroll window by transform: a
+        // transform is not a layout shift, so the viewer adds no CLS to its host.
+        // Cells keep `left` inside their row, fixed while the window scrolls. Only
+        // frozen-column cells carry a transform (cancelling the row's), so at most
+        // frozen columns x rendered rows cells get their own paint layer.
+        return <div key={slot} role="row" aria-rowindex={slot + 2} data-transient-active={extra ? 'true' : undefined}
+          style={extra ? { ...hiddenText, top: 0, left: 0, pointerEvents: 'none' } : { position: 'absolute', top: 0, left: 0, transform: `translate(${gutter + rowShift}px, ${headerHeight + box.y}px)`, height: box.height, width: '100%', pointerEvents: 'none' }}>
+          <GridRowHeader props={headerProps} slot={slot} cancelX={extra ? 0 : gutter + rowShift} />
+          {cells.map(col => {
+            const at = { row, col }, value = props.cellPresentation?.(at) ?? { text: '', state: 'loading' as const }
+            // The row follows the scrolling body. Frozen columns undo that transform
+            // while keeping their own local layout position stable.
+            const pinned = Boolean(scroll.frozen && projection.cols.start(col) < scroll.frozen.left)
+            // Body boxes are deliberately unclamped (stable `left`), so one scrolled
+            // under the frozen column strip overlaps it. Accepted: gridcells hold only
+            // hidden screen-reader text, nothing paints them and rows ignore pointers.
+            const column = rowLocalColumn(gridHeaderBox(projection, scroll, 'column', col), viewport, pinned ? 0 : rowShift)
+            const offscreen = extra || (slot === activeSlot && active?.col === col && !columns.includes(col))
+            const isSelected = cellSelected(selection.ranges, at)
+            // Name from contents: the visually hidden text IS the name, so VoiceOver
+            // reads the value once (no label + contents) and never "blank" (S13 V1/V5).
+            return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
+              aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
+              style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
+          })}
+        </div>
+      })}
+    </div>
+    {/* Bounded by the cell area (below the header row, above the status line): a taller popup scrolls
+        instead of losing its controls. Anchored at the top under its column: content that arrives later
+        (a loading value list) grows the popup downward, never moving what is already shown. */}
+    {props.popup && <div ref={popupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
+      onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+      style={{ position: 'absolute', zIndex: 7, top: headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height, overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}>{props.popup.content}</div>}
+    <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection}
+      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: STATUS_BAR_HEIGHT, lineHeight: `${STATUS_BAR_HEIGHT}px`, padding: '0 8px', boxSizing: 'border-box', fontSize: 12, color: HEADER_COLORS.text, background: HEADER_COLORS.background, boxShadow: `inset 0 1px ${HEADER_COLORS.track}`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} />
+  </div>
+}

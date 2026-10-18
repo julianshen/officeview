@@ -9,6 +9,10 @@ import { decideCellCalculation, isWhatIfDataTable, type CalcMode, type CalcPolic
 import { canonicalOrder, findCyclicCells, ITERATIVE_PASS_HARD_CAP, runBoundedPasses, transitiveDependents } from './iterative'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../types'
 import { savedSpillFollowers } from './saved-spills'
+import { workbookValuePolicy } from './value-policy'
+
+/** Per-document value policy (spec §4.4): cached documents never reach the evaluator. */
+export { markSavedValuesOnly, workbookValuePolicy, type WorkbookValuePolicy } from './value-policy'
 
 /** Monotonic reference generation: each recalculation invalidates old cursors. */
 let workbookReferenceGeneration = 0
@@ -39,6 +43,10 @@ export interface WorkbookEvaluationOptions {
   /** Application resource policy for spill publication (never a native claim). */
   maxArrayCells?: number
   maxArraySide?: number
+  /** Cumulative cap on cells materialized by array evaluation (results and
+   * array-mode references), charged before each materialization and never
+   * reset within one evaluation. Unset = no cumulative limit. */
+  maxMaterializedCells?: number
   /** Explicit locale override (wins over parsed file metadata). */
   locale?: string
   /** Explicit IANA timeZone override. */
@@ -146,6 +154,38 @@ interface DocSpillState {
   valueDeps: Map<string, Set<string>>
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
+
+/** Engine-published spill footprint of one owner: the bounding box of its anchor and live generated cells. */
+export interface EngineSpillFootprint { anchor: { row: number; col: number }; r0: number; r1: number; c0: number; c1: number }
+/** Structural spill bridge (viewer S3.3): per-sheet footprints of the owners
+ * that published generated cells in the last evaluation, as rectangles only.
+ * Undefined when this document was never evaluated (no ownership is known). */
+export function engineSpillFootprints(doc: XlsxDocument): ReadonlyMap<XlsxSheet, readonly EngineSpillFootprint[]> | undefined {
+  const state = docSpillStates.get(doc)
+  if (!state) return undefined
+  const owners = new Map<string, { sheet: XlsxSheet; footprint: EngineSpillFootprint }>()
+  for (const g of state.generated) {
+    let entry = owners.get(g.ownerKey)
+    if (!entry) {
+      // Owner keys are spillCellKey(anchor): `${sheetId}!${col}:${row}`; spills stay on their anchor's sheet.
+      const m = /!(\d+):(\d+)$/.exec(g.ownerKey)
+      if (!m) continue
+      const col = Number(m[1]), row = Number(m[2])
+      entry = { sheet: g.sheet, footprint: { anchor: { row, col }, r0: row, r1: row, c0: col, c1: col } }
+      owners.set(g.ownerKey, entry)
+    }
+    const f = entry.footprint
+    f.r0 = Math.min(f.r0, g.cell.row); f.r1 = Math.max(f.r1, g.cell.row)
+    f.c0 = Math.min(f.c0, g.cell.col); f.c1 = Math.max(f.c1, g.cell.col)
+  }
+  const out = new Map<XlsxSheet, EngineSpillFootprint[]>()
+  for (const { sheet, footprint } of owners.values()) {
+    const list = out.get(sheet)
+    if (list) list.push(footprint)
+    else out.set(sheet, [footprint])
+  }
+  return out
+}
 
 /** Snapshot/restore the full cell content (everything except its coordinates). */
 function snapshotCell(cell: XlsxCell): CellContent {
@@ -339,6 +379,9 @@ export function evaluateWorkbookFormulas(
   doc: XlsxDocument,
   options?: WorkbookEvaluationOptions
 ): void {
+  if (workbookValuePolicy(doc) === 'cached') {
+    throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
+  }
   // Cheap early-exit: skip evaluation work entirely when no cell has a formula.
   // A what-if `<f t="dataTable"/>` may carry no formula text at all; it is
   // still unsupported and must be diagnosed, so the actual what-if type keeps
@@ -830,6 +873,7 @@ export function evaluateWorkbookFormulas(
     semantics,
     maxArrayCells: options?.maxArrayCells,
     maxArraySide: options?.maxArraySide,
+    ...(options?.maxMaterializedCells !== undefined ? { materializationBudget: { limit: options.maxMaterializedCells, used: 0 } } : {}),
     getCellValue: (sheetName, col, row) => {
       const targetSheetName = sheetName ?? ctx.currentSheet
       if (!targetSheetName) return formulaError('#REF!')

@@ -8,12 +8,14 @@ import type { FontDiagnostic } from '../core/fonts/types'
 import { collectDocImages, createMeasurer, layoutDocx, renderPages } from '../docx/layout'
 import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
-import { normalizeWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
-import { computeMetrics, renderSheet } from '../xlsx/render'
+import { inheritedCanvasLang } from '../core/text-metrics'
+import { normalizeWatermark, paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../core/watermark'
+import { computeMetrics, renderSheet, type RenderSheetAssets, type StaticExportLimit } from '../xlsx/render'
 import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
-import type { XlsxDocument } from '../xlsx/types'
+import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
+import { ensureChartPainter } from '../xlsx/chartLoader'
 import type { PptxDocument } from '../pptx/types'
 
 export interface PageSpec {
@@ -32,13 +34,66 @@ function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagn
     if (released) return
     released = true
     dispose()
-    for (const image of new Set(decoded)) releaseDecodedImage(image)
+    releaseDecoded(decoded)
   } })
+}
+/** Each decoded bitmap is closed once, even when shared by several assets. */
+/** @internal */
+export function releaseDecoded(decoded: Array<CanvasImageSource | undefined>): void {
+  for (const image of new Set(decoded)) releaseDecodedImage(image)
 }
 export interface Paintable {
   spec: PageSpec
   /** Paints one white-background unit into a ctx scaled so 1 unit = 1 spec px. */
   paint: (ctx: CanvasRenderingContext2D) => void
+  /** Set when the unit is a typed refusal (spec §11.5 `large-export-limit`): the
+   * static bitmap cannot hold the sheet, so `paint` draws a notice instead of a
+   * partial grid that would look complete. */
+  refusal?: readonly StaticExportLimit[]
+}
+
+/** @internal One static sheet unit (S2.3 budgeted path): the whole-sheet raster,
+ * or a typed `large-export-limit` refusal unit. Shared by getPaintables and the
+ * sheet viewer's print preparation, which supplies admitted image assets. */
+export function sheetPaintable(sheet: XlsxSheet, assets: RenderSheetAssets, watermark?: ResolvedWatermark): Paintable {
+  const m = computeMetrics(sheet)
+  if (m.exportLimits?.length) return refusalPaintable(sheet, m.exportLimits, watermark)
+  return {
+    spec: { widthPx: m.widthPx, heightPx: m.heightPx },
+    paint: (ctx) => renderSheet(sheet, ctx, m, watermark, assets),
+  }
+}
+
+const REFUSAL_SPEC: PageSpec = { widthPx: 480, heightPx: 96 }
+export const LARGE_EXPORT_MESSAGE = 'This sheet is too large to export as one image. Choose a range or print selected pages.'
+/** A static unit that explains the refusal instead of painting a truncated grid. */
+function refusalPaintable(sheet: XlsxSheet, limits: readonly StaticExportLimit[], watermark?: ResolvedWatermark): Paintable {
+  // Same deduped diagnostics channel the renderer uses for unsupported formats.
+  sheet.diagnostics ??= []
+  for (const limit of limits) {
+    if (!sheet.diagnostics.some(d => d.feature === 'large-export-limit' && d.message === limit.message)) {
+      sheet.diagnostics.push({ kind: 'large-export-limit', feature: 'large-export-limit', message: limit.message })
+    }
+  }
+  return {
+    spec: { ...REFUSAL_SPEC },
+    refusal: limits,
+    paint: (ctx) => {
+      ctx.save()
+      try {
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, REFUSAL_SPEC.widthPx, REFUSAL_SPEC.heightPx)
+        if (watermark) paintWatermark(ctx, REFUSAL_SPEC, watermark)
+        ctx.fillStyle = '#444444'
+        ctx.textBaseline = 'alphabetic'
+        ctx.font = 'bold 13px sans-serif'
+        ctx.fillText(`Sheet "${sheet.name}" is too large for a static image.`, 12, 28)
+        ctx.font = '12px sans-serif'
+        ctx.fillText('This sheet is too large to export as one image.', 12, 52)
+        ctx.fillText('Choose a range or print selected pages.', 12, 72)
+      } finally { ctx.restore() }
+    },
+  }
 }
 
 async function measurerFromDoc(resolve: (family: string) => string): Promise<ReturnType<typeof createMeasurer>> {
@@ -60,6 +115,10 @@ async function measurerFromDoc(resolve: (family: string) => string): Promise<Ret
     ctx = createCanvas(4, 4).getContext('2d')
   }
   if (!ctx) throw new Error('no 2d context available for measurement')
+  // Pages paint on canvases attached to this document; measure under the same
+  // language so generic font families resolve to the same face.
+  const lang = inheritedCanvasLang()
+  if (lang && 'lang' in ctx) (ctx as { lang: string }).lang = lang
   return createMeasurer(ctx, resolve)
 }
 
@@ -96,7 +155,8 @@ function bytesEqual(a: Uint8Array | undefined, b: Uint8Array | undefined): boole
  * once. The selected representation/reason is propagated to every alias's
  * selection record so coverage stays consistent.
  */
-async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
+/** @internal Shared with the interactive sheet asset lease (components/xlsx/sheetAssets). */
+export async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unknown }>, decode?: ImageDecodeFn): Promise<Array<CanvasImageSource | undefined>> {
   // Complete-pair identity: raster bytes + SVG bytes + SVG verdict state +
   // primary-SVG verdict state + fallback availability. Missing/external
   // candidates (byte-less) and ordinary rasters therefore never collapse.
@@ -137,7 +197,8 @@ async function decodeImageAssets(assets: Array<ImageCandidates & { drawing?: unk
 interface ContentCarrier { content?: DrawingContent<unknown, unknown>; children?: ContentCarrier[] }
 /** Append cached pictures after indexed assets so ordinary scene image indices
  * stay stable. Identity deduplication also bounds handwritten cyclic models. */
-function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsset[] {
+/** @internal */
+export function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsset[] {
   const images: ContentImageAsset[] = [], seenImages = new Set<ContentImageAsset>()
   const seenNodes = new Set<ContentCarrier>(), seenShapes = new Set<DrawingContentShape<unknown>>()
   const shapes = (items: DrawingContentShape<unknown>[]) => {
@@ -168,13 +229,15 @@ export function getPaintables(
   const watermark = normalizeWatermark(options?.watermark as WatermarkOptions | undefined)
   if ('sections' in doc) {
     return acquireFonts(doc, options?.registerFont).then(async (lease) => {
+      // Decoded before the lease exists: a later failure must close them too.
+      let decoded: Array<CanvasImageSource | undefined> = []
       try {
         const baseFamilyCss = (family: string) => fontFamilyCssDocx(lease.resolve(family))
         const measure = await measurerFromDoc(withFallbackFonts(baseFamilyCss, options?.fallbackFonts))
         const pages = layoutDocx(doc, measure)
         // One decode per unique candidate pair; failures degrade to a blank slot.
         const docImages = collectDocImages(doc)
-        const decoded = await decodeImageAssets(docImages, options?.decodeImage)
+        decoded = await decodeImageAssets(docImages, options?.decodeImage)
         const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
         // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
         // resolved against the whole document, not the single-page array.
@@ -197,36 +260,35 @@ export function getPaintables(
             })
           },
         })), lease.dispose, lease.diagnostics, decoded)
-      } catch (error) { lease.dispose(); throw error }
+      } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
     })
   }
   if ('sheets' in doc) {
     return acquireFonts(doc, options?.registerFont).then(async lease => {
+      let decoded: Array<CanvasImageSource | undefined> = []
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
+        await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
         const indexed = doc.images ?? []
-        const decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
+        decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
-        return withLease(doc.sheets.map((sheet) => {
-          const m = computeMetrics(sheet)
-          return {
-            spec: { widthPx: m.widthPx, heightPx: m.heightPx },
-            paint: (ctx) => renderSheet(sheet, ctx, m, watermark, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }),
-          }
-        }), lease.dispose, lease.diagnostics, decoded)
-      } catch (error) { lease.dispose(); throw error }
+        return withLease(doc.sheets.map((sheet): Paintable =>
+          sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }, watermark),
+        ), lease.dispose, lease.diagnostics, decoded)
+      } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
     })
   }
   return acquireFonts(doc, options?.registerFont).then(async lease => {
+    let decoded: Array<CanvasImageSource | undefined> = []
     try {
       const sm = slideMetrics(doc)
       const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
-      const decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
+      decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
       return withLease(doc.slides.map(slide => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
         paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image) }),
       })), lease.dispose, lease.diagnostics, decoded)
-    } catch (error) { lease.dispose(); throw error }
+    } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
   })
 }

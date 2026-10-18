@@ -26,6 +26,9 @@ OOXML/ODF bytes (zip) ──▶ OfficePackage (cached part reader)
 - `ResizeObserver` (with fallback) keeps page scale responsive to container width
 - Canvas 2D text layout via `measureText` (no font shaping guarantees)
 
+This diagram describes the default page path. Opt-in XLSX sheet mode uses a
+resident/paged source and bounded viewport tiles; see the interactive viewer below.
+
 ## Usage
 
 ```tsx
@@ -63,11 +66,212 @@ const doc = parseRtf(rtfBytes)
 />
 ```
 
-Search is built in: type in the bar (or press `Cmd/Ctrl+F`), use `Enter` / `Shift+Enter`
+In page mode, search is built in: type in the bar (or press `Cmd/Ctrl+F`), use `Enter` / `Shift+Enter`
 or the arrows to walk matches, `Escape` to clear. Matches are highlighted on the canvas
 and the active match is scrolled into view. The text index is built lazily on the first
 search by replaying each page's paint into a recording context, so it covers all three
 formats without a separate text model.
+
+### Interactive spreadsheet viewer
+
+`interactiveSheets` enables the experimental XLSX viewport on `OfficeFile` or
+`OfficeDoc` (default **off**; other formats ignore it). It provides worksheet
+navigation, tiled rendering, selection/find and absolute 25%–400% zoom, initially 100%.
+With the flag off, spreadsheets keep the legacy fit-width pages and the interactive
+code is not loaded — with one exception: a large workbook already opened in the
+viewer worker stays in the interactive viewer if the flag later turns off, because
+the legacy renderer has no resident rows for a worker-backed workbook.
+
+**Sizing.** The interactive viewer is a flex item: in a sized flex-column host
+(for example `display: flex; flex-direction: column; height: 100vh`) it fills the
+host's height; in an unsized host its grid pane defaults to 400px tall. A visible
+status line under the grid reports record counts, the saved-values policy and other
+notices. The viewer chrome uses its own system font stack, not the host page's.
+
+For large files, supply `OfficeFile` with a **module worker factory**. For example,
+with a bundler that supports module workers, create an entry in your application:
+
+```ts
+// viewer-worker.ts
+import 'officeview/worker'
+```
+
+```tsx
+import { OfficeDoc, OfficeFile } from 'officeview'
+
+const createViewerWorker = () => new Worker(
+  new URL('./viewer-worker.ts', import.meta.url),
+  { type: 'module' },
+)
+
+<OfficeFile data={file} interactiveSheets viewerWorker={createViewerWorker} />
+```
+
+With Vite, set `worker: { format: 'es' }` in `vite.config`: the worker code-splits
+its lazy large-file modules, which Vite's default `iife` worker format rejects at
+build time. Other bundlers need module-worker (ES module) output for this entry.
+
+For an already-parsed model, use `<OfficeDoc document={doc} interactiveSheets />`.
+Small admitted files use the object path; each large document gets a worker,
+released on replacement/unmount. Without a usable factory, large files use
+compatibility parsing with **“Large file — opened in compatibility mode”** and
+no large-mode memory/performance guarantee. `OfficeDoc` views an existing model;
+its earlier parsing/allocation cost still applies. Pre-parsed models have no
+worker route: `OfficeDoc` has no `viewerWorker` prop and always uses the object
+path, so parse large workbooks from bytes through `OfficeFile`/`useOfficeFile`.
+
+Changing `interactiveSheets` or `viewerWorker` on a mounted `OfficeFile` re-opens
+re-readable sources (bytes, `Blob`, `{ url }`) under the new route. One-shot
+sources — a `Response`, `ReadableStream`, `Request` or any `Promise` (including a
+`Promise<Blob>` and a bodyless GET `Request`, which are pinned conservatively) —
+are consumed by their first load, so they keep the document and route they
+opened with until you pass a fresh source.
+
+#### Capacity, admission and storage
+
+Full addressability is **1,048,576 rows × 16,384 columns** (`XFD1048576`), or
+**2^34 possible cells**. Sparse/blank regions stay compact; admitting all those
+cells simultaneously exceeds current populated-data limits.
+
+Profiles define these aggregate app-accounted budgets across the document's
+sheets, caches and outstanding operations; browser overhead is additional:
+
+| Pool | Desktop D | Mobile M |
+|---|---:|---:|
+| Main thread | 64 MiB | 32 MiB |
+| Worker | 512 MiB | 256 MiB |
+| Canvas/bitmap | 128 MiB | 64 MiB |
+| Prepared columns, within worker budget | 64 MiB / 8 columns | 32 MiB / 4 columns |
+
+Admission selects D/M automatically for desktop versus phones/tablets, including
+iPadOS. The interactive viewer uses that same profile for all of its pools: a
+worker-backed viewer uses the profile its source was admitted with, and a
+resident (non-worker) viewer detects the device the same way. So on a phone or
+tablet the main-thread pools (copy admission, controls memory, the
+text-overflow cache) and canvas/bitmap presentation (device-scale admission,
+tile cache, images) get the M caps. The M table is not an end-to-end mobile
+compliance claim. There is no public profile-selection prop.
+
+Principal default admission gates are:
+
+| Gate | D | M |
+|---|---:|---:|
+| Object candidate: compressed bytes | 32 MiB | 16 MiB |
+| Object candidate: non-drawing XML total | 6 MiB | 3 MiB |
+| Object candidate: parsed row / cell records | 100,000 each | 50,000 each |
+| Paged path: compressed / expanded XML | 256 MiB / 2 GiB | 128 MiB / 1 GiB |
+| Paged path: cell records | 2^25 | 2^24 |
+
+Object admission also budgets predicted parser/evaluator memory (256/128 MiB).
+Part/string sizes, ZIP validation and storage quota add gates. Outcomes include
+paging, diagnosed compatibility or typed refusal; missing paged content stays
+loading/incomplete rather than silently truncated.
+
+Large pages use OPFS/IndexedDB, or bounded memory when estimated stored bytes fit
+32 MiB (D) / 16 MiB (M). Storage denial/quota reports free-space/smaller-file/reopen
+guidance; remote spooling can require downloading and opening locally.
+**Known restriction:** default Playwright WebKit fails OPFS writes for files
+requiring persistent pages, without retrying IndexedDB. Tested small memory-backed
+files work; real Safari is unverified.
+
+#### View and value semantics
+
+Operations are **view-only**: source cells, formulas and references stay unchanged.
+Small files use the existing formula engine when admitted; large paged files and
+files exceeding evaluation resources use saved values, with
+**“Showing saved values — N formulas not recalculated (file too large)”**;
+during import the count may be pending. Missing formula caches are unavailable.
+
+- **Sort:** 1–8 keys permute whole rows, protect table headers/totals and keep
+  hidden rows pinned. Text uses natural, locale-aware `Intl.Collator` ordering
+  with optional case sensitivity; dates sort as serial numbers. Errors and
+  blanks remain after normal values in both directions, with blanks last.
+  Equal keys use original source-row order as the final tie-break.
+- **Structural safety:** operations wait/refuse on incomplete metadata, body
+  merges or fixed-array/dynamic spill extents, including spill children.
+  Sorting refuses neighboring nonblank data outside the selected columns and
+  affected cell-anchored drawings. Filtering refuses drawing-position changes,
+  including changes above an anchor. Absolute drawings stay fixed. Tables are
+  supported through their declared range/header/totals metadata.
+- **Filters:** AND-combined column rules over one range: values/blanks, numeric,
+  date and text/wildcards. Dates honor 1900/1904 and the resolved time zone, include
+  the ending day's times, and start weeks Sunday. Text conditions include strings
+  and mixed-column formatted number/date/boolean text; errors/blanks fail even
+  negated conditions. File-authored filters start as a hidden-row snapshot;
+  color/top-N rules are not editable viewer predicates. A real filter can reveal
+  matching snapshot-hidden rows in its body; Clear restores the saved snapshot.
+- **Filter text matching and value lists:** case-insensitive, accent-sensitive
+  NFD → ignorable removal/full case folding → NFD, retaining ZWJ, variation
+  selectors and tag characters. Folding/grapheme data is pinned
+  to Unicode 16.0, including Turkish/Azeri folding. Substring endpoints respect
+  grapheme boundaries; wildcard `?` consumes one canonical grapheme, `*` any
+  number, and `~` escapes metacharacters (invalid escapes are rejected).
+  An empty canonical query means no search. Raw UTF-16 values/checkbox keys remain
+  exact: `item2` and `item02` are different filter values despite natural-sort
+  equivalence. Search covers values beyond the 10,000-value display prefix.
+  Searched Select All updates every matching value while
+  preserving choices outside the search; blanks have a separate explicit choice.
+  Cancel/Escape discard drafts; incomplete/over-budget domains are diagnosed.
+- **View-only resizing:** drag a column header's right edge or a row header's
+  bottom edge (a guide line follows the pointer; the size applies on release),
+  or double-click the edge to fit the content of the visible and already-loaded
+  rows (at most 2,048 rows / 1,024 cells; no full-sheet scan). On touch, the
+  active column gets a 44px handle on its edge and the active row a 44px handle
+  in the header corner (drag vertically). Keyboard: Alt+Shift+Left/Right
+  (column) and Alt+Shift+Up/Down (row) step 8px on the active cell or a focused
+  header, Alt+Shift+Enter fits; each change is announced. Sizes are kept per
+  sheet for the viewer session (through scroll, zoom, sort/filter and sheet
+  switches; a resized row keeps its height when a sort moves it), **never written
+  to the file**, and **Reset sizes** restores the workbook's widths and heights.
+  Hidden rows/columns stay hidden. Print still uses the workbook's sizes.
+
+#### Copy, print and accessibility
+
+Copy emits displayed-value text in current display order, omitting hidden rows
+and columns. The clipboard ceiling is **8 MiB of serialized UTF-16**, including
+separators/escaping; session scratch limits can refuse earlier. Oversized copy
+says **“Copy is too large. Select a smaller range.”** Missing values wait and can
+be cancelled. `allowCopy`/`allowPrint` and server protection continue to apply.
+
+Built-in Print uses the existing static sheet output, not the sorted/filtered
+viewport. Worker-backed workbooks currently refuse this action. Whole-sheet
+static output beyond the legacy **16,384-row × 4,096-column** grid, or a drawing
+sheet beyond its raster limits, reports `large-export-limit` and
+**“This sheet is too large to export as one image. Choose a range or print selected pages.”**
+Drawing-sheet rasters additionally have a 16,384px side / 64 MiB RGBA ceiling.
+Print images share the viewport's bitmap budget; unavailable output is diagnosed.
+Supply a host range/selected-page workflow when needed.
+
+One grid Tab entry owns a bounded row/header/cell tree with active/selection/sort
+state. Arrows/Home/End/Ctrl-or-Cmd edges navigate; Enter moves down, Shift extends
+selection, F2 enters header controls, Alt+Down opens a filter, and Ctrl/Cmd+F opens
+find. Escape closes popups before clearing selection and restores focus. Touch
+header controls are 44px buttons; for the active cell's column narrower than that, a
+44px "Actions for column …" button in the header corner opens its select, sort and
+filter buttons (clipped headers keep their owned bounds); inputs keep native
+editing keys. **Behavior change:**
+Ctrl/Cmd+wheel blocks browser page zoom over every viewer, including its controls.
+
+OffscreenCanvas is optional for sheet mode; font failure uses diagnosed fallbacks,
+storage denial reports refusal/incomplete, and context restoration drops tiles
+and repaints both layers. Performance receipts cover desktop Chrome kernels only;
+functional automation also covers Playwright WebKit. **Actual Safari, iPad/physical
+touch and VoiceOver are not run**; release readiness remains open.
+
+#### Parser and load-state API
+
+`parseXlsx(pkg, options)` adds `valuePolicy: 'engine' | 'cached'` (default
+`'engine'`) and optional `evaluation` caps: `maxArrayCells`, `maxArraySide` and
+`maxMaterializedCells`. This is the object parser; use `OfficeFile` with a worker
+for the admitted paged route.
+
+`useOfficeFile(source, options)` accepts `interactiveSheets` and `viewerWorker`.
+Its `OfficeFileState` has `status: 'loading' | 'ready' | 'error'`: ready supplies
+`document` and optional `notices` (render `notices` yourself — `OfficeFile`
+shows them only outside sheet mode, so a hook integrator who drops them hides
+messages such as the saved-values line); error supplies `message` and optional typed
+`code`/`reason` for admission refusals. `OfficeFile`'s `error` renderer receives
+the message string; use the hook when handling structured refusal metadata.
 
 ### Streaming files
 
@@ -265,11 +469,11 @@ not protect a secret inside it.
 
 **Rich Text (.rtf)** — parsed directly from the byte stream (RTF is plain text, not a zip, so it never goes through `OfficePackage`) and mapped onto the same intermediate model as `.docx`, which means pagination, painting, search and selection come from the existing pipeline rather than a second renderer. Supported: runs (bold/italic/underline/strike/size/font/colour/highlight), the font and colour tables, paragraph alignment incl. justify, indents, spacing and line spacing, `\par`/`\line`/`\tab`, page size/margins/`\sect` sections incl. landscape (writers store landscape pages in their final orientation, so explicit `\paperw`/`\paperh` are honoured rather than rotated again), `\uN` unicode (with `\ucN` fallback skipping, group-scoped `\uc`, and negative/surrogate-pair recovery), `\'hh` code-page escapes decoded through `\ansicpgN` or the active font's `\fcharsetN` (using a complete built-in windows-1251 table for runtimes whose `TextDecoder` lacks it -- and, for consistency, on every runtime, because Node decodes the encoding's undefined byte `0x98` differently from the standard. `\deff` supplies the default font and its charset before any explicit `\fN`, and Symbol/Wingdings `\'hh` bytes are resolved through a Symbol glyph table (`\'b7` is a bullet), falling back to the raw byte for codes outside the table; list markers in `{\pntext}` and `{\listtext}` decode through the same code-page logic as body text), tables (`\trowd`/`\cellx`/`\intbl`/`\cell`/`\row` with borders, shading and vertical alignment), inline pictures (`\pict` with `\pngblip`/`\jpegblip` hex payloads), and list paragraphs (`\pntext`/`\listtext`/`\ilvl`). Deliberately not rendered: `\emfblip`/`\wmetafile` vector metafiles, drawing shapes, fields and embedded objects — these are skipped rather than mis-rendered. Nested tables (`\itap` > 1) are flattened into the outer table.
 
-**Viewer** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting, and text selection (drag, double-click for a word, triple-click for a line) with copy via `Cmd/Ctrl+C` or an on-screen button.
+**Page viewer (default)** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting, and text selection (drag, double-click for a word, triple-click for a line) with copy via `Cmd/Ctrl+C` or an on-screen button. Opt-in interactive spreadsheets use the grid behavior described above.
 
 ## Selecting and copying
 
-Drag across text to select it; double-click selects a word, triple-click a line, and
+In page mode, drag across text to select it; double-click selects a word, triple-click a line, and
 `Escape` clears. Copy with `Cmd/Ctrl+C`, or tap the **Copy selection** button that
 appears (useful on touch, where there is no keyboard shortcut). Selection and search
 hit-testing both run off the same text index, so they work identically for Word,

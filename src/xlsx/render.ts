@@ -3,7 +3,7 @@
  * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
  * height 15pt (20px). Cell geometry is fixed; no reflow needed.
  */
-import type { XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxSheet } from './types'
+import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxSheet } from './types'
 import type { PptxTextBody } from '../pptx/types'
 import { layoutTextBody, type MeasureText, type TextLayout } from '../drawing/text-layout'
 import { resolveColor } from '../core/color'
@@ -13,12 +13,20 @@ import { paintDrawingContent } from '../drawing/content-paint'
 import type { ContentPaintAssets } from '../drawing/content'
 import { createTextBodyMeasurer, paintTextBody } from '../drawing/text-paint'
 import { graphemes } from '../core/text-recording'
-import { resolveGeometry } from '../drawing/geometry'
-import type { DrawingContentShape } from '../drawing/content'
 import { isFormulaError, isEvaluationError } from './formula/evaluator'
-import { formatCommon } from './formula/format'
-import { decodeSerial } from './formula/serial'
+import { formatCommon, numericSectionIsText, type FormatAllocation } from './formula/format'
+import { BUILTIN_DATE_FORMATS, formatBuiltinDate } from './builtinDate'
+import { BUILTIN_EXTENDED_FORMATS, NO_SECTION, formatColor, formatExtended, negativeDateOverflow } from './cellFormat'
 import type { ResolvedSemantics } from './formula/types'
+import type { WorkerDiagnostic } from './view/contracts'
+import { MAX_COLS, isValidCoordinate } from './view/coordinates'
+import { NO_OVERFLOW, alignmentOverflows, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
+import { RectangleIndex } from './view/structure'
+import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
+import { cellSourceRow, drawingExtent } from './view/sheetCells'
+import type { CellBodyLayout } from './view/textLayout'
+import { CELL_FONT_STACK, cellFontString } from './cellFont'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -27,11 +35,26 @@ export interface GridMetrics {
   heightPx: number
   requestedDrawingBounds?: { right: number; bottom: number }
   retainedDrawingBounds?: { right: number; bottom: number }
+  /** Typed static-raster refusals: populated cells outside the retained grid
+   * (spec §11.5). Present only when the static bitmap cannot hold the sheet. */
+  exportLimits?: readonly StaticExportLimit[]
+  /** Metadata resolved conservatively (for example conflicting duplicate rows). */
+  diagnostics?: readonly WorkerDiagnostic[]
 }
 
-const DEFAULT_COL_PX = 64
+/** One explicit static-output budget that a request exceeded (spec §11.5). */
+export interface StaticExportLimit { code: 'large-export-limit'; resource: 'rows' | 'cols' | 'pixels' | 'raster-bytes' | 'pages'; requested: number; limit: number; message: string }
+/** Raised before painting when a static raster/print request exceeds an explicit
+ * budget. Static output never aliases or silently drops logical coordinates. */
+export class StaticExportLimitError extends RangeError {
+  readonly code = 'large-export-limit'
+  constructor(readonly limits: readonly StaticExportLimit[]) {
+    super(limits.map(limit => limit.message).join('; '))
+    this.name = 'StaticExportLimitError'
+  }
+}
+
 const DEFAULT_ROW_PX = 20
-const CHAR_PX = 7
 /** Hard caps so a pathological sheet can never allocate an impossible canvas. */
 const MAX_GRID_COLS = 4096
 const MAX_GRID_ROWS = 16384
@@ -46,10 +69,38 @@ export function cellTextRotation(rotation: number | undefined): { radians: numbe
   return { radians: rotation <= 90 ? (-rotation * Math.PI) / 180 : ((rotation - 90) * Math.PI) / 180 }
 }
 
+/**
+ * Cell text names Calibri (the renderer does not resolve per-cell faces). A bare
+ * "Calibri" falls back to a context-dependent default when it is missing:
+ * Chrome's DOM canvas and workers pick a wide sans (~132px for a 16-character
+ * date at 11pt), its main-thread OffscreenCanvas and WebKit pick Times
+ * (~105px), so the static, interactive, print and worker views measured and
+ * wrapped differently and only some showed ####. One explicit stack: the
+ * metric-compatible Carlito, then common sans faces with the same metrics in
+ * every context, then the generic.
+ */
+const cellFontFamily = (family: string): string => family === 'Calibri' ? CELL_FONT_STACK : family
+/** Calibri (= Carlito) advance widths for U+0020..U+007E in 1/2048 em, regular
+ * and bold: Excel's own layout metrics for its default face, so '#' overflow
+ * follows what Excel shows even where the fallback face is wider. */
+const CALIBRI_ADVANCE = [463, 667, 821, 1020, 1038, 1464, 1397, 452, 621, 621, 1020, 1020, 511, 627, 517, 791, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 548, 548, 1020, 1020, 1020, 949, 1831, 1185, 1114, 1092, 1260, 1000, 941, 1292, 1276, 516, 653, 1064, 861, 1751, 1322, 1356, 1058, 1378, 1112, 941, 998, 1314, 1162, 1822, 1063, 998, 959, 628, 791, 628, 1020, 1020, 596, 981, 1076, 866, 1076, 1019, 625, 964, 1076, 470, 490, 931, 470, 1636, 1076, 1080, 1076, 1076, 714, 801, 686, 1076, 925, 1464, 887, 927, 809, 644, 943, 644, 1020]
+const CALIBRI_BOLD_ADVANCE = [463, 667, 898, 1020, 1038, 1493, 1443, 478, 638, 638, 1020, 1020, 528, 627, 547, 880, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 1038, 565, 565, 1020, 1020, 1020, 949, 1840, 1241, 1148, 1084, 1291, 999, 940, 1305, 1292, 546, 678, 1120, 866, 1790, 1349, 1385, 1090, 1405, 1153, 968, 1014, 1337, 1211, 1856, 1128, 1064, 979, 665, 880, 665, 1020, 1020, 615, 1011, 1099, 857, 1099, 1031, 648, 971, 1099, 503, 523, 983, 503, 1666, 1099, 1101, 1099, 1099, 728, 817, 710, 1099, 969, 1526, 941, 970, 814, 704, 973, 704, 1020]
+/** Width of `text` in Excel's Calibri at `sizePt`, or undefined outside ASCII. */
+function calibriWidth(text: string, sizePt: number, bold: boolean | undefined): number | undefined {
+  const table = bold ? CALIBRI_BOLD_ADVANCE : CALIBRI_ADVANCE
+  let units = 0
+  for (let i = 0; i < text.length; i++) {
+    const advance = table[text.charCodeAt(i) - 32]
+    if (advance === undefined) return undefined
+    units += advance
+  }
+  return units / 2048 * sizePt * 96 / 72
+}
+
 /** Measured glyph bands also cover the canonical recording band, so fitting
  * cell text has the same physical and selectable bounds on every Canvas host. */
 function cellTextMeasurer(ctx: CanvasRenderingContext2D): MeasureText {
-  const native = createTextBodyMeasurer(ctx, family => family)
+  const native = createTextBodyMeasurer(ctx, cellFontFamily)
   return (text, style) => {
     const m = native(text, style), size = (style.fontSizePt ?? 10) * 96 / 72
     const ascent = Math.max(m.ascent ?? 0, size * .85), descent = Math.max(m.descent ?? 0, size * .25)
@@ -90,8 +141,11 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
 }
 /** Wrapped text chooses a measured local multiline box that fits its rotated
  * cell interior. No-wrap or physically oversized text keeps authored font size
- * and clips to the cell; source remains complete, with clip-aware indexing. */
-function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false): void {
+ * and clips to the cell; source remains complete, with clip-aware indexing.
+ * Layout and paint are separate so the viewer can cache the layout (computed
+ * in a box at the origin) and replay it; the static path runs both back to back
+ * at absolute coordinates, exactly as before. */
+function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
   const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
@@ -129,81 +183,118 @@ function paintCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxC
         return Math.min(cosine > 1e-10 ? (innerW - sine * localHeight) / cosine : maxFlow,
           sine > 1e-10 ? (innerH - cosine * localHeight) / sine : maxFlow)
       }), ...Array.from({ length: count }, (_, i) => Math.min(maxFlow, advance / (i + 1)))])].filter(width => width > 0).sort((a, b) => b - a) : [Math.max(1, advance)]
-      layout = rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
+      // The widest candidate is the fallback when none fits (laid out once).
+      let chosen: TextLayout | undefined
       for (const width of widths) {
         const candidate = rotatedLayout(layoutTextBody(body, width, h, measure), radians)
+        chosen ??= candidate
         const bounds = textLayoutBounds(candidate, measure)
-        if (bounds.width <= innerW + 1e-8 && bounds.height <= innerH + 1e-8) { layout = candidate; break }
+        if (bounds.width <= innerW + 1e-8 && bounds.height <= innerH + 1e-8) { chosen = candidate; break }
+        // Unrotated, the candidates only narrow (widest first) and a narrower
+        // box only wraps into more lines: once one is too tall, none fits.
+        // Without this, text taller than its cell laid out once per candidate.
+        if (!radians && bounds.height > innerH + 1e-8) break
       }
+      layout = chosen ?? rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
     }
     const bounds = textLayoutBounds(layout, measure)
     const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
-    // Coordinates in the placed layout are worksheet-local and already include
+    // One unwrapped, unrotated line may run into empty neighbours (S13); the
+    // clip widens by the room it needs, up to the allowance.
+    let clipX0 = x, clipX1 = x + w
+    if (overflow && !wrap && !stacked && !radians && alignmentOverflows(style?.horizontal)) {
+      const placedBounds = textLayoutBounds(placed, measure)
+      const band = overflowBand(x, w, placedBounds.x, placedBounds.width, overflow) ?? { x0: Math.min(x, placedBounds.x), x1: Math.max(x + w, placedBounds.x + placedBounds.width) }
+      clipX0 = band.x0
+      clipX1 = band.x1
+    }
+    // Coordinates in the placed layout are box-local to (x, y) and already include
     // the final merged bounds. Paint and recording replay this exact geometry.
-    paintTextBody(body, ctx, 0, 0, w, h, family => family, undefined, { layout: placed, clip: { x, y, width: w, height: h } })
+    return { kind: 'layout', text, font: '', color, body, layout: placed, clip: { x: clipX0, y, width: clipX1 - clipX0, height: h },
+      ...(stacked ? { stacked: true } : radians ? { rotation: radians } : {}), wrap, lines: placed.lines.length }
+  } finally { ctx.restore() }
+}
+function paintCellText(ctx: CanvasRenderingContext2D, text: Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }>): void {
+  ctx.save()
+  try {
+    paintTextBody(text.body, ctx, 0, 0, text.clip.width, text.clip.height, cellFontFamily, undefined, { layout: text.layout, clip: text.clip })
   } finally { ctx.restore() }
 }
 /** How much wider than the used range a <col> declaration may be and still
  * count as real formatting rather than noise. */
 const MAX_DECLARED_COL_SLACK = 64
-const MAX_DRAWING_SIDE = 16384
-const MAX_DRAWING_AREA = 16777216
+/** The legacy drawing-path raster clamp: 16,384 px per axis and 16,777,216 px
+ * (64 MiB RGBA). A request beyond it used to be cropped silently and is now a typed
+ * refusal. Drawing-free sheets were never clamped by pixels: within the legacy grid
+ * caps they keep rendering in full (spec §11.5 preserves admitted static output). */
+const MAX_RASTER_SIDE = 16384
+const MAX_RASTER_BYTES = 64 * 1024 * 1024
+const MAX_DRAWING_SIDE = MAX_RASTER_SIDE
+const MAX_DRAWING_AREA = MAX_RASTER_BYTES / 4
+/** A full-sheet print run beyond this many pages needs an explicit bounded range. */
+const MAX_PRINT_PAGES = 10_000
+/** Explicit static (full-sheet bitmap/print) budgets. The interactive viewer is not
+ * bound by them: it paints a bounded viewport over the full logical axes. */
+export const STATIC_SHEET_BUDGET = Object.freeze({
+  maxGridRows: MAX_GRID_ROWS,
+  maxGridCols: MAX_GRID_COLS,
+  maxDrawingSidePx: MAX_DRAWING_SIDE,
+  maxDrawingAreaPx: MAX_DRAWING_AREA,
+  maxPrintPages: MAX_PRINT_PAGES,
+})
 
-type Matrix = [number, number, number, number, number, number]
-const identity: Matrix = [1, 0, 0, 1, 0, 0]
-function multiply(a: Matrix, b: Matrix): Matrix {
-  return [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]]
+function validMerge(r: XlsxMergeRange): boolean {
+  return isValidCoordinate(r.minRow, r.minCol) && isValidCoordinate(r.maxRow, r.maxCol) && r.minRow <= r.maxRow && r.minCol <= r.maxCol
 }
-function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom: number } {
-  const bounds = { right: 0, bottom: 0 }
-  type BoundsNode = XlsxDrawing | DrawingContentShape
-  const walk = (items: BoundsNode[], parent: Matrix): void => {
-    for (const node of items) {
-      const x = node.xEmu / 9525, y = node.yEmu / 9525, w = node.widthEmu / 9525, h = node.heightEmu / 9525
-      const deg = node.rotationDeg ?? 0
-      if ('transformValid' in node && node.transformValid === false || ![x, y, w, h, deg].every(Number.isFinite) || w < 0 || h < 0) continue
-      const rad = deg * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad)
-      const fx = node.flipH ? -1 : 1, fy = node.flipV ? -1 : 1
-      const cx = x + w / 2, cy = y + h / 2
-      const local: Matrix = [cos * fx, sin * fx, -sin * fy, cos * fy, cx - cos * fx * w / 2 + sin * fy * h / 2, cy - sin * fx * w / 2 - cos * fy * h / 2]
-      const matrix = multiply(parent, local)
-      const include = (px: number, py: number) => {
-        const tx = matrix[0] * px + matrix[2] * py + matrix[4]
-        const ty = matrix[1] * px + matrix[3] * py + matrix[5]
-        if (Number.isFinite(tx) && Number.isFinite(ty)) { bounds.right = Math.max(bounds.right, tx); bounds.bottom = Math.max(bounds.bottom, ty) }
-      }
-      if (node.group) {
-        const g = node.group, sx = g.ext.width / g.chExt.width, sy = g.ext.height / g.chExt.height
-        if (![sx, sy, g.chOff.x, g.chOff.y].every(Number.isFinite) || sx < 0 || sy < 0) continue
-        const childMatrix = multiply(matrix, [sx, 0, 0, sy, -sx * g.chOff.x / 9525, -sy * g.chOff.y / 9525])
-        walk((node.children ?? []) as BoundsNode[], childMatrix)
-      } else {
-        include(0, 0); include(w, 0); include(w, h); include(0, h)
-        if (node.drawingGeometry && !node.drawingGeometry.preset) {
-          for (const path of resolveGeometry(node.drawingGeometry, w, h).paths) {
-            for (const command of path.commands) {
-              if (command[0] === 'moveTo' || command[0] === 'lnTo') include(command[1], command[2])
-              else if (command[0] === 'quadBezTo') { include(command[1], command[2]); include(command[3], command[4]) }
-              else if (command[0] === 'cubicBezTo') { include(command[1], command[2]); include(command[3], command[4]); include(command[5], command[6]) }
-              else if (command[0] === 'arcTo') {
-                const [, cx, cy, rx, ry] = command
-                include(cx - rx, cy - ry); include(cx + rx, cy - ry)
-                include(cx - rx, cy + ry); include(cx + rx, cy + ry)
-              }
-            }
-          }
-        }
-        if ('content' in node && node.content?.kind === 'diagram') walk(node.content.shapes as BoundsNode[], matrix)
-      }
+
+/** Populated cells and merge extents the retained static grid cannot place. Before
+ * this check the renderer drew cells at `rowY[row] ?? 0` / `colX[col] ?? 0`, i.e.
+ * over A1, and clipped merges to the bitmap edge. */
+function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): StaticExportLimit[] {
+  let maxRow = -1, maxCol = -1
+  for (const row of sheet.rows) {
+    for (const cell of row.cells) {
+      const source = cellSourceRow(row, cell)
+      if (!Number.isSafeInteger(source) || source < 0) continue
+      maxRow = Math.max(maxRow, source)
+      if (Number.isSafeInteger(cell.col) && cell.col >= 0) maxCol = Math.max(maxCol, cell.col)
     }
   }
-  walk(nodes, identity)
-  return bounds
+  for (const r of sheet.mergeRanges ?? []) {
+    if (validMerge(r)) { maxRow = Math.max(maxRow, r.maxRow); maxCol = Math.max(maxCol, r.maxCol) }
+  }
+  const limits: StaticExportLimit[] = []
+  if (maxRow + 1 > rows) limits.push({ code: 'large-export-limit', resource: 'rows', requested: maxRow + 1, limit: rows, message: `Row ${maxRow + 1} is beyond the ${rows}-row static grid; render a bounded viewport instead` })
+  if (maxCol + 1 > cols) limits.push({ code: 'large-export-limit', resource: 'cols', requested: maxCol + 1, limit: cols, message: `Column ${maxCol + 1} is beyond the ${cols}-column static grid; render a bounded viewport instead` })
+  return limits
+}
+
+/** Pixel/byte admission for one full-sheet drawing-bearing raster: exactly the
+ * requests the legacy clamp would have truncated. */
+function rasterLimits(width: number, height: number): StaticExportLimit[] {
+  const w = Math.ceil(width), h = Math.ceil(height)
+  const limits: StaticExportLimit[] = []
+  const side = Math.max(w, h)
+  if (side > MAX_RASTER_SIDE) limits.push({ code: 'large-export-limit', resource: 'pixels', requested: side, limit: MAX_RASTER_SIDE, message: `A ${w}x${h}px sheet image exceeds the ${MAX_RASTER_SIDE}px static raster side; render a bounded viewport instead` })
+  if (w * h * 4 > MAX_RASTER_BYTES) limits.push({ code: 'large-export-limit', resource: 'raster-bytes', requested: w * h * 4, limit: MAX_RASTER_BYTES, message: `A ${w}x${h}px sheet image needs ${w * h * 4} bytes, over the ${MAX_RASTER_BYTES}-byte static raster budget` })
+  return limits
+}
+/** Raster limits of a full-sheet request; only a clamped drawing bitmap can truncate. */
+function requestedRasterLimits(m: GridMetrics): StaticExportLimit[] {
+  return m.requestedDrawingBounds ? rasterLimits(m.requestedDrawingBounds.right, m.requestedDrawingBounds.bottom) : []
+}
+
+function transformedDrawingBounds(nodes: XlsxDrawing[]): { right: number; bottom: number } {
+  const extent = drawingExtent(nodes)
+  return { right: Math.max(0, extent.right), bottom: Math.max(0, extent.bottom) }
 }
 
 export function computeMetrics(sheet: XlsxSheet): GridMetrics {
+  const merges = (sheet.mergeRanges ?? []).filter(validMerge)
   let maxCol = 0
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
+  // Merged ranges are part of the painted grid even where only the anchor is populated.
+  for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
   // Real spreadsheets declare column formatting far wider than the used range
   // (a sheet with data in A1:C10 may carry <col max="1025"/>). Sizing the grid
   // from such a declared range alone produced a 66,000px canvas and threw, so
@@ -213,27 +304,59 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   const declaredMax = sheet.cols.reduce((m, c) => drawing && !Number.isSafeInteger(c.max) ? m : Math.max(m, c.max), maxCol)
   const gridMax = declaredMax > maxCol + MAX_DECLARED_COL_SLACK ? maxCol : declaredMax
   const nCols = Math.min(Math.max(gridMax + 1, (drawing ? (sheet.drawingMarkers?.maxCol ?? 0) + 1 : 1), 1), MAX_GRID_COLS)
-  const colWidthsPx = new Array<number>(nCols).fill(DEFAULT_COL_PX)
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
+  const colWidthsPx = new Array<number>(nCols).fill(columns.defaultWidthPx)
   for (const spec of sheet.cols) {
-    if (drawing ? spec.widthChars !== undefined || spec.hidden : spec.widthChars !== undefined && !spec.hidden) {
-      const w = drawing && spec.hidden ? 0 : drawing && (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) ? DEFAULT_COL_PX : Math.round(spec.widthChars! * CHAR_PX + 5)
+    // Authored-hidden columns collapse unconditionally (spec §5.3), not only on
+    // drawing-bearing sheets.
+    if (spec.widthChars !== undefined || spec.hidden) {
+      const w = spec.hidden ? 0 : drawing && (spec.widthChars === undefined || !Number.isFinite(spec.widthChars) || spec.widthChars < 0) ? columns.defaultWidthPx : columnWidthPx(spec.widthChars!, columns.maxDigitWidthPx)
       for (let c = Math.max(0, spec.min); c <= spec.max && c < nCols; c++) colWidthsPx[c] = w
     }
   }
-  let maxRow = 0
+  const diagnostics: WorkerDiagnostic[] = []
+  let maxRow = 0, inconsistent = 0
   for (const row of sheet.rows) if (!drawing || Number.isSafeInteger(row.index) && row.index >= 0) maxRow = Math.max(row.index, maxRow)
+  // An explicit cell reference names its row even when the row record does not.
+  for (const row of sheet.rows) {
+    for (const cell of row.cells) {
+      const source = cellSourceRow(row, cell)
+      if (source === row.index || !Number.isSafeInteger(source) || source < 0) continue
+      inconsistent++
+      maxRow = Math.max(maxRow, source)
+    }
+  }
+  if (inconsistent) diagnostics.push({ code: 'inconsistent-row-coordinate', message: `${inconsistent} cell(s) carry a reference outside their row record; placed by the cell reference` })
+  for (const r of merges) maxRow = Math.max(maxRow, r.maxRow)
   const nRows = Math.min(Math.max(maxRow + 1, drawing ? (sheet.drawingMarkers?.maxRow ?? 0) + 1 : 1), MAX_GRID_ROWS)
   const rowHeightsPx = new Array<number>(nRows).fill(DEFAULT_ROW_PX)
+  // Duplicate records for one index are invalid OOXML (rows without `r` currently
+  // all parse at index 0). Collapse only when every record is hidden so a stray
+  // hidden duplicate never hides visible data; conflicts are diagnosed.
+  const rowHidden = new Map<number, boolean>()
+  for (const row of sheet.rows) rowHidden.set(row.index, (rowHidden.get(row.index) ?? true) && row.hidden === true)
+  const conflicting = new Set(sheet.rows.filter(row => row.hidden === true && rowHidden.get(row.index) === false).map(row => row.index))
+  if (conflicting.size) diagnostics.push({ code: 'conflicting-row-metadata', message: `${conflicting.size} row index(es) carry both hidden and visible records; kept visible` })
   for (const row of sheet.rows) {
     if (row.index >= 0 && row.index < nRows) {
-      if (drawing && row.hidden) rowHeightsPx[row.index] = 0
-      else if (row.heightPt !== undefined && row.customHeight) rowHeightsPx[row.index] = drawing && (!Number.isFinite(row.heightPt) || row.heightPt < 0) ? DEFAULT_ROW_PX : Math.round(row.heightPt * (96 / 72))
+      if (rowHidden.get(row.index)) rowHeightsPx[row.index] = 0
+      // Excel applies a stored ht with or without customHeight.
+      else if (row.heightPt !== undefined) rowHeightsPx[row.index] = drawing && (!Number.isFinite(row.heightPt) || row.heightPt < 0) ? DEFAULT_ROW_PX : Math.round(row.heightPt * (96 / 72))
     }
   }
   const gridWidth = colWidthsPx.reduce((a, b) => a + b, 0), gridHeight = rowHeightsPx.reduce((a, b) => a + b, 0)
-  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight }
+  const extras = (raster: StaticExportLimit[]) => {
+    const exportLimits = [...gridCoverageLimits(sheet, nRows, nCols), ...raster]
+    return {
+      ...(exportLimits.length ? { exportLimits } : {}),
+      ...(diagnostics.length ? { diagnostics } : {}),
+    }
+  }
+  if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras([]) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
+  // The retained bitmap stays clamped (parse-time coverage reporting relies on
+  // it), but a clamped request is refused, never painted as if complete.
   let width = Math.max(1, Math.min(MAX_DRAWING_SIDE, Math.ceil(requested.right)))
   let height = Math.max(1, Math.min(MAX_DRAWING_SIDE, Math.ceil(requested.bottom)))
   if (width * height > MAX_DRAWING_AREA) height = Math.max(1, Math.floor(MAX_DRAWING_AREA / width))
@@ -244,6 +367,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
     heightPx: height,
     requestedDrawingBounds: requested,
     retainedDrawingBounds: { right: width, bottom: height },
+    ...extras(rasterLimits(requested.right, requested.bottom)),
   }
 }
 
@@ -264,6 +388,9 @@ export interface PrintMetrics {
   scale: number
   pagesWide: number
   pagesTall: number
+  /** Full-run refusals (grid coverage or page quota). A caller printing every page
+   * must honor them; a single bounded page is admitted on its own coverage. */
+  exportLimits?: readonly StaticExportLimit[]
 }
 /**
  * Print geometry for one sheet: paper rect, printable rect inside the
@@ -296,7 +423,13 @@ export function computePrintMetrics(sheet: XlsxSheet, grid: GridMetrics, dpi = 9
   }
   const pagesWide = Math.max(1, Math.ceil((grid.widthPx * scale) / Math.max(1, printable.width)))
   const pagesTall = Math.max(1, Math.ceil((grid.heightPx * scale) / Math.max(1, printable.height)))
-  return { paperPx, printable, scale, pagesWide, pagesTall }
+  const pages = pagesWide * pagesTall
+  // A print run is many bounded pages, not one raster: only grid coverage and the
+  // page quota apply. Individual pages are admitted by renderPrintPage.
+  const exportLimits = [...(grid.exportLimits ?? []).filter(limit => limit.resource === 'rows' || limit.resource === 'cols'),
+    ...(pages > MAX_PRINT_PAGES ? [{ code: 'large-export-limit' as const, resource: 'pages' as const, requested: pages, limit: MAX_PRINT_PAGES,
+      message: `Printing ${pages} pages exceeds the ${MAX_PRINT_PAGES}-page static budget; print a bounded range instead` }] : [])]
+  return { paperPx, printable, scale, pagesWide, pagesTall, ...(exportLimits.length ? { exportLimits } : {}) }
 }
 /**
  * Paint one print page: paper-white sheet, content scaled into the printable
@@ -319,6 +452,18 @@ export function renderPrintPage(
   watermark?: WatermarkOptions | ResolvedWatermark,
   prepared?: RenderSheetAssets,
 ): void {
+  // One page is a bounded request: renderSheet refuses it only when its window
+  // reaches coordinates the static grid cannot place (spec §11.5).
+  if (!Number.isSafeInteger(pageCol) || !Number.isSafeInteger(pageRow) || pageCol < 0 || pageRow < 0
+    || pageCol >= print.pagesWide || pageRow >= print.pagesTall) throw new RangeError('Print page is outside the page grid')
+  const page = {
+    x: (pageCol * print.printable.width) / print.scale,
+    y: (pageRow * print.printable.height) / print.scale,
+    width: print.printable.width / print.scale,
+    height: print.printable.height / print.scale,
+  }
+  const limits = staticAdmission(sheet, metrics, page)
+  if (limits.length) throw new StaticExportLimitError(limits)
   ctx.save()
   try {
     ctx.fillStyle = '#ffffff'
@@ -333,12 +478,7 @@ export function renderPrintPage(
     ctx.clip()
     ctx.translate(printable.x, printable.y)
     ctx.scale(scale, scale)
-    renderSheet(sheet, ctx, metrics, undefined, prepared, {
-      x: (pageCol * printable.width) / scale,
-      y: (pageRow * printable.height) / scale,
-      width: printable.width / scale,
-      height: printable.height / scale,
-    })
+    renderSheet(sheet, ctx, metrics, undefined, prepared, page)
   } finally {
     ctx.restore()
   }
@@ -367,30 +507,39 @@ function formatFiniteFallback(value: number): string {
  * with twelve integer digits use scientific notation. Cell painting supplies
  * a physical width test so the display can lose precision without changing
  * the stored value. This finite profile does not implement locale General. */
-function formatGeneral(value: number, fits: (text: string) => boolean = () => true): string {
-  if (!Number.isFinite(value)) return String(value)
+function formatGeneral(value: number, fits: (text: string) => boolean = () => true, noFit?: () => void, allocation?: FormatAllocation): string {
+  if (!Number.isFinite(value)) { allocation?.allocate(18); return String(value) }
   if (value === 0) return '0'
   const negative = value < 0, absolute = Math.abs(value)
   const sign = negative ? '-' : ''
+  allocation?.allocate(50) // finite Number shortest representation is at most 25 UTF-16 units
   const raw = String(absolute)
   // Expand only small exponents which could fit the plain-character budget.
+  if (raw.includes('e') && absolute < 1 && absolute >= 1e-9) allocation?.allocate(8 * raw.length + 96)
   const plain = raw.includes('e') && absolute < 1 && absolute >= 1e-9
     ? '0.' + '0'.repeat(-Number(raw.split('e')[1]) - 1) + raw.split('e')[0].replace('.', '')
     : raw
   const scientific = (digits: number) => {
+    allocation?.allocate(4 * (digits + 9) + 16)
     const [mantissa, exponent] = absolute.toExponential(digits).split('e')
+    allocation?.allocate(4 * mantissa.length)
     const compact = mantissa.includes('.') ? mantissa.replace(/0+$/, '').replace(/\.$/, '') : mantissa
     const e = Number(exponent)
+    allocation?.allocate(2 * (sign.length + compact.length + 7))
     return `${sign}${compact}E${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`
   }
   const useScientific = absolute >= 1e11 || (absolute < 1e-4 && (plain.includes('e') || plain.length > 11))
   if (!useScientific) {
+    allocation?.allocate(4 * (sign.length + plain.length))
     if (plain.length <= 11 && fits(sign + plain)) return sign + plain
     const integerDigits = absolute >= 1 ? Math.floor(Math.log10(absolute)) + 1 : 1
     for (let decimals = Math.max(0, 10 - integerDigits); decimals >= 0; decimals--) {
+      allocation?.allocate(2 * (integerDigits + decimals + 2))
       const fixed = absolute.toFixed(decimals)
+      allocation?.allocate(4 * fixed.length)
       const compact = fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed
       // A nonzero value must not disappear through display rounding.
+      allocation?.allocate(4 * (sign.length + compact.length))
       if (compact.length <= 11 && Number(compact) !== 0 && fits(sign + compact)) return sign + compact
     }
   }
@@ -398,6 +547,7 @@ function formatGeneral(value: number, fits: (text: string) => boolean = () => tr
     const text = scientific(decimals)
     if (text.length - sign.length <= 11 && fits(text)) return text
   }
+  noFit?.()
   return '#'
 }
 
@@ -406,6 +556,7 @@ export function formatValue(
   value: string | number | boolean | null,
   numFmtId: number,
   semantics?: ResolvedSemantics,
+  allocation?: FormatAllocation,
 ): string {
   if (value === null) return ''
   if (typeof value === 'string') return value
@@ -413,45 +564,43 @@ export function formatValue(
   const sem = semantics ?? DEFAULT_RENDER_SEMANTICS
   switch (numFmtId) {
     case 0: // General
-      return formatGeneral(value)
+      return formatGeneral(value, undefined, undefined, allocation)
     case 2: // 0.00
-      return formatText(value, '0.00', sem)
+      return formatText(value, '0.00', sem, allocation)
     case 9: // 0%
-      return formatText(value, '0%', sem)
+      return formatText(value, '0%', sem, allocation)
     case 10: // 0.00%
-      return formatText(value, '0.00%', sem)
+      return formatText(value, '0.00%', sem, allocation)
     case 3: // #,##0
-      return formatText(value, '#,##0', sem)
+      return formatText(value, '#,##0', sem, allocation)
     case 4: // #,##0.00
-      return formatText(value, '#,##0.00', sem)
+      return formatText(value, '#,##0.00', sem, allocation)
     default:
-      // Built-in date formats keep the established ISO product convention but
-      // now decode through the SHARED serial model (1900 day-0/fictitious day,
-      // explicit 1904) instead of the removed JS-Date epoch path.
-      if (numFmtId >= 18 && numFmtId <= 22) {
-        const formats = ['h:mm AM/PM', 'h:mm:ss AM/PM', 'h:mm', 'h:mm:ss', 'm/d/yy h:mm']
-        return formatText(value, formats[numFmtId - 18], sem)
-      }
-      if (numFmtId >= 14 && numFmtId <= 17) return formatDateSerial(value, sem.dateSystem)
+      // Built-in dates/times use the resolved locale and the shared serial
+      // model, preserving the accepted exact en-US forms.
+      if (numFmtId >= 14 && numFmtId <= 22) return builtinDateText(value, numFmtId, sem, allocation)
+      allocation?.allocate(256) // bounded fallback Number strings
       return formatFiniteFallback(value)
   }
 }
 
+/** Unsupported locale tags keep a formatted en-US fallback and a diagnostic. */
+function builtinDateText(value: number, id: number, semantics: ResolvedSemantics, allocation?: FormatAllocation, sheet?: XlsxSheet): string {
+  let result = formatBuiltinDate(value, id, semantics, allocation)
+  if (result.kind === 'unsupported') {
+    if (sheet) noteFormatUnsupported(sheet, BUILTIN_DATE_FORMATS[id - 14], result.reason, allocation, true)
+    result = formatBuiltinDate(value, id, { ...semantics, locale: 'en-US' }, allocation)
+  }
+  return result.kind === 'text' ? result.text : isEvaluationError(result) ? '' : formatFiniteFallback(value)
+}
 /** One shared formatter call; unsupported classes fall back to plain numbers. */
-function formatText(value: number, format: string, semantics: ResolvedSemantics): string {
-  const result = formatCommon(value, format, semantics)
+function formatText(value: number, format: string, semantics: ResolvedSemantics, allocation?: FormatAllocation): string {
+  const result = formatCommon(value, format, semantics, allocation)
   if (result.kind === 'text') return result.text
   if (isEvaluationError(result)) return ''
   return formatFiniteFallback(value)
 }
 
-export function formatDateSerial(serial: number, dateSystem: '1900' | '1904' = '1900'): string {
-  const parts = decodeSerial(serial, dateSystem)
-  if (isEvaluationError(parts)) return ''
-  const { year, month, day } = parts.civil
-  const y = year < 0 ? `-${String(-year).padStart(4, '0')}` : String(year).padStart(4, '0')
-  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-}
 
 /**
  * Cell text for the shared renderer: an authored custom numFmt formatCode uses
@@ -465,15 +614,50 @@ function renderCellText(
   semantics: ResolvedSemantics | undefined,
   sheet: XlsxSheet,
   fitsGeneral?: (text: string) => boolean,
+  generalNoFit?: () => void,
+  allocation?: FormatAllocation,
 ): string {
-  const code = style?.formatCode
-  if (code !== undefined && value !== null) {
-    const result = formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS)
-    if (result.kind === 'text') return result.text
-    if (!isEvaluationError(result)) noteFormatUnsupported(sheet, code, result.reason)
+  if (typeof value === 'number' && style && style.formatCode === undefined && style.numFmtId >= 14 && style.numFmtId <= 22) {
+    const sem = semantics ?? DEFAULT_RENDER_SEMANTICS
+    if (value < 0 && sem.dateSystem === '1900') generalNoFit?.()
+    return builtinDateText(value, style.numFmtId, sem, allocation, sheet)
   }
-  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral)
-  return formatValue(value, style?.numFmtId ?? 0, semantics)
+  const code = displayFormatCode(style)
+  if (code !== undefined && value !== null) {
+    if (typeof value === 'number' && negativeDateOverflow(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)) { generalNoFit?.(); return '#' }
+    // Conditional codes choose sections by condition, not by sign: the finite
+    // grammar's sign-based selection would pick the wrong section.
+    const conditional = /\[\s*[<>=]/.test(code)
+    const result = conditional ? { kind: 'unsupported' as const, reason: 'condition token' } : formatCommon(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, allocation)
+    if (result.kind === 'text') return result.text
+    if (!isEvaluationError(result)) {
+      // Cells display colours, scientific, fractions and padding tokens that
+      // the finite TEXT grammar diagnoses.
+      const extended = formatExtended(value, code, semantics ?? DEFAULT_RENDER_SEMANTICS, n => formatGeneral(n, fitsGeneral, generalNoFit, allocation), allocation)
+      // No conditional section admits the number: Excel fills the cell with '#'.
+      if (extended === NO_SECTION) { generalNoFit?.(); return '#' }
+      if (extended !== undefined) return extended
+      if (style?.formatCode !== undefined) noteFormatUnsupported(sheet, code, result.reason, allocation)
+    }
+  }
+  if (typeof value === 'number' && (style?.numFmtId ?? 0) === 0) return formatGeneral(value, fitsGeneral, generalNoFit, allocation)
+  if (typeof value === 'string') allocation?.borrowed?.(value)
+  return formatValue(value, style?.numFmtId ?? 0, semantics, allocation)
+}
+
+/** The authored format code, or the code of a built-in id the finite
+ * default switch does not render (scientific, fractions, red negatives). */
+function displayFormatCode(style: XlsxCellStyle | undefined): string | undefined {
+  return style?.formatCode ?? (style ? BUILTIN_EXTENDED_FORMATS[style.numFmtId] : undefined)
+}
+
+/** @internal The canonical display text of a cell (authored/built-in formats and
+ * workbook semantics) without General width-fitting, shared by sheet-mode find
+ * and accessible values with the painted text. */
+export function cellDisplayText(sheet: XlsxSheet, cell: Pick<XlsxCell, 'value' | 'style'>, allocation?: FormatAllocation, widthDependent?: () => void): string {
+  // `widthDependent` is told when the text could change with the cell width
+  // (General fitting, or no admitting section's '#'); the text is unchanged.
+  return renderCellText(cell.value, cell.style, sheet.semantics, sheet, widthDependent && (() => { widthDependent(); return true }), widthDependent, allocation)
 }
 
 /**
@@ -481,13 +665,28 @@ function renderCellText(
  * channel (same shape as doc.diagnostics), deduped across repeated paints.
  * No product warning UI is produced.
  */
-function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string): void {
+function noteFormatUnsupported(sheet: XlsxSheet, format: string, reason: string, allocation?: FormatAllocation, builtinFallback = false): void {
   const holder = sheet as unknown as { diagnostics?: Array<{ kind: string; feature: string; message: string }> }
-  holder.diagnostics ??= []
-  const message = `Format '${format}' is outside the finite common-format grammar: ${reason}`
-  if (!holder.diagnostics.some((d) => d.feature === 'format-unsupported' && d.message === message)) {
-    holder.diagnostics.push({ kind: 'unsupported-format', feature: 'format-unsupported', message })
+  if (!allocation) holder.diagnostics ??= []
+  // A built-in date/time whose locale cannot be used is a fallback, not a
+  // grammar failure: the format itself is fine.
+  const lead = builtinFallback ? 'Built-in date/time format' : 'Format'
+  const tail = builtinFallback ? ' is shown in en-US: ' : ' is outside the finite common-format grammar: '
+  const units = lead.length + 3 + format.length + tail.length + reason.length
+  // Two concatenation buffers and the new diagnostic/array slots are admitted
+  // before constructing either. Persistent bytes transfer with publication.
+  allocation?.allocate(4 * units + 128)
+  const message = `${lead} '${format}'${tail}${reason}`
+  if (holder.diagnostics?.some(d => d.feature === 'format-unsupported' && d.message === message)) {
+    allocation?.release(4 * units + 128)
+    return
   }
+  const bytes = message.length * 2 + 72 + (holder.diagnostics ? 0 : 32)
+  const diagnostic = { kind: 'unsupported-format', feature: 'format-unsupported', message }
+  const commit = () => { holder.diagnostics ??= []; holder.diagnostics.push(diagnostic) }
+  if (allocation?.retain) allocation.retain([sheet, diagnostic], bytes, commit, 'diagnostic')
+  else commit()
+  allocation?.release(4 * units + 128 - bytes)
 }
 
 function prefixSums(widths: number[]): number[] {
@@ -513,14 +712,16 @@ export function renderSheet(
   prepared?: RenderSheetAssets,
   viewport?: SheetViewport,
 ): void {
-  ctx.save()
-  try {
   const m = metrics ?? computeMetrics(sheet)
   const { colWidthsPx, rowHeightsPx } = m
+  const limits = staticAdmission(sheet, m, viewport)
+  if (limits.length) throw new StaticExportLimitError(limits)
   const colX = prefixSums(colWidthsPx)
   const rowY = prefixSums(rowHeightsPx)
   const gridWidth = colX[colWidthsPx.length]
   const gridHeight = rowY[rowHeightsPx.length]
+  ctx.save()
+  try {
   const ranges = sheet.mergeRanges ?? []
   // Viewport culling: paint only intersecting cells/boundaries, translated to
   // the output origin. Absent viewport paints the whole sheet exactly as
@@ -528,33 +729,11 @@ export function renderSheet(
   // drawings may expand the bitmap beyond the cells). Per-frame text
   // measurement is cached by face+text.
   const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
-  const measureCache = new Map<string, number>()
-  const measured = (font: string, text: string): number => {
-    const key = `${font}\n${text}`
-    let w = measureCache.get(key)
-    if (w === undefined) {
-      ctx.font = font
-      w = ctx.measureText(text).width
-      measureCache.set(key, w)
-    }
-    return w
-  }
+  const measured = textMeasurer(ctx)
   if (viewport) ctx.translate(-vp.x, -vp.y)
   const intersects = (x: number, y: number, w: number, h: number): boolean =>
     x < vp.x + vp.width && x + w > vp.x && y < vp.y + vp.height && y + h > vp.y
-
-  // map "row:col" -> range for every covered (non-anchor) cell
-  const covered = new Map<string, XlsxMergeRange>()
-  const anchor = new Map<string, XlsxMergeRange>()
-  for (const r of ranges) {
-    for (let row = r.minRow; row <= r.maxRow; row++) {
-      for (let col = r.minCol; col <= r.maxCol; col++) {
-        const key = `${row}:${col}`
-        if (row === r.minRow && col === r.minCol) anchor.set(key, r)
-        else covered.set(key, r)
-      }
-    }
-  }
+  const merges = staticMergeIndex(ranges)
 
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(vp.x, vp.y, vp.width, vp.height)
@@ -566,80 +745,58 @@ export function renderSheet(
   // Row bottoms extended by merge ranges anchored in the row: a row whose own
   // box sits above the viewport still paints when its merged range reaches in.
   const rowBottom = new Map<number, number>()
+  const edges = mergeEdges(sheet, m, colX, rowY)
   for (const r of ranges) {
-    const bottom = rowY[r.maxRow + 1] ?? m.heightPx
+    const bottom = edges.row(r.maxRow + 1)
     if (bottom > (rowBottom.get(r.minRow) ?? Number.NEGATIVE_INFINITY)) rowBottom.set(r.minRow, bottom)
   }
+  const extent = { width: m.widthPx, height: m.heightPx }
+  const laidOut: CellBodyLayout[] = []
   for (const row of sheet.rows) {
-    const y = rowY[row.index] ?? 0
-    const h = rowHeightsPx[row.index] ?? DEFAULT_ROW_PX
-    const bottom = Math.max(y + h, rowBottom.get(row.index) ?? Number.NEGATIVE_INFINITY)
-    if (bottom <= vp.y || y >= vp.y + vp.height) continue
+    // A malformed row may name many source rows. Partition once so occupancy
+    // construction never rescans the container for each source row.
+    const sourceCells = new Map<number, XlsxCell[]>()
     for (const cell of row.cells) {
-      const cov = covered.get(`${cell.row}:${cell.col}`)
-      if (cov) continue // inside a merge, not its anchor — nothing to paint
-      const rng = anchor.get(`${cell.row}:${cell.col}`)
-      // geometry: anchor cells expand across their merge range
-      const x = colX[cell.col] ?? 0
-      const w = rng ? (colX[rng.maxCol + 1] ?? m.widthPx) - x : (colWidthsPx[cell.col] ?? DEFAULT_COL_PX)
-      const hh = rng ? (rowY[rng.maxRow + 1] ?? m.heightPx) - y : h
-      if (!intersects(x, y, w, hh)) continue
-      // fill
-      const fill = cell.style?.fillColor
-      if (fill) {
-        ctx.fillStyle = resolveColor(fill)
-        ctx.fillRect(x, y, w, hh)
-      }
-      // text (right-align numbers, left-align strings; alignment spans the merge)
-      const font = `${cell.style?.italic ? 'italic ' : ''}${cell.style?.bold ? 'bold ' : ''}${cell.style?.fontSizePt ?? 10}pt "Calibri"`
-      const fitsGeneral = cellTextRotation(cell.style?.textRotation) === undefined
-        ? (text: string) => measured(font, text) <= Math.max(0, w - PADDING_L - PADDING_R)
-        : undefined
-      const text = renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral)
-      if (text !== '') {
-        const color = cell.style?.color ? resolveColor(cell.style.color) : '#000000'
-        ctx.fillStyle = color
-        ctx.font = font
-        // OOXML often authors default alignment fields on every cell. Those
-        // retain ordinary placement; real alignment/wrapping/rotation needs
-        // the measured local layout (including explicit no-wrap for255).
-        const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
-          || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
-          || cell.style?.wrapText === true || cellTextRotation(cell.style?.textRotation) !== undefined
-        const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
-        if (explicit) paintCellText(ctx, text, cell.style, typeof cell.value === 'number', x, y, w, hh, color, isCenter)
-        else {
-          // Preserve accepted ordinary default horizontal layout exactly.
-          const textW = measured(ctx.font, text)
-          const tx = typeof cell.value === 'number'
-            ? x + w - PADDING_R - textW
-            : isCenter
-              ? x + (w - textW) / 2
-              : x + PADDING_L
-          const ty = y + hh - (hh - (cell.style?.fontSizePt ?? 10) * (96 / 72)) / 2
-          ctx.textBaseline = 'alphabetic'; ctx.fillText(text, tx, ty)
-        }
-      }
-      // borders (anchor draws the merged rect's outline)
-      const b = cell.style?.borders
-      if (b) paintBorders.push(() => {
-        ctx.lineWidth = 1
-        const draw = (side: string | undefined, x1: number, yy1: number, x2: number, yy2: number) => {
-          if (!side) return
-          ctx.strokeStyle = '#000000'
-          ctx.beginPath()
-          // Keep outer borders within the worksheet bitmap instead of
-          // clipping the right/bottom stroke completely off the canvas.
-          ctx.moveTo(Math.min(x1 + 0.5, m.widthPx - 0.5), Math.min(yy1 + 0.5, m.heightPx - 0.5))
-          ctx.lineTo(Math.min(x2 + 0.5, m.widthPx - 0.5), Math.min(yy2 + 0.5, m.heightPx - 0.5))
-          ctx.stroke()
-        }
-        draw(b.left, x, y, x, y + hh)
-        draw(b.right, x + w, y, x + w, y + hh)
-        draw(b.top, x, y, x + w, y)
-        draw(b.bottom, x, y + hh, x + w, y + hh)
-      })
+      const source = cellSourceRow(row, cell)
+      let cells = sourceCells.get(source)
+      if (!cells) sourceCells.set(source, cells = [])
+      cells.push(cell)
     }
+    const rowOverflow = new Map<number, RowOverflowInput>()
+    const overflowFor = (cell: XlsxCell, source: number): OverflowAllowance => {
+      let input = rowOverflow.get(source)
+      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(sourceCells.get(source)!, merges.inRow(source), edges.col, MAX_COLS - 1))
+      return textOverflowAllowance(input, cell.col)
+    }
+    for (const cell of row.cells) {
+      // Only coordinates inside the grid have geometry; admission refused any
+      // populated cell beyond it that this request needs, so nothing here falls
+      // back to the origin. An explicit cell reference names its own row.
+      const source = cellSourceRow(row, cell)
+      if (!Number.isInteger(source) || source < 0 || source >= rowHeightsPx.length) continue
+      if (!Number.isInteger(cell.col) || cell.col < 0 || cell.col >= colWidthsPx.length) continue
+      const y = rowY[source]
+      const h = rowHeightsPx[source]
+      const bottom = Math.max(y + h, rowBottom.get(source) ?? Number.NEGATIVE_INFINITY)
+      if (bottom <= vp.y || y >= vp.y + vp.height) continue
+      if (merges.covers(cell.row, cell.col)) continue // inside a merge, not its anchor — nothing to paint
+      const rng = merges.anchorAt(cell.row, cell.col)
+      // geometry: anchor cells expand across their merge range
+      const x = colX[cell.col]
+      const w = rng ? edges.col(rng.maxCol + 1) - x : colWidthsPx[cell.col]
+      const hh = rng ? edges.row(rng.maxRow + 1) - y : h
+      // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
+      if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
+      // Fills go down now; text after every fill, so overflow into an empty
+      // formatted neighbour stays visible (Excel draws it over the fill).
+      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
+      paintCellLayout(ctx, layout, extent, 'fill')
+      laidOut.push(layout)
+    }
+  }
+  for (const layout of laidOut) {
+    const border = paintCellLayout(ctx, layout, extent, 'content')
+    if (border) paintBorders.push(border)
   }
 
   // grid lines, with merged interiors masked out. A vertical boundary at
@@ -651,9 +808,11 @@ export function renderSheet(
   const firstCol = Math.max(0, colX.findIndex((x, i) => x + (colWidthsPx[i] ?? 0) > vp.x))
   const lastCol = colX.findIndex(x => x >= vp.x + vp.width)
   const c0 = firstCol < 0 ? 0 : firstCol, c1 = lastCol < 0 ? colWidthsPx.length : lastCol
+  // Excel also hides a vertical gridline under text spilling across it.
+  const spills = spillBands(laidOut)
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]
-    for (const [y1, y2] of visibleSegments(c, ranges, rowY, gridHeight, true)) {
+    for (const [y1, y2] of withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)) {
       if (y2 <= vp.y || y1 >= vp.y + vp.height) continue
       ctx.moveTo(x + 0.5, y1 + 0.5)
       ctx.lineTo(x + 0.5, y2 + 0.5)
@@ -673,7 +832,374 @@ export function renderSheet(
   ctx.stroke()
   // Explicit formatting wins over both gridlines and neighboring cell fills.
   for (const paint of paintBorders) paint()
-  if (sheet.drawings?.length) paintScene(sheet.drawings, ctx, {
+  paintSheetDrawings(sheet, sheet.drawings ?? [], ctx, prepared)
+  } finally { ctx.restore() }
+}
+
+/** Static admission (spec §11.5, plan S2.3), always recomputed from the sheet and
+ * the metrics actually used, never trusted from caller-supplied refusal metadata.
+ * A full-sheet raster must cover every populated cell and merge and fit the
+ * legacy drawing raster clamp. A bounded window is admitted unless it reaches past the grid on
+ * an axis where data continues. Nothing uncovered is ever drawn over A1. */
+function staticAdmission(sheet: XlsxSheet, m: GridMetrics, viewport?: SheetViewport): StaticExportLimit[] {
+  const coverage = gridCoverageLimits(sheet, m.rowHeightsPx.length, m.colWidthsPx.length)
+  if (!viewport) return [...coverage, ...requestedRasterLimits(m)]
+  const sum = (sizes: number[]) => sizes.reduce((a, b) => a + b, 0)
+  const gridWidth = sum(m.colWidthsPx), gridHeight = sum(m.rowHeightsPx)
+  // Merges the grid truncates are laid out at their true extent (mergeEdges), so
+  // only a window reaching past the grid where data or merges continue is refused.
+  const limits = coverage.filter(limit => limit.resource === 'rows' ? viewport.y + viewport.height > gridHeight : viewport.x + viewport.width > gridWidth)
+  return limits
+}
+
+/** Grid boundary positions for merge geometry. Inside the retained grid these are
+ * the prefix sums; past it (a merge the static grid truncates) the extent follows
+ * the same authored row/column rules, so an anchor lays out against its true
+ * merged box instead of the bitmap edge. Invalid edges keep the bitmap clamp. */
+/** @internal Exported for work-count tests; not part of the public API. */
+export function mergeEdges(sheet: XlsxSheet, m: GridMetrics, colX: number[] = prefixSums(m.colWidthsPx), rowY: number[] = prefixSums(m.rowHeightsPx)) {
+  let work = 0
+  const columns = sheet.columnMetrics ?? DEFAULT_COLUMN_METRICS
+  const nRows = m.rowHeightsPx.length, nCols = m.colWidthsPx.length
+  let rowsBeyond: Map<number, number> | undefined, colsBeyond: Map<number, number> | undefined
+  const beyondRows = () => {
+    if (!rowsBeyond) {
+      rowsBeyond = new Map()
+      const hidden = new Map<number, boolean>()
+      for (const row of sheet.rows) if (row.index >= nRows) hidden.set(row.index, (hidden.get(row.index) ?? true) && row.hidden === true)
+      for (const row of sheet.rows) {
+        if (!(row.index >= nRows) || !Number.isSafeInteger(row.index)) continue
+        if (hidden.get(row.index)) rowsBeyond.set(row.index, 0)
+        else if (row.heightPt !== undefined && Number.isFinite(row.heightPt) && row.heightPt >= 0) rowsBeyond.set(row.index, Math.round(row.heightPt * (96 / 72)))
+      }
+    }
+    return rowsBeyond
+  }
+  const beyondCols = () => {
+    if (!colsBeyond) {
+      colsBeyond = new Map()
+      for (const spec of sheet.cols) {
+        if (!(spec.widthChars !== undefined || spec.hidden) || !Number.isSafeInteger(spec.min) || !Number.isSafeInteger(spec.max)) continue
+        const w = spec.hidden ? 0 : !Number.isFinite(spec.widthChars) || spec.widthChars! < 0 ? columns.defaultWidthPx : columnWidthPx(spec.widthChars!, columns.maxDigitWidthPx)
+        for (let c = Math.max(nCols, spec.min); c <= Math.min(spec.max, MAX_COLS - 1); c++) colsBeyond.set(c, w)
+      }
+    }
+    return colsBeyond
+  }
+  // Each beyond-grid axis becomes sorted positions plus a prefix of size deltas,
+  // built once; an edge is then a binary search (O(B + T log B) for T merges).
+  const sorted = (beyond: Map<number, number>, size: number) => {
+    const entries = [...beyond].sort((a, b) => a[0] - b[0])
+    work += entries.length
+    const at = Float64Array.from(entries, entry => entry[0])
+    const delta = new Float64Array(entries.length + 1)
+    entries.forEach(([, value], i) => { delta[i + 1] = delta[i] + value - size })
+    return { at, delta }
+  }
+  let rowPrefix: ReturnType<typeof sorted> | undefined, colPrefix: ReturnType<typeof sorted> | undefined
+  const edge = (index: number, prefix: number[], n: number, size: number, deltas: () => ReturnType<typeof sorted>, clamp: number): number => {
+    if (index <= n) return prefix[index] ?? clamp
+    if (!Number.isSafeInteger(index)) return clamp
+    const { at, delta } = deltas()
+    let low = 0, high = at.length
+    while (low < high) {
+      work++
+      const mid = Math.floor((low + high) / 2)
+      if (at[mid] < index) low = mid + 1
+      else high = mid
+    }
+    return prefix[n] + (index - n) * size + delta[low]
+  }
+  return {
+    row: (index: number) => edge(index, rowY, nRows, DEFAULT_ROW_PX, () => (rowPrefix ??= sorted(beyondRows(), DEFAULT_ROW_PX)), m.heightPx),
+    col: (index: number) => edge(index, colX, nCols, columns.defaultWidthPx, () => (colPrefix ??= sorted(beyondCols(), columns.defaultWidthPx)), m.widthPx),
+    /** Beyond-grid entries visited so far (test seam for the O(B + T log B) bound). */
+    work: () => work,
+  }
+}
+
+/** @internal Shared with the interactive viewport painter (xlsx/view/renderViewport). */
+export type MeasureCached = (font: string, text: string) => number
+/** @internal */
+export function textMeasurer(ctx: CanvasRenderingContext2D): MeasureCached {
+  const measureCache = new Map<string, number>()
+  return (font: string, text: string): number => {
+    const key = `${font}\n${text}`
+    let w = measureCache.get(key)
+    if (w === undefined) {
+      ctx.font = font
+      w = ctx.measureText(text).width
+      measureCache.set(key, w)
+    }
+    return w
+  }
+}
+
+/** Merge lookups without expanding every covered cell (a giant merge used to
+ * allocate one map entry per covered cell). Decisions match the old maps:
+ * any covering range that is not anchored here wins; the last range anchored
+ * at a cell supplies its merged extent. */
+function staticMergeIndex(ranges: readonly XlsxMergeRange[]) {
+  const anchor = new Map<string, XlsxMergeRange>()
+  const entries: Array<{ rect: { r0: number; r1: number; c0: number; c1: number }; value: XlsxMergeRange }> = []
+  for (const r of ranges) {
+    anchor.set(`${r.minRow}:${r.minCol}`, r)
+    if (isValidCoordinate(r.minRow, r.minCol) && isValidCoordinate(r.maxRow, r.maxCol) && r.minRow <= r.maxRow && r.minCol <= r.maxCol) {
+      entries.push({ rect: { r0: r.minRow, r1: r.maxRow, c0: r.minCol, c1: r.maxCol }, value: r })
+    }
+  }
+  const index = RectangleIndex.build(entries)
+  return {
+    /** Ranges intersecting one row (text overflow blockers). */
+    inRow: (row: number) => isValidCoordinate(row, 0) ? index.collect({ r0: row, r1: row, c0: 0, c1: MAX_COLS - 1 }) : [],
+    anchorAt: (row: number, col: number) => anchor.get(`${row}:${col}`),
+    covers: (row: number, col: number) => isValidCoordinate(row, col)
+      && index.firstWhere({ r0: row, r1: row, c0: col, c1: col }, r => r.minRow !== row || r.minCol !== col) !== undefined,
+  }
+}
+
+/** Host formatting and text layout of one cell in the box (x, y, w, hh): the
+ * single source of a cell's display text and geometry for both paths. */
+/** @internal */
+export function layoutCellBody(
+  ctx: CanvasRenderingContext2D,
+  sheet: XlsxSheet,
+  cell: XlsxCell,
+  x: number, y: number, w: number, hh: number,
+  measured: MeasureCached,
+  /** Room the text may use past the box (textOverflowAllowance). Absent: plain
+   * text is unbounded and laid-out text clips to the box, as before S13. */
+  overflow?: OverflowAllowance,
+  /** Width-independent display text already formatted (and admitted) by the caller. */
+  preformatted?: string,
+  /** Allocation observer for any formatting this layout still does. */
+  allocation?: FormatAllocation,
+): CellBodyLayout {
+  const out: CellBodyLayout = { x, y, w, h: hh, formattedText: '' }
+  if (cell.style?.fillColor) out.fill = spreadsheetColor(cell.style.fillColor)
+  // text (right-align numbers, left-align strings; alignment spans the merge)
+  const fontAt = (sizePt: number) => cellFontString(cell.style, sizePt)
+  const baseSize = cell.style?.fontSizePt ?? 10
+  const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
+  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  const shrinkable = cell.style?.shrinkToFit === true && cell.style.wrapText !== true && !rotated
+  let font = fontAt(baseSize), fontSize = baseSize
+  // Excel decides fit with its Calibri metrics; a wider fallback face must not
+  // turn a value Excel shows into '#' (its paint is then fitted below).
+  const excelFits = (text: string): boolean => (calibriWidth(text, fontSize, cell.style?.bold) ?? Infinity) <= inner + EXCEL_FIT_TOLERANCE_PX
+  // Shrink-to-fit keeps full General precision and scales the font instead.
+  const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
+  let generalNoFit = false
+  const formatted = preformatted ?? renderCellText(cell.value, cell.style, sheet.semantics, sheet, fitsGeneral, () => { generalNoFit = true }, allocation)
+  let style = cell.style
+  if (shrinkable && formatted !== '') {
+    // Never larger than authored. Above the floor the text fits; at the floor a
+    // number shows '#' and text is held to its own cell — it never spills.
+    const size = shrunkFontSize(baseSize, inner, size => measured(fontAt(size), formatted))
+    if (size < baseSize) {
+      if (size >= MIN_SHRINK_FONT_PT) {
+        font = fontAt(size); fontSize = size
+        style = { ...cell.style!, fontSizePt: size }
+      } else if (typeof cell.value !== 'number') {
+        const floor = Math.min(baseSize, MIN_SHRINK_FONT_PT)
+        font = fontAt(floor); fontSize = floor
+        style = { ...cell.style!, fontSizePt: floor }
+        overflow = NO_OVERFLOW
+      }
+    }
+  }
+  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit, excelFits, allocation)
+  if (text === formatted && typeof cell.value === 'number' && !cell.valueIsError && !rotated && cell.style?.wrapText !== true && measured(font, text) > inner && excelFits(text)) {
+    // Excel shows it in full; the fallback face is wider, so fit the paint to
+    // the cell (as shrink-to-fit would) instead of spilling a number.
+    const size = shrunkFontSize(fontSize, inner, size => measured(fontAt(size), text))
+    if (size >= MIN_SHRINK_FONT_PT) {
+      font = fontAt(size); fontSize = size
+      style = { ...(style ?? { numFmtId: 0 }), fontSizePt: size }
+    }
+  }
+  out.formattedText = text
+  if (text !== '') {
+    // A colour section ([Red], [Color n]) overrides the font colour.
+    const code = displayFormatCode(cell.style)
+    const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code, allocation) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')
+    // OOXML often authors default alignment fields on every cell. Those
+    // retain ordinary placement; real alignment/wrapping/rotation needs
+    // the measured local layout (including explicit no-wrap for255).
+    const explicit = (style?.horizontal !== undefined && style.horizontal !== 'general')
+      || (style?.vertical !== undefined && style.vertical !== 'bottom')
+      || style?.wrapText === true || rotated
+    const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
+    if (explicit) {
+      ctx.fillStyle = color
+      ctx.font = font
+      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow), font }
+    } else {
+      // Preserve accepted ordinary default horizontal layout exactly.
+      ctx.font = font
+      const textW = measured(ctx.font, text)
+      const tx = typeof cell.value === 'number'
+        ? x + w - PADDING_R - textW
+        : isCenter
+          ? x + (w - textW) / 2
+          : x + PADDING_L
+      const ty = y + hh - (hh - (style?.fontSizePt ?? 10) * (96 / 72)) / 2
+      out.text = { kind: 'plain', text, font, color, tx, ty, width: textW }
+      // Text reaching past the room its empty neighbours give is clipped there.
+      const band = overflowBand(x, w, tx, textW, overflow)
+      if (band) out.text.clipX = band
+    }
+  }
+  if (cell.style?.borders) out.borders = cell.style.borders
+  if (cell.style?.borderColors) out.borderColors = cell.style.borderColors
+  return out
+}
+
+/** SpreadsheetML colours (styles.xml fills, fonts, borders) are ARGB whose alpha
+ * byte Excel ignores: openpyxl writes every opaque colour as 00RRGGBB. The shared
+ * resolver keeps DrawingML/WordprocessingML alpha semantics for DOCX/PPTX. */
+/** @internal */
+export function spreadsheetColor(raw: string): string {
+  const hex = raw.trim().replace(/^#/, '')
+  return /^[0-9a-f]{8}$/i.test(hex) ? `#${hex.slice(2).toUpperCase()}` : resolveColor(raw)
+}
+
+/** Sub-pixel slack for Excel's integer-pixel layout of Calibri advances. */
+const EXCEL_FIT_TOLERANCE_PX = 0.5
+/** Smallest shrink-to-fit size; below it a number shows '#' (Excel's own floor is lower). */
+const MIN_SHRINK_FONT_PT = 4
+/** The font size (0.1 pt steps) at which the text fits `inner`; `base` when it already fits. */
+function shrunkFontSize(base: number, inner: number, widthAt: (sizePt: number) => number): number {
+  const natural = widthAt(base)
+  if (natural <= inner) return base
+  let size = natural > 0 ? Math.floor(base * inner / natural * 10) / 10 : 0
+  while (size >= MIN_SHRINK_FONT_PT && widthAt(size) > inner) size = Math.round((size - 0.1) * 10) / 10
+  return size
+}
+
+/** The horizontal clip [x0, x1] for text spanning [tx, tx + textW] in the box
+ * [x, x + w], or undefined when the allowance covers it (no clip, as before). */
+function overflowBand(x: number, w: number, tx: number, textW: number, overflow: OverflowAllowance | undefined): { x0: number; x1: number } | undefined {
+  if (!overflow) return undefined
+  const needLeft = Math.max(0, x - tx), needRight = Math.max(0, tx + textW - (x + w))
+  if (needLeft <= overflow.left && needRight <= overflow.right) return undefined
+  return { x0: x - Math.min(needLeft, overflow.left), x1: x + w + Math.min(needRight, overflow.right) }
+}
+
+/**
+ * Excel fidelity (S13 V4): a number/date/time whose formatted text does not
+ * fit the cell interior is shown as '#' repeated to fill it (at least one) —
+ * never clipped digits, never spilled into a neighbour. General has already
+ * dropped decimals and tried scientific notation and signals "nothing fits"
+ * with a single '#'. Text (and an authored '@' text format), booleans and
+ * errors keep their existing overflow/clip behaviour; wrapped and rotated
+ * cells keep their measured layout. A shrink-to-fit cell reaches this only
+ * when even the minimum font size does not fit. Measurement uses the same
+ * font string the cell paints with.
+ * Only the painted string changes: cellDisplayText (find, accessible value)
+ * keeps the real formatted value.
+ */
+function numericOverflowText(cell: XlsxCell, text: string, font: string, w: number, measured: MeasureCached, generalNoFit: boolean, excelFits?: (text: string) => boolean, allocation?: FormatAllocation): string {
+  if (typeof cell.value !== 'number' || text === '' || cell.valueIsError) return text
+  const style = cell.style
+  if (style?.wrapText === true || cellTextRotation(style?.textRotation) !== undefined) return text
+  // Eligibility comes from the value type and the SELECTED format section, not
+  // from the output string: a number shown through an '@' section is text.
+  if (style?.formatCode !== undefined && numericSectionIsText(cell.value, style.formatCode, allocation)) return text
+  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  if (!generalNoFit && (measured(font, text) <= inner || excelFits?.(text))) return text
+  const glyph = measured(font, '#')
+  return '#'.repeat(Math.max(1, glyph > 0 ? Math.floor(inner / glyph) : 1))
+}
+
+/** Replay one cell layout at its own coordinates; returns the deferred border. */
+/** @internal */
+export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyLayout, extent: { width: number; height: number }, phase: 'all' | 'fill' | 'content' = 'all'): (() => void) | undefined {
+  const { x, y, w, h: hh } = layout
+  if (layout.fill && phase !== 'content') {
+    ctx.fillStyle = layout.fill
+    ctx.fillRect(x, y, w, hh)
+  }
+  if (phase === 'fill') return undefined
+  const text = layout.text
+  if (text) {
+    ctx.fillStyle = text.color
+    ctx.font = text.font
+    if (text.kind === 'layout') paintCellText(ctx, text)
+    else if (text.clipX) {
+      // Horizontal clip only: plain text keeps its unclipped vertical extent.
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(text.clipX.x0, y - hh * 8, text.clipX.x1 - text.clipX.x0, hh * 17)
+      ctx.clip()
+      ctx.textBaseline = 'alphabetic'
+      ctx.fillText(text.text, text.tx, text.ty)
+      ctx.restore()
+    } else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
+  }
+  // borders (anchor draws the merged rect's outline)
+  const b = layout.borders
+  if (!b) return undefined
+  const colors = layout.borderColors
+  return () => {
+    const draw = (side: 'left' | 'right' | 'top' | 'bottom', x1: number, yy1: number, x2: number, yy2: number) => {
+      const name = b[side]
+      if (!name) return
+      const spec = BORDER_STYLES[name] ?? BORDER_STYLES.thin
+      const vertical = x1 === x2
+      ctx.strokeStyle = colors?.[side] ? spreadsheetColor(colors[side]!) : '#000000'
+      ctx.lineWidth = spec.width
+      ctx.setLineDash(spec.dash ?? [])
+      // A double border is two 1px lines straddling the grid line; wider
+      // strokes centre on it (odd widths on the pixel, even on its edge) and
+      // square their caps so adjoining sides meet at the corners.
+      ctx.lineCap = spec.width > 1 ? 'square' : 'butt'
+      const centre = spec.width % 2 ? 0.5 : 0
+      for (const offset of spec.double ? [-1, 1] : [0]) {
+        // Upper clamp only: interactive bodies sit at the origin and replay
+        // under a translation, so a lower clamp would move every left/top side.
+        const at = (v: number, limit: number) => Math.min(v + centre + offset, limit - spec.width / 2)
+        const ex = (v: number) => Math.min(v + 0.5, extent.width - 0.5), ey = (v: number) => Math.min(v + 0.5, extent.height - 0.5)
+        ctx.beginPath()
+        // Keep outer borders within the worksheet bitmap instead of
+        // clipping the right/bottom stroke completely off the canvas.
+        if (vertical) { ctx.moveTo(at(x1, extent.width), ey(yy1)); ctx.lineTo(at(x2, extent.width), ey(yy2)) }
+        else { ctx.moveTo(ex(x1), at(yy1, extent.height)); ctx.lineTo(ex(x2), at(yy2, extent.height)) }
+        ctx.stroke()
+      }
+      ctx.setLineDash([])
+      ctx.lineCap = 'butt'
+    }
+    draw('left', x, y, x, y + hh)
+    draw('right', x + w, y, x + w, y + hh)
+    draw('top', x, y, x + w, y)
+    draw('bottom', x, y + hh, x + w, y + hh)
+    ctx.lineWidth = 1
+  }
+}
+
+/** Excel's border line styles (ECMA-376 ST_BorderStyle) at 100% zoom. */
+const BORDER_STYLES: Record<string, { width: number; dash?: number[]; double?: boolean }> = {
+  thin: { width: 1 },
+  hair: { width: 1, dash: [1, 1] },
+  dotted: { width: 1, dash: [1, 2] },
+  dashed: { width: 1, dash: [3, 1] },
+  dashDot: { width: 1, dash: [9, 3, 3, 3] },
+  dashDotDot: { width: 1, dash: [9, 3, 3, 3, 3, 3] },
+  medium: { width: 2 },
+  mediumDashed: { width: 2, dash: [9, 3] },
+  mediumDashDot: { width: 2, dash: [9, 3, 3, 3] },
+  mediumDashDotDot: { width: 2, dash: [9, 3, 3, 3, 3, 3] },
+  slantDashDot: { width: 2, dash: [11, 1, 5, 1] },
+  thick: { width: 3 },
+  double: { width: 1, double: true },
+}
+
+/** Drawings are positioned in worksheet CSS pixels by the parser; both paths
+ * paint them in the same (translated) sheet space. */
+/** @internal */
+export function paintSheetDrawings(sheet: XlsxSheet, drawings: readonly XlsxDrawing[], ctx: CanvasRenderingContext2D, prepared?: RenderSheetAssets): void {
+  if (drawings.length) paintScene(drawings, ctx, {
     images: prepared?.images,
     paintContent(node, context, w, h) {
       if (!node.content) return
@@ -686,7 +1212,52 @@ export function renderSheet(
     },
     paintText(node, context, w, h) { if (node.textBody) paintTextBody(node.textBody, context, 0, 0, w, h, prepared?.resolveFont ?? (f => f), sheet.drawingTheme) },
   })
-  } finally { ctx.restore() }
+}
+
+/** @internal The horizontal band [x0, x1] of a laid-out body whose single line
+ * of text is painted past its own box into empty neighbours (S13), widened to
+ * cover the box; undefined when the text stays inside it. */
+export function spillSpan(body: CellBodyLayout): { x0: number; x1: number } | undefined {
+  const text = body.text
+  if (!text) return undefined
+  let x0: number, x1: number
+  if (text.kind === 'plain') {
+    x0 = text.clipX ? Math.max(text.tx, text.clipX.x0) : text.tx
+    x1 = text.clipX ? Math.min(text.tx + text.width, text.clipX.x1) : text.tx + text.width
+  } else {
+    if (text.wrap || text.rotation || text.stacked) return undefined
+    x0 = text.clip.x
+    x1 = text.clip.x + text.clip.width
+  }
+  if (x0 >= body.x && x1 <= body.x + body.w) return undefined
+  return { x0: Math.min(x0, body.x), x1: Math.max(x1, body.x + body.w) }
+}
+/** Spill bands of laid-out bodies, with the rows they occupy. */
+function spillBands(bodies: readonly CellBodyLayout[]): Array<{ x0: number; x1: number; y0: number; y1: number }> {
+  const out: Array<{ x0: number; x1: number; y0: number; y1: number }> = []
+  for (const body of bodies) {
+    const span = spillSpan(body)
+    if (span) out.push({ ...span, y0: body.y, y1: body.y + body.h })
+  }
+  return out
+}
+/** Vertical gridline segments at x minus the rows where a spill band
+ * crosses x strictly inside it (a clip at a blocking neighbour keeps its edge). */
+function withoutSpills(segments: Array<[number, number]>, x: number, spills: ReadonlyArray<{ x0: number; x1: number; y0: number; y1: number }>): Array<[number, number]> {
+  const hidden = spills.filter(band => band.x0 < x && x < band.x1).map(band => [band.y0, band.y1] as [number, number])
+  if (!hidden.length) return segments
+  hidden.sort((a, b) => a[0] - b[0])
+  const out: Array<[number, number]> = []
+  for (const [start, end] of segments) {
+    let pos = start
+    for (const [h0, h1] of hidden) {
+      if (h1 <= pos || h0 >= end) continue
+      if (h0 > pos) out.push([pos, h0])
+      pos = Math.max(pos, h1)
+    }
+    if (pos < end) out.push([pos, end])
+  }
+  return out
 }
 
 /**
@@ -709,15 +1280,11 @@ function visibleSegments(
       ? index > r.minCol && index <= r.maxCol
       : index > r.minRow && index <= r.maxRow
     if (!interior) continue
-    if (vertical) {
-      const y1 = starts[r.minRow] ?? 0
-      const y2 = starts[r.maxRow + 1] ?? total
-      hidden.push([y1, y2])
-    } else {
-      const x1 = starts[r.minCol] ?? 0
-      const x2 = starts[r.maxCol + 1] ?? total
-      hidden.push([x1, x2])
-    }
+    // A merge starting beyond the grid has no boundary inside it; it must not
+    // mask from the origin. Its far edge still clamps to the grid extent.
+    const first = starts[vertical ? r.minRow : r.minCol]
+    if (first === undefined) continue
+    hidden.push([first, starts[(vertical ? r.maxRow : r.maxCol) + 1] ?? total])
   }
   if (hidden.length === 0) return [[0, total]]
   hidden.sort((a, b) => a[0] - b[0])

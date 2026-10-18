@@ -1,3 +1,4 @@
+import type { XlsxFrozenPane } from './frozenPane'
 /** XLSX document model. */
 import type { SceneImage, SceneNode } from '../drawing/scene'
 import type { DrawingContent } from '../drawing/content'
@@ -13,6 +14,7 @@ import type {
   TableMetadata,
   WorkbookSheetIdentity,
 } from './formula/types'
+import type { DeclaredSheetFilters } from './view/declaredFilters'
 
 export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean }
 export interface XlsxDrawing extends SceneNode<PptxTextBody, SceneImage> {
@@ -59,6 +61,8 @@ export interface XlsxCellStyle {
   color?: string
   fillColor?: string
   borders?: { left?: string; right?: string; top?: string; bottom?: string }
+  /** SpreadsheetML ARGB per border side (absent: black). */
+  borderColors?: { left?: string; right?: string; top?: string; bottom?: string }
   /** Normalized alignment textRotation: 1-180 as authored, or 255 stacked. Absent, 0 and invalid values stay undefined (horizontal). */
   textRotation?: number
   /** Alignment horizontal/vertical as authored (e.g. left/center/right, top/center/bottom). Absent stays undefined. */
@@ -66,6 +70,8 @@ export interface XlsxCellStyle {
   vertical?: string
   /** wrapText as authored. Absent stays undefined. */
   wrapText?: boolean
+  /** alignment@shrinkToFit as authored (ignored when wrapping). Absent stays undefined. */
+  shrinkToFit?: boolean
 }
 
 export interface XlsxRow {
@@ -111,8 +117,20 @@ export interface XlsxPageMargins {
   footer: number
 }
 
+/** A worksheet drawing marker: zero-based cell plus EMU offsets inside it. */
+export interface XlsxAnchorMarker { col: number; row: number; colOffEmu: number; rowOffEmu: number }
+/** Raw anchor placement as authored; occupied bounds are resolved later against sheet geometry. */
+export type XlsxDrawingAnchorRecord =
+  | { id: string; kind: 'oneCell'; from: XlsxAnchorMarker; cx: number; cy: number }
+  | { id: string; kind: 'twoCell'; from: XlsxAnchorMarker; to: XlsxAnchorMarker }
+  | { id: string; kind: 'absolute'; x: number; y: number; cx: number; cy: number }
+/** `unresolved` counts anchors or drawing parts whose placement could not be read (fail-closed). */
+export interface XlsxDrawingAnchors { records: XlsxDrawingAnchorRecord[]; unresolved: number }
+
 export interface XlsxSheet {
   drawingCoverage?: DrawingCoverageEntry[]
+  /** Authored frozen panes of the first sheet view (interactive viewer only). */
+  frozen?: XlsxFrozenPane
   name: string
   sourcePartPath?: string
   /** Resolved workbook semantics (date system/locale/zone/clock) so the
@@ -123,6 +141,9 @@ export interface XlsxSheet {
   sheetId?: string
   workbookIndex?: number
   kind?: 'worksheet' | 'other'
+  /** Excel column pixel model (workbook MDW, sheet default width); absent:
+   * Calibri 11 (MDW 7px, 64px default). */
+  columnMetrics?: import('./columnWidth').ColumnMetrics
   rows: XlsxRow[]
   cols: XlsxColumnSpec[]
   merges: string[]
@@ -130,6 +151,10 @@ export interface XlsxSheet {
   mergeRanges: XlsxMergeRange[]
   drawings?: XlsxDrawing[]
   drawingMarkers?: { maxCol: number; maxRow: number }
+  /** Bounded DrawingML anchor metadata for the viewer's structural guards
+   * (S3.3): one record per anchor, independent of content/image parsing.
+   * Undefined means never extracted (hand-built sheets), never "no anchors". */
+  drawingAnchors?: XlsxDrawingAnchors
   drawingDiagnostics?: ContentDiagnostic[]
   /** Render-time unsupported-format diagnostics (same shape as doc.diagnostics),
    * deduped across repeated paints. No product warning UI. */
@@ -152,10 +177,21 @@ export interface XlsxDocument {
   workbookSheets?: WorkbookSheetIdentity[]
   definedNames?: DefinedNameMetadata[]
   tables?: TableMetadata[]
+  /** Declared file filter/sort state as diagnostics only (S8.3, spec §7.5):
+   * present only when a sheet declares worksheet/table autoFilter or
+   * sortState. Supported file filters persist as hidden rows; nothing here
+   * becomes an editable viewer rule. */
+  declaredFilters?: DeclaredSheetFilters[]
   calc?: CalcSettings
+  /** Value policy (spec §4.4), set only on saved-values documents (parseXlsx valuePolicy 'cached');
+   * absent means 'engine'. Read through workbookValuePolicy / documentValuePolicy. */
+  valuePolicy?: 'engine' | 'cached'
   /** True when the package actually ships an `xl/calcChain.xml` part, detected
    * from the workbook relationship inventory — never inferred from a producer
    * or guessed. `undefined` means the model did not declare it. */
   calcChainPresent?: boolean
   semantics?: ResolvedSemantics
+  /** Resolved cellXfs table (index = cell styleIndex), published to worker
+   * viewer sources so remote cells style exactly like resident ones. */
+  cellStyles?: readonly XlsxCellStyle[]
 }

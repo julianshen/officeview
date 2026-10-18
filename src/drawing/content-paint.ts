@@ -2,6 +2,28 @@ import { emuToPx } from '../core/geometry'
 import { resolveGeometry } from './geometry'
 import { paintGeometry } from './paint'
 import type { DrawingContent, DrawingContentShape, ContentTextRun, ContentPaintAssets } from './content'
+import type { XlsxChartModel } from '../xlsx/chartModel'
+type XlsxChartPainter = (chart: XlsxChartModel, ctx: CanvasRenderingContext2D, width: number, height: number, familyCss?: (family: string) => string) => void
+/** Set by the lazy worksheet chart module when it loads (xlsx/chart.ts). */
+let xlsxChartPainter: XlsxChartPainter | undefined
+export function registerXlsxChartPainter(painter: XlsxChartPainter): void { xlsxChartPainter = painter }
+/** A chart that is not drawn: a card with its title and the reason, never blank space. */
+export function paintChartPlaceholder(chart: XlsxChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: (family: string) => string = JSON.stringify): void {
+  ctx.save()
+  try {
+    ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
+    ctx.fillStyle = '#F7F7F7'; ctx.fillRect(0, 0, w, h)
+    ctx.strokeStyle = '#BFBFBF'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.strokeRect(0.5, 0.5, w - 1, h - 1); ctx.setLineDash([])
+    const s = Math.min(24, w / 6, h / 6), x = w / 2 - s / 2, y = h / 2 - s - 6
+    ctx.fillStyle = '#A6A6A6'
+    for (const [i, f] of [0.45, 0.8, 0.6].entries()) ctx.fillRect(x + i * s / 3 + 1, y + s * (1 - f), s / 3 - 2, s * f)
+    ctx.fillStyle = '#595959'; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
+    ctx.font = `bold 12px ${familyCss(chart.fontFamily)}`
+    ctx.fillText(chart.title ?? 'Chart', w / 2, h / 2, w - 8)
+    ctx.font = `11px ${familyCss(chart.fontFamily)}`
+    ctx.fillText(chart.unsupported ?? 'Chart not loaded', w / 2, h / 2 + 16, w - 8)
+  } finally { ctx.restore() }
+}
 export interface ContentPaintOptions<Paragraph, Text> {
   paintDiagramText?: (shape: DrawingContentShape<Text>, ctx: CanvasRenderingContext2D, width: number, height: number) => void
   paintTextbox?: (drawing: Extract<DrawingContent<Paragraph, Text>, { kind: 'textbox' }>, ctx: CanvasRenderingContext2D, width: number, height: number, assets?: ContentPaintAssets) => void
@@ -77,6 +99,7 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
     }
     paintShapes(drawing.shapes)
   } else if (drawing.kind === 'chart') paintChart(drawing, ctx, width, height, options.fontFamilyCss)
+  else if (drawing.kind === 'xlsxChart') (drawing.chart.unsupported || !xlsxChartPainter ? paintChartPlaceholder : xlsxChartPainter)(drawing.chart, ctx, width, height, options.fontFamilyCss)
   else {
     if (drawing.fill) {
       ctx.fillStyle = `#${drawing.fill}`

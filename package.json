@@ -21,7 +21,9 @@
   },
   "type": "module",
   "license": "MIT",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/worker.js"
+  ],
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -43,6 +45,9 @@
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser": "playwright test --config playwright.viewer.config.ts",
+    "bench:viewer": "bun scripts/bench-interactive-viewer.ts",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "lint": "tsc --noEmit",
     "prepublishOnly": "bun run build"
   },
@@ -51,9 +56,11 @@
   },
   "dependencies": {
     "fast-xml-parser": "^5.11.1",
-    "jszip": "^3.10.2"
+    "jszip": "^3.10.2",
+    "pako": "1.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.7",

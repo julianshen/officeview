@@ -433,18 +433,14 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
   const direct = getChildren(p, 'pPr')[0]
   const id = attrs(getChildren(direct, 'pStyle')[0]).val ?? context.defaultParagraph
   let lineValue: number | undefined, lineRule: 'auto' | 'exact' | 'atLeast' = 'auto'
-  let jcAuthored = false
+  let jc: string | undefined
   for (const pPr of [context.paragraphDefaults, ...(table?.pPr ?? []), ...styleChain(id, context).map(style => getChildren(style, 'pPr')[0]), direct]) {
     const spacing = attrs(getChildren(pPr, 'spacing')[0])
     if (spacing.before !== undefined) paragraph.spacingBeforeTwips = Number(spacing.before)
     if (spacing.after !== undefined) paragraph.spacingAfterTwips = Number(spacing.after)
     if (spacing.line !== undefined) lineValue = Number(spacing.line)
     if (spacing.lineRule !== undefined) lineRule = spacing.lineRule as typeof lineRule
-    const jc = attrs(getChildren(pPr, 'jc')[0]).val
-    if (jc !== undefined) {
-      paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
-      jcAuthored = true
-    }
+    jc = attrs(getChildren(pPr, 'jc')[0]).val ?? jc
     // BiDi direction inherits like other paragraph properties (CT_OnOff:
     // absent value means on). Later layers, including direct formatting, win.
     const bidiNode = getChildren(pPr, 'bidi')[0]
@@ -456,7 +452,9 @@ export function applyParagraphDefaults(paragraph: DocxParagraph, p: XmlNode, con
     if (outline !== undefined) paragraph.outlineLevel = Number(outline)
   }
   if (lineValue !== undefined) paragraph.lineSpacing = { value: lineValue, rule: lineRule }
-  // An RTL paragraph with no authored alignment defaults to right,
-  // matching direct-only w:bidi handling elsewhere.
-  if (paragraph.bidi && !jcAuthored) paragraph.align = 'right'
+  // Logical start/end (and no authored alignment, which means start) resolve
+  // against the FINAL direction, wherever in the cascade either came from:
+  // start is the right margin of an RTL paragraph (visual review NEW-2).
+  if (jc === undefined || jc === 'start' || jc === 'end') paragraph.align = (jc === 'end') === !paragraph.bidi ? 'right' : 'left'
+  else paragraph.align = jc === 'both' ? 'justify' : jc === 'center' || jc === 'right' ? jc : 'left'
 }

@@ -1,7 +1,7 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
-import type { XlsxCell, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type {
   CalcSettings,
   DefinedNameMetadata,
@@ -11,14 +11,21 @@ import type {
 } from './formula/types'
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
+import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
 import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
-import { computeMetrics } from './render'
+import { hasXlsxCharts, loadChartModule } from './chartLoader'
+import { frozenPaneFrom } from './frozenPane'
+import { cellDisplayText, computeMetrics } from './render'
 import { resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
-import { evaluateWorkbookFormulas } from './formula/workbook'
+import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
 import { initializeSavedSpills } from './formula/saved-spills'
 import { dynamicMetadataIndices } from './metadata'
 import { decodeXlsxString } from './strings'
+import { resolveSheetColor, type SheetColorContext } from './sheetColors'
+import { defaultColumnWidthPx, maxDigitWidthPx, sheetFormat } from './columnWidth'
+import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
+import { PackageError } from '../core/package-error'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -63,24 +70,38 @@ function asNode(v: unknown): XmlNode {
 
 interface Styles {
   numFmtIds: number[]
-  /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId. */
-  numFmts: Map<number, string>
-  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string }>
+  /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
+   * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
+  numFmts: Map<number, string | null>
+  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string }>
   fills: Array<{ rgb?: string; pattern?: string }>
-  borders: Array<{ left?: string; right?: string; top?: string; bottom?: string }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean }>
+  borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
 }
 
-async function parseStyles(pkg: OfficePackage): Promise<Styles> {
+/** Excel's own limit on a custom number-format code (UTF-16 units). Excel
+ * refuses longer codes, so an authored one is shown as General (documented in
+ * docs/formula-compatibility.md); every formatter therefore parses at most
+ * this much per authored cell code. */
+export const MAX_FORMAT_CODE_UNITS = 255
+
+async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
   const styles: Styles = { numFmtIds: [], numFmts: new Map(), fonts: [], fills: [], borders: [], xfs: [] }
   if (!root) return styles
+  // Indexed and theme colour references resolve here, once, for every path.
+  const indexed = getChildren(getChildren(root, 'colors')[0], 'indexedColors')[0]
+  const colorContext: SheetColorContext = {
+    ...(themePalette ? { theme: themePalette } : {}),
+    ...(indexed ? { indexed: getChildren(indexed, 'rgbColor').map(node => String(attrs(node).rgb ?? '')) } : {}),
+  }
+  const colorOf = (node: XmlNode | undefined) => node ? resolveSheetColor(attrs(node), colorContext) : undefined
   for (const numFmtsN of getChildren(root, 'numFmts')) {
     for (const nf of getChildren(numFmtsN, 'numFmt')) {
       const a = attrs(nf)
       const id = parseInt(a.numFmtId ?? '', 10)
       const code = typeof a.formatCode === 'string' ? a.formatCode : undefined
-      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code)
+      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code.length > MAX_FORMAT_CODE_UNITS ? null : code)
     }
   }
   for (const f of getChildren(root, 'fonts').flatMap((n) => getChildren(n, 'font'))) {
@@ -88,7 +109,8 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
       bold: f['b'] !== undefined,
       italic: f['i'] !== undefined,
       sizePt: f['sz'] !== undefined ? parseFloat(attrs(asNode(f['sz'])).val ?? '11') : undefined,
-      color: attrs(asNode(f['color'])).rgb as string | undefined,
+      color: colorOf(asNode(f['color'])),
+      name: attrs(asNode(f['name'])).val as string | undefined,
     }
     styles.fonts.push(font)
   }
@@ -96,7 +118,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
     for (const fill of getChildren(fillsN, 'fill')) {
       const pattern = getChildren(fill, 'patternFill')[0]
       const fg = pattern ? getChildren(pattern, 'fgColor')[0] : undefined
-      styles.fills.push({ rgb: attrs(asNode(fg)).rgb as string | undefined, pattern: attrs(asNode(pattern)).patternType as string | undefined })
+      styles.fills.push({ rgb: colorOf(fg), pattern: attrs(asNode(pattern)).patternType as string | undefined })
     }
   }
   for (const bordersN of getChildren(root, 'borders')) {
@@ -105,7 +127,14 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         const node = getChildren(border, n)[0]
         return node ? (attrs(node).style as string | undefined) : undefined
       }
-      styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom') })
+      // Side colours (auto and system indexed 64 keep the black default).
+      const colors: Record<string, string> = {}
+      for (const n of ['left', 'right', 'top', 'bottom']) {
+        const node = getChildren(border, n)[0]
+        const rgb = node && side(n) ? colorOf(getChildren(node, 'color')[0]) : undefined
+        if (rgb) colors[n] = rgb
+      }
+      styles.borders.push({ left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom'), ...(Object.keys(colors).length ? { colors } : {}) })
     }
   }
   for (const cellXfsN of getChildren(root, 'cellXfs')) {
@@ -117,6 +146,7 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
       const horizontal = typeof align.horizontal === 'string' && align.horizontal !== '' ? align.horizontal : undefined
       const vertical = typeof align.vertical === 'string' && align.vertical !== '' ? align.vertical : undefined
       const wrapText = align.wrapText === '1' || align.wrapText === 'true' ? true : align.wrapText === '0' || align.wrapText === 'false' ? false : undefined
+      const shrinkToFit = align.shrinkToFit === '1' || align.shrinkToFit === 'true' ? true : align.shrinkToFit === '0' || align.shrinkToFit === 'false' ? false : undefined
       styles.xfs.push({
         numFmtId: parseInt(a.numFmtId ?? '0', 10),
         fontId: parseInt(a.fontId ?? '0', 10),
@@ -126,13 +156,54 @@ async function parseStyles(pkg: OfficePackage): Promise<Styles> {
         horizontal,
         vertical,
         wrapText,
+        shrinkToFit,
       })
     }
   }
   return styles
 }
 
-export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
+export interface ParseXlsxOptions {
+  /** Load-time evaluator resource caps (large-source admission, design note §4.3). Unset = today's behaviour. */
+  evaluation?: Pick<WorkbookEvaluationOptions, 'maxArrayCells' | 'maxArraySide' | 'maxMaterializedCells'>
+  /** 'cached' shows saved values only: no load-time evaluation, so a formula
+   * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
+  valuePolicy?: 'engine' | 'cached'
+}
+
+/** The workbook default (Normal style, font 0) maximum digit width. */
+export function workbookDigitWidth(styles: Styles): number {
+  const font = styles.fonts[0]
+  return font ? maxDigitWidthPx(font.name, font.sizePt) : 7
+}
+
+/** One cellXfs entry resolved to the cell style (fonts/fills/borders/numFmt):
+ * the single resolution both the object parser and the paged import use. */
+export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxCellStyle {
+  const font = styles.fonts[xf.fontId]
+  const fill = styles.fills[xf.fillId]
+  const border = styles.borders[xf.borderId]
+  const code = styles.numFmts.get(xf.numFmtId)
+  return {
+    // An overlong authored code (null) is General, even over a built-in id.
+    numFmtId: code === null ? 0 : xf.numFmtId,
+    formatCode: code ?? undefined,
+    bold: font?.bold,
+    italic: font?.italic,
+    fontSizePt: font?.sizePt,
+    color: font?.color,
+    fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
+    borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
+    ...(border?.colors ? { borderColors: { ...border.colors } } : {}),
+    textRotation: xf.textRotation,
+    horizontal: xf.horizontal,
+    vertical: xf.vertical,
+    wrapText: xf.wrapText,
+    ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
+  }
+}
+
+export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = {}): Promise<XlsxDocument> {
   const workbook = await pkg.xml('xl/workbook.xml')
   if (!workbook) throw new Error('xl/workbook.xml missing — not a valid xlsx?')
   const rels = await pkg.xml('xl/_rels/workbook.xml.rels')
@@ -159,12 +230,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     try { const text=await pkg.text(metadataPath);if(text)dynamicIndices=dynamicMetadataIndices(text) }
     catch { /* Unverified optional metadata never upgrades a fixed array. */ }
   }
-  const styles = await parseStyles(pkg)
   let theme: ThemeContext = parseThemeContext()
+  let themeParsed = false
   if (themePath) {
-    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)) }
+    try { theme = parseThemeContext(await pkg.xmlOrdered(themePath)); themeParsed = true }
     catch { /* optional theme cannot invalidate usable cells */ }
   }
+  const styles = await parseStyles(pkg, themeParsed ? theme.palette : undefined)
 
   const sheets: XlsxSheet[] = []
   const workbookSheets: WorkbookSheetIdentity[] = []
@@ -180,12 +252,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     const relType = relTypes.get(relId) ?? ''
     const kind = relType.endsWith('/worksheet') ? 'worksheet' : relType !== '' ? 'other' : 'worksheet'
     const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\.\//, '')}`
-    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices)
+    const sheet = await parseSheet(pkg, path, name, strings, styles, theme, sheetId, workbookIndex, kind, dynamicIndices, workbookDigitWidth(styles))
     sheets.push(sheet)
     sheetPartPaths.push(path)
     workbookSheets.push({ sheetId, workbookIndex, name, kind })
     workbookIndex++
   }
+  // Charts without cached values (openpyxl) read their series from the cells.
   const drawingCoverage = sheets.flatMap((sheet, unit) => {
     const entries = (sheet.drawingCoverage ?? []).map(entry => ({ ...entry, unit }))
     const metrics = sheet.drawings?.length ? computeMetrics(sheet) : undefined
@@ -227,10 +300,18 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
   const resolvedTables: TableMetadata[] = []
   let declaredTableParts = 0
   let tableInventoryComplete = true
+  const declaredFilters: DeclaredSheetFilters[] = []
+  // One retained-size budget for the whole document's declarations.
+  const declaredBudget = createDeclaredBudget()
+  const tableSourceChecks = new Map<string, boolean>()
   for (let i = 0; i < sheets.length; i++) {
     const sheetPath = sheetPartPaths[i]
     const identity = workbookSheets[i]
     if (!sheetPath || !identity) continue
+    const sheetEntry: DeclaredSheetFilters = {
+      sheetId: identity.sheetId, name: identity.name, workbookIndex: identity.workbookIndex, partPath: sheetPath, tableAutoFilters: [],
+    }
+    const sheetDeclared = declaredSheetBuilder(sheetEntry, declaredBudget)
     try {
       const wsRoot = await pkg.xml(sheetPath)
       // A referenced worksheet that cannot be inspected has unknown table
@@ -241,6 +322,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
         continue
       }
       const wsData = getChildren(wsRoot, 'worksheet')[0] ?? wsRoot
+      // S8.3: declared worksheet filter/sort state is diagnostics only. The
+      // worksheet XML is already in hand; stored order and hidden rows below
+      // are never touched by this. sortState is valid both as a direct child
+      // and nested inside <autoFilter>; direct wins with a duplicate flag.
+      const worksheetDeclared = parseDeclaredContainer(wsData, declaredBudget)
+      if (worksheetDeclared.autoFilter) sheetEntry.worksheetAutoFilter = worksheetDeclared.autoFilter
+      if (worksheetDeclared.sortState) sheetEntry.worksheetSortState = worksheetDeclared.sortState
       // Every tablePart element is a declaration (CT_TablePart requires
       // r:id): one without a resolvable id is unavailable inventory, never
       // evidence of zero declarations.
@@ -251,7 +339,10 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           tablePartDecls.push(typeof rid === 'string' && rid !== '' ? rid : undefined)
         }
       }
-      if (tablePartDecls.length === 0) continue
+      if (tablePartDecls.length === 0) {
+        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
+        continue
+      }
       declaredTableParts += tablePartDecls.length
       const slash = sheetPath.lastIndexOf('/')
       const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
@@ -281,13 +372,23 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
         }
         const partPath = resolvePartTarget(sheetPath, rel.target)
         try {
-          const sourceText = await pkg.text(partPath)
-          if (!isTablePartSource(sourceText)) {
+          // The root-QName check depends only on the part's bytes, so repeated
+          // references to one part reuse it instead of re-parsing the text.
+          let sourceOk = tableSourceChecks.get(partPath)
+          if (sourceOk === undefined) {
+            sourceOk = isTablePartSource(await pkg.text(partPath))
+            tableSourceChecks.set(partPath, sourceOk)
+          }
+          if (!sourceOk) {
             tableInventoryComplete = false
             continue
           }
           const tableRoot = await pkg.xml(partPath)
           const tableNode = getChildren(tableRoot, 'table')[0] ?? tableRoot
+          // S8.3 diagnostics: declared table filter/sort state, parsed
+          // independently of metadata validity and attributed by part path
+          // (repeated references to one part are diagnosed once).
+          if (tableNode) collectDeclaredTable(sheetDeclared, tableNode, partPath)
           const meta = parseTableMetadata(tableNode, identity.sheetId, partPath)
           if (!meta) {
             tableInventoryComplete = false
@@ -300,10 +401,13 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
           tableInventoryComplete = false
         }
       }
+      if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     } catch {
       // Worksheet-level discovery failure with declared parts is unavailable,
-      // never a false complete registry.
+      // never a false complete registry. Worksheet declarations already read
+      // survive independently of the table failure.
       tableInventoryComplete = false
+      if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
     }
   }
   // Completeness first: any failed discovery keeps the inventory
@@ -345,9 +449,24 @@ export async function parseXlsx(pkg: OfficePackage): Promise<XlsxDocument> {
     calc,
     calcChainPresent,
     semantics,
+    cellStyles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
+    ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   initializeSavedSpills(doc)
-  evaluateWorkbookFormulas(doc, { fullCalcOnLoad })
+  if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
+  else evaluateWorkbookFormulas(doc, { fullCalcOnLoad, ...options.evaluation })
+  // Labels are formatted with the chart's output cap (no builder grows past it).
+  const CHART_LABEL_OUTPUT = 256
+  // Charts without cached values (openpyxl) read their series from the cells
+  // once values and the date system are final: formatted category text,
+  // workbook defined names, and the document's value policy.
+  if (sheets.some(sheet => hasXlsxCharts(sheet.drawings))) {
+    // Under the cached policy an uncached formula has no value (view/values isValueUnavailable).
+    const cached = options.valuePolicy === 'cached'
+    try {
+      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: () => {}, release: () => {} }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
+    } catch { /* charts keep their placeholder state; the workbook stays usable */ }
+  }
   return doc
 }
 
@@ -362,11 +481,15 @@ async function parseSheet(
   workbookIndex: number,
   kind: 'worksheet' | 'other',
   dynamicIndices:ReadonlySet<number>,
+  digitWidth = 7,
 ): Promise<XlsxSheet> {
   const root = await pkg.xml(path)
   const sheet: XlsxSheet = { name, sourcePartPath: path, sheetId, workbookIndex, kind, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
+  // Excel's column pixel model; set before drawings are placed against the grid.
+  const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0])), digitWidth) }
+  if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns
   const colsNode = getChildren(data, 'cols')[0]
   if (colsNode) {
     for (const col of getChildren(colsNode, 'col')) {
@@ -387,6 +510,9 @@ async function parseSheet(
     }
     sheet.mergeRanges = sheet.merges.map(parseMergeRange)
   }
+  const pane = getChildren(getChildren(getChildren(data, 'sheetViews')[0], 'sheetView')[0], 'pane')[0]
+  const frozen = pane ? frozenPaneFrom(attrs(pane) as Record<string, string | undefined>) : undefined
+  if (frozen) sheet.frozen = frozen
   const setupPr = getChildren(getChildren(data, 'sheetPr')[0], 'pageSetUpPr')[0]
   const setupNode = getChildren(data, 'pageSetup')[0]
   if (setupNode || setupPr) {
@@ -418,10 +544,25 @@ async function parseSheet(
     header: inches(ma.header, 0.3), footer: inches(ma.footer, 0.3),
   }
   const sheetData = getChildren(data, 'sheetData')[0]
+  // Excel's implicit positions: a <row> without r follows the previous row and
+  // a <c> without r follows the previous cell of its row (A1-relative start).
+  // An implicit position past the worksheet (more ref-less rows or cells than
+  // it has) is a typed refusal, like the paged reader's, never a thrown
+  // coordinate error. A row number repeated explicitly is merged into its
+  // first record (later cells replace same-column ones) with a sheet
+  // diagnostic; the paged reader refuses such a file instead (documented).
+  let previousRow = -1
+  const rowsByIndex = new Map<number, XlsxRow>()
   for (const rowNode of getChildren(sheetData, 'row')) {
     const ra = attrs(rowNode)
+    const explicitRow = ra.r !== undefined ? parseInt(ra.r as string, 10) - 1 : NaN
+    const explicit = Number.isInteger(explicitRow) && explicitRow >= 0
+    const rowIndex = explicit ? explicitRow : previousRow + 1
+    if (!explicit && rowIndex >= MAX_ROWS) throw new PackageError('unsupported', `a worksheet row without a row number follows row ${rowIndex}, past the last worksheet row`, path)
+    previousRow = rowIndex
+    let previousCol = -1
     const row: XlsxRow = {
-      index: parseInt(ra.r ?? '1', 10) - 1,
+      index: rowIndex,
       heightPt: ra.ht !== undefined ? parseFloat(ra.ht as string) : undefined,
       customHeight: ra.customHeight === '1',
       hidden: ra.hidden === '1' || ra.hidden === 'true',
@@ -429,8 +570,13 @@ async function parseSheet(
     }
     for (const cNode of getChildren(rowNode, 'c')) {
       const ca = attrs(cNode)
-      const ref = (ca.r as string) ?? ''
-      const [rowIdx, colIdx] = parseRef(ref)
+      const explicitRef = typeof ca.r === 'string' && /^[A-Z]+\d+$/.test(ca.r) ? ca.r : undefined
+      const [rowIdx, colIdx] = explicitRef ? parseRef(explicitRef) : [rowIndex, previousCol + 1]
+      if (!explicitRef && (rowIdx >= MAX_ROWS || colIdx >= MAX_COLS)) {
+        throw new PackageError('unsupported', `row ${rowIndex + 1} has a cell without a reference past the last worksheet column`, path)
+      }
+      const ref = explicitRef ?? formatA1({ row: rowIdx, col: colIdx })
+      previousCol = colIdx
       const t = ca.t as string | undefined
       const sIdx = parseInt(ca.s ?? '0', 10)
       let value: string | number | boolean | null = null
@@ -507,27 +653,18 @@ async function parseSheet(
         ca: calcAlways ? true : undefined,
       }
       const xf = styles.xfs[cell.styleIndex]
-      if (xf) {
-        const font = styles.fonts[xf.fontId]
-        const fill = styles.fills[xf.fillId]
-        const border = styles.borders[xf.borderId]
-        cell.style = {
-          numFmtId: xf.numFmtId,
-          formatCode: styles.numFmts.get(xf.numFmtId),
-          bold: font?.bold,
-          italic: font?.italic,
-          fontSizePt: font?.sizePt,
-          color: font?.color,
-          fillColor: fill?.pattern === 'solid' ? fill.rgb : undefined,
-          borders: border ? { left: border.left, right: border.right, top: border.top, bottom: border.bottom } : undefined,
-          textRotation: xf.textRotation,
-          horizontal: xf.horizontal,
-          vertical: xf.vertical,
-          wrapText: xf.wrapText,
-        }
-      }
+      if (xf) cell.style = resolveXfStyle(styles, xf)
       row.cells.push(cell)
     }
+    const earlier = rowsByIndex.get(row.index)
+    if (earlier) {
+      const replaced = new Set(row.cells.map(cell => cell.col))
+      earlier.cells = [...earlier.cells.filter(cell => !replaced.has(cell.col)), ...row.cells].sort((a, b) => a.col - b.col)
+      const diagnostic = { kind: 'parse', feature: 'duplicate-row', message: `row ${row.index + 1} appears more than once; its cells were merged` }
+      if (!sheet.diagnostics?.some(d => d.feature === diagnostic.feature && d.message === diagnostic.message)) (sheet.diagnostics ??= []).push(diagnostic)
+      continue
+    }
+    rowsByIndex.set(row.index, row)
     sheet.rows.push(row)
   }
   await parseWorksheetDrawings(pkg, sheet, path, data, theme)

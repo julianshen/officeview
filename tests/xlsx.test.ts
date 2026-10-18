@@ -46,7 +46,7 @@ describe('xlsx render', () => {
     expect(formatValue(3.14159, 2)).toBe('3.14')
     expect(formatValue(0.42, 9)).toBe('42%')
     expect(formatValue(4500.5, 3)).toBe('4,501')
-    expect(formatValue(45000, 14)).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(formatValue(45000, 14)).toBe('3/15/2023')
     expect(formatValue('text', 0)).toBe('text')
     expect(formatValue(true, 0)).toBe('TRUE')
   })
@@ -55,7 +55,8 @@ describe('xlsx render', () => {
     const buf = await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }], cols: '<col min="1" max="2" width="10"/>' }])
     const doc = await parseXlsx(await OfficePackage.load(buf))
     const m = computeMetrics(doc.sheets[0])
-    expect(m.colWidthsPx[0]).toBe(Math.round(10 * 7 + 5))
+    // Excel column model: trunc((256w + trunc(128/mdw))/256 * mdw), mdw 7 (Calibri 11).
+    expect(m.colWidthsPx[0]).toBe(70)
     expect(m.colWidthsPx[1]).toBe(m.colWidthsPx[0])
   })
 
