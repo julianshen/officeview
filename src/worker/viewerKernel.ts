@@ -40,6 +40,9 @@ import { MAX_ROWS } from '../xlsx/view/coordinates'
 import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
 import { queryPayloadBytes } from './viewerQueryBudget'
 import { admitReply, replyLimitEnvelope } from './viewerReplyLimit'
+import { measurePayloadBytesStepped, measureWithinSlice } from './replyMeasure'
+import { CheckpointBudget } from '../xlsx/view/scheduler'
+import { smallTreeBytes } from '../xlsx/view/payloadBytes'
 import type { PoolCharge } from '../xlsx/view/tileCache'
 
 export type { CancelReason } from './viewerProtocol'
@@ -218,6 +221,12 @@ export class ViewerKernel {
         let held = 0
         try { out = admitReply(command as CommandOf<'read'>, out, limit!, bytes => !workspace || workspace.set(held += bytes), control) }
         finally { workspace?.release() }
+      } else if (out.replyBytes === undefined) {
+        // A kernel-built reply is a small tree: stamped without a walk. A
+        // provider result arrives here already stamped (see sized).
+        const stamped = { ...out, replyBytes: 0 }
+        const bytes = smallTreeBytes(stamped)
+        if (bytes !== undefined) { stamped.replyBytes = bytes; out = stamped }
       }
       const transfer = transferablesOf(out)
       this.accounting.transfer(transfer)
@@ -281,7 +290,8 @@ export class ViewerKernel {
       ] } : final
       // Of a read's replies, only a complete one carries the provider's result;
       // every other kind (cancelled, stale, error) is built by the kernel.
-      emit(this.withReason(diagnosed, entry), diagnosed.kind !== 'complete')
+      const answer = this.withReason(diagnosed, entry)
+      emit(!checked && diagnosed.kind === 'complete' ? this.sizedWithinSlice(answer, docId) ?? await this.sizedInSteps(answer, docId, entry) : answer, diagnosed.kind !== 'complete')
     } catch (cause) {
       if (entry?.controller.signal.aborted) {
         emit(this.withReason(reply(command as never, entry.owner as never, { kind: 'cancelled' }), entry), true)
@@ -312,6 +322,41 @@ export class ViewerKernel {
         if (this.finished.size > FINISHED_OWNERS_LIMIT) this.finished.delete(this.finished.keys().next().value as string)
       }
     }
+  }
+  /** A provider result's reply with its exact size stamped (`replyBytes`, the
+   * measure main would charge, counted in it), so main charges the received
+   * clone without walking it (spec §10.2). The walk's workspace is admitted to
+   * the document pool; a reply the pool cannot measure now goes unstamped and
+   * main charges its conservative maximum. This synchronous form sizes a reply
+   * whose walk fits one slice (small replies keep their posting order) and
+   * returns null for a larger one, which sizedInSteps measures. */
+  private sizedWithinSlice(out: WorkerReply, docId: string | undefined): WorkerReply | null {
+    const workspace = docId === undefined ? undefined : this.sessions.get(docId)?.memory.charge()
+    let held = 0
+    try {
+      const sized = { ...out, replyBytes: 0 }
+      const measured = measureWithinSlice(sized, more => !workspace || workspace.set(held += more))
+      if (!measured) return null
+      if (measured.bytes === undefined) return out
+      sized.replyBytes = measured.bytes
+      return sized
+    } finally { workspace?.release() }
+  }
+  /** sizedWithinSlice for a reply larger than one slice: measured in budget
+   * steps with host yields, abandoned (cancelled) when its command is. */
+  private async sizedInSteps(out: WorkerReply, docId: string | undefined, entry: InFlight): Promise<WorkerReply> {
+    const workspace = docId === undefined ? undefined : this.sessions.get(docId)?.memory.charge()
+    const budget = new CheckpointBudget(() => {
+      if (entry.controller.signal.aborted) throw new DOMException('Reply sizing cancelled', 'AbortError')
+    }, undefined, {}, 'reply')
+    let held = 0
+    try {
+      const sized = { ...out, replyBytes: 0 }
+      const bytes = await measurePayloadBytesStepped(sized, more => !workspace || workspace.set(held += more), budget)
+      if (bytes === undefined) return out
+      sized.replyBytes = bytes
+      return sized
+    } finally { budget.dispose(); workspace?.release() }
   }
   private abort(entry: InFlight, reason: CancelReason): void {
     if (entry.controller.signal.aborted) return

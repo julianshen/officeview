@@ -1,6 +1,7 @@
 import { ViewerClient, type ViewerPort } from '../../src/worker/viewerClient'
 import { RemoteWorkbook } from '../../src/worker/viewerRemoteSource'
 import { initialIdentity, initialWorkbookOwner } from '../../src/worker/viewerProtocol'
+import { measurePayloadBytes } from '../../src/xlsx/view/payloadBytes'
 import type { RowPermutationBand, SortSpec, ViewCommitDelta, WorkerCommand } from '../../src/xlsx/view/contracts'
 
 /** Controlled message events: no import, rendering, polling or timer readiness. */
@@ -25,7 +26,9 @@ export function remoteViewReplies() {
     return (index >= 0 ? Promise.resolve(commands.splice(index, 1)[0]) : new Promise<WorkerCommand>(resolve => waiters.push({ kind, resolve }))) as Promise<Extract<WorkerCommand, { kind: K }>>
   }
   const reply = (command: WorkerCommand, result: unknown) => {
-    const data = { commandKind: command.kind, requestId: command.requestId, owner: 'owner' in command ? command.owner : undefined, diagnostics: [], kind: 'complete', result }
+    const data = { commandKind: command.kind, requestId: command.requestId, owner: 'owner' in command ? command.owner : undefined, diagnostics: [], kind: 'complete', result, replyBytes: 0 }
+    // As the kernel does (spec §10.2): the worker stamps the reply's exact size.
+    data.replyBytes = measurePayloadBytes(data)!
     for (const listener of listeners) listener({ data })
     return data
   }

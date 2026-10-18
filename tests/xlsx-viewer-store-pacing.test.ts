@@ -183,6 +183,29 @@ describe('paged readRows counts visited records, not just decoded cells (codex D
   }, 60_000)
 })
 
+describe('paged readRows final check (codex D3)', () => {
+  it('a cancel after the last checkpoint (a read under 256 units) never ends in success', async () => {
+    const { source, store } = await pagedStore(1, 100)
+    const controller = new AbortController()
+    const adapter = store as unknown as { load: (...args: unknown[]) => Promise<{ rows: Uint32Array }> }
+    const load = adapter.load.bind(store)
+    let visited = 0
+    const spy = vi.spyOn(adapter, 'load').mockImplementation(async (...args) => {
+      const p = await load(...args)
+      return { ...p, rows: new Proxy(p.rows, { get(target, prop) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop) && ++visited === 10) controller.abort()
+        const value = Reflect.get(target, prop, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      } }) }
+    })
+    try {
+      const page = await store.readRows({ r0: 0, r1: 0, c0: 0, c1: 0 }, undefined, options(store, controller.signal))
+      expect(controller.signal.aborted).toBe(true)
+      expect(page.error?.code).toBe('cancelled')
+    } finally { spy.mockRestore(); await source.release() }
+  }, 60_000)
+})
+
 describe('remote store: the worker serves a read in bounded steps', () => {
   it('services a queued macrotask abort while serving codex\'s header read', async () => {
     const { doc, work } = objectDoc(2, 8192)

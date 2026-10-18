@@ -28,7 +28,7 @@ import type {
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
 import type { OverflowCache } from '../xlsx/view/overflowCache'
-import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -62,6 +62,14 @@ function drawingGrantRefusal(command: CommandOf<'read'>, message = DRAWING_MEMOR
 function grantedBytes(reply: WorkerReply, grant: number): number {
   const stamped = (reply as { replyBytes?: unknown }).replyBytes
   return typeof stamped === 'number' && Number.isSafeInteger(stamped) && stamped >= 0 && stamped <= grant ? stamped : grant
+}
+/** The bytes a non-granted reply is charged without walking it (spec §10.2):
+ * the size the worker measured and stamped on it, or, when that is missing or
+ * invalid, `maximum` (the whole main-thread budget: no reply main can hold is
+ * larger). */
+function stampedBytes(reply: WorkerReply, maximum: number): number {
+  const stamped = (reply as { replyBytes?: unknown }).replyBytes
+  return typeof stamped === 'number' && Number.isSafeInteger(stamped) && stamped >= 0 ? stamped : maximum
 }
 /** Status text when a sort's view cannot fit the main-thread budget (stream F). */
 export const SORT_MEMORY_REFUSAL = 'Not enough memory to apply the sort on this device'
@@ -455,11 +463,11 @@ export class RemoteWorkbook implements WorkbookSource {
       // a page (a scan generator across tasks) keeps the charge. An admitted
       // reservation becomes that charge (no gap, no double count); any excess
       // over it is charged on top.
-      // A granted reply is never walked here: the worker stamped its exact
-      // size (within the grant) on it. A missing or invalid size is charged as
-      // the whole grant.
+      // No reply is walked here: the worker stamped its exact size on it (a
+      // granted one within its grant). A missing or invalid size is charged as
+      // the whole grant, or as the whole main budget for any other reply.
       const pool = drawings ? 'drawings' : 'replies', targets = leaseTargets(reply)
-      const bytes = grant ? grantedBytes(reply, this.mainLedger.ownerBytes('replies', grant)) : estimatePayloadBytes(reply)
+      const bytes = grant ? grantedBytes(reply, this.mainLedger.ownerBytes('replies', grant)) : stampedBytes(reply, MAIN_THREAD_BUDGETS[this.profile])
       const held = grant ?? reservation
       const moved = held ? Math.min(bytes, this.mainLedger.ownerBytes('replies', held)) : 0
       if (moved > 0) this.mainLedger.adoptWhileReachable('replies', held!, pool, targets, moved)
