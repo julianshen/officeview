@@ -3,12 +3,14 @@
  * charges bounded by explicit owners, not by garbage collection. Collection
  * callbacks never run in this file, so only explicit releases end a charge.
  */
-import { afterEach, beforeEach, expect, it, onTestFinished } from 'vitest'
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { createViewerControlResources, viewerControls } from '../src/components/xlsx/viewerControlsClient'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
+import { StructuralIndex } from '../src/xlsx/view/structure'
+import { emptyGridSelection } from '../src/xlsx/view/selection'
 import { workbookOf } from './helpers/xlsx-find'
 
 const RealRegistry = globalThis.FinalizationRegistry
@@ -83,5 +85,86 @@ it('disposing a control port returns the controls pool to its pre-port value', a
     expect(ledger.snapshot().byPool.controls, `after dispose ${i}`).toBe(before)
   }
   keep.dispose()
+  resources.dispose()
+})
+
+/** A port over one sheet whose structural indexes (in creation order) are observed. */
+async function portWithIndexes(structural?: (call: number, result: { completeness: string }) => Promise<void> | void) {
+  const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 'Header' }, { row: 1, col: 0, value: 2 }, { row: 2, col: 0, value: 1 }] }])
+  const source = createObjectWorkbookSource(doc, 'd'), store = source.store('s')
+  const ledger = new MainMemoryLedger({ register() {} }), resources = createViewerControlResources('D', undefined, ledger)
+  const indexes: StructuralIndex[] = []
+  const adopt = ledger.adoptWhileReachable.bind(ledger)
+  ledger.adoptWhileReachable = (...args) => { if (args[3][0] instanceof StructuralIndex) indexes.push(args[3][0]); return adopt(...args) }
+  if (structural) {
+    const query = store.queryStructural.bind(store)
+    let call = 0
+    store.queryStructural = async (...args) => { const result = await query(...args); await structural(call++, result as { completeness: string }); return result }
+  }
+  let release!: () => void, hit!: () => void
+  const reading = new Promise<void>(resolve => hit = resolve), held = new Promise<void>(resolve => release = resolve)
+  const readRows = store.readRows.bind(store)
+  // Every header probe waits until released: a resolver stays in flight.
+  store.readRows = async (...args) => { hit(); await held; return readRows(...args) }
+  const owner = { ...store.stamp, fontGen: 0, viewGen: 0 }
+  const selection = { ...emptyGridSelection(), active: { row: 1, col: 0 }, ranges: [{ rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 2 }] }, cols: [{ c0: 0, c1: 0 }] }] }
+  const port = await viewerControls({ doc, source, sheetId: 's', resources, ledger,
+    snapshot: () => ({ owner, filter: null, sort: null, records: { visible: 3, total: 3, completeness: 'complete' as const } }),
+    view: () => ({ selection }) as never, publish: () => { throw new Error('unused') } }, new AbortController().signal)
+  const resolve = () => port.client.resolve(owner, 'sort', new AbortController().signal)
+  return { ledger, resources, indexes, port, resolve, reading, release }
+}
+
+it('disposing a port defers its structural index release to an in-flight resolver, exactly once', async () => {
+  const { ledger, resources, indexes, port, resolve, reading, release } = await portWithIndexes()
+  const [index] = indexes
+  const charged = () => ledger.snapshot().byPool.controls
+  const pending = resolve()
+  await reading
+  const during = charged()
+  port.dispose()
+  expect(ledger.hasLifetime(index), 'the resolver still reads the index after its header probe').toBe(true)
+  port.dispose()
+  expect(ledger.hasLifetime(index)).toBe(true)
+  release()
+  await pending.catch(() => {})
+  expect(ledger.hasLifetime(index), 'the last holder ends the charge').toBe(false)
+  const drained = charged()
+  expect(drained).toBeLessThan(during)
+  port.dispose()
+  expect(charged(), 'a later dispose releases nothing twice').toBe(drained)
+  resources.dispose()
+})
+
+it('re-queried structure (loading, loading, complete) retires each index when its last reader drains', async () => {
+  const gates: Array<{ open: () => void; wait: Promise<void> }> = []
+  const gateAt = (call: number) => gates[call] ??= (() => { let open!: () => void; const wait = new Promise<void>(resolve => open = resolve); return { open, wait } })()
+  const { ledger, resources, indexes, port, resolve, reading, release } = await portWithIndexes(async (call, result) => {
+    // 0: the port opens on a loading sheet; 1: still loading; 2 and 3: complete.
+    if (call <= 1) result.completeness = 'loading'
+    if (call >= 2) await gateAt(call).wait
+  })
+  expect(indexes).toHaveLength(1)
+  // A resolver on a loading structure re-queries, still loading: the replaced
+  // index had no other reader and ends at once.
+  await expect(resolve()).resolves.toMatchObject({ kind: 'incomplete' })
+  expect(indexes).toHaveLength(2)
+  expect(ledger.hasLifetime(indexes[0])).toBe(false)
+  // Two resolvers re-query concurrently. The first completes and holds its
+  // index in a header probe while the second replaces it.
+  const first = resolve(), second = resolve()
+  gateAt(2).open()
+  await reading
+  expect(indexes).toHaveLength(3)
+  gateAt(3).open()
+  await vi.waitFor(() => expect(indexes).toHaveLength(4))
+  expect(ledger.hasLifetime(indexes[1])).toBe(false)
+  expect(ledger.hasLifetime(indexes[2]), 'a replaced index stays charged while a resolver reads it').toBe(true)
+  release()
+  await Promise.all([first, second])
+  expect(ledger.hasLifetime(indexes[2]), 'its reader drained').toBe(false)
+  expect(ledger.hasLifetime(indexes[3]), 'the port still owns the current index').toBe(true)
+  port.dispose()
+  expect(ledger.hasLifetime(indexes[3])).toBe(false)
   resources.dispose()
 })

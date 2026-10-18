@@ -150,6 +150,17 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     store.settle?.(result)
     signal.throwIfAborted()
   } catch (error) { if (!options.resources) resources.dispose(); throw error }
+  // Explicit owners of each structural index (AC-LIFE-02): the port while the
+  // index is current, and every resolver whose range request handed it out,
+  // until that resolver settles. The last holder ends the charge, exactly once.
+  const holders = new Map<StructuralIndex, number>()
+  const hold = (index: StructuralIndex) => { holders.set(index, (holders.get(index) ?? 0) + 1); return index }
+  const letGo = (index: StructuralIndex) => {
+    const left = holders.get(index)! - 1
+    if (left) holders.set(index, left)
+    else { holders.delete(index); memory.settle?.(index) }
+  }
+  hold(structure)
   const portMetadata = memory.reserve()
   let styles: Map<number, XlsxCell['style']>, classifications: Map<string, ColumnClassification>, jobs: Set<AbortController>
   try {
@@ -465,12 +476,16 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       abort.throwIfAborted()
       if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
       const stale = structure
-      structure = controlStructure(result, memory)
+      structure = hold(controlStructure(result, memory))
       store.settle?.(result)
-      memory.settle?.(stale)
+      letGo(stale)
         abort.throwIfAborted()
     }
-    const resolved = await resolve(owner, kind, abort, override, col)
+    // The inner resolve reads `structure` synchronously through rangeRequest
+    // and may use it again after awaiting header rows.
+    const reading = hold(structure)
+    let resolved: Awaited<ReturnType<typeof resolve>>
+    try { resolved = await resolve(owner, kind, abort, override, col) } finally { letGo(reading) }
     if (resolved.kind === 'complete' && kind === 'filter') await classify(owner, resolved.range, col ?? resolved.range.c0, abort)
     return resolved
   }
@@ -481,6 +496,7 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     return values(owner, range, col, applied, abort)
   }
   return { client, dispose() {
+    const first = !disposed
     disposed = true
     for (const job of jobs) job.abort()
     classifications.clear()
@@ -489,10 +505,11 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     // that reader exits; the account closes once the cache is drained.
     else lanes.close(() => laneAccount?.close())
     cache.invalidate(identity => identity.sheetId === sheetId)
-    // Explicit owners (AC-LIFE-02): a disposed port's lookup metadata and
-    // structure end now; closures a host still retains must not keep them charged.
+    // Explicit owners (AC-LIFE-02): a disposed port's lookup metadata ends now,
+    // and its structure as soon as no in-flight resolver still reads it;
+    // closures a host still retains must not keep them charged.
     memory.settle?.(styles)
-    memory.settle?.(structure)
+    if (first) letGo(structure)
     if (!options.resources) resources.dispose()
   } }
 }

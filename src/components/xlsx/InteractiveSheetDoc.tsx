@@ -159,17 +159,45 @@ function sameFreeze(window: ScrollWindow['frozen'], authored: XlsxFrozenPane | u
   return (window?.rows ?? 0) === (authored?.rows ?? 0) && (window?.cols ?? 0) === (authored?.cols ?? 0)
 }
 /**
- * The active sheet's semantic presentations (AC-LIFE-02). A superseded cache
- * (sheet switch, value generation, unmount) ends its presentations' charges at
- * once. Render closures read it through the returned ref, so a retained stale
- * closure context never keeps an old cache (and its labels) alive.
+ * The active sheet's semantic presentations (AC-LIFE-02), with explicit owners:
+ * - A render may fill its cache before it commits, or never commit (suspended,
+ *   abandoned). Every rendered cache is tracked; the next commit disposes those
+ *   it did not commit, and unmount disposes all, so no charge waits on GC.
+ * - The committed cache is published to callbacks in the commit phase only: a
+ *   speculative render never changes what the visible view's callbacks read.
+ *   During its own render a view reads the cache it rendered with.
+ * - Superseded caches (sheet switch, value generation) are disposed on commit.
+ * dispose() settles each presentation's lifetime charge; a later finalizer for
+ * a settled target is a no-op in the ledger, so a charge ends exactly once and
+ * GC stays only a backstop (e.g. a late refill after unmount).
+ * No closure here captures a cache directly: a stale callback (or a retained
+ * closure context) reaches at most the committed one through the owner.
  */
-function useSemanticPresentations(sheet: XlsxSheet | undefined, valueGen: number, budget: FormatBudget): { readonly current: SemanticPresentationCache | null } {
+export function useSemanticPresentations(sheet: XlsxSheet | undefined, valueGen: number, budget: FormatBudget): (cell: XlsxCell) => { text: string; state?: 'error' } {
   const cache = useMemo(() => sheet ? new SemanticPresentationCache(sheet, budget) : null, [sheet, valueGen, budget])
-  const ref = useRef(cache)
-  ref.current = cache
-  useEffect(() => () => cache?.dispose(), [cache])
-  return ref
+  const owner = useRef<{ committed: SemanticPresentationCache | null; rendered: Set<SemanticPresentationCache> } | null>(null)
+  const own = owner.current ??= { committed: null, rendered: new Set() }
+  if (cache) own.rendered.add(cache)
+  const slot = { cache, pending: true }
+  useLayoutEffect(() => {
+    // StrictMode re-runs this effect for the same commit: publish once.
+    if (!slot.pending) return
+    const next = slot.cache
+    slot.pending = false
+    slot.cache = null
+    // The superseded cache and every rendered-but-uncommitted one end here.
+    if (own.committed) own.rendered.add(own.committed)
+    own.committed = next
+    for (const rendered of own.rendered) if (rendered !== next) rendered.dispose()
+    own.rendered.clear()
+  })
+  // Disposal is not terminal: a StrictMode remount refills the committed cache.
+  useEffect(() => () => {
+    own.committed?.dispose()
+    for (const rendered of own.rendered) rendered.dispose()
+    own.rendered.clear()
+  }, [])
+  return cell => (slot.pending ? slot.cache : own.committed)!.get(cell)
 }
 function documentIdOf(doc: object): string {
   let id = documentIds.get(doc)
@@ -662,7 +690,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
   measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
-  const semanticPresentations = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget)
+  const presentCell = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget)
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)
     if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
@@ -1709,7 +1737,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
-                return cell ? semanticPresentations.current!.get(cell) : { text: '' }
+                return cell ? presentCell(cell) : { text: '' }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
