@@ -17,3 +17,5 @@ validation/office-reference/*.png
 test-results/
 playwright-report/
 .tmp/
+
+.superpowers/
