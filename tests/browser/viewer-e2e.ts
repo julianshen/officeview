@@ -113,6 +113,8 @@ function f2Sort8Package(): Uint8Array {
     { r: 15, vals: [7, 5, 5, 5, 5, 5, 5, 2], label: 'H-high' },
     { r: 16, vals: [9, 5, 5, 5, 5, 5, 5, 5], label: 'A-high' },
     { r: 17, vals: [8, 5, 5, 5, 5, 5, 5, 5], label: 'A-low' },
+    { r: 18, vals: [10, 1, 1, 5, 5, 5, 5, 5], label: 'BC-Cwins' },
+    { r: 19, vals: [10, 2, 2, 5, 5, 5, 5, 5], label: 'BC-Bwins' },
   ]
   for (const d of defs) {
     const cells = d.vals.map((v, i) => `<c r="${cols[i]}${d.r}"><v>${v}</v></c>`).join('')
