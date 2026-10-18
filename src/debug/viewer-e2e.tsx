@@ -14,6 +14,12 @@
  *   wcaps=a,b     capabilities the viewer worker denies itself (workerCaps.ts),
  *                 passed as the Worker name since init scripts never reach it
  *   focus=grid    focus the grid once it has painted (real-keyboard runs)
+ *   name=1        hand the bytes over as a File named after the src path's last
+ *                 segment (paged documents: the toolbar shows the file name)
+ *   toolbar=0     showToolbar={false} at first; window.__viewerE2E.setToolbar(on)
+ *                 toggles it at run time (paged toolbar CLS checks)
+ *   theme=light|dark  the viewer theme (default system)
+ *   background=<css colour>  the background prop (default: the backdrop token)
  *   paged=1       with worker=1: debug-only admission override (forcePaged.ts).
  *                 The page loads through loadOfficeSource with the object cell
  *                 cap lowered to 1 (and the worker kernel likewise), so even a
@@ -61,6 +67,8 @@ export interface ViewerE2E {
   workersTerminated: number
   mainLedger: MainMemoryLedger | null
   clipboard: string[]
+  /** Paged documents: show or hide the toolbar and status line. */
+  setToolbar(on: boolean): void
   counts(): Record<string, number>
   reset(): void
 }
@@ -84,6 +92,7 @@ const state: ViewerE2E = {
   workersTerminated: 0,
   mainLedger: null,
   clipboard: [],
+  setToolbar() {},
   counts() {
     const out: Record<string, number> = {}
     for (const command of state.commands) {
@@ -153,7 +162,8 @@ function E2EPage(): JSX.Element {
     if (!src) { state.error = 'missing ?src='; return }
     void fetch(src).then(async response => {
       if (!response.ok) throw new Error(`fixture ${src}: HTTP ${response.status}`)
-      setBlob(await response.blob())
+      const blob = await response.blob()
+      setBlob(params.get('name') === '1' ? new File([blob], decodeURIComponent(src.split(/[?#]/)[0].split('/').pop() ?? 'file')) : blob)
       state.loaded = true
     }).catch(error => { state.error = error instanceof Error ? error.message : String(error) })
   }, [src])
@@ -163,12 +173,18 @@ function E2EPage(): JSX.Element {
   // onFrame and onMainLedger are the viewer's @internal instrumentation props;
   // OfficeFile forwards unknown props to the interactive viewer unchanged.
   const internal = { onFrame, onMainLedger } as Record<string, unknown>
+  const [toolbar, setToolbar] = useState(params.get('toolbar') !== '0')
+  state.setToolbar = setToolbar
+  const theme = params.get('theme')
   if (worker && params.get('paged') === '1') return <ForcedPagedDoc blob={blob} internal={internal} />
   return (
     <OfficeFile
       data={blob}
       interactiveSheets
       showSearch
+      showToolbar={toolbar}
+      {...(theme === 'light' || theme === 'dark' ? { theme } : {})}
+      {...(params.get('background') ? { background: params.get('background')! } : {})}
       allowCopy={params.get('copy') !== '0'}
       {...(factory ? { viewerWorker: factory } : {})}
       loading={<div role="status">Loading workbook…</div>}

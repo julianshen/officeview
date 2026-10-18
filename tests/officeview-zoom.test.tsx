@@ -78,6 +78,8 @@ async function mount() {
       expect((c as HTMLCanvasElement).height).toBeGreaterThan(0)
     }
   })
+  // the zoom buttons live in the lazy paged toolbar
+  await utils.findByRole('toolbar', { name: 'Document toolbar' })
   return utils
 }
 

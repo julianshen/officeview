@@ -30,7 +30,9 @@ async function mount() {
   return { ...utils, canvas }
 }
 
-const copyButton = (c: HTMLElement) => c.querySelector('[data-testid="officeview-copy-selection"]')
+// The toolbar's Copy button is present whenever copying is allowed and is
+// enabled only with a non-empty selection; "a copy button" means a usable one.
+const copyButton = (c: HTMLElement) => c.querySelector('[data-testid="officeview-copy-selection"]:not(:disabled)')
 
 describe('<OfficeDoc> text selection', () => {
   test('drag across text shows a selection and a copy button', async () => {

@@ -63,9 +63,10 @@ function App(): JSX.Element {
   if (!docs) return <p>loading</p>
   if (pair) {
     return (
-      <div className="app" style={{ display: 'flex', flexDirection: 'row', width: 1000 }}>
-        <div className="brand-a" data-viewer="1" style={{ ...box, width: 500 }}><OfficeDoc document={docs.docx} theme="light" /></div>
-        <div data-viewer="2" style={{ ...box, width: 500 }}><OfficeDoc document={docs.docx} theme="dark" /></div>
+      // 620px each: wide enough for the paged toolbar's regular (non-compact) layout
+      <div className="app" style={{ display: 'flex', flexDirection: 'row', width: 1240 }}>
+        <div className="brand-a" data-viewer="1" style={{ ...box, width: 620 }}><OfficeDoc document={docs.docx} theme="light" /></div>
+        <div data-viewer="2" style={{ ...box, width: 620 }}><OfficeDoc document={docs.docx} theme="dark" /></div>
       </div>
     )
   }
