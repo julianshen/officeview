@@ -378,3 +378,79 @@ describe('copy and Find focus requests', () => {
     expect(document.activeElement).toBe(ui.region)
   })
 })
+
+describe('PagedToolbar Find requests', () => {
+  const base = {
+    kind: 'document' as const, current: 1, total: 3, onPrev() {}, onNext() {}, zoom: 1, onZoomIn() {}, onZoomOut() {}, onResetZoom() {},
+    onFit() {}, fitActive: false, copyState: 'idle' as const, showSearch: true, showZoom: true, onEscapeToDocument() {},
+    search: <input type="search" aria-label="Search document" />,
+  }
+  it.each([false, true])('a second request after focus moved away refocuses Find (compact %s)', async (compact) => {
+    const { PagedToolbar } = await import('../src/components/paged/PagedToolbar')
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    const ui = render(<PagedToolbar {...base} compact={compact} focusSearchRequest={1} />)
+    await waitFor(() => expect(document.activeElement).toBe(ui.getByRole('searchbox')))
+    outside.focus()
+    ui.rerender(<PagedToolbar {...base} compact={compact} focusSearchRequest={2} />)
+    await waitFor(() => expect(document.activeElement).toBe(ui.getByRole('searchbox')))
+    outside.remove()
+  })
+
+  it('compact with zoom controls hidden offers no Fit, and no More menu when nothing is left', async () => {
+    const { PagedToolbar } = await import('../src/components/paged/PagedToolbar')
+    const ui = render(<PagedToolbar {...base} compact showZoom={false} onCopy={() => {}} focusSearchRequest={0} />)
+    fireEvent.click(ui.getByLabelText('More options'))
+    expect(within(ui.getByRole('menu')).queryByText('Fit to width')).toBeNull()
+    expect(within(ui.getByRole('menu')).getByText('Copy selection')).toBeTruthy()
+    ui.unmount()
+    const bare = render(<PagedToolbar {...base} compact showZoom={false} focusSearchRequest={0} />)
+    expect(bare.queryByLabelText('More options')).toBeNull()
+  })
+
+  it('compact menu items are 44px targets on any pointer', async () => {
+    const { PagedToolbar } = await import('../src/components/paged/PagedToolbar')
+    const ui = render(<PagedToolbar {...base} compact onPrint={() => {}} focusSearchRequest={0} />)
+    fireEvent.click(ui.getByLabelText('More options'))
+    for (const item of ui.getByRole('menu').querySelectorAll('[role^=menuitem]')) expect(item.className.split(' ')).toContain('ov:min-h-11')
+  })
+
+  it('no numeric position while the pages are pending', async () => {
+    const { PagedToolbar } = await import('../src/components/paged/PagedToolbar')
+    const { PagedStatus } = await import('../src/components/paged/PagedStatus')
+    const ui = render(<><PagedToolbar {...base} current={1} total={0} compact={false} focusSearchRequest={0} /><PagedStatus kind="document" current={1} total={0} words={null} /></>)
+    expect(ui.getByTestId('officeview-page-position').textContent).not.toMatch(/\d/)
+    expect(ui.getByTestId('officeview-status').textContent).not.toMatch(/\d/)
+  })
+})
+
+describe('pending pages in the viewer', () => {
+  it('the toolbar and status never read "1 / 0" while the paintables resolve', async () => {
+    let resolve!: () => void
+    const held = new Promise<void>((r) => { resolve = r })
+    const pages = h.pages!
+    h.pages = null
+    const paint = await import('../src/render/paint')
+    const spy = vi.spyOn(paint, 'getPaintables').mockImplementation(async () => { await held; const { fakePaintables: fake } = await import('./helpers/paged-viewer'); return fake(pages) })
+    try {
+      const { OfficeDoc } = await import('../src/components/OfficeDoc')
+      const ui = render(<OfficeDoc document={REPORT} />)
+      const bar = await toolbar(ui)
+      expect(within(bar).getByTestId('officeview-page-position').textContent).not.toMatch(/\d/)
+      expect(status(ui.container)!.textContent).not.toMatch(/\d/)
+      resolve()
+      await waitFor(() => expect(within(bar).getByTestId('officeview-page-position').textContent).toBe('1 / 3'))
+    } finally { spy.mockRestore() }
+  })
+})
+
+describe('backdrop token (review I4)', () => {
+  it('the scroll area uses --ov-color-backdrop unless the host passes background; pages stay white', async () => {
+    const themed = await mount()
+    expect(themed.region.style.background).toBe('var(--ov-color-backdrop)')
+    expect((themed.container.querySelector('canvas') as HTMLElement).style.background).toBe('rgb(255, 255, 255)')
+    themed.unmount()
+    const host = await mount({ background: '#123456' })
+    expect(host.region.style.background).toBe('rgb(18, 52, 86)')
+  })
+})

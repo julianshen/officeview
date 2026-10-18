@@ -16,7 +16,7 @@ export function PagedStatus({ kind, current, total, words }: { kind: PagedKind; 
       style={{ height: PAGED_STATUS_HEIGHT }}
       className="ov:flex ov:items-center ov:gap-2 ov:px-3 ov:text-sm ov:text-muted ov:bg-chrome ov:border-t ov:border-border ov:whitespace-nowrap ov:overflow-hidden ov:tabular-nums ov:select-none"
     >
-      <span>{kind === 'slides' ? 'Slide' : 'Page'} {current} of {total}</span>
+      <span>{kind === 'slides' ? 'Slide' : 'Page'} {total > 0 ? `${current} of ${total}` : '—'}</span>
       {kind === 'document' && (
         <>
           {' '}<span aria-hidden="true">·</span>{' '}

@@ -124,6 +124,7 @@ function* shapesNode(shapes: readonly ShapeLike[]): Visit {
   yield STEP
   for (let i = 0; i < shapes.length; i++) {
     const shape = shapes[i]
+    yield STEP // every shape visit is a budgeted item, empty or not
     const paras = shape.paragraphs ?? []
     for (let j = 0; j < paras.length; j++) {
       const runs = paras[j].runs
@@ -185,7 +186,9 @@ export function* wordSourceChunks(doc: DocxDocument): Generator<Item, void, unde
   const stack: Visit[] = [documentNode(doc)]
   while (stack.length > 0) {
     const r = stack[stack.length - 1].next()
-    if (r.done) { stack.pop(); continue }
+    // a finished child returns through its own item, so unwinding deep
+    // nesting is spread over pulls too
+    if (r.done) { stack.pop(); yield STEP; continue }
     const v = r.value
     if (typeof v === 'object') stack.push(v)
     else yield v

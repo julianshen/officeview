@@ -48,7 +48,8 @@ export interface PagedChromeProps {
   } | null
   /** Undefined when copying is not allowed. */
   copy?: { state: 'idle' | 'done' | 'failed'; enabled: boolean; onCopy(): void }
-  onPrint?: () => void
+  /** Print is offered only when allowed. */
+  allowPrint: boolean
   /** Bumped by a Cmd/Ctrl-F press that found no search input. */
   focusSearchRequest: number
 }
@@ -122,7 +123,8 @@ export default function PagedChrome(p: PagedChromeProps): ReactElement {
         )}
         {...(p.copy ? { onCopy: p.copy.onCopy, copyEnabled: p.copy.enabled } : {})}
         copyState={p.copy?.state ?? 'idle'}
-        {...(p.onPrint ? { onPrint: p.onPrint } : {})}
+        // Interim: Task 4 replaces this with the isolated page-image print.
+        {...(p.allowPrint ? { onPrint: () => window.print() } : {})}
         compact={p.compact}
         showSearch={!!search}
         showZoom={p.showZoom}

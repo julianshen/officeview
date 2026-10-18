@@ -5,7 +5,7 @@
  * name, Find collapsed to an icon button, and Fit/Copy/Print in a More menu.
  * Presentational: all document state arrives as props (see PagedChrome).
  */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Ban, Check, ChevronLeft, ChevronRight, Copy, Minus, MoveHorizontal, Plus, Printer, Search } from 'lucide-react'
 import { Icon } from '../Icon'
 import { MoreMenu, type MoreItem } from './MoreMenu'
@@ -74,10 +74,14 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
     root.current?.querySelector<HTMLElement>(key === 'search' ? 'input[type=search]' : `[data-ov-control="${key}"]`) ?? null
 
   // Cmd/Ctrl-F (possibly queued while the chunk loaded): expand and focus Find.
-  useEffect(() => {
+  // A mounted input is focused at once (an already-open Find re-renders
+  // nothing, so a deferred focus would never run); otherwise Find expands first.
+  useLayoutEffect(() => {
     const req = p.focusSearchRequest
     if (!p.showSearch || req <= 0 || req === seenRequest.current) return
     seenRequest.current = req
+    const input = control('search') as HTMLInputElement | null
+    if (input) { input.focus(); input.select(); return }
     setExpanded(true)
     pendingFocus.current = 'search'
   }, [p.focusSearchRequest, p.showSearch])
@@ -125,7 +129,8 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
   const fitIcon = <Icon icon={MoveHorizontal} name="fit-width" />
   const copyIcon = p.copyState === 'done' ? <Icon icon={Check} name="check" /> : p.copyState === 'failed' ? <Icon icon={Ban} name="ban" /> : <Icon icon={Copy} name="copy" />
   const more: MoreItem[] = [
-    { key: 'fit', label: 'Fit to width', icon: fitIcon, onSelect: p.onFit, checked: p.fitActive },
+    // Fit belongs to the zoom group: hidden with it (showZoomControls={false})
+    ...(p.showZoom ? [{ key: 'fit', label: 'Fit to width', icon: fitIcon, onSelect: p.onFit, checked: p.fitActive }] : []),
     ...(p.onCopy ? [{ key: 'copy', label: 'Copy selection', icon: copyIcon, onSelect: p.onCopy, disabled: !p.copyEnabled }] : []),
     ...(p.onPrint ? [{ key: 'print', label: 'Print', icon: <Icon icon={Printer} name="printer" />, onSelect: p.onPrint }] : []),
   ]
@@ -158,8 +163,9 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
       {!(compact && findOpen) && (
         <div className="ov:flex ov:items-center ov:gap-0 ov:shrink-0">
           <button type="button" data-ov-control="prev" aria-label={`Previous ${unit}`} disabled={p.current <= 1} onClick={p.onPrev} className={btn}><Icon icon={ChevronLeft} name="chevron-left" /></button>
-          <span data-testid="officeview-page-position" aria-label={`${kind === 'slides' ? 'Slide' : 'Page'} ${p.current} of ${p.total}`} className="ov:px-1 ov:whitespace-nowrap ov:tabular-nums ov:text-text">
-            {kind === 'slides' && !compact ? 'Slide ' : ''}{p.current} / {p.total}
+          <span data-testid="officeview-page-position" aria-label={p.total > 0 ? `${kind === 'slides' ? 'Slide' : 'Page'} ${p.current} of ${p.total}` : 'Loading pages'} className="ov:px-1 ov:whitespace-nowrap ov:tabular-nums ov:text-text">
+            {/* no numeric position until the pages are known */}
+            {p.total > 0 ? <>{kind === 'slides' && !compact ? 'Slide ' : ''}{p.current} / {p.total}</> : '—'}
           </span>
           <button type="button" data-ov-control="next" aria-label={`Next ${unit}`} disabled={p.current >= p.total} onClick={p.onNext} className={btn}><Icon icon={ChevronRight} name="chevron-right" /></button>
         </div>
@@ -187,7 +193,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
         </>
       )}
       {compact ? (
-        <MoreMenu items={more} buttonClass={btn} />
+        more.length > 0 && <MoreMenu items={more} buttonClass={btn} />
       ) : (p.onCopy || p.onPrint) && (
         <>
           {divider(compact)}

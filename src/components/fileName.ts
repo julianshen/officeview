@@ -12,8 +12,9 @@ export function fileNameFrom(source: unknown, disposition?: string | null): stri
     const name = (star && decode(star[1])) ?? /filename\s*=\s*(?:"([^"]*)"|([^;\s]+))/i.exec(disposition)?.slice(1).find(Boolean)
     if (name) return name
   }
-  if (typeof File !== 'undefined' && source instanceof File) return source.name || undefined
-  const url = (source as { url?: unknown } | null)?.url
+  // File.name (a File is the only accepted source with a name)
+  const { name, url } = (source ?? {}) as { name?: unknown; url?: unknown }
+  if (typeof name === 'string') return name || undefined
   if (typeof url !== 'string') return undefined
   const segment = url.split(/[?#]/)[0].split('/').pop()
   return segment ? decode(segment) ?? segment : undefined

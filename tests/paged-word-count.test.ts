@@ -269,3 +269,41 @@ describe('useWordCount', () => {
     await waitFor(() => expect(result.current).toBe(4))
   })
 })
+
+describe('bounded work per pull (review I3)', () => {
+  it('10,000 empty diagram shapes: at most one shape visit per generator pull', () => {
+    const shapes = Array.from({ length: 10_000 }, () => ({ paragraphs: [] }))
+    let visits = 0
+    const proxied = new Proxy(shapes, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) visits++
+        return Reflect.get(target, key, receiver)
+      },
+    })
+    const withDiagram: DocxParagraph = { ...para('x'), images: [{ data: new Uint8Array(), widthEmu: 1, heightEmu: 1, drawing: { kind: 'diagram', shapes: proxied } } as never] }
+    const gen = wordSourceChunks(doc([section([pBlock(withDiagram)])]))
+    let max = 0
+    for (;;) {
+      const before = visits
+      if (gen.next().done) break
+      max = Math.max(max, visits - before)
+    }
+    expect(visits).toBeGreaterThanOrEqual(10_000)
+    expect(max).toBeLessThanOrEqual(1)
+  })
+
+  it('unwinding 10,000 nested levels is spread over yields, not done inside one pull', () => {
+    let inner: unknown = pBlock(para('x'))
+    for (let i = 0; i < 10_000; i++) {
+      inner = { kind: 'table', table: { gridColsTwips: [1], cellMargins: {}, rows: [{ cells: [{ gridSpan: 1, paragraphs: [], blocks: [inner] }] }] } }
+    }
+    const gen = wordSourceChunks(doc([section([inner])]))
+    let afterX = -1
+    for (let r = gen.next(); !r.done; r = gen.next()) {
+      if (r.value === 'x') afterX = 0
+      else if (afterX >= 0) afterX++
+    }
+    // every completed level (table, row, cell, blocks list) returns through its own yield
+    expect(afterX).toBeGreaterThanOrEqual(10_000)
+  })
+})

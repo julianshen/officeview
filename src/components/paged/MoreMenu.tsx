@@ -2,7 +2,8 @@
  * The compact toolbar's More menu (spec §6.5 keyboard contract): it opens
  * focused on its first item; ArrowUp/ArrowDown (wrapping), Home and End move
  * between items; Escape, Tab-away and outside clicks close it and return
- * focus to the More button.
+ * focus to the More button. The menu exists only in the compact toolbar,
+ * so its items are 44px targets on any pointer.
  */
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Ellipsis } from 'lucide-react'
@@ -19,7 +20,7 @@ export interface MoreItem {
 }
 
 const ITEM = [
-  'ov:flex ov:w-full ov:items-center ov:gap-2 ov:py-0 ov:px-3 ov:min-h-8 ov:coarse:min-h-11 ov:text-left ov:text-base ov:text-text ov:bg-transparent ov:border-0 ov:cursor-pointer',
+  'ov:flex ov:w-full ov:items-center ov:gap-2 ov:py-0 ov:px-3 ov:min-h-11 ov:text-left ov:text-base ov:text-text ov:bg-transparent ov:border-0 ov:cursor-pointer',
   'ov:hover:bg-hover ov:focus-visible:bg-hover ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:-outline-offset-2 ov:focus-visible:outline-accent',
   'ov:aria-checked:font-[600] ov:aria-disabled:text-muted ov:aria-disabled:cursor-default',
 ].join(' ')

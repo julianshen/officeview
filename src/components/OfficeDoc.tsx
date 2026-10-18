@@ -47,7 +47,7 @@ export type OfficeDocSource = import('../docx/types').DocxDocument | import('../
 
 export interface OfficeDocProps {
   document: OfficeDocSource
-  /** Container background. */
+  /** Container background (default: the --ov-color-backdrop token). */
   background?: string
   /** Gap between pages in px. */
   pageGapPx?: number
@@ -255,7 +255,7 @@ function PageCanvas({
 
 function LegacyOfficeDoc({
   document,
-  background = '#888888',
+  background,
   pageGapPx = 16,
   className,
   style,
@@ -322,7 +322,7 @@ function LegacyOfficeDoc({
   })
   // gesture bookkeeping
   const pointers = useRef(new Map<number, Point>())
-  const gestureStart = useRef<{ view: Transform; distance: number } | null>(null)
+  const gestureStart = useRef<{ context: ZoomContext; at: Point; distance: number } | null>(null)
   const panStart = useRef<{ transform: Transform; point: Point } | null>(null)
 
   // React attaches wheel listeners as passive, so onWheel cannot stop the
@@ -372,8 +372,9 @@ function LegacyOfficeDoc({
   const naturalWidth = Math.min(avail || maxPageW, maxPageW)
   const fitWidth = avail > 0 ? Math.min(avail, maxPageW * MAX_ZOOM) : naturalWidth
   const displayWidth = fitMode ? fitWidth : naturalWidth
-  const layoutRef = useRef({ specs, naturalWidth, fitWidth, gap: pageGapPx })
-  layoutRef.current = { specs, naturalWidth, fitWidth, gap: pageGapPx }
+  const layout = { specs, naturalWidth, fitWidth, gap: pageGapPx }
+  const layoutRef = useRef(layout)
+  layoutRef.current = layout
 
   // content size at fit scale, used for pan clamping
   const contentWidth = displayWidth || 1
@@ -410,8 +411,10 @@ function LegacyOfficeDoc({
     const pts = [...pointers.current.values()]
     if (pts.length === 2) {
       // start a pinch from the current transform
+      // the full start context: its view is derived once the routing is in
       gestureStart.current = {
-        view: router?.viewAt(zoomContext(), midpoint(pts[0], pts[1])) ?? tRef.current,
+        context: zoomContext(),
+        at: midpoint(pts[0], pts[1]),
         distance: Math.max(1, distance(pts[0], pts[1])),
       }
       panStart.current = null
@@ -447,7 +450,8 @@ function LegacyOfficeDoc({
     const pts = [...pointers.current.values()]
     if (pts.length >= 2 && gestureStart.current) {
       const g = gestureStart.current
-      route((m) => apply(m.zoomTo(zoomContext(), g.view, g.view.zoom * Math.max(1, distance(pts[0], pts[1])) / g.distance, midpoint(pts[0], pts[1]))))
+      const ratio = Math.max(1, distance(pts[0], pts[1])) / g.distance, at = midpoint(pts[0], pts[1])
+      routed((m) => { const view = m.viewAt(g.context, g.at); apply(m.zoomTo(zoomContext(), view, view.zoom * ratio, at)) })
       return
     }
     // a drag past the threshold while zoomed pans instead of selecting
@@ -520,13 +524,14 @@ function LegacyOfficeDoc({
   const apply = (o: ZoomOutcome | null) => {
     if (!o) return
     // No transform or mode change means no commit to carry the scrollTop.
-    const t = tRef.current, n = o.transform
-    if (o.fit === fitRef.current && n.zoom === t.zoom && n.panX === t.panX && n.panY === t.panY) { if (containerRef.current) containerRef.current.scrollTop = o.scrollTop; return }
+    if (o.fit === fitRef.current && transformCss(o.transform) === transformCss(tRef.current)) { if (containerRef.current) containerRef.current.scrollTop = o.scrollTop; return }
     setFitMode(o.fit)
     pending.current = o.scrollTop
     commit(o.transform)
   }
-  const zoomAround = (at: Point, next: (zoom: number) => number) => route((m) => {
+  // Input queued for the routing applies only to the document it was made on.
+  const routed = (fn: (m: Router) => void) => { const o = ownerRef.current; route((m) => { if (o && ownerRef.current === o) fn(m) }) }
+  const zoomAround = (at: Point, next: (zoom: number) => number) => routed((m) => {
     const c = zoomContext()
     const view = m.viewAt(c, at)
     apply(m.zoomTo(c, view, next(view.zoom), at))
@@ -534,7 +539,7 @@ function LegacyOfficeDoc({
   const center = (): Point => ({ x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 })
   const zoomBy = (direction: 1 | -1) => zoomAround(center(), (z) => stepZoom(z, direction))
   const reset = () => zoomAround(center(), () => 1)
-  const toggleFit = () => route((m) => apply(m.toggleFit(zoomContext())))
+  const toggleFit = () => routed((m) => apply(m.toggleFit(zoomContext())))
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
@@ -780,8 +785,7 @@ function LegacyOfficeDoc({
     showZoom: showZoomControls,
     search: showSearch ? { inputRef, query, onQuery: setQuery, matches, active, setActive, indexing } : null,
     copy: allowCopy ? { state: copied, enabled: !!selection && !isEmptyRange(selection), onCopy: () => void doCopy() } : undefined,
-    // Interim: Task 4 replaces this with the isolated page-image print.
-    onPrint: allowPrint ? () => window.print() : undefined,
+    allowPrint,
     focusSearchRequest,
   }
 
@@ -812,7 +816,8 @@ function LegacyOfficeDoc({
         onCopyCapture={allowCopy ? undefined : preventNativeCopy}
         onContextMenu={allowCopy ? undefined : preventNativeCopy}
         style={{
-          background,
+          // the themed backdrop; a host background prop overrides the token
+          background: background ?? 'var(--ov-color-backdrop)',
           // at fit we let the browser do momentum scrolling; when zoomed we
           // own the pan and must not scroll the container
           overflow: zoomed ? 'hidden' : 'auto',
@@ -870,9 +875,12 @@ const PagedChrome = lazy(() => import('./paged/PagedChrome'))
 // The zoom routing is lazy too, requested by the first paged render: its
 // gestures need painted pages, so it is loaded before they can happen; an
 // input that still beats it is applied once it arrives.
-let router: typeof import('./zoomRouting') | undefined
-const loadRouter = () => import('./zoomRouting').then((m) => (router = m))
-const route = (fn: (m: typeof import('./zoomRouting')) => void) => { if (router) fn(router); else void loadRouter().then(fn) }
+type Router = typeof import('./zoomRouting')
+let router: Router | undefined
+/** @internal Tests delay the routing module through this. */
+export const routerLoader = { load: (): Promise<Router> => import('./zoomRouting') }
+const loadRouter = () => routerLoader.load().then((m) => (router = m))
+const route = (fn: (m: Router) => void) => { if (router) fn(router); else void loadRouter().then(fn) }
 const SLOT = 'ov:shrink-0 ov:bg-chrome'
 const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 

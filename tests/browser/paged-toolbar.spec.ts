@@ -382,3 +382,34 @@ function contrast(a: string, b: string): number {
   const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
   return (hi + 0.05) / (lo + 0.05)
 }
+
+test.describe('backdrop token', () => {
+  test.use({ viewport: { width: 1280, height: 800 } })
+  test('the paged backdrop follows the theme and host token overrides; an explicit background prop wins; pages stay white', async ({ page }) => {
+    const colours = () => region(page).evaluate((el) => ({ backdrop: getComputedStyle(el).backgroundColor, page: getComputedStyle(el.querySelector('canvas')!).backgroundColor }))
+    await open(page, 'Report.docx', { query: { theme: 'light' } })
+    expect(await colours()).toEqual({ backdrop: 'rgb(240, 239, 238)', page: 'rgb(255, 255, 255)' })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await open(page, 'Report.docx', { query: { theme: 'dark' } })
+    expect(await colours()).toEqual({ backdrop: 'rgb(22, 21, 20)', page: 'rgb(255, 255, 255)' })
+    await page.addStyleTag({ content: '[data-ov-theme-root] { --ov-color-backdrop: #123456 }' })
+    expect(await colours()).toEqual({ backdrop: 'rgb(18, 52, 86)', page: 'rgb(255, 255, 255)' })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await open(page, 'Report.docx', { query: { theme: 'dark', background: '#654321' } })
+    expect(await colours()).toEqual({ backdrop: 'rgb(101, 67, 33)', page: 'rgb(255, 255, 255)' })
+  })
+})
+
+test.describe('narrow fine pointer 375x667', () => {
+  test.use({ viewport: { width: 375, height: 667 } })
+  test('compact on a fine pointer: toolbar controls and menu items are still 44px', async ({ page }) => {
+    await open(page, 'Report.docx')
+    expect(await coarse(page)).toBe(false)
+    for (const s of await toolbar(page).evaluate((bar) => [...bar.querySelectorAll('button')].map((el) => ({ label: el.getAttribute('aria-label'), ...el.getBoundingClientRect().toJSON() as Rect })))) {
+      expect(s.height, `${s.label}`).toBeGreaterThanOrEqual(44)
+      expect(s.right, `${s.label} right edge`).toBeLessThanOrEqual(375 + 0.5)
+    }
+    await toolbar(page).getByLabel('More options').click()
+    for (const h of await page.getByRole('menu').evaluate((m) => [...m.querySelectorAll('[role^=menuitem]')].map((el) => el.getBoundingClientRect().height))) expect(h).toBeGreaterThanOrEqual(44)
+  })
+})

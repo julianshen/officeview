@@ -5,8 +5,7 @@
  */
 import { useSyncExternalStore } from 'react'
 
-const query = (): MediaQueryList | undefined =>
-  typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)') : undefined
+const query = (): MediaQueryList | undefined => globalThis.matchMedia?.('(pointer: coarse)')
 
 const subscribe = (cb: () => void): (() => void) => {
   const mq = query()

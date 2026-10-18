@@ -19,6 +19,7 @@
  *   toolbar=0     showToolbar={false} at first; window.__viewerE2E.setToolbar(on)
  *                 toggles it at run time (paged toolbar CLS checks)
  *   theme=light|dark  the viewer theme (default system)
+ *   background=<css colour>  the background prop (default: the backdrop token)
  *   paged=1       with worker=1: debug-only admission override (forcePaged.ts).
  *                 The page loads through loadOfficeSource with the object cell
  *                 cap lowered to 1 (and the worker kernel likewise), so even a
@@ -183,6 +184,7 @@ function E2EPage(): JSX.Element {
       showSearch
       showToolbar={toolbar}
       {...(theme === 'light' || theme === 'dark' ? { theme } : {})}
+      {...(params.get('background') ? { background: params.get('background')! } : {})}
       allowCopy={params.get('copy') !== '0'}
       {...(factory ? { viewerWorker: factory } : {})}
       loading={<div role="status">Loading workbook…</div>}
