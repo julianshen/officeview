@@ -6,8 +6,13 @@ The separate interactive spreadsheet viewer is implemented behind the
 default-off `interactiveSheets` flag; large paged viewing uses a host-supplied
 worker. Integrator usage, resource/copy/print limits and capability restrictions
 are documented in [README](README.md#interactive-spreadsheet-viewer).
-Desktop Chrome kernel thresholds pass in retained receipts; Safari, physical
-iPad and VoiceOver evidence and the final release decision remain open.
+Desktop Chrome release receipts are admitted **at their recorded tree
+(`9cfb090` = integration `fb0ddc7`, 2026-10-16); the full-composition tree
+(streams C/E/F, FC-T2 and the auto-fit/cellFont fixes, head `3255f93`) has not
+had a controlled release re-run, and current-head Linux CI is red (plan M2).**
+Safari, physical iPad and VoiceOver final-tree evidence and the final release
+decision remain open; a native (iOS Simulator, non-physical) M-profile
+natural-text sort refusal is accepted by design (user decision 6, 2026-10-17).
 See the [interactive viewer plan](docs/superpowers/plans/2026-10-10-interactive-viewer.md)
 for its requirement matrix. The WordArt plan below retains its existing scope.
 
