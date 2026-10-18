@@ -1,6 +1,6 @@
 // @vitest-environment node
 /** The pacing yield (spec §10.2): a real macrotask, never a clamped 0 ms timer
- * in a browser-like host, one shared channel, FIFO with queued tasks. */
+ * in a browser-like host, one shared channel delivering in posting order. */
 import { describe, expect, it, vi } from 'vitest'
 import { macrotaskYield } from '../src/xlsx/view/scheduler'
 
@@ -34,22 +34,17 @@ describe('macrotaskYield', () => {
     expect(chain).toBe(1000)
     await microtasks
   })
-  it('services a cancel message queued before it (browser posted-message FIFO)', async () => {
-    // A browser delivers posted messages from one task source in order, one
-    // task each; model that so the check does not depend on Node's per-port queues.
-    const fifo: (() => void)[] = []
-    const pump = () => { const next = fifo.shift(); next?.(); if (fifo.length) setTimeout(pump, 0) }
-    class FifoChannel {
-      port1: { onmessage: ((event: unknown) => void) | null; close(): void } = { onmessage: null, close() {} }
-      port2 = { postMessage: (data: unknown) => { const port = this.port1; fifo.push(() => port.onmessage?.({ data })); if (fifo.length === 1) setTimeout(pump, 0) }, close() {} }
-    }
-    const yieldOnce = macrotaskYield({ MessageChannel: FifoChannel as unknown as typeof MessageChannel, setTimeout: vi.fn() })
+  it('on its one channel, a message posted earlier (one carrying a cancel) is serviced first', async () => {
+    // Only same-channel order is claimed; ordering against timers or other
+    // (transferred) ports is not.
+    const { host } = browserHost()
+    const yieldOnce = macrotaskYield(host)
     const controller = new AbortController()
-    const cancel = new FifoChannel()
-    cancel.port1.onmessage = () => controller.abort()
-    cancel.port2.postMessage(null)
-    await yieldOnce()
-    expect(controller.signal.aborted).toBe(true)
+    const carryingCancel = yieldOnce().then(() => controller.abort())
+    let abortedAtResume = false
+    await yieldOnce().then(() => { abortedAtResume = controller.signal.aborted })
+    await carryingCancel
+    expect(abortedAtResume).toBe(true)
   })
   it('resumes concurrent waiters in order, one per yield', async () => {
     const { host } = browserHost()

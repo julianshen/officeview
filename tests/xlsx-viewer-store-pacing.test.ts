@@ -159,6 +159,26 @@ describe('paged store decodes a request in bounded steps', () => {
   }, 60_000)
 })
 
+describe('paged scan: no page escapes before its checkpoint (codex review of 6ee6282)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  // A page that fills within a batch is charged and checked before it is
+  // returned: an abort during its decoding returns no page.
+  it.each([[100, 1], [256, 1], [4096, 3841]])('a %i-record page with an abort at record %i is cancelled, not returned', async (limit, at) => {
+    const { source, store } = await pagedStore(limit, 1)
+    const controller = new AbortController()
+    const proto = PagedXlsxSheetAdapter.prototype as unknown as { rowCell: (...args: unknown[]) => unknown }
+    const rowCell = proto.rowCell
+    let calls = 0
+    vi.spyOn(proto, 'rowCell').mockImplementation(function (this: unknown, ...args: unknown[]) { if (++calls === at) controller.abort(); return rowCell.apply(this, args) })
+    try {
+      const page = await firstPage(store.scanPopulated({ range: { r0: 0, r1: limit - 1, c0: 0, c1: 0 }, limit }, options(store, controller.signal)))
+      expect(page.error?.code).toBe('cancelled')
+      expect(page.items).toHaveLength(0)
+      expect(calls - at).toBeLessThanOrEqual(256)
+    } finally { await source.release() }
+  }, 60_000)
+})
+
 describe('paged readRows counts visited records, not just decoded cells (codex D3)', () => {
   it('checks while finding the end of a wide row for one requested column, and never succeeds after a cancel', async () => {
     const { source, store } = await pagedStore(1, 8192)

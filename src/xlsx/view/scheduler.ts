@@ -42,11 +42,15 @@ type YieldHost = {
  *  - Node (and jsdom on Node): its native setImmediate. Node's immediate queue
  *    gives timers/I/O a turn; a chain of port messages can drain within one
  *    poll phase there.
- *  - elsewhere: one shared MessageChannel. A posted message is an ordinary
- *    task, FIFO with already queued tasks (a cancel message is serviced), and
- *    never clamped like a nested 0 ms timer (>= 4 ms in browsers).
- *    A bundled setImmediate polyfill is not trusted, and scheduler.yield is not
- *    used: its continuation outranks queued tasks.
+ *  - elsewhere: one shared MessageChannel. Each yield is a real task boundary
+ *    (a macrotask, so tasks already queued for the event loop get a turn) and
+ *    never clamped like a nested 0 ms timer (>= 4 ms in browsers). Messages on
+ *    this one channel are delivered in posting order (a message posted earlier
+ *    on it, such as one carrying a cancel, is serviced first). No ordering is
+ *    implied against timers or other, e.g. transferred, ports: each is its own
+ *    task source. A bundled setImmediate polyfill is not trusted, and
+ *    scheduler.yield is not used: its continuation is prioritized over
+ *    ordinary queued tasks.
  *  - a 0 ms timer only where neither exists.
  */
 export function macrotaskYield(host: YieldHost = globalThis as unknown as YieldHost): () => Promise<void> {

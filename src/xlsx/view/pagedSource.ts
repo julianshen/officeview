@@ -368,12 +368,18 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           // Records are visited in batches up to the next checkpoint, each
           // batch charged once (spec §10.2 bound unchanged).
           for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= range.r1;) {
-            const from = i, stop = Math.min(p.rows.length, i + budget.batch)
+            let from = i
+            const stop = Math.min(p.rows.length, i + budget.batch)
             for (; i < stop && p.rows[i] <= range.r1; i++) {
               if (p.cols[i] < range.c0 || p.cols[i] > range.c1 || !recordPopulated(p, i)) continue
               const next = item(p, i)
               items.push(next instanceof Promise ? await next : next)
               if (items.length === request.limit) {
+                // No page escapes before its work is charged and checked: the
+                // batch so far is spent (a due pause runs) and a check runs.
+                if (budget.spend(i + 1 - from)) await budget.pause()
+                from = i + 1
+                budget.checkpoint()
                 yield { items, completeness: 'complete', stamp: this.stamp }
                 items = []
                 const again = this.guard(options)
