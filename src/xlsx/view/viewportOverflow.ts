@@ -5,6 +5,7 @@ import type { ProjectedSheetMetrics } from './projection'
 import { cellBlocksOverflow } from './textOverflow'
 import { FindError } from './find'
 import { queryPayloadBytes } from './queryPayload'
+import { knownQueryBytes } from './queryBytesMemo'
 import { sameIdentity } from './cacheIdentity'
 
 export type { OverflowEnd, OverflowEntry, OverflowProof, OverflowViewportResult, OverflowCapture } from './overflowProof'
@@ -31,7 +32,8 @@ export class ViewportOverflowCollector implements OverflowCapture {
     if (this.pageBytes + this.outputBytes + this.bytes > 2 * this.budget) throw new FindError('resource-limit', 'Viewport construction exceeds admitted workspace')
   }
   page(payload: unknown, records: number): void {
-    const bytes = queryPayloadBytes(payload, this.budget)
+    // The bounded query facade measured this page with the worker's walker.
+    const bytes = knownQueryBytes(payload, this.budget) ?? queryPayloadBytes(payload, this.budget)
     this.pageBytes = Math.max(this.pageBytes, bytes)
     // Payload ownership survives the page through placed cells; placements,
     // copied cell envelopes and readDetail's sets/sort share this upper bound.

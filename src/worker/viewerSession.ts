@@ -69,7 +69,7 @@ import { awaitQueryDeadline, interruptibleStore } from './viewerAbort'
 import { WorkbookFind, FindError, FIND_HIT_BUFFER_BUDGET, type FindPage, type FindSheetInput } from '../xlsx/view/find'
 import { queryViewport, toViewportResults, VIEWPORT_DETAIL_LIMITS } from '../xlsx/view/viewport'
 import { axisBytes, projectionBytes } from '../xlsx/view/mainLedger'
-import { boundedQueryStore, queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
+import { accountQueryBytes, boundedQueryStore, queryWorkspaceRefusal, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 import type { ProjectedSheetMetrics } from '../xlsx/view/projection'
 import type { FormatAllocation } from '../xlsx/formula/format'
 import type { FormatBudget } from '../xlsx/view/formatWorkspace'
@@ -1127,6 +1127,18 @@ export class DocumentSession {
    * operation's finally on every outcome (commit, refusal, cancel, stale).
    * Growing a charge evicts retained caches first; false when it cannot fit.
    * A late provider cannot revive a share after cancellation unwinds it. */
+  /** queryPayloadBytes through the worker's one payload walker (spec §10.2):
+   * checkpointed by `check`, with real yields, its workspace admitted to this
+   * document's pool; synchronous when no pause is due. A refused workspace is a
+   * typed retryable resource-limit (FindError). */
+  /** The session's injected yield for walks (tests), else the host's. */
+  private get queryYield(): (() => Promise<void>) | undefined { const injected = this.options.yield; return injected ? () => injected('query') : undefined }
+  private async queryBytes(value: unknown, limit: number, check: () => void): Promise<number> {
+    const accounted = accountQueryBytes(value, limit, check, this.memory, this.queryYield)
+    const bytes = accounted instanceof Promise ? await accounted : accounted
+    if (bytes === undefined) throw queryWorkspaceRefusal()
+    return bytes
+  }
   private charge(): Charge {
     const share = this.memory.charge()
     let released = false
@@ -2185,12 +2197,16 @@ export class DocumentSession {
         queryStructural: (rect, options) => track(() => raw.queryStructural(rect, options)),
         queryOverview: (query, options) => track(() => raw.queryOverview(query, options)),
       })
-      const store = boundedQueryStore(tracked, budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records)
+      const store = boundedQueryStore(tracked, budget, undefined, VIEWPORT_DETAIL_LIMITS[profile].records, false, false, this.memory, this.queryYield)
       const overflow = new ViewportOverflowCollector(budget)
       const out = await queryViewport(store, cached.metrics, window, owner, { profile, signal, scope, overflowCapture: overflow, textDependencies: true, isCurrent: captured => this.isCurrent(captured) })
       if (out.kind === 'diagnostic') return { kind: 'error', error: failure('invalid-coordinate', out.diagnostics[0]?.message ?? 'Invalid viewport') }
       if (out.kind !== 'viewport') return { kind: out.kind }
-      if (queryPayloadBytes(out, budget) > budget) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
+      const live = () => {
+        if (signal.aborted) throw new FindError('cancelled', 'Viewport cancelled')
+        if (!this.isCurrent(owner)) throw new FindError('stale', 'Viewport owner changed')
+      }
+      if (await this.queryBytes(out, budget, live) > budget) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
       const { results, active } = toViewportResults(out)
       const result = { ...results[0], merges: out.merges, coarse: out.coarse, rowLines: out.rowLines, colLines: out.colLines, work: out.work, completeness: out.completeness, ...(out.error ? { error: out.error } : {}), ...(results.length > 1 ? { groups: out.groups } : {}), ...(active ? { active } : {}) } as ViewportResult
       const steps = overflow.finish(cached.metrics, out.cells, owner, window, profile, scope ?? 'frame'), slice = this.slice(signal)
@@ -2204,13 +2220,16 @@ export class DocumentSession {
           if (slice.due(proof.value)) await slice.pause('viewport-overflow')
         }
       } finally { steps.return(undefined as never); slice.dispose() }
-      const extended = { ...result, overflowProof: proof.value }
-      if (queryPayloadBytes({ result: extended, diagnostics: out.diagnostics }, budget) > budget - 1024) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
-      return { result: extended, diagnostics: out.diagnostics }
+      const measured = { ...result, overflowProof: proof.value, queryBytes: 0 }
+      // The stamp is counted in the measure (a number slot costs the same at any value).
+      const queryBytes = await this.queryBytes({ result: measured, diagnostics: out.diagnostics }, budget, live)
+      if (queryBytes > budget - 1024) return { kind: 'error', error: failure('resource-limit', 'Viewport reply exceeds its bounded byte budget') }
+      measured.queryBytes = queryBytes
+      return { result: measured, diagnostics: out.diagnostics }
     } catch (cause) {
       if (signal.aborted || cause instanceof FindError && cause.code === 'cancelled') return { kind: 'cancelled' }
       if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }
-      if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message) }
+      if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message, cause.retryable) }
       throw cause
     } finally { unpinProjection?.(); unpinView(); ended = true; drained() }
   }
@@ -2262,7 +2281,7 @@ export class DocumentSession {
             store: boundedQueryStore(store, budget / 2, bytes => {
               current.emittedBytes += bytes
               if (current.emittedBytes > budget) throw new FindError('resource-limit', 'Search hit page exceeds its bounded byte budget')
-            }, 20_000, true, true),
+            }, 20_000, true, true, this.memory, this.queryYield),
           })
         }
         current.engine = new WorkbookFind({ owner, sheets }, query, {
@@ -2315,7 +2334,11 @@ export class DocumentSession {
       page = { ...partial, hits, incomplete, ...(!incomplete.length && hits.length === partial.hits.length && totalKnown !== undefined ? { totalKnown } : {}) }
       if (current.stopped || signal.aborted) return { kind: 'cancelled' }
       if (!sameWorkbookOwner(owner, this.workbookOwner())) { this.stopSearch(current); return { kind: 'stale' } }
-      if (queryPayloadBytes(page, budget) > budget) throw new FindError('resource-limit', 'Search reply exceeds its bounded byte budget')
+      const bytes = await this.queryBytes(page, budget, () => {
+        if (current.stopped || signal.aborted) throw new FindError('cancelled', 'Search cancelled')
+        if (!sameWorkbookOwner(owner, this.workbookOwner())) throw new FindError('stale', 'Search owner changed')
+      })
+      if (bytes > budget) throw new FindError('resource-limit', 'Search reply exceeds its bounded byte budget')
       if (page.complete) this.stopSearch(current)
       else current.cursor = `find:${this.epoch}:${++this.searchSerial}`
       return { ...page, ...(current.cursor ? { cursor: current.cursor } : {}) }
@@ -2323,7 +2346,7 @@ export class DocumentSession {
       this.stopSearch(current)
       if (signal.aborted || cause instanceof FindError && (cause.code === 'closed' || cause.code === 'cancelled')) return { kind: 'cancelled' }
       if (cause instanceof FindError && cause.code === 'stale') return { kind: 'stale' }
-      if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message) }
+      if (cause instanceof FindError && cause.code === 'resource-limit') return { kind: 'error', error: failure('resource-limit', cause.message, cause.retryable) }
       throw cause
     } finally {
       signal.removeEventListener('abort', abort)
@@ -2423,13 +2446,14 @@ export class DocumentSession {
         const valid = Array.isArray(query.request?.groups) && query.request.groups.length <= cap && Number.isSafeInteger(query.request.maxGroups) && query.request.maxGroups > 0 && query.request.maxGroups <= cap
         const charge = this.charge()
         try {
-          const bytes = queryPayloadBytes(query.request, budget)
+          const bytes = await this.queryBytes(query.request, budget, () => { if (signal.aborted) throw new FindError('cancelled', 'Overview cancelled') })
           if (!valid || bytes > budget) result = { op: 'overview', page: failedPage(store.stamp, failure('resource-limit', `Overview is limited to ${cap} bounded groups`)) }
           else if (!charge.set(bytes + budget)) result = { op: 'overview', page: failedPage(store.stamp, failure('quota', 'Overview exceeds the worker memory budget')) }
-          else result = { op: 'overview', page: await boundedQueryStore(store, budget).queryOverview(query.request, options) }
+          else result = { op: 'overview', page: await boundedQueryStore(store, budget, undefined, undefined, false, false, this.memory, this.queryYield).queryOverview(query.request, options) }
         } catch (cause) {
+          if (cause instanceof FindError && cause.code === 'cancelled') return { kind: 'cancelled' }
           if (!(cause instanceof FindError) || cause.code !== 'resource-limit') throw cause
-          result = { op: 'overview', page: failedPage(store.stamp, failure('resource-limit', cause.message)) }
+          result = { op: 'overview', page: failedPage(store.stamp, failure('resource-limit', cause.message, cause.retryable)) }
         } finally { charge.release() }
         break
       }

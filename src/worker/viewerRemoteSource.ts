@@ -28,7 +28,7 @@ import type {
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
 import { createDocumentOverflowCache } from '../xlsx/view/documentOverflow'
 import type { OverflowCache } from '../xlsx/view/overflowCache'
-import { MainMemoryLedger, axisBytes, estimatePayloadBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
+import { MainMemoryLedger, axisBytes, leaseTargets, type LedgerHold } from '../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../xlsx/types'
 import { MAX_COLS, MAX_ROWS, formatA1, isValidCoordinate, type SourceCell, type SourceRect } from '../xlsx/view/coordinates'
 import { createAxisMetrics } from '../xlsx/view/axes'
@@ -46,7 +46,7 @@ import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawi
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
-import { queryPayloadBytes, WORKER_QUERY_BYTES } from './viewerQueryBudget'
+import { accountQueryBytes, ledgerPool, WORKER_QUERY_BYTES } from './viewerQueryBudget'
 
 export const ROW_CHUNK_COLS = 256
 /** One document-wide byte ledger for every sheet's painting row cache: a
@@ -62,6 +62,15 @@ function drawingGrantRefusal(command: CommandOf<'read'>, message = DRAWING_MEMOR
 function grantedBytes(reply: WorkerReply, grant: number): number {
   const stamped = (reply as { replyBytes?: unknown }).replyBytes
   return typeof stamped === 'number' && Number.isSafeInteger(stamped) && stamped >= 0 && stamped <= grant ? stamped : grant
+}
+/** The bytes a non-granted reply is charged without walking it (spec §10.2):
+ * the size the worker measured and stamped on it. The kernel stamps every reply
+ * it posts (a walk it cannot admit posts a typed refusal, not data); a missing
+ * or invalid stamp is a protocol error, defensively charged as `maximum` (the
+ * whole main-thread budget). That is not an upper bound on reply sizes. */
+function stampedBytes(reply: WorkerReply, maximum: number): number {
+  const stamped = (reply as { replyBytes?: unknown }).replyBytes
+  return typeof stamped === 'number' && Number.isSafeInteger(stamped) && stamped >= 0 ? stamped : maximum
 }
 /** Status text when a sort's view cannot fit the main-thread budget (stream F). */
 export const SORT_MEMORY_REFUSAL = 'Not enough memory to apply the sort on this device'
@@ -455,11 +464,11 @@ export class RemoteWorkbook implements WorkbookSource {
       // a page (a scan generator across tasks) keeps the charge. An admitted
       // reservation becomes that charge (no gap, no double count); any excess
       // over it is charged on top.
-      // A granted reply is never walked here: the worker stamped its exact
-      // size (within the grant) on it. A missing or invalid size is charged as
-      // the whole grant.
+      // No reply is walked here: the worker stamped its exact size on it (a
+      // granted one within its grant). A missing or invalid size is charged as
+      // the whole grant, or, as a protocol error, the whole main budget.
       const pool = drawings ? 'drawings' : 'replies', targets = leaseTargets(reply)
-      const bytes = grant ? grantedBytes(reply, this.mainLedger.ownerBytes('replies', grant)) : estimatePayloadBytes(reply)
+      const bytes = grant ? grantedBytes(reply, this.mainLedger.ownerBytes('replies', grant)) : stampedBytes(reply, MAIN_THREAD_BUDGETS[this.profile])
       const held = grant ?? reservation
       const moved = held ? Math.min(bytes, this.mainLedger.ownerBytes('replies', held)) : 0
       if (moved > 0) this.mainLedger.adoptWhileReachable('replies', held!, pool, targets, moved)
@@ -1100,9 +1109,26 @@ export class RemoteSheetStore implements SourceStore {
     const cap = VIEWPORT_DETAIL_LIMITS[this.workbook.profile].overviewGroups
     const refused = this.guard(options)
     if (refused) return this.failedPage(refused)
-    if (!Array.isArray(request.groups) || request.groups.length > cap || queryPayloadBytes(request, budget) > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    if (!Array.isArray(request.groups) || request.groups.length > cap) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    // One checkpointed walk (its workspace admitted to the main ledger)
+    // measures the request; awaited only when it paused.
+    const accounted = accountQueryBytes(request, budget, () => { if (options.signal.aborted) throw new DOMException('Overview cancelled', 'AbortError') },
+      ledgerPool(this.workbook.mainLedger, 'replies', MAIN_THREAD_BUDGETS[this.workbook.profile]))
+    let bytes: number | undefined
+    try { bytes = accounted instanceof Promise ? await accounted : accounted } catch (cause) {
+      if (options.signal.aborted) return this.failedPage(failure('cancelled', 'Overview cancelled', true))
+      throw cause
+    }
+    if (bytes === undefined) return this.failedPage(failure('resource-limit', 'Overview request accounting exceeds the main memory budget; retry', true))
+    if (bytes > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    // The outgoing clone is admitted against aggregate main headroom before
+    // it is built: this charge reserves it and stays its charge until the
+    // reply (no gap, no second count). Without room nothing is sent.
+    if (this.workbook.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.workbook.profile]) {
+      return this.failedPage(failure('resource-limit', 'Overview request exceeds the main memory budget; retry', true))
+    }
     const charge = `overview-clone:${this.workbook.nextRequestId()}`
-    this.workbook.mainLedger.set('replies', charge, queryPayloadBytes(request, budget))
+    this.workbook.mainLedger.set('replies', charge, bytes)
     try {
       const out = await this.read({ op: 'overview', request: structuredClone(request) }, options)
       if ('code' in out) return this.failedPage(out)

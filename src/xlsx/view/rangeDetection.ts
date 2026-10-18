@@ -32,6 +32,7 @@ import {
 } from './coordinates'
 import type { PopulatedCellSource, StructuralIndex } from './structure'
 import { guardSort, isChildOnlyRange } from './operationGuard'
+import { CHECK_WORK_UNITS, YIELD_WORK_UNITS } from './scheduler'
 
 export interface RangeDetectionRequest {
   store: SourceStore
@@ -51,6 +52,10 @@ export interface RangeDetectionRequest {
    * (default DEFAULT_DETECTION_WORK_BUDGET). Exceeding it refuses with
    * resource-limit; the shared guard's streaming scan is not counted. */
   workBudget?: number
+  /** Pacing clock and host yield (tests inject both; defaults: performance.now
+   * and a real macrotask turn). */
+  now?: () => number
+  yield?: () => Promise<void>
 }
 export type RangeSource =
   | { kind: 'table'; id: string }
@@ -82,7 +87,6 @@ export const DEFAULT_DETECTION_WORK_BUDGET = 2 ** 24
 const STRIP_MAX_LINES = 1024
 /** Largest gallop strip page, in cells (a page proves at least the lines it fully covers). */
 const STRIP_MAX_CELLS = 65_536
-const YIELD_EVERY_PAGES = 16
 const YIELD_EVERY_MS = 4
 const FULL_DOMAIN: SourceRect = { r0: 0, r1: MAX_ROWS - 1, c0: 0, c1: MAX_COLS - 1 }
 
@@ -153,21 +157,54 @@ function yieldToHost(): Promise<void> {
   }
   return new Promise(resolve => setTimeout(resolve, 0))
 }
-/** Cooperative pacing: yield every few pages or milliseconds, then re-check the
- * signal, so an abort scheduled mid-run lands even when source pages resolve
- * as microtasks. */
+/** Cooperative pacing (spec §10.2, plan S4.2: at least every 10 ms or 4,096
+ * rows). Every cell a scan processes is one unit (at most a row of work) and
+ * every page read one more; processing loops spend units one cell at a time.
+ * At every checkpoint (at most CHECK_WORK_UNITS units apart, spec §12.1) and
+ * after every yield the signal and the source owner are re-checked; the slice
+ * yields once 4,096 units or its time budget are spent, so neither depends on
+ * the page size. The store decodes one request in its own steps (see the
+ * SourceStore pacing contract). */
 class Pacer {
-  private pages = 0
-  private last = performance.now()
-  constructor(private readonly signal: AbortSignal) {}
+  private work = 0
+  private unchecked = 0
+  private last: number
+  private readonly now: () => number
+  private readonly pause: () => Promise<void>
+  constructor(private readonly signal: AbortSignal, pacing: Pick<RangeDetectionRequest, 'now' | 'yield'> = {}, private readonly owner: () => void = () => {}) {
+    this.now = pacing.now ?? (() => performance.now())
+    this.pause = pacing.yield ?? yieldToHost
+    this.last = this.now()
+  }
+  /** Charges processed units; at each checkpoint (at most CHECK_WORK_UNITS
+   * apart, spec §12.1) re-checks the signal and the owner and samples the
+   * clock. True once the slice is spent. */
+  spend(units = 1): boolean {
+    this.work += units
+    this.unchecked += units
+    if (this.unchecked < CHECK_WORK_UNITS && this.work < YIELD_WORK_UNITS) return false
+    this.unchecked = 0
+    this.signal.throwIfAborted()
+    this.owner()
+    return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= YIELD_EVERY_MS
+  }
+  async yield(): Promise<void> {
+    await this.pause()
+    this.work = 0
+    this.unchecked = 0
+    this.last = this.now()
+    this.signal.throwIfAborted()
+    this.owner()
+  }
+  /** Before reading a page. */
   async tick(): Promise<void> {
     this.signal.throwIfAborted()
-    this.pages++
-    if (this.pages < YIELD_EVERY_PAGES && performance.now() - this.last < YIELD_EVERY_MS) return
-    await yieldToHost()
-    this.pages = 0
-    this.last = performance.now()
-    this.signal.throwIfAborted()
+    if (this.spend() || this.now() - this.last >= YIELD_EVERY_MS) await this.yield()
+  }
+  /** Admits `units` of a consumer's work on a returned page within one slice. */
+  async reserve(units: number): Promise<void> {
+    if (this.work > 0 && this.work + units > YIELD_WORK_UNITS) await this.yield()
+    this.work += units
   }
 }
 
@@ -195,14 +232,14 @@ export class Scanner {
   constructor(
     private readonly store: SourceStore,
     private readonly options: ReadOptions,
-    private readonly pacer: Pacer,
+    readonly pacer: Pacer,
     private readonly budget: number,
   ) {}
   async page(rect: SourceRect, limit: number, cursor?: string): Promise<Page<SourceCell>> {
     if (this.work + 1 > this.budget) throw new WorkBudgetExceeded(`Detection exceeded its work budget of ${this.budget}`)
     this.work++
-    await this.pacer.tick()
     const held = cursor === undefined ? undefined : this.held.get(cursor)
+    await this.pacer.tick()
     const scope = `${rect.r0}:${rect.r1}:${rect.c0}:${rect.c1}:${limit}`
     let iterator: AsyncIterator<Page<SourceCell>>
     let step: IteratorResult<Page<SourceCell>>
@@ -232,10 +269,12 @@ export class Scanner {
     }
     this.work += first.items.length
     for (const cell of first.items) {
+      try { if (this.pacer.spend()) await this.pacer.yield() } catch (error) { void iterator.return?.(); throw error }
       const outside = !isValidCoordinate(cell.row, cell.col) ? 'worksheet domain' : cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1 ? 'requested range' : null
       if (outside !== null) { void iterator.return?.(); throw contractViolation(`Populated cell outside the ${outside}`) }
     }
     if (first.nextCursor !== undefined || first.completeness === 'incomplete') { void iterator.return?.(); return first }
+    try { await this.pacer.tick() } catch (error) { void iterator.return?.(); throw error }
     const ahead = await iterator.next()
     this.options.signal.throwIfAborted()
     if (ahead.done) return first
@@ -289,7 +328,13 @@ export class Scanner {
     return {
       iterate: async (range, cursor, limit) => {
         const page = await this.page(range, limit ?? defaultLimit, cursor)
-        const items = page.items.map(cell => ({ row: cell.row, col: cell.col }))
+        const items: SourceCell[] = []
+        for (const cell of page.items) {
+          if (this.pacer.spend()) await this.pacer.yield()
+          items.push({ row: cell.row, col: cell.col })
+        }
+        // The guard scans the returned page synchronously: admit it in one slice.
+        await this.pacer.reserve(items.length)
         return page.completeness === 'complete'
           ? { items, completeness: 'complete', missing: [], nextCursor: page.nextCursor }
           : { items, completeness: page.completeness, missing: [{ ...range }], nextCursor: page.nextCursor }
@@ -370,6 +415,7 @@ async function probeCurrentRegion(seed: SourceCell, scanner: Scanner, pageLimit:
       const seen = new Uint8Array(lines)
       let reached = 0
       for (const cell of page.items) {
+        if (scanner.pacer.spend()) await scanner.pacer.yield()
         const offset = dir * ((rowSide(side) ? cell.row : cell.col) - line)
         seen[offset] = 1
         reached = Math.max(reached, offset + 1)
@@ -447,6 +493,7 @@ async function probeHeaderRows(store: SourceStore, options: ReadOptions, pacer: 
     for (const item of page.items) {
       if (item.row < band.r0 || item.row > band.r1) throw contractViolation('Read row outside the requested band')
       for (const cell of item.cells) {
+        if (pacer.spend()) await pacer.yield()
         if (!isValidCoordinate(cell.row, cell.col)) throw contractViolation('Read cell outside the worksheet domain')
         if (cell.row < band.r0 || cell.row > band.r1 || cell.col < band.c0 || cell.col > band.c1) {
           throw contractViolation('Read cell outside the requested band')
@@ -744,7 +791,9 @@ async function boundary(
   const owner: SourceStamp = Object.freeze({ ...request.store.stamp })
   let outcome: RangeDetection
   try {
-    outcome = await run(new Pacer(signal), owner)
+    outcome = await run(new Pacer(signal, request, () => {
+      if (!sameStamp(request.store.stamp, owner)) throw new ScanFailure({ code: 'stale-source', retryable: true, message: 'Source generation changed during detection' })
+    }), owner)
   } catch (error) {
     if (signal?.aborted) outcome = { kind: 'cancelled' }
     else if (error instanceof ScanFailure) outcome = sourceError(error.failure)

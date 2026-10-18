@@ -22,7 +22,7 @@ import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type 
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
-import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, buildGeometry, withFrozen, intersects, invalidMergeDiagnostic } from './source'
+import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
 import {
   F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt, textPrefix,
   type CellPagePayload, type PageSummary,
@@ -63,7 +63,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   /** S13.2: the parsed drawing payload, retained (evictable) in the document pool so
    * repeated reads (stale retries, re-shown sheets) clone instead of re-parsing. */
   private drawingsCache?: { entry: PoolEntry; result: SheetDrawings }
-  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }) {}
+  constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }, private readonly pacing: StorePacing = {}) {}
 
   get extent(): SourceStore['extent'] {
     const used = this.sheet.state === 'complete' ? this.sheet.used : undefined
@@ -198,6 +198,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     const items: SparseRowPage[] = []
     let visited = 0, cells = 0
+    const budget = requestBudget(() => this.guard(options), this.pacing)
     try {
       for (const page of this.pagesFor(row, range.r1)) {
         if (page.aggregate.records === 0 || page.c1 < range.c0 || page.c0 > range.c1) continue
@@ -205,11 +206,19 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         let i = lower(p.rows, row)
         while (i < p.rows.length && p.rows[i] <= range.r1) {
           const r = p.rows[i]
+          // Finding the row's end visits its records: work, like decoding.
           let end = i
-          while (end < p.rows.length && p.rows[end] === r) end++
+          while (end < p.rows.length && p.rows[end] === r) {
+            end++
+            if (budget.spend(1)) await budget.pause()
+          }
           const rowCells: AuthoritativeCell[] = []
-          for (let k = lower(p.cols, range.c0, i, end); k < end && p.cols[k] <= range.c1; k++) rowCells.push(await this.rowCell(p, k))
+          for (let k = lower(p.cols, range.c0, i, end); k < end && p.cols[k] <= range.c1; k++) {
+            if (budget.spend(1)) await budget.pause()
+            rowCells.push(await this.rowCell(p, k))
+          }
           if (visited >= READ_ROWS_PAGE_ROWS || (items.length && cells + rowCells.length > READ_ROWS_MAX_CELLS)) {
+            await budget.finish()
             return { items, completeness: 'complete', stamp: this.stamp, nextCursor: `${key}${r}` }
           }
           visited++
@@ -218,9 +227,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           i = end
         }
       }
+      // A cancel or owner change landing after the last checkpoint never ends in success.
+      await budget.finish()
     } catch (cause) {
+      if (cause instanceof SourceStop) return failedPage(this.stamp, cause.failure)
       return { items, completeness: 'incomplete', stamp: this.stamp, error: pageFailure(cause) }
-    }
+    } finally { budget.dispose() }
     const status = this.status(range.r1)
     if (status.kind === 'error') return { items, completeness: 'incomplete', stamp: this.stamp, error: status.failure }
     if (status.kind === 'unknown') {
@@ -346,12 +358,15 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     let items: T[] = []
     let row = range.r0
+    const budget = requestBudget(() => this.guard(options), this.pacing)
+    try {
     for (;;) {
       try {
         for (const page of this.pagesFor(row, Math.min(range.r1, this.sheet.importedThroughRow))) {
           if (page.aggregate.populated === 0 || page.c1 < range.c0 || page.c0 > range.c1) { row = Math.max(row, page.r1 + 1); continue }
           const p = await this.load(page, options.signal)
           for (let i = lower(p.rows, row); i < p.rows.length && p.rows[i] <= range.r1; i++) {
+            if (budget.spend(1)) await budget.pause()
             if (p.cols[i] < range.c0 || p.cols[i] > range.c1 || !recordPopulated(p, i)) continue
             const next = item(p, i)
             items.push(next instanceof Promise ? await next : next)
@@ -365,6 +380,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           row = Math.max(row, page.r1 + 1)
         }
       } catch (cause) {
+        if (cause instanceof SourceStop) { yield failedPage(this.stamp, cause.failure); return }
         yield { items, completeness: 'incomplete', stamp: this.stamp, error: pageFailure(cause) }
         return
       }
@@ -377,7 +393,12 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const waited = await waitFor(this.workbook, options.signal)
       if (waited) { yield { items, completeness: 'incomplete', stamp: this.stamp, error: waited }; return }
     }
+    try { await budget.finish() } catch (cause) {
+      if (cause instanceof SourceStop) { yield failedPage(this.stamp, cause.failure); return }
+      throw cause
+    }
     yield { items, completeness: 'complete', stamp: this.stamp }
+    } finally { budget.dispose() }
   }
 
   async queryStructural(rect: SourceRect, options: ReadOptions): Promise<StructuralResult> {
@@ -799,6 +820,8 @@ async function waitFor(workbook: PagedWorkbook, signal: AbortSignal | undefined)
 export interface PagedSourceOptions {
   /** Drawing transfer budget override (tests, embedders); default drawingPayloadBudget(profile). */
   drawingPayloadBytes?: number
+  /** Request-decode clock and host yield (tests inject both). */
+  pacing?: StorePacing
 }
 export function createPagedWorkbookSource(session: PagedImportSession, options: PagedSourceOptions = {}): WorkbookSource {
   const { workbook } = session
@@ -814,7 +837,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
   const storeFor = (sheetId: string): PagedXlsxSheetAdapter => {
     let store = stores.get(sheetId)
     if (!store) {
-      store = new PagedXlsxSheetAdapter(Object.freeze({ docId: workbook.docId, sheetId, valueGen: INITIAL_GENERATION }), workbook, find(sheetId), drawingState)
+      store = new PagedXlsxSheetAdapter(Object.freeze({ docId: workbook.docId, sheetId, valueGen: INITIAL_GENERATION }), workbook, find(sheetId), drawingState, options.pacing)
       stores.set(sheetId, store)
     }
     return store

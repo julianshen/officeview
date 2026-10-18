@@ -1,8 +1,9 @@
 import { adoptAllocation, type AllocationContext, type AllocationReservation } from './allocationAccount'
 import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailure, SourceStamp, SourceStore, ValueSearchPredicate, ValuesFilter } from './contracts'
-import type { ColumnClassification, PreparedValue } from './filter'
+import { classifyColumn, type ColumnClassification, type PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
+import { CHECK_WORK_UNITS, CheckpointBudget, YIELD_WORK_UNITS, type BatchSlice, type CooperativeOptions } from './scheduler'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
@@ -170,24 +171,54 @@ function defaultYield(): Promise<void> {
   const host = globalThis as { setImmediate?: (callback: () => void) => unknown }
   return new Promise(resolve => host.setImmediate ? host.setImmediate(resolve) : setTimeout(resolve, 0))
 }
-/** Time-sliced cooperative yielding: an abort scheduled as a task runs within
- * one slice even when every awaited page resolves immediately. */
+/** Time- and work-sliced cooperative yielding (spec §10.2: every slice or
+ * YIELD_WORK_UNITS rows/entries, whichever first): an abort scheduled as a
+ * task runs within one slice even when every awaited page resolves
+ * immediately and the clock never advances. */
 class Pacer {
   private last: number
+  private work = 0
+  private unchecked = 0
   private readonly now: () => number
   private readonly sliceMs: number
   private readonly pause: () => Promise<void>
-  constructor(options: Pacing) {
+  /** `check` throws on cancellation or a stale owner; it runs at every
+   * checkpoint (at most CHECK_WORK_UNITS apart) and after every yield. */
+  constructor(options: Pacing, private readonly check: () => void) {
     this.now = options.now ?? (() => performance.now())
     this.sliceMs = options.sliceMs ?? 8
     if (!Number.isFinite(this.sliceMs) || this.sliceMs < 0) throw new ValueIndexError('invalid-rule', 'Invalid time slice')
     this.pause = options.yield ?? defaultYield
     this.last = this.now()
   }
-  get due(): boolean { return this.now() - this.last >= this.sliceMs }
+  /** Charges completed work units and samples the clock now; true once the
+   * work or time budget is spent (for coarse steps such as hash chunks). */
+  due(units: number): boolean {
+    this.work += units
+    return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= this.sliceMs
+  }
+  /** Charges completed work units; at each checkpoint runs the check and
+   * samples the clock. True once the work or time budget is spent. */
+  step(units: number): boolean {
+    this.work += units
+    this.unchecked += units
+    if (this.unchecked < CHECK_WORK_UNITS && this.work < YIELD_WORK_UNITS) return false
+    this.unchecked = 0
+    this.check()
+    return this.work >= YIELD_WORK_UNITS || this.now() - this.last >= this.sliceMs
+  }
+  /** Units the next batch may take: up to the next checkpoint, within the slice. */
+  get batch(): number { return Math.max(1, Math.min(CHECK_WORK_UNITS - this.unchecked, YIELD_WORK_UNITS - this.work)) }
+  /** Unyielded work, flushed at a handoff to another phase. */
+  get pending(): boolean { return this.work > 0 }
+  /** Charges work without sampling the clock (a partial stride). */
+  charge(units: number): void { this.work += units }
   async yield(): Promise<void> {
     await this.pause()
+    this.work = 0
+    this.unchecked = 0
     this.last = this.now()
+    this.check()
   }
 }
 /** Exact value domain of an index: rules and key runs are valid only there. */
@@ -384,6 +415,9 @@ export class ValueIndex implements LaneAccount {
   private pending: Promise<ValueCompleteness> | undefined
   private pages: Uint8Array | undefined
   private unmerged = 0
+  /** Merged prefix of each page whose merge a cancellation interrupted, kept
+   * until that page completes (other pages may merge in between). */
+  private readonly partial = new Map<number, number>()
   private count = 0
   private kinds: Uint8Array
   private numbers: Float64Array
@@ -529,8 +563,9 @@ export class ValueIndex implements LaneAccount {
     if (!this.disposed && !sameStamp(this.source.stamp, this.stamp)) this.dispose()
     if (this.disposed) throw new ValueIndexError('stale-source', 'Value index was invalidated; retry')
   }
-  /** Merges unread/unknown pages in cancellable, time-sliced page batches. A
-   * page merges atomically, so cancellation or a source error leaves resumable state. */
+  /** Merges unread/unknown pages in cancellable, work- and time-sliced batches.
+   * A page is validated whole before any of it merges, and an interrupted merge
+   * resumes after its merged prefix, so cancellation leaves resumable state. */
   build(options: ValueBuildOptions = {}): Promise<ValueCompleteness> {
     try { this.assertLive() } catch (error) { return Promise.reject(error) }
     if (this.identity.classification.kind === 'loading') return Promise.resolve('loading')
@@ -548,7 +583,7 @@ export class ValueIndex implements LaneAccount {
     this.assertLive()
   }
   private async run(options: ValueBuildOptions): Promise<ValueCompleteness> {
-    const { signal, onProgress } = options, pacer = new Pacer(options)
+    const { signal, onProgress } = options, pacer = new Pacer(options, () => this.check(signal))
     const source = this.source, pageCount = source.pageCount
     if (!this.pages) {
       if (!Number.isSafeInteger(pageCount) || pageCount < 0) throw new ValueIndexError('page-error', 'Invalid value source page count')
@@ -570,16 +605,67 @@ export class ValueIndex implements LaneAccount {
       if (read.kind === 'error') {
         throw new ValueIndexError(read.failure.code, read.failure.message, { retryable: read.failure.retryable })
       }
-      if (read.kind === 'unknown' || !this.admissible(read)) this.pages[page] = UNKNOWN
-      else {
-        this.merge(read)
-        this.pages[page] = MERGED
-        this.unmerged--
-        this.ledger.mergedPages++
+      // Validation and merge run in batches up to the next checkpoint (spec
+      // §§10.2, 12.1), so neither the yield bound nor the check cadence
+      // depends on page size.
+      const slice = async (from: number, to: number) => {
+        if (pacer.step(to - from)) {
+          progress()
+          await pacer.yield()
+          this.check(signal)
+        }
+      }
+      let unknown = read.kind === 'unknown'
+      if (read.kind === 'values') {
+        this.wellFormed(read)
+        for (let at = 0; at < read.count;) {
+          const end = Math.min(read.count, at + pacer.batch)
+          if (this.unknownCells(read, at, end)) unknown = true
+          await slice(at, end)
+          at = end
+        }
+      }
+      if (unknown || read.kind !== 'values') {
+        if (this.partial.has(page)) throw new ValueIndexError('page-error', 'A partially merged value page changed under one source stamp')
+        this.pages[page] = UNKNOWN
+      } else {
+        // A page cut by a cancellation resumes after its merged prefix: under
+        // one stamp a re-read page holds the same values.
+        const resumed = this.partial.get(page)
+        let at = resumed ?? 0
+        const completed = () => {
+          if (resumed !== undefined) {
+            this.partial.delete(page)
+            this.release(KEY_PATCH_BYTES)
+          }
+          this.pages![page] = MERGED
+          this.unmerged--
+          this.ledger.mergedPages++
+        }
+        if (at >= read.count) completed()
+        try {
+          while (at < read.count) {
+            const from = at, end = Math.min(read.count, at + pacer.batch)
+            this.merge(read, from, end)
+            at = end
+            // The page is committed before its last batch's cancellable pause.
+            if (at === read.count) completed()
+            await slice(from, end)
+          }
+        } catch (error) {
+          // Only an interrupted page keeps (and is charged for) its prefix.
+          if (at > 0 && at < read.count && !this.disposed) {
+            try {
+              if (resumed === undefined) this.charge(KEY_PATCH_BYTES)
+              this.partial.set(page, at)
+            } catch { this.dispose() }
+          }
+          throw error
+        }
       }
       // Merged into (and charged by) this index, or dropped: the source payload's charge ends.
       } finally { if (read.kind === 'values') read.settle?.() }
-      if (pacer.due) {
+      if (pacer.step(1)) {
         progress()
         await pacer.yield()
         this.check(signal)
@@ -611,7 +697,7 @@ export class ValueIndex implements LaneAccount {
         account: scratch,
         afterChunk: async () => {
           this.check(signal)
-          if (pacer.due) { await pacer.yield(); this.check(signal) }
+          if (pacer.due(0)) { await pacer.yield(); this.check(signal) }
         },
       })
     } finally { scratch.close() }
@@ -656,6 +742,7 @@ export class ValueIndex implements LaneAccount {
       }
       if (this.searchKeys.length < total) {
         this.keyState = 'computing'
+        let stride = 0
         for (let id = this.searchKeys.length; id < total; id++) {
           // Preflight raw length against the triggering search's effective limit
           // (an oversized value keeps a null key and the exact path rejects it,
@@ -668,12 +755,17 @@ export class ValueIndex implements LaneAccount {
           }
           this.retainKey(key === null ? 8 : key.length * 2 + 48)
           this.searchKeys.push(key)
-          if (id % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
-            progress()
-            await pacer.yield()
-            this.check(signal)
+          if (++stride === PACE_STRIDE) {
+            stride = 0
+            if (pacer.step(PACE_STRIDE)) {
+              progress()
+              await pacer.yield()
+              this.check(signal)
+            }
           }
         }
+        // The final partial stride is work too: the next phase starts after it.
+        pacer.charge(stride)
         this.keyState = 'computed'
       }
     } catch (error) {
@@ -695,19 +787,23 @@ export class ValueIndex implements LaneAccount {
     }
   }
   /** Validates a lane page before any merge; unknown cells defer the whole page. */
-  private admissible(page: ValueLanePage): boolean {
-    const { count, tags, numbers, texts, styles } = page
+  private wellFormed(page: ValueLanePage): void {
+    const { count, tags, numbers, styles } = page
     if (!Number.isSafeInteger(count) || count < 0 || tags.length !== count || numbers.length < count || (styles && styles.length < count)) {
       throw new ValueIndexError('page-error', 'Malformed value lane page')
     }
+  }
+  /** Validates cells [from, to); true when any is unknown (the page then defers). */
+  private unknownCells(page: ValueLanePage, from: number, to: number): boolean {
+    const { tags, texts } = page
     let unknown = false
-    for (let i = 0; i < count; i++) {
+    for (let i = from; i < to; i++) {
       const tag = tags[i]
       if (tag === SOURCE_UNKNOWN) unknown = true
       else if (tag < SOURCE_NUMBER || tag > SOURCE_UNAVAILABLE) throw new ValueIndexError('page-error', 'Uncovered value lane cell')
       else if ((tag === SOURCE_STRING || tag === SOURCE_ERROR) && typeof texts[i] !== 'string') throw new ValueIndexError('page-error', 'Missing text for value lane cell')
     }
-    return !unknown
+    return unknown
   }
   private grow(capacity: number): void {
     const old = this.kinds.length
@@ -735,9 +831,9 @@ export class ValueIndex implements LaneAccount {
     map.set(text, ordinal)
     return ordinal
   }
-  private merge(page: ValueLanePage): void {
-    const { count, tags, numbers, texts, styles } = page
-    for (let i = 0; i < count; i++) {
+  private merge(page: ValueLanePage, from: number, to: number): void {
+    const { tags, numbers, texts, styles } = page
+    for (let i = from; i < to; i++) {
       const style = styles ? styles[i] : 0
       let ordinal: number
       switch (tags[i]) {
@@ -877,8 +973,8 @@ export class ValueIndex implements LaneAccount {
       }
     }
     const labelOption = options.label ?? inherited?.label, limits = options.limits ?? inherited?.limits
-    const from = resume?.searchedEntries ?? 0, end = this.count, pacer = new Pacer(options)
     const live = () => { checkSignal(signal, 'Value search'); this.assertLive() }
+    const from = resume?.searchedEntries ?? 0, end = this.count, pacer = new Pacer(options, live)
     const reservation = this.reserve()
     reservation.charge(words(end) * 4 + (reservation.canAdopt ? 1024 : 0))
     // A running scan holds resident keys: not idle for key dropping/eviction.
@@ -902,6 +998,8 @@ export class ValueIndex implements LaneAccount {
           this.keyRunning = true
           try { await this.keyPhase(signal, pacer, options.onKeyProgress, budget.maxTextLength) } finally { this.keyRunning = false }
           live()
+          // Phase handoff: the scan's 16-entry strides start on a fresh slice.
+          if (pacer.pending) { await pacer.yield(); live() }
         }
         const exactKeys = keysUsable && strategy.exactKeys
         const queryKey = keysUsable && !exactKeys ? generateSearchKey(strategy, query.text) : null
@@ -945,7 +1043,7 @@ export class ValueIndex implements LaneAccount {
             } else hit = false
           } else exact++
           if (hit) { setBit(matches, ordinal); count++ }
-          if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.due) {
+          if ((ordinal - from) % PACE_STRIDE === PACE_STRIDE - 1 && pacer.step(PACE_STRIDE)) {
             onProgress?.({ searched: ordinal + 1, total: end, matches: count })
             live()
             await pacer.yield()
@@ -1372,10 +1470,51 @@ export async function compileValuesMembership(
   return { matches, bytes: keys.bytes, release: () => { keys = undefined; reservation?.close() } }
 }
 
+/** Yield budget a column pass charges rows to; CooperativeSlice satisfies it. */
+export type ColumnPassPacer = BatchSlice
+/** Column classification over lane pages of any size, in CheckpointBudget batches
+ * (spec §§10.2, 12.1). Without a caller slice a host-yield slice is used, so a
+ * pass whose pages resolve as microtasks still lets a cancel posted as a task
+ * land. */
+export async function classifyLanePages(
+  each: (accept: (page: ValueLanePage) => Promise<void>) => Promise<void>,
+  prepared: (page: ValueLanePage, index: number) => PreparedValue,
+  check: () => void,
+  pacer?: ColumnPassPacer,
+): Promise<ColumnClassification> {
+  const budget = new CheckpointBudget(check, pacer)
+  let numeric = false, text = false, date = false, loading = false
+  try {
+    // Work an earlier pass left unyielded is not carried into this one.
+    await budget.flush()
+    await each(async page => {
+      for (let at = 0; at < page.count;) {
+        const end = Math.min(page.count, at + budget.batch)
+        function* values() { for (let i = at; i < end; i++) yield prepared(page, i) }
+        const part = classifyColumn(values(), true)
+        numeric ||= part.hasNumeric; text ||= part.kind === 'text'; date ||= part.kind === 'date'; loading ||= part.kind === 'loading'
+        if (budget.spend(end - at)) await budget.pause()
+        at = end
+      }
+    })
+    await budget.finish()
+  } finally { budget.dispose() }
+  return { kind: loading ? 'loading' : text ? 'text' : numeric ? date ? 'date' : 'number' : 'empty', hasNumeric: numeric }
+}
 /** Adapts SourceStore.queryColumn to typed lane pages. It asks for the typed
  * lanes encoding (S1.2) and still accepts cell-object entries from stores that
- * do not produce lanes. One page per row band; the owner is read live. */
-export function valueSourceFromStore(store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096, allocation?: AllocationContext): ValueColumnSource {
+ * do not produce lanes. One page per row band; the owner is read live.
+ *
+ * Bounded input (spec §§10.2, 12.1): placement, coverage checks and the final
+ * coverage scan run in CheckpointBudget batches with checkpoints and a host
+ * yield, so any pageRows is admissible. The store's own work to answer one queryColumn
+ * request is outside this adapter: a provider bounds it by the request's limit
+ * (see SourceStore). */
+export function valueSourceFromStore(
+  store: SourceStore, col: number, body: { r0: number; r1: number }, pageRows = 4096, allocation?: AllocationContext,
+  /** Decode clock and host yield (tests inject both). */
+  pacing: Pick<CooperativeOptions, 'now' | 'yield'> = {},
+): ValueColumnSource {
   if (!Number.isSafeInteger(pageRows) || pageRows < 1 || body.r1 < body.r0 - 1) throw new RangeError('Invalid value source paging')
   const rows = body.r1 - body.r0 + 1
   return {
@@ -1388,6 +1527,12 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
       const account = allocation?.reserve()
       account?.charge(count * 21 + 512 + stamp.sheetId.length * 2)
       const consumed: object[] = []
+      // Placement and coverage run in bounded batches with checkpoints and a
+      // real yield (spec §§10.2, 12.1), whatever pageRows the consumer chose.
+      const budget = new CheckpointBudget(() => {
+        checkSignal(signal, 'Value page read')
+        if (!sameStamp(store.stamp, stamp)) throw new ValueIndexError('stale-source', 'Column page owner changed')
+      }, undefined, pacing)
       try {
       const tags = new Uint8Array(count), numbers = new Float64Array(count), styles = new Uint32Array(count), texts: (string | undefined)[] = allocation ? new Array(count) : []
       const cursors = new Set<string>()
@@ -1408,7 +1553,7 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
         if (result.completeness === 'incomplete') return drop({ kind: 'error', failure: { code: 'incomplete', retryable: true, message: 'Column page is incomplete' } })
         if (result.completeness !== 'complete') loading = true
         for (const item of result.items) {
-          const outcome = place(item, r0, r1, col, tags, numbers, styles, texts, account)
+          const outcome = await place(item, r0, r1, col, tags, numbers, styles, texts, budget, account)
           if (outcome) return drop(outcome)
         }
         cursor = result.nextCursor
@@ -1418,27 +1563,42 @@ export function valueSourceFromStore(store: SourceStore, col: number, body: { r0
         }
       } while (cursor !== undefined)
       if (loading) return drop({ kind: 'unknown', pageId: `${stamp.sheetId}:${col}:${r0}` })
-      if (tags.includes(0)) throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
+      for (let at = 0; at < count;) {
+        const end = Math.min(count, at + budget.batch)
+        if (tags.subarray(at, end).includes(0)) throw new ValueIndexError('page-error', 'Complete column page left rows uncovered')
+        if (budget.spend(end - at)) await budget.pause()
+        at = end
+      }
+      await budget.finish()
       page = { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
       if (account) adoptAllocation(account, page)
       return page
       } catch (error) { for (const payload of consumed) store.settle?.(payload); throw error }
-      finally { account?.release() }
+      finally { account?.release(); budget.dispose() }
     },
   }
 }
 /** Lane tags share their numbers with SOURCE_* (contracts LANE_*), so they copy straight in. */
-function placeLanes(
+async function fillBlank(tags: Uint8Array, from: number, to: number, budget: CheckpointBudget): Promise<void> {
+  for (let at = from; at < to;) {
+    const end = Math.min(to, at + budget.batch)
+    tags.fill(SOURCE_BLANK, at, end)
+    if (budget.spend(end - at)) await budget.pause()
+    at = end
+  }
+}
+async function placeLanes(
   lanes: ColumnLanes, r0: number,
-  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], account?: AllocationReservation,
-): ValuePageRead | undefined {
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], budget: CheckpointBudget, account?: AllocationReservation,
+): Promise<ValuePageRead | undefined> {
   const n = lanes.rows.length
   if (lanes.tags.length !== n || lanes.numbers.length !== n || lanes.styles.length !== n || lanes.textStart.length !== n + 1) {
     throw new ValueIndexError('page-error', 'Malformed column lanes')
   }
-  tags.fill(SOURCE_BLANK, lanes.r0 - r0, lanes.r1 - r0 + 1)
+  await fillBlank(tags, lanes.r0 - r0, lanes.r1 - r0 + 1, budget)
   let previous = -1
   for (let i = 0; i < n; i++) {
+    if (budget.spend(1)) await budget.pause()
     const row = lanes.rows[i], tag = lanes.tags[i]
     if (row <= previous || row < lanes.r0 || row > lanes.r1) throw new ValueIndexError('page-error', 'Column lanes rows out of order')
     if (tag !== SOURCE_NUMBER && tag !== SOURCE_STRING && tag !== SOURCE_BOOLEAN && tag !== SOURCE_ERROR && tag !== SOURCE_BLANK && tag !== SOURCE_UNAVAILABLE) {
@@ -1468,19 +1628,24 @@ function laneText(lanes: ColumnLanes, i: number, account?: AllocationReservation
   return out
   } catch (error) { account?.release(peak); throw error }
 }
-function place(
+async function place(
   item: ColumnEntry, r0: number, r1: number, col: number,
-  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], account?: AllocationReservation,
-): ValuePageRead | undefined {
+  tags: Uint8Array, numbers: Float64Array, styles: Uint32Array, texts: (string | undefined)[], budget: CheckpointBudget, account?: AllocationReservation,
+): Promise<ValuePageRead | undefined> {
   if (item.kind === 'unknown') return { kind: 'unknown', pageId: item.pageId }
   if (item.kind === 'error') return { kind: 'error', failure: { code: item.code, retryable: item.retryable, message: 'Column value source failed' } }
   const first = 'row' in item ? item.row : item.r0, last = 'row' in item ? item.row : item.r1
   if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < r0 || last > r1 || last < first) {
     throw new ValueIndexError('page-error', 'Column entry outside the requested page')
   }
-  for (let row = first; row <= last; row++) if (tags[row - r0]) throw new ValueIndexError('page-error', 'Overlapping column coverage')
-  if (item.kind === 'blank') { tags.fill(SOURCE_BLANK, first - r0, last - r0 + 1); return }
-  if (item.kind === 'lanes') return placeLanes(item, r0, tags, numbers, styles, texts, account)
+  for (let at = first - r0; at <= last - r0;) {
+    const end = Math.min(last - r0 + 1, at + budget.batch)
+    if (tags.subarray(at, end).some(tag => tag !== 0)) throw new ValueIndexError('page-error', 'Overlapping column coverage')
+    if (budget.spend(end - at)) await budget.pause()
+    at = end
+  }
+  if (item.kind === 'blank') { await fillBlank(tags, first - r0, last - r0 + 1, budget); return }
+  if (item.kind === 'lanes') return placeLanes(item, r0, tags, numbers, styles, texts, budget, account)
   const at = first - r0, cell = item.cell
   if (cell.row !== first || cell.col !== col || cell.id !== first * 16384 + col) throw new ValueIndexError('page-error', 'Cell identity does not match its column entry')
   styles[at] = cell.styleIndex ?? 0

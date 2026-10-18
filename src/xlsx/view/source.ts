@@ -35,6 +35,7 @@ import {
 } from '../../worker/viewerSession'
 import { addRecord, answerOverview, emptyAggregate, type OverviewCellSource } from '../storage/overviewIndex'
 import { cellDisplayText } from '../render'
+import { CheckpointBudget, type CooperativeOptions } from './scheduler'
 
 /** Row-page bounds: at most 200 rows and 262,144 cells (matches the fixture store). */
 export const READ_ROWS_PAGE_ROWS = 200
@@ -45,6 +46,19 @@ export interface ObjectSourceOptions {
   drawingPayloadBytes?: number
   /** Fixed at admission (§4.4); 'cached' wraps a doc parsed with valuePolicy 'cached'. */
   valuePolicy?: ValuePolicy
+  /** Request-decode clock and host yield (tests inject both). */
+  pacing?: StorePacing
+}
+export type StorePacing = Pick<CooperativeOptions, 'now' | 'yield'>
+/** A request's decode stopped at a checkpoint (cancelled or a stale owner). */
+export class SourceStop extends Error {
+  constructor(readonly failure: SourceFailure) { super(failure.message) }
+}
+/** Decode budget of one store request (spec §10.2, decision 10): cells are
+ * decoded in steps of at most 4,096 with a real yield between steps, and the
+ * request's guard (signal, owner) runs at every checkpoint, throwing SourceStop. */
+export function requestBudget(guard: () => SourceFailure | undefined, pacing: StorePacing = {}): CheckpointBudget {
+  return new CheckpointBudget(() => { const stop = guard(); if (stop) throw new SourceStop(stop) }, undefined, pacing, 'source')
 }
 /** Initial worker-side defaults; authoritative sheet metrics land with S2.3/S5. */
 const DEFAULT_ROW_CSS = 20
@@ -170,6 +184,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     readonly valuePolicy: ValuePolicy = 'engine',
     private readonly engineSpills?: readonly EngineSpillFootprint[],
     private readonly drawingPayloadBytes?: number,
+    private readonly pacing: StorePacing = {},
   ) {
     const rows = sheet.rows.filter(row => isValidCoordinate(row.index, 0) && row.cells.length)
       .sort((a, b) => a.index - b.index)
@@ -271,6 +286,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     }
     const account = options[SOURCE_ALLOCATION]?.reserve()
     account?.charge(96)
+    const budget = requestBudget(() => this.guard(options), this.pacing)
     try {
     const items: SparseRowPage[] = []
     let visited = 0, cellCount = 0
@@ -279,6 +295,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       account?.charge(72)
       const cells: AuthoritativeCell[] = []
       for (const cell of row.cells) {
+        if (budget.spend(1)) await budget.pause()
         if (cell.row === row.index && cell.col >= range.c0 && cell.col <= range.c1) {
           account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
           cells.push(toRowCell(cell, this.valuePolicy))
@@ -293,10 +310,14 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       if (cells.length) items.push({ row: row.index, cells: cells.sort((a, b) => a.col - b.col) })
     }
     const more = at < this.rows.length && this.rowIndexes[at] <= range.r1
+    await budget.finish()
     const page = { items, completeness: 'complete' as const, stamp: this.stamp, ...(more ? { nextCursor: `${key}${at}` } : {}) }
     if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
     return page
-    } finally { account?.release() }
+    } catch (stop) {
+      if (stop instanceof SourceStop) return failedPage(this.stamp, stop.failure)
+      throw stop
+    } finally { account?.release(); budget.dispose() }
   }
   /** Column page straight from the row index: populated entries plus explicit
    * blank runs covering every requested row; nothing is cached per column. */
@@ -367,10 +388,15 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     }
     let account = options[SOURCE_ALLOCATION]?.reserve()
     account?.charge(96)
+    const budget = requestBudget(() => this.guard(options), this.pacing)
     try {
     let items: AuthoritativeCell[] = []
     for (let at = lowerBound(this.rowIndexes, request.range.r0); at < this.rows.length && this.rowIndexes[at] <= request.range.r1; at++) {
       for (const cell of this.rows[at].cells) {
+        try { if (budget.spend(1)) await budget.pause() } catch (stop) {
+          if (!(stop instanceof SourceStop)) throw stop
+          yield failedPage(this.stamp, stop.failure); return
+        }
         if (cell.col < request.range.c0 || cell.col > request.range.c1 || !isPopulated(cell)) continue
         account?.charge(384 + (isUnavailable(cell, this.valuePolicy) ? 288 : 0) + (cell.sharedFormula ? 96 : 0))
         items.push(toRowCell(cell, this.valuePolicy))
@@ -387,11 +413,15 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
         }
       }
     }
+    try { await budget.finish() } catch (stop) {
+      if (!(stop instanceof SourceStop)) throw stop
+      yield failedPage(this.stamp, stop.failure); return
+    }
     const page = { items, completeness: 'complete' as const, stamp: this.stamp }
     if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
     account?.release()
     yield page
-    } finally { account?.release() }
+    } finally { account?.release(); budget.dispose() }
   }
   async queryStructural(rect: SourceRect, options: ReadOptions & SourceAllocationOptions): Promise<StructuralResult> {
     const base = { stamp: this.stamp, merges: [], tables: [], spills: [], drawings: [] }
@@ -643,7 +673,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     if (!store) {
       const { sheet } = find(sheetId)
       const stamp = Object.freeze({ docId, sheetId, valueGen: INITIAL_GENERATION })
-      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy, spillFootprints()?.get(sheet) ?? (spillFootprints() ? [] : undefined), options.drawingPayloadBytes)
+      store = new ObjectXlsxSheetAdapter(stamp, sheet, doc.tables?.filter(table => table.sheetId === sheetId), maxCells, policy, spillFootprints()?.get(sheet) ?? (spillFootprints() ? [] : undefined), options.drawingPayloadBytes, options.pacing)
       stores.set(sheetId, store)
     }
     return store

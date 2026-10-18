@@ -7,7 +7,7 @@ import {
   type ValueColumnSource, type ValueIndex, type ValueIndexIdentity, type ValueLabeler, type ValueLanePage, type ValuePageRead,
 } from '../src/xlsx/view/valueIndex'
 import { MemoryValueRunStore } from '../src/xlsx/view/valueRuns'
-import { EXACT_SEARCH } from '../src/xlsx/view/searchKeys'
+import { EXACT_SEARCH, canonicalKeyStrategy, foldVariantOf } from '../src/xlsx/view/searchKeys'
 /** Tests of pool bytes and scan pacing exclude lazily retained canonical keys. */
 const EXACT = { searchKeys: { strategy: EXACT_SEARCH } } as const
 
@@ -977,5 +977,192 @@ describe('review round 3 findings', () => {
     await expect(compileValuesMembership(rule, identity(), store, { cache, signal: during.signal })).rejects.toMatchObject({ code: 'cancelled' })
     expect(cache.usedBytes).toBe(0)
     await expect(ValueSelectionDraft.open(index, null, store, aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
+  })
+})
+
+describe('row-count yield bound (spec §10.2, plan S4.2 LIFE-02)', () => {
+  /** Pages of `rows` numbers that resolve immediately; each page counts its
+   * rows into `merged` when the index settles it (after merging). */
+  function numberPages(count: number, rows: number, merged: { rows: number }): FakeSource {
+    const pages: (() => ValuePageRead)[] = []
+    for (let p = 0; p < count; p++) {
+      pages.push(() => {
+        const numbers = new Float64Array(rows)
+        for (let i = 0; i < rows; i++) numbers[i] = p * rows + i
+        return { kind: 'values', pageId: `p${p}`, count: rows, tags: new Uint8Array(rows).fill(SOURCE_NUMBER), numbers, texts: [], settle: () => { merged.rows += rows } }
+      })
+    }
+    return new FakeSource(pages)
+  }
+  it.each([512, 1000])('yields after at most 4,096 merged rows while the time slice never expires (%i-row pages)', async rows => {
+    const merged = { rows: 0 }, slices: number[] = []
+    let since = 0
+    const source = numberPages(Math.ceil(10_240 / rows), rows, merged)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    const status = await index.build({
+      now: () => 0,
+      yield: async () => { slices.push(merged.rows - since); since = merged.rows },
+    })
+    expect(status).toBe('complete')
+    slices.push(merged.rows - since)
+    expect(merged.rows).toBeGreaterThanOrEqual(10_240)
+    expect(slices.length - 1).toBeGreaterThanOrEqual(2)
+    expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
+  })
+  it('observes a cancel posted as a macrotask within one 4,096-row slice of immediately resolved pages', async () => {
+    const merged = { rows: 0 }, controller = new AbortController()
+    const source = numberPages(40, 512, merged)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    setImmediate(() => controller.abort())
+    await expect(index.build({ signal: controller.signal, now: () => 0 })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(merged.rows).toBeLessThanOrEqual(4096)
+  })
+  it('bounds search entries between yields at 4,096 while the time slice never expires', async () => {
+    const { index } = await built(items(10_240), mixed, 4096, EXACT)
+    const searched: number[] = []
+    let yields = 0
+    const result = await index.search({ text: 'item', locale: 'en-US' }, {
+      now: () => 0, yield: async () => { yields++ }, onProgress: p => searched.push(p.searched),
+    })
+    expect(result.count).toBe(10_240)
+    expect(yields).toBeGreaterThanOrEqual(2)
+    const gaps = searched.map((at, i) => at - (i ? searched[i - 1] : 0))
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(4096)
+  })
+  it('splits one 8,192-row page: the first yield comes before 8,192 values are merged (codex R1)', async () => {
+    const merged = { rows: 0 }, sizes: number[] = []
+    const source = numberPages(1, 8192, merged)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    expect(await index.build({ now: () => 0, yield: async () => { sizes.push(index.size) } })).toBe('complete')
+    expect(sizes.length).toBeGreaterThanOrEqual(2)
+    expect(sizes[0]).toBeLessThanOrEqual(4096)
+    expect(Math.max(...[...sizes, index.size].map((at, i, all) => at - (i ? all[i - 1] : 0)))).toBeLessThanOrEqual(4096)
+  })
+  it('resumes a page whose merge a cancellation cut, without double counting', async () => {
+    const controller = new AbortController()
+    const rows = Array.from({ length: 8192 }, (_, i) => i % 3000)
+    const source = fromCells(rows, 8192)
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    let yields = 0
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (++yields === 3) controller.abort() } }))
+      .rejects.toMatchObject({ code: 'cancelled' })
+    expect(index.size).toBeGreaterThan(0)
+    expect(await index.build()).toBe('complete')
+    expect(index.size).toBe(3000)
+    let total = 0
+    for (let offset = 0; offset < 3000; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8192)
+  })
+  // 4,095 keys end mid-slice; 4,111 yield at 4,096 keys and leave a 15-key stride.
+  it.each([4095, 4111])('accounts the partial key stride at the key-to-search handoff (codex R2, %i keys)', async total => {
+    const strategy = canonicalKeyStrategy(foldVariantOf('en-US'))
+    const { index } = await built(items(total), mixed, 4096, { searchKeys: { strategy } })
+    let keys = 0, searched = 0, last = 0
+    const slices: number[] = []
+    const result = await index.search({ text: 'item', locale: 'en-US' }, {
+      now: () => 0,
+      yield: async () => { slices.push(keys + searched - last); last = keys + searched },
+      onKeyProgress: p => { keys = p.completed },
+      onProgress: p => { searched = p.searched },
+    })
+    expect(result.count).toBe(total)
+    expect(keys).toBe(total)
+    expect(slices.length).toBeGreaterThanOrEqual(1)
+    expect(slices[0]).toBeLessThanOrEqual(4096)
+    slices.push(keys + searched - last)
+    expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
+  })
+  it('keeps a later partial merge while an earlier unknown page fills in (codex C1)', async () => {
+    let ready = false
+    const source = new FakeSource([() => ready ? lanes('p0', [99999]) : { kind: 'unknown', pageId: 'p0' }, () => lanes('p1', Array.from({ length: 8192 }, (_, i) => i % 3000))])
+    const cache = new ValueIndexCache(EXACT), index = cache.open(identity(numeric), source), controller = new AbortController()
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (index.size > 0) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    ready = true
+    expect(await index.build({ now: () => 0, yield: async () => {} })).toBe('complete')
+    let total = 0
+    for (let offset = 0; offset < index.size; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8193)
+    expect(index.size).toBe(3001)
+  })
+  it('refuses a partially merged page that reads back unknown under one stamp', async () => {
+    let unknown = false
+    const source = new FakeSource([() => unknown ? { kind: 'unknown', pageId: 'p0' } : lanes('p0', Array.from({ length: 8192 }, (_, i) => i))])
+    const index = new ValueIndexCache(EXACT).open(identity(numeric), source), controller = new AbortController()
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (index.size > 0) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    unknown = true
+    await expect(index.build()).rejects.toMatchObject({ code: 'page-error', message: 'A partially merged value page changed under one source stamp' })
+  })
+  it('samples the clock within 256 merged values of one large page (spec §12.1)', async () => {
+    const source = numberPages(1, 8192, { rows: 0 }), sizes: number[] = []
+    let clock = 0
+    const index = new ValueIndexCache().open(identity(numeric), source)
+    // Every clock read is a full slice later.
+    expect(await index.build({ now: () => (clock += 8), yield: async () => { sizes.push(index.size) } })).toBe('complete')
+    // Validation yields first (size 0), then every merge batch.
+    const gaps = [...sizes, index.size].map((at, i, all) => at - (i ? all[i - 1] : 0))
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(256)
+  })
+  it('checks cancellation within 256 validated cells, before any pause (spec §12.1)', async () => {
+    const controller = new AbortController(), count = 8192
+    let reads = 0, yields = 0
+    const texts = new Proxy(Array.from({ length: count }, (_, i) => `v${i}`), { get(target, key, receiver) {
+      if (typeof key === 'string' && /^\d+$/.test(key)) { if (++reads === 1) controller.abort() }
+      return Reflect.get(target, key, receiver)
+    } })
+    const source = new FakeSource([() => ({ kind: 'values', pageId: 'p0', count, tags: new Uint8Array(count).fill(SOURCE_STRING), numbers: new Float64Array(count), texts })])
+    const index = new ValueIndexCache(EXACT).open(identity(), source)
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { yields++ } })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(yields).toBe(0)
+    expect(reads).toBeLessThanOrEqual(256)
+  })
+  it('bounds the owned adapter decode of an 8,192-row response (codex C3)', async () => {
+    const store = { stamp: STAMP, queryColumn: async () => ({ stamp: STAMP, completeness: 'complete', items: [{ kind: 'blank', r0: 0, r1: 8191 }], nextCursor: undefined }) } as unknown as SourceStore
+    const source = valueSourceFromStore(store, 0, { r0: 0, r1: 8191 }, 8192)
+    let serviced = false
+    setImmediate(() => { serviced = true })
+    const result = await source.readPage(0, new AbortController().signal)
+    expect(result).toMatchObject({ kind: 'values', count: 8192 })
+    expect(serviced).toBe(true)
+  })
+  it('refuses a decode whose source owner changes at a decode yield', async () => {
+    let stamp = STAMP
+    const store = { get stamp() { return stamp }, queryColumn: async () => ({ stamp, completeness: 'complete', items: [{ kind: 'blank', r0: 0, r1: 8191 }], nextCursor: undefined }) } as unknown as SourceStore
+    const source = valueSourceFromStore(store, 0, { r0: 0, r1: 8191 }, 8192)
+    setImmediate(() => { stamp = { ...STAMP, valueGen: STAMP.valueGen + 1 } })
+    await expect(source.readPage(0, new AbortController().signal)).rejects.toMatchObject({ code: 'stale-source' })
+  })
+  it('paces every decode pass: coverage check, blank fill and final coverage scan', async () => {
+    const store = { stamp: STAMP, queryColumn: async () => ({ stamp: STAMP, completeness: 'complete', items: [{ kind: 'blank', r0: 0, r1: 8191 }], nextCursor: undefined }) } as unknown as SourceStore
+    let yields = 0
+    const source = valueSourceFromStore(store, 0, { r0: 0, r1: 8191 }, 8192, undefined, { now: () => 0, yield: async () => { yields++ } })
+    expect(await source.readPage(0, new AbortController().signal)).toMatchObject({ kind: 'values', count: 8192 })
+    // Three passes of 8,192 rows each: 24,576 units, a pause at every 4,096.
+    expect(yields).toBe(6)
+  })
+  it('commits a page before its final batch pause: a cancel there never re-merges it (codex D1)', async () => {
+    const source = fromCells(Array.from({ length: 8192 }, (_, i) => i % 3000), 8192)
+    const index = new ValueIndexCache(EXACT).open(identity(numeric), source), controller = new AbortController()
+    let pauses = 0
+    // Two validation pauses, then two merge pauses: the fourth follows the last batch.
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (++pauses === 4) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(await index.build({ now: () => 0, yield: async () => {} })).toBe('complete')
+    let total = 0
+    for (let offset = 0; offset < index.size; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8192)
+  })
+  it('commits a resumed page before its final batch pause', async () => {
+    const source = fromCells(Array.from({ length: 8192 }, (_, i) => i % 3000), 8192)
+    const index = new ValueIndexCache(EXACT).open(identity(numeric), source)
+    const cancelAt = async (pause: number) => {
+      const controller = new AbortController()
+      let pauses = 0
+      await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (++pauses === pause) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    }
+    await cancelAt(3) // after the first merge half: a 4,096-row prefix is kept
+    await cancelAt(3) // resumed: two validation pauses, then the final merge batch
+    expect(await index.build({ now: () => 0, yield: async () => {} })).toBe('complete')
+    let total = 0
+    for (let offset = 0; offset < index.size; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8192)
   })
 })

@@ -62,7 +62,8 @@ const FULL_SHEET: SourceRect = Object.freeze({ r0: 0, r1: MAX_ROWS - 1, c0: 0, c
 /** resource-limit: the bounded hit buffer would be exceeded (§11.4 bounded storage). */
 export type FindErrorCode = 'stale' | 'cancelled' | 'closed' | 'resource-limit'
 export class FindError extends Error {
-  constructor(readonly code: FindErrorCode, message: string) {
+  /** `retryable`: a transient refusal (e.g. workspace the pool cannot admit now). */
+  constructor(readonly code: FindErrorCode, message: string, readonly retryable = false) {
     super(message)
     this.name = 'FindError'
   }

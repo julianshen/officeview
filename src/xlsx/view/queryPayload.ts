@@ -1,7 +1,9 @@
-/** Bounded, cycle-safe clone estimate with an early stop, including UTF-16 text
+/** `seen` may be shared across calls so parts of one payload measured
+ * separately count each shared object once, as one whole-payload call would.
+ * Bounded, cycle-safe clone estimate with an early stop, including UTF-16 text
  * and complete backing buffers (not just a small typed-array view). */
-export function queryPayloadBytes(value: unknown, limit: number): number {
-  const seen = new Set<object>(), stack: unknown[] = [value]
+export function queryPayloadBytes(value: unknown, limit: number, seen = new Set<object>()): number {
+  const stack: unknown[] = [value]
   let bytes = 0
   while (stack.length && bytes <= limit) {
     const item = stack.pop()

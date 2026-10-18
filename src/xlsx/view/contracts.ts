@@ -167,6 +167,14 @@ export interface RangeCompletion {
   missing: readonly SourceRect[]
   error?: SourceFailure
 }
+/** Pacing contract (spec §10.2 provider request decode, decision 10): a
+ * provider decodes a scanPopulated/scanOccupied or readRows request in steps of
+ * at most YIELD_WORK_UNITS cells with a real macrotask yield between steps, and
+ * checks the request's signal and source owner at checkpoints at most
+ * CHECK_WORK_UNITS cells apart and after every yield, ending the request with a
+ * cancelled or stale-source page (the shipped stores use requestBudget). The
+ * request's limit and the number of requests are unchanged. queryColumn is
+ * bounded by its limit. External custom providers must meet the same contract. */
 export interface SourceStore {
   readonly stamp: SourceStamp
   readonly valuePolicy: ValuePolicy
@@ -415,6 +423,9 @@ export type ViewportResult = (
 ) & {
   /** Request-local overflow evidence; never a row-cache completeness proof. */
   overflowProof?: import('./overflowProof').OverflowProof
+  /** queryPayloadBytes of this result with its diagnostics, measured by the
+   * worker's paced walker (spec §10.2), so main checks the bound without a walk. */
+  queryBytes?: number
   /** Mixed detail/coarse panes and exact active inspection share the same owner. */
   groups?: readonly ViewportOverviewGroup[]
   active?: ViewportCell

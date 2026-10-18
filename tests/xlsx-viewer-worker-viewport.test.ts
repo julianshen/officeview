@@ -31,6 +31,8 @@ import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibi
 import type { CacheIdentity, LogicalCellBox, LogicalViewport } from '../src/xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../src/xlsx/view/projection'
 import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
+/** As the worker does (spec §10.2), a fixture result carries the query size the worker measured. */
+const STAMPED_QUERY_BYTES = 4096
 import { workbookOf } from './helpers/xlsx-find'
 
 const fixtureProof = () => ({ version: 1, owner: { docId: 'doc', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, window: windowOf(), profile: 'D', scope: 'tile', entries: [], pending: [] })
@@ -220,7 +222,7 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
     }
     try {
       const plans = new WorkerViewportPlans(h.remote)
-      const complete = { kind: 'complete', owner: fixtureOwner(), result: { kind: 'viewport', overflowProof: fixtureProof(), completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
+      const complete = { kind: 'complete', owner: fixtureOwner(), result: { kind: 'viewport', overflowProof: fixtureProof(), queryBytes: STAMPED_QUERY_BYTES, completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
       const viewport = vi.spyOn(h.remote, 'viewport').mockResolvedValue(complete)
       try {
         h.remote.beginPageFrame()
@@ -334,7 +336,7 @@ describe('cumulative per-frame/per-tile page caps and the ring share (r4 #1, #2)
 })
 
 describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => {
-  const complete = { kind: 'complete', owner: fixtureOwner(), result: { kind: 'viewport', overflowProof: fixtureProof(), completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
+  const complete = { kind: 'complete', owner: fixtureOwner(), result: { kind: 'viewport', overflowProof: fixtureProof(), queryBytes: STAMPED_QUERY_BYTES, completeness: 'complete', content: { kind: 'detail', cells: [] } } } as never
 
   it('MINOR-3: the request carries the frame owner its plan is stored under', async () => {
     const h = await harness()
@@ -416,7 +418,7 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const h = await harness()
     const plans = new WorkerViewportPlans(h.remote)
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
-    const partial = (error?: object) => ({ kind: 'complete', owner: fixtureOwner(), diagnostics: [], result: { kind: 'viewport', overflowProof: fixtureProof(), completeness: error ? 'incomplete' : 'loading', content: { kind: 'detail', cells: [{ kind: 'error', source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 64, height: 20 } }] }, ...(error ? { error } : {}) } }) as never
+    const partial = (error?: object) => ({ kind: 'complete', owner: fixtureOwner(), diagnostics: [], result: { kind: 'viewport', overflowProof: fixtureProof(), queryBytes: STAMPED_QUERY_BYTES, completeness: error ? 'incomplete' : 'loading', content: { kind: 'detail', cells: [{ kind: 'error', source: { row: 0, col: 0 }, bounds: { x: 0, y: 0, width: 64, height: 20 } }] }, ...(error ? { error } : {}) } }) as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(partial({ code: 'page-error', retryable: true, message: 'page failed' }))
     const unsubscribe = h.remote.subscribe(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
     vi.useFakeTimers()
@@ -446,7 +448,7 @@ describe('WorkerViewportPlans: owner scope and retry (MINOR-2, MINOR-3)', () => 
     const h = await harness()
     const plans = new WorkerViewportPlans(h.remote)
     const owner = h.session.identity('s'), window = windowOf(), extent = extentOf(metricsOf(h))
-    const loading = { kind: 'complete', owner: fixtureOwner(), diagnostics: [], result: { kind: 'viewport', overflowProof: fixtureProof(), completeness: 'loading', content: { kind: 'detail', cells: [] } } } as never
+    const loading = { kind: 'complete', owner: fixtureOwner(), diagnostics: [], result: { kind: 'viewport', overflowProof: fixtureProof(), queryBytes: STAMPED_QUERY_BYTES, completeness: 'loading', content: { kind: 'detail', cells: [] } } } as never
     const spy = vi.spyOn(h.remote, 'viewport').mockResolvedValue(loading)
     const unsubscribe = h.remote.subscribe(() => { plans.beginFrame(owner, window); plans.get(owner, window, extent, true) })
     vi.useFakeTimers()
