@@ -134,6 +134,7 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
 - **Post-processing.** A small build step handles what Tailwind v4 still emits for shadow, border and translate utilities.
   - *Round-2 revision:* the step is a **PostCSS plugin** registered in Vite's `css.postcss.plugins`. That stage runs after `@tailwindcss/vite` has generated the CSS and before Vite consumes it, in the library build, the dev/harness server, `?inline` imports and vitest.
   - A Vite `transform` hook with `enforce: 'post'` would run after `vite:css-post`, see only `""` or JS, and leave `dist/style.css` unscoped.
+  - *Round-3 revision:* the plugin identifies the entry by its module id with any `?query` stripped, so `officeview.css?inline` and `?direct` are scoped too. Vite passes the query through to PostCSS.
   - A scratch build (vite 7.3.1, tailwindcss and `@tailwindcss/vite` 4.3.3) confirmed the PostCSS stage rewrites all of those outputs.
 
   The plugin:
@@ -162,6 +163,7 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
   - The input is applied as if the viewer were on the natural layout at `z0 = fitWidth / naturalDisplayWidth`, with the content point under that input's anchor unchanged. Buttons step `z0` with `stepZoom` (×1.5 or ÷1.5); wheel and pinch apply their ratio to `z0`.
   - A result above 1 is a zoomed transform; a result clamped to 1 is the native natural layout.
   - Example: from `z0 ≈ 1.613`, zoom out gives 1.0756, and a second zoom out gives 1.
+  - *Round-3 revision:* gaps between pages are fixed px, so the fit layout is not a uniform scale of the natural layout. The anchor therefore converts by page index plus page-local offset, the offset scaled by `naturalWidth / fitWidth`. A point inside a gap keeps its unscaled gap offset.
   - This replaces the earlier wording that zooming out from fit "lands at natural layout, zoom 1".
 - **Fit state.** `fitActive = fitMode`, shown as `aria-pressed` on the Fit button. Container resizes re-lay out while fit mode is on. A zero-width container falls back to the non-fit formula.
 - **Memory.** In fit mode only pages near the viewport are rasterised at the full fit width. Off-screen pages keep a backing store no larger than natural mode would give them, using the same visibility observer the zoomed path uses today. The per-page backing scale stays capped by `MAX_EFFECTIVE_SCALE`.
@@ -179,6 +181,7 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
   - *Round-2 revision:* the mapping always includes the container's native `scrollTop`: content y = (view y + scrollTop − padding − panY) / zoom.
   - Mode changes move the offset atomically. Entering zoom turns the native scroll into pan and sets `scrollTop` to 0 in the same commit that sets `overflow: hidden`; leaving zoom turns pan back into `scrollTop`. Both keep the content point under the anchor fixed.
   - So `overflow: hidden` never hides a stale scroll offset.
+  - *Round-3 revision:* `goTo` while zoomed uses the exact inverse of that mapping, `panY = scrollTop − padding − top·zoom`.
   - State updates only when the index changes, so fast momentum scrolling produces no extra React renders.
   - This replaces the sparse IntersectionObserver thresholds, which could miss the moment two tall pages swap dominance. It also replaces `intersectionRatio` comparisons, which favour short pages.
   - `goTo(i)` scrolls the viewer's own container (`container.scrollTo`), never `scrollIntoView`, so host ancestors never scroll. While zoomed (`overflow: hidden`), it sets `panY` through `clampPan` instead.
@@ -197,6 +200,7 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
     - The model is walked lazily. Runs are never concatenated, and each run's text is fed in chunks of at most 2,000 code units without splitting a surrogate pair.
     - A resumable counter carries the open-token state across chunks, runs and slices, so a giant token, URL or CJK paragraph is both bounded and counted exactly.
     - The slice clock and the cancellation signal are checked after every chunk. Slices take ≤ 8 ms of work and yield between them; the work is cancellable and tied to the document generation.
+    - *Round-3 revision:* every node visit is a budgeted step. That includes empty runs, tables, cells and paragraph boundaries, and the traversal is iterative. A slice overshoots 8 ms by at most one step (one node visit or one ≤ 2,000-code-unit chunk), whatever the content.
   - PowerPoint and static XLSX show no word count.
 
 ### 6.12 Paged print isolation (R9)

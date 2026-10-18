@@ -30,7 +30,7 @@
     - `vite.harness.config.ts` inherits it through `mergeConfig(baseConfig, …)` and must **not** add a second copy.
     - Why this stage: `@tailwindcss/vite` generates the CSS first, then Vite's `vite:css` plugin runs `css.postcss.plugins` on the generated CSS before the CSS is consumed. A Vite `transform` hook with `enforce: 'post'` runs after `vite:css-post` and only ever sees `""` or JS (codex's R2 reproduction).
     - Verified with a scratch build (vite 7.3.1, tailwindcss and `@tailwindcss/vite` 4.3.3): a PostCSS plugin at this stage rewrote the emitted `dist/style.css`, the `?inline` string inside the JS bundle and the dev-server responses for `s.css`, `s.css?direct` and `s.css?inline`, and removed every `@property` rule in each of them.
-    - The plugin only touches its input when `root.source.input.file` ends with `src/styles/officeview.css`.
+    - The plugin only touches its input when `isOvEntry(root.source?.input.file)` is true (R3-1). That check strips any `?query` or `#hash` from Vite's module id, normalises backslashes to `/`, and then tests `endsWith('/src/styles/officeview.css')`. Vite hands PostCSS the id with its query attached (verified: `…/s.css?inline` in the scratch build), so an exact-path check would skip the `?inline` copy.
   - The shipped CSS contains no `:root`, `:host`, `@property` or unscoped selector. `bun scripts/audit-css.ts dist/style.css` (built on `unscopedSelectors`) is part of every build gate.
 - **Theme root.**
   - The theme root is the outer viewer wrapper; `data-officeview-root` keeps its existing semantics: the inner region that receives the host's `className`/`style`, with no `ov:` classes.
@@ -218,7 +218,8 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
   - `export const CANVAS_TOKENS: readonly CanvasToken[]`
   - `export const THEME_DEFAULTS: { light: Record<ColorToken, string>; dark: Record<ColorToken, string> }`
 - `scripts/postcss-ov-scope.ts`:
-  - `export function ovCssScope(): import('postcss').Plugin`. This is a PostCSS plugin (`postcssPlugin: 'ov-scope'`, `OnceExit`). It acts only when `root.source?.input.file` ends with `src/styles/officeview.css` and leaves any other CSS untouched. It runs through Vite's `css.postcss.plugins`, which is after `@tailwindcss/vite` has generated the CSS and before Vite consumes it, in the build, the dev server, `?inline` and vitest alike.
+  - `export function ovCssScope(): import('postcss').Plugin`. This is a PostCSS plugin (`postcssPlugin: 'ov-scope'`, `OnceExit`). It acts only when `isOvEntry(root.source?.input.file)` is true and leaves any other CSS untouched.
+  - `export function isOvEntry(id: string | undefined): boolean`. It strips the query and hash, normalises separators and matches the `officeview.css` path suffix. It runs through Vite's `css.postcss.plugins`, which is after `@tailwindcss/vite` has generated the CSS and before Vite consumes it, in the build, the dev server, `?inline` and vitest alike.
   - `export function scopeOvCss(css: string): string` is the same transform applied to a string, used by the unit tests. It does three things:
     - drops `@property` rules;
     - unwraps the `@layer properties`/`@supports` fallback into an unlayered rule `[data-ov-theme-root], [data-ov-theme-root] *, [data-ov-theme-root] ::before, [data-ov-theme-root] ::after { --tw-*: … }`, placed before the utilities;
@@ -243,6 +244,18 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
     - `it('drops @property and rescopes the properties fallback')`.
     - `it('appends the theme-root scope to utility selectors, variants and pseudo-elements')`: a table of real Tailwind output, including `.ov\:flex`, `.ov\:hover\:bg-hover:hover` inside `@media (hover: hover)`, `.ov\:placeholder\:text-muted::placeholder`, `.ov\:coarse\:min-h-11` inside `@media (pointer: coarse)` and `.ov\:motion-reduce\:transition-none`.
     - `it('unscopedSelectors reports any rule without [data-ov-theme-root] (mutation)')`: `.x{}` and `:root{}` are reported.
+    - `it('isOvEntry matches the entry with or without Vite queries and nothing else')`:
+
+      | Id | Result |
+      |---|---|
+      | `/a/src/styles/officeview.css` | true |
+      | `/a/src/styles/officeview.css?inline` | true |
+      | `/a/src/styles/officeview.css?direct` | true |
+      | `/a/src/styles/officeview.css?inline&used` | true |
+      | `C:\a\src\styles\officeview.css?inline` | true |
+      | `/a/src/styles/other.css?inline` | false |
+      | `/a/src/styles/officeview.css.map` | false |
+      | `undefined` | false |
     - `it('the ?inline compiled stylesheet is scoped (pipeline placement)')`: `import css from '../src/styles/officeview.css?inline'` goes through the real vitest pipeline. `unscopedSelectors(css)` returns `[]`, `css` contains no `@property`, and it contains at least one `.ov\:` selector ending in `:is([data-ov-theme-root], [data-ov-theme-root] *)`. This fails if the plugin is registered at a stage that never sees the CSS.
   - `tests/ui-theme-foundation.test.tsx`:
     - `it('marks the outer wrapper as theme root, data-ov-theme=system by default, honouring the prop')`: for a DOCX, `[data-ov-theme-root]` contains `[data-officeview-root]` and, after the lazy chunk loads, the floating search box; rerender with `theme="dark"` gives `'dark'`. Do the same for the interactive sheet wrapper and the `Suspense` fallback.
@@ -333,17 +346,23 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
   - RFC 6266: `filename*` wins over `filename`, and `filename` wins over the URL. A malformed `filename*` falls back to `filename`.
   - Returns `undefined` otherwise. The name is set from the resolved response for promised/one-shot sources and is discarded if the source changed meanwhile.
 - `pageTracking.ts` (pure):
-  - `export function pageOffsets(specs: readonly PageSpec[], displayWidth: number, gap: number): { top: number[]; height: number[] }`
+  - `pageOffsets` is imported from `scrollPan.ts` (see below).
   - `export function mostVisiblePage(o: { top: number[]; height: number[] }, viewTop: number, viewHeight: number): number`. It picks the largest visible pixel height, ties going to the lower index.
 - `usePageTracking.ts`: `export function usePageTracking(container: RefObject<HTMLElement | null>, layout: { specs: readonly PageSpec[]; displayWidth: number; gap: number }, transform: Transform, setTransform: (t: Transform) => void): { current: number; goTo(index: number): void }`.
   - Recomputes once per rAF on scroll, transform, resize or layout change, and calls `setState` only when the index changes.
   - It maps the viewport into content coordinates **only** through `scrollPan.contentYAt`, which includes the container's native `scrollTop`. Visible content runs from `contentYAt(0, s)` to `contentYAt(clientHeight, s)`.
   - `goTo(i)`, not zoomed: `container.scrollTo({ top: PAGE_PADDING_PX + top[i] })`.
-  - `goTo(i)`, zoomed: `setTransform(clampPan({ ...t, panY: PAGE_PADDING_PX - top[i] * zoom }, viewport))`. This relies on the invariant that `scrollTop === 0` whenever `zoom > 1`; it asserts the invariant in development and otherwise subtracts `scrollTop`.
+  - `goTo(i)`, zoomed: `setTransform(clampPan({ ...t, panY: panYForContentTop(top[i], s) }, viewport))`. This is the exact inverse of `contentYAt` (R3-2): `panYForContentTop(y, s) = s.scrollTop - s.padding - y * s.zoom`, so `contentYAt(0) === y`. The `scrollTop === 0` invariant while zoomed makes the `scrollTop` term 0 in practice, but the formula stays correct if it is ever nonzero.
   - Never `scrollIntoView`.
 - `scrollPan.ts` (eager, pure; R2-5). Native scroll and pan move between modes atomically, so the retained `scrollTop` of an `overflow: hidden` container can never skew tracking or `goTo`. `zoom.ts` is unchanged.
   - `export interface ScrollPanState { scrollTop: number; panY: number; zoom: number; padding: number }`
-  - `export function contentYAt(viewY: number, s: ScrollPanState): number`, which returns `(viewY + s.scrollTop - s.padding - s.panY) / s.zoom` in natural-layout content px.
+  - `export function contentYAt(viewY: number, s: ScrollPanState): number`, which returns `(viewY + s.scrollTop - s.padding - s.panY) / s.zoom`. The result is in the **current layout's** content px (the stack as laid out at the current `displayWidth`, before the zoom transform).
+  - `export function panYForContentTop(contentY: number, s: ScrollPanState): number`, which returns `s.scrollTop - s.padding - contentY * s.zoom`, the inverse that puts `contentY` at viewport y = 0.
+  - `export function pageOffsets(specs: readonly PageSpec[], displayWidth: number, gap: number): { top: number[]; height: number[] }`. It moves here from `pageTracking.ts` because the eager zoom handlers need it; `pageTracking.ts` imports it. `height[i] = spec.heightPx * displayWidth / spec.widthPx`; `top[i + 1] = top[i] + height[i] + gap`, since gaps are fixed px (`marginBottom: gap` at `OfficeDoc.tsx:235`).
+  - `export function remapContentY(y: number, from: { top: number[]; height: number[] }, to: { top: number[]; height: number[] }): number` (R3-4) maps a content point from one layout to another through **page index plus page-local offset**:
+    - inside page i: `to.top[i] + (y - from.top[i]) * (to.height[i] / from.height[i])`;
+    - inside the gap after page i: `to.top[i] + to.height[i] + (y - from.top[i] - from.height[i])`, since gaps do not scale;
+    - before page 0: unchanged; after the last page: offset from the last page's bottom, unscaled.
   - `export function enterZoom(s: ScrollPanState, nextZoom: number, anchorY: number): { panY: number; scrollTop: 0 }`. It keeps `contentYAt(anchorY)` fixed. `LegacyOfficeDoc` applies `scrollTop = 0` in a layout effect in the same commit that switches `overflow` to `hidden`.
   - `export function exitZoom(s: ScrollPanState, anchorY: number, maxScrollTop: number): { panY: 0; scrollTop: number }`. It keeps `contentYAt(anchorY)` fixed, clamped to `[0, maxScrollTop]`, and is applied in the same commit that switches back to `overflow: auto`.
   - Every zoom input goes through these helpers: buttons, Ctrl/Cmd-wheel, pinch and keyboard.
@@ -356,13 +375,18 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
   - `export interface WordCounter { push(chunk: string): void; boundary(): void; total(): number }`
   - `export function createWordCounter(): WordCounter`. This is a resumable state machine. Its state is `inToken`, `tokenHasAlnum` and `pendingHigh` (a lone high surrogate carried over to the next `push`). It iterates by code point, so a token, surrogate pair or mark that spans any number of `push` calls is counted exactly once.
   - `export function countWords(text: string): number`, a convenience wrapper: `createWordCounter()`, then `push(text)`, then `total()`.
-  - `export function* wordSourceChunks(doc: DocxDocument): Generator<string | typeof PARA>`.
+  - `export const STEP: unique symbol`, a traversal checkpoint carrying no text.
+  - `export function* wordSourceChunks(doc: DocxDocument): Generator<string | typeof PARA | typeof STEP>`.
     - It walks the model **lazily**: body blocks, then table cells (recursive), text-box paragraphs, footnotes and endnotes. Headers, footers and comments are excluded.
     - It yields each run's text in slices of at most `UNIT_CHARS` code units, never splitting a surrogate pair, and yields `PARA` after each paragraph.
-    - It never joins runs and never collects arrays up front, so the work between two yields is bounded by `UNIT_CHARS` plus one node visit.
+    - It never joins runs and never collects arrays up front.
+    - **Every node visit yields (R3-3).** Each section, block, paragraph, run (including an **empty** run), table, row, cell, drawing or text body, and note yields at least one item. Nodes with no text yield `STEP`.
+    - Traversal is **iterative**, with an explicit stack of child iterators rather than recursion, so deep nesting (tables inside cells inside text boxes) neither recurses on the JS stack nor runs ahead of the budget.
+    - The work between two yields is therefore at most one node visit plus at most `UNIT_CHARS` code units, whatever the content.
   - `export function countDocumentWords(doc: DocxDocument, opts: { signal: AbortSignal; now?: () => number; schedule?: (cb: () => void) => () => void; sliceMs?: number }): Promise<number>`.
     - Defaults: `now = performance.now`, `schedule = requestIdleCallback ?? setTimeout(0)`, `sliceMs = 8`.
-    - Within a slice, it pulls chunks from the generator and pushes them into one counter, checking `signal.aborted` and `now()` after **every** chunk, and yields when the slice reaches `sliceMs`.
+    - Within a slice, it pulls items from the generator, checking `signal.aborted` and `now()` after **every** item, `STEP` and `PARA` included. Text goes to `push`, `PARA` to `boundary()`, and `STEP` is only counted against the budget.
+    - The slice ends at the first check at or after `sliceMs`. Precise guarantee: a slice overshoots `sliceMs` by at most the cost of one item (one node visit or one ≤ `UNIT_CHARS` chunk). The fake-clock tests prove this item-level bound, not an absolute wall-clock ceiling.
     - Abort rejects with an `AbortError`, and nothing is published for a superseded generation.
 - `useWordCount.ts`: `export function useWordCount(document: OfficeDocSource): number | null`. Returns `null` for PPTX and static XLSX, and while counting. A fresh `AbortController` is created per document, and the previous one is aborted.
 - `PagedToolbar` props:
@@ -383,6 +407,8 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
   - `displayWidth = fitMode && avail > 0 ? Math.min(avail, naturalMax * MAX_ZOOM) : Math.min(avail || naturalMax, naturalMax)`. For container widths 0 to 32, `avail` is 0 and the natural width is used, exactly as today; it is never negative.
   - The transform stays at zoom 1 while fit mode is on.
   - **Fit exit, one rule.** A zoom input in fit mode is applied as if the viewer were on the natural layout at `z0 = fitDisplayWidth / naturalDisplayWidth`, with the same content point under that input's existing anchor. Fit mode turns off in the same commit.
+    - **Anchor conversion (R3-4).** Fixed-px gaps mean the fit layout is not a uniform `z0` scale of the natural stack. So the anchor's content y is converted with `remapContentY(contentYAt(anchorY, fitState), pageOffsets(specs, fitWidth, gap), pageOffsets(specs, naturalWidth, gap))`, which keeps the page index and scales the page-local offset by `naturalWidth / fitWidth`.
+    - The new zoom `z1` is then applied on the natural layout, with `panY = anchorY - padding - yNat * z1` for zoomed results (`scrollTop` is 0 while zoomed; this solves `contentYAt(anchorY) = yNat`), or through `exitZoom`'s scroll mapping when `z1` clamps to 1.
     - Buttons give `stepZoom(z0, ±1)`; wheel and pinch apply their ratio to `z0`.
     - If the result is above 1, it goes through `enterZoom`. If it clamps to 1, the viewer lands on the native natural layout through `exitZoom`'s scroll mapping.
     - Example: `z0 = 968/600 ≈ 1.613`. Zoom in gives 2.42 (zoomed). Zoom out gives `stepZoom(1.613, -1)` = 1.0756 (still zoomed, not natural), and a second zoom out gives 1, the native natural layout.
@@ -423,9 +449,14 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
     - `it('mixed page sizes compare visible pixels, not ratios')`: a fully visible 200px page loses to a 500px-visible tall page.
     - `it('maps the viewport through the zoom transform')`
     - `it('scrollPan: contentYAt includes native scrollTop; enterZoom and exitZoom keep the anchored content point fixed')` (pure). From `{ scrollTop: 1000, panY: 0, zoom: 1, padding: 16 }`, `enterZoom(…, 2, 400)` returns `scrollTop` 0 and a `panY` for which `contentYAt(400)` is unchanged (±0.5). `exitZoom` round-trips the same point.
+    - `it('panYForContentTop is the exact inverse of contentYAt')` (pure). With padding 16, scrollTop 0, zoom 2 and target 1000, the result is `panY = -2016` and `contentYAt(0) = 1000`. With padding 16, scrollTop 40, zoom 3 and target 500, the result is `panY = -1476` and `contentYAt(0) = 500`. A round trip over random states holds to 1e-9.
+    - `it('remapContentY keeps page index and page-local offset; gaps do not scale')` (pure). Two pages of 1000×1000 spec px with gap 20, from fit width 2000 to natural 1000:
+      - fit offsets are `top [0, 2020]`, `height [2000, 2000]`; natural offsets are `top [0, 1020]`, `height [1000, 1000]`;
+      - `y = 2020 + 500` (page 1, offset 500) maps to `1020 + 250 = 1270`, whereas a naive divide by `z0` would give 1260;
+      - `y = 2010` (inside the gap after page 0) maps to `1000 + 10 = 1010`.
     - `it('native scroll to a later page, then zoom: tracking and goTo stay correct')`, in `LegacyOfficeDoc` with a jsdom layout mock:
       - native-scroll to page 3, then press Zoom in: `container.scrollTop === 0` in the same commit, and the tracked page is still 3;
-      - `goTo(5)` while zoomed brings page 5's top to the viewport top (±1px);
+      - `goTo(5)` while zoomed brings page 5's top to the viewport top (±1px), checked with `pageGapPx` 16 and padding 16. The expected `panY` comes from `panYForContentTop`, not a hand-typed constant;
       - zoom back out to 1: native scrolling resumes with page 5 at the top.
     - `it('updates at most once per animation frame and only on change')`: rAF mock, 50 scroll events in one frame → 1 computation; render count rises only on index change.
     - `it('goTo scrolls the viewer container, never scrollIntoView')`: spy `Element.prototype.scrollIntoView` (0 calls); `container.scrollTop` equals the target offset.
@@ -453,12 +484,16 @@ Spec §6.7 R5. This is a pure move with no visual change. It frees eager bytes b
     - `it('a giant single token (2,000,000 chars, no whitespace) is bounded and counts once')`: every yielded chunk is ≤ `UNIT_CHARS`, every slice is ≤ 8 chunks, and the total is 1.
     - `it('a long URL paragraph and a 100,000-char CJK paragraph are chunked and counted exactly')`: URL repeated without spaces → 1; CJK → 100,000.
     - `it('a paragraph with 100,000 runs is traversed lazily')`: the generator's first chunk arrives before the fixture's run-array iterator has advanced past a handful of runs (instrument with a Proxy).
+    - `it('100,000 empty runs before one word: every visit is a budgeted item')`: fake `now` advances 1 ms per item. No slice handles more than 8 items, there are at least 12,500 slices, and the total is 1.
+    - `it('deep non-text structure is bounded and does not recurse')`: tables nested 10,000 levels deep through cells, plus 50,000 empty tables, plus a final `'x'`. There is no stack overflow, every slice is ≤ 8 items, and the total is 1.
+    - `it('abort during a long text-free traversal stops within one item')`: abort after 5 slices of empty runs. The promise rejects with `AbortError`, and the generator is never pulled again after the next check.
     - `it('cancels on abort: no result after document change')`
     - `it('useWordCount returns null until counted, never counts during render, null for PPTX and static XLSX')`
   - `paged-fit.test.tsx`:
     - `it('fit-to-width lays pages out at the pane width without a transform')`: container 1000px, page natural 600 → canvas CSS width `968px`; the content transform has zoom 1 (no `scale(` above 1); container `overflow` is `auto`; `Fit to width` has `aria-pressed="true"`.
     - `it('a pointer drag in fit mode selects text, not pan')`
     - `it('zooming from fit mode starts at the equivalent zoom and turns fit off')`: Fit, then `Zoom in` → scale ≈ `stepZoom(968/600, 1)` (±0.01), `aria-pressed="false"`, and the content point under the anchor is unchanged (±1px, not merely the same page).
+    - `it('leaving fit mode on a later page keeps the anchor through page-relative remapping')`: 10 pages with `pageGapPx = 24`. Fit mode is on and the view is scrolled so the anchor sits 300 fit-px into page 7. After zoom in, the same page-7 point (page-local offset × `naturalWidth/fitWidth`) is under the anchor (±1px). A second case puts the anchor inside the gap after page 6, and the point stays in that gap at the same unscaled offset.
     - `it('zoom out from fit follows stepZoom: 1.613 → 1.0756 (zoomed), then 1 (native natural layout)')`: after the second step, canvas width is 600, `overflow` is `auto`, `scrollTop` keeps the anchored point, and the readout goes 161% → 108% → 100%. The same rule is checked once each for Ctrl-wheel and pinch.
     - `it('fit mode follows container resize; narrow widths keep the natural fallback')`: 1000→1400 gives 1368. Container widths 0, 1, 31 and 32 give 600 (never negative), in both fit and non-fit mode. 33 gives 1 in non-fit and 1 in fit (`avail = 1`), matching today's guard.
     - `it('fit mode caps at MAX_ZOOM × natural width')`: page 100px in a 1000px pane → 600.
@@ -810,3 +845,12 @@ Every claim below was checked against the source and, where it concerns the CSS 
 | R2 MINOR 2 ((0,1,1) host resets) | Fixed. The base uses `:is()` (0,1,1). That is not relied on: every control must carry explicit colour, background, padding and border utilities at (0,2,0), enforced by a jsdom class check, and the hostile-host Playwright leg is added to Tasks 2, 3 and 5, where the class swap happens. Raising the base to (0,2,0) was rejected, because any selector trick that does it (for example `:not([x])`) ties with or beats the utilities. |
 | R2 MINOR 3 (WebKit named pages) | Fixed. `pageRules(specs, namedPages)` has a single-size fallback chosen by `CSS.supports('page', 'p0')`. A Chromium PDF page-box test and a WebKit branch and fit test are added. |
 | R2 NIT 4 (duplicated print constants) | Fixed. Cross-reference comments are added in both files; the sheet path stays untouched. |
+
+### Round 3 (review of 03ba88c): codex REQUEST CHANGES (agy and opencode already approved)
+
+| # | Disposition |
+|---|---|
+| R3-1 | **Accepted and fixed.** Verified in the scratch build: PostCSS receives `…/officeview.css?inline` as `input.file`. New `isOvEntry(id)` strips the query and hash and normalises separators before the suffix match (Global Constraints, Task 1). Covered by a table test (plain, `?inline`, `?direct`, `?inline&used`, a Windows path, an unrelated stylesheet, `.css.map`), by the existing `?inline` pipeline test and by the `dist/style.css` audit. |
+| R3-2 | **Accepted and fixed.** Zoomed `goTo` uses `panYForContentTop(y, s) = scrollTop − padding − y·zoom`, the exact inverse of `contentYAt`. Tests use codex's case (padding 16, zoom 2, target 1000 → −2016) and a nonzero-`scrollTop` case (−1476), plus a random round trip. The mounted test derives its expected value from the helper. |
+| R3-3 | **Accepted and fixed.** The generator yields at every node visit (`STEP` for text-free nodes, including empty runs) and traverses iteratively with an explicit stack. The slice loop checks the clock and abort after every item. The guarantee is restated as "overshoot ≤ one item". Tests: 100,000 empty runs, 10,000-deep nested tables plus 50,000 empty tables, and abort during a text-free traversal. |
+| R3-4 | **Accepted and fixed.** Verified: `PageCanvas` uses a fixed `marginBottom: gap` (`OfficeDoc.tsx:235`). New eager `pageOffsets` and `remapContentY` convert the anchor through page index plus page-local offset scaled by `naturalWidth/fitWidth`, with gap offsets unscaled. The `contentYAt` units are reworded to "current layout". Tests: codex's two-page gap example (1270, not the naive 1260), an anchor in a gap, and a mounted later-page case with `pageGapPx = 24`. |
