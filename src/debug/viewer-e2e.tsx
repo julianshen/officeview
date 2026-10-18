@@ -64,7 +64,6 @@ export interface ViewerE2E {
   reset(): void
 }
 
-
 declare global {
   interface Window { __viewerE2E?: ViewerE2E }
 }
@@ -163,7 +162,6 @@ function E2EPage(): JSX.Element {
   // onFrame and onMainLedger are the viewer's @internal instrumentation props;
   // OfficeFile forwards unknown props to the interactive viewer unchanged.
   const internal = { onFrame, onMainLedger } as Record<string, unknown>
-
   if (worker && params.get('paged') === '1') return <ForcedPagedDoc blob={blob} internal={internal} />
   return (
     <OfficeFile
