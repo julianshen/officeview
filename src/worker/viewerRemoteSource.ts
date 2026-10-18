@@ -64,9 +64,10 @@ function grantedBytes(reply: WorkerReply, grant: number): number {
   return typeof stamped === 'number' && Number.isSafeInteger(stamped) && stamped >= 0 && stamped <= grant ? stamped : grant
 }
 /** The bytes a non-granted reply is charged without walking it (spec §10.2):
- * the size the worker measured and stamped on it, or, when that is missing or
- * invalid, `maximum` (the whole main-thread budget: no reply main can hold is
- * larger). */
+ * the size the worker measured and stamped on it. The kernel stamps every reply
+ * it posts (a walk it cannot admit posts a typed refusal, not data); a missing
+ * or invalid stamp is a protocol error, defensively charged as `maximum` (the
+ * whole main-thread budget). That is not an upper bound on reply sizes. */
 function stampedBytes(reply: WorkerReply, maximum: number): number {
   const stamped = (reply as { replyBytes?: unknown }).replyBytes
   return typeof stamped === 'number' && Number.isSafeInteger(stamped) && stamped >= 0 ? stamped : maximum
@@ -465,7 +466,7 @@ export class RemoteWorkbook implements WorkbookSource {
       // over it is charged on top.
       // No reply is walked here: the worker stamped its exact size on it (a
       // granted one within its grant). A missing or invalid size is charged as
-      // the whole grant, or as the whole main budget for any other reply.
+      // the whole grant, or, as a protocol error, the whole main budget.
       const pool = drawings ? 'drawings' : 'replies', targets = leaseTargets(reply)
       const bytes = grant ? grantedBytes(reply, this.mainLedger.ownerBytes('replies', grant)) : stampedBytes(reply, MAIN_THREAD_BUDGETS[this.profile])
       const held = grant ?? reservation

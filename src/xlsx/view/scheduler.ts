@@ -171,6 +171,11 @@ export class CheckpointBudget {
     this.slice ??= this.owned = new CooperativeSlice<string>({ ...this.pacing, start: this.start })
     return this.slice.due(since)
   }
+  /** A checkpoint now (a final check without a pause). */
+  checkpoint(): void {
+    this.unchecked = 0
+    this.check()
+  }
   /** Ends a pass with a final check; units below the next checkpoint are
    * charged to a caller slice, so the next pass sharing it starts after them. */
   async finish(): Promise<void> {

@@ -40,7 +40,7 @@ import { MAX_ROWS } from '../xlsx/view/coordinates'
 import { awaitAbortable, bindQueryDeadline } from './viewerAbort'
 import { queryPayloadBytes } from './viewerQueryBudget'
 import { admitReply, replyLimitEnvelope } from './viewerReplyLimit'
-import { measurePayloadBytesStepped, measureWithinSlice } from './replyMeasure'
+import { StopWalk, walkPayload } from './replyMeasure'
 import { CheckpointBudget } from '../xlsx/view/scheduler'
 import { smallTreeBytes } from '../xlsx/view/payloadBytes'
 import type { PoolCharge } from '../xlsx/view/tileCache'
@@ -213,7 +213,8 @@ export class ViewerKernel {
     let ended = false
     const retain = (release: () => void) => { if (ended) release(); else outgoing.push(release) }
     // `control`: the emitting site built `out` itself, with no provider result.
-    const emit = (out: WorkerReply, control = false) => {
+    // `transfer`: the walker already collected it (a measured provider result).
+    const emit = (out: WorkerReply, control = false, transfer?: ArrayBuffer[]) => {
       if (checked && out.requestId === command.requestId) {
         // The walk's workspace is a transient share of the document pool,
         // admitted chunk by chunk before it grows and released after the walk.
@@ -223,14 +224,14 @@ export class ViewerKernel {
         finally { workspace?.release() }
       } else if (out.replyBytes === undefined) {
         // A kernel-built reply is a small tree: stamped without a walk. A
-        // provider result arrives here already stamped (see sized).
+        // provider result arrives here already stamped (see publish).
         const stamped = { ...out, replyBytes: 0 }
         const bytes = smallTreeBytes(stamped)
         if (bytes !== undefined) { stamped.replyBytes = bytes; out = stamped }
       }
-      const transfer = transferablesOf(out)
-      this.accounting.transfer(transfer)
-      post(out, transfer)
+      const transfers = transfer ?? transferablesOf(out)
+      this.accounting.transfer(transfers)
+      post(out, transfers)
     }
     let entry: InFlight | undefined
     let deadline: ReturnType<typeof setTimeout> | undefined
@@ -279,19 +280,19 @@ export class ViewerKernel {
           if (!(expired.signal.aborted && out.kind === 'complete' && out.result.kind === 'view')) throw cause
         }
       }
-      const final = this.finalCheck(command, out, entry)
       report.close()
       const source = docId ? this.sessions.get(docId)?.source : undefined
       const status = source?.valueStatus?.()
-      const diagnosed = final.kind === 'complete' && status?.policy === 'cached' ? { ...final, diagnostics: [
+      const conclude = (final: WorkerReply): WorkerReply => this.withReason(final.kind === 'complete' && status?.policy === 'cached' ? { ...final, diagnostics: [
         ...final.diagnostics.filter(d => d.code !== 'cached-value-policy'),
         ...(source?.openDiagnostics ?? []).filter(d => d.code !== 'cached-value-policy' && !final.diagnostics.some(existing => existing.code === d.code && existing.message === d.message)),
         { code: 'cached-value-policy', message: status.message! },
-      ] } : final
+      ] } : final, entry!)
+      const final = this.finalCheck(command, out, entry)
       // Of a read's replies, only a complete one carries the provider's result;
       // every other kind (cancelled, stale, error) is built by the kernel.
-      const answer = this.withReason(diagnosed, entry)
-      emit(!checked && diagnosed.kind === 'complete' ? this.sizedWithinSlice(answer, docId) ?? await this.sizedInSteps(answer, docId, entry) : answer, diagnosed.kind !== 'complete')
+      if (checked || final !== out || out.kind !== 'complete') emit(conclude(final), final.kind !== 'complete')
+      else await this.publish(command, out, conclude(out), docId, entry, emit)
     } catch (cause) {
       if (entry?.controller.signal.aborted) {
         emit(this.withReason(reply(command as never, entry.owner as never, { kind: 'cancelled' }), entry), true)
@@ -323,39 +324,32 @@ export class ViewerKernel {
       }
     }
   }
-  /** A provider result's reply with its exact size stamped (`replyBytes`, the
-   * measure main would charge, counted in it), so main charges the received
-   * clone without walking it (spec §10.2). The walk's workspace is admitted to
-   * the document pool; a reply the pool cannot measure now goes unstamped and
-   * main charges its conservative maximum. This synchronous form sizes a reply
-   * whose walk fits one slice (small replies keep their posting order) and
-   * returns null for a larger one, which sizedInSteps measures. */
-  private sizedWithinSlice(out: WorkerReply, docId: string | undefined): WorkerReply | null {
+  /** Posts a provider result (spec §10.2): the one payload walker measures it
+   * (stamped as `replyBytes`, the measure main charges, counted in it) and
+   * collects its transferables in the same pass, its workspace admitted to the
+   * document pool. While it walks, each checkpoint asks whether the outcome
+   * would still be published (finalCheck: cancellation, owner, the committed
+   * view rule) and stops it otherwise. The owner check runs once more after
+   * the walk, immediately before posting. A walk the pool refuses posts a
+   * typed retryable refusal and none of the result's data. */
+  private async publish(command: Exclude<WorkerCommand, { kind: 'cancel' }>, out: WorkerReply, answer: WorkerReply, docId: string | undefined, entry: InFlight,
+    emit: (out: WorkerReply, control?: boolean, transfer?: ArrayBuffer[]) => void): Promise<void> {
+    const published = () => this.finalCheck(command, out, entry) === out
     const workspace = docId === undefined ? undefined : this.sessions.get(docId)?.memory.charge()
+    const budget = new CheckpointBudget(() => { if (!published()) throw new StopWalk() }, undefined, {}, 'reply')
     let held = 0
     try {
-      const sized = { ...out, replyBytes: 0 }
-      const measured = measureWithinSlice(sized, more => !workspace || workspace.set(held += more))
-      if (!measured) return null
-      if (measured.bytes === undefined) return out
-      sized.replyBytes = measured.bytes
-      return sized
-    } finally { workspace?.release() }
-  }
-  /** sizedWithinSlice for a reply larger than one slice: measured in budget
-   * steps with host yields, abandoned (cancelled) when its command is. */
-  private async sizedInSteps(out: WorkerReply, docId: string | undefined, entry: InFlight): Promise<WorkerReply> {
-    const workspace = docId === undefined ? undefined : this.sessions.get(docId)?.memory.charge()
-    const budget = new CheckpointBudget(() => {
-      if (entry.controller.signal.aborted) throw new DOMException('Reply sizing cancelled', 'AbortError')
-    }, undefined, {}, 'reply')
-    let held = 0
-    try {
-      const sized = { ...out, replyBytes: 0 }
-      const bytes = await measurePayloadBytesStepped(sized, more => !workspace || workspace.set(held += more), budget)
-      if (bytes === undefined) return out
-      sized.replyBytes = bytes
-      return sized
+      const sized = { ...answer, replyBytes: 0 }
+      const run = walkPayload(sized, more => !workspace || workspace.set(held += more), budget)
+      const outcome = run instanceof Promise ? await run : run
+      const final = this.finalCheck(command, out, entry)
+      if (final !== out) { emit(this.withReason(final, entry), true); return }
+      if (outcome.kind !== 'measured') {
+        emit(errorReply(command, capturedOwner(command) as never, 'resource-limit', true, [{ code: 'reply-workspace', message: 'The reply could not be measured within the worker memory budget; retry' }]), true)
+        return
+      }
+      sized.replyBytes = outcome.bytes
+      emit(sized, false, outcome.transfer)
     } finally { budget.dispose(); workspace?.release() }
   }
   private abort(entry: InFlight, reason: CancelReason): void {
