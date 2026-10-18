@@ -89,6 +89,8 @@ export function SearchBar({
           padding: '0 8px',
           borderRadius: 6,
           border: '1px solid rgba(0,0,0,0.2)',
+          // light-pinned on the light panel until the toolbar task themes it
+          color: '#111',
           fontSize: 14,
           outline: 'none',
         }}

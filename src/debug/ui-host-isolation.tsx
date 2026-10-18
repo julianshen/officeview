@@ -8,6 +8,7 @@
  *                    (absent: a clean page)
  *   mode=pair        two paged viewers instead: viewer 1 light inside
  *                    `.brand-a` (a host accent override), viewer 2 dark
+ *   theme=dark|system  theme of the sheet and paged viewers (default light)
  *
  * Page layout uses inline styles only, so the hostile sheet cannot move the
  * viewers; only what reaches viewer elements can differ. Excluded from the
@@ -31,6 +32,7 @@ const BRAND_CSS = '.brand-a [data-ov-theme-root]{--ov-color-accent:#c50f1f}'
 const params = new URLSearchParams(location.search)
 const host = params.get('host')
 const pair = params.get('mode') === 'pair'
+const theme = params.get('theme') === 'dark' ? 'dark' : params.get('theme') === 'system' ? 'system' : 'light'
 
 function addStyle(id: string, css: string, first: boolean): void {
   const style = document.createElement('style')
@@ -69,8 +71,8 @@ function App(): JSX.Element {
   }
   return (
     <div className="app" style={{ display: 'block', width: 900 }}>
-      <div data-viewer="sheet" style={box}><OfficeDoc document={docs.xlsx} interactiveSheets theme="light" /></div>
-      <div data-viewer="paged" style={box}><OfficeDoc document={docs.docx} theme="light" /></div>
+      <div data-viewer="sheet" style={box}><OfficeDoc document={docs.xlsx} interactiveSheets theme={theme} /></div>
+      <div data-viewer="paged" style={box}><OfficeDoc document={docs.docx} theme={theme} /></div>
       <button id="host-button" type="button">Host button</button>
       <div id="host-flex" className="flex">host flex</div>
     </div>

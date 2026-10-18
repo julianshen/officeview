@@ -249,6 +249,9 @@ function yieldPrint(id: string): void {
   printOwner.style.remove()
   printOwner = null
 }
+/** Until the sheet chrome's light backgrounds move to tokens (Task 3), its text
+ * stays light-pinned so a dark theme never paints pale text on them. */
+const LEGACY_TEXT = '#1f2937'
 /** UA form controls do not inherit fonts; one shared rule (while any viewer is mounted) makes them. */
 let fontRule: { style: HTMLStyleElement; users: number } | null = null
 function retainFontRule(): () => void {
@@ -1393,10 +1396,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     observer.observe(el, { childList: true, subtree: true })
     return () => observer.disconnect()
   }, [mainLedger, live])
+  // Once per mount: is officeview.css loaded? (spec §5, R10)
+  useEffect(() => { if (wrapperRef.current) warnIfStylesMissing(wrapperRef.current) }, [])
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
-    warnIfStylesMissing(el)
     const suppress = (event: WheelEvent) => { if (event.ctrlKey || event.metaKey) event.preventDefault() }
     el.addEventListener('wheel', suppress, { passive: false })
     return () => el.removeEventListener('wheel', suppress)
@@ -1699,7 +1703,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
     // an unsized host gets the default 400px pane.
-    <div ref={wrapperRef} data-officeview-sheet-instance={instance} {...themeRootProps(props.theme, instance)} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
+    <div ref={wrapperRef} data-officeview-sheet-instance={instance} {...themeRootProps(props.theme, instance)} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto', color: LEGACY_TEXT }}>
       <div
         ref={rootRef}
         className={props.className}
@@ -1720,7 +1724,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div data-officeview-ui="sheet-toolbar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px', padding: '4px 8px', background: '#f9fafb', boxShadow: 'inset 0 -1px #858b94' }}>
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
-        <div data-officeview-ui="sheet-actions"><button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" onClick={cancelCopy}>Cancel copy</button>}<button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button><button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>Reset sizes</button></div>
+        <div data-officeview-ui="sheet-actions"><button type="button" className="ov:text-inherit ov:bg-transparent ov:p-0 ov:border-0" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" className="ov:text-inherit ov:bg-transparent ov:p-0 ov:border-0" onClick={cancelCopy}>Cancel copy</button>}<button type="button" className="ov:text-inherit ov:bg-transparent ov:p-0 ov:border-0" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button><button type="button" className="ov:text-inherit ov:bg-transparent ov:p-0 ov:border-0" disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>Reset sizes</button></div>
         {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}
         {showSearch && (
           <div data-officeview-ui="sheet-search" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
@@ -1789,7 +1793,7 @@ function intersectVisibility(mask: RowVisibility, other: CompactRowVisibility): 
 }
 
 /** Control-utility rule (spec §6.8): colour, background and border as ov: utilities (padding is inline). */
-const DOCKED = 'ov:text-text ov:bg-transparent ov:border-0'
+const DOCKED = 'ov:text-inherit ov:bg-transparent ov:border-0'
 /** Below this pane width (CSS px) the zoom controls dock into the toolbar. */
 const NARROW_PANE_PX = 600
 /** The zoom controls as a toolbar group (same names and test id as the floating

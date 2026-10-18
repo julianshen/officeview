@@ -49,7 +49,7 @@ export function SheetNavigator({ documentId, sheets, activeSheetId, onSheetChang
       </select></label>
       <label>Go To cell <input aria-label="Go To cell" value={address} onChange={event => { setAddress(event.target.value); setError(''); setInvalid(false) }} maxLength={16}
         disabled={disabled} style={control} aria-invalid={invalid} aria-describedby={error ? errorId : undefined} placeholder="A1" /></label>
-      <button type="submit" disabled={disabled} className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" style={control}>Go To</button>
+      <button type="submit" disabled={disabled} className="ov:text-inherit ov:bg-transparent ov:p-0 ov:border-0" style={control}>Go To</button>
       {error && <span id={errorId}>{error}</span>}
     </form>
   </nav>

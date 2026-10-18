@@ -182,8 +182,67 @@ test.describe('host isolation (spec §6.8)', () => {
       }
     }))
     expect(resolved).toEqual([
-      { theme: 'light', rootColor: 'rgb(32, 31, 30)', accent: '#c50f1f', searchAccent: '#c50f1f', zoomSurface: '#ffffff', inputColor: 'rgb(32, 31, 30)' },
-      { theme: 'dark', rootColor: 'rgb(243, 242, 241)', accent: '#479ef5', searchAccent: '#479ef5', zoomSurface: '#292827', inputColor: 'rgb(243, 242, 241)' },
+      // The Find input stays light-pinned on its (still light) panel until the toolbar task themes it.
+      { theme: 'light', rootColor: 'rgb(32, 31, 30)', accent: '#c50f1f', searchAccent: '#c50f1f', zoomSurface: '#ffffff', inputColor: 'rgb(17, 17, 17)' },
+      { theme: 'dark', rootColor: 'rgb(243, 242, 241)', accent: '#479ef5', searchAccent: '#479ef5', zoomSurface: '#292827', inputColor: 'rgb(17, 17, 17)' },
     ])
   })
+})
+
+/** Text contrast of every text-bearing element and control under the given
+ * selectors, against the first mostly opaque background behind it (review R1:
+ * no pale-on-light text before the chrome is migrated to tokens). */
+function contrasts(page: Page, selectors: { sel: string; disabled: boolean }[]): Promise<{ key: string; color: string; background: string; ratio: number }[]> {
+  return page.evaluate((sels) => {
+    const parse = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number)
+    const lum = ([r, g, b]: number[]) => {
+      const f = (v: number) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+    }
+    const backgroundOf = (el: Element | null): string => {
+      for (let e = el; e; e = e.parentElement) {
+        const bg = getComputedStyle(e).backgroundColor
+        const parts = parse(bg)
+        if (parts.length >= 3 && (parts.length < 4 || parts[3] > 0.5)) return bg
+      }
+      return 'rgb(255, 255, 255)'
+    }
+    const out: { key: string; color: string; background: string; ratio: number }[] = []
+    for (const { sel, disabled } of sels) {
+      document.querySelectorAll(sel).forEach((el, i) => {
+        if (!disabled && (el as HTMLButtonElement).disabled) return
+        const hasText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent!.trim()) || /^(BUTTON|INPUT|SELECT)$/.test(el.tagName)
+        if (!hasText) return
+        const color = getComputedStyle(el).color
+        const background = backgroundOf(el)
+        const [a, b] = [lum(parse(color)), lum(parse(background))]
+        out.push({ key: `${sel}#${i}:${el.tagName.toLowerCase()}:${el.getAttribute('aria-label') ?? el.textContent?.trim().slice(0, 20)}`, color, background, ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) })
+      })
+    }
+    return out
+  }, selectors)
+}
+
+test.describe('dark theme legibility before the chrome migration (review R1)', () => {
+  for (const variant of ['dark', 'system'] as const) {
+    test(`sheet toolbar and action buttons keep >= 4.5:1 text contrast (theme=${variant}, dark scheme)`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: 'dark' })
+      await open(page, `?theme=${variant}`)
+      await ready(page)
+      // The dark tokens really are active, so the check is meaningful.
+      const accent = await page.evaluate(() => getComputedStyle(document.querySelector('[data-viewer=sheet] [data-ov-theme-root]')!).getPropertyValue('--ov-color-accent').trim())
+      expect(accent).toBe('#479ef5')
+      // WCAG 1.4.3 exempts inactive controls, so disabled toolbar controls are
+      // skipped (the Find arrows keep their pre-existing inline #888); the
+      // action buttons are checked enabled or not.
+      const results = await contrasts(page, [
+        { sel: '[data-viewer=sheet] [data-officeview-ui=sheet-toolbar] *', disabled: false },
+        { sel: '[data-viewer=sheet] [data-officeview-ui=sheet-actions] button', disabled: true },
+        { sel: '[data-viewer=paged] [data-testid=officeview-search] input', disabled: false },
+      ])
+      expect(results.filter((r) => r.key.includes('sheet-actions')).length).toBeGreaterThanOrEqual(3)
+      const failing = results.filter((r) => r.ratio < 4.5).map((r) => `${r.key}: ${r.color} on ${r.background} = ${r.ratio.toFixed(2)}`)
+      expect(failing).toEqual([])
+    })
+  }
 })

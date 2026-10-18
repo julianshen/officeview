@@ -304,10 +304,11 @@ function LegacyOfficeDoc({
   // browser's own Ctrl/Cmd+wheel page zoom; a native listener on the outer
   // wrapper can, over the pages and every control (search, copy, zoom).
   const wrapperRef = useRef<HTMLDivElement | null>(null)
+  // Once per mount: is officeview.css loaded? (spec §5, R10)
+  useEffect(() => { if (wrapperRef.current) warnIfStylesMissing(wrapperRef.current) }, [])
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
-    warnIfStylesMissing(el)
     const suppressPageZoom = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
     el.addEventListener('wheel', suppressPageZoom, { passive: false })
     return () => el.removeEventListener('wheel', suppressPageZoom)

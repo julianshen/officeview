@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import postcss from 'postcss'
 import css from '../src/styles/officeview.css?inline'
-import { isOvEntry, scopeOvCss, unscopedSelectors } from '../scripts/postcss-ov-scope'
+import { isOvEntry, isScopedSelector, scopeOvCss, unscopedSelectors } from '../scripts/postcss-ov-scope'
 
 const SCOPE = ':is([data-ov-theme-root], [data-ov-theme-root] *)'
 
@@ -97,6 +97,55 @@ describe('ovCssScope (spec §6.8)', () => {
     expect(unscopedSelectors('@keyframes spin { from { opacity: 0 } to { opacity: 1 } }')).toEqual([])
     // A selector the transform cannot scope fails loudly instead of shipping unscoped.
     expect(() => scopeOvCss(':where(.ov\\:space-x-2 > :not(:last-child)) { margin: 0 }')).toThrow(/unscoped/)
+  })
+
+  it('the validator rejects selectors that can reach outside the theme root (review R1)', () => {
+    const rejected = [
+      ':not([data-ov-theme-root]) button',
+      'body:not([data-ov-theme-root])',
+      '[data-ov-theme-root] ~ div',
+      '[data-ov-theme-root] + *',
+      '[data-ov-theme-root]+button',
+      // Ancestor-prefixed: rejected by design (the root must be leftmost).
+      'body [data-ov-theme-root]',
+      ':has([data-ov-theme-root])',
+      'div:has(> [data-ov-theme-root])',
+      `.ov\\:x${SCOPE} ~ div`,
+      ':where(.a, [data-ov-theme-root])',
+      '[data-ov-theme-root=x]',
+      '.x',
+      ':root',
+    ]
+    for (const selector of rejected) {
+      expect(isScopedSelector(selector), selector).toBe(false)
+      expect(unscopedSelectors(`${selector}{}`), selector).toEqual([selector])
+    }
+    // The transform refuses to ship them.
+    expect(() => scopeOvCss('body:not([data-ov-theme-root]) { color: red }')).toThrow(/unscoped/)
+    expect(() => scopeOvCss('[data-ov-theme-root] + button { color: red }')).toThrow(/unscoped/)
+  })
+
+  it('the validator accepts every form the stylesheet emits (dev, minified and browser-serialised)', () => {
+    const accepted = [
+      ':where([data-ov-theme-root])',
+      ':where([data-ov-theme-root][data-ov-theme=dark])',
+      ':where([data-ov-theme-root][data-ov-theme="system"])',
+      '[data-ov-theme-root]',
+      '[data-ov-theme-root] *',
+      '[data-ov-theme-root] ::before',
+      '[data-ov-theme-root] :after',
+      '[data-ov-theme-root] :where(*:not([data-officeview-root]))',
+      '[data-ov-theme-root] :where(:not([data-officeview-root]))',
+      '[data-ov-theme-root] :is(button, input, select, textarea)',
+      '[data-ov-theme-root] input:where([type=checkbox], [type=radio])',
+      '[data-ov-theme-root] > a ~ b',
+      `.ov\\:flex${SCOPE}`,
+      '.ov\\:flex:is([data-ov-theme-root],[data-ov-theme-root] *)',
+      `.ov\\:hover\\:bg-hover${SCOPE}:hover`,
+      `.ov\\:placeholder\\:text-muted${SCOPE}::placeholder`,
+      `.ov\\:group-hover\\:flex${SCOPE}:is(:where(.ov\\:group):hover *)`,
+    ]
+    for (const selector of accepted) expect(isScopedSelector(selector), selector).toBe(true)
   })
 
   it('isOvEntry matches the entry with or without Vite queries and nothing else', () => {
