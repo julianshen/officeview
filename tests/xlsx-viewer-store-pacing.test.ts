@@ -136,6 +136,15 @@ describe('paged store decodes a request in bounded steps', () => {
     expect(Math.max(...slices)).toBeLessThanOrEqual(4096)
     await source.release()
   }, 60_000)
+  it('steps a 65,536-cell scanOccupied strip (coordinates only, same loop)', async () => {
+    const work = { cells: 0, slice: 0 }, probe = frozen(work)
+    const { source, store } = await pagedStore(8192, 8, probe.pacing)
+    // Coordinates only: no payload decode to count, so units are the yields themselves.
+    const page = await firstPage(store.scanOccupied!({ range: STRIP, limit: 65_536 }, options(store)))
+    expect(page.items.length).toBe(65_536)
+    expect(probe.done().length - 1).toBeGreaterThanOrEqual(15)
+    await source.release()
+  }, 60_000)
   it.each(['rows', 'scan'] as const)('services a queued macrotask abort mid-request (%s)', async kind => {
     const work = counting()
     const { source, store } = kind === 'rows' ? await pagedStore(2, 8192) : await pagedStore(8192, 8)
