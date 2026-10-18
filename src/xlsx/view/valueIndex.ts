@@ -633,11 +633,23 @@ export class ValueIndex implements LaneAccount {
         // one stamp a re-read page holds the same values.
         const resumed = this.partial.get(page)
         let at = resumed ?? 0
+        const completed = () => {
+          if (resumed !== undefined) {
+            this.partial.delete(page)
+            this.release(KEY_PATCH_BYTES)
+          }
+          this.pages![page] = MERGED
+          this.unmerged--
+          this.ledger.mergedPages++
+        }
+        if (at >= read.count) completed()
         try {
           while (at < read.count) {
             const from = at, end = Math.min(read.count, at + pacer.batch)
             this.merge(read, from, end)
             at = end
+            // The page is committed before its last batch's cancellable pause.
+            if (at === read.count) completed()
             await slice(from, end)
           }
         } catch (error) {
@@ -650,13 +662,6 @@ export class ValueIndex implements LaneAccount {
           }
           throw error
         }
-        if (resumed !== undefined) {
-          this.partial.delete(page)
-          this.release(KEY_PATCH_BYTES)
-        }
-        this.pages[page] = MERGED
-        this.unmerged--
-        this.ledger.mergedPages++
       }
       // Merged into (and charged by) this index, or dropped: the source payload's charge ends.
       } finally { if (read.kind === 'values') read.settle?.() }
@@ -1492,6 +1497,7 @@ export async function classifyLanePages(
         at = end
       }
     })
+    await budget.finish()
   } finally { budget.dispose() }
   return { kind: loading ? 'loading' : text ? 'text' : numeric ? date ? 'date' : 'number' : 'empty', hasNumeric: numeric }
 }
@@ -1563,6 +1569,7 @@ export function valueSourceFromStore(
         if (budget.spend(end - at)) await budget.pause()
         at = end
       }
+      await budget.finish()
       page = { kind: 'values', pageId: `${stamp.sheetId}:${col}:${r0}`, count, tags, numbers, texts, styles, settle }
       if (account) adoptAllocation(account, page)
       return page

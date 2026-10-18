@@ -10,7 +10,7 @@ import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { emptyGridSelection } from '../src/xlsx/view/selection'
 import { semanticsFor } from '../src/xlsx/view/semanticsFor'
-import { CooperativeSlice } from '../src/xlsx/view/scheduler'
+import { CheckpointBudget, CooperativeSlice } from '../src/xlsx/view/scheduler'
 import { SOURCE_NUMBER, classifyLanePages, type ValueLanePage } from '../src/xlsx/view/valueIndex'
 import type { FilterSpec, SheetView, SourceStore } from '../src/xlsx/view/contracts'
 import type { XlsxDocument } from '../src/xlsx/types'
@@ -215,5 +215,18 @@ describe('checkpoints within 256 classification units (spec §12.1, codex C2)', 
     const cooperate = new CooperativeSlice<'filter'>({ now: () => clock, yield: async () => { marks.push(clock - at); at = clock } })
     await classifyLanePages(async accept => accept(page(4096)), () => { clock++; return { kind: 'number', value: 1 } }, () => {}, cooperate)
     expect(marks[0]).toBeLessThanOrEqual(256)
+  })
+  it('carries a short tail into the next pass sharing the slice (codex D2)', async () => {
+    let processed = 0, last = 0
+    const gaps: number[] = []
+    const cooperate = new CooperativeSlice<'filter'>({ now: () => 0, yield: async () => { gaps.push(processed - last); last = processed } })
+    await classifyLanePages(async accept => accept(page(4095)), () => { processed++; return { kind: 'number', value: 1 } }, () => {}, cooperate)
+    for (let i = 0; i < 512; i++) { processed++; if (cooperate.due(1)) await cooperate.pause('filter') }
+    expect(gaps[0]).toBeLessThanOrEqual(4096)
+  })
+  it('keeps the operation start as the owned slice clock origin (codex D2)', () => {
+    let now = 0
+    const budget = new CheckpointBudget(() => {}, undefined, { now: () => now, yield: async () => {} })
+    try { now = 256; expect(budget.spend(256)).toBe(true) } finally { budget.dispose() }
   })
 })

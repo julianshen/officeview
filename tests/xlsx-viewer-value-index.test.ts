@@ -1139,4 +1139,30 @@ describe('row-count yield bound (spec §10.2, plan S4.2 LIFE-02)', () => {
     // Three passes of 8,192 rows each: 24,576 units, a pause at every 4,096.
     expect(yields).toBe(6)
   })
+  it('commits a page before its final batch pause: a cancel there never re-merges it (codex D1)', async () => {
+    const source = fromCells(Array.from({ length: 8192 }, (_, i) => i % 3000), 8192)
+    const index = new ValueIndexCache(EXACT).open(identity(numeric), source), controller = new AbortController()
+    let pauses = 0
+    // Two validation pauses, then two merge pauses: the fourth follows the last batch.
+    await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (++pauses === 4) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    expect(await index.build({ now: () => 0, yield: async () => {} })).toBe('complete')
+    let total = 0
+    for (let offset = 0; offset < index.size; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8192)
+  })
+  it('commits a resumed page before its final batch pause', async () => {
+    const source = fromCells(Array.from({ length: 8192 }, (_, i) => i % 3000), 8192)
+    const index = new ValueIndexCache(EXACT).open(identity(numeric), source)
+    const cancelAt = async (pause: number) => {
+      const controller = new AbortController()
+      let pauses = 0
+      await expect(index.build({ signal: controller.signal, now: () => 0, yield: async () => { if (++pauses === pause) controller.abort() } })).rejects.toMatchObject({ code: 'cancelled' })
+    }
+    await cancelAt(3) // after the first merge half: a 4,096-row prefix is kept
+    await cancelAt(3) // resumed: two validation pauses, then the final merge batch
+    expect(await index.build({ now: () => 0, yield: async () => {} })).toBe('complete')
+    let total = 0
+    for (let offset = 0; offset < index.size; offset += 500) for (const entry of index.page({ offset, limit: 500, label }).entries) total += entry.count
+    expect(total).toBe(8192)
+  })
 })

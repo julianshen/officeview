@@ -25,6 +25,8 @@ export interface CooperativeOptions<Phase extends string = string> {
   checkEvery?: 1 | 256
   /** Owner boundary may interrupt a stalled host/injected yield. */
   awaitYield?: (work: Promise<void>) => Promise<void>
+  /** Clock reading the first slice starts at (default: now). */
+  start?: number
 }
 export interface HostYield { yield: () => Promise<void>; dispose: () => void }
 type Allocate = <T>(create: () => T) => T
@@ -87,7 +89,7 @@ export class CooperativeSlice<Phase extends string = string> {
   constructor(options: CooperativeOptions<Phase>, allocate?: Allocate) {
     this.checkEvery = options.checkEvery === 256 ? 256 : 1
     this.now = options.now ?? (() => performance.now())
-    this.last = this.now()
+    this.last = options.start ?? this.now()
     const host = options.yield ? undefined : createHostYield(allocate)
     const schedule = options.yield ?? host!.yield
     this.schedule = options.awaitYield ? phase => options.awaitYield!(schedule(phase)) : schedule
@@ -145,12 +147,16 @@ export class CheckpointBudget {
   private work = 0
   private unchecked = 0
   private owned: CooperativeSlice<string> | undefined
+  /** The operation's start: an owned slice created later keeps this time origin. */
+  private readonly start: number | undefined
   constructor(
     private readonly check: () => void,
     private slice?: BatchSlice,
     private readonly pacing: Pick<CooperativeOptions, 'now' | 'yield'> = {},
     private readonly phase = 'filter',
-  ) {}
+  ) {
+    if (!slice) this.start = (pacing.now ?? (() => performance.now()))()
+  }
   /** Units the next batch may take. */
   get batch(): number { return Math.max(1, Math.min(CHECK_WORK_UNITS - this.unchecked, YIELD_WORK_UNITS - this.work)) }
   /** Charges units; true when a pause is due. */
@@ -162,8 +168,16 @@ export class CheckpointBudget {
     this.unchecked = 0
     this.check()
     // The slice counts the same units and owns the clock and the host yield.
-    this.slice ??= this.owned = new CooperativeSlice<string>(this.pacing)
+    this.slice ??= this.owned = new CooperativeSlice<string>({ ...this.pacing, start: this.start })
     return this.slice.due(since)
+  }
+  /** Ends a pass with a final check; units below the next checkpoint are
+   * charged to a caller slice, so the next pass sharing it starts after them. */
+  async finish(): Promise<void> {
+    const since = this.unchecked
+    this.unchecked = 0
+    this.check()
+    if (since && this.slice && this.slice !== this.owned && this.slice.due(since)) await this.pause()
   }
   async pause(): Promise<void> {
     await this.slice!.pause(this.phase)

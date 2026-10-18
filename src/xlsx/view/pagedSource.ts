@@ -206,14 +206,19 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         let i = lower(p.rows, row)
         while (i < p.rows.length && p.rows[i] <= range.r1) {
           const r = p.rows[i]
+          // Finding the row's end visits its records: work, like decoding.
           let end = i
-          while (end < p.rows.length && p.rows[end] === r) end++
+          while (end < p.rows.length && p.rows[end] === r) {
+            end++
+            if (budget.spend(1)) await budget.pause()
+          }
           const rowCells: AuthoritativeCell[] = []
           for (let k = lower(p.cols, range.c0, i, end); k < end && p.cols[k] <= range.c1; k++) {
             if (budget.spend(1)) await budget.pause()
             rowCells.push(await this.rowCell(p, k))
           }
           if (visited >= READ_ROWS_PAGE_ROWS || (items.length && cells + rowCells.length > READ_ROWS_MAX_CELLS)) {
+            await budget.finish()
             return { items, completeness: 'complete', stamp: this.stamp, nextCursor: `${key}${r}` }
           }
           visited++
@@ -222,6 +227,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           i = end
         }
       }
+      // A cancel or owner change landing after the last checkpoint never ends in success.
+      await budget.finish()
     } catch (cause) {
       if (cause instanceof SourceStop) return failedPage(this.stamp, cause.failure)
       return { items, completeness: 'incomplete', stamp: this.stamp, error: pageFailure(cause) }
@@ -385,6 +392,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       // A scan waits for the import frontier instead of reporting rows it has not seen.
       const waited = await waitFor(this.workbook, options.signal)
       if (waited) { yield { items, completeness: 'incomplete', stamp: this.stamp, error: waited }; return }
+    }
+    try { await budget.finish() } catch (cause) {
+      if (cause instanceof SourceStop) { yield failedPage(this.stamp, cause.failure); return }
+      throw cause
     }
     yield { items, completeness: 'complete', stamp: this.stamp }
     } finally { budget.dispose() }

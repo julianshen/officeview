@@ -310,6 +310,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       if (cells.length) items.push({ row: row.index, cells: cells.sort((a, b) => a.col - b.col) })
     }
     const more = at < this.rows.length && this.rowIndexes[at] <= range.r1
+    await budget.finish()
     const page = { items, completeness: 'complete' as const, stamp: this.stamp, ...(more ? { nextCursor: `${key}${at}` } : {}) }
     if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
     return page
@@ -411,6 +412,10 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
           if (again) { yield failedPage(this.stamp, again); return }
         }
       }
+    }
+    try { await budget.finish() } catch (stop) {
+      if (!(stop instanceof SourceStop)) throw stop
+      yield failedPage(this.stamp, stop.failure); return
     }
     const page = { items, completeness: 'complete' as const, stamp: this.stamp }
     if (account) adoptAllocation(account, page, account.bytes, [this.stamp])
