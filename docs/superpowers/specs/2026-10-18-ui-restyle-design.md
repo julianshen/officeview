@@ -117,6 +117,7 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
   Paper sits under every one of these except the backdrop. Their default values are therefore chosen to read on `#ffffff` in **both** themes: strokes ≥ 3:1 against white, and `pending-text` ≥ 4.5:1 against `pending`. Hosts can still override them. `surface` is never used for paper.
 - Painters keep today's literal colours as defaults when no colours are passed, so the static `renderSheet` path and the golden corpus are unchanged.
 - **Cache keying (R11).** Themed colours that are baked into cached bitmaps form a palette key. That key is part of the sheet tile cache identity and of the paged overlay key. A colour change misses the cache, and stale tiles or pages are never presented.
+  - *Round-2 revision:* the palette key lives on the tile key (`TileKey` and its serialized `tileKey()`) and the renderer's frame, not on the shared `CacheIdentity`, which takes part in worker ownership checks.
 
 ### 6.7 Bundle strategy
 - Moving chrome styles from inline JS objects to the stylesheet shrinks the eager JS; that freed room funds eager-shell icons and the new toolbar. Verify with a real build after every stream; the 38,720 B ceiling is hard. If the new Word/PowerPoint toolbar does not fit eagerly, lazy-load it (the pages can render first).
@@ -130,12 +131,20 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
 - `data-officeview-root` keeps its existing semantics: the inner region with the host's `className`/`style`, the print guard target and test hooks. That region carries **no** utility classes and is excluded from the scoped base rules, so a host's `className`/`style` behave exactly as before.
 - **Tokens.** Tokens are defined on `:where([data-ov-theme-root])`. The dark set is defined on `:where([data-ov-theme-root][data-ov-theme=dark])` and, inside `@media (prefers-color-scheme: dark)`, on `:where([data-ov-theme-root][data-ov-theme=system])`. `--ov-sentinel: 1` lives in the same rule as the light set.
 - **No global emission.** The stylesheet does not import Tailwind's default theme. A self-authored `@theme inline reference { --*: initial; … }` maps only the semantic names (colours, radii, shadows, a few font sizes and easings) to `var(--ov-*)`. `reference` suppresses the `:root, :host` block, and `inline` makes utilities read `var(--ov-…)` directly. Tailwind's own prefixed variable names (`--ov-color-*`), which would collide with the host-facing tokens, are therefore never emitted. Spacing is `--spacing: 4px`, so sizes are pixels and do not depend on the host's `html { font-size }`.
-- **Post-processing.** A small build step (a Vite plugin that runs in the library, harness and vitest configs) handles what Tailwind v4 still emits for shadow, border and translate utilities:
+- **Post-processing.** A small build step handles what Tailwind v4 still emits for shadow, border and translate utilities.
+  - *Round-2 revision:* the step is a **PostCSS plugin** registered in Vite's `css.postcss.plugins`. That stage runs after `@tailwindcss/vite` has generated the CSS and before Vite consumes it, in the library build, the dev/harness server, `?inline` imports and vitest.
+  - A Vite `transform` hook with `enforce: 'post'` would run after `vite:css-post`, see only `""` or JS, and leave `dist/style.css` unscoped.
+  - A scratch build (vite 7.3.1, tailwindcss and `@tailwindcss/vite` 4.3.3) confirmed the PostCSS stage rewrites all of those outputs.
+
+  The plugin:
   - it drops the `@property --tw-*` registrations;
   - it rewrites the `@layer properties { @supports … { *, ::before, ::after, ::backdrop { --tw-*: … } } }` fallback into an unconditional, **unlayered** rule placed before the utilities: `[data-ov-theme-root], [data-ov-theme-root] *, [data-ov-theme-root] ::before, [data-ov-theme-root] ::after { --tw-*: … }`;
   - it scopes every utility selector by appending `:is([data-ov-theme-root], [data-ov-theme-root] *)` to its leading class compound;
   - it fails the build if any rule remains whose selector lacks `[data-ov-theme-root]`.
-- **Winning over host resets.** Utilities and the scoped base rules are **unlayered**. A scoped utility has specificity (0,2,0), which beats unlayered host type and universal resets (`button { all: unset }`, `* { box-sizing: content-box }`) and single class + type rules (`.app button`). The scoped base, at (0,1,0) and placed before the utilities, restores what `all: unset` removes: `box-sizing: border-box`, font, colour, line height, button and input appearance, border, padding, background and cursor.
+- **Winning over host resets.** Utilities and the scoped base rules are **unlayered**. A scoped utility has specificity (0,2,0), which beats unlayered host type and universal resets (`button { all: unset }`, `* { box-sizing: content-box }`) and single class + type rules (`.app button`). The scoped base, placed before the utilities, restores what `all: unset` removes: `box-sizing: border-box`, font, colour, line height, button and input appearance, border, padding, background and cursor.
+  - *Round-2 revision:* the base's form-control rule uses `:is(button, input, select, textarea)`, at specificity (0,1,1).
+  - That only ties with a host rule like `.app button`, so it is not relied on. Every viewer control carries explicit `ov:` colour, background, padding and border utilities, which beat the host rule at (0,2,0).
+  - A jsdom class check and the hostile-host Playwright leg enforce this in each restyle task.
 - We **do not** use Tailwind's `important` flag. The viewer keeps dynamic inline geometry (widths, heights, transforms, canvas sizes), and `!important` utilities would override any inline value on the same property. Hosts customise through tokens, not by overriding utilities.
 - **Residual risk, documented in the README.** Host rules with specificity ≥ (0,2,0), or with `!important`, that target viewer elements can still win.
 - **Tests (plan Task 1).**
@@ -145,11 +154,15 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
 
 ### 6.9 Fit-to-width layout mode (R1)
 - Today `displayWidth = min(avail, naturalMaxPageWidth)`, where `avail = containerWidth − 2 × 16`, and zoom 1 already means "fit, capped at 1:1". Fit-to-width adds a `fitMode` flag:
-  - `displayWidth = fitMode && avail > 0 ? min(avail, natural × MAX_ZOOM) : min(avail || natural, natural)`.
+  - `avail = max(0, containerWidth − 2 × 16)` (today's guard, kept); `displayWidth = fitMode && avail > 0 ? min(avail, natural × MAX_ZOOM) : min(avail || natural, natural)`. The width is never negative; containers 0–32 px wide use the natural width, as today.
   - Pages are laid out and re-rasterised at that width, which may exceed natural size. The zoom transform stays `{ zoom: 1, panX: 0, panY: 0 }`, so the container stays `overflow: auto`, native scrolling and momentum work, and a pointer drag selects text.
   - Page coordinates keep `scale = displayWidth / spec.widthPx`, so search and selection geometry are unchanged.
   - `zoom.ts` is not changed; its exported zoom semantics stay as they are.
-- **Leaving fit mode.** Any zoom input turns fit mode off: zoom in/out buttons, Ctrl/Cmd-wheel, pinch and keyboard zoom. No visible jump is allowed. The equivalent zoom `z0 = fitWidth / naturalDisplayWidth` becomes the gesture's start zoom on the natural layout, and the step or pinch applies from `z0` anchored as today. Zooming out from fit therefore lands at natural layout, zoom 1. The reading position, meaning the page under the viewport top, is preserved.
+- **Leaving fit mode.** *Round-2 revision: one rule.* Any zoom input turns fit mode off: zoom in/out buttons, Ctrl/Cmd-wheel, pinch and keyboard zoom.
+  - The input is applied as if the viewer were on the natural layout at `z0 = fitWidth / naturalDisplayWidth`, with the content point under that input's anchor unchanged. Buttons step `z0` with `stepZoom` (×1.5 or ÷1.5); wheel and pinch apply their ratio to `z0`.
+  - A result above 1 is a zoomed transform; a result clamped to 1 is the native natural layout.
+  - Example: from `z0 ≈ 1.613`, zoom out gives 1.0756, and a second zoom out gives 1.
+  - This replaces the earlier wording that zooming out from fit "lands at natural layout, zoom 1".
 - **Fit state.** `fitActive = fitMode`, shown as `aria-pressed` on the Fit button. Container resizes re-lay out while fit mode is on. A zero-width container falls back to the non-fit formula.
 - **Memory.** In fit mode only pages near the viewport are rasterised at the full fit width. Off-screen pages keep a backing store no larger than natural mode would give them, using the same visibility observer the zoomed path uses today. The per-page backing scale stays capped by `MAX_EFFECTIVE_SCALE`.
 
@@ -163,21 +176,39 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
 ### 6.11 Page tracking and word count (R7, R8)
 - **Page tracking.** Page tops and heights come analytically from page specs, `displayWidth` and the gap (the same numbers as `contentHeight`), with no layout reads.
   - On scroll, transform change, resize or page-list change, one rAF-throttled computation picks the current page. That is the page with the **largest visible pixel height** in the viewport, with ties going to the lower index. While zoomed, the viewport is mapped through the transform.
+  - *Round-2 revision:* the mapping always includes the container's native `scrollTop`: content y = (view y + scrollTop − padding − panY) / zoom.
+  - Mode changes move the offset atomically. Entering zoom turns the native scroll into pan and sets `scrollTop` to 0 in the same commit that sets `overflow: hidden`; leaving zoom turns pan back into `scrollTop`. Both keep the content point under the anchor fixed.
+  - So `overflow: hidden` never hides a stale scroll offset.
   - State updates only when the index changes, so fast momentum scrolling produces no extra React renders.
   - This replaces the sparse IntersectionObserver thresholds, which could miss the moment two tall pages swap dominance. It also replaces `intersectionRatio` comparisons, which favour short pages.
   - `goTo(i)` scrolls the viewer's own container (`container.scrollTo`), never `scrollIntoView`, so host ancestors never scroll. While zoomed (`overflow: hidden`), it sets `panY` through `clampPan` instead.
 - **Word count** comes from the document text model, with no painting: `DocxDocument`, which DOCX, RTF and ODT all produce.
   - Justification: painting is what made the search-index route a long task. The text model has no line wrapping and no repeated page headers, and it avoids the watermark-muted painting span.
-  - Policy, matching Word's default count:
-    - counted: body paragraphs (runs concatenated, so a word split across runs counts once), table cells (recursively), text-box paragraphs, footnotes and endnotes;
+  - Policy, modelled on Word's default count (the expected test counts are derived from this policy, not measured in Word):
+    - counted: body paragraphs, table cells (recursively), text-box paragraphs, footnotes and endnotes;
     - not counted: headers, footers and comments.
-  - Tokens: each Han, Hiragana or Katakana character counts as one word. Any other maximal run of letters, digits and marks counts as one word; internal `'`, `’`, `-`, `.` and `,` join a run, so `don't`, `e-mail`, `3.14` and `2026` each count once. Korean is counted by spaces.
+  - *Round-2 revision, tokens:*
+    - A word is a maximal whitespace-delimited run of non-CJK code points containing at least one letter or digit. So `$50`, `100%`, `e-mail`, `3.14` and a URL each count once, and a lone `—` does not count.
+    - Each Han, Hiragana or Katakana code point counts as one word. Combining marks continue a token.
+    - Korean is counted by spaces.
+    - Run boundaries are not word boundaries; paragraph boundaries are.
   - `Intl.Segmenter` is not used: its dictionary segmentation of CJK differs between engines.
-  - Counting runs in idle slices of ≤ 8 ms of work, with long paragraphs chunked at 2,000 characters. It yields between slices, can be cancelled by an AbortSignal, and is tied to the document generation. PowerPoint and static XLSX show no word count.
+  - *Round-2 revision, bounded work:*
+    - The model is walked lazily. Runs are never concatenated, and each run's text is fed in chunks of at most 2,000 code units without splitting a surrogate pair.
+    - A resumable counter carries the open-token state across chunks, runs and slices, so a giant token, URL or CJK paragraph is both bounded and counted exactly.
+    - The slice clock and the cancellation signal are checked after every chunk. Slices take ≤ 8 ms of work and yield between them; the work is cancellable and tied to the document generation.
+  - PowerPoint and static XLSX show no word count.
 
 ### 6.12 Paged print isolation (R9)
-- Print and Cmd/Ctrl-P (when allowed) lazy-load the print module and render each page **in the parent document**. The parent is where the registered fonts live, which a fresh iframe would not have. Pages are rendered one at a time on a single reused canvas at `PRINT_SCALE` = 2, falling back to 1. Each page's size is clamped by `PRINT_MAX_AXIS` = 16,384 and a byte cap. A page that cannot be rasterised prints a text notice instead.
+- Print and Cmd/Ctrl-P (when allowed) lazy-load the print module and render each page **in the parent document**. The parent is where the registered fonts live, which a fresh iframe would not have. Pages are rendered one at a time on a single reused canvas, at one uniform scale for the whole job: `PRINT_SCALE` = 2, or else 1, within `PRINT_MAX_AXIS` = 16,384 and a workspace byte cap. A job that does not fit at scale 1 is refused (see the whole-job bound below) rather than printing per-page notices.
 - Each page is turned into a PNG blob and an object URL. The module builds a hidden same-origin `<iframe>` inside the theme root whose document contains only those `<img>` elements. Each page size gets a named `@page` rule (`size: Wpx Hpx; margin: 0`), and the module calls `iframe.contentWindow.print()`. Host content is never in the printed document.
+  - *Round-2 revision, page size:* where named pages are unsupported (`CSS.supports('page', 'p0')` is false, as in older WebKit), a single `@page` sized to the largest page is used, and each image is fitted inside it.
+- *Round-2 revision, whole-job memory bound:*
+  - Before anything is allocated, the job picks one uniform scale, 2 or else 1, so that every page fits the workspace and axis caps and the estimated decoded total (Σ W·H·s²·4) is ≤ 1 GiB. Otherwise the job is **refused** with a status-line notice, with no partial printout.
+  - Retained PNG blobs are capped at 192 MiB in total. Going over aborts the job with the same notice.
+  - The single raster canvas is cleared after each page and zeroed at the end.
+  - Images are awaited with `load`, not force-decoded.
+  - Every await point (lazy import, `toBlob`, image load) re-checks for abort. Late blobs are never turned into URLs, and failures before the job object exists still clean up everything.
 - **Cleanup.** The iframe is removed and its URLs revoked when any of these happens:
   - the frame's or the window's `afterprint` fires;
   - the user starts a new print;
@@ -217,3 +248,14 @@ The viewer chrome looks dated, "even uglier than Office 365." The owner wants a 
 - **R10.** The dev warning is a runtime check, not env-gated (§5).
 - **R11.** A palette key in the tile cache identity and the paged overlay key (§6.6).
 - **R12.** Stream order: canvas theming after spreadsheet chrome and paged print, then motion. Shared-file ownership is tabled in the plan.
+
+**Round-2 revisions (codex R2 and opencode R2 on 657b6f9)**
+
+These refine existing decisions; no owner decision changes.
+- The CSS scoping runs as a PostCSS stage (§6.8).
+- Every viewer control carries explicit colour, background, padding and border utilities (§6.8).
+- The fit formula keeps the zero/narrow-width guard, and fit exit follows one rule (§6.9).
+- Native scroll and pan move atomically between modes (§6.11).
+- Word count uses bounded chunks with a resumable tokenizer (§6.11).
+- Print has a whole-job memory bound, in-flight cleanup and a single-size page fallback (§6.12).
+- The palette key sits on the tile key, not the shared identity (§6.6).
