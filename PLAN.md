@@ -8,8 +8,12 @@ worker. Integrator usage, resource/copy/print limits and capability restrictions
 are documented in [README](README.md#interactive-spreadsheet-viewer).
 Desktop Chrome release receipts are admitted **at their recorded tree
 (`9cfb090` = integration `fb0ddc7`, 2026-10-16); the full-composition tree
-(streams C/E/F, FC-T2 and the auto-fit/cellFont fixes, head `3255f93`) has not
-had a controlled release re-run, and current-head Linux CI is red (plan M2).**
+(streams C/E/F, FC-T2, the auto-fit/cellFont fix and value pacing, integration
+`01b2bf5`) still has no controlled release re-run (plan M1).** B1 (value-index
+pacing) is fixed (`d3a3c55`, codex APPROVE after seven rounds), Linux CI is
+green at `d3a3c55` (run 39096574217; plan M2 resolved; a final-head re-run
+comes later), and the M3 browser acceptance legs are executed (merged
+`8e0a5e5`, with the AC-LIFE-02 sheet-switch leak fix, codex APPROVE).
 Safari, physical iPad and VoiceOver final-tree evidence and the final release
 decision remain open; a native (iOS Simulator, non-physical) M-profile
 natural-text sort refusal is accepted by design (user decision 6, 2026-10-17).

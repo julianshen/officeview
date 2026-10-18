@@ -1219,14 +1219,16 @@ carry that qualifier.
 `744×1047@2x`, iPhone 17 `326×580@3x` (viewer-perf) / `402×714@3x` (harness;
 the device DPR is 3 on iPhone — relevant to canvas/pixel cost interpretation).
 
-**Build provenance (historical; superseded at the current head).** All three raw
+**Build provenance (historical; superseded at later heads).** All three raw
 viewer-perf receipts (`/Users/julianshen/
 prj/officeview/.worktrees/visual-shots/sim-bench/viewer-perf-safari-sim-*.json`,
 field `commit` = `b66c7ea3bedc…`) record commit `b66c7ea`. Their successful
 builds were run with a **local, unlanded** modification of
 `vite.perf.config.ts` that sets
 `worker.rollupOptions.output.inlineDynamicImports = true`. That option exists
-in neither `b66c7ea` nor current head `3255f93`/integration `541f212`, and it
+in neither `b66c7ea` nor the head at that reconciliation (`3255f93`; since
+superseded by `d3a3c55` and integration `01b2bf5`, which keep the same lazy
+worker chunk), and it
 is not in this docs commit: the runs reproduce only against `b66c7ea` plus
 that local perf-config change. **Supersession:** the under-provenance "pending
 landing" of that inline option is closed by a different, reviewed mechanism —
@@ -1255,7 +1257,7 @@ F2/F4) was fixed in the perf build with
 `worker.rollupOptions.output.inlineDynamicImports = true`; that config change
 is described under build provenance above — at the time of the
 simulator runs, a local `vite.perf.config.ts` modification for this suite, not
-a product change; superseded at the current head by merged `1d8f476`, which
+a product change; superseded since merged `1d8f476`, which
 removes the re-evaluation race itself (worker entries are bootstraps that no
 chunk imports) while the perf config keeps the lazy worker chunk deliberately.
 
