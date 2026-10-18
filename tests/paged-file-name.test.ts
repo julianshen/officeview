@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { fileNameFrom } from '../src/components/fileName'
+import { openByteStream } from '../src/core/stream'
 
 describe('fileNameFrom', () => {
   it('File.name', () => {
@@ -34,5 +35,17 @@ describe('fileNameFrom', () => {
     expect(fileNameFrom({ url: 'https://x/' })).toBeUndefined()
     expect(fileNameFrom(undefined)).toBeUndefined()
     expect(fileNameFrom(new Blob([]))).toBeUndefined()
+  })
+})
+
+describe('openByteStream onHeaders', () => {
+  it('is called once per response with its headers, and not for local sources', async () => {
+    const seen: (string | null)[] = []
+    const onHeaders = (h: Headers) => seen.push(h.get('content-disposition'))
+    await openByteStream(new Response('x', { headers: { 'content-disposition': 'attachment; filename="a.docx"' } }), { onHeaders })
+    await openByteStream(Promise.resolve(new Response('y')), { onHeaders })
+    await openByteStream(new Uint8Array([1]), { onHeaders })
+    await openByteStream(new Blob(['z']), { onHeaders })
+    expect(seen).toEqual(['attachment; filename="a.docx"', null])
   })
 })

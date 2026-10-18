@@ -11,6 +11,7 @@ import type { PackageErrorCode } from '../core/package-error'
 import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
 import { ImportRefusal, type RefusalReason } from '../xlsx/storage/importSession'
 import { pagedWorkbookOf } from './pagedDocument'
+import { fileNameFrom } from './fileName'
 
 export type { AnyDoc } from './loadOfficeSource'
 
@@ -61,6 +62,8 @@ export function useOfficeFile(
     onProgress?: (p: Progress) => void
     onProtection?: ProtectionListener
     onWatermark?: WatermarkListener
+    /** Response headers of the download (dropped once the load is replaced). */
+    onHeaders?: (headers: Headers, url: string) => void
     /** With `viewerWorker`, a large (paged) spreadsheet opens in that worker for the interactive viewer. */
     interactiveSheets?: boolean
     viewerWorker?: () => ViewerWorkerPort
@@ -73,6 +76,8 @@ export function useOfficeFile(
   protectionRef.current = options.onProtection
   const watermarkRef = useRef(options.onWatermark)
   watermarkRef.current = options.onWatermark
+  const headersRef = useRef(options.onHeaders)
+  headersRef.current = options.onHeaders
   const workerRef = useRef(options.viewerWorker)
   workerRef.current = options.viewerWorker
   // Paged admissions route to the worker only with the flag AND a worker;
@@ -103,6 +108,7 @@ export function useOfficeFile(
       // in <OfficeFile>) and let a stale download overwrite the live policy.
       onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
       onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
+      onHeaders: (h, url) => { if (!cancelled) headersRef.current?.(h, url) },
       ...(routeRef.current ? {
         paged: async (blob, ctx, release) => {
           const factory = workerRef.current
@@ -190,10 +196,14 @@ export function OfficeFile({
     source: ByteSource | null | undefined
     mark: WatermarkOptions | undefined
   }>()
+  // File name (spec §6.5), sealed to its source like the policy above: the
+  // response's Content-Disposition or URL (a promised source resolves to it).
+  const [named, setNamed] = useState<{ source: ByteSource | null | undefined; name: string | undefined }>()
   const state = useOfficeFile(data, {
     onProgress: (p) => setProgress(p),
     onProtection: (policy) => setHeaderPolicy({ source: data, policy }),
     onWatermark: (mark) => setHeaderMark({ source: data, mark }),
+    onHeaders: (h, url) => setNamed({ source: data, name: fileNameFrom({ url }, h.get('content-disposition')) }),
     interactiveSheets: rest.interactiveSheets,
     viewerWorker,
   })
@@ -204,6 +214,7 @@ export function OfficeFile({
   // authority on what a document is stamped with.
   const serverMark = headerMark && headerMark.source === data ? headerMark.mark : undefined
   const effectiveWatermark = mergeWatermark(watermark, serverMark)
+  const title = rest.title ?? (named?.source === data ? named?.name : undefined) ?? fileNameFrom(data)
   if (state.status === 'loading') {
     if (typeof loading === 'function') return loading(progress ?? { loaded: 0 })
     return <>{loading}</>
@@ -216,6 +227,7 @@ export function OfficeFile({
       allowPrint={effectiveAllowPrint}
       {...(effectiveWatermark ? { watermark: effectiveWatermark } : {})}
       {...rest}
+      {...(title ? { title } : {})}
     />
   )
   if (!state.notices || ((rest.interactiveSheets || pagedWorkbookOf(state.document)) && 'sheets' in state.document)) return doc

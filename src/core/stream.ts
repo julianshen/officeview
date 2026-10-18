@@ -270,6 +270,8 @@ export interface OpenSourceListeners {
   onProgress?: ProgressListener
   onProtection?: ProtectionListener
   onWatermark?: WatermarkListener
+  /** The response headers (fetched or handed-in Response) and its URL, once per response. */
+  onHeaders?: (headers: Headers, url: string) => void
 }
 
 function pullStream(stream: ReadableStream<Uint8Array>, onProgress: ProgressListener | undefined, total: number | undefined, signal?: AbortSignal): ByteStreamReader {
@@ -328,6 +330,7 @@ async function openResponse(response: Response, listeners: OpenSourceListeners, 
   }
   listeners.onProtection?.(protectionFromHeaders(response.headers))
   listeners.onWatermark?.(watermarkFromHeaders(response.headers))
+  listeners.onHeaders?.(response.headers, response.url)
   const totalHeader = response.headers.get('content-length')
   const total = totalHeader ? parseInt(totalHeader, 10) : undefined
   if (response.body) return { kind: 'stream', reader: pullStream(response.body, listeners.onProgress, Number.isFinite(total) ? total : undefined, signal) }

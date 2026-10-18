@@ -118,6 +118,10 @@ export interface OfficeDocProps {
    * --ov-* tokens from any rule that targets [data-ov-theme-root].
    */
   theme?: ThemeMode
+  /** Show the Word/PowerPoint toolbar and status line (default true). */
+  showToolbar?: boolean
+  /** File name shown in the toolbar; <OfficeFile> derives one when unset. */
+  title?: string
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
