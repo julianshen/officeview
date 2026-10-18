@@ -73,10 +73,18 @@ function* walk(value: unknown, admit: (bytes: number) => boolean, options: WalkO
       if (!enter(item)) return false
       if (ArrayBuffer.isView(item)) { stack.push(item.buffer); tally.bytes += 24; continue }
       if (Object.prototype.toString.call(item) === '[object ArrayBuffer]') { tally.bytes += (item as ArrayBuffer).byteLength; continue }
-      const values = Array.isArray(item) ? item : Object.values(item)
-      tally.bytes += 24 + values.length * 16
-      if (tally.bytes > limit) break
-      for (const child of values) stack.push(child)
+      // Children are read one step at a time (an accessor-backed or huge array
+      // is never read whole in one step); their count needs no reads.
+      if (Array.isArray(item)) {
+        tally.bytes += 24 + item.length * 16
+        if (tally.bytes > limit) break
+        for (let i = 0; i < item.length; i++) { stack.push(item[i]); yield }
+      } else {
+        const keys = Object.keys(item)
+        tally.bytes += 24 + keys.length * 16
+        if (tally.bytes > limit) break
+        for (const key of keys) { stack.push((item as Record<string, unknown>)[key]); yield }
+      }
     }
     return true
   }

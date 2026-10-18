@@ -2,6 +2,8 @@ import type { AuthoritativeCell, Page, ReadOptions, SourceStore } from '../xlsx/
 import { FindError } from '../xlsx/view/find'
 import { CheckpointBudget } from '../xlsx/view/scheduler'
 import { walkPayload, type WalkOutcome } from './replyMeasure'
+import { rememberQueryBytes } from '../xlsx/view/queryBytesMemo'
+import type { PoolCharge } from '../xlsx/view/tileCache'
 
 /** Wire/workspace admission within the existing document pool; never a larger
  * worker budget. Large source pages and long hit texts refuse explicitly. */
@@ -9,29 +11,47 @@ export const WORKER_QUERY_BYTES = { D: 8 * 1024 * 1024, M: 4 * 1024 * 1024 } as 
 
 export { queryPayloadBytes } from '../xlsx/view/queryPayload'
 
+/** A pool whose transient shares admit a walk's workspace (the document pool). */
+export interface QueryPool { charge(): PoolCharge }
+/** queryPayloadBytes of `value` through the worker's one payload walker (spec
+ * §10.2): checkpointed by `check` (it throws on cancellation or a stale owner)
+ * with real yields (the host's, or the session's injected `hostYield`), its workspace admitted to `pool` in chunks and released
+ * after the walk. Synchronous when no pause is due. `undefined`: the pool
+ * refused the workspace. */
+export function accountQueryBytes(value: unknown, limit: number, check: () => void, pool?: QueryPool, hostYield?: () => Promise<void>): number | undefined | Promise<number | undefined> {
+  const workspace = pool?.charge()
+  const pass = new CheckpointBudget(check, undefined, hostYield ? { yield: hostYield } : {}, 'query')
+  let held = 0
+  const end = () => { pass.dispose(); workspace?.release() }
+  const done = (outcome: WalkOutcome): number | undefined => { end(); return outcome.kind === 'measured' ? outcome.bytes : undefined }
+  let run: WalkOutcome | Promise<WalkOutcome>
+  try { run = walkPayload(value, more => !workspace || workspace.set(held += more), pass, { model: 'query', limit }) } catch (error) { end(); throw error }
+  return run instanceof Promise ? run.then(done, error => { end(); throw error }) : done(run)
+}
+/** A typed retryable refusal: the walk's workspace does not fit the pool now. */
+export const queryWorkspaceRefusal = () => new FindError('resource-limit', 'Source query accounting exceeds the worker memory budget; retry', true)
+
 /** Viewport/search value-page facade. Drawings use the original interruptible
  * store and their separate drawing budget; they are not query-page payloads. */
-export function boundedQueryStore(store: SourceStore, budget: number, emitted?: (bytes: number) => void, maxRecords = 20_000, fullDomain = false, loadedOnly = false): SourceStore {
-  // queryPayloadBytes accounting through the worker's one payload walker (spec
-  // §10.2): checkpointed (cancellation, owner) with real yields. Its workspace
-  // is bounded by the byte limit at which the walk stops.
-  // A page that needs no pause is accounted synchronously (no extra task turns).
+export function boundedQueryStore(store: SourceStore, budget: number, emitted?: (bytes: number) => void, maxRecords = 20_000, fullDomain = false, loadedOnly = false, pool?: QueryPool, hostYield?: () => Promise<void>): SourceStore {
+  // Accounting through the one walker, checkpointed (cancellation, owner) with
+  // real yields and its workspace admitted to the document pool; a page that
+  // needs no pause is accounted synchronously (no extra task turns). A refused
+  // workspace publishes no page: a typed retryable resource-limit.
   const checked = <T>(value: T, options: ReadOptions, emission = false): T | Promise<T> => {
-    const pass = new CheckpointBudget(() => {
+    const done = (bytes: number | undefined): T => {
+      if (bytes === undefined) throw queryWorkspaceRefusal()
+      if (bytes > budget) throw new FindError('resource-limit', 'Source query page exceeds its bounded byte budget')
+      if (emission) emitted?.(2 * bytes)
+      rememberQueryBytes(value, budget, bytes)
+      return value
+    }
+    const accounted = accountQueryBytes(value, budget, () => {
       if (options.signal?.aborted) throw new FindError('cancelled', 'Source query cancelled')
       const now = store.stamp
       if (options.stamp && (options.stamp.docId !== now.docId || options.stamp.sheetId !== now.sheetId || options.stamp.valueGen !== now.valueGen)) throw new FindError('stale', 'Source owner changed')
-    }, undefined, {}, 'query')
-    const done = (outcome: WalkOutcome): T => {
-      pass.dispose()
-      const bytes = outcome.kind === 'measured' ? outcome.bytes : Number.POSITIVE_INFINITY
-      if (bytes > budget) throw new FindError('resource-limit', 'Source query page exceeds its bounded byte budget')
-      if (emission) emitted?.(2 * bytes)
-      return value
-    }
-    let run: WalkOutcome | Promise<WalkOutcome>
-    try { run = walkPayload(value, () => true, pass, { model: 'query', limit: budget }) } catch (error) { pass.dispose(); throw error }
-    return run instanceof Promise ? run.then(done, error => { pass.dispose(); throw error }) : done(run)
+    }, pool, hostYield)
+    return accounted instanceof Promise ? accounted.then(done) : done(accounted)
   }
   return {
     get stamp() { return store.stamp },

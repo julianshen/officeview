@@ -16,6 +16,8 @@ import { CheckpointBudget } from '../src/xlsx/view/scheduler'
 import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { initialIdentity } from '../src/worker/viewerProtocol'
 import { workbookOf } from './helpers/xlsx-find'
+import { kernelFixture } from './helpers/drawing-grant'
+import { FindError } from '../src/xlsx/view/find'
 import type { WorkerReply } from '../src/xlsx/view/contracts'
 
 vi.mock('../src/xlsx/view/payloadBytes', async importOriginal => {
@@ -167,17 +169,18 @@ describe('bounded query facade accounting (codex E4)', () => {
   it('an 8,192-cell query page is accounted in steps, first yielding within 4,096 visits', async () => {
     const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }])
     const store = createObjectWorkbookSource(document, 'doc').store('s')
-    let visits = 0, first = -1
+    let visits = 0, first = -1, pauses = 0
     const cells = Array.from({ length: 8192 }, (_, col) => ({ row: 0, col, styleIndex: 0, get value() { visits++; return col } }))
     vi.spyOn(store, 'readRows').mockResolvedValue({ items: [{ row: 0, cells }], completeness: 'complete', stamp: store.stamp } as never)
     const native = CheckpointBudget.prototype.pause
     vi.spyOn(CheckpointBudget.prototype, 'pause').mockImplementation(async function (this: CheckpointBudget) {
-      if ((this as unknown as { phase: string }).phase === 'query' && first < 0) first = visits
+      if ((this as unknown as { phase: string }).phase === 'query') { pauses++; if (first < 0) first = visits }
       return native.call(this)
     })
     const page = await boundedQueryStore(store, 8 * 1024 * 1024).readRows({ r0: 0, r1: 0, c0: 0, c1: 8191 }, undefined, { signal: new AbortController().signal, stamp: { ...store.stamp } })
     expect(page.items[0].cells).toHaveLength(8192)
-    expect(first).toBeGreaterThan(0)
+    expect(visits).toBe(8192)
+    expect(pauses).toBeGreaterThanOrEqual(2)
     expect(first).toBeLessThanOrEqual(4096)
   })
 })
@@ -204,5 +207,65 @@ describe('main charges a stamped reply without walking it', () => {
       // The worker's stamp, not the defensive unstamped charge (the whole main budget).
       expect(charged).toBeLessThan(MAIN_THREAD_BUDGETS.D)
     } finally { await remote.release() }
+  })
+})
+
+describe('residuals closed on the one walker', () => {
+  const keyRun = (count: number) => {
+    const reads = { count: 0 }
+    const texts = Array.from({ length: count }, (_, i) => `key-${i}`)
+    const counted: string[] = []
+    for (let i = 0; i < count; i++) Object.defineProperty(counted, i, { enumerable: true, get() { reads.count++; return texts[i] } })
+    return { reads, set: { refId: 'ref-1', scope: 'scope', run: { count, kinds: new Uint8Array(count).fill(2), numbers: new Float64Array(count), texts: counted } } }
+  }
+  const filter = (keySets: unknown[]) => ({ kind: 'filter' as const, requestId: 'f', owner: initialIdentity('doc', 's'), nowMs: 0,
+    spec: { range: { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map() }, keySets } as never)
+  it('kernel key-set admission is accounted in walker steps (first yield within 4,096 visits)', async () => {
+    const h = await harness(wide), { reads, set } = keyRun(8192)
+    const marks: number[] = [0]
+    const native = CheckpointBudget.prototype.pause
+    vi.spyOn(CheckpointBudget.prototype, 'pause').mockImplementation(async function (this: CheckpointBudget) {
+      if ((this as unknown as { phase: string }).phase === 'query') marks.push(reads.count)
+      return native.call(this)
+    })
+    try {
+      await h.kernel.handle(filter([set]), () => {})
+      marks.push(reads.count)
+      // Both accountings (the command's key sets, then each installed set) read every key.
+      expect(reads.count).toBe(2 * 8192)
+      expect(Math.max(...marks.slice(1).map((at, i) => at - marks[i]))).toBeLessThanOrEqual(4096)
+    } finally { await h.close() }
+  })
+  it('kernel key-set accounting the pool cannot admit is a sizeless quota', async () => {
+    const h = await harness(wide), { set } = keyRun(8192)
+    const memory = h.kernel.session('doc')!.memory, pressure = memory.charge()
+    expect(pressure.set(memory.limitBytes - memory.totalBytes)).toBe(true)
+    const replies: WorkerReply[] = []
+    try {
+      await h.kernel.handle(filter([set]), out => replies.push(out))
+      const last = replies.at(-1) as WorkerReply & { requiredBytes?: number }
+      expect(last).toMatchObject({ kind: 'quota', resource: 'memory' })
+      expect(last.requiredBytes).toBeUndefined()
+    } finally { pressure.release(); await h.close() }
+  })
+  it('the query facade admits its walk to the pool: a refusal is a typed retryable resource-limit and no page', async () => {
+    const document = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }])
+    const store = createObjectWorkbookSource(document, 'doc').store('s')
+    vi.spyOn(store, 'readRows').mockResolvedValue({ items: [{ row: 0, cells: wide() }], completeness: 'complete', stamp: store.stamp } as never)
+    const refusing = { charge: () => ({ set: () => false, release: () => {} }) } as never
+    const error = await boundedQueryStore(store, 8 * 1024 * 1024, undefined, 20_000, false, false, refusing)
+      .readRows({ r0: 0, r1: 0, c0: 0, c1: 8191 }, undefined, { signal: new AbortController().signal, stamp: { ...store.stamp } }).then(() => null, cause => cause)
+    expect(error).toBeInstanceOf(FindError)
+    expect(error).toMatchObject({ code: 'resource-limit', retryable: true })
+  })
+  it('FC-T2: a granted drawings reply is measured and its transfers collected by the walker, once', async () => {
+    const { read } = await kernelFixture(64 * 1024)
+    measure.mockClear(); transfers.mockClear()
+    const { posted: [full] } = await read('g1', 1 << 30)
+    expect(full).toMatchObject({ kind: 'complete' })
+    expect(full.replyBytes).toBe(payload.measurePayloadBytes(full))
+    const own = (calls: unknown[][]) => calls.filter(([message]) => (message as { requestId?: string }).requestId === 'g1')
+    expect(own(transfers.mock.calls)).toHaveLength(0)
+    expect(own(measure.mock.calls)).toHaveLength(1) // the assertion's own call above
   })
 })
