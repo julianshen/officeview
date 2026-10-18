@@ -159,17 +159,20 @@ function sameFreeze(window: ScrollWindow['frozen'], authored: XlsxFrozenPane | u
   return (window?.rows ?? 0) === (authored?.rows ?? 0) && (window?.cols ?? 0) === (authored?.cols ?? 0)
 }
 /**
- * The active sheet's semantic presentations (AC-LIFE-02), with explicit owners:
- * - A render may fill its cache before it commits, or never commit (suspended,
- *   abandoned). Every rendered cache is tracked; the next commit disposes those
- *   it did not commit, and unmount disposes all, so no charge waits on GC.
+ * The active sheet's semantic presentations (AC-LIFE-02). Ownership:
+ * - Committed and replaced caches are released explicitly: each commit
+ *   disposes the superseded cache and any cache a render made without
+ *   committing while this viewer stayed mounted; unmount disposes the committed
+ *   cache and those still tracked.
+ * - Caches from renders that never reach an owner's cleanup are released by
+ *   the GC finalization backstop only: an initial render that suspends and
+ *   never commits (React runs no cleanup for it), or a cache a commit already
+ *   disposed and dropped that a still-pending render then refills.
  * - The committed cache is published to callbacks in the commit phase only: a
  *   speculative render never changes what the visible view's callbacks read.
  *   During its own render a view reads the cache it rendered with.
- * - Superseded caches (sheet switch, value generation) are disposed on commit.
  * dispose() settles each presentation's lifetime charge; a later finalizer for
- * a settled target is a no-op in the ledger, so a charge ends exactly once and
- * GC stays only a backstop (e.g. a late refill after unmount).
+ * a settled target is a no-op in the ledger, so a charge ends exactly once.
  * No closure here captures a cache directly: a stale callback (or a retained
  * closure context) reaches at most the committed one through the owner.
  */

@@ -99,3 +99,30 @@ it('the hook disposes a superseded committed cache when a new sheet commits', as
   expect(ledger.snapshot().byPool.document).toBe(0)
   expect(labels).toContain('B text')
 })
+
+it('a cache from an initial render that never commits is released by the finalization backstop, exactly once', async () => {
+  const { useSemanticPresentations } = await import('../src/components/xlsx/InteractiveSheetDoc')
+  const { mainFormatBudget } = await import('../src/components/xlsx/mainFormatBudget')
+  // Collection is driven by hand: the ledger's watcher records registrations.
+  const registered = new Map<string, object[]>()
+  const ledger = new MainMemoryLedger({ register(target, token) { registered.set(token, [...registered.get(token) ?? [], target]) } })
+  const budget = mainFormatBudget(ledger, 64 * 1024 * 1024)
+  ledger.set('document', 'sentinel', 100)
+  const sheet = workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 3 }] }]).sheets[0]
+  const presented: object[] = []
+  function NeverCommits(): null {
+    const present = useSemanticPresentations(sheet, 0, budget)
+    presented.push(present(sheet.rows[0].cells[0]))
+    throw gate.wait
+  }
+  const ui = render(<Suspense fallback={<div>Suspended</div>}><NeverCommits /></Suspense>)
+  ui.unmount()
+  const charged = ledger.snapshot().byPool.document
+  expect(charged, 'React ran no cleanup for the abandoned render: the backstop still holds it').toBeGreaterThan(100)
+  const tokens = [...registered].filter(([, targets]) => targets.some(target => presented.includes(target))).map(([token]) => token)
+  expect(tokens.length).toBeGreaterThan(0)
+  for (const token of tokens) ledger.collected(token)
+  expect(ledger.snapshot().byPool.document, 'collection ends the abandoned charges').toBe(100)
+  for (const token of tokens) ledger.collected(token)
+  expect(ledger.snapshot().byPool.document, 'a duplicate finalizer releases nothing more').toBe(100)
+})
