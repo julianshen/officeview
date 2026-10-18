@@ -24,7 +24,7 @@ import {
 } from '../core/selection'
 import { isViewerUiTarget } from './xlsx/gridEvents'
 import type { PageOverlay } from '../core/overlay'
-import { SearchBar, ZoomControls } from './viewerControls'
+import type { FloatingControlsProps } from './paged/PagedChrome'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
 import {
@@ -482,8 +482,13 @@ function LegacyOfficeDoc({
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
-      inputRef.current?.focus()
-      inputRef.current?.select()
+      if (inputRef.current) {
+        inputRef.current.focus()
+        inputRef.current.select()
+      } else {
+        // the lazy Find bar is not mounted yet; it focuses itself on mount
+        setFocusSearchRequest((n) => n + 1)
+      }
       return
     }
     // Protection policy and Escape fall-through apply even when the event comes
@@ -525,6 +530,7 @@ function LegacyOfficeDoc({
   const [indexing, setIndexing] = useState(false)
   const indexRef = useRef<TextIndex | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const [focusSearchRequest, setFocusSearchRequest] = useState(0)
 
   const indexOwnerRef = useRef<typeof owner | null>(null)
   const indexPendingRef = useRef<{ owner: typeof owner; promise: Promise<TextIndex> } | null>(null)
@@ -735,6 +741,10 @@ function LegacyOfficeDoc({
     }
   }
 
+  const copy: FloatingControlsProps['copy'] = selection && allowCopy && !isEmptyRange(selection)
+    ? { state: copied, onCopy: () => void doCopy() }
+    : null
+
   return (
     <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div
@@ -799,50 +809,30 @@ function LegacyOfficeDoc({
           ))}
         </div>
       </div>
-      {showSearch && (
-        <SearchBar
-          inputRef={inputRef}
-          query={query}
-          onQuery={(q) => setQuery(q)}
-          count={matches.length}
-          active={active}
-          indexing={indexing}
-          onPrev={() => goTo(-1)}
-          onNext={() => goTo(1)}
-        />
-      )}
-      {selection && allowCopy && !isEmptyRange(selection) && (
-        <button
-          type="button"
-          data-testid="officeview-copy-selection"
-          onClick={() => void doCopy()}
-          style={{
-            position: 'absolute',
-            bottom: 'calc(env(safe-area-inset-bottom) + 16px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '8px 16px',
-            borderRadius: 18,
-            border: 'none',
-            background: copied === 'failed' ? '#8a1f11' : copied === 'done' ? '#1a7f37' : 'rgba(20,22,28,0.92)',
-            color: '#fff',
-            fontSize: 14,
-            cursor: 'pointer',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
-            zIndex: 6,
-          }}
-        >
-          {copied === 'done' ? 'Copied ✓' : copied === 'failed' ? 'Copy blocked — press ⌘C' : 'Copy selection'}
-        </button>
-      )}
-      {showZoomControls && (
-        <ZoomControls
-          zoom={transform.zoom}
-          onIn={() => zoomBy(1)}
-          onOut={() => zoomBy(-1)}
-          onReset={reset}
-          atFit={!zoomed}
-        />
+      {(showSearch || showZoomControls || copy) && (
+        <Suspense fallback={null}>
+          <FloatingControls
+            search={showSearch ? {
+              inputRef,
+              query,
+              onQuery: (q) => setQuery(q),
+              count: matches.length,
+              active,
+              indexing,
+              onPrev: () => goTo(-1),
+              onNext: () => goTo(1),
+            } : null}
+            zoom={showZoomControls ? {
+              zoom: transform.zoom,
+              onIn: () => zoomBy(1),
+              onOut: () => zoomBy(-1),
+              onReset: reset,
+              atFit: !zoomed,
+            } : null}
+            copy={copy}
+            focusSearchRequest={focusSearchRequest}
+          />
+        </Suspense>
       )}
     </div>
   )
@@ -850,6 +840,11 @@ function LegacyOfficeDoc({
 
 // Loaded only when a host opts in for a spreadsheet; the legacy path never pulls it.
 const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
+
+// The floating Find bar, zoom cluster and copy pill float over the pages and
+// take no layout space, so loading them lazily cannot shift layout. Their
+// state and key handlers stay here, eager.
+const FloatingControls = lazy(() => import('./paged/PagedChrome').then(m => ({ default: m.FloatingControls })))
 
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props

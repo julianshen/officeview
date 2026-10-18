@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 import { readFileSync } from 'node:fs'
+import { moduleMap } from './scripts/vite-module-map'
 
 export default defineConfig({
   plugins: [react(), {
@@ -29,7 +30,9 @@ export default defineConfig({
         this.emitFile({ type: 'asset', fileName: `drawing/unicode/${name}`, source: readFileSync(fileURLToPath(new URL(`./src/drawing/unicode/${name}`, import.meta.url))) })
       }
     },
-  }],
+  },
+  // dist/.module-map.json for scripts/check-eager.ts (eager import-graph gate)
+  ...(process.env.OV_MODULE_MAP ? [moduleMap()] : [])],
   build: {
     lib: {
       entry: {
