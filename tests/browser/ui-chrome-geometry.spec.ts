@@ -3,6 +3,10 @@
  * the shared viewer controls (SearchBar, ZoomControls, copy pill) with the
  * real stylesheet. The jsdom suite (tests/viewer-chrome.test.tsx) asserts the
  * classes; these are the browser twins of its former inline-size checks.
+ * Task 3 moved the paged viewer's controls into its toolbar (inline Find,
+ * toolbar-sized zoom buttons, compact layout on coarse pointers); the paged
+ * toolbar's own geometry lives in paged-toolbar.spec.ts, and the floating
+ * sizes here are the sheet viewer's.
  *
  * Page: src/debug/ui-host-isolation.html (sheet + paged viewers inside a host
  * `<div class="app">`; `host=first|last` adds the hostile host sheet).
@@ -13,13 +17,14 @@ import { fileURLToPath } from 'node:url'
 
 const MAIN_SIZES = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/chrome-sizes.main.json', import.meta.url)), 'utf8')) as Record<string, { width: number; height: number }>
 const LABELS = ['Search document', 'Previous match', 'Next match', 'Zoom in', 'Zoom out', 'Reset zoom']
-const VIEWERS = ['sheet', 'paged'] as const
+/** The paged toolbar's controls in its compact (coarse pointer) layout. */
+const PAGED_COMPACT = ['Previous page', 'Next page', 'Zoom out', 'Reset zoom', 'Zoom in', 'Find', 'More options']
 
-async function open(page: Page, query = ''): Promise<void> {
+async function open(page: Page, query = '', searchboxes = 2): Promise<void> {
   await page.goto(`/src/debug/ui-host-isolation.html${query}`)
   await page.locator('[data-viewer=sheet] [data-officeview-sheet-instance] canvas').first().waitFor()
   await page.locator('[data-viewer=paged] canvas').first().waitFor()
-  await expect(page.getByRole('searchbox')).toHaveCount(2)
+  await expect(page.getByRole('searchbox')).toHaveCount(searchboxes)
   await expect(page.getByRole('button', { name: 'Zoom in' })).toHaveCount(2)
   await page.evaluate(() => document.fonts.ready)
 }
@@ -33,28 +38,33 @@ async function showCopyPill(page: Page): Promise<void> {
   await expect(page.getByTestId('officeview-copy-selection')).toBeVisible()
 }
 
-async function boxes(page: Page): Promise<Record<string, Record<string, { width: number; height: number; left: number; right: number; top: number; bottom: number }>>> {
-  return page.evaluate(({ labels, viewers }) => Object.fromEntries(viewers.map((v) => [v, Object.fromEntries(labels.map((name) => {
+type Box = { width: number; height: number; left: number; right: number; top: number; bottom: number }
+async function boxes(page: Page, viewer: string, labels: readonly string[] = LABELS): Promise<Record<string, Box>> {
+  return page.evaluate(({ labels, v }) => Object.fromEntries(labels.map((name) => {
     const el = document.querySelector(`[data-viewer=${v}] [aria-label="${name}"]`)
     if (!el) throw new Error(`${v}: ${name} missing`)
     return [name, el.getBoundingClientRect().toJSON()]
-  }))])), { labels: LABELS, viewers: [...VIEWERS] })
+  })), { labels: [...labels], v: viewer })
 }
 
 test.describe('shared viewer controls: geometry (spec §513, AC-A11Y-02)', () => {
   test.describe('coarse pointer', () => {
     test.use({ viewport: { width: 1280, height: 900 }, hasTouch: true, isMobile: true })
     test('coarse pointer: every control is at least 44px high and wide (browser)', async ({ page }) => {
-      await open(page)
+      // coarse: the paged toolbar is compact, its Find collapsed to a button
+      await open(page, '', 1)
       test.skip(!(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)), 'this engine does not emulate a coarse pointer')
-      const all = await boxes(page)
-      for (const v of VIEWERS) {
-        for (const name of LABELS) {
-          expect(all[v][name].height, `${v} ${name}`).toBeGreaterThanOrEqual(44)
-          expect(all[v][name].width, `${v} ${name}`).toBeGreaterThanOrEqual(44)
-        }
-        // the input keeps its 148px width
-        expect(all[v]['Search document'].width, `${v} input`).toBeCloseTo(148, 0)
+      const sheet = await boxes(page, 'sheet')
+      for (const name of LABELS) {
+        expect(sheet[name].height, `sheet ${name}`).toBeGreaterThanOrEqual(44)
+        expect(sheet[name].width, `sheet ${name}`).toBeGreaterThanOrEqual(44)
+      }
+      // the input keeps its 148px width
+      expect(sheet['Search document'].width, 'sheet input').toBeCloseTo(148, 0)
+      const paged = await boxes(page, 'paged', PAGED_COMPACT)
+      for (const name of PAGED_COMPACT) {
+        expect(paged[name].height, `paged ${name}`).toBeGreaterThanOrEqual(44)
+        expect(paged[name].width, `paged ${name}`).toBeGreaterThanOrEqual(44)
       }
     })
   })
@@ -63,29 +73,31 @@ test.describe('shared viewer controls: geometry (spec §513, AC-A11Y-02)', () =>
     await page.setViewportSize({ width: 1280, height: 900 })
     await open(page)
     expect(await page.evaluate(() => matchMedia('(pointer: fine)').matches)).toBe(true)
-    const all = await boxes(page)
+    const sheet = await boxes(page, 'sheet')
     const diffs: string[] = []
-    for (const v of VIEWERS) {
-      for (const name of LABELS) {
-        for (const axis of ['width', 'height'] as const) {
-          const want = MAIN_SIZES[name][axis], got = all[v][name][axis]
-          if (Math.abs(got - want) > 0.5) diffs.push(`${v} ${name} ${axis}: main ${want}, now ${got}`)
-        }
+    for (const name of LABELS) {
+      for (const axis of ['width', 'height'] as const) {
+        const want = MAIN_SIZES[name][axis], got = sheet[name][axis]
+        if (Math.abs(got - want) > 0.5) diffs.push(`sheet ${name} ${axis}: main ${want}, now ${got}`)
       }
     }
     expect(diffs).toEqual([])
+    // the paged viewer's Find row is the same SearchBar, inline in its toolbar
+    const paged = await boxes(page, 'paged', ['Search document', 'Previous match', 'Next match'])
+    for (const name of ['Search document', 'Previous match', 'Next match']) expect(paged[name].height, `paged ${name}`).toBeCloseTo(MAIN_SIZES[name].height, 0)
   })
 
+  // The floating variant (the sheet viewer's; the paged viewer's Find is inline in its toolbar).
   test('is bounded by the viewer width, lets the input shrink and wraps status/buttons (browser)', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await open(page)
-    await page.evaluate(() => { (document.querySelector('[data-viewer=paged]') as HTMLElement).style.width = '320px' })
-    const search = page.locator('[data-viewer=paged]').getByRole('searchbox', { name: 'Search document' })
-    await search.fill('text')
-    await expect(page.locator('[data-viewer=paged] [data-testid=officeview-search-status]')).toContainText('of')
+    await page.evaluate(() => { (document.querySelector('[data-viewer=sheet]') as HTMLElement).style.width = '320px' })
+    const search = page.locator('[data-viewer=sheet]').getByRole('searchbox', { name: 'Search document' })
+    await search.fill('1')
+    await expect(page.locator('[data-viewer=sheet] [data-testid=officeview-search-status]')).toContainText('of')
     const r = await page.evaluate(() => {
-      const viewer = document.querySelector('[data-viewer=paged] [data-ov-theme-root]')!.getBoundingClientRect().toJSON()
-      const bar = document.querySelector('[data-viewer=paged] [data-testid=officeview-search]') as HTMLElement
+      const viewer = document.querySelector('[data-viewer=sheet] [data-ov-theme-root]')!.getBoundingClientRect().toJSON()
+      const bar = document.querySelector('[data-viewer=sheet] [data-testid=officeview-search]') as HTMLElement
       const input = bar.querySelector('input')!.getBoundingClientRect().toJSON()
       const parts = [...bar.children].map((el) => el.getBoundingClientRect().toJSON())
       return { viewer, bar: bar.getBoundingClientRect().toJSON(), barScroll: bar.scrollWidth, barClient: bar.clientWidth, input, parts }

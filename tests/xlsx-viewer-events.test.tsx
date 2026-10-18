@@ -239,7 +239,8 @@ describe('OfficeDoc as the grid ancestor', () => {
   })
   it('falls an unhandled grid Escape through to the viewer selection clear', async () => {
     const { ui, canvas, grid, cleanup } = await officeDocWithGrid()
-    const copyButton = () => ui.container.querySelector('[data-testid="officeview-copy-selection"]')
+    // the toolbar's Copy button is enabled only while a selection exists
+    const copyButton = () => ui.container.querySelector('[data-testid="officeview-copy-selection"]:not(:disabled)')
     fireEvent.doubleClick(canvas, { clientX: 160, clientY: 104, bubbles: true })
     await waitFor(() => expect(copyButton()).toBeTruthy())
     act(() => grid.focus())

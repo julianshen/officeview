@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { SearchBar, ZoomControls } from '../src/components/viewerControls'
-import { FloatingControls } from '../src/components/paged/PagedChrome'
+import { PagedToolbar, type PagedToolbarProps } from '../src/components/paged/PagedToolbar'
 import type { PaintableArray } from '../src/render/paint'
 import { workbookOf } from './helpers/xlsx-find'
 import { OfficePackage } from '../src/core/zip'
@@ -34,8 +34,9 @@ describe('Ctrl/Cmd+wheel never zooms the browser page over any part of the viewe
   it('page viewer: over the search bar and the zoom controls', async () => {
     const ui = render(<OfficeDoc document={await docx()} />)
     await waitFor(() => expect(ui.container.querySelector('canvas')).toBeTruthy())
-    expect(zoomWheelPrevented(ui.getByRole('searchbox', { name: 'Search document' }))).toEqual([true, true])
+    expect(zoomWheelPrevented(await ui.findByRole('searchbox', { name: 'Search document' }))).toEqual([true, true])
     expect(zoomWheelPrevented(ui.getByRole('button', { name: 'Zoom in' }))).toEqual([true, true])
+    expect(zoomWheelPrevented(ui.getByRole('toolbar', { name: 'Document toolbar' }))).toEqual([true, true])
   })
 
   it('spreadsheet viewer: over the search bar and the zoom controls', FIRST_PAINT_TEST, async () => {
@@ -175,6 +176,12 @@ describe('touch targets (spec §513, AC-A11Y-02)', () => {
   })
 })
 
+const TOOLBAR: PagedToolbarProps = {
+  title: 'Report.docx', kind: 'document', current: 1, total: 3, onPrev() {}, onNext() {}, zoom: 1, onZoomIn() {}, onZoomOut() {},
+  onResetZoom() {}, onFit() {}, fitActive: false, onCopy() {}, copyEnabled: true, copyState: 'idle', onPrint() {}, compact: false,
+  showSearch: false, showZoom: true, focusSearchRequest: 0, onEscapeToDocument() {},
+}
+
 describe('control utility rule (spec §6.8)', () => {
   const COLOUR = /^ov:text-(text|muted|icon|accent|on-accent|inherit)$/
   const BACKGROUND = /^ov:bg-/
@@ -184,10 +191,14 @@ describe('control utility rule (spec §6.8)', () => {
     const ui = render(<div data-ov-theme-root="" data-ov-theme="light">
       <SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={0} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} />
       <ZoomControls zoom={1} onIn={() => {}} onOut={() => {}} onReset={() => {}} atFit />
-      {(['idle', 'done', 'failed'] as const).map(state => <FloatingControls key={state} search={null} zoom={null} copy={{ state, onCopy: () => {} }} focusSearchRequest={0} />)}
+      {(['idle', 'done', 'failed'] as const).map(state => <PagedToolbar key={state} {...TOOLBAR} copyState={state} />)}
+      <PagedToolbar {...TOOLBAR} compact />
     </div>)
+    fireEvent.click(ui.getAllByLabelText('More options')[0])
     const controls = [...ui.container.querySelectorAll('[data-ov-theme-root] :is(button, input, select, textarea)')]
-    expect(controls).toHaveLength(9)
+    // search (3) + zoom (3) + 3 desktop toolbars (prev, next, zoom out, reset, zoom in, fit, copy, print)
+    // + compact toolbar (prev, next, zoom out, reset, zoom in, more) + its menu (fit, copy, print)
+    expect(controls).toHaveLength(3 + 3 + 3 * 8 + 6 + 3)
     const missing = controls.flatMap(el => {
       const classes = [...el.classList]
       const label = el.getAttribute('aria-label') ?? el.getAttribute('data-testid') ?? el.tagName

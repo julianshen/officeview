@@ -28,6 +28,7 @@ export function SearchBar({
   countLabel,
   note,
   failure,
+  variant = 'floating',
 }: {
   inputRef: React.RefObject<HTMLInputElement | null>
   query: string
@@ -43,6 +44,8 @@ export function SearchBar({
   note?: string
   /** A failed search has no final match count. */
   failure?: string
+  /** 'floating' overlays the viewer (sheet viewer); 'inline' sits in a toolbar. */
+  variant?: 'floating' | 'inline'
 }): ReactElement {
   const qualifier = note ? ` (${note})` : ''
   const status = indexing ? 'indexing…' : failure ?? (count === 0 ? (query ? `no matches${qualifier}` : '') : `${active + 1} of ${countLabel ?? count}${qualifier}`)
@@ -51,8 +54,12 @@ export function SearchBar({
     <div
       data-testid="officeview-search"
       data-officeview-chrome=""
-      // never wider than the viewer: the input shrinks, status/buttons wrap
-      className={`ov:absolute ov:top-[calc(env(safe-area-inset-top)+8px)] ov:right-3 ov:z-6 ov:max-w-[calc(100%-24px)] ov:box-border ov:flex ov:flex-wrap ov:justify-end ov:items-center ov:gap-1.5 ov:p-1.5 ov:text-text ${SURFACE}`}
+      data-variant={variant}
+      // floating: never wider than the viewer, the input shrinks and
+      // status/buttons wrap; inline: one row that shrinks inside the toolbar
+      className={variant === 'inline'
+        ? 'ov:flex ov:flex-nowrap ov:items-center ov:gap-1 ov:min-w-0 ov:shrink ov:p-0 ov:text-text ov:bg-transparent ov:border-0'
+        : `ov:absolute ov:top-[calc(env(safe-area-inset-top)+8px)] ov:right-3 ov:z-6 ov:max-w-[calc(100%-24px)] ov:box-border ov:flex ov:flex-wrap ov:justify-end ov:items-center ov:gap-1.5 ov:p-1.5 ov:text-text ${SURFACE}`}
     >
       <input
         ref={inputRef}
@@ -65,7 +72,7 @@ export function SearchBar({
           if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) onPrev(); else onNext() }
           else if (e.key === 'Escape') { e.preventDefault(); onQuery('') }
         }}
-        className={`ov:h-7 ov:w-37 ov:min-w-0 ov:shrink ov:basis-24 ov:grow ov:max-w-37 ov:px-2 ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:text-[14px] ov:placeholder:text-muted ov:outline-none ov:focus-visible:border-accent ${MOTION} ${TARGET}`}
+        className={`ov:h-7 ov:w-37 ov:min-w-0 ov:shrink ov:basis-24 ov:grow ov:max-w-37 ov:px-2 ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:text-[14px] ov:placeholder:text-muted ov:outline-none ov:focus-visible:border-accent ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-0 ov:focus-visible:outline-accent ${MOTION} ${TARGET}`}
       />
       <span
         data-testid="officeview-search-status"

@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
 import { GridHeaders } from '../src/components/xlsx/GridHeaders'
 import { SearchBar, ZoomControls } from '../src/components/viewerControls'
-import { FloatingControls } from '../src/components/paged/PagedChrome'
+import { PagedToolbar } from '../src/components/paged/PagedToolbar'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createScrollWindow } from '../src/xlsx/view/scrollWindow'
@@ -68,9 +68,9 @@ describe('viewer chrome glyphs use text presentation', () => {
     }
     expect(ui.container.textContent).not.toMatch(GLYPHS)
   })
-  it('copy pill in every state', () => {
+  it('paged toolbar copy button in every state', () => {
     for (const state of ['idle', 'done', 'failed'] as const) {
-      const ui = render(<FloatingControls search={null} zoom={null} copy={{ state, onCopy: vi.fn() }} focusSearchRequest={0} />)
+      const ui = render(<PagedToolbar kind="document" current={1} total={2} onPrev={vi.fn()} onNext={vi.fn()} zoom={1} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onResetZoom={vi.fn()} onFit={vi.fn()} fitActive={false} onCopy={vi.fn()} copyEnabled copyState={state} onPrint={vi.fn()} compact={false} showSearch={false} showZoom focusSearchRequest={0} onEscapeToDocument={vi.fn()} />)
       const pill = ui.getByTestId('officeview-copy-selection')
       expect(pill.querySelector('svg[data-icon][aria-hidden="true"]'), state).toBeTruthy()
       expect(pill.textContent, state).not.toMatch(GLYPHS)
