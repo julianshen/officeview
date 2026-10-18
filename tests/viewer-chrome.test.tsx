@@ -202,8 +202,11 @@ describe('control utility rule (spec §6.8)', () => {
     const missing = controls.flatMap(el => {
       const classes = [...el.classList]
       const label = el.getAttribute('aria-label') ?? el.getAttribute('data-testid') ?? el.tagName
+      // padding on both axes: a lone ov:px-* lets a host rule such as
+      // `.app button { padding: 20px }` set the block padding
+      const padded = classes.some(c => /^ov:p-/.test(c)) || (classes.some(c => /^ov:px-/.test(c)) && classes.some(c => /^ov:py-/.test(c)))
       return ([['colour', COLOUR], ['background', BACKGROUND], ['padding', PADDING], ['border', BORDER]] as const)
-        .filter(([, re]) => !classes.some(c => re.test(c))).map(([what]) => `${label}: ${what}`)
+        .filter(([what, re]) => what === 'padding' ? !padded : !classes.some(c => re.test(c))).map(([what]) => `${label}: ${what}`)
     })
     expect(missing).toEqual([])
   })

@@ -72,7 +72,7 @@ export function SearchBar({
           if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) onPrev(); else onNext() }
           else if (e.key === 'Escape') { e.preventDefault(); onQuery('') }
         }}
-        className={`ov:h-7 ov:w-37 ov:min-w-0 ov:shrink ov:basis-24 ov:grow ov:max-w-37 ov:px-2 ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:text-[14px] ov:placeholder:text-muted ov:outline-none ov:focus-visible:border-accent ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-0 ov:focus-visible:outline-accent ${MOTION} ${TARGET}`}
+        className={`ov:h-7 ov:w-37 ov:min-w-0 ov:shrink ov:basis-24 ov:grow ov:max-w-37 ov:py-0 ov:px-2 ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:text-[14px] ov:placeholder:text-muted ov:outline-none ov:focus-visible:border-accent ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-0 ov:focus-visible:outline-accent ${MOTION} ${TARGET}`}
       />
       <span
         data-testid="officeview-search-status"

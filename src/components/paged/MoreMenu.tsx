@@ -19,7 +19,7 @@ export interface MoreItem {
 }
 
 const ITEM = [
-  'ov:flex ov:w-full ov:items-center ov:gap-2 ov:px-3 ov:min-h-8 ov:coarse:min-h-11 ov:text-left ov:text-base ov:text-text ov:bg-transparent ov:border-0 ov:cursor-pointer',
+  'ov:flex ov:w-full ov:items-center ov:gap-2 ov:py-0 ov:px-3 ov:min-h-8 ov:coarse:min-h-11 ov:text-left ov:text-base ov:text-text ov:bg-transparent ov:border-0 ov:cursor-pointer',
   'ov:hover:bg-hover ov:focus-visible:bg-hover ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:-outline-offset-2 ov:focus-visible:outline-accent',
   'ov:aria-checked:font-[600] ov:aria-disabled:text-muted ov:aria-disabled:cursor-default',
 ].join(' ')

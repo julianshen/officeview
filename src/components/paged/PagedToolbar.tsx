@@ -49,10 +49,12 @@ const BLOCKED = 'Copy blocked — press ⌘C'
 const COPY_STATE = { idle: 'idle', done: 'copied', failed: 'blocked' } as const
 const MOTION = 'ov:transition-colors ov:duration-150 ov:motion-reduce:transition-none'
 const FOCUS = 'ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'
-const BASE = `ov:inline-flex ov:items-center ov:justify-center ov:gap-1 ov:shrink-0 ov:px-1 ov:rounded-control ov:bg-transparent ov:border-0 ov:text-icon ov:cursor-pointer ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:cursor-default ov:aria-pressed:bg-header-active ov:aria-pressed:text-accent ${MOTION} ${FOCUS}`
+const BASE = `ov:inline-flex ov:items-center ov:justify-center ov:gap-1 ov:shrink-0 ov:py-0 ov:px-1 ov:rounded-control ov:bg-transparent ov:border-0 ov:text-icon ov:cursor-pointer ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:cursor-default ov:aria-pressed:bg-header-active ov:aria-pressed:text-accent ${MOTION} ${FOCUS}`
 /** Regular: 28px controls in a 40px bar (44px on a coarse pointer); compact: 44px. */
 const button = (compact: boolean) => `${BASE} ${compact ? 'ov:min-h-11 ov:min-w-11' : 'ov:h-7 ov:min-w-7 ov:coarse:min-h-11 ov:coarse:min-w-11'}`
 const DIVIDER = 'ov:w-px ov:h-5 ov:mx-1 ov:shrink-0 ov:bg-border'
+/** Compact drops the group dividers: 44px targets need the width at 375px. */
+const divider = (compact: boolean) => (compact ? null : <span className={DIVIDER} aria-hidden="true" />)
 
 /** Where focus goes when the layout crosses the compact threshold. */
 const COUNTERPART: Record<string, string> = { fit: 'more', copy: 'more', print: 'more', more: 'fit', find: 'search' }
@@ -147,14 +149,14 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
         if (input) { input.focus(); (input as HTMLInputElement).select() }
       }}
       style={{ height: PAGED_TOOLBAR_HEIGHT[compact ? 'compact' : 'regular'] }}
-      className={`ov:flex ov:items-center ov:gap-1 ov:shrink-0 ov:min-w-0 ov:px-2 ${compact ? 'ov:py-0.5' : 'ov:py-1.5'} ov:bg-chrome ov:text-text ov:border-b ov:border-border ov:text-base`}
+      className={`ov:flex ov:items-center ov:shrink-0 ov:min-w-0 ${compact ? 'ov:gap-0 ov:px-1 ov:py-0.5' : 'ov:gap-1 ov:px-2 ov:py-1.5'} ov:bg-chrome ov:text-text ov:border-b ov:border-border ov:text-base`}
     >
       {!compact && p.title && (
         <span data-testid="officeview-title" title={p.title} className="ov:min-w-0 ov:shrink ov:truncate ov:font-[600] ov:px-1">{p.title}</span>
       )}
       <span className="ov:flex-1" />
       {!(compact && findOpen) && (
-        <div className="ov:flex ov:items-center ov:gap-0.5 ov:shrink-0">
+        <div className="ov:flex ov:items-center ov:gap-0 ov:shrink-0">
           <button type="button" data-ov-control="prev" aria-label={`Previous ${unit}`} disabled={p.current <= 1} onClick={p.onPrev} className={btn}><Icon icon={ChevronLeft} name="chevron-left" /></button>
           <span data-testid="officeview-page-position" aria-label={`${kind === 'slides' ? 'Slide' : 'Page'} ${p.current} of ${p.total}`} className="ov:px-1 ov:whitespace-nowrap ov:tabular-nums ov:text-text">
             {kind === 'slides' && !compact ? 'Slide ' : ''}{p.current} / {p.total}
@@ -164,8 +166,8 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
       )}
       {p.showZoom && !(compact && findOpen) && (
         <>
-          <span className={DIVIDER} aria-hidden="true" />
-          <div data-testid="officeview-zoom-controls" className="ov:flex ov:items-center ov:gap-0.5 ov:shrink-0">
+          {divider(compact)}
+          <div data-testid="officeview-zoom-controls" className="ov:flex ov:items-center ov:gap-0 ov:shrink-0">
             <button type="button" data-ov-control="zoom-out" aria-label="Zoom out" disabled={p.zoom <= 1} onClick={p.onZoomOut} className={btn}><Icon icon={Minus} name="minus" /></button>
             <button type="button" data-ov-control="zoom-reset" aria-label="Reset zoom" onClick={p.onResetZoom} className={`${btn} ov:min-w-11 ov:text-sm ov:font-[600] ov:tabular-nums ov:text-text`}>{Math.round(p.zoom * 100)}%</button>
             <button type="button" data-ov-control="zoom-in" aria-label="Zoom in" onClick={p.onZoomIn} className={btn}><Icon icon={Plus} name="plus" /></button>
@@ -175,7 +177,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
       )}
       {p.showSearch && (
         <>
-          <span className={DIVIDER} aria-hidden="true" />
+          {divider(compact)}
           {compact && (
             <button type="button" data-ov-control="find" aria-label="Find" aria-expanded={expanded} onClick={() => { const open = !expanded; setExpanded(open); pendingFocus.current = open ? 'search' : null }} className={btn}>
               <Icon icon={Search} name="search" />
@@ -188,7 +190,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
         <MoreMenu items={more} buttonClass={btn} />
       ) : (p.onCopy || p.onPrint) && (
         <>
-          <span className={DIVIDER} aria-hidden="true" />
+          {divider(compact)}
           {p.onCopy && (
             <button
               type="button"

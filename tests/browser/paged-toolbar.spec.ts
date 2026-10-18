@@ -42,9 +42,9 @@ async function deck(count: number): Promise<Uint8Array> {
 const fixtures = new Map<string, Promise<Uint8Array>>()
 function fixture(name: string): Promise<Uint8Array> {
   if (!fixtures.has(name)) {
-    fixtures.set(name, name === 'Report.docx' ? buildDocx(lines(150))
+    fixtures.set(name, name === 'Report.docx' ? buildDocx(lines(220))
       : name === 'Tall.docx' ? buildDocx(lines(60))
-        : name === 'Hundred.docx' ? buildDocx(lines(2600, 'Row'))
+        : name === 'Hundred.docx' ? buildDocx(lines(4400, 'Row'))
           : name === 'Deck.pptx' ? deck(3)
             : Promise.reject(new Error(`no fixture ${name}`)))
   }
@@ -188,7 +188,10 @@ test.describe('compact 375x667 coarse', () => {
       }
       await page.keyboard.press('Escape')
       await toolbar(page).getByLabel('Find').click()
-      for (const s of await sizes()) expect(s.height, `${name} expanded ${s.label}`).toBeGreaterThanOrEqual(44)
+      for (const s of await sizes()) {
+        expect(s.height, `${name} expanded ${s.label}`).toBeGreaterThanOrEqual(44)
+        expect(s.right, `${name} expanded ${s.label} right edge`).toBeLessThanOrEqual(375 + 0.5)
+      }
       await page.unrouteAll({ behavior: 'ignoreErrors' })
     }
   })
@@ -198,13 +201,15 @@ test.describe('desktop 1280x800', () => {
   test.use({ viewport: { width: 1280, height: 800 } })
 
   for (const theme of ['light', 'dark'] as const) {
-    test(`keyboard: Tab order through toolbar groups with a visible focus ring in light and dark (${theme})`, async ({ page }) => {
+    test(`keyboard: Tab order through toolbar groups with a visible focus ring in light and dark (${theme})`, async ({ page, browserName }) => {
+      // WebKit follows Safari's default: Tab reaches only text fields, Option-Tab every control
+      const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
       await open(page, 'Report.docx', { query: { theme } })
       // Tab from the start of the page walks the toolbar in DOM order, then the pages.
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
       const order: string[] = []
       for (let i = 0; i < 20; i++) {
-        await page.keyboard.press('Tab')
+        await page.keyboard.press(tab)
         const info = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement
           const bar = document.querySelector('[data-testid=officeview-toolbar]')!

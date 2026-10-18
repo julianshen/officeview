@@ -519,6 +519,9 @@ function LegacyOfficeDoc({
   })
   const apply = (o: ZoomOutcome | null) => {
     if (!o) return
+    // No transform or mode change means no commit to carry the scrollTop.
+    const t = tRef.current, n = o.transform
+    if (o.fit === fitRef.current && n.zoom === t.zoom && n.panX === t.panX && n.panY === t.panY) { if (containerRef.current) containerRef.current.scrollTop = o.scrollTop; return }
     setFitMode(o.fit)
     pending.current = o.scrollTop
     commit(o.transform)

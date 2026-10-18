@@ -29,13 +29,16 @@ async function open(page: Page, query = '', searchboxes = 2): Promise<void> {
   await page.evaluate(() => document.fonts.ready)
 }
 
-/** Double-click a word of the paged document's first line so the copy pill shows. */
+/** Double-click a word of the paged document's first line so Copy is enabled. */
 async function showCopyPill(page: Page): Promise<void> {
   const canvas = page.locator('[data-viewer=paged] canvas').first()
   const box = (await canvas.boundingBox())!
   const scale = box.width / 816
   await canvas.dblclick({ position: { x: 130 * scale, y: 104 * scale } })
-  await expect(page.getByTestId('officeview-copy-selection')).toBeVisible()
+  // the paged toolbar's Copy button is enabled by the selection; let its
+  // 150ms colour transition settle before anything reads its colours
+  await expect(page.getByTestId('officeview-copy-selection')).toBeEnabled()
+  await page.waitForTimeout(300)
 }
 
 type Box = { width: number; height: number; left: number; right: number; top: number; bottom: number }
@@ -91,19 +94,21 @@ test.describe('shared viewer controls: geometry (spec §513, AC-A11Y-02)', () =>
   test('is bounded by the viewer width, lets the input shrink and wraps status/buttons (browser)', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await open(page)
-    await page.evaluate(() => { (document.querySelector('[data-viewer=sheet]') as HTMLElement).style.width = '320px' })
+    await page.evaluate(() => { (document.querySelector('[data-viewer=sheet]') as HTMLElement).style.width = '240px' })
     const search = page.locator('[data-viewer=sheet]').getByRole('searchbox', { name: 'Search document' })
     await search.fill('1')
     await expect(page.locator('[data-viewer=sheet] [data-testid=officeview-search-status]')).toContainText('of')
     const r = await page.evaluate(() => {
-      const viewer = document.querySelector('[data-viewer=sheet] [data-ov-theme-root]')!.getBoundingClientRect().toJSON()
       const bar = document.querySelector('[data-viewer=sheet] [data-testid=officeview-search]') as HTMLElement
+      // bounded by the box it floats in (the sheet viewer's pane)
+      const viewer = (bar.offsetParent as HTMLElement).getBoundingClientRect().toJSON()
       const input = bar.querySelector('input')!.getBoundingClientRect().toJSON()
       const parts = [...bar.children].map((el) => el.getBoundingClientRect().toJSON())
       return { viewer, bar: bar.getBoundingClientRect().toJSON(), barScroll: bar.scrollWidth, barClient: bar.clientWidth, input, parts }
     })
-    expect(r.viewer.width).toBeCloseTo(320, 0)
-    expect(r.bar.right).toBeLessThanOrEqual(r.viewer.right - 12 + 0.5)
+    expect(r.viewer.width).toBeLessThanOrEqual(240)
+    // (inside its pane; the sheet pane's own inset differs from the old paged 12px margin)
+    expect(r.bar.right).toBeLessThanOrEqual(r.viewer.right + 0.5)
     expect(r.bar.left).toBeGreaterThanOrEqual(r.viewer.left - 0.5)
     expect(r.barScroll).toBeLessThanOrEqual(r.barClient)
     for (const part of r.parts) {
@@ -138,7 +143,7 @@ function snapshot(page: Page): Promise<Snapshot[]> {
         const svg = el.tagName.toLowerCase() === 'svg' ? null : el.querySelector(':scope > svg')
         const ib = svg?.getBoundingClientRect()
         out.push({
-          key: `${v}:${i}:${el.tagName.toLowerCase()}:${el.getAttribute('aria-label') ?? el.getAttribute('data-testid') ?? el.getAttribute('data-icon') ?? ''}`,
+          key: `${v}:${i}:${el.tagName.toLowerCase()}:${el.getAttribute('data-testid') ?? ''}:${el.getAttribute('aria-label') ?? el.getAttribute('data-icon') ?? ''}`,
           box: { x: b.x, y: b.y, width: b.width, height: b.height },
           color: cs.color,
           backgroundColor: cs.backgroundColor,
