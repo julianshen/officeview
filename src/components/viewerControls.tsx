@@ -89,6 +89,8 @@ export function SearchBar({
           padding: '0 8px',
           borderRadius: 6,
           border: '1px solid rgba(0,0,0,0.2)',
+          // light-pinned on the light panel until the toolbar task themes it
+          color: '#111',
           fontSize: 14,
           outline: 'none',
         }}
@@ -118,6 +120,8 @@ export function ZoomControls({
   onReset: () => void
   atFit: boolean
 }): ReactElement {
+  // Padding is the ov:p-0 utility: it beats host `.app button` rules that tie
+  // the scoped base (spec §6.8, control-utility rule).
   const btn: CSSProperties = {
     width: T(36),
     height: T(36),
@@ -147,12 +151,13 @@ export function ZoomControls({
         zIndex: 5,
       }}
     >
-      <button type="button" onClick={onIn} aria-label="Zoom in" style={btn}>+</button>
-      <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} style={{ ...btn, opacity: atFit ? 0.5 : 1 }}>−</button>
+      <button type="button" onClick={onIn} aria-label="Zoom in" className="ov:p-0" style={btn}>+</button>
+      <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className="ov:p-0" style={{ ...btn, opacity: atFit ? 0.5 : 1 }}>−</button>
       <button
         type="button"
         onClick={onReset}
         aria-label="Reset zoom"
+        className="ov:p-0"
         style={{ ...btn, height: T(28), fontSize: 11, fontWeight: 600 }}
       >
         {Math.round(zoom * 100)}%

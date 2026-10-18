@@ -170,7 +170,10 @@ describe('#19 chrome font', () => {
   it('the viewer chrome uses an explicit system font stack and its native controls inherit it', async () => {
     const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
     const wrapper = ui.container.querySelector('[data-officeview-sheet-instance]') as HTMLElement
-    expect(wrapper.style.fontFamily).toMatch(/system-ui/)
+    // The font comes from the scoped base rule on the theme root (Task 1), not
+    // an inline style; tests/setup/styles.ts injects the real stylesheet.
+    expect(wrapper.hasAttribute('data-ov-theme-root')).toBe(true)
+    expect(getComputedStyle(wrapper).fontFamily).toMatch(/system-ui/)
     const rule = [...document.head.querySelectorAll('style[data-officeview-sheet-font]')].map(style => style.textContent).join('')
     expect(rule).toMatch(/button.*input.*select|font:\s*inherit/)
   })

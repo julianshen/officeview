@@ -2,9 +2,13 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 import { readFileSync } from 'node:fs'
+import { moduleMap } from './scripts/vite-module-map'
+import { ovCss } from './scripts/ov-css-config'
 
 export default defineConfig({
-  plugins: [react(), {
+  // Tailwind + the theme-root scoping stage (scripts/ov-css-config.ts).
+  css: ovCss.css,
+  plugins: [react(), ...ovCss.plugins, {
     name: 'drawing-preset-notices',
     generateBundle() {
       for (const name of ['LICENSE', 'NOTICE.md']) {
@@ -29,7 +33,9 @@ export default defineConfig({
         this.emitFile({ type: 'asset', fileName: `drawing/unicode/${name}`, source: readFileSync(fileURLToPath(new URL(`./src/drawing/unicode/${name}`, import.meta.url))) })
       }
     },
-  }],
+  },
+  // dist/.module-map.json for scripts/check-eager.ts (eager import-graph gate)
+  ...(process.env.OV_MODULE_MAP ? [moduleMap()] : [])],
   build: {
     lib: {
       entry: {
@@ -37,6 +43,8 @@ export default defineConfig({
         worker: fileURLToPath(new URL('./src/worker/worker-entry.ts', import.meta.url)),
       },
       formats: ['es'],
+      // dist/style.css, exported as "officeview/style.css"
+      cssFileName: 'style',
     },
     rollupOptions: {
       external: ['react', 'react-dom'],

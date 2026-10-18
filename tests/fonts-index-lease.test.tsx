@@ -16,7 +16,7 @@ test('indexing retains a font consumer while async recording outlives main viewe
  const doc: PptxDocument = { slideWidthEmu: 100000, slideHeightEmu: 100000, images: [], slides: [{ index: 0, widthEmu: 100000, heightEmu: 100000, shapes: [] }], embeddedFonts: [{ family: 'Liter', variant: 'regular', relationshipId: 'font', partPath: 'font', bytes: new Uint8Array(readFileSync('tests/fixtures/fonts/Liter-Regular.ttf')) }] }
  const view = render(<OfficeDoc document={doc} />)
  await waitFor(() => expect(view.container.querySelectorAll('canvas')).toHaveLength(1))
- fireEvent.change(view.getByRole('searchbox'), { target: { value: 'x' } })
+ fireEvent.change(await view.findByRole('searchbox'), { target: { value: 'x' } })
  await waitFor(() => expect(gate.entered).toBe(true))
  view.unmount(); expect(remove).not.toHaveBeenCalled()
  await act(async () => gate.release())
