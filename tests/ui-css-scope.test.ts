@@ -125,6 +125,32 @@ describe('ovCssScope (spec §6.8)', () => {
     expect(() => scopeOvCss('[data-ov-theme-root] + button { color: red }')).toThrow(/unscoped/)
   })
 
+  it('the root marker counts only as an attribute name, never inside a value (re-review R2)', () => {
+    const probe = '[data-label="[data-ov-theme-root]"]'
+    // Why it must be rejected: it matches host elements in a document with no theme root.
+    const host = document.createElement('div')
+    host.innerHTML = '<button data-label="[data-ov-theme-root]">host</button>'
+    document.body.appendChild(host)
+    expect(document.querySelector('[data-ov-theme-root]')).toBeNull()
+    expect(host.querySelector(probe)).toBe(host.firstElementChild)
+    host.remove()
+    expect(isScopedSelector(probe)).toBe(false)
+    expect(unscopedSelectors(`${probe}{color:red}`)).toEqual([probe])
+    expect(() => scopeOvCss(`${probe}{color:red}`)).toThrow(/unscoped/)
+    // Same for a quoted value elsewhere, a namespaced or valued root attribute,
+    // nesting, and selectors the parser cannot read (fail closed).
+    for (const selector of [
+      "[title='[data-ov-theme-root] x'] button",
+      '[data-ov-theme-root="1"]',
+      '[*|data-ov-theme-root]',
+      '& [data-ov-theme-root]',
+      '[data-ov-theme-root',
+      '',
+    ]) expect(isScopedSelector(selector), selector).toBe(false)
+    // The attribute name is case-insensitive in HTML.
+    expect(isScopedSelector('[DATA-OV-THEME-ROOT] button')).toBe(true)
+  })
+
   it('the validator accepts every form the stylesheet emits (dev, minified and browser-serialised)', () => {
     const accepted = [
       ':where([data-ov-theme-root])',
