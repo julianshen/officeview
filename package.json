@@ -59,6 +59,7 @@
   "dependencies": {
     "fast-xml-parser": "^5.11.1",
     "jszip": "^3.10.2",
+    "lucide-react": "^1.59.0",
     "pako": "1.0.11"
   },
   "devDependencies": {

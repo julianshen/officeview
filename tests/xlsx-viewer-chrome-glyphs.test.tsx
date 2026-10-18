@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
 import { GridHeaders } from '../src/components/xlsx/GridHeaders'
 import { SearchBar, ZoomControls } from '../src/components/viewerControls'
+import { FloatingControls } from '../src/components/paged/PagedChrome'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createScrollWindow } from '../src/xlsx/view/scrollWindow'
@@ -50,11 +51,31 @@ describe('viewer chrome glyphs use text presentation', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))
     expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
   })
+  // Spec §6.3: search, zoom and copy controls draw Lucide icons, never glyph text.
+  const GLYPHS = /[↑↓+−✓⌘]/u
+  const iconControls = (root: HTMLElement, selector: string) => [...root.querySelectorAll<HTMLElement>(selector)]
   it('search bar and zoom controls', () => {
     const ui = render(<div>
       <SearchBar inputRef={{ current: null }} query="x" onQuery={vi.fn()} count={2} active={0} indexing={false} onPrev={vi.fn()} onNext={vi.fn()} />
       <ZoomControls zoom={1} onIn={vi.fn()} onOut={vi.fn()} onReset={vi.fn()} atFit={false} />
     </div>)
     expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
+    const buttons = iconControls(ui.container, '[aria-label="Previous match"], [aria-label="Next match"], [aria-label="Zoom in"], [aria-label="Zoom out"]')
+    expect(buttons).toHaveLength(4)
+    for (const button of buttons) {
+      expect(button.querySelector('svg[data-icon][aria-hidden="true"]'), button.getAttribute('aria-label')!).toBeTruthy()
+      expect(button.textContent).not.toMatch(GLYPHS)
+    }
+    expect(ui.container.textContent).not.toMatch(GLYPHS)
+  })
+  it('copy pill in every state', () => {
+    for (const state of ['idle', 'done', 'failed'] as const) {
+      const ui = render(<FloatingControls search={null} zoom={null} copy={{ state, onCopy: vi.fn() }} focusSearchRequest={0} />)
+      const pill = ui.getByTestId('officeview-copy-selection')
+      expect(pill.querySelector('svg[data-icon][aria-hidden="true"]'), state).toBeTruthy()
+      expect(pill.textContent, state).not.toMatch(GLYPHS)
+      expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
+      ui.unmount()
+    }
   })
 })

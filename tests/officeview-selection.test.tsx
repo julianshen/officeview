@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest'
-import { render, waitFor, fireEvent } from '@testing-library/react'
+import { render, waitFor, fireEvent, screen } from '@testing-library/react'
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
@@ -74,7 +74,26 @@ describe('<OfficeDoc> text selection', () => {
     fireEvent.doubleClick(canvas, { clientX: 160, clientY: 104, bubbles: true })
     await waitFor(() => expect(copyButton(container)).toBeTruthy())
     fireEvent.click(copyButton(container) as HTMLElement)
-    await waitFor(() => expect((copyButton(container) as HTMLElement).textContent).toBe('Copied ✓'))
+    await waitFor(() => expect(container.querySelector('[data-testid="officeview-copy-selection"][data-state="copied"]')).toBeTruthy())
+    // announced to assistive tech through a polite live region that outlives the state change
+    const status = container.querySelector('[data-testid="officeview-copy-status"]') as HTMLElement
+    expect(status.getAttribute('role')).toBe('status')
+    expect(status.getAttribute('aria-live')).toBe('polite')
+    expect(status.textContent).toBe('Copied')
+    expect((copyButton(container) as HTMLElement).textContent).toBe('Copied')
+  })
+
+  test('a blocked copy says so: data-state=blocked, accessible text, announced', async () => {
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    const { container, canvas } = await mount()
+    fireEvent.doubleClick(canvas, { clientX: 160, clientY: 104, bubbles: true })
+    await waitFor(() => expect(copyButton(container)).toBeTruthy())
+    const status = container.querySelector('[data-testid="officeview-copy-status"]') as HTMLElement
+    expect(status.textContent).toBe('')
+    fireEvent.click(copyButton(container) as HTMLElement)
+    await waitFor(() => expect((copyButton(container) as HTMLElement).getAttribute('data-state')).toBe('blocked'))
+    expect(screen.getByRole('button', { name: 'Copy blocked — press ⌘C' })).toBe(copyButton(container))
+    expect(status.textContent).toBe('Copy blocked — press ⌘C')
   })
 
   test('Escape clears the selection', async () => {
