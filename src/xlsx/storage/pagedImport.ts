@@ -86,6 +86,10 @@ export interface PagedImportOptions {
   pageRows?: number
   /** Called once per committed page (tests observe progressive commits). */
   onCommit?(page: ImportedPage): void
+  /** Background priority (spec §10.2): awaited before each source read, so the
+   * host can park this import while foreground commands (viewport, cell
+   * reads) run. */
+  beforeRead?(signal: AbortSignal): Promise<void> | void
 }
 export interface PagedImportSession extends ImportSession {
   readonly workbook: PagedWorkbook
@@ -117,7 +121,12 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   if (options.signal?.aborted) controller.abort()
   else options.signal?.addEventListener('abort', forward, { once: true })
   const signal = controller.signal
-  const src = blobRangeSource(source.blob)
+  const raw = blobRangeSource(source.blob), beforeRead = options.beforeRead
+  const src: typeof raw = beforeRead ? { size: raw.size, async read(start, end, readSignal) {
+    const parked = beforeRead(signal)
+    if (parked) await parked
+    return raw.read(start, end, readSignal)
+  } } : raw
   // One ledger per import: options.ledger, else the injected store's own, else a
   // fresh one. Two different ledgers would split the charges, so that is refused.
   if (options.ledger && options.store?.ledger && options.store.ledger !== options.ledger) {

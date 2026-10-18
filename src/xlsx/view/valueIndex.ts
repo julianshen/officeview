@@ -3,7 +3,7 @@ import type { ColumnEntry, ColumnLanes, FilterRange, PagedKeySetRef, SourceFailu
 import { classifyColumn, type ColumnClassification, type PreparedValue } from './filter'
 import { FilterDiagnostic, TextFilterMatcher, WorkBudget, type FilterLimits } from './textFilter'
 import { canonicalSearchKey } from './canonicalText'
-import { CHECK_WORK_UNITS, CheckpointBudget, YIELD_WORK_UNITS, type BatchSlice, type CooperativeOptions } from './scheduler'
+import { CHECK_WORK_UNITS, CheckpointBudget, YIELD_WORK_UNITS, hostTask, type BatchSlice, type CooperativeOptions } from './scheduler'
 import {
   KEY_BOOLEAN, KEY_DATE, KEY_ERROR, KEY_NUMBER, KEY_STRING, NumberTable, ValueIndexError, loadKeySet,
   sameStamp, valueKeyString, type LaneAccount, type ValueKeySet, type ValueRunStore,
@@ -167,10 +167,8 @@ const defaultLabel: ValueLabeler = (kind, value) => {
   if (kind === 'boolean') return value ? 'TRUE' : 'FALSE'
   throw new FilterDiagnostic('missing-display-text', 'Missing formatted display text lane')
 }
-function defaultYield(): Promise<void> {
-  const host = globalThis as { setImmediate?: (callback: () => void) => unknown }
-  return new Promise(resolve => host.setImmediate ? host.setImmediate(resolve) : setTimeout(resolve, 0))
-}
+/** The shared macrotask yield (never a clamped 0 ms timer in browsers). */
+const defaultYield = hostTask
 /** Time- and work-sliced cooperative yielding (spec §10.2: every slice or
  * YIELD_WORK_UNITS rows/entries, whichever first): an abort scheduled as a
  * task runs within one slice even when every awaited page resolves

@@ -1005,6 +1005,13 @@ describe('detection pacing row bound (spec §10.2; plan S4.2 LIFE-02)', () => {
     expect(yields).toBe(0)
     expect(store.processed.cells).toBeLessThanOrEqual(256)
   })
+  it.each([9_000, 10_000, 11_000, 12_000, 13_000])('checks within 256 cells in the batched scan loops too (abort at cell %i of large strip pages)', async at => {
+    const store = counted(denseBlockStore(4096, 8)), controller = new AbortController()
+    store.onTouch = cells => { if (cells === at) controller.abort() }
+    const outcome = await detectOperationRange({ store, structure: emptyIndex(store), selection: sel(0, 0), options: { signal: controller.signal, stamp: { ...store.stamp } }, now: () => 0, yield: async () => {} })
+    expect(outcome).toEqual({ kind: 'cancelled' })
+    expect(store.processed.cells - at).toBeLessThanOrEqual(256)
+  })
   it('samples the clock within 256 processed cells of one large page', async () => {
     const store = counted(denseBlockStore(2, 8192))
     const selection = sel(0, 0, [{ rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, cols: [{ c0: 0, c1: 8191 }] }])

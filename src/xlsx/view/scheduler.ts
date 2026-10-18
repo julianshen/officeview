@@ -31,44 +31,60 @@ export interface CooperativeOptions<Phase extends string = string> {
 export interface HostYield { yield: () => Promise<void>; dispose: () => void }
 type Allocate = <T>(create: () => T) => T
 
-/** Real task boundary for the host. Node's immediate queue gives timers/I/O a
- * turn between yields (a chain of port messages can drain within one poll
- * phase); browsers prefer scheduler.yield, then task-backed MessageChannel
- * ports, then a timer. Each operation owns its ports and disposes them. */
-export function createHostYield(allocate: Allocate = create => create()): HostYield {
-  const host = globalThis as typeof globalThis & {
-    scheduler?: { yield: () => Promise<void> }
-    setImmediate?: (callback: () => void) => unknown
+type YieldHost = {
+  setImmediate?: (callback: () => void) => unknown
+  MessageChannel?: typeof MessageChannel
+  process?: { versions?: { node?: string } }
+  setTimeout: (callback: () => void, ms: number) => unknown
+}
+/**
+ * One real macrotask turn for pacing (spec §10.2), for `host`:
+ *  - Node (and jsdom on Node): its native setImmediate. Node's immediate queue
+ *    gives timers/I/O a turn; a chain of port messages can drain within one
+ *    poll phase there.
+ *  - elsewhere: one shared MessageChannel. A posted message is an ordinary
+ *    task, FIFO with already queued tasks (a cancel message is serviced), and
+ *    never clamped like a nested 0 ms timer (>= 4 ms in browsers).
+ *    A bundled setImmediate polyfill is not trusted, and scheduler.yield is not
+ *    used: its continuation outranks queued tasks.
+ *  - a 0 ms timer only where neither exists.
+ */
+export function macrotaskYield(host: YieldHost = globalThis as unknown as YieldHost): () => Promise<void> {
+  if (host.process?.versions?.node && host.setImmediate) {
+    const immediate = host.setImmediate
+    return () => new Promise<void>(resolve => { immediate(resolve) })
   }
-  if (host.setImmediate) return {
-    yield: () => new Promise<void>(resolve => host.setImmediate!(resolve)),
-    dispose: () => {},
+  if (host.MessageChannel) {
+    let channel: MessageChannel | undefined
+    const waiting: (() => void)[] = []
+    return () => new Promise<void>(resolve => {
+      if (!channel) {
+        channel = new host.MessageChannel!()
+        // Each message resumes the oldest waiter: one per posted yield.
+        channel.port1.onmessage = () => { waiting.shift()?.() }
+      }
+      waiting.push(resolve)
+      channel.port2.postMessage(null)
+    })
   }
-  if (host.scheduler?.yield) return { yield: () => host.scheduler!.yield(), dispose: () => {} }
-  if (typeof MessageChannel !== 'undefined') {
-    const channel = allocate(() => new MessageChannel())
-    let resume: (() => void) | undefined
-    channel.port1.onmessage = () => {
-      const resolve = resume
-      resume = undefined
-      resolve?.()
-    }
-    return {
-      yield: () => new Promise<void>(resolve => {
-        resume = resolve
-        channel.port2.postMessage(null)
-      }),
-      dispose: () => {
-        channel.port1.onmessage = null
-        channel.port1.close()
-        channel.port2.close()
-      },
-    }
+  return () => new Promise<void>(resolve => { host.setTimeout(resolve, 0) })
+}
+let shared: { yield: () => Promise<void>; immediate: unknown; channel: unknown } | undefined
+/** The host's shared macrotask yield (see macrotaskYield), re-resolved only
+ * if the host's yield primitives themselves change (test stubs). */
+export function hostTask(): Promise<void> {
+  const host = globalThis as unknown as YieldHost
+  if (!shared || shared.immediate !== host.setImmediate || shared.channel !== host.MessageChannel) {
+    shared = { yield: macrotaskYield(host), immediate: host.setImmediate, channel: host.MessageChannel }
   }
-  return {
-    yield: () => new Promise<void>(resolve => setTimeout(resolve, 0)),
-    dispose: () => {},
-  }
+  return shared.yield()
+}
+
+/** Real task boundary for the host: the shared macrotask yield (hostTask).
+ * Nothing per operation to allocate or dispose (`allocate` is kept for
+ * callers that account allocations; the shared channel is created once). */
+export function createHostYield(_allocate: Allocate = create => create()): HostYield {
+  return { yield: hostTask, dispose: () => {} }
 }
 
 /**

@@ -348,7 +348,7 @@ describe('immutable option ownership', () => {
 
 
 describe('review behavior regressions', () => {
-  it('default MessageChannel scheduling avoids timers and disposes on every outcome', async () => {
+  it('default MessageChannel scheduling avoids timers on every outcome, through one shared channel', async () => {
     const timer = globalThis.setTimeout
     for (const outcome of ['complete', 'cancelled', 'error'] as const) {
       const controller = new AbortController()
@@ -388,7 +388,9 @@ describe('review behavior regressions', () => {
         expect(timers).not.toHaveBeenCalled()
         expect(channels).toBe(1)
         expect(messages).toBeGreaterThan(0)
-        expect(closed).toBe(2)
+        // One shared channel serves every operation of the host (spec §10.2
+        // yield): nothing per operation to dispose.
+        expect(closed).toBe(0)
       } finally { vi.unstubAllGlobals() }
     }
   })
@@ -752,14 +754,19 @@ describe('round three source ownership regressions', () => {
       expect(native).toBe(0)
     } finally { vi.unstubAllGlobals() }
   })
-  it('browser native scheduler is preferred over MessageChannel', async () => {
-    let yielded = 0
+  it('MessageChannel is preferred over the native scheduler: a yield continuation would outrank queued tasks (a cancel)', async () => {
+    let yielded = 0, posted = 0
+    const timer = globalThis.setTimeout
     vi.stubGlobal('setImmediate', undefined)
     vi.stubGlobal('scheduler', { yield: async () => { yielded++ } })
-    vi.stubGlobal('MessageChannel', class { constructor() { throw new Error('ports should not be created') } })
+    vi.stubGlobal('MessageChannel', class {
+      port1 = { onmessage: null as (() => void) | null, close: () => {} }
+      port2 = { close: () => {}, postMessage: () => { posted++; timer(() => this.port1.onmessage?.(), 0) } }
+    })
     try {
       expect((await sortRowOrder(dataStore([[fixtureCell(1)]]), specFor(1))).kind).toBe('complete')
-      expect(yielded).toBeGreaterThan(0)
+      expect(posted).toBeGreaterThan(0)
+      expect(yielded).toBe(0)
     } finally { vi.unstubAllGlobals() }
   })
 })

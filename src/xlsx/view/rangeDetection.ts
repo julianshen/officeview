@@ -32,7 +32,7 @@ import {
 } from './coordinates'
 import type { PopulatedCellSource, StructuralIndex } from './structure'
 import { guardSort, isChildOnlyRange } from './operationGuard'
-import { CHECK_WORK_UNITS, YIELD_WORK_UNITS } from './scheduler'
+import { CHECK_WORK_UNITS, YIELD_WORK_UNITS, hostTask } from './scheduler'
 
 export interface RangeDetectionRequest {
   store: SourceStore
@@ -137,26 +137,7 @@ function structuralWait(structure: StructuralIndex): RangeDetection {
 }
 
 /** Host yield that gives timers (and abort callbacks) a real macrotask turn. */
-function yieldToHost(): Promise<void> {
-  const host = globalThis as typeof globalThis & {
-    setImmediate?: (callback: () => void) => unknown
-    scheduler?: { yield?: () => Promise<void> }
-  }
-  if (host.setImmediate) return new Promise(resolve => { host.setImmediate!(resolve) })
-  if (host.scheduler?.yield) return host.scheduler.yield()
-  if (typeof MessageChannel !== 'undefined') {
-    return new Promise(resolve => {
-      const channel = new MessageChannel()
-      channel.port1.onmessage = () => {
-        channel.port1.close()
-        channel.port2.close()
-        resolve()
-      }
-      channel.port2.postMessage(null)
-    })
-  }
-  return new Promise(resolve => setTimeout(resolve, 0))
-}
+const yieldToHost = hostTask
 /** Cooperative pacing (spec §10.2, plan S4.2: at least every 10 ms or 4,096
  * rows). Every cell a scan processes is one unit (at most a row of work) and
  * every page read one more; processing loops spend units one cell at a time.
@@ -201,6 +182,9 @@ class Pacer {
     this.signal.throwIfAborted()
     if (this.spend() || this.now() - this.last >= YIELD_EVERY_MS) await this.yield()
   }
+  /** Units the next batch may take: up to the next checkpoint, within the slice.
+   * Loops process a batch synchronously, then spend it once. */
+  get batch(): number { return Math.max(1, Math.min(CHECK_WORK_UNITS - this.unchecked, YIELD_WORK_UNITS - this.work)) }
   /** Admits `units` of a consumer's work on a returned page within one slice. */
   async reserve(units: number): Promise<void> {
     if (this.work > 0 && this.work + units > YIELD_WORK_UNITS) await this.yield()
@@ -268,10 +252,16 @@ export class Scanner {
       throw new ScanFailure({ code: 'stale-source', retryable: true, message: 'Populated scan page belongs to another source stamp' })
     }
     this.work += first.items.length
-    for (const cell of first.items) {
-      try { if (this.pacer.spend()) await this.pacer.yield() } catch (error) { void iterator.return?.(); throw error }
-      const outside = !isValidCoordinate(cell.row, cell.col) ? 'worksheet domain' : cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1 ? 'requested range' : null
-      if (outside !== null) { void iterator.return?.(); throw contractViolation(`Populated cell outside the ${outside}`) }
+    const items = first.items
+    for (let at = 0; at < items.length;) {
+      const end = Math.min(items.length, at + this.pacer.batch)
+      for (let i = at; i < end; i++) {
+        const cell = items[i]
+        const outside = !isValidCoordinate(cell.row, cell.col) ? 'worksheet domain' : cell.row < rect.r0 || cell.row > rect.r1 || cell.col < rect.c0 || cell.col > rect.c1 ? 'requested range' : null
+        if (outside !== null) { void iterator.return?.(); throw contractViolation(`Populated cell outside the ${outside}`) }
+      }
+      try { if (this.pacer.spend(end - at)) await this.pacer.yield() } catch (error) { void iterator.return?.(); throw error }
+      at = end
     }
     if (first.nextCursor !== undefined || first.completeness === 'incomplete') { void iterator.return?.(); return first }
     try { await this.pacer.tick() } catch (error) { void iterator.return?.(); throw error }
@@ -328,10 +318,12 @@ export class Scanner {
     return {
       iterate: async (range, cursor, limit) => {
         const page = await this.page(range, limit ?? defaultLimit, cursor)
-        const items: SourceCell[] = []
-        for (const cell of page.items) {
-          if (this.pacer.spend()) await this.pacer.yield()
-          items.push({ row: cell.row, col: cell.col })
+        const items: SourceCell[] = [], source = page.items
+        for (let at = 0; at < source.length;) {
+          const end = Math.min(source.length, at + this.pacer.batch)
+          for (let i = at; i < end; i++) items.push({ row: source[i].row, col: source[i].col })
+          if (this.pacer.spend(end - at)) await this.pacer.yield()
+          at = end
         }
         // The guard scans the returned page synchronously: admit it in one slice.
         await this.pacer.reserve(items.length)
@@ -414,11 +406,16 @@ async function probeCurrentRegion(seed: SourceCell, scanner: Scanner, pageLimit:
       const page = await scanner.page(rect, Math.min(lines * (hi - lo + 1), STRIP_MAX_CELLS))
       const seen = new Uint8Array(lines)
       let reached = 0
-      for (const cell of page.items) {
-        if (scanner.pacer.spend()) await scanner.pacer.yield()
-        const offset = dir * ((rowSide(side) ? cell.row : cell.col) - line)
-        seen[offset] = 1
-        reached = Math.max(reached, offset + 1)
+      const cells = page.items, rows = rowSide(side)
+      for (let at = 0; at < cells.length;) {
+        const end = Math.min(cells.length, at + scanner.pacer.batch)
+        for (let i = at; i < end; i++) {
+          const offset = dir * ((rows ? cells[i].row : cells[i].col) - line)
+          seen[offset] = 1
+          if (offset + 1 > reached) reached = offset + 1
+        }
+        if (scanner.pacer.spend(end - at)) await scanner.pacer.yield()
+        at = end
       }
       let prefix = 0
       while (prefix < lines && seen[prefix] === 1) prefix++
