@@ -146,6 +146,8 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     const result = await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal, stamp })
     signal.throwIfAborted()
     structure = controlStructure(result, memory)
+    // The frozen index cloned the reply; the index alone carries its charge now.
+    store.settle?.(result)
     signal.throwIfAborted()
   } catch (error) { if (!options.resources) resources.dispose(); throw error }
   const portMetadata = memory.reserve()
@@ -462,7 +464,10 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
       const result = await store.queryStructural({ r0: 0, r1: 1048575, c0: 0, c1: 16383 }, { signal: abort, stamp: { ...store.stamp } })
       abort.throwIfAborted()
       if (disposed || resources.closed) throw new ValueIndexError('cancelled', 'Controls disposed')
+      const stale = structure
       structure = controlStructure(result, memory)
+      store.settle?.(result)
+      memory.settle?.(stale)
         abort.throwIfAborted()
     }
     const resolved = await resolve(owner, kind, abort, override, col)
@@ -484,6 +489,10 @@ export async function viewerControls(options: ViewerControlsOptions, signal: Abo
     // that reader exits; the account closes once the cache is drained.
     else lanes.close(() => laneAccount?.close())
     cache.invalidate(identity => identity.sheetId === sheetId)
+    // Explicit owners (AC-LIFE-02): a disposed port's lookup metadata and
+    // structure end now; closures a host still retains must not keep them charged.
+    memory.settle?.(styles)
+    memory.settle?.(structure)
     if (!options.resources) resources.dispose()
   } }
 }

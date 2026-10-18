@@ -5,6 +5,8 @@ export interface FormatBudget {
   reserve(bytes: number): void
   release(bytes: number): void
   retain?(targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic'): void
+  /** Ends a retained target's charge now: its owner dropped it (no GC wait). */
+  settle?(target: object): void
 }
 
 /** Keep builders charged through the synchronous consumer of their output. */

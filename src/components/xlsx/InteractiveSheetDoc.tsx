@@ -48,6 +48,7 @@ import { SharedMeasureContext } from './measureContext'
 import { cellDisplayText } from '../../xlsx/render'
 import { SemanticPresentationCache } from './formatPresentation'
 import { mainFormatBudget } from './mainFormatBudget'
+import type { FormatBudget } from '../../xlsx/view/formatWorkspace'
 import { createObjectWorkbookSource } from '../../worker/viewerObjectSource'
 import { detectProfile } from '../../xlsx/storage/importSession'
 import { BITMAP_BUDGETS, MAIN_THREAD_BUDGETS, type TileCacheStats } from '../../xlsx/view/tileCache'
@@ -156,6 +157,19 @@ let nextDocumentId = 0
 /** Same requested freeze (counts only; extents follow the pane size). */
 function sameFreeze(window: ScrollWindow['frozen'], authored: XlsxFrozenPane | undefined): boolean {
   return (window?.rows ?? 0) === (authored?.rows ?? 0) && (window?.cols ?? 0) === (authored?.cols ?? 0)
+}
+/**
+ * The active sheet's semantic presentations (AC-LIFE-02). A superseded cache
+ * (sheet switch, value generation, unmount) ends its presentations' charges at
+ * once. Render closures read it through the returned ref, so a retained stale
+ * closure context never keeps an old cache (and its labels) alive.
+ */
+function useSemanticPresentations(sheet: XlsxSheet | undefined, valueGen: number, budget: FormatBudget): { readonly current: SemanticPresentationCache | null } {
+  const cache = useMemo(() => sheet ? new SemanticPresentationCache(sheet, budget) : null, [sheet, valueGen, budget])
+  const ref = useRef(cache)
+  ref.current = cache
+  useEffect(() => () => cache?.dispose(), [cache])
+  return ref
 }
 function documentIdOf(doc: object): string {
   let id = documentIds.get(doc)
@@ -648,7 +662,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const measure = useMemo(() => new SharedMeasureContext(() => layoutAdmission), [layoutAdmission])
   measure.setFontGen(fontGen)
   const layoutHostFor = useMemo(() => new WeakMap<XlsxSheet, CellLayoutHost>(), [measure])
-  const semanticPresentations = useMemo(() => entry ? new SemanticPresentationCache(entry.sheet, semanticFormatBudget) : null, [entry?.sheet, identity.valueGen, semanticFormatBudget])
+  const semanticPresentations = useSemanticPresentations(entry?.sheet, identity.valueGen, semanticFormatBudget)
   const layoutHost = (sheet: XlsxSheet): CellLayoutHost => {
     let host = layoutHostFor.get(sheet)
     if (!host) layoutHostFor.set(sheet, host = measure.host(sheet))
@@ -1695,7 +1709,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
-                return cell ? semanticPresentations!.get(cell) : { text: '' }
+                return cell ? semanticPresentations.current!.get(cell) : { text: '' }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
