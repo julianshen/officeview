@@ -1,0 +1,9 @@
+{
+  "_note": "Fine-pointer control boxes (CSS px) declared on main 849e1d2 (viewerControls.tsx). Raw measurements from main, sheet and paged viewers in the ui-host-isolation layout at 1280x900, are in chrome-sizes.main.raw-<engine>.json: they match these values except Previous/Next match, which measured 28.80 wide where the text arrow (about 10.8px plus 16px padding) overflowed the declared 28px min-width (Chromium sheet viewer, WebKit both viewers). With icons the arrows are exactly 28.",
+  "Search document": { "width": 148, "height": 28 },
+  "Previous match": { "width": 28, "height": 28 },
+  "Next match": { "width": 28, "height": 28 },
+  "Zoom in": { "width": 36, "height": 36 },
+  "Zoom out": { "width": 36, "height": 36 },
+  "Reset zoom": { "width": 36, "height": 28 }
+}

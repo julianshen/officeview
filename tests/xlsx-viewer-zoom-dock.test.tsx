@@ -47,6 +47,6 @@ describe('zoom controls placement', () => {
     await waitFor(() => ui.getByRole('grid'), FIRST_PAINT_WAIT)
     const zoom = ui.getByTestId('officeview-zoom-controls')
     expect(zoom.closest('[data-officeview-ui="sheet-toolbar"]')).toBeNull()
-    expect(zoom.style.position).toBe('absolute')
+    expect(zoom.classList.contains('ov:absolute')).toBe(true)
   }, FIRST_PAINT_TEST.timeout)
 })

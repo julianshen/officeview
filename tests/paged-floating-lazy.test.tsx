@@ -64,7 +64,9 @@ describe('lazy paged floating controls', () => {
     fireEvent.doubleClick(canvas, { clientX: 160, clientY: 104, bubbles: true })
     await waitFor(() => expect(copyButton(container)).toBeTruthy())
     fireEvent.click(copyButton(container)!)
-    await waitFor(() => expect(copyButton(container)!.textContent).toBe('Copied ✓'))
+    await waitFor(() => expect(copyButton(container)!.getAttribute('data-state')).toBe('copied'))
+    const status = container.querySelector('[data-testid="officeview-copy-status"]')!
+    expect([status.getAttribute('role'), status.getAttribute('aria-live'), status.textContent]).toEqual(['status', 'polite', 'Copied'])
   })
 
   it('clicking the lazy copy pill with a selection copies it', async () => {

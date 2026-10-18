@@ -182,9 +182,9 @@ test.describe('host isolation (spec §6.8)', () => {
       }
     }))
     expect(resolved).toEqual([
-      // The Find input stays light-pinned on its (still light) panel until the toolbar task themes it.
-      { theme: 'light', rootColor: 'rgb(32, 31, 30)', accent: '#c50f1f', searchAccent: '#c50f1f', zoomSurface: '#ffffff', inputColor: 'rgb(17, 17, 17)' },
-      { theme: 'dark', rootColor: 'rgb(243, 242, 241)', accent: '#479ef5', searchAccent: '#479ef5', zoomSurface: '#292827', inputColor: 'rgb(17, 17, 17)' },
+      // The Find input is themed (Task 2): token text on the token field, no light pin.
+      { theme: 'light', rootColor: 'rgb(32, 31, 30)', accent: '#c50f1f', searchAccent: '#c50f1f', zoomSurface: '#ffffff', inputColor: 'rgb(32, 31, 30)' },
+      { theme: 'dark', rootColor: 'rgb(243, 242, 241)', accent: '#479ef5', searchAccent: '#479ef5', zoomSurface: '#292827', inputColor: 'rgb(243, 242, 241)' },
     ])
   })
 })

@@ -13,6 +13,8 @@ async function mount(paras: DocxParaSpec[] = [{ runs: [{ text: 'alpha beta' }] }
   const doc = await docFor(paras)
   const utils = render(<OfficeDoc document={doc} />)
   await waitFor(() => expect(utils.container.querySelectorAll('canvas').length).toBeGreaterThan(0))
+  // the floating controls are a lazy chunk (Task 0): wait for it, not for a race with first paint
+  await waitFor(() => expect(utils.container.querySelector('[data-testid="officeview-search"]')).toBeTruthy())
   return utils
 }
 

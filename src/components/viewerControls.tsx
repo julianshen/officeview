@@ -2,10 +2,19 @@
  * Viewer chrome shared by the page viewer and the interactive sheet viewport:
  * the Ctrl/Cmd+F search bar and the zoom control cluster.
  */
-import type { CSSProperties, ReactElement } from 'react'
+import type { ReactElement } from 'react'
+import { ChevronDown, ChevronUp, Minus, Plus } from 'lucide-react'
+import { Icon } from './Icon'
 
-/** Spec §513: 44px minimum control targets on touch (coarse-pointer) devices; desktop sizes unchanged. */
-const T = (px: number): number => typeof matchMedia == 'function' && matchMedia('(pointer: coarse)').matches ? Math.max(px, 44) : px
+/** Shared control styling (spec §6.1, §6.8). Every control declares colour,
+ * background, padding and border as ov: utilities, which beat host rules such
+ * as `.app button` (control-utility rule). Coarse pointers get 44px targets
+ * (spec §513); desktop sizes are main's. */
+const TARGET = 'ov:coarse:min-h-11 ov:coarse:min-w-11'
+const MOTION = 'ov:transition-colors ov:duration-150 ov:motion-reduce:transition-none'
+const FOCUS = 'ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'
+const SURFACE = 'ov:bg-surface ov:border ov:border-border ov:rounded-control ov:shadow-popover'
+const ICON_BUTTON = `ov:inline-flex ov:items-center ov:justify-center ov:shrink-0 ov:p-0 ov:text-icon ov:cursor-pointer ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:cursor-default ${MOTION} ${FOCUS} ${TARGET}`
 
 export function SearchBar({
   inputRef,
@@ -37,39 +46,13 @@ export function SearchBar({
 }): ReactElement {
   const qualifier = note ? ` (${note})` : ''
   const status = indexing ? 'indexing…' : failure ?? (count === 0 ? (query ? `no matches${qualifier}` : '') : `${active + 1} of ${countLabel ?? count}${qualifier}`)
-  const btn: CSSProperties = {
-    height: T(28),
-    minWidth: T(28),
-    padding: '0 8px',
-    borderRadius: 6,
-    border: '1px solid rgba(0,0,0,0.2)',
-    background: count > 0 ? '#f0f0f0' : 'rgba(0,0,0,0.06)',
-    color: count > 0 ? '#111' : '#888',
-    fontSize: 14,
-    cursor: count > 0 ? 'pointer' : 'default',
-  }
+  const arrow = `ov:h-7 ov:w-7 ov:rounded-control ov:bg-transparent ov:border ov:border-border ${ICON_BUTTON}`
   return (
     <div
       data-testid="officeview-search"
       data-officeview-chrome=""
-      style={{
-        position: 'absolute',
-        top: 'calc(env(safe-area-inset-top) + 8px)',
-        right: 12,
-        // never wider than the viewer: the input shrinks, status/buttons wrap
-        maxWidth: 'calc(100% - 24px)',
-        boxSizing: 'border-box',
-        display: 'flex',
-        flexWrap: 'wrap',
-        justifyContent: 'flex-end',
-        alignItems: 'center',
-        gap: 6,
-        padding: 6,
-        borderRadius: 10,
-        background: 'rgba(255,255,255,0.95)',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-        zIndex: 6,
-      }}
+      // never wider than the viewer: the input shrinks, status/buttons wrap
+      className={`ov:absolute ov:top-[calc(env(safe-area-inset-top)+8px)] ov:right-3 ov:z-6 ov:max-w-[calc(100%-24px)] ov:box-border ov:flex ov:flex-wrap ov:justify-end ov:items-center ov:gap-1.5 ov:p-1.5 ov:text-text ${SURFACE}`}
     >
       <input
         ref={inputRef}
@@ -82,27 +65,16 @@ export function SearchBar({
           if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) onPrev(); else onNext() }
           else if (e.key === 'Escape') { e.preventDefault(); onQuery('') }
         }}
-        style={{
-          height: T(28),
-          width: 148,
-          minWidth: 0,
-          padding: '0 8px',
-          borderRadius: 6,
-          border: '1px solid rgba(0,0,0,0.2)',
-          // light-pinned on the light panel until the toolbar task themes it
-          color: '#111',
-          fontSize: 14,
-          outline: 'none',
-        }}
+        className={`ov:h-7 ov:w-37 ov:min-w-0 ov:shrink ov:basis-24 ov:grow ov:max-w-37 ov:px-2 ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:text-[14px] ov:placeholder:text-muted ov:outline-none ov:focus-visible:border-accent ${MOTION} ${TARGET}`}
       />
       <span
         data-testid="officeview-search-status"
-        style={{ minWidth: 64, fontSize: 12, color: '#555', textAlign: 'center' }}
+        className="ov:min-w-16 ov:text-sm ov:text-muted ov:text-center"
       >
         {status}
       </span>
-      <button type="button" onClick={onPrev} disabled={count === 0} aria-label="Previous match" style={btn}>↑</button>
-      <button type="button" onClick={onNext} disabled={count === 0} aria-label="Next match" style={btn}>↓</button>
+      <button type="button" onClick={onPrev} disabled={count === 0} aria-label="Previous match" className={arrow}><Icon icon={ChevronUp} name="chevron-up" /></button>
+      <button type="button" onClick={onNext} disabled={count === 0} aria-label="Next match" className={arrow}><Icon icon={ChevronDown} name="chevron-down" /></button>
     </div>
   )
 }
@@ -120,45 +92,20 @@ export function ZoomControls({
   onReset: () => void
   atFit: boolean
 }): ReactElement {
-  // Padding is the ov:p-0 utility: it beats host `.app button` rules that tie
-  // the scoped base (spec §6.8, control-utility rule).
-  const btn: CSSProperties = {
-    width: T(36),
-    height: T(36),
-    borderRadius: 18,
-    border: '1px solid rgba(0,0,0,0.15)',
-    background: '#fff',
-    color: '#111',
-    fontSize: 18,
-    lineHeight: 1,
-    cursor: 'pointer',
-    boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  }
+  const btn = `ov:w-9 ov:h-9 ${SURFACE} ${ICON_BUTTON} ov:disabled:opacity-50`
   return (
     <div
       data-testid="officeview-zoom-controls"
       data-officeview-chrome=""
-      style={{
-        position: 'absolute',
-        right: 12,
-        bottom: 'calc(env(safe-area-inset-bottom) + 12px)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        zIndex: 5,
-      }}
+      className="ov:absolute ov:right-3 ov:bottom-[calc(env(safe-area-inset-bottom)+12px)] ov:z-5 ov:flex ov:flex-col ov:gap-2"
     >
-      <button type="button" onClick={onIn} aria-label="Zoom in" className="ov:p-0" style={btn}>+</button>
-      <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className="ov:p-0" style={{ ...btn, opacity: atFit ? 0.5 : 1 }}>−</button>
+      <button type="button" onClick={onIn} aria-label="Zoom in" className={btn}><Icon icon={Plus} name="plus" size={20} /></button>
+      <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className={btn}><Icon icon={Minus} name="minus" size={20} /></button>
       <button
         type="button"
         onClick={onReset}
         aria-label="Reset zoom"
-        className="ov:p-0"
-        style={{ ...btn, height: T(28), fontSize: 11, fontWeight: 600 }}
+        className={`ov:w-9 ov:h-7 ov:text-xs ov:font-[600] ov:tabular-nums ov:text-text ${SURFACE} ov:inline-flex ov:items-center ov:justify-center ov:p-0 ov:cursor-pointer ov:hover:bg-hover ${MOTION} ${FOCUS} ${TARGET}`}
       >
         {Math.round(zoom * 100)}%
       </button>
