@@ -190,6 +190,40 @@ S8.6 is complete for the measured desktop D kernel scenarios. All nine Chrome
 runs at `09adbb1fa156c54c12e2ada22ea80e89a175d525` pass their frozen thresholds.
 S10.2 reuses those kernel receipts and does not re-run them.
 
+## Final-tree release receipt (2026-10-18, integration `6341b02`)
+
+**Receipt:** `.tmp/viewer-bench/viewer-perf-chromium-desktop-release-6341b02d2cde-2026-10-18T10-05-29-531Z.json` (copy archived in `_prompts/`; run log `_prompts/m1-release-6341b02.log`), integrity sha256 `d29b962a1ba2a9763b23d8ff73cb3debfcbada46df71cbd6876ad2950353cdc7` (SHA-256 over the canonical JSON minus the `hash` field; the harness handshake reports the same value).
+**Command:** `bun scripts/bench-interactive-viewer.ts --browser chromium --channel chrome --profile desktop --fixture all --repeat 30 --mode release --port 4187`.
+**Machine:** Apple M4 Pro (14 logical cores, 24 GiB), macOS 26.5.2; Google Chrome 155.0.8059.80 stable, headless, DPR 2; AC power, no thermal warning. **Shared machine, load on a working set:** load averages at start 4.69 / 7.34 / 6.97 and at end 5.15 / 5.61 / 6.20 (1/5/15-minute); run window 10:05–10:15 UTC. **Result: desktop release ADMITTED, 13/13 rows.** This is the composed integration tree — everything through the M3 browser legs, the value-pacing merge (`d3a3c55`) and the yield-perf restore (`6341b02`), on a clean checkout (`dirty: false`).
+
+| Row | Limit | Measured / notes |
+|---|---|---|
+| warm-viewport-frame | ≤ 16.7 ms | 16.67 ms, pass. (Ordinary input-to-paint p95 4.56; ordinary frame interval p95 16.67; wrapped input-to-paint p95 8.89; styled input-to-paint p95 3.74) |
+| input-acknowledgment | ≤ 50 ms | 32.99 ms, pass-limited. (Sort p95 16.35; filter max (n=10) 32.99; find p95 16.4; cancel p95 17.41) |
+| numeric-sort-100k | ≤ 100 ms | 67.4 ms (sort-100k-8key query-completion p95, n=30) |
+| numeric-sort-1m | ≤ 1000 ms | 787.2 ms (sort-1m-8key query-completion p95, n=30) |
+| numeric-filter-1m | ≤ 100 ms | 72.6 ms (filter-1m-numeric query-completion p95, n=30) |
+| natural-text-sort-1m | ≤ 4000 ms | 2348.6 ms (text-sort-1m-natural query-completion p95, n=30) |
+| cold-value-index-100k | ≤ 750 ms | 30.5 ms (value-index-100k-cold query-completion p95, n=30) |
+| progressive-first-viewport | ≤ 1500 ms | 950.14 ms, pass-limited. (F1 p95 532.84; F2 max (n=10) 700.2; F3 p95 950.14) |
+| import-expanded-throughput | ≥ 20 MiB/s | 48.92 MiB/s (F1 48.92; F2 59.18; F3 53.88) |
+| import-cell-throughput | ≥ 100,000 cells/s | 751,851.43 cells/s (F1 751,851; F2 1,371,050; F3 1,483,449) |
+| main-owned-memory | ≤ 64 MiB | 35.7 MiB, pass. (Ledger peak 35.72; forced-GC live peak above the warmed host 27.32; checkpoint-heap excess −0.2 under the 0.25 MiB engine-cache allowance (user decision 2026-10-13) with 0 MiB independent noise; warm-up objects/arrays/DOM 0.15) |
+| worker-owned-memory | ≤ 512 MiB | 229.9 MiB (F2 worker ledger 223.5 / UASM 229.9) |
+| bitmap-retained | ≤ 128 MiB | 116.0 MiB |
+
+**Informational sort end-to-end (not a threshold):** 30/30 F2 header sorts completed (0 censored at the 15 s cap), end-to-end p50 377 ms / p95 417 ms / max 1,844 ms on the cold first sample; filter-apply end-to-end p50 793 / p95 1,546 ms.
+
+**Memory after close (both sessions, `close()` with the host left idle, three forced GCs):** F2 — main owned 0.4 MiB, both workers (2/2, including the warmed host) terminated, DOM canvases 0, bitmap 116.0 MiB during the session, worker ledger 223.5 MiB during the session. F4 — main owned 0.3 MiB, 2/2 terminated, canvases 0, worker ledger 152.0 / UASM 158.3 MiB, bitmap 68.0 MiB during the session. Ten F2 open/scroll/close recovery cycles own 0.46–1.26 MiB after each close (growth under the roughly 2 MiB bound).
+
+**Regression found and fixed before this receipt.** The first final-tree release run on `6971044` (the docs-only head, everything merged but pre-yield-perf) was **NOT ADMITTED**: progressive-first-viewport missed (F3 p95 1,581.34 ms > 1,500 ms; F1/F2 passed), with import throughput a little lower as well (48.17 MiB/s, 740,412 cells/s; `.tmp/viewer-bench/viewer-perf-chromium-desktop-release-6971044c640d-2026-10-18T07-20-16-013Z.json`, log `m1-release-6971044-miss.log`). Real-browser measurement (worker instrumentation, CPU profiles, an A/B against pre-pacing `9737123`) located two causes introduced by the LIFE-02 pacing walk (`d3a3c55`): F3 p50 went from about 1,000 ms to about 1,385 ms, and header-sort end-to-end p50 from about 290 ms to about 560 ms.
+- **F3:** the stepped first-viewport decode's pauses are microseconds of work, but each pause handed the worker to the background paged import for about 5 ms. The import now **parks at its source reads while foreground commands (viewport, cell reads) run**, via the kernel's bounded `waitForForeground` (spec §10.2 priority; one bounded wait per read, so the import is never starved) through an `openImportSession` `beforeRead` hook.
+- **Sort:** worker range detection's hot loops (scanner validation, strip marking, guard copy) paid per-cell `spend()`/try-await bookkeeping, now replaced by synchronous batches processed up to the next checkpoint, charged once (same 4,096-unit bound and 256-unit checkpoint spacing), and the paged scan charges and re-checks before a page escapes its checkpoint (codex r2 MAJOR fixed). All pacing yields use one shared unclamped macrotask yield (host `setImmediate` on Node/jsdom; otherwise one shared `MessageChannel`, never a clamped 0 ms timer), and the scheduler's overstated cross-channel FIFO claim was narrowed to a same-channel guarantee (5415f28).
+- **Fix landed as `6341b02`** (yield-perf: `446ce13` + `6ee6282` + `5415f28`); codex confirmed in two rounds, final **APPROVE** (`findings-yield-perf-codex.md`: its rounds 1–2 MAJOR is fixed by the escaped-page checkpoint in `5415f28`, and its MINOR narrows the scheduler's overstated cross-channel FIFO guarantee to a same-channel one); cross-source browser cancellation latency remains unmeasured separately and no cancellation-latency guarantee is claimed. LIFE-02 pacing bounds, 256-unit checkpoint spacing and the decision-10 store contract are unchanged.
+- The receipt above was then re-run on `6341b02` and admitted 13/13 with the same command.
+
+Mobile rows were not run (no physical iPad/mobile receipt; skipped by user decision). Physical device and Excel for Windows checks remain not-run.
+
 ## Final-tree release receipt (2026-10-16, `9cfb090` = integration `fb0ddc7`)
 
 **Receipt:** `viewer-perf-chromium-desktop-release-9cfb0901cfb8-2026-10-15T22-18-21-696Z.json`, sha256 `9c8ac5ff4bdb3ac47fc69f9cf0613afb4167dd6641af1a7d0cb73cf66eba5ebf`.
