@@ -6,7 +6,7 @@
  *  - IntersectionObserver-based lazy rendering (only visible pages paint)
  *  - touch scrolling is native (overflow scroll), no custom gesture code needed
  */
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { getPaintables, type PageSpec, type Paintable, type PaintableArray } from '../render/paint'
 import type { WatermarkOptions } from '../core/watermark'
 import type { FallbackFontsOptions } from '../core/fonts/fallback'
@@ -27,6 +27,7 @@ import type { PageOverlay } from '../core/overlay'
 import type { FloatingControlsProps } from './paged/PagedChrome'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
+import { themeRootProps, warnIfStylesMissing, type ThemeMode } from './theme'
 import {
   distance,
   midpoint,
@@ -111,6 +112,12 @@ export interface OfficeDocProps {
    * review; its behaviour may change between minor versions.
    */
   interactiveSheets?: boolean
+  /**
+   * Colour theme (default 'system', which follows prefers-color-scheme). Set on
+   * the viewer's theme root as data-ov-theme; hosts re-brand by overriding the
+   * --ov-* tokens from any rule that targets [data-ov-theme-root].
+   */
+  theme?: ThemeMode
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
@@ -252,7 +259,9 @@ function LegacyOfficeDoc({
   allowPrint = true,
   watermark,
   fallbackFonts,
+  theme,
 }: OfficeDocProps): ReactElement {
+  const instance = useId()
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
   // The watermark is painted into the page bitmap, so changing it has to repaint.
@@ -298,6 +307,7 @@ function LegacyOfficeDoc({
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
+    warnIfStylesMissing(el)
     const suppressPageZoom = (e: WheelEvent) => { if (e.ctrlKey || e.metaKey) e.preventDefault() }
     el.addEventListener('wheel', suppressPageZoom, { passive: false })
     return () => el.removeEventListener('wheel', suppressPageZoom)
@@ -746,7 +756,7 @@ function LegacyOfficeDoc({
     : null
 
   return (
-    <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} {...themeRootProps(theme, instance)} className="ov:relative ov:flex ov:flex-col ov:min-h-0">
       <div
         ref={containerRef}
         className={className}
@@ -848,12 +858,13 @@ const FloatingControls = lazy(() => import('./paged/PagedChrome').then(m => ({ d
 
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
+  const instance = useId()
   // A worker-backed (paged) shell document carries its source (S5.4) and has no
   // rows on the main thread: only the interactive viewer can show it.
   const paged = pagedWorkbookOf(document)
   if ((interactiveSheets || paged) && 'sheets' in document) {
     return (
-      <Suspense fallback={<div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div>}>
+      <Suspense fallback={<div {...themeRootProps(props.theme, instance)}><div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div></div>}>
         <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />
       </Suspense>
     )

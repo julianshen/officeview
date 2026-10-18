@@ -77,6 +77,7 @@ import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
 import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
+import { themeRootProps, warnIfStylesMissing, type ThemeMode } from '../theme'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { pagedSheetGeometry } from './pagedGeometry'
@@ -137,6 +138,7 @@ export interface InteractiveSheetDocProps {
   watermark?: WatermarkOptions
   fallbackFonts?: FallbackFontsOptions
   pageGapPx?: number
+  theme?: ThemeMode
   /** @internal Committed sort/filter views per sheet id (S9.1 seam). */
   views?: Readonly<Record<string, SheetViewInput>>
   /** @internal Instrumentation for tests and the browser harness. */
@@ -247,8 +249,6 @@ function yieldPrint(id: string): void {
   printOwner.style.remove()
   printOwner = null
 }
-/** Viewer chrome font (toolbar, headers, status, popups): never the host page's. */
-const CHROME_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 /** UA form controls do not inherit fonts; one shared rule (while any viewer is mounted) makes them. */
 let fontRule: { style: HTMLStyleElement; users: number } | null = null
 function retainFontRule(): () => void {
@@ -1396,6 +1396,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
+    warnIfStylesMissing(el)
     const suppress = (event: WheelEvent) => { if (event.ctrlKey || event.metaKey) event.preventDefault() }
     el.addEventListener('wheel', suppress, { passive: false })
     return () => el.removeEventListener('wheel', suppress)
@@ -1698,7 +1699,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
     // an unsized host gets the default 400px pane.
-    <div ref={wrapperRef} data-officeview-sheet-instance={instance} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto', fontFamily: CHROME_FONT, fontSize: 13, color: '#1f2937' }}>
+    <div ref={wrapperRef} data-officeview-sheet-instance={instance} {...themeRootProps(props.theme, instance)} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
       <div
         ref={rootRef}
         className={props.className}
@@ -1719,7 +1720,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div data-officeview-ui="sheet-toolbar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px', padding: '4px 8px', background: '#f9fafb', boxShadow: 'inset 0 -1px #858b94' }}>
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
-        <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button><button type="button" disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>Reset sizes</button></div>
+        <div data-officeview-ui="sheet-actions"><button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" onClick={cancelCopy}>Cancel copy</button>}<button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button><button type="button" className="ov:text-text ov:bg-transparent ov:p-0 ov:border-0" disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>Reset sizes</button></div>
         {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}
         {showSearch && (
           <div data-officeview-ui="sheet-search" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
@@ -1787,6 +1788,8 @@ function intersectVisibility(mask: RowVisibility, other: CompactRowVisibility): 
   return createRowVisibility(other.logicalCount, slot => mask.visible(slot) && other.visible(slot))
 }
 
+/** Control-utility rule (spec §6.8): colour, background and border as ov: utilities (padding is inline). */
+const DOCKED = 'ov:text-text ov:bg-transparent ov:border-0'
 /** Below this pane width (CSS px) the zoom controls dock into the toolbar. */
 const NARROW_PANE_PX = 600
 /** The zoom controls as a toolbar group (same names and test id as the floating
@@ -1795,9 +1798,9 @@ function DockedZoomControls({ zoom, onIn, onOut, onReset, atFit, touch }: { zoom
   const side = touch ? 44 : 28
   const btn: CSSProperties = { minWidth: side, minHeight: side, padding: '0 6px', fontSize: 14 }
   return <div role="group" aria-label="Zoom" data-testid="officeview-zoom-controls" data-officeview-ui="sheet-zoom" style={{ display: 'flex', gap: 4 }}>
-    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} style={btn}>−</button>
-    <button type="button" onClick={onReset} aria-label="Reset zoom" style={{ ...btn, fontSize: 12, fontWeight: 600 }}>{Math.round(zoom * 100)}%</button>
-    <button type="button" onClick={onIn} aria-label="Zoom in" style={btn}>+</button>
+    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className={DOCKED} style={btn}>−</button>
+    <button type="button" onClick={onReset} aria-label="Reset zoom" className={DOCKED} style={{ ...btn, fontSize: 12, fontWeight: 600 }}>{Math.round(zoom * 100)}%</button>
+    <button type="button" onClick={onIn} aria-label="Zoom in" className={DOCKED} style={btn}>+</button>
   </div>
 }
 

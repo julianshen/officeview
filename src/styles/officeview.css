@@ -1,0 +1,173 @@
+/*
+ * officeview stylesheet (spec §6.1, §6.8), shipped as dist/style.css.
+ *
+ * No preflight, no global emission: Tailwind's theme is imported by
+ * reference only, the semantic theme below maps utilities to the --ov-*
+ * tokens, and scripts/postcss-ov-scope.ts scopes every utility to the theme
+ * root ([data-ov-theme-root]) and drops @property. Token values mirror
+ * src/styles/tokens.ts (tests/ui-theme-foundation.test.tsx).
+ */
+@import "tailwindcss/theme.css" prefix(ov) reference;
+@custom-variant coarse (@media (pointer: coarse));
+@theme inline reference {
+  --*: initial;
+  --spacing: 4px;
+  --color-surface: var(--ov-color-surface);
+  --color-chrome: var(--ov-color-chrome);
+  --color-field: var(--ov-color-field);
+  --color-border: var(--ov-color-border);
+  --color-text: var(--ov-color-text);
+  --color-muted: var(--ov-color-muted);
+  --color-icon: var(--ov-color-icon);
+  --color-hover: var(--ov-color-hover);
+  --color-accent: var(--ov-color-accent);
+  --color-on-accent: var(--ov-color-on-accent);
+  --color-header: var(--ov-color-header);
+  --color-header-text: var(--ov-color-header-text);
+  --color-header-active: var(--ov-color-header-active);
+  --color-gridline: var(--ov-color-gridline);
+  --color-backdrop: var(--ov-color-backdrop);
+  --color-selection: var(--ov-color-selection);
+  --color-selection-fill: var(--ov-color-selection-fill);
+  --color-find: var(--ov-color-find);
+  --color-find-active: var(--ov-color-find-active);
+  --color-text-selection: var(--ov-color-text-selection);
+  --color-pending: var(--ov-color-pending);
+  --color-pending-text: var(--ov-color-pending-text);
+  --color-freeze: var(--ov-color-freeze);
+  --radius-control: var(--ov-radius-control);
+  --radius-panel: var(--ov-radius-panel);
+  --shadow-rest: var(--ov-shadow-rest);
+  --shadow-popover: var(--ov-shadow-popover);
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --ease-fluent: cubic-bezier(.1,.9,.2,1);
+}
+
+/* Tokens. :where() keeps them at zero specificity, so any host rule that
+ * targets [data-ov-theme-root] re-brands the viewer. */
+:where([data-ov-theme-root]) {
+  --ov-sentinel: 1;
+  --ov-color-surface: #ffffff;
+  --ov-color-chrome: #faf9f8;
+  --ov-color-field: #ffffff;
+  --ov-color-border: #e1dfdd;
+  --ov-color-text: #201f1e;
+  --ov-color-muted: #605e5c;
+  --ov-color-icon: #323130;
+  --ov-color-hover: #f3f2f1;
+  --ov-color-accent: #0f6cbd;
+  --ov-color-on-accent: #ffffff;
+  --ov-color-header: #f3f2f1;
+  --ov-color-header-text: #323130;
+  --ov-color-header-active: #deecf9;
+  --ov-color-gridline: #edebe9;
+  --ov-color-backdrop: #f0efee;
+  --ov-color-selection: #107c41;
+  --ov-color-selection-fill: rgba(16,124,65,.12);
+  --ov-color-find: rgba(255,214,0,.45);
+  --ov-color-find-active: #ca5010;
+  --ov-color-text-selection: rgba(64,128,255,.35);
+  --ov-color-pending: #eceff3;
+  --ov-color-pending-text: #605e5c;
+  --ov-color-freeze: #5f6368;
+  --ov-radius-control: 4px;
+  --ov-radius-panel: 6px;
+  --ov-shadow-rest: 0 1.6px 3.6px rgba(0,0,0,.13);
+  --ov-shadow-popover: 0 6.4px 14.4px rgba(0,0,0,.18);
+}
+
+:where([data-ov-theme-root][data-ov-theme=dark]) {
+  --ov-color-surface: #292827;
+  --ov-color-chrome: #201f1e;
+  --ov-color-field: #1b1a19;
+  --ov-color-border: #3b3a39;
+  --ov-color-text: #f3f2f1;
+  --ov-color-muted: #a19f9d;
+  --ov-color-icon: #d2d0ce;
+  --ov-color-hover: #3b3a39;
+  --ov-color-accent: #479ef5;
+  --ov-color-on-accent: #1b1a19;
+  --ov-color-header: #201f1e;
+  --ov-color-header-text: #d2d0ce;
+  --ov-color-header-active: #1c3149;
+  --ov-color-gridline: #3b3a39;
+  --ov-color-backdrop: #161514;
+  --ov-color-selection: #107c41;
+  --ov-color-selection-fill: rgba(16,124,65,.12);
+  --ov-color-find: rgba(255,214,0,.45);
+  --ov-color-find-active: #ca5010;
+  --ov-color-text-selection: rgba(64,128,255,.35);
+  --ov-color-pending: #e1dfdd;
+  --ov-color-pending-text: #605e5c;
+  --ov-color-freeze: #5f6368;
+  --ov-shadow-rest: 0 1.6px 3.6px rgba(0,0,0,.5);
+  --ov-shadow-popover: 0 6.4px 14.4px rgba(0,0,0,.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  :where([data-ov-theme-root][data-ov-theme=system]) {
+    --ov-color-surface: #292827;
+    --ov-color-chrome: #201f1e;
+    --ov-color-field: #1b1a19;
+    --ov-color-border: #3b3a39;
+    --ov-color-text: #f3f2f1;
+    --ov-color-muted: #a19f9d;
+    --ov-color-icon: #d2d0ce;
+    --ov-color-hover: #3b3a39;
+    --ov-color-accent: #479ef5;
+    --ov-color-on-accent: #1b1a19;
+    --ov-color-header: #201f1e;
+    --ov-color-header-text: #d2d0ce;
+    --ov-color-header-active: #1c3149;
+    --ov-color-gridline: #3b3a39;
+    --ov-color-backdrop: #161514;
+    --ov-color-selection: #107c41;
+    --ov-color-selection-fill: rgba(16,124,65,.12);
+    --ov-color-find: rgba(255,214,0,.45);
+    --ov-color-find-active: #ca5010;
+    --ov-color-text-selection: rgba(64,128,255,.35);
+    --ov-color-pending: #e1dfdd;
+    --ov-color-pending-text: #605e5c;
+    --ov-color-freeze: #5f6368;
+    --ov-shadow-rest: 0 1.6px 3.6px rgba(0,0,0,.5);
+    --ov-shadow-popover: 0 6.4px 14.4px rgba(0,0,0,.6);
+  }
+}
+
+/* Scoped base: unlayered and before the utilities. It restores what a host
+ * reset such as `button { all: unset }` removes. The host's className/style
+ * region ([data-officeview-root]) is left out of box-sizing. */
+[data-ov-theme-root] {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: var(--ov-color-text);
+}
+[data-ov-theme-root] :where(*:not([data-officeview-root])) {
+  box-sizing: border-box;
+}
+[data-ov-theme-root] :is(button, input, select, textarea) {
+  font: inherit;
+  color: inherit;
+  line-height: inherit;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+[data-ov-theme-root] :is(input, select) {
+  cursor: auto;
+}
+/* appearance: none would leave checkboxes and radios with no box at all (the
+ * filter dialog's value list); keep them native. Same specificity, later. */
+[data-ov-theme-root] input:where([type=checkbox], [type=radio]) {
+  appearance: auto;
+  cursor: pointer;
+}
+
+/* Utilities come last in source order, so they follow the base. source("..")
+ * limits class detection to src/ (docs and tests quote ov: class names). */
+@import "tailwindcss/utilities.css" prefix(ov) source("..");
