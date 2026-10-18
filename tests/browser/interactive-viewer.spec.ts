@@ -549,6 +549,150 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('C31, value 2')
   })
 
+  test('F5 structure: dynamic-spill and drawing anchor refuse sort and filter; filter below anchor commits', async ({ page }) => {
+    // Dynamic-array spill: range overlapping D20:D23 SEQUENCE(4) refuses sorts (AC-STORE-03, AC-SEM-04).
+    await openViewer(page, 'f5-spill.xlsx')
+    const beforeSpillA2 = await page.getByRole('gridcell', { name: /^A2, value / }).textContent()
+
+    // Child-only spill selection (rows 21..23, excluding anchor D20) refuses sort.
+    await goTo(page, 'A21')
+    await page.getByRole('grid').focus()
+    for (let i = 0; i < 2; i++) await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(status(page)).toContainText('Operation refused: dynamic-spill', { timeout: 30_000 })
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(beforeSpillA2)
+
+    // Filter on column A hiding row 21 (value 10) refuses with dynamic-spill; view unchanged (AC-STORE-03, AC-SEM-04).
+    await goTo(page, 'A1')
+    await page.getByRole('button', { name: /^Filter column A/ }).click()
+    const spillFilterDialog = page.getByRole('dialog', { name: 'Column filter' })
+    await spillFilterDialog.getByRole('checkbox', { name: '10', exact: true }).uncheck()
+    await spillFilterDialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Operation refused: dynamic-spill', { timeout: 30_000 })
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(beforeSpillA2)
+
+    // Child cell of dynamic spill is read-only accessible.
+    await goTo(page, 'D21')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('D21, value 2')
+
+    // Drawing anchor: sort overlapping twoCell drawing anchor at rows 10..13 refuses (AC-STORE-03, AC-SEM-04).
+    await openViewer(page, 'f5-drawing.xlsx')
+    const beforeDrawingA2 = await page.getByRole('gridcell', { name: /^A2, value / }).textContent()
+    await goTo(page, 'A10')
+    await page.getByRole('grid').focus()
+    for (let i = 0; i < 2; i++) await page.keyboard.press('Shift+ArrowDown')
+    await page.keyboard.press('Shift+ArrowRight')
+    await page.getByRole('button', { name: 'Cycle sort column A' }).click()
+    await expect(status(page)).toContainText('Operation refused: drawing-impact', { timeout: 30_000 })
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(beforeDrawingA2)
+
+    // Filter on B hiding 'top' (rows 2..9, above the drawing anchor at row 10) is refused (AC-SEM-05).
+    await goTo(page, 'A1')
+    await page.getByRole('button', { name: /^Filter column B/ }).click()
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await dialog.getByRole('checkbox', { name: 'top', exact: true }).uncheck()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Operation refused: drawing-impact', { timeout: 30_000 })
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(beforeDrawingA2)
+
+    // Filter on B hiding 'mid' (rows 10..20, within the drawing anchor at rows 10..13) is refused (AC-SEM-05 within-anchor).
+    await page.getByRole('button', { name: /^Filter column B/ }).click()
+    await dialog.getByRole('checkbox', { name: 'top', exact: true }).check()
+    await dialog.getByRole('checkbox', { name: 'mid', exact: true }).uncheck()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Operation refused: drawing-impact', { timeout: 30_000 })
+    expect(await page.getByRole('gridcell', { name: /^A2, value / }).textContent()).toBe(beforeDrawingA2)
+
+    // Filter on B hiding only 'bot' (rows 21..30, below the drawing anchor) is allowed and commits (AC-SEM-05).
+    await page.getByRole('button', { name: /^Filter column B/ }).click()
+    await dialog.getByRole('checkbox', { name: 'mid', exact: true }).check()
+    await expect(dialog.getByRole('checkbox', { name: 'mid', exact: true })).toBeChecked()
+    await dialog.getByRole('checkbox', { name: 'bot', exact: true }).uncheck()
+    await expect(dialog.getByRole('checkbox', { name: 'bot', exact: true })).not.toBeChecked()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(status(page)).toContainText('Visible body 19 / complete body 29', { timeout: 30_000 })
+  })
+
+  test('F2 eight-key sort: interactive modal adds 8 levels across columns A-H with tied groups and mixed asc/desc', async ({ page }) => {
+    await openViewer(page, 'f2-sort8.xlsx')
+    await expect(status(page)).toContainText('Visible body 19 / complete body 19')
+
+    // Open More sort options for column A.
+    await page.getByRole('button', { name: 'More sort options for A' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Sort worksheet' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('textbox', { name: 'Column level 1' })).toHaveValue('A')
+
+    // Add levels up to 8 (columns A through H).
+    for (let i = 1; i < 8; i++) {
+      await dialog.getByRole('button', { name: 'Add level' }).click()
+    }
+    expect(await dialog.locator('[data-sort-level]').count()).toBe(8)
+    await expect(dialog.getByRole('button', { name: 'Add level' })).toBeDisabled()
+
+    // Verify all 8 column letters A through H were selected across the 8 levels.
+    for (let i = 0; i < 8; i++) {
+      const colLetter = String.fromCharCode(65 + i)
+      await expect(dialog.getByRole('textbox', { name: `Column level ${i + 1}` })).toHaveValue(colLetter)
+    }
+
+    // Configure alternating directions across the 8 levels:
+    // Level 1 (A): asc (default)
+    // Level 2 (B): desc
+    // Level 3 (C): asc
+    // Level 4 (D): desc
+    // Level 5 (E): asc
+    // Level 6 (F): desc
+    // Level 7 (G): asc
+    // Level 8 (H): desc
+    await dialog.getByRole('combobox', { name: 'Direction level 2' }).selectOption('desc')
+    await dialog.getByRole('combobox', { name: 'Direction level 4' }).selectOption('desc')
+    await dialog.getByRole('combobox', { name: 'Direction level 6' }).selectOption('desc')
+    await dialog.getByRole('combobox', { name: 'Direction level 8' }).selectOption('desc')
+
+    // Apply 8-key sort.
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(dialog).toBeHidden()
+
+    // Verified: sort applied, priority 1 column A shows aria-sort ascending.
+    await expect(status(page)).toContainText('Visible body 18 / complete body 18', { timeout: 30_000 })
+    await expect(status(page)).toContainText('View-only sort applied; formulas unchanged.')
+    await expect(page.getByRole('columnheader', { name: /^Column A/ })).toHaveAttribute('aria-sort', 'ascending')
+
+    // Assert the exact resulting order across all 8 tied prefix groups.
+    // Every single key 1..8 inverted its pair's initial file order.
+    // The keys.slice(0, 1) mutation fails because pairs 1..7 tie on key 1 and would stay unsorted.
+    // The key 2<->3 priority swap mutation fails on the A=10 pair where B desc and C asc disagree.
+    const expectedOrder = [
+      { cell: 'I2', expected: 'I2, value B-high; original I3' },
+      { cell: 'I3', expected: 'I3, value B-low; original I2' },
+      { cell: 'I4', expected: 'I4, value C-low; original I5' },
+      { cell: 'I5', expected: 'I5, value C-high; original I4' },
+      { cell: 'I6', expected: 'I6, value D-high; original I7' },
+      { cell: 'I7', expected: 'I7, value D-low; original I6' },
+      { cell: 'I8', expected: 'I8, value E-low; original I9' },
+      { cell: 'I9', expected: 'I9, value E-high; original I8' },
+      { cell: 'I10', expected: 'I10, value F-high; original I11' },
+      { cell: 'I11', expected: 'I11, value F-low; original I10' },
+      { cell: 'I12', expected: 'I12, value G-low; original I13' },
+      { cell: 'I13', expected: 'I13, value G-high; original I12' },
+      { cell: 'I14', expected: 'I14, value H-high; original I15' },
+      { cell: 'I15', expected: 'I15, value H-low; original I14' },
+      { cell: 'I16', expected: 'I16, value A-low; original I17' },
+      { cell: 'I17', expected: 'I17, value A-high; original I16' },
+      { cell: 'I18', expected: 'I18, value BC-Bwins; original I19' },
+      { cell: 'I19', expected: 'I19, value BC-Cwins; original I18' },
+    ]
+
+    for (const { cell, expected } of expectedOrder) {
+      await goTo(page, cell)
+      await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe(expected)
+    }
+  })
+
   test('F7 two sheets with identical first revisions: views, zoom and hidden-row inspection stay per sheet; reload resets', async ({ page }) => {
     await openViewer(page, 'f7-two-sheets.xlsx')
     // Reproduced gap: the 0.75pt row 10 (2 device px at DPR 2) made the whole
@@ -604,6 +748,88 @@ test.describe('S10.1 real interactive viewer', () => {
     await expect(page.getByRole('columnheader', { name: /^Column B/ })).not.toHaveAttribute('aria-sort', /ascending|descending/)
   })
 
+  test('F7 multi-sheet switching: retained memory plateaus across repeated sheet switches (AC-LIFE-02)', async ({ page, browserName }) => {
+    // Forced GC via CDP HeapProfiler.collectGarbage requires Chromium.
+    // WebKit in Playwright has no CDP session or exposed programmatic GC hook.
+    test.skip(browserName !== 'chromium', 'Forced GC via CDP HeapProfiler.collectGarbage requires Chromium; WebKit has no programmatic GC API')
+
+    const cdp = await page.context().newCDPSession(page)
+    const gc = async () => {
+      for (let g = 0; g < 3; g++) {
+        await cdp.send('HeapProfiler.collectGarbage')
+        await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 50)))
+      }
+    }
+
+    await openViewer(page, 'f7-three-sheets.xlsx')
+    const sheet = page.getByRole('combobox', { name: 'Worksheet' })
+
+    // On sheet A, apply cycle sort on column B: preserves compact applied sort state across switches (§12.4).
+    await page.getByRole('button', { name: 'Cycle sort column B' }).click()
+    await expect(page.getByRole('columnheader', { name: /^Column B/ })).toHaveAttribute('aria-sort', 'ascending', { timeout: 30_000 })
+
+    const sheetIdMap: Record<string, string> = { A: '1', B: '2', C: '3' }
+    const waitForSheet = async (target: string) => {
+      await sheet.selectOption({ label: target })
+      await expect(page.getByRole('grid')).toHaveAttribute('aria-label', `Worksheet ${target}`)
+      const expectedId = sheetIdMap[target] ?? target
+      await expect.poll(async () => {
+        const frame = await page.evaluate(() => window.__viewerE2E?.lastFrame)
+        return Boolean(frame && frame.activeSheetId === expectedId && frame.pendingTiles === 0)
+      }, { timeout: 15_000 }).toBe(true)
+    }
+
+    // Warm all 3 sheets (A, B, C) and establish baseline after forced GC.
+    await waitForSheet('A')
+    await gc()
+    const baselineA = await page.evaluate(() => window.__viewerE2E?.mainLedger?.bytes ?? 0)
+
+    await waitForSheet('B')
+    await gc()
+    const baselineB = await page.evaluate(() => window.__viewerE2E?.mainLedger?.bytes ?? 0)
+
+    await waitForSheet('C')
+    await gc()
+    const baselineC = await page.evaluate(() => window.__viewerE2E?.mainLedger?.bytes ?? 0)
+
+    const baselineCeiling = Math.max(baselineA, baselineB, baselineC)
+    expect(baselineCeiling).toBeGreaterThan(0)
+
+    // Repeatedly cycle across sheets A -> B -> C for 12 switches total.
+    const history: Array<{ sheet: string; ledger: number; tiles: number }> = []
+    const targets = ['A', 'B', 'C']
+    for (let i = 0; i < 12; i++) {
+      const target = targets[i % 3]
+      await waitForSheet(target)
+      await gc()
+      const sample = await page.evaluate(() => ({
+        ledger: window.__viewerE2E?.mainLedger?.bytes ?? 0,
+        tiles: window.__viewerE2E?.lastFrame?.tiles.tiles ?? 0,
+      }))
+      history.push({ sheet: target, ...sample })
+    }
+
+    // Assert retained memory plateau:
+    // 1. Final switch memory is bounded within baseline + 32 KiB (no monotonic growth after GC).
+    const finalSample = history[history.length - 1]
+    expect(finalSample.ledger).toBeLessThanOrEqual(baselineCeiling + 32 * 1024)
+
+    // 2. Later rounds (switches 6-11) do not exceed earlier rounds (switches 0-5).
+    const earlyMax = Math.max(...history.slice(0, 6).map(h => h.ledger))
+    const lateMax = Math.max(...history.slice(6).map(h => h.ledger))
+    expect(lateMax).toBeLessThanOrEqual(earlyMax + 16 * 1024)
+
+    // 3. Tile cache retained count remains bounded (no tile canvas leak).
+    const maxTiles = Math.max(...history.map(h => h.tiles))
+    expect(maxTiles).toBeLessThanOrEqual(50)
+
+    // Assert that sheet A preserves its compact applied sort state across switches (§12.4 / AC-LIFE-02).
+    await waitForSheet('A')
+    await expect(page.getByRole('columnheader', { name: /^Column B/ })).toHaveAttribute('aria-sort', 'ascending')
+    await goTo(page, 'B2')
+    await expect.poll(async () => (await activeCell(page))?.label ?? '').toBe('B2, value 0; original B41')
+    await expect(status(page)).toContainText('Visible body 39 / complete body 40')
+  })
 
   // S13 native Excel checkpoint: a workbook written and reopened (no repair
   // prompt) by Microsoft Excel 16 for macOS. Expected labels are the values

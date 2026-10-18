@@ -4,6 +4,7 @@ import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
 import { buildDocx } from '../src/testdata/ooxml-builders'
+import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 async function docWithPages() {
   const paras = Array.from({ length: 120 }, (_, i) => ({ runs: [{ text: `line ${i}` }] }))
@@ -296,9 +297,10 @@ describe('XLSX sheet mode zoom (S5.2, spec §5.5)', () => {
     expect(utils.container.querySelector('[role="grid"]')).toBeNull()
   })
 
-  test('flag on: absolute SheetZoom from 25% to 400% with no page pan transform', async () => {
+  test('flag on: absolute SheetZoom from 25% to 400% with no page pan transform', FIRST_PAINT_TEST, async () => {
     const utils = render(<OfficeDoc document={await sheetDoc()} interactiveSheets />)
-    await waitFor(() => expect(utils.container.querySelector('[role="grid"]')).toBeTruthy())
+    // Cold start: the lazy viewer chunk may still show its loading notice at 1 s.
+    await waitFor(() => expect(utils.container.querySelector('[role="grid"]')).toBeTruthy(), FIRST_PAINT_WAIT)
     expect(utils.queryByTestId('officeview-content')).toBeNull()
     expect(label(utils.container)).toBe('100%')
     const out = utils.container.querySelector('[aria-label="Zoom out"]') as HTMLButtonElement

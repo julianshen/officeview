@@ -17,5 +17,6 @@ export function mainFormatBudget(ledger: MainMemoryLedger, limit: number, retain
       ledger.adoptWhileReachable('layout', owner, retainedPool, targets, bytes, commit)
       held -= bytes
     },
+    settle(target) { ledger.settle(target) },
   }
 }

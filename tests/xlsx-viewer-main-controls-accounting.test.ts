@@ -123,7 +123,12 @@ for (const profile of ['D', 'M'] as const)
       await freshTask()
       const afterClose = ledger.snapshot(), liveAfterClose = allocations.filter(a => a.ref.deref() && a.bytes > 0 && (a.name === 'Uint8Array' && a.bytes === n || a.name === 'Float64Array' && a.bytes === n * 8)).reduce((s, a) => s + a.bytes, 0)
       assert.equal(liveAfterClose, rawBytes)
-      assert.equal(afterClose.byPool.controls, during.byPool.controls)
+      // Disposal ends only the port's own explicit owners (AC-LIFE-02): its lookup
+      // metadata (2048 B + 48 B per style, two styles) and its structural index
+      // (1696 B). Held raw lanes and the display lane stay charged until drained.
+      assert.equal(afterClose.byPool.controls, during.byPool.controls - (2048 + 2 * 48) - 1696)
+      assert.equal(ledger.ownerBytes('controls', resources.cacheOwner), 22690)
+      assert.ok([...kernelOwners].reduce((total, owner) => total + ledger.ownerBytes('controls', owner), 0) >= rawBytes)
       assert.equal(view, originalView)
       assert.equal(JSON.stringify(view.selection), originalSelection)
       assert.equal(JSON.stringify(doc), originalDoc)

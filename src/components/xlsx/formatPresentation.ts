@@ -23,7 +23,9 @@ export function formatCellPresentation(sheet: XlsxSheet, cell: XlsxCell, budget:
   }
 }
 
-/** A bounded viewer cache; each entry's owned text/metadata already has a lease. */
+/** A bounded viewer cache; each entry's owned text/metadata already has a lease.
+ * The cache owns those leases: an entry it drops, and every entry on dispose(),
+ * ends its charge at once instead of waiting for collection (AC-LIFE-02). */
 export class SemanticPresentationCache {
   private readonly entries = new Map<XlsxCell, {
     value: XlsxCell['value']; code: string | undefined; numFmtId: number | undefined
@@ -35,7 +37,7 @@ export class SemanticPresentationCache {
     // Cache snapshots may outlive mutable source strings. Cache only bounded
     // inputs and charge those snapshots too; larger formats/values still format.
     if ((typeof value === 'string' && value.length > 256) || (style?.formatCode?.length ?? 0) > 256) {
-      this.entries.delete(cell)
+      this.drop(cell)
       return formatCellPresentation(this.sheet, cell, this.budget)
     }
     const hit = this.entries.get(cell)
@@ -44,14 +46,24 @@ export class SemanticPresentationCache {
       this.entries.set(cell, hit)
       return hit.presentation
     }
-    this.entries.delete(cell)
+    this.drop(cell)
     const presentation = formatCellPresentation(this.sheet, cell, this.budget, true)
     // The presentation's 256 B fixed reservation includes this cache entry.
     // Mutable resident cells/styles are compared by their actual format inputs.
     if (!presentation.state) {
-      if (this.entries.size >= 512) this.entries.delete(this.entries.keys().next().value!)
+      if (this.entries.size >= 512) this.drop(this.entries.keys().next().value!)
       this.entries.set(cell, { value, code: style?.formatCode, numFmtId: style?.numFmtId, dateSystem, locale, presentation })
     }
     return presentation
+  }
+  /** Ends every entry's charge; the cache stays usable (a StrictMode remount reuses it). */
+  dispose(): void {
+    for (const cell of [...this.entries.keys()]) this.drop(cell)
+  }
+  private drop(cell: XlsxCell): void {
+    const entry = this.entries.get(cell)
+    if (!entry) return
+    this.entries.delete(cell)
+    this.budget.settle?.(entry.presentation)
   }
 }
