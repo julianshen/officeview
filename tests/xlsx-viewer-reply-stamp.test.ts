@@ -382,3 +382,25 @@ describe('confirmation round (codex F1-F5)', () => {
     } finally { await kernel.handle({ kind: 'close', requestId: 'close', docId: 'doc' }, () => {}) }
   })
 })
+
+describe('overview clone admission (codex R1)', () => {
+  it('admits the outgoing clone against main headroom before building it: a typed refusal, nothing sent, peak within budget', async () => {
+    const doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }])
+    const source = createObjectWorkbookSource(doc, 'oc')
+    const kernel = new ViewerKernel({ parse: async () => doc, openSource: async () => source })
+    const port = connectInProcess(kernel), client = new ViewerClient(port)
+    await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'oc', source: { kind: 'object', document: doc }, profile: 'D' })
+    const remote = new RemoteWorkbook(client, { docId: 'oc', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map([['s', kernel.session('oc')!.layout('s')]]) })
+    const ledger = remote.mainLedger, limit = MAIN_THREAD_BUDGETS.D
+    try {
+      const store = remote.store('s')
+      ledger.set('copy', 'filler', limit - ledger.bytes - 8192)
+      const sent = vi.spyOn(client, 'send')
+      const request = { maxGroups: 1, groups: [{ groupId: 'g'.repeat(100_000), rows: { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 0 }] }, cols: [{ c0: 0, c1: 0 }] }] }
+      const page = await store.queryOverview(request as never, { signal: new AbortController().signal, stamp: { ...store.stamp } })
+      expect(page.error).toMatchObject({ code: 'resource-limit', retryable: true })
+      expect(sent).not.toHaveBeenCalled()
+      expect(ledger.peakBytes).toBeLessThanOrEqual(limit)
+    } finally { ledger.release('copy', 'filler'); await remote.release() }
+  })
+})

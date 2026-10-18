@@ -1110,8 +1110,8 @@ export class RemoteSheetStore implements SourceStore {
     const refused = this.guard(options)
     if (refused) return this.failedPage(refused)
     if (!Array.isArray(request.groups) || request.groups.length > cap) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
-    // One checkpointed walk (workspace admitted to the main ledger) both
-    // checks and charges the request's clone; awaited only when it paused.
+    // One checkpointed walk (its workspace admitted to the main ledger)
+    // measures the request; awaited only when it paused.
     const accounted = accountQueryBytes(request, budget, () => { if (options.signal.aborted) throw new DOMException('Overview cancelled', 'AbortError') },
       ledgerPool(this.workbook.mainLedger, 'replies', MAIN_THREAD_BUDGETS[this.workbook.profile]))
     let bytes: number | undefined
@@ -1121,6 +1121,12 @@ export class RemoteSheetStore implements SourceStore {
     }
     if (bytes === undefined) return this.failedPage(failure('resource-limit', 'Overview request accounting exceeds the main memory budget; retry', true))
     if (bytes > budget) return this.failedPage(failure('resource-limit', 'Overview request exceeds its bounded wire budget'))
+    // The outgoing clone is admitted against aggregate main headroom before
+    // it is built: this charge reserves it and stays its charge until the
+    // reply (no gap, no second count). Without room nothing is sent.
+    if (this.workbook.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.workbook.profile]) {
+      return this.failedPage(failure('resource-limit', 'Overview request exceeds the main memory budget; retry', true))
+    }
     const charge = `overview-clone:${this.workbook.nextRequestId()}`
     this.workbook.mainLedger.set('replies', charge, bytes)
     try {
