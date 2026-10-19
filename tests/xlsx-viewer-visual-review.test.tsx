@@ -36,14 +36,12 @@ describe('#21 header contrast', () => {
       const text = theme[HEADER_COLORS.text]
       const action = theme[HEADER_COLORS.action]
       const active = theme[HEADER_COLORS.active]
-      const track = theme[HEADER_COLORS.track]
       expect(contrast(text, bg), `${name} header text`).toBeGreaterThanOrEqual(4.5)
       expect(contrast(action, bg), `${name} header action`).toBeGreaterThanOrEqual(4.5)
       expect(contrast(active, bg), `${name} header active`).toBeGreaterThanOrEqual(4.5)
-      expect(contrast(track, bg), `${name} header track`).toBeGreaterThanOrEqual(3)
 
       expect(contrast(theme.text, theme.chrome), `${name} status text on chrome`).toBeGreaterThanOrEqual(4.5)
-      expect(contrast(theme.muted, theme.chrome), `${name} status muted on chrome`).toBeGreaterThanOrEqual(3)
+      expect(contrast(theme.muted, theme.chrome), `${name} status muted on chrome`).toBeGreaterThanOrEqual(4.5)
     }
   })
 })
@@ -262,6 +260,41 @@ describe('#13 popup and toolbar layout', () => {
     const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
     const search = ui.getByTestId('officeview-search')
     expect(search.closest('[data-officeview-ui=sheet-toolbar]')).not.toBeNull()
+  })
+  it('the floating zoom cluster clears the status bar without overlapping it', () => {
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
+    const zoom = ui.getByTestId('officeview-zoom-controls')
+    expect(getComputedStyle(zoom).bottom).toMatch(/36px/)
+  })
+  it('header action buttons do not carry inline background or padding that overrides utilities', () => {
+    const props = gridFixture()
+    const ui = render(<GridHeaders projection={props.projection} window={props.window} viewport={props.viewport} columns={[0]} selection={props.selection} sort={null} controlMode onSortCycle={() => {}} onFilter={() => {}} />)
+    const btn = ui.getByRole('button', { name: /^Select Column A/ })
+    expect(btn.style.background).toBe('')
+    expect(btn.style.padding).toBe('')
+    const sortBtn = ui.getByRole('button', { name: 'Cycle sort column A' })
+    expect(sortBtn.style.background).toBe('')
+    expect(sortBtn.style.padding).toBe('')
+  })
+  it('controls declare disabled styling utilities (spec §6.8)', () => {
+    const ui = render(
+      <div data-ov-theme-root="" data-ov-theme="light">
+        <InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />
+      </div>,
+    )
+    const copyBtn = ui.getByRole('button', { name: 'Copy selection' })
+    expect(copyBtn.className).toMatch(/ov:disabled:text-muted/)
+    expect(copyBtn.className).toMatch(/ov:disabled:opacity-50/)
+    expect(copyBtn.className).toMatch(/ov:disabled:cursor-default/)
+  })
+  it('toolbar buttons draw icons with data-icon', () => {
+    const ui = render(
+      <div data-ov-theme-root="" data-ov-theme="light">
+        <InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />
+      </div>,
+    )
+    expect(ui.container.querySelector('[data-officeview-ui="sheet-actions"] svg[data-icon="copy"]')).toBeTruthy()
+    expect(ui.container.querySelector('[data-officeview-ui="sheet-actions"] svg[data-icon="rotate-ccw"]')).toBeTruthy()
   })
 })
 

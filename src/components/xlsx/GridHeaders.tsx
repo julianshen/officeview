@@ -11,13 +11,12 @@ import { ArrowUpDown, ArrowUp, ArrowDown, Loader2, Filter, Ellipsis, ArrowUpLeft
 import { Icon } from '../Icon'
 
 export const GRID_HEADER_SIZE = 44
-/** Header strip token names (WCAG AA on `header`: text/action/active >= 4.5:1, track >= 3:1). */
+/** Header strip token names (WCAG AA on `header`: text/action/active >= 4.5:1). */
 export const HEADER_COLORS = Object.freeze({
   background: 'header',
   text: 'header-text',
   action: 'icon',
   active: 'accent',
-  track: 'muted',
 } as const)
 /** Desktop header layout: label font, per-letter estimate and one action glyph's width (CSS px). */
 const LABEL_FONT_PX = 12, LABEL_LETTER_PX = 7, LABEL_PAD_PX = 4, ACTION_PX = 14
@@ -145,7 +144,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
   const actions = Boolean(props.onSortCycle || props.onFilter || props.onSortDialog)
   const height = columnHeaderHeight(touch, actions, Boolean(props.onSortDialog))
   const gutter = props.gutter ?? GRID_HEADER_SIZE
-  const target = { minHeight: GRID_HEADER_SIZE, minWidth: touch ? GRID_HEADER_SIZE : 0, overflow: 'hidden', padding: 0, border: 0, background: 'transparent' }
+  const target = { minHeight: GRID_HEADER_SIZE, minWidth: touch ? GRID_HEADER_SIZE : 0, overflow: 'hidden' }
   // Desktop: a column too narrow for its label plus the action glyphs (or any
   // column at <= 50% zoom) shows its label only; its actions stay named and
   // focusable (control mode), and focus reveals them over the neighbours.
@@ -259,7 +258,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-description={actions ? description : undefined} title={`${label}; ${description}`}
           onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
-          className="ov:bg-transparent ov:text-header-text ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
+          className="ov:bg-transparent ov:text-header-text ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
           style={cellTarget}><span style={{ ...iconClip, whiteSpace: 'nowrap', fontSize: labelFont }}>{letters}</span></button>
         {actions && !narrowTouch(col) && (!touch ? columnActions(props, col, () => actionTarget, iconClip)
           : <div style={{ display: 'flex', width: box.width, height: GRID_HEADER_SIZE, flex: 'none' }}>{inline
@@ -294,10 +293,10 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
       aria-busy={props.pendingSortColumn === col ? true : undefined}
       aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}
       aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`}
-      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'}`}
+      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'}`}
       onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}>
       <span style={iconClip}>
-        {props.pendingSortColumn === col ? <Icon icon={Loader2} name="loader" size={14} className="ov:animate-spin" />
+        {props.pendingSortColumn === col ? <Icon icon={Loader2} name="loader" size={14} className="ov:motion-safe:animate-spin" />
           : direction === 'ascending' ? <Icon icon={ArrowUp} name="arrow-up" size={14} />
           : direction === 'descending' ? <Icon icon={ArrowDown} name="arrow-down" size={14} />
           : <Icon icon={ArrowUpDown} name="arrow-up-down" size={14} />}
@@ -306,15 +305,15 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
     <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       style={style(1)} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`}
       aria-pressed={Boolean(rule)} title={description}
-      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'}`}
+      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'}`}
       onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}>
       <span style={iconClip}>
-        <Icon icon={Filter} name="filter" size={14} />
+        <Icon icon={Filter} name="filter" size={14} fill={rule ? 'currentColor' : 'none'} />
       </span>
     </button>
     {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`}
-      className="ov:bg-transparent ov:text-icon ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover ov:rounded-control"
+      className="ov:bg-transparent ov:text-icon ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control"
       onClick={event => props.onSortDialog?.(col, event.currentTarget)}>
       <span style={iconClip}><Icon icon={Ellipsis} name="ellipsis" size={14} /></span>
     </button>}

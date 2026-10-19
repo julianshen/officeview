@@ -188,6 +188,7 @@ describe('view-only resize: coarse pointers', () => {
       expect(row.textContent).toBe('2')
       expect(row.querySelector('svg[data-icon="move-vertical"]')).toBeTruthy()
       expect(row.getAttribute('aria-label')).toBe('Resize row 2')
+      expect(column.getAttribute('aria-label')).toBe('Resize column C')
       fireEvent.pointerDown(row, { button: 0, pointerId: 4, clientY: 60, pointerType: 'touch' })
       fireEvent.pointerMove(window, { pointerId: 4, clientY: 76, pointerType: 'touch' })
       fireEvent.pointerUp(window, { pointerId: 4, clientY: 76, pointerType: 'touch' })

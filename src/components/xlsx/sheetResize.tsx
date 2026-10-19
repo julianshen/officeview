@@ -14,7 +14,7 @@ import type { LogicalCellBox, ScrollWindow } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { frozenViewportSize } from '../../xlsx/view/frozenPanes'
 import type { SourceCell } from '../../xlsx/view/coordinates'
-import { MAX_ROWS } from '../../xlsx/view/coordinates'
+import { MAX_ROWS, columnToLetters } from '../../xlsx/view/coordinates'
 import type { ViewportSize } from '../../xlsx/view/scrollWindow'
 import { TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/viewport'
 import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, RESIZE_LIMITS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from '../../xlsx/view/axisSizes'
@@ -154,7 +154,7 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
     cleanup.current = stop
   }
   const handle = (kind: 'row' | 'column', index: number, slot: number, box: HandleBox, extra: CSSProperties = {}) => {
-    const label = kind === 'row' ? `Resize row ${slot + 1}` : `Resize column ${index + 1}`
+    const label = kind === 'row' ? `Resize row ${slot + 1}` : `Resize column ${columnToLetters(index)}`
     return (
       <div key={`${kind}:${slot}`} aria-hidden="true" data-officeview-ui="resize-handle" {...(kind === 'row' ? { 'data-resize-row': slot } : { 'data-resize-column': index })}
         aria-label={label}
@@ -167,7 +167,7 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
           <span
             aria-label={label}
             className="ov:flex ov:items-center ov:gap-0.5 ov:text-xs ov:font-semibold ov:text-muted ov:bg-surface/90 ov:rounded-control ov:px-1 ov:py-0.5 ov:shadow-rest ov:pointer-events-none ov:whitespace-nowrap"
-            style={{ fontSize: 14, lineHeight: 1 }}>
+            style={{ lineHeight: 1 }}>
             {kind === 'row' ? (
               <>
                 <Icon icon={MoveVertical} name="move-vertical" size={14} />

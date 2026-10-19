@@ -275,6 +275,7 @@ test.describe('shared viewer controls: host isolation (spec §6.8)', () => {
         for (const prop of ['color', 'backgroundColor', 'borderColor', 'borderRadius', 'padding'] as const) {
           if (got[prop] !== want[prop]) diffs.push(`${order} ${want.key} ${prop}: ${want[prop]} -> ${got[prop]}`)
         }
+        if (JSON.stringify(got.icon) !== JSON.stringify(want.icon)) diffs.push(`${order} ${want.key} icon: ${JSON.stringify(want.icon)} -> ${JSON.stringify(got.icon)}`)
       }
       expect(diffs).toEqual([])
     }

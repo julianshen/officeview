@@ -182,7 +182,8 @@
   box-shadow: none !important;
   padding: 0 !important;
 }
-[data-ov-theme-root] [data-officeview-sheet-instance] > [data-testid=officeview-zoom-controls] {
+/* 36px = STATUS_BAR_HEIGHT (24px) + 12px floating margin */
+:is([data-ov-theme-root][data-officeview-sheet-instance], [data-ov-theme-root] [data-officeview-sheet-instance]) > [data-testid=officeview-zoom-controls] {
   bottom: calc(env(safe-area-inset-bottom) + 36px) !important;
 }
 

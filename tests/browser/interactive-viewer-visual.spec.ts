@@ -115,11 +115,24 @@ test.describe('visual review: interactive viewer layout', () => {
     const farCell = await rect(page, '[role=gridcell][aria-selected=true]'), zoom = await rect(page, '[data-testid=officeview-zoom-controls]')
     expect(overlaps(farCell, zoom)).toBe(false)
     expect(farCell.right).toBeLessThanOrEqual(zoom.left + 0.5)
+    const status = await rect(page, '[data-officeview-ui=viewer-status]')
+    expect(overlaps(status, zoom)).toBe(false)
+    expect(zoom.bottom).toBeLessThanOrEqual(status.top + 0.5)
     await page.getByRole('grid').focus()
     await page.keyboard.press('ArrowLeft')
     await page.keyboard.press('ArrowRight')
     const navCell = await rect(page, '[role=gridcell][aria-selected=true]')
     expect(overlaps(navCell, zoom)).toBe(false)
+    expect(overlaps(status, zoom)).toBe(false)
+  })
+
+  test('header buttons carry the explicit label colour instead of the UA button colour (browser)', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    const color = await page.evaluate(() => {
+      const btn = document.querySelector<HTMLElement>('[data-header-column]')
+      return btn ? getComputedStyle(btn).color : null
+    })
+    expect(color).toBe('rgb(50, 49, 48)')
   })
 
   test('find scroll-into-view keeps row 1 visible for visible hits and aligns below-the-fold hits to whole rows', async ({ page }) => {
@@ -162,28 +175,27 @@ test.describe('visual review: interactive viewer layout', () => {
         const lum = (c: number[]) => { const [r, g, b] = c.map(v => v / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
         const ratio = (a: number[], b: number[]) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
 
-        const headerStrip = parse(getComputedStyle(document.querySelector('[data-officeview-ui=grid-headers]')!).backgroundColor)
+        const headerStripRaw = getComputedStyle(document.querySelector('[data-officeview-ui=grid-headers]')!).backgroundColor
+        const headerStrip = parse(headerStripRaw)
         const headerRatios = [...document.querySelectorAll('[data-header-column], [data-header-row]')].slice(0, 20).map(el => ratio(parse(getComputedStyle(el).color), headerStrip))
 
         const statusEl = document.querySelector('[data-officeview-ui=viewer-status]') as HTMLElement
         const statusText = parse(getComputedStyle(statusEl).color)
         const statusBg = parse(getComputedStyle(statusEl).backgroundColor)
-        const wrapper = document.querySelector('[data-officeview-sheet-instance]') as HTMLElement
-        const wrapperBg = parse(getComputedStyle(wrapper).backgroundColor)
-        const effectiveBg = (statusBg[0] === 0 && statusBg[1] === 0 && statusBg[2] === 0 && getComputedStyle(statusEl).backgroundColor.includes('rgba(0, 0, 0, 0)'))
-          ? wrapperBg : statusBg
-        const statusRatio = ratio(statusText, effectiveBg)
+        const statusRatio = ratio(statusText, statusBg)
 
-        return { headerRatios, statusRatio }
+        return { headerRatios, statusRatio, headerStrip: headerStripRaw }
       })
       expect(res.headerRatios.length, `${themeName} headers`).toBeGreaterThan(0)
       for (const r of res.headerRatios) expect(r, `${themeName} header`).toBeGreaterThanOrEqual(4.5)
       expect(res.statusRatio, `${themeName} status`).toBeGreaterThanOrEqual(4.5)
+      return res
     }
 
-    await checkContrast('light')
+    const light = await checkContrast('light')
     await page.emulateMedia({ colorScheme: 'dark' })
-    await checkContrast('dark')
+    const dark = await checkContrast('dark')
+    expect(light.headerStrip).not.toBe(dark.headerStrip)
   })
 
   test.describe('dark scheme (browser)', () => {

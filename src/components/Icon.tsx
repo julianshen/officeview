@@ -9,8 +9,8 @@ import type { ReactElement } from 'react'
 
 export type IconName = 'chevron-up' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'plus' | 'minus' | 'search' | 'copy' | 'check' | 'ban' | 'command'
   | 'ellipsis' | 'printer' | 'fit-width'
-  | 'arrow-up-down' | 'arrow-up' | 'arrow-down' | 'loader' | 'filter' | 'move-vertical' | 'move-horizontal' | 'corner'
+  | 'arrow-up-down' | 'arrow-up' | 'arrow-down' | 'loader' | 'filter' | 'move-vertical' | 'move-horizontal' | 'corner' | 'rotate-ccw'
 
-export function Icon({ icon: Glyph, name, size = 16, className }: { icon: LucideIcon; name: IconName; size?: number; className?: string }): ReactElement {
-  return <Glyph data-icon={name} size={size} strokeWidth={2} aria-hidden="true" focusable="false" className={className} />
+export function Icon({ icon: Glyph, name, size = 16, className, fill }: { icon: LucideIcon; name: IconName; size?: 14 | 16 | 20; className?: string; fill?: string }): ReactElement {
+  return <Glyph data-icon={name} size={size} strokeWidth={2} fill={fill} aria-hidden="true" focusable="false" className={className} />
 }

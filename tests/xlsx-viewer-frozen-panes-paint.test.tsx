@@ -93,6 +93,7 @@ describe('frozen pane semantics and headers', () => {
     const rows = within(grid).getAllByRole('row').map(row => row.getAttribute('aria-rowindex'))
     // Header row, frozen row 1, then the body from row 2 + 2400/24 = row 102.
     expect(rows.slice(0, 3)).toEqual(['1', '2', String(2400 / 24 + 2 + 1)])
+    expect(ui.getAllByRole('gridcell', { name: /^A1,/ })).toHaveLength(1)
     const colHeaders = within(grid).getAllByRole('columnheader')
     expect(colHeaders[0].querySelector('svg[data-icon="corner"]')).toBeTruthy()
     expect(colHeaders.map(header => header.textContent?.trim().charAt(0)).filter(Boolean).slice(0, 2)).toEqual(['A', 'L'])

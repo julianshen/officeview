@@ -61,6 +61,12 @@ describe('viewer chrome glyphs use text presentation', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))
     expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
   })
+  it('the pending sort spinner respects reduced motion', () => {
+    const ui = headers({ touch: false, sort: null, pending: 0 })
+    const spinner = ui.container.querySelector('svg[data-icon="loader"]')
+    expect(spinner?.classList.contains('ov:motion-safe:animate-spin')).toBe(true)
+    expect(spinner?.classList.contains('ov:animate-spin')).toBe(false)
+  })
   // Spec §6.3: search, zoom and copy controls draw Lucide icons, never glyph text.
   const GLYPHS = /[↑↓+−✓⌘]/u
   const iconControls = (root: HTMLElement, selector: string) => [...root.querySelectorAll<HTMLElement>(selector)]

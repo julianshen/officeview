@@ -18,7 +18,7 @@ export function SheetNavigator({ documentId, sheets, activeSheetId, onSheetChang
   useEffect(() => { setAddress(''); setError(''); setInvalid(false) }, [documentId, activeSheetId])
   const control = { minHeight: 44, minWidth: 44 } as const
   const row = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 8px' } as const
-  const controlCls = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:hover:bg-hover ov:px-2 ov:py-1 ov:text-xs'
+  const controlCls = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs'
   return <nav aria-label="Worksheet navigation" data-officeview-ui="sheet-navigator" style={row}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => { if (!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f')) event.stopPropagation() }}>

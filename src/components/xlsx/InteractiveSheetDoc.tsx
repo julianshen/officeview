@@ -23,7 +23,8 @@
  */
 import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
-import { Copy, Printer, Minus, Plus, ArrowUpDown } from 'lucide-react'
+import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
+import { Icon } from '../Icon'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
@@ -1678,7 +1679,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const dockZoom = touchControls || pane.width < NARROW_PANE_PX
   const zoomProps = { zoom, onIn: () => zoomBy(1), onOut: () => zoomBy(-1), onReset: resetZoom, atFit: zoom <= SHEET_MIN_ZOOM }
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
-  const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:hover:bg-hover ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:gap-1'
+  const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:gap-1'
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
     // an unsized host gets the default 400px pane.
@@ -1705,7 +1706,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
         <div data-officeview-ui="sheet-actions" className="ov:flex ov:items-center ov:gap-1">
           <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
-            <Copy size={14} aria-hidden="true" />
+            <Icon icon={Copy} name="copy" size={14} />
             Copy selection
           </button>
           {copyPending && (
@@ -1715,12 +1716,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           )}
           {allowPrint && (
             <button type="button" className={toolbarBtn} onClick={() => void preparePrint()}>
-              <Printer size={14} aria-hidden="true" />
+              <Icon icon={Printer} name="printer" size={14} />
               Print
             </button>
           )}
           <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
-            <ArrowUpDown size={14} aria-hidden="true" />
+            <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
             Reset sizes
           </button>
         </div>
@@ -1792,7 +1793,7 @@ function intersectVisibility(mask: RowVisibility, other: CompactRowVisibility): 
 }
 
 /** Control-utility rule (spec §6.8): colour, background, padding and border as ov: utilities. */
-const DOCKED = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:hover:bg-hover ov:px-1.5 ov:py-1 ov:text-xs ov:font-semibold ov:flex ov:items-center ov:justify-center'
+const DOCKED = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-1.5 ov:py-1 ov:text-xs ov:font-semibold ov:flex ov:items-center ov:justify-center'
 /** Below this pane width (CSS px) the zoom controls dock into the toolbar. */
 const NARROW_PANE_PX = 600
 /** The zoom controls as a toolbar group (same names and test id as the floating
@@ -1801,9 +1802,9 @@ function DockedZoomControls({ zoom, onIn, onOut, onReset, atFit, touch }: { zoom
   const side = touch ? 44 : 28
   const btn: CSSProperties = { minWidth: side, minHeight: side }
   return <div role="group" aria-label="Zoom" data-testid="officeview-zoom-controls" data-officeview-ui="sheet-zoom" className="ov:flex ov:items-center ov:gap-1">
-    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className={DOCKED} style={btn}><Minus size={14} aria-hidden="true" /></button>
+    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className={DOCKED} style={btn}><Icon icon={Minus} name="minus" size={14} /></button>
     <button type="button" onClick={onReset} aria-label="Reset zoom" className={DOCKED} style={btn}>{Math.round(zoom * 100)}%</button>
-    <button type="button" onClick={onIn} aria-label="Zoom in" className={DOCKED} style={btn}><Plus size={14} aria-hidden="true" /></button>
+    <button type="button" onClick={onIn} aria-label="Zoom in" className={DOCKED} style={btn}><Icon icon={Plus} name="plus" size={14} /></button>
   </div>
 }
 
