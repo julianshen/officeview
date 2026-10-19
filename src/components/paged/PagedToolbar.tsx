@@ -121,7 +121,12 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
     if (next ? !root.current?.contains(next) : (e.target as Node).isConnected) focusKey.current = null
   }
   const onFindKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== 'Escape' || !(e.target instanceof HTMLInputElement)) return
+    if (!(e.target instanceof HTMLInputElement)) return
+    // The query is host-entered text, not protected document content.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') { e.stopPropagation(); return }
+    if (e.key !== 'Escape') return
+    e.stopPropagation()
+    e.preventDefault()
     if (compact) { setExpanded(false); pendingFocus.current = 'find' }
     else p.onEscapeToDocument()
   }

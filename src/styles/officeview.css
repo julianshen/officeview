@@ -195,7 +195,7 @@
  * spreadsheet viewer) matches merely because another viewer denies printing.
  * Like the rest of the chrome, this rule ships in the required style.css. */
 @media print {
-  :where([data-ov-theme-root][data-ov-instance][data-ov-print="false"]) {
+  [data-ov-theme-root][data-ov-instance][data-ov-print="false"] {
     display: none !important;
   }
 }

@@ -8,7 +8,7 @@ import { PAGED_STATUS_HEIGHT } from './metrics'
 
 export type PagedKind = 'document' | 'slides' | 'sheet-pages'
 
-export function PagedStatus({ kind, current, total, words, notice }: { kind: PagedKind; current: number; total: number; words: number | null; notice?: string }): ReactElement {
+export function PagedStatus({ kind, current, total, words }: { kind: PagedKind; current: number; total: number; words: number | null }): ReactElement {
   return (
     <div
       data-testid="officeview-status"
@@ -16,7 +16,6 @@ export function PagedStatus({ kind, current, total, words, notice }: { kind: Pag
       style={{ height: PAGED_STATUS_HEIGHT }}
       className="ov:flex ov:items-center ov:gap-2 ov:px-3 ov:text-sm ov:text-muted ov:bg-chrome ov:border-t ov:border-border ov:whitespace-nowrap ov:overflow-hidden ov:tabular-nums ov:select-none"
     >
-      {notice && <span role="status">{notice}</span>}
       <span>{kind === 'slides' ? 'Slide' : 'Page'} {total > 0 ? `${current} of ${total}` : '—'}</span>
       {kind === 'document' && (
         <>

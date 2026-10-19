@@ -450,7 +450,21 @@ test('paged print frame contains only page images at page size', async ({page}, 
     const e = f as HTMLIFrameElement
     e.style.cssText = `position:fixed;inset:0;width:${d.w}px;height:${d.h}px;opacity:1;border:0;z-index:99999`
   }, dimensions)
-  await page.locator('[data-officeview-print-frame]').screenshot({path:info.outputPath('white-print-page.png')})
+  const shot = await page.locator('[data-officeview-print-frame]').screenshot({path:info.outputPath('white-print-page.png')})
+  const corner = await page.evaluate(async png => {
+    const image = new Image()
+    const loaded = new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error('screenshot decode failed')) })
+    image.src = `data:image/png;base64,${png}`
+    await loaded
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 1
+    const ctx = canvas.getContext('2d')!
+    // The fixture's unpainted page corner must be white in the screenshot,
+    // not merely declared white by the iframe body's computed style.
+    ctx.drawImage(image, 2, 2, 1, 1, 0, 0, 1, 1)
+    return [...ctx.getImageData(0, 0, 1, 1).data]
+  }, shot.toString('base64'))
+  expect(corner).toEqual([255, 255, 255, 255])
   expect(await frame.locator('body').evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)')
 })
 
@@ -469,11 +483,13 @@ test('print cleanup without afterprint: next print removes the old frame', async
 test('page box size: named pages or the supported single-size fallback', async ({page, context, browserName}, info) => {
   await observePrint(page)
   await open(page, 'Deck.pptx')
+  await page.emulateMedia({media:'print'})
   const result = await page.evaluate(async () => {
     const path = '/src/components/paged/printDocument.ts'
     const {printDocument} = await import(/* @vite-ignore */ path)
     const pages = [{widthPx:400,heightPx:600},{widthPx:600,heightPx:400},{widthPx:400,heightPx:600}].map(spec => ({spec,paint(ctx:CanvasRenderingContext2D){ctx.fillStyle='#111';ctx.fillRect(20,20,40,40)}}))
     const job = await printDocument(pages, document.querySelector('[data-ov-theme-root]'), {signal:new AbortController().signal,onNotice(text:string){throw new Error(text)}})
+    Object.assign(window, {__disposePageBoxJob: () => job.dispose()})
     const doc = job.frame.contentDocument as Document
     return {html:doc.documentElement.outerHTML,named:CSS.supports('page','p0'),css:doc.querySelector('style')!.textContent,boxes:[...doc.images].map(i => ({w:i.getBoundingClientRect().width,h:i.getBoundingClientRect().height}))}
   })
@@ -500,4 +516,49 @@ test('page box size: named pages or the supported single-size fallback', async (
     }
     await pdfPage.close()
   }
+  await page.evaluate(() => (window as unknown as {__disposePageBoxJob():void}).__disposePageBoxJob())
+  await expect(page.locator('[data-officeview-print-frame]')).toHaveCount(0)
+})
+
+for (const stylesheet of [true, false]) test(`denied print guard isolates peers (stylesheet=${stylesheet})`, async ({page}) => {
+  await open(page, 'Deck.pptx')
+  await page.evaluate(async ({stylesheet}) => {
+    if (!stylesheet) {
+      document.querySelectorAll('style,link[rel="stylesheet"]').forEach(el => el.remove())
+    }
+    const path = '/src/debug/paged-print-probe.tsx'
+    const {mountPrintPeers} = await import(/* @vite-ignore */ path)
+    const dispose = await mountPrintPeers(await (await fetch('/__fixtures/Deck.pptx')).blob())
+    Object.assign(window, {__disposePrintPeers: dispose})
+  }, {stylesheet})
+  const denied = page.locator('[data-peer="denied"] [data-ov-instance]')
+  await expect(denied).toHaveCount(1)
+  // Wait for the lazy service, then test a competing host !important rule.
+  await page.locator('[data-peer="allowed"]').getByRole('button', {name:'Print', exact:true}).waitFor()
+  if (!stylesheet) await expect(page.locator('style[data-ov-print-guard]')).toHaveCount(1)
+  await page.addStyleTag({content:'@media print { div { display:block !important } }'})
+  await page.emulateMedia({media:'print'})
+  await expect(denied).toHaveCSS('display', 'none')
+  for (const peer of ['allowed', 'sheet']) {
+    const root = page.locator(`[data-peer="${peer}"] [data-ov-instance]`)
+    await expect(root).toHaveCount(1)
+    expect(await root.evaluate(el => getComputedStyle(el).display)).not.toBe('none')
+  }
+  await page.evaluate(() => (window as unknown as {__disposePrintPeers():void}).__disposePrintPeers())
+  await expect(page.locator('style[data-ov-print-guard]')).toHaveCount(0)
+})
+
+test('print cleanup without afterprint: React unmount removes the frame', async ({page}) => {
+  await observePrint(page)
+  await open(page, 'Deck.pptx')
+  await page.evaluate(async () => {
+    const path = '/src/debug/paged-print-probe.tsx'
+    const {mountPrintPeers} = await import(/* @vite-ignore */ path)
+    Object.assign(window, {__disposePrintPeers: await mountPrintPeers(await (await fetch('/__fixtures/Deck.pptx')).blob())})
+  })
+  await page.locator('[data-peer="allowed"]').getByRole('button', {name:'Print', exact:true}).click()
+  await expect.poll(() => page.evaluate(() => (window as unknown as {__printCalls:Window[]}).__printCalls.length)).toBe(1)
+  await expect(page.locator('[data-officeview-print-frame]')).toHaveCount(1)
+  await page.evaluate(() => (window as unknown as {__disposePrintPeers():void}).__disposePrintPeers())
+  await expect(page.locator('[data-officeview-print-frame]')).toHaveCount(0)
 })

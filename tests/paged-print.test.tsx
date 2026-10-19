@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { pageRules, planPrintJob } from '../src/components/paged/printDocument'
+import { pageRules, planPrintJob, printDocument } from '../src/components/paged/printDocument'
+import type { Paintable } from '../src/render/paint'
+import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
+import { OfficeDoc } from '../src/components/OfficeDoc'
+import { docxModel, fakePaintables } from './helpers/paged-viewer'
+import * as paint from '../src/render/paint'
+import { printLoader } from '../src/components/paged/PagedChrome'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const letter = { widthPx: 816, heightPx: 1056 }
 describe('print planning', () => {
   it('chooses a uniform scale before allocation and refuses oversized jobs', () => {
@@ -22,9 +28,6 @@ describe('print planning', () => {
   })
 })
 
-import { afterEach, beforeEach, vi } from 'vitest'
-import { printDocument } from '../src/components/paged/printDocument'
-import type { Paintable } from '../src/render/paint'
 const pages: Paintable[] = Array.from({length: 3}, () => ({spec: letter, paint: vi.fn()}))
 let root: HTMLDivElement
 let abort: AbortController
@@ -32,7 +35,7 @@ let notice: ReturnType<typeof vi.fn<(text: string) => void>>
 let framePrint: ReturnType<typeof vi.fn<() => void>>
 let urls: ReturnType<typeof vi.fn>
 let revoke: ReturnType<typeof vi.fn>
-let observer: MutationObserver
+let observers: MutationObserver[] = []
 let autoLoad = true
 beforeEach(() => {
   root = document.createElement('div'); document.body.append(root)
@@ -45,17 +48,18 @@ beforeEach(() => {
     const result = append.call(this, node) as T
     if (node instanceof HTMLIFrameElement) {
       node.contentWindow!.print = framePrint
-      observer = new MutationObserver(records => {
+      const observer = new MutationObserver(records => {
         for (const r of records) for (const child of r.addedNodes) {
           if (child.nodeName === 'IMG' && autoLoad) child.dispatchEvent(new Event('load'))
         }
       })
+      observers.push(observer)
       observer.observe(node.contentDocument!, {childList: true, subtree: true})
     }
     return result
   })
 })
-afterEach(() => { abort.abort(); observer?.disconnect(); root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { abort.abort(); observers.forEach(o => o.disconnect()); observers = []; root.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const blob = () => Promise.resolve(new Blob(['png'], {type: 'image/png'}))
 const start = (rasterize: NonNullable<Parameters<typeof printDocument>[2]['rasterize']> = vi.fn(blob), ps = pages) => printDocument(ps, root, {signal: abort.signal, onNotice: notice, rasterize})
 async function until(check: () => boolean) { await vi.waitFor(() => expect(check()).toBe(true)) }
@@ -91,13 +95,18 @@ describe('isolated print ownership', () => {
   it('reuses one workspace serially, clears per page and zeros at completion', async () => {
     const canvases: HTMLCanvasElement[] = []
     let previous: HTMLCanvasElement | undefined
+    let inFlight = 0, peak = 0
     const raster = vi.fn(async (_p, _s, c: HTMLCanvasElement) => {
+      peak = Math.max(peak, ++inFlight)
+      await new Promise(resolve => setTimeout(resolve, 0))
       if (previous) expect(c.getContext('2d')!.getImageData(0,0,1,1).data[3]).toBe(0)
       c.getContext('2d')!.fillRect(0,0,1,1)
       previous = c; canvases.push(c)
+      --inFlight
       return blob()
     })
     await start(raster)
+    expect(peak).toBe(1); expect(inFlight).toBe(0)
     expect(new Set(canvases).size).toBe(1)
     expect(canvases[0].width).toBe(0); expect(canvases[0].height).toBe(0)
   })
@@ -152,11 +161,6 @@ describe('isolated print ownership', () => {
   })
 })
 
-import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
-import { OfficeDoc } from '../src/components/OfficeDoc'
-import { docxModel, fakePaintables } from './helpers/paged-viewer'
-import * as paint from '../src/render/paint'
-import { printLoader } from '../src/components/paged/PagedChrome'
 
 describe('mounted print lifecycle', () => {
   beforeEach(() => {
@@ -215,6 +219,29 @@ describe('mounted print lifecycle', () => {
     expect(framePrint).toHaveBeenCalledTimes(1)
     expect(root.querySelector('iframe')).toBeNull()
   })
+  it('keeps query copy and Find Escape out of the document keyboard policy', async () => {
+    const bubbled = vi.fn()
+    const view = render(<div onKeyDown={bubbled}><OfficeDoc document={docxModel(['one'])} allowCopy={false} showSearch /></div>, {container: root})
+    const input = await view.findByRole('searchbox', {name: 'Search document'})
+    expect(fireEvent.keyDown(input, {key: 'c', ctrlKey: true})).toBe(true)
+    expect(bubbled).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, {key: 'Escape'})
+    expect(bubbled).not.toHaveBeenCalled()
+    expect(fireEvent.keyDown(view.getByRole('region'), {key: 'c', ctrlKey: true})).toBe(false)
+  })
+  it.each([true, false])('keeps a stable dismissible print notice with toolbar=%s', async showToolbar => {
+    vi.spyOn(printLoader, 'load').mockRejectedValue(new Error('network'))
+    const view = render(<OfficeDoc document={docxModel(['one'])} showToolbar={showToolbar} />, {container: root})
+    await waitFor(() => expect(root.querySelector('[data-ov-print-notice] [role="status"]')).not.toBeNull())
+    const live = root.querySelector('[data-ov-print-notice] [role="status"]')!
+    expect(live.textContent).toBe('')
+    fireEvent.keyDown(view.getByRole('region'), {key: 'p', ctrlKey: true})
+    await waitFor(() => expect(live.textContent).toContain('could not be printed'))
+    expect(root.querySelector('[data-ov-print-notice] [role="status"]')).toBe(live)
+    expect((live.parentElement as HTMLElement).style.position).toBe('absolute')
+    fireEvent.click(view.getByRole('button', {name: 'Dismiss print notice'}))
+    expect(live.textContent).toBe('')
+  })
   it('denied print hides only its own instance and swallows Ctrl-P', async () => {
     const doc = docxModel(['one'])
     const view = render(<><OfficeDoc document={doc} allowPrint={false}/><OfficeDoc document={doc}/></>, {container:root})
@@ -224,6 +251,7 @@ describe('mounted print lifecycle', () => {
     const rules = Array.from(document.styleSheets).flatMap(sheet => Array.from(sheet.cssRules)).flatMap(rule =>
       rule instanceof CSSMediaRule && rule.media.mediaText.includes('print') ? Array.from(rule.cssRules) : [])
     const rule = rules.find(rule => rule instanceof CSSStyleRule && rule.selectorText.includes('data-ov-print')) as CSSStyleRule
+    expect(rule.selectorText).not.toContain(':where')
     expect(rule.style.display).toBe('none')
     expect(rule.style.getPropertyPriority('display')).toBe('important')
     expect(regions[0].closest(rule.selectorText)).not.toBeNull()
