@@ -211,3 +211,15 @@ describe('control utility rule (spec §6.8)', () => {
     expect(missing).toEqual([])
   })
 })
+
+it('a denied paged print guard leaves an allowed page viewer and sheet viewer printable', async () => {
+  const document = await docx()
+  const a = render(<OfficeDoc document={document} allowPrint={false} />)
+  const b = render(<OfficeDoc document={document} />)
+  const c = render(<InteractiveSheetDoc doc={sheetDoc()} />)
+  await waitFor(() => expect(a.container.querySelector('canvas')).toBeTruthy())
+  await waitFor(() => expect(c.container.querySelector('[data-officeview-sheet-instance]')).toBeTruthy())
+  expect(printed(a.container.querySelector('[data-officeview-root]'))).toBe(false)
+  expect(printed(b.container.querySelector('[data-officeview-root]'))).toBe(true)
+  expect(printed(c.container.querySelector('[data-officeview-sheet-print-notice]'))).toBe(true)
+})

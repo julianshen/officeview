@@ -4,8 +4,9 @@
  * below the pages), page tracking, the word count and the Find bar. Zoom
  * state and the keyboard paths stay eager in OfficeDoc, which hands props in.
  */
-import { useEffect, type ReactElement, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import type { Paintable } from '../../render/paint'
 import { stepMatch, type SearchMatch } from '../../core/search'
 import type { Transform } from '../../core/zoom'
 import type { OfficeDocSource } from '../OfficeDoc'
@@ -50,6 +51,11 @@ export interface PagedChromeProps {
   copy?: { state: 'idle' | 'done' | 'failed'; enabled: boolean; onCopy(): void }
   /** Print is offered only when allowed. */
   allowPrint: boolean
+  pages: readonly Paintable[]
+  owner: object
+  showToolbar: boolean
+  /** A queued keyboard print, tagged with its document/layout owner. */
+  print?: { owner: object }
   /** Bumped by a Cmd/Ctrl-F press that found no search input. */
   focusSearchRequest: number
 }
@@ -64,6 +70,35 @@ const honoured = new WeakMap<object, number>()
 
 export default function PagedChrome(p: PagedChromeProps): ReactElement {
   const { containerRef, layout, transform, search } = p
+  const [notice, setNotice] = useState('')
+  const printing = useRef<AbortController | null>(null)
+  const beginPrint = () => {
+    printing.current?.abort()
+    if (!p.allowPrint || !p.pages.length) return
+    const root = containerRef.current?.closest<HTMLElement>('[data-ov-theme-root]')
+    if (!root) return
+    const controller = new AbortController()
+    printing.current = controller
+    setNotice('')
+    void printLoader.load().then(m => {
+      if (!controller.signal.aborted) return m.printDocument(p.pages, root, {
+        signal: controller.signal, title: p.title,
+        onNotice: text => { if (!controller.signal.aborted) setNotice(text) },
+      })
+    }).catch(() => {
+      if (!controller.signal.aborted) setNotice('The document could not be printed. Please try again.')
+    })
+  }
+  useEffect(() => {
+    setNotice('')
+    return () => { printing.current?.abort() }
+  }, [p.owner, p.pages, p.allowPrint])
+  useEffect(() => {
+    if (p.print?.owner === p.owner) beginPrint()
+    // Pages may arrive after a shortcut. Restoring permission must never
+    // replay a cancelled request; the separate owner effect aborts it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.print, p.owner, p.pages])
   const tracking = usePageTracking(containerRef, layout, transform, p.setTransform)
   const words = useWordCount(p.document)
   const kind = kindOf(p.document)
@@ -93,6 +128,7 @@ export default function PagedChrome(p: PagedChromeProps): ReactElement {
   }, [match])
 
   const go = (index: number) => tracking.goTo(Math.max(0, Math.min(total - 1, index)))
+  if (!p.showToolbar) return <>{notice && <div role="status">{notice}</div>}</>
   return (
     <>
       <PagedToolbar
@@ -123,15 +159,16 @@ export default function PagedChrome(p: PagedChromeProps): ReactElement {
         )}
         {...(p.copy ? { onCopy: p.copy.onCopy, copyEnabled: p.copy.enabled } : {})}
         copyState={p.copy?.state ?? 'idle'}
-        // Interim: Task 4 replaces this with the isolated page-image print.
-        {...(p.allowPrint ? { onPrint: () => window.print() } : {})}
+        {...(p.allowPrint ? { onPrint: beginPrint } : {})}
         compact={p.compact}
         showSearch={!!search}
         showZoom={p.showZoom}
         focusSearchRequest={request}
         onEscapeToDocument={() => containerRef.current?.focus()}
       />
-      {p.statusSlot && createPortal(<PagedStatus kind={kind} current={current} total={total} words={words} />, p.statusSlot)}
+      {p.statusSlot && createPortal(<PagedStatus notice={notice} kind={kind} current={current} total={total} words={words} />, p.statusSlot)}
     </>
   )
 }
+
+export const printLoader = {load: () => import('./printDocument')}
