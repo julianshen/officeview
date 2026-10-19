@@ -2,6 +2,7 @@
  * Parse DOCX parts (document.xml, styles.xml) into the DocxDocument model.
  */
 import type { OfficePackage } from '../core/zip'
+import type { ChartDocumentContext } from '../charts/context'
 import { loadDocxEmbeddedFonts } from '../core/fonts/docx'
 import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
@@ -9,7 +10,7 @@ import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRun
 import { loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
-import { contentRepresentation, coverageIssueMatchesEntry, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
+import { contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
@@ -697,7 +698,7 @@ function parseDrawing(
   const docPr = attrs(getChildren(wp, 'docPr')[0])
   const graphicData = getChildren(getChildren(wp, 'graphic')[0], 'graphicData')[0]
   const graphicUri = attrs(graphicData).uri?.toLowerCase() ?? ''
-  const feature = vector?.drawing?.kind ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
+  const feature = featureOfKind(vector?.drawing?.kind) ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
   const audit = (status: DrawingCoverageEntry['status'], reason?: string, referenceId?: string, consumed = true, limit?: number, imageSelection?: ImageSelection) => {
     if (!context?.reserveDrawing || !context.drawingCoverage) return
     context.drawingCoverage.push({ partPath: context.partPath ?? 'word/document.xml', treePath: context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
@@ -1364,7 +1365,12 @@ async function loadSettings(pkg: OfficePackage, docRels: Map<string, { type: str
   }
 }
 
-export async function parseDocx(pkg: OfficePackage): Promise<DocxDocument> {
+export interface ParseDocxOptions {
+  /** The document's chart context; unset, the lazy chart engine creates one per parse. */
+  chartContext?: ChartDocumentContext
+}
+export async function parseDocx(pkg: OfficePackage, options: ParseDocxOptions = {}): Promise<DocxDocument> {
+  drawingPartContext(pkg).chart = options.chartContext
   const doc = await pkg.xmlOrdered('word/document.xml')
   if (!doc) throw new Error('word/document.xml missing — not a valid docx?')
   const stylesXml = await pkg.xml('word/styles.xml')

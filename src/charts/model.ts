@@ -118,9 +118,10 @@ export interface ChartModel {
 /**
  * The representation an adapter returns (spec 6.3). `unsupported` and
  * `refused` never satisfy an `mc:Choice`; a card is made only when no
- * representation remains.
+ * representation remains. `Model` defaults to `ChartModel`; until D0 the
+ * engine still returns the legacy `XlsxChartModel` (runtime tag `xlsxChart`).
  */
-export type ChartResult =
-  | { kind: 'native'; model: ChartModel }
+export type ChartResult<Model = ChartModel> =
+  | { kind: 'native'; model: Model }
   | { kind: 'unsupported'; reason: string }
   | { kind: 'refused'; reason: string }

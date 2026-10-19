@@ -198,7 +198,7 @@ describe('word drawing text keeps generic font fallback', () => {
     const modules = import.meta.glob('../src/drawing/{parts,content,content-paint}.ts')
     expect(Object.keys(modules).sort()).toEqual(['../src/drawing/content-paint.ts', '../src/drawing/content.ts', '../src/drawing/parts.ts'])
   })
-  test.each([[diagram, 'diagram', [255, 0, 0], 50, 50], [chart, 'chart', [0, 255, 0], 50, 60], [ink, 'ink', [0, 0, 255], 50, 50]] as const)('Word and PPTX paint the same supported %s payload', async (content, kind, color, x, y) => {
+  test.each([[diagram, 'diagram', [255, 0, 0], 50, 50], [chart, 'xlsxChart', [0, 255, 0], 50, 60], [ink, 'ink', [0, 0, 255], 50, 50]] as const)('Word and PPTX paint the same supported %s payload', async (content, kind, color, x, y) => {
     const package_ = await pkg({ 'word/_rels/document.xml.rels': rels(rel('dm', '../assets/data.xml') + rel('chart', '../assets/chart.xml') + rel('ink', '../assets/ink.xml')) })
     const root = parseXmlOrdered(`<w:document><w:body><w:drawing><wp:inline><wp:extent cx="952500" cy="952500"/><a:graphic>${content}</a:graphic></wp:inline></w:drawing></w:body></w:document>`)
     const drawings = await loadDrawingParts(package_, root, 'word/document.xml', { colors: new Map(), fonts: new Map() }, () => ({ runs: [], images: [], align: 'left' }))
@@ -215,10 +215,10 @@ describe('word drawing text keeps generic font fallback', () => {
     expect(pixel(pptContext, x, y)).toEqual(color)
   })
   test.each([
-    ['chart Choice', chart, diagram, 'c', 'chart', [0, 255, 0], 50, 60, 1],
+    ['chart Choice', chart, diagram, 'c', 'xlsxChart', [0, 255, 0], 50, 60, 1],
     ['diagram Choice', diagram, ink, 'dgm', 'diagram', [255, 0, 0], 50, 50, 2],
     ['InkML contentPart Choice', ink, chart, 'ink', 'ink', [0, 0, 255], 50, 50, 1],
-    ['chart Fallback', ink, chart, 'future', 'chart', [0, 255, 0], 50, 60, 1],
+    ['chart Fallback', ink, chart, 'future', 'xlsxChart', [0, 255, 0], 50, 60, 1],
     ['InkML contentPart Fallback', diagram, ink, 'future', 'ink', [0, 0, 255], 50, 50, 1],
   ] as const)('PPTX paints nested selected %s from its original content node', async (_label, choice, fallback, requires, kind, color, x, y, nodes) => {
     const alternate = `<mc:AlternateContent><mc:Choice Requires="${requires}">${choice}</mc:Choice><mc:Fallback>${fallback}</mc:Fallback></mc:AlternateContent>`
@@ -229,10 +229,10 @@ describe('word drawing text keeps generic font fallback', () => {
     expect(pixel(ctx, x, y)).toEqual(color)
   })
   test.each([
-    ['chart Choice', chart, ink, 'c', 'chart', [0, 255, 0], 50, 60, 1],
+    ['chart Choice', chart, ink, 'c', 'xlsxChart', [0, 255, 0], 50, 60, 1],
     ['diagram Choice', diagram, ink, 'dgm', 'diagram', [255, 0, 0], 50, 50, 2],
     ['InkML contentPart Fallback', chart, ink, 'future', 'ink', [0, 0, 255], 50, 50, 1],
-    ['chart Fallback', diagram, chart, 'future', 'chart', [0, 255, 0], 50, 60, 1],
+    ['chart Fallback', diagram, chart, 'future', 'xlsxChart', [0, 255, 0], 50, 60, 1],
   ] as const)('PPTX paints selected %s when the graphic itself is wrapped', async (_label, choice, fallback, requires, kind, color, x, y, nodes) => {
     const alternate = `<mc:AlternateContent><mc:Choice Requires="${requires}"><a:graphic>${choice}</a:graphic></mc:Choice><mc:Fallback><a:graphic>${fallback}</a:graphic></mc:Fallback></mc:AlternateContent>`
     const body = frame(choice).replace(`<a:graphic>${choice}</a:graphic>`, alternate)
@@ -243,10 +243,10 @@ describe('word drawing text keeps generic font fallback', () => {
     expect(pixel(ctx, x, y)).toEqual(color)
   })
   test.each([
-    ['chart Choice', '<c:chart r:id="chart"/>', '<p:contentPart r:id="ink"/>', 'c', 'chart', [0, 255, 0], 50, 60, 1],
+    ['chart Choice', '<c:chart r:id="chart"/>', '<p:contentPart r:id="ink"/>', 'c', 'xlsxChart', [0, 255, 0], 50, 60, 1],
     ['diagram Choice', '<dgm:relIds r:dm="dm"/>', '<c:chart r:id="chart"/>', 'dgm', 'diagram', [255, 0, 0], 50, 50, 2],
     ['InkML contentPart Choice', '<p:contentPart r:id="ink"/>', '<c:chart r:id="chart"/>', 'ink', 'ink', [0, 0, 255], 50, 50, 1],
-    ['chart Fallback', '<p:contentPart r:id="ink"/>', '<c:chart r:id="chart"/>', 'future', 'chart', [0, 255, 0], 50, 60, 1],
+    ['chart Fallback', '<p:contentPart r:id="ink"/>', '<c:chart r:id="chart"/>', 'future', 'xlsxChart', [0, 255, 0], 50, 60, 1],
     ['InkML contentPart Fallback', '<c:chart r:id="chart"/>', '<p:contentPart r:id="ink"/>', 'future', 'ink', [0, 0, 255], 50, 50, 1],
     ['InkML Fallback after missing chart', '<c:chart r:id="missing"/>', '<p:contentPart r:id="ink"/>', 'c', 'ink', [0, 0, 255], 50, 50, 1],
     ['InkML Fallback after unsupported OMML', '<m:oMath/><c:chart r:id="chart"/>', '<p:contentPart r:id="ink"/>', 'c', 'ink', [0, 0, 255], 50, 50, 1],
@@ -274,15 +274,15 @@ describe('word drawing text keeps generic font fallback', () => {
       Object.defineProperty(node, 'spPr', { get() { materialized++; return pr }, configurable: true, enumerable: true })
     }
     const doc = await parsePptx(package_)
-    expect(doc.slides[0].shapes[0]?.content?.kind).toBe('chart')
+    expect(doc.slides[0].shapes[0]?.content?.kind).toBe('xlsxChart')
     expect(materialized).toBe(0)
     expect(drawingPartContext(package_).nodes).toBe(1)
   })
   test.each([
     ['double supported InkML Choice', '<mc:AlternateContent><mc:Choice Requires="a"><mc:AlternateContent><mc:Choice Requires="ink"><p:contentPart r:id="ink"/></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent>', 'ink', [0, 0, 255], 50, 50],
     ['double missing chart with inner InkML Fallback', '<mc:AlternateContent><mc:Choice Requires="a"><mc:AlternateContent><mc:Choice Requires="c"><c:chart r:id="missing"/></mc:Choice><mc:Fallback><p:contentPart r:id="ink"/></mc:Fallback></mc:AlternateContent></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent>', 'ink', [0, 0, 255], 50, 50],
-    ['OMML before contentPart', '<mc:AlternateContent><mc:Choice Requires="a"><m:oMath/><p:contentPart r:id="ink"/></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent>', 'chart', [0, 255, 0], 50, 60],
-    ['OMML after contentPart', '<mc:AlternateContent><mc:Choice Requires="a"><p:contentPart r:id="ink"/><m:oMath/></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent>', 'chart', [0, 255, 0], 50, 60],
+    ['OMML before contentPart', '<mc:AlternateContent><mc:Choice Requires="a"><m:oMath/><p:contentPart r:id="ink"/></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent>', 'xlsxChart', [0, 255, 0], 50, 60],
+    ['OMML after contentPart', '<mc:AlternateContent><mc:Choice Requires="a"><p:contentPart r:id="ink"/><m:oMath/></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent>', 'xlsxChart', [0, 255, 0], 50, 60],
   ] as const)('PPTX resolves recursive payload %s before selecting a branch', async (_label, xml, kind, color, x, y) => {
     const { doc, package_ } = await pptx(frame(`<a:graphicData uri="chart">${xml}</a:graphicData>`))
     expect(doc.slides[0].shapes[0]?.content?.kind).toBe(kind)
@@ -291,13 +291,13 @@ describe('word drawing text keeps generic font fallback', () => {
     expect(pixel(ctx, x, y)).toEqual(color)
   })
   test.each([
-    ['chart Choice', `<mc:AlternateContent><mc:Choice Requires="c">${chart}</mc:Choice><mc:Fallback>${ink}</mc:Fallback></mc:AlternateContent>`, 'chart', [0, 255, 0], 50, 60],
+    ['chart Choice', `<mc:AlternateContent><mc:Choice Requires="c">${chart}</mc:Choice><mc:Fallback>${ink}</mc:Fallback></mc:AlternateContent>`, 'xlsxChart', [0, 255, 0], 50, 60],
     ['missing chart with InkML Fallback', `<mc:AlternateContent><mc:Choice Requires="c">${chart.replace('id="chart"', 'id="missing"')}</mc:Choice><mc:Fallback>${ink}</mc:Fallback></mc:AlternateContent>`, 'ink', [0, 0, 255], 50, 50],
     ['double nested InkML Choice', `<mc:AlternateContent><mc:Choice Requires="a"><mc:AlternateContent><mc:Choice Requires="ink">${ink}</mc:Choice><mc:Fallback>${chart}</mc:Fallback></mc:AlternateContent></mc:Choice><mc:Fallback>${chart}</mc:Fallback></mc:AlternateContent>`, 'ink', [0, 0, 255], 50, 50],
-    ['payload child chart Choice', '<a:graphicData uri="chart"><mc:AlternateContent><mc:Choice Requires="c"><c:chart r:id="chart"/></mc:Choice><mc:Fallback><p:contentPart r:id="ink"/></mc:Fallback></mc:AlternateContent></a:graphicData>', 'chart', [0, 255, 0], 50, 60],
+    ['payload child chart Choice', '<a:graphicData uri="chart"><mc:AlternateContent><mc:Choice Requires="c"><c:chart r:id="chart"/></mc:Choice><mc:Fallback><p:contentPart r:id="ink"/></mc:Fallback></mc:AlternateContent></a:graphicData>', 'xlsxChart', [0, 255, 0], 50, 60],
     ['payload child double missing chart with InkML Fallback', '<a:graphicData uri="chart"><mc:AlternateContent><mc:Choice Requires="a"><mc:AlternateContent><mc:Choice Requires="c"><c:chart r:id="missing"/></mc:Choice><mc:Fallback><p:contentPart r:id="ink"/></mc:Fallback></mc:AlternateContent></mc:Choice><mc:Fallback><c:chart r:id="chart"/></mc:Fallback></mc:AlternateContent></a:graphicData>', 'ink', [0, 0, 255], 50, 50],
-    ['OMML before contentPart', '<mc:AlternateContent><mc:Choice Requires="a"><a:graphicData><m:oMath/><p:contentPart r:id="ink"/></a:graphicData></mc:Choice><mc:Fallback><a:graphicData uri="chart"><c:chart r:id="chart"/></a:graphicData></mc:Fallback></mc:AlternateContent>', 'chart', [0, 255, 0], 50, 60],
-    ['OMML after contentPart', `<mc:AlternateContent><mc:Choice Requires="a"><a:graphicData>${'<p:contentPart r:id="ink"/><m:oMath/>'}</a:graphicData></mc:Choice><mc:Fallback>${chart}</mc:Fallback></mc:AlternateContent>`, 'chart', [0, 255, 0], 50, 60],
+    ['OMML before contentPart', '<mc:AlternateContent><mc:Choice Requires="a"><a:graphicData><m:oMath/><p:contentPart r:id="ink"/></a:graphicData></mc:Choice><mc:Fallback><a:graphicData uri="chart"><c:chart r:id="chart"/></a:graphicData></mc:Fallback></mc:AlternateContent>', 'xlsxChart', [0, 255, 0], 50, 60],
+    ['OMML after contentPart', `<mc:AlternateContent><mc:Choice Requires="a"><a:graphicData>${'<p:contentPart r:id="ink"/><m:oMath/>'}</a:graphicData></mc:Choice><mc:Fallback>${chart}</mc:Fallback></mc:AlternateContent>`, 'xlsxChart', [0, 255, 0], 50, 60],
   ] as const)('Word paints selected nested %s and retains surrounding text', async (_label, content, kind, color, x, y) => {
     const package_ = await pkg({
       'word/document.xml': `<w:document><w:body><w:p><w:r><w:t>before</w:t><w:drawing><wp:inline><wp:extent cx="952500" cy="952500"/><a:graphic>${content}</a:graphic></wp:inline></w:drawing><w:t>after</w:t></w:r></w:p></w:body></w:document>`,
@@ -321,7 +321,7 @@ describe('word drawing text keeps generic font fallback', () => {
     const doc = await parseDocx(package_)
     const paragraph = doc.sections[0].paragraphs[0]
     expect(paragraph.runs.map(run => run.text).join('')).toBe('beforeafter')
-    expect(paragraph.images[0]?.drawing?.kind).toBe('chart')
+    expect(paragraph.images[0]?.drawing?.kind).toBe('xlsxChart')
     expect(drawingPartContext(package_).nodes).toBe(1)
     const ctx = createCanvas(100, 100).getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 100, 100)
     paintDrawing(paragraph.images[0].drawing!, ctx as unknown as CanvasRenderingContext2D, 100, 100)
@@ -343,7 +343,7 @@ describe('word drawing text keeps generic font fallback', () => {
     const doc = await parseDocx(package_)
     const paragraph = doc.sections[0].paragraphs[0]
     expect(paragraph.runs.map(run => run.text).join('')).toBe('beforeafter')
-    expect(paragraph.images[0]?.drawing?.kind).toBe('chart')
+    expect(paragraph.images[0]?.drawing?.kind).toBe('xlsxChart')
     expect(drawingPartContext(package_).nodes).toBe(1)
     const ctx = createCanvas(100, 100).getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 100, 100)
     paintDrawing(paragraph.images[0].drawing!, ctx as unknown as CanvasRenderingContext2D, 100, 100)
@@ -367,7 +367,7 @@ describe('word drawing text keeps generic font fallback', () => {
       Object.defineProperty(node, 'spPr', { get() { materialized++; return pr }, configurable: true, enumerable: true })
     }
     const doc = await parsePptx(package_)
-    expect(doc.slides[0].shapes.map(shape => shape.content?.kind ?? shape.geometry)).toEqual(['chart', 'rect'])
+    expect(doc.slides[0].shapes.map(shape => shape.content?.kind ?? shape.geometry)).toEqual(['xlsxChart', 'rect'])
     expect(materialized).toBe(0)
     expect(drawingPartContext(package_).nodes).toBe(2)
     const ctx = createCanvas(100, 100).getContext('2d'); renderSlide(doc.slides[0], ctx as unknown as CanvasRenderingContext2D)
@@ -523,7 +523,7 @@ describe('embedded content traversal boundaries', () => {
     expect((await shared(atLimit, contentRef))?.kind).toBe('ink')
     const overLimit = await pkg({ ...chain(34), 'owner/_rels/document.xml.rels': rels(rel('first', '../chain/0.xml') + rel('good', '../assets/chart.xml')) })
     expect(await shared(overLimit, contentRef)).toBeUndefined()
-    expect((await shared(overLimit, contentRef.replace('first', 'good')))?.kind).toBe('chart')
+    expect((await shared(overLimit, contentRef.replace('first', 'good')))?.kind).toBe('xlsxChart')
     expect(drawingPartContext(overLimit).diagnostics).toContainEqual(expect.objectContaining({ kind: 'content-depth' }))
     expect(drawingPartContext(overLimit).diagnostics).toContainEqual(expect.objectContaining({ kind: 'content-depth', limit: 32, identity: 'chain/32.xml' }))
   })
@@ -536,7 +536,7 @@ describe('embedded content traversal boundaries', () => {
     })
     const doc = await parseDocx(package_)
     expect(doc.sections[0].paragraphs[0].runs.map(run => run.text).join('')).toBe('beforeafter')
-    expect(doc.sections[0].paragraphs[0].images.map(image => image.drawing?.kind)).toEqual(['chart'])
+    expect(doc.sections[0].paragraphs[0].images.map(image => image.drawing?.kind)).toEqual(['xlsxChart'])
     expect(drawingPartContext(package_).diagnostics).toContainEqual(expect.objectContaining({ kind: 'content-depth', limit: 32 }))
   })
   test('64 cached groups survive and an excessive group keeps its valid sibling', async () => {

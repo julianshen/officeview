@@ -8,8 +8,8 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { CACHED_COLUMN, chartWorkbook, openpyxlFrame } from './helpers/xlsx-chart-fixture'
 
 // The lazy chart chunk is wrapped so the test sees the context each chart parse receives.
-vi.mock('../src/xlsx/chart', async importOriginal => {
-  const original = await importOriginal<typeof import('../src/xlsx/chart')>()
+vi.mock('../src/charts', async importOriginal => {
+  const original = await importOriginal<typeof import('../src/charts')>()
   return { ...original, parseXlsxChart: vi.fn(original.parseXlsxChart) }
 })
 
@@ -236,6 +236,6 @@ describe('document chart context (spec 6.4 ownership)', () => {
   })
 })
 
-let chartModule: typeof import('../src/xlsx/chart') | undefined
+let chartModule: typeof import('../src/charts') | undefined
 const parseXlsxChartMock = () => chartModule!.parseXlsxChart
-chartModule = await import('../src/xlsx/chart')
+chartModule = await import('../src/charts')

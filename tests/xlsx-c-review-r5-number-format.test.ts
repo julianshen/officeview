@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest'
 import {writeFile} from 'node:fs/promises'
-import {scanChartNumber} from '../src/xlsx/chart'
+import {scanChartNumber} from '../src/charts'
 import {formatCommon} from '../src/xlsx/formula/format'
 import {semanticsFor} from '../src/xlsx/view/semanticsFor'
 const scan=(s:string)=>scanChartNumber(s.length,i=>s.charCodeAt(i))

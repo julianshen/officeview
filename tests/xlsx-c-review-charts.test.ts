@@ -1,7 +1,7 @@
 import { describe, test, expect, vi } from 'vitest'
 import { chartWorkbookBytes, chartWorkbook } from './helpers/xlsx-chart-fixture'
 import { parseXlsx } from '../src/xlsx/parse'
-import { parseXlsxChart, fillWorkbookCharts } from '../src/xlsx/chart'
+import { parseXlsxChart, fillWorkbookCharts } from '../src/charts'
 import { parseXmlOrdered } from '../src/core/xml'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { MemoryPool } from '../src/xlsx/view/tileCache'

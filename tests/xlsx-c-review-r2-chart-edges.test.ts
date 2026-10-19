@@ -2,7 +2,7 @@
 import { expect, it, vi } from 'vitest'
 import { chartWorkbook, chartWorkbookBytes, addNumberFormat } from './helpers/xlsx-chart-fixture'
 import { parseXlsx } from '../src/xlsx/parse'
-import { parseXlsxChart } from '../src/xlsx/chart'
+import { parseXlsxChart } from '../src/charts'
 import { parseXmlOrdered } from '../src/core/xml'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'

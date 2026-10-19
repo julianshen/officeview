@@ -10,7 +10,7 @@ export interface DrawingCoverageEntry {
   feature: string
   status: 'native' | 'fallback' | 'unsupported' | 'malformed'
   /** Actual payload consumed by this static renderer, independent of MC branch. */
-  selectedRepresentation: 'native-shape' | 'picture' | 'raster-fallback' | 'cached-diagram' | 'column-chart' | 'chart' | 'chart-placeholder' | 'inkml' | 'textbox' | 'table' | 'group' | 'text-only' | 'blank' | 'none' | 'unverified'
+  selectedRepresentation: 'native-shape' | 'picture' | 'raster-fallback' | 'cached-diagram' | 'chart' | 'chart-placeholder' | 'inkml' | 'textbox' | 'table' | 'group' | 'text-only' | 'blank' | 'none' | 'unverified'
   representation: 'native' | 'choice' | 'fallback'
   reason?: string
   /** Why the retained paint assessment is inconclusive; source failure remains in reason. */
@@ -34,12 +34,12 @@ export interface DrawingCoverageDocument { drawingCoverage?: DrawingCoverageEntr
  * (cacheless SmartArt synthesized from dataModel text) reuse the existing
  * text-only status instead of claiming a cached diagram rendering.
  */
-/** Coverage feature of a content kind (worksheet charts report as charts). */
-const featureOfKind = (kind: string | undefined) => kind === 'xlsxChart' ? 'chart' : kind
+/** The coverage feature of a content kind: the `xlsxChart` runtime tag reports `chart` in every format. */
+export const featureOfKind = (kind: string | undefined) => kind === 'xlsxChart' ? 'chart' : kind
 export function contentRepresentation<Paragraph, Text>(content: DrawingContent<Paragraph, Text>): DrawingCoverageEntry['selectedRepresentation'] {
   if (content.kind === 'diagram' && content.textOnly) return 'text-only'
   const kind = content.kind
-  return kind === 'diagram' ? 'cached-diagram' : kind === 'chart' ? 'column-chart' : kind === 'xlsxChart' ? (content.chart.unsupported ? 'chart-placeholder' : 'chart') : kind === 'ink' ? 'inkml' : kind === 'textbox' ? 'textbox' : 'none'
+  return kind === 'diagram' ? 'cached-diagram' : kind === 'xlsxChart' ? (content.chart.unsupported ? 'chart-placeholder' : 'chart') : kind === 'ink' ? 'inkml' : kind === 'textbox' ? 'textbox' : 'none'
 }
 
 import { attrs, getChildren, namespaceUri, orderedChildren, type XmlNode } from '../core/xml'

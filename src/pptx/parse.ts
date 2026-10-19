@@ -3,6 +3,7 @@ import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
 import type { OfficePackage } from '../core/zip'
+import type { ChartDocumentContext } from '../charts/context'
 import { attrs, elementChildren, getChildren, orderedChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
 import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
@@ -841,7 +842,12 @@ function walkShapes(shapes: PptxShape[], visit: (shape: PptxShape) => void): voi
   for (const shape of shapes) { visit(shape); if (shape.children) walkShapes(shape.children, visit) }
 }
 
-export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
+export interface ParsePptxOptions {
+  /** The document's chart context; unset, the lazy chart engine creates one per parse. */
+  chartContext?: ChartDocumentContext
+}
+export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = {}): Promise<PptxDocument> {
+  drawingPartContext(pkg).chart = options.chartContext
   const presentation = await pkg.xml('ppt/presentation.xml')
   if (!presentation) throw new Error('ppt/presentation.xml missing — not a valid pptx?')
   const sldSz = getChildren(presentation, 'sldSz')[0]
@@ -896,6 +902,7 @@ export async function parsePptx(pkg: OfficePackage): Promise<PptxDocument> {
         if (name === '#text') continue
         if (name === 'graphicData' || name === 'contentPart') {
           const adapters = {
+            chartContext: drawingPartContext(pkg).chart,
             parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme.context, defaults, textFontDefaults(getChildren(shape, 'style')[0], theme.context)),
             parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme.context, defaults).paragraphs[0],
           }

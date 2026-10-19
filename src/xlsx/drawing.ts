@@ -151,16 +151,10 @@ const child = (node: XmlNode | undefined, name: string) => getChildren(node, nam
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 const bool = (raw: string | undefined) => raw === '1' || raw === 'true'
 const contentTheme = (theme: ThemeContext) => ({ colors: new Map(Object.entries(theme.palette).map(([key, value]) => [key, value.replace(/^#/, '')])), fonts: new Map([['minorHAnsi', theme.fonts.minor.latin ?? 'Calibri']]) })
-const contentAdapters = (theme: ThemeContext, pkg: OfficePackage) => ({ chartContext: drawingPartContext(pkg).chart, parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0],
-  // Worksheet charts use the lazy chart chunk; an unsupported type reads as
-  // absent here so compatibility fallbacks still win (a placeholder follows).
-  parseChart: async (root: XmlNode, path: string) => {
-    const charts = await loadChartModule()
-    // A malformed chart part never fails the workbook: it reads as unsupported (placeholder/fallback).
-    let chart: ReturnType<typeof charts.parseXlsxChart>
-    try { chart = charts.parseXlsxChart(root, theme, charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
-    return chart && !chart.unsupported ? { kind: 'xlsxChart' as const, chart } : undefined
-  } })
+// Worksheet charts use the shared default parseChart (drawing/content.ts, the lazy
+// chart engine); an unsupported type is not content, so compatibility fallbacks
+// still win (a placeholder follows).
+const contentAdapters = (theme: ThemeContext, pkg: OfficePackage) => ({ chartContext: drawingPartContext(pkg).chart, parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0] })
 
 /** Whether a graphic frame names a chart part (directly or inside a compatibility branch). */
 function referencesChart(node: XmlNode, depth = 0): boolean {

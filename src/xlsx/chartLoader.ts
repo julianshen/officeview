@@ -1,11 +1,11 @@
-/** Entry to the lazy worksheet chart chunk: nothing here pulls chart code in eagerly. */
+/** Entry to the lazy chart engine (src/charts), for every format: nothing here pulls chart code in eagerly. */
 import type { XlsxDrawing } from './types'
 
-export type ChartModule = typeof import('./chart')
+export type ChartModule = typeof import('../charts')
 let pending: Promise<ChartModule> | undefined
 /** Loads (once) the chart parser/painter; loading registers the painter. */
 export function loadChartModule(): Promise<ChartModule> {
-  return pending ??= import('./chart').catch(error => { pending = undefined; throw error })
+  return pending ??= import('../charts').catch(error => { pending = undefined; throw error })
 }
 
 /** Whether any drawing (or group child) carries a worksheet chart. */

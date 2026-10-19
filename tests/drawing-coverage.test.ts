@@ -71,13 +71,17 @@ describe('machine drawing coverage', () => {
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original').map(e => [e.referenceId, e.status, e.selectedRepresentation])).toEqual([['ink', 'unsupported', 'none'], ['ink', 'unsupported', 'none']])
   })
 
-  test('PPTX unsupported horizontal chart retains owners without inventing missing relationships', async () => {
+  test('PPTX horizontal chart is native on both owners without inventing missing relationships', async () => {
     const doc = await pptx(frame(1, 'chart', '<c:chart r:id="bar"/>') + frame(2, 'chart', '<c:chart r:id="bar"/>'), {
       'ppt/slides/_rels/slide1.xml.rels': rels(rel('bar', 'chart', '../charts/bar.xml')),
       'ppt/charts/bar.xml': horizontalChart,
     })
     expect(drawingReport(doc).counts).toEqual({ originalObjects: 2, selectedDescendants: 0, diagnosticEntries: 0 })
-    expect(doc.drawingCoverage!.filter(e => e.scope === 'original').every(e => e.status === 'unsupported' && e.reason !== 'relationship-not-found')).toBe(true)
+    // A0a: the shared engine reads horizontal bars natively (the eager column-only reader is gone).
+    const originals = doc.drawingCoverage!.filter(e => e.scope === 'original')
+    expect(originals).toHaveLength(2)
+    expect(originals.every(e => e.status === 'native' && e.feature === 'chart' && e.selectedRepresentation === 'chart' && e.reason !== 'relationship-not-found')).toBe(true)
+    expect(doc.slides[0].shapes.map(shape => shape.content?.kind === 'xlsxChart' ? shape.content.chart.groups[0]?.barDir : undefined)).toEqual(['bar', 'bar'])
   })
 
   test('PPTX parsed unsupported chart document without plot area is not interpreted as another relationship', async () => {
@@ -258,7 +262,7 @@ describe('machine drawing coverage', () => {
     expect(doc.sections.flatMap(s => s.paragraphs).flatMap(p => p.images)).toHaveLength(realBoundary ? 10000 : 1)
     const originals = doc.drawingCoverage!.filter(e => e.scope === 'original')
     expect(originals).toHaveLength(count)
-    expect(originals.slice(0, -1).every(e => e.status === 'native' && e.selectedRepresentation === 'column-chart')).toBe(true)
+    expect(originals.slice(0, -1).every(e => e.status === 'native' && e.selectedRepresentation === 'chart')).toBe(true)
     expect(originals.at(-1)).toMatchObject({ status: 'unsupported', reason: 'drawing node budget exceeded', selectedRepresentation: 'none' })
     expect(originals.at(-1)?.limit).toBe(10000)
     expect(drawingReport(doc).counts.diagnosticEntries).toBe(0)
@@ -457,9 +461,9 @@ describe('machine drawing coverage', () => {
       'ppt/slides/_rels/slide1.xml.rels': rels(rel('chart', 'chart', '../charts/chart1.xml')),
       'ppt/charts/chart1.xml': columns,
     })
-    expect(doc.slides[0].shapes[0].content?.kind).toBe('chart')
+    expect(doc.slides[0].shapes[0].content?.kind).toBe('xlsxChart')
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(1)
-    expect(doc.drawingCoverage![0]).toMatchObject({ id: '91', feature: 'chart', status: 'fallback', representation: 'fallback', selectedRepresentation: 'column-chart', reason: expect.stringContaining('fallback') })
+    expect(doc.drawingCoverage![0]).toMatchObject({ id: '91', feature: 'chart', status: 'fallback', representation: 'fallback', selectedRepresentation: 'chart', reason: expect.stringContaining('fallback') })
   })
 
   test('nested PPTX supported Choice reports choice provenance, including intentional blank', async () => {
@@ -467,7 +471,7 @@ describe('machine drawing coverage', () => {
     const nested = (choice: string) => frame(91, 'chart', `<mc:AlternateContent><mc:Choice Requires="c">${choice}</mc:Choice><mc:Fallback><c:chart r:id="good"/></mc:Fallback></mc:AlternateContent>`)
     const parts = { 'ppt/slides/_rels/slide1.xml.rels': rels(rel('good', 'chart', '../charts/chart1.xml')), 'ppt/charts/chart1.xml': columns }
     const chosen = await pptx(nested('<c:chart r:id="good"/>'), parts)
-    expect(chosen.drawingCoverage![0]).toMatchObject({ status: 'native', representation: 'choice', selectedRepresentation: 'column-chart' })
+    expect(chosen.drawingCoverage![0]).toMatchObject({ status: 'native', representation: 'choice', selectedRepresentation: 'chart' })
     const blank = await pptx(nested(''), parts)
     expect(blank.slides[0].shapes).toHaveLength(0)
     expect(blank.drawingCoverage![0]).toMatchObject({ feature: 'empty-choice', status: 'native', representation: 'choice', selectedRepresentation: 'blank' })
@@ -641,12 +645,12 @@ describe('machine drawing coverage', () => {
       'word/_rels/document.xml.rels': rels(rel('c1', 'chart', 'charts/c1.xml') + rel('c2', 'chart', 'charts/c2.xml')),
       'word/charts/c1.xml': chart, 'word/charts/c2.xml': chart,
     }))
-    expect(doc.sections[0].paragraphs[0].images[0].drawing?.kind).toBe('chart')
+    expect(doc.sections[0].paragraphs[0].images[0].drawing?.kind).toBe('xlsxChart')
     const ctx = createCanvas(100, 100).getContext('2d')
     paintDrawing(doc.sections[0].paragraphs[0].images[0].drawing!, ctx as unknown as CanvasRenderingContext2D, 100, 100)
     expect(ctx.getImageData(0, 0, 100, 100).data.some(value => value !== 0)).toBe(true)
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(1)
-    expect(doc.drawingCoverage![0]).toMatchObject({ id: '2', status: 'fallback', selectedRepresentation: 'column-chart', representation: 'fallback' })
+    expect(doc.drawingCoverage![0]).toMatchObject({ id: '2', status: 'fallback', selectedRepresentation: 'chart', representation: 'fallback' })
   })
 
   test('Word inventories every rejected drawing placement without a fallback', async () => {
@@ -689,8 +693,8 @@ describe('machine drawing coverage', () => {
     expect(blank.sections[0].paragraphs[0].images).toHaveLength(0)
     expect(blank.drawingCoverage![0]).toMatchObject({ id: '71', feature: 'empty-choice', status: 'native', representation: 'choice', selectedRepresentation: 'blank' })
     const recovered = await make('<c:chart r:id="missing"/>')
-    expect(recovered.sections[0].paragraphs[0].images[0].drawing?.kind).toBe('chart')
-    expect(recovered.drawingCoverage![0]).toMatchObject({ id: '71', status: 'fallback', representation: 'fallback', selectedRepresentation: 'column-chart' })
+    expect(recovered.sections[0].paragraphs[0].images[0].drawing?.kind).toBe('xlsxChart')
+    expect(recovered.drawingCoverage![0]).toMatchObject({ id: '71', status: 'fallback', representation: 'fallback', selectedRepresentation: 'chart' })
     expect(recovered.drawingCoverage!.filter(e => e.scope === 'diagnostic')).toHaveLength(0)
   })
 
@@ -718,9 +722,9 @@ describe('machine drawing coverage', () => {
       'word/_rels/document.xml.rels': rels(rel('c1', 'chart', 'charts/c1.xml') + rel('c2', 'chart', 'charts/c2.xml')),
       'word/charts/c1.xml': chart, 'word/charts/c2.xml': chart,
     }))
-    expect(doc.sections[0].paragraphs[0].images[0]?.drawing?.kind).toBe('chart')
+    expect(doc.sections[0].paragraphs[0].images[0]?.drawing?.kind).toBe('xlsxChart')
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(1)
-    expect(doc.drawingCoverage![0]).toMatchObject({ id: '81', feature: 'chart', selectedRepresentation: 'column-chart' })
+    expect(doc.drawingCoverage![0]).toMatchObject({ id: '81', feature: 'chart', selectedRepresentation: 'chart' })
   })
 
   test.each([

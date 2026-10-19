@@ -7,6 +7,8 @@ import type { SceneGroupTransform } from './scene'
 import type { OfficePackage } from '../core/zip'
 import type { XlsxChartModel } from '../xlsx/chartModel'
 import type { ChartDocumentContext } from '../charts/context'
+import type { ChartResult } from '../charts/model'
+import { loadChartModule } from '../xlsx/chartLoader'
 import { parseGeometry, resolveGeometry } from './geometry'
 import { supportedChoiceRequirements } from './coverage'
 import { parseGroupShapeProperties, resolveDrawingStyle } from './style'
@@ -105,20 +107,6 @@ export type DrawingContent<Paragraph = ContentParagraph, Text = never> =
       strokes: Array<{ points: Array<[number, number]>; widthEmu: number; color: string }>
       widthEmu: number
       heightEmu: number
-    }
-  | {
-      kind: 'chart'
-      title?: string
-      categories: string[]
-      series: Array<{ name: string; values: Array<number | undefined>; color: string }>
-      min?: number
-      max?: number
-      majorUnit?: number
-      gapWidth: number
-      overlap: number
-      legend: boolean
-      fontFamily: string
-      fontSizePt: number
     }
   | { kind: 'xlsxChart'; chart: XlsxChartModel }
   | {
@@ -237,62 +225,6 @@ function shape(node: XmlNode, theme: ContentTheme, drawingTheme: ThemeContext, g
   }
 }
 
-/** Cache points are indexed; missing points must retain their category slot. */
-function cacheValues(node: XmlNode | undefined): Array<string | undefined> {
-  const cache =
-    child(child(node, 'strRef'), 'strCache') ??
-    child(child(node, 'numRef'), 'numCache') ??
-    child(node, 'strLit') ??
-    child(node, 'numLit')
-  const out: Array<string | undefined> = []
-  for (const p of getChildren(cache, 'pt')) out[num(attrs(p).idx)] = textOf(child(p, 'v'))
-  return Array.from({ length: out.length }, (_, index) => out[index])
-}
-
-function chart(root: XmlNode, theme: ContentTheme): Extract<DrawingContent, { kind: 'chart' }> | undefined {
-  const chart = child(root, 'chart'),
-    plot = child(chart, 'plotArea'),
-    bars = child(plot, 'barChart')
-  if (
-    !bars ||
-    attrs(child(bars, 'barDir')).val === 'bar' ||
-    !['clustered', undefined].includes(attrs(child(bars, 'grouping')).val)
-  )
-    return undefined
-  const series = getChildren(bars, 'ser').map((s, index) => {
-    const tx = child(s, 'tx')
-    return {
-      name: textOf(child(tx, 'v')) || cacheValues(tx)[0] || `Series ${index + 1}`,
-      values: cacheValues(child(s, 'val')).map((v) =>
-        v === undefined || !Number.isFinite(Number(v)) ? undefined : Number(v)
-      ),
-      color:
-        color(child(child(s, 'spPr'), 'solidFill'), theme) ?? theme.colors.get(`accent${(index % 6) + 1}`) ?? '4F81BD'
-    }
-  })
-  const categories = cacheValues(child(getChildren(bars, 'ser')[0], 'cat')).map((v) => v ?? '')
-  const title = child(chart, 'title')
-  const titleText = descendants(child(title, 'tx'), 't').map(textOf).join('') || cacheValues(child(title, 'tx'))[0]
-  const locale = attrs(child(root, 'lang')).val ?? ''
-  const axis = child(plot, 'valAx'),
-    scaling = child(axis, 'scaling')
-  const optional = (n: XmlNode | undefined) => (n ? num(attrs(n).val) : undefined)
-  return {
-    kind: 'chart',
-    categories,
-    series,
-    title: title ? titleText || (locale.startsWith('zh') ? '圖表標題' : 'Chart Title') : undefined,
-    min: optional(child(scaling, 'min')),
-    max: optional(child(scaling, 'max')),
-    majorUnit: optional(child(axis, 'majorUnit')),
-    gapWidth: Math.max(0, num(attrs(child(bars, 'gapWidth')).val, 150)),
-    overlap: Math.max(-100, Math.min(100, num(attrs(child(bars, 'overlap')).val))),
-    legend: !!child(chart, 'legend'),
-    fontFamily: theme.fonts.get('minorHAnsi') ?? 'Calibri',
-    fontSizePt: num(attrs(descendants(child(axis, 'txPr'), 'defRPr')[0]).sz, 900) / 100
-  }
-}
-
 const LENGTH_EMU: Record<string, number> = { cm: 360000, mm: 36000, in: 914400, pt: 12700, px: 9525 }
 
 /** Cartesian InkML traces. Unsupported encodings keep the compatibility picture. */
@@ -371,11 +303,28 @@ export function parseInk(root: XmlNode): Extract<DrawingContent, { kind: 'ink' }
 export interface ContentLoadAdapters<Paragraph, Text> {
   parseParagraph?: (p: XmlNode) => Paragraph
   parseDiagramText?: (node: XmlNode, shape: XmlNode) => Text
-  /** Format-specific chart reader (XLSX); undefined keeps the shared column-chart reader.
-   * An undefined result means unsupported, so compatibility fallbacks still apply. */
-  parseChart?: (root: XmlNode, path: string) => Promise<DrawingContent<Paragraph, Text> | undefined>
+  /** Chart reader; the default is the shared lazy engine (`defaultParseChart`) for every format.
+   * Only `native` is content: anything else leaves compatibility fallbacks to apply. */
+  parseChart?: (root: XmlNode, path: string) => Promise<ChartResult<XlsxChartModel>>
   /** The document's chart context (charts/context.ts): one per parse, shared by every chart. */
   chartContext?: ChartDocumentContext
+}
+/** The shared default chart reader (spec 6.2): the lazy chart engine, for XLSX, DOCX and PPTX. */
+export function defaultParseChart(pkg: OfficePackage, theme: ThemeContext, chartContext?: ChartDocumentContext): (root: XmlNode, path: string) => Promise<ChartResult<XlsxChartModel>> {
+  return async (root, path) => {
+    const charts = await loadChartModule()
+    // A malformed chart part never fails the document: it reads as unsupported (placeholder/fallback).
+    let chart: XlsxChartModel | undefined
+    try { chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
+    return chart && !chart.unsupported ? { kind: 'native', model: chart } : { kind: 'unsupported', reason: chart?.unsupported ?? 'unreadable chart part' }
+  }
+}
+/** Caller adapters spread over the defaults: a caller passing only text adapters still gets the default `parseChart`. */
+function withDefaultAdapters<Paragraph, Text>(adapters: ContentLoadAdapters<Paragraph, Text>, pkg: OfficePackage, theme: ThemeContext): ContentLoadAdapters<Paragraph, Text> {
+  if (adapters.parseChart) return adapters
+  const merged = { ...adapters }
+  merged.parseChart = defaultParseChart(pkg, theme, adapters.chartContext)
+  return merged
 }
 const deferredDiagrams = new WeakMap<object, { materializeSelected: () => boolean }>()
 const SOURCE_PROBE_LIMIT = DOCUMENT_DRAWING_NODE_LIMIT * 2
@@ -503,6 +452,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   source?: { ownerPartPath: string; sourceReferenceId: string; interpretation: string },
 ): Promise<DrawingContent<Paragraph, Text> | undefined> {
   const context = drawingPartContext(pkg)
+  adapters = withDefaultAdapters(adapters, pkg, drawingTheme)
   const follow = async (id: string, from = owner, interpretation = 'content'): Promise<DrawingContent<Paragraph, Text> | undefined> => {
     const origin = source ?? { ownerPartPath: from, sourceReferenceId: id, interpretation }
     const diagnosticStart = context.diagnostics.length
@@ -525,11 +475,10 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     const ink = parseInk(root)
     if (ink) return ink
     if (adapters.parseChart && child(root, 'chart') && !attrs(child(root, 'chart')).id) {
+      // Minimal ChartResult handling (A0a): native is content; unsupported and
+      // refused follow the unsupported-content path below (A0b adds the card contract).
       const parsed = await adapters.parseChart(root, path)
-      if (parsed) return parsed
-    } else {
-      const payload = chart(root, theme)
-      if (payload) return payload
+      if (parsed.kind === 'native') return { kind: 'xlsxChart', chart: parsed.model }
     }
     const tree = child(root, 'spTree')
     if (tree) {
