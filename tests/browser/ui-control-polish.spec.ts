@@ -7,7 +7,7 @@
  *  - the focused dialog input shows the accent focus ring in the dark theme.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { ensureFixtures, openViewer } from './viewer-e2e'
+import { ensureFixtures, goTo, openViewer } from './viewer-e2e'
 
 const css = (el: Locator, prop: string) => el.evaluate((node, p) => getComputedStyle(node).getPropertyValue(p), prop)
 const accent = (page: Page) => page.locator('[data-ov-theme-root]').first().evaluate((root) => {
@@ -67,5 +67,41 @@ test.describe('sheet control polish (browser)', () => {
     await search.focus()
     await expect.poll(() => css(search, 'outline-style')).toBe('solid')
     expect(await css(search, 'outline-color')).toBe(await accent(page))
+  })
+})
+
+test.describe('desktop column header actions (browser)', () => {
+  test.beforeAll(async () => { await ensureFixtures() })
+
+  test('idle header actions stay quiet until hover or focus; an active filter stays visible (browser)', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await openViewer(page, 'f2-1k.xlsx')
+    const sortB = page.getByRole('button', { name: 'Cycle sort column B' })
+    const opacity = (name: string | RegExp) => page.getByRole('button', { name }).evaluate((el) => getComputedStyle(el).opacity)
+    await page.mouse.move(5, 790)
+    await expect.poll(() => opacity('Cycle sort column B')).toBe('0')
+    expect(await opacity(/^Filter column B/)).toBe('0')
+    expect(await opacity('More sort options for B')).toBe('0')
+    await page.getByRole('columnheader', { name: /^Column B/ }).hover()
+    await expect.poll(() => opacity('Cycle sort column B')).toBe('1')
+    // Keyboard (F2 control mode, then Tab to the sort action) reveals it.
+    await page.mouse.move(5, 790)
+    await goTo(page, 'B2')
+    await page.getByRole('grid').focus()
+    await page.keyboard.press('F2')
+    await page.keyboard.press('Tab')
+    await expect(sortB).toBeFocused()
+    await expect.poll(() => opacity('Cycle sort column B')).toBe('1')
+    await page.keyboard.press('Escape')
+    // An applied filter keeps its funnel visible without hover.
+    await page.getByRole('button', { name: /^Filter column D/ }).click()
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click()
+    await dialog.getByRole('checkbox', { name: 'alpha', exact: true }).check()
+    await dialog.getByRole('button', { name: 'OK' }).click()
+    await expect(dialog).toBeHidden()
+    await page.mouse.move(5, 790)
+    await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await expect.poll(() => opacity(/^Filter column D/)).toBe('1')
   })
 })
