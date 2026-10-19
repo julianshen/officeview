@@ -29,6 +29,7 @@ import type JSZip from 'jszip'
 import type { OfficePackage } from '../core/zip'
 import { registerOrdered, type XmlNode } from '../core/xml'
 import { XmlTokenizer, localName } from '../core/xml-stream'
+import { PackageError } from '../core/package-error'
 import type { ChartParentLedger } from './workspace'
 import type { ChartParseContext } from './context'
 
@@ -36,7 +37,8 @@ const MiB = 1024 * 1024
 export const CHART_PART_LIMIT = { desktop: 8 * MiB, mobile: 4 * MiB } as const
 /** The largest inflate chunk admitted (pako's output chunk is 16 KiB). */
 export const CHART_CHUNK_LIMIT = 64 * 1024
-const TOKEN_CHARS = 64 * 1024
+export const CHART_TOKEN_CHARS = 64 * 1024
+const TOKEN_CHARS = CHART_TOKEN_CHARS
 /** Reserved once before the stream: the crossing chunk plus the tokenizer's carried token (UTF-16). */
 export const CHART_READ_CROSSING = CHART_CHUNK_LIMIT + 2 * TOKEN_CHARS
 const SLICE = 16 * 1024
@@ -68,6 +70,8 @@ export async function readChartPart(pkg: OfficePackage, path: string, context: P
 
   const builder = treeBuilder(charge)
   const tokenizer = new XmlTokenizer(builder.events, { maxTokenChars: TOKEN_CHARS })
+  // Comments never reach the tree: they are discarded while streaming, so their length is not a token limit.
+  const comments = new CommentStripper()
   let decoder: TextDecoder | undefined, head: Uint8Array | undefined, accepted = 0
   /** One inflated chunk: capped, charged, decoded and tokenized, then its transient charge is refunded. */
   const feed = (chunk: Uint8Array, owned: boolean) => {
@@ -84,12 +88,12 @@ export async function readChartPart(pkg: OfficePackage, path: string, context: P
         head = undefined
         decoder = new TextDecoder(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : 'utf-8', { fatal: true })
       }
-      tokenizer.write(decoder.decode(bytes, { stream: true }))
+      tokenizer.write(comments.strip(decoder.decode(bytes, { stream: true })))
     } finally { workspace.release(chunkTag) }
   }
   const finish = () => {
-    if (!decoder) { decoder = new TextDecoder('utf-8', { fatal: true }); if (head) tokenizer.write(decoder.decode(head, { stream: true })) }
-    tokenizer.write(decoder.decode())
+    if (!decoder) { decoder = new TextDecoder('utf-8', { fatal: true }); if (head) tokenizer.write(comments.strip(decoder.decode(head, { stream: true }))) }
+    tokenizer.write(comments.strip(decoder.decode(), true))
     tokenizer.end()
   }
   try {
@@ -109,6 +113,9 @@ export async function readChartPart(pkg: OfficePackage, path: string, context: P
     refund()
     if (error instanceof Stop) return error.result
     if (builder.stop) return builder.stop
+    // A token over the reader's limit is a resource refusal, never malformed XML.
+    if (error instanceof PackageError && error.code === 'resource-limit') return { kind: 'unsupported', reason: 'This chart contains markup larger than the viewer reads', code: 'chart-token-limit', limit: TOKEN_CHARS }
+    if (error instanceof PackageError && error.code === 'unsupported') return { kind: 'unsupported', reason: 'This chart uses XML the viewer does not read', code: 'unsupported-xml' }
     return { kind: 'malformed', reason: 'Chart data could not be read', code: 'invalid-content-xml' }
   }
   workspace.release(chunkTag)
@@ -142,10 +149,80 @@ function stream(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array) => void): 
   })
 }
 
-const ELEMENT_BYTES = 96, ATTRIBUTE_BYTES = 48, TEXT_BYTES = 40
-/** Builds the same ordered tree as `parseXmlOrdered` from tokenizer events, charging each node first. */
+/** Streams comments out (outside CDATA and processing instructions), holding at most 8 characters
+ * between chunks; a comment's content is never retained. */
+class CommentStripper {
+  private state: 'text' | 'comment' | 'cdata' | 'pi' = 'text'
+  private carry = ''
+  strip(chunk: string, last = false): string {
+    const input = this.carry + chunk
+    this.carry = ''
+    let out = '', i = 0
+    while (i < input.length) {
+      if (this.state === 'text') {
+        const at = input.indexOf('<', i)
+        if (at < 0) { out += input.slice(i); break }
+        out += input.slice(i, at)
+        if (!last && input.length - at < 9) { this.carry = input.slice(at); break }
+        if (input.startsWith('<!--', at)) { this.state = 'comment'; i = at + 4 }
+        else if (input.startsWith('<![CDATA[', at)) { out += '<![CDATA['; this.state = 'cdata'; i = at + 9 }
+        else if (input.startsWith('<?', at)) { out += '<?'; this.state = 'pi'; i = at + 2 }
+        else { out += '<'; i = at + 1 }
+        continue
+      }
+      const close = this.state === 'comment' ? '-->' : this.state === 'cdata' ? ']]>' : '?>'
+      const at = input.indexOf(close, i)
+      if (at < 0) {
+        const keep = Math.max(i, input.length - (close.length - 1))
+        if (this.state !== 'comment') out += input.slice(i, keep)
+        this.carry = last ? '' : input.slice(keep)
+        if (last && this.state === 'comment') throw new PackageError('parse-error', 'unterminated comment')
+        if (last) out += input.slice(keep)
+        break
+      }
+      if (this.state !== 'comment') out += input.slice(i, at + close.length)
+      this.state = 'text'
+      i = at + close.length
+    }
+    return out
+  }
+}
+
+/** Retained bytes priced per tree node (charged before the node exists): the node, its attribute record,
+ * its ordered and grouped child lists and its slot in the parent's lists. */
+export const ELEMENT_BYTES = 256
+const ATTRIBUTE_BYTES = 48, TEXT_BYTES = 160
+/** A namespace scope object, and each binding it owns. Inherited bindings are shared through the parent
+ * scope, never copied, so each binding is priced once, by the element that declares it. */
+export const NAMESPACE_SCOPE_BYTES = 96, NAMESPACE_BINDING_BYTES = 64
+
+/** A persistent namespace scope: an element's own declarations over its parent's scope (shared). */
+export class NamespaceScope implements ReadonlyMap<string, string> {
+  /** Scopes constructed (tests observe the admission boundary). */
+  static built = 0
+  constructor(private readonly parent: NamespaceScope | undefined, private readonly own: ReadonlyMap<string, string>) { NamespaceScope.built++ }
+  get ownSize(): number { return this.own.size }
+  get(prefix: string): string | undefined { return this.own.get(prefix) ?? this.parent?.get(prefix) }
+  has(prefix: string): boolean { return this.own.has(prefix) || !!this.parent?.has(prefix) }
+  /** The visible bindings, materialized on demand (never retained). */
+  private visible(): Map<string, string> {
+    const out = new Map(this.parent?.visible())
+    for (const [prefix, uri] of this.own) out.set(prefix, uri)
+    return out
+  }
+  get size(): number { return this.visible().size }
+  forEach(fn: (value: string, key: string, map: ReadonlyMap<string, string>) => void): void { this.visible().forEach((value, key) => fn(value, key, this)) }
+  entries(): MapIterator<[string, string]> { return this.visible().entries() }
+  keys(): MapIterator<string> { return this.visible().keys() }
+  values(): MapIterator<string> { return this.visible().values() }
+  [Symbol.iterator](): MapIterator<[string, string]> { return this.entries() }
+}
+/** The shared scope of nodes under no declaration at all. */
+const NO_NAMESPACES = new NamespaceScope(undefined, new Map())
+
+/** Builds the same ordered tree as `parseXmlOrdered` from tokenizer events, charging each node before it is built. */
 function treeBuilder(charge: (bytes: number) => void) {
-  interface Open { node: XmlNode; attrs: Record<string, string>; ordered: Array<[string, XmlNode]>; grouped: Map<string, XmlNode[]>; namespaces: ReadonlyMap<string, string>; text: string }
+  interface Open { node: XmlNode; attrs: Record<string, string>; ordered: Array<[string, XmlNode]>; grouped: Map<string, XmlNode[]>; namespaces: NamespaceScope | undefined; text: string }
   const stack: Open[] = []
   const state: { root?: XmlNode; stop?: Exclude<ChartRead, { kind: 'tree' }> } = {}
   const flushText = (open: Open) => {
@@ -159,30 +236,41 @@ function treeBuilder(charge: (bytes: number) => void) {
     flushText(open)
     for (const [name, list] of open.grouped) open.node[name] = list.length === 1 ? list[0] : list
     open.node['@attrs'] = open.attrs
-    registerOrdered(open.node, open.ordered, open.namespaces)
+    registerOrdered(open.node, open.ordered, open.namespaces ?? NO_NAMESPACES)
   }
+  const declaration = (name: string) => name === 'xmlns' || name.startsWith('xmlns:')
   const events = {
     open(qname: string, names: readonly string[], values: readonly string[], count: number, selfClosing: boolean) {
       const parent = stack[stack.length - 1]
-      let bytes = ELEMENT_BYTES + 2 * qname.length
-      for (let i = 0; i < count; i++) bytes += ATTRIBUTE_BYTES + 2 * (names[i].length + values[i].length)
-      let namespaces: ReadonlyMap<string, string> = parent?.namespaces ?? new Map()
-      let local: Map<string, string> | undefined
-      for (let i = 0; i < count; i++) if (names[i] === 'xmlns' || names[i].startsWith('xmlns:')) (local ??= new Map(namespaces)).set(names[i] === 'xmlns' ? '' : names[i].slice(6), values[i])
-      if (local) namespaces = local
+      if (parent) flushText(parent)
+      // Price everything this node retains first: nothing below is allocated before the charge succeeds.
+      let bytes = ELEMENT_BYTES + 2 * qname.length, declared = 0
+      for (let i = 0; i < count; i++) {
+        bytes += ATTRIBUTE_BYTES + 2 * (names[i].length + values[i].length)
+        if (declaration(names[i])) declared++
+      }
+      if (declared) bytes += NAMESPACE_SCOPE_BYTES + declared * NAMESPACE_BINDING_BYTES
       if (!parent) {
-        // Dispatch on the root's real namespace: only classic (or unbound) continues to a tree.
-        const colon = qname.indexOf(':'), uri = namespaces.get(colon < 0 ? '' : qname.slice(0, colon))
+        // Dispatch on the root's real namespace (its own declarations): only classic (or unbound) continues.
+        const colon = qname.indexOf(':'), want = colon < 0 ? 'xmlns' : `xmlns:${qname.slice(0, colon)}`
+        let uri: string | undefined
+        for (let i = 0; i < count; i++) if (names[i] === want) uri = values[i]
         if (localName(qname) === 'chartSpace' && uri !== undefined && !CLASSIC.has(uri)) {
           state.stop = /chartex/i.test(uri)
             ? { kind: 'unsupported', reason: 'ChartEx charts are not supported yet', code: 'unsupported-chart', feature: 'ChartEx' }
             : { kind: 'unsupported', reason: 'This chart format is not supported', code: 'unsupported-chart' }
           throw new Stop(state.stop)
         }
-      } else flushText(parent)
+      }
       charge(bytes)
+      let namespaces = parent?.namespaces
+      if (declared) {
+        const own = new Map<string, string>()
+        for (let i = 0; i < count; i++) if (declaration(names[i])) own.set(names[i] === 'xmlns' ? '' : names[i].slice(6), values[i])
+        namespaces = new NamespaceScope(namespaces, own)
+      }
       const attrs: Record<string, string> = {}
-      for (let i = 0; i < count; i++) if (names[i] !== 'xmlns' && !names[i].startsWith('xmlns')) attrs[localName(names[i])] = values[i]
+      for (let i = 0; i < count; i++) if (!names[i].startsWith('xmlns')) attrs[localName(names[i])] = values[i]
       const open: Open = { node: {}, attrs, ordered: [], grouped: new Map(), namespaces, text: '' }
       if (parent) {
         const name = localName(qname)
@@ -193,7 +281,8 @@ function treeBuilder(charge: (bytes: number) => void) {
       else stack.push(open)
     },
     close() { finish(stack.pop()!) },
-    text(text: string) { const open = stack[stack.length - 1]; if (open) { charge(2 * text.length); open.text += text } },
+    // The segment and the node's merged text: charged before either is kept.
+    text(text: string) { const open = stack[stack.length - 1]; if (open) { charge(4 * text.length); open.text += text } },
   }
   return { events, get root() { return state.root }, get stop() { return state.stop } }
 }

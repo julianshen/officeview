@@ -7,13 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
-import { parseXmlOrdered } from '../src/core/xml'
+import { namespaceScope, namespaceUri, parseXmlOrdered } from '../src/core/xml'
 import { chartCard, prepareCompatibleDrawingContent, prepareDrawingContent, type DrawingContent } from '../src/drawing/content'
 import { drawingPartContext } from '../src/drawing/parts'
 import { parseThemeContext } from '../src/drawing/style'
 import { documentChartContext } from '../src/charts/context'
 import { parseXlsxChart } from '../src/charts/parse'
-import { CHART_READ_CROSSING, readChartPart } from '../src/charts/read'
+import { CHART_READ_CROSSING, ELEMENT_BYTES, NAMESPACE_BINDING_BYTES, NAMESPACE_SCOPE_BYTES, NamespaceScope, readChartPart } from '../src/charts/read'
 import { paintDrawingContent } from '../src/drawing/content-paint'
 import { getPaintables } from '../src/render/paint'
 import { parseDocx } from '../src/docx/parse'
@@ -719,5 +719,87 @@ describe('fix round 1: admitted bounded read and namespace dispatch (spec 6.5, I
     // Streamed bytes are refunded chunk by chunk: the peak stays far below the part size plus its text.
     expect(peak - before).toBeLessThan(CHART_READ_CROSSING + 3 * 64 * 1024 + 256 * 1024)
     expect(workspace.used, 'released after the parse').toBe(before)
+  })
+})
+
+// ---- Fix round 2 (codex re-review R1, R2, comment limit) ---------------------------------------
+describe('fix round 2: propagation follows the selection result (R1)', () => {
+  it('a failed inner fallback is not a representation: the card propagates; a usable outer fallback still wins', async () => {
+    for (const format of FORMATS) {
+      // Outer supported Choice → inner unsupported chart Choice + missing-picture Fallback; no outer fallback.
+      const failedInner = alternate(alternate(graphicObject(format, 60, chartPayload()), picture(format, 61, 'gone')), undefined)
+      expectCard(format, await resolve(format, await build(format, failedInner)), SURFACE_REASON)
+      // Control: a usable outer fallback wins over the propagated failure.
+      const control = alternate(alternate(graphicObject(format, 60, chartPayload()), picture(format, 61, 'gone')), picture(format, 62))
+      expectFallbackPicture(format, await resolve(format, await build(format, control)), '62', 'usable outer fallback')
+    }
+  })
+
+  it('seven nested supported Choices with no fallbacks give the card', async () => {
+    for (const format of FORMATS) {
+      let body = graphicObject(format, 70, chartPayload())
+      for (let i = 0; i < 7; i++) body = alternate(body, undefined)
+      expectCard(format, await resolve(format, await build(format, body)), SURFACE_REASON)
+    }
+  })
+})
+
+describe('fix round 2: namespace ownership is admitted before construction (R2)', () => {
+  // 100 root declarations and 200 nested elements, each declaring one more namespace.
+  const nested = `<chartSpace ${Array.from({ length: 100 }, (_, i) => `xmlns:n${i}="urn:n${i}"`).join(' ')}>${Array.from({ length: 200 }, (_, i) => `<x xmlns:z${i}="urn:z${i}">`).join('')}${'</x>'.repeat(200)}</chartSpace>`
+  const pkgOf = () => packageOf({ 'chart.xml': nested })
+
+  it('every namespace scope and binding is charged, inherited bindings are shared (never copied)', async () => {
+    const context = documentChartContext('desktop')
+    const read = await readChartPart(await pkgOf(), 'chart.xml', context)
+    expect(read?.kind).toBe('tree')
+    if (read?.kind !== 'tree') return
+    // Deepest node: it sees all 300 bindings, but owns only its own declaration.
+    let node = read.root
+    for (let i = 0; i < 200; i++) node = (node as Record<string, unknown>).x as typeof node
+    expect(namespaceUri(node, 'n0')).toBe('urn:n0')
+    expect(namespaceUri(node, 'z199')).toBe('urn:z199')
+    expect(namespaceUri(node, 'z0')).toBe('urn:z0')
+    const scope = namespaceScope(node) as NamespaceScope
+    expect(scope.size).toBe(300)
+    expect(scope.ownSize).toBe(1)
+    // The charge covers 201 scopes and 300 owned bindings, on top of the elements and the crossing.
+    expect(context.workspace.used - CHART_READ_CROSSING).toBeGreaterThanOrEqual(201 * (NAMESPACE_SCOPE_BYTES) + 300 * NAMESPACE_BINDING_BYTES + 201 * ELEMENT_BYTES)
+    read.release()
+    expect(context.workspace.used).toBe(0)
+  })
+
+  it.each([3, 4, 60])('a refusal at reservation %i happens before the refused node or its scope is built', async refuseAt => {
+    let calls = 0
+    const context = documentChartContext('desktop', undefined, { reserve: () => ++calls < refuseAt, release: () => {} })
+    const built = NamespaceScope.built
+    const read = await readChartPart(await pkgOf(), 'chart.xml', context)
+    expect(read).toMatchObject({ kind: 'refused', code: 'chart-refused' })
+    // Reservations: 1 crossing, 2 the chunk, then one per element (each before its node and scope exist).
+    expect(NamespaceScope.built - built).toBe(Math.max(0, refuseAt - 3))
+    expect(context.workspace.used).toBe(0)
+  })
+})
+
+describe('fix round 2: token limits are resource limits; comments stream (comment limit)', () => {
+  const contentTheme = { colors: new Map<string, string>(), fonts: new Map<string, string>() }
+  async function attempt(part: string) {
+    const pkg = await packageOf({ 'word/_rels/document.xml.rels': rels(['rC', 'chart', 'charts/chart1.xml']), 'word/charts/chart1.xml': part })
+    const node = parseXmlOrdered(`<a:graphicData xmlns:a="${A}" xmlns:c="${C}" xmlns:r="${R}" uri="${C}"><c:chart r:id="rC"/></a:graphicData>`)
+    const content = await prepareDrawingContent(pkg, node, 'word/document.xml', contentTheme, parseThemeContext(), {})
+    return { content, card: chartCard(node)?.chart, diagnostics: drawingPartContext(pkg).diagnostics }
+  }
+  it('a valid 66,000-character comment (across chunks, also in the prolog) parses natively', async () => {
+    for (const part of [STACKED.replace('<c:chart>', `<!--${'c'.repeat(66000)}--><c:chart>`), `<?xml version="1.0"?><!--${'- c'.repeat(30000)}-->${STACKED}`]) {
+      const { content } = await attempt(part)
+      expect(content?.kind === 'xlsxChart' && content.chart.groups[0]?.series.length).toBe(2)
+    }
+  })
+  it('markup over the token limit is a resource refusal with its limit, not malformed XML', async () => {
+    const { content, card, diagnostics } = await attempt(STACKED.replace('<c:chart>', `<c:chart big="${'v'.repeat(70000)}">`))
+    expect(content).toBeUndefined()
+    expect(card?.unsupported).toBe('This chart contains markup larger than the viewer reads')
+    expect(diagnostics.find(d => d.reason === 'chart-token-limit')).toMatchObject({ kind: 'unsupported-content', limit: 65536 })
+    expect(diagnostics.some(d => d.reason === 'invalid-content-xml')).toBe(false)
   })
 })

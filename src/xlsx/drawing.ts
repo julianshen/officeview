@@ -6,7 +6,7 @@ import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
 import { coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
-import { attemptedMalformedRelationshipIssue, cardChart, chartCard, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, cardChart, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
@@ -207,14 +207,16 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
   const fallback = child(alternate, 'Fallback')
   // No representation remains (no fallback, or its picture is unusable): an attempted chart Choice shows its card (spec 6.3).
   // Only the outermost selection places it, so a card never makes an enclosing Choice available.
-  const card = depth === 0 && getChildren(alternate, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink']).supported && chartCard(choice))
+  const card = getChildren(alternate, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink']).supported && chartCard(choice))
   const unusable = !!card && !!fallback && await fallbackUnusable(pkg, owner, fallback)
+  // The actual result: nothing usable here (an unusable fallback is not a representation), so the failure propagates.
+  if (!fallback || unusable) markExhausted(alternate)
   if (fallback && !unusable && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)) {
     discardFailed()
     // The chart's card travels with its selected fallback pictures, painted if one fails to decode.
     return { branch: fallback, mode: 'fallback', ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }
   }
-  if (card) {
+  if (card && depth === 0) {
     if (unusable) contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'chart', { reason: 'chart-fallback-unusable' })
     return { branch: card, mode: 'choice', ...(unusable ? { unusable } : {}) }
   }

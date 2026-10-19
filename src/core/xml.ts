@@ -94,6 +94,11 @@ export function registerOrdered(node: XmlNode, ordered: Array<[string, XmlNode]>
   return node
 }
 
+/** The in-scope namespace bindings of an ordered node. */
+export function namespaceScope(node: XmlNode | undefined): ReadonlyMap<string, string> | undefined {
+  return node ? namespaceMap.get(node) : undefined
+}
+
 /** Resolve a prefix used by MC Requires at this node, honoring local shadowing. */
 export function namespaceUri(node: XmlNode | undefined, prefix: string): string | undefined {
   return node ? namespaceMap.get(node)?.get(prefix) : undefined

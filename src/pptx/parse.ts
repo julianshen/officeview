@@ -1,5 +1,5 @@
 import type { XlsxChartModel } from '../xlsx/chartModel'
-import { attemptedMalformedRelationshipIssue, chartCard, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
 import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
@@ -693,6 +693,8 @@ class DrawingCompatibility {
         : name === 'pic' && !this.pictureUsable(attrs(getChildren(getChildren(item, 'blipFill')[0], 'blip')[0]).embed ?? ''))
     }
     const unusable = !!card && !!fallback && unusableBranch(fallback, 0)
+    // The resolver's actual result: no usable representation here, so a terminal chart failure propagates outward.
+    if (!fallback || unusable) markExhausted(node)
     if (unusable) this.unusableFallback()
     const selected: Representation | undefined = fallback && !unusable ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}`, ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }
       : card && { node: card, representation: 'choice' }

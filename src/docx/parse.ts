@@ -9,7 +9,7 @@ import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlN
 import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
 import { choiceCards, loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
-import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, isExhausted, malformedRelationshipAttempt, markExhausted, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, contentDiagnostic, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
@@ -489,7 +489,7 @@ export function parseParagraph(
     // No representation remains (no fallback, or it drew nothing): an attempted chart Choice shows its card,
     // replacing the unusable fallback's audit and recording why (spec 6.3). Never during a probe.
     const cards = (parent: XmlNode | undefined, depth = 0): XmlNode[] => !parent || depth >= 128 ? [] : orderedChildren(parent).flatMap(([name, child]) =>
-      name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' && getChildren(child, 'Fallback').length ? [] : cards(child, depth + 1))
+      name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' && getChildren(child, 'Fallback').length && !isExhausted(child) ? [] : cards(child, depth + 1))
     const cardChoice = () => getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported && cards(choice).length)
     /** The chart card a selected fallback's pictures carry, painted if one fails to decode. */
     const chartFallback = () => { const choice = cardChoice(), card = choice && choiceCards.get(cards(choice)[0])?.drawing; return card?.kind === 'xlsxChart' ? card.chart : undefined }
@@ -591,7 +591,11 @@ export function parseParagraph(
         const card = chartFallback()
         if (card) for (const image of paragraph.images.slice(images)) if (!image.drawing) image.chartFallback = card
       }
-      else if (context?.reserveDrawing) placeCard(fallback, audited)
+      else {
+        // The actual result: nothing usable here (no fallback, or it drew nothing), so the failure propagates.
+        markExhausted(node)
+        if (context?.reserveDrawing) placeCard(fallback, audited)
+      }
     }
     // A failed compatibility wrapper still owns a source placement. Probing
     // disables audit writes, so retain its identity when no branch yielded a
