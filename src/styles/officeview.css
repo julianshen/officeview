@@ -168,6 +168,17 @@
   cursor: pointer;
 }
 
+/* stream E: the base above sets appearance: none on selects (it restores what
+ * host resets remove), which also drops the native dropdown arrow. ov:select-chevron
+ * draws one from two gradients in the icon colour (pair it with ov:pr-6 for room
+ * on the right; Tailwind orders pr after px); the control stays a native <select> (keyboard, picker and ARIA unchanged). */
+@utility select-chevron {
+  background-image: linear-gradient(45deg, transparent 50%, var(--ov-color-icon) 50%), linear-gradient(135deg, var(--ov-color-icon) 50%, transparent 50%);
+  background-position: right 13px center, right 8px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
 /* stream E (spec §6.8, §6.10): spreadsheet chrome base rules */
 [data-ov-theme-root] :is([data-officeview-sheet-instance], [data-officeview-sheet-instance] *) :is(button, input, select, textarea) {
   font: inherit;

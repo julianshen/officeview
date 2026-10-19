@@ -5,7 +5,7 @@ import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { sameFilterRange } from './controlsClient'
 import { m } from 'motion/react'
 import { dialog, useMotionProps } from '../motion/presets'
-import { controlTarget, CONTROL_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
+import { controlTarget, CONTROL_CLS, SELECT_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
 export interface SortDialogProps extends ControlProps { applied: SortSpec | null; col?: number }
 interface Level { id: number; column: string; order: 'asc' | 'desc' }
 export function SortDialog(props: SortDialogProps): ReactElement | null {
@@ -84,7 +84,7 @@ export function SortDialog(props: SortDialogProps): ReactElement | null {
       <h2>Sort worksheet</h2><p>View-only sort; formulas unchanged.</p>
       {levels.map((level, index) => <fieldset key={level.id} data-sort-level={level.id}><legend>Level {index + 1}</legend>
         <label>Column letter <input aria-label={`Column level ${index + 1}`} className={CONTROL_CLS} style={controlTarget} value={level.column} aria-invalid={Boolean(validation)} onChange={event => setLevels(levels.map(item => item.id === level.id ? { ...item, column: event.target.value } : item))} /></label>
-        <label>Direction <select aria-label={`Direction level ${index + 1}`} className={CONTROL_CLS} style={controlTarget} value={level.order} onChange={event => setLevels(levels.map(item => item.id === level.id ? { ...item, order: event.target.value as 'asc' | 'desc' } : item))}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
+        <label>Direction <select aria-label={`Direction level ${index + 1}`} className={SELECT_CLS} style={controlTarget} value={level.order} onChange={event => setLevels(levels.map(item => item.id === level.id ? { ...item, order: event.target.value as 'asc' | 'desc' } : item))}><option value="asc">Ascending</option><option value="desc">Descending</option></select></label>
         <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} onClick={() => { focus.current = levels.length > 1 ? `[data-sort-level="${levels[index === 0 ? 1 : 0].id}"] input` : '[data-add-level]'; setLevels(levels.filter(item => item.id !== level.id)) }}>Remove level {index + 1}</button>
         <button type="button" data-move={-1} className={CONTROL_BTN_CLS} style={controlTarget} disabled={index === 0} onClick={() => move(index, -1)}>Move level {index + 1} up</button><button type="button" data-move={1} className={CONTROL_BTN_CLS} style={controlTarget} disabled={index === levels.length - 1} onClick={() => move(index, 1)}>Move level {index + 1} down</button>
       </fieldset>)}
