@@ -422,6 +422,13 @@ describe('PagedToolbar Find requests', () => {
     expect(ui.getByTestId('officeview-page-position').textContent).not.toMatch(/\d/)
     expect(ui.getByTestId('officeview-status').textContent).not.toMatch(/\d/)
   })
+
+  it('the status position span carries its own test id, independent of child order (final review M7)', async () => {
+    const { PagedStatus } = await import('../src/components/paged/PagedStatus')
+    const ui = render(<PagedStatus kind="slides" current={3} total={12} words={1234} />)
+    expect(ui.getByTestId('officeview-status-position').textContent).toBe('Slide 3 of 12')
+    expect(ui.getByTestId('officeview-status').contains(ui.getByTestId('officeview-status-position'))).toBe(true)
+  })
 })
 
 describe('pending pages in the viewer', () => {

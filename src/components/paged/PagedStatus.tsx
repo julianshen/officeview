@@ -18,7 +18,7 @@ export function PagedStatus({ kind, current, total, words }: { kind: PagedKind; 
       className="ov:flex ov:items-center ov:gap-2 ov:px-3 ov:text-sm ov:text-muted ov:bg-chrome ov:border-t ov:border-border ov:whitespace-nowrap ov:overflow-hidden ov:tabular-nums ov:select-none"
     >
       {/* A stable position span; the keyed text inside it ticks on each page change. */}
-      <span><Tick k={total > 0 ? current : 0}>{kind === 'slides' ? 'Slide' : 'Page'} {total > 0 ? `${current} of ${total}` : '—'}</Tick></span>
+      <span data-testid="officeview-status-position"><Tick k={total > 0 ? current : 0}>{kind === 'slides' ? 'Slide' : 'Page'} {total > 0 ? `${current} of ${total}` : '—'}</Tick></span>
       {kind === 'document' && (
         <>
           {' '}<span aria-hidden="true">·</span>{' '}

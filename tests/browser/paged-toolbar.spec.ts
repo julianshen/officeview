@@ -301,7 +301,7 @@ test.describe('desktop 1280x800', () => {
     await expect(page.getByTestId('officeview-word-count')).not.toHaveText(/^—/, { timeout: 60_000 })
     const r = await page.evaluate(async () => {
       const el = document.querySelector('[data-officeview-root]') as HTMLElement
-      const status = document.querySelector('[data-testid=officeview-status] > span')!
+      const status = document.querySelector('[data-testid=officeview-status-position]')!
       let frame = 0
       const changes: number[] = []
       const mo = new MutationObserver(() => changes.push(frame))
