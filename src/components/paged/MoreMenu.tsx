@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Ellipsis } from 'lucide-react'
 import { Icon } from '../Icon'
+import { Pop, popover, Presence } from '../motion/presets'
 
 export interface MoreItem {
   key: string
@@ -69,8 +70,10 @@ export function MoreMenu({ items, buttonClass }: { items: readonly MoreItem[]; b
       >
         <Icon icon={Ellipsis} name="ellipsis" />
       </button>
-      {open && (
-        <div
+      <Presence>{open && (
+        <Pop
+          key="menu"
+          v={popover}
           ref={menu}
           role="menu"
           aria-label="More options"
@@ -93,8 +96,8 @@ export function MoreMenu({ items, buttonClass }: { items: readonly MoreItem[]; b
               {item.label}
             </button>
           ))}
-        </div>
-      )}
+        </Pop>
+      )}</Presence>
     </div>
   )
 }

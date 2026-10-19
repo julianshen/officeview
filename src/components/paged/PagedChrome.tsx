@@ -13,6 +13,7 @@ import type { Transform } from '../../core/zoom'
 import type { OfficeDocSource } from '../OfficeDoc'
 import { contentYAt, pageOffsets } from '../scrollPan'
 import { SearchBar } from '../viewerControls'
+import { MotionRoot } from '../motion/presets'
 import { PAGE_PADDING_PX } from './metrics'
 import { PagedStatus, type PagedKind } from './PagedStatus'
 import { PagedToolbar } from './PagedToolbar'
@@ -166,7 +167,7 @@ function VisibleChrome(p: PagedChromeProps & { beginPrint(): void }): ReactEleme
 
   const go = (index: number) => tracking.goTo(Math.max(0, Math.min(total - 1, index)))
   return (
-    <>
+    <MotionRoot>
       <PagedToolbar
         title={p.title}
         kind={kind}
@@ -203,7 +204,7 @@ function VisibleChrome(p: PagedChromeProps & { beginPrint(): void }): ReactEleme
         onEscapeToDocument={() => containerRef.current?.focus()}
       />
       {p.statusSlot && createPortal(<PagedStatus kind={kind} current={current} total={total} words={words} />, p.statusSlot)}
-    </>
+    </MotionRoot>
   )
 }
 

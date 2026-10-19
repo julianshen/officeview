@@ -80,6 +80,7 @@ import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
 import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
+import { MotionRoot, Tick } from '../motion/presets'
 import { themeRootProps, warnIfStylesMissing, type ThemeMode } from '../theme'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
@@ -1684,7 +1685,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:gap-1'
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
-    // an unsized host gets the default 400px pane.
+    // an unsized host gets the default 400px pane. Chrome motion only (spec §6.4).
+    <MotionRoot>
     <div ref={wrapperRef} data-officeview-sheet-instance={instance} {...themeRootProps(props.theme, instance)} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
       <div
         ref={rootRef}
@@ -1781,6 +1783,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       {/* A modal popup (the mobile filter sheet) owns the bottom of the viewer. */}
       {showZoomControls && !dockZoom && !popup && <ZoomControls {...zoomProps} />}
     </div>
+    </MotionRoot>
   )
 }
 
@@ -1805,7 +1808,7 @@ function DockedZoomControls({ zoom, onIn, onOut, onReset, atFit, touch }: { zoom
   const btn: CSSProperties = { minWidth: side, minHeight: side }
   return <div role="group" aria-label="Zoom" data-testid="officeview-zoom-controls" data-officeview-ui="sheet-zoom" className="ov:flex ov:items-center ov:gap-1">
     <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className={DOCKED} style={btn}><Icon icon={Minus} name="minus" size={14} /></button>
-    <button type="button" onClick={onReset} aria-label="Reset zoom" className={DOCKED} style={btn}>{Math.round(zoom * 100)}%</button>
+    <button type="button" onClick={onReset} aria-label="Reset zoom" className={DOCKED} style={btn}><Tick k={Math.round(zoom * 100)}>{Math.round(zoom * 100)}%</Tick></button>
     <button type="button" onClick={onIn} aria-label="Zoom in" className={DOCKED} style={btn}><Icon icon={Plus} name="plus" size={14} /></button>
   </div>
 }

@@ -3,11 +3,14 @@ import type { SortSpec } from '../../xlsx/view/contracts'
 import { columnToLetters, lettersToColumn } from '../../xlsx/view/coordinates'
 import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { sameFilterRange } from './controlsClient'
+import { m } from 'motion/react'
+import { dialog, useMotionProps } from '../motion/presets'
 import { controlTarget, CONTROL_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
 export interface SortDialogProps extends ControlProps { applied: SortSpec | null; col?: number }
 interface Level { id: number; column: string; order: 'asc' | 'desc' }
 export function SortDialog(props: SortDialogProps): ReactElement | null {
   const life = useControlLifetime(props), root = useRef<HTMLDivElement>(null), ids = useRef(0), focus = useRef<string | null>(null)
+  const motion = useMotionProps(dialog, true, root)
   const [range, setRange] = useState<DetectedRange | null>(null), [levels, setLevels] = useState<Level[]>([]), [caseSensitive, setCaseSensitive] = useState(props.applied?.caseSensitive ?? false)
   const [busy, setBusy] = useState(true), [error, setError] = useState(''), [progress, setProgress] = useState('Resolving source range')
   const resolve = (override?: 0 | 1, reset = false) => {
@@ -63,7 +66,7 @@ export function SortDialog(props: SortDialogProps): ReactElement | null {
     }).catch(error => { if (job.current()) { const message = life.error(error); setError(message); props.onNotice(message); setBusy(false) } })
   }
   if (props.open === false) return null
-  return <div ref={root} role={props.embedded ? undefined : 'dialog'} aria-label="Sort worksheet" aria-modal={props.embedded ? undefined : true} data-officeview-ui="sort-dialog"
+  return <m.div {...motion} role={props.embedded ? undefined : 'dialog'} aria-label="Sort worksheet" aria-modal={props.embedded ? undefined : true} data-officeview-ui="sort-dialog"
     className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => {
@@ -93,5 +96,5 @@ export function SortDialog(props: SortDialogProps): ReactElement | null {
       {!busy && !range && <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} onClick={() => resolve()}>Retry range</button>}
       <button type="submit" className={CONTROL_PRIMARY_BTN_CLS} style={controlTarget} disabled={busy || !spec || life.invalid}>OK</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} onClick={() => life.cancel()}>Cancel</button>
     </form>
-  </div>
+  </m.div>
 }

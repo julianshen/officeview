@@ -177,6 +177,11 @@ async function readResponse(
  * Headers/cookies travel in `init` (or inside the Request); they are never
  * copied into error messages.
  */
+/** Throws the shared "no fetch" error before a URL download. */
+function requireFetch(input: string | Request): void {
+  if (typeof fetch !== 'function') throw new Error(`Cannot download ${typeof input === 'string' ? input : input.url}: fetch is not available in this environment`)
+}
+
 async function fetchInput(
   input: string | Request,
   init: RequestInit | undefined,
@@ -185,10 +190,7 @@ async function fetchInput(
   onWatermark?: WatermarkListener,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
-  if (typeof fetch !== 'function') {
-    const url = typeof input === 'string' ? input : input.url
-    throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
-  }
+  requireFetch(input)
   return readResponse(await fetch(input, withSignal(input, init, signal)), onProgress, onProtection, onWatermark, signal)
 }
 
@@ -338,10 +340,7 @@ async function openResponse(response: Response, listeners: OpenSourceListeners, 
 }
 
 async function openFetch(input: string | Request, init: RequestInit | undefined, listeners: OpenSourceListeners, signal?: AbortSignal): Promise<OpenedSource> {
-  if (typeof fetch !== 'function') {
-    const url = typeof input === 'string' ? input : input.url
-    throw new Error(`Cannot download ${url}: fetch is not available in this environment`)
-  }
+  requireFetch(input)
   return openResponse(await fetch(input, withSignal(input, init, signal)), listeners, signal)
 }
 

@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type ReactElement } from 'react'
 import type { NavigatorRequest } from '../../xlsx/view/coordinates'
 import { navigatorRequestFromA1 } from '../../xlsx/view/scrollWindow'
+import { Pulse } from '../motion/presets'
 
 export interface SheetNavigatorProps {
   documentId: string
@@ -22,9 +23,10 @@ export function SheetNavigator({ documentId, sheets, activeSheetId, onSheetChang
   return <nav aria-label="Worksheet navigation" data-officeview-ui="sheet-navigator" style={row}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => { if (!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f')) event.stopPropagation() }}>
-    <label>Worksheet <select aria-label="Worksheet" value={activeSheetId} disabled={disabled} className={controlCls} style={control} onChange={event => onSheetChange(event.target.value)}>
+    {/* The selected sheet ticks in place: the select is never remounted, so keyboard focus stays on it. */}
+    <label>Worksheet <Pulse k={activeSheetId}><select aria-label="Worksheet" value={activeSheetId} disabled={disabled} className={controlCls} style={control} onChange={event => onSheetChange(event.target.value)}>
       {sheets.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}</option>)}
-    </select></label>
+    </select></Pulse></label>
     <form style={row} onSubmit={event => {
       event.preventDefault()
       if (disabled) return

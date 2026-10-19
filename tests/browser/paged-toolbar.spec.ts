@@ -72,6 +72,8 @@ async function open(page: Page, name: string, options: OpenOptions = {}): Promis
   return { release }
 }
 
+/** Task 6: chrome motion has finished (WAAPI or JS-driven): every motion element is opaque and untransformed. */
+const motionSettled = (page: Page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running') && [...document.querySelectorAll('[data-ov-motion]')].every((el) => { const cs = getComputedStyle(el); return cs.opacity === '1' && (cs.transform === 'none' || cs.transform === 'matrix(1, 0, 0, 1, 0, 0)') }))
 const toolbar = (page: Page) => page.getByRole('toolbar', { name: 'Document toolbar' })
 const statusLine = (page: Page) => page.getByTestId('officeview-status')
 const region = (page: Page) => page.getByRole('region', { name: 'Document viewer' })
@@ -183,11 +185,13 @@ test.describe('compact 375x667 coarse', () => {
       // every control fits inside the pane (nothing pushed off-screen)
       for (const s of await sizes()) expect(s.right, `${name} ${s.label} right edge`).toBeLessThanOrEqual(375 + 0.5)
       await toolbar(page).getByLabel('More options').click()
+      await motionSettled(page)
       for (const item of await page.getByRole('menu').evaluate((m) => [...m.querySelectorAll('[role^=menuitem]')].map((el) => ({ label: el.textContent, ...el.getBoundingClientRect().toJSON() as Rect })))) {
         expect(item.height, `${name} menu ${item.label}`).toBeGreaterThanOrEqual(44)
       }
       await page.keyboard.press('Escape')
       await toolbar(page).getByLabel('Find').click()
+      await motionSettled(page) // the closed menu has finished its exit
       for (const s of await sizes()) {
         expect(s.height, `${name} expanded ${s.label}`).toBeGreaterThanOrEqual(44)
         expect(s.right, `${name} expanded ${s.label} right edge`).toBeLessThanOrEqual(375 + 0.5)
@@ -413,6 +417,8 @@ test.describe('narrow fine pointer 375x667', () => {
       expect(s.right, `${s.label} right edge`).toBeLessThanOrEqual(375 + 0.5)
     }
     await toolbar(page).getByLabel('More options').click()
+    // Task 6: the menu enters with a short drop; measure it once settled.
+    await motionSettled(page)
     for (const h of await page.getByRole('menu').evaluate((m) => [...m.querySelectorAll('[role^=menuitem]')].map((el) => el.getBoundingClientRect().height))) expect(h).toBeGreaterThanOrEqual(44)
   })
 })
