@@ -331,6 +331,7 @@ export function bitmapPoolPlan(viewport: { cssWidth: number; cssHeight: number; 
 export interface TileSurface { readonly width: number; readonly height: number; close?(): void }
 /** Complete tile identity (§10.1): cache owner plus backend/zoom/DPR/grid cell. */
 export interface TileKey {
+  paletteKey: string
   identity: CacheIdentity
   backend: string
   zoom: number
@@ -342,7 +343,7 @@ export interface TileCacheStats { tiles: number; bytes: number; closed: number }
 const identityKey = (identity: CacheIdentity): string =>
   JSON.stringify([identity.docId, identity.sheetId, identity.valueGen, identity.fontGen, identity.viewGen])
 const tileKey = (key: TileKey): string =>
-  JSON.stringify([identityKey(key.identity), key.backend, key.zoom, key.dpr, key.col, key.row])
+  JSON.stringify([identityKey(key.identity), key.backend, key.paletteKey, key.zoom, key.dpr, key.col, key.row])
 function closeSurface(surface: TileSurface): void {
   try { surface.close?.() } catch { /* already closed or lost with its device */ }
 }

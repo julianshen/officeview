@@ -54,6 +54,14 @@ import { parseRtf } from 'officeview'
 const doc = parseRtf(rtfBytes)
 ```
 
+Canvas UI overlays read `--ov-color-*` properties from the viewer's
+`[data-ov-theme-root]`. Changes to that root's inline style, class or theme,
+and system color-scheme changes, repaint overlays and invalidate themed tiles.
+Overrides changed only through an ancestor stylesheet are picked up on the next
+theme change or remount. Worksheet/page paper stays white in both themes;
+authored cell colors and canvas gridlines are unchanged. A supplied `background`
+prop still overrides the viewer backdrop.
+
 ### Props worth knowing
 
 ```tsx

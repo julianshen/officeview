@@ -27,7 +27,7 @@ describe('frozen pane paint', () => {
     const draws = vi.spyOn(pane, 'drawImage'), fills = vi.spyOn(pane, 'fillRect'), clips = vi.spyOn(pane, 'clip')
     const origin = { x: 5 * T + 100, y: 5 * T + 100 }
     renderer.present(pane, {
-      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
       identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
       origin, viewport: { width: 640, height: 400 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
       frozen: { rows: 1, cols: 1, left: 64, top: 20 },
@@ -52,7 +52,7 @@ describe('frozen pane paint', () => {
     const pane = canvas.getContext('2d')!
     const draws = vi.spyOn(pane, 'drawImage')
     renderer.present(pane, {
-      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
       identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
       origin: { x: 100, y: 100 }, viewport: { width: 400, height: 300 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
       frozen: { rows: 1, cols: 1, left: 64, top: 20 },
@@ -71,7 +71,7 @@ describe('frozen pane paint', () => {
     const pane = canvas.getContext('2d')!
     const clips = vi.spyOn(pane, 'clip'), draws = vi.spyOn(pane, 'drawImage')
     renderer.present(pane, {
-      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
       identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
       origin: { x: 10, y: 10 }, viewport: { width: 100, height: 100 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
     })

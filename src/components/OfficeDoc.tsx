@@ -1,3 +1,4 @@
+import type { CanvasColors } from './canvasColors'
 /**
  * <OfficeDoc> — renders a parsed office document (any format) onto stacked
  * per-page <canvas> elements inside a scrollable container. Handles:
@@ -137,9 +138,7 @@ export interface HighlightRect {
 }
 
 interface SearchOverlay extends PageOverlay {
-  /** Alias kept for the paint call sites. */
-  rects: HighlightRect[]
-  active: HighlightRect[]
+  colors?: CanvasColors
 }
 
 /**
@@ -147,16 +146,16 @@ interface SearchOverlay extends PageOverlay {
  * while the ctx still carries the page transform, so rectangles are in page
  * coordinates.
  */
-function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay): void {
+function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay, colors: Pick<CanvasColors, 'find' | 'find-active' | 'text-selection'> = {}): void {
   ctx.save()
-  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
-  for (const r of overlay.rects) ctx.fillRect(r.x, r.y, r.width, r.height)
+  ctx.fillStyle = colors.find ?? 'rgba(255,214,0,.45)'
+  for (const r of overlay.highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
   // selection sits on top of the search wash, as it does in a browser
-  ctx.fillStyle = 'rgba(64, 128, 255, 0.35)'
+  ctx.fillStyle = colors['text-selection'] ?? 'rgba(64,128,255,.35)'
   for (const r of overlay.selection) ctx.fillRect(r.x, r.y, r.width, r.height)
-  ctx.strokeStyle = '#ff8c00'
+  ctx.strokeStyle = colors['find-active'] ?? '#ff8c00'
   ctx.lineWidth = 1.5
-  for (const r of overlay.active) ctx.strokeRect(r.x, r.y, r.width, r.height)
+  for (const r of overlay.activeMatch) ctx.strokeRect(r.x, r.y, r.width, r.height)
   ctx.restore()
 }
 
@@ -232,7 +231,7 @@ function PageCanvas({
     if (!ctx) return
     ctx.setTransform(backingW / spec.widthPx, 0, 0, backingW / spec.widthPx, 0, 0)
     paint(ctx)
-    if (overlay) paintHighlights(ctx, overlay)
+    if (overlay) paintHighlights(ctx, overlay, overlay.colors)
     // overlay.key changes whenever the match set or active match changes
   }, [paint, backingW, backingH, spec.widthPx, overlay?.key])
 
@@ -329,6 +328,7 @@ function LegacyOfficeDoc({
   // React attaches wheel listeners as passive, so onWheel cannot stop the
   // browser's own Ctrl/Cmd+wheel page zoom; a native listener on the outer
   // wrapper can, over the pages and every control (search, copy, zoom).
+  const [palette, setPalette] = useState<CanvasColors & {key: string}>()
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   // Once per mount: is officeview.css loaded? (spec §5, R10) And request the
   // zoom routing.
@@ -732,19 +732,19 @@ function LegacyOfficeDoc({
 
   const overlayFor = (pageIndex: number): SearchOverlay | undefined => {
     const searchRects =
-      matches.length === 0 ? [] : matches.filter((m) => m.pageIndex === pageIndex).flatMap((m) => m.rects)
-    const activeMatch = active >= 0 ? matches[active] : undefined
-    const activeRects = activeMatch && activeMatch.pageIndex === pageIndex ? activeMatch.rects : []
+      matches.filter((m) => m.pageIndex === pageIndex).flatMap((m) => m.rects)
+    const activeMatch = matches[active]
+    const activeRects = activeMatch?.pageIndex === pageIndex ? activeMatch.rects : []
     const selRects =
       selection && indexRef.current ? rectsForSelectionOnPage(indexRef.current, pageIndex, selection) : []
-    if (searchRects.length === 0 && activeRects.length === 0 && selRects.length === 0) return undefined
+    // The active match is already a member of searchRects.
+    if (!searchRects.length && !selRects.length) return undefined
     return {
-      rects: searchRects,
-      active: activeRects,
+      colors: palette,
       selection: selRects,
       highlights: searchRects,
       activeMatch: activeRects,
-      key: `${searchRects.length}:${active}:${selectionKey}:${query}`,
+      key: `${searchRects.length}:${active}:${selectionKey}:${query}:${palette?.key}`,
     }
   }
 
@@ -752,6 +752,7 @@ function LegacyOfficeDoc({
   const compact = isCompact(containerWidth || COMPACT_PANE_PX, useCoarsePointer())
   const [statusSlot, setStatusSlot] = useState<HTMLDivElement | null>(null)
   const chrome: PagedChromeProps = {
+    onPalette: setPalette,
     document,
     title,
     compact,
