@@ -3,10 +3,11 @@
 Plan: `docs/superpowers/plans/2026-10-18-ui-restyle.md` (Task 8). Spec:
 `docs/superpowers/specs/2026-10-18-ui-restyle-design.md`.
 
-Measured on `feature/ui-h` at base `697cbf9` (all streams A–G merged) plus the
-Task 8 docs change (README, CHANGELOG, this file, `tests/readme-tokens.test.ts`).
-The docs change touches no library source, so the build outputs below are those
-of `697cbf9`. Host: macOS (Darwin 25.5.0), Bun, Node 22.22.3, 2026-10-19.
+Measured on `feature/ui-h`: base `697cbf9` (all streams A–G merged), the Task 8
+docs change (`0292978`) and Task 8 fix round 1 (`319c15c`: outline Lucide icons,
+select chevrons, disabled primary styling, dialog button gaps, accent focus ring;
+lazy files and `officeview.css` only). Host: macOS (Darwin 25.5.0), Bun, Node
+22.22.3, 2026-10-19.
 
 ## Gates
 
@@ -14,17 +15,18 @@ of `697cbf9`. Host: macOS (Darwin 25.5.0), Bun, Node 22.22.3, 2026-10-19.
 |---|---|---|
 | Type check | `bunx tsc --noEmit` | exit 0 |
 | Script type check | `bun run typecheck:scripts` | exit 0 |
-| Unit tests | `bunx vitest run` | 389 files passed; 7,590 passed, 2 skipped, 1 todo, 0 failed |
+| Unit tests | `bunx vitest run` | 391 files passed; 7,599 passed, 2 skipped, 1 todo, 0 failed |
 | Build + eager budget | `bun run build && bun scripts/eager-budget.ts` | exit 0; **38,696 B** (ceiling 38,720 B, 24 B headroom) |
-| CSS isolation audit | `bun scripts/audit-css.ts dist/style.css` | `ok (144 rules, all scoped)` |
+| CSS isolation audit | `bun scripts/audit-css.ts dist/style.css` | `ok (150 rules, all scoped)` |
 | Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | `eager modules: 151`, `eager graph ok` |
-| Golden corpus | `bun scripts/golden-corpus.ts compare --threshold 0 --max-ratio 0` | 32 passed, **5 failed**, 2 skipped; the 5 are identical on `main` (see below) |
-| Browser (Chromium + WebKit) | `IV_HARNESS_PORT=4193 bunx playwright test --config playwright.viewer.config.ts` | exit 0; 226 tests (113 Chromium, 113 WebKit): **212 passed, 14 skipped, 0 failed**, 0 flaky (6.8 min) |
+| Golden corpus | `bun scripts/golden-corpus.ts compare --threshold 0 --max-ratio 0` | **Baseline-identical** (controller ruling): 32 passed, 5 mismatches that `main` shows identically, 2 skipped (see below) |
+| Browser (Chromium + WebKit) | `IV_HARNESS_PORT=4193 bunx playwright test --config playwright.viewer.config.ts` | Full suite at `0292978`: exit 0; 226 tests (113 Chromium, 113 WebKit), 212 passed, 14 skipped, 0 failed. After fix round 1, the affected specs (ui-icon-fill, ui-control-polish, ui-chrome-geometry, ui-host-isolation, ui-motion, interactive-viewer-visual, -mobile, -a11y, interactive-viewer, paged-toolbar, viewer-layout-shift): exit 0; 196 tests (99 Chromium, 97 WebKit), **188 passed, 8 skipped, 0 failed** |
 
 Vitest count note: the ledger's last combined gate recorded 7,511 tests at
 `697cbf9`. This run had the real-file corpus present in `corpus/` (copied from
 the main checkout and verified against `corpus/corpus.lock.json` SHA-256), so the
-corpus-backed tests ran instead of skipping, plus the new `readme-tokens` test.
+corpus-backed tests ran instead of skipping, plus the new `readme-tokens`,
+`ui-icon-fill` and `ui-control-polish` tests.
 
 ### Golden corpus
 
@@ -40,6 +42,11 @@ five units with the same pixel counts, and the `actual` renders from `main` and
 from `feature/ui-h` are pixel-identical for all five (compared with PIL). The
 restyle therefore leaves corpus rendering unchanged; the five goldens disagree
 with this host's rendering on `main` too. Nothing was re-recorded.
+
+**Ruling (controller, Task 8 fix round 1):** because the five failing units are
+pixel-identical to `main`'s renders and fail identically on `main`, the golden
+gate counts as baseline-identical for this branch. Re-run after fix round 1:
+the same five units, with the same pixel counts.
 
 ## Eager budget: B0 to final
 
@@ -57,7 +64,8 @@ with this host's rendering on `main` too. Nothing was re-recorded.
 | Stream D merged (Task 4, paged print) | `7eed355` | 38,672 | −7 | ledger |
 | Stream G merged (Task 7, canvas theming) | `1f0a9cd` | 38,720 | +48 | ledger |
 | Stream F merged (Task 6, motion) | `697cbf9` | 38,696 | −24 | ledger |
-| Final (Task 8, docs only) | this branch | **38,696** | 0 | this run |
+| Task 8 docs | `0292978` | 38,696 | 0 | this run |
+| Final (Task 8 fix round 1, lazy only) | `319c15c` | **38,696** | 0 | this run |
 
 Net over the restyle: 38,697 → 38,696 (−1 B). Lucide icons, motion, tokens and
 all new paged UI are outside the eager graph (`check-eager.ts`).
@@ -69,7 +77,9 @@ interactive XLSX viewer (filter popup, sort dialog, mobile filter sheet, zoom
 50% and 200%), in light and dark, at 1280×800 desktop and 375×667 touch:
 48 composite pairs over 24 shots. "Before" is `main` (`849e1d2`), which has no
 dark mode, so each shot pairs before-light with after-light and with
-after-dark. The gallery is published separately for the owner; the cross-model
+after-dark. The "after" shots were re-captured after fix round 1 (tree `9cbdd5e`,
+identical to `319c15c`, which only rewords the commit message). The gallery is
+published separately for the owner; the cross-model
 visual reviews (plan Task 8 step 3) are recorded with the PR.
 
 ## Known limitations (documented in the README)
