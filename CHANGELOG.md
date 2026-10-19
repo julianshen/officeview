@@ -76,7 +76,9 @@ print. Targets 0.5.0 (the version in package.json).
 - **A failed lazy chunk no longer blanks the host**: if the page viewer's
   toolbar chunk or zoom module cannot load (for example after a redeploy
   removed the old hashed file, or a CSP blocks it), the pages still render
-  without the toolbar, or without zoom, and one `console.warn` is logged.
+  without the toolbar, or without zoom, and one `console.warn` is logged. If
+  the interactive spreadsheet chunk cannot load, the viewer shows
+  "Spreadsheet viewer could not load. Reload to retry." instead.
 
 ## [0.4.0] - 2026-10-03
 

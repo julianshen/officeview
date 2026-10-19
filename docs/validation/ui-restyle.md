@@ -12,7 +12,7 @@ lazy files only). Host: macOS (Darwin 25.5.0), Bun, Node
 22.22.3, 2026-10-19.
 
 **Final-review fix round** (2026-10-20, `54d9f30`..HEAD on
-`feature/ui-restyle`): I1 lazy-chunk failure fallback, I2 scoped
+`feature/ui-restyle`, re-run after the residual fix `96e4b5e`): I1 lazy-chunk failure fallback (paged chrome, zoom routing and the interactive sheet chunk), I2 scoped
 `color-scheme`, I3 README sample, M1–M8. The gate table below is re-run on that
 head; the earlier results are kept in the notes.
 
@@ -22,8 +22,8 @@ head; the earlier results are kept in the notes.
 |---|---|---|
 | Type check | `bunx tsc --noEmit` | exit 0 |
 | Script type check | `bun run typecheck:scripts` | exit 0 |
-| Unit tests | `bunx vitest run` | exit 0; 394 files passed, 2 skipped; 7,535 passed, 10 skipped, 1 todo, 0 failed (corpus files absent, see note) |
-| Build + eager budget | `bun run build && bun scripts/eager-budget.ts` | exit 0; **38,657 B** (ceiling 38,720 B, 63 B headroom) |
+| Unit tests | `bunx vitest run` | exit 0; 395 files passed, 2 skipped; 7,536 passed, 10 skipped, 1 todo, 0 failed (corpus files absent, see note) |
+| Build + eager budget | `bun run build && bun scripts/eager-budget.ts` | exit 0; **38,712 B** (ceiling 38,720 B, 8 B headroom) |
 | CSS isolation audit | `bun scripts/audit-css.ts dist/style.css` | `ok (156 rules, all scoped)` |
 | Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | `eager modules: 151`, `eager graph ok` |
 | Golden corpus | `bun scripts/golden-corpus.ts compare --threshold 0 --max-ratio 0` | Not re-run in the fix round (no painter change). Earlier: **Baseline-identical** (controller ruling): 32 passed, 5 mismatches that `main` shows identically, 2 skipped (see below) |
@@ -82,9 +82,10 @@ the same five units, with the same pixel counts.
 | Task 8 docs | `0292978` | 38,696 | 0 | this run |
 | Task 8 fix round 1 (lazy only) | `319c15c` | 38,696 | 0 | this run |
 | Task 8 fix round 2 (lazy only) | `917ae02` | 38,694 | −2 | this run |
-| Final-review I1 (chunk-failure catch +66 B; style check moved lazy) | `54d9f30` | **38,657** | −37 | fix round |
+| Final-review I1 (chunk-failure catch +66 B; style check moved lazy) | `54d9f30` | 38,657 | −37 | fix round |
+| Re-review residual (sheet chunk failure status) | `96e4b5e` | **38,712** | +55 | fix round |
 
-Net over the restyle: 38,697 → 38,657 (−40 B). Lucide icons, motion, tokens and
+Net over the restyle: 38,697 → 38,712 (+15 B, within the 38,720 B ceiling). Lucide icons, motion, tokens and
 all new paged UI are outside the eager graph (`check-eager.ts`).
 
 ## Visual review
