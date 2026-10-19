@@ -48,6 +48,25 @@ describe('OfficeFile file name', () => {
     await waitFor(async () => expect(await titleOf(container)).toBe('Deck 1.docx'))
   })
 
+  it('promised File: name from the resolved File', async () => {
+    const promised = Promise.resolve(new File([bytes.slice()], 'Board pack.docx'))
+    const { container } = render(<OfficeFile data={promised} />)
+    await waitFor(async () => expect(await titleOf(container)).toBe('Board pack.docx'))
+  })
+
+  it('promised File replaced before it resolves: the stale name never overwrites the live one', async () => {
+    let releaseOld!: (f: File) => void
+    const old = new Promise<File>((r) => { releaseOld = r })
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => response(input, { 'content-disposition': 'attachment; filename="fresh.docx"' })))
+    const { container, rerender } = render(<OfficeFile data={old} />)
+    const fresh = { url: 'https://x/dl?id=1' }
+    rerender(<OfficeFile data={fresh} />)
+    await waitFor(async () => expect(await titleOf(container)).toBe('fresh.docx'))
+    await act(async () => { releaseOld(new File([bytes.slice()], 'stale.docx')) })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(container.querySelector('[data-testid=doc]')!.getAttribute('data-title')).toBe('fresh.docx')
+  })
+
   it('source replaced during fetch: the stale name is never shown', async () => {
     let releaseOld!: (r: Response) => void
     const old = new Promise<Response>((r) => { releaseOld = r })

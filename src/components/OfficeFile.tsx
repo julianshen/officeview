@@ -11,7 +11,6 @@ import type { PackageErrorCode } from '../core/package-error'
 import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
 import { ImportRefusal, type RefusalReason } from '../xlsx/storage/importSession'
 import { pagedWorkbookOf } from './pagedDocument'
-import { fileNameFrom } from './fileName'
 
 export type { AnyDoc } from './loadOfficeSource'
 
@@ -197,16 +196,26 @@ export function OfficeFile({
     mark: WatermarkOptions | undefined
   }>()
   // File name (spec §6.5), sealed to its source like the policy above: the
-  // response's Content-Disposition or URL (a promised source resolves to it).
+  // response's Content-Disposition or URL, or the File a promised source
+  // resolves to (which reports no headers). Headers win whichever lands
+  // first. The parser is lazy (out of the eager entry); a name that resolves
+  // after its source was replaced is dropped so it never overwrites the live one.
   const [named, setNamed] = useState<{ source: ByteSource | null | undefined; name: string | undefined }>()
+  const current = useRef(data)
+  current.current = data
+  const name = (from: unknown, disposition?: string | null, keep?: boolean) => {
+    const source = data
+    void import('./fileName').then(({ fileNameFrom }) => current.current === source && setNamed((n) => keep && n?.source === source ? n : { source, name: fileNameFrom(from, disposition) }), () => {})
+  }
   const state = useOfficeFile(data, {
     onProgress: (p) => setProgress(p),
     onProtection: (policy) => setHeaderPolicy({ source: data, policy }),
     onWatermark: (mark) => setHeaderMark({ source: data, mark }),
-    onHeaders: (h, url) => setNamed({ source: data, name: fileNameFrom({ url }, h.get('content-disposition')) }),
+    onHeaders: (h, url) => name({ url }, h.get('content-disposition')),
     interactiveSheets: rest.interactiveSheets,
     viewerWorker,
   })
+  useEffect(() => { Promise.resolve(data).then((s) => name(s, null, true), () => {}) }, [data])
   const serverPolicy = headerPolicy && headerPolicy.source === data ? headerPolicy.policy : undefined
   const effectiveAllowCopy = allowCopy && (serverPolicy?.allowCopy ?? true)
   const effectiveAllowPrint = allowPrint && (serverPolicy?.allowPrint ?? true)
@@ -214,7 +223,7 @@ export function OfficeFile({
   // authority on what a document is stamped with.
   const serverMark = headerMark && headerMark.source === data ? headerMark.mark : undefined
   const effectiveWatermark = mergeWatermark(watermark, serverMark)
-  const title = rest.title ?? (named?.source === data ? named?.name : undefined) ?? fileNameFrom(data)
+  const title = rest.title ?? (named?.source === data ? named?.name : undefined)
   if (state.status === 'loading') {
     if (typeof loading === 'function') return loading(progress ?? { loaded: 0 })
     return <>{loading}</>
