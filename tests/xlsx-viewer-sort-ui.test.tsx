@@ -158,9 +158,9 @@ it('shows the committed sort direction and pressed arrow/funnel state without fo
     filter={{ range: { r0: 0, r1: 3, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }} />)
   const arrow = ui.getByRole('button', { name: 'Cycle sort column A' }), funnel = ui.getByRole('button', { name: /Filter column A/ })
   expect(arrow.getAttribute('aria-pressed')).toBe('true')
-  expect(arrow.textContent).toContain('↓')
+  expect(arrow.querySelector('svg[data-icon="arrow-down"]')).toBeTruthy()
   expect(funnel.getAttribute('aria-pressed')).toBe('true')
-  expect(funnel.querySelector('svg')).toBeTruthy()
+  expect(funnel.querySelector('svg[data-icon="filter"]')).toBeTruthy()
   expect(ui.getByRole('columnheader', { name: /Column A/ }).getAttribute('aria-sort')).toBe('descending')
 })
 

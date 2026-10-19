@@ -38,12 +38,22 @@ describe('viewer chrome glyphs use text presentation', () => {
   const sorted: SortSpec = { keys: [{ col: 0, order: 'asc' }, { col: 1, order: 'desc' }] } as unknown as SortSpec
   for (const touch of [false, true]) {
     it(`grid headers (${touch ? 'touch' : 'desktop'}): unsorted, sorted, pending`, () => {
-      for (const ui of [headers({ touch, sort: null }), headers({ touch, sort: sorted }), headers({ touch, sort: null, pending: 2 })]) {
-        const all = texts(ui.container)
-        expect(all.join('')).toMatch(/[↕↖]/u)
-        expect(all.flatMap(emojiPresentation)).toEqual([])
-        ui.unmount()
-      }
+      const unsorted = headers({ touch, sort: null })
+      expect(texts(unsorted.container).join('')).not.toMatch(/[↕↖↑↓…]/u)
+      expect(unsorted.container.querySelector('svg[data-icon="arrow-up-down"]')).toBeTruthy()
+      expect(unsorted.container.querySelector('svg[data-icon="corner"]')).toBeTruthy()
+      unsorted.unmount()
+
+      const s = headers({ touch, sort: sorted })
+      expect(texts(s.container).join('')).not.toMatch(/[↕↖↑↓…]/u)
+      expect(s.container.querySelector('svg[data-icon="arrow-up"]')).toBeTruthy()
+      expect(s.container.querySelector('svg[data-icon="arrow-down"]')).toBeTruthy()
+      s.unmount()
+
+      const p = headers({ touch, sort: null, pending: 2 })
+      expect(texts(p.container).join('')).not.toMatch(/[↕↖↑↓…]/u)
+      expect(p.container.querySelector('svg[data-icon="loader"]')).toBeTruthy()
+      p.unmount()
     })
   }
   it('the narrow-column touch lane', () => {

@@ -8,7 +8,7 @@ import { navigateKey, scrollIntoView, hitTestViewport, type NavigationKey, type 
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
-import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, HEADER_COLORS, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
+import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
 import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
 import { useControlMedia } from './controlMedia'
 import { ResizeHandles, type ResizeRequest } from './sheetResize'
@@ -397,9 +397,10 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         instead of losing its controls. Anchored at the top under its column: content that arrives later
         (a loading value list) grows the popup downward, never moving what is already shown. */}
     {props.popup && <div ref={popupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
+      className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-      style={{ position: 'absolute', zIndex: 7, top: headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height, overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}>{props.popup.content}</div>}
+      style={{ position: 'absolute', zIndex: 7, top: headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height, overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</div>}
     <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection}
-      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: STATUS_BAR_HEIGHT, lineHeight: `${STATUS_BAR_HEIGHT}px`, padding: '0 8px', boxSizing: 'border-box', fontSize: 12, color: HEADER_COLORS.text, background: HEADER_COLORS.background, boxShadow: `inset 0 1px ${HEADER_COLORS.track}`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} />
+      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: STATUS_BAR_HEIGHT, lineHeight: `${STATUS_BAR_HEIGHT}px`, boxSizing: 'border-box', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} />
   </div>
 }

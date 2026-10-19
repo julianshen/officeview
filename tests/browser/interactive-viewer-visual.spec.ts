@@ -154,6 +154,67 @@ test.describe('visual review: interactive viewer layout', () => {
     for (const r of ratios) expect(r).toBeGreaterThanOrEqual(4.5)
   })
 
+  test('header and status computed colours meet contrast in light and dark (browser)', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    const checkContrast = async (themeName: string) => {
+      const res = await page.evaluate(() => {
+        const parse = (c: string) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+        const lum = (c: number[]) => { const [r, g, b] = c.map(v => v / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+        const ratio = (a: number[], b: number[]) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
+
+        const headerStrip = parse(getComputedStyle(document.querySelector('[data-officeview-ui=grid-headers]')!).backgroundColor)
+        const headerRatios = [...document.querySelectorAll('[data-header-column], [data-header-row]')].slice(0, 20).map(el => ratio(parse(getComputedStyle(el).color), headerStrip))
+
+        const statusEl = document.querySelector('[data-officeview-ui=viewer-status]') as HTMLElement
+        const statusText = parse(getComputedStyle(statusEl).color)
+        const statusBg = parse(getComputedStyle(statusEl).backgroundColor)
+        const wrapper = document.querySelector('[data-officeview-sheet-instance]') as HTMLElement
+        const wrapperBg = parse(getComputedStyle(wrapper).backgroundColor)
+        const effectiveBg = (statusBg[0] === 0 && statusBg[1] === 0 && statusBg[2] === 0 && getComputedStyle(statusEl).backgroundColor.includes('rgba(0, 0, 0, 0)'))
+          ? wrapperBg : statusBg
+        const statusRatio = ratio(statusText, effectiveBg)
+
+        return { headerRatios, statusRatio }
+      })
+      expect(res.headerRatios.length, `${themeName} headers`).toBeGreaterThan(0)
+      for (const r of res.headerRatios) expect(r, `${themeName} header`).toBeGreaterThanOrEqual(4.5)
+      expect(res.statusRatio, `${themeName} status`).toBeGreaterThanOrEqual(4.5)
+    }
+
+    await checkContrast('light')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await checkContrast('dark')
+  })
+
+  test.describe('dark scheme (browser)', () => {
+    test('#9 header labels never truncate and action glyphs never crowd them in dark scheme', async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 })
+      await openViewer(page, 'f2-1k.xlsx')
+      await page.emulateMedia({ colorScheme: 'dark' })
+      const result = await page.evaluate(() => {
+        const labels = [...document.querySelectorAll<HTMLElement>('[data-header-column] > span')].filter(s => s.getBoundingClientRect().width > 0)
+        const truncated = labels.filter(s => s.scrollWidth > s.clientWidth + 0.5).map(s => s.textContent)
+        const crowded = labels.filter(s => {
+          const header = s.closest('[role=columnheader]')!, label = s.getBoundingClientRect()
+          const text = document.createRange(); text.selectNodeContents(s); const ink = text.getBoundingClientRect()
+          return [...header.querySelectorAll<HTMLElement>('[data-action-column]')].some(b => { const r = b.getBoundingClientRect(); return r.width > 1 && r.left < ink.right - 0.5 && ink.left < r.right && label.width > 0 })
+        }).map(s => s.textContent)
+        return { count: labels.length, truncated, crowded }
+      })
+      expect(result.count).toBeGreaterThan(0)
+      expect(result.truncated).toEqual([])
+      expect(result.crowded).toEqual([])
+    })
+
+    test('#13 toolbar controls never overlap in dark scheme', async ({ page }) => {
+      await openViewer(page, 'f2-1k.xlsx')
+      await page.emulateMedia({ colorScheme: 'dark' })
+      const boxes = await page.evaluate(() => ['[aria-label=Worksheet]', '[aria-label="Address space"]', '[aria-label="Go To cell"]', '[data-officeview-ui=sheet-navigator] button', '[data-officeview-ui=sheet-actions]', '[data-testid=officeview-search]']
+        .map(s => ({ s, ...document.querySelector(s)!.getBoundingClientRect().toJSON() })))
+      for (const [i, a] of boxes.entries()) for (const b of boxes.slice(i + 1)) expect(overlaps(a, b), `${a.s} overlaps ${b.s}`).toBe(false)
+    })
+  })
+
   test('#12 print: white page, 2x canvases, a titled page per sheet, controls hidden', async ({ page, browserName }) => {
     await page.addInitScript(() => { (window as unknown as { print: () => void }).print = () => { (window as unknown as { __printed: number }).__printed = 1 } })
     await openViewer(page, 'f7-two-sheets.xlsx')

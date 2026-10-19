@@ -7,9 +7,18 @@ import { frozenViewportSize } from '../../xlsx/view/frozenPanes'
 import { rowContains, boundedSelectionText } from '../../xlsx/view/selection'
 import { useControlMedia } from './controlMedia'
 
+import { ArrowUpDown, ArrowUp, ArrowDown, Loader2, Filter, Ellipsis, ArrowUpLeft } from 'lucide-react'
+import { Icon } from '../Icon'
+
 export const GRID_HEADER_SIZE = 44
-/** Header strip palette (WCAG AA on `background`: text/action/active >= 4.5:1, track >= 3:1). */
-export const HEADER_COLORS = Object.freeze({ background: '#f3f4f6', text: '#1f2937', action: '#374151', active: '#1459a6', track: '#858b94' })
+/** Header strip token names (WCAG AA on `header`: text/action/active >= 4.5:1, track >= 3:1). */
+export const HEADER_COLORS = Object.freeze({
+  background: 'header',
+  text: 'header-text',
+  action: 'icon',
+  active: 'accent',
+  track: 'muted',
+} as const)
 /** Desktop header layout: label font, per-letter estimate and one action glyph's width (CSS px). */
 const LABEL_FONT_PX = 12, LABEL_LETTER_PX = 7, LABEL_PAD_PX = 4, ACTION_PX = 14
 /** Row-number label font and per-digit width (tabular figures). */
@@ -129,9 +138,6 @@ function selectedRow(props: GridHeadersProps, row: number): boolean | undefined 
   if (merged.length === 1 && merged[0].lo <= 0 && merged[0].hi >= props.projection.cols.logicalCount - 1) return true
   return unknown ? undefined : false
 }
-/** Emoji-capable glyphs (Unicode Emoji=Yes) carry U+FE0E, or iOS draws them as
- * colour emoji tiles; the other header glyphs (↑ ↓ ⋯ …) are not emoji. */
-const TEXT_GLYPH = { corner: '\u2196\uFE0E', unsorted: '\u2195\uFE0E' } as const
 // A mouse press must not move focus onto a header control outside control mode.
 const keepGridFocus = (event: MouseEvent<HTMLButtonElement>) => { if (event.currentTarget.tabIndex < 0) event.preventDefault() }
 export function GridHeaders(props: GridHeadersProps): ReactElement {
@@ -139,7 +145,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
   const actions = Boolean(props.onSortCycle || props.onFilter || props.onSortDialog)
   const height = columnHeaderHeight(touch, actions, Boolean(props.onSortDialog))
   const gutter = props.gutter ?? GRID_HEADER_SIZE
-  const target = { minHeight: GRID_HEADER_SIZE, minWidth: touch ? GRID_HEADER_SIZE : 0, overflow: 'hidden', padding: 0, border: 0, background: 'transparent', color: HEADER_COLORS.text }
+  const target = { minHeight: GRID_HEADER_SIZE, minWidth: touch ? GRID_HEADER_SIZE : 0, overflow: 'hidden', padding: 0, border: 0, background: 'transparent' }
   // Desktop: a column too narrow for its label plus the action glyphs (or any
   // column at <= 50% zoom) shows its label only; its actions stay named and
   // focusable (control mode), and focus reveals them over the neighbours.
@@ -201,21 +207,26 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
     return () => document.removeEventListener('pointerdown', outside, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openCol])
-  const laneTarget = (index: number): CSSProperties => ({ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE * index, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE, background: '#ffffff' })
-  return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: HEADER_COLORS.background, boxShadow: `inset 0 -1px ${HEADER_COLORS.track}` }}>
+  const laneTarget = (index: number): CSSProperties => ({ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE * index, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE })
+  return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: 'var(--ov-color-header)', boxShadow: 'inset 0 -1px var(--ov-color-gridline)' }}>
     <div role="columnheader" aria-colindex={1} aria-label="Worksheet corner" style={{ position: 'absolute', left: 0, width: gutter, height: laneCol === undefined ? GRID_HEADER_SIZE : height, zIndex: 1 }}>
-      <button type="button" aria-label="Select worksheet" className="ov:bg-transparent ov:p-0 ov:border-0" tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} onClick={props.onSelectAll} style={{ width: gutter, height: GRID_HEADER_SIZE, color: HEADER_COLORS.text }}>{TEXT_GLYPH.corner}</button>
+      <button type="button" aria-label="Select worksheet" className="ov:bg-header ov:text-header-text ov:border-0 ov:px-1 ov:py-1 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover" tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} onClick={props.onSelectAll} style={{ width: gutter, height: GRID_HEADER_SIZE }}><Icon icon={ArrowUpLeft} name="corner" size={14} /></button>
       {laneCol !== undefined && <>
         <button ref={laneButton} type="button" data-header-lane={laneCol} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-label={`Actions for column ${columnToLetters(laneCol)}`} aria-expanded={laneOpen} aria-controls={laneId}
           onClick={() => setOpenLane(laneOpen ? null : laneCol)} onKeyDown={event => { if (event.key === 'Escape' && laneOpen) { event.preventDefault(); event.stopPropagation(); closeLane(true) } }}
-          style={{ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>{columnToLetters(laneCol)}⋯</button>
+          className="ov:bg-header ov:text-header-text ov:border-0 ov:px-1 ov:py-1 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
+          style={{ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>
+          <span className="ov:mr-0.5">{columnToLetters(laneCol)}</span><Icon icon={Ellipsis} name="ellipsis" size={14} />
+        </button>
         {laneOpen && <div ref={laneGroup} id={laneId} role="group" aria-label={`Column ${columnToLetters(laneCol)} actions`} data-officeview-ui="header-lane"
+          className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
           onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeLane(true) } }}
           onClick={() => { setOpenLane(null) }}
-          style={{ position: 'absolute', left: 0, top: GRID_HEADER_SIZE * 2, width: GRID_HEADER_SIZE, zIndex: 3, boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>
+          style={{ position: 'absolute', left: 0, top: GRID_HEADER_SIZE * 2, width: GRID_HEADER_SIZE, zIndex: 3 }}>
           {props.onSelect && <button type="button" data-header-column={laneCol} data-header-lane={laneCol} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
             aria-label={`Select whole column ${columnToLetters(laneCol)}`} style={laneTarget(0)}
+            className="ov:bg-surface ov:text-header-text ov:border-0 ov:px-1 ov:py-1 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
             onClick={event => props.onSelect?.('column', laneCol, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event)}>{columnToLetters(laneCol)}</button>}
           {actions && columnActions(props, laneCol, index => laneTarget(index + (props.onSelect ? 1 : 0)))}
         </div>}
@@ -239,28 +250,31 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       // A label wider than its column shrinks instead of truncating ("XFD", not "X..").
       const labelFont = touch || box.width >= labelPx ? LABEL_FONT_PX : Math.max(6, (box.width - 2) / (letters.length * LABEL_LETTER_PX / LABEL_FONT_PX))
       const cellTarget = touch ? { ...target, minWidth: Math.min(GRID_HEADER_SIZE, box.width), width: box.width, flex: 'none' } : { ...target, flex: '1 1 auto', minWidth: 0 }
-      const actionTarget: CSSProperties = touch ? cellTarget : compact && !revealed ? { ...target, ...visuallyHidden } : { ...target, flex: 'none', width: ACTION_PX, color: HEADER_COLORS.action }
+      const actionTarget: CSSProperties = touch ? cellTarget : compact && !revealed ? { ...target, ...visuallyHidden } : { ...target, flex: 'none', width: ACTION_PX }
       const iconClip = { display: 'block', width: touch ? box.width : undefined, overflow: 'hidden', textAlign: 'center' as const }
       const count = props.onSortDialog ? 3 : 2, inline = box.width >= count * GRID_HEADER_SIZE, open = openCol === col
       return <div key={col} role="columnheader" aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
         onFocus={() => setFocusCol(col)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusCol(current => current === col ? null : current) }}
-        style={{ position: 'absolute', left: 0, transform: `translateX(${gutter + box.x}px)`, width, height, overflow: open ? 'visible' : 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch', boxSizing: 'border-box', boxShadow: `inset -1px 0 ${HEADER_COLORS.track}`, ...(revealed || open ? { zIndex: 3, background: HEADER_COLORS.background } : {}) }}>
+        style={{ position: 'absolute', left: 0, transform: `translateX(${gutter + box.x}px)`, width, height, overflow: open ? 'visible' : 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch', boxSizing: 'border-box', boxShadow: 'inset -1px 0 var(--ov-color-gridline)', ...(revealed || open ? { zIndex: 3, background: 'var(--ov-color-header)' } : {}) }}>
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
           aria-description={actions ? description : undefined} title={`${label}; ${description}`}
           onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
+          className="ov:bg-transparent ov:text-header-text ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
           style={cellTarget}><span style={{ ...iconClip, whiteSpace: 'nowrap', fontSize: labelFont }}>{letters}</span></button>
         {actions && !narrowTouch(col) && (!touch ? columnActions(props, col, () => actionTarget, iconClip)
           : <div style={{ display: 'flex', width: box.width, height: GRID_HEADER_SIZE, flex: 'none' }}>{inline
-            ? columnActions(props, col, () => ({ ...target, flex: 'none', width: box.width / count, minWidth: GRID_HEADER_SIZE, color: HEADER_COLORS.action }))
+            ? columnActions(props, col, () => ({ ...target, flex: 'none', width: box.width / count, minWidth: GRID_HEADER_SIZE }))
             : <>
               <button ref={open ? colButton : undefined} type="button" data-header-disclosure={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
                 aria-label={`Actions for column ${letters}`} aria-expanded={open} aria-controls={open ? colGroupId : undefined}
                 onClick={() => setOpenCol(open ? null : col)} onKeyDown={event => { if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); closeCol(true) } }}
-                style={cellTarget}><span style={iconClip}>⋯</span></button>
+                className="ov:bg-transparent ov:text-icon ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
+                style={cellTarget}><span style={iconClip}><Icon icon={Ellipsis} name="ellipsis" size={14} /></span></button>
               {open && <div ref={colGroup} id={colGroupId} role="group" aria-label={`Column ${letters} actions`} data-officeview-ui="header-actions"
+                className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
                 onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeCol(true) } }}
                 onClick={() => { setOpenCol(null) }}
-                style={{ position: 'absolute', left: 0, top: height, width: GRID_HEADER_SIZE, height: count * GRID_HEADER_SIZE, zIndex: 3, boxShadow: '0 2px 6px rgba(0,0,0,.25)' }}>
+                style={{ position: 'absolute', left: 0, top: height, width: GRID_HEADER_SIZE, height: count * GRID_HEADER_SIZE, zIndex: 3 }}>
                 {columnActions(props, col, index => laneTarget(index))}
               </div>}
             </>}</div>)}
@@ -275,9 +289,35 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
   const label = `Column ${columnToLetters(col)}${direction ? `; sort priority ${priority + 1}, ${direction}` : ''}`
   const rule = props.filter?.columns.get(col), description = rule ? columnRuleDescription(rule) : 'No viewer filter'
   return <>
-    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(0), ...(direction ? { color: HEADER_COLORS.active } : {}) }} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`} aria-busy={props.pendingSortColumn === col ? true : undefined} aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'} aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`} onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}><span style={iconClip}>{props.pendingSortColumn === col ? '…' : direction === 'ascending' ? '↑' : direction === 'descending' ? '↓' : TEXT_GLYPH.unsorted}</span></button>
-    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={{ ...style(1), ...(rule ? { color: HEADER_COLORS.active } : {}) }} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`} aria-pressed={Boolean(rule)} title={description} onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}><span style={iconClip}><svg aria-hidden="true" width="12" height="14" viewBox="0 0 12 14"><path d="M1 1h10L7 6v6l-2-1V6z" fill={rule ? 'currentColor' : 'none'} stroke="currentColor" /></svg></span></button>
-    {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus} style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`} onClick={event => props.onSortDialog?.(col, event.currentTarget)}><span style={iconClip}>⋯</span></button>}
+    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
+      style={style(0)} disabled={!props.onSortCycle} aria-label={`Cycle sort column ${columnToLetters(col)}`}
+      aria-busy={props.pendingSortColumn === col ? true : undefined}
+      aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}
+      aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`}
+      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'}`}
+      onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}>
+      <span style={iconClip}>
+        {props.pendingSortColumn === col ? <Icon icon={Loader2} name="loader" size={14} className="ov:animate-spin" />
+          : direction === 'ascending' ? <Icon icon={ArrowUp} name="arrow-up" size={14} />
+          : direction === 'descending' ? <Icon icon={ArrowDown} name="arrow-down" size={14} />
+          : <Icon icon={ArrowUpDown} name="arrow-up-down" size={14} />}
+      </span>
+    </button>
+    <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
+      style={style(1)} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`}
+      aria-pressed={Boolean(rule)} title={description}
+      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'}`}
+      onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}>
+      <span style={iconClip}>
+        <Icon icon={Filter} name="filter" size={14} />
+      </span>
+    </button>
+    {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
+      style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`}
+      className="ov:bg-transparent ov:text-icon ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover ov:rounded-control"
+      onClick={event => props.onSortDialog?.(col, event.currentTarget)}>
+      <span style={iconClip}><Icon icon={Ellipsis} name="ellipsis" size={14} /></span>
+    </button>}
   </>
 }
 /** Touch: a label row plus one actions row (spec §9.3 44px targets); else one row. */
@@ -295,9 +335,11 @@ export function GridRowHeader({ props, slot, cancelX = 0 }: { props: GridHeaders
   const full = gridHeaderBox(props.projection, props.window, 'row', slot)
   const label = full.height <= props.viewport.height ? { top: full.y - box.y, height: full.height } : { top: 0, height: box.height }
   return <div role="rowheader" aria-colindex={1} aria-label={`Row ${slot + 1}`} aria-selected={selectedRow(props, row)}
-    data-officeview-ui="row-header" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', width: gutter, height: '100%', pointerEvents: 'auto', background: HEADER_COLORS.background, boxShadow: `inset -1px 0 ${HEADER_COLORS.track}`, ...(cancelX ? { transform: `translateX(${-cancelX}px)` } : {}) }}>
+    data-officeview-ui="row-header" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+    style={{ position: 'absolute', width: gutter, height: '100%', pointerEvents: 'auto', background: 'var(--ov-color-header)', boxShadow: 'inset -1px 0 var(--ov-color-gridline)', ...(cancelX ? { transform: `translateX(${-cancelX}px)` } : {}) }}>
     <button type="button" aria-label={`Select row ${slot + 1}`} data-header-row={slot} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       onClick={event => props.onSelect?.('row', row, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event)}
-      style={{ position: 'absolute', top: label.top + label.height / 2, transform: 'translateY(-50%)', minWidth: GRID_HEADER_SIZE, minHeight: GRID_HEADER_SIZE, width: gutter, border: 0, padding: 0, background: 'transparent', color: HEADER_COLORS.text }}><span style={{ display: 'block', height: label.height, overflow: 'hidden', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', fontSize: Math.min(ROW_FONT_PX, label.height), lineHeight: `${label.height}px` }}>{slot + 1}</span></button>
+      className="ov:bg-transparent ov:text-header-text ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
+      style={{ position: 'absolute', top: label.top + label.height / 2, transform: 'translateY(-50%)', minWidth: GRID_HEADER_SIZE, minHeight: GRID_HEADER_SIZE, width: gutter }}><span style={{ display: 'block', height: label.height, overflow: 'hidden', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', fontSize: Math.min(ROW_FONT_PX, label.height), lineHeight: `${label.height}px` }}>{slot + 1}</span></button>
   </div>
 }

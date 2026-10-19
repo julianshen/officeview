@@ -168,6 +168,24 @@
   cursor: pointer;
 }
 
+/* stream E (spec §6.8, §6.10): spreadsheet chrome base rules */
+[data-ov-theme-root] :is([data-officeview-sheet-instance], [data-officeview-sheet-instance] *) :is(button, input, select, textarea) {
+  font: inherit;
+}
+[data-ov-theme-root] :is([data-officeview-sheet-instance], [data-officeview-sheet-instance] *) h2 {
+  font-size: 1.15em;
+  margin: 0 0 8px;
+}
+[data-ov-theme-root] [data-officeview-ui=sheet-search] > [data-testid=officeview-search] {
+  position: static !important;
+  max-width: 100% !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+[data-ov-theme-root] [data-officeview-sheet-instance] > [data-testid=officeview-zoom-controls] {
+  bottom: calc(env(safe-area-inset-bottom) + 36px) !important;
+}
+
 /* Utilities come last in source order, so they follow the base. source("..")
  * limits class detection to src/ (docs and tests quote ov: class names). */
 @import "tailwindcss/utilities.css" prefix(ov) source("..");

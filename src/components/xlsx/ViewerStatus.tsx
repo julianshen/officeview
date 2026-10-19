@@ -58,5 +58,5 @@ export function ViewerStatus({ records, announcement, inspection, countMode, loa
     announcement ? ` — ${announcement}` : '',
     inspection ? ` — Original cell ${formatA1(inspection.target)}; ${inspection.hiddenReason}; read-only. ${inspectionText(snapshot?.key === key ? snapshot.read : null)}` : '',
   ].join('')
-  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" style={style} title={style ? text : undefined}>{text}</div>
+  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" className="ov:bg-chrome ov:border-t ov:border-border ov:text-muted ov:text-xs ov:px-3 ov:py-1" style={style} title={style ? text : undefined}>{text}</div>
 }
