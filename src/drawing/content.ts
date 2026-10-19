@@ -6,6 +6,7 @@ import type { DrawingColor, DrawingStyle, ThemeContext } from './style'
 import type { SceneGroupTransform } from './scene'
 import type { OfficePackage } from '../core/zip'
 import type { XlsxChartModel } from '../xlsx/chartModel'
+import type { ChartDocumentContext } from '../charts/context'
 import { parseGeometry, resolveGeometry } from './geometry'
 import { supportedChoiceRequirements } from './coverage'
 import { parseGroupShapeProperties, resolveDrawingStyle } from './style'
@@ -373,6 +374,8 @@ export interface ContentLoadAdapters<Paragraph, Text> {
   /** Format-specific chart reader (XLSX); undefined keeps the shared column-chart reader.
    * An undefined result means unsupported, so compatibility fallbacks still apply. */
   parseChart?: (root: XmlNode, path: string) => Promise<DrawingContent<Paragraph, Text> | undefined>
+  /** The document's chart context (charts/context.ts): one per parse, shared by every chart. */
+  chartContext?: ChartDocumentContext
 }
 const deferredDiagrams = new WeakMap<object, { materializeSelected: () => boolean }>()
 const SOURCE_PROBE_LIMIT = DOCUMENT_DRAWING_NODE_LIMIT * 2

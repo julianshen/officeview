@@ -1,5 +1,6 @@
 /** Package-scoped drawing traversal state. Cached source XML is theme-independent. */
 import { attrs, getChildren, orderedChildren, type XmlNode } from '../core/xml'
+import type { ChartDocumentContext } from '../charts/context'
 import type { OfficePackage } from '../core/zip'
 
 export const CONTENT_REFERENCE_DEPTH = 32
@@ -28,6 +29,8 @@ export interface DrawingPartContext {
   relationships: Map<string, Promise<Map<string, { path?: string; external: boolean; type?: string }>>>
   relationshipNodes: Map<string, Promise<XmlNode[]>>
   placements: Set<string>
+  /** The document chart context (charts/context.ts), set once per parse. */
+  chart?: ChartDocumentContext
 }
 const contexts = new WeakMap<OfficePackage, DrawingPartContext>()
 export function drawingPartContext(pkg: OfficePackage): DrawingPartContext {
