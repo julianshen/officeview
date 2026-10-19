@@ -387,13 +387,15 @@ async function residentCopy(bytes: Uint8Array, at: string): Promise<string> {
 }
 
 describe('S5.4 review: worker-backed cells keep resident semantics', () => {
-  it('F1 formats paged cells with the workbook style table and date system (copy and find parity)', async () => {
+  // A worker-backed mount's first paint: 0.5-0.6 s at 1 vCPU, 1.3-1.6 s at
+  // 0.5 vCPU (Linux container); GitHub's runner timed out at the default 1 s.
+  it('F1 formats paged cells with the workbook style table and date system (copy and find parity)', FIRST_PAINT_TEST, async () => {
     const bytes = pkg({ sheetData: DATED, styles: DATE_STYLES })
     const expected = await residentCopy(bytes, 'A1')
     expect(expected).not.toBe('44927')
     const h = workerHarness(), write = clipboard()
     const ui = render(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: new RegExp(expected.replace(/[/.]/g, '\\$&')) })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('gridcell', { name: new RegExp(expected.replace(/[/.]/g, '\\$&')) })).toBeTruthy(), FIRST_PAINT_WAIT)
     const grid = go(ui, 'A1')
     fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
     await waitFor(() => expect(write).toHaveBeenCalledWith(expected))
