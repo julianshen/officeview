@@ -54,7 +54,8 @@ print. Targets 0.5.0 (the version in package.json).
   loaded, and `prefers-reduced-motion` is honoured.
 - Dependencies: `lucide-react` (icons, replacing Unicode glyphs) and `motion`
   (pinned to `14.4.0`). Both load only in lazy chunks; the eager bundle does not
-  grow.
+  grow. Because the pin is exact, a host that depends on a different `motion`
+  version ships two copies.
 
 ### Changed
 
@@ -68,6 +69,14 @@ print. Targets 0.5.0 (the version in package.json).
 - **The print guard is per instance**: `allowPrint={false}` hides only its own
   viewer from print output, so a sibling viewer that allows printing still
   prints.
+- **Native controls follow the theme**: the theme root sets `color-scheme`
+  (`light` or `dark`), so scrollbars, select option lists, checkboxes and the
+  search clear button match the viewer theme. Scoped to the viewer; the host
+  page's `color-scheme` is untouched.
+- **A failed lazy chunk no longer blanks the host**: if the page viewer's
+  toolbar chunk or zoom module cannot load (for example after a redeploy
+  removed the old hashed file, or a CSP blocks it), the pages still render
+  without the toolbar, or without zoom, and one `console.warn` is logged.
 
 ## [0.4.0] - 2026-10-03
 

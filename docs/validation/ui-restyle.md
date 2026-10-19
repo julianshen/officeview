@@ -11,18 +11,31 @@ actions on touch, compact touch sheet toolbar, quiet desktop header actions;
 lazy files only). Host: macOS (Darwin 25.5.0), Bun, Node
 22.22.3, 2026-10-19.
 
+**Final-review fix round** (2026-10-20, `54d9f30`..HEAD on
+`feature/ui-restyle`): I1 lazy-chunk failure fallback, I2 scoped
+`color-scheme`, I3 README sample, M1–M8. The gate table below is re-run on that
+head; the earlier results are kept in the notes.
+
 ## Gates
 
 | Gate | Command | Result |
 |---|---|---|
 | Type check | `bunx tsc --noEmit` | exit 0 |
 | Script type check | `bun run typecheck:scripts` | exit 0 |
-| Unit tests | `bunx vitest run` | 391 files passed; 7,601 passed, 2 skipped, 1 todo, 0 failed |
-| Build + eager budget | `bun run build && bun scripts/eager-budget.ts` | exit 0; **38,694 B** (ceiling 38,720 B, 26 B headroom) |
+| Unit tests | `bunx vitest run` | exit 0; 394 files passed, 2 skipped; 7,535 passed, 10 skipped, 1 todo, 0 failed (corpus files absent, see note) |
+| Build + eager budget | `bun run build && bun scripts/eager-budget.ts` | exit 0; **38,657 B** (ceiling 38,720 B, 63 B headroom) |
 | CSS isolation audit | `bun scripts/audit-css.ts dist/style.css` | `ok (156 rules, all scoped)` |
 | Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | `eager modules: 151`, `eager graph ok` |
-| Golden corpus | `bun scripts/golden-corpus.ts compare --threshold 0 --max-ratio 0` | **Baseline-identical** (controller ruling): 32 passed, 5 mismatches that `main` shows identically, 2 skipped (see below) |
-| Browser (Chromium + WebKit) | `IV_HARNESS_PORT=4193 bunx playwright test --config playwright.viewer.config.ts` | Full suite at `0292978`: exit 0; 226 tests (113 Chromium, 113 WebKit), 212 passed, 14 skipped, 0 failed. After fix round 2, the affected specs (ui-sheet-touch, ui-icon-fill, ui-control-polish, ui-chrome-geometry, ui-host-isolation, ui-motion, interactive-viewer-visual, -mobile, -a11y, -resize, interactive-viewer, paged-toolbar, viewer-layout-shift): exit 0; 206 tests (103 Chromium, 103 WebKit), **198 passed, 8 skipped, 0 failed** |
+| Golden corpus | `bun scripts/golden-corpus.ts compare --threshold 0 --max-ratio 0` | Not re-run in the fix round (no painter change). Earlier: **Baseline-identical** (controller ruling): 32 passed, 5 mismatches that `main` shows identically, 2 skipped (see below) |
+| Browser (Chromium + WebKit) | `IV_HARNESS_PORT=4195 bunx playwright test --config playwright.viewer.config.ts` | Full suite: exit 0; 248 tests (124 Chromium, 124 WebKit), **232 passed, 16 skipped, 0 failed** (adds the 8 `color-scheme` checks) |
+
+Earlier results (before the final-review fix round, at `917ae02`): vitest 391
+files, 7,601 passed, 2 skipped, 1 todo (corpus present); eager 38,694 B;
+Playwright full suite at `0292978` 212 passed, 14 skipped, 0 failed.
+
+Fix-round vitest note: `corpus/` holds only `corpus.lock.json` in this
+checkout, so the corpus-backed tests skip; that, not a regression, is the gap
+to the 7,601 above.
 
 Vitest count note: the ledger's last combined gate recorded 7,511 tests at
 `697cbf9`. This run had the real-file corpus present in `corpus/` (copied from
@@ -68,9 +81,10 @@ the same five units, with the same pixel counts.
 | Stream F merged (Task 6, motion) | `697cbf9` | 38,696 | −24 | ledger |
 | Task 8 docs | `0292978` | 38,696 | 0 | this run |
 | Task 8 fix round 1 (lazy only) | `319c15c` | 38,696 | 0 | this run |
-| Final (Task 8 fix round 2, lazy only) | `917ae02` | **38,694** | −2 | this run |
+| Task 8 fix round 2 (lazy only) | `917ae02` | 38,694 | −2 | this run |
+| Final-review I1 (chunk-failure catch +66 B; style check moved lazy) | `54d9f30` | **38,657** | −37 | fix round |
 
-Net over the restyle: 38,697 → 38,694 (−3 B). Lucide icons, motion, tokens and
+Net over the restyle: 38,697 → 38,657 (−40 B). Lucide icons, motion, tokens and
 all new paged UI are outside the eager graph (`check-eager.ts`).
 
 ## Visual review
