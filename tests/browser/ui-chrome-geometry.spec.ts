@@ -188,4 +188,96 @@ test.describe('shared viewer controls: host isolation (spec §6.8)', () => {
       expect(diffs).toEqual([])
     }
   })
+
+  test('hostile host sheet leaves sheet toolbar, header actions, filter popup and sort dialog geometry and colours unchanged (browser)', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    const snapshotSheetChrome = async (): Promise<Snapshot[]> => page.evaluate(() => {
+      const out: Snapshot[] = []
+      const sel = '[data-viewer=sheet] [data-officeview-ui=sheet-toolbar], [data-viewer=sheet] [data-officeview-ui=sheet-toolbar] *, [data-viewer=sheet] [data-officeview-ui=grid-headers] button, [data-viewer=sheet] [data-officeview-ui=grid-headers] svg'
+      document.querySelectorAll(sel).forEach((el, i) => {
+        if (el.closest('svg') && el.tagName.toLowerCase() !== 'svg') return
+        const cs = getComputedStyle(el)
+        const b = el.getBoundingClientRect()
+        const svg = el.tagName.toLowerCase() === 'svg' ? null : el.querySelector(':scope > svg')
+        const ib = svg?.getBoundingClientRect()
+        out.push({
+          key: `sheet-chrome:${i}:${el.tagName.toLowerCase()}:${el.getAttribute('data-officeview-ui') ?? ''}:${el.getAttribute('aria-label') ?? el.getAttribute('data-icon') ?? ''}`,
+          box: { x: b.x, y: b.y, width: b.width, height: b.height },
+          color: cs.color,
+          backgroundColor: cs.backgroundColor,
+          borderColor: cs.borderColor,
+          borderRadius: cs.borderRadius,
+          padding: cs.padding,
+          icon: svg && ib ? { width: ib.width, height: ib.height, stroke: getComputedStyle(svg).stroke } : null,
+        })
+      })
+      return out
+    })
+
+    const snapshotDialog = async (dialogSelector: string, prefix: string): Promise<Snapshot[]> => page.evaluate(({ sel, prefix }) => {
+      const out: Snapshot[] = []
+      const root = document.querySelector(sel)
+      if (!root) return out
+      const elements = [root, ...root.querySelectorAll('*')]
+      elements.forEach((el, i) => {
+        if (el.closest('svg') && el.tagName.toLowerCase() !== 'svg') return
+        const cs = getComputedStyle(el)
+        const b = el.getBoundingClientRect()
+        const svg = el.tagName.toLowerCase() === 'svg' ? null : el.querySelector(':scope > svg')
+        const ib = svg?.getBoundingClientRect()
+        out.push({
+          key: `${prefix}:${i}:${el.tagName.toLowerCase()}:${el.getAttribute('data-officeview-ui') ?? ''}:${el.getAttribute('aria-label') ?? el.getAttribute('data-icon') ?? (el.tagName.toLowerCase() === 'button' ? el.textContent : '') ?? ''}`,
+          box: { x: b.x, y: b.y, width: b.width, height: b.height },
+          color: cs.color,
+          backgroundColor: cs.backgroundColor,
+          borderColor: cs.borderColor,
+          borderRadius: cs.borderRadius,
+          padding: cs.padding,
+          icon: svg && ib ? { width: ib.width, height: ib.height, stroke: getComputedStyle(svg).stroke } : null,
+        })
+      })
+      return out
+    }, { sel: dialogSelector, prefix })
+
+    const runSequence = async (query = '') => {
+      await open(page, query)
+      const chrome = await snapshotSheetChrome()
+
+      await page.locator('[data-viewer=sheet]').getByRole('button', { name: /^Filter column A/ }).click()
+      await expect(page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]')).toBeVisible()
+      const filterSnap = await snapshotDialog('[data-viewer=sheet] [data-officeview-ui=grid-popup]', 'filter-popup')
+      await page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]').getByRole('button', { name: 'Cancel' }).click()
+      await expect(page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]')).toHaveCount(0)
+
+      await page.locator('[data-viewer=sheet]').getByRole('grid').focus()
+      await page.keyboard.press('F2')
+      await page.locator('[data-viewer=sheet]').getByRole('button', { name: 'More sort options for A' }).click()
+      await expect(page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]')).toBeVisible()
+      const sortSnap = await snapshotDialog('[data-viewer=sheet] [data-officeview-ui=grid-popup]', 'sort-dialog')
+      await page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]').getByRole('button', { name: 'Cancel' }).click()
+
+      return [...chrome, ...filterSnap, ...sortSnap]
+    }
+
+    const clean = await runSequence('')
+    expect(clean.length).toBeGreaterThan(15)
+
+    for (const order of ['first', 'last'] as const) {
+      const hostile = await runSequence(`?host=${order}`)
+      const byKey = new Map(hostile.map((s) => [s.key, s]))
+      const diffs: string[] = []
+      for (const want of clean) {
+        const got = byKey.get(want.key)
+        if (!got) { diffs.push(`${order} ${want.key}: missing`); continue }
+        for (const axis of ['x', 'y', 'width', 'height'] as const) {
+          if (Math.abs(got.box[axis] - want.box[axis]) > 0.5) diffs.push(`${order} ${want.key} box.${axis}: ${want.box[axis]} -> ${got.box[axis]}`)
+        }
+        for (const prop of ['color', 'backgroundColor', 'borderColor', 'borderRadius', 'padding'] as const) {
+          if (got[prop] !== want[prop]) diffs.push(`${order} ${want.key} ${prop}: ${want[prop]} -> ${got[prop]}`)
+        }
+        if (JSON.stringify(got.icon) !== JSON.stringify(want.icon)) diffs.push(`${order} ${want.key} icon: ${JSON.stringify(want.icon)} -> ${JSON.stringify(got.icon)}`)
+      }
+      expect(diffs).toEqual([])
+    }
+  })
 })

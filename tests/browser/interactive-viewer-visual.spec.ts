@@ -115,11 +115,73 @@ test.describe('visual review: interactive viewer layout', () => {
     const farCell = await rect(page, '[role=gridcell][aria-selected=true]'), zoom = await rect(page, '[data-testid=officeview-zoom-controls]')
     expect(overlaps(farCell, zoom)).toBe(false)
     expect(farCell.right).toBeLessThanOrEqual(zoom.left + 0.5)
+    const status = await rect(page, '[data-officeview-ui=viewer-status]')
+    expect(overlaps(status, zoom)).toBe(false)
+    expect(zoom.bottom).toBeLessThanOrEqual(status.top + 0.5)
     await page.getByRole('grid').focus()
     await page.keyboard.press('ArrowLeft')
     await page.keyboard.press('ArrowRight')
     const navCell = await rect(page, '[role=gridcell][aria-selected=true]')
     expect(overlaps(navCell, zoom)).toBe(false)
+    expect(overlaps(status, zoom)).toBe(false)
+  })
+
+  test('header buttons carry the explicit label colour instead of the UA button colour (browser)', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    const color = await page.evaluate(() => {
+      const btn = document.querySelector<HTMLElement>('[data-header-column]')
+      return btn ? getComputedStyle(btn).color : null
+    })
+    expect(color).toBe('rgb(50, 49, 48)')
+  })
+
+  test('desktop header action icons are fully visible inside their buttons and not clipped (browser)', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await openViewer(page, 'f2-1k.xlsx')
+
+    const checkActionIcons = async (description: string) => {
+      const icons = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll<HTMLElement>('[data-action-column]')].filter(b => b.getBoundingClientRect().width >= 14)
+        return buttons.map(btn => {
+          const btnRect = btn.getBoundingClientRect()
+          const span = btn.querySelector('span')
+          const spanRect = span?.getBoundingClientRect()
+          const svg = btn.querySelector('svg')
+          const svgRect = svg?.getBoundingClientRect()
+          return {
+            label: btn.getAttribute('aria-label') ?? '',
+            btnWidth: btnRect.width,
+            spanWidth: spanRect?.width ?? 0,
+            svgWidth: svgRect?.width ?? 0,
+            svgFill: svg?.getAttribute('fill'),
+          }
+        })
+      })
+      expect(icons.length, `${description} icon count`).toBeGreaterThan(0)
+      for (const item of icons) {
+        expect(item.svgWidth, `${description} ${item.label} svg width`).toBeGreaterThanOrEqual(14)
+        expect(item.spanWidth, `${description} ${item.label} span width`).toBeGreaterThanOrEqual(14)
+        expect(item.btnWidth, `${description} ${item.label} button width`).toBeGreaterThanOrEqual(14)
+      }
+      return icons
+    }
+
+    await checkActionIcons('initial')
+
+    const filterBtn = page.getByRole('button', { name: /^Filter column A/ })
+    await filterBtn.click()
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click()
+    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+
+    const activeIcons = await checkActionIcons('filtered')
+    const activeFilter = activeIcons.find(i => /Filter column A/.test(i.label))
+    expect(activeFilter).toBeDefined()
+    expect(activeFilter!.svgFill).toBe('currentColor')
+    expect(activeFilter!.svgWidth).toBeGreaterThanOrEqual(14)
+    expect(activeFilter!.spanWidth).toBeGreaterThanOrEqual(14)
   })
 
   test('find scroll-into-view keeps row 1 visible for visible hits and aligns below-the-fold hits to whole rows', async ({ page }) => {
@@ -152,6 +214,66 @@ test.describe('visual review: interactive viewer layout', () => {
     })
     expect(ratios.length).toBeGreaterThan(0)
     for (const r of ratios) expect(r).toBeGreaterThanOrEqual(4.5)
+  })
+
+  test('header and status computed colours meet contrast in light and dark (browser)', async ({ page }) => {
+    await openViewer(page, 'f2-1k.xlsx')
+    const checkContrast = async (themeName: string) => {
+      const res = await page.evaluate(() => {
+        const parse = (c: string) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+        const lum = (c: number[]) => { const [r, g, b] = c.map(v => v / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+        const ratio = (a: number[], b: number[]) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
+
+        const headerStripRaw = getComputedStyle(document.querySelector('[data-officeview-ui=grid-headers]')!).backgroundColor
+        const headerStrip = parse(headerStripRaw)
+        const headerRatios = [...document.querySelectorAll('[data-header-column], [data-header-row]')].slice(0, 20).map(el => ratio(parse(getComputedStyle(el).color), headerStrip))
+
+        const statusEl = document.querySelector('[data-officeview-ui=viewer-status]') as HTMLElement
+        const statusText = parse(getComputedStyle(statusEl).color)
+        const statusBg = parse(getComputedStyle(statusEl).backgroundColor)
+        const statusRatio = ratio(statusText, statusBg)
+
+        return { headerRatios, statusRatio, headerStrip: headerStripRaw }
+      })
+      expect(res.headerRatios.length, `${themeName} headers`).toBeGreaterThan(0)
+      for (const r of res.headerRatios) expect(r, `${themeName} header`).toBeGreaterThanOrEqual(4.5)
+      expect(res.statusRatio, `${themeName} status`).toBeGreaterThanOrEqual(4.5)
+      return res
+    }
+
+    const light = await checkContrast('light')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    const dark = await checkContrast('dark')
+    expect(light.headerStrip).not.toBe(dark.headerStrip)
+  })
+
+  test.describe('dark scheme (browser)', () => {
+    test('#9 header labels never truncate and action glyphs never crowd them in dark scheme', async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 })
+      await openViewer(page, 'f2-1k.xlsx')
+      await page.emulateMedia({ colorScheme: 'dark' })
+      const result = await page.evaluate(() => {
+        const labels = [...document.querySelectorAll<HTMLElement>('[data-header-column] > span')].filter(s => s.getBoundingClientRect().width > 0)
+        const truncated = labels.filter(s => s.scrollWidth > s.clientWidth + 0.5).map(s => s.textContent)
+        const crowded = labels.filter(s => {
+          const header = s.closest('[role=columnheader]')!, label = s.getBoundingClientRect()
+          const text = document.createRange(); text.selectNodeContents(s); const ink = text.getBoundingClientRect()
+          return [...header.querySelectorAll<HTMLElement>('[data-action-column]')].some(b => { const r = b.getBoundingClientRect(); return r.width > 1 && r.left < ink.right - 0.5 && ink.left < r.right && label.width > 0 })
+        }).map(s => s.textContent)
+        return { count: labels.length, truncated, crowded }
+      })
+      expect(result.count).toBeGreaterThan(0)
+      expect(result.truncated).toEqual([])
+      expect(result.crowded).toEqual([])
+    })
+
+    test('#13 toolbar controls never overlap in dark scheme', async ({ page }) => {
+      await openViewer(page, 'f2-1k.xlsx')
+      await page.emulateMedia({ colorScheme: 'dark' })
+      const boxes = await page.evaluate(() => ['[aria-label=Worksheet]', '[aria-label="Address space"]', '[aria-label="Go To cell"]', '[data-officeview-ui=sheet-navigator] button', '[data-officeview-ui=sheet-actions]', '[data-testid=officeview-search]']
+        .map(s => ({ s, ...document.querySelector(s)!.getBoundingClientRect().toJSON() })))
+      for (const [i, a] of boxes.entries()) for (const b of boxes.slice(i + 1)) expect(overlaps(a, b), `${a.s} overlaps ${b.s}`).toBe(false)
+    })
   })
 
   test('#12 print: white page, 2x canvases, a titled page per sheet, controls hidden', async ({ page, browserName }) => {

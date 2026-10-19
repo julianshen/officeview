@@ -15,6 +15,10 @@ export interface ControlProps {
   onApplied: (snapshot: ControlSnapshot) => void
 }
 export const controlTarget = { minHeight: 44, minWidth: 44 } as const
+export const CONTROL_CLS = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs'
+export const CONTROL_BTN_CLS = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium'
+export const CONTROL_PRIMARY_BTN_CLS = 'ov:rounded-control ov:border ov:border-border ov:bg-accent ov:text-on-accent ov:enabled:hover:opacity-90 ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-3 ov:py-1 ov:text-xs ov:font-semibold'
+export const CHECKBOX_CLS = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-accent ov:p-0.5'
 export function failureText(result: Exclude<ControlResult, { snapshot: ControlSnapshot }>): string {
   if (result.kind === 'refused') return `Operation refused: ${'message' in result.refusal ? result.refusal.message : result.refusal.reason}.`
   return result.kind === 'incomplete' ? 'Source data is incomplete; wait and retry.' : result.kind === 'stale' ? 'Source or view changed; reopen and retry.' : 'Operation cancelled.'
