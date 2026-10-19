@@ -15,6 +15,10 @@ import { workbookOf } from './helpers/xlsx-find'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 import type { Paintable, PaintableArray } from '../src/render/paint'
+import { installFullStylesheet } from './setup/styles'
+
+// Asserts on base-rule and utility styles (#19 font, #13 layout).
+installFullStylesheet()
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -182,7 +186,7 @@ describe('#19 chrome font', () => {
     const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
     const wrapper = ui.container.querySelector('[data-officeview-sheet-instance]') as HTMLElement
     // The font comes from the scoped base rule on the theme root (Task 1), not
-    // an inline style; tests/setup/styles.ts injects the real stylesheet.
+    // an inline style; this file installs the full real stylesheet.
     expect(wrapper.hasAttribute('data-ov-theme-root')).toBe(true)
     expect(getComputedStyle(wrapper).fontFamily).toMatch(/system-ui/)
     expect(document.head.querySelector('style[data-officeview-sheet-font]')).toBeNull()
