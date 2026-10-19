@@ -9,7 +9,7 @@ function frame() {
   const sheet: XlsxSheet = { name: 'S', rows: [], cols: [], merges: [], mergeRanges: [] }
   const geometry = buildSheetGeometry(sheet)
   if (geometry.kind !== 'ready') throw new Error('ready geometry required')
-  return { sheet, geometry, layoutCache: new LayoutCache(), merges: new MergeQueryCache(), identity: { docId: 'ce', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 100, y: 100 }, viewport, zoom: 1, dpr: 1, extent: { width: 10000, height: 10000 }, frozen: { rows: 1, cols: 1, left: 64, top: 20 } }
+  return { sheet, geometry, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache(), identity: { docId: 'ce', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 100, y: 100 }, viewport, zoom: 1, dpr: 1, extent: { width: 10000, height: 10000 }, frozen: { rows: 1, cols: 1, left: 64, top: 20 } }
 }
 function target() { const canvas = document.createElement('canvas'); canvas.width = 200; canvas.height = 140; return canvas.getContext('2d')! }
 const samples = (ctx: CanvasRenderingContext2D) => [[10, 2], [100, 2], [10, 100], [100, 100]].map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data])

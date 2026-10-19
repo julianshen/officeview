@@ -21,7 +21,7 @@ import type { PptxDocument } from '../pptx/types'
 import { odfKind } from '../odf/container'
 import { parseOdt } from '../odt/parse'
 import { parseRtf, isRtf } from '../rtf/parse'
-import { openByteStream, type ByteSource, type ByteStreamReader, type Progress, type ProtectionListener, type WatermarkListener } from '../core/stream'
+import { openByteStream, type ByteSource, type ByteStreamReader, type Progress, type ProtectionListener, type WatermarkListener, type OpenSourceListeners } from '../core/stream'
 import { isPackageError, throwIfAborted } from '../core/package-error'
 import { parseXml } from '../core/xml'
 import type { SpooledSource, StorageEnv } from '../core/spool'
@@ -74,6 +74,7 @@ export interface LoadSourceOptions {
   onProgress?: (p: Progress) => void
   onProtection?: ProtectionListener
   onWatermark?: WatermarkListener
+  onHeaders?: OpenSourceListeners['onHeaders']
   /** Aborts the download, the spool, the verification pass and the parse. */
   signal?: AbortSignal
   /** Default: run-time probe of OPFS/IndexedDB (memory only where neither exists). */
@@ -211,6 +212,7 @@ export async function loadOfficeSource(source: ByteSource, options: LoadSourceOp
     onProgress: options.onProgress,
     onProtection: options.onProtection,
     onWatermark: options.onWatermark,
+    onHeaders: options.onHeaders,
   }, ctx.signal)
   throwIfAborted(ctx.signal)
   switch (opened.kind) {

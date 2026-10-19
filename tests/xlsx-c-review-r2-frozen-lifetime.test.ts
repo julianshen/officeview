@@ -21,7 +21,7 @@ it.each([false, true])('pending frame surfaces remain within the admitted bitmap
   const sheet: XlsxSheet = { name: 'S', rows: [], cols: [], merges: [], mergeRanges: [] }
   const geometry = buildSheetGeometry(sheet)
   if (geometry.kind !== 'ready') throw new Error('geometry')
-  const frame = { sheet, geometry, layoutCache: new LayoutCache(), merges: new MergeQueryCache(),
+  const frame = { sheet, geometry, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache(),
     identity: { docId: 'r2', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 0, y: 0 }, viewport, zoom: 1, dpr: 1,
     extent: { width: 1e6, height: 1e6 }, ...(frozen ? { frozen: { rows: 1, cols: 1, left: 64, top: 20 } } : {}) }
   for (let i = 0; i < 8; i++) renderer.present(ctx, { ...frame, origin: { x: 4096 * i, y: 4096 * i } })

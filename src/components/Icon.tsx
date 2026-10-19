@@ -1,0 +1,18 @@
+/**
+ * The single icon contract for viewer chrome (spec §6.3): a Lucide icon,
+ * decorative only (the owning control carries the accessible label), tagged
+ * with `data-icon` so tests select `svg[data-icon="…"]`. Lazy-only: never
+ * import this, or any lucide-react icon, from eager code (scripts/check-eager.ts).
+ */
+import type { LucideIcon } from 'lucide-react'
+import type { ReactElement } from 'react'
+
+export type IconName = 'chevron-up' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'plus' | 'minus' | 'search' | 'copy' | 'check' | 'ban' | 'command'
+  | 'ellipsis' | 'printer' | 'fit-width' | 'x'
+  | 'arrow-up-down' | 'arrow-up' | 'arrow-down' | 'loader' | 'filter' | 'move-vertical' | 'move-horizontal' | 'corner' | 'rotate-ccw'
+
+export function Icon({ icon: Glyph, name, size = 16, className, fill }: { icon: LucideIcon; name: IconName; size?: 14 | 16 | 20; className?: string; fill?: string }): ReactElement {
+  // Pass fill only when set: an explicit fill={undefined} would replace
+  // lucide's default fill="none" and paint every outline icon solid black.
+  return <Glyph data-icon={name} size={size} strokeWidth={2} {...(fill === undefined ? {} : { fill })} aria-hidden="true" focusable="false" className={className} />
+}

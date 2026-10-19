@@ -3,6 +3,8 @@
  * PowerPoint) directly on an HTML <canvas>. Pixel-faithful rendering, not
  * HTML translation. Designed for desktop and mobile browsers.
  */
+// The scoped stylesheet, emitted as dist/style.css (hosts import "officeview/style.css")
+import './styles/officeview.css'
 // High-level components
 export { OfficeDoc, default as OfficeDocDefault } from './components/OfficeDoc'
 export { OfficeFile, useOfficeFile, loadOfficeFile } from './components/OfficeFile'

@@ -35,7 +35,8 @@ test('lazy indexing fallback owns and releases its own pending extraction on rep
  const h = harness(), a = source('A'), b = source('B')
  const view = render(<OfficeDoc document={a} />)
  await waitFor(() => expect(h.pending).toHaveLength(1))
- fireEvent.change(view.getByRole('searchbox'), { target: { value: 'B' } })
+ // Find lives in the lazy paged toolbar
+ fireEvent.change(await view.findByRole('searchbox'), { target: { value: 'B' } })
  await act(async () => { await new Promise(r => setTimeout(r, 0)) })
  view.rerender(<OfficeDoc document={b} />)
  await waitFor(() => expect(h.pending).toHaveLength(2))
@@ -50,7 +51,7 @@ test.each(['document', 'watermark'] as const)('%s owner change clears stale inde
  const h = harness(), a = source('A'), b = source('B')
  const view = render(<OfficeDoc document={a} />)
  await waitFor(() => expect(h.pending).toHaveLength(1))
- fireEvent.change(view.getByRole('searchbox'), { target: { value: 'x' } })
+ fireEvent.change(await view.findByRole('searchbox'), { target: { value: 'x' } })
  await waitFor(() => expect(view.getByTestId('officeview-search-status').textContent).toBe('indexing…'))
  fireEvent.change(view.getByRole('searchbox'), { target: { value: '' } })
  if (change === 'document') view.rerender(<OfficeDoc document={b} />)

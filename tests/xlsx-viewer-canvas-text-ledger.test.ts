@@ -28,7 +28,7 @@ const tileBytes = (col: number) => TILE_CANVAS_BYTES + shapeCacheBytes(2, `tile 
 
 function frameAt(col: number) {
   return {
-    sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+    sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
     identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
     origin: { x: col * TILE_DEVICE_PX, y: 0 }, viewport: { width: 10, height: 10 },
     zoom: 1, dpr: 1, extent: { width: 64 * TILE_DEVICE_PX, height: TILE_DEVICE_PX },

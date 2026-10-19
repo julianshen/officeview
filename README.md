@@ -33,9 +33,22 @@ resident/paged source and bounded viewport tiles; see the interactive viewer bel
 
 ```tsx
 import { OfficeFile } from 'officeview'
+import 'officeview/style.css'
 
 <OfficeFile data={fileBytes} loading={<Spinner />} />
 ```
+
+**Import the stylesheet once** (since 0.5.0). The viewer chrome (toolbar, status
+line, menus, dialogs, spreadsheet headers) is styled by `officeview/style.css`;
+without it the viewer renders unstyled. The stylesheet is self-contained and
+scoped: it ships no reset or preflight, and every rule targets the viewer's
+theme root, so it never restyles the host page. When the stylesheet is missing,
+the viewer logs `[officeview] style.css not loaded` once per page.
+
+**Dependencies.** The chrome uses `lucide-react` for icons and
+`motion` (pinned to `14.4.0`) for animation, both loaded only in lazy chunks.
+Because the pin is exact, a host that also depends on a different `motion`
+version will ship two copies of it.
 
 Or with a pre-parsed model:
 
@@ -59,18 +72,150 @@ const doc = parseRtf(rtfBytes)
 ```tsx
 <OfficeDoc
   document={doc}
-  showZoomControls={false}  // hide the +/- cluster
-  showSearch={false}        // hide the search bar (Cmd/Ctrl+F opens it otherwise)
+  theme="dark"              // 'light' | 'dark' | 'system' (default: follow the OS)
+  title="Q3 report.docx"    // file name in the toolbar (OfficeFile derives one)
+  showToolbar={false}       // hide the Word/PowerPoint toolbar and status line
+  showZoomControls={false}  // hide the zoom controls
+  showSearch={false}        // hide Find (Cmd/Ctrl+F opens it otherwise)
   pageGapPx={16}
   watermark={{ text: 'CONFIDENTIAL', placement: 'tile' }}
 />
 ```
+
+- `theme` sets the colour theme; see [Theming](#theming). `<OfficeFile>` passes
+  it, `showToolbar` and `title` through.
+- `title` overrides the file name shown in the toolbar. Without it,
+  `<OfficeFile>` uses the `File` name, the last URL path segment or a
+  `Content-Disposition` filename when one is available; with no name the slot
+  is hidden.
+- `showToolbar` (default `true`) controls the slim top toolbar and bottom status
+  line of the page viewer (Word, PowerPoint, RTF, ODT and static XLSX). Hosts
+  with their own UI can turn both off.
+
+The page viewer's toolbar holds the file name, page navigation (previous/next
+with "3 / 12", "Slide 3 / 12" for PowerPoint), zoom out / zoom % / zoom in, a
+**fit-to-width** button, Find, Copy and Print. The status line below the pages
+shows the current page or slide and, for Word, RTF and ODT, a **word count**
+(body paragraphs, table cells, text boxes, footnotes and endnotes; not headers,
+footers or comments). On touch devices and narrow panes the toolbar keeps 44px
+targets: Find collapses to a button and Fit, Copy and Print move into a "More"
+menu.
+
+**Give the viewer a constrained height.** Page tracking (the "3 / 12" readout)
+and Previous/Next scroll the viewer's own container, never the host page. In a
+host that lets the viewer grow to its full content height, the container never
+scrolls, so the readout stays on the first page and Previous/Next have nothing
+to scroll. Put the viewer in a sized box, for example a flex column with
+`height: 100vh` and the viewer as `flex: 1 1 auto; min-height: 0`.
 
 In page mode, search is built in: type in the bar (or press `Cmd/Ctrl+F`), use `Enter` / `Shift+Enter`
 or the arrows to walk matches, `Escape` to clear. Matches are highlighted on the canvas
 and the active match is scrolled into view. The text index is built lazily on the first
 search by replaying each page's paint into a recording context, so it covers all three
 formats without a separate text model.
+
+### Theming
+
+The viewer has a light and a dark theme. By default it follows the operating
+system (`prefers-color-scheme`); the `theme` prop forces one:
+
+```tsx
+<OfficeFile data={fileBytes} theme="light" />   {/* 'light' | 'dark' | 'system' */}
+```
+
+**Theme root.** Each viewer's outer wrapper carries `data-ov-theme-root`, plus
+`data-ov-theme="light|dark|system"` and a per-instance `data-ov-instance` id.
+Every token and every rule in `style.css` hangs off that element, and every
+toolbar, menu, dialog and the mobile filter sheet render inside it. The inner
+`data-officeview-root` region still receives your `className` and `style`
+unchanged and carries no library classes.
+
+**Re-branding.** Tokens are CSS custom properties. The library defines them
+under `:where([data-ov-theme-root])`, which has zero specificity, so any host
+rule that targets the theme root wins without `!important`:
+
+```css
+.brand [data-ov-theme-root] {
+  --ov-color-accent: #c50f1f;
+}
+/* Dark-only overrides */
+.brand [data-ov-theme-root][data-ov-theme=dark] {
+  --ov-color-accent: #ff99a4;
+}
+```
+
+A `theme="system"` viewer switches its dark set inside
+`@media (prefers-color-scheme: dark)`; target
+`[data-ov-theme-root][data-ov-theme=system]` in the same media query to
+override it there. Two viewers on one page resolve their own tokens, so each can
+have its own theme and overrides.
+
+Colour tokens (`--ov-color-<name>`):
+
+| Token | Light | Dark | Used for |
+|---|---|---|---|
+| `--ov-color-surface` | `#ffffff` | `#292827` | Raised panels: menus, dialogs, popovers, the filter sheet. Never paper. |
+| `--ov-color-chrome` | `#faf9f8` | `#201f1e` | Toolbar and status line background. |
+| `--ov-color-field` | `#ffffff` | `#1b1a19` | Text inputs (Find, Go To). |
+| `--ov-color-border` | `#e1dfdd` | `#3b3a39` | Control, panel and toolbar borders. |
+| `--ov-color-text` | `#201f1e` | `#f3f2f1` | Primary chrome text. |
+| `--ov-color-muted` | `#605e5c` | `#a19f9d` | Secondary text (status line, hints). |
+| `--ov-color-icon` | `#323130` | `#d2d0ce` | Toolbar and header icons. |
+| `--ov-color-hover` | `#f3f2f1` | `#3b3a39` | Hover and pressed background. |
+| `--ov-color-accent` | `#0f6cbd` | `#479ef5` | Focus ring, active and selected controls, primary buttons. |
+| `--ov-color-on-accent` | `#ffffff` | `#1b1a19` | Text and icons on `accent`. |
+| `--ov-color-header` | `#f3f2f1` | `#201f1e` | Spreadsheet row/column header background. |
+| `--ov-color-header-text` | `#323130` | `#d2d0ce` | Spreadsheet header labels. |
+| `--ov-color-header-active` | `#deecf9` | `#1c3149` | Pressed toggle buttons (`aria-pressed`). |
+| `--ov-color-gridline` | `#edebe9` | `#3b3a39` | Dividers between spreadsheet header cells only (canvas gridlines stay `#d0d0d0`). |
+| `--ov-color-backdrop` | `#f0efee` | `#161514` | Area around the pages or sheet. The `background` prop overrides it. |
+| `--ov-color-selection` | `#107c41` | `#107c41` | Cell selection border (drawn on paper). |
+| `--ov-color-selection-fill` | `rgba(16,124,65,.12)` | `rgba(16,124,65,.12)` | Cell selection fill (on paper). |
+| `--ov-color-find` | `rgba(255,214,0,.45)` | `rgba(255,214,0,.45)` | Find match highlight (on paper). |
+| `--ov-color-find-active` | `#ca5010` | `#ca5010` | Active Find match outline (on paper). |
+| `--ov-color-text-selection` | `rgba(64,128,255,.35)` | `rgba(64,128,255,.35)` | Page viewer text selection (on paper). |
+| `--ov-color-pending` | `#eceff3` | `#e1dfdd` | Tile "Loading…" placeholder. |
+| `--ov-color-pending-text` | `#605e5c` | `#605e5c` | Placeholder text, on `pending`. |
+| `--ov-color-freeze` | `#5f6368` | `#5f6368` | Frozen-pane divider (on paper). |
+
+The last eight are drawn on the document's white paper in both themes, so their
+dark defaults are chosen to read on `#ffffff`. If you override them, keep
+strokes at 3:1 or more against white.
+
+Radii and shadows: `--ov-radius-control` (`4px`), `--ov-radius-panel` (`6px`),
+`--ov-shadow-rest` (`0 1.6px 3.6px rgba(0,0,0,.13)`, dark alpha `.5`) and
+`--ov-shadow-popover` (`0 6.4px 14.4px rgba(0,0,0,.18)`, dark alpha `.6`). The
+defaults meet WCAG contrast in both themes (text 4.5:1, controls 3:1); check your
+own values against the same rules.
+
+**Paper stays paper.** Dark mode darkens the chrome, the headers, the menus and
+the backdrop around the content. The document itself is never themed: page
+canvases and the worksheet stay white, authored fills and text keep their
+colours, and the sheet's canvas gridlines stay `#d0d0d0`, in both themes. No
+token (including `surface`) colours the paper. A host `background` prop still
+overrides the backdrop token.
+
+**When overrides take effect.** DOM chrome follows token changes immediately,
+because it reads the custom properties through CSS. Canvas overlays (cell
+selection, Find highlights, text selection, the freeze divider and tile
+placeholders) read the tokens in script. They re-read them on mount, when the
+`theme` prop changes, when the system colour scheme changes, and when the theme
+root's `style`, `class` or `data-ov-theme` attribute changes; themed tiles are
+then repainted, never served stale from a cache. A change made only through an
+ancestor stylesheet (for example toggling a class on `<body>` that a rule
+`.brand [data-ov-theme-root]` keys on) is not observed: overlays pick it up at
+the next `theme` change or when the viewer remounts.
+
+**Host CSS isolation and its limit.** `style.css` has no global rules: no
+preflight, no `:root`, `:host`, `@property` or universal selectors, and no
+`!important` utilities. Two layout rules in the spreadsheet viewer (the Find
+bar placement and the zoom controls' bottom offset) and the `allowPrint={false}`
+print guard do use `!important`, all scoped to the theme root. Its utilities
+are unlayered and scoped to the theme root at specificity (0,2,0), so common host resets (`button { all: unset }`,
+`* { box-sizing: content-box }`, `html { font-size: 10px }`, `.app button`)
+do not reach the viewer chrome. Host rules with specificity (0,2,0) or higher
+that target viewer elements, or rules with `!important`, can still override the
+chrome. Re-brand through the tokens instead.
 
 ### Interactive spreadsheet viewer
 
@@ -389,15 +534,29 @@ so existing usage is unchanged:
 <OfficeDoc document={doc} allowCopy={false} allowPrint={false} />
 ```
 
-`allowCopy={false}` removes drag text selection, the copy button, and the `Cmd/Ctrl+C`
-handler; it also swallows native copy and context-menu events inside the viewer and opts
-the container out of browser text selection. Search, zoom and pan are untouched.
+`allowCopy={false}` removes drag text selection and the `Cmd/Ctrl+C` handler, and
+**hides** the Copy button (it is not shown disabled); it also swallows native copy and
+context-menu events inside the viewer and opts the container out of browser text
+selection. Search, zoom and pan are untouched.
 
-`allowPrint={false}` installs a `@media print` rule that hides the viewer and swallows
-`Cmd/Ctrl+P` while it has focus. The rule is scoped to this component, is installed only
-while such a viewer is mounted, and is removed on unmount — so the rest of the host page
-still prints normally. `<OfficeFile>` accepts both props too (they come through the
-underlying `OfficeDocProps`).
+`allowPrint={false}` **hides** the Print button, swallows `Cmd/Ctrl+P` while the viewer
+has focus, and hides the viewer from the browser's print output. The print rule is scoped
+to that viewer instance (its theme root's `data-ov-instance`), so the rest of the host
+page, and any sibling viewer that allows printing, still print normally. `<OfficeFile>`
+accepts both props too (they come through the underlying `OfficeDocProps`).
+
+In the page viewer (Word, PowerPoint, RTF, ODT, static XLSX) the print rule lives in
+`style.css`. If the host never imports the stylesheet, the viewer injects an equivalent
+instance-scoped rule once its lazy toolbar chunk has loaded; until then, printing from
+the browser's own menu can still include it. Import `style.css` if you rely on print
+suppression.
+
+When printing is allowed, the page viewer's Print button (and `Cmd/Ctrl+P`) prints
+**only the document**: each page is rendered to an image at page size and printed from a
+hidden same-origin frame that contains nothing but those images, so host content never
+reaches the printout. A job too large to rasterise within the memory bounds is refused
+with a notice in the status line rather than printed partially. The spreadsheet viewer's
+print path is unchanged (see [Copy, print and accessibility](#copy-print-and-accessibility)).
 
 **Be clear about what this is.** These are deterrents, not DRM, and it is worth saying so
 before you rely on them:
@@ -474,8 +633,9 @@ not protect a secret inside it.
 ## Selecting and copying
 
 In page mode, drag across text to select it; double-click selects a word, triple-click a line, and
-`Escape` clears. Copy with `Cmd/Ctrl+C`, or tap the **Copy selection** button that
-appears (useful on touch, where there is no keyboard shortcut). Selection and search
+`Escape` clears. Copy with `Cmd/Ctrl+C`, or use the toolbar's **Copy selection**
+button (in the "More" menu on touch and narrow panes), which is useful on touch, where
+there is no keyboard shortcut. Selection and search
 hit-testing both run off the same text index, so they work identically for Word,
 Excel and PowerPoint. Copying uses the async Clipboard API and falls back to a hidden
 textarea; if the browser blocks both, the button says so instead of pretending.

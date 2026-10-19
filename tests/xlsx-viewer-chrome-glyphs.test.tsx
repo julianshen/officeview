@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
 import { GridHeaders } from '../src/components/xlsx/GridHeaders'
 import { SearchBar, ZoomControls } from '../src/components/viewerControls'
+import { PagedToolbar } from '../src/components/paged/PagedToolbar'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createScrollWindow } from '../src/xlsx/view/scrollWindow'
@@ -37,12 +38,22 @@ describe('viewer chrome glyphs use text presentation', () => {
   const sorted: SortSpec = { keys: [{ col: 0, order: 'asc' }, { col: 1, order: 'desc' }] } as unknown as SortSpec
   for (const touch of [false, true]) {
     it(`grid headers (${touch ? 'touch' : 'desktop'}): unsorted, sorted, pending`, () => {
-      for (const ui of [headers({ touch, sort: null }), headers({ touch, sort: sorted }), headers({ touch, sort: null, pending: 2 })]) {
-        const all = texts(ui.container)
-        expect(all.join('')).toMatch(/[↕↖]/u)
-        expect(all.flatMap(emojiPresentation)).toEqual([])
-        ui.unmount()
-      }
+      const unsorted = headers({ touch, sort: null })
+      expect(texts(unsorted.container).join('')).not.toMatch(/[↕↖↑↓…]/u)
+      expect(unsorted.container.querySelector('svg[data-icon="arrow-up-down"]')).toBeTruthy()
+      expect(unsorted.container.querySelector('svg[data-icon="corner"]')).toBeTruthy()
+      unsorted.unmount()
+
+      const s = headers({ touch, sort: sorted })
+      expect(texts(s.container).join('')).not.toMatch(/[↕↖↑↓…]/u)
+      expect(s.container.querySelector('svg[data-icon="arrow-up"]')).toBeTruthy()
+      expect(s.container.querySelector('svg[data-icon="arrow-down"]')).toBeTruthy()
+      s.unmount()
+
+      const p = headers({ touch, sort: null, pending: 2 })
+      expect(texts(p.container).join('')).not.toMatch(/[↕↖↑↓…]/u)
+      expect(p.container.querySelector('svg[data-icon="loader"]')).toBeTruthy()
+      p.unmount()
     })
   }
   it('the narrow-column touch lane', () => {
@@ -50,11 +61,37 @@ describe('viewer chrome glyphs use text presentation', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Actions for column B' }))
     expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
   })
+  it('the pending sort spinner respects reduced motion', () => {
+    const ui = headers({ touch: false, sort: null, pending: 0 })
+    const spinner = ui.container.querySelector('svg[data-icon="loader"]')
+    expect(spinner?.classList.contains('ov:motion-safe:animate-spin')).toBe(true)
+    expect(spinner?.classList.contains('ov:animate-spin')).toBe(false)
+  })
+  // Spec §6.3: search, zoom and copy controls draw Lucide icons, never glyph text.
+  const GLYPHS = /[↑↓+−✓⌘]/u
+  const iconControls = (root: HTMLElement, selector: string) => [...root.querySelectorAll<HTMLElement>(selector)]
   it('search bar and zoom controls', () => {
     const ui = render(<div>
       <SearchBar inputRef={{ current: null }} query="x" onQuery={vi.fn()} count={2} active={0} indexing={false} onPrev={vi.fn()} onNext={vi.fn()} />
       <ZoomControls zoom={1} onIn={vi.fn()} onOut={vi.fn()} onReset={vi.fn()} atFit={false} />
     </div>)
     expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
+    const buttons = iconControls(ui.container, '[aria-label="Previous match"], [aria-label="Next match"], [aria-label="Zoom in"], [aria-label="Zoom out"]')
+    expect(buttons).toHaveLength(4)
+    for (const button of buttons) {
+      expect(button.querySelector('svg[data-icon][aria-hidden="true"]'), button.getAttribute('aria-label')!).toBeTruthy()
+      expect(button.textContent).not.toMatch(GLYPHS)
+    }
+    expect(ui.container.textContent).not.toMatch(GLYPHS)
+  })
+  it('paged toolbar copy button in every state', () => {
+    for (const state of ['idle', 'done', 'failed'] as const) {
+      const ui = render(<PagedToolbar kind="document" current={1} total={2} onPrev={vi.fn()} onNext={vi.fn()} zoom={1} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onResetZoom={vi.fn()} onFit={vi.fn()} fitActive={false} onCopy={vi.fn()} copyEnabled copyState={state} onPrint={vi.fn()} compact={false} showSearch={false} showZoom focusSearchRequest={0} onEscapeToDocument={vi.fn()} />)
+      const pill = ui.getByTestId('officeview-copy-selection')
+      expect(pill.querySelector('svg[data-icon][aria-hidden="true"]'), state).toBeTruthy()
+      expect(pill.textContent, state).not.toMatch(GLYPHS)
+      expect(texts(ui.container).flatMap(emojiPresentation)).toEqual([])
+      ui.unmount()
+    }
   })
 })

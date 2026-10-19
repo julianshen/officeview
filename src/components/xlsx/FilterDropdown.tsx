@@ -6,8 +6,10 @@ import { decodeSerial } from '../../xlsx/formula/serial'
 import { columnToLetters } from '../../xlsx/view/coordinates'
 import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
-import { controlTarget, failureText, useControlLifetime, type ControlProps } from './controlUi'
+import { controlTarget, CONTROL_CLS, SELECT_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
 import { useControlMedia } from './controlMedia'
+import { m } from 'motion/react'
+import { popover, sheet, useMotionProps } from '../motion/presets'
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
 export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null }
 /** Reserved height of the loaded page's controls ((Blanks), the selected-count
@@ -15,6 +17,8 @@ export interface FilterDropdownProps extends ControlProps { col: number; applied
 const PAGE_BLOCK_MIN_HEIGHT = 160
 export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
   const bottomSheet = useControlMedia('(pointer: coarse), (max-width: 640px)')
+  // The mobile sheet slides up; the desktop dropdown drops from its column.
+  const motion = useMotionProps(bottomSheet ? sheet : popover)
   const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
   const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
   const [changing, setChanging] = useState(false), [domainClass, setDomainClass] = useState<ColumnClassification | null>(null)
@@ -104,7 +108,8 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
     })().catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
   }
   if (props.open === false) return null
-  return <div role={props.embedded ? undefined : 'dialog'} aria-label={`Filter column ${columnToLetters(props.col)}`} data-officeview-ui="filter-dropdown"
+  return <m.div {...motion} role={props.embedded ? undefined : 'dialog'} aria-label={`Filter column ${columnToLetters(props.col)}`} data-officeview-ui="filter-dropdown"
+    className={bottomSheet ? "ov:rounded-t-[12px] ov:shadow-popover ov:bg-surface ov:border-t ov:border-border" : "ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') return
@@ -113,44 +118,44 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       else if (event.key === 'Enter' && event.target === searchInput.current) { event.preventDefault(); refresh({ ...query, offset: 0 }) }
     }} style={{ position: bottomSheet ? 'fixed' : 'relative', bottom: bottomSheet ? 0 : undefined, left: bottomSheet ? 0 : undefined, zIndex: bottomSheet ? 4 : undefined, width: bottomSheet ? '100%' : 'min(420px, calc(100vw - 16px))',
       // Embedded on desktop, the bounded grid popup is the one scroll container (no nested scroller taller than the pane).
-      maxHeight: bottomSheet ? '85dvh' : props.embedded ? undefined : '80vh', borderRadius: bottomSheet ? '12px 12px 0 0' : undefined, overflowY: bottomSheet || !props.embedded ? 'auto' : undefined, background: '#fff', border: '1px solid #888', padding: '12px', paddingBottom: 'calc(12px + var(--officeview-safe-bottom))', '--officeview-safe-bottom': 'env(safe-area-inset-bottom, 0px)', boxSizing: 'border-box' } as CSSProperties}>
+      maxHeight: bottomSheet ? '85dvh' : props.embedded ? undefined : '80vh', overflowY: bottomSheet || !props.embedded ? 'auto' : undefined, padding: '12px', paddingBottom: 'calc(12px + var(--officeview-safe-bottom))', '--officeview-safe-bottom': 'env(safe-area-inset-bottom, 0px)', boxSizing: 'border-box' } as CSSProperties}>
     <form onSubmit={event => { event.preventDefault(); apply() }}>
       <h2>Filter column {columnToLetters(props.col)}</h2>
-      <div><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>
-      <button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
+      <div><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('asc')}>Sort ascending</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || !range || life.invalid} onClick={() => apply('desc')}>Sort descending</button></div>
+      <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
       {/* Space reserved for what the value list's arrival fills in, so nothing below moves (no layout shift). */}
       <p style={{ minHeight: '2.6em' }}>{range && <>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</>}</p>
-      <label>Filter method <select aria-label="Filter method" style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
+      <label>Filter method <select aria-label="Filter method" className={SELECT_CLS} style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
       {method === 'values' ? <>
-        <label>Search <input ref={searchInput} aria-label="Search all values" disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
-        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
+        <label>Search <input ref={searchInput} aria-label="Search all values" className={CONTROL_CLS} disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
+        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
         <p style={{ minHeight: '1.3em' }}>{page?.truncated ? 'Showing first 10,000; search all values.' : ''}</p>
-        <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: true, includeBlanks })}>Select All</button>
-        <button type="button" style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: false, includeBlanks })}>Deselect All</button>
-        {query.text && <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" disabled={changing || life.invalid} checked={includeBlanks} onChange={event => setIncludeBlanks(event.target.checked)} />Include blanks in searched Select All</label>}
+        <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: true, includeBlanks })}>Select All</button>
+        <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || !page || life.invalid} onClick={() => refresh(query, { kind: 'all', selected: false, includeBlanks })}>Deselect All</button>
+        {query.text && <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} disabled={changing || life.invalid} checked={includeBlanks} onChange={event => setIncludeBlanks(event.target.checked)} />Include blanks in searched Select All</label>}
         <div style={{ height: 280, overflowY: 'auto' }}>{page?.entries.map(entry => <label key={entry.ordinal} data-value-ordinal={entry.ordinal} style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}>
-          <input type="checkbox" aria-label={`${entry.label}${entry.kind === 'error' ? ' (error)' : ''}`} checked={entry.selected === true} disabled={busy || entry.selected === 'pending' || life.invalid}
+          <input type="checkbox" className={CHECKBOX_CLS} aria-label={`${entry.label}${entry.kind === 'error' ? ' (error)' : ''}`} checked={entry.selected === true} disabled={busy || entry.selected === 'pending' || life.invalid}
             ref={input => { if (input) input.indeterminate = entry.selected === 'pending' }} onChange={event => refresh(query, { kind: 'toggle', ordinal: entry.ordinal, selected: event.target.checked })} />
           <span>{entry.label}{entry.kind === 'error' ? ' (error)' : ''}{entry.selected === 'pending' ? ' — selection pending' : ''}</span>
-          <button type="button" aria-label={`Inspect value ${entry.ordinal + 1}`} style={controlTarget} disabled={busy || life.invalid} onClick={() => { if (busy || life.invalid) return; const job = life.begin(); void session.current!.inspect(entry.ordinal, job.signal).then(value => { if (job.current()) setInspection(value) }).catch(error => { if (job.current()) noticeError(life.error(error)) }) }}>Inspect</button>
+          <button type="button" aria-label={`Inspect value ${entry.ordinal + 1}`} className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => { if (busy || life.invalid) return; const job = life.begin(); void session.current!.inspect(entry.ordinal, job.signal).then(value => { if (job.current()) setInspection(value) }).catch(error => { if (job.current()) noticeError(life.error(error)) }) }}>Inspect</button>
         </label>)}</div>
-        <div style={{ minHeight: PAGE_BLOCK_MIN_HEIGHT }}>{page && <><label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="(Blanks)" checked={page.blanks} disabled={busy || life.invalid} onChange={event => refresh(query, { kind: 'blanks', selected: event.target.checked })} />(Blanks)</label>
+        <div style={{ minHeight: PAGE_BLOCK_MIN_HEIGHT }}>{page && <><label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} aria-label="(Blanks)" checked={page.blanks} disabled={busy || life.invalid} onChange={event => refresh(query, { kind: 'blanks', selected: event.target.checked })} />(Blanks)</label>
           <p>{page.count.count} selected values{page.count.pending ? `; ${page.count.pending} pending` : ''}; {page.count.complete ? 'complete universe' : 'universe incomplete'}.</p>
-          <button type="button" style={controlTarget} disabled={busy || query.offset === 0} onClick={() => refresh({ ...query, offset: Math.max(0, query.offset - 200) })}>Previous values</button><button type="button" style={controlTarget} disabled={busy || query.offset + 200 >= page.displayed} onClick={() => refresh({ ...query, offset: query.offset + 200 })}>Next values</button></>}</div>
+          <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || query.offset === 0} onClick={() => refresh({ ...query, offset: Math.max(0, query.offset - 200) })}>Previous values</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || query.offset + 200 >= page.displayed} onClick={() => refresh({ ...query, offset: query.offset + 200 })}>Next values</button></>}</div>
       </> : <>
         <ConditionEditor value={first} onChange={setFirst} classification={classification} index={1} invalid={Boolean(validation)} />
-        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" aria-label="Use two conditions" checked={compound} onChange={event => setCompound(event.target.checked)} />Use two conditions</label>
-        {compound && <><label>Combine <select aria-label="Combine conditions" style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
+        <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} aria-label="Use two conditions" checked={compound} onChange={event => setCompound(event.target.checked)} />Use two conditions</label>
+        {compound && <><label>Combine <select aria-label="Combine conditions" className={SELECT_CLS} style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
         {classification.kind === 'date' && <p>Calendar dates in {props.client.context().timeZone}; periods include times and resolve at apply time.</p>}
       </>}
       {periods.map(period => <p key={period}>{period}</p>)}
       {inspection && <pre>{inspection}</pre>}{validation && <p>{validation}</p>}{error && <p>{error}</p>}
       <div style={{ minHeight: controlTarget.minHeight }}>
         {busy && <div role="progressbar" aria-label={progress}>{progress}</div>}
-        {!busy && (!page?.complete || error) && <button type="button" style={controlTarget} onClick={initialize}>Retry values</button>}
+        {!busy && (!page?.complete || error) && <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} onClick={initialize}>Retry values</button>}
       </div>
       {/* OK/Cancel stay in view at the bottom of the scrolling popup. */}
-      <div style={{ position: 'sticky', bottom: 'calc(-12px - var(--officeview-safe-bottom))', margin: '0 -12px calc(-12px - var(--officeview-safe-bottom))', padding: '4px 12px calc(12px + var(--officeview-safe-bottom))', background: '#fff' }}><button type="submit" style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" style={controlTarget} onClick={() => life.cancel()}>Cancel</button></div>
+      <div className="ov:bg-surface" style={{ position: 'sticky', bottom: 'calc(-12px - var(--officeview-safe-bottom))', margin: '0 -12px calc(-12px - var(--officeview-safe-bottom))', padding: '4px 12px calc(12px + var(--officeview-safe-bottom))' }}><button type="submit" className={CONTROL_PRIMARY_BTN_CLS} style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} onClick={() => life.cancel()}>Cancel</button></div>
     </form>
-  </div>
+  </m.div>
 }

@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactElement, type ReactNode } from 'react'
 import type { CacheIdentity, GridSelection, SheetView, ScrollWindow, SourceRowInterval, ProfileId } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import type { SourceCell } from '../../xlsx/view/coordinates'
@@ -8,11 +8,12 @@ import { navigateKey, scrollIntoView, hitTestViewport, type NavigationKey, type 
 import { MAX_ROWS, MAX_COLS, cellId, columnToLetters, formatA1 } from '../../xlsx/view/coordinates'
 import { activeAnnouncement, boundedSelectionText, reconcileSelection, recordCounts, emptyGridSelection, selectCell, selectHeader } from '../../xlsx/view/selection'
 import { belowDetail } from '../../xlsx/view/viewport'
-import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, HEADER_COLORS, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
+import { GridHeaders, GridRowHeader, GRID_HEADER_SIZE, cellSelected, gridHeaderBox, viewportHeaderBox, columnHeaderHeight } from './GridHeaders'
 import { ViewerStatus, type ViewerStatusProps, type HiddenCellInspection } from './ViewerStatus'
 import { useControlMedia } from './controlMedia'
 import { ResizeHandles, type ResizeRequest } from './sheetResize'
 import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
+import { fade, Pop, Presence } from '../motion/presets'
 
 export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
@@ -171,6 +172,13 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     }
     previousPopup.current = props.popup ? { popup: props.popup, owner: previousPopup.current?.owner ?? ownerKey } : null
   }, [ownerKey, props.popup])
+  // Each opening is a new popup: one still fading out is never revived with its
+  // finished control state (a reopen mounts a fresh dropdown, as before motion).
+  const popupSeq = useRef(0), popupWasOpen = useRef(false)
+  if (props.popup && !popupWasOpen.current) popupSeq.current++
+  popupWasOpen.current = Boolean(props.popup)
+  // A popup fading out unmounts after the next one mounted: never let its detach clear the live ref.
+  const keepPopupRef = useCallback((node: HTMLDivElement | null) => { if (node) popupRef.current = node }, [])
   // Desktop popup anchor: under the invoking column, clamped inside the wrapper.
   const [popupLeft, setPopupLeft] = useState(0)
   useLayoutEffect(() => {
@@ -396,10 +404,13 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     {/* Bounded by the cell area (below the header row, above the status line): a taller popup scrolls
         instead of losing its controls. Anchored at the top under its column: content that arrives later
         (a loading value list) grows the popup downward, never moving what is already shown. */}
-    {props.popup && <div ref={popupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
+    {/* Opacity only: a transform here would capture the position: fixed mobile filter sheet inside. One
+        key per opening, so switching filter ↔ sort in place swaps the content without a second dialog. */}
+    <Presence>{props.popup && <Pop key={popupSeq.current} v={fade} ref={keepPopupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
+      className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-      style={{ position: 'absolute', zIndex: 7, top: headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height, overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}>{props.popup.content}</div>}
-    <ViewerStatus {...props.status} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection}
-      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: STATUS_BAR_HEIGHT, lineHeight: `${STATUS_BAR_HEIGHT}px`, padding: '0 8px', boxSizing: 'border-box', fontSize: 12, color: HEADER_COLORS.text, background: HEADER_COLORS.background, boxShadow: `inset 0 1px ${HEADER_COLORS.track}`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} />
+      style={{ position: 'absolute', zIndex: 7, top: headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height, overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</Pop>}</Presence>
+    <ViewerStatus {...props.status} motionKey={sheetId} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection}
+      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: STATUS_BAR_HEIGHT, lineHeight: `${STATUS_BAR_HEIGHT}px`, boxSizing: 'border-box', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} />
   </div>
 }

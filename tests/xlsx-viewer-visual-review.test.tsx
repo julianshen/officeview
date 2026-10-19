@@ -15,6 +15,10 @@ import { workbookOf } from './helpers/xlsx-find'
 import { gridFixture } from './helpers/xlsx-grid-fixture'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 import type { Paintable, PaintableArray } from '../src/render/paint'
+import { installFullStylesheet } from './setup/styles'
+
+// Asserts on base-rule and utility styles (#19 font, #13 layout).
+installFullStylesheet()
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -24,20 +28,27 @@ function luminance(hex: string): number {
 }
 const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05) }
 
+import { THEME_DEFAULTS } from '../src/styles/tokens'
+import { FilterDropdown } from '../src/components/xlsx/FilterDropdown'
+import { SortDialog } from '../src/components/xlsx/SortDialog'
+import { controlsFixture } from './helpers/xlsx-controls-fixture'
+
 describe('#21 header contrast', () => {
-  it('header labels, action glyphs and active state meet WCAG AA on the header strip; tracks are >= 3:1', () => {
-    expect(contrast(HEADER_COLORS.text, HEADER_COLORS.background)).toBeGreaterThanOrEqual(4.5)
-    expect(contrast(HEADER_COLORS.action, HEADER_COLORS.background)).toBeGreaterThanOrEqual(4.5)
-    expect(contrast(HEADER_COLORS.active, HEADER_COLORS.background)).toBeGreaterThanOrEqual(4.5)
-    expect(contrast(HEADER_COLORS.track, HEADER_COLORS.background)).toBeGreaterThanOrEqual(3)
-  })
-  it('header buttons carry the explicit label colour instead of the UA button colour', () => {
-    const props = gridFixture()
-    const ui = render(<GridHeaders projection={props.projection} window={props.window} viewport={props.viewport} columns={[0]} selection={props.selection} sort={null} onSortCycle={() => {}} onFilter={() => {}} />)
-    expect(ui.getByRole('button', { name: /^Select Column A/ }).style.color).toBe(rgb(HEADER_COLORS.text))
+  it('header and status token colours meet contrast in light and dark', () => {
+    for (const [name, theme] of Object.entries(THEME_DEFAULTS)) {
+      const bg = theme[HEADER_COLORS.background]
+      const text = theme[HEADER_COLORS.text]
+      const action = theme[HEADER_COLORS.action]
+      const active = theme[HEADER_COLORS.active]
+      expect(contrast(text, bg), `${name} header text`).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(action, bg), `${name} header action`).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(active, bg), `${name} header active`).toBeGreaterThanOrEqual(4.5)
+
+      expect(contrast(theme.text, theme.chrome), `${name} status text on chrome`).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(theme.muted, theme.chrome), `${name} status muted on chrome`).toBeGreaterThanOrEqual(4.5)
+    }
   })
 })
-const rgb = (hex: string) => `rgb(${[1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`
 
 describe('#9 header actions and labels', () => {
   const headers = (zoom: number, coarse = false) => {
@@ -110,8 +121,12 @@ describe('#18 status line', () => {
   it('is one text run, so a changing count never moves the notices after it (no layout shift)', () => {
     const ui = render(<GridSemantics {...gridFixture()} announcement="Selection cleared." />)
     const status = ui.container.querySelector('[data-officeview-ui=viewer-status]') as HTMLElement
+    // Task 6: the run sits in one inline span keyed by the sheet (it fades in on a sheet switch).
     expect(status.childNodes).toHaveLength(1)
-    expect(status.childNodes[0].nodeType).toBe(Node.TEXT_NODE)
+    const run = status.childNodes[0] as HTMLElement
+    expect(run.getAttribute('data-ov-motion')).toBe('fade')
+    expect(run.childNodes).toHaveLength(1)
+    expect(run.childNodes[0].nodeType).toBe(Node.TEXT_NODE)
     expect(status.title).toBe(status.textContent)
   })
   it('in the viewer pane it fills its positioned parent, so the status line follows the pane at once', () => {
@@ -170,9 +185,74 @@ describe('#19 chrome font', () => {
   it('the viewer chrome uses an explicit system font stack and its native controls inherit it', async () => {
     const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
     const wrapper = ui.container.querySelector('[data-officeview-sheet-instance]') as HTMLElement
-    expect(wrapper.style.fontFamily).toMatch(/system-ui/)
-    const rule = [...document.head.querySelectorAll('style[data-officeview-sheet-font]')].map(style => style.textContent).join('')
-    expect(rule).toMatch(/button.*input.*select|font:\s*inherit/)
+    // The font comes from the scoped base rule on the theme root (Task 1), not
+    // an inline style; this file installs the full real stylesheet.
+    expect(wrapper.hasAttribute('data-ov-theme-root')).toBe(true)
+    expect(getComputedStyle(wrapper).fontFamily).toMatch(/system-ui/)
+    expect(document.head.querySelector('style[data-officeview-sheet-font]')).toBeNull()
+    const btn = ui.getByRole('button', { name: 'Copy selection' })
+    expect(getComputedStyle(btn).fontFamily).toMatch(/system-ui/)
+  })
+})
+
+describe('control utility rule for sheet chrome (spec §6.8)', () => {
+  const COLOUR = /^ov:text-(text|muted|icon|accent|on-accent|header-text|inherit)$/
+  const BACKGROUND = /^ov:bg-/
+  const PADDING = /^ov:p[xytrbl]?-/
+  const BORDER = /^ov:border(-0)?$/
+
+  it('every viewer control declares colour, background, padding and border utilities', () => {
+    const f = controlsFixture()
+    const p = gridFixture()
+    const ui = render(
+      <div data-ov-theme-root="" data-ov-theme="light">
+        <InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />
+        <div role="grid">
+          <GridHeaders
+            projection={p.projection}
+            window={p.window}
+            viewport={p.viewport}
+            columns={[0]}
+            selection={p.selection}
+            sort={null}
+            controlMode
+            onSortCycle={() => {}}
+            onFilter={() => {}}
+            onSortDialog={() => {}}
+          />
+        </div>
+        <FilterDropdown
+          open
+          owner={f.snapshot.owner}
+          client={f.client}
+          col={0}
+          applied={null}
+          onClose={() => {}}
+          onNotice={() => {}}
+          onApplied={() => {}}
+        />
+        <SortDialog
+          open
+          owner={f.snapshot.owner}
+          client={f.client}
+          applied={null}
+          onClose={() => {}}
+          onNotice={() => {}}
+          onApplied={() => {}}
+        />
+      </div>,
+    )
+    const controls = [...ui.container.querySelectorAll('[data-ov-theme-root] :is(button, input, select, textarea)')]
+    expect(controls.length).toBeGreaterThanOrEqual(10)
+    const missing = controls.flatMap(el => {
+      const classes = [...el.classList]
+      const label = el.getAttribute('aria-label') ?? el.getAttribute('data-testid') ?? el.tagName
+      const padded = classes.some(c => /^ov:p-/.test(c)) || (classes.some(c => /^ov:px-/.test(c)) && classes.some(c => /^ov:py-/.test(c)))
+      return ([['colour', COLOUR], ['background', BACKGROUND], ['padding', PADDING], ['border', BORDER]] as const)
+        .filter(([what, re]) => what === 'padding' ? !padded : !classes.some(c => re.test(c)))
+        .map(([what]) => `${label}: ${what}`)
+    })
+    expect(missing).toEqual([])
   })
 })
 
@@ -188,6 +268,42 @@ describe('#13 popup and toolbar layout', () => {
     const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
     const search = ui.getByTestId('officeview-search')
     expect(search.closest('[data-officeview-ui=sheet-toolbar]')).not.toBeNull()
+  })
+  it('the floating zoom cluster clears the status bar without overlapping it', () => {
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />)
+    const zoom = ui.getByTestId('officeview-zoom-controls')
+    expect(getComputedStyle(zoom).bottom).toMatch(/36px/)
+  })
+  it('header action buttons do not carry inline background or padding that overrides utilities', () => {
+    const props = gridFixture()
+    const ui = render(<GridHeaders projection={props.projection} window={props.window} viewport={props.viewport} columns={[0]} selection={props.selection} sort={null} controlMode onSortCycle={() => {}} onFilter={() => {}} />)
+    const btn = ui.getByRole('button', { name: /^Select Column A/ })
+    expect(btn.style.background).toBe('')
+    expect(btn.style.padding).toBe('')
+    const sortBtn = ui.getByRole('button', { name: 'Cycle sort column A' })
+    expect(sortBtn.style.background).toBe('')
+    expect(sortBtn.style.padding).toBe('')
+    expect(sortBtn.classList.contains('ov:p-0')).toBe(true)
+  })
+  it('controls declare disabled styling utilities (spec §6.8)', () => {
+    const ui = render(
+      <div data-ov-theme-root="" data-ov-theme="light">
+        <InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />
+      </div>,
+    )
+    const copyBtn = ui.getByRole('button', { name: 'Copy selection' })
+    expect(copyBtn.className).toMatch(/ov:disabled:text-muted/)
+    expect(copyBtn.className).toMatch(/ov:disabled:opacity-50/)
+    expect(copyBtn.className).toMatch(/ov:disabled:cursor-default/)
+  })
+  it('toolbar buttons draw icons with data-icon', () => {
+    const ui = render(
+      <div data-ov-theme-root="" data-ov-theme="light">
+        <InteractiveSheetDoc doc={workbookOf([{ sheetId: 'A', cells: [{ row: 0, col: 0, value: 'x' }] }])} />
+      </div>,
+    )
+    expect(ui.container.querySelector('[data-officeview-ui="sheet-actions"] svg[data-icon="copy"]')).toBeTruthy()
+    expect(ui.container.querySelector('[data-officeview-ui="sheet-actions"] svg[data-icon="rotate-ccw"]')).toBeTruthy()
   })
 })
 

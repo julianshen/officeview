@@ -3,6 +3,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react'
 import { SortDialog } from '../src/components/xlsx/SortDialog'
 import { controlsFixture } from './helpers/xlsx-controls-fixture'
 import { createControlsClient } from '../src/components/xlsx/controlsClient'
+import type { FilterSpec } from '../src/xlsx/view/contracts'
 
 const setup = (table = false) => {
   const fixture = controlsFixture(8, { kind: 'number', hasNumeric: true }, table), close = vi.fn(), notice = vi.fn(), applied = vi.fn()
@@ -158,9 +159,9 @@ it('shows the committed sort direction and pressed arrow/funnel state without fo
     filter={{ range: { r0: 0, r1: 3, c0: 0, c1: 0, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }} />)
   const arrow = ui.getByRole('button', { name: 'Cycle sort column A' }), funnel = ui.getByRole('button', { name: /Filter column A/ })
   expect(arrow.getAttribute('aria-pressed')).toBe('true')
-  expect(arrow.textContent).toContain('↓')
+  expect(arrow.querySelector('svg[data-icon="arrow-down"]')).toBeTruthy()
   expect(funnel.getAttribute('aria-pressed')).toBe('true')
-  expect(funnel.querySelector('svg')).toBeTruthy()
+  expect(funnel.querySelector('svg[data-icon="filter"]')).toBeTruthy()
   expect(ui.getByRole('columnheader', { name: /Column A/ }).getAttribute('aria-sort')).toBe('descending')
 })
 
@@ -376,5 +377,13 @@ describe('S13.2 item 5: 44px touch targets for legal narrow columns (spec §9.3,
       expect(selection.ranges[0].cols).toEqual([{ c0: 1, c1: 1 }])
       ui.unmount()
     } finally { window.matchMedia = previous }
+  })
+
+  it('active filter button provides a filled funnel shape cue', () => {
+    const projection = narrowProjection(), viewport = { width: 200, height: 100 }
+    const filterSpec: FilterSpec = { range: { r0: 0, c0: 0, r1: 10, c1: 2, headerRows: 1, totalsRows: 0 }, columns: new Map([[0, { kind: 'number', op: 'gt', first: 0 }]]) }
+    const ui = render(<GridHeaders projection={projection} window={createScrollWindow(projection, viewport)} viewport={viewport} columns={[0]} selection={emptyGridSelection()} sort={null} filter={filterSpec} controlMode onFilter={vi.fn()} />)
+    const icon = ui.container.querySelector('svg[data-icon="filter"]')
+    expect(icon?.getAttribute('fill')).toBe('currentColor')
   })
 })

@@ -1,3 +1,4 @@
+import type { CanvasColors } from '../components/canvasColors'
 /**
  * Overlay geometry shared by the page renderer and the search/selection layers.
  * Rectangles are in page (document) coordinates.
@@ -95,11 +96,11 @@ export function gridSelectionOverlay(selection: { contains(at: { row: number; co
   outline(vertical, false)
   return { fills, borders }
 }
-export function paintGridSelectionOverlay(ctx: CanvasRenderingContext2D, geometry: GridSelectionGeometry, scale = 1): void {
+export function paintGridSelectionOverlay(ctx: CanvasRenderingContext2D, geometry: GridSelectionGeometry, scale = 1, colors?: Pick<CanvasColors, 'selection' | 'selection-fill'>): void {
   if (!Number.isFinite(scale) || scale <= 0) throw new RangeError('Invalid overlay scale')
   ctx.save()
-  ctx.fillStyle = 'rgba(0, 128, 0, 0.12)'
-  ctx.strokeStyle = '#008000'
+  ctx.fillStyle = colors?.['selection-fill'] ?? 'rgba(0, 128, 0, 0.12)'
+  ctx.strokeStyle = colors?.selection ?? '#008000'
   ctx.lineWidth = 2 / scale
   for (const rect of geometry.fills) ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
   if (geometry.borders.length) {
@@ -120,11 +121,11 @@ export function gridGeometryToViewport(geometry: GridSelectionGeometry, origin: 
   }
 }
 /** Search wash and active-match outline, the same colours as the page overlay. */
-export function paintSearchOverlay(ctx: CanvasRenderingContext2D, highlights: readonly HighlightRect[], active: readonly HighlightRect[], scale = 1): void {
+export function paintSearchOverlay(ctx: CanvasRenderingContext2D, highlights: readonly HighlightRect[], active: readonly HighlightRect[], scale = 1, colors?: Pick<CanvasColors, 'find' | 'find-active'>): void {
   ctx.save()
-  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
+  ctx.fillStyle = colors?.find ?? 'rgba(255, 214, 0, 0.45)'
   for (const r of highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
-  ctx.strokeStyle = '#ff8c00'
+  ctx.strokeStyle = colors?.['find-active'] ?? '#ff8c00'
   ctx.lineWidth = 1.5 / scale
   for (const r of active) ctx.strokeRect(r.x, r.y, r.width, r.height)
   ctx.restore()

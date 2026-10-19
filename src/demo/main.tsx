@@ -5,6 +5,7 @@
 import { useState, type ChangeEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile } from '../components/OfficeFile'
+import '../styles/officeview.css'
 import { buildDocx, buildXlsx, buildPptx, type DocxCellSpec, type DocxParaSpec, type DocxTableSpec } from '../testdata/ooxml-builders'
 import { buildOdt, odfDecimalListStyle, odfWriterHeadingStyles } from '../testdata/odf-builders'
 

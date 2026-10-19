@@ -1,0 +1,54 @@
+{
+  "sheet": {
+    "Search document": {
+      "width": 148,
+      "height": 28
+    },
+    "Previous match": {
+      "width": 28.796875,
+      "height": 28
+    },
+    "Next match": {
+      "width": 28.796875,
+      "height": 28
+    },
+    "Zoom in": {
+      "width": 36,
+      "height": 36
+    },
+    "Zoom out": {
+      "width": 36,
+      "height": 36
+    },
+    "Reset zoom": {
+      "width": 36,
+      "height": 28
+    }
+  },
+  "paged": {
+    "Search document": {
+      "width": 148,
+      "height": 28
+    },
+    "Previous match": {
+      "width": 28.796875,
+      "height": 28
+    },
+    "Next match": {
+      "width": 28.796875,
+      "height": 28
+    },
+    "Zoom in": {
+      "width": 36,
+      "height": 36
+    },
+    "Zoom out": {
+      "width": 36,
+      "height": 36
+    },
+    "Reset zoom": {
+      "width": 36,
+      "height": 28
+    }
+  }
+}

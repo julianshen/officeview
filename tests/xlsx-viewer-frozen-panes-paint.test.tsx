@@ -27,7 +27,7 @@ describe('frozen pane paint', () => {
     const draws = vi.spyOn(pane, 'drawImage'), fills = vi.spyOn(pane, 'fillRect'), clips = vi.spyOn(pane, 'clip')
     const origin = { x: 5 * T + 100, y: 5 * T + 100 }
     renderer.present(pane, {
-      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
       identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
       origin, viewport: { width: 640, height: 400 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
       frozen: { rows: 1, cols: 1, left: 64, top: 20 },
@@ -52,7 +52,7 @@ describe('frozen pane paint', () => {
     const pane = canvas.getContext('2d')!
     const draws = vi.spyOn(pane, 'drawImage')
     renderer.present(pane, {
-      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
       identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
       origin: { x: 100, y: 100 }, viewport: { width: 400, height: 300 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
       frozen: { rows: 1, cols: 1, left: 64, top: 20 },
@@ -71,7 +71,7 @@ describe('frozen pane paint', () => {
     const pane = canvas.getContext('2d')!
     const clips = vi.spyOn(pane, 'clip'), draws = vi.spyOn(pane, 'drawImage')
     renderer.present(pane, {
-      sheet: {} as never, geometry: {} as never, layoutCache: {} as never, merges: {} as never,
+      sheet: {} as never, geometry: {} as never, paletteKey: '', layoutCache: {} as never, merges: {} as never,
       identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 },
       origin: { x: 10, y: 10 }, viewport: { width: 100, height: 100 }, zoom: 1, dpr: 1, extent: { width: 64 * T, height: 64 * T },
     })
@@ -94,7 +94,9 @@ describe('frozen pane semantics and headers', () => {
     // Header row, frozen row 1, then the body from row 2 + 2400/24 = row 102.
     expect(rows.slice(0, 3)).toEqual(['1', '2', String(2400 / 24 + 2 + 1)])
     expect(ui.getAllByRole('gridcell', { name: /^A1,/ })).toHaveLength(1)
-    expect(within(grid).getAllByRole('columnheader').map(header => header.textContent?.trim().charAt(0)).slice(0, 3)).toEqual(['↖', 'A', 'L'])
+    const colHeaders = within(grid).getAllByRole('columnheader')
+    expect(colHeaders[0].querySelector('svg[data-icon="corner"]')).toBeTruthy()
+    expect(colHeaders.map(header => header.textContent?.trim().charAt(0)).filter(Boolean).slice(0, 2)).toEqual(['A', 'L'])
   })
 
   it('headers of scrolling rows/columns never overlap the pinned strip', () => {

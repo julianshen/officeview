@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OfficeFile, type ViewerWorkerPort } from '../components/OfficeFile'
+import '../styles/officeview.css'
 import type { SheetFrameStats } from '../components/xlsx/InteractiveSheetDoc'
 import type { MainLedgerSnapshot, MainMemoryLedger } from '../xlsx/view/mainLedger'
 import type { PerfReply, PerfRequest } from './viewerPerfWorker'

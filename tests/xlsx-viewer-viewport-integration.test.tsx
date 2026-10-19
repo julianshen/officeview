@@ -226,9 +226,11 @@ describe('interactive sheet viewport (S5.2)', () => {
     await settle()
     expect(h.last().basePaints).toBe(base)
     const overlay = ui.getByTestId('officeview-sheet-overlay') as HTMLCanvasElement
-    const [r, g, b, a] = overlay.getContext('2d')!.getImageData(20, 10, 1, 1).data
+    // Interior of the active match: the translucent wash must still expose text
+    // on the base canvas. An opaque find-active fill fails this assertion.
+    const [r,g,b,a] = overlay.getContext('2d')!.getImageData(20,10,1,1).data
     expect(a).toBeGreaterThan(0)
-    // Yellow wash (rgba(255, 214, 0, 0.45)): red and green, no blue.
+    expect(a).toBeLessThan(160)
     expect(r).toBeGreaterThan(b + 100)
     expect(g).toBeGreaterThan(b + 80)
   })

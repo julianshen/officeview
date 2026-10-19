@@ -1,3 +1,4 @@
+import { useCanvasColors } from '../canvasColors'
 /**
  * Interactive sheet viewport (plan S5.2; spec §§5.5, 9, 10.1, 11, 12.4), mounted
  * by <OfficeDoc interactiveSheets> for XLSX documents and loaded on demand.
@@ -23,6 +24,8 @@
  */
 import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
+import { Icon } from '../Icon'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
@@ -77,6 +80,9 @@ import { SheetNavigator } from './SheetNavigator'
 import type { HiddenCellInspection } from './ViewerStatus'
 import { SheetTileRenderer, TILE_BYTES, admitDeviceScale, paneSurfaceBytes, type SheetFrame } from './sheetTiles'
 import { SearchBar, ZoomControls } from '../viewerControls'
+import { MotionRoot, Tick } from '../motion/presets'
+import { themeRootProps, type ThemeMode } from '../theme'
+import { warnIfStylesMissing } from '../styleWarning'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { pagedSheetGeometry } from './pagedGeometry'
@@ -137,6 +143,7 @@ export interface InteractiveSheetDocProps {
   watermark?: WatermarkOptions
   fallbackFonts?: FallbackFontsOptions
   pageGapPx?: number
+  theme?: ThemeMode
   /** @internal Committed sort/filter views per sheet id (S9.1 seam). */
   views?: Readonly<Record<string, SheetViewInput>>
   /** @internal Instrumentation for tests and the browser harness. */
@@ -246,26 +253,6 @@ function yieldPrint(id: string): void {
   if (printOwner?.id !== id) return
   printOwner.style.remove()
   printOwner = null
-}
-/** Viewer chrome font (toolbar, headers, status, popups): never the host page's. */
-const CHROME_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
-/** UA form controls do not inherit fonts; one shared rule (while any viewer is mounted) makes them. */
-let fontRule: { style: HTMLStyleElement; users: number } | null = null
-function retainFontRule(): () => void {
-  if (!fontRule) {
-    const style = globalThis.document.createElement('style')
-    style.setAttribute('data-officeview-sheet-font', '')
-    // The search row sits in the toolbar flow (never over the navigator), and the
-    // zoom cluster clears the status line.
-    style.textContent = '[data-officeview-sheet-instance] :is(button,input,select,textarea){font:inherit}[data-officeview-sheet-instance] h2{font-size:1.15em;margin:0 0 8px}'
-      + '[data-officeview-ui=sheet-search]>[data-testid=officeview-search]{position:static!important;max-width:100%!important;box-shadow:none!important;padding:0!important}'
-      + `[data-officeview-sheet-instance]>[data-testid=officeview-zoom-controls]{bottom:calc(env(safe-area-inset-bottom) + ${STATUS_BAR_HEIGHT + 12}px)!important}`
-    globalThis.document.head.appendChild(style)
-    fontRule = { style, users: 0 }
-  }
-  const rule = fontRule
-  rule.users++
-  return () => { if (--rule.users === 0 && fontRule === rule) { rule.style.remove(); fontRule = null } }
 }
 /** Print units render at this device scale when the print bitmap budget admits it. */
 const PRINT_SCALE = 2
@@ -650,6 +637,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // ---- layers ----
   const baseRef = useRef<HTMLCanvasElement | null>(null)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const palette = useCanvasColors(wrapperRef, props.theme ?? 'system')
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const device = { width: Math.ceil(viewport.width * dpr), height: Math.ceil(viewport.height * dpr) }
@@ -712,7 +701,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
     return {
-      sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
+      sheet: entry.sheet, geometry: entry.geometry, identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
       assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
@@ -739,7 +728,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       ['layout', 'caches', layout], ['merges', 'caches', merges], ['layout', 'resize-sizes', sized],
       // Every element the viewer renders (its toolbar, navigation, headers and
       // status as well as the pane), each with its React fiber and props.
-      ['dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current))],
+      ['dom', 'grid', heldDomBytes(domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))],
       ['canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0],
     ]
     if (domReservation.current) { domReservation.current = 0; updates.push(['dom', 'resize-reservation', 0]) }
@@ -788,7 +777,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.fillStyle = '#666666'
+      ctx.fillStyle = palette.colors['pending-text'] ?? '#666666'
       ctx.font = '12px sans-serif'
       ctx.fillText('Loading…', 8, 20)
       return
@@ -819,7 +808,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
@@ -1105,12 +1094,32 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The header sort in flight (spec §12.2 acknowledgment): shown with the click,
   // cleared when its own job ends; any newer job or a sheet switch replaces it.
   const [sortPending, setSortPending] = useState<{ col: number; job: AbortController } | null>(null)
+  const domHold = useRef<{ job: AbortController; bytes: number } | null>(null)
+  const heldDomBytes = (measured: number) => Math.max(measured, domHold.current?.bytes ?? 0)
   useEffect(() => { closePopup(); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
+  // A job's hold ends in the commit that no longer shows its pending glyph
+  // (completion, refusal, cancellation or a sheet switch), never when the job
+  // merely settles: until React commits, the DOM still holds the smaller
+  // spinner and a re-measure would publish the dip. A newer job keeps its own
+  // hold. Layout phase: before the observer's microtask and chargeMain, which
+  // then measure the restored DOM.
+  useLayoutEffect(() => {
+    const hold = domHold.current
+    if (!hold || sortPending?.job === hold.job) return
+    domHold.current = null
+    const el = rootRef.current ?? paneRef.current
+    if (live.current && el) mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(el)))
+  }, [sortPending, mainLedger, live])
   useEffect(() => () => controlJob.current?.abort(), [])
   const sortCycle = async (col: number, shift: boolean) => {
     const sheetId = activeSheetId
     controlJob.current?.abort()
     const abort = new AbortController(); controlJob.current = abort
+    // The pending glyph has fewer elements than the resting one, and the DOM
+    // charge is unconditional: hold it at its current bytes until this job
+    // ends, so admitted work (a ring-tile prefetch) cannot take the dip and the
+    // restored glyph never re-measures the ledger past the hard budget (§12.4).
+    domHold.current = { job: abort, bytes: Math.max(domHold.current?.bytes ?? 0, mainLedger.ownerBytes('dom', 'grid')) }
     // Acknowledge before any await: admission over a large paged range can take long.
     setSortPending({ col, job: abort })
     try {
@@ -1126,6 +1135,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const result = await client.sort(owner, keys.length ? { range: resolved.range, keys, caseSensitive: previous?.caseSensitive ?? false } : null, abort.signal)
       if (!abort.signal.aborted) setAnnouncement('snapshot' in result ? 'View-only sort applied; formulas unchanged.' : failureText(result))
     } catch (error) { if (!abort.signal.aborted) setAnnouncement(error instanceof Error ? error.message : 'Sort unavailable.') }
+    // The DOM hold ends in the commit that clears this pending state (above).
     finally { setSortPending(pending => (pending?.job === abort ? null : pending)) }
   }
   const copyJob = useRef<AbortController | null>(null), copyToken = useRef(0)
@@ -1264,7 +1274,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (index === activeHit) active.push(...rects)
       })
     }
-    paintFindOverlay(ctx, highlights, active)
+    paintFindOverlay(ctx, highlights, active, palette.colors)
     if (selection.ranges.length) {
       const records = overlayRecords(entry.metrics, pane, profile)
       // Past the per-cell cap the membership is coalesced into pixel groups, never dropped.
@@ -1273,7 +1283,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const geometry = records
         ? gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
         : gridSelectionOverlay({ contains: () => true }, coarse!.records, pane, scroll.zoom * dpr)
-      paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, origin, scroll.zoom, bias), dpr)
+      paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, origin, scroll.zoom, bias), dpr, palette.colors)
     }
     if (pinned) ctx.restore()
     }
@@ -1281,7 +1291,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setSelectionIncomplete(selection.ranges.length ? incomplete : false)
     report()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scroll, selection, page, activeHit, viewport, dpr, identityKey, loadTick])
+  }, [scroll, selection, page, activeHit, viewport, dpr, identityKey, loadTick, palette.key])
 
   // Keep the native scroller on the window's physical segment (Go To, keys, recenter).
   const syncing = useRef(false)
@@ -1382,17 +1392,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // controls) never zooms the browser page; React's wheel listeners are passive,
   // so this one is native, on the outer wrapper that also holds the controls.
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
   // DOM a child commits on its own (a popup's value list arriving through its
   // own state) is charged when it lands, not at the next parent render: one
   // MutationObserver callback per task re-counts the viewer's elements by class.
   useLayoutEffect(() => {
     const el = rootRef.current
     if (!el || typeof MutationObserver === 'undefined') return
-    const observer = new MutationObserver(() => { if (live.current && el.isConnected) mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(el))) })
+    const observer = new MutationObserver(() => { if (live.current && el.isConnected) mainLedger.set('dom', 'grid', heldDomBytes(domClassBytes(domClassCounts(el)))) })
     observer.observe(el, { childList: true, subtree: true })
     return () => observer.disconnect()
   }, [mainLedger, live])
+  // Once per mount: is officeview.css loaded? (spec §5, R10)
+  useEffect(() => { if (wrapperRef.current) warnIfStylesMissing(wrapperRef.current) }, [])
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
@@ -1498,8 +1509,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     host.head.appendChild(guard)
     return () => guard.remove()
   }, [allowPrint, instance])
-
-  useLayoutEffect(() => retainFontRule(), [])
 
   const onGridChange = (transition: GridTransition) => {
     cancelCopy()
@@ -1695,10 +1704,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const dockZoom = touchControls || pane.width < NARROW_PANE_PX
   const zoomProps = { zoom, onIn: () => zoomBy(1), onOut: () => zoomBy(-1), onReset: resetZoom, atFit: zoom <= SHEET_MIN_ZOOM }
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
+  // Coarse pointer: 44px targets (spec §9.3) shown icon-only; the label stays in
+  // the accessible name through an sr-only span, so names are unchanged.
+  const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:justify-center ov:gap-1 ov:coarse:min-h-11 ov:coarse:min-w-11 ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'
+  const toolbarLabel = 'ov:coarse:sr-only'
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
-    // an unsized host gets the default 400px pane.
-    <div ref={wrapperRef} data-officeview-sheet-instance={instance} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto', fontFamily: CHROME_FONT, fontSize: 13, color: '#1f2937' }}>
+    // an unsized host gets the default 400px pane. Chrome motion only (spec §6.4).
+    <MotionRoot>
+    <div ref={wrapperRef} data-officeview-sheet-instance={instance} {...themeRootProps(props.theme, instance)} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
       <div
         ref={rootRef}
         className={props.className}
@@ -1711,15 +1725,35 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         onCopyCapture={event => { if (!allowCopy) event.preventDefault(); else if ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid')) { event.preventDefault(); void copyGrid() } }}
         onContextMenu={allowCopy ? undefined : event => event.preventDefault()}
         style={{
-          background: props.background ?? '#888888', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto',
+          background: props.background ?? 'var(--ov-color-backdrop)', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto',
           WebkitUserSelect: allowCopy ? undefined : 'none', userSelect: allowCopy ? undefined : 'none', ...props.style,
         }}
       >
         <div data-officeview-sheet-screen="" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto' }}>
-        <div data-officeview-ui="sheet-toolbar" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 12px', padding: '4px 8px', background: '#f9fafb', boxShadow: 'inset 0 -1px #858b94' }}>
+        <div data-officeview-ui="sheet-toolbar" className="ov:bg-chrome ov:border-b ov:border-border ov:flex ov:flex-wrap ov:items-center ov:gap-x-3 ov:gap-y-1 ov:px-2 ov:py-1">
         <SheetNavigator documentId={docId} sheets={doc.sheets.map((sheet, index) => ({ id: sheetIds[index], name: sheet.name }))}
           activeSheetId={activeSheetId} onSheetChange={onSheetChange} onNavigate={onNavigate} onNotice={setAnnouncement} disabled={!entry} />
-        <div data-officeview-ui="sheet-actions"><button type="button" disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>Copy selection</button>{copyPending && <button type="button" onClick={cancelCopy}>Cancel copy</button>}<button type="button" disabled={!allowPrint} onClick={() => void preparePrint()}>Print</button><button type="button" disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>Reset sizes</button></div>
+        <div data-officeview-ui="sheet-actions" className="ov:flex ov:items-center ov:gap-1">
+          <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
+            <Icon icon={Copy} name="copy" size={14} />
+            <span className={toolbarLabel}>Copy selection</span>
+          </button>
+          {copyPending && (
+            <button type="button" className={toolbarBtn} onClick={cancelCopy}>
+              Cancel copy
+            </button>
+          )}
+          {allowPrint && (
+            <button type="button" className={toolbarBtn} onClick={() => void preparePrint()}>
+              <Icon icon={Printer} name="printer" size={14} />
+              <span className={toolbarLabel}>Print</span>
+            </button>
+          )}
+          <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
+            <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
+            <span className={toolbarLabel}>Reset sizes</span>
+          </button>
+        </div>
         {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}
         {showSearch && (
           <div data-officeview-ui="sheet-search" style={{ flex: '1 1 260px', minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
@@ -1774,6 +1808,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       {/* A modal popup (the mobile filter sheet) owns the bottom of the viewer. */}
       {showZoomControls && !dockZoom && !popup && <ZoomControls {...zoomProps} />}
     </div>
+    </MotionRoot>
   )
 }
 
@@ -1787,17 +1822,19 @@ function intersectVisibility(mask: RowVisibility, other: CompactRowVisibility): 
   return createRowVisibility(other.logicalCount, slot => mask.visible(slot) && other.visible(slot))
 }
 
+/** Control-utility rule (spec §6.8): colour, background, padding and border as ov: utilities. */
+const DOCKED = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-1.5 ov:py-1 ov:text-xs ov:font-semibold ov:flex ov:items-center ov:justify-center'
 /** Below this pane width (CSS px) the zoom controls dock into the toolbar. */
 const NARROW_PANE_PX = 600
 /** The zoom controls as a toolbar group (same names and test id as the floating
  * cluster); 44px targets on a coarse pointer (spec §9.3). */
 function DockedZoomControls({ zoom, onIn, onOut, onReset, atFit, touch }: { zoom: number; onIn: () => void; onOut: () => void; onReset: () => void; atFit: boolean; touch: boolean }): ReactElement {
   const side = touch ? 44 : 28
-  const btn: CSSProperties = { minWidth: side, minHeight: side, padding: '0 6px', fontSize: 14 }
-  return <div role="group" aria-label="Zoom" data-testid="officeview-zoom-controls" data-officeview-ui="sheet-zoom" style={{ display: 'flex', gap: 4 }}>
-    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} style={btn}>−</button>
-    <button type="button" onClick={onReset} aria-label="Reset zoom" style={{ ...btn, fontSize: 12, fontWeight: 600 }}>{Math.round(zoom * 100)}%</button>
-    <button type="button" onClick={onIn} aria-label="Zoom in" style={btn}>+</button>
+  const btn: CSSProperties = { minWidth: side, minHeight: side }
+  return <div role="group" aria-label="Zoom" data-testid="officeview-zoom-controls" data-officeview-ui="sheet-zoom" className="ov:flex ov:items-center ov:gap-1">
+    <button type="button" onClick={onOut} aria-label="Zoom out" disabled={atFit} className={DOCKED} style={btn}><Icon icon={Minus} name="minus" size={14} /></button>
+    <button type="button" onClick={onReset} aria-label="Reset zoom" className={DOCKED} style={btn}><Tick k={Math.round(zoom * 100)}>{Math.round(zoom * 100)}%</Tick></button>
+    <button type="button" onClick={onIn} aria-label="Zoom in" className={DOCKED} style={btn}><Icon icon={Plus} name="plus" size={14} /></button>
   </div>
 }
 

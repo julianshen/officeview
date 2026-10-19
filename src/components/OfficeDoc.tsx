@@ -1,3 +1,4 @@
+import type { CanvasColors } from './canvasColors'
 /**
  * <OfficeDoc> — renders a parsed office document (any format) onto stacked
  * per-page <canvas> elements inside a scrollable container. Handles:
@@ -6,11 +7,11 @@
  *  - IntersectionObserver-based lazy rendering (only visible pages paint)
  *  - touch scrolling is native (overflow scroll), no custom gesture code needed
  */
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { getPaintables, type PageSpec, type Paintable, type PaintableArray } from '../render/paint'
 import type { WatermarkOptions } from '../core/watermark'
 import type { FallbackFontsOptions } from '../core/fonts/fallback'
-import { buildTextIndex, findMatches, stepMatch, type SearchMatch, type TextIndex } from '../core/search'
+import { buildTextIndex, findMatches, type SearchMatch, type TextIndex } from '../core/search'
 import {
   hitTest,
   isEmptyRange,
@@ -24,17 +25,20 @@ import {
 } from '../core/selection'
 import { isViewerUiTarget } from './xlsx/gridEvents'
 import type { PageOverlay } from '../core/overlay'
-import { SearchBar, ZoomControls } from './viewerControls'
+import type { PagedChromeProps } from './paged/PagedChrome'
+import { PAGE_PADDING_PX as PAD, PAGED_STATUS_HEIGHT, PAGED_TOOLBAR_HEIGHT, COMPACT_PANE_PX, isCompact } from './paged/metrics'
+import { useCoarsePointer } from './pointer'
+import type { ZoomContext, ZoomOutcome } from './zoomRouting'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
+import { themeRootProps, type ThemeMode } from './theme'
 import {
   distance,
+  MAX_ZOOM,
   midpoint,
   panTransform,
-  pinchTransform,
   stepZoom,
   transformCss,
-  zoomAt,
   type Point,
   type Transform,
   type Viewport,
@@ -44,7 +48,7 @@ export type OfficeDocSource = import('../docx/types').DocxDocument | import('../
 
 export interface OfficeDocProps {
   document: OfficeDocSource
-  /** Container background. */
+  /** Container background (default: the --ov-color-backdrop token). */
   background?: string
   /** Gap between pages in px. */
   pageGapPx?: number
@@ -111,6 +115,16 @@ export interface OfficeDocProps {
    * review; its behaviour may change between minor versions.
    */
   interactiveSheets?: boolean
+  /**
+   * Colour theme (default 'system', which follows prefers-color-scheme). Set on
+   * the viewer's theme root as data-ov-theme; hosts re-brand by overriding the
+   * --ov-* tokens from any rule that targets [data-ov-theme-root].
+   */
+  theme?: ThemeMode
+  /** Show the Word/PowerPoint toolbar and status line (default true). */
+  showToolbar?: boolean
+  /** File name shown in the toolbar; <OfficeFile> derives one when unset. */
+  title?: string
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
@@ -124,9 +138,7 @@ export interface HighlightRect {
 }
 
 interface SearchOverlay extends PageOverlay {
-  /** Alias kept for the paint call sites. */
-  rects: HighlightRect[]
-  active: HighlightRect[]
+  colors?: CanvasColors
 }
 
 /**
@@ -134,16 +146,16 @@ interface SearchOverlay extends PageOverlay {
  * while the ctx still carries the page transform, so rectangles are in page
  * coordinates.
  */
-function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay): void {
+function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay, colors: Pick<CanvasColors, 'find' | 'find-active' | 'text-selection'> = {}): void {
   ctx.save()
-  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
-  for (const r of overlay.rects) ctx.fillRect(r.x, r.y, r.width, r.height)
+  ctx.fillStyle = colors.find ?? 'rgba(255,214,0,.45)'
+  for (const r of overlay.highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
   // selection sits on top of the search wash, as it does in a browser
-  ctx.fillStyle = 'rgba(64, 128, 255, 0.35)'
+  ctx.fillStyle = colors['text-selection'] ?? 'rgba(64,128,255,.35)'
   for (const r of overlay.selection) ctx.fillRect(r.x, r.y, r.width, r.height)
-  ctx.strokeStyle = '#ff8c00'
+  ctx.strokeStyle = colors['find-active'] ?? '#ff8c00'
   ctx.lineWidth = 1.5
-  for (const r of overlay.active) ctx.strokeRect(r.x, r.y, r.width, r.height)
+  for (const r of overlay.activeMatch) ctx.strokeRect(r.x, r.y, r.width, r.height)
   ctx.restore()
 }
 
@@ -219,7 +231,7 @@ function PageCanvas({
     if (!ctx) return
     ctx.setTransform(backingW / spec.widthPx, 0, 0, backingW / spec.widthPx, 0, 0)
     paint(ctx)
-    if (overlay) paintHighlights(ctx, overlay)
+    if (overlay) paintHighlights(ctx, overlay, overlay.colors)
     // overlay.key changes whenever the match set or active match changes
   }, [paint, backingW, backingH, spec.widthPx, overlay?.key])
 
@@ -242,7 +254,7 @@ function PageCanvas({
 
 function LegacyOfficeDoc({
   document,
-  background = '#888888',
+  background,
   pageGapPx = 16,
   className,
   style,
@@ -252,7 +264,11 @@ function LegacyOfficeDoc({
   allowPrint = true,
   watermark,
   fallbackFonts,
+  theme,
+  showToolbar = true,
+  title,
 }: OfficeDocProps): ReactElement {
+  const instance = useId()
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
   // The watermark is painted into the page bitmap, so changing it has to repaint.
@@ -261,6 +277,7 @@ function LegacyOfficeDoc({
   const markKey = watermark ? JSON.stringify(watermark) : ''
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
   const owner = useMemo(() => ({ document, markKey, fontKey }), [document, markKey, fontKey])
+  const [printRequest, requestPrint] = useState<{ owner: typeof owner }>()
   const ownerRef = useRef<typeof owner | null>(owner)
   ownerRef.current = owner
   const copyAllowed = useRef(allowCopy)
@@ -270,7 +287,8 @@ function LegacyOfficeDoc({
     let lease: PaintableArray | undefined
     ownerRef.current = owner
     setPages([])
-    setTransform({ zoom: 1, panX: 0, panY: 0 })
+    commit(IDENTITY)
+    pending.current = 0
     getPaintables(document, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) }).then(p => {
       if (cancelled) { p.dispose(); return }
       lease = p
@@ -285,16 +303,36 @@ function LegacyOfficeDoc({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
-  const [transform, setTransform] = useState<Transform>({ zoom: 1, panX: 0, panY: 0 })
+  const [transform, setTransform] = useState<Transform>(IDENTITY)
+  // Every transform change goes through commit, so handlers firing before the
+  // next render (a burst of wheel events) build on the latest value.
+  const tRef = useRef(transform)
+  const commit = (t: Transform) => { tRef.current = t; setTransform(t) }
+  // Fit-to-width is a layout mode (spec §6.9): pages are laid out at the pane
+  // width, the transform stays at zoom 1 and the container scrolls natively.
+  const [fitMode, setFit] = useState(false)
+  const fitRef = useRef(false)
+  const setFitMode = (on: boolean) => { fitRef.current = on; setFit(on) }
+  // A scrollTop applied in the commit that switches overflow (spec §6.11):
+  // scroll and pan trade places atomically.
+  const pending = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (el && pending.current !== null) { el.scrollTop = pending.current; pending.current = null }
+  })
   // gesture bookkeeping
   const pointers = useRef(new Map<number, Point>())
-  const gestureStart = useRef<{ transform: Transform; distance: number; center: Point } | null>(null)
+  const gestureStart = useRef<{ context: ZoomContext; at: Point; distance: number } | null>(null)
   const panStart = useRef<{ transform: Transform; point: Point } | null>(null)
 
   // React attaches wheel listeners as passive, so onWheel cannot stop the
   // browser's own Ctrl/Cmd+wheel page zoom; a native listener on the outer
   // wrapper can, over the pages and every control (search, copy, zoom).
+  const [palette, setPalette] = useState<CanvasColors & {key: string}>()
   const wrapperRef = useRef<HTMLDivElement | null>(null)
+  // Once per mount: request the zoom routing. (The lazy chrome checks that
+  // officeview.css is loaded, spec §5, R10.)
+  useEffect(() => { void loadRouter() }, [])
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
@@ -325,13 +363,19 @@ function LegacyOfficeDoc({
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  const specs = pages.map((p) => p.spec)
+  const specs = useMemo(() => pages.map((p) => p.spec), [pages])
 
-  // Reserve: page width = min(container inner width, natural width)
-  const padding = 16
-  const avail = Math.max(0, containerWidth - padding * 2)
+  // Natural: page width = min(container inner width, natural width). Fit:
+  // the pane width, capped at MAX_ZOOM x natural; containers 0-32px wide
+  // keep the natural width.
+  const avail = Math.max(0, containerWidth - PAD * 2)
   const maxPageW = specs.length > 0 ? Math.max(...specs.map((s) => s.widthPx)) : 800
-  const displayWidth = Math.min(avail || maxPageW, maxPageW)
+  const naturalWidth = Math.min(avail || maxPageW, maxPageW)
+  const fitWidth = avail > 0 ? Math.min(avail, maxPageW * MAX_ZOOM) : naturalWidth
+  const displayWidth = fitMode ? fitWidth : naturalWidth
+  const layout = { specs, naturalWidth, fitWidth, gap: pageGapPx }
+  const layoutRef = useRef(layout)
+  layoutRef.current = layout
 
   // content size at fit scale, used for pan clamping
   const contentWidth = displayWidth || 1
@@ -368,10 +412,11 @@ function LegacyOfficeDoc({
     const pts = [...pointers.current.values()]
     if (pts.length === 2) {
       // start a pinch from the current transform
+      // the full start context: its view is derived once the routing is in
       gestureStart.current = {
-        transform,
+        context: zoomContext(),
+        at: midpoint(pts[0], pts[1]),
         distance: Math.max(1, distance(pts[0], pts[1])),
-        center: midpoint(pts[0], pts[1]),
       }
       panStart.current = null
       selectionDrag.current = null
@@ -406,9 +451,8 @@ function LegacyOfficeDoc({
     const pts = [...pointers.current.values()]
     if (pts.length >= 2 && gestureStart.current) {
       const g = gestureStart.current
-      setTransform(
-        pinchTransform(g.transform, g.distance, Math.max(1, distance(pts[0], pts[1])), midpoint(pts[0], pts[1]), viewportRef.current),
-      )
+      const ratio = Math.max(1, distance(pts[0], pts[1])) / g.distance, at = midpoint(pts[0], pts[1])
+      routed((m) => { const view = m.viewAt(g.context, g.at); apply(m.zoomTo(zoomContext(), view, view.zoom * ratio, at)) })
       return
     }
     // a drag past the threshold while zoomed pans instead of selecting
@@ -417,7 +461,7 @@ function LegacyOfficeDoc({
         selectionDrag.current = null
       }
       const start = panStart.current
-      setTransform(panTransform(start.transform, { x: point.x - start.point.x, y: point.y - start.point.y }, viewportRef.current))
+      commit(panTransform(start.transform, { x: point.x - start.point.x, y: point.y - start.point.y }, viewportRef.current))
       return
     }
     if (pts.length === 1 && selectionDrag.current && !selectionDrag.current.moved) {
@@ -445,8 +489,9 @@ function LegacyOfficeDoc({
     if (!e.ctrlKey && !e.metaKey) return
     if (isViewerUiTarget(e.target)) return
     e.preventDefault()
+    const at = localPoint(e)
     const factor = Math.exp(-e.deltaY / 250)
-    setTransform((t) => zoomAt(t, t.zoom * factor, localPoint(e), viewportRef.current))
+    zoomAround(at, (z) => z * factor)
   }
 
   const onDoubleClick = (e: React.MouseEvent) => {
@@ -459,7 +504,7 @@ function LegacyOfficeDoc({
         selectWordAt(caret)
         return
       }
-      setTransform((t) => (t.zoom > 1 ? { zoom: 1, panX: 0, panY: 0 } : zoomAt(t, 2, at, viewportRef.current)))
+      zoomAround(at, (z) => (z > 1 ? 1 : 2))
     })
   }
 
@@ -469,21 +514,50 @@ function LegacyOfficeDoc({
     void caretFromEvent(e).then((caret) => caret && selectLineAt(caret))
   }
 
-  const zoomBy = (direction: 1 | -1) => {
-    setTransform((t) => {
-      const next = stepZoom(t.zoom, direction)
-      const anchor = { x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 }
-      return next <= 1 ? { zoom: 1, panX: 0, panY: 0 } : zoomAt(t, next, anchor, viewportRef.current)
-    })
+  // Every zoom input goes through zoomRouting (scroll/pan model, fit exit).
+  const zoomContext = (): ZoomContext => ({
+    transform: tRef.current,
+    fit: fitRef.current,
+    scrollTop: pending.current ?? containerRef.current?.scrollTop ?? 0,
+    ...layoutRef.current,
+    viewport: viewportRef.current,
+  })
+  const apply = (o: ZoomOutcome | null) => {
+    if (!o) return
+    // No transform or mode change means no commit to carry the scrollTop.
+    if (o.fit === fitRef.current && transformCss(o.transform) === transformCss(tRef.current)) { if (containerRef.current) containerRef.current.scrollTop = o.scrollTop; return }
+    setFitMode(o.fit)
+    pending.current = o.scrollTop
+    commit(o.transform)
   }
-
-  const reset = () => setTransform({ zoom: 1, panX: 0, panY: 0 })
+  // Input queued for the routing applies only to the document it was made on.
+  const routed = (fn: (m: Router) => void) => { const o = ownerRef.current; route((m) => { if (o && ownerRef.current === o) fn(m) }) }
+  const zoomAround = (at: Point, next: (zoom: number) => number) => routed((m) => {
+    const c = zoomContext()
+    const view = m.viewAt(c, at)
+    apply(m.zoomTo(c, view, next(view.zoom), at))
+  })
+  const center = (): Point => ({ x: viewportRef.current.width / 2, y: viewportRef.current.height / 2 })
+  const zoomBy = (direction: 1 | -1) => zoomAround(center(), (z) => stepZoom(z, direction))
+  const reset = () => zoomAround(center(), () => 1)
+  const toggleFit = () => routed((m) => apply(m.toggleFit(zoomContext())))
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
+      e.preventDefault()
+      if (allowPrint) requestPrint({ owner })
+    }
+    if (e.defaultPrevented) return
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
-      inputRef.current?.focus()
-      inputRef.current?.select()
+      if (inputRef.current) {
+        inputRef.current.focus()
+        inputRef.current.select()
+      } else if (showSearch) {
+        // Find is collapsed or its chunk is still loading: the toolbar
+        // expands and focuses it. With search off nothing is queued.
+        setFocusSearchRequest((n) => n + 1)
+      }
       return
     }
     // Protection policy and Escape fall-through apply even when the event comes
@@ -495,11 +569,7 @@ function LegacyOfficeDoc({
       e.preventDefault()
       return
     }
-    if (!allowPrint && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
-      e.preventDefault()
-      return
-    }
-    if (e.key === 'Escape' && selection && !e.defaultPrevented) {
+    if (e.key === 'Escape' && selection) {
       setSelection(undefined)
       selectionAnchor.current = null
       return
@@ -525,6 +595,7 @@ function LegacyOfficeDoc({
   const [indexing, setIndexing] = useState(false)
   const indexRef = useRef<TextIndex | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const [focusSearchRequest, setFocusSearchRequest] = useState(0)
 
   const indexOwnerRef = useRef<typeof owner | null>(null)
   const indexPendingRef = useRef<{ owner: typeof owner; promise: Promise<TextIndex> } | null>(null)
@@ -561,25 +632,6 @@ function LegacyOfficeDoc({
     setActive(-1)
   }, [owner])
 
-  // Print suppression. The document is drawn to canvases, so it reaches the
-  // print pipeline as pixels; hiding the viewer with a print-only rule is what
-  // actually removes it from a printout. The rule is installed only while a
-  // viewer with allowPrint={false} is mounted, and removed on unmount so a
-  // later print of the host page is unaffected. `document` is shadowed by the
-  // prop of the same name, hence globalThis.
-  useEffect(() => {
-    if (allowPrint) return
-    const doc = globalThis.document
-    if (!doc) return
-    const style = doc.createElement('style')
-    style.setAttribute('data-officeview-print-guard', '')
-    style.textContent = '@media print { [data-officeview-root] { display: none !important; } }'
-    doc.head.appendChild(style)
-    return () => {
-      style.remove()
-    }
-  }, [allowPrint])
-
   useEffect(() => {
     if (query.trim().length === 0) {
       setMatches([])
@@ -598,45 +650,6 @@ function LegacyOfficeDoc({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, pages, owner])
-
-  const goTo = (direction: 1 | -1) => {
-    setActive((current) => stepMatch(matches, current, direction))
-  }
-
-  // bring the active match's page into view
-  useEffect(() => {
-    const match = matches[active]
-    if (!match) return
-    const container = containerRef.current
-    if (!container) return
-    const canvas = container.querySelectorAll('canvas')[match.pageIndex] as HTMLElement | undefined
-    if (!canvas) return
-
-    // "visible" means inside the region's box *and* the viewport — the region
-    // itself may not be the scrolling element (it can grow to fit all pages).
-    const regionRect = container.getBoundingClientRect?.()
-    const canvasRect = canvas.getBoundingClientRect?.()
-    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : Infinity
-    const viewTop = Math.max(regionRect?.top ?? 0, 0)
-    const viewBottom = Math.min(regionRect?.bottom ?? viewportHeight, viewportHeight)
-    const pageVisible =
-      !!canvasRect && canvasRect.height > 0 && canvasRect.top >= viewTop && canvasRect.bottom <= viewBottom
-
-    if (!pageVisible) {
-      if (typeof canvas.scrollIntoView === 'function') {
-        // scrolls whichever ancestor actually scrolls
-        canvas.scrollIntoView({ block: 'start' })
-      } else {
-        const target = Math.max(0, canvas.offsetTop - padding)
-        if (typeof container.scrollTo === 'function') {
-          container.scrollTo({ top: target, behavior: 'smooth' })
-        } else {
-          container.scrollTop = target
-        }
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, matches])
 
   // ---- text selection ----
   const [selection, setSelection] = useState<SelectionRange | undefined>(undefined)
@@ -719,24 +732,60 @@ function LegacyOfficeDoc({
 
   const overlayFor = (pageIndex: number): SearchOverlay | undefined => {
     const searchRects =
-      matches.length === 0 ? [] : matches.filter((m) => m.pageIndex === pageIndex).flatMap((m) => m.rects)
-    const activeMatch = active >= 0 ? matches[active] : undefined
-    const activeRects = activeMatch && activeMatch.pageIndex === pageIndex ? activeMatch.rects : []
+      matches.filter((m) => m.pageIndex === pageIndex).flatMap((m) => m.rects)
+    const activeMatch = matches[active]
+    const activeRects = activeMatch?.pageIndex === pageIndex ? activeMatch.rects : []
     const selRects =
       selection && indexRef.current ? rectsForSelectionOnPage(indexRef.current, pageIndex, selection) : []
-    if (searchRects.length === 0 && activeRects.length === 0 && selRects.length === 0) return undefined
+    // The active match is already a member of searchRects.
+    if (!searchRects.length && !selRects.length) return undefined
     return {
-      rects: searchRects,
-      active: activeRects,
+      colors: palette,
       selection: selRects,
       highlights: searchRects,
       activeMatch: activeRects,
-      key: `${searchRects.length}:${active}:${selectionKey}:${query}`,
+      key: `${searchRects.length}:${active}:${selectionKey}:${query}:${palette?.key}`,
     }
   }
 
+  // Unmeasured (0) counts as regular: jsdom and display:none panes have no width.
+  const compact = isCompact(containerWidth || COMPACT_PANE_PX, useCoarsePointer())
+  const [statusSlot, setStatusSlot] = useState<HTMLDivElement | null>(null)
+  const chrome: PagedChromeProps = {
+    onPalette: setPalette,
+    document,
+    title,
+    compact,
+    statusSlot,
+    containerRef,
+    layout: { specs, displayWidth, gap: pageGapPx },
+    transform,
+    setTransform: commit,
+    zoom: fitMode ? fitWidth / naturalWidth : transform.zoom,
+    onZoom: zoomBy,
+    onReset: reset,
+    fitActive: fitMode,
+    onFit: toggleFit,
+    showZoom: showZoomControls,
+    search: showSearch ? { inputRef, query, onQuery: setQuery, matches, active, setActive, indexing } : null,
+    copy: allowCopy ? { state: copied, enabled: !!selection && !isEmptyRange(selection), onCopy: () => void doCopy() } : undefined,
+    allowPrint,
+    pages,
+    owner,
+    showToolbar,
+    print: printRequest,
+    focusSearchRequest,
+  }
+
   return (
-    <div ref={wrapperRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div ref={wrapperRef} {...themeRootProps(theme, instance)} className="ov:relative ov:flex ov:flex-col ov:min-h-0"
+      data-ov-print={allowPrint} onKeyDown={onKeyDown}>
+      {/* The lazy chrome also owns printing with showToolbar=false (if its
+          chunk fails, pages render without chrome, Find or print). Fixed
+          placeholders reserve visible chrome without shifting pages (§6.10). */}
+      <Suspense fallback={showToolbar && <div data-testid="officeview-toolbar-placeholder" className={SLOT} style={{ height: PAGED_TOOLBAR_HEIGHT[compact ? 'compact' : 'regular'] }} />}>
+        <PagedChrome {...chrome} />
+      </Suspense>
       <div
         ref={containerRef}
         className={className}
@@ -744,7 +793,6 @@ function LegacyOfficeDoc({
         aria-label="Document viewer"
         data-officeview-root=""
         tabIndex={0}
-        onKeyDown={onKeyDown}
         onDoubleClick={onDoubleClick}
         onClick={onClick}
         onWheel={onWheel}
@@ -755,13 +803,14 @@ function LegacyOfficeDoc({
         onCopyCapture={allowCopy ? undefined : preventNativeCopy}
         onContextMenu={allowCopy ? undefined : preventNativeCopy}
         style={{
-          background,
+          // the themed backdrop; a host background prop overrides the token
+          background: background ?? 'var(--ov-color-backdrop)',
           // at fit we let the browser do momentum scrolling; when zoomed we
           // own the pan and must not scroll the container
           overflow: zoomed ? 'hidden' : 'auto',
           WebkitOverflowScrolling: 'touch',
           touchAction: zoomed ? 'none' : 'pan-y',
-          padding,
+          padding: PAD,
           minHeight: 0,
           flex: '1 1 auto',
           position: 'relative',
@@ -790,66 +839,46 @@ function LegacyOfficeDoc({
               paint={p.paint}
               displayWidth={displayWidth}
               gap={pageGapPx}
-              baseScale={dpr}
+              baseScale={dpr * naturalWidth / displayWidth}
               boostedScale={dpr * transform.zoom}
-              boosted={zoomed}
+              boosted={zoomed || fitMode}
               rootRef={containerRef}
               overlay={overlayFor(i)}
             />
           ))}
         </div>
       </div>
-      {showSearch && (
-        <SearchBar
-          inputRef={inputRef}
-          query={query}
-          onQuery={(q) => setQuery(q)}
-          count={matches.length}
-          active={active}
-          indexing={indexing}
-          onPrev={() => goTo(-1)}
-          onNext={() => goTo(1)}
-        />
-      )}
-      {selection && allowCopy && !isEmptyRange(selection) && (
-        <button
-          type="button"
-          data-testid="officeview-copy-selection"
-          onClick={() => void doCopy()}
-          style={{
-            position: 'absolute',
-            bottom: 'calc(env(safe-area-inset-bottom) + 16px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '8px 16px',
-            borderRadius: 18,
-            border: 'none',
-            background: copied === 'failed' ? '#8a1f11' : copied === 'done' ? '#1a7f37' : 'rgba(20,22,28,0.92)',
-            color: '#fff',
-            fontSize: 14,
-            cursor: 'pointer',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
-            zIndex: 6,
-          }}
-        >
-          {copied === 'done' ? 'Copied ✓' : copied === 'failed' ? 'Copy blocked — press ⌘C' : 'Copy selection'}
-        </button>
-      )}
-      {showZoomControls && (
-        <ZoomControls
-          zoom={transform.zoom}
-          onIn={() => zoomBy(1)}
-          onOut={() => zoomBy(-1)}
-          onReset={reset}
-          atFit={!zoomed}
-        />
-      )}
+      {showToolbar && <div ref={setStatusSlot} data-testid="officeview-status-slot" className={SLOT} style={{ height: PAGED_STATUS_HEIGHT }} />}
     </div>
   )
 }
 
-// Loaded only when a host opts in for a spreadsheet; the legacy path never pulls it.
-const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
+// A chunk that fails to load (a redeploy removed it, a CSP blocks it) warns
+// once and degrades inside the viewer rather than unmounting the host.
+const warnChunk = (e: unknown) => console.warn('[officeview] chunk not loaded', e)
+/** The sheet viewer's loading or failure status, inside its own theme root. */
+const SheetStatus = (p: { theme?: ThemeMode; text: string }) => <div {...themeRootProps(p.theme, useId())}><div role="status" data-officeview-root="" style={{ padding: 16 }}>{p.text}</div></div>
+// Loaded only when a host opts in for a spreadsheet (or a worker-backed shell
+// needs it); the legacy path never pulls it. On failure: a visible status, never
+// the legacy renderer (a worker-backed shell has no resident rows).
+const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc').catch((e) => (warnChunk(e), { default: (p: { theme?: ThemeMode }) => <SheetStatus theme={p.theme} text="Spreadsheet viewer could not load. Reload to retry." /> as never })))
+
+// The toolbar, status line, page tracking and word count (spec §6.10). Key
+// handlers and zoom state stay here, eager.
+const PagedChrome = lazy(() => import('./paged/PagedChrome').catch((e) => (warnChunk(e), { default: () => null as never })))
+// The zoom routing is lazy too, requested by the first paged render: its
+// gestures need painted pages, so it is loaded before they can happen; an
+// input that still beats it is applied once it arrives.
+type Router = typeof import('./zoomRouting')
+let router: Router | undefined
+let routerP: Promise<Router | void> | undefined
+/** @internal Tests delay the routing module through this. */
+export const routerLoader = { load: (): Promise<Router> => import('./zoomRouting') }
+// One attempt: a failure warns once and zoom stays off (no retry per gesture).
+const loadRouter = () => routerP ??= routerLoader.load().then((m) => (router = m), warnChunk)
+const route = (fn: (m: Router) => void) => { if (router) fn(router); else void loadRouter().then((m) => m && fn(m)) }
+const SLOT = 'ov:shrink-0 ov:bg-chrome'
+const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
@@ -858,7 +887,7 @@ export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const paged = pagedWorkbookOf(document)
   if ((interactiveSheets || paged) && 'sheets' in document) {
     return (
-      <Suspense fallback={<div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div>}>
+      <Suspense fallback={<SheetStatus theme={props.theme} text="Loading spreadsheet viewer…" />}>
         <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />
       </Suspense>
     )

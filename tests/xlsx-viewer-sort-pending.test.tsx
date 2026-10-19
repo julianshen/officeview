@@ -11,6 +11,8 @@ import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { GRID_HEADER_SIZE } from '../src/components/xlsx/GridHeaders'
 import * as controlsModule from '../src/components/xlsx/viewerControlsClient'
 import { workbookOf } from './helpers/xlsx-find'
+import { domClassBytes, domClassCounts } from '../src/components/xlsx/domCost'
+import type { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -85,7 +87,7 @@ describe('header sort pending acknowledgment', () => {
       expect(pending(ui)).toEqual({ status: true, busy: true, header: true })
       expect(pendingSort.getAttribute('aria-description')).toBe('sorting')
       expect(pendingSort.title).toBe('Column B; sorting')
-      expect(pendingSort.textContent).toBe('…')
+      expect(pendingSort.querySelector('svg[data-icon="loader"]')).toBeTruthy()
       expect(pendingSort.getAttribute('aria-pressed')).toBe('false')
       expect(pendingSort.getAttribute('data-action-column')).toBe('1')
       expect(document.activeElement).toBe(grid)
@@ -115,12 +117,75 @@ describe('header sort pending acknowledgment', () => {
       expect(pending(ui)).toEqual({ status: false, busy: false, header: false })
       expect(committed.getAttribute('aria-description')).toBe('ascending')
       expect(committed.title).toBe('Column B; sort priority 1, ascending; ascending')
-      expect(committed.textContent).toBe('↑')
+      expect(committed.querySelector('svg[data-icon="arrow-up"]')).toBeTruthy()
       expect(committed.getAttribute('aria-pressed')).toBe('true')
       expect(committed.tabIndex).toBe(-1)
       expect(document.activeElement).toBe(grid)
       expect(statusText(ui)).toMatch(/View-only sort applied/)
     } finally { window.matchMedia = previous }
+  })
+
+  it('holds the DOM charge while pending: the smaller pending glyph frees no headroom that the restored glyph would overrun (§12.4)', async () => {
+    // The pending spinner has fewer elements than the resting sort glyph. If
+    // the charge followed that dip, admitted work (a ring-tile prefetch) could
+    // take the freed bytes, and the unconditional re-measure when the glyph
+    // returns would push the ledger over the hard budget.
+    const release = gateResolve()
+    let ledger: MainMemoryLedger | null = null
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([sheet('A')])} {...({ onMainLedger: (l: MainMemoryLedger) => { ledger = l } } as object)} />)
+    await ready(ui)
+    const sort = () => ui.getByRole('button', { name: 'Cycle sort column B' })
+    const before = ledger!.ownerBytes('dom', 'grid')
+    const whilePending: number[] = []
+    const set = ledger!.set.bind(ledger!)
+    ledger!.set = ((...args: Parameters<MainMemoryLedger['set']>) => {
+      set(...args)
+      if (args[0] === 'dom' && args[1] === 'grid' && ui.container.querySelector('[aria-label="Cycle sort column B"][aria-busy="true"]')) whilePending.push(args[2])
+    }) as MainMemoryLedger['set']
+    act(() => { fireEvent.click(sort()) })
+    expect(pending(ui).header).toBe(true)
+    await act(async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0)) })
+    const root = ui.container.querySelector('[data-officeview-root]')!
+    expect(domClassBytes(domClassCounts(root)), 'the pending glyph is smaller than the resting one').toBeLessThan(before)
+    expect(whilePending.length, 'the pending commit was re-measured').toBeGreaterThan(0)
+    expect(Math.min(...whilePending)).toBeGreaterThanOrEqual(before)
+    await act(async () => { release() })
+    await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
+    // The hold ends with the job: the charge is the measured DOM again.
+    await waitFor(() => expect(ledger!.ownerBytes('dom', 'grid')).toBe(domClassBytes(domClassCounts(root))))
+  })
+
+  it.each([['refusal', 'fail'], ['completion', 'hold']] as const)('keeps the DOM hold until the commit that restores the resting glyph (%s)', async (_, mode) => {
+    // Between the job's end and React committing the restored glyph, the DOM
+    // still shows the smaller spinner. A re-measure in that window must not
+    // publish the dip, or a charge admitted into it is overrun by the commit.
+    const release = gateResolve(mode)
+    let ledger: MainMemoryLedger | null = null
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([sheet('A')])} {...({ onMainLedger: (l: MainMemoryLedger) => { ledger = l } } as object)} />)
+    await ready(ui)
+    const before = ledger!.ownerBytes('dom', 'grid')
+    fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
+    const root = ui.container.querySelector('[data-officeview-root]')!
+    const budget = 64 * 1024 * 1024
+    await act(async () => {
+      // Inside act, React commits only when the scope ends: the job settles
+      // (its finally runs) while the committed DOM still shows the spinner.
+      release()
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 0))
+      expect(statusText(ui), 'the restoring commit has not happened yet').toMatch(/Sorting column B/)
+      expect(pending(ui).header).toBe(true)
+      // A count-neutral mutation runs the real subtree observer's re-measure.
+      const marker = document.createComment('observer tick'); root.append(marker); marker.remove()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(ledger!.ownerBytes('dom', 'grid')).toBeGreaterThanOrEqual(before)
+      // Another consumer is admitted up to exactly the budget.
+      ledger!.set('controls', 'test-pressure', budget - ledger!.bytes)
+    })
+    expect(pending(ui).header).toBe(false)
+    expect(ledger!.bytes).toBeLessThanOrEqual(budget)
+    // The hold ended with that commit: the charge is the measured DOM again.
+    expect(ledger!.ownerBytes('dom', 'grid')).toBe(domClassBytes(domClassCounts(root)))
+    ledger!.release('controls', 'test-pressure')
   })
 
   it('clears on failure with the failure announced', async () => {

@@ -14,7 +14,7 @@ import type { LogicalCellBox, ScrollWindow } from '../../xlsx/view/contracts'
 import type { ProjectedSheetMetrics } from '../../xlsx/view/projection'
 import { frozenViewportSize } from '../../xlsx/view/frozenPanes'
 import type { SourceCell } from '../../xlsx/view/coordinates'
-import { MAX_ROWS } from '../../xlsx/view/coordinates'
+import { MAX_ROWS, columnToLetters } from '../../xlsx/view/coordinates'
 import type { ViewportSize } from '../../xlsx/view/scrollWindow'
 import { TEXT_OVERFLOW_REACH_CSS, type SheetGeometry } from '../../xlsx/view/viewport'
 import { AUTOFIT_MAX_CELLS, AUTOFIT_MAX_ROWS, RESIZE_LIMITS, autoFitRowCandidates, cellFont, clampSize, fitColumnWidth, fitRowHeight, type Measure } from '../../xlsx/view/axisSizes'
@@ -23,6 +23,8 @@ import { createAdmittedLayoutContext } from './measureContext'
 import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { XlsxCell, XlsxCellStyle, XlsxSheet } from '../../xlsx/types'
 import { cellDisplayText } from '../../xlsx/render'
+import { MoveVertical, MoveHorizontal } from 'lucide-react'
+import { Icon } from '../Icon'
 import type { FormatAllocation } from '../../xlsx/formula/format'
 import { GRID_HEADER_SIZE, gridHeaderBox, viewportHeaderBox } from './GridHeaders'
 
@@ -151,15 +153,34 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
     host.addEventListener('pointercancel', end)
     cleanup.current = stop
   }
-  const handle = (kind: 'row' | 'column', index: number, slot: number, box: HandleBox, extra: CSSProperties = {}) =>
-    <div key={`${kind}:${slot}`} aria-hidden="true" data-officeview-ui="resize-handle" {...(kind === 'row' ? { 'data-resize-row': slot } : { 'data-resize-column': index })}
-      title={kind === 'row' ? 'Drag to resize the row; double-click to fit' : 'Drag to resize the column; double-click to fit'}
-      onPointerDown={event => begin(event, kind, index, slot)}
-      onClick={event => event.stopPropagation()}
-      onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); props.onResize({ kind, index, fit: true }) }}
-      style={{ position: 'absolute', zIndex: 3, touchAction: 'none', cursor: kind === 'row' ? 'row-resize' : 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', ...placed(box), ...extra }}>
-      {touch && <span style={{ fontSize: 14, lineHeight: 1, color: GUIDE, background: '#ffffffd0', borderRadius: 4, padding: '2px 3px', pointerEvents: 'none', whiteSpace: 'nowrap' }}>{kind === 'row' ? `↕${slot + 1}` : '↔'}</span>}
-    </div>
+  const handle = (kind: 'row' | 'column', index: number, slot: number, box: HandleBox, extra: CSSProperties = {}) => {
+    const label = kind === 'row' ? `Resize row ${slot + 1}` : `Resize column ${columnToLetters(index)}`
+    return (
+      <div key={`${kind}:${slot}`} aria-hidden="true" data-officeview-ui="resize-handle" {...(kind === 'row' ? { 'data-resize-row': slot } : { 'data-resize-column': index })}
+        aria-label={label}
+        title={kind === 'row' ? 'Drag to resize the row; double-click to fit' : 'Drag to resize the column; double-click to fit'}
+        onPointerDown={event => begin(event, kind, index, slot)}
+        onClick={event => event.stopPropagation()}
+        onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); props.onResize({ kind, index, fit: true }) }}
+        style={{ position: 'absolute', zIndex: 3, touchAction: 'none', cursor: kind === 'row' ? 'row-resize' : 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', ...placed(box), ...extra }}>
+        {touch && (
+          <span
+            aria-label={label}
+            className="ov:flex ov:items-center ov:gap-0.5 ov:text-xs ov:font-semibold ov:text-muted ov:bg-surface/90 ov:rounded-control ov:px-1 ov:py-0.5 ov:shadow-rest ov:pointer-events-none ov:whitespace-nowrap"
+            style={{ lineHeight: 1 }}>
+            {kind === 'row' ? (
+              <>
+                <Icon icon={MoveVertical} name="move-vertical" size={14} />
+                {slot + 1}
+              </>
+            ) : (
+              <Icon icon={MoveHorizontal} name="move-horizontal" size={14} />
+            )}
+          </span>
+        )}
+      </div>
+    )
+  }
   const handles: ReactElement[] = []
   const fits = (length: number) => length >= (touch ? 2 * COARSE_HALF : 2 * FINE_HALF)
   for (const col of columns) {
@@ -180,7 +201,7 @@ export function ResizeHandles(props: ResizeHandlesProps): ReactElement {
     const end = pinnedRow(slot) ? pinnedCss.y : viewport.height
     if (box.height <= 0 || edge < start || edge > end || (!touch && !fits(end - start))) continue
     const regionLayout = touch ? layout : { ...layout, headerHeight: headerHeight + start, viewport: { ...viewport, height: end - start } }
-    handles.push(handle('row', projection.order.displayToSource(slot), slot, handlePlacement('row', touch ? edge : edge - start, regionLayout), touch ? { background: '#f3f4f6' } : {}))
+    handles.push(handle('row', projection.order.displayToSource(slot), slot, handlePlacement('row', touch ? edge : edge - start, regionLayout), touch ? { background: 'var(--ov-color-header, #f3f4f6)' } : {}))
   }
   if (drag?.moved) {
     const box = gridHeaderBox(projection, scroll, drag.kind, drag.kind === 'row' ? drag.slot : drag.index)

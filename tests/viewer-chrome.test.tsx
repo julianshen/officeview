@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { SearchBar, ZoomControls } from '../src/components/viewerControls'
+import { PagedToolbar, type PagedToolbarProps } from '../src/components/paged/PagedToolbar'
 import type { PaintableArray } from '../src/render/paint'
 import { workbookOf } from './helpers/xlsx-find'
 import { OfficePackage } from '../src/core/zip'
@@ -33,8 +34,9 @@ describe('Ctrl/Cmd+wheel never zooms the browser page over any part of the viewe
   it('page viewer: over the search bar and the zoom controls', async () => {
     const ui = render(<OfficeDoc document={await docx()} />)
     await waitFor(() => expect(ui.container.querySelector('canvas')).toBeTruthy())
-    expect(zoomWheelPrevented(ui.getByRole('searchbox', { name: 'Search document' }))).toEqual([true, true])
+    expect(zoomWheelPrevented(await ui.findByRole('searchbox', { name: 'Search document' }))).toEqual([true, true])
     expect(zoomWheelPrevented(ui.getByRole('button', { name: 'Zoom in' }))).toEqual([true, true])
+    expect(zoomWheelPrevented(ui.getByRole('toolbar', { name: 'Document toolbar' }))).toEqual([true, true])
   })
 
   it('spreadsheet viewer: over the search bar and the zoom controls', FIRST_PAINT_TEST, async () => {
@@ -146,31 +148,78 @@ describe('spreadsheet print mode', () => {
 })
 
 describe('search bar in a narrow viewer', () => {
-  // jsdom has no layout: the real-browser check is in tests/browser/interactive-viewer.spec.ts.
+  // jsdom has no layout: the geometry twin is tests/browser/ui-chrome-geometry.spec.ts.
   it('is bounded by the viewer width, lets the input shrink and wraps status/buttons', () => {
     const ui = render(<div style={{ position: 'relative', width: 240 }}><SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={3} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} /></div>)
     const bar = ui.getByTestId('officeview-search')
-    expect(bar.style.maxWidth).toBe('calc(100% - 24px)')
-    expect(bar.style.boxSizing).toBe('border-box')
-    expect(bar.style.flexWrap).toBe('wrap')
-    expect(ui.getByRole('searchbox').style.minWidth).toBe('0px')
+    for (const cls of ['ov:max-w-[calc(100%-24px)]', 'ov:box-border', 'ov:flex-wrap']) expect(bar.classList.contains(cls), cls).toBe(true)
+    expect(ui.getByRole('searchbox').classList.contains('ov:min-w-0')).toBe(true)
   })
 })
 
+const LABELS = ['Search document', 'Previous match', 'Next match', 'Zoom in', 'Zoom out', 'Reset zoom']
+const chrome = () => render(<div data-ov-theme-root="" data-ov-theme="light">
+  <SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={3} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} />
+  <ZoomControls zoom={1} onIn={() => {}} onOut={() => {}} onReset={() => {}} atFit={false} />
+</div>)
+
 describe('touch targets (spec §513, AC-A11Y-02)', () => {
-  const chrome = () => render(<div><SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={3} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} /><ZoomControls zoom={1} onIn={() => {}} onOut={() => {}} onReset={() => {}} atFit={false} /></div>)
-  const sizes = (ui: ReturnType<typeof render>) => ['Search document', 'Previous match', 'Next match', 'Zoom in', 'Zoom out', 'Reset zoom']
-    .map(name => ui.getByLabelText(name) as HTMLElement).map(el => [parseFloat(el.style.height), Math.max(parseFloat(el.style.minWidth) || 0, parseFloat(el.style.width) || 0)])
-  it('coarse pointer: every control is at least 44px high and wide (the input is 148px wide)', () => {
-    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('coarse') }))
-    try {
-      for (const [height, width] of sizes(chrome())) { expect(height).toBeGreaterThanOrEqual(44); expect(width).toBeGreaterThanOrEqual(44) }
-    } finally { vi.unstubAllGlobals() }
+  // Computed sizes are asserted in tests/browser/ui-chrome-geometry.spec.ts.
+  it('every labelled control carries the coarse 44px target classes; input keeps its 148px width class', () => {
+    const ui = chrome()
+    for (const name of LABELS) {
+      const el = ui.getByLabelText(name)
+      expect(el.classList.contains('ov:coarse:min-h-11'), name).toBe(true)
+      expect(el.classList.contains('ov:coarse:min-w-11'), name).toBe(true)
+    }
+    expect(ui.getByRole('searchbox').classList.contains('ov:w-37')).toBe(true)
   })
-  it('fine pointer: desktop sizes are unchanged', () => {
-    vi.stubGlobal('matchMedia', () => ({ matches: false }))
-    try {
-      expect(sizes(chrome()).map(([height]) => height)).toEqual([28, 28, 28, 36, 36, 28])
-    } finally { vi.unstubAllGlobals() }
+})
+
+const TOOLBAR: PagedToolbarProps = {
+  title: 'Report.docx', kind: 'document', current: 1, total: 3, onPrev() {}, onNext() {}, zoom: 1, onZoomIn() {}, onZoomOut() {},
+  onResetZoom() {}, onFit() {}, fitActive: false, onCopy() {}, copyEnabled: true, copyState: 'idle', onPrint() {}, compact: false,
+  showSearch: false, showZoom: true, focusSearchRequest: 0, onEscapeToDocument() {},
+}
+
+describe('control utility rule (spec §6.8)', () => {
+  const COLOUR = /^ov:text-(text|muted|icon|accent|on-accent|inherit)$/
+  const BACKGROUND = /^ov:bg-/
+  const PADDING = /^ov:p[xytrbl]?-/
+  const BORDER = /^ov:border(-0)?$/
+  it('every viewer control declares colour, background, padding and border utilities', () => {
+    const ui = render(<div data-ov-theme-root="" data-ov-theme="light">
+      <SearchBar inputRef={{ current: null }} query="x" onQuery={() => {}} count={0} active={0} indexing={false} onPrev={() => {}} onNext={() => {}} />
+      <ZoomControls zoom={1} onIn={() => {}} onOut={() => {}} onReset={() => {}} atFit />
+      {(['idle', 'done', 'failed'] as const).map(state => <PagedToolbar key={state} {...TOOLBAR} copyState={state} />)}
+      <PagedToolbar {...TOOLBAR} compact />
+    </div>)
+    fireEvent.click(ui.getAllByLabelText('More options')[0])
+    const controls = [...ui.container.querySelectorAll('[data-ov-theme-root] :is(button, input, select, textarea)')]
+    // search (3) + zoom (3) + 3 desktop toolbars (prev, next, zoom out, reset, zoom in, fit, copy, print)
+    // + compact toolbar (prev, next, zoom out, reset, zoom in, more) + its menu (fit, copy, print)
+    expect(controls).toHaveLength(3 + 3 + 3 * 8 + 6 + 3)
+    const missing = controls.flatMap(el => {
+      const classes = [...el.classList]
+      const label = el.getAttribute('aria-label') ?? el.getAttribute('data-testid') ?? el.tagName
+      // padding on both axes: a lone ov:px-* lets a host rule such as
+      // `.app button { padding: 20px }` set the block padding
+      const padded = classes.some(c => /^ov:p-/.test(c)) || (classes.some(c => /^ov:px-/.test(c)) && classes.some(c => /^ov:py-/.test(c)))
+      return ([['colour', COLOUR], ['background', BACKGROUND], ['padding', PADDING], ['border', BORDER]] as const)
+        .filter(([what, re]) => what === 'padding' ? !padded : !classes.some(c => re.test(c))).map(([what]) => `${label}: ${what}`)
+    })
+    expect(missing).toEqual([])
   })
+})
+
+it('a denied paged print guard leaves an allowed page viewer and sheet viewer printable', async () => {
+  const document = await docx()
+  const a = render(<OfficeDoc document={document} allowPrint={false} />)
+  const b = render(<OfficeDoc document={document} />)
+  const c = render(<InteractiveSheetDoc doc={sheetDoc()} />)
+  await waitFor(() => expect(a.container.querySelector('canvas')).toBeTruthy())
+  await waitFor(() => expect(c.container.querySelector('[data-officeview-sheet-instance]')).toBeTruthy())
+  expect(printed(a.container.querySelector('[data-officeview-root]'))).toBe(false)
+  expect(printed(b.container.querySelector('[data-officeview-root]'))).toBe(true)
+  expect(printed(c.container.querySelector('[data-officeview-sheet-print-notice]'))).toBe(true)
 })
