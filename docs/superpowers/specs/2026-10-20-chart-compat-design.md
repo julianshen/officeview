@@ -2,7 +2,8 @@
 
 **Status:** revision 3.
 - Round 1: codex, agy and opencode all returned REQUEST CHANGES.
-- Round 2: agy APPROVE; codex R2-1…R2-6 and opencode N1 are addressed here.
+- Round 2: agy APPROVE; codex R2-1…R2-6 and opencode N1 were addressed in revision 3.
+- Round 3: codex R3-1 (epoch conversion domain) and its minors are addressed here.
 
 It supersedes the plan-only proposal in PR #12 (issue #13).
 **Date:** 2026-10-20 · **Baseline:** `main` @ `3581768`.
@@ -170,9 +171,17 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
   The 1900 system keeps serial 60 as 1900-02-29, as Excel does. Time fractions are preserved.
 - **Epoch normalization [rev: codex R2-3].**
   - Cached and literal values are already in the chart epoch.
-  - Each value **filled from a workbook** carries that workbook's epoch. It is converted into the chart epoch (±1,462 days) **only for date roles**: date-axis categories, and values on an axis whose format is a date format. Ordinary numbers are never converted.
-  - Pinned by both directions, mixed cached and filled roles, time fractions and the serial-60 case.
-- **Axis format with mixed sources.** With `sourceLinked=1` and mixed source cell formats, an axis uses the format of the **first non-blank point** of the first series on that axis. A tick has no unique source point; this is Office's observed behaviour, verified by reference.
+  - Each value **filled from a workbook** carries that workbook's epoch.
+  - It is converted into the chart epoch **only for date roles**: date-axis categories, and values on an axis whose format is a date format. Ordinary numbers are never converted.
+- **How the conversion works [rev: codex R3-1].**
+  - The conversion goes through the repository's civil-date model (`src/xlsx/formula/serial.ts`): source serial → civil date and time fraction → destination serial. It is **not** a blanket ±1,462 offset.
+  - The offset is valid only for dates from 1904-01-01 onward, which both systems represent.
+  - A source value with **no counterpart** in the destination epoch makes that point **unavailable**, with the diagnostic `chart-date-unrepresentable`. It is never silently mapped to a real date. The cases are:
+    - 1900-system serial 0;
+    - the fictitious 1900-02-29 (serial 60 and 60.x);
+    - any 1900-system date before 1904-01-01 going into a 1904 chart.
+  - Required tests: serials 1, 59, 60, 60.5 and 61 in both directions where they can be represented, the refusal cases, mixed cached and filled roles, and time fractions.
+- **Axis format with mixed sources.** With `sourceLinked=1` and mixed source cell formats, an axis uses the format of the **first non-blank point** of the first series on that axis. This is an acceptance requirement that **must be verified against an Office reference**; until it is, the case is marked unverified.
 
 ### 5.2 Number formats [rev: codex I4]
 
@@ -251,11 +260,12 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
   - **unavailable:** for example, a formula cell with no saved value.
 
   The error identity is kept through data fill, up to the family's plotting rule. It is never normalized to blank early.
-- **Plotting matrix**, with Office's default where the 2016+ `dispNaAsBlank` extension (`c16r3:dataDisplayOptions16`) is absent or false:
+- **Scope.** The four states apply to **numeric plotting inputs**: values, x values, bubble sizes and error amounts. Category and name roles are strings, and an error there displays its code text.
+- **Plotting matrix**, with Office's default where the 2016+ `dispNaAsBlank` extension (`c16r3:dataDisplayOptions16`) is absent or false. The **stacked/100% row overrides** the family rows. "As blank (gap)" for an unavailable line point means an **unconditional gap**. The matrix is the specified behaviour; each cell still needs its §8 Office reference before it is claimed as matched:
 
   | Family | blank | #N/A | other error | unavailable |
   |---|---|---|---|---|
-  | Line, scatter, radar | per `dispBlanksAs` (gap: break; zero: 0; span: connect) | no marker; the line **connects across it, whatever `dispBlanksAs` says** | as #N/A | as blank (gap), plus `chart-point-unavailable` |
+  | Line, scatter, radar | per `dispBlanksAs` (gap: break; zero: 0; span: connect) | no marker; the line **connects across it, whatever `dispBlanksAs` says** | as #N/A | unconditional gap, plus `chart-point-unavailable` |
   | Column, bar | no bar | no bar | no bar | no bar, plus diagnostic |
   | Area (standard) | gap if `dispBlanksAs=gap`, else 0 | gap if `dispBlanksAs=gap`, else 0 | as #N/A | as blank, plus diagnostic |
   | Stacked or 100% (any family) | 0 | 0 | 0 | 0, plus diagnostic |
@@ -264,7 +274,7 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
   - When `dispNaAsBlank=1`, #N/A follows the blank column.
   - A data label on an #N/A point still shows `#N/A`.
   - **Analytic families** (§4.3, trendlines, stdDev/stdErr error bars) exclude blank and error points from the computation. **Refuse** the chart, or drop the trendline / error bar, if any required point is unavailable.
-  - Every cell of the matrix is a numeric oracle in §8.
+  - Every cell of the matrix is a numeric oracle in §8, including standard area under each `dispBlanksAs` value (gap, zero, span).
 - **Series level.** `invertIfNegative`, `explosion`, and per-point `dPt` overrides.
 - **Group level.** `varyColors`, `gapWidth`, `overlap`, `upDownBars`, `hiLowLines`, `dropLines` and `serLines`.
 
@@ -343,7 +353,7 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 **Embedded workbook reader.** This is a **new bounded values-only reader** in a lazy chunk: `src/charts/embeddedWorkbook.ts`. It is not an unrestricted `parseXlsx` call.
 
 - **Resolve.** Resolve chart part `.rels` → `c:externalData@r:id`. Only a package-internal target is accepted; `External` gives a diagnostic and the data is unavailable.
-- **Admit.** Admission condition: inflated size ≤ **8 MiB** (desktop) / **4 MiB** (mobile) via `pkg.bytes(path, max)` **[rev: agy 2; call]**. Real chart workbooks are 15–100 KB.
+- **Admit.** Admission condition: inflated size ≤ **8 MiB** (desktop) / **4 MiB** (mobile), read through a **new uncached bounded read** that is added next to `OfficeZip.bytes` (the existing `bytes()` caches; `zip.ts:40-53`) **[rev: agy 2; codex R3 minor 1; call]**. Real chart workbooks are 15–100 KB.
 - **Read.** `OfficePackage.load` the bytes, then read only these:
   1. `xl/workbook.xml`: sheets, `date1904` and `definedNames`. External references are rejected even when reached through a name.
   2. `xl/sharedStrings.xml`, bounded by streaming SAX with a string-count and byte cap.
@@ -351,7 +361,7 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
   4. **Only the sheets the chart's references name.** They are read with the existing streaming worksheet tokenizer, extracting cells **only inside the referenced ranges** and stopping after the last referenced row.
 - **Never followed:** drawings, nested embeddings, external links, VBA or any other relationship.
 - **Formulas.** Formula cells use their saved value (`<v>`). A formula without a saved value is unavailable for that point and diagnosed. Formulas are never evaluated.
-- **Values.** Excel numeric-text rules apply via `scanChartNumber`. Error cells are treated as blanks (§5.8).
+- **Values.** Excel numeric-text rules apply via `scanChartNumber`. Error cells keep their error code as point state `error(code)` (§5.8).
 - **Ownership [rev: codex R2-1].** One document-level **chart workspace** owns every chart allocation: embedded package bytes, the zip inventory, XML/tokenizer workspace, shared strings, extracted cells and chart models.
   - It has a single limit: **64 MiB desktop / 32 MiB mobile**. This is the same limit as the §6.5 retention cap, not an addition to it.
   - It is charged before allocation, in actual bytes (strings at 2 B per UTF-16 unit plus 32 B overhead).
@@ -373,7 +383,7 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 - **Reuse and cancellation.**
   - Requests are deduplicated per normalized part path as a shared promise. The extracted cell data is discarded once every consumer is filled.
   - Cancellation through the document `AbortSignal` **stops publication immediately**. The charges stay held **until the producer actually settles**: JSZip load and inflate are not abortable. They are refunded only then.
-  - Tested with gated inflate and load, cancellation mid-read, and 50 embeddings.
+  - **Must be tested** with gated inflate and load, cancellation mid-read, and 50 embeddings.
 - **Tests:**
   - a sub-cap ZIP with an oversized inner sharedStrings or sheet;
   - 50 distinct embeddings;
@@ -392,10 +402,10 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 - **Two stages [rev: codex R2-2].**
   - **Stage 1, preparation (async, at parse time, size-independent):** data fill, statistics, trendline fits sampled in data units, the axis value domain and candidate tick values, and formatted label strings. The result is an immutable model that can be transferred between realms.
   - **Stage 2, layout (synchronous, at paint time, per placement):** text measurement, tick thinning, label placement and plot-area geometry for the given size, DPR and font generation.
-    - Layout is cached on the model, keyed by (width, height, dpr, fontGeneration). A resize or font load invalidates it.
-    - Layout transients are bounded by the work bounds below and charged to the chart workspace for the duration of the paint.
-    - Layout is deterministic.
-  - Tested by repeated placement at two sizes, delayed font load, resize, and synchronous paint after transfer.
+    - Layout is cached in a **realm-local sidecar** (a WeakMap keyed by the model), keyed by (width, height, dpr, fontGeneration). It is never serialized with the immutable model. A resize or font load invalidates it.
+    - **Cached layouts stay charged** to the chart workspace until they are invalidated, evicted or disposed. Only paint-local transients are refunded after each paint.
+    - Layout is bounded by the work bounds below, and it is deterministic.
+  - **Must be tested:** repeated placement at two sizes, delayed font load, resize, and synchronous paint after transfer.
 - **Work bounds per chart:**
 
   | Item | Bound |
@@ -422,7 +432,11 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
   - native → `chart`;
   - card → `chart-placeholder`;
   - an authored fallback picture → the existing fallback representation, with the original feature (`chart`/`ChartEx`).
-- **Diagnostics.** New codes: `chart-data-unavailable`, `chart-refused`, `chart-invalid-log-value`, `chart-singular-trendline`, `chart-label-feature-unsupported` and `chart-axis-unplaceable`. Each has a reason string.
+- **Diagnostics.** New codes, each with a reason string:
+  - `chart-data-unavailable`, `chart-point-unavailable`, `chart-date-unrepresentable`;
+  - `chart-refused`, `chart-fallback-unusable`;
+  - `chart-invalid-log-value`, `chart-singular-trendline`;
+  - `chart-label-feature-unsupported`, `chart-axis-unplaceable`.
 - **Accessibility.**
   - Each chart carries a bounded description: type, title, series names, value range, and "placeholder: reason" for cards.
   - The description travels with its page/slide placement in the paintables metadata (lazy, charged to the retention budget).
