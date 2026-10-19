@@ -87,6 +87,13 @@ function withNamespaces(parent: ReadonlyMap<string, string>, raw: unknown): Read
   return local ?? parent
 }
 
+/** Registers a node built outside fast-xml-parser (the bounded chart tree) with its document order and namespaces. */
+export function registerOrdered(node: XmlNode, ordered: Array<[string, XmlNode]>, namespaces: ReadonlyMap<string, string>): XmlNode {
+  orderMap.set(node, ordered)
+  namespaceMap.set(node, namespaces)
+  return node
+}
+
 /** Resolve a prefix used by MC Requires at this node, honoring local shadowing. */
 export function namespaceUri(node: XmlNode | undefined, prefix: string): string | undefined {
   return node ? namespaceMap.get(node)?.get(prefix) : undefined

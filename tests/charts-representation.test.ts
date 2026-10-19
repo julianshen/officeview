@@ -8,11 +8,14 @@ import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXmlOrdered } from '../src/core/xml'
-import { prepareCompatibleDrawingContent, type DrawingContent } from '../src/drawing/content'
+import { chartCard, prepareCompatibleDrawingContent, prepareDrawingContent, type DrawingContent } from '../src/drawing/content'
 import { drawingPartContext } from '../src/drawing/parts'
 import { parseThemeContext } from '../src/drawing/style'
 import { documentChartContext } from '../src/charts/context'
 import { parseXlsxChart } from '../src/charts/parse'
+import { CHART_READ_CROSSING, readChartPart } from '../src/charts/read'
+import { paintDrawingContent } from '../src/drawing/content-paint'
+import { getPaintables } from '../src/render/paint'
 import { parseDocx } from '../src/docx/parse'
 import { parsePptx } from '../src/pptx/parse'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -83,18 +86,21 @@ const NAMESPACES = `xmlns:mc="${MC}" xmlns:c="${C}" xmlns:a="${A}" xmlns:r="${R}
 
 interface Built { pkg: OfficePackage; chartPath: string }
 /** A one-object document whose body is `body`; `chart` (and `chartEx`) are its chart parts. */
-async function build(format: Format, body: string, options: { chart?: string; chartEx?: boolean; image?: Uint8Array | null } = {}): Promise<Built> {
+const UNRELATED = { docx: '<w:p><w:r><w:t>Unrelated</w:t></w:r></w:p>', pptx: `<p:sp><p:nvSpPr><p:cNvPr id="900" name="Unrelated"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9525" cy="9525"/></a:xfrm><a:prstGeom prst="rect"/></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:t>Unrelated</a:t></a:r></a:p></p:txBody></p:sp>`, xlsx: '<row r="1"><c r="A1" t="inlineStr"><is><t>Unrelated</t></is></c></row>' }
+/** `chart: null` omits the chart part (a missing reference); `unrelated` adds content that must survive. */
+async function build(format: Format, body: string, options: { chart?: string | Uint8Array | null; chartEx?: boolean; image?: Uint8Array | null; unrelated?: boolean } = {}): Promise<Built> {
   const image = options.image === undefined ? png() : options.image
-  const chart = options.chart ?? SURFACE
+  const chart = options.chart === undefined ? SURFACE : options.chart
+  const extra = (f: Format) => options.unrelated ? UNRELATED[f] : ''
   const chartEx = `<cx:chartSpace xmlns:cx="${CX}"><cx:chart><cx:plotArea/></cx:chart></cx:chartSpace>`
   const relItems = (prefix: string): Array<[string, string, string]> => [
     ['rC', 'chart', `${prefix}charts/chart1.xml`], ['rX', 'chartEx', `${prefix}charts/chartEx1.xml`], ...(image ? [['im', 'image', `${prefix}media/image1.png`] as [string, string, string]] : []),
   ]
   if (format === 'docx') {
     const pkg = await packageOf({
-      'word/document.xml': `<w:document xmlns:w="${W}" xmlns:wp="${WP}" ${NAMESPACES}><w:body><w:p><w:r>${body}</w:r></w:p></w:body></w:document>`,
+      'word/document.xml': `<w:document xmlns:w="${W}" xmlns:wp="${WP}" ${NAMESPACES}><w:body><w:p><w:r>${body}</w:r></w:p>${extra('docx')}</w:body></w:document>`,
       'word/_rels/document.xml.rels': rels(...relItems('')),
-      'word/charts/chart1.xml': chart,
+      ...(chart !== null ? { 'word/charts/chart1.xml': chart } : {}),
       ...(options.chartEx ? { 'word/charts/chartEx1.xml': chartEx } : {}),
       ...(image ? { 'word/media/image1.png': image } : {}),
     })
@@ -104,9 +110,9 @@ async function build(format: Format, body: string, options: { chart?: string; ch
     const pkg = await packageOf({
       'ppt/presentation.xml': `<p:presentation xmlns:p="${P}" xmlns:r="${R}"><p:sldSz cx="${300 * EMU}" cy="${200 * EMU}"/><p:sldIdLst><p:sldId id="256" r:id="s1"/></p:sldIdLst></p:presentation>`,
       'ppt/_rels/presentation.xml.rels': rels(['s1', 'slide', 'slides/slide1.xml']),
-      'ppt/slides/slide1.xml': `<p:sld xmlns:p="${P}" ${NAMESPACES}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>${body}</p:spTree></p:cSld></p:sld>`,
+      'ppt/slides/slide1.xml': `<p:sld xmlns:p="${P}" ${NAMESPACES}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>${body}${extra('pptx')}</p:spTree></p:cSld></p:sld>`,
       'ppt/slides/_rels/slide1.xml.rels': rels(...relItems('../')),
-      'ppt/charts/chart1.xml': chart,
+      ...(chart !== null ? { 'ppt/charts/chart1.xml': chart } : {}),
       ...(options.chartEx ? { 'ppt/charts/chartEx1.xml': chartEx } : {}),
       ...(image ? { 'ppt/media/image1.png': image } : {}),
     })
@@ -115,11 +121,11 @@ async function build(format: Format, body: string, options: { chart?: string; ch
   const pkg = await packageOf({
     'xl/workbook.xml': `<workbook xmlns:r="${R}"><sheets><sheet name="One" sheetId="1" r:id="s1"/></sheets></workbook>`,
     'xl/_rels/workbook.xml.rels': rels(['s1', 'worksheet', 'worksheets/sheet1.xml']),
-    'xl/worksheets/sheet1.xml': `<worksheet xmlns:r="${R}"><sheetData/><drawing r:id="dr"/></worksheet>`,
+    'xl/worksheets/sheet1.xml': `<worksheet xmlns:r="${R}"><sheetData>${extra('xlsx')}</sheetData><drawing r:id="dr"/></worksheet>`,
     'xl/worksheets/_rels/sheet1.xml.rels': rels(['dr', 'drawing', '../drawings/drawing1.xml']),
     'xl/drawings/drawing1.xml': `<xdr:wsDr xmlns:xdr="${XDR}" ${NAMESPACES}><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="${W_PX * EMU}" cy="${H_PX * EMU}"/>${body}<xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>`,
     'xl/drawings/_rels/drawing1.xml.rels': rels(...relItems('../')),
-    'xl/charts/chart1.xml': chart,
+    ...(chart !== null ? { 'xl/charts/chart1.xml': chart } : {}),
     ...(options.chartEx ? { 'xl/charts/chartEx1.xml': chartEx } : {}),
     ...(image ? { 'xl/media/image1.png': image } : {}),
   })
@@ -128,18 +134,19 @@ async function build(format: Format, body: string, options: { chart?: string; ch
 
 interface Outcome { contents: Array<DrawingContent<unknown, unknown>>; pictures: number; coverage: DrawingCoverageEntry[]; diagnostics: Array<{ reason?: string }> }
 /** Parse and collect what the object resolved to: its drawn contents, pictures and coverage. */
-async function resolve(format: Format, built: Built): Promise<Outcome> {
+type Parsers = { parseDocx: typeof parseDocx; parsePptx: typeof parsePptx; parseXlsx: typeof parseXlsx }
+async function resolve(format: Format, built: Built, parsers: Parsers = { parseDocx, parsePptx, parseXlsx }): Promise<Outcome> {
   if (format === 'docx') {
-    const doc = await parseDocx(built.pkg)
+    const doc = await parsers.parseDocx(built.pkg)
     const images = doc.sections[0].paragraphs[0]?.images ?? []
     return { contents: images.flatMap(i => i.drawing ? [i.drawing] : []), pictures: images.filter(i => !i.drawing && i.data.length).length, coverage: (doc.drawingCoverage ?? []).filter(e => e.scope === 'original'), diagnostics: drawingPartContext(built.pkg).diagnostics }
   }
   if (format === 'pptx') {
-    const doc = await parsePptx(built.pkg)
+    const doc = await parsers.parsePptx(built.pkg)
     const shapes = doc.slides[0].shapes
     return { contents: shapes.flatMap(s => s.content ? [s.content] : []), pictures: shapes.filter(s => s.imageIndex !== undefined).length, coverage: (doc.drawingCoverage ?? []).filter(e => e.scope === 'original'), diagnostics: drawingPartContext(built.pkg).diagnostics }
   }
-  const doc = await parseXlsx(built.pkg)
+  const doc = await parsers.parseXlsx(built.pkg)
   const drawings = doc.sheets[0].drawings ?? []
   return { contents: drawings.flatMap(d => d.content ? [d.content] : []), pictures: drawings.filter(d => d.image).length, coverage: (doc.drawingCoverage ?? []).filter(e => e.scope === 'original'), diagnostics: drawingPartContext(built.pkg).diagnostics }
 }
@@ -306,7 +313,7 @@ describe('bounded chart parts (spec 6.5)', () => {
   it('a chart part over the byte cap is refused before any XML tree is built', async () => {
     const cap = 4 * 1024 * 1024 // mobile
     const marker = 'oversized-chart-marker'
-    const huge = space(`<c:plotArea><c:barChart><c:barDir val="col"/>${ser(0, RED, [1])}</c:barChart></c:plotArea>`, `<!-- ${marker} ${'x'.repeat(cap)} -->`)
+    const huge = space(`<c:plotArea><c:barChart><c:barDir val="col"/>${ser(0, RED, [1])}</c:barChart></c:plotArea>`, `<!-- ${marker} -->${`<!--${'x'.repeat(1000)}-->`.repeat(Math.ceil(cap / 1000) + 8)}`)
     for (const forged of [false, true]) {
       const zip = new JSZip()
       zip.file('word/document.xml', `<w:document xmlns:w="${W}" xmlns:wp="${WP}" ${NAMESPACES}><w:body><w:p><w:r>${graphicObject('docx', 80, chartPayload())}</w:r></w:p></w:body></w:document>`)
@@ -459,5 +466,258 @@ describe('painter containment and the engine across realms (spec 6.5)', () => {
     expect([ctx.fillStyle, ctx.lineWidth, ctx.globalAlpha]).toEqual(['#123456', 1, 1])
     ctx.fillRect(150, 120, 20, 20)
     expect(Array.from(ctx.getImageData(160, 130, 1, 1).data)).toEqual([0x12, 0x34, 0x56, 255])
+  })
+})
+
+// ---- Fix round 1 (codex review I1-I7) ------------------------------------------------------------
+const GREEN_RECT = (format: 'pptx' | 'xlsx', id: number) => {
+  const p = format === 'pptx' ? 'p' : 'xdr'
+  return `<${p}:sp><${p}:nvSpPr><${p}:cNvPr id="${id}" name="Rect ${id}"/><${p}:cNvSpPr/>${p === 'p' ? '<p:nvPr/>' : ''}</${p}:nvSpPr><${p}:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${W_PX * EMU}" cy="${H_PX * EMU}"/></a:xfrm><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></${p}:spPr></${p}:sp>`
+}
+const group = (format: 'pptx' | 'xlsx', id: number, children: string) => {
+  const p = format === 'pptx' ? 'p' : 'xdr'
+  const box = `<a:off x="0" y="0"/><a:ext cx="${W_PX * EMU}" cy="${H_PX * EMU}"/>`
+  return `<${p}:grpSp><${p}:nvGrpSpPr><${p}:cNvPr id="${id}" name="Group ${id}"/><${p}:cNvGrpSpPr/>${p === 'p' ? '<p:nvPr/>' : ''}</${p}:nvGrpSpPr><${p}:grpSpPr><a:xfrm>${box}<a:chOff x="0" y="0"/><a:chExt cx="${W_PX * EMU}" cy="${H_PX * EMU}"/></a:xfrm></${p}:grpSpPr>${children}</${p}:grpSp>`
+}
+type Node = { source?: { id?: string }; children?: Node[] }
+const ids = (nodes: Node[]): string[] => nodes.flatMap(node => [...(node.source?.id ? [node.source.id] : []), ...ids(node.children ?? [])])
+async function sceneIds(format: 'pptx' | 'xlsx', built: Built): Promise<string[]> {
+  if (format === 'pptx') return ids((await parsePptx(built.pkg)).slides[0].shapes as Node[])
+  return ids(((await parseXlsx(built.pkg)).sheets[0].drawings ?? []) as Node[])
+}
+const CORRUPT = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8])
+
+describe('fix round 1: chunk failure, decode failure, whole fallbacks, propagation (spec 6.3)', () => {
+  it('I1: a chart chunk that fails at parse time is a chart failure; the fallback, the card and unrelated content survive', async () => {
+    for (const format of FORMATS) {
+      vi.resetModules()
+      let attempts = 0
+      vi.doMock('../src/charts', () => { attempts++; throw new Error('chunk failed to load') })
+      const parsers: Parsers = { parseDocx: (await import('../src/docx/parse')).parseDocx, parsePptx: (await import('../src/pptx/parse')).parsePptx, parseXlsx: (await import('../src/xlsx/parse')).parseXlsx }
+      // A valid fallback picture is selected.
+      const mc = alternate(graphicObject(format, 10, chartPayload()), picture(format, 11))
+      expectFallbackPicture(format, await resolve(format, await build(format, mc), parsers), '11', 'chunk failure')
+      // With no fallback, the card says why; unrelated content survives beside it.
+      const built = await build(format, graphicObject(format, 12, chartPayload()), { unrelated: true })
+      const outcome = await resolve(format, built, parsers)
+      expect(attempts, format).toBeGreaterThan(0)
+      const card = outcome.contents.find(content => content.kind === 'xlsxChart')
+      expect(card?.kind === 'xlsxChart' && card.chart.unsupported, format).toBe('The chart engine could not be loaded')
+      expect(outcome.coverage.find(entry => entry.id === '12'), format).toMatchObject({ selectedRepresentation: 'chart-placeholder' })
+      if (format === 'docx') expect((await parsers.parseDocx((await build('docx', graphicObject('docx', 12, chartPayload()), { unrelated: true })).pkg)).sections[0].paragraphs[1].runs.map(r => r.text).join('')).toBe('Unrelated')
+      if (format === 'pptx') expect(outcome.coverage.some(entry => entry.id === '900' && entry.status === 'native')).toBe(true)
+      if (format === 'xlsx') {
+        const doc = await parsers.parseXlsx((await build('xlsx', graphicObject('xlsx', 12, chartPayload()), { unrelated: true })).pkg)
+        expect(doc.sheets[0].rows.flatMap(row => row.cells).map(cell => cell.value)).toContain('Unrelated')
+      }
+      vi.doUnmock('../src/charts')
+    }
+    vi.resetModules()
+  })
+
+  it('I2: a selected fallback picture that fails to decode becomes the card and records chart-fallback-unusable, after transfer', async () => {
+    for (const format of FORMATS) {
+      const body = alternate(graphicObject(format, 20, chartPayload()), picture(format, 21))
+      for (const corrupt of [true, false]) {
+        const doc = structuredClone((format === 'docx' ? await parseDocx((await build(format, body, { image: corrupt ? CORRUPT : undefined })).pkg)
+          : format === 'pptx' ? await parsePptx((await build(format, body, { image: corrupt ? CORRUPT : undefined })).pkg)
+          : await parseXlsx((await build(format, body, { image: corrupt ? CORRUPT : undefined })).pkg)) as never) as Parameters<typeof getPaintables>[0]
+        const pages = await getPaintables(doc)
+        const { widthPx: w, heightPx: h } = pages[0].spec
+        const ctx = createCanvas(w, h).getContext('2d')
+        pages[0].paint(ctx as unknown as CanvasRenderingContext2D)
+        const data = ctx.getImageData(0, 0, w, h).data
+        const originals = ((doc as { drawingCoverage?: DrawingCoverageEntry[] }).drawingCoverage ?? []).filter(entry => entry.scope === 'original')
+        expect(originals, `${format} corrupt=${corrupt}`).toHaveLength(1)
+        if (corrupt) {
+          expectCardPixels(data, w, h, `${format} decode failure`)
+          expect(originals[0], format).toMatchObject({ selectedRepresentation: 'chart-placeholder', reason: `chart-fallback-unusable: ${SURFACE_REASON}` })
+        } else {
+          expect(colourBox(data, w, h, '00FF00').count, `${format} the picture paints`).toBeGreaterThan(W_PX * H_PX * 0.5)
+          expect(originals[0], format).toMatchObject({ selectedRepresentation: 'raster-fallback' })
+        }
+        pages.dispose()
+      }
+    }
+  })
+
+  it('I3: one unusable picture never discards usable shapes or groups in the same fallback', async () => {
+    for (const format of ['pptx', 'xlsx'] as const) {
+      const broken = picture(format, 31, 'gone')
+      // Mixed: a broken picture beside a valid rectangle keeps the fallback (the rectangle draws).
+      const mixed = await build(format, alternate(graphicObject(format, 30, chartPayload()), broken + GREEN_RECT(format, 99)))
+      expect(await sceneIds(format, mixed), `${format} mixed`).toContain('99')
+      expect((await resolve(format, await build(format, alternate(graphicObject(format, 30, chartPayload()), broken + GREEN_RECT(format, 99))))).contents, `${format} mixed: no card`).toEqual([])
+      // A group of only broken pictures is unusable: the card.
+      const onlyBroken = await resolve(format, await build(format, alternate(graphicObject(format, 30, chartPayload()), group(format, 98, broken))))
+      expectCard(format, onlyBroken, SURFACE_REASON)
+      // A group with a usable shape keeps the fallback.
+      const grouped = await build(format, alternate(graphicObject(format, 30, chartPayload()), group(format, 98, broken + GREEN_RECT(format, 97))))
+      expect(await sceneIds(format, grouped), `${format} grouped`).toContain('97')
+    }
+    // DOCX: a broken picture beside a valid one keeps the fallback picture.
+    const docx = await resolve('docx', await build('docx', alternate(graphicObject('docx', 30, chartPayload()), picture('docx', 31, 'gone') + picture('docx', 32))))
+    expect(docx.contents).toEqual([])
+    expect(docx.pictures).toBe(1)
+  })
+
+  it('I4: a terminal chart failure propagates through nested wrappers and missing references', async () => {
+    for (const format of FORMATS) {
+      // Outer supported Choice, inner supported Choice, unsupported chart; no fallback anywhere.
+      const nested = alternate(alternate(graphicObject(format, 40, chartPayload()), undefined), undefined)
+      expectCard(format, await resolve(format, await build(format, nested)), SURFACE_REASON)
+      // A standalone missing chart part.
+      expectCard(format, await resolve(format, await build(format, graphicObject(format, 41, chartPayload()), { chart: null })), 'Chart data could not be read')
+      // A missing chart in a Choice with a valid fallback still selects the fallback.
+      expectFallbackPicture(format, await resolve(format, await build(format, alternate(graphicObject(format, 42, chartPayload()), picture(format, 43)), { chart: null })), '43', 'missing chart')
+    }
+  })
+})
+
+describe('fix round 1: the real engine balances every save (spec 6.5, I5)', () => {
+  const titled = space(`<c:autoTitleDeleted val="1"/><c:plotArea><c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/>${ser(0, RED, [3, 5])}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Category</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Value</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val="1"/></c:valAx></c:plotArea>`)
+  it.each(['rotated axis title', 'plot area'] as const)('a throw inside the %s save leaves the caller\'s depth and transform', async where => {
+    await import('../src/charts') // the real engine registers its painter
+    const chart = parseXlsxChart(parseXmlOrdered(titled), undefined)!
+    expect(chart.categoryAxis.title).toBe('Category')
+    const canvas = createCanvas(W_PX, H_PX), real = canvas.getContext('2d')
+    let depth = 0, thrown = false
+    const ctx = new Proxy(real, {
+      get(target, prop) {
+        if (prop === 'save') return () => { depth++; target.save() }
+        if (prop === 'restore') return () => { depth--; target.restore() }
+        if (prop === 'fillText' && where === 'rotated axis title') return (...args: [string, number, number]) => {
+          if (!thrown && target.getTransform().b !== 0) { thrown = true; throw new Error('engine bug in the rotated title') }
+          target.fillText(...args)
+        }
+        if (prop === 'fillRect' && where === 'plot area') return (...args: [number, number, number, number]) => {
+          if (!thrown && String(target.fillStyle).toLowerCase() === '#ff0000') { thrown = true; throw new Error('engine bug in the plot') }
+          target.fillRect(...args)
+        }
+        const value = Reflect.get(target, prop)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+      set(target, prop, value) { return Reflect.set(target, prop, value) },
+    })
+    ctx.save(); ctx.translate(17, 19)
+    paintDrawingContent({ kind: 'xlsxChart', chart }, ctx as unknown as CanvasRenderingContext2D, W_PX, H_PX)
+    expect(thrown, where).toBe(true)
+    expect(depth, where).toBe(1)
+    const m = real.getTransform()
+    expect([m.a, m.b, m.c, m.d, m.e, m.f], where).toEqual([1, 0, 0, 1, 17, 19])
+    ctx.restore()
+    expect(depth).toBe(0)
+    const after = real.getTransform()
+    expect([after.e, after.f]).toEqual([0, 0])
+  })
+})
+
+describe('fix round 1: admitted bounded read and namespace dispatch (spec 6.5, I6, I7)', () => {
+  const graphicData = () => parseXmlOrdered(`<a:graphicData xmlns:a="${A}" xmlns:c="${C}" xmlns:r="${R}" uri="${C}"><c:chart r:id="rC"/></a:graphicData>`)
+  const contentTheme = { colors: new Map<string, string>(), fonts: new Map<string, string>() }
+  async function attempt(part: string | Uint8Array, chartContext = documentChartContext('desktop')) {
+    const pkg = await packageOf({ 'word/_rels/document.xml.rels': rels(['rC', 'chart', 'charts/chart1.xml']), 'word/charts/chart1.xml': part })
+    const parseChart = vi.fn(async (root: Parameters<typeof parseXlsxChart>[0]) => ({ kind: 'native' as const, model: parseXlsxChart(root, undefined)! }))
+    const node = graphicData()
+    const content = await prepareDrawingContent(pkg, node, 'word/document.xml', contentTheme, parseThemeContext(), { parseChart, chartContext })
+    return { pkg, content, parseChart, card: chartCard(node)?.chart }
+  }
+  const utf16 = (text: string, bigEndian: boolean) => {
+    const out = new Uint8Array(2 + text.length * 2)
+    out[0] = bigEndian ? 0xfe : 0xff; out[1] = bigEndian ? 0xff : 0xfe
+    for (let i = 0; i < text.length; i++) { const code = text.charCodeAt(i); out[2 + 2 * i + (bigEndian ? 1 : 0)] = code & 255; out[2 + 2 * i + (bigEndian ? 0 : 1)] = code >> 8 }
+    return out
+  }
+  const chartEx = (open: string) => `${open}<cx:chart xmlns:cx="${CX}"><cx:plotArea/></cx:chart></${open.slice(1, open.indexOf(' '))}>`
+
+  it('I7: dispatch uses the real root namespace (default, alias, UTF-8, UTF-16, long preambles)', async () => {
+    const preamble = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<!--${'p'.repeat(20000)}-->\n<?office-pi data?>${' '.repeat(5000)}`
+    const classicAlias = STACKED.replace(/c:/g, 'k:').replace('xmlns:k=', 'xmlns:k=')
+    for (const [label, part, expected] of [
+      ['default ChartEx namespace', chartEx(`<chartSpace xmlns="${CX}">`), 'ChartEx'],
+      ['alias ChartEx prefix', chartEx(`<q:chartSpace xmlns:q="${CX}">`), 'ChartEx'],
+      ['long preamble ChartEx', preamble + chartEx(`<q:chartSpace xmlns:q="${CX}">`), 'ChartEx'],
+      ['UTF-16BE ChartEx', utf16(chartEx(`<q:chartSpace xmlns:q="${CX}">`), true), 'ChartEx'],
+      ['other namespace', `<chartSpace xmlns="urn:example:not-a-chart"><chart><plotArea><barChart>${ser(0, RED, [1])}</barChart></plotArea></chart></chartSpace>`.replace(/c:/g, ''), 'other'],
+      ['classic alias prefix', classicAlias, 'classic'],
+      ['long preamble classic', preamble + STACKED, 'classic'],
+      ['UTF-8 BOM classic', new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode(STACKED)]), 'classic'],
+      ['UTF-16LE classic', utf16(STACKED, false), 'classic'],
+      ['UTF-16BE classic', utf16(STACKED, true), 'classic'],
+    ] as const) {
+      const { content, parseChart, card } = await attempt(part)
+      if (expected === 'classic') {
+        expect(parseChart, label).toHaveBeenCalledTimes(1)
+        expect(content?.kind === 'xlsxChart' && content.chart.groups[0]?.series.length, label).toBe(2)
+      } else {
+        // A non-classic part never reaches the classic parser.
+        expect(parseChart, label).not.toHaveBeenCalled()
+        expect(content, label).toBeUndefined()
+        expect(card, label).toMatchObject(expected === 'ChartEx' ? { unsupported: 'ChartEx charts are not supported yet', feature: 'ChartEx' } : { unsupported: 'This chart format is not supported' })
+      }
+    }
+  })
+
+  it('I6: a refusing parent refuses the read before anything is allocated', async () => {
+    let parentCalls = 0
+    const context = documentChartContext('mobile', undefined, { reserve: () => { parentCalls++; return false }, release: () => {} })
+    const part = space(`<c:plotArea><c:barChart><c:barDir val="col"/>${ser(0, RED, [1, 2])}</c:barChart></c:plotArea>`, `<!-- refused-marker -->${`<!--${'x'.repeat(1000)}-->`.repeat(256)}`)
+    const pkg = await packageOf({ 'word/_rels/document.xml.rels': rels(['rC', 'chart', 'charts/chart1.xml']), 'word/charts/chart1.xml': part })
+    let streamed = 0
+    const entry = (pkg as unknown as { zip: JSZip }).zip.file('word/charts/chart1.xml') as unknown as { internalStream: (type: string) => unknown }
+    const internal = entry.internalStream.bind(entry)
+    entry.internalStream = type => { streamed++; return internal(type) }
+    vi.mocked(parseXmlOrdered).mockClear()
+    const node = graphicData()
+    const content = await prepareDrawingContent(pkg, node, 'word/document.xml', contentTheme, parseThemeContext(), { chartContext: context })
+    expect(content).toBeUndefined()
+    expect(chartCard(node)?.chart.unsupported).toBe('This chart needs more memory than is available for charts')
+    expect(parentCalls).toBeGreaterThan(0)
+    expect(streamed, 'nothing inflated').toBe(0)
+    expect(vi.mocked(parseXmlOrdered).mock.calls.some(([xml]) => xml.includes('refused-marker'))).toBe(false)
+    expect(context.workspace.used).toBe(0)
+    expect(drawingPartContext(pkg).diagnostics.some(d => d.reason === 'chart-refused')).toBe(true)
+  })
+
+  it('I6: a paged package keeps owning the chart tree through its own ledger', async () => {
+    // The paged RangePackage shape: no zip entry, its own bounded bytes() and a chartLedger (its pool).
+    const bytes = new TextEncoder().encode(STACKED)
+    const pool = { charged: 0, refuseAfter: Infinity }
+    const paged = (refuseAfter = Infinity) => {
+      pool.charged = 0; pool.refuseAfter = refuseAfter
+      return { has: () => true, bytes: async (_path: string, max?: number) => { if (max !== undefined && bytes.length > max) throw new Error('Part byte limit exceeded'); return bytes },
+        chartLedger: { reserve: (n: number) => { if (pool.charged + n > pool.refuseAfter) return false; pool.charged += n; return true }, release: () => {} } } as unknown as OfficePackage
+    }
+    const context = documentChartContext('desktop')
+    const read = await readChartPart(paged(), 'xl/charts/chart1.xml', context)
+    expect(read?.kind).toBe('tree')
+    // The pool was charged for every tree node; the workspace holds the tree (and the crossing), not the pool's raw bytes.
+    expect(pool.charged).toBeGreaterThan(0)
+    expect(context.workspace.used).toBe(CHART_READ_CROSSING + pool.charged)
+    if (read?.kind === 'tree') read.release()
+    expect(context.workspace.used).toBe(0)
+    // The pool refusing part way refuses the read and refunds the workspace.
+    const refused = await readChartPart(paged(500), 'xl/charts/chart1.xml', context)
+    expect(refused).toMatchObject({ kind: 'refused', code: 'chart-refused' })
+    expect(context.workspace.used).toBe(0)
+  })
+
+  it('I6: every allocation of the read is charged first, peaks within the limit and is released', async () => {
+    const context = documentChartContext('desktop')
+    const workspace = context.workspace
+    let peak = 0, charges = 0
+    const reserve = workspace.reserve.bind(workspace)
+    ;(workspace as { reserve: typeof reserve }).reserve = (bytes, tag) => { const ok = reserve(bytes, tag); if (ok) { charges++; peak = Math.max(peak, workspace.used) } return ok }
+    const padding = `<!--${'x'.repeat(1000)}-->`.repeat(256) // ~256 KiB streamed, never retained
+    const before = workspace.used
+    const { content, parseChart } = await attempt(STACKED.replace('<c:chart>', `${padding}<c:chart>`), context)
+    expect(parseChart).toHaveBeenCalledTimes(1)
+    expect(content?.kind).toBe('xlsxChart')
+    expect(charges, 'crossing, chunks and tree nodes').toBeGreaterThan(20)
+    expect(peak).toBeGreaterThan(before + CHART_READ_CROSSING)
+    expect(peak).toBeLessThanOrEqual(workspace.limit)
+    // Streamed bytes are refunded chunk by chunk: the peak stays far below the part size plus its text.
+    expect(peak - before).toBeLessThan(CHART_READ_CROSSING + 3 * 64 * 1024 + 256 * 1024)
+    expect(workspace.used, 'released after the parse').toBe(before)
   })
 })

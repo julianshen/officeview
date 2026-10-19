@@ -187,12 +187,14 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, bo
       if (model.categoryAxis.gridlines) { ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, plot.y); ctx.lineTo(Math.round(x) + 0.5, plot.y + plot.h); ctx.stroke() }
     }
   }
-  // Axis titles.
+  // Axis titles. Every save is balanced in finally, so a throw never leaks state (spec 6.5 containment).
   ctx.fillStyle = TEXT
-  if (catTitle) { ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; if (horizontal) { ctx.save(); ctx.translate(box.x + fontPx, plot.y + plot.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(catTitle, 0, 0); ctx.restore() } else ctx.fillText(catTitle, plot.x + plot.w / 2, box.y + box.h) }
-  if (valueTitle) { ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; if (horizontal) ctx.fillText(valueTitle, plot.x + plot.w / 2, box.y + box.h); else { ctx.save(); ctx.translate(box.x + fontPx, plot.y + plot.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(valueTitle, 0, 0); ctx.restore() } }
+  const rotated = (text: string) => { ctx.save(); try { ctx.translate(box.x + fontPx, plot.y + plot.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(text, 0, 0) } finally { ctx.restore() } }
+  if (catTitle) { ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; if (horizontal) rotated(catTitle); else ctx.fillText(catTitle, plot.x + plot.w / 2, box.y + box.h) }
+  if (valueTitle) { ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; if (horizontal) ctx.fillText(valueTitle, plot.x + plot.w / 2, box.y + box.h); else rotated(valueTitle) }
 
   ctx.save()
+  try {
   ctx.beginPath(); ctx.rect(plot.x, plot.y, plot.w, plot.h); ctx.clip()
   const at = (f: number) => horizontal ? plot.x + f * plot.w : plot.y + plot.h - f * plot.h
   const barGroups = model.groups.filter(g => g.type === 'bar')
@@ -273,7 +275,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, bo
       }
     }
   }
-  ctx.restore()
+  } finally { ctx.restore() }
 }
 
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */

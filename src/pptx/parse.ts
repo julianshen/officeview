@@ -1,3 +1,4 @@
+import type { XlsxChartModel } from '../xlsx/chartModel'
 import { attemptedMalformedRelationshipIssue, chartCard, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
 import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
@@ -612,6 +613,8 @@ function parseGraphicFrame(frame: XmlNode, tableStyles: Map<string, TableStyleEn
 interface Representation {
   node: XmlNode
   representation: 'choice' | 'fallback'
+  /** The chart card a selected fallback's pictures carry (painted if one fails to decode). */
+  chartFallback?: XlsxChartModel
   reason?: string
   feature?: string
 }
@@ -683,10 +686,15 @@ class DrawingCompatibility {
     const fallback = getChildren(node, 'Fallback')[0]
     // No representation remains (no fallback, or every fallback picture is unusable): an attempted chart Choice shows its card (spec 6.3).
     const card = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
-    const pictures = getChildren(fallback, 'pic')
-    const unusable = !!card && pictures.length > 0 && pictures.every(pic => !this.pictureUsable(attrs(getChildren(getChildren(pic, 'blipFill')[0], 'blip')[0]).embed ?? ''))
+    // The whole fallback is evaluated: only pictures without a usable image (or groups of only those) make it unusable.
+    const unusableBranch = (parent: XmlNode, depth: number): boolean => {
+      const items = orderedChildren(parent).filter(([name]) => name !== '#text' && name !== 'nvGrpSpPr' && name !== 'grpSpPr')
+      return items.length > 0 && depth < 16 && items.every(([name, item]) => name === 'grpSp' ? unusableBranch(item, depth + 1)
+        : name === 'pic' && !this.pictureUsable(attrs(getChildren(getChildren(item, 'blipFill')[0], 'blip')[0]).embed ?? ''))
+    }
+    const unusable = !!card && !!fallback && unusableBranch(fallback, 0)
     if (unusable) this.unusableFallback()
-    const selected: Representation | undefined = fallback && !unusable ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` }
+    const selected: Representation | undefined = fallback && !unusable ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}`, ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }
       : card && { node: card, representation: 'choice' }
     this.selections.set(node, selected)
     return selected
@@ -791,9 +799,10 @@ function parseShapeTree(
     if (name === 'AlternateContent') {
       const selected = compatibility.selectRepresentation(original)
       if (selected) {
-        const { node, ...selection } = selected
+        const { node, chartFallback, ...selection } = selected
         const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance, imageContext, groupStyle)
         if (selected.representation === 'fallback') retainChoiceText(getChildren(original, 'Choice')[0], selectedShapes)
+        if (chartFallback) walkShapes(selectedShapes, shape => { if (shape.image) shape.chartFallback = chartFallback })
         if (!selectedShapes.length) diagnostics.push({ kind: 'missing-representation', message: 'Selected AlternateContent representation contains no usable drawing', feature: selected.feature, source: sourceOf(original, name, partPath, path, selection) })
         shapes.push(...selectedShapes)
       } else diagnostics.push({ kind: 'missing-representation', message: 'AlternateContent has no supported Choice or native fallback', feature: compatibility.failure(original), source: sourceOf(original, name, partPath, path) })

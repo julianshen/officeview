@@ -488,10 +488,13 @@ export function parseParagraph(
     }
     // No representation remains (no fallback, or it drew nothing): an attempted chart Choice shows its card,
     // replacing the unusable fallback's audit and recording why (spec 6.3). Never during a probe.
+    const cards = (parent: XmlNode | undefined, depth = 0): XmlNode[] => !parent || depth >= 128 ? [] : orderedChildren(parent).flatMap(([name, child]) =>
+      name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' && getChildren(child, 'Fallback').length ? [] : cards(child, depth + 1))
+    const cardChoice = () => getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported && cards(choice).length)
+    /** The chart card a selected fallback's pictures carry, painted if one fails to decode. */
+    const chartFallback = () => { const choice = cardChoice(), card = choice && choiceCards.get(cards(choice)[0])?.drawing; return card?.kind === 'xlsxChart' ? card.chart : undefined }
     const placeCard = (fallback: XmlNode | undefined, audited: number): void => {
-      const cards = (parent: XmlNode | undefined, depth = 0): XmlNode[] => !parent || depth >= 128 ? [] : orderedChildren(parent).flatMap(([name, child]) =>
-        name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' ? [] : cards(child, depth + 1))
-      const choice = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported && cards(choice).length)
+      const choice = cardChoice()
       if (!choice || !context) return
       if (context.drawingCoverage) context.drawingCoverage.length = audited
       for (const drawing of cards(choice)) {
@@ -565,23 +568,29 @@ export function parseParagraph(
     const wp = getChildren(drawing, 'anchor')[0]
     if (data && wp && (!context?.reserveDrawing || context.reserveDrawing())) {
       const extent = attrs(getChildren(wp, 'extent')[0])
+      const card = chartFallback()
       addImage({
         ...data,
         widthEmu: Number(extent.cx) || 0,
         heightEmu: Number(extent.cy) || 0,
-        floating: parseAnchor(wp)
+        floating: parseAnchor(wp),
+        ...(card ? { chartFallback: card } : {}),
       })
       if (fallback) markUnselected(fallback)
       const docPr = attrs(getChildren(wp, 'docPr')[0])
       context?.drawingCoverage?.push({ partPath: context.partPath ?? 'word/document.xml', treePath: drawing ? context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]` : `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
         feature: 'picture', status: 'fallback', selectedRepresentation: 'raster-fallback', representation: 'fallback', reason: 'Selected compatibility fallback image', scope: 'original' })
     } else {
-      const prior = context?.representation, before = inline.length, audited = context?.drawingCoverage?.length ?? 0
+      const prior = context?.representation, before = inline.length, audited = context?.drawingCoverage?.length ?? 0, images = paragraph.images.length
       if (fallback) {
         if (context) context.representation = 'fallback'
         try { walk(fallback) } finally { if (context) context.representation = prior }
       }
-      if (inline.length > before) markUnselected(fallback)
+      if (inline.length > before) {
+        markUnselected(fallback)
+        const card = chartFallback()
+        if (card) for (const image of paragraph.images.slice(images)) if (!image.drawing) image.chartFallback = card
+      }
       else if (context?.reserveDrawing) placeCard(fallback, audited)
     }
     // A failed compatibility wrapper still owns a source placement. Probing

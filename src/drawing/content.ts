@@ -8,7 +8,7 @@ import type { OfficePackage } from '../core/zip'
 import type { XlsxChartModel } from '../xlsx/chartModel'
 import type { ChartDocumentContext } from '../charts/context'
 import type { ChartResult } from '../charts/model'
-import { loadChartModule } from '../xlsx/chartLoader'
+import { loadChartModule, type ChartModule } from '../xlsx/chartLoader'
 import { parseGeometry, resolveGeometry } from './geometry'
 import { supportedChoiceRequirements } from './coverage'
 import { parseGroupShapeProperties, resolveDrawingStyle } from './style'
@@ -312,10 +312,9 @@ export interface ContentLoadAdapters<Paragraph, Text> {
 /** The shared default chart reader (spec 6.2): the lazy chart engine, for XLSX, DOCX and PPTX. */
 export function defaultParseChart(pkg: OfficePackage, theme: ThemeContext, chartContext?: ChartDocumentContext): (root: XmlNode, path: string) => Promise<ChartResult<XlsxChartModel>> {
   return async (root, path) => {
-    const charts = await loadChartModule()
-    // A malformed chart part never fails the document: it reads as unsupported (placeholder/fallback).
+    // A malformed chart part or a failed engine load never fails the document: it reads as unsupported (spec 6.3).
     let chart: XlsxChartModel | undefined
-    try { chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
+    try { const charts = await loadChartModule(); chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
     return chart && !chart.unsupported ? { kind: 'native', model: chart } : { kind: 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
   }
 }
@@ -336,11 +335,17 @@ type ChartCard = Extract<DrawingContent, { kind: 'xlsxChart' }>
 export const cardChart = (reason: string, title?: string, feature?: 'ChartEx'): XlsxChartModel =>
   ({ ...(title ? { title } : {}), groups: [], categories: [], categoryAxis: { gridlines: false, deleted: false }, valueAxis: { gridlines: false, deleted: false }, fontFamily: 'Calibri', fontSizePt: 10, unsupported: reason, ...(feature ? { feature } : {}) })
 /** The card of the chart a graphic object references, when that chart was attempted and could not be drawn.
- * Searches the object's own carriers (never into an AlternateContent). */
+ * Searches the object's own carriers. A nested AlternateContent is entered only when it has no Fallback (its
+ * Choices then all failed, so the terminal chart failure propagates to the final selection, spec 6.3); one with
+ * a Fallback resolved to that fallback and is never searched. */
 export function chartCard(node: XmlNode | undefined, depth = 0): ChartCard | undefined {
   const card = chartCards.get(child(node, 'chart') as XmlNode)
   if (card) return { kind: 'xlsxChart', chart: card }
-  if (depth < 4) for (const [name, next] of orderedChildren(node)) if (name !== '#text' && name !== 'AlternateContent') { const found = chartCard(next, depth + 1); if (found) return found }
+  if (depth < 12) for (const [name, next] of orderedChildren(node)) {
+    if (name === '#text' || name === 'AlternateContent' && child(next, 'Fallback')) continue
+    const found = chartCard(next, depth + 1)
+    if (found) return found
+  }
   return undefined
 }
 const CHART_EX_REASON = 'ChartEx charts are not supported yet'
@@ -474,6 +479,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   const follow = async (id: string, from = owner, interpretation = 'content'): Promise<DrawingContent<Paragraph, Text> | undefined> => {
     const origin = source ?? { ownerPartPath: from, sourceReferenceId: id, interpretation }
     const diagnosticStart = context.diagnostics.length
+    let release: (() => void) | undefined
     try {
     const path = await referencedPart(pkg, from, id)
     if (!path) {
@@ -484,28 +490,22 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     if (depth >= CONTENT_REFERENCE_DEPTH) { contentDiagnostic(context, 'content-depth', from, path, { identity: path, reason: 'reference-depth', limit: CONTENT_REFERENCE_DEPTH }); return undefined }
     let root: XmlNode | undefined
     if (interpretation === 'chart') {
-      // Bounded chart XML (spec 6.5): the cap is enforced chunk by chunk before any tree is built.
-      const limit = (adapters.chartContext?.profile === 'mobile' ? 4 : 8) << 20
-      let head: string | undefined
-      try { head = new TextDecoder().decode((await pkg.bytes(path, limit))?.subarray(0, 4096)) }
-      catch (error) {
-        const over = String((error as Error | undefined)?.message).startsWith('Part byte limit')
-        chartFailure = cardChart(over ? 'This chart is too large to display' : 'Chart data could not be read')
-        contentDiagnostic(context, over ? 'unsupported-content' : 'malformed-part', path, 'chart', over ? { identity: id, reason: 'chart-part-limit', limit } : { identity: id, ownerPartPath: from, reason: 'invalid-content-xml' })
+      // Bounded, admitted chart XML (spec 6.5) through the lazy engine's tokenizer path. A failed engine
+      // load is a chart failure (spec 6.3), never a document failure.
+      let read: Awaited<ReturnType<ChartModule['readChartPart']>>
+      try {
+        const charts = await loadChartModule()
+        read = await charts.readChartPart(pkg, path, adapters.chartContext ? charts.chartParseContext(adapters.chartContext, pkg, path) : charts.chartParseContextFor(pkg, path))
+      } catch { read = { kind: 'unsupported', reason: 'The chart engine could not be loaded', code: 'chart-engine-unavailable' } }
+      if (read?.kind === 'tree') { root = read.root; release = read.release }
+      else if (read) {
+        chartFailure = cardChart(read.reason, undefined, read.feature)
+        contentDiagnostic(context, read.kind === 'malformed' ? 'malformed-part' : 'unsupported-content', path, read.feature ?? 'chart', { identity: id, ownerPartPath: from, reason: read.code, limit: read.limit })
         return undefined
       }
-      // Dispatch by namespace: a ChartEx part stays unsupported until the ChartEx reader lands.
-      const space = /<(?:([\w.-]+):)?chartSpace\b[^>]*>/.exec(head ?? '')
-      if (space && new RegExp(`xmlns${space[1] ? `:${space[1]}` : ''}\\s*=\\s*["'][^"']*chartex`, 'i').test(space[0])) {
-        chartFailure = cardChart(CHART_EX_REASON, undefined, 'ChartEx')
-        contentDiagnostic(context, 'unsupported-content', path, 'ChartEx', { identity: id, reason: 'unsupported-chart' })
-        return undefined
-      }
-    }
-    try { root = await pkg.xmlOrdered(path) }
-    catch {
-      if (interpretation === 'chart') chartFailure = cardChart('Chart data could not be read')
-      contentDiagnostic(context, 'malformed-part', path, interpretation, { identity: id, ownerPartPath: from, reason: 'invalid-content-xml' }); return undefined
+    } else {
+      try { root = await pkg.xmlOrdered(path) }
+      catch { contentDiagnostic(context, 'malformed-part', path, interpretation, { identity: id, ownerPartPath: from, reason: 'invalid-content-xml' }); return undefined }
     }
     if (!root) return undefined
     if (context.placements.has(path)) context.coverage.repeated++
@@ -641,6 +641,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     if (!loaded && context.diagnostics.length === beforeNested) contentDiagnostic(context, 'unsupported-content', path, origin.interpretation, { reason: 'unsupported-content' })
     return loaded
     } finally {
+      release?.()
       // Preserve the immediate failure identity and resolved target; carry
       // the selected source relationship through nested reference chains.
       for (const issue of context.diagnostics.slice(diagnosticStart)) {
@@ -870,7 +871,8 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   if (ids) return follow(attrs(ids).dm, owner, 'diagram')
   if (chartRef) {
     const chart = await follow(attrs(chartRef).id, owner, 'chart')
-    if (chartFailure) chartCards.set(chartRef, chartFailure)
+    // Every failed chart reference, a missing one included, keeps its card for the final selection (spec 6.3).
+    if (!chart) chartCards.set(chartRef, chartFailure ?? cardChart('Chart data could not be read'))
     return chart
   }
   const content = child(graphic, 'contentPart')

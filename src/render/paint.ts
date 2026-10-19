@@ -17,6 +17,8 @@ import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../
 import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
 import { ensureChartEngine, ensureChartPainter } from '../xlsx/chartLoader'
 import type { PptxDocument } from '../pptx/types'
+import type { DrawingCoverageEntry } from '../drawing/coverage'
+import type { ImageSelection } from '../core/svg'
 
 export interface PageSpec {
   widthPx: number
@@ -194,6 +196,29 @@ export async function decodeImageAssets(assets: Array<ImageCandidates & { drawin
   return decoded
 }
 
+type FallbackCarrier = { chartFallback?: { unsupported?: string }; imageIndex?: number; image?: { imageSelection?: ImageSelection }; children?: FallbackCarrier[] }
+const savedCoverage = new WeakMap<DrawingCoverageEntry, Pick<DrawingCoverageEntry, 'selectedRepresentation' | 'reason'>>()
+/** A chart's selected fallback picture that failed to decode paints the chart's card (spec 6.3). Its coverage
+ * records that, recomputed at each preparation so a later successful decode restores the fallback entry. */
+function recordChartFallbacks(lists: Array<DrawingCoverageEntry[] | undefined>, failed: Map<ImageSelection, string>): void {
+  for (const entry of lists.flatMap(list => list ?? [])) {
+    const reason = entry.imageSelection && failed.get(entry.imageSelection), saved = savedCoverage.get(entry)
+    if (reason !== undefined) {
+      if (!saved) savedCoverage.set(entry, { selectedRepresentation: entry.selectedRepresentation, reason: entry.reason })
+      entry.selectedRepresentation = 'chart-placeholder'
+      entry.reason = `chart-fallback-unusable: ${reason}`
+    } else if (saved) { Object.assign(entry, saved); savedCoverage.delete(entry) }
+  }
+}
+/** Scene nodes (PPTX shapes, XLSX drawings) whose chart-fallback picture did not decode. */
+function failedSceneFallbacks(nodes: FallbackCarrier[], decoded: Array<CanvasImageSource | undefined>, failed = new Map<ImageSelection, string>()): Map<ImageSelection, string> {
+  for (const node of nodes) {
+    if (node.chartFallback && node.imageIndex !== undefined && !decoded[node.imageIndex] && node.image?.imageSelection) failed.set(node.image.imageSelection, node.chartFallback.unsupported ?? '')
+    failedSceneFallbacks(node.children ?? [], decoded, failed)
+  }
+  return failed
+}
+
 interface ContentCarrier { content?: DrawingContent<unknown, unknown>; children?: ContentCarrier[] }
 /** Append cached pictures after indexed assets so ordinary scene image indices
  * stay stable. Identity deduplication also bounds handwritten cyclic models. */
@@ -240,6 +265,9 @@ export function getPaintables(
         await ensureChartEngine(docImages.map(image => ({ content: image.drawing })))
         decoded = await decodeImageAssets(docImages, options?.decodeImage)
         const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
+        const failed = new Map<ImageSelection, string>()
+        docImages.forEach((image, index) => { if (image.chartFallback && !decoded[index] && image.imageSelection) failed.set(image.imageSelection, image.chartFallback.unsupported ?? '') })
+        recordChartFallbacks([doc.drawingCoverage], failed)
         // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
         // resolved against the whole document, not the single-page array.
         const total = pages.length
@@ -273,6 +301,7 @@ export function getPaintables(
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
+        recordChartFallbacks([doc.drawingCoverage, ...doc.sheets.map(sheet => sheet.drawingCoverage)], failedSceneFallbacks(doc.sheets.flatMap(sheet => sheet.drawings ?? []), decoded))
         return withLease(doc.sheets.map((sheet): Paintable =>
           sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }, watermark),
         ), lease.dispose, lease.diagnostics, decoded)
@@ -287,6 +316,7 @@ export function getPaintables(
       await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes))
       decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
+      recordChartFallbacks([doc.drawingCoverage], failedSceneFallbacks(doc.slides.flatMap(slide => slide.shapes), decoded))
       return withLease(doc.slides.map(slide => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
         paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image) }),

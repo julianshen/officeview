@@ -428,14 +428,16 @@ describe('machine drawing coverage', () => {
       'ppt/slides/_rels/slide1.xml.rels': rels(rel('missing', 'chart', '../charts/absent.xml')),
     })
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(1)
-    expect(doc.drawingCoverage!.some(e => e.id === '403' && e.status === 'malformed' && e.selectedRepresentation === 'none')).toBe(true)
+    // A0b r1 (spec 6.3): a failed chart reference with nothing else remaining becomes its card.
+    expect(doc.drawingCoverage!.some(e => e.id === '403' && e.status === 'malformed' && e.selectedRepresentation === 'chart-placeholder')).toBe(true)
   })
 
   test.each([false, true])('PPTX repeated missing chart references classify every %s placement', async wrapped => {
     const body = [1, 2].map(id => wrapped ? `<mc:AlternateContent><mc:Choice Requires="c">${frame(id, 'chart', '<c:chart r:id="missing"/>')}</mc:Choice></mc:AlternateContent>` : frame(id, 'chart', '<c:chart r:id="missing"/>')).join('')
     const doc = await pptx(body, { 'ppt/slides/_rels/slide1.xml.rels': rels(rel('missing', 'chart', '../charts/absent.xml')) })
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(2)
-    for (const id of ['1', '2']) expect(doc.drawingCoverage!.find(e => e.id === id && e.scope === 'original')).toMatchObject({ status: 'malformed', referenceId: 'missing', reason: 'part-not-found', selectedRepresentation: 'none' })
+    // A0b r1 (spec 6.3): a missing chart keeps its card; the failure is still reported.
+    for (const id of ['1', '2']) expect(doc.drawingCoverage!.find(e => e.id === id && e.scope === 'original')).toMatchObject({ status: 'malformed', referenceId: 'missing', reason: 'part-not-found', selectedRepresentation: 'chart-placeholder' })
   })
 
   test('a later supported Choice does not inherit an unselected ChartEx feature', async () => {
@@ -669,7 +671,8 @@ describe('machine drawing coverage', () => {
       'word/_rels/document.xml.rels': rels(rel('missing', 'chart', 'charts/absent.xml')),
     }))
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(2)
-    for (const id of ['1', '2']) expect(doc.drawingCoverage!.find(e => e.id === id)).toMatchObject({ status: 'malformed', referenceId: 'missing', reason: 'part-not-found', selectedRepresentation: 'none' })
+    // A0b r1 (spec 6.3): a missing chart keeps its card; the failure is still reported.
+    for (const id of ['1', '2']) expect(doc.drawingCoverage!.find(e => e.id === id)).toMatchObject({ status: 'malformed', referenceId: 'missing', reason: 'part-not-found', selectedRepresentation: 'chart-placeholder' })
   })
 
   test('Word selected empty Choice excludes a later missing-chart diagnostic', async () => {
@@ -736,9 +739,11 @@ describe('machine drawing coverage', () => {
     const doc = await parseDocx(await packageOf({
       'word/document.xml': `<w:document xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><w:body><w:p><w:r><mc:AlternateContent><mc:Choice Requires="${requires}">${drawing}</mc:Choice></mc:AlternateContent></w:r></w:p></w:body></w:document>`,
     }))
-    expect(doc.sections[0].paragraphs[0].images).toHaveLength(0)
+    // A0b r1 (spec 6.3): a missing chart Choice with no fallback becomes its card; an unknown Requires stays blank.
+    const card = status === 'malformed'
+    expect(doc.sections[0].paragraphs[0].images).toHaveLength(card ? 1 : 0)
     expect(doc.drawingCoverage!.filter(e => e.scope === 'original')).toHaveLength(1)
-    expect(doc.drawingCoverage!.find(e => e.scope === 'original')).toMatchObject({ id: '99', name: 'source 99', status, selectedRepresentation: 'none', partPath: 'word/document.xml', treePath: expect.stringContaining('AlternateContent') })
+    expect(doc.drawingCoverage!.find(e => e.scope === 'original')).toMatchObject({ id: '99', name: 'source 99', status, selectedRepresentation: card ? 'chart-placeholder' : 'none', partPath: 'word/document.xml', ...(card ? {} : { treePath: expect.stringContaining('AlternateContent') }) })
   })
 
   test('reused Word header part contributes one original source placement', async () => {
@@ -1274,7 +1279,8 @@ describe('machine drawing coverage', () => {
     }))
     expect(drawingReport(doc).counts).toEqual({ originalObjects: 4, selectedDescendants: 0, diagnosticEntries: 0 })
     expect(doc.drawingCoverage!.filter(e => e.referenceId === 'one').map(e => [e.unit, e.status, e.reason, e.selectedRepresentation])).toEqual([
-      [0, 'malformed', 'invalid-relationship-xml', 'none'], [1, 'malformed', 'invalid-relationship-xml', 'none'],
+      // A0b r1 (spec 6.3): a chart that could not be resolved keeps its card.
+      ...[0, 1].map(unit => [unit, 'malformed', 'invalid-relationship-xml', kind === 'chart' ? 'chart-placeholder' : 'none']),
     ])
     expect(doc.drawingCoverage!.filter(e => e.id === '9').map(e => e.status)).toEqual(['native', 'native'])
   })
