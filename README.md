@@ -45,6 +45,11 @@ scoped: it ships no reset or preflight, and every rule targets the viewer's
 theme root, so it never restyles the host page. When the stylesheet is missing,
 the viewer logs `[officeview] style.css not loaded` once per page.
 
+**Dependencies.** The chrome uses `lucide-react` for icons and
+`motion` (pinned to `14.4.0`) for animation, both loaded only in lazy chunks.
+Because the pin is exact, a host that also depends on a different `motion`
+version will ship two copies of it.
+
 Or with a pre-parsed model:
 
 ```tsx
@@ -115,7 +120,7 @@ The viewer has a light and a dark theme. By default it follows the operating
 system (`prefers-color-scheme`); the `theme` prop forces one:
 
 ```tsx
-<OfficeFile data=<class 'bytes'> theme="light" />   {/* 'light' | 'dark' | 'system' */}
+<OfficeFile data={fileBytes} theme="light" />   {/* 'light' | 'dark' | 'system' */}
 ```
 
 **Theme root.** Each viewer's outer wrapper carries `data-ov-theme-root`, plus
@@ -203,8 +208,10 @@ the next `theme` change or when the viewer remounts.
 
 **Host CSS isolation and its limit.** `style.css` has no global rules: no
 preflight, no `:root`, `:host`, `@property` or universal selectors, and no
-`!important` utilities. Its utilities are unlayered and scoped to the theme root
-at specificity (0,2,0), so common host resets (`button { all: unset }`,
+`!important` utilities. Two layout rules in the spreadsheet viewer (the Find
+bar placement and the zoom controls' bottom offset) and the `allowPrint={false}`
+print guard do use `!important`, all scoped to the theme root. Its utilities
+are unlayered and scoped to the theme root at specificity (0,2,0), so common host resets (`button { all: unset }`,
 `* { box-sizing: content-box }`, `html { font-size: 10px }`, `.app button`)
 do not reach the viewer chrome. Host rules with specificity (0,2,0) or higher
 that target viewer elements, or rules with `!important`, can still override the

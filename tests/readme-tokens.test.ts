@@ -48,4 +48,17 @@ describe('README theming documentation', () => {
     const everywhere = tokenRows(README).map(row => row.name)
     expect(everywhere.length).toBe(COLOR_TOKENS.length)
   })
+
+  it('README code samples carry no Python reprs (final review I3)', () => {
+    expect(README).not.toContain("<class '")
+    expect(themingSection()).toContain('<OfficeFile data={fileBytes} theme="light" />')
+  })
+
+  it('README states the exact motion pin and the two-copies consequence (final review M4)', () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as { dependencies: Record<string, string> }
+    const pin = pkg.dependencies.motion
+    expect(pin).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(README).toContain(`\`motion\` (pinned to \`${pin}\`)`)
+    expect(README).toMatch(/different `motion`\s+version[^.]*two copies/)
+  })
 })
