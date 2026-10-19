@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { scanChartNumber } from '../src/xlsx/chart'
+import { scanChartNumber } from '../src/charts'
 
 const scan = (text: string) => scanChartNumber(text.length, i => text.charCodeAt(i))
 // Excel-style numeric text (coordinator decision, r5): optional surrounding ASCII

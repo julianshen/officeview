@@ -45,4 +45,7 @@ export const EAGER_FORBIDDEN: readonly RegExp[] = [
   /src\/components\/motion\//,
   /src\/styles\/tokens\.ts(?:$|\?)/,
   /src\/components\/paged\/(?!metrics\.ts(?:$|\?))/,
+  // The chart engine is lazy (spec 6.1); chartLoader, chartModel and the placeholder painter stay eager.
+  /src\/charts\//,
+  /src\/xlsx\/chart\.ts(?:$|\?)/,
 ]

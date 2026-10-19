@@ -61,7 +61,7 @@ describe('worksheet chart data', () => {
     if (content?.kind !== 'xlsxChart') return
     expect(content.chart).toMatchObject({ title: 'Radar', unsupported: 'Radar chart is not supported' })
     expect(sheet.drawingCoverage?.find(entry => entry.element === 'graphicFrame')?.selectedRepresentation).toBe('chart-placeholder')
-    const { chartDescription } = await import('../src/xlsx/chart')
+    const { chartDescription } = await import('../src/charts')
     expect(chartDescription(content.chart)).toBe('Chart: Radar. Radar chart is not supported; it is not drawn.')
   })
 })
@@ -107,7 +107,7 @@ describe('chart references: formats, defined names, unreadable areas', () => {
 })
 
 describe('chart parser', async () => {
-  const { parseXlsxChart, parseChartRange, chartDescription, fillChartRanges } = await import('../src/xlsx/chart')
+  const { parseXlsxChart, parseChartRange, chartDescription, fillChartRanges } = await import('../src/charts')
   const { parseXmlOrdered } = await import('../src/core/xml')
   const parse = (xml: string) => parseXlsxChart(parseXmlOrdered(xml), undefined)!
 
@@ -167,7 +167,7 @@ describe('chart parser', async () => {
 })
 
 describe('chart painting', async () => {
-  const { parseXlsxChart, paintXlsxChart } = await import('../src/xlsx/chart')
+  const { parseXlsxChart, paintXlsxChart } = await import('../src/charts')
   const { paintDrawingContent } = await import('../src/drawing/content-paint')
   const { parseXmlOrdered } = await import('../src/core/xml')
   const parse = (xml: string) => parseXlsxChart(parseXmlOrdered(xml), undefined)!

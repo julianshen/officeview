@@ -52,6 +52,11 @@ export default defineConfig({
       // allowing the entry to gain internal exports keeps it one eager file
       // instead of a facade plus a shared chunk.
       preserveEntrySignatures: 'allow-extension',
+      output: {
+        // The lazy chart engine's entry is src/charts/index.ts; name its chunk
+        // charts-*.js so it never reads as (or collides with) an index chunk.
+        chunkFileNames: chunk => chunk.facadeModuleId?.replace(/\\/g, '/').endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : '[name]-[hash].js',
+      },
     },
   },
 })

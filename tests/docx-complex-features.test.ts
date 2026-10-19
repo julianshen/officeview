@@ -291,7 +291,7 @@ describe('DOCX complex drawing and style regressions', () => {
     )
     expect(collectDocImages(doc)).toHaveLength(1)
     expect(collectDocImages(doc)[0]).toMatchObject({
-      drawing: { kind: 'chart', series: [{ name: 'Series', values: [4] }], categories: ['Category'], overlap: -27 }
+      drawing: { kind: 'xlsxChart', chart: { groups: [{ type: 'bar', barDir: 'col', grouping: 'clustered', overlap: -27, series: [{ name: 'Series', values: [4] }] }], categories: ['Category'] } }
     })
     const { createCanvas } = await import('canvas')
     const ctx = createCanvas(816, 1056).getContext('2d')

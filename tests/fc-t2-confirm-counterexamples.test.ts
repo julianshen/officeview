@@ -4,7 +4,7 @@
 // main never walks a granted drawings reply; the worker walk admits its
 // workspace in chunks, without a fixed object cap.
 import { describe, expect, it, vi } from 'vitest'
-import { parseXlsxChart } from '../src/xlsx/chart'
+import { parseXlsxChart } from '../src/charts'
 import { parseXmlOrdered } from '../src/core/xml'
 import * as bytes from '../src/xlsx/view/payloadBytes'
 import { ViewerKernel, connectInProcess } from '../src/worker/viewerKernel'

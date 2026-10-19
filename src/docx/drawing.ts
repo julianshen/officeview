@@ -8,7 +8,7 @@ import { withFallbackFonts } from '../core/fonts/fallback'
 import type { FontResolver } from '../core/fonts/register'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
-import { partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
+import { drawingPartContext, partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
 import { prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
 import type { ContentSelection } from '../drawing/content'
 import { supportedChoiceRequirements } from '../drawing/coverage'
@@ -76,7 +76,7 @@ export async function loadDrawingParts(
   const load = async (drawing: XmlNode): Promise<void> => {
     const wp = child(drawing, 'inline') ?? child(drawing, 'anchor')
     if (!wp) return
-    const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
+    const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { chartContext: drawingPartContext(pkg).chart, parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
     if (compatible?.selections.length) selections.set(drawing, compatible.selections)
     const vector = compatible?.content
     if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) {
