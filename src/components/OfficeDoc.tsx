@@ -31,7 +31,7 @@ import { useCoarsePointer } from './pointer'
 import type { ZoomContext, ZoomOutcome } from './zoomRouting'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
-import { themeRootProps, warnIfStylesMissing, type ThemeMode } from './theme'
+import { themeRootProps, type ThemeMode } from './theme'
 import {
   distance,
   MAX_ZOOM,
@@ -330,9 +330,9 @@ function LegacyOfficeDoc({
   // wrapper can, over the pages and every control (search, copy, zoom).
   const [palette, setPalette] = useState<CanvasColors & {key: string}>()
   const wrapperRef = useRef<HTMLDivElement | null>(null)
-  // Once per mount: is officeview.css loaded? (spec §5, R10) And request the
-  // zoom routing.
-  useEffect(() => { if (wrapperRef.current) warnIfStylesMissing(wrapperRef.current); void loadRouter() }, [])
+  // Once per mount: request the zoom routing. (The lazy chrome checks that
+  // officeview.css is loaded, spec §5, R10.)
+  useEffect(() => { void loadRouter() }, [])
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
@@ -780,7 +780,8 @@ function LegacyOfficeDoc({
   return (
     <div ref={wrapperRef} {...themeRootProps(theme, instance)} className="ov:relative ov:flex ov:flex-col ov:min-h-0"
       data-ov-print={allowPrint} onKeyDown={onKeyDown}>
-      {/* The lazy chrome also owns printing with showToolbar=false. Fixed
+      {/* The lazy chrome also owns printing with showToolbar=false (if its
+          chunk fails, pages render without chrome, Find or print). Fixed
           placeholders reserve visible chrome without shifting pages (§6.10). */}
       <Suspense fallback={showToolbar && <div data-testid="officeview-toolbar-placeholder" className={SLOT} style={{ height: PAGED_TOOLBAR_HEIGHT[compact ? 'compact' : 'regular'] }} />}>
         <PagedChrome {...chrome} />
@@ -857,16 +858,21 @@ const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
 
 // The toolbar, status line, page tracking and word count (spec §6.10). Key
 // handlers and zoom state stay here, eager.
-const PagedChrome = lazy(() => import('./paged/PagedChrome'))
+// A chunk that fails to load (a redeploy removed it, a CSP blocks it) warns
+// once and leaves the pages without chrome rather than unmounting the host.
+const warnChunk = (e: unknown) => console.warn('[officeview] chunk not loaded', e)
+const PagedChrome = lazy(() => import('./paged/PagedChrome').catch((e) => (warnChunk(e), { default: () => null as never })))
 // The zoom routing is lazy too, requested by the first paged render: its
 // gestures need painted pages, so it is loaded before they can happen; an
 // input that still beats it is applied once it arrives.
 type Router = typeof import('./zoomRouting')
 let router: Router | undefined
+let routerP: Promise<Router | void> | undefined
 /** @internal Tests delay the routing module through this. */
 export const routerLoader = { load: (): Promise<Router> => import('./zoomRouting') }
-const loadRouter = () => routerLoader.load().then((m) => (router = m))
-const route = (fn: (m: Router) => void) => { if (router) fn(router); else void loadRouter().then(fn) }
+// One attempt: a failure warns once and zoom stays off (no retry per gesture).
+const loadRouter = () => routerP ??= routerLoader.load().then((m) => (router = m), warnChunk)
+const route = (fn: (m: Router) => void) => { if (router) fn(router); else void loadRouter().then((m) => m && fn(m)) }
 const SLOT = 'ov:shrink-0 ov:bg-chrome'
 const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 

@@ -14,6 +14,7 @@ import type { OfficeDocSource } from '../OfficeDoc'
 import { contentYAt, pageOffsets } from '../scrollPan'
 import { SearchBar } from '../viewerControls'
 import { MotionRoot } from '../motion/presets'
+import { warnIfStylesMissing } from '../styleWarning'
 import { PAGE_PADDING_PX } from './metrics'
 import { PagedStatus, type PagedKind } from './PagedStatus'
 import { PagedToolbar } from './PagedToolbar'
@@ -77,6 +78,8 @@ export default function PagedChrome(p: PagedChromeProps): ReactElement {
   // Root attribute observation handles prop-driven theme changes too.
   const palette = useCanvasColors(themeRoot, 'system')
   useEffect(() => { p.onPalette?.({...palette.colors, key: palette.key}) }, [palette, p.onPalette])
+  // Once per page: is officeview.css loaded? (spec §5, R10)
+  useEffect(() => { const root = themeRoot.current; if (root) warnIfStylesMissing(root) }, [themeRoot])
   const [notice, setNotice] = useState('')
   useEffect(() => {
     if (p.allowPrint) return
