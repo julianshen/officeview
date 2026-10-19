@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import type { CalendarDay, DateOp, DatePreset, NumberOp, TextOp, TypedCondition } from '../../xlsx/view/contracts'
 import type { ColumnClassification } from '../../xlsx/view/filter'
-import { controlTarget, CONTROL_CLS, CHECKBOX_CLS } from './controlUi'
+import { controlTarget, CONTROL_CLS, SELECT_CLS, CHECKBOX_CLS } from './controlUi'
 import { m } from 'motion/react'
 import { fade, useMotionProps } from '../motion/presets'
 
@@ -33,11 +33,11 @@ export function ConditionEditor({ value, onChange, classification, index, invali
   // The second condition fades in when the user adds it; the first mounts with its dropdown.
   const motion = useMotionProps(fade, index > 1)
   return <m.fieldset {...motion}><legend>{prefix}</legend>
-    <label>Type <select aria-label={`${prefix} type`} className={CONTROL_CLS} value={value.kind} style={controlTarget} onChange={event => onChange(conditionInput(undefined, event.target.value as TypedCondition['kind']))}>
+    <label>Type <select aria-label={`${prefix} type`} className={SELECT_CLS} value={value.kind} style={controlTarget} onChange={event => onChange(conditionInput(undefined, event.target.value as TypedCondition['kind']))}>
       {types.map(kind => <option key={kind} value={kind}>{kind === 'datePreset' ? 'Date preset' : kind === 'date' ? 'Calendar date' : kind === 'number' ? 'Number' : 'Text'}</option>)}</select></label>
-    {value.kind === 'datePreset' ? <label>Period <select aria-label={`${prefix} preset`} className={CONTROL_CLS} value={value.preset} style={controlTarget} onChange={event => onChange({ ...value, preset: event.target.value as DatePreset })}>
+    {value.kind === 'datePreset' ? <label>Period <select aria-label={`${prefix} preset`} className={SELECT_CLS} value={value.preset} style={controlTarget} onChange={event => onChange({ ...value, preset: event.target.value as DatePreset })}>
       {(['today', 'yesterday', 'tomorrow', 'thisWeek', 'thisMonth', 'thisYear'] as const).map(preset => <option key={preset} value={preset}>{preset}</option>)}</select></label> : <>
-      <label>Operator <select aria-label={`${prefix} operator`} className={CONTROL_CLS} value={value.op} style={controlTarget} onChange={event => onChange({ ...value, op: event.target.value })}>{operators[value.kind].map(op => <option key={op} value={op}>{names[op]}</option>)}</select></label>
+      <label>Operator <select aria-label={`${prefix} operator`} className={SELECT_CLS} value={value.op} style={controlTarget} onChange={event => onChange({ ...value, op: event.target.value })}>{operators[value.kind].map(op => <option key={op} value={op}>{names[op]}</option>)}</select></label>
       <label>{value.kind === 'date' ? 'Calendar date' : 'Value'} <input aria-label={`${prefix} first`} className={CONTROL_CLS} aria-invalid={invalid} value={value.first} placeholder={value.kind === 'date' ? 'YYYY-MM-DD' : undefined} style={controlTarget} onChange={event => onChange({ ...value, first: event.target.value })} /></label>
       {value.op === 'between' && <label>Through <input aria-label={`${prefix} second`} className={CONTROL_CLS} aria-invalid={invalid} value={value.second} style={controlTarget} onChange={event => onChange({ ...value, second: event.target.value })} /></label>}
       {value.kind === 'text' && <label style={{ ...controlTarget, display: 'inline-flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} checked={value.wildcards} onChange={event => onChange({ ...value, wildcards: event.target.checked })} />Use * / ? wildcards (~ escapes)</label>}

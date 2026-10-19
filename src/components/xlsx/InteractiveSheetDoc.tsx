@@ -1682,7 +1682,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const dockZoom = touchControls || pane.width < NARROW_PANE_PX
   const zoomProps = { zoom, onIn: () => zoomBy(1), onOut: () => zoomBy(-1), onReset: resetZoom, atFit: zoom <= SHEET_MIN_ZOOM }
   const canvasStyle: CSSProperties = { position: 'absolute', left: 0, top: 0, width: viewport.width, height: viewport.height, pointerEvents: 'none' }
-  const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:gap-1'
+  // Coarse pointer: 44px targets (spec §9.3) shown icon-only; the label stays in
+  // the accessible name through an sr-only span, so names are unchanged.
+  const toolbarBtn = 'ov:rounded-control ov:border ov:border-border ov:bg-field ov:text-text ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:px-2 ov:py-1 ov:text-xs ov:font-medium ov:flex ov:items-center ov:justify-center ov:gap-1 ov:coarse:min-h-11 ov:coarse:min-w-11 ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'
+  const toolbarLabel = 'ov:coarse:sr-only'
   return (
     // The outer wrapper is the host's flex item: it fills a sized flex-column host;
     // an unsized host gets the default 400px pane. Chrome motion only (spec §6.4).
@@ -1711,7 +1714,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div data-officeview-ui="sheet-actions" className="ov:flex ov:items-center ov:gap-1">
           <button type="button" className={toolbarBtn} disabled={!allowCopy || !selection.ranges.length || copyPending} onClick={() => void copyGrid()}>
             <Icon icon={Copy} name="copy" size={14} />
-            Copy selection
+            <span className={toolbarLabel}>Copy selection</span>
           </button>
           {copyPending && (
             <button type="button" className={toolbarBtn} onClick={cancelCopy}>
@@ -1721,12 +1724,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           {allowPrint && (
             <button type="button" className={toolbarBtn} onClick={() => void preparePrint()}>
               <Icon icon={Printer} name="printer" size={14} />
-              Print
+              <span className={toolbarLabel}>Print</span>
             </button>
           )}
           <button type="button" className={toolbarBtn} disabled={!resized} aria-description="Restore this sheet's workbook column widths and row heights" onClick={resetSizes}>
             <Icon icon={RotateCcw} name="rotate-ccw" size={14} />
-            Reset sizes
+            <span className={toolbarLabel}>Reset sizes</span>
           </button>
         </div>
         {showZoomControls && dockZoom && !popup && <DockedZoomControls {...zoomProps} touch={touchControls} />}

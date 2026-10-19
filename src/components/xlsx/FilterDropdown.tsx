@@ -6,7 +6,7 @@ import { decodeSerial } from '../../xlsx/formula/serial'
 import { columnToLetters } from '../../xlsx/view/coordinates'
 import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
-import { controlTarget, CONTROL_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
+import { controlTarget, CONTROL_CLS, SELECT_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
 import { useControlMedia } from './controlMedia'
 import { m } from 'motion/react'
 import { popover, sheet, useMotionProps } from '../motion/presets'
@@ -125,7 +125,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       <button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clear')}>Clear column</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} disabled={busy || life.invalid} onClick={() => apply('clearAll')}>Clear all filters</button>
       {/* Space reserved for what the value list's arrival fills in, so nothing below moves (no layout shift). */}
       <p style={{ minHeight: '2.6em' }}>{range && <>{range.source.kind === 'table' ? `Table metadata: ${range.range.headerRows} header row(s), ${range.range.totalsRows} totals row(s).` : 'Resolved source range.'}{props.applied && !sameFilterRange(props.applied.range, range.range) ? ' OK will replace the previous filter range.' : ''}</>}</p>
-      <label>Filter method <select aria-label="Filter method" className={CONTROL_CLS} style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
+      <label>Filter method <select aria-label="Filter method" className={SELECT_CLS} style={controlTarget} value={method} onChange={event => setMethod(event.target.value as 'values' | 'custom')}><option value="values">Values and blanks</option>{(method === 'custom' || !['loading', 'empty'].includes(classification.kind)) && <option value="custom">{classification.kind === 'loading' ? 'Custom filters (classification pending)' : classification.kind === 'date' ? 'Date filters' : classification.kind === 'number' ? 'Number filters' : 'Text / mixed filters'}</option>}</select></label>
       {method === 'values' ? <>
         <label>Search <input ref={searchInput} aria-label="Search all values" className={CONTROL_CLS} disabled={changing || life.invalid} style={controlTarget} value={query.text} onChange={event => refresh({ text: event.target.value, offset: 0, wildcards: query.wildcards })} /></label>
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} disabled={changing || life.invalid} checked={Boolean(query.wildcards)} onChange={event => refresh({ ...query, offset: 0, wildcards: event.target.checked })} />Search with wildcards</label>
@@ -145,7 +145,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       </> : <>
         <ConditionEditor value={first} onChange={setFirst} classification={classification} index={1} invalid={Boolean(validation)} />
         <label style={{ ...controlTarget, display: 'flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} aria-label="Use two conditions" checked={compound} onChange={event => setCompound(event.target.checked)} />Use two conditions</label>
-        {compound && <><label>Combine <select aria-label="Combine conditions" className={CONTROL_CLS} style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
+        {compound && <><label>Combine <select aria-label="Combine conditions" className={SELECT_CLS} style={controlTarget} value={connective} onChange={event => setConnective(event.target.value as 'and' | 'or')}><option value="and">All (AND)</option><option value="or">Either (OR)</option></select></label><ConditionEditor value={second} onChange={setSecond} classification={classification} index={2} invalid={Boolean(validation)} /></>}
         {classification.kind === 'date' && <p>Calendar dates in {props.client.context().timeZone}; periods include times and resolve at apply time.</p>}
       </>}
       {periods.map(period => <p key={period}>{period}</p>)}

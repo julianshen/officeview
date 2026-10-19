@@ -8,6 +8,67 @@ and this project uses [semantic versioning](https://semver.org/spec/v2.0.0.html)
 Note: releases up to and including v0.3.0 predate this file and are recorded only
 in git history.
 
+## [Unreleased]
+
+The UI restyle: a Fluent (Office 365) look for every viewer surface, light and
+dark themes, a toolbar and status line for the page viewer, and isolated paged
+print. Targets 0.5.0 (the version in package.json).
+
+### Breaking
+
+- **Hosts must import the stylesheet.** The viewer chrome is now styled by a
+  shipped stylesheet instead of inline styles. Add, once per app:
+
+  ```ts
+  import 'officeview/style.css'
+  ```
+
+  Without it the viewer renders unstyled and logs
+  `[officeview] style.css not loaded` once per page. The stylesheet ships no
+  reset or preflight and every rule is scoped to the viewer's theme root
+  (`[data-ov-theme-root]`), so it does not restyle the host page. Print
+  suppression (`allowPrint={false}`) in the page viewer also relies on it; see
+  the README's "Copy and print prevention".
+
+### Added
+
+- **Light and dark themes**: a `theme` prop (`'light' | 'dark' | 'system'`,
+  default `'system'`, which follows `prefers-color-scheme`) on `OfficeDoc` and
+  `OfficeFile`. Every chrome colour, radius and shadow is a documented
+  `--ov-*` custom property that hosts override from any selector targeting
+  `[data-ov-theme-root]`. Document content stays white paper in both themes.
+- **Page viewer toolbar** (Word, PowerPoint, RTF, ODT, static XLSX): file name,
+  Find, zoom, Copy and Print in a slim top toolbar instead of floating controls,
+  with a touch/narrow layout (44px targets, "More" menu). New `showToolbar`
+  (default `true`) and `title` props; `OfficeFile` derives the file name from
+  the `File`, the URL or a `Content-Disposition` header.
+- **Page navigation**: previous/next page or slide with a "3 / 12" readout.
+- **Fit to width**: a layout mode that fits the page width to the viewer,
+  re-rasterised at that width while scrolling stays native.
+- **Word count** in a new status line for Word, RTF and ODT.
+- **Isolated paged print**: the page viewer prints only the document's pages, as
+  page-size images in a hidden same-origin frame; host content never reaches
+  the printout.
+- **Motion** for menus, dialogs, the mobile filter sheet, the sheet picker, the
+  zoom readout and click feedback. Chrome only (canvases never animate), lazy
+  loaded, and `prefers-reduced-motion` is honoured.
+- Dependencies: `lucide-react` (icons, replacing Unicode glyphs) and `motion`
+  (pinned to `14.4.0`). Both load only in lazy chunks; the eager bundle does not
+  grow.
+
+### Changed
+
+- **Fluent look** for the spreadsheet viewer, the page viewer and the shared
+  shell: system font stack, 4px controls, 6px panels, soft layered shadows,
+  Lucide icons, Excel-green cell selection, Fluent menus, sort/filter dialogs
+  and mobile filter sheet.
+- **Disallowed actions are hidden**: with `allowCopy={false}` or
+  `allowPrint={false}` the Copy or Print button is hidden rather than shown;
+  the blocking behaviour is unchanged.
+- **The print guard is per instance**: `allowPrint={false}` hides only its own
+  viewer from print output, so a sibling viewer that allows printing still
+  prints.
+
 ## [0.4.0] - 2026-10-03
 
 The first release with more than the original three formats. Adds two whole

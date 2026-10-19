@@ -256,7 +256,11 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const actionTarget: CSSProperties = touch ? cellTarget : compact && !revealed ? { ...target, ...visuallyHidden } : { ...target, flex: 'none', width: ACTION_PX }
       const iconClip = { display: 'block', width: touch ? box.width : undefined, overflow: 'hidden', textAlign: 'center' as const }
       const count = props.onSortDialog ? 3 : 2, inline = box.width >= count * GRID_HEADER_SIZE, open = openCol === col
-      return <div key={col} role="columnheader" aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
+      // Desktop: idle action icons stay quiet until the header is hovered or holds
+      // focus, so the letter reads first; an applied sort or filter, a pending
+      // sort and the selected column always show theirs (Task 8 visual review).
+      const quiet = !touch && !compact && !selected
+      return <div key={col} role="columnheader" className={quiet ? 'ov:group' : undefined} aria-colindex={col + 2} aria-label={label} aria-selected={selected} aria-sort={priority === 0 ? direction : undefined}
         onFocus={() => setFocusCol(col)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusCol(current => current === col ? null : current) }}
         style={{ position: 'absolute', left: 0, transform: `translateX(${gutter + box.x}px)`, width, height, overflow: open ? 'visible' : 'hidden', display: 'flex', flexDirection: touch ? 'column' : 'row', alignItems: 'stretch', boxSizing: 'border-box', boxShadow: 'inset -1px 0 var(--ov-color-gridline)', ...(revealed || open ? { zIndex: 3, background: 'var(--ov-color-header)' } : {}) }}>
         <button type="button" aria-label={`Select ${label}`} data-header-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
@@ -264,7 +268,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
           onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onSelect?.('column', col, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event) }}
           className="ov:bg-transparent ov:text-header-text ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
           style={cellTarget}><span style={{ ...iconClip, whiteSpace: 'nowrap', fontSize: labelFont }}>{letters}</span></button>
-        {actions && !narrowTouch(col) && (!touch ? columnActions(props, col, () => actionTarget, iconClip)
+        {actions && !narrowTouch(col) && (!touch ? columnActions(props, col, () => actionTarget, iconClip, quiet)
           : <div style={{ display: 'flex', width: box.width, height: GRID_HEADER_SIZE, flex: 'none' }}>{inline
             ? columnActions(props, col, () => ({ ...target, flex: 'none', width: box.width / count, minWidth: GRID_HEADER_SIZE }))
             : <>
@@ -286,7 +290,9 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
   </div>
 }
 /** Sort / filter / more-sort buttons of one column; `style(i)` places the i-th. */
-function columnActions(props: GridHeadersProps, col: number, style: (index: number) => CSSProperties, iconClip: CSSProperties = { display: 'block', overflow: 'hidden', textAlign: 'center' }): ReactElement {
+/** Hidden until the header is hovered or focused (or the button itself has keyboard focus). */
+const QUIET = 'ov:opacity-0 ov:group-hover:opacity-100 ov:group-focus-within:opacity-100 ov:focus-visible:opacity-100 ov:transition-opacity ov:motion-reduce:transition-none'
+function columnActions(props: GridHeadersProps, col: number, style: (index: number) => CSSProperties, iconClip: CSSProperties = { display: 'block', overflow: 'hidden', textAlign: 'center' }, quiet = false): ReactElement {
   const priority = props.sort?.keys.findIndex(key => key.col === col) ?? -1
   const direction = priority < 0 ? undefined : props.sort!.keys[priority].order === 'asc' ? 'ascending' : 'descending'
   const label = `Column ${columnToLetters(col)}${direction ? `; sort priority ${priority + 1}, ${direction}` : ''}`
@@ -297,7 +303,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
       aria-busy={props.pendingSortColumn === col ? true : undefined}
       aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}
       aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`}
-      className={`ov:bg-transparent ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'}`}
+      className={`ov:bg-transparent ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'} ${quiet && !direction && props.pendingSortColumn !== col ? QUIET : ''}`}
       onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}>
       <span style={iconClip}>
         {props.pendingSortColumn === col ? <Icon icon={Loader2} name="loader" size={14} className="ov:motion-safe:animate-spin" />
@@ -309,7 +315,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
     <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       style={style(1)} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`}
       aria-pressed={Boolean(rule)} title={description}
-      className={`ov:bg-transparent ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'}`}
+      className={`ov:bg-transparent ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'} ${quiet && !rule ? QUIET : ''}`}
       onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}>
       <span style={iconClip}>
         <Icon icon={Filter} name="filter" size={14} fill={rule ? 'currentColor' : 'none'} />
@@ -317,7 +323,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
     </button>
     {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`}
-      className="ov:bg-transparent ov:text-icon ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control"
+      className={`ov:bg-transparent ov:text-icon ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${quiet ? QUIET : ''}`}
       onClick={event => props.onSortDialog?.(col, event.currentTarget)}>
       <span style={iconClip}><Icon icon={Ellipsis} name="ellipsis" size={14} /></span>
     </button>}
