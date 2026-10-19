@@ -1,8 +1,8 @@
 /**
  * The display name of an opened file (spec §6.5): File.name, a
  * Content-Disposition filename (RFC 6266: filename* over filename) or the
- * last URL path segment. Eager and small (used by <OfficeFile>); kept out of
- * components/paged/ so the eager allowlist there stays metrics.ts only.
+ * last URL path segment. Lazy: <OfficeFile> imports it dynamically once a
+ * source resolves, so it stays out of the eager entry.
  */
 const decode = (s: string): string | undefined => { try { return decodeURIComponent(s) } catch { return undefined } }
 
