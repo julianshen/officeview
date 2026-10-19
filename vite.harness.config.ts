@@ -44,7 +44,11 @@ function lazyPagedChunks(): Plugin {
     configureServer(s) { server = s },
     transform(_code, id) {
       if (!server || !id.split('?')[0].endsWith('/src/debug/viewer-e2e.tsx')) return
-      for (const url of ['/src/components/paged/PagedChrome.tsx', '/src/components/zoomRouting.ts']) void server.warmupRequest(url)
+      for (const url of [
+        '/src/components/paged/PagedChrome.tsx',
+        '/src/components/zoomRouting.ts',
+        '/src/components/paged/printDocument.ts',
+      ]) void server.warmupRequest(url)
     },
   }
 }
