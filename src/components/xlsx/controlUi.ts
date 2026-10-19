@@ -15,8 +15,8 @@ export interface ControlProps {
   onApplied: (snapshot: ControlSnapshot) => void
 }
 export const controlTarget = { minHeight: 44, minWidth: 44 } as const
-/** Accent focus ring for dialog and sheet controls (the browser default ring
- * turns white on the dark theme's `color-scheme`). */
+/** Accent focus ring for dialog and sheet controls (the theme root sets
+ * `color-scheme`, and under `dark` the browser default ring turns white). */
 const CONTROL_FOCUS = 'ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:outline-offset-1 ov:focus-visible:outline-accent'
 /** Buttons sitting next to each other in the flow keep a gap. */
 const CONTROL_GAP = 'ov:mr-1 ov:mb-1'

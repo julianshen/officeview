@@ -246,3 +246,29 @@ test.describe('dark theme legibility before the chrome migration (review R1)', (
     })
   }
 })
+
+// Final review I2: native parts (scrollbars, select popups, checkboxes, the
+// search clear button) follow the theme through a scoped `color-scheme`.
+test.describe('native controls follow the theme (color-scheme)', () => {
+  const cases = [
+    { query: '?theme=dark', scheme: 'light', expected: 'dark' },
+    { query: '?theme=system', scheme: 'dark', expected: 'dark' },
+    { query: '?theme=system', scheme: 'light', expected: 'light' },
+    { query: '', scheme: 'dark', expected: 'light' },
+  ] as const
+  for (const c of cases) {
+    test(`theme root and its scroller compute color-scheme ${c.expected} (${c.query || 'theme=light'}, ${c.scheme} scheme)`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: c.scheme })
+      await open(page, c.query)
+      await ready(page)
+      const schemes = await page.evaluate(() => [
+        ...[...document.querySelectorAll('[data-ov-theme-root]')].map((el) => getComputedStyle(el).getPropertyValue('color-scheme').trim()),
+        getComputedStyle(document.querySelector('[data-viewer=paged] [role=region]')!).getPropertyValue('color-scheme').trim(),
+      ])
+      expect(schemes.length).toBeGreaterThanOrEqual(3)
+      expect(schemes).toEqual(schemes.map(() => c.expected))
+      // The host page itself is untouched.
+      expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('color-scheme').trim())).toBe('normal')
+    })
+  }
+})

@@ -49,6 +49,9 @@
  * targets [data-ov-theme-root] re-brands the viewer. */
 :where([data-ov-theme-root]) {
   --ov-sentinel: 1;
+  /* Native parts (scrollbars, select popups, checkboxes, the search clear
+   * button) follow the theme; it inherits, scoped to the viewer. */
+  color-scheme: light;
   --ov-color-surface: #ffffff;
   --ov-color-chrome: #faf9f8;
   --ov-color-field: #ffffff;
@@ -79,6 +82,7 @@
 }
 
 :where([data-ov-theme-root][data-ov-theme=dark]) {
+  color-scheme: dark;
   --ov-color-surface: #292827;
   --ov-color-chrome: #201f1e;
   --ov-color-field: #1b1a19;
@@ -108,6 +112,7 @@
 
 @media (prefers-color-scheme: dark) {
   :where([data-ov-theme-root][data-ov-theme=system]) {
+    color-scheme: dark;
     --ov-color-surface: #292827;
     --ov-color-chrome: #201f1e;
     --ov-color-field: #1b1a19;
