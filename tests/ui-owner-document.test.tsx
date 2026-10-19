@@ -41,6 +41,21 @@ describe('outside-click listeners use the owner document', () => {
     ui.unmount()
   })
 
+  it('MoreMenu arrow keys read focus from its own document', () => {
+    const { doc, container } = otherDocument()
+    const items = ['Alpha', 'Beta', 'Gamma'].map((label) => ({ key: label, label, icon: null, onSelect: vi.fn() }))
+    const ui = render(<MoreMenu buttonClass="" items={items} />, { container, baseElement: doc.body })
+    fireEvent.click(within(doc.body).getByRole('button', { name: 'More options' }))
+    const menu = within(doc.body).getByRole('menu')
+    const [alpha, beta] = within(menu).getAllByRole('menuitem')
+    expect(doc.activeElement).toBe(alpha)
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(doc.activeElement).toBe(beta)
+    fireEvent.keyDown(menu, { key: 'ArrowUp' })
+    expect(doc.activeElement).toBe(alpha)
+    ui.unmount()
+  })
+
   it.each([[64, 'header-actions'], [30, 'header-lane']])('GridHeaders (%ipx columns) closes its %s group on a pointerdown elsewhere in its own document', (width, kind) => {
     const { doc, container } = otherDocument()
     const projection = createSheetMetrics({ rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 24 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: width }) })

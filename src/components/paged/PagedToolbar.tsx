@@ -96,7 +96,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
     if (wasCompact.current === compact) return
     wasCompact.current = compact
     const key = focusKey.current
-    if (!key || root.current?.contains(document.activeElement)) return
+    if (!key || root.current?.contains(root.current.ownerDocument.activeElement)) return
     const next = control(key) ? key : COUNTERPART[key] ?? key
     if (compact && next === 'search') setExpanded(true)
     if (!compact && key === 'search') setExpanded(false)

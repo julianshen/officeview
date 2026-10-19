@@ -48,7 +48,7 @@ export function MoreMenu({ items, buttonClass }: { items: readonly MoreItem[]; b
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const list = entries()
-    const i = list.indexOf(document.activeElement as HTMLElement)
+    const i = list.indexOf(menu.current?.ownerDocument.activeElement as HTMLElement)
     const go = (n: number) => { e.preventDefault(); list[(n + list.length) % list.length]?.focus() }
     if (e.key === 'ArrowDown') go(i + 1)
     else if (e.key === 'ArrowUp') go(i - 1)
