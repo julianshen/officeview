@@ -58,6 +58,9 @@ const DIVIDER = 'ov:w-px ov:h-5 ov:mx-1 ov:shrink-0 ov:bg-border'
 /** Compact drops the group dividers: 44px targets need the width at 375px. */
 const divider = (compact: boolean) => (compact ? null : <span className={DIVIDER} aria-hidden="true" />)
 
+/** Realm-safe: `instanceof HTMLInputElement` is false for an input in a popup or iframe. */
+const isInput = (t: unknown): t is HTMLInputElement => (t as Element | null)?.tagName === 'INPUT'
+
 /** Where focus goes when the layout crosses the compact threshold. */
 const COUNTERPART: Record<string, string> = { fit: 'more', copy: 'more', print: 'more', more: 'fit', find: 'search' }
 
@@ -110,12 +113,12 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
     if (!el) return
     pendingFocus.current = null
     el.focus()
-    if (el instanceof HTMLInputElement) el.select()
+    if (isInput(el)) el.select()
   })
 
   const onFocus = (e: React.FocusEvent) => {
     const t = e.target as HTMLElement
-    focusKey.current = t instanceof HTMLInputElement || t.closest('[data-testid="officeview-search"]') ? 'search' : t.closest('[data-ov-control]')?.getAttribute('data-ov-control') ?? null
+    focusKey.current = isInput(t) || t.closest('[data-testid="officeview-search"]') ? 'search' : t.closest('[data-ov-control]')?.getAttribute('data-ov-control') ?? null
   }
   const onBlur = (e: React.FocusEvent) => {
     const next = e.relatedTarget as Node | null
@@ -124,7 +127,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
     if (next ? !root.current?.contains(next) : (e.target as Node).isConnected) focusKey.current = null
   }
   const onFindKeyDown = (e: React.KeyboardEvent) => {
-    if (!(e.target instanceof HTMLInputElement)) return
+    if (!isInput(e.target)) return
     // The query is host-entered text, not protected document content.
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') { e.stopPropagation(); return }
     if (e.key !== 'Escape') return

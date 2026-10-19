@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { MoreMenu } from '../src/components/paged/MoreMenu'
+import { PagedToolbar } from '../src/components/paged/PagedToolbar'
 import { GridHeaders } from '../src/components/xlsx/GridHeaders'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
 import { createSheetMetrics } from '../src/xlsx/view/projection'
@@ -54,6 +55,32 @@ describe('outside-click listeners use the owner document', () => {
     fireEvent.keyDown(menu, { key: 'ArrowUp' })
     expect(doc.activeElement).toBe(alpha)
     ui.unmount()
+  })
+
+  const toolbarProps = {
+    kind: 'document' as const, current: 1, total: 3, onPrev() {}, onNext() {}, zoom: 1, onZoomIn() {}, onZoomOut() {}, onResetZoom() {},
+    onFit() {}, fitActive: false, copyState: 'idle' as const, showSearch: true, showZoom: true, onEscapeToDocument() {},
+    search: <input type="search" aria-label="Search document" />, compact: true, focusSearchRequest: 1,
+  }
+
+  it('PagedToolbar Escape in the compact Find input collapses Find in its own document', () => {
+    const { doc, container } = otherDocument()
+    render(<PagedToolbar {...toolbarProps} />, { container, baseElement: doc.body })
+    const input = within(doc.body).getByRole('searchbox')
+    expect(doc.activeElement).toBe(input)
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(within(doc.body).queryByRole('searchbox')).toBeNull()
+    expect(doc.activeElement).toBe(doc.querySelector('[data-ov-control="find"]'))
+  })
+
+  it('PagedToolbar Ctrl+C in the Find input never reaches the allowCopy={false} guard in its own document', () => {
+    const { doc, container } = otherDocument()
+    // Stands in for OfficeDoc's region guard (allowCopy={false} prevents Ctrl/Cmd+C).
+    const guard = vi.fn((e: React.KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === 'c') e.preventDefault() })
+    render(<div onKeyDown={guard}><PagedToolbar {...toolbarProps} /></div>, { container, baseElement: doc.body })
+    const input = within(doc.body).getByRole('searchbox')
+    expect(fireEvent.keyDown(input, { key: 'c', ctrlKey: true })).toBe(true)
+    expect(guard).not.toHaveBeenCalled()
   })
 
   it.each([[64, 'header-actions'], [30, 'header-lane']])('GridHeaders (%ipx columns) closes its %s group on a pointerdown elsewhere in its own document', (width, kind) => {
