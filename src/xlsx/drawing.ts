@@ -151,14 +151,14 @@ const child = (node: XmlNode | undefined, name: string) => getChildren(node, nam
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 const bool = (raw: string | undefined) => raw === '1' || raw === 'true'
 const contentTheme = (theme: ThemeContext) => ({ colors: new Map(Object.entries(theme.palette).map(([key, value]) => [key, value.replace(/^#/, '')])), fonts: new Map([['minorHAnsi', theme.fonts.minor.latin ?? 'Calibri']]) })
-const contentAdapters = (theme: ThemeContext) => ({ parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0],
+const contentAdapters = (theme: ThemeContext, pkg: OfficePackage) => ({ chartContext: drawingPartContext(pkg).chart, parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0],
   // Worksheet charts use the lazy chart chunk; an unsupported type reads as
   // absent here so compatibility fallbacks still win (a placeholder follows).
-  parseChart: async (root: XmlNode) => {
+  parseChart: async (root: XmlNode, path: string) => {
     const charts = await loadChartModule()
     // A malformed chart part never fails the workbook: it reads as unsupported (placeholder/fallback).
     let chart: ReturnType<typeof charts.parseXlsxChart>
-    try { chart = charts.parseXlsxChart(root, theme) } catch { chart = undefined }
+    try { chart = charts.parseXlsxChart(root, theme, charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
     return chart && !chart.unsupported ? { kind: 'xlsxChart' as const, chart } : undefined
   } })
 
@@ -217,7 +217,7 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
       continue
     }
     if (name === 'chart' || name === 'relIds' || name === 'contentPart' || name === 'wsp') {
-      if (await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme))) selected = true
+      if (await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))) selected = true
       else failed = true
       continue
     }
@@ -401,7 +401,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
     await imageFor(pkg, owner, node, result, selections)
   } else if (name === 'pic') await imageFor(pkg, owner, node, result, selections)
   else if (name === 'graphicFrame' || name === 'contentPart') {
-    const palette = contentTheme(theme), adapters = contentAdapters(theme)
+    const palette = contentTheme(theme), adapters = contentAdapters(theme, pkg)
     const graphic = child(child(node, 'graphic'), 'graphicData')
     const carrier = name === 'contentPart' ? { ...(parentCarrier ? { '@attrs': attrs(parentCarrier) } : {}), contentPart: node } : graphic
     if (carrier || name === 'graphicFrame') {

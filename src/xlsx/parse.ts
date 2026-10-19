@@ -1,5 +1,6 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
+import type { ChartDocumentContext } from '../charts/context'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type {
@@ -16,7 +17,7 @@ import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
 import { frozenPaneFrom } from './frozenPane'
 import { cellDisplayText, computeMetrics } from './render'
-import { resolvePartTarget } from '../drawing/parts'
+import { drawingPartContext, resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
 import { initializeSavedSpills } from './formula/saved-spills'
@@ -169,6 +170,8 @@ export interface ParseXlsxOptions {
   /** 'cached' shows saved values only: no load-time evaluation, so a formula
    * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
   valuePolicy?: 'engine' | 'cached'
+  /** The document's chart context (F0); unset, the lazy chart chunk creates one per parse. */
+  chartContext?: ChartDocumentContext
 }
 
 /** The workbook default (Normal style, font 0) maximum digit width. */
@@ -230,6 +233,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     try { const text=await pkg.text(metadataPath);if(text)dynamicIndices=dynamicMetadataIndices(text) }
     catch { /* Unverified optional metadata never upgrades a fixed array. */ }
   }
+  drawingPartContext(pkg).chart = options.chartContext
   let theme: ThemeContext = parseThemeContext()
   let themeParsed = false
   if (themePath) {

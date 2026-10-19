@@ -12,9 +12,12 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import { paintChartPlaceholder, registerXlsxChartPainter } from '../drawing/content-paint'
 import { chartDescription, formatNumber } from './chartDescription'
+import type { ChartParseContext } from '../charts/context'
 import type { XlsxChartAxis, XlsxChartGroup, XlsxChartModel, XlsxChartRange, XlsxChartSeries, XlsxChartType } from './chartModel'
 
 /** Bounds: series per chart, points per series. */
+export { chartParseContextFor } from '../charts/context'
+
 export const CHART_SERIES_LIMIT = 64
 export const CHART_POINT_LIMIT = 4096
 /** Characters kept per chart label (category, series name); longer labels are cut and the chart marked truncated. */
@@ -146,7 +149,8 @@ function axisOf(node: XmlNode | undefined): XlsxChartAxis {
 }
 
 /** Read one chart part. `undefined` for a part that is not a chart document. */
-export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined): XlsxChartModel | undefined {
+/** `_context` is the chart's parse context (F0 threads it; A1a/D0 consume it). */
+export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _context?: ChartParseContext): XlsxChartModel | undefined {
   const chart = child(root, 'chart')
   const plot = child(chart, 'plotArea')
   if (!chart || !plot) return undefined

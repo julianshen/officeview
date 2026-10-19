@@ -6,7 +6,12 @@
  * A series whose reference carries no cache keeps the reference so the
  * workbook can fill it from its cells (openpyxl writes no caches; Excel
  * recomputes from the sheet).
+ *
+ * The format-neutral contracts (`ChartModel`, `ChartPoint`, axis bindings,
+ * `ChartResult`) are re-exported beside the legacy `Xlsx*` types; D0 moves
+ * the engine onto them.
  */
+export type * from '../charts/model'
 export type XlsxChartType = 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scatter'
 export type XlsxChartGrouping = 'clustered' | 'stacked' | 'percentStacked' | 'standard'
 
