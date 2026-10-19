@@ -292,9 +292,12 @@ test.describe('desktop 1280x800', () => {
     await open(page, 'Hundred.docx')
     const total = await page.locator('[data-officeview-root] canvas').count()
     expect(total).toBeGreaterThanOrEqual(90)
+    // the word count shares the status line and lands on its own schedule;
+    // let it settle and watch only the page position
+    await expect(page.getByTestId('officeview-word-count')).not.toHaveText(/^—/, { timeout: 60_000 })
     const r = await page.evaluate(async () => {
       const el = document.querySelector('[data-officeview-root]') as HTMLElement
-      const status = document.querySelector('[data-testid=officeview-status]')!
+      const status = document.querySelector('[data-testid=officeview-status] > span')!
       let frame = 0
       const changes: number[] = []
       const mo = new MutationObserver(() => changes.push(frame))
