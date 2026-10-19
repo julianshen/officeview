@@ -15,7 +15,9 @@ import { contentYAt, pageOffsets } from '../scrollPan'
 import { SearchBar } from '../viewerControls'
 import { MotionRoot } from '../motion/presets'
 import { warnIfStylesMissing } from '../styleWarning'
-import { PAGE_PADDING_PX } from './metrics'
+import { X } from 'lucide-react'
+import { Icon } from '../Icon'
+import { PAGE_PADDING_PX, PAGED_STATUS_HEIGHT } from './metrics'
 import { PagedStatus, type PagedKind } from './PagedStatus'
 import { PagedToolbar } from './PagedToolbar'
 import { usePageTracking, type PagedLayout } from './usePageTracking'
@@ -131,11 +133,11 @@ export default function PagedChrome(p: PagedChromeProps): ReactElement {
   return <>
     {p.showToolbar && <VisibleChrome {...p} focusSearchRequest={request} beginPrint={beginPrint} />}
     <div data-ov-print-notice="" data-officeview-chrome=""
-      style={{ position: 'absolute', bottom: p.showToolbar ? 32 : 8, left: 8, right: 8, zIndex: 10, pointerEvents: notice ? 'auto' : 'none' }}
+      style={{ position: 'absolute', bottom: (p.showToolbar ? PAGED_STATUS_HEIGHT : 0) + 8, left: 8, right: 8, zIndex: 10, pointerEvents: notice ? 'auto' : 'none' }}
       className={notice ? 'ov:flex ov:items-center ov:gap-2 ov:p-2 ov:bg-chrome ov:text-text ov:border ov:border-border ov:rounded-control' : undefined}>
       <span role="status" className="ov:min-w-0" style={{ overflowWrap: 'anywhere' }}>{notice}</span>
       {notice && <button type="button" aria-label="Dismiss print notice" onClick={() => setNotice('')}
-        className="ov:shrink-0 ov:min-w-11 ov:min-h-11 ov:p-0 ov:bg-transparent ov:border-0 ov:text-icon ov:rounded-control ov:hover:bg-hover ov:focus-visible:outline-2 ov:focus-visible:outline-accent">×</button>}
+        className="ov:shrink-0 ov:min-w-11 ov:min-h-11 ov:p-0 ov:bg-transparent ov:border-0 ov:text-icon ov:rounded-control ov:hover:bg-hover ov:focus-visible:outline-2 ov:focus-visible:outline-accent ov:inline-flex ov:items-center ov:justify-center"><Icon icon={X} name="x" /></button>}
     </div>
   </>
 }

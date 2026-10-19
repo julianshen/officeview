@@ -8,7 +8,7 @@ import type { LucideIcon } from 'lucide-react'
 import type { ReactElement } from 'react'
 
 export type IconName = 'chevron-up' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'plus' | 'minus' | 'search' | 'copy' | 'check' | 'ban' | 'command'
-  | 'ellipsis' | 'printer' | 'fit-width'
+  | 'ellipsis' | 'printer' | 'fit-width' | 'x'
   | 'arrow-up-down' | 'arrow-up' | 'arrow-down' | 'loader' | 'filter' | 'move-vertical' | 'move-horizontal' | 'corner' | 'rotate-ccw'
 
 export function Icon({ icon: Glyph, name, size = 16, className, fill }: { icon: LucideIcon; name: IconName; size?: 14 | 16 | 20; className?: string; fill?: string }): ReactElement {
