@@ -144,7 +144,7 @@ Only the specifics are listed below.
   - `src/charts/workspace.ts`;
   - `src/charts/context.ts`;
   - `src/charts/format-api.ts` (interface only).
-- Modify: `src/xlsx/chartModel.ts`, which becomes `export type * from '../charts/model'` (types-only).
+- Modify: `src/xlsx/chartModel.ts`. It **adds** `export type * from '../charts/model'` alongside its existing `Xlsx*` types, so the existing engine still compiles. The full swap happens in A0a. [plan r2: opencode N1]
 - Test: `tests/charts-foundation.test.ts`.
 
 **Interfaces (produced):**
@@ -164,7 +164,7 @@ Only the specifics are listed below.
   - `it('workspace reserves, transfers and releases; refuses past the limit; never unlimited')`;
   - `it('hold keeps charges until a gated producer settles after abort')`;
   - `it('axis bindings: pie none, cartesian named roles, xy, radial, surface; invalid references rejected at parse')`;
-  - `it('documentChartContext is created once per parse and reaches the adapters of all three formats')`.
+  - `it('documentChartContext is created once per parse and reaches the XLSX adapter')`. DOCX and PPTX get the shared adapter in A0a, and their reach is asserted there. [plan r2: opencode N3]
 - [ ] Record B0 in `.superpowers/sdd/progress.md` and in `docs/validation/chart-compat.md`, which this task creates as a stub.
 - [ ] Commit `feat(charts): foundation contracts for the chart engine`.
 
@@ -178,7 +178,9 @@ Only the specifics are listed below.
   - `src/xlsx/chartLoader.ts`: imports `../charts`;
   - `src/drawing/content.ts`:
     - a shared default `parseChart` in `ContentLoadAdapters` (:370-376), with caller adapters spread over the defaults;
+    - minimal `ChartResult` consumption in `follow()`: `native` → content; anything else → today's `unsupported-content` path. The full MC/card contract is A0b. [plan r2: opencode N2]
     - delete `chart()` (:251-293) and `kind:'chart'`;
+  - `src/drawing/coverage.ts`: export `featureOfKind`; `src/docx/parse.ts:700` uses it. This moves from A0b, so A0a's coverage assertion holds.
   - `src/drawing/content-paint.ts`: delete `paintChart`;
   - `src/xlsx/drawing.ts`: its adapter becomes the default;
   - `tests/helpers/eager-graph.ts`: add `src/charts/` and `src/xlsx/chart.ts` to `EAGER_FORBIDDEN`.
@@ -206,8 +208,7 @@ Only the specifics are listed below.
   - `src/drawing/content.ts`: the `ChartResult` handling in `follow()` and `prepareCompatibleDrawingContent`; a bounded chart-part read before tree construction, through the bounded tokenizer path; chart dispatch by namespace (ChartEx still `unsupported` until B1);
   - `src/drawing/content-paint.ts`: save/try/finally/restore, with a card on throw;
   - `src/render/paint.ts`: `ensureChartEngine` in the DOCX and PPTX branches, catching failure;
-  - `src/index.ts`: export `preloadCharts`;
-  - `src/drawing/coverage.ts`: export `featureOfKind`; `src/docx/parse.ts:700` uses it.
+  - `src/index.ts`: export `preloadCharts`.
 - Test: `tests/charts-representation.test.ts`.
 
 - [ ] Tests:
@@ -221,7 +222,7 @@ Only the specifics are listed below.
   - `it('getPaintables returns pages with cards when the chart chunk fails')`.
   - `it('renderSlide paints a card when the engine was never loaded in this realm')`.
   - `it('preloadCharts registers the painter')`.
-  - `it('docx coverage reports chart via featureOfKind')`.
+  - `it('a card reports coverage chart-placeholder')`.
 - [ ] Commit `feat(charts): representation contract, bounded chart parts and painter containment`.
 
 ### Task D0: Resident and paged XLSX data-contract migration
@@ -596,7 +597,11 @@ Each task runs the conformance harness and refuses analytic inputs over the limi
 
 - [ ] Robustness tests:
   - `it('200 charts stay within the chart workspace; later charts become cards')` (Review Focus 5);
-  - `it('torture file per format: every family, chartex, model3D, OMML, a huge embedded workbook, a corrupt embedded zip, external externalData, empty and NaN data')`, asserting no throw, the diagnostics and the allocation/work counters;
+  - Torture fixtures, split by damage class, per format [plan r2: opencode N4]. Each asserts no throw, the expected diagnostics, and the allocation/work counters:
+    - (a) every family plus ChartEx, model3D and OMML;
+    - (b) a huge embedded workbook and a corrupt embedded zip;
+    - (c) external `externalData` and a name pointing at an external workbook;
+    - (d) empty, NaN and ∞ data.
   - `it('repeated paints and cache churn release layout charges')`;
   - `it('path, label-byte and contour-grid bounds drop elements with diagnostics')`.
 - [ ] `it('README chart family list matches the engine family registry')`.
