@@ -293,7 +293,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
       aria-busy={props.pendingSortColumn === col ? true : undefined}
       aria-description={props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}
       aria-pressed={Boolean(direction)} title={`${label}; ${props.pendingSortColumn === col ? 'sorting' : direction ?? 'unsorted'}`}
-      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'}`}
+      className={`ov:bg-transparent ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${direction ? 'ov:text-accent' : 'ov:text-icon'}`}
       onClick={event => props.onSortCycle?.(col, event.shiftKey, event.currentTarget)}>
       <span style={iconClip}>
         {props.pendingSortColumn === col ? <Icon icon={Loader2} name="loader" size={14} className="ov:motion-safe:animate-spin" />
@@ -305,7 +305,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
     <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       style={style(1)} disabled={!props.onFilter} aria-label={`Filter column ${columnToLetters(col)} — ${description}`}
       aria-pressed={Boolean(rule)} title={description}
-      className={`ov:bg-transparent ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'}`}
+      className={`ov:bg-transparent ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control ${rule ? 'ov:text-accent' : 'ov:text-icon'}`}
       onClick={event => { props.onNotice?.(`${label}; ${description}`); props.onFilter?.(col, event.currentTarget) }}>
       <span style={iconClip}>
         <Icon icon={Filter} name="filter" size={14} fill={rule ? 'currentColor' : 'none'} />
@@ -313,7 +313,7 @@ function columnActions(props: GridHeadersProps, col: number, style: (index: numb
     </button>
     {props.onSortDialog && <button type="button" data-action-column={col} tabIndex={props.controlMode ? 0 : -1} onMouseDown={keepGridFocus}
       style={style(2)} aria-label={`More sort options for ${columnToLetters(col)}`}
-      className="ov:bg-transparent ov:text-icon ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control"
+      className="ov:bg-transparent ov:text-icon ov:border-0 ov:p-0 ov:flex ov:items-center ov:justify-center ov:enabled:hover:bg-hover ov:disabled:text-muted ov:disabled:opacity-50 ov:disabled:cursor-default ov:rounded-control"
       onClick={event => props.onSortDialog?.(col, event.currentTarget)}>
       <span style={iconClip}><Icon icon={Ellipsis} name="ellipsis" size={14} /></span>
     </button>}

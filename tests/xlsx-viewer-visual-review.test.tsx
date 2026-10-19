@@ -275,6 +275,7 @@ describe('#13 popup and toolbar layout', () => {
     const sortBtn = ui.getByRole('button', { name: 'Cycle sort column A' })
     expect(sortBtn.style.background).toBe('')
     expect(sortBtn.style.padding).toBe('')
+    expect(sortBtn.classList.contains('ov:p-0')).toBe(true)
   })
   it('controls declare disabled styling utilities (spec §6.8)', () => {
     const ui = render(

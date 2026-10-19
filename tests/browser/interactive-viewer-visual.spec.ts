@@ -135,6 +135,55 @@ test.describe('visual review: interactive viewer layout', () => {
     expect(color).toBe('rgb(50, 49, 48)')
   })
 
+  test('desktop header action icons are fully visible inside their buttons and not clipped (browser)', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await openViewer(page, 'f2-1k.xlsx')
+
+    const checkActionIcons = async (description: string) => {
+      const icons = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll<HTMLElement>('[data-action-column]')].filter(b => b.getBoundingClientRect().width >= 14)
+        return buttons.map(btn => {
+          const btnRect = btn.getBoundingClientRect()
+          const span = btn.querySelector('span')
+          const spanRect = span?.getBoundingClientRect()
+          const svg = btn.querySelector('svg')
+          const svgRect = svg?.getBoundingClientRect()
+          return {
+            label: btn.getAttribute('aria-label') ?? '',
+            btnWidth: btnRect.width,
+            spanWidth: spanRect?.width ?? 0,
+            svgWidth: svgRect?.width ?? 0,
+            svgFill: svg?.getAttribute('fill'),
+          }
+        })
+      })
+      expect(icons.length, `${description} icon count`).toBeGreaterThan(0)
+      for (const item of icons) {
+        expect(item.svgWidth, `${description} ${item.label} svg width`).toBeGreaterThanOrEqual(14)
+        expect(item.spanWidth, `${description} ${item.label} span width`).toBeGreaterThanOrEqual(14)
+        expect(item.btnWidth, `${description} ${item.label} button width`).toBeGreaterThanOrEqual(14)
+      }
+      return icons
+    }
+
+    await checkActionIcons('initial')
+
+    const filterBtn = page.getByRole('button', { name: /^Filter column A/ })
+    await filterBtn.click()
+    const dialog = page.getByRole('dialog', { name: 'Column filter' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'Deselect All', exact: true }).click()
+    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+
+    const activeIcons = await checkActionIcons('filtered')
+    const activeFilter = activeIcons.find(i => /Filter column A/.test(i.label))
+    expect(activeFilter).toBeDefined()
+    expect(activeFilter!.svgFill).toBe('currentColor')
+    expect(activeFilter!.svgWidth).toBeGreaterThanOrEqual(14)
+    expect(activeFilter!.spanWidth).toBeGreaterThanOrEqual(14)
+  })
+
   test('find scroll-into-view keeps row 1 visible for visible hits and aligns below-the-fold hits to whole rows', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await openViewer(page, 'f2-1k.xlsx')
