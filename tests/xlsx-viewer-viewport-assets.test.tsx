@@ -59,18 +59,22 @@ describe('font lease swap', () => {
   it('keeps the current lease until its replacement has published', async () => {
     const disposals: string[] = []
     let release: (() => void) | undefined
-    const calls: string[] = []
+    const calls: string[] = [], loaded: string[] = []
     const loader: typeof prepareSheetAssets = async (doc, options) => {
       const tag = options?.fallbackFonts ? 'next' : 'first'
       calls.push(tag)
       if (tag === 'next') await new Promise<void>(resolve => { release = resolve })
       const lease = await prepareSheetAssets(doc, options)
+      loaded.push(tag)
       return { ...lease, dispose: () => { disposals.push(tag); lease.dispose() } }
     }
     const { default: InteractiveSheetDoc } = await import('../src/components/xlsx/InteractiveSheetDoc')
     const doc = workbookWithImages()
     const ui = render(<InteractiveSheetDoc doc={doc} assetLoader={loader} />)
-    await waitFor(() => expect(calls).toEqual(['first']))
+    // The first lease must be current before the swap starts: wait for its
+    // load to settle (a fixed sleep raced a slow prepareSheetAssets, and a
+    // lease that lands after it is superseded is rightly disposed at once).
+    await waitFor(() => expect(loaded).toEqual(['first']))
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
     ui.rerender(<InteractiveSheetDoc doc={doc} assetLoader={loader} fallbackFonts={{ fallbackChain: ['Arial'] }} />)
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
