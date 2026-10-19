@@ -692,7 +692,9 @@ class DrawingCompatibility {
       return items.length > 0 && depth < 16 && items.every(([name, item]) => name === 'grpSp' ? unusableBranch(item, depth + 1)
         : name === 'pic' && !this.pictureUsable(attrs(getChildren(getChildren(item, 'blipFill')[0], 'blip')[0]).embed ?? ''))
     }
-    const unusable = !!card && !!fallback && unusableBranch(fallback, 0)
+    // An attempted chart's fallback is judged by its actual resolution: unusable pictures, or contents that fail
+    // themselves (an unsupported chart, a nested exhausted wrapper) are not a representation.
+    const unusable = !!card && !!fallback && (unusableBranch(fallback, 0) || this.unsupportedFeature(fallback, depth + 1) !== undefined)
     // The resolver's actual result: no usable representation here, so a terminal chart failure propagates outward.
     if (!fallback || unusable) markExhausted(node)
     if (unusable) this.unusableFallback()

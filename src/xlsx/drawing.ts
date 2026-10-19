@@ -211,7 +211,10 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
   const unusable = !!card && !!fallback && await fallbackUnusable(pkg, owner, fallback)
   // The actual result: nothing usable here (an unusable fallback is not a representation), so the failure propagates.
   if (!fallback || unusable) markExhausted(alternate)
-  if (fallback && !unusable && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)) {
+  const available = !!fallback && !unusable && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)
+  // The fallback's actual resolution failed (an unsupported chart, a nested exhausted wrapper): nothing usable here.
+  if (fallback && !unusable && !available) markExhausted(alternate)
+  if (available) {
     discardFailed()
     // The chart's card travels with its selected fallback pictures, painted if one fails to decode.
     return { branch: fallback, mode: 'fallback', ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }

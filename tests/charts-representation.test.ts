@@ -803,3 +803,26 @@ describe('fix round 2: token limits are resource limits; comments stream (commen
     expect(diagnostics.some(d => d.reason === 'invalid-content-xml')).toBe(false)
   })
 })
+
+// ---- Fix round 3 (codex re-review 2: R1 for non-picture fallback failures) ---------------------
+describe('fix round 3: exhaustion follows the fallback\'s actual resolution (R1)', () => {
+  it('an inner fallback that fails through an unsupported chart or a nested failed wrapper propagates the card', async () => {
+    for (const format of FORMATS) {
+      const variants = {
+        // 1. The inner Fallback references the same unsupported surface chart.
+        'fallback chart': alternate(alternate(graphicObject(format, 80, chartPayload()), graphicObject(format, 81, chartPayload())), undefined),
+        // 2. The inner Fallback is another supported wrapper: an unsupported chart and a missing-picture Fallback.
+        'fallback wrapper': alternate(alternate(graphicObject(format, 80, chartPayload()), alternate(graphicObject(format, 82, chartPayload()), picture(format, 83, 'gone'))), undefined),
+      }
+      for (const [label, body] of Object.entries(variants)) {
+        const outcome = await resolve(format, await build(format, body))
+        expect(outcome.contents.length, `${format} ${label}`).toBe(1)
+        expectCard(format, outcome, SURFACE_REASON)
+        // Control: a usable outer fallback still wins.
+        const control = body.replace(/<\/mc:Choice><\/mc:AlternateContent>$/, `</mc:Choice><mc:Fallback>${picture(format, 84)}</mc:Fallback></mc:AlternateContent>`)
+        expect(control, label).not.toBe(body)
+        expectFallbackPicture(format, await resolve(format, await build(format, control)), '84', `${label} control`)
+      }
+    }
+  })
+})
