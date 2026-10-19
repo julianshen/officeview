@@ -1,3 +1,4 @@
+import type { CanvasColors } from '../canvasColors'
 /**
  * Grid selection overlay geometry for the interactive sheet pane (spec §§9.1,
  * 11.1, 11.3). Below the per-frame cap the overlay uses one record per visible
@@ -167,11 +168,11 @@ export function coarseSelectionRecords(selection: GridSelection, metrics: Projec
  * band's own edge), so its decoration never lands on a cell border or gridline
  * where it would read as an underline of the cell's text. */
 const ACTIVE_INSET = 1.5
-export function paintFindOverlay(ctx: CanvasRenderingContext2D, highlights: readonly Box[], active: readonly Box[]): void {
+export function paintFindOverlay(ctx: CanvasRenderingContext2D, highlights: readonly Box[], active: readonly Box[], colors?: Pick<CanvasColors, 'find' | 'find-active'>): void {
   ctx.save()
-  ctx.fillStyle = 'rgba(255, 214, 0, 0.45)'
+  ctx.fillStyle = colors?.find ?? 'rgba(255, 214, 0, 0.45)'
   for (const r of highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
-  ctx.fillStyle = 'rgba(255, 140, 0, 0.45)'
+  ctx.fillStyle = colors?.['find-active'] ?? 'rgba(255, 140, 0, 0.45)'
   for (const r of active) {
     const inset = Math.min(ACTIVE_INSET, r.width / 4, r.height / 4)
     ctx.fillRect(r.x + inset, r.y + inset, r.width - 2 * inset, r.height - 2 * inset)

@@ -45,7 +45,7 @@ async function harness(doc = workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 
 type Harness = Awaited<ReturnType<typeof harness>>
 function frame(h: Harness, w = windowOf()): SheetFrame {
   const geometry = h.geometry()
-  return { sheet: { ...h.doc.sheets[0], rows: [] }, geometry, identity: h.remote.identity('s'), origin: { x: w.box.x, y: w.box.y }, viewport: { width: 128, height: 40 }, zoom: w.zoom, dpr: w.deviceScale, extent: { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, layoutCache: new LayoutCache(), merges: new MergeQueryCache(), plan: h.route(w), pending: (box, isVisible) => h.store.pendingIn(geometry.metrics, box, w.zoom * w.deviceScale, !isVisible) }
+  return { sheet: { ...h.doc.sheets[0], rows: [] }, geometry, identity: h.remote.identity('s'), origin: { x: w.box.x, y: w.box.y }, viewport: { width: 128, height: 40 }, zoom: w.zoom, dpr: w.deviceScale, extent: { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache(), plan: h.route(w), pending: (box, isVisible) => h.store.pendingIn(geometry.metrics, box, w.zoom * w.deviceScale, !isVisible) }
 }
 function renderer() {
   return new SheetTileRenderer('D', 0, () => { const canvas = createCanvas(512, 512); return { canvas: canvas as unknown as HTMLCanvasElement, width: 512, height: 512, close: () => { canvas.width = 0; canvas.height = 0 } } })
@@ -56,7 +56,7 @@ function crop(h: Harness, f: SheetFrame) {
   if (canonical.kind !== 'ready') throw new Error('Expected canonical geometry')
   try {
     a.present(actual.getContext('2d') as unknown as CanvasRenderingContext2D, f)
-    b.present(expected.getContext('2d') as unknown as CanvasRenderingContext2D, { ...f, sheet: h.doc.sheets[0], geometry: canonical, plan: undefined, pending: undefined, layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
+    b.present(expected.getContext('2d') as unknown as CanvasRenderingContext2D, { ...f, sheet: h.doc.sheets[0], geometry: canonical, plan: undefined, pending: undefined, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
     expect(actual.getContext('2d').getImageData(0, 0, actual.width, actual.height).data).toEqual(expected.getContext('2d').getImageData(0, 0, expected.width, expected.height).data)
     expect(a.stats.pendingTiles).toBe(0)
     expect(a.cache.stats().tiles).toBeGreaterThan(0)
@@ -90,7 +90,7 @@ it('TASK8 cache proof cancels held plan and preserves resident paint', async () 
     if (canonical.kind !== 'ready') throw new Error('Expected canonical geometry')
     try {
       paint.present(progressive.getContext('2d') as unknown as CanvasRenderingContext2D, f)
-      canonicalPaint.present(reference.getContext('2d') as unknown as CanvasRenderingContext2D, { ...f, sheet: h.doc.sheets[0], geometry: canonical, plan: undefined, pending: undefined, layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
+      canonicalPaint.present(reference.getContext('2d') as unknown as CanvasRenderingContext2D, { ...f, sheet: h.doc.sheets[0], geometry: canonical, plan: undefined, pending: undefined, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
       expect(progressive.getContext('2d').getImageData(0, 0, 128, 20).data).toEqual(reference.getContext('2d').getImageData(0, 0, 128, 20).data)
       expect([...progressive.getContext('2d').getImageData(2, 35, 1, 1).data]).toEqual([236, 239, 243, 255])
       expect(paint.stats.pendingTiles).toBe(1)

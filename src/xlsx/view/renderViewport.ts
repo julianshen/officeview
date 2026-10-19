@@ -1,3 +1,4 @@
+import type { CanvasColors } from '../../components/canvasColors'
 /**
  * Interactive viewport painter (spec §§5.3, 11.1, 11.2; plans S2.3/S5.1/S5.2).
  * Lives outside `render.ts` so the static renderer, which every consumer loads
@@ -69,6 +70,7 @@ export interface ViewportPaintResult {
   work: ViewportWork
 }
 export interface ViewportPaintOptions {
+  colors?: Pick<CanvasColors, 'pending' | 'pending-text'>
   /** Worker-planned records; canonical layout and paint remain on this host. */
   preparedPlan?: ViewportPlan
   profile?: ViewportProfile
@@ -126,7 +128,7 @@ export function renderSheetViewport(
   const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
   const cache = options.cache ?? new LayoutCache()
   const notice = (text: string) => {
-    ctx.fillStyle = '#666666'
+    ctx.fillStyle = options.colors?.['pending-text'] ?? '#666666'
     ctx.font = '12px sans-serif'
     ctx.textBaseline = 'alphabetic'
     ctx.fillText(text, 8, 20)
@@ -158,7 +160,7 @@ export function renderSheetViewport(
       cache.endBatch()
       records = []
       if (paintable) {
-        ctx.fillStyle = COARSE_FILL
+        ctx.fillStyle = options.colors?.pending ?? COARSE_FILL
         ctx.fillRect(0, 0, width, height)
         notice(error.message)
       }
@@ -183,7 +185,7 @@ export function renderSheetViewport(
       if (border) paintBorders.push(() => { ctx.save(); ctx.translate(lx, ly); border(); ctx.restore() })
     }
     for (const group of coarse) {
-      ctx.fillStyle = COARSE_FILL
+      ctx.fillStyle = options.colors?.pending ?? COARSE_FILL
       ctx.fillRect(group.bounds.x - vx, group.bounds.y - vy, group.bounds.width, group.bounds.height)
     }
     // The active cell keeps its exact record even inside a summarized region;
@@ -241,10 +243,10 @@ export function renderSheetViewport(
     let pendingNotice = false
     if (plan.kind === 'detail') for (const region of plan.pending ?? []) {
       const box = region.bounds
-      ctx.fillStyle = COARSE_FILL
+      ctx.fillStyle = options.colors?.pending ?? COARSE_FILL
       ctx.fillRect(box.x - vx, box.y - vy, box.width, box.height)
       if (!pendingNotice && box.x < vx + width && box.x + box.width > vx && box.y < vy + height && box.y + box.height > vy) {
-        ctx.fillStyle = '#666666'
+        ctx.fillStyle = options.colors?.['pending-text'] ?? '#666666'
         ctx.font = '12px sans-serif'
         ctx.textBaseline = 'alphabetic'
         ctx.fillText(region.error ? 'Cells could not be loaded' : 'Loading…', Math.max(8, box.x - vx + 8), Math.max(16, box.y - vy + 16))

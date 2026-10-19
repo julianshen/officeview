@@ -113,7 +113,7 @@ function surface(width = 512, height = 512) {
   return { width, height, close } satisfies TileSurface
 }
 const tile = (overrides: Partial<TileKey> = {}): TileKey =>
-  ({ identity: identity(), backend: 'canvas2d', zoom: 1, dpr: 2, col: 0, row: 0, ...overrides })
+  ({ identity: identity(), backend: 'canvas2d', paletteKey: '', zoom: 1, dpr: 2, col: 0, row: 0, ...overrides })
 
 describe('TileCache: bitmap pool with ImageBitmap close', () => {
   it('pins the §12.4 bitmap pool arithmetic for both profiles', () => {

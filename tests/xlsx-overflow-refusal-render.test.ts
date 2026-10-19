@@ -53,7 +53,7 @@ describe('round 6: overflow resource rendering keeps exact and unknown coverage'
     pane.width = 200; pane.height = 80
     const ctx = pane.getContext('2d')!
     try {
-      const result = renderer.present(ctx, { sheet: f.sheet, geometry: f.geometry, identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 0, y: 0 }, viewport: { width: 200, height: 80 }, zoom: 1, dpr: 1, extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() }, layoutCache: new LayoutCache(), merges: new MergeQueryCache(), pending: () => [{ x: 0, y: 20, width: 512, height: 20 }] })
+      const result = renderer.present(ctx, { sheet: f.sheet, geometry: f.geometry, identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 0, y: 0 }, viewport: { width: 200, height: 80 }, zoom: 1, dpr: 1, extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() }, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache(), pending: () => [{ x: 0, y: 20, width: 512, height: 20 }] })
       expect(result.resourceNotice).toContain('exceeds the document memory budget')
       expect(texts).toContain('Loading…')
       expect(renderer.stats.pendingTiles).toBe(1)
@@ -74,7 +74,7 @@ describe('round 6: overflow resource rendering keeps exact and unknown coverage'
     const pane = document.createElement('canvas')
     pane.width = 200; pane.height = 80
     const ctx = pane.getContext('2d')!
-    const frame = { sheet: f.sheet, geometry: f.geometry, identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 0, y: 0 }, viewport: { width: 200, height: 80 }, zoom: 1, dpr: 1, extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() }, layoutCache: new LayoutCache(), merges: new MergeQueryCache() }
+    const frame = { sheet: f.sheet, geometry: f.geometry, identity: { docId: 'd', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: { x: 0, y: 0 }, viewport: { width: 200, height: 80 }, zoom: 1, dpr: 1, extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() }, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache() }
     try {
       const refusedFrame = renderer.present(ctx, frame)
       expect(refusedFrame.resourceNotice).toContain('exceeds the document memory budget')
@@ -112,7 +112,7 @@ describe('round 6: overflow resource rendering keeps exact and unknown coverage'
       zoom: 1,
       dpr: 1,
       extent: { width: f.geometry.metrics.cols.totalCss(), height: f.geometry.metrics.rows.totalCss() },
-      layoutCache: new LayoutCache(),
+      paletteKey: '', layoutCache: new LayoutCache(),
       merges: new MergeQueryCache(),
       plan: () => ({
         ...basePlan,

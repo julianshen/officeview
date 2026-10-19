@@ -518,7 +518,7 @@ async function slice3Harness(input: readonly Slice3Cell[], options: Slice4Option
     const target = createCanvas(width, height), reference = createCanvas(width, height)
     const prepared = new SheetTileRenderer('D', 0, makeTile), resident = new SheetTileRenderer('D', 0, makeTile)
     const windows: LogicalViewport[] = []
-    const base: SheetFrame = { sheet, geometry, identity: owner, origin: { x, y }, viewport: { width, height }, zoom, dpr: 1, extent, layoutCache: layout, merges: new MergeQueryCache() }
+    const base: SheetFrame = { sheet, geometry, identity: owner, origin: { x, y }, viewport: { width, height }, zoom, dpr: 1, extent, paletteKey: '', layoutCache: layout, merges: new MergeQueryCache() }
     const frame: SheetFrame = { ...base, plan: (window, visible) => { windows.push(window); return get(window, visible) } }
     plans.beginFrame(owner, { box: { x, y, width: width / zoom, height: height / zoom }, zoom, deviceScale: 1 })
     try {
@@ -527,7 +527,7 @@ async function slice3Harness(input: readonly Slice3Cell[], options: Slice4Option
       if (requests.mock.calls.length > before) expect(prepared.cache.stats().tiles).toBe(0)
       await flush()
       prepared.present(target.getContext('2d') as unknown as CanvasRenderingContext2D, frame)
-      resident.present(reference.getContext('2d') as unknown as CanvasRenderingContext2D, { ...base, layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
+      resident.present(reference.getContext('2d') as unknown as CanvasRenderingContext2D, { ...base, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
       const pixels = target.getContext('2d').getImageData(0, 0, width, height).data
       expect(target.getContext('2d').getImageData(0, 0, compareWidth, height).data).toEqual(reference.getContext('2d').getImageData(0, 0, compareWidth, height).data)
       const window = windows[0]

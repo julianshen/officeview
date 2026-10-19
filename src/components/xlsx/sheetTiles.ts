@@ -1,3 +1,4 @@
+import type { CanvasColors } from '../canvasColors'
 /**
  * Base-tile painter for the interactive sheet viewport (plan S5.2, spec §§11.1,
  * 11.3, 12.4). Base tiles are 512×512 device-pixel Canvas2D surfaces keyed by
@@ -29,6 +30,8 @@ export interface CanvasTile extends TileSurface {
   cost?: { records: number; gridlines: number; resourceNotice?: string }
 }
 export interface SheetFrame {
+  paletteKey: string
+  colors?: Pick<CanvasColors, 'pending' | 'pending-text' | 'freeze'>
   /** A prepared (worker) plan for a tile; undefined plans it on the main thread. */
   plan?: (window: LogicalViewport, visible: boolean) => ViewportPlan | undefined
   sheet: XlsxSheet
@@ -132,7 +135,7 @@ function paintFreezeLines(target: CanvasRenderingContext2D, frame: SheetFrame): 
   const size = frozenViewportSize(frame.frozen, frame.zoom)
   target.save()
   target.setTransform(1, 0, 0, 1, 0, 0)
-  target.fillStyle = '#5F6368'
+  target.fillStyle = frame.colors?.freeze ?? '#5F6368'
   const w = Math.max(1, Math.round(frame.dpr))
   // On the boundary, inside the scrolling body: frozen-strip pixels (glyphs of a
   // title in row 1, say) are never painted over.
@@ -216,7 +219,7 @@ export class SheetTileRenderer {
           // Float64 global device offsets minus the snapped origin: small integers.
           if (surface) target.drawImage(surface.canvas, col * TILE_DEVICE_PX - rx, row * TILE_DEVICE_PX - ry)
           else {
-            target.fillStyle = PENDING_FILL
+            target.fillStyle = frame.colors?.pending ?? PENDING_FILL
             target.fillRect(col * TILE_DEVICE_PX - rx, row * TILE_DEVICE_PX - ry, TILE_DEVICE_PX, TILE_DEVICE_PX)
             resourceNotice ??= TILE_REFUSED
           }
@@ -235,7 +238,7 @@ export class SheetTileRenderer {
     this.stats.frameGridlines = gridlines
     // Drop tiles of an older owner/zoom/DPR only after the new frame is up, so the
     // last committed frame stays presented while the replacement paints (§10.1).
-    this.cache.invalidate(key => !sameIdentity(key.identity, frame.identity) || key.zoom !== frame.zoom || key.dpr !== frame.dpr)
+    this.cache.invalidate(key => !sameIdentity(key.identity, frame.identity) || key.zoom !== frame.zoom || key.dpr !== frame.dpr || key.paletteKey !== frame.paletteKey)
     return { bias: { x: (frame.origin.x * scale - px) / frame.dpr, y: (frame.origin.y * scale - py) / frame.dpr }, ...(resourceNotice ? { resourceNotice } : {}) }
   }
 
@@ -284,7 +287,7 @@ export class SheetTileRenderer {
   textCacheBytes(): number { return this.shapeBytes }
 
   private key(frame: SheetFrame, col: number, row: number): TileKey {
-    return { identity: frame.identity, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
+    return { identity: frame.identity, paletteKey: frame.paletteKey, backend: TILE_BACKEND, zoom: frame.zoom, dpr: frame.dpr, col, row }
   }
 
   private tile(frame: SheetFrame, col: number, row: number, visible: boolean, budget: FrameBudget): { surface: CanvasTile | null; retained: boolean; notice?: string } {
@@ -327,7 +330,7 @@ export class SheetTileRenderer {
     let work: NonNullable<CanvasTile['cost']> = { records: 0, gridlines: 0 }
     // Distinct texts this tile's context shapes: the browser keeps each one
     // (per font) while the canvas lives, outside the bitmap.
-    const shaped = ctx ? countShapedTexts(ctx, admission ? bytes => { if (!admission.admit(bytes)) throw new LayoutAdmissionError(); nativeHeld += bytes } : undefined) : null
+    const shaped = ctx ? countShapedTexts(ctx, admission ? bytes => { if (!admission.admit(bytes)) throw new LayoutAdmissionError(); nativeHeld += bytes } : undefined, frame.colors) : null
     // Row reads are asked for before any worker plan: both spend one frame
     // page budget, and the row cache's reads also make the cells known for
     // the accessible grid. Asked even for a tile that ends up pending: a
@@ -348,7 +351,7 @@ export class SheetTileRenderer {
       let result: ReturnType<typeof renderSheetViewport>
       try {
         result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
-          preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
+          colors: frame.colors, preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
           ...(admission ? { layoutAdmission: admission } : {}), ...(frame.layoutHost ? { layoutHost: frame.layoutHost } : {}),
         })
       } catch (error) {
@@ -368,7 +371,7 @@ export class SheetTileRenderer {
     if (kind === 'pending' || kind === 'diagnostic') { if (visible) this.stats.pendingTiles++; return { surface, retained: false } }
     if (pending.length) {
       if (visible) this.stats.pendingTiles++
-      if (ctx) { try { paintPending(ctx, box, pending) } catch (error) { if (!(error instanceof LayoutAdmissionError)) throw error } }
+      if (ctx) { try { paintPending(ctx, box, pending, frame.colors) } catch (error) { if (!(error instanceof LayoutAdmissionError)) throw error } }
       return { surface, retained: false }
     }
     if (work.resourceNotice) return { surface, retained: false }
@@ -394,7 +397,7 @@ export class SheetTileRenderer {
 /** Counts, per font, the distinct (direction, text) entries a context draws or
  * measures from now on (the browser keeps one shaping cache per font a context
  * used, keyed by text and direction), as estimated shaping bytes. */
-function countShapedTexts(ctx: CanvasRenderingContext2D, admit?: (bytes: number) => void): { readonly bytes: number; paintNotice(text: string, box: LogicalCellBox): void } {
+function countShapedTexts(ctx: CanvasRenderingContext2D, admit?: (bytes: number) => void, colors?: CanvasColors): { readonly bytes: number; paintNotice(text: string, box: LogicalCellBox): void } {
   const fonts = new Map<string, { seen: Set<string>; units: number }>()
   const out = { bytes: 0 }
   // Each new (font, direction, text) is admitted BEFORE the browser shapes it
@@ -421,9 +424,9 @@ function countShapedTexts(ctx: CanvasRenderingContext2D, admit?: (bytes: number)
       ctx.save()
       try {
         ctx.setTransform(1, 0, 0, 1, 0, 0)
-        ctx.fillStyle = PENDING_FILL
+        ctx.fillStyle = colors?.pending ?? PENDING_FILL
         ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-        ctx.fillStyle = '#666666'
+        ctx.fillStyle = colors?.['pending-text'] ?? '#666666'
         ctx.font = '12px sans-serif'
         let admitted = true
         try { note(text) } catch (error) { if (!(error instanceof LayoutAdmissionError)) throw error; admitted = false }
@@ -438,16 +441,16 @@ function countShapedTexts(ctx: CanvasRenderingContext2D, admit?: (bytes: number)
  * and one notice. ctx carries the tile's logical scale; boxes are logical. */
 const PENDING_FILL = '#eceff3'
 const TILE_REFUSED = 'Not enough memory to lay out this text; zoom in or close other views.'
-function paintPending(ctx: CanvasRenderingContext2D, box: LogicalCellBox, pending: readonly LogicalCellBox[]): void {
+function paintPending(ctx: CanvasRenderingContext2D, box: LogicalCellBox, pending: readonly LogicalCellBox[], colors?: CanvasColors): void {
   ctx.save()
   try {
-    ctx.fillStyle = PENDING_FILL
+    ctx.fillStyle = colors?.pending ?? PENDING_FILL
     for (const rect of pending) {
       const top = Math.max(rect.y, box.y), bottom = Math.min(rect.y + rect.height, box.y + box.height)
       if (bottom > top) ctx.fillRect(0, top - box.y, box.width, bottom - top)
     }
     const first = pending[0]
-    ctx.fillStyle = '#666666'
+    ctx.fillStyle = colors?.['pending-text'] ?? '#666666'
     ctx.font = '12px sans-serif'
     ctx.textBaseline = 'alphabetic'
     ctx.fillText('Loading…', 8, Math.max(0, first.y - box.y) + 16)

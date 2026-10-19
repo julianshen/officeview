@@ -226,11 +226,18 @@ describe('interactive sheet viewport (S5.2)', () => {
     await settle()
     expect(h.last().basePaints).toBe(base)
     const overlay = ui.getByTestId('officeview-sheet-overlay') as HTMLCanvasElement
-    const [r, g, b, a] = overlay.getContext('2d')!.getImageData(20, 10, 1, 1).data
-    expect(a).toBeGreaterThan(0)
-    // Yellow wash (rgba(255, 214, 0, 0.45)): red and green, no blue.
-    expect(r).toBeGreaterThan(b + 100)
-    expect(g).toBeGreaterThan(b + 80)
+    const pixels = overlay.getContext('2d')!.getImageData(0, 0, overlay.width, overlay.height).data
+    // The active match is under the selection wash; derive the composed colour
+    // through the same browser colour conversion, then find an interior pixel.
+    const sample = document.createElement('canvas').getContext('2d')!
+    sample.fillStyle = '#ca5010'; sample.fillRect(0, 0, 1, 1)
+    sample.fillStyle = 'rgba(16,124,65,.12)'; sample.fillRect(0, 0, 1, 1)
+    const expected = sample.getImageData(0, 0, 1, 1).data
+    let activePixels = 0
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] === expected[0] && pixels[i + 1] === expected[1] && pixels[i + 2] === expected[2] && pixels[i + 3] === 255) activePixels++
+    }
+    expect(activePixels).toBeGreaterThan(0)
   })
 
   it('find navigates to an offscreen and other-sheet hit through the navigator, keeping zoom', async () => {

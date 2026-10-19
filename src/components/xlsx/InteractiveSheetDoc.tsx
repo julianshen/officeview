@@ -1,3 +1,4 @@
+import { useCanvasColors } from '../canvasColors'
 /**
  * Interactive sheet viewport (plan S5.2; spec §§5.5, 9, 10.1, 11, 12.4), mounted
  * by <OfficeDoc interactiveSheets> for XLSX documents and loaded on demand.
@@ -634,6 +635,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // ---- layers ----
   const baseRef = useRef<HTMLCanvasElement | null>(null)
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const palette = useCanvasColors(wrapperRef, props.theme ?? 'system')
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const device = { width: Math.ceil(viewport.width * dpr), height: Math.ceil(viewport.height * dpr) }
@@ -696,7 +699,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
     return {
-      sheet: entry.sheet, geometry: entry.geometry, identity, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
+      sheet: entry.sheet, geometry: entry.geometry, identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
       assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
@@ -772,7 +775,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.fillStyle = '#666666'
+      ctx.fillStyle = palette.colors['pending-text'] ?? '#666666'
       ctx.font = '12px sans-serif'
       ctx.fillText('Loading…', 8, 20)
       return
@@ -803,7 +806,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)
@@ -1248,7 +1251,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (index === activeHit) active.push(...rects)
       })
     }
-    paintFindOverlay(ctx, highlights, active)
+    paintFindOverlay(ctx, highlights, active, palette.colors)
     if (selection.ranges.length) {
       const records = overlayRecords(entry.metrics, pane, profile)
       // Past the per-cell cap the membership is coalesced into pixel groups, never dropped.
@@ -1257,7 +1260,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const geometry = records
         ? gridSelectionOverlay({ contains: at => selectionContains(selection, at) }, records, pane, scroll.zoom * dpr)
         : gridSelectionOverlay({ contains: () => true }, coarse!.records, pane, scroll.zoom * dpr)
-      paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, origin, scroll.zoom, bias), dpr)
+      paintGridSelectionOverlay(ctx, gridGeometryToViewport(geometry, origin, scroll.zoom, bias), dpr, palette.colors)
     }
     if (pinned) ctx.restore()
     }
@@ -1265,7 +1268,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     setSelectionIncomplete(selection.ranges.length ? incomplete : false)
     report()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scroll, selection, page, activeHit, viewport, dpr, identityKey, loadTick])
+  }, [scroll, selection, page, activeHit, viewport, dpr, identityKey, loadTick, palette.key])
 
   // Keep the native scroller on the window's physical segment (Go To, keys, recenter).
   const syncing = useRef(false)
@@ -1366,7 +1369,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // controls) never zooms the browser page; React's wheel listeners are passive,
   // so this one is native, on the outer wrapper that also holds the controls.
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
   // DOM a child commits on its own (a popup's value list arriving through its
   // own state) is charged when it lands, not at the next parent render: one
   // MutationObserver callback per task re-counts the viewer's elements by class.
@@ -1696,7 +1698,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         onCopyCapture={event => { if (!allowCopy) event.preventDefault(); else if ((event.target as HTMLElement).hasAttribute?.('data-officeview-grid')) { event.preventDefault(); void copyGrid() } }}
         onContextMenu={allowCopy ? undefined : event => event.preventDefault()}
         style={{
-          background: props.background ?? '#888888', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto',
+          background: props.background ?? 'var(--ov-color-backdrop)', display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto',
           WebkitUserSelect: allowCopy ? undefined : 'none', userSelect: allowCopy ? undefined : 'none', ...props.style,
         }}
       >

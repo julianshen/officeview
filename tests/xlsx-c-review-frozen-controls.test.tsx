@@ -50,7 +50,7 @@ function paint(sheet: XlsxSheet, offset = { x: 32, y: 10 }, freeze = { rows: 1, 
     const tile = createCanvas(512, 512)
     return { canvas: tile as unknown as HTMLCanvasElement, width: 512, height: 512, close: () => { tile.width = 0; tile.height = 0 } }
   })
-  renderer.present(canvas.getContext('2d') as unknown as CanvasRenderingContext2D, { sheet, geometry, identity: { docId: 'review', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: offset, viewport, zoom, dpr: 1, extent: { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, frozen: freeze, layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
+  renderer.present(canvas.getContext('2d') as unknown as CanvasRenderingContext2D, { sheet, geometry, identity: { docId: 'review', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }, origin: offset, viewport, zoom, dpr: 1, extent: { width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, frozen: freeze, paletteKey: '', layoutCache: new LayoutCache(), merges: new MergeQueryCache() })
   renderer.dispose()
   return (x: number, y: number) => Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data)
 }

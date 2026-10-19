@@ -1,10 +1,11 @@
+import { useCanvasColors, type CanvasColors } from '../canvasColors'
 /**
  * Paged-viewer chrome, loaded lazily by <OfficeDoc> (spec §6.10): the top
  * toolbar, the status line (portalled into OfficeDoc's fixed-height slot
  * below the pages), page tracking, the word count and the Find bar. Zoom
  * state and the keyboard paths stay eager in OfficeDoc, which hands props in.
  */
-import { useEffect, useRef, useState, type ReactElement, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { Paintable } from '../../render/paint'
 import { stepMatch, type SearchMatch } from '../../core/search'
@@ -22,6 +23,7 @@ export { PagedToolbar } from './PagedToolbar'
 export { PagedStatus } from './PagedStatus'
 
 export interface PagedChromeProps {
+  onPalette?(palette: CanvasColors & {key: string}): void
   document: OfficeDocSource
   title?: string
   compact: boolean
@@ -70,6 +72,10 @@ const honoured = new WeakMap<object, number>()
 
 export default function PagedChrome(p: PagedChromeProps): ReactElement {
   const { containerRef, search } = p
+  const themeRoot = useMemo(() => ({ get current() { return containerRef.current?.closest('[data-ov-theme-root]') ?? null } }), [containerRef])
+  // Root attribute observation handles prop-driven theme changes too.
+  const palette = useCanvasColors(themeRoot, 'system')
+  useEffect(() => { p.onPalette?.({...palette.colors, key: palette.key}) }, [palette, p.onPalette])
   const [notice, setNotice] = useState('')
   useEffect(() => {
     if (p.allowPrint) return

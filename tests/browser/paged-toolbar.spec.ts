@@ -565,3 +565,31 @@ test('print cleanup without afterprint: React unmount removes the frame', async 
   await page.evaluate(() => (window as unknown as {__disposePrintPeers():void}).__disposePrintPeers())
   await expect(page.locator('[data-officeview-print-frame]')).toHaveCount(0)
 })
+
+test('dark: paged page pixels are white and the backdrop is dark', async ({page}) => {
+  await open(page,'Report.docx',{query:{theme:'dark'}})
+  await expect(region(page)).toHaveCSS('background-color','rgb(22, 21, 20)')
+  const shot=await region(page).locator('canvas').first().screenshot()
+  const corner=await page.evaluate(async png=>{
+    const img=new Image(), loaded=new Promise<void>((resolve,reject)=>{img.onload=()=>resolve();img.onerror=()=>reject(new Error('PNG load'))})
+    img.src=`data:image/png;base64,${png}`; await loaded
+    const c=document.createElement('canvas');c.width=c.height=1
+    const ctx=c.getContext('2d')!;ctx.drawImage(img,2,2,1,1,0,0,1,1)
+    return [...ctx.getImageData(0,0,1,1).data]
+  },shot.toString('base64'))
+  expect(corner).toEqual([255,255,255,255])
+})
+
+test('host --ov-color-find override reaches the paged highlights without replacing the canvas', async ({page}) => {
+  await open(page,'Report.docx')
+  const canvas=region(page).locator('canvas').first()
+  await canvas.evaluate(c=>c.setAttribute('data-palette-original',''))
+  await page.getByRole('searchbox',{name:'Search document'}).fill('Line')
+  await page.locator('[data-ov-theme-root]').evaluate(el=>(el as HTMLElement).style.setProperty('--ov-color-find','#1234ff'))
+  await expect.poll(()=>canvas.evaluate(node=>{
+    const c=node as HTMLCanvasElement,d=c.getContext('2d')!.getImageData(0,0,c.width,c.height).data
+    for(let i=0;i<d.length;i+=4) if(d[i]===18&&d[i+1]===52&&d[i+2]===255&&d[i+3]===255) return true
+    return false
+  })).toBe(true)
+  await expect(canvas).toHaveAttribute('data-palette-original','')
+})
