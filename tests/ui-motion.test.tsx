@@ -125,6 +125,12 @@ describe('chrome-only motion (spec §6.4, decision A)', () => {
     // The status run is a new element keyed by the sheet; the live region stays.
     expect(status()).not.toBe(statusBefore)
     expect(status().getAttribute('data-ov-tick')).toBe('B')
+    // Tick decides enter-vs-final from performance.now(); a jsdom render of
+    // a zoom step takes ~130-170 ms, about one TICK_MS, so wall-clock timing
+    // would decide the assertions below. Drive the clock explicitly: the
+    // first step comes after a pause, the second one frame later.
+    let clock = performance.now() + 1000
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
     const zoomBefore = readout(ui.container)!
     expect(zoomBefore.getAttribute('data-ov-tick')).toBe('100')
     act(() => { fireEvent.click(ui.getByRole('button', { name: 'Zoom in' })) })
@@ -135,6 +141,7 @@ describe('chrome-only motion (spec §6.4, decision A)', () => {
     // The keyed remount animates in from the tick's initial state.
     expect(rec.props.filter(p => p.name === 'tick' && String(p.tick) === '125').at(-1)?.initial).toBe('initial')
     // A step right after the last one (a ctrl-wheel or pinch gesture) renders final: the readout never sits dim.
+    clock += 16
     act(() => { fireEvent.click(ui.getByRole('button', { name: 'Zoom in' })) })
     expect(readout(ui.container)!.getAttribute('data-ov-tick')).toBe('150')
     expect(rec.props.filter(p => p.name === 'tick' && String(p.tick) === '150').at(-1)?.initial).toBe(false)
