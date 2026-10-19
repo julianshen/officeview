@@ -123,5 +123,5 @@ export interface ChartModel {
  */
 export type ChartResult<Model = ChartModel> =
   | { kind: 'native'; model: Model }
-  | { kind: 'unsupported'; reason: string }
-  | { kind: 'refused'; reason: string }
+  | { kind: 'unsupported'; reason: string; title?: string }
+  | { kind: 'refused'; reason: string; title?: string }

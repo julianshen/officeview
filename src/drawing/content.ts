@@ -316,7 +316,7 @@ export function defaultParseChart(pkg: OfficePackage, theme: ThemeContext, chart
     // A malformed chart part never fails the document: it reads as unsupported (placeholder/fallback).
     let chart: XlsxChartModel | undefined
     try { chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
-    return chart && !chart.unsupported ? { kind: 'native', model: chart } : { kind: 'unsupported', reason: chart?.unsupported ?? 'unreadable chart part' }
+    return chart && !chart.unsupported ? { kind: 'native', model: chart } : { kind: 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
   }
 }
 /** Caller adapters spread over the defaults: a caller passing only text adapters still gets the default `parseChart`. */
@@ -327,6 +327,23 @@ function withDefaultAdapters<Paragraph, Text>(adapters: ContentLoadAdapters<Para
   return merged
 }
 const deferredDiagrams = new WeakMap<object, { materializeSelected: () => boolean }>()
+/** Cards for attempted chart references nothing could draw (spec 6.3), keyed by the reference element.
+ * Prepared content never includes them, so a card never satisfies an mc:Choice; adapters place one only
+ * where no representation remains. */
+const chartCards = new WeakMap<XmlNode, XlsxChartModel>()
+type ChartCard = Extract<DrawingContent, { kind: 'xlsxChart' }>
+/** A placeholder card model (the engine's `placeholderChart`, without loading the engine). */
+export const cardChart = (reason: string, title?: string, feature?: 'ChartEx'): XlsxChartModel =>
+  ({ ...(title ? { title } : {}), groups: [], categories: [], categoryAxis: { gridlines: false, deleted: false }, valueAxis: { gridlines: false, deleted: false }, fontFamily: 'Calibri', fontSizePt: 10, unsupported: reason, ...(feature ? { feature } : {}) })
+/** The card of the chart a graphic object references, when that chart was attempted and could not be drawn.
+ * Searches the object's own carriers (never into an AlternateContent). */
+export function chartCard(node: XmlNode | undefined, depth = 0): ChartCard | undefined {
+  const card = chartCards.get(child(node, 'chart') as XmlNode)
+  if (card) return { kind: 'xlsxChart', chart: card }
+  if (depth < 4) for (const [name, next] of orderedChildren(node)) if (name !== '#text' && name !== 'AlternateContent') { const found = chartCard(next, depth + 1); if (found) return found }
+  return undefined
+}
+const CHART_EX_REASON = 'ChartEx charts are not supported yet'
 const SOURCE_PROBE_LIMIT = DOCUMENT_DRAWING_NODE_LIMIT * 2
 const cachedGroupIdentity = (group: XmlNode): string | undefined => attrs(child(child(group, 'nvGrpSpPr'), 'cNvPr')).id || attrs(group).id
 /** Raw source capability check: no styles, text models, or cached shapes built. */
@@ -453,6 +470,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
 ): Promise<DrawingContent<Paragraph, Text> | undefined> {
   const context = drawingPartContext(pkg)
   adapters = withDefaultAdapters(adapters, pkg, drawingTheme)
+  let chartFailure: XlsxChartModel | undefined
   const follow = async (id: string, from = owner, interpretation = 'content'): Promise<DrawingContent<Paragraph, Text> | undefined> => {
     const origin = source ?? { ownerPartPath: from, sourceReferenceId: id, interpretation }
     const diagnosticStart = context.diagnostics.length
@@ -465,8 +483,30 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     if (ancestry.includes(path)) { contentDiagnostic(context, 'content-cycle', from, path, { identity: path, reason: 'ancestry' }); return undefined }
     if (depth >= CONTENT_REFERENCE_DEPTH) { contentDiagnostic(context, 'content-depth', from, path, { identity: path, reason: 'reference-depth', limit: CONTENT_REFERENCE_DEPTH }); return undefined }
     let root: XmlNode | undefined
+    if (interpretation === 'chart') {
+      // Bounded chart XML (spec 6.5): the cap is enforced chunk by chunk before any tree is built.
+      const limit = (adapters.chartContext?.profile === 'mobile' ? 4 : 8) << 20
+      let head: string | undefined
+      try { head = new TextDecoder().decode((await pkg.bytes(path, limit))?.subarray(0, 4096)) }
+      catch (error) {
+        const over = String((error as Error | undefined)?.message).startsWith('Part byte limit')
+        chartFailure = cardChart(over ? 'This chart is too large to display' : 'Chart data could not be read')
+        contentDiagnostic(context, over ? 'unsupported-content' : 'malformed-part', path, 'chart', over ? { identity: id, reason: 'chart-part-limit', limit } : { identity: id, ownerPartPath: from, reason: 'invalid-content-xml' })
+        return undefined
+      }
+      // Dispatch by namespace: a ChartEx part stays unsupported until the ChartEx reader lands.
+      const space = /<(?:([\w.-]+):)?chartSpace\b[^>]*>/.exec(head ?? '')
+      if (space && new RegExp(`xmlns${space[1] ? `:${space[1]}` : ''}\\s*=\\s*["'][^"']*chartex`, 'i').test(space[0])) {
+        chartFailure = cardChart(CHART_EX_REASON, undefined, 'ChartEx')
+        contentDiagnostic(context, 'unsupported-content', path, 'ChartEx', { identity: id, reason: 'unsupported-chart' })
+        return undefined
+      }
+    }
     try { root = await pkg.xmlOrdered(path) }
-    catch { contentDiagnostic(context, 'malformed-part', path, interpretation, { identity: id, ownerPartPath: from, reason: 'invalid-content-xml' }); return undefined }
+    catch {
+      if (interpretation === 'chart') chartFailure = cardChart('Chart data could not be read')
+      contentDiagnostic(context, 'malformed-part', path, interpretation, { identity: id, ownerPartPath: from, reason: 'invalid-content-xml' }); return undefined
+    }
     if (!root) return undefined
     if (context.placements.has(path)) context.coverage.repeated++
     context.placements.add(path)
@@ -475,10 +515,13 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     const ink = parseInk(root)
     if (ink) return ink
     if (adapters.parseChart && child(root, 'chart') && !attrs(child(root, 'chart')).id) {
-      // Minimal ChartResult handling (A0a): native is content; unsupported and
-      // refused follow the unsupported-content path below (A0b adds the card contract).
+      // The representation contract (spec 6.3): only native is content. Unsupported and refused
+      // leave the Choice unsatisfied; their card is placed only where no representation remains.
       const parsed = await adapters.parseChart(root, path)
       if (parsed.kind === 'native') return { kind: 'xlsxChart', chart: parsed.model }
+      chartFailure = cardChart(parsed.reason, parsed.title)
+      contentDiagnostic(context, 'unsupported-content', path, 'chart', { reason: parsed.kind === 'refused' ? 'chart-refused' : 'unsupported-chart' })
+      return undefined
     }
     const tree = child(root, 'spTree')
     if (tree) {
@@ -818,13 +861,18 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
     return out
   }
   const uri = attrs(graphic).uri?.toLowerCase() ?? ''
+  const chartRef = child(graphic, 'chart')
   if (uri.includes('chartex') || uri.includes('model3d') || child(graphic, 'oMath') || child(graphic, 'oMathPara')) {
+    if (chartRef && uri.includes('chartex')) chartCards.set(chartRef, cardChart(CHART_EX_REASON, undefined, 'ChartEx'))
     contentDiagnostic(context, 'unsupported-content', owner, uri || 'OMML'); return undefined
   }
   const ids = child(graphic, 'relIds')
   if (ids) return follow(attrs(ids).dm, owner, 'diagram')
-  const chartRef = child(graphic, 'chart')
-  if (chartRef) return follow(attrs(chartRef).id, owner, 'chart')
+  if (chartRef) {
+    const chart = await follow(attrs(chartRef).id, owner, 'chart')
+    if (chartFailure) chartCards.set(chartRef, chartFailure)
+    return chart
+  }
   const content = child(graphic, 'contentPart')
   if (content) return follow(attrs(content).id, owner, 'contentPart')
   const wsp = child(graphic, 'wsp')

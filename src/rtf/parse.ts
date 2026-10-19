@@ -581,7 +581,6 @@ class RtfParser {
     return decodeBytesIn(bytes, label)
   }
 
-  /** Decode and emit any buffered `\'hh` bytes. */
   private flushHex(): void {
     if (this.hexBuf.length === 0) return
     const bytes = this.hexBuf

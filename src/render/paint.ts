@@ -15,7 +15,7 @@ import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
 import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
-import { ensureChartPainter } from '../xlsx/chartLoader'
+import { ensureChartEngine, ensureChartPainter } from '../xlsx/chartLoader'
 import type { PptxDocument } from '../pptx/types'
 
 export interface PageSpec {
@@ -237,6 +237,7 @@ export function getPaintables(
         const pages = layoutDocx(doc, measure)
         // One decode per unique candidate pair; failures degrade to a blank slot.
         const docImages = collectDocImages(doc)
+        await ensureChartEngine(docImages.map(image => ({ content: image.drawing })))
         decoded = await decodeImageAssets(docImages, options?.decodeImage)
         const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
         // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
@@ -283,6 +284,7 @@ export function getPaintables(
     try {
       const sm = slideMetrics(doc)
       const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
+      await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes))
       decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
       return withLease(doc.slides.map(slide => ({

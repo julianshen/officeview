@@ -1,4 +1,4 @@
-import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, chartCard, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
 import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
@@ -680,7 +680,10 @@ class DrawingCompatibility {
     }
     this.failures.set(node, feature ?? 'AlternateContent')
     const fallback = getChildren(node, 'Fallback')[0]
-    const selected: Representation | undefined = fallback ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` } : undefined
+    // No representation remains: an attempted chart Choice shows its card (spec 6.3).
+    const card = fallback ? undefined : getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
+    const selected: Representation | undefined = fallback ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` }
+      : card && { node: card, representation: 'choice' }
     this.selections.set(node, selected)
     return selected
   }
@@ -820,7 +823,7 @@ function parseShapeTree(
     } else {
       const node = selectNestedAlternates(original, source, shapeIssues, compatibility)
       const graphic = name === 'graphicFrame' ? selectedGraphicData(original, compatibility) : undefined
-      const content = name === 'contentPart' ? contents.get(original) : graphic ? contents.get(graphic) : undefined
+      const content = name === 'contentPart' ? contents.get(original) : graphic ? contents.get(graphic) ?? chartCard(graphic) : undefined
       if (content && (name === 'graphicFrame' || name === 'contentPart')) {
         reserveDrawingContent(pkg, content, partPath, false)
         shape = { ...parseTransform(getChildren(node, 'xfrm')[0]), geometry: 'other', content }

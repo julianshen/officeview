@@ -12,14 +12,17 @@ fixtures are "Office-shaped synthetic" and are never reported as Office evidence
 
 ## Eager budget
 
-Measured with `bun run build && bun scripts/eager-budget.ts` (Node zlib gzip of
-`dist/index.js`, hard ceiling 38,720 B).
+Measured with `bun run build && bun scripts/eager-budget.ts`: the gzip of
+`dist/index.js` by `node:zlib` **as implemented by Bun** (the script runs under Bun,
+so this is Bun's `node:zlib`, not Node's), Bun 1.3.10, hard ceiling 38,720 B. Every
+figure in this table was measured this way; a Node-run gzip may differ by a few bytes.
 
 | Point | Commit | Eager gzip (B) | Note |
 |---|---|---|---|
 | **B0** | `ea03a34` (`chart/f0` before F0; no src/scripts/build-config change since `3581768`) | **38,631** | Every later task must stay at or below B0 unless earlier tasks freed bytes |
 | After F0 | F0 commit | 38,632 | `dist/index.js` identical to B0 except six content-hashed chunk filenames; +1 B is hash entropy (see F0 report) |
 | After A0a | A0a commit | 38,635 | `dist/index.js` byte-identical to the `f4563ba` build after normalising chunk-hash names (B0 + 4 B hash churn, within the 16 B tolerance; the lazy engine chunk is now `charts-*.js`). The deleted mini-reader and `paintChart` lived in the statically imported `office-worker` chunk, which dropped 350,840 → 349,510 B gzip (−1,330 B); the eager closure (index + importSession + office-worker) went 390,631 → 389,304 B. Running total vs B0: +4 B on `dist/index.js` (hash churn only) |
+| After A0b | A0b commit | 38,638 | Before (A0a, rebuilt): 38,635. The `preloadCharts` export adds its one import binding and export name to `dist/index.js` (+13 B, measured 38,648 = B0 + 17, over B0 + 16). Recovered without behaviour change by deleting one comment that `dist/index.js` preserves verbatim (the restating `/** Decode and emit any buffered \'hh bytes. */` on `RtfParser.flushHex`, −10 B). `ensureChartEngine`, the painter containment and the representation contract live in the `office-worker` chunk, not `dist/index.js`. Bytes added by A0b: +3 B. Running total vs B0: +7 B (within the 16 B hash-churn tolerance) |
 
 ## Spec §8 testing and validation
 
@@ -29,7 +32,7 @@ One case per §8 bullet (leaf level: sub-bullets of Goldens, References and Brow
 |---|---|---|---|
 | CH-8-1 | Numeric oracles: hand-computed values for ticks, date axes (both systems), display units, number-format classes, ofPie splits, stock roles, bubble scaling, trendlines, error bars, histogram bins, Pareto, box-whisker quartiles, waterfall subtotals, treemap/sunburst aggregation | pending | |
 | CH-8-2 | Unit tests: parse to model, and paint with a recording context, for every family and element | pending | |
-| CH-8-3 | Representation tests: spec 6.3 in all three formats, including no-fallback and chunk failure | pending | |
+| CH-8-3 | Representation tests: spec 6.3 in all three formats, including no-fallback and chunk failure | pending | A0b: `tests/charts-representation.test.ts` (Office-shaped synthetic): MC with injected unsupported/refused and surface3DChart, ChartEx with fallback, nested/alias/unknown Requires and the standalone card in all three formats; broken fallback picture (XLSX); chunk failure (DOCX, PPTX). Open: the no-fallback card in DOCX |
 | CH-8-4 | Data tests: spec 6.4 (embedded workbook, precedence, budgets, cancellation) | pending | |
 | CH-8-5 | Robustness tests: extreme scales, tiny units, huge forecasts, 200 charts per document, a torture file per format, asserting allocation/work counters | pending | |
 | CH-8-6 | Goldens: synthetic chart gallery (one chart per family and major element), per format, recorded on the Mac | pending | |

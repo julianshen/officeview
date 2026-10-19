@@ -98,7 +98,17 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
     }
     }
     paintShapes(drawing.shapes)
-  } else if (drawing.kind === 'xlsxChart') (drawing.chart.unsupported || !xlsxChartPainter ? paintChartPlaceholder : xlsxChartPainter)(drawing.chart, ctx, width, height, options.fontFamilyCss)
+  } else if (drawing.kind === 'xlsxChart') {
+    const chart = drawing.chart, css = options.fontFamilyCss
+    if (chart.unsupported || !xlsxChartPainter) paintChartPlaceholder(chart, ctx, width, height, css)
+    else {
+      // Containment (spec 6.5): a throwing engine paints the card and never leaks state into later shapes.
+      ctx.save()
+      try { xlsxChartPainter(chart, ctx, width, height, css) }
+      catch { ctx.restore(); ctx.save(); paintChartPlaceholder({ ...chart, unsupported: 'This chart could not be drawn' }, ctx, width, height, css) }
+      finally { ctx.restore() }
+    }
+  }
   else {
     if (drawing.fill) {
       ctx.fillStyle = `#${drawing.fill}`

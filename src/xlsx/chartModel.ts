@@ -72,6 +72,8 @@ export interface XlsxChartModel {
   fontSizePt: number
   /** Set when the chart cannot be drawn: the reason shown on the placeholder card. */
   unsupported?: string
+  /** A card's original feature when it is not a classic chart (spec 6.3). */
+  feature?: 'ChartEx'
   /** Data points dropped by the per-chart bound. */
   truncated?: boolean
 }

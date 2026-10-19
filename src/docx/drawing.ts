@@ -9,7 +9,7 @@ import type { FontResolver } from '../core/fonts/register'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { drawingPartContext, partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
-import { prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
+import { chartCard, prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
 import type { ContentSelection } from '../drawing/content'
 import { supportedChoiceRequirements } from '../drawing/coverage'
 import { paintDrawingContent } from '../drawing/content-paint'
@@ -73,15 +73,16 @@ export async function loadDrawingParts(
     if (!drawingTheme.colors[name] && /^[\da-f]{6}$/i.test(value))
       drawingTheme.colors[name] = { kind: 'srgb', value, transforms: [] }
   }
-  const load = async (drawing: XmlNode): Promise<void> => {
+  const load = async (drawing: XmlNode, inChoice: boolean): Promise<void> => {
     const wp = child(drawing, 'inline') ?? child(drawing, 'anchor')
     if (!wp) return
     const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { chartContext: drawingPartContext(pkg).chart, parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
     if (compatible?.selections.length) selections.set(drawing, compatible.selections)
-    const vector = compatible?.content
+    // A standalone chart nothing could draw becomes its card; inside a Choice it never satisfies it (spec 6.3).
+    const vector = compatible?.content ?? (compatible || inChoice ? undefined : chartCard(wp))
     if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) {
       const extent = attrs(child(wp, 'extent'))
-      const reference = attrs(compatible?.reference)
+      const reference = attrs(compatible?.reference ?? child(child(child(wp, 'graphic'), 'graphicData'), 'chart'))
       out.set(drawing, { data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: vector,
         referenceId: reference.id ?? reference.dm })
     }
@@ -94,7 +95,7 @@ export async function loadDrawingParts(
     }
     return false
   }
-  const visit = async (parent: XmlNode): Promise<void> => {
+  const visit = async (parent: XmlNode, inChoice = false): Promise<void> => {
     for (const [name, node] of orderedChildren(parent)) {
       if (name === 'AlternateContent') {
         let selected = false
@@ -102,15 +103,15 @@ export async function loadDrawingParts(
           if (!supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported) continue
           if (orderedChildren(choice).every(([name]) => name === '#text')) { selected = true; break }
           const before = out.size
-          await visit(choice)
+          await visit(choice, true)
           if (out.size > before || hasSelectedBlank(choice)) { selected = true; break }
         }
         if (!selected) {
           const fallback = child(node, 'Fallback')
-          if (fallback) await visit(fallback)
+          if (fallback) await visit(fallback, inChoice)
         }
-      } else if (name === 'drawing') await load(node)
-      else if (name !== '#text') await visit(node)
+      } else if (name === 'drawing') await load(node, inChoice)
+      else if (name !== '#text') await visit(node, inChoice)
     }
   }
   await visit(root)

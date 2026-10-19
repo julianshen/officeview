@@ -90,7 +90,8 @@ describe('machine drawing coverage', () => {
       'ppt/charts/bar.xml': '<c:chartSpace><c:chart><c:title/></c:chart></c:chartSpace>',
     })
     expect(drawingReport(doc).counts).toEqual({ originalObjects: 1, selectedDescendants: 0, diagnosticEntries: 0 })
-    expect(doc.drawingCoverage![0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-chart', selectedRepresentation: 'none' })
+    // A0b: a standalone chart nothing could draw becomes its card (spec 6.3).
+    expect(doc.drawingCoverage![0]).toMatchObject({ status: 'unsupported', reason: 'unsupported-chart', selectedRepresentation: 'chart-placeholder' })
   })
 
   test('PPTX direct contentPart retains its root relationship for malformed XML', async () => {

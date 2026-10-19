@@ -698,7 +698,7 @@ function parseDrawing(
   const docPr = attrs(getChildren(wp, 'docPr')[0])
   const graphicData = getChildren(getChildren(wp, 'graphic')[0], 'graphicData')[0]
   const graphicUri = attrs(graphicData).uri?.toLowerCase() ?? ''
-  const feature = featureOfKind(vector?.drawing?.kind) ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
+  const feature = featureOfKind(vector?.drawing) ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
   const audit = (status: DrawingCoverageEntry['status'], reason?: string, referenceId?: string, consumed = true, limit?: number, imageSelection?: ImageSelection) => {
     if (!context?.reserveDrawing || !context.drawingCoverage) return
     context.drawingCoverage.push({ partPath: context.partPath ?? 'word/document.xml', treePath: context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
@@ -1523,7 +1523,7 @@ export async function parseDocx(pkg: OfficePackage, options: ParseDocxOptions = 
         // A text-only entry already reports rendered fallback text (its reason
         // names the fallback); resetting it to none would un-report content
         // the entry proves is retained.
-        if (entry.selectedRepresentation !== 'raster-fallback' && entry.selectedRepresentation !== 'text-only' && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
+        if (!['raster-fallback', 'text-only', 'chart-placeholder'].includes(entry.selectedRepresentation) && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
       }
     } else drawingCoverage.push({ partPath: issue.partPath, treePath: issue.sourcePath ?? issue.identity ?? issue.partPath, element: issue.kind, id: issue.identity,
       feature: issue.feature ?? issue.kind, status: issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported',

@@ -6,14 +6,13 @@ import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
 import { coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
-import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, cardChart, chartCard, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
-import { loadChartModule } from './chartLoader'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
   if (node.kind === 'shape') {
@@ -166,21 +165,25 @@ function referencesChart(node: XmlNode, depth = 0): boolean {
   return false
 }
 
-/** The card shown for a chart frame nothing could draw: title and reason, never blank. */
-async function chartPlaceholder(pkg: OfficePackage, owner: string, rid: string | undefined, theme: ThemeContext): Promise<XlsxDrawing['content']> {
-  const charts = await loadChartModule()
-  let root: XmlNode | undefined
-  try {
-    const path = rid ? await referencedPart(pkg, owner, rid) : undefined
-    root = path ? await pkg.xmlOrdered(path) : undefined
-  } catch { root = undefined }
-  let parsed: ReturnType<typeof charts.parseXlsxChart>
-  try { parsed = root ? charts.parseXlsxChart(root, theme) : undefined } catch { return { kind: 'xlsxChart', chart: charts.placeholderChart(undefined, 'This chart could not be read') } }
-  return { kind: 'xlsxChart', chart: parsed?.unsupported ? parsed : charts.placeholderChart(parsed?.title, parsed ? 'This chart could not be drawn' : 'Chart data could not be read') }
+/** The card shown for a chart frame nothing could draw (spec 6.3): the attempted chart's own card
+ * (reason and title), else an unreadable-chart card. The chart part is never read again here. */
+function chartPlaceholder(node: XmlNode, prepared: XlsxDrawing['content']): XlsxDrawing['content'] {
+  return chartCard(node) ?? { kind: 'xlsxChart', chart: cardChart(prepared ? 'This chart could not be drawn' : 'Chart data could not be read', prepared?.kind === 'xlsxChart' ? prepared.chart.title : undefined) }
+}
+
+/** A fallback whose every picture has no usable image part (missing, external or absent). */
+async function picturesUnusable(pkg: OfficePackage, owner: string, fallback: XmlNode): Promise<boolean> {
+  const pictures = getChildren(fallback, 'pic')
+  if (!pictures.length) return false
+  const rels = await partRelationships(pkg, owner)
+  return pictures.every(pic => {
+    const rel = rels.get(attrs(child(child(pic, 'blipFill'), 'blip')).embed)
+    return !rel?.path || rel.external || !pkg.has(rel.path)
+  })
 }
 
 /** Decide MC branches from their selected descendants only. Empty supported Choices are valid. */
-async function selectedAlternative(pkg: OfficePackage, owner: string, alternate: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<{ branch: XmlNode; mode: 'choice' | 'fallback' } | undefined> {
+async function selectedAlternative(pkg: OfficePackage, owner: string, alternate: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<{ branch: XmlNode; mode: 'choice' | 'fallback'; unusable?: boolean } | undefined> {
   if (depth >= MAX_COMPATIBILITY_DEPTH) {
     contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'AlternateContent', { identity: owner, reason: 'compatibility-depth', limit: MAX_COMPATIBILITY_DEPTH })
     return undefined
@@ -195,7 +198,15 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
     for (const diagnostic of diagnostics.slice(before)) failed.add(diagnostic)
   }
   const fallback = child(alternate, 'Fallback')
-  if (fallback && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)) { discardFailed(); return { branch: fallback, mode: 'fallback' } }
+  // No representation remains (no fallback, or its picture is unusable): an attempted chart Choice shows its card (spec 6.3).
+  // Only the outermost selection places it, so a card never makes an enclosing Choice available.
+  const card = depth === 0 && getChildren(alternate, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink']).supported && chartCard(choice))
+  const unusable = !!card && !!fallback && await picturesUnusable(pkg, owner, fallback)
+  if (fallback && !unusable && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)) { discardFailed(); return { branch: fallback, mode: 'fallback' } }
+  if (card) {
+    if (unusable) contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'chart', { reason: 'chart-fallback-unusable' })
+    return { branch: card, mode: 'choice', ...(unusable ? { unusable } : {}) }
+  }
   return undefined
 }
 
@@ -422,7 +433,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
       }
       // A chart nothing could draw (unsupported type, no usable fallback) keeps a card.
       if (!result.content && !result.children?.length && !result.source.emptySelection && name === 'graphicFrame' && referencesChart(node)) {
-        result.content = await chartPlaceholder(pkg, owner, result.source.referenceId, theme)
+        result.content = chartPlaceholder(node, prepared)
       }
     }
   }
@@ -438,7 +449,10 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
     const treePath = `${path}/${name}[${index++}]`
     if (name === 'AlternateContent') {
       const selected = await selectedAlternative(pkg, owner, node, theme, 0, carrier)
-      if (selected) out.push(...await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections, groupStyle))
+      const branch = selected ? await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections, groupStyle) : []
+      // The card replaces an unusable fallback picture and records why, beside its own reason.
+      if (selected?.unusable) for (const drawing of branch) if (drawing.content?.kind === 'xlsxChart') drawing.source.reason = `chart-fallback-unusable: ${drawing.content.chart.unsupported}`
+      out.push(...branch)
     } else if (name === 'graphic' || name === 'graphicData') {
       out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections, groupStyle))
     } else if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame', 'contentPart'].includes(name)) {

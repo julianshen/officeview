@@ -226,7 +226,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
-  if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : 'Chart Title'
+  if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : val(child(root, 'lang'))?.startsWith('zh') ? '圖表標題' : 'Chart Title'
   const legend = child(chart, 'legend')
   const model: XlsxChartModel = {
     ...(title ? { title } : {}),
