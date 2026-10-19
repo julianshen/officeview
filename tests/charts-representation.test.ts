@@ -826,3 +826,24 @@ describe('fix round 3: exhaustion follows the fallback\'s actual resolution (R1)
     }
   })
 })
+
+// ---- Fix round 4 (codex re-review 3: PPTX mixed fallbacks) -------------------------------------
+describe('fix round 4: a fallback with usable content is kept; its failed descendant gets its own card', () => {
+  it.each(['pptx', 'xlsx'] as const)('%s: a usable shape beside a failed chart or a failed wrapper', async format => {
+    const failed = {
+      'failed chart': graphicObject(format, 3, chartPayload()),
+      'failed wrapper': alternate(graphicObject(format, 4, chartPayload()), picture(format, 5, 'gone')),
+    }
+    for (const [label, descendant] of Object.entries(failed)) {
+      const built = await build(format, alternate(graphicObject(format, 1, chartPayload()), GREEN_RECT(format, 99) + descendant))
+      const shapes = format === 'pptx' ? (await parsePptx(built.pkg)).slides[0].shapes as Array<Node & { content?: DrawingContent<unknown, unknown> }>
+        : ((await parseXlsx(built.pkg)).sheets[0].drawings ?? []) as Array<Node & { content?: DrawingContent<unknown, unknown> }>
+      // The usable rectangle survives, and the Choice's own object (id 1) is not drawn.
+      expect(ids(shapes), `${format} ${label}`).toContain('99')
+      expect(ids(shapes), `${format} ${label}`).not.toContain('1')
+      // The failed descendant carries its own card.
+      const cards = shapes.flatMap(function walk(shape): Array<DrawingContent<unknown, unknown>> { return [...(shape.content ? [shape.content] : []), ...((shape.children ?? []) as typeof shapes).flatMap(walk)] })
+      expect(cards.map(card => card.kind === 'xlsxChart' && card.chart.unsupported), `${format} ${label}`).toEqual([SURFACE_REASON])
+    }
+  })
+})

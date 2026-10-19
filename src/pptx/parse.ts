@@ -1,5 +1,5 @@
 import type { XlsxChartModel } from '../xlsx/chartModel'
-import { attemptedMalformedRelationshipIssue, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, chartCard, isExhausted, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
 import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
@@ -687,14 +687,19 @@ class DrawingCompatibility {
     // No representation remains (no fallback, or every fallback picture is unusable): an attempted chart Choice shows its card (spec 6.3).
     const card = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
     // The whole fallback is evaluated: only pictures without a usable image (or groups of only those) make it unusable.
-    const unusableBranch = (parent: XmlNode, depth: number): boolean => {
-      const items = orderedChildren(parent).filter(([name]) => name !== '#text' && name !== 'nvGrpSpPr' && name !== 'grpSpPr')
-      return items.length > 0 && depth < 16 && items.every(([name, item]) => name === 'grpSp' ? unusableBranch(item, depth + 1)
-        : name === 'pic' && !this.pictureUsable(attrs(getChildren(getChildren(item, 'blipFill')[0], 'blip')[0]).embed ?? ''))
-    }
-    // An attempted chart's fallback is judged by its actual resolution: unusable pictures, or contents that fail
-    // themselves (an unsupported chart, a nested exhausted wrapper) are not a representation.
-    const unusable = !!card && !!fallback && (unusableBranch(fallback, 0) || this.unsupportedFeature(fallback, depth + 1) !== undefined)
+    // An attempted chart's fallback is judged by whether any usable selected content remains: a shape, a usable
+    // picture, a frame or part whose content resolves, or a group or nested alternative holding such content.
+    // A failed descendant beside usable content keeps the fallback (that descendant shows its own card).
+    const items = (parent: XmlNode) => orderedChildren(parent).filter(([name]) => name !== '#text' && name !== 'nvGrpSpPr' && name !== 'grpSpPr')
+    const usable = (parent: XmlNode, level: number): boolean => level < MAX_DRAWING_DEPTH && items(parent).some(([name, item]) => {
+      if (name === 'sp' || name === 'cxnSp') return true
+      if (name === 'pic') return this.pictureUsable(attrs(getChildren(getChildren(item, 'blipFill')[0], 'blip')[0]).embed ?? '')
+      if (name === 'grpSp') return usable(item, level + 1)
+      if (name === 'AlternateContent') { const selected = this.selectRepresentation(item, level + 1); return !!selected && !isExhausted(item) && usable(selected.node, level + 2) }
+      return this.unsupportedFeature(item, level + 1) === undefined
+    })
+    // An empty Fallback stays a (blank) selection.
+    const unusable = !!card && !!fallback && items(fallback).length > 0 && !usable(fallback, depth + 1)
     // The resolver's actual result: no usable representation here, so a terminal chart failure propagates outward.
     if (!fallback || unusable) markExhausted(node)
     if (unusable) this.unusableFallback()
