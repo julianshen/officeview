@@ -88,7 +88,7 @@ export function useMotionRef<T extends Element>(own?: Ref<T> | null): (node: T |
   const last = useRef<T | null>(null)
   return useCallback((node: T | null) => {
     if (node) last.current = node
-    else if (last.current) { visualElementStore.delete(last.current); last.current = null }
+    else if (last.current) { visualElementStore?.delete(last.current); last.current = null }
     if (typeof own === 'function') own(node)
     else if (own) (own as { current: T | null }).current = node
   }, [own])
