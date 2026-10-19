@@ -11,6 +11,8 @@ import InteractiveSheetDoc from '../src/components/xlsx/InteractiveSheetDoc'
 import { GRID_HEADER_SIZE } from '../src/components/xlsx/GridHeaders'
 import * as controlsModule from '../src/components/xlsx/viewerControlsClient'
 import { workbookOf } from './helpers/xlsx-find'
+import { domClassBytes, domClassCounts } from '../src/components/xlsx/domCost'
+import type { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -121,6 +123,36 @@ describe('header sort pending acknowledgment', () => {
       expect(document.activeElement).toBe(grid)
       expect(statusText(ui)).toMatch(/View-only sort applied/)
     } finally { window.matchMedia = previous }
+  })
+
+  it('holds the DOM charge while pending: the smaller pending glyph frees no headroom that the restored glyph would overrun (§12.4)', async () => {
+    // The pending spinner has fewer elements than the resting sort glyph. If
+    // the charge followed that dip, admitted work (a ring-tile prefetch) could
+    // take the freed bytes, and the unconditional re-measure when the glyph
+    // returns would push the ledger over the hard budget.
+    const release = gateResolve()
+    let ledger: MainMemoryLedger | null = null
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([sheet('A')])} {...({ onMainLedger: (l: MainMemoryLedger) => { ledger = l } } as object)} />)
+    await ready(ui)
+    const sort = () => ui.getByRole('button', { name: 'Cycle sort column B' })
+    const before = ledger!.ownerBytes('dom', 'grid')
+    const whilePending: number[] = []
+    const set = ledger!.set.bind(ledger!)
+    ledger!.set = ((...args: Parameters<MainMemoryLedger['set']>) => {
+      set(...args)
+      if (args[0] === 'dom' && args[1] === 'grid' && ui.container.querySelector('[aria-label="Cycle sort column B"][aria-busy="true"]')) whilePending.push(args[2])
+    }) as MainMemoryLedger['set']
+    act(() => { fireEvent.click(sort()) })
+    expect(pending(ui).header).toBe(true)
+    await act(async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setTimeout(resolve, 0)) })
+    const root = ui.container.querySelector('[data-officeview-root]')!
+    expect(domClassBytes(domClassCounts(root)), 'the pending glyph is smaller than the resting one').toBeLessThan(before)
+    expect(whilePending.length, 'the pending commit was re-measured').toBeGreaterThan(0)
+    expect(Math.min(...whilePending)).toBeGreaterThanOrEqual(before)
+    await act(async () => { release() })
+    await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
+    // The hold ends with the job: the charge is the measured DOM again.
+    await waitFor(() => expect(ledger!.ownerBytes('dom', 'grid')).toBe(domClassBytes(domClassCounts(root))))
   })
 
   it('clears on failure with the failure announced', async () => {

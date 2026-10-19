@@ -728,7 +728,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       ['layout', 'caches', layout], ['merges', 'caches', merges], ['layout', 'resize-sizes', sized],
       // Every element the viewer renders (its toolbar, navigation, headers and
       // status as well as the pane), each with its React fiber and props.
-      ['dom', 'grid', domClassBytes(domClassCounts(rootRef.current ?? paneRef.current))],
+      ['dom', 'grid', heldDomBytes(domClassBytes(domClassCounts(rootRef.current ?? paneRef.current)))],
       ['canvasText', 'tiles', rendererRef.current?.textCacheBytes() ?? 0],
     ]
     if (domReservation.current) { domReservation.current = 0; updates.push(['dom', 'resize-reservation', 0]) }
@@ -1094,12 +1094,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The header sort in flight (spec §12.2 acknowledgment): shown with the click,
   // cleared when its own job ends; any newer job or a sheet switch replaces it.
   const [sortPending, setSortPending] = useState<{ col: number; job: AbortController } | null>(null)
-  useEffect(() => { closePopup(); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
+  const domHold = useRef<{ job: AbortController; bytes: number } | null>(null)
+  const heldDomBytes = (measured: number) => Math.max(measured, domHold.current?.bytes ?? 0)
+  useEffect(() => { closePopup(); controlJob.current?.abort(); domHold.current = null; setSortPending(null) }, [activeSheetId])
   useEffect(() => () => controlJob.current?.abort(), [])
   const sortCycle = async (col: number, shift: boolean) => {
     const sheetId = activeSheetId
     controlJob.current?.abort()
     const abort = new AbortController(); controlJob.current = abort
+    // The pending glyph has fewer elements than the resting one, and the DOM
+    // charge is unconditional: hold it at its current bytes until this job
+    // ends, so admitted work (a ring-tile prefetch) cannot take the dip and the
+    // restored glyph never re-measures the ledger past the hard budget (§12.4).
+    domHold.current = { job: abort, bytes: Math.max(domHold.current?.bytes ?? 0, mainLedger.ownerBytes('dom', 'grid')) }
     // Acknowledge before any await: admission over a large paged range can take long.
     setSortPending({ col, job: abort })
     try {
@@ -1115,7 +1122,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const result = await client.sort(owner, keys.length ? { range: resolved.range, keys, caseSensitive: previous?.caseSensitive ?? false } : null, abort.signal)
       if (!abort.signal.aborted) setAnnouncement('snapshot' in result ? 'View-only sort applied; formulas unchanged.' : failureText(result))
     } catch (error) { if (!abort.signal.aborted) setAnnouncement(error instanceof Error ? error.message : 'Sort unavailable.') }
-    finally { setSortPending(pending => (pending?.job === abort ? null : pending)) }
+    finally {
+      setSortPending(pending => (pending?.job === abort ? null : pending))
+      // A newer job keeps its own hold; this one ends with its job, and the
+      // next re-measure (the commit that clears the pending glyph) charges the
+      // DOM as it is.
+      if (domHold.current?.job === abort) domHold.current = null
+    }
   }
   const copyJob = useRef<AbortController | null>(null), copyToken = useRef(0)
   const [copyPending, setCopyPending] = useState(false)
@@ -1377,7 +1390,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useLayoutEffect(() => {
     const el = rootRef.current
     if (!el || typeof MutationObserver === 'undefined') return
-    const observer = new MutationObserver(() => { if (live.current && el.isConnected) mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(el))) })
+    const observer = new MutationObserver(() => { if (live.current && el.isConnected) mainLedger.set('dom', 'grid', heldDomBytes(domClassBytes(domClassCounts(el)))) })
     observer.observe(el, { childList: true, subtree: true })
     return () => observer.disconnect()
   }, [mainLedger, live])
