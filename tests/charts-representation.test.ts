@@ -239,18 +239,27 @@ describe('representation contract (spec 6.3)', () => {
     expect(expectCard('pptx', ex, 'ChartEx charts are not supported yet', 'ChartEx').chart.unsupported).toBe('ChartEx charts are not supported yet')
   })
 
+  it('a chart Choice with no fallback becomes its card (standalone and no-fallback)', async () => {
+    for (const format of FORMATS) {
+      const outcome = await resolve(format, await build(format, alternate(graphicObject(format, 45, chartPayload()), undefined)))
+      expect(expectCard(format, outcome, SURFACE_REASON).chart.title, format).toBe('Surf')
+      expect(outcome.coverage[0], format).toMatchObject({ id: '45', representation: 'choice' })
+    }
+  })
+
   it('a broken fallback picture becomes a card recording chart-fallback-unusable', async () => {
-    const body = alternate(graphicObject('xlsx', 50, chartPayload()), picture('xlsx', 51, 'im'))
-    const built = await build('xlsx', body, { image: null })
-    const outcome = await resolve('xlsx', built)
-    expectCard('xlsx', outcome, SURFACE_REASON)
-    expect(outcome.coverage[0]).toMatchObject({ id: '50', representation: 'choice' })
-    // Recorded beside the original reason: on the placed card's source and as a diagnostic.
-    const drawing = (await parseXlsx((await build('xlsx', body, { image: null })).pkg)).sheets[0].drawings![0]
+    for (const format of FORMATS) {
+      const body = alternate(graphicObject(format, 50, chartPayload()), picture(format, 51, 'im'))
+      const outcome = await resolve(format, await build(format, body, { image: null }))
+      expectCard(format, outcome, SURFACE_REASON)
+      expect(outcome.coverage[0], format).toMatchObject({ id: '50', representation: 'choice' })
+      // Recorded beside the original reason.
+      expect(outcome.diagnostics.some(d => d.reason === 'chart-fallback-unusable'), format).toBe(true)
+      // A usable fallback picture is still selected over the card.
+      expectFallbackPicture(format, await resolve(format, await build(format, body)), '51', 'usable fallback')
+    }
+    const drawing = (await parseXlsx((await build('xlsx', alternate(graphicObject('xlsx', 50, chartPayload()), picture('xlsx', 51, 'im')), { image: null })).pkg)).sheets[0].drawings![0]
     expect(drawing.source.reason).toBe(`chart-fallback-unusable: ${SURFACE_REASON}`)
-    expect(outcome.diagnostics.some(d => d.reason === 'chart-fallback-unusable')).toBe(true)
-    // A usable fallback picture is still selected over the card.
-    expectFallbackPicture('xlsx', await resolve('xlsx', await build('xlsx', body)), '51', 'usable fallback')
   })
 
   it('nested and alias-prefixed AlternateContent and unknown Requires', async () => {

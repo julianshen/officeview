@@ -23,6 +23,8 @@ const preparedSelections = new WeakMap<Map<XmlNode, DocxImage>, WeakMap<XmlNode,
 export function wordDrawingSelections(drawings: Map<XmlNode, DocxImage> | undefined, drawing: XmlNode): ContentSelection[] {
   return drawings ? preparedSelections.get(drawings)?.get(drawing) ?? [] : []
 }
+/** Cards of attempted chart drawings inside a Choice (spec 6.3), placed only when no representation remains. */
+export const choiceCards = new WeakMap<XmlNode, DocxImage>()
 export async function loadDrawingParts(
   pkg: OfficePackage,
   root: XmlNode,
@@ -78,14 +80,15 @@ export async function loadDrawingParts(
     if (!wp) return
     const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { chartContext: drawingPartContext(pkg).chart, parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
     if (compatible?.selections.length) selections.set(drawing, compatible.selections)
-    // A standalone chart nothing could draw becomes its card; inside a Choice it never satisfies it (spec 6.3).
-    const vector = compatible?.content ?? (compatible || inChoice ? undefined : chartCard(wp))
-    if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) {
-      const extent = attrs(child(wp, 'extent'))
-      const reference = attrs(compatible?.reference ?? child(child(child(wp, 'graphic'), 'graphicData'), 'chart'))
-      out.set(drawing, { data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: vector,
-        referenceId: reference.id ?? reference.dm })
-    }
+    // A standalone chart nothing could draw becomes its card. Inside a Choice it never satisfies it (spec 6.3):
+    // the paragraph walk places it only when no representation remains (`choiceCards`).
+    const card = compatible ? undefined : chartCard(wp)
+    const vector = compatible?.content ?? (inChoice ? undefined : card)
+    const extent = attrs(child(wp, 'extent'))
+    const reference = attrs(compatible?.reference ?? child(child(child(wp, 'graphic'), 'graphicData'), 'chart'))
+    const entry = (content: DocxDrawing): DocxImage => ({ data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: content, referenceId: reference.id ?? reference.dm })
+    if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) out.set(drawing, entry(vector))
+    else if (card && inChoice) choiceCards.set(drawing, entry(card))
   }
   const hasSelectedBlank = (parent: XmlNode | undefined, depth = 0): boolean => {
     if (!parent || depth >= 128) return false

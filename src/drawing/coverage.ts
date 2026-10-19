@@ -511,7 +511,9 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
           affected.reason = content.reason ?? issue.message
           affected.limit = content.limit
         }
-        if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody)) &&
+        // A chart card selected inside a compatibility wrapper is that wrapper's drawn representation.
+        if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody) ||
+          shape.content?.kind === 'xlsxChart' && shape.source?.treePath.startsWith(`${affected.treePath}/`)) &&
           !retainedGeometryAt(affected)) affected.selectedRepresentation = 'none'
         if (affected.scope === 'original' && (issue.kind === 'missing-part' || issue.kind === 'malformed-part')) {
           for (const entry of entries) if (entry.scope === 'diagnostic' && entry.treePath.startsWith(`${affected.treePath}/`) && entry.referenceId === content.identity) {

@@ -621,7 +621,8 @@ const SUPPORTED_DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink']
 
 /** Per-slide decisions avoid rescanning a selected subtree at every enclosing Choice. */
 class DrawingCompatibility {
-  constructor(private contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>) {}
+  /** `pictureUsable` resolves a picture relationship; `unusableFallback` records a chart card replacing an unusable fallback. */
+  constructor(private contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>, private pictureUsable: (rid: string) => boolean = () => true, private unusableFallback: () => void = () => {}) {}
   private features = new WeakMap<XmlNode, string | null>()
   private selections = new WeakMap<XmlNode, Representation | undefined>()
   private failures = new WeakMap<XmlNode, string>()
@@ -680,9 +681,12 @@ class DrawingCompatibility {
     }
     this.failures.set(node, feature ?? 'AlternateContent')
     const fallback = getChildren(node, 'Fallback')[0]
-    // No representation remains: an attempted chart Choice shows its card (spec 6.3).
-    const card = fallback ? undefined : getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
-    const selected: Representation | undefined = fallback ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` }
+    // No representation remains (no fallback, or every fallback picture is unusable): an attempted chart Choice shows its card (spec 6.3).
+    const card = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
+    const pictures = getChildren(fallback, 'pic')
+    const unusable = !!card && pictures.length > 0 && pictures.every(pic => !this.pictureUsable(attrs(getChildren(getChildren(pic, 'blipFill')[0], 'blip')[0]).embed ?? ''))
+    if (unusable) this.unusableFallback()
+    const selected: Representation | undefined = fallback && !unusable ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` }
       : card && { node: card, representation: 'choice' }
     this.selections.set(node, selected)
     return selected
@@ -894,7 +898,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     imageContext.background = slide.background
     const spTree = getChildren(getChildren(slideRoot, 'cSld')[0], 'spTree')[0]
     const contents = new Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>()
-    const compatibility = new DrawingCompatibility(contents)
+    const compatibility = new DrawingCompatibility(contents, rid => slideImages.has(rid), () => contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', path, 'chart', { reason: 'chart-fallback-unusable' }))
     const defaults = getChildren(presentation, 'defaultTextStyle')[0]
     const contentTheme = { colors: theme.palette, fonts: new Map([['minorHAnsi', theme.context.fonts.minor.latin ?? 'Calibri']]) }
     const pending = [slideRoot]

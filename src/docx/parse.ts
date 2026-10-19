@@ -7,11 +7,11 @@ import { loadDocxEmbeddedFonts } from '../core/fonts/docx'
 import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
-import { loadDrawingParts, wordDrawingSelections } from './drawing'
+import { choiceCards, loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
-import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
+import { DOCUMENT_DRAWING_NODE_LIMIT, contentDiagnostic, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
@@ -486,6 +486,24 @@ export function parseParagraph(
       }
       return false
     }
+    // No representation remains (no fallback, or it drew nothing): an attempted chart Choice shows its card,
+    // replacing the unusable fallback's audit and recording why (spec 6.3). Never during a probe.
+    const placeCard = (fallback: XmlNode | undefined, audited: number): void => {
+      const cards = (parent: XmlNode | undefined, depth = 0): XmlNode[] => !parent || depth >= 128 ? [] : orderedChildren(parent).flatMap(([name, child]) =>
+        name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' ? [] : cards(child, depth + 1))
+      const choice = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported && cards(choice).length)
+      if (!choice || !context) return
+      if (context.drawingCoverage) context.drawingCoverage.length = audited
+      for (const drawing of cards(choice)) {
+        const card = choiceCards.get(drawing)!
+        context.drawings.set(drawing, card)
+        if (fallback && context.pkg) contentDiagnostic(drawingPartContext(context.pkg), 'unsupported-content', context.partPath ?? 'word/document.xml', 'chart', { identity: card.referenceId, reason: 'chart-fallback-unusable' })
+      }
+      const prior = context.representation
+      context.representation = 'choice'
+      try { walk(choice) } finally { context.representation = prior }
+      markUnselected(choice)
+    }
     for (const choice of getChildren(node, 'Choice')) {
       const understood = supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported
       if (!understood) { skipped.push(choice); continue }
@@ -557,11 +575,14 @@ export function parseParagraph(
       const docPr = attrs(getChildren(wp, 'docPr')[0])
       context?.drawingCoverage?.push({ partPath: context.partPath ?? 'word/document.xml', treePath: drawing ? context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]` : `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
         feature: 'picture', status: 'fallback', selectedRepresentation: 'raster-fallback', representation: 'fallback', reason: 'Selected compatibility fallback image', scope: 'original' })
-    } else if (fallback) {
-      const prior = context?.representation, before = inline.length
-      if (context) context.representation = 'fallback'
-      try { walk(fallback) } finally { if (context) context.representation = prior }
+    } else {
+      const prior = context?.representation, before = inline.length, audited = context?.drawingCoverage?.length ?? 0
+      if (fallback) {
+        if (context) context.representation = 'fallback'
+        try { walk(fallback) } finally { if (context) context.representation = prior }
+      }
       if (inline.length > before) markUnselected(fallback)
+      else if (context?.reserveDrawing) placeCard(fallback, audited)
     }
     // A failed compatibility wrapper still owns a source placement. Probing
     // disables audit writes, so retain its identity when no branch yielded a
