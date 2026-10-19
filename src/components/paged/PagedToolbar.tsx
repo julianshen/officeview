@@ -9,6 +9,8 @@ import { useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } 
 import { Ban, Check, ChevronLeft, ChevronRight, Copy, Minus, MoveHorizontal, Plus, Printer, Search } from 'lucide-react'
 import { Icon } from '../Icon'
 import { MoreMenu, type MoreItem } from './MoreMenu'
+import { m } from 'motion/react'
+import { Presence, Tick, tick, useMotionProps } from '../motion/presets'
 import { PAGED_TOOLBAR_HEIGHT } from './metrics'
 import type { PagedKind } from './PagedStatus'
 
@@ -67,6 +69,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
   const pendingFocus = useRef<string | null>(null)
   const seenRequest = useRef(0)
   const btn = button(compact)
+  const copied = useMotionProps(tick)
   const unit = kind === 'slides' ? 'slide' : 'page'
   const findOpen = p.showSearch && (!compact || expanded)
 
@@ -180,7 +183,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
           {divider(compact)}
           <div data-testid="officeview-zoom-controls" className="ov:flex ov:items-center ov:gap-0 ov:shrink-0">
             <button type="button" data-ov-control="zoom-out" aria-label="Zoom out" disabled={p.zoom <= 1} onClick={p.onZoomOut} className={btn}><Icon icon={Minus} name="minus" /></button>
-            <button type="button" data-ov-control="zoom-reset" aria-label="Reset zoom" onClick={p.onResetZoom} className={`${btn} ov:min-w-11 ov:text-sm ov:font-[600] ov:tabular-nums ov:text-text`}>{Math.round(p.zoom * 100)}%</button>
+            <button type="button" data-ov-control="zoom-reset" aria-label="Reset zoom" onClick={p.onResetZoom} className={`${btn} ov:min-w-11 ov:text-sm ov:font-[600] ov:tabular-nums ov:text-text`}><Tick k={Math.round(p.zoom * 100)}>{Math.round(p.zoom * 100)}%</Tick></button>
             <button type="button" data-ov-control="zoom-in" aria-label="Zoom in" onClick={p.onZoomIn} className={btn}><Icon icon={Plus} name="plus" /></button>
             {!compact && <button type="button" data-ov-control="fit" aria-label="Fit to width" aria-pressed={p.fitActive} onClick={p.onFit} className={btn}>{fitIcon}</button>}
           </div>
@@ -215,7 +218,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
               className={`${btn} ov:data-[state=copied]:text-accent`}
             >
               {copyIcon}
-              {p.copyState === 'done' && <span className="ov:text-sm ov:text-text">Copied</span>}
+              <Presence>{p.copyState === 'done' && <m.span key="copied" {...copied} className="ov:text-sm ov:text-text">Copied</m.span>}</Presence>
             </button>
           )}
           {p.onPrint && <button type="button" data-ov-control="print" aria-label="Print" onClick={p.onPrint} className={btn}><Icon icon={Printer} name="printer" /></button>}

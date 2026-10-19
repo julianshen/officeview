@@ -117,8 +117,12 @@ describe('#18 status line', () => {
   it('is one text run, so a changing count never moves the notices after it (no layout shift)', () => {
     const ui = render(<GridSemantics {...gridFixture()} announcement="Selection cleared." />)
     const status = ui.container.querySelector('[data-officeview-ui=viewer-status]') as HTMLElement
+    // Task 6: the run sits in one inline span keyed by the sheet (it fades in on a sheet switch).
     expect(status.childNodes).toHaveLength(1)
-    expect(status.childNodes[0].nodeType).toBe(Node.TEXT_NODE)
+    const run = status.childNodes[0] as HTMLElement
+    expect(run.getAttribute('data-ov-motion')).toBe('fade')
+    expect(run.childNodes).toHaveLength(1)
+    expect(run.childNodes[0].nodeType).toBe(Node.TEXT_NODE)
     expect(status.title).toBe(status.textContent)
   })
   it('in the viewer pane it fills its positioned parent, so the status line follows the pane at once', () => {

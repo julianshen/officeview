@@ -9,6 +9,8 @@ import { useControlMedia } from './controlMedia'
 
 import { ArrowUpDown, ArrowUp, ArrowDown, Loader2, Filter, Ellipsis, ArrowUpLeft } from 'lucide-react'
 import { Icon } from '../Icon'
+import { m } from 'motion/react'
+import { popover, useMotionProps } from '../motion/presets'
 
 export const GRID_HEADER_SIZE = 44
 /** Header strip token names (WCAG AA on `header`: text/action/active >= 4.5:1). */
@@ -206,6 +208,8 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
     return () => document.removeEventListener('pointerdown', outside, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openCol])
+  // Enter only: the header's overflow clips the group the moment it closes.
+  const laneMotion = useMotionProps(popover, true, laneGroup), colMotion = useMotionProps(popover, true, colGroup)
   const laneTarget = (index: number): CSSProperties => ({ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE * index, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE })
   return <div role="row" aria-rowindex={1} data-officeview-ui="grid-headers" onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} style={{ position: 'absolute', top: 0, left: 0, height, width: '100%', zIndex: 2, background: 'var(--ov-color-header)', boxShadow: 'inset 0 -1px var(--ov-color-gridline)' }}>
     <div role="columnheader" aria-colindex={1} aria-label="Worksheet corner" style={{ position: 'absolute', left: 0, width: gutter, height: laneCol === undefined ? GRID_HEADER_SIZE : height, zIndex: 1 }}>
@@ -218,7 +222,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
           style={{ ...target, position: 'absolute', left: 0, top: GRID_HEADER_SIZE, width: GRID_HEADER_SIZE, height: GRID_HEADER_SIZE }}>
           <span className="ov:mr-0.5">{columnToLetters(laneCol)}</span><Icon icon={Ellipsis} name="ellipsis" size={14} />
         </button>
-        {laneOpen && <div ref={laneGroup} id={laneId} role="group" aria-label={`Column ${columnToLetters(laneCol)} actions`} data-officeview-ui="header-lane"
+        {laneOpen && <m.div {...laneMotion} id={laneId} role="group" aria-label={`Column ${columnToLetters(laneCol)} actions`} data-officeview-ui="header-lane"
           className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
           onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeLane(true) } }}
           onClick={() => { setOpenLane(null) }}
@@ -228,7 +232,7 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
             className="ov:bg-surface ov:text-header-text ov:border-0 ov:px-1 ov:py-1 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
             onClick={event => props.onSelect?.('column', laneCol, { toggle: event.ctrlKey || event.metaKey, extend: event.shiftKey }, event)}>{columnToLetters(laneCol)}</button>}
           {actions && columnActions(props, laneCol, index => laneTarget(index + (props.onSelect ? 1 : 0)))}
-        </div>}
+        </m.div>}
       </>}
     </div>
     {props.columns.map(col => {
@@ -269,13 +273,13 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
                 onClick={() => setOpenCol(open ? null : col)} onKeyDown={event => { if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); closeCol(true) } }}
                 className="ov:bg-transparent ov:text-icon ov:border-0 ov:px-1 ov:py-0 ov:flex ov:items-center ov:justify-center ov:hover:bg-hover"
                 style={cellTarget}><span style={iconClip}><Icon icon={Ellipsis} name="ellipsis" size={14} /></span></button>
-              {open && <div ref={colGroup} id={colGroupId} role="group" aria-label={`Column ${letters} actions`} data-officeview-ui="header-actions"
+              {open && <m.div {...colMotion} id={colGroupId} role="group" aria-label={`Column ${letters} actions`} data-officeview-ui="header-actions"
                 className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
                 onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeCol(true) } }}
                 onClick={() => { setOpenCol(null) }}
                 style={{ position: 'absolute', left: 0, top: height, width: GRID_HEADER_SIZE, height: count * GRID_HEADER_SIZE, zIndex: 3 }}>
                 {columnActions(props, col, index => laneTarget(index))}
-              </div>}
+              </m.div>}
             </>}</div>)}
       </div>
     })}

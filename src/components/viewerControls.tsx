@@ -5,6 +5,7 @@
 import type { ReactElement } from 'react'
 import { ChevronDown, ChevronUp, Minus, Plus } from 'lucide-react'
 import { Icon } from './Icon'
+import { Tick } from './motion/presets'
 
 /** Shared control styling (spec §6.1, §6.8). Every control declares colour,
  * background, padding and border as ov: utilities, which beat host rules such
@@ -114,7 +115,7 @@ export function ZoomControls({
         aria-label="Reset zoom"
         className={`ov:w-9 ov:h-7 ov:text-xs ov:font-[600] ov:tabular-nums ov:text-text ${SURFACE} ov:inline-flex ov:items-center ov:justify-center ov:p-0 ov:cursor-pointer ov:hover:bg-hover ${MOTION} ${FOCUS} ${TARGET}`}
       >
-        {Math.round(zoom * 100)}%
+        <Tick k={Math.round(zoom * 100)}>{Math.round(zoom * 100)}%</Tick>
       </button>
     </div>
   )

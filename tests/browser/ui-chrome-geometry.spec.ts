@@ -158,6 +158,9 @@ function snapshot(page: Page): Promise<Snapshot[]> {
   })
 }
 
+/** Task 6: popups enter with a short chrome animation; geometry is compared once it has finished. */
+const motionSettled = (page: Page) => page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running') && [...document.querySelectorAll('[data-ov-motion]')].every((el) => { const cs = getComputedStyle(el); return cs.opacity === '1' && (cs.transform === 'none' || cs.transform === 'matrix(1, 0, 0, 1, 0, 0)') }))
+
 test.describe('shared viewer controls: host isolation (spec §6.8)', () => {
   test('hostile host sheet (.app button, all:unset) leaves SearchBar/ZoomControls/copy pill geometry and colours unchanged (browser)', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
@@ -191,6 +194,9 @@ test.describe('shared viewer controls: host isolation (spec §6.8)', () => {
 
   test('hostile host sheet leaves sheet toolbar, header actions, filter popup and sort dialog geometry and colours unchanged (browser)', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
+    // Host isolation, not motion, is under test: the popups open in their final state, so focus-driven
+    // scrolling inside them never races the entry animation (WebKit landed 1px apart between runs).
+    await page.emulateMedia({ reducedMotion: 'reduce' })
     const snapshotSheetChrome = async (): Promise<Snapshot[]> => page.evaluate(() => {
       const out: Snapshot[] = []
       const sel = '[data-viewer=sheet] [data-officeview-ui=sheet-toolbar], [data-viewer=sheet] [data-officeview-ui=sheet-toolbar] *, [data-viewer=sheet] [data-officeview-ui=grid-headers] button, [data-viewer=sheet] [data-officeview-ui=grid-headers] svg'
@@ -245,6 +251,7 @@ test.describe('shared viewer controls: host isolation (spec §6.8)', () => {
 
       await page.locator('[data-viewer=sheet]').getByRole('button', { name: /^Filter column A/ }).click()
       await expect(page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]')).toBeVisible()
+      await motionSettled(page)
       const filterSnap = await snapshotDialog('[data-viewer=sheet] [data-officeview-ui=grid-popup]', 'filter-popup')
       await page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]').getByRole('button', { name: 'Cancel' }).click()
       await expect(page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]')).toHaveCount(0)
@@ -253,6 +260,7 @@ test.describe('shared viewer controls: host isolation (spec §6.8)', () => {
       await page.keyboard.press('F2')
       await page.locator('[data-viewer=sheet]').getByRole('button', { name: 'More sort options for A' }).click()
       await expect(page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]')).toBeVisible()
+      await motionSettled(page)
       const sortSnap = await snapshotDialog('[data-viewer=sheet] [data-officeview-ui=grid-popup]', 'sort-dialog')
       await page.locator('[data-viewer=sheet] [data-officeview-ui=grid-popup]').getByRole('button', { name: 'Cancel' }).click()
 

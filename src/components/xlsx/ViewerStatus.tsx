@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactElement } fr
 import type { CellRead, Completeness, SourceStore } from '../../xlsx/view/contracts'
 import { cellId, formatA1, MAX_ROWS, type SourceCell } from '../../xlsx/view/coordinates'
 import { boundedSelectionText } from '../../xlsx/view/selection'
+import { fade, Tick } from '../motion/presets'
 
 export interface HiddenCellInspection {
   target: SourceCell
@@ -16,6 +17,8 @@ export interface ViewerStatusProps {
   loadReport?: { status: 'ready'; notices?: readonly string[] } | { status: 'error'; message: string }
   /** Placement/appearance of the visible status line (GridSemantics). */
   style?: CSSProperties
+  /** The status run fades in when this changes (the active sheet). */
+  motionKey?: string
 }
 function inspectionText(read: CellRead | null): string {
   if (!read || read.kind === 'unknown') return 'Loading cell…'
@@ -24,7 +27,7 @@ function inspectionText(read: CellRead | null): string {
   const formula = read.cell.formula ? `; formula ${boundedSelectionText(read.cell.formula)}` : ''
   return read.kind === 'unavailable' ? `Formula value unavailable${formula}` : `Value ${boundedSelectionText(String(read.cell.value ?? ''))}${formula}`
 }
-export function ViewerStatus({ records, announcement, inspection, countMode, loadReport, style }: ViewerStatusProps): ReactElement {
+export function ViewerStatus({ records, announcement, inspection, countMode, loadReport, style, motionKey = '' }: ViewerStatusProps): ReactElement {
   const validCounts = Number.isSafeInteger(records?.total) && records.total >= 0 && records.total <= MAX_ROWS && Number.isSafeInteger(records.visible) && records.visible >= 0 && records.visible <= records.total
   const source = inspection?.source, row = inspection?.target.row, col = inspection?.target.col
   const owner = source?.stamp
@@ -58,5 +61,8 @@ export function ViewerStatus({ records, announcement, inspection, countMode, loa
     announcement ? ` — ${announcement}` : '',
     inspection ? ` — Original cell ${formatA1(inspection.target)}; ${inspection.hiddenReason}; read-only. ${inspectionText(snapshot?.key === key ? snapshot.read : null)}` : '',
   ].join('')
-  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" className="ov:bg-chrome ov:border-t ov:border-border ov:text-muted ov:text-xs ov:px-3 ov:py-0" style={style} title={style ? text : undefined}>{text}</div>
+  return <div role="status" aria-live="polite" aria-atomic="true" data-officeview-ui="viewer-status" className="ov:bg-chrome ov:border-t ov:border-border ov:text-muted ov:text-xs ov:px-3 ov:py-0" style={style} title={style ? text : undefined}>
+    {/* The live region stays; the inline run inside it is keyed (opacity only, so the ellipsis still applies). */}
+    <Tick k={motionKey} v={fade} className="">{text}</Tick>
+  </div>
 }

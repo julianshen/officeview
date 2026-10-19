@@ -8,6 +8,8 @@ import type { DetectedRange } from '../../xlsx/view/rangeDetection'
 import { filterWithColumn, sameFilterRange, type DraftPage, type DraftQuery, type ValueDraftAction, type ValuesDraftPort } from './controlsClient'
 import { controlTarget, CONTROL_CLS, CONTROL_BTN_CLS, CONTROL_PRIMARY_BTN_CLS, CHECKBOX_CLS, failureText, useControlLifetime, type ControlProps } from './controlUi'
 import { useControlMedia } from './controlMedia'
+import { m } from 'motion/react'
+import { popover, sheet, useMotionProps } from '../motion/presets'
 import { ConditionEditor, conditionInput, typedCondition } from './ConditionEditor'
 export interface FilterDropdownProps extends ControlProps { col: number; applied: FilterSpec | null; snapshotHidden?: boolean; appliedSort?: SortSpec | null }
 /** Reserved height of the loaded page's controls ((Blanks), the selected-count
@@ -15,6 +17,8 @@ export interface FilterDropdownProps extends ControlProps { col: number; applied
 const PAGE_BLOCK_MIN_HEIGHT = 160
 export function FilterDropdown(props: FilterDropdownProps): ReactElement | null {
   const bottomSheet = useControlMedia('(pointer: coarse), (max-width: 640px)')
+  // The mobile sheet slides up; the desktop dropdown drops from its column.
+  const motion = useMotionProps(bottomSheet ? sheet : popover)
   const life = useControlLifetime(props), session = useRef<ValuesDraftPort | null>(null), searchInput = useRef<HTMLInputElement>(null), changingRef = useRef(false)
   const [range, setRange] = useState<DetectedRange | null>(null), [page, setPage] = useState<DraftPage | null>(null), [query, setQuery] = useState<DraftQuery>({ text: '', offset: 0 })
   const [changing, setChanging] = useState(false), [domainClass, setDomainClass] = useState<ColumnClassification | null>(null)
@@ -104,7 +108,7 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
     })().catch(error => { if (job.current()) { noticeError(life.error(error)); setBusy(false) } })
   }
   if (props.open === false) return null
-  return <div role={props.embedded ? undefined : 'dialog'} aria-label={`Filter column ${columnToLetters(props.col)}`} data-officeview-ui="filter-dropdown"
+  return <m.div {...motion} role={props.embedded ? undefined : 'dialog'} aria-label={`Filter column ${columnToLetters(props.col)}`} data-officeview-ui="filter-dropdown"
     className={bottomSheet ? "ov:rounded-t-[12px] ov:shadow-popover ov:bg-surface ov:border-t ov:border-border" : "ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => {
@@ -153,5 +157,5 @@ export function FilterDropdown(props: FilterDropdownProps): ReactElement | null 
       {/* OK/Cancel stay in view at the bottom of the scrolling popup. */}
       <div className="ov:bg-surface" style={{ position: 'sticky', bottom: 'calc(-12px - var(--officeview-safe-bottom))', margin: '0 -12px calc(-12px - var(--officeview-safe-bottom))', padding: '4px 12px calc(12px + var(--officeview-safe-bottom))' }}><button type="submit" className={CONTROL_PRIMARY_BTN_CLS} style={controlTarget} disabled={busy || !canApply || life.invalid}>OK</button><button type="button" className={CONTROL_BTN_CLS} style={controlTarget} onClick={() => life.cancel()}>Cancel</button></div>
     </form>
-  </div>
+  </m.div>
 }

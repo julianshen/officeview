@@ -2,6 +2,8 @@ import type { ReactElement } from 'react'
 import type { CalendarDay, DateOp, DatePreset, NumberOp, TextOp, TypedCondition } from '../../xlsx/view/contracts'
 import type { ColumnClassification } from '../../xlsx/view/filter'
 import { controlTarget, CONTROL_CLS, CHECKBOX_CLS } from './controlUi'
+import { m } from 'motion/react'
+import { fade, useMotionProps } from '../motion/presets'
 
 export interface ConditionInput { kind: TypedCondition['kind']; op: string; first: string; second: string; wildcards: boolean; preset: DatePreset }
 export function conditionInput(rule?: TypedCondition, kind: TypedCondition['kind'] = 'text'): ConditionInput {
@@ -28,7 +30,9 @@ const names: Record<string, string> = { eq: 'Equals', neq: 'Does not equal', gt:
 export function ConditionEditor({ value, onChange, classification, index, invalid }: { value: ConditionInput; onChange: (value: ConditionInput) => void; classification: ColumnClassification; index: number; invalid: boolean }): ReactElement {
   const types: TypedCondition['kind'][] = classification.kind === 'date' ? ['date', 'datePreset', 'number'] : classification.kind === 'number' ? ['number'] : classification.hasNumeric ? ['text', 'number'] : ['text']
   const prefix = `Condition ${index}`
-  return <fieldset><legend>{prefix}</legend>
+  // The second condition fades in when the user adds it; the first mounts with its dropdown.
+  const motion = useMotionProps(fade, index > 1)
+  return <m.fieldset {...motion}><legend>{prefix}</legend>
     <label>Type <select aria-label={`${prefix} type`} className={CONTROL_CLS} value={value.kind} style={controlTarget} onChange={event => onChange(conditionInput(undefined, event.target.value as TypedCondition['kind']))}>
       {types.map(kind => <option key={kind} value={kind}>{kind === 'datePreset' ? 'Date preset' : kind === 'date' ? 'Calendar date' : kind === 'number' ? 'Number' : 'Text'}</option>)}</select></label>
     {value.kind === 'datePreset' ? <label>Period <select aria-label={`${prefix} preset`} className={CONTROL_CLS} value={value.preset} style={controlTarget} onChange={event => onChange({ ...value, preset: event.target.value as DatePreset })}>
@@ -38,5 +42,5 @@ export function ConditionEditor({ value, onChange, classification, index, invali
       {value.op === 'between' && <label>Through <input aria-label={`${prefix} second`} className={CONTROL_CLS} aria-invalid={invalid} value={value.second} style={controlTarget} onChange={event => onChange({ ...value, second: event.target.value })} /></label>}
       {value.kind === 'text' && <label style={{ ...controlTarget, display: 'inline-flex', alignItems: 'center' }}><input type="checkbox" className={CHECKBOX_CLS} checked={value.wildcards} onChange={event => onChange({ ...value, wildcards: event.target.checked })} />Use * / ? wildcards (~ escapes)</label>}
     </>}
-  </fieldset>
+  </m.fieldset>
 }
