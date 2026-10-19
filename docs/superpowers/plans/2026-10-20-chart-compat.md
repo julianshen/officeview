@@ -144,7 +144,16 @@ Only the specifics are listed below.
   - `src/charts/workspace.ts`;
   - `src/charts/context.ts`;
   - `src/charts/format-api.ts` (interface only).
-- Modify: `src/xlsx/chartModel.ts`. It **adds** `export type * from '../charts/model'` alongside its existing `Xlsx*` types, so the existing engine still compiles. The full swap happens in A0a. [plan r2: opencode N1]
+- Modify:
+  - `src/xlsx/chartModel.ts`. It **adds** `export type * from '../charts/model'` alongside its existing `Xlsx*` types, so the existing engine still compiles. [plan r2: opencode N1]
+  - `src/xlsx/parse.ts`, `src/xlsx/drawing.ts` and `src/drawing/content.ts` (`ContentLoadAdapters` gains an optional `chartContext`), for the production hook. Keep the eager additions minimal; context creation sits behind the lazy chart boundary. **Measure before going on**: F0 has no headroom above B0. [plan r2: codex minor 3]
+
+**Compatibility boundary [plan r2: codex R2-1].**
+- F0 is **additive only**. Every old exported name and runtime shape stays: `XlsxChartSeries.values: Array<number|undefined>`, groups without bindings, and so on.
+- The new types (`ChartPoint`, `ChartAxisBinding`, `ChartResult`, `ChartWorkspace`, the context) are added beside them, and no existing required field changes.
+- **D0 migrates atomically:** producers, consumers, the legacy `Xlsx*` aliases and their tests move to the final shape in one task.
+- **A1a activates axis bindings:** it populates and validates them.
+- Every intermediate task must typecheck and pass the unchanged engine assertions.
 - Test: `tests/charts-foundation.test.ts`.
 
 **Interfaces (produced):**
@@ -154,7 +163,12 @@ Only the specifics are listed below.
 - `type ChartResult = {kind:'native'; model:ChartModel} | {kind:'unsupported'; reason:string} | {kind:'refused'; reason:string}`.
 - `interface ChartWorkspace { readonly limit:number; reserve(bytes:number, tag:string): boolean; transfer(from:string, to:string, bytes:number): void; release(tag:string): void; hold<T>(p:Promise<T>, tag:string): Promise<T> }`.
   - `hold` keeps the charges until the promise settles, even after an abort.
-  - `createChartWorkspace(profile:'desktop'|'mobile')` returns a limit of 64 MiB or 32 MiB.
+  - `createChartWorkspace(profile, parent?: ChartParentLedger)`, where `interface ChartParentLedger { reserve(bytes:number, tag:string): boolean; release(tag:string, bytes:number): void }`.
+  - **[plan r2: codex R2-2]** The workspace is a **sublimit facet**. `reserve` succeeds only if **both** the chart limit (64/32 MiB) **and** the parent ledger admit the bytes. One physical allocation counts once in the parent aggregate and also counts toward the chart sublimit; that is not double charging.
+  - `transfer` moves ownership between tags **within** the facet. It never removes bytes from the parent.
+  - A refusal rolls back both.
+  - Without a parent (resident DOCX/PPTX/XLSX), only the chart limit applies.
+  - The paged worker passes its document-pool construction share (`src/worker/viewerSession.ts:2425`) as the parent.
 - `interface ChartParseContext { theme?: ThemeContext; pkg: OfficePackage; partPath: string; signal?: AbortSignal; profile:'desktop'|'mobile'; workspace: ChartWorkspace; epoch?: '1900'|'1904' }`.
 - `interface ChartFormatter { format(v:number, code:string|undefined, epoch:'1900'|'1904'): string }`. A2 implements it.
 - `interface TextMeasure { width(text:string, font:string): number; lineHeight(font:string): number }`.
@@ -162,6 +176,8 @@ Only the specifics are listed below.
 
 - [ ] Tests:
   - `it('workspace reserves, transfers and releases; refuses past the limit; never unlimited')`;
+  - `it('a reservation is refused when the parent ledger is near its limit even though the chart sublimit has room; a refusal rolls back both')`;
+  - `it('cartesian binding has exactly one of category or x; the validator enforces it')` [codex minor 5];
   - `it('hold keeps charges until a gated producer settles after abort')`;
   - `it('axis bindings: pie none, cartesian named roles, xy, radial, surface; invalid references rejected at parse')`;
   - `it('documentChartContext is created once per parse and reaches the XLSX adapter')`. DOCX and PPTX get the shared adapter in A0a, and their reach is asserted there. [plan r2: opencode N3]
@@ -217,7 +233,7 @@ Only the specifics are listed below.
   - `it('standalone unsupported chart becomes a card with the reason, the original feature and one representation')`.
   - `it('a broken fallback picture becomes a card recording chart-fallback-unusable')`.
   - `it('nested and alias-prefixed AlternateContent and unknown Requires')`.
-  - `it('a chart part over the byte cap is refused before any XML parse')`: assert that no parser or tokenizer call happens and that the inflated-byte counter stays under the cap, including with a forged declared size.
+  - `it('a chart part over the byte cap is refused before any XML tree is built')`. Assert no tree construction, and **accepted bytes ≤ cap**. With a forged declared size, the refusal happens on the first chunk that crosses the cap; that bounded crossing buffer is admitted separately. [codex minor 2]
   - `it('a throwing painter paints a card and restores canvas state for later shapes')`.
   - `it('getPaintables returns pages with cards when the chart chunk fails')`.
   - `it('renderSlide paints a card when the engine was never loaded in this realm')`.
@@ -250,7 +266,7 @@ Only the specifics are listed below.
   - `it('analytic roles keep all points up to 65536: a 5000-point series is not truncated to 4096 for analysis')`, using a 4,097-point dataset where the last point changes a computed mean;
   - `it('65537 analytic points refuse; display still truncates at 4096 for non-analytic families')`;
   - `it('plotVisOnly skips hidden rows and columns; plotVisOnly=0 plots them')`;
-  - `it('paged admission is not double-charged when a model is retained in the chart workspace')`;
+  - `it('paged charts reserve through the parent document pool: the retained model plus the outgoing clone peak is charged as two live allocations; cancellation, eviction and last release return the parent to its baseline')`;
   - `it('existing paged streaming and lease protections still hold')`.
 - [ ] Commit `refactor(charts): xlsx resident and paged data use point states and analytic acquisition`.
 
@@ -374,6 +390,7 @@ Only the specifics are listed below.
   - `it('series and point explosion geometry')`;
   - `it('dPt overrides take precedence over series formatting')`;
   - `it('gapWidth, overlap and varyColors for existing families')`;
+  - `it('dropLines on line and area groups and serLines on stacked bars draw the expected segments')` [codex minor 1];
   - `it('dark mode leaves chart pixels identical')`.
 - [ ] List the golden deltas.
 - [ ] Commit `feat(charts): markers, fills, chart styles and series options`.
@@ -609,7 +626,7 @@ Each task runs the conformance harness and refuses analytic inputs over the limi
 - [ ] **Validation doc:**
   - the gate table;
   - B0 → final eager, with every task's running total;
-  - a reference-status table **keyed by spec §8 case IDs**, each verified or unverified;
+  - a reference-status table, using stable case IDs that **F0 assigns** in the validation doc (`CH-<section>-<n>`, one per spec §8 bullet and §5.8 matrix cell), each verified or unverified [codex minor 4];
   - residual diffs;
   - blocked ChartEx families.
 - [ ] Full gates:
