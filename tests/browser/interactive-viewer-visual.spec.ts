@@ -317,15 +317,42 @@ test.describe('canvas paper and palettes', () => {
     for(let i=0;i<data.length;i+=4) if(data[i]===rgb[0] && data[i+1]===rgb[1] && data[i+2]===rgb[2] && data[i+3]>0) return true
     return false
   },rgb)
-  const hasActivePixel = async (page: Page) => {
-    const rgb = await page.locator('[data-ov-theme-root]').evaluate(root => {
-      const style = getComputedStyle(root), ctx = document.createElement('canvas').getContext('2d')!
-      ctx.fillStyle = style.getPropertyValue('--ov-color-find-active'); ctx.fillRect(0,0,1,1)
-      ctx.fillStyle = style.getPropertyValue('--ov-color-selection-fill'); ctx.fillRect(0,0,1,1)
-      return [...ctx.getImageData(0,0,1,1).data].slice(0,3)
-    })
-    return hasPixel(page,rgb)
-  }
+  // Find the active outline, then require visible dark glyph pixels inside it.
+  // Merely finding the accent colour also passes an opaque fill hiding the text.
+  const hasActivePixel = (page: Page) => page.locator(overlay).evaluate(node => {
+    const canvas = node as HTMLCanvasElement, root = canvas.closest('[data-ov-theme-root]')!
+    const style = getComputedStyle(root), sample = document.createElement('canvas').getContext('2d')!
+    sample.fillStyle = style.getPropertyValue('--ov-color-find-active'); sample.fillRect(0,0,1,1)
+    sample.fillStyle = style.getPropertyValue('--ov-color-selection-fill'); sample.fillRect(0,0,1,1)
+    const accent = sample.getImageData(0,0,1,1).data
+    const pixels = canvas.getContext('2d')!.getImageData(0,0,canvas.width,canvas.height).data
+    const base = root.querySelector<HTMLCanvasElement>('[data-testid="officeview-sheet-base"]')!
+    const paper = base.getContext('2d')!.getImageData(0,0,base.width,base.height).data
+    let left=canvas.width, top=canvas.height, right=-1, bottom=-1
+    for(let y=0;y<canvas.height;y++) for(let x=0;x<canvas.width;x++) {
+      const i=(y*canvas.width+x)*4
+      if(pixels[i]===accent[0] && pixels[i+1]===accent[1] && pixels[i+2]===accent[2]) {
+        left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y)
+      }
+    }
+    const lum = (rgb:number[]) => rgb.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i],0)
+    for(let y=top+2;y<bottom-1;y++) for(let x=left+2;x<right-1;x++) {
+      const i=(y*canvas.width+x)*4, alpha=pixels[i+3]/255
+      if(alpha<=0 || alpha>=.63 || paper[i]>32 || paper[i+1]>32 || paper[i+2]>32) continue
+      const glyph=[0,1,2].map(k=>pixels[i+k]*alpha+paper[i+k]*(1-alpha))
+      const background=[0,1,2].map(k=>pixels[i+k]*alpha+255*(1-alpha))
+      if((lum(background)+.05)/(lum(glyph)+.05)>=4.5) return true
+    }
+    return false
+  })
+  test('host background prop overrides the sheet backdrop in dark theme', async ({page}) => {
+    await openViewer(page,'f2-1k.xlsx')
+    const url = new URL(page.url())
+    url.searchParams.set('theme','dark'); url.searchParams.set('background','#123456')
+    await page.goto(url.toString())
+    await expect(page.getByRole('grid')).toBeVisible()
+    await expect(page.locator('[data-officeview-root]')).toHaveCSS('background-color','rgb(18, 52, 86)')
+  })
   test('dark: sheet paper and gridlines are pixel-identical to light; headers and backdrop are dark', async ({page}) => {
     await page.emulateMedia({colorScheme:'light'})
     await openViewer(page,'f2-1k.xlsx'); await settle(page)
@@ -362,7 +389,9 @@ test.describe('canvas paper and palettes', () => {
     await page.locator('[data-officeview-sheet-instance]').evaluate(el=>(el as HTMLElement).style.setProperty('--ov-color-find','#1234ff'))
     const rgb = await page.locator('[data-ov-theme-root]').evaluate(root => {
       const ctx = document.createElement('canvas').getContext('2d')!
+      ctx.globalAlpha = .75
       ctx.fillStyle = '#1234ff'; ctx.fillRect(0,0,1,1)
+      ctx.globalAlpha = 1
       ctx.fillStyle = getComputedStyle(root).getPropertyValue('--ov-color-selection-fill'); ctx.fillRect(0,0,1,1)
       return [...ctx.getImageData(0,0,1,1).data].slice(0,3)
     })

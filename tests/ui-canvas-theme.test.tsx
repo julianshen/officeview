@@ -46,16 +46,37 @@ it('painters use passed colours and keep legacy literals by default', () => {
   paintSearchOverlay(ctx,[rect],[rect],1,{find:'#234567','find-active':'#345678'})
   expect(fills.pop()).toBe('#234567'); expect(strokes.pop()).toBe('#345678')
   paintFindOverlay(ctx,[rect],[rect],{find:'#234567','find-active':'#345678'})
-  expect(fills.slice(-2)).toEqual(['#234567','#345678'])
+  expect(fills.at(-1)).toBe('#234567'); expect(strokes.at(-1)).toBe('#345678')
+})
+it('active find outlines preserve dark text contrast inside the match in both themes', () => {
+  for (const colors of Object.values(THEME_DEFAULTS)) {
+    const {ctx} = context()
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,100,100)
+    ctx.fillStyle = '#111111'; ctx.fillRect(10,10,3,8) // solid interior of an authored glyph
+    const band = {x:2,y:2,width:40,height:30}
+    paintFindOverlay(ctx,[band],[band],colors)
+    paintGridSelectionOverlay(ctx,{fills:[band],borders:[]},1,colors)
+    const luminance = (x:number,y:number) => {
+      const rgb = [...ctx.getImageData(x,y,1,1).data].slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+      return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722
+    }
+    expect((luminance(20,12)+.05)/(luminance(11,12)+.05)).toBeGreaterThanOrEqual(4.5)
+  }
 })
 it('paper stays paper: worksheet white and gridlines are never themed', () => {
   const f = frame(), {ctx,fills,strokes} = context()
   renderSheetViewport(f.sheet,ctx,f.geometry,{box:{x:0,y:0,width:100,height:100},zoom:1,deviceScale:1},undefined,{colors:THEME_DEFAULTS.dark})
   expect(fills).toContain('#ffffff'); expect(strokes).toContain('#d0d0d0')
-  const renderer = new SheetTileRenderer('D',0)
+  const tileStrokes: string[][] = []
+  const renderer = new SheetTileRenderer('D',0, () => {
+    const tile = context()
+    tile.ctx.canvas.width = tile.ctx.canvas.height = 512
+    tileStrokes.push(tile.strokes)
+    return {canvas:tile.ctx.canvas,width:512,height:512,close() {}}
+  })
   fills.length = 0
   renderer.present(ctx,{...f,colors:THEME_DEFAULTS.dark})
-  expect(fills).toContain('#ffffff'); renderer.dispose()
+  expect(fills).toContain('#ffffff'); expect(tileStrokes.flat()).toContain('#d0d0d0'); renderer.dispose()
 })
 it('pending and freeze colours fall back and accept overrides', () => {
   const f = frame(), {ctx,fills,texts} = context()
@@ -84,6 +105,7 @@ it('a palette change misses the tile cache and drops old tiles after presenting'
   renderer.present(ctx,f)
   const paints = renderer.stats.basePaints
   renderer.present(ctx,f); expect(renderer.stats.tileHits).toBeGreaterThan(0)
+  // tileHits is cumulative: unchanged means zero cache hits in the next frame.
   const hits = renderer.stats.tileHits, closed = renderer.cache.stats().closed
   const draw = ctx.drawImage.bind(ctx)
   vi.spyOn(ctx,'drawImage').mockImplementation((...args: any[]) => { expect(renderer.cache.stats().closed).toBe(closed); (draw as any)(...args) })

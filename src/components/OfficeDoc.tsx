@@ -146,7 +146,7 @@ interface SearchOverlay extends PageOverlay {
  * while the ctx still carries the page transform, so rectangles are in page
  * coordinates.
  */
-function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay, colors: CanvasColors = {}): void {
+function paintHighlights(ctx: CanvasRenderingContext2D, overlay: SearchOverlay, colors: Pick<CanvasColors, 'find' | 'find-active' | 'text-selection'> = {}): void {
   ctx.save()
   ctx.fillStyle = colors.find ?? 'rgba(255,214,0,.45)'
   for (const r of overlay.highlights) ctx.fillRect(r.x, r.y, r.width, r.height)
