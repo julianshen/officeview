@@ -853,14 +853,18 @@ function LegacyOfficeDoc({
   )
 }
 
-// Loaded only when a host opts in for a spreadsheet; the legacy path never pulls it.
-const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc'))
+// A chunk that fails to load (a redeploy removed it, a CSP blocks it) warns
+// once and degrades inside the viewer rather than unmounting the host.
+const warnChunk = (e: unknown) => console.warn('[officeview] chunk not loaded', e)
+/** The sheet viewer's loading or failure status, inside its own theme root. */
+const SheetStatus = (p: { theme?: ThemeMode; text: string }) => <div {...themeRootProps(p.theme, useId())}><div role="status" data-officeview-root="" style={{ padding: 16 }}>{p.text}</div></div>
+// Loaded only when a host opts in for a spreadsheet (or a worker-backed shell
+// needs it); the legacy path never pulls it. On failure: a visible status, never
+// the legacy renderer (a worker-backed shell has no resident rows).
+const InteractiveSheetDoc = lazy(() => import('./xlsx/InteractiveSheetDoc').catch((e) => (warnChunk(e), { default: (p: { theme?: ThemeMode }) => <SheetStatus theme={p.theme} text="Spreadsheet viewer could not load. Reload to retry." /> as never })))
 
 // The toolbar, status line, page tracking and word count (spec §6.10). Key
 // handlers and zoom state stay here, eager.
-// A chunk that fails to load (a redeploy removed it, a CSP blocks it) warns
-// once and leaves the pages without chrome rather than unmounting the host.
-const warnChunk = (e: unknown) => console.warn('[officeview] chunk not loaded', e)
 const PagedChrome = lazy(() => import('./paged/PagedChrome').catch((e) => (warnChunk(e), { default: () => null as never })))
 // The zoom routing is lazy too, requested by the first paged render: its
 // gestures need painted pages, so it is loaded before they can happen; an
@@ -878,13 +882,12 @@ const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 
 export function OfficeDoc(props: OfficeDocProps): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
-  const instance = useId()
   // A worker-backed (paged) shell document carries its source (S5.4) and has no
   // rows on the main thread: only the interactive viewer can show it.
   const paged = pagedWorkbookOf(document)
   if ((interactiveSheets || paged) && 'sheets' in document) {
     return (
-      <Suspense fallback={<div {...themeRootProps(props.theme, instance)}><div role="status" data-officeview-root="" style={{ padding: 16 }}>Loading spreadsheet viewer…</div></div>}>
+      <Suspense fallback={<SheetStatus theme={props.theme} text="Loading spreadsheet viewer…" />}>
         <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />
       </Suspense>
     )
