@@ -353,7 +353,7 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 **Embedded workbook reader.** This is a **new bounded values-only reader** in a lazy chunk: `src/charts/embeddedWorkbook.ts`. It is not an unrestricted `parseXlsx` call.
 
 - **Resolve.** Resolve chart part `.rels` → `c:externalData@r:id`. Only a package-internal target is accepted; `External` gives a diagnostic and the data is unavailable.
-- **Admit.** Admission condition: inflated size ≤ **8 MiB** (desktop) / **4 MiB** (mobile), read through a **new uncached bounded read** that is added next to `OfficeZip.bytes` (the existing `bytes()` caches; `zip.ts:40-53`) **[rev: agy 2; codex R3 minor 1; call]**. Real chart workbooks are 15–100 KB.
+- **Admit.** Admission condition: inflated size ≤ **8 MiB** (desktop) / **4 MiB** (mobile), read through a **new uncached bounded read** in the lazy `src/charts/embeddedZip.ts`, which uses the package's underlying zip entry directly. `src/core/zip.ts` gains at most a one-line accessor for that entry (the existing `bytes()` caches; `zip.ts:40-53`). **[rev: agy 2; codex R3 minor 1; call]**. Real chart workbooks are 15–100 KB.
 - **Read.** `OfficePackage.load` the bytes, then read only these:
   1. `xl/workbook.xml`: sheets, `date1904` and `definedNames`. External references are rejected even when reached through a name.
   2. `xl/sharedStrings.xml`, bounded by streaming SAX with a string-count and byte cap.
@@ -487,8 +487,8 @@ Every family handles empty series, all-blank values, NaN/∞ (treated as blank),
 ## 9. Delivery constraints
 
 - **Eager budget.** Measured by `bun run build && bun scripts/eager-budget.ts`: Node zlib gzip of `dist/index.js`, ceiling 38,720 B. Every task records before and after.
-  - Net change ≤ 0 per task.
-  - Stream A's first task lands the adapter seam and deletes the mini-reader before anything else, so later tasks start with the freed bytes.
+  - **Project baseline budget [rev: plan review, codex P6 / opencode B1].** B0 is the eager size at the plan's start (`3581768`, about 38,631 B). After every task, the eager size must be **≤ B0**. Bytes freed by an earlier task (A0 deletes the mini-reader) may be spent by later tasks. Every eager-touching task records the running total and the bytes it adds.
+  - New logic always goes on the lazy side when it can. This is mandatory for the embedded-zip inventory and the uncached read, which live in `src/charts/`, not in `src/core/zip.ts`.
 - **Goldens.** Changed only with individual inspection and a stated reason.
 - **Review.** Every task is reviewed by a model family other than its implementer's. Stream B's field-map task is reviewed by two families.
 - **CI.** CI passes on Linux; the pixel goldens stay Mac-only per `ci.yml`.

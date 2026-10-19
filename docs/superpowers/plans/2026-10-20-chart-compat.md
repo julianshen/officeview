@@ -2,461 +2,617 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** revision 2. It addresses the plan review from agy, codex and opencode, all of which returned REQUEST CHANGES with no Critical findings. The changes:
+
+- a foundation task comes first;
+- a resident/paged data-contract migration task is added;
+- oversized tasks are split;
+- tests discriminate native rendering from fallback;
+- axis bindings are discriminated;
+- the eager budget is measured against the project baseline (spec §9 amended);
+- the native-fixture prerequisite for ChartEx is restored.
+
 **Goal:** Render every chart a user is likely to meet natively in XLSX, DOCX and PPTX through one lazily loaded chart engine, with a fallback picture or a labelled card instead of blank space or wrong values.
 
 **Architecture:**
-- Move the lazy XLSX chart engine to `src/charts/`. Give DOCX and PPTX the same `parseChart` adapter XLSX uses, and delete the eager clustered-column mini-reader.
-- Then grow the engine:
-  - an axis model by ID;
-  - the format adapter;
-  - data labels and point states;
-  - a bounded embedded-workbook reader;
-  - fills, markers and layout;
-  - new classic families;
-  - trendlines and error bars;
-  - accessibility.
-- ChartEx (stream B) follows after a normative field map.
+1. Lay foundation contracts: workspace, context, point states, the format interface and axis bindings.
+2. Move the lazy XLSX engine to `src/charts/`, give all formats one shared `parseChart` adapter, and delete the eager mini-reader.
+3. Migrate resident and paged XLSX data to the new contracts.
+4. Grow the engine: axes, layout, formats and labels, embedded data, styling, families, analytics and accessibility.
+5. ChartEx (stream B) follows after a native-verified field map.
 
-**Tech Stack:** TypeScript, React 19, Vite 7, vitest + jsdom, Playwright (Chromium + WebKit), bun 1.3.10, node-canvas for tests.
+**Tech Stack:** TypeScript, React 19, Vite 7, vitest + jsdom, Playwright (Chromium + WebKit), bun 1.3.10, node-canvas in tests.
 
-**Spec:** `docs/superpowers/specs/2026-10-20-chart-compat-design.md`. It is the binding authority. Every task's requirements include the spec sections it names.
+**Spec:** `docs/superpowers/specs/2026-10-20-chart-compat-design.md` (approved at `8beadb3`; §9 budget rule amended). It is the binding authority, and each task names its sections.
 
 ## Global Constraints
 
-- **Eager budget.**
-  - Measure with `bun run build && bun scripts/eager-budget.ts`. The script reports the Node zlib gzip of `dist/index.js` and exits 1 above **38,720**. The baseline at `3581768` is about 38,631 B.
-  - Every task records before and after numbers in its commit message, and must come out **net ≤ 0**.
-  - Always rebuild before measuring.
+- **Eager budget** (spec §9, amended).
+  - Measure with `bun run build && bun scripts/eager-budget.ts`: Node zlib gzip of `dist/index.js`, hard ceiling 38,720.
+  - **B0** is the eager size at `3581768`. Task F0 records it in the ledger and the validation doc.
+  - After every task, the eager size must be **≤ B0**. Bytes freed earlier (A0a) may be spent later.
+  - Every task records before, after, the running total and the bytes it adds. Always rebuild before measuring.
+  - New logic goes lazy. **Never add the embedded-zip inventory or uncached read to `src/core/zip.ts`**; at most a one-line entry accessor.
 - **Eager graph.**
   - Run `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts`.
-  - Task A0 adds `src/charts/` and `src/xlsx/chart.ts` to `EAGER_FORBIDDEN` in `tests/helpers/eager-graph.ts`. After that, nothing under `src/charts/` may be statically reachable from `src/index.ts`.
-  - `paintChartPlaceholder` stays eager (spec §6.1).
-- **Runtime tag.** The tag stays `kind:'xlsxChart'` (spec §6.2). Types and modules become neutral (`ChartModel`, `src/charts/*`).
-- **Representation contract** (spec §6.3). The adapter returns `{ kind:'native', model } | { kind:'unsupported', reason } | { kind:'refused', reason }`.
-  - `unsupported` and `refused` must not satisfy an `mc:Choice`.
-  - A card is created only when no representation remains.
-- **Point states** (spec §5.8): value, blank, error(code), unavailable. Errors keep their identity until the family plotting rule.
-- **Analytic inputs are never truncated** (spec §4.3, §7). If they exceed 65,536 points per series, refuse the chart.
-- **Limits** are in spec §6.4 (embedded workbook and the chart workspace, 64/32 MiB) and §6.5 (work bounds). Charge before allocation. Chart XML is read with an 8/4 MiB cap before the tree is built.
-- **Two stages** (spec §6.5):
-  - stage 1 is async and size-independent, and produces an immutable model;
-  - stage 2 is synchronous layout, kept in a realm-local WeakMap sidecar keyed by (w, h, dpr, fontGeneration) and charged until it is evicted.
+  - A0a adds `src/charts/` and `src/xlsx/chart.ts` to `EAGER_FORBIDDEN`.
+  - `paintChartPlaceholder` stays eager.
+- **Runtime tag.** The tag stays `kind:'xlsxChart'`; types and modules become neutral.
+- **Representation contract** (spec §6.3). The adapter returns `{kind:'native',model} | {kind:'unsupported',reason} | {kind:'refused',reason}`. `unsupported` and `refused` never satisfy an `mc:Choice`, and a card is created only when no representation remains.
+- **Point states** (spec §5.8): value, blank, error(code), unavailable. They apply to numeric roles, and errors keep their identity until plotting.
+- **Analytic acquisition is separate from display truncation.**
+  - Analytic inputs (trendlines, stdDev/stdErr, histogram, Pareto, box & whisker, treemap/sunburst) are acquired **before** any display cap, up to 65,536 per series. Above that, the chart (or the element) is refused.
+  - Display caps (64 series / 4,096 points) apply only to what is drawn.
+- **Ownership** (spec §6.4/§6.5). One per-document `ChartWorkspace` (64/32 MiB) charges every chart allocation before it is made.
+  - It never runs as unlimited or no-op admission, even in early tasks.
+  - It relates to the paged drawing admission by **transfer, not double-charge** (D0).
+- **Two stages** (spec §6.5).
+  - Stage 1 is async and size-independent, and produces an immutable model.
+  - Stage 2 is synchronous layout in a realm-local WeakMap sidecar keyed by (w, h, dpr, fontGeneration), charged until it is evicted.
 - **Paper rule.** Dark mode never changes chart pixels.
+- **Native-success tests must reject fallbacks.** Any test of "renders natively" asserts:
+  - the model kind is native (not a card, not a fallback picture);
+  - the coverage representation is `chart`;
+  - distinct native geometry, not just non-white pixels.
 - **Goldens.**
-  - No golden is re-recorded without individual inspection and a stated reason.
-  - Existing XLSX chart goldens must stay pixel-identical, unless a spec §5 element legitimately changes them; each such change is listed in the commit.
-  - Pixel goldens are Mac-only and are never run in CI.
+  - A0a: existing XLSX chart goldens must be **pixel-identical (diff 0)**; no re-record.
+  - Later tasks: identical except the enumerated, individually inspected spec §5 deltas, listed in the commit with reasons.
+  - Pixel goldens are Mac-only, never run in CI.
+- **Fixtures.**
+  - Synthetic builder fixtures are **"Office-shaped synthetic"** and are never reported as Office evidence.
+  - Real Office-authored files are evidence, with provenance (producer and version) recorded.
 - **Tests per task:**
   - `bunx tsc --noEmit`;
   - the focused vitest files;
   - the full `bunx vitest run` once before reporting;
   - build plus budget plus `check-eager`;
   - affected Playwright specs with a unique `IV_HARNESS_PORT` (Chromium + WebKit).
-  - Agents whose sandbox cannot bind localhost (codex) list the commands, and the controller runs them.
-- **CI is Linux and slower than macOS.** Avoid wall-clock races in tests; drive clocks explicitly. Do not inject the full stylesheet into jsdom tests; `tests/setup/styles.ts` injects only the theme contract by default.
-- **No new runtime dependencies** without owner approval.
-- **Review.** Every task is reviewed by a model family other than its implementer's. B1 (field map) gets two reviewing families.
+  - codex cannot bind localhost or write git metadata; the controller runs those commands and commits for it.
+- **CI is Linux and slower.** Drive clocks explicitly; never rely on wall time. `tests/setup/styles.ts` injects only the theme contract.
+- **No new runtime dependencies.**
+- **Review.** A different model family reviews each task. B1's field map gets two families.
 
 ## Review Focus
 
-These are the input classes most likely to bite users that no single task's tests fully exercise. Each one is pinned by a test in the task named.
-
-1. **A real Office DOCX/PPTX chart with caches and an embedded workbook,** opened in the paged viewer: it must draw natively, never as a card. Owned by A0 (adapter) and A3 (data), as `office-shaped paged chart renders natively (browser)`.
-2. **A ChartEx chart wrapped in `mc:AlternateContent` with a fallback picture,** before stream B lands: the fallback picture must keep painting, never a card. Owned by A0, as `chartex choice with fallback keeps the fallback picture`.
-3. **Finance charts using `dispUnits` = millions:** tick labels must divide. Owned by A1, as `display units divide tick labels and draw the unit label`.
-4. **A line chart with #N/A points:** the line spans the gap. Owned by A2, as `#N/A spans a line regardless of dispBlanksAs`.
-5. **A document with many charts** (200 on one page, or 50 embeddings): bounded memory, later charts become cards, no throw. Owned by A3 and A7, as `200 charts stay within the chart workspace`.
+| # | Input | Expected | Pinned by |
+|---|---|---|---|
+| 1 | A paged chart whose **values role has no cache**, with the data only in the embedded workbook | Renders natively from the workbook | A3b `cacheless values role renders natively from the embedded workbook`, plus the A7 browser test |
+| 2 | A ChartEx chart wrapped in `mc:AlternateContent` with a fallback picture, before stream B | The fallback picture keeps painting | A0b `chartex choice with fallback keeps the fallback picture` |
+| 3 | Finance chart with `dispUnits` = millions | Tick labels divide | A1a `display units divide tick values` (with A2 formatting) |
+| 4 | Line chart with #N/A points | The line spans | A2 `#N/A spans a line regardless of dispBlanksAs` |
+| 5 | 200 charts or 50 embeddings | Bounded; later charts become cards; no throw | C1 robustness slice `200 charts stay within the chart workspace` |
 
 ---
 
-## Streams and agents
+## Order, branches and agents
 
-Tasks run **sequentially** in this order: A0 → A1 → A2 → A3 → A4 → A5 → A6 → A7 → B1 → B2 → B3 → B4 → B5 → C1. Each task lives on its own branch off `feature/chart-compat` and is merged back with `--no-ff` after review, followed by the combined gates.
+Tasks run **sequentially**:
+
+F0 → A0a → A0b → D0 → A1a → A1b → A2 → A3a → A3b → A4a → A4b → A4c → A4d → A5a → A5b → A5c → A5d → A6a → A6b → A7 → B1 → B2 → B3 → B4 → B5 → C1.
+
+Each task gets a branch off `feature/chart-compat`, merged back `--no-ff` after review, followed by the combined gates.
 
 | Task | Implementer | Reviewer |
 |---|---|---|
-| A0 engine move + adapter seam + representation contract | Claude | codex |
-| A1 axis model + two-stage layout | Claude | codex |
-| A2 format adapter + data labels + point states | codex | Claude |
-| A3 embedded workbook reader + data precedence + chart workspace | Claude | codex |
-| A4 markers, lines, smoothing, fills, style, categories, layout, legend, user shapes | agy | Claude |
-| A5 new classic families (bubble, radar, stock, ofPie, contour, surface3D card) | Claude | opencode |
-| A6 trendlines + error bars | codex | Claude |
-| A7 accessibility + coverage + diagnostics + browser | Claude | agy |
-| B1 ChartEx field map + dispatch | codex | Claude + opencode |
-| B2 waterfall + funnel | Claude | codex |
-| B3 histogram + Pareto | Claude | codex |
+| F0 foundation contracts | Claude | codex |
+| A0a engine move, shared adapter, delete mini-reader | Claude | codex |
+| A0b representation contract, containment, exports, coverage | Claude | opencode |
+| D0 resident/paged XLSX data-contract migration | Claude | codex |
+| A1a axis graph, scales, dates | Claude | codex |
+| A1b layout, cache, text and fonts | codex | Claude |
+| A2 display formats, data labels, point matrix | codex | Claude |
+| A3a embedded zip admission, uncached read, cancellation | Claude | codex |
+| A3b embedded cells, SST, formats, names; data precedence | Claude | codex |
+| A4a markers, lines, fills, style precedence, invertIfNegative, explosion, dPt | agy | Claude |
+| A4b titles, legend, multi-level categories, plotVisOnly | agy | Claude |
+| A4c smoothing | Claude | opencode |
+| A4d user shapes | Claude | codex |
+| A5a bubble, radar (+ family conformance harness) | Claude | opencode |
+| A5b stock | codex | Claude |
+| A5c pie-of-pie, bar-of-pie | Claude | opencode |
+| A5d contour, surface3D card | Claude | codex |
+| A6a trendlines | codex | Claude |
+| A6b error bars | Claude | codex |
+| A7 accessibility, coverage, diagnostics, browser | Claude | agy |
+| B1 ChartEx native parts, field map, parser, dispatch | codex | Claude + opencode |
+| B2 waterfall, funnel | Claude | codex |
+| B3 histogram, Pareto | Claude | codex |
 | B4 box & whisker | agy | Claude |
-| B5 treemap + sunburst | Claude | opencode |
-| C1 gallery goldens, validation doc, README, CHANGELOG | Claude | codex + agy |
+| B5 treemap, sunburst | Claude | opencode |
+| C1 robustness slice, gallery goldens, validation doc, README, CHANGELOG, PR | Claude | codex + agy |
+
+**Step pattern for every task:**
+1. Write the failing tests.
+2. Run them and see them fail.
+3. Implement.
+4. Run them and see them pass, along with the listed regression files.
+5. Run build, budget (running total ≤ B0) and `check-eager`.
+6. Run the browser tests, when listed.
+7. Commit with the given message.
+
+Only the specifics are listed below.
 
 ---
 
-### Task A0: Engine move, shared adapter, representation contract
+### Task F0: Foundation contracts
 
-**Spec:** §6.1, §6.2, §6.3, §6.5 (bounded XML read, painter containment, `ensureChartEngine`, `preloadCharts`), §6.6 (coverage `featureOfKind` export).
+**Spec:** §5.8 point states, §6.3 result union, §6.4 workspace/ownership, §6.5 two stages, §5.1 axis model, §5.2 format interface.
 
 **Files:**
 - Create:
-  - `src/charts/index.ts`, the lazy entry, which re-exports parse, paint, fill and register;
-  - `src/charts/model.ts` (types; this replaces `src/xlsx/chartModel.ts`, and the old path re-exports it);
-  - `src/charts/parse.ts`, `src/charts/paint.ts` and `src/charts/fill.ts`, which move the code out of `src/xlsx/chart.ts`. The old file is deleted, and its imports are repointed.
+  - `src/charts/model.ts`: types-only `ChartModel`, `ChartGroup` with **discriminated axis bindings**, `ChartPoint`, `ChartRole` and `ChartResult`;
+  - `src/charts/workspace.ts`;
+  - `src/charts/context.ts`;
+  - `src/charts/format-api.ts` (interface only).
+- Modify: `src/xlsx/chartModel.ts`, which becomes `export type * from '../charts/model'` (types-only).
+- Test: `tests/charts-foundation.test.ts`.
+
+**Interfaces (produced):**
+- `type ChartPoint = {state:'value'; v:number; fmt?:string} | {state:'blank'} | {state:'error'; code:string} | {state:'unavailable'}`.
+- `type ChartAxisBinding = {kind:'none'} | {kind:'cartesian'; category?:string; x?:string; value:string} | {kind:'xy'; x:string; y:string} | {kind:'radial'; value:string} | {kind:'surface'; category:string; series:string; value:string}`.
+  - Pie and doughnut use `none`; radar uses `radial`; contour uses `surface`.
+- `type ChartResult = {kind:'native'; model:ChartModel} | {kind:'unsupported'; reason:string} | {kind:'refused'; reason:string}`.
+- `interface ChartWorkspace { readonly limit:number; reserve(bytes:number, tag:string): boolean; transfer(from:string, to:string, bytes:number): void; release(tag:string): void; hold<T>(p:Promise<T>, tag:string): Promise<T> }`.
+  - `hold` keeps the charges until the promise settles, even after an abort.
+  - `createChartWorkspace(profile:'desktop'|'mobile')` returns a limit of 64 MiB or 32 MiB.
+- `interface ChartParseContext { theme?: ThemeContext; pkg: OfficePackage; partPath: string; signal?: AbortSignal; profile:'desktop'|'mobile'; workspace: ChartWorkspace; epoch?: '1900'|'1904' }`.
+- `interface ChartFormatter { format(v:number, code:string|undefined, epoch:'1900'|'1904'): string }`. A2 implements it.
+- `interface TextMeasure { width(text:string, font:string): number; lineHeight(font:string): number }`.
+- **Production hooks:** `documentChartContext(profile, signal)`, created once per parse. It is threaded by `parseDocx`, `parsePptx` and `parseXlsx` options into `ContentLoadAdapters`. A standalone or transferred render uses its own workspace, created on demand.
+
+- [ ] Tests:
+  - `it('workspace reserves, transfers and releases; refuses past the limit; never unlimited')`;
+  - `it('hold keeps charges until a gated producer settles after abort')`;
+  - `it('axis bindings: pie none, cartesian named roles, xy, radial, surface; invalid references rejected at parse')`;
+  - `it('documentChartContext is created once per parse and reaches the adapters of all three formats')`.
+- [ ] Record B0 in `.superpowers/sdd/progress.md` and in `docs/validation/chart-compat.md`, which this task creates as a stub.
+- [ ] Commit `feat(charts): foundation contracts for the chart engine`.
+
+### Task A0a: Engine move, shared adapter, delete the mini-reader
+
+**Spec:** §6.1, §6.2.
+
+**Files:**
+- Create: `src/charts/index.ts` (the lazy entry), plus `src/charts/parse.ts`, `paint.ts` and `fill.ts`, which move the code from `src/xlsx/chart.ts` **behaviour-identically**. Then delete `src/xlsx/chart.ts`.
 - Modify:
-  - `src/xlsx/chartLoader.ts`: `loadChartModule()` imports `../charts`;
+  - `src/xlsx/chartLoader.ts`: imports `../charts`;
   - `src/drawing/content.ts`:
-    - a shared default `parseChart` in `ContentLoadAdapters` (around :370-376), merged under caller adapters;
-    - delete `chart()` (:251-293) and its `kind:'chart'` variant;
-    - a bounded chart-part read;
-    - chart dispatch by namespace;
-    - the representation contract in `follow()` and `prepareCompatibleDrawingContent`;
-    - keep ChartEx returning `unsupported` until B1;
-  - `src/drawing/content-paint.ts`: delete `paintChart`; wrap the registered painter in save/try/finally/restore with a card on throw;
-  - `src/docx/drawing.ts`, `src/pptx/parse.ts`: rely on the default adapter (remove any `parseChart` gaps);
-  - `src/render/paint.ts`: `ensureChartEngine(contents: DrawingContent[])` in the DOCX and PPTX branches (it catches failure);
-  - `src/index.ts`: `export { preloadCharts }`;
-  - `src/drawing/coverage.ts`: export `featureOfKind`; `src/docx/parse.ts:700` uses it;
+    - a shared default `parseChart` in `ContentLoadAdapters` (:370-376), with caller adapters spread over the defaults;
+    - delete `chart()` (:251-293) and `kind:'chart'`;
+  - `src/drawing/content-paint.ts`: delete `paintChart`;
+  - `src/xlsx/drawing.ts`: its adapter becomes the default;
   - `tests/helpers/eager-graph.ts`: add `src/charts/` and `src/xlsx/chart.ts` to `EAGER_FORBIDDEN`.
 - Test:
-  - new `tests/charts-adapter.test.ts`, `tests/charts-representation.test.ts`;
-  - update `tests/drawing-content.test.ts:277` and `tests/docx-complex-features.test.ts:294`: `kind:'chart'` → `kind:'xlsxChart'`;
-  - update `tests/drawing-coverage.test.ts:74-113`: horizontal bar is now native.
+  - new `tests/charts-adapter.test.ts`;
+  - update the `kind:'chart'` assertions (`tests/drawing-content.test.ts:277`, `tests/docx-complex-features.test.ts:294`) and `tests/drawing-coverage.test.ts:74-113`;
+  - repoint the imports in `tests/xlsx-chart*.test.ts`, keeping every assertion.
 
-**Interfaces:**
-- Produces:
-  - `type ChartResult = { kind:'native'; model: ChartModel } | { kind:'unsupported'; reason: string } | { kind:'refused'; reason: string }`;
-  - `parseChartPart(root: XmlNode, ctx: ChartParseContext): Promise<ChartResult>` (lazy). `ChartParseContext = { theme: ThemeContext | undefined; pkg: OfficePackage; partPath: string; signal?: AbortSignal; profile: 'desktop'|'mobile'; workspace: ChartWorkspace }`;
-  - `ensureChartEngine(contents: readonly DrawingContent[]): Promise<void>`;
-  - `preloadCharts(): Promise<void>`;
-  - `featureOfKind(kind: DrawingContent['kind']): string`.
-- Later tasks extend `ChartModel` (A1+) and `ChartParseContext` (A3 adds `embedded`).
+- [ ] Tests:
+  - `it('docx and pptx stacked bar, horizontal bar, line and pie parse natively as xlsxChart')`: assert the model, coverage `chart` and group geometry;
+  - `it('a caller passing only text adapters still gets the default parseChart; a caller parseChart overrides')`;
+  - `it('src/charts is not in the eager graph')`, from the module map.
+- [ ] Gates:
+  - all `tests/xlsx-chart*.test.ts` assertions pass unchanged;
+  - `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts` passes on the Mac, with **diff 0 and no re-record**;
+  - the budget records the drop.
+- [ ] Commit `feat(charts): one lazy chart engine for all formats; delete the eager column-chart reader`.
 
-- [ ] **Step 1: Failing tests.**
-  - `it('docx and pptx charts parse through the shared lazy adapter as xlsxChart')`: a stacked horizontal bar, a line and a pie in a DOCX and a PPTX built with `src/testdata/ooxml-builders.ts`, plus cached `c:` XML. Each yields `kind:'xlsxChart'`, not unsupported.
-  - `it('a caller passing only text adapters still gets the default parseChart')`.
-  - `it('unsupported and refused results do not satisfy an mc:Choice; the fallback picture is selected')`: radar Choice plus picture Fallback in all three formats.
-  - `it('chartex choice with fallback keeps the fallback picture')` (Review Focus 2).
-  - `it('standalone unsupported chart becomes a card with the reason and feature')`.
-  - `it('a broken fallback picture becomes a card recording chart-fallback-unusable')`.
-  - `it('a chart part over the byte cap is unsupported before the tree is built')`: spy on `pkg.xmlOrdered` and assert it is not called.
-  - `it('a throwing chart painter paints a card and restores canvas state')`.
-  - `it('getPaintables returns pages with cards when the chart chunk fails to load')`.
-  - `it('renderSlide paints a card when the engine was never loaded in this realm')`.
-  - `it('preloadCharts loads and registers the painter')`.
-  - `it('docx coverage reports chart, not xlsxChart')`.
-  - `it('existing xlsx chart behaviour is unchanged')`: run `tests/xlsx-charts*.test.ts` unchanged.
-- [ ] **Step 2:** Run them and see them fail.
-- [ ] **Step 3:** Implement. Move the code first and keep it behaviour-identical, then add the seam. Delete the mini-reader in the same task, so the eager bytes go down.
-- [ ] **Step 4:** Run them and see them pass. Also pass `tests/xlsx-chart*.test.ts`, `tests/drawing-*.test.ts`, `tests/pptx-drawings.test.ts`, `tests/docx-complex-features.test.ts` and `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts` (Mac).
-- [ ] **Step 5:** Run build, budget (record the drop) and `check-eager`.
-- [ ] **Step 6: Browser.** In `tests/browser/paged-toolbar.spec.ts` or a new `tests/browser/paged-charts.spec.ts`, add `test('docx and pptx charts render natively in the paged viewer (browser)')`, which counts non-white pixels in the chart box.
-- [ ] **Step 7:** Commit `feat(charts): one lazy chart engine for xlsx, docx and pptx; delete the eager column-chart reader`.
+### Task A0b: Representation contract, containment, exports, coverage
 
-### Task A1: Axis model by ID and two-stage layout
-
-**Spec:** §5.1 (all), §5.10 manual layout, §6.5 (two stages, work bounds, rendering bounds).
+**Spec:** §6.3, §6.5 (bounded chart XML, painter containment, `ensureChartEngine`, `preloadCharts`), §6.6 (`featureOfKind`).
 
 **Files:**
-- Create:
-  - `src/charts/axes.ts`: axis graph, scales, ticks, date axes, display units;
-  - `src/charts/layout.ts`: stage-2 layout and the sidecar cache;
-  - `src/charts/dates.ts`: epoch resolution and conversion through `src/xlsx/formula/serial.ts`.
-- Modify: `src/charts/parse.ts` and `src/charts/paint.ts`, to consume the axis graph and layout.
-- Test: `tests/charts-axes.test.ts`, `tests/charts-layout.test.ts`, `tests/charts-dates.test.ts`.
-
-**Interfaces:**
-- Produces:
-  - `ChartAxis = { id: string; kind:'cat'|'val'|'date'|'ser'; pos:'b'|'t'|'l'|'r'; crossAx: string; deleted: boolean; scale: AxisScale; ... }`;
-  - `ChartModel.axes: ChartAxis[]`;
-  - `ChartGroup.axIds: [string, string]`;
-  - `layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure): ChartLayout`, cached in a `WeakMap<ChartModel, Map<key, ChartLayout>>` and charged to the workspace.
-- A2 consumes `ChartAxis.format`. A5 consumes the axis bindings for stock and bubble.
-
-- [ ] **Step 1: Failing tests** (numeric oracles):
-  - `it('groups bind axes by axId; secondary value axis has its own scale')`;
-  - `it('scatter and bubble use independent x and y value axes')`;
-  - `it('a category group plus an XY group keep separate x domains')`;
-  - `it('an unplaceable axis combination becomes a card with chart-axis-unplaceable')`;
-  - `it('crossBetween between vs midCat positions categories')`;
-  - `it('orientation maxMin reverses the axis')`;
-  - `it('logBase scales and skips non-positive values with chart-invalid-log-value')`;
-  - `it('display units divide tick labels and draw the unit label')` (Review Focus 3): builtInUnit millions and custUnit;
-  - `it('date axis steps by calendar months and years and keeps unequal spacing')`;
-  - `it('date axis over text categories falls back to categorical with a diagnostic')`;
-  - `it('chart epoch precedence: c:date1904, then workbook, then 1900')`;
-  - `it('epoch conversion uses the civil model; serial 0, 60 and pre-1904 dates are unrepresentable')`: serials 1, 59, 60, 60.5 and 61, in both directions;
-  - `it('tick generation is bounded to 1000 per axis; a tiny majorUnit is enlarged with a diagnostic')`;
-  - `it('tickLblSkip and automatic skip prevent overlapping labels')`;
-  - `it('label rotation from txPr bodyPr rot')`;
-  - `it('manualLayout edge and factor modes, defaults factor and outer, inverted box falls back')`;
-  - `it('layout is cached per size, dpr and font generation; resize and font load invalidate; cached layouts stay charged')`;
-  - `it('a transferred model paints synchronously in a fresh realm')` (structuredClone).
-- [ ] **Steps 2–5:** See them fail, implement, see them pass. Existing XLSX chart goldens stay identical; list any intended change. Run build, budget and `check-eager`.
-- [ ] **Step 6:** Commit `feat(charts): axis model by id, date axes, display units and placement-keyed layout`.
-
-### Task A2: Display formats, data labels, point states
-
-**Spec:** §5.2, §5.3, §5.8.
-
-**Files:**
-- Create:
-  - `src/charts/format.ts`, the chart display-format adapter over `src/xlsx/cellFormat.ts`;
-  - `src/charts/labels.ts`;
-  - `src/charts/points.ts`.
-- Modify: `src/charts/parse.ts`, `src/charts/fill.ts` and `src/charts/paint.ts`.
-- Test: `tests/charts-format.test.ts`, `tests/charts-labels.test.ts`, `tests/charts-points.test.ts`.
-
-**Interfaces:**
-- Produces:
-  - `type ChartPoint = { state:'value'; v: number; fmt?: string } | { state:'blank' } | { state:'error'; code: string } | { state:'unavailable' }`;
-  - `ChartSeries.values: ChartPoint[]`;
-  - `formatChartValue(v: number, code: string | undefined, epoch: '1900'|'1904'): string`, capped at 256 units, with the 255-unit code cap.
-- A3 fills `ChartPoint`, and A6 consumes it.
-
-- [ ] **Step 1: Failing tests:**
-  - `it('axis and label formats: scientific, fraction, elapsed, date, percent, locale prefix')`;
-  - `it('sourceLinked uses per-point cache formats for labels and first non-blank for the axis')`;
-  - `it('codes over 255 units render General; output capped at 256')`;
-  - `it('data label precedence group then series then point; explicit false overrides; delete hides')`;
-  - `it('label content flags, separator, authored rich text and leader lines')`;
-  - `it('dLblPos defaults per family; bestFit for pie')`;
-  - `it('field-reference labels and manual label layout fall back with chart-label-feature-unsupported')`;
-  - `it('point states survive fill: blank, #N/A, other error, unavailable')`;
-  - `it('#N/A spans a line regardless of dispBlanksAs')` (Review Focus 4);
-  - one test per cell of the spec §5.8 matrix:
-    - line/scatter/radar × gap, zero and span;
-    - column;
-    - area × gap, zero and span;
-    - stacked;
-    - pie;
-    - `dispNaAsBlank=1`;
-  - `it('a data label on an #N/A point shows #N/A')`.
-- [ ] **Steps 2–6:** As in A1. Commit `feat(charts): display formats, data labels and point states`.
-
-### Task A3: Embedded workbook reader, data precedence, chart workspace
-
-**Spec:** §6.4 (all), §7.
-
-**Files:**
-- Create:
-  - `src/charts/embeddedWorkbook.ts` (lazy);
-  - `src/charts/workspace.ts`;
-  - `src/charts/dataPrecedence.ts`.
 - Modify:
-  - `src/core/zip.ts`: add an uncached bounded read, `bytesUncached(path, max)`, and a central-directory inventory peek;
-  - `src/charts/fill.ts` and `src/charts/parse.ts`.
-- Test: `tests/charts-embedded.test.ts`, `tests/charts-precedence.test.ts`, `tests/charts-workspace.test.ts`, and a builder helper in `tests/helpers/chart-fixtures.ts` that makes a DOCX/PPTX with `c:externalData` and an embedded xlsx.
+  - `src/drawing/content.ts`: the `ChartResult` handling in `follow()` and `prepareCompatibleDrawingContent`; a bounded chart-part read before tree construction, through the bounded tokenizer path; chart dispatch by namespace (ChartEx still `unsupported` until B1);
+  - `src/drawing/content-paint.ts`: save/try/finally/restore, with a card on throw;
+  - `src/render/paint.ts`: `ensureChartEngine` in the DOCX and PPTX branches, catching failure;
+  - `src/index.ts`: export `preloadCharts`;
+  - `src/drawing/coverage.ts`: export `featureOfKind`; `src/docx/parse.ts:700` uses it.
+- Test: `tests/charts-representation.test.ts`.
 
-**Interfaces:**
-- Produces:
-  - `ChartWorkspace` with `reserve(bytes): boolean`, `transfer`, `release` and `settle(promise)`. It is owned per document, with a limit of 64/32 MiB.
-  - `readEmbeddedRanges(pkg: OfficePackage, chartPath: string, refs: ChartRef[], ctx): Promise<EmbeddedCells | { refused: string } | { unavailable: string }>`.
+- [ ] Tests:
+  - `it('unsupported and refused results do not satisfy an mc:Choice; the fallback picture is selected')`. Use **injected** adapter outcomes plus `surface3DChart`, which stays unsupported, in all three formats.
+  - `it('chartex choice with fallback keeps the fallback picture')`.
+  - `it('standalone unsupported chart becomes a card with the reason, the original feature and one representation')`.
+  - `it('a broken fallback picture becomes a card recording chart-fallback-unusable')`.
+  - `it('nested and alias-prefixed AlternateContent and unknown Requires')`.
+  - `it('a chart part over the byte cap is refused before any XML parse')`: assert that no parser or tokenizer call happens and that the inflated-byte counter stays under the cap, including with a forged declared size.
+  - `it('a throwing painter paints a card and restores canvas state for later shapes')`.
+  - `it('getPaintables returns pages with cards when the chart chunk fails')`.
+  - `it('renderSlide paints a card when the engine was never loaded in this realm')`.
+  - `it('preloadCharts registers the painter')`.
+  - `it('docx coverage reports chart via featureOfKind')`.
+- [ ] Commit `feat(charts): representation contract, bounded chart parts and painter containment`.
 
-- [ ] **Step 1: Failing tests:**
-  - `it('saved data wins: caches and literals, sparse idx kept, ptCount=0 is present-empty')`;
-  - `it('cache-absent references are read from the embedded workbook')`;
-  - `it('office-shaped paged chart renders natively')`: caches and an embedded workbook (Review Focus 1);
-  - `it('a missing required role makes the chart unsupported, never a silently missing series')`;
-  - `it('mixed cached and workbook-filled roles are allowed')`;
-  - `it('external targets and names pointing at external workbooks are unavailable')`;
-  - `it('formula cells without a saved value are unavailable points')`;
-  - `it('only referenced sheets and ranges are read; reading stops after the last referenced row')`, using a spy on the tokenizer;
-  - `it('admission: inflated cap, central directory entries and declared sizes are checked before load')`;
-  - `it('a sub-cap zip with an oversized inner sharedStrings is refused and fully refunded')`;
-  - `it('50 distinct embeddings and repeated references stay within the workspace; one read at a time')`;
-  - `it('cancellation stops publication immediately; charges are held until the gated producer settles')`;
+### Task D0: Resident and paged XLSX data-contract migration
+
+**Spec:** §6.4 (XLSX clause, per-role precedence), §5.8 point states, §7 analytic vs display limits, §5.8 `plotVisOnly`.
+
+**Files:**
+- Modify:
+  - `src/charts/fill.ts`;
+  - `src/charts/parse.ts`: the cache/literal readers emit `ChartPoint` and keep sparse indices;
+  - `src/xlsx/parse.ts` (resident fill, :459-469);
+  - `src/xlsx/view/pagedSource.ts`: `fillCharts` at :513-737 keeps error identity (today :628-629 collapses errors), keeps unavailable saved formula values, and keeps hidden-row/column provenance for `plotVisOnly`;
+  - `src/xlsx/storage/pagedDrawings.ts`.
+- Test:
+  - `tests/charts-data-contract.test.ts`;
+  - extend `tests/xlsx-viewer-paged-drawings.test.ts`;
+  - keep `tests/xlsx-c-review-r3-chart-memory.test.ts` and the lease/stream tests green.
+
+**Rules:**
+- **Analytic acquisition before display caps.** Analytic roles are acquired up to 65,536 points per series; display caps apply at draw time.
+- **Ownership.** The paged path's existing drawing admission stays authoritative for its backing storage. The chart workspace is charged by **transfer** when a filled model is retained, never as a second charge on the same bytes. Worker → main copies are charged once on the receiving side.
+
+- [ ] Tests:
+  - `it('resident and paged fills produce identical ChartPoint arrays for the same workbook')`, covering caches vs references, blanks, #N/A vs #DIV/0!, and formulas without saved values;
+  - `it('analytic roles keep all points up to 65536: a 5000-point series is not truncated to 4096 for analysis')`, using a 4,097-point dataset where the last point changes a computed mean;
+  - `it('65537 analytic points refuse; display still truncates at 4096 for non-analytic families')`;
+  - `it('plotVisOnly skips hidden rows and columns; plotVisOnly=0 plots them')`;
+  - `it('paged admission is not double-charged when a model is retained in the chart workspace')`;
+  - `it('existing paged streaming and lease protections still hold')`.
+- [ ] Commit `refactor(charts): xlsx resident and paged data use point states and analytic acquisition`.
+
+### Task A1a: Axis graph, scales, dates
+
+**Spec:** §5.1 (all), §6.5 rendering bounds.
+
+**Files:**
+- Create: `src/charts/axes.ts` and `src/charts/dates.ts`, which use `src/xlsx/formula/serial.ts`.
+- Test: `tests/charts-axes.test.ts` and `tests/charts-dates.test.ts`. These are pure model and number tests; native family renders come in A5.
+
+- [ ] Tests (numeric):
+  - `it('groups bind axes by axId; a secondary value axis has its own scale')`;
+  - `it('a deleted axis still controls the scale')`;
+  - `it('crosses autoZero, min, max and crossesAt place the crossing')`;
+  - `it('explicit min and max, majorUnit and minorUnit, minor gridlines and tick marks, tickLblPos nextTo, low, high and none')`;
+  - `it('xy bindings keep independent x and y domains; a category group plus an XY group keep separate x domains')`;
+  - `it('an unplaceable combination is chart-axis-unplaceable')`;
+  - `it('crossBetween between vs midCat')`;
+  - `it('orientation maxMin')`;
+  - `it('logBase skips non-positive values with chart-invalid-log-value')`;
+  - `it('display units divide tick values and name the unit label')`, covering builtInUnit and custUnit;
+  - `it('date axis steps by calendar months and years and keeps unequal spacing')`;
+  - `it('text categories on a date axis fall back to categorical with a diagnostic')`;
+  - `it('chart epoch precedence and val-omitted date1904 is true')`;
+  - `it('same-epoch serial 60 is preserved; cross-epoch conversion uses the civil model')`, covering serials 1, 59, 60, 60.5 and 61 in both directions, the unrepresentable cases, mixed cached and filled provenance, and fractions;
+  - `it('ticks are bounded to 1000; a tiny majorUnit is enlarged with a diagnostic')`.
+- [ ] Commit `feat(charts): axis graph, scales, date axes and display units`.
+
+### Task A1b: Layout, cache, text and fonts
+
+**Spec:** §6.5 stage 2, §5.10 manual layout, §6.7, §5.1 label rotation and thinning.
+
+**Files:**
+- Create: `src/charts/layout.ts`. It holds `layoutChart(model, w, h, dpr, fontGeneration, measure: TextMeasure): ChartLayout` and the WeakMap sidecar.
+- Test: `tests/charts-layout.test.ts`.
+
+- [ ] Tests:
+  - `it('layout is cached per size, dpr and font generation; resize and font load invalidate; cached layouts stay charged; paint transients are refunded')`;
+  - `it('a structuredClone-transferred model paints synchronously in a fresh realm with its own workspace')`;
+  - `it('theme minor font via the font manager; txPr size clamped 6-72')`;
+  - `it('rotation from txPr bodyPr rot and vert; tickLblSkip and automatic skip never overlap labels')`;
+  - `it('manualLayout: edge and factor modes, defaults factor and outer, resolution order, inverted box falls back with a diagnostic')`.
+- [ ] Commit `feat(charts): placement-keyed chart layout with charged caches`.
+
+### Task A2: Display formats, data labels, point matrix
+
+**Spec:** §5.2, §5.3, §5.8 matrix.
+
+**Files:**
+- Create: `src/charts/format.ts` (`ChartFormatter` over `src/xlsx/cellFormat.ts`) and `src/charts/labels.ts`.
+- Modify: `src/charts/paint.ts`.
+- Test: `tests/charts-format.test.ts`, `tests/charts-labels.test.ts`, `tests/charts-matrix.test.ts`.
+
+- [ ] Tests:
+  - `it('formats: scientific, fraction, elapsed, date, percent, locale prefix')`;
+  - `it('sourceLinked per-point label formats; axis uses the first non-blank (acceptance, unverified until reference)')`;
+  - `it('codes over 255 units are General; output capped at 256')`;
+  - `it('label precedence group then series then point; explicit false overrides; delete hides')`;
+  - `it('content flags, separator, rich text, leader lines; dLblPos defaults; bestFit for pie')`;
+  - `it('field-reference and manual-layout labels fall back with chart-label-feature-unsupported')`;
+  - `it('#N/A spans a line regardless of dispBlanksAs')`;
+  - matrix cells for line and scatter × gap, zero and span; column; area × gap, zero and span; stacked overrides; pie; `dispNaAsBlank=1`. **Radar cells move to A5a.**
+  - `it('a label on an #N/A point shows #N/A')`.
+- [ ] Commit `feat(charts): display formats, data labels and blank and error plotting`.
+
+### Task A3a: Embedded zip admission, uncached read, cancellation
+
+**Spec:** §6.4 (resolve, admit, ownership, cancellation).
+
+**Files:**
+- Create: `src/charts/embeddedZip.ts` (lazy). It covers chart `.rels` → `externalData` resolution, the central-directory inventory peek, the uncached bounded inflate and the `hold` integration.
+- Modify: `src/core/zip.ts`, **at most one line**: an accessor for the raw entry. Measure it.
+- Test: `tests/charts-embedded-zip.test.ts`, plus the builder `tests/helpers/chart-fixtures.ts`, which makes Office-shaped synthetic DOCX/PPTX with `c:externalData` and an embedded xlsx.
+
+- [ ] Tests:
+  - `it('external targets and package-escaping paths are unavailable')`;
+  - `it('admission: inflated cap 8 and 4 MiB, at most 256 entries, declared-size sum checked before load; a forged declared size is caught by the inflated counter')`;
   - `it('embedding bytes are not retained in the outer package cache')`;
-  - `it('a corrupt embedded zip leaves caches or a card')`;
-  - `it('200 charts stay within the chart workspace; later charts become cards')` (Review Focus 5).
-- [ ] **Steps 2–6:** As in A1. Commit `feat(charts): bounded embedded-workbook data for docx and pptx charts`.
+  - `it('one embedded read at a time per document')`;
+  - `it('cancellation stops publication immediately; charges are held until the gated inflate settles')`;
+  - `it('a corrupt embedded zip is unavailable with a diagnostic')`.
+- [ ] Commit `feat(charts): bounded embedded-workbook access for chart data`.
 
-### Task A4: Markers, lines, smoothing, fills, style, categories, text, layout, legend, user shapes
+### Task A3b: Embedded cells, SST, formats, names; data precedence
 
-**Spec:** §5.4, §5.5, §5.9, §5.10 (title, legend), §5.11.
+**Spec:** §6.4 (read, values, budgets, per-role precedence, required roles).
 
 **Files:**
-- Create: `src/charts/style.ts`, `src/charts/markers.ts`, `src/charts/fills.ts` and `src/charts/categories.ts`.
-- Modify: `src/charts/parse.ts` and `src/charts/paint.ts`. `src/charts/paint.ts` uses `src/drawing/scene-paint.ts` for user shapes through the existing relationship and depth budget.
-- Test: `tests/charts-style.test.ts`, `tests/charts-markers.test.ts`, `tests/charts-categories.test.ts`, `tests/charts-usershapes.test.ts`.
+- Create: `src/charts/embeddedWorkbook.ts` and `src/charts/dataPrecedence.ts`. Sheets are read with the streaming `XmlTokenizer` (`src/core/xml-stream.ts:140`).
+- Test: `tests/charts-embedded-workbook.test.ts`, `tests/charts-precedence.test.ts`.
 
-- [ ] **Step 1: Failing tests:**
-  - `it('marker symbols, size clamp 2-72, marker spPr')`;
+- [ ] Tests:
+  - `it('cacheless values role renders natively from the embedded workbook')`, an Office-shaped synthetic fixture (Review Focus 1). Assert the native model, the filled values and coverage `chart`.
+  - `it('cached-only chart never opens the embedding')`.
+  - `it('saved data wins: caches and literals; sparse indices kept; ptCount=0 present-empty')`.
+  - `it('literal-only and mixed literal-reference series')`.
+  - `it('a missing required role makes the chart unsupported')`.
+  - `it('formula cells without a saved value are unavailable points; with a saved value they use it')`.
+  - `it('only referenced sheets and ranges are read; reading stops after the last referenced row')`. Assert with allocation counters, not only tokenizer calls.
+  - `it('names resolved with bounds; a name pointing at an external workbook is unavailable')`.
+  - `it('shared strings over the byte or count budget refuse and refund')`.
+  - `it('50 distinct embeddings and repeated references stay within the workspace')`.
+- [ ] Commit `feat(charts): embedded-workbook data and per-role precedence for docx and pptx charts`.
+
+### Task A4a: Markers, lines, fills, style precedence, series options
+
+**Spec:** §5.4, §5.11 colour precedence, §5.8 series and group options.
+
+**Files:**
+- Create: `src/charts/style.ts`, `src/charts/markers.ts` and `src/charts/fills.ts`.
+- Test: `tests/charts-style.test.ts`.
+
+- [ ] Tests:
+  - `it('marker symbols, auto cycle, size clamp 2-72, marker spPr')`;
   - `it('line dash, width, cap and noFill')`;
-  - `it('smooth draws Catmull-Rom Bezier through every point; blanks break per dispBlanksAs')`;
   - `it('solid, gradient, pattern and noFill for series, points, plot area, chart area, legend and title')`;
-  - `it('chart area noFill is transparent; default per producer via c:style')`;
-  - `it('colour precedence spPr then chartStyle then colorStyle then c:style then accents with lumMod variants after six')`;
-  - `it('multi-level categories draw grouped tiers; noMultiLvlLbl shows the innermost only')`;
-  - `it('title content and run formatting precedence')`;
-  - `it('legend position, overlay and legendEntry delete')`;
-  - `it('userShapes draw through the scene painter within the relationship budget')`;
+  - `it('chart area noFill is transparent; default via c:style')`;
+  - `it('colour precedence spPr, chartStyle, colorStyle, c:style, then accents with lumMod variants after six')`;
+  - `it('invertIfNegative fills negative bars with the inverted fill')`;
+  - `it('series and point explosion geometry')`;
+  - `it('dPt overrides take precedence over series formatting')`;
+  - `it('gapWidth, overlap and varyColors for existing families')`;
   - `it('dark mode leaves chart pixels identical')`.
-- [ ] **Steps 2–6:** As in A1. List every existing XLSX golden that legitimately changes (for example, `noFill` chart area) with its reason. Commit `feat(charts): markers, smoothing, fills, chart styles, multi-level categories, layout and user shapes`.
+- [ ] List the golden deltas.
+- [ ] Commit `feat(charts): markers, fills, chart styles and series options`.
 
-### Task A5: New classic families
+### Task A4b: Titles, legend, multi-level categories
 
-**Spec:** §4.1 rows for bubble, radar, stock, ofPie, contour and surface3D, plus §5.8 group options.
+**Spec:** §5.9, §5.10 (title, legend).
 
 **Files:**
-- Create: `src/charts/families/bubble.ts`, `radar.ts`, `stock.ts`, `ofPie.ts` and `contour.ts`.
-- Modify: `src/charts/parse.ts` (remove these from the unsupported list; `surface3DChart` → `unsupported`).
-- Test: `tests/charts-families-classic.test.ts`.
+- Create: `src/charts/categories.ts`.
+- Modify: `src/charts/layout.ts`.
+- Test: `tests/charts-text.test.ts`.
 
-- [ ] **Step 1: Failing tests** (numeric oracles):
-  - `it('bubble: bubbleScale, sizeRepresents area and width, zero not drawn, showNegBubbles')`;
-  - `it('radar: clockwise from 12, radial value axis, filled and marker styles')`;
-  - `it('stock: volume from the bar group; open, high, low, close by order; authored axes; hiLowLines and upDownBars; a role mismatch becomes a card')`;
-  - `it('ofPie: auto, pos, val, percent and cust splits; the Other slice conserves totals and percentages; secondPieSize; serLines; bar-of-pie gapWidth')`;
-  - `it('contour: bands from the major unit, no interpolation across missing cells, wireframe boundaries only, bandFmts colours')`;
+- [ ] Tests:
+  - `it('title content order: rich, strRef cache, automatic, autoTitleDeleted')`;
+  - `it('run formatting precedence rPr, paragraph, txPr, style, theme')`;
+  - `it('legend position, overlay and legendEntry delete')`;
+  - `it('multi-level categories draw grouped tiers; noMultiLvlLbl shows the innermost only')`.
+- [ ] Commit `feat(charts): chart titles, legends and multi-level categories`.
+
+### Task A4c: Smoothing
+
+**Spec:** §5.5.
+
+- [ ] Tests (geometry):
+  - `it('smooth passes through every point with Catmull-Rom tangents; end segments use the end point')`;
+  - `it('blanks break the curve per dispBlanksAs')`;
+  - `it('unequal x spacing for scatter')`.
+- [ ] The validation doc marks smoothing as an **approximation, unverified** until a reference exists.
+- [ ] Commit `feat(charts): smoothed lines`.
+
+### Task A4d: User shapes
+
+**Spec:** §5.11 user shapes.
+
+**Files:**
+- Create: `src/charts/userShapes.ts`. It parses `c:userShapes` through the existing relationship and depth budget, prepares the nodes and images with the existing drawing preparation, and paints them via `src/drawing/scene-paint.ts`.
+- Test: `tests/charts-usershapes.test.ts`.
+
+- [ ] Tests:
+  - `it('relSizeAnchor and absSizeAnchor place shapes over the chart')`;
+  - `it('user-shape images use the image budget; relationship cycles are refused')`;
+  - `it('missing user-shapes part leaves the chart native with a diagnostic')`.
+- [ ] Commit `feat(charts): chart user shapes`.
+
+### Task A5a: Bubble, radar, family conformance harness
+
+**Spec:** §4.1 bubble and radar, §7 every-family robustness.
+
+**Files:**
+- Create:
+  - `src/charts/families/bubble.ts` and `radar.ts`;
+  - `tests/helpers/chart-family-conformance.ts`, a parameterized harness covering empty series, all-blank values, NaN/∞, negative values and a single point. It asserts no throw, a native or card result, and the diagnostics. Every later family task runs it.
+- Test: `tests/charts-families-bubble-radar.test.ts`.
+
+- [ ] Tests:
+  - `it('bubble: bubbleScale, sizeRepresents area and width, zero not drawn, showNegBubbles 0 and 1')`;
+  - `it('radar: clockwise from 12, radial axis, standard, marker and filled styles')`;
+  - the radar cells of the §5.8 matrix;
+  - the conformance harness over every existing and new family.
+- [ ] Commit `feat(charts): bubble and radar charts`.
+
+### Task A5b: Stock
+
+- [ ] **File:** `src/charts/families/stock.ts`.
+- [ ] Tests:
+  - `it('volume from the bar group; open, high, low, close by order; authored axes')`;
+  - `it('HLC, OHLC, volume-HLC and volume-OHLC')`;
+  - `it('hiLowLines and upDownBars colours')`;
+  - `it('a role mismatch becomes a card')`;
+  - the conformance harness.
+- [ ] Commit `feat(charts): stock charts`.
+
+### Task A5c: Pie-of-pie and bar-of-pie
+
+- [ ] **File:** `src/charts/families/ofPie.ts`.
+- [ ] Tests (numeric):
+  - `it('auto splits ceil(n/3) last points; pos, val, percent and cust splits')`;
+  - `it('the Other slice conserves totals and percent labels; original indices keep colours and labels')`;
+  - `it('secondPieSize, serLines and bar-of-pie gapWidth')`;
+  - the conformance harness.
+- [ ] Commit `feat(charts): pie-of-pie and bar-of-pie charts`.
+
+### Task A5d: Contour and surface3D card
+
+- [ ] **File:** `src/charts/families/contour.ts`. In `src/charts/parse.ts`, `surface3DChart` becomes `unsupported`.
+- [ ] Tests:
+  - `it('contour bands from the major unit; grid at most 256x256')`;
+  - `it('no interpolation across missing cells')`;
+  - `it('wireframe draws boundaries only; bandFmts colours')`;
   - `it('surface3D uses the fallback picture, else a card')`;
-  - `it('dropLines and serLines')`.
-- [ ] **Steps 2–6:** As in A1. Commit `feat(charts): bubble, radar, stock, pie-of-pie and contour charts`.
+  - the conformance harness.
+- [ ] Commit `feat(charts): contour charts`.
 
-### Task A6: Trendlines and error bars
+### Task A6a: Trendlines
 
-**Spec:** §5.6, §5.7, §7 analytic rows.
+**Spec:** §5.6, §7 analytic.
 
-**Files:**
-- Create: `src/charts/trendlines.ts` and `src/charts/errorBars.ts`.
-- Modify: `src/charts/parse.ts`, `src/charts/fill.ts` (custom plus/minus are data roles) and `src/charts/paint.ts`.
-- Test: `tests/charts-trendlines.test.ts` and `tests/charts-errorbars.test.ts`.
-
-- [ ] **Step 1: Failing tests:** numeric answers on known datasets.
-  - `it('linear, exponential, logarithmic, polynomial 2-6, power and moving average fit known datasets')`;
-  - `it('XY charts fit x values; category charts fit indices 1..n')`;
-  - `it('non-positive values are excluded per type with diagnostics')`;
+- [ ] **File:** `src/charts/trendlines.ts`.
+- [ ] Tests (numeric answers):
+  - `it('linear, exponential, logarithmic, polynomial 2-6, power and moving average on known datasets')`;
+  - `it('XY uses x values; category charts use 1..n')`;
+  - `it('non-positive exclusions per type with diagnostics')`;
   - `it('a singular polynomial fit draws nothing with chart-singular-trendline')`;
-  - `it('intercept applies to linear, exponential and polynomial only')`;
-  - `it('forward and backward extension is bounded to 10x the data domain with a diagnostic')`;
-  - `it('an out-of-range order or period draws nothing with a diagnostic, never clamped')`;
-  - `it('equation and R-squared labels use the authored numFmt, else 4 significant digits')`;
-  - `it('trendline sampled to at most 512 points')`;
-  - `it('error bars fixed, percentage, stdDev n-1 centred on the mean, stdErr and custom from data sources')`;
-  - `it('analytic inputs over 65536 points drop the trendline or error bar, never a prefix')`.
-- [ ] **Steps 2–6:** As in A1. Commit `feat(charts): trendlines and error bars`.
+  - `it('intercept for linear, exponential and polynomial only')`;
+  - `it('extension bounded to 10x the data domain with a diagnostic')`;
+  - `it('out-of-range order or period draws nothing, never clamped')`;
+  - `it('equation and R-squared labels: authored numFmt, else 4 significant digits')`;
+  - `it('at most 512 samples')`;
+  - `it('a 4097-point series fits on all points')`, where the last point changes the slope;
+  - `it('65537 points drop the trendline')`.
+- [ ] Commit `feat(charts): trendlines`.
 
-### Task A7: Accessibility, coverage and diagnostics finalization, browser
+### Task A6b: Error bars
+
+**Spec:** §5.7.
+
+- [ ] **File:** `src/charts/errorBars.ts`. `src/charts/fill.ts` adds the custom plus/minus roles.
+- [ ] Tests (geometry and numeric):
+  - `it('x and y directions; plus, minus and both; noEndCap segment geometry')`;
+  - `it('fixed, percentage, stdDev (n-1, centred on the series mean), stdErr')`;
+  - `it('custom plus and minus from caches and the embedded workbook; a missing custom point draws no bar')`;
+  - `it('analytic stdDev over 65536 drops the bars')`.
+- [ ] Commit `feat(charts): error bars`.
+
+### Task A7: Accessibility, coverage, diagnostics, browser
 
 **Spec:** §6.6, §8 (browser).
 
 **Files:**
+- Create: `src/charts/describe.ts`, moved and extended from `src/xlsx/chartDescription.ts`.
 - Modify:
-  - `src/render/paint.ts`: paintables carry chart descriptions with placement;
-  - `src/components/OfficeDoc.tsx` (eager, budget!) or the lazy `src/components/paged/PagedChrome.tsx`: a per-page offscreen list of `role="img"` entries. Prefer the lazy side;
-  - `src/charts/describe.ts`, which moves `chartDescription` and extends it with the placeholder reason.
+  - `src/render/paint.ts`: paintables carry descriptions with placement, charged to the workspace;
+  - `src/components/paged/PagedChrome.tsx` (lazy): a per-page offscreen `role="img"` list. **Do not edit eager `OfficeDoc.tsx` beyond passing data.**
 - Test:
   - `tests/charts-a11y.test.tsx`;
-  - `tests/browser/paged-charts.spec.ts`;
-  - `tests/charts-coverage.test.ts`.
+  - `tests/charts-coverage.test.ts`;
+  - `tests/browser/paged-charts.spec.ts`.
 
-- [ ] **Step 1: Failing tests:**
+- [ ] Tests:
   - `it('two charts on one page expose two role=img entries in reading order')`;
   - `it('a header chart repeated on each page appears once per page')`;
-  - `it('a card exposes placeholder: reason')`;
-  - `it('allowCopy false keeps descriptions readable but not selectable')`;
-  - `it('coverage native chart, card chart-placeholder, fallback picture keeps the original feature')`;
-  - `it('all new diagnostic codes are emitted with reasons')`;
-  - Browser:
-    - `test('chart descriptions are exposed per page (browser)')`;
-    - `test('dark mode leaves chart pixels identical to light (browser)')`;
-    - `test('CLS 0 while charts load (browser)')`.
-- [ ] **Steps 2–6:** As in A1. Commit `feat(charts): accessible chart descriptions and coverage for paged documents`.
+  - `it('cards expose placeholder: reason')`;
+  - `it('allowCopy false keeps descriptions readable, not selectable')`;
+  - `it('coverage: native chart, card chart-placeholder, fallback keeps the original feature')`;
+  - `it('every new diagnostic code is emitted with a reason')`.
+- [ ] Browser tests (they must reject fallbacks):
+  - `test('docx and pptx charts render natively in the paged viewer (browser)')`: assert native geometry plus the accessible description naming a native type;
+  - `test('cacheless embedded-workbook chart renders natively (browser)')`;
+  - `test('dark mode leaves chart pixels identical (browser)')`;
+  - `test('CLS 0 while charts load (browser)')`.
+- [ ] Commit `feat(charts): accessible chart descriptions and coverage for paged documents`.
 
-### Task B1: ChartEx field map and dispatch
+### Task B1: ChartEx native parts, field map, parser, dispatch
 
-**Spec:** §4.2, §4.3, §6.2 (ChartEx dispatch, MC capability lists), §6.3.
+**Spec:** §4.2, §4.3, §6.2, §6.3.
 
-**Files:**
-- Create:
-  - `docs/charts/chartex-map.md`, the normative map;
-  - `src/charts/chartex/parse.ts`: data dimensions, `layoutId` and series binding, producing a ChartEx model;
-  - `tests/fixtures/chartex/`: one Office-authored or hand-built-from-spec part per family, with provenance recorded.
-- Modify:
-  - `src/drawing/content.ts`: remove the unconditional chartex rejection (:869) and the structural rejection, and dispatch `cx:` to the engine;
-  - `src/docx/drawing.ts:102` and the PPTX/XLSX Choice capability lists: accept `cx` when the engine can load.
-- Test: `tests/charts-chartex-parse.test.ts`.
-
-- [ ] **Step 1:** Write `docs/charts/chartex-map.md` against MS-ODRAWXML (CT_ChartSpace, CT_ChartData, CT_Data, CT_NumericDimension, CT_StringDimension, CT_Series with layoutId, CT_Binning, CT_SeriesLayoutProperties, CT_Subtotals, ST_QuartileMethod, ST_ParentLabelLayout). It must cover every spec §4.3 bullet, with defaults, and cite its sources. **Review gate:** two reviewing families approve the map before Step 2.
-- [ ] **Step 2: Failing tests:**
-  - `it('chartex data dimensions parse by id with levels and sparse points')`;
+- [ ] **Step 0: Native parts (prerequisite, spec §4.3).**
+  - Acquire at least one **Office-authored** part per family: waterfall, funnel, histogram, Pareto, box & whisker, treemap, sunburst, region map.
+  - Sources: public test corpora such as Apache POI test-data, LibreOffice `qa` data and the Open-XML-SDK test files. Owner-supplied files are also welcome.
+  - Record the provenance (file, producer and version, licence) in `tests/fixtures/chartex/PROVENANCE.md`.
+  - **A family with no Office-authored part is blocked.** It stays on the fallback picture and is listed in the validation doc. It is not built from hand-written XML.
+- [ ] **Step 1:** Write `docs/charts/chartex-map.md` against MS-ODRAWXML and the native parts, covering every spec §4.3 bullet and its defaults. **Gate:** two families approve it.
+- [ ] **Files:**
+  - `src/charts/chartex/parse.ts`, which extends the **one** `ChartModel` contract with a discriminated ChartEx group kind, not a second model;
+  - `src/drawing/content.ts`: remove the unconditional chartex rejection (:869) and the structural rejection; dispatch `cx:`;
+  - the consumer Choice capability lists (`src/docx/drawing.ts:102`, PPTX, XLSX);
+  - **eager budget:** keep the dispatch to a namespace check; everything else stays lazy.
+- [ ] Tests:
+  - `it('chartex dimensions parse by id with levels and sparse points')`, using the native parts;
   - `it('series bind dimensions through dataId; layoutId selects the family')`;
-  - `it('region map and unreadable parts return unsupported so the fallback picture is kept')`;
-  - `it('cx choices are attempted in docx, pptx and xlsx when the engine loads')`;
-  - `it('nested and alias-prefixed AlternateContent and unknown Requires')`.
-- [ ] **Steps 3–6:** Implement, see the tests pass, run build, budget and `check-eager`. Families still return `unsupported` until B2–B5. Commit `feat(charts): chartex field map, parser and dispatch`.
+  - `it('region map, blocked families and unreadable parts return unsupported so the fallback picture is kept')`;
+  - `it('cx choices are attempted in docx, pptx and xlsx when the engine loads')`.
+- [ ] Commit `feat(charts): chartex field map, parser and dispatch`.
 
-### Task B2: Waterfall and funnel
+### Tasks B2–B5: ChartEx families
 
-**Spec:** §4.3 waterfall and funnel.
+Each task runs the conformance harness and refuses analytic inputs over the limit, never using a prefix. Its numeric tests use the native parts plus hand-computed datasets.
 
-- [ ] **Files:** `src/charts/chartex/waterfall.ts` and `funnel.ts`; test `tests/charts-chartex-waterfall-funnel.test.ts`.
-- [ ] **Tests (numeric):**
-  - `it('waterfall subtotals show the running total anchored at zero and the accumulator continues')`;
-  - `it('increase, decrease and total colours and connector visibility')`;
-  - `it('funnel centred bars proportional to value in source order')`;
-  - plus a gallery entry.
-- [ ] Commit `feat(charts): waterfall and funnel charts`.
-
-### Task B3: Histogram and Pareto
-
-**Spec:** §4.3 histogram and Pareto; §7 analytic.
-
-- [ ] **Files:** `src/charts/chartex/histogram.ts`; test `tests/charts-chartex-histogram.test.ts`.
-- [ ] **Tests (numeric):**
+- **B2 waterfall and funnel** (`src/charts/chartex/waterfall.ts`, `funnel.ts`):
+  - `it('subtotals show the running total anchored at zero; the accumulator continues')`;
+  - `it('increase, decrease and total colours; connector visibility')`;
+  - `it('funnel centred bars proportional to value in source order')`.
+  - Commit `feat(charts): waterfall and funnel charts`.
+- **B3 histogram and Pareto** (`src/charts/chartex/histogram.ts`):
   - `it('binSize, binCount and automatic Scott bins')`;
-  - `it('intervalClosed right and left edges')`;
-  - `it('underflow and overflow bins, explicit and auto')`;
-  - `it('Office interval label notation')`;
+  - `it('intervalClosed right and left')`;
+  - `it('underflow and overflow, explicit and auto')`;
+  - `it('interval label notation')`;
   - `it('pre-aggregated data drawn as given')`;
-  - `it('pareto sorts descending with stable ties and a cumulative percent on its own axis')`;
-  - `it('over 65536 inputs refuses the chart, never a prefix')`.
-- [ ] Commit `feat(charts): histogram and pareto charts`.
-
-### Task B4: Box & whisker
-
-**Spec:** §4.3 box & whisker.
-
-- [ ] **Files:** `src/charts/chartex/boxWhisker.ts`; test `tests/charts-chartex-box.test.ts`.
-- [ ] **Tests (numeric):**
-  - `it('exclusive and inclusive quartile methods split halves with or without the median, odd and even n')`;
-  - `it('whiskers to the furthest point within 1.5 IQR; outliers when visible')`;
-  - `it('mean marker, mean line and inner points visibility')`.
-- [ ] Commit `feat(charts): box and whisker charts`.
-
-### Task B5: Treemap and sunburst
-
-**Spec:** §4.3 treemap and sunburst; §6.5 node bound.
-
-- [ ] **Files:** `src/charts/chartex/treemap.ts` and `sunburst.ts`; test `tests/charts-chartex-hierarchy.test.ts`.
-- [ ] **Tests (numeric and geometry):**
-  - `it('nodes identified by full path; duplicates aggregate; missing level is a leaf')`;
-  - `it('non-positive weights excluded with a diagnostic')`;
-  - `it('squarified treemap areas proportional to weight; parentLabelLayout none, banner and overlapping')`;
+  - `it('pareto descending with stable ties; cumulative percent on its own axis')`;
+  - `it('a 4097-sample histogram uses every sample')`;
+  - `it('65537 samples refuse')`.
+  - Commit `feat(charts): histogram and pareto charts`.
+- **B4 box & whisker** (`src/charts/chartex/boxWhisker.ts`):
+  - `it('exclusive and inclusive split halves with or without the median; odd and even n')`;
+  - `it('whiskers within 1.5 IQR; outliers when visible')`;
+  - `it('mean marker, mean line and inner points')`.
+  - Commit `feat(charts): box and whisker charts`.
+- **B5 treemap and sunburst** (`src/charts/chartex/treemap.ts`, `sunburst.ts`):
+  - `it('full-path identity; duplicates aggregate; missing level is a leaf')`;
+  - `it('non-positive weights excluded')`;
+  - `it('squarified areas proportional to weight; parentLabelLayout none, banner and overlapping')`;
   - `it('sunburst rings by depth with angles proportional to subtree weight')`;
-  - `it('over 4096 nodes refuses the chart')`.
-- [ ] Commit `feat(charts): treemap and sunburst charts`.
+  - `it('over 4096 nodes refuses')`.
+  - Commit `feat(charts): treemap and sunburst charts`.
 
-### Task C1: Gallery goldens, validation doc, README, CHANGELOG
+### Task C1: Robustness slice, gallery, validation, docs, PR
 
-**Spec:** §8, §9.
+**Spec:** §7, §8, §9.
 
 **Files:**
 - Create:
-  - `src/testdata/chart-gallery.ts`, builders for one DOCX, PPTX and XLSX each, with one chart per family and major element;
-  - `docs/validation/chart-compat.md`, covering the gate table, B0 → final eager, the reference status per case (verified or unverified) and residual diffs;
-  - `tests/golden.test.ts` entries for the gallery (Mac-recorded).
+  - `tests/charts-robustness.test.ts`;
+  - `src/testdata/chart-gallery.ts`.
 - Modify:
-  - `README.md` "Charts" section: supported families, data policy, limits and the `preloadCharts` API;
-  - `CHANGELOG.md` `[Unreleased]`.
-- Office references: add any owner-supplied files to `validation/office-reference/`; otherwise record the interim LibreOffice evidence and mark the cases unverified.
+  - `tests/golden.test.ts` (gallery entries);
+  - `docs/validation/chart-compat.md`;
+  - `README.md` "Charts" section;
+  - `CHANGELOG.md`.
 
-- [ ] **Step 1:** Add `it('README chart family list matches the engine family registry')`.
-- [ ] **Step 2:** Build the gallery, record the goldens on the Mac, and inspect each one individually.
-- [ ] **Step 3:** Run the full gates and record them in the validation doc:
+- [ ] Robustness tests:
+  - `it('200 charts stay within the chart workspace; later charts become cards')` (Review Focus 5);
+  - `it('torture file per format: every family, chartex, model3D, OMML, a huge embedded workbook, a corrupt embedded zip, external externalData, empty and NaN data')`, asserting no throw, the diagnostics and the allocation/work counters;
+  - `it('repeated paints and cache churn release layout charges')`;
+  - `it('path, label-byte and contour-grid bounds drop elements with diagnostics')`.
+- [ ] `it('README chart family list matches the engine family registry')`.
+- [ ] Gallery goldens: one DOCX, PPTX and XLSX each, recorded on the Mac, every one individually inspected.
+- [ ] **Validation doc:**
+  - the gate table;
+  - B0 → final eager, with every task's running total;
+  - a reference-status table **keyed by spec §8 case IDs**, each verified or unverified;
+  - residual diffs;
+  - blocked ChartEx families.
+- [ ] Full gates:
   - tsc and typecheck:scripts;
   - full vitest;
-  - eager budget;
+  - budget;
   - check-eager;
-  - golden-corpus compare (baseline-identical);
-  - full Playwright, Chromium + WebKit.
-- [ ] **Step 4:** Commit `docs: chart compatibility validation, README and CHANGELOG`.
-- [ ] **Step 5:** Open the PR `feature/chart-compat` → `main`, closing #13 and superseding #12.
+  - golden-corpus compare, identical except the enumerated deltas;
+  - full Playwright.
+- [ ] Commit `docs: chart compatibility validation, README and CHANGELOG`.
+- [ ] Open the PR `feature/chart-compat` → `main`, closing #13 and superseding #12. Merge only after CI and the bot review pass.
