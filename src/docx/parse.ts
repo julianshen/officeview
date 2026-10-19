@@ -7,11 +7,11 @@ import { loadDocxEmbeddedFonts } from '../core/fonts/docx'
 import { sniffImageMime } from '../core/images'
 import { attrs, elementChildren, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRunDefaults, readRunProperties, readTheme, styleChain, styleContext, type DocxStyleContext, type ParagraphStyleLayers } from './styles'
-import { loadDrawingParts, wordDrawingSelections } from './drawing'
+import { choiceCards, loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
-import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, reserveDrawingContent } from '../drawing/content'
+import { attemptedMalformedRelationshipIssue, isExhausted, malformedRelationshipAttempt, markExhausted, reserveDrawingContent } from '../drawing/content'
 import { contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
-import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
+import { DOCUMENT_DRAWING_NODE_LIMIT, contentDiagnostic, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
 
@@ -486,6 +486,27 @@ export function parseParagraph(
       }
       return false
     }
+    // No representation remains (no fallback, or it drew nothing): an attempted chart Choice shows its card,
+    // replacing the unusable fallback's audit and recording why (spec 6.3). Never during a probe.
+    const cards = (parent: XmlNode | undefined, depth = 0): XmlNode[] => !parent || depth >= 128 ? [] : orderedChildren(parent).flatMap(([name, child]) =>
+      name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' && getChildren(child, 'Fallback').length && !isExhausted(child) ? [] : cards(child, depth + 1))
+    const cardChoice = () => getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported && cards(choice).length)
+    /** The chart card a selected fallback's pictures carry, painted if one fails to decode. */
+    const chartFallback = () => { const choice = cardChoice(), card = choice && choiceCards.get(cards(choice)[0])?.drawing; return card?.kind === 'xlsxChart' ? card.chart : undefined }
+    const placeCard = (fallback: XmlNode | undefined, audited: number): void => {
+      const choice = cardChoice()
+      if (!choice || !context) return
+      if (context.drawingCoverage) context.drawingCoverage.length = audited
+      for (const drawing of cards(choice)) {
+        const card = choiceCards.get(drawing)!
+        context.drawings.set(drawing, card)
+        if (fallback && context.pkg) contentDiagnostic(drawingPartContext(context.pkg), 'unsupported-content', context.partPath ?? 'word/document.xml', 'chart', { identity: card.referenceId, reason: 'chart-fallback-unusable' })
+      }
+      const prior = context.representation
+      context.representation = 'choice'
+      try { walk(choice) } finally { context.representation = prior }
+      markUnselected(choice)
+    }
     for (const choice of getChildren(node, 'Choice')) {
       const understood = supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported
       if (!understood) { skipped.push(choice); continue }
@@ -547,21 +568,34 @@ export function parseParagraph(
     const wp = getChildren(drawing, 'anchor')[0]
     if (data && wp && (!context?.reserveDrawing || context.reserveDrawing())) {
       const extent = attrs(getChildren(wp, 'extent')[0])
+      const card = chartFallback()
       addImage({
         ...data,
         widthEmu: Number(extent.cx) || 0,
         heightEmu: Number(extent.cy) || 0,
-        floating: parseAnchor(wp)
+        floating: parseAnchor(wp),
+        ...(card ? { chartFallback: card } : {}),
       })
       if (fallback) markUnselected(fallback)
       const docPr = attrs(getChildren(wp, 'docPr')[0])
       context?.drawingCoverage?.push({ partPath: context.partPath ?? 'word/document.xml', treePath: drawing ? context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]` : `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
         feature: 'picture', status: 'fallback', selectedRepresentation: 'raster-fallback', representation: 'fallback', reason: 'Selected compatibility fallback image', scope: 'original' })
-    } else if (fallback) {
-      const prior = context?.representation, before = inline.length
-      if (context) context.representation = 'fallback'
-      try { walk(fallback) } finally { if (context) context.representation = prior }
-      if (inline.length > before) markUnselected(fallback)
+    } else {
+      const prior = context?.representation, before = inline.length, audited = context?.drawingCoverage?.length ?? 0, images = paragraph.images.length
+      if (fallback) {
+        if (context) context.representation = 'fallback'
+        try { walk(fallback) } finally { if (context) context.representation = prior }
+      }
+      if (inline.length > before) {
+        markUnselected(fallback)
+        const card = chartFallback()
+        if (card) for (const image of paragraph.images.slice(images)) if (!image.drawing) image.chartFallback = card
+      }
+      else {
+        // The actual result: nothing usable here (no fallback, or it drew nothing), so the failure propagates.
+        markExhausted(node)
+        if (context?.reserveDrawing) placeCard(fallback, audited)
+      }
     }
     // A failed compatibility wrapper still owns a source placement. Probing
     // disables audit writes, so retain its identity when no branch yielded a
@@ -698,7 +732,7 @@ function parseDrawing(
   const docPr = attrs(getChildren(wp, 'docPr')[0])
   const graphicData = getChildren(getChildren(wp, 'graphic')[0], 'graphicData')[0]
   const graphicUri = attrs(graphicData).uri?.toLowerCase() ?? ''
-  const feature = featureOfKind(vector?.drawing?.kind) ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
+  const feature = featureOfKind(vector?.drawing) ?? (getChildren(graphicData, 'pic').length ? 'picture' : getChildren(graphicData, 'chart').length ? 'chart' : getChildren(graphicData, 'relIds').length ? 'diagram' : getChildren(graphicData, 'contentPart').length ? 'ink' : graphicUri.includes('chartex') ? 'ChartEx' : graphicData ? 'graphicData' : 'drawing')
   const audit = (status: DrawingCoverageEntry['status'], reason?: string, referenceId?: string, consumed = true, limit?: number, imageSelection?: ImageSelection) => {
     if (!context?.reserveDrawing || !context.drawingCoverage) return
     context.drawingCoverage.push({ partPath: context.partPath ?? 'word/document.xml', treePath: context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
@@ -1523,7 +1557,7 @@ export async function parseDocx(pkg: OfficePackage, options: ParseDocxOptions = 
         // A text-only entry already reports rendered fallback text (its reason
         // names the fallback); resetting it to none would un-report content
         // the entry proves is retained.
-        if (entry.selectedRepresentation !== 'raster-fallback' && entry.selectedRepresentation !== 'text-only' && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
+        if (!['raster-fallback', 'text-only', 'chart-placeholder'].includes(entry.selectedRepresentation) && !['document-budget', 'source-node-limit'].includes(issue.reason ?? '') && !entry.reason?.includes('cached-picture')) entry.selectedRepresentation = 'none'
       }
     } else drawingCoverage.push({ partPath: issue.partPath, treePath: issue.sourcePath ?? issue.identity ?? issue.partPath, element: issue.kind, id: issue.identity,
       feature: issue.feature ?? issue.kind, status: issue.kind === 'missing-part' || issue.kind === 'malformed-part' ? 'malformed' : 'unsupported',

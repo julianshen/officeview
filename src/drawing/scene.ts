@@ -56,5 +56,7 @@ export interface SceneNode<Text = unknown, Image extends SceneImage = SceneImage
   image?: Image
   /** Stable adapter-assigned index into a predecoded asset list. */
   imageIndex?: number
+  /** Set on a picture selected as a chart's fallback: the chart's card, painted if the picture fails to decode. */
+  chartFallback?: import('../xlsx/chartModel').XlsxChartModel
   textBody?: Text
 }

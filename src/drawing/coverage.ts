@@ -35,7 +35,7 @@ export interface DrawingCoverageDocument { drawingCoverage?: DrawingCoverageEntr
  * text-only status instead of claiming a cached diagram rendering.
  */
 /** The coverage feature of a content kind: the `xlsxChart` runtime tag reports `chart` in every format. */
-export const featureOfKind = (kind: string | undefined) => kind === 'xlsxChart' ? 'chart' : kind
+export const featureOfKind = (content: DrawingContent<unknown, unknown> | undefined) => content?.kind === 'xlsxChart' ? content.chart.feature ?? 'chart' : content?.kind
 export function contentRepresentation<Paragraph, Text>(content: DrawingContent<Paragraph, Text>): DrawingCoverageEntry['selectedRepresentation'] {
   if (content.kind === 'diagram' && content.textOnly) return 'text-only'
   const kind = content.kind
@@ -423,7 +423,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
     const selectedFeature = selectedPayload ? sourceFeature(selectedPayload[1], selectedPayload[0]) : originalFeature
     let feature = source?.representation === 'fallback'
       ? (['ChartEx', 'OMML', 'model3D'].includes(originalFeature) ? originalFeature : source.feature ?? originalFeature)
-      : shape ? featureOfKind(shape.content?.kind) ?? sourceFeature(undefined, source?.element ?? name) : selectedFeature
+      : shape ? featureOfKind(shape.content) ?? sourceFeature(undefined, source?.element ?? name) : selectedFeature
     let status: DrawingCoverageEntry['status'] = source?.representation === 'fallback' ? 'fallback' : shape ? 'native' : 'unsupported'
     let reason = source?.reason
     if (name === 'AlternateContent' && !shape) {
@@ -511,7 +511,9 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
           affected.reason = content.reason ?? issue.message
           affected.limit = content.limit
         }
-        if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody)) &&
+        // A chart card selected inside a compatibility wrapper is that wrapper's drawn representation.
+        if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody) ||
+          shape.content?.kind === 'xlsxChart' && shape.source?.treePath.startsWith(`${affected.treePath}/`)) &&
           !retainedGeometryAt(affected)) affected.selectedRepresentation = 'none'
         if (affected.scope === 'original' && (issue.kind === 'missing-part' || issue.kind === 'malformed-part')) {
           for (const entry of entries) if (entry.scope === 'diagnostic' && entry.treePath.startsWith(`${affected.treePath}/`) && entry.referenceId === content.identity) {
@@ -541,7 +543,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
 export function xlsxNodeCoverage(node: XlsxDrawing, unit: number, scope: DrawingCoverageEntry['scope']): DrawingCoverageEntry[] {
   const source = node.source
   const issue = node.drawingGeometry ? resolveGeometry(node.drawingGeometry, node.widthEmu / 9525, node.heightEmu / 9525).issues[0] : undefined
-  const feature = issue ? 'geometry' : featureOfKind(node.content?.kind) ?? (source.emptySelection ? 'empty-choice' : source.element === 'pic' ? 'picture' : source.element === 'grpSp' ? 'group' : source.element === 'contentPart' ? 'ink' : source.element === 'graphicFrame' ? 'graphicData' : 'shape')
+  const feature = issue ? 'geometry' : featureOfKind(node.content) ?? (source.emptySelection ? 'empty-choice' : source.element === 'pic' ? 'picture' : source.element === 'grpSp' ? 'group' : source.element === 'contentPart' ? 'ink' : source.element === 'graphicFrame' ? 'graphicData' : 'shape')
   const status: DrawingCoverageEntry['status'] = issue ? issue.kind === 'unknown-preset' ? 'unsupported' : 'malformed' : node.transformValid === false ? 'malformed' : (source.element === 'graphicFrame' || source.element === 'contentPart') && !node.content && !node.children?.length && !source.emptySelection ? 'unsupported' : source.element === 'pic' && !node.image ? 'malformed' : source.representation === 'fallback' ? 'fallback' : 'native'
   const reason = issue ? `${issue.kind}: ${issue.message}` : node.transformValid === false ? 'invalid-transform' : source.emptySelection ? 'Supported empty Choice selected' : status === 'malformed' && source.element === 'pic' ? 'missing image part or relationship' : status === 'unsupported' ? 'unsupported graphicData payload' : source.reason
   const selectedRepresentation: DrawingCoverageEntry['selectedRepresentation'] = node.content ? contentRepresentation(node.content)

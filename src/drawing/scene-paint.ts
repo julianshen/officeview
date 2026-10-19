@@ -3,6 +3,7 @@ import { emuToPx } from '../core/geometry'
 import { resolveGeometry } from './geometry'
 import { paintGeometry } from './paint'
 import type { SceneNode } from './scene'
+import { paintChartPlaceholder } from './content-paint'
 
 /** Recursive structural constraint preserves the adapter's node type in callbacks. */
 type SceneTree<Node> = SceneNode & { children?: Node[] }
@@ -75,6 +76,8 @@ function paintNode<Node extends SceneTree<Node>>(shape: Node, ctx: CanvasRenderi
           finally { ctx.restore() }
         }
       }
+      // A chart's selected fallback picture that could not be decoded paints the chart's card (spec 6.3).
+      else if (shape.chartFallback) paintChartPlaceholder(shape.chartFallback, ctx, w, h)
       else options.missingImage?.(shape)
     }
     if (shape.textBody) options.paintText?.(shape, ctx, w, h)

@@ -14,6 +14,7 @@ import { chartDescription } from '../xlsx/chartDescription'
 import { paintXlsxChart } from './paint'
 
 export { chartParseContext, chartParseContextFor } from './context'
+export { readChartPart, type ChartRead } from './read'
 export * from './parse'
 export * from './fill'
 export { paintXlsxChart }

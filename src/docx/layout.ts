@@ -3,6 +3,7 @@
  * Text measurement uses a real Canvas2D measureText (via a provided measure
  * function) so widths match what we paint.
  */
+import { paintChartPlaceholder } from '../drawing/content-paint'
 import type { DocxBlock, DocxDocument, DocxImage, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableRow, DocxTextRun, TableCellBorder } from './types'
 import { paintDrawing } from './drawing'
 import type { ContentImageAsset, ContentPaintAssets } from '../drawing/content'
@@ -132,6 +133,8 @@ export interface ImageBox {
   /** Index into the document's decoded image list (set by the caller). */
   imageIndex: number
   drawing?: DocxImage['drawing']
+  /** The chart card painted when this selected fallback picture fails to decode (spec 6.3). */
+  chartFallback?: DocxImage['chartFallback']
   /** Physical cell viewport for directional inline images that exceed its bounds. */
   clip?: { xPx: number; yPx: number; widthPx: number; heightPx: number }
   /** Set for floating (wp:anchor) images: drawn behind text and out of flow. */
@@ -708,7 +711,7 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
             widthPx: w,
             heightPx: h,
             imageIndex: imageIndex.get(image) ?? -1,
-            drawing: image.drawing,
+            drawing: image.drawing, chartFallback: image.chartFallback,
             floating: {
               behindDoc: image.floating.behindDoc,
               relativeHeight: image.floating.relativeHeight,
@@ -743,7 +746,7 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
               yPx: box.yPx + shift,
               clip: shiftedImageClip(box.clip, 0, shift),
               imageIndex: imageIndex.get(box.image) ?? -1,
-              drawing: box.image.drawing
+              drawing: box.image.drawing, chartFallback: box.image.chartFallback
             })
           if (line.segs.length || !line.inlineImages?.length || line.logical)
             page.lines.push({
@@ -789,7 +792,7 @@ function layoutDocxPass(document: DocxDocument, measure: MeasureFn, totalPages: 
               yPx: box.yPx + y,
               clip: shiftedImageClip(box.clip, tableX, y),
               imageIndex: imageIndex.get(box.image) ?? -1,
-              drawing: box.image.drawing
+              drawing: box.image.drawing, chartFallback: box.image.chartFallback
             })
           if (line.segs.length || !line.inlineImages?.length || line.logical)
             page.lines.push({
@@ -872,7 +875,7 @@ function layoutNoteBlocks(
           yPx: box.yPx + dy,
           clip: shiftedImageClip(box.clip, dx, dy),
           imageIndex: imageIndex.get(box.image) ?? -1,
-          drawing: box.image.drawing,
+          drawing: box.image.drawing, chartFallback: box.image.chartFallback,
         })
       }
     }
@@ -1258,7 +1261,7 @@ function layoutRepeated(hf: HFBlock, measure: MeasureFn, pageNumber: number, tot
   const addLines = (lines: LineBox[], x = 0, dy = 0) => {
     for (const line of lines) {
       out.lines.push({ ...line, xPx: line.xPx + x, yPx: line.yPx + dy, baselinePx: line.baselinePx === undefined ? undefined : line.baselinePx + dy })
-      for (const box of line.inlineImages ?? []) out.images.push({ ...box, xPx: box.xPx + x, yPx: box.yPx + dy, clip: shiftedImageClip(box.clip, x, dy), imageIndex: hf.imageIndex?.get(box.image) ?? -1, drawing: box.image.drawing })
+      for (const box of line.inlineImages ?? []) out.images.push({ ...box, xPx: box.xPx + x, yPx: box.yPx + dy, clip: shiftedImageClip(box.clip, x, dy), imageIndex: hf.imageIndex?.get(box.image) ?? -1, drawing: box.image.drawing, chartFallback: box.image.chartFallback })
     }
   }
   for (const block of hf.blocks ?? hf.paragraphs.map(paragraph => ({ kind: 'p' as const, paragraph }))) {
@@ -1286,7 +1289,7 @@ function layoutRepeated(hf: HFBlock, measure: MeasureFn, pageNumber: number, tot
   for (const image of out.images) { image.yPx += offset; image.clip = shiftedImageClip(image.clip, 0, offset) }
   for (const { image, flowY, contentX, contentWidth } of floating) {
     const pos = resolveFloating(image, { pageWidthPx: page.widthPx, pageHeightPx: page.heightPx, contentX, contentWidth, flowY: offset + flowY, m: hf.margins ?? { top: offset, bottom: page.heightPx - offset, left: hf.xPx, right: page.widthPx - hf.xPx - hf.widthPx } })
-    out.images.push({ xPx: pos.x, yPx: pos.y, widthPx: emuToPx(image.widthEmu), heightPx: emuToPx(image.heightEmu), imageIndex: hf.imageIndex?.get(image) ?? -1, drawing: image.drawing, floating: { ...image.floating! } })
+    out.images.push({ xPx: pos.x, yPx: pos.y, widthPx: emuToPx(image.widthEmu), heightPx: emuToPx(image.heightEmu), imageIndex: hf.imageIndex?.get(image) ?? -1, drawing: image.drawing, chartFallback: image.chartFallback, floating: { ...image.floating! } })
   }
   out.occupied = y > 0 || out.lines.length > 0 || out.images.length > 0
   out.top = Math.min(offset, ...out.images.map(image => image.yPx))
@@ -1346,6 +1349,12 @@ function paintImages(
       } else {
         const img = images?.[box.imageIndex]
         if (img) ctx.drawImage(img as CanvasImageSource, box.xPx, box.yPx, box.widthPx, box.heightPx)
+        else if (box.chartFallback) {
+          // The selected fallback picture of a chart could not be decoded: its card replaces it (spec 6.3).
+          ctx.save()
+          try { ctx.translate(box.xPx, box.yPx); paintChartPlaceholder(box.chartFallback, ctx, box.widthPx, box.heightPx) }
+          finally { ctx.restore() }
+        }
       }
     } finally { if (box.clip) ctx.restore() }
   }

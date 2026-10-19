@@ -1,4 +1,5 @@
-import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
+import type { XlsxChartModel } from '../xlsx/chartModel'
+import { attemptedMalformedRelationshipIssue, chartCard, isExhausted, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
 import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
@@ -612,6 +613,8 @@ function parseGraphicFrame(frame: XmlNode, tableStyles: Map<string, TableStyleEn
 interface Representation {
   node: XmlNode
   representation: 'choice' | 'fallback'
+  /** The chart card a selected fallback's pictures carry (painted if one fails to decode). */
+  chartFallback?: XlsxChartModel
   reason?: string
   feature?: string
 }
@@ -621,7 +624,8 @@ const SUPPORTED_DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink']
 
 /** Per-slide decisions avoid rescanning a selected subtree at every enclosing Choice. */
 class DrawingCompatibility {
-  constructor(private contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>) {}
+  /** `pictureUsable` resolves a picture relationship; `unusableFallback` records a chart card replacing an unusable fallback. */
+  constructor(private contents: Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>, private pictureUsable: (rid: string) => boolean = () => true, private unusableFallback: () => void = () => {}) {}
   private features = new WeakMap<XmlNode, string | null>()
   private selections = new WeakMap<XmlNode, Representation | undefined>()
   private failures = new WeakMap<XmlNode, string>()
@@ -680,7 +684,27 @@ class DrawingCompatibility {
     }
     this.failures.set(node, feature ?? 'AlternateContent')
     const fallback = getChildren(node, 'Fallback')[0]
-    const selected: Representation | undefined = fallback ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}` } : undefined
+    // No representation remains (no fallback, or every fallback picture is unusable): an attempted chart Choice shows its card (spec 6.3).
+    const card = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
+    // The whole fallback is evaluated: only pictures without a usable image (or groups of only those) make it unusable.
+    // An attempted chart's fallback is judged by whether any usable selected content remains: a shape, a usable
+    // picture, a frame or part whose content resolves, or a group or nested alternative holding such content.
+    // A failed descendant beside usable content keeps the fallback (that descendant shows its own card).
+    const items = (parent: XmlNode) => orderedChildren(parent).filter(([name]) => name !== '#text' && name !== 'nvGrpSpPr' && name !== 'grpSpPr')
+    const usable = (parent: XmlNode, level: number): boolean => level < MAX_DRAWING_DEPTH && items(parent).some(([name, item]) => {
+      if (name === 'sp' || name === 'cxnSp') return true
+      if (name === 'pic') return this.pictureUsable(attrs(getChildren(getChildren(item, 'blipFill')[0], 'blip')[0]).embed ?? '')
+      if (name === 'grpSp') return usable(item, level + 1)
+      if (name === 'AlternateContent') { const selected = this.selectRepresentation(item, level + 1); return !!selected && !isExhausted(item) && usable(selected.node, level + 2) }
+      return this.unsupportedFeature(item, level + 1) === undefined
+    })
+    // An empty Fallback stays a (blank) selection.
+    const unusable = !!card && !!fallback && items(fallback).length > 0 && !usable(fallback, depth + 1)
+    // The resolver's actual result: no usable representation here, so a terminal chart failure propagates outward.
+    if (!fallback || unusable) markExhausted(node)
+    if (unusable) this.unusableFallback()
+    const selected: Representation | undefined = fallback && !unusable ? { node: fallback, representation: 'fallback', feature: feature ?? 'AlternateContent', reason: `Native fallback selected for unsupported ${feature ?? 'AlternateContent'}`, ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }
+      : card && { node: card, representation: 'choice' }
     this.selections.set(node, selected)
     return selected
   }
@@ -784,9 +808,10 @@ function parseShapeTree(
     if (name === 'AlternateContent') {
       const selected = compatibility.selectRepresentation(original)
       if (selected) {
-        const { node, ...selection } = selected
+        const { node, chartFallback, ...selection } = selected
         const selectedShapes = parseShapeTree(pkg, contents, node, partPath, slideImages, theme, tableStyles, diagnostics, compatibility, `${path}/${selected.representation}`, selection, depth + 1, textDefaults, groupDepth, inheritance, imageContext, groupStyle)
         if (selected.representation === 'fallback') retainChoiceText(getChildren(original, 'Choice')[0], selectedShapes)
+        if (chartFallback) walkShapes(selectedShapes, shape => { if (shape.image) shape.chartFallback = chartFallback })
         if (!selectedShapes.length) diagnostics.push({ kind: 'missing-representation', message: 'Selected AlternateContent representation contains no usable drawing', feature: selected.feature, source: sourceOf(original, name, partPath, path, selection) })
         shapes.push(...selectedShapes)
       } else diagnostics.push({ kind: 'missing-representation', message: 'AlternateContent has no supported Choice or native fallback', feature: compatibility.failure(original), source: sourceOf(original, name, partPath, path) })
@@ -820,7 +845,7 @@ function parseShapeTree(
     } else {
       const node = selectNestedAlternates(original, source, shapeIssues, compatibility)
       const graphic = name === 'graphicFrame' ? selectedGraphicData(original, compatibility) : undefined
-      const content = name === 'contentPart' ? contents.get(original) : graphic ? contents.get(graphic) : undefined
+      const content = name === 'contentPart' ? contents.get(original) : graphic ? contents.get(graphic) ?? chartCard(graphic) : undefined
       if (content && (name === 'graphicFrame' || name === 'contentPart')) {
         reserveDrawingContent(pkg, content, partPath, false)
         shape = { ...parseTransform(getChildren(node, 'xfrm')[0]), geometry: 'other', content }
@@ -891,7 +916,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     imageContext.background = slide.background
     const spTree = getChildren(getChildren(slideRoot, 'cSld')[0], 'spTree')[0]
     const contents = new Map<XmlNode, DrawingContent<PptxParagraph, PptxTextBody>>()
-    const compatibility = new DrawingCompatibility(contents)
+    const compatibility = new DrawingCompatibility(contents, rid => slideImages.has(rid), () => contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', path, 'chart', { reason: 'chart-fallback-unusable' }))
     const defaults = getChildren(presentation, 'defaultTextStyle')[0]
     const contentTheme = { colors: theme.palette, fonts: new Map([['minorHAnsi', theme.context.fonts.minor.latin ?? 'Calibri']]) }
     const pending = [slideRoot]

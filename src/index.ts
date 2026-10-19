@@ -77,6 +77,7 @@ export type { CaretPos, SelectionRange } from './core/selection'
 
 // Public extraction prepares embedded fonts and returns a disposable consumer lease.
 export { getPaintables } from './render/paint'
+export { preloadCharts } from './xlsx/chartLoader'
 export type { Paintable, PaintableArray, PageSpec, PaintOptions } from './render/paint'
 export type { RegisterFont, FontRegistrationRequest } from './core/fonts/register'
 export type { EmbeddedFontFace, FontVariant, FontDiagnostic } from './core/fonts/types'

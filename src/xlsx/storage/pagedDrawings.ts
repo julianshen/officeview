@@ -132,6 +132,9 @@ class RangePackage extends OfficePackage {
   /** Settles when the pool refuses, so the caller stops waiting on the parse. */
   readonly refusal = new Promise<void>(resolve => { this.settleRefusal = resolve })
   readonly diagnostics: WorkerDiagnostic[] = []
+  /** The bounded chart reader (charts/read.ts) admits its tree here as well as in the chart workspace, so this
+   * pool keeps owning paged chart trees as it did through xmlOrdered (its working set only grows during a read). */
+  readonly chartLedger = { reserve: (bytes: number) => this.admit(bytes), release: () => {} }
 
   constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal, private readonly memory?: DrawingMemory) {
     super(new JSZip())
@@ -274,7 +277,8 @@ export async function loadPagedSheetDrawings(
   if (options.fillCharts && hasXlsxCharts(shell.drawings)) {
     // Defined names come from the workbook part, read only when a chart names one.
     let names: DefinedNameMetadata[] = []
-    if ((await loadChartModule()).drawingsNeedNames(shell.drawings)) {
+    // A failed engine load leaves the charts as cards (spec 6.3); the drawings still load.
+    if ((await loadChartModule().catch(() => undefined))?.drawingsNeedNames(shell.drawings)) {
       try { names = parseDefinedNames(await pkg.xml('xl/workbook.xml')) } catch { if (signal.aborted) throw aborted(signal) }
     }
     // The chart cell workspace is admitted against the drawing memory before any read.
