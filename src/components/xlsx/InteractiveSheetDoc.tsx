@@ -1096,7 +1096,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [sortPending, setSortPending] = useState<{ col: number; job: AbortController } | null>(null)
   const domHold = useRef<{ job: AbortController; bytes: number } | null>(null)
   const heldDomBytes = (measured: number) => Math.max(measured, domHold.current?.bytes ?? 0)
-  useEffect(() => { closePopup(); controlJob.current?.abort(); domHold.current = null; setSortPending(null) }, [activeSheetId])
+  useEffect(() => { closePopup(); controlJob.current?.abort(); setSortPending(null) }, [activeSheetId])
+  // A job's hold ends in the commit that no longer shows its pending glyph
+  // (completion, refusal, cancellation or a sheet switch), never when the job
+  // merely settles: until React commits, the DOM still holds the smaller
+  // spinner and a re-measure would publish the dip. A newer job keeps its own
+  // hold. Layout phase: before the observer's microtask and chargeMain, which
+  // then measure the restored DOM.
+  useLayoutEffect(() => {
+    const hold = domHold.current
+    if (!hold || sortPending?.job === hold.job) return
+    domHold.current = null
+    const el = rootRef.current ?? paneRef.current
+    if (live.current && el) mainLedger.set('dom', 'grid', domClassBytes(domClassCounts(el)))
+  }, [sortPending, mainLedger, live])
   useEffect(() => () => controlJob.current?.abort(), [])
   const sortCycle = async (col: number, shift: boolean) => {
     const sheetId = activeSheetId
@@ -1122,13 +1135,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const result = await client.sort(owner, keys.length ? { range: resolved.range, keys, caseSensitive: previous?.caseSensitive ?? false } : null, abort.signal)
       if (!abort.signal.aborted) setAnnouncement('snapshot' in result ? 'View-only sort applied; formulas unchanged.' : failureText(result))
     } catch (error) { if (!abort.signal.aborted) setAnnouncement(error instanceof Error ? error.message : 'Sort unavailable.') }
-    finally {
-      setSortPending(pending => (pending?.job === abort ? null : pending))
-      // A newer job keeps its own hold; this one ends with its job, and the
-      // next re-measure (the commit that clears the pending glyph) charges the
-      // DOM as it is.
-      if (domHold.current?.job === abort) domHold.current = null
-    }
+    // The DOM hold ends in the commit that clears this pending state (above).
+    finally { setSortPending(pending => (pending?.job === abort ? null : pending)) }
   }
   const copyJob = useRef<AbortController | null>(null), copyToken = useRef(0)
   const [copyPending, setCopyPending] = useState(false)

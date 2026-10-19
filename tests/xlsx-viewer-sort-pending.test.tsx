@@ -155,6 +155,39 @@ describe('header sort pending acknowledgment', () => {
     await waitFor(() => expect(ledger!.ownerBytes('dom', 'grid')).toBe(domClassBytes(domClassCounts(root))))
   })
 
+  it.each([['refusal', 'fail'], ['completion', 'hold']] as const)('keeps the DOM hold until the commit that restores the resting glyph (%s)', async (_, mode) => {
+    // Between the job's end and React committing the restored glyph, the DOM
+    // still shows the smaller spinner. A re-measure in that window must not
+    // publish the dip, or a charge admitted into it is overrun by the commit.
+    const release = gateResolve(mode)
+    let ledger: MainMemoryLedger | null = null
+    const ui = render(<InteractiveSheetDoc doc={workbookOf([sheet('A')])} {...({ onMainLedger: (l: MainMemoryLedger) => { ledger = l } } as object)} />)
+    await ready(ui)
+    const before = ledger!.ownerBytes('dom', 'grid')
+    fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
+    const root = ui.container.querySelector('[data-officeview-root]')!
+    const budget = 64 * 1024 * 1024
+    await act(async () => {
+      // Inside act, React commits only when the scope ends: the job settles
+      // (its finally runs) while the committed DOM still shows the spinner.
+      release()
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 0))
+      expect(statusText(ui), 'the restoring commit has not happened yet').toMatch(/Sorting column B/)
+      expect(pending(ui).header).toBe(true)
+      // A count-neutral mutation runs the real subtree observer's re-measure.
+      const marker = document.createComment('observer tick'); root.append(marker); marker.remove()
+      for (let i = 0; i < 5; i++) await Promise.resolve()
+      expect(ledger!.ownerBytes('dom', 'grid')).toBeGreaterThanOrEqual(before)
+      // Another consumer is admitted up to exactly the budget.
+      ledger!.set('controls', 'test-pressure', budget - ledger!.bytes)
+    })
+    expect(pending(ui).header).toBe(false)
+    expect(ledger!.bytes).toBeLessThanOrEqual(budget)
+    // The hold ended with that commit: the charge is the measured DOM again.
+    expect(ledger!.ownerBytes('dom', 'grid')).toBe(domClassBytes(domClassCounts(root)))
+    ledger!.release('controls', 'test-pressure')
+  })
+
   it('clears on failure with the failure announced', async () => {
     const release = gateResolve('fail')
     const ui = render(<InteractiveSheetDoc doc={workbookOf([sheet('A')])} />)
