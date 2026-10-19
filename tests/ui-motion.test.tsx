@@ -134,6 +134,10 @@ describe('chrome-only motion (spec §6.4, decision A)', () => {
     expect(zoomAfter.textContent).toBe('125%')
     // The keyed remount animates in from the tick's initial state.
     expect(rec.props.filter(p => p.name === 'tick' && String(p.tick) === '125').at(-1)?.initial).toBe('initial')
+    // A step right after the last one (a ctrl-wheel or pinch gesture) renders final: the readout never sits dim.
+    act(() => { fireEvent.click(ui.getByRole('button', { name: 'Zoom in' })) })
+    expect(readout(ui.container)!.getAttribute('data-ov-tick')).toBe('150')
+    expect(rec.props.filter(p => p.name === 'tick' && String(p.tick) === '150').at(-1)?.initial).toBe(false)
   })
 
   it('reduced motion uses zero-duration variants', async () => {

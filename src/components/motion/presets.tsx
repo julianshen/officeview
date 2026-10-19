@@ -39,10 +39,11 @@ export const fade: Variants = {
   animate: { opacity: 1, transition: ms(120) },
   exit: { opacity: 0, transition: ms(120) },
 }
+const TICK_MS = 140
 /** A changed readout (sheet, zoom, page position) or a confirmation. */
 export const tick: Variants = {
   initial: { opacity: 0, y: 4 },
-  animate: { opacity: 1, y: 0, transition: ms(140) },
+  animate: { opacity: 1, y: 0, transition: ms(TICK_MS) },
   exit: { opacity: 0, y: -4, transition: ms(120) },
 }
 
@@ -105,11 +106,16 @@ export function useMotionProps<T extends Element = HTMLElement>(v: Variants, ent
  * renders in its final state.
  */
 export function Tick({ k, v = tick, className = 'ov:inline-block', children }: { k: string | number; v?: Variants; className?: string; children: ReactNode }): ReactElement {
-  // Stable per element: the first key renders final, every later key enters.
-  const first = useRef(k), changed = useRef(false)
-  if (k !== first.current) changed.current = true
+  // Decided once per key: the first key renders final; a later key enters,
+  // unless it follows the previous change within one tick (a ctrl-wheel or
+  // pinch gesture steps the zoom every frame; the readout must not sit dim).
+  const state = useRef({ k, enter: false, at: 0 })
+  if (state.current.k !== k) {
+    const now = performance.now()
+    state.current = { k, enter: now - state.current.at > TICK_MS, at: now }
+  }
   return <m.span key={k} ref={useMotionRef<HTMLSpanElement>()} data-ov-motion={NAMES.get(v)} data-ov-tick={k} className={className}
-    variants={useVariants(v)} initial={changed.current ? 'initial' : false} animate="animate">{children}</m.span>
+    variants={useVariants(v)} initial={state.current.enter ? 'initial' : false} animate="animate">{children}</m.span>
 }
 
 const pulses = new WeakMap<Variants, Variants>()

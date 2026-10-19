@@ -65,3 +65,29 @@ test.describe('reduced motion', () => {
     await settledAtOnce(page, page.getByRole('menu', { name: 'More options' }))
   })
 })
+
+test.describe('chrome motion', () => {
+  test.beforeAll(async () => { await ensureFixtures() })
+
+  test('sheet switch and zoom play the chrome tick: picker in place, readout keyed', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await openViewer(page, 'f7-two-sheets.xlsx')
+    /** True when the motion element under `selector` is mid-animation on the next frame. */
+    const animating = (selector: string) => page.evaluate((s) => new Promise<boolean>((resolve) => requestAnimationFrame(() => {
+      const el = document.querySelector(s)!
+      const cs = getComputedStyle(el)
+      resolve(el.getAnimations().length > 0 || cs.opacity !== '1' || (cs.transform !== 'none' && cs.transform !== 'matrix(1, 0, 0, 1, 0, 0)'))
+    })), selector)
+    const picker = page.getByRole('combobox', { name: 'Worksheet' })
+    const pickerTick = 'label > [data-ov-motion=tick]'
+    expect(await animating(pickerTick), 'no tick on first mount').toBe(false)
+    const before = await picker.elementHandle()
+    const value = await picker.locator('option', { hasText: 'B' }).getAttribute('value')
+    await picker.selectOption(value!)
+    expect(await animating(pickerTick), 'the picker ticks on a sheet switch').toBe(true)
+    // In place: the same select node (never remounted).
+    expect(await page.evaluate(([a, b]) => a === b, [before, await picker.elementHandle()])).toBe(true)
+    await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
+    expect(await animating('[aria-label="Reset zoom"] [data-ov-motion=tick]'), 'the zoom readout ticks').toBe(true)
+  })
+})
