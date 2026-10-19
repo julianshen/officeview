@@ -37,7 +37,7 @@ function dragAcrossText(canvas: HTMLCanvasElement): void {
 }
 
 const copyButton = (c: HTMLElement) => c.querySelector('[data-testid="officeview-copy-selection"]')
-const printGuards = () => document.head.querySelectorAll('style[data-officeview-print-guard]')
+const printGuards = () => document.querySelectorAll('[data-ov-print="false"]')
 
 describe('allowCopy={false} (copy prevention)', () => {
   test('dragging text produces no selection and no copy button', async () => {
@@ -91,12 +91,12 @@ describe('allowCopy (default, unchanged behaviour)', () => {
 })
 
 describe('allowPrint={false} (print prevention)', () => {
-  test('installs a print-only rule that hides the viewer', async () => {
+  test('marks the denied instance for the scoped print rule', async () => {
     const { container, unmount } = await mount({ allowPrint: false })
     const guards = printGuards()
     expect(guards.length).toBe(1)
-    expect(guards[0].textContent).toContain('@media print')
-    expect(guards[0].textContent).toContain('data-officeview-root')
+    expect(guards[0].hasAttribute('data-ov-instance')).toBe(true)
+    expect(guards[0].contains(container.querySelector('[data-officeview-root]'))).toBe(true)
     expect(container.querySelector('[data-officeview-root]')).toBeTruthy()
     unmount()
   })
@@ -116,12 +116,12 @@ describe('allowPrint={false} (print prevention)', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
-  test('Cmd/Ctrl+P still works when print prevention is off', async () => {
+  test('Cmd/Ctrl+P is routed to isolated print when print prevention is off', async () => {
     const { container } = await mount()
     const region = container.querySelector('[data-officeview-root]') as HTMLElement
     const event = new KeyboardEvent('keydown', { key: 'p', metaKey: true, bubbles: true, cancelable: true })
     fireEvent(region, event)
-    expect(event.defaultPrevented).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
   })
 })
 

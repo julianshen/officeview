@@ -101,7 +101,7 @@ describe('<OfficeFile> server-driven protection', () => {
     // is no prop for devtools to flip back on
     expect(rootOf(container).style.userSelect).toBe('none')
     // print is off: the print guard hides the viewer from printouts…
-    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    expect(document.querySelector('[data-ov-print="false"]')).not.toBeNull()
     // …and the print shortcut is swallowed
     expect(fireEvent.keyDown(rootOf(container), { key: 'p', ctrlKey: true })).toBe(false)
   })
@@ -112,7 +112,7 @@ describe('<OfficeFile> server-driven protection', () => {
     const { container } = render(<OfficeFile data={{ url: 'https://files.example.com/open.docx' }} allowCopy={false} allowPrint={false} />)
     await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0), { timeout: 30_000 })
     expect(rootOf(container).style.userSelect).toBe('none')
-    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    expect(document.querySelector('[data-ov-print="false"]')).not.toBeNull()
   })
 
   test('switching to an unprotected source lifts the server policy', async () => {
@@ -129,7 +129,7 @@ describe('<OfficeFile> server-driven protection', () => {
     stubDownload(open)
     rerender(<OfficeFile data={open} />)
     await waitFor(() => expect(rootOf(container).style.userSelect).not.toBe('none'), { timeout: 30_000 })
-    expect(document.head.querySelector('[data-officeview-print-guard]')).toBeNull()
+    expect(document.querySelector('[data-ov-print="false"]')).toBeNull()
   })
 
   test('a stale permissive download resolving late cannot re-enable copy/print', async () => {
@@ -157,7 +157,7 @@ describe('<OfficeFile> server-driven protection', () => {
     rerender(<OfficeFile data={{ url: 'https://files.example.com/guarded.docx' }} />)
     await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0), { timeout: 30_000 })
     expect(rootOf(container).style.userSelect).toBe('none')
-    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    expect(document.querySelector('[data-ov-print="false"]')).not.toBeNull()
     // now let the old permissive download finish: the live policy must not budge
     await act(async () => {
       resolveSlow(
@@ -166,7 +166,7 @@ describe('<OfficeFile> server-driven protection', () => {
       await new Promise((r) => setTimeout(r, 100))
     })
     expect(rootOf(container).style.userSelect).toBe('none')
-    expect(document.head.querySelector('[data-officeview-print-guard]')).not.toBeNull()
+    expect(document.querySelector('[data-ov-print="false"]')).not.toBeNull()
     expect(fireEvent.keyDown(rootOf(container), { key: 'p', ctrlKey: true })).toBe(false)
   })
 })

@@ -278,6 +278,7 @@ function LegacyOfficeDoc({
   const markKey = watermark ? JSON.stringify(watermark) : ''
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
   const owner = useMemo(() => ({ document, markKey, fontKey }), [document, markKey, fontKey])
+  const [printRequest, requestPrint] = useState<{ owner: typeof owner }>()
   const ownerRef = useRef<typeof owner | null>(owner)
   ownerRef.current = owner
   const copyAllowed = useRef(allowCopy)
@@ -542,6 +543,11 @@ function LegacyOfficeDoc({
   const toggleFit = () => routed((m) => apply(m.toggleFit(zoomContext())))
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
+      e.preventDefault()
+      if (allowPrint) requestPrint({ owner })
+    }
+    if (e.defaultPrevented) return
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       if (inputRef.current) {
@@ -563,11 +569,7 @@ function LegacyOfficeDoc({
       e.preventDefault()
       return
     }
-    if (!allowPrint && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
-      e.preventDefault()
-      return
-    }
-    if (e.key === 'Escape' && selection && !e.defaultPrevented) {
+    if (e.key === 'Escape' && selection) {
       setSelection(undefined)
       selectionAnchor.current = null
       return
@@ -629,25 +631,6 @@ function LegacyOfficeDoc({
     setMatches([])
     setActive(-1)
   }, [owner])
-
-  // Print suppression. The document is drawn to canvases, so it reaches the
-  // print pipeline as pixels; hiding the viewer with a print-only rule is what
-  // actually removes it from a printout. The rule is installed only while a
-  // viewer with allowPrint={false} is mounted, and removed on unmount so a
-  // later print of the host page is unaffected. `document` is shadowed by the
-  // prop of the same name, hence globalThis.
-  useEffect(() => {
-    if (allowPrint) return
-    const doc = globalThis.document
-    if (!doc) return
-    const style = doc.createElement('style')
-    style.setAttribute('data-officeview-print-guard', '')
-    style.textContent = '@media print { [data-officeview-root] { display: none !important; } }'
-    doc.head.appendChild(style)
-    return () => {
-      style.remove()
-    }
-  }, [allowPrint])
 
   useEffect(() => {
     if (query.trim().length === 0) {
@@ -786,18 +769,21 @@ function LegacyOfficeDoc({
     search: showSearch ? { inputRef, query, onQuery: setQuery, matches, active, setActive, indexing } : null,
     copy: allowCopy ? { state: copied, enabled: !!selection && !isEmptyRange(selection), onCopy: () => void doCopy() } : undefined,
     allowPrint,
+    pages,
+    owner,
+    showToolbar,
+    print: printRequest,
     focusSearchRequest,
   }
 
   return (
-    <div ref={wrapperRef} {...themeRootProps(theme, instance)} className="ov:relative ov:flex ov:flex-col ov:min-h-0">
-      {/* Fixed-height placeholders from the eager metrics reserve the lazy
-          toolbar and status line, so their arrival shifts nothing (§6.10). */}
-      {showToolbar && (
-        <Suspense fallback={<div data-testid="officeview-toolbar-placeholder" className={SLOT} style={{ height: PAGED_TOOLBAR_HEIGHT[compact ? 'compact' : 'regular'] }} />}>
-          <PagedChrome {...chrome} />
-        </Suspense>
-      )}
+    <div ref={wrapperRef} {...themeRootProps(theme, instance)} className="ov:relative ov:flex ov:flex-col ov:min-h-0"
+      data-ov-print={allowPrint} onKeyDown={onKeyDown}>
+      {/* The lazy chrome also owns printing with showToolbar=false. Fixed
+          placeholders reserve visible chrome without shifting pages (§6.10). */}
+      <Suspense fallback={showToolbar && <div data-testid="officeview-toolbar-placeholder" className={SLOT} style={{ height: PAGED_TOOLBAR_HEIGHT[compact ? 'compact' : 'regular'] }} />}>
+        <PagedChrome {...chrome} />
+      </Suspense>
       <div
         ref={containerRef}
         className={className}
@@ -805,7 +791,6 @@ function LegacyOfficeDoc({
         aria-label="Document viewer"
         data-officeview-root=""
         tabIndex={0}
-        onKeyDown={onKeyDown}
         onDoubleClick={onDoubleClick}
         onClick={onClick}
         onWheel={onWheel}

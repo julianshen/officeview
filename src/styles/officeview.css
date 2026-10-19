@@ -190,3 +190,12 @@
 /* Utilities come last in source order, so they follow the base. source("..")
  * limits class detection to src/ (docs and tests quote ov: class names). */
 @import "tailwindcss/utilities.css" prefix(ov) source("..");
+
+/* A denied paged viewer marks its own instance root. No sibling (including a
+ * spreadsheet viewer) matches merely because another viewer denies printing.
+ * Like the rest of the chrome, this rule ships in the required style.css. */
+@media print {
+  [data-ov-theme-root][data-ov-instance][data-ov-print="false"] {
+    display: none !important;
+  }
+}
