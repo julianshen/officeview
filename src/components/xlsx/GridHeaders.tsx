@@ -182,8 +182,10 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const target = event.target as Node | null
       if (target && !laneGroup.current?.contains(target) && !laneButton.current?.contains(target)) setOpenLane(null)
     }
-    document.addEventListener('pointerdown', outside, true)
-    return () => document.removeEventListener('pointerdown', outside, true)
+    // The owner document: a viewer rendered into a popup window listens there.
+    const doc = laneButton.current?.ownerDocument ?? document
+    doc.addEventListener('pointerdown', outside, true)
+    return () => doc.removeEventListener('pointerdown', outside, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [laneOpen])
   // Touch: a column at least 44px wide but too narrow for its actions side by
@@ -204,8 +206,10 @@ export function GridHeaders(props: GridHeadersProps): ReactElement {
       const target = event.target as Node | null
       if (target && !colGroup.current?.contains(target) && !colButton.current?.contains(target)) setOpenCol(null)
     }
-    document.addEventListener('pointerdown', outside, true)
-    return () => document.removeEventListener('pointerdown', outside, true)
+    // The owner document: a viewer rendered into a popup window listens there.
+    const doc = colButton.current?.ownerDocument ?? document
+    doc.addEventListener('pointerdown', outside, true)
+    return () => doc.removeEventListener('pointerdown', outside, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openCol])
   // Enter only: the header's overflow clips the group the moment it closes.

@@ -40,8 +40,10 @@ export function MoreMenu({ items, buttonClass }: { items: readonly MoreItem[]; b
       const t = e.target as Node
       if (!menu.current?.contains(t) && !button.current?.contains(t)) close()
     }
-    document.addEventListener('pointerdown', outside, true)
-    return () => document.removeEventListener('pointerdown', outside, true)
+    // The owner document: a viewer rendered into a popup window listens there.
+    const doc = button.current?.ownerDocument ?? document
+    doc.addEventListener('pointerdown', outside, true)
+    return () => doc.removeEventListener('pointerdown', outside, true)
   }, [open])
 
   const onKeyDown = (e: React.KeyboardEvent) => {
