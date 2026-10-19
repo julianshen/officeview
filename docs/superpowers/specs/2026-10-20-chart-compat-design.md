@@ -1,6 +1,10 @@
 # Chart Compatibility — Design Spec
 
-**Status:** revision 2. This addresses review round 1: codex, agy and opencode all returned REQUEST CHANGES, with no Critical findings. It supersedes the plan-only proposal in PR #12 (issue #13).
+**Status:** revision 3.
+- Round 1: codex, agy and opencode all returned REQUEST CHANGES.
+- Round 2: agy APPROVE; codex R2-1…R2-6 and opencode N1 are addressed here.
+
+It supersedes the plan-only proposal in PR #12 (issue #13).
 **Date:** 2026-10-20 · **Baseline:** `main` @ `3581768`.
 **Decision marks:** **[call]** marks the author's call, open to review. **[rev]** marks a decision taken from a round-1 review finding. The reviewer and finding are given in brackets.
 
@@ -94,9 +98,9 @@ officeview renders Office documents read-only to canvas. Charts are common in re
 | Area (standard, stacked, 100%) | native | |
 | Pie, exploded pie, doughnut | native | `firstSliceAng`, `holeSize`, per-point and series `explosion` |
 | Scatter (markers, lines, smooth) | native | independent x domain (§5.1) |
-| Bubble (`bubble3D` drawn flat) | native | `bubbleScale` (default 100%). `sizeRepresents` = area (default) or w. Size ≤ 0 is not drawn and is diagnosed; it never draws as zero or negative. A series without `bubbleSize` data is unavailable. |
+| Bubble (`bubble3D` drawn flat) | native | `bubbleScale` (default 100%). `sizeRepresents` = area (default) or w. **Zero size:** no bubble. **Negative size:** governed by `c:showNegBubbles` [rev: codex R2-5]. When 0 (default), no bubble. When 1, draw a bubble of |size| with no fill and the series line colour, as Office draws negative bubbles; pinned by positive, negative and zero reference cases. A series without `bubbleSize` data is unavailable. |
 | Radar (standard, marker, filled) | native | `radarStyle`; categories clockwise from 12 o'clock; the value axis is radial |
-| Stock (HLC, OHLC, volume-HLC, volume-OHLC) | native | Series roles are ordered: [volume], open?, high, low, close. Roles come from series order in the stock group; volume is the bar group in the same plot. **Axes come from each group's authored `axId` bindings, never assumed** [rev: codex I10]. Draw `hiLowLines` and `upDownBars` (up/down fills from `c:upBars`/`c:downBars`). A series-count/role mismatch becomes a card with a reason. |
+| Stock (HLC, OHLC, volume-HLC, volume-OHLC) | native | Volume, when present, is the series of the **bar group** in the same plot. The stock group's series are, in order, open (only when there are 4 series), high, low, close. **Axes come from each group's authored `axId` bindings, never assumed** [rev: codex I10]. Draw `hiLowLines` and `upDownBars` (up/down fills from `c:upBars`/`c:downBars`). A series-count/role mismatch becomes a card with a reason. |
 | Pie-of-pie, bar-of-pie | native | `ofPieType`. `splitType` is one of: auto (Office default: last third of points, `ceil(n/3)`), pos (last `splitPos` points), val (points < `splitPos`), percent (points < `splitPos`% of total) or cust (`custSplit/secondPiePt` indices). Original point indices keep their colours and labels. The primary pie gains one synthetic "Other" slice whose value is the sum of the secondary points, so totals and percentages are conserved. Also `secondPieSize` (default 75%), bar-of-pie `gapWidth`, and `serLines` connectors. [rev: codex I10, opencode F6] |
 | Contour (`surfaceChart`, the 2D surface) | native | z grid = series (rows) × categories (columns). Colour bands come from the value-axis major unit (Office band count). Missing cells are not interpolated across. `wireframe=1` draws band boundaries only. Band colours follow `c:bandFmts` when present, otherwise the accent cycle. |
 | Surface 3D (`surface3DChart`) | **fallback/card** | Perspective is a non-goal. Show the authored fallback, else a card reading "3-D surface charts are shown as a placeholder". [rev: codex I11 / §10 Q1] |
@@ -158,12 +162,17 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
   - Label rotation comes from `txPr/bodyPr@rot` and `vert`.
 - **Display units.** `dispUnits`, either `builtInUnit` (hundreds … trillions) or `custUnit`, divides tick values. It draws the unit label (`dispUnitsLbl`, with the default unit text) beside the axis. Without this, finance charts show values off by factors of 10³–10⁹.
 - **Date axes.** `c:dateAx` scales numeric date serials. `baseTimeUnit` and `majorTimeUnit` are days, months or years; **month and year steps follow the calendar, never a constant number of days**. Unequal date spacing is preserved. If the category data is text, the axis is treated as categorical (`auto=1` behaviour) and diagnosed. A date axis is never rebuilt from formatted labels.
-- **Date system [rev: codex I4, agy 5].** The first of these that applies wins:
-  1. `c:chartSpace/c:date1904`;
+- **Date system [rev: codex I4, agy 5].** The **chart epoch** is the first of these that applies:
+  1. `c:chartSpace/c:date1904` (present with `val` omitted means true);
   2. the embedded workbook's `workbookPr@date1904` (DOCX/PPTX) or the containing workbook's (XLSX);
   3. the 1900 system.
 
   The 1900 system keeps serial 60 as 1900-02-29, as Excel does. Time fractions are preserved.
+- **Epoch normalization [rev: codex R2-3].**
+  - Cached and literal values are already in the chart epoch.
+  - Each value **filled from a workbook** carries that workbook's epoch. It is converted into the chart epoch (±1,462 days) **only for date roles**: date-axis categories, and values on an axis whose format is a date format. Ordinary numbers are never converted.
+  - Pinned by both directions, mixed cached and filled roles, time fractions and the serial-60 case.
+- **Axis format with mixed sources.** With `sourceLinked=1` and mixed source cell formats, an axis uses the format of the **first non-blank point** of the first series on that axis. A tick has no unique source point; this is Office's observed behaviour, verified by reference.
 
 ### 5.2 Number formats [rev: codex I4]
 
@@ -175,8 +184,9 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
   1. explicit `numFmt` with `sourceLinked=0`;
   2. `sourceLinked=1` → the source format (the cache `formatCode` per point, or the embedded cell's format);
   3. no format → General, or percent for 100% axes.
-- Mixed per-point source formats are applied per point.
-- A raw numeric value and its format provenance are kept on the model; labels are formatted at paint time.
+- Mixed per-point source formats are applied per point for data labels.
+- A raw numeric value and its format provenance are kept on the model.
+- Label **strings** are formatted during preparation (§6.5 stage 1), because they do not depend on size. Locale-sensitive parts use the display formatter's locale handling (en-US default, as in the existing cell renderer).
 
 ### 5.3 Data labels [rev: codex I10]
 
@@ -218,7 +228,7 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
   - `intercept` applies to linear, exponential and polynomial fits.
   - `forward`/`backward` extend the line in x units. The extension is bounded so the drawn domain is ≤ 10 × the data domain, otherwise the extension is clamped and diagnosed.
 - **Out-of-range authored parameters** (order outside 2–6, a period outside its range) → no line and a diagnostic. They are never clamped silently.
-- **Labels.** The equation and R² label use Office's formats: `y = 1.2345x + 0.5` and `R² = 0.9876`, with 4 significant digits.
+- **Labels.** The equation and R² label follow the authored `trendlineLbl/numFmt` when present. Otherwise the policy is 4 significant digits: `y = 1.2345x + 0.5`, `R² = 0.9876`.
 - **Sampling.** The line is drawn by sampling ≤ 512 points.
 
 ### 5.7 Error bars [rev: codex I7]
@@ -233,10 +243,28 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
 
 ### 5.8 Chart-level and series options [rev: agy 4, opencode F2, codex I10]
 
-- **Chart level.**
-  - `c:dispBlanksAs` (gap, zero, span; Office default is gap) applies to line, scatter and radar. Bars treat blanks as gaps.
-  - `c:plotVisOnly`.
-  - Error cells (#N/A …) are treated as blanks for plotting. Line charts treat #N/A as span when `dispBlanksAs=gap`, matching Office.
+- **Chart level.** `c:dispBlanksAs` (gap, zero, span; Office default gap) and `c:plotVisOnly`.
+- **Point states [rev: codex R2-4, R2-6; opencode N1].** Every data point is exactly one of:
+  - **value:** a number;
+  - **blank:** an absent `pt@idx`, or an empty cell;
+  - **error(code):** `#N/A`, which is kept distinct from other error codes;
+  - **unavailable:** for example, a formula cell with no saved value.
+
+  The error identity is kept through data fill, up to the family's plotting rule. It is never normalized to blank early.
+- **Plotting matrix**, with Office's default where the 2016+ `dispNaAsBlank` extension (`c16r3:dataDisplayOptions16`) is absent or false:
+
+  | Family | blank | #N/A | other error | unavailable |
+  |---|---|---|---|---|
+  | Line, scatter, radar | per `dispBlanksAs` (gap: break; zero: 0; span: connect) | no marker; the line **connects across it, whatever `dispBlanksAs` says** | as #N/A | as blank (gap), plus `chart-point-unavailable` |
+  | Column, bar | no bar | no bar | no bar | no bar, plus diagnostic |
+  | Area (standard) | gap if `dispBlanksAs=gap`, else 0 | gap if `dispBlanksAs=gap`, else 0 | as #N/A | as blank, plus diagnostic |
+  | Stacked or 100% (any family) | 0 | 0 | 0 | 0, plus diagnostic |
+  | Pie, doughnut | no slice | no slice | no slice | no slice, plus diagnostic |
+
+  - When `dispNaAsBlank=1`, #N/A follows the blank column.
+  - A data label on an #N/A point still shows `#N/A`.
+  - **Analytic families** (§4.3, trendlines, stdDev/stdErr error bars) exclude blank and error points from the computation. **Refuse** the chart, or drop the trendline / error bar, if any required point is unavailable.
+  - Every cell of the matrix is a numeric oracle in §8.
 - **Series level.** `invertIfNegative`, `explosion`, and per-point `dPt` overrides.
 - **Group level.** `varyColors`, `gapWidth`, `overlap`, `upDownBars`, `hiLowLines`, `dropLines` and `serLines`.
 
@@ -251,7 +279,9 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 - **Manual layout.** `c:manualLayout` for the plot area, title and legend honours `ST_LayoutMode`:
   - `xMode`/`yMode` = edge: `x`/`y` is a fraction of the chart area.
   - `xMode`/`yMode` = factor: an offset from the element's default position, as a fraction of the chart area.
-  - `wMode`/`hMode` = factor: `w`/`h` is the size as a fraction. `wMode`/`hMode` = edge: `w`/`h` is the right or bottom edge, so width = w − x.
+  - `wMode`/`hMode` = factor: `w`/`h` is the size as a fraction. `wMode`/`hMode` = edge: `w`/`h` is the right or bottom edge.
+  - **Order of resolution:** first resolve x and y to absolute edge positions (applying factor offsets to the default position), then compute the width as `w − x` for edge mode or as `w` for factor mode, and likewise for height.
+  - **Defaults:** an omitted mode is `factor` (schema default). An omitted `x`/`y`/`w`/`h` keeps the automatic value. An omitted `layoutTarget` is `outer`.
   - `layoutTarget` = inner (the plot area excluding tick labels) or outer.
   - The result is clamped to the chart area. An empty or inverted box falls back to automatic layout, with a diagnostic.
 
@@ -272,7 +302,8 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 
 ### 6.2 Format adapters and the runtime tag
 
-- One `parseChart` adapter is added to the shared `ContentLoadAdapters` defaults, so XLSX, DOCX (through the compatible wrapper) and PPTX all receive it. [rev: opencode F8]
+- A shared default `parseChart` is added for `ContentLoadAdapters` (`content.ts:370-376`), so XLSX, DOCX (through the compatible wrapper) and PPTX all receive it. [rev: opencode F8]
+- **Merging [rev: codex minor 2]:** a caller's adapters are spread over the defaults, so a caller that passes only text adapters still gets the default `parseChart`. A caller-supplied `parseChart` overrides the default. The XLSX adapter becomes the default.
 - The dispatch in `follow()` recognises both classic `c:chartSpace` (with `c:chart`) and ChartEx `cx:chartSpace` roots by namespace, including alias prefixes. [rev: agy 3]
 - The unconditional ChartEx rejections (`content.ts:869`, the structural check at `999-1045`) and each consumer's Choice capability list (`docx/drawing.ts:102`, the PPTX equivalents) are updated so that `cx` Choices are attempted when the engine can load.
 - **Runtime tag.** **[rev: codex minor 1]** The runtime tag stays `kind:'xlsxChart'`. Renaming a runtime discriminant breaks transferred models and every switch. Module and type names become format-neutral (`ChartModel`); the tag string is unchanged. The eager mini-reader `chart()`, its `kind:'chart'` and `paintChart` are deleted.
@@ -286,6 +317,7 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 - `prepareCompatibleDrawingContent` treats `unsupported` and `refused` as **not satisfying** the Choice, so the `mc:Fallback` picture is selected.
 - Only when **no** usable representation remains does the content become a placeholder card model. The card carries the reason, the original feature (`chart`/`ChartEx`) and exactly one selected representation.
 - A standalone part (no AlternateContent) that is unsupported becomes a card directly.
+- When the selected fallback picture itself fails to decode, the card replaces it. The card records `chart-fallback-unusable` alongside the original reason.
 - Nested and outer AlternateContent, alias prefixes and unknown `Requires` are pinned by tests in all three formats.
 
 ### 6.4 Data precedence and the embedded workbook (DOCX/PPTX) [rev: codex I1, I8; agy 2; opencode F4, F5]
@@ -294,7 +326,7 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 
 **Per data role.** The roles are series name, categories, values, x values, bubble sizes and custom error plus/minus.
 
-1. **Cache present:** the cache element exists. Use it, even when it is **partial**:
+1. **Saved data present** [rev: codex R2-4]: a cache (`numCache`/`strCache`/`multiLvlStrCache`) or a **literal** (`numLit`/`strLit`, or a literal series name `tx/v`) exists. Use it, even when it is **partial**:
    - sparse `pt@idx` positions are kept;
    - missing indices are **blank**, never compacted and never zero;
    - `ptCount=0` is a present, empty cache.
@@ -320,20 +352,28 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 - **Never followed:** drawings, nested embeddings, external links, VBA or any other relationship.
 - **Formulas.** Formula cells use their saved value (`<v>`). A formula without a saved value is unavailable for that point and diagnosed. Formulas are never evaluated.
 - **Values.** Excel numeric-text rules apply via `scanChartNumber`. Error cells are treated as blanks (§5.8).
-- **Budgets:**
+- **Ownership [rev: codex R2-1].** One document-level **chart workspace** owns every chart allocation: embedded package bytes, the zip inventory, XML/tokenizer workspace, shared strings, extracted cells and chart models.
+  - It has a single limit: **64 MiB desktop / 32 MiB mobile**. This is the same limit as the §6.5 retention cap, not an addition to it.
+  - It is charged before allocation, in actual bytes (strings at 2 B per UTF-16 unit plus 32 B overhead).
+  - Charges are transferred, not duplicated, when a workspace allocation becomes part of a retained model, and refunded when it is freed.
+- **Admission before load.**
+  - The inflated embedding size is checked against the 8/4 MiB cap.
+  - The central directory is inspected before `OfficePackage.load`: ≤ 256 entries, and declared sizes summing to ≤ 32/16 MiB.
+  - The embedding bytes are read through an **uncached** bounded read, so they are not retained in the outer package cache. They are released once the embedded package has been read.
+- **Budgets** (all within the workspace):
 
   | Budget | Desktop / mobile |
   |---|---|
   | Inflated XML read per embedded package | 32 / 16 MiB |
-  | Shared-string bytes | 8 / 4 MiB |
+  | Shared strings | 8 / 4 MiB **and** 262,144 strings |
   | Cells extracted per chart | 262,144 (64 × 4,096) |
-  | Cell bytes | 160 B each (existing) |
-  | Retained embedded models per document | 32 MiB |
+  | Concurrency | one embedded workbook read at a time per document |
 
-  Every budget is charged before allocation. A breach → `refused`, a diagnostic, and every partial allocation released.
+  A breach → `refused`, a diagnostic, and the refund of everything that was allocated.
 - **Reuse and cancellation.**
-  - Requests are deduplicated per normalized part path as a shared promise, then discarded once every consumer is filled.
-  - Cancellation through the document `AbortSignal` releases all charges.
+  - Requests are deduplicated per normalized part path as a shared promise. The extracted cell data is discarded once every consumer is filled.
+  - Cancellation through the document `AbortSignal` **stops publication immediately**. The charges stay held **until the producer actually settles**: JSZip load and inflate are not abortable. They are refunded only then.
+  - Tested with gated inflate and load, cancellation mid-read, and 50 embeddings.
 - **Tests:**
   - a sub-cap ZIP with an oversized inner sharedStrings or sheet;
   - 50 distinct embeddings;
@@ -349,12 +389,18 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
 ### 6.5 Paint and preparation [rev: codex I2, minor 2; agy 7]
 
 - **Bounded chart XML.** The chart part is read with a byte cap before the tree is built: desktop/mobile 8/4 MiB, the same pair as the existing drawing-part limit, in all formats. Over the cap → `unsupported`.
-- **All expensive work happens in async preparation (parse time).** This covers data fill, statistics, trendline fits, tick generation, label formatting and text measurement inputs. The model the painter receives is **paint-ready**, so synchronous paint is bounded.
+- **Two stages [rev: codex R2-2].**
+  - **Stage 1, preparation (async, at parse time, size-independent):** data fill, statistics, trendline fits sampled in data units, the axis value domain and candidate tick values, and formatted label strings. The result is an immutable model that can be transferred between realms.
+  - **Stage 2, layout (synchronous, at paint time, per placement):** text measurement, tick thinning, label placement and plot-area geometry for the given size, DPR and font generation.
+    - Layout is cached on the model, keyed by (width, height, dpr, fontGeneration). A resize or font load invalidates it.
+    - Layout transients are bounded by the work bounds below and charged to the chart workspace for the duration of the paint.
+    - Layout is deterministic.
+  - Tested by repeated placement at two sizes, delayed font load, resize, and synchronous paint after transfer.
 - **Work bounds per chart:**
 
   | Item | Bound |
   |---|---|
-  | Ticks per axis | ≤ 1,000 (Office would refuse more) |
+  | Ticks per axis | ≤ 1,000 (viewer work bound) |
   | Data-label strings | ≤ 4,096 |
   | Path segments painted | ≤ 262,144 |
   | Trendline samples | ≤ 512 per trendline |
@@ -362,7 +408,8 @@ Multi-level categories (`multiLvlStrRef`/`multiLvlStrCache`, all `lvl`s) are dra
   | Treemap/sunburst nodes | ≤ 4,096 |
 
   On a breach, the affected element is dropped with a diagnostic; for analytic families the chart is refused (§4.3).
-- **Document-wide retention.** Charts retain ≤ 64 MiB desktop / 32 MiB mobile, charged per model. Over that, later charts become cards.
+- **Document-wide retention.** This is the §6.4 chart workspace (64 MiB desktop / 32 MiB mobile, the same limit). Over it, later charts become cards.
+- **Rendering bounds are not analytic changes [rev: codex minor 4].** Enlarging a tick unit, clamping a forecast extension, or thinning labels are **visible rendering bounds**. Each is diagnosed. None of them alters a fit, a statistic or an authored parameter; the no-silent-change anti-goal applies to those.
 - **Tiny units.** A tiny `majorUnit` or an extreme finite scale is handled by the tick bound: the unit is enlarged to fit ≤ 1,000 ticks, with a diagnostic.
 - **Painter containment.** The painter dispatch in `content-paint.ts` wraps the engine in `ctx.save()`/`try`/`finally ctx.restore()`. A throw paints the card with "This chart could not be drawn" and never affects later shapes.
 - **Preparation before paint.** `getPaintables` DOCX and PPTX branches call `ensureChartEngine(contents)`. It is typed over `DrawingContent`, and it **catches** a load failure, so pages still return, with cards.
