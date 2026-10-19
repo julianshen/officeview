@@ -1,6 +1,7 @@
 import type { PageSpec, Paintable } from '../../render/paint'
 
-// Same raster scale and axis ceiling as InteractiveSheetDoc.tsx:271–273 (print path).
+// Same raster scale and axis ceiling as InteractiveSheetDoc.tsx's print path
+// (its PRINT_SCALE and PRINT_MAX_AXIS).
 export const PRINT_SCALE = 2
 export const PRINT_MAX_AXIS = 16384
 export const PRINT_MAX_BYTES = 64 * 1024 * 1024

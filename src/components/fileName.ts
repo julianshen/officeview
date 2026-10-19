@@ -12,7 +12,8 @@ export function fileNameFrom(source: unknown, disposition?: string | null): stri
     const name = (star && decode(star[1])) ?? /filename\s*=\s*(?:"([^"]*)"|([^;\s]+))/i.exec(disposition)?.slice(1).find(Boolean)
     if (name) return name
   }
-  // File.name (a File is the only accepted source with a name)
+  // File.name: of the typed sources (DirectByteSource), only a File carries a
+  // name; any other string `name` can arrive only through an untyped cast.
   const { name, url } = (source ?? {}) as { name?: unknown; url?: unknown }
   if (typeof name === 'string') return name || undefined
   if (typeof url !== 'string') return undefined
