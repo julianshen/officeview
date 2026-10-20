@@ -4,7 +4,6 @@ import { createCanvas } from 'canvas'
 import { parseXmlOrdered } from '../src/core/xml'
 import { parseXlsxChart } from '../src/charts/parse'
 import { paintXlsxChart } from '../src/charts/paint'
-import { layoutChart } from '../src/charts/layout'
 import type { ChartModel } from '../src/charts/model'
 
 const parse = (xml: string) => parseXlsxChart(parseXmlOrdered(xml), undefined)!
@@ -100,9 +99,6 @@ describe('charts-families-contour (Task A5d)', () => {
 
   // conformance: no throw on edge cases
   it('conformance: empty/all-blank/NaN/Inf/negative/single point', () => {
-    const cases = [
-      `<surfaceChart></surfaceChart>`,
-    ]
     // empty chart (no series) should not throw
     expect(() => parse(space(`<surfaceChart><axId val="1"/><axId val="2"/><axId val="3"/></surfaceChart>`))).not.toThrow()
     const m2 = parse(space(`<surfaceChart>${ser(0, [NaN, Infinity, -5])}<axId val="1"/><axId val="2"/><axId val="3"/></surfaceChart>`))

@@ -164,48 +164,71 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
  */
 function paintContour(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
   const rows = group.series.length
-  const cols = Math.max(1, model.categories.length || Math.max(...group.series.map(s => s.source.values.values ? Object.keys(s.source.values.values).length : 0), 0))
+  const cols = Math.max(1, model.categories.length || Math.max(...group.series.map(s => (s.source.values as any)?.length ?? 0), 0))
   if (!rows || !cols) return
-  // Grid cap 256x256.
   const rCount = Math.min(rows, 256), cCount = Math.min(cols, 256)
-  // Value axis major unit for banding.
   const axisId = group.binding.kind === 'surface' ? group.binding.value : undefined
   const axis = axisId ? model.axes.find(a => a.id === axisId) : model.axes.find(a => a.kind === 'value')
-  const major = (axis && (axis as any).majorUnit) || 1
-  // Collect z values.
-  const grid: Array<Array<number | undefined>> = []
-  let min = Infinity, max = -Infinity
+  const vals: number[] = []
+  for (let r = 0; r < rCount; r++) for (let c = 0; c < cCount; c++) { const v = group.series[r]?.value(c); if (v !== undefined && Number.isFinite(v)) vals.push(v) }
+  const dataMin = vals.length ? Math.min(...vals) : 0
+  const dataMax = vals.length ? Math.max(...vals) : 1
+  const min = Number.isFinite(dataMin) ? (axis?.min ?? dataMin) : 0
+  const max = Number.isFinite(dataMax) ? (axis?.max ?? dataMax) : 1
+  let major = axis?.majorUnit
+  if (!major || major <= 0) {
+    const range = (max - min) || 1
+    const base = 10 ** Math.floor(Math.log10(range / 5 || 1))
+    major = ([1,2,5].map(m => m*base).find(m => m >= range/5) ?? base*10)
+  }
+  const bandCount = Math.max(1, Math.ceil((max - min) / major))
+  // band index for a z value, on the axis tick grid
+  const bandOf = (z: number) => Math.max(0, Math.min(bandCount - 1, Math.floor((z - min) / major)))
+  const accents = ['4472C4','ED7D31','A5A5A5','FFC000','5B9BD5','70AD47']
+  const bandColor = (band: number) => (group.bandColors && group.bandColors[band]) ? group.bandColors[band]! : accents[band % accents.length]
+  const cellW = box.w / cCount, cellH = box.h / rCount
+  const wireframe = group.wireframe === true
+  const grid: number[][] = []
   for (let r = 0; r < rCount; r++) {
-    const row: Array<number | undefined> = []
+    const row: number[] = []
     for (let c = 0; c < cCount; c++) {
       const v = group.series[r]?.value(c)
-      row.push(v)
-      if (v !== undefined && Number.isFinite(v)) { min = Math.min(min, v); max = Math.max(max, v) }
+      row.push(v !== undefined && Number.isFinite(v) ? bandOf(v) : -1)
     }
     grid.push(row)
   }
-  if (!Number.isFinite(min)) { min = 0; max = 1 }
-  if (min === max) max = min + (major || 1)
-  const bandCount = Math.max(1, Math.ceil((max - min) / (major || 1)))
-  const cellW = box.w / cCount, cellH = box.h / rCount
-  // wireframe?
-  const wireframe = group.wireframe === true
-  // Band colours: accent cycle fallback.
-  const accents = ['4472C4','ED7D31','A5A5A5','FFC000','5B9BD5','70AD47']
-  const bandColor = (band: number) => (group.bandColors && group.bandColors[band]) ? group.bandColors[band]! : accents[band % accents.length]
   for (let r = 0; r < rCount; r++) {
     for (let c = 0; c < cCount; c++) {
-      const z = grid[r][c]
-      if (z === undefined || !Number.isFinite(z)) continue
-      const band = Math.max(0, Math.min(bandCount - 1, Math.floor((z - min) / (major || 1))))
+      const b = grid[r][c]
+      if (b < 0) continue
       const x = box.x + c * cellW, y = box.y + r * cellH
-      if (!wireframe) { ctx.fillStyle = '#' + bandColor(band); ctx.fillRect(x, y, cellW, cellH) }
-      else { ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1) }
+      if (!wireframe) {
+        ctx.fillStyle = '#' + bandColor(b)
+        ctx.fillRect(x, y, cellW, cellH)
+      }
     }
   }
+  // wireframe: stroke only band boundaries (edges between differing bands, and next to missing cells)
   if (wireframe) {
-    // boundaries only already drawn per cell; ensure outer border
-    ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1)
+    ctx.strokeStyle = '#000000'; ctx.lineWidth = 1
+    for (let r = 0; r < rCount; r++) {
+      for (let c = 0; c < cCount; c++) {
+        const b = grid[r][c]
+        if (b < 0) continue
+        const x = box.x + c * cellW, y = box.y + r * cellH
+        // right edge
+        if (c + 1 < cCount && grid[r][c+1] !== b) { ctx.beginPath(); ctx.moveTo(x+cellW, y); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
+        else if (c + 1 >= cCount) { ctx.beginPath(); ctx.moveTo(x+cellW, y); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
+        // bottom edge
+        if (r + 1 < rCount && grid[r+1][c] !== b) { ctx.beginPath(); ctx.moveTo(x, y+cellH); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
+        else if (r + 1 >= rCount) { ctx.beginPath(); ctx.moveTo(x, y+cellH); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
+        // missing neighbour edges
+        if (c + 1 < cCount && grid[r][c+1] < 0) { ctx.beginPath(); ctx.moveTo(x+cellW, y); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
+        if (r + 1 < rCount && grid[r+1][c] < 0) { ctx.beginPath(); ctx.moveTo(x, y+cellH); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
+      }
+    }
+    // outer border
+    ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1)
   }
 }
 

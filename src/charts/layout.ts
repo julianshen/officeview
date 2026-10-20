@@ -317,4 +317,4 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
 onChartModelRelease(releaseChartLayouts)
 
 /** The paint-local buffers, admitted before the paint: per group its stack and series buffers (plus the two drop-line extents, A4a). */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48), 0) + view.series.length * 256
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? Math.min(group.series.length, 256) * Math.min(256, Math.max(1, ...group.series.map(s => (s.values as any)?.length ?? 0))) * 16 : 0), 0) + view.series.length * 256

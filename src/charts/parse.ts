@@ -30,15 +30,16 @@ export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 
-function parseBandColors(node: XmlNode, theme: ThemeContext | undefined): string[] | undefined {
+function parseBandColors(node: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void): string[] | undefined {
   const list = getChildren(node, 'bandFmts').length ? getChildren(child(node,'bandFmts'),'bandFmt') : getChildren(node,'bandFmt')
   if (!list.length) return undefined
   const out: string[] = []
   for (const bf of list) {
-    const idx = finite(val(child(bf,'idx'))) ?? out.length
+    const rawIdx = finite(val(child(bf,'idx'))) ?? finite(attrs(bf).idx) ?? out.length
+    const idx = Math.max(0, Math.min(255, Math.trunc(rawIdx)))
     const spPr = child(bf,'spPr')
     const fill = spPr ? solid(spPr, theme) : undefined
-    if (fill) out[idx] = fill
+    if (fill) { chargeChartColor(charge); out[idx] = fill }
   }
   return out.length ? out : undefined
 }
@@ -590,7 +591,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
       ...(type === 'contour' ? { wireframe: val(child(node, 'wireframe')) === '1' || val(child(node, 'wireframe')) === 'true' } : {}),
-      ...(type === 'contour' ? { bandColors: parseBandColors(node, theme) } : {}),
+      ...(type === 'contour' ? { bandColors: parseBandColors(node, theme, charge) } : {}),
       varyColors: vary,
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),
@@ -599,7 +600,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
-  if (groups.some(g => g.family === 'contour' && (g.series.length > 256 || g.series.some(s => (s.values?.length ?? 0) > 256)))) truncated = true
+  const contourOverflow = groups.some(g => g.family === 'contour' && (g.series.length > 256 || g.series.some(s => (s.values?.length ?? 0) > 256)))
+  if (contourOverflow) truncated = true
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
@@ -642,6 +644,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
+    ...(contourOverflow ? { diagnostics: [{ code: 'chart-tick-limit', reason: 'Contour grid exceeds 256x256; truncated to 256x256' }] } : {}),
   }
   return unsupported ? model : admitAxes(model, charge)
 }
