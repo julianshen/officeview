@@ -49,8 +49,14 @@ export const EMBEDDED_INVENTORY_BYTES = EMBEDDED_ENTRY_LIMIT * (384 + 2 * 2 * NA
 /** A chart part's relationships part is read only up to this many inflated bytes (Office writes well under 1 KB). */
 export const EMBEDDED_RELS_LIMIT = 256 * 1024
 const RELS_TOKEN_CHARS = 16 * 1024
-/** Reserved once before the relationships stream: the in-flight chunk plus the tokenizer's carried token (UTF-16). */
-export const EMBEDDED_RELS_CROSSING = CHART_CHUNK_LIMIT + 2 * RELS_TOKEN_CHARS
+/** The relationships grammar (OPC Part 2 §9.3): `Relationships` > flat `Relationship`; anything else is malformed. */
+const RELS_DEPTH = 2, RELS_NAME_CHARS = 64, RELS_ATTRIBUTES = 8, RELS_VALUE_CHARS = 4096, RELS_TEXT_CHARS = 1024
+/**
+ * Reserved once before the relationships stream, in UTF-16 bytes: the in-flight chunk; the carried token; the
+ * last accepted token's names and values the tokenizer still references (at most one token); the element stack
+ * (depth 2, names checked before they are pushed); the pending whitespace segment and its slice.
+ */
+export const EMBEDDED_RELS_CROSSING = CHART_CHUNK_LIMIT + 2 * (2 * RELS_TOKEN_CHARS + RELS_DEPTH * RELS_NAME_CHARS + 2 * RELS_TEXT_CHARS)
 
 export interface EmbeddedWorkbook {
   kind: 'workbook'
@@ -111,9 +117,14 @@ async function readRelationship(pkg: OfficePackage, owner: string, rId: string, 
   const malformed = () => new Stop(unavailable('chart-data-rels-malformed', "The chart's relationships could not be read"))
   try {
     if (!workspace.reserve(EMBEDDED_RELS_CROSSING, crossingTag)) throw new Stop(REFUSED())
-    let found: { target?: string; external: boolean } | undefined
+    let found: { target?: string; external: boolean } | undefined, depth = 0
     const tokenizer = new XmlTokenizer({
-      open(qname, names, values, count) {
+      // The grammar is checked here, before the tokenizer pushes the name or keeps the attributes past this token.
+      open(qname, names, values, count, selfClosing) {
+        if (qname.length > RELS_NAME_CHARS || localName(qname) !== (depth === 0 ? 'Relationships' : 'Relationship') || depth >= RELS_DEPTH) throw malformed()
+        if (count > RELS_ATTRIBUTES) throw malformed()
+        for (let i = 0; i < count; i++) if (names[i].length > RELS_NAME_CHARS || values[i].length > RELS_VALUE_CHARS) throw malformed()
+        if (!selfClosing) depth++
         if (found || localName(qname) !== 'Relationship') return
         let id: string | undefined, target: string | undefined, mode: string | undefined
         for (let i = 0; i < count; i++) {
@@ -125,9 +136,9 @@ async function readRelationship(pkg: OfficePackage, owner: string, rId: string, 
         op.charge(32 + 2 * (target?.length ?? 0))
         found = { ...(target !== undefined ? { target } : {}), external: mode === 'External' }
       },
-      close() {},
-      text() {},
-    }, { maxTokenChars: RELS_TOKEN_CHARS })
+      close() { depth-- },
+      text(text) { if (/\S/.test(text)) throw malformed() },
+    }, { maxTokenChars: RELS_TOKEN_CHARS, maxTextSegmentChars: RELS_TEXT_CHARS, maxDepth: RELS_DEPTH + 1, maxAttributes: RELS_ATTRIBUTES + 1 })
     const comments = new CommentStripper(), decoder = new TextDecoder('utf-8', { fatal: true })
     let accepted = 0
     const write = (text: string) => {

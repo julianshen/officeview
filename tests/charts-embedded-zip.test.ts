@@ -12,6 +12,7 @@ import { createChartWorkspace } from '../src/charts/workspace'
 import { buildChartDocx, buildChartPptx, embeddedXlsx, type ChartEmbedSpec } from './helpers/chart-fixtures'
 import { buildZip, type BuildEntry } from './helpers/zip-builder'
 import type JSZip from 'jszip'
+import { XmlTokenizer } from '../src/core/xml-stream'
 
 /**
  * Gate for an entry's inflate (`target`: the embedding, or the chart's `.rels`); only target streams count in `calls`.
@@ -349,6 +350,52 @@ describe('embedded workbook access (A3a)', () => {
     expect(await resolveExternalData(chartParseContext(documentChartContext('desktop'), longTarget, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'refused', diagnostic: { code: 'chart-rels-limit' } })
     const broken = await load('<Relationships><Relationship Id="rId1" Target="x.xlsx"></Relationships>')
     expect(await resolveExternalData(chartParseContext(documentChartContext('desktop'), broken, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-rels-malformed' } })
+  })
+
+  it('R1: tokenizer state retained across chunks stays within the relationship reservation; off-grammar input is malformed', async () => {
+    const relsPath = 'word/charts/_rels/chart1.xml.rels'
+    const NS = 'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"'
+    const external = '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="https://example.com/book.xlsx" TargetMode="External"/>'
+    const load = (xml: string) => OfficePackage.load(buildZip([{ name: relsPath, data: xml, method: 0 }]).bytes)
+    type Probe = { stack: string[]; pending: string; carry: string; names: string[]; values: string[] }
+    const units = (t: Probe) => [...t.stack, t.pending, t.carry, ...t.names, ...t.values].reduce((n, s) => n + (s?.length ?? 0), 0)
+    const orig = XmlTokenizer.prototype.write
+    const run = async (xml: string) => {
+      const doc = documentChartContext('desktop')
+      let writes = 0, worst = 0
+      // After every write (one per chunk): what the tokenizer still holds, at 2 B per unit, against what is admitted now.
+      XmlTokenizer.prototype.write = function (this: XmlTokenizer, text: string) {
+        try { return orig.call(this, text) } finally {
+          writes++
+          worst = Math.max(worst, 2 * units(this as unknown as Probe) - doc.workspace.used)
+        }
+      }
+      try {
+        const result = await openEmbeddedWorkbook(chartParseContext(doc, await load(xml), 'word/charts/chart1.xml'), 'rId1')
+        expect(doc.workspace.used).toBe(0)
+        return { result, writes, worst }
+      } finally { XmlTokenizer.prototype.write = orig }
+    }
+    // codex's probe: eight nested 15,000-unit element names under the root.
+    const names = Array.from({ length: 8 }, (_, i) => String.fromCharCode(65 + i).repeat(15000))
+    const nested = await run(`<Relationships ${NS}>` + names.map(n => `<${n}>`).join('') + [...names].reverse().map(n => `</${n}>`).join('') + '</Relationships>')
+    expect(nested.result).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-rels-malformed' } })
+    expect(nested.worst).toBeLessThanOrEqual(0)
+    // Off-grammar shapes are malformed, never retained: wrong root, a child of Relationship, a long name, too many
+    // attributes, an oversized value, non-whitespace text.
+    for (const xml of [
+      `<Other ${NS}>${external}</Other>`,
+      `<Relationships ${NS}><Relationship Id="rId9" Target="x"><Relationship Id="rId1" Target="y"/></Relationship></Relationships>`,
+      `<Relationships ${NS}><${'R'.repeat(65)}/>${external}</Relationships>`,
+      `<Relationships ${NS}><Relationship ${Array.from({ length: 9 }, (_, i) => `a${i}="v"`).join(' ')}/>${external}</Relationships>`,
+      `<Relationships ${NS}><Relationship Id="rId9" Target="${'t'.repeat(4097)}"/>${external}</Relationships>`,
+      `<Relationships ${NS}>${'z'.repeat(40000)}${external}</Relationships>`,
+    ]) expect((await run(xml)).result, xml.slice(0, 90)).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-rels-malformed' } })
+    // A valid part spread over many chunks: whitespace and many relationships, the requested one last.
+    const spread = await run(`<Relationships ${NS}>` + Array.from({ length: 600 }, (_, i) => `\n  <Relationship Id="rX${i}" Type="t" Target="../embeddings/${'w'.repeat(200)}${i}.xlsx"/>`).join('') + ' '.repeat(30000) + external + '</Relationships>')
+    expect(spread.result).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-external' } })
+    expect(spread.writes).toBeGreaterThan(4)
+    expect(spread.worst).toBeLessThanOrEqual(0)
   })
 
   it('I2: an abort during relationship resolution returns cancelled at once; its charges are held until it settles', async () => {
