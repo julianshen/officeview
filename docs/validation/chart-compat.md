@@ -98,14 +98,17 @@ area blank/#N/A cells are checked under each `dispBlanksAs` value (gap, zero, sp
 | CH-5.8-19 | Pie, doughnut | other error | no slice | pending | |
 | CH-5.8-20 | Pie, doughnut | unavailable | no slice, plus diagnostic | pending | |
 
-## A1b placement and typography validation (uncommitted candidate)
+## A1b placement and typography validation
 
 A1b adds a transferable stage-1 axis/tick/label snapshot and a realm-local,
 placement-keyed layout sidecar. Retained layouts belong to the receiving chart
-workspace; paint scratch is released on return. Font publication, resize, model
-replacement and receiver disposal invalidate the sidecar. An active paint pins
+workspace; paint scratch is released on return. Font publication, model replacement and receiver disposal invalidate the sidecar.
+Multiple sizes share a pressure-evicted LRU; revisiting a size reuses its placement. An active paint pins
 its invalidated entry until it returns. The synchronous API without an explicit
-context retains its existing bounded per-call default.
+context retains its existing bounded per-call default. Unowned stage-1 preparation
+uses an isolated mobile workspace: it is bounded locally but is not aggregated
+with a receiving document ledger. Callers needing aggregate admission must supply
+an owner/context.
 
 `tests/charts-layout.test.ts` covers placement keys, warm measurement reuse,
 refusal before measurement, transfer, receiver/model disposal, reentrant disposal,
@@ -129,7 +132,21 @@ series when the path work bound would be exceeded.
 A clean archive of base `416117d` builds an eager bundle of 38,637 bytes; the
 candidate build measured 38,639 bytes with bun/node:zlib. Normalizing lazy chunk
 hashes makes index.js byte-identical: +2 B from the base, +8 B from B0 (38,631),
-below the task ceiling of 38,647. Detailed final gates and unresolved validation
-limits are in `task-A1b-report.md` in the controller's SDD directory. Browser and
+below the task ceiling of 38,647. That measurement belongs to the initial A1b implementation. Browser and
 independent Office-reference validation remain pending; no acceptance box is
 advanced on the strength of the node-canvas checks.
+
+Fix-round-1 regressions additionally cover 200 native mobile charts, tight retained
+charges, workspace LRU pressure, one-byte construction refusal, A→B→A reuse,
+a fresh VM realm with its own receiving workspace, collection of the original
+painting canvas, uniform automatic label intervals, authored skip and vertical
+text, shared display-unit bands, worker font publication, and refused snapshot
+release. These tests establish accounting and placement invariants, not independent
+Office-reference fidelity.
+
+Fix-round-1 gates: typecheck, 161 chart tests, mapped production build and eager
+import graph pass; eager gzip is 38,638 B (task ceiling 38,647 B). The full suite
+with the three socket suites excluded has 7,638 passing and five failing tests.
+Three failures pass isolated; the policy eviction/recreation timeout and mounted
+font-generation asset-loader assertion reproduce on unchanged base 634dfd4.
+The full-suite gate therefore remains non-green.

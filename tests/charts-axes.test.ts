@@ -1,7 +1,6 @@
 // @vitest-environment node
-import { layoutBound, paintWorkspaceBytes, releaseChartLayouts, releaseWorkspaceLayouts } from '../src/charts/layout'
+import { layoutChart, layoutBound, releaseChartLayouts, releaseWorkspaceLayouts } from '../src/charts/layout'
 import { preparedAxesBytes } from '../src/charts/prepare'
-import { displayView } from '../src/charts/display'
 /**
  * A1a: the axis graph and scales (spec 5.1, 6.5 tick bound). Numeric model tests over the parsed chart and its
  * resolved axes, plus one painter check that the drawing follows the graph. Fixtures are Office-shaped
@@ -290,7 +289,7 @@ describe('A1a fix round 1: admission, label order, minor elements, extreme scale
     expect(log[0]).toMatch(/^chart-layout#/)
     expect(log[1]).toMatch(/^chart-paint#/)
     expect(Number(log[0].split(':').pop())).toBeGreaterThanOrEqual(axisGraphBound(model, 3))
-    expect(workspace.used).toBe(held + layoutBound(model))
+    expect(workspace.used).toBe(held + retained(model, { workspace, profile: 'desktop' }))
     expect(drawn.of('fillRect').length).toBeGreaterThan(3)
     // Full: resolveAxes refuses before building, and the paint is the contained card (no native bars), nothing held.
     workspace.reserve(workspace.limit - workspace.used, 'pressure')
@@ -392,7 +391,7 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
       expect(bytes).toBeLessThanOrEqual(bound)
     }
     {
-      const model = models[0], bound = layoutBound(model) + paintWorkspaceBytes(model, displayView(model))
+      const model = models[0], bound = layoutBound(model)
       // A parent with exactly the bound admits the paint; one byte less refuses it with the card.
       for (const [room, native] of [[bound, true], [bound - 1, false]] as const) {
         let held = 0
@@ -401,7 +400,7 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
         const r = recorder(400, 300)
         paintXlsxChart(model, r.ctx, 400, 300, undefined, { ...context, workspace })
         expect(r.texts().join(' ').includes('memory')).toBe(!native)
-        expect(held).toBe(layoutBound(model))
+        expect(held).toBe(native ? retained(model, { ...context, workspace }, 400, 300) : 0)
         releaseWorkspaceLayouts(workspace)
         expect(held).toBe(0)
       }
@@ -426,7 +425,7 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
     const ok = recorder()
     paintXlsxChart(clone, ok.ctx, 800, 500, undefined, context)
     expect(log.length).toBe(2)
-    expect(context.workspace.used).toBe(layoutBound(clone))
+    expect(context.workspace.used).toBe(retained(clone, context))
     expect(ok.texts()).toContain('C1')
     // No headroom in the receiving document: the card.
     context.workspace.reserve = reserve
@@ -522,12 +521,12 @@ describe('A1a fix round 3: the interactive sheet preparation receives charts int
       const ok = paintLease(clone, lease)
       expect(ok.texts()).toContain('C1')
       expect(peak).toBeGreaterThan(0)
-      expect(ledger.ownerBytes('drawings', 'charts')).toBe(layoutBound(clone))
+      expect(ledger.ownerBytes('drawings', 'charts')).toBe(retained(clone, context))
       // The viewer ledger full: the card.
       ledger.set('layout', 'pressure', MAIN_THREAD_BUDGETS.M)
       const full = paintLease(clone, lease)
       expect(full.texts().join(' ')).toMatch(/memory/)
-      expect(ledger.ownerBytes('drawings', 'charts')).toBe(layoutBound(clone))
+      expect(ledger.ownerBytes('drawings', 'charts')).toBe(retained(clone, context))
     } finally { lease.dispose() }
   })
 })
@@ -592,7 +591,7 @@ describe('A1a fix round 4: receiving contexts follow the active parent and profi
     try {
       paintLease(clone, a); paintLease(clone, b); paintLease(clone, a)
       expect([one.calls.length, two.calls.length]).toEqual([3, 2])
-      expect([one.held, two.held]).toEqual([layoutBound(clone), layoutBound(clone)])
+      expect([one.held, two.held]).toEqual([retained(clone, a.assets.chartContext!), retained(clone, b.assets.chartContext!)])
       // The same (document, parent, profile) shares one context while either lease lives.
       const c = await prepareSheetAssets(doc, { chartParent: one.parent, profile: 'D' })
       expect(c.assets.chartContext).toBe(a.assets.chartContext)
@@ -600,3 +599,7 @@ describe('A1a fix round 4: receiving contexts follow the active parent and profi
     } finally { a.dispose(); b.dispose() }
   })
 })
+
+function retained(model: ChartModel, context: Parameters<typeof layoutChart>[6], w = 800, h = 500): number {
+  return layoutChart(model, w, h, 1, 0, { width: () => { throw new Error("Expected cached placement") }, lineHeight: () => 14 }, context).retainedBytes
+}

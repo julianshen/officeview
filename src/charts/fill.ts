@@ -209,7 +209,7 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
   } catch (error) {
     if (owner) owner.workspace.release(fillTag)
     if (!(error instanceof ChartRefusal)) throw error
-    const refused = { ...model, unsupported: 'This chart needs more memory than is available for charts', refused: true as const }
+    const refused = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true as const }
     succeedChartModel(model, refused)
     return refused
   }
@@ -374,7 +374,7 @@ export function stampWorkbookEpoch(drawings: XlsxDrawingLike[] | undefined, epoc
       try { next = prepareChartAxes({ ...content.chart, workbookEpoch: epoch }, chartModelOwner(content.chart)) }
       catch (error) {
         if (!(error instanceof ChartRefusal)) throw error
-        next = { ...content.chart, workbookEpoch: epoch, unsupported: 'This chart needs more memory than is available for charts', refused: true }
+        next = { ...content.chart, preparedAxes: undefined, workbookEpoch: epoch, unsupported: 'This chart needs more memory than is available for charts', refused: true }
       }
       succeedChartModel(content.chart, next)
       content.chart = next

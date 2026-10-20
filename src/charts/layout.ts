@@ -1,5 +1,5 @@
 /** Placement-only chart layout. The weak sidecar is never serialized with the model.
- * One live placement per model/workspace; resize, DPR and font changes evict before building.
+ * Placements share a pressure-evicted LRU per receiving workspace.
  * A conservative construction bound is reserved before measurement or graph construction.
  */
 import type { ChartModel, ChartManualLayout, ChartDiagnostic, ChartTextStyle } from './model'
@@ -17,6 +17,8 @@ export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
 export interface ChartLayout {
   graph: AxisGraph; view: DisplayView; area: Box; plot: Box; title: Box; legend: Box
+  readonly retainedBytes: number
+  axisBands: Map<string, number>
   texts: Map<string, string[]>
   labelIndices: Map<string, Set<number>>
   fontPx: number; labels: Map<string, AxisLabel[]>; diagnostics: ChartDiagnostic[]
@@ -63,36 +65,89 @@ export function legendEntries(model: ChartModel, view: DisplayView): Array<{ nam
   }
   return view.series.map(({ series }) => ({ name: series.name, color: series.color }))
 }
-interface Entry { entries: Map<ChartWorkspace, Entry>; pins: number; layout: ChartLayout; workspace: ChartWorkspace; tag: string; key: string; family: string }
+interface Entry {
+  contexts: Map<ChartWorkspace, Map<string, Entry>>
+  entries: Map<string, Entry>
+  pins: number
+  layout: ChartLayout
+  workspace: ChartWorkspace
+  tag: string
+  key: string
+  ref: WeakRef<Entry>
+}
 const defaults = new WeakMap<ChartModel, ChartWorkspace>()
-const cache = new WeakMap<ChartModel, Map<ChartWorkspace, Entry>>()
+const cache = new WeakMap<ChartModel, Map<ChartWorkspace, Map<string, Entry>>>()
+// Weak links preserve collection of a model while maintaining insertion-order LRU.
+const byWorkspace = new WeakMap<ChartWorkspace, Set<WeakRef<Entry>>>()
 const fontEntries = new Set<WeakRef<Entry>>()
+const collected = new FinalizationRegistry<{ workspace: ChartWorkspace; tag: string; ref: WeakRef<Entry> }>(e => {
+  e.workspace.release(e.tag)
+  byWorkspace.get(e.workspace)?.delete(e.ref)
+  fontEntries.delete(e.ref)
+})
+const layoutEntries = new WeakMap<ChartLayout, Entry>()
+let serial = 0
+
 export function invalidateChartFonts(): void {
-  for (const ref of fontEntries) { const e = ref.deref(); if (e) drop(e) }
+  for (const ref of fontEntries) { const entry = ref.deref(); if (entry) drop(entry) }
   fontEntries.clear()
 }
-const byWorkspace = new WeakMap<ChartWorkspace, Set<WeakRef<Entry>>>()
-const collected = new FinalizationRegistry<{ workspace: ChartWorkspace; tag: string }>(e => e.workspace.release(e.tag))
-let serial = 0
-const layoutEntries = new WeakMap<ChartLayout, Entry>()
-function drop(entry: Entry): void { entry.key = ''; if (entry.entries.get(entry.workspace) === entry) entry.entries.delete(entry.workspace); if (!entry.pins) { collected.unregister(entry); entry.workspace.release(entry.tag) } }
-/** Pin cached storage across synchronous re-entrant paint/invalidation. */
+function touch(entry: Entry): void {
+  const lru = byWorkspace.get(entry.workspace)!
+  lru.delete(entry.ref)
+  lru.add(entry.ref)
+}
+function drop(entry: Entry): void {
+  if (entry.entries.get(entry.key) === entry) entry.entries.delete(entry.key)
+  if (!entry.entries.size) entry.contexts.delete(entry.workspace)
+  entry.key = ''
+  byWorkspace.get(entry.workspace)?.delete(entry.ref)
+  fontEntries.delete(entry.ref)
+  if (!entry.pins) {
+    collected.unregister(entry)
+    entry.workspace.release(entry.tag)
+  }
+}
+/** Evict least-recently-used, unpinned cache entries before refusing construction or paint scratch. */
+export function reserveChartLayoutWorkspace(workspace: ChartWorkspace, bytes: number, tag: string): boolean {
+  if (workspace.reserve(bytes, tag)) return true
+  for (const ref of byWorkspace.get(workspace) ?? []) {
+    const entry = ref.deref()
+    if (!entry) { byWorkspace.get(workspace)?.delete(ref); continue }
+    if (entry.pins) continue
+    drop(entry)
+    if (workspace.reserve(bytes, tag)) return true
+  }
+  return false
+}
 export function holdChartLayout(layout: ChartLayout): () => void {
   const entry = layoutEntries.get(layout)!
   entry.pins++
   let released = false
-  return () => { if (released) return; released = true; entry.pins--; if (!entry.key) drop(entry) }
+  return () => {
+    if (released) return
+    released = true
+    entry.pins--
+    if (!entry.key) drop(entry)
+  }
 }
 export function releaseChartLayouts(model: ChartModel): void {
-  for (const e of cache.get(model)?.values() ?? []) drop(e)
+  for (const placements of cache.get(model)?.values() ?? []) {
+    for (const entry of placements.values()) drop(entry)
+  }
   cache.delete(model)
   defaults.delete(model)
 }
 export function releaseWorkspaceLayouts(workspace: ChartWorkspace): void {
-  for (const ref of byWorkspace.get(workspace) ?? []) { const e = ref.deref(); if (e) drop(e) }
+  for (const ref of byWorkspace.get(workspace) ?? []) { const entry = ref.deref(); if (entry) drop(entry) }
   byWorkspace.delete(workspace)
 }
-/** Retention and construction bound, including labels/maps, legend widths and display closures. */
+/** Scoped parse ledgers expose the receiving facet; paint and layout share this rule. */
+export function ownedChartWorkspace(model: ChartModel): ChartWorkspace | undefined {
+  const owner = chartModelOwner(model)?.workspace
+  return owner && ((owner as { facet?: ChartWorkspace }).facet ?? owner)
+}
+/** Temporary construction bound, including labels/maps, legend widths and display closures. */
 export function layoutBound(model: ChartModel): number {
   let slots = model.categories.length, series = 0, text = 0
   for (const group of model.groups) for (const s of group.series) { series++; slots = Math.max(slots, s.values.length); text += s.name.length * 2 }
@@ -102,15 +157,81 @@ export function layoutBound(model: ChartModel): number {
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily)): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')
-  const owner = chartModelOwner(model)?.workspace
-  const workspace = context?.workspace ?? (owner && ((owner as { facet?: ChartWorkspace }).facet ?? owner)) ?? (() => { let w = defaults.get(model); if (!w) defaults.set(model, w = createChartWorkspace('mobile')); return w })()
-  let entries = cache.get(model)
-  const key = `${w},${h},${dpr},${fontGeneration}`, old = entries?.get(workspace)
-  if (old?.key === key && old.family === family) return old.layout
-  if (old) { drop(old); entries!.delete(workspace) }
-  const tag = `chart-layout#${++serial}`
-  if (!workspace.reserve(layoutBound(model), tag)) throw new ChartRefusal()
+  let workspace = context?.workspace ?? ownedChartWorkspace(model) ?? defaults.get(model)
+  if (!workspace) { workspace = createChartWorkspace('mobile'); defaults.set(model, workspace) }
+  let contexts = cache.get(model)
+  if (!contexts) { contexts = new Map(); cache.set(model, contexts) }
+  let entries = contexts.get(workspace)
+  if (!entries) { entries = new Map(); contexts.set(workspace, entries) }
+  const key = JSON.stringify([w, h, dpr, fontGeneration, family])
+  const hit = entries.get(key)
+  if (hit) { touch(hit); return hit.layout }
+  const tag = `chart-layout#${++serial}`, bound = layoutBound(model)
+  if (!reserveChartLayoutWorkspace(workspace, bound, tag)) throw new ChartRefusal()
   try {
+    const layout = buildLayout(model, w, h, measure, family)
+    if (layout.retainedBytes > bound) throw new ChartRefusal()
+    const retainedTag = `${tag}:retained`
+    workspace.transfer(tag, retainedTag, layout.retainedBytes)
+    const entry = { contexts, entries, pins: 0, layout, workspace, tag: retainedTag, key } as Entry
+    entry.ref = new WeakRef(entry)
+    layoutEntries.set(layout, entry)
+    contexts.set(workspace, entries)
+    entries.set(key, entry)
+    let lru = byWorkspace.get(workspace)
+    if (!lru) { lru = new Set(); byWorkspace.set(workspace, lru) }
+    lru.add(entry.ref)
+    fontEntries.add(entry.ref)
+    collected.register(entry, { workspace, tag: retainedTag, ref: entry.ref }, entry)
+    return layout
+  } finally { workspace.release(tag) }
+}
+
+/** Pure lookup factory: its lexical scope contains no measuring callback or canvas. */
+function cachedWidths(widths: Map<string, Map<string, number>>): ChartLayout['width'] {
+  return (text, font) => {
+    const width = widths.get(font)?.get(text)
+    if (width === undefined) throw new Error('Chart text was not measured during layout')
+    return width
+  }
+}
+/** Tight retained bound: objects/maps/closures plus the actual ticks, label records and width entries.
+ * Borrowed model storage is charged by the model owner; shared strings/ticks are conservatively priced again.
+ */
+function retainedBytes(layout: Omit<ChartLayout, 'width' | 'retainedBytes'>, widths: Map<string, Map<string, number>>): number {
+  let bytes = 4096 + layout.view.series.length * 512 + layout.graph.groups.length * 256
+  for (const axis of layout.graph.axes.values()) bytes += 1024 + (axis.ticks.length + axis.minorTicks.length) * 16
+  for (const [id, strings] of layout.texts) bytes += 96 + id.length * 2 + strings.reduce((n, s) => n + 48 + s.length * 2, 0)
+  for (const labels of layout.labels.values()) bytes += 128 + labels.length * 192
+  for (const [font, strings] of widths) {
+    bytes += 96 + font.length * 2
+    for (const text of strings.keys()) bytes += 64 + text.length * 2
+  }
+  for (const diagnostic of layout.diagnostics) bytes += 64 + diagnostic.code.length * 2 + diagnostic.reason.length * 2
+  return bytes
+}
+/** Automatic thinning uses one interval; authored intervals retain a final overlap guard. */
+function thinLabels(list: AxisLabel[], authored: number | undefined, gap: number): AxisLabel[] {
+  const fits = (labels: AxisLabel[]) => labels.every((l, i) => !i || l.position - l.extent / 2 >= labels[i-1].position + labels[i-1].extent / 2 + gap)
+  if (authored !== undefined) {
+    let last = -Infinity
+    return list.filter(label => {
+      if (label.index % authored || label.position - label.extent / 2 < last + gap) return false
+      last = label.position + label.extent / 2
+      return true
+    })
+  }
+  const byIndex = new Map(list.map(l => [l.index, l]))
+  const max = Math.max(0, ...byIndex.keys())
+  for (let stride = 1; stride <= max + 1; stride++) {
+    const kept: AxisLabel[] = []
+    for (let i = 0; i <= max; i += stride) { const label = byIndex.get(i); if (label) kept.push(label) }
+    if (kept.length > 1 && kept[0].position > kept[kept.length-1].position) kept.reverse()
+    if (fits(kept)) return kept
+  }
+  return []
+}
+function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasure, family: string): ChartLayout {
     const widths = new Map<string, Map<string, number>>()
     const width = (text: string, font: string) => {
       let byText = widths.get(font); if (!byText) widths.set(font, byText = new Map())
@@ -143,7 +264,7 @@ export function layoutChart(model: ChartModel, w: number, h: number, dpr: number
     const placed = graph.groups.filter(g => g !== undefined), used = [...graph.axes.values()].filter(a => placed.some(g => g.horizontal === a || g.vertical === a))
     const valueAxes = used.filter(a => placed.some(g => g.value === a)), baseAxes = used.filter(a => !valueAxes.includes(a))
     const bands = { l: [] as number[], r: [] as number[], t: [] as number[], b: [] as number[] }
-    const texts = new Map<string, string[]>()
+    const texts = new Map<string, string[]>(), axisBands = new Map<string, number>()
     for (const a of [...valueAxes, ...baseAxes].sort((p, q) => (p.orientation === 'v' ? 0 : 1) - (q.orientation === 'v' ? 0 : 1))) {
       const strings = model.preparedAxes?.axes.find(p => p.id === a.id)?.labels ?? axisTexts(a, graph, view); texts.set(a.id, strings)
       const px = (a.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72, angle = textAngle(a.axis.text ?? model.text)
@@ -151,6 +272,7 @@ export function layoutChart(model: ChartModel, w: number, h: number, dpr: number
       for (const s of strings) widest = Math.max(widest, width(s, chartFont(px, family)))
       const cross = a.orientation === 'h' ? Math.abs(Math.sin(angle)) * widest + Math.abs(Math.cos(angle)) * px : Math.abs(Math.cos(angle)) * widest + Math.abs(Math.sin(angle)) * px
       const band = a.deleted || a.axis.tickLblPos === 'none' ? 0 : a.orientation === 'h' ? cross + 6 : a.role === 'value' ? cross + 6 + (a.axis.majorTickMark === 'out' || a.axis.majorTickMark === 'cross' ? 4 : 0) : Math.min(area.w * .35, cross + 8)
+      axisBands.set(a.id, band)
       const side = axisSide(a, graph); bands[side].push(band)
       if (a.display?.label && !a.deleted) bands[side].push(fontPx + 6)
       if (a.axis.title) bands[side].push(fontPx + 6)
@@ -171,9 +293,8 @@ export function layoutChart(model: ChartModel, w: number, h: number, dpr: number
       const list: AxisLabel[] = [], strings = texts.get(a.id)!, angle = textAngle(a.axis.text ?? model.text)
       const px = (a.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72
       const group = placed.find(g => g.category === a), between = !(group && (group.value.axis.crossBetween ?? a.axis.crossBetween) === 'midCat')
-      const stride = a.axis.tickLblSkip ?? 1
       for (let i = 0; i < strings.length; i++) {
-        if (i % stride || !strings[i]) continue
+        if (!strings[i]) continue
         const f = a.role === 'value' ? axisFraction(a, a.ticks[i], false) : a.role === 'date' ? categoryFraction(a, dateUnitIndex(a.ticks[i], a.dateBase!, graph.epoch) - a.dateStart!, between) : categoryFraction(a, i, between)
         const position = a.orientation === 'h' ? plot.x + f * plot.w : plot.y + plot.h - f * plot.h
         const measured = width(strings[i], chartFont(px, family))
@@ -182,25 +303,14 @@ export function layoutChart(model: ChartModel, w: number, h: number, dpr: number
         list.push({ index: i, text: strings[i], position, extent, crossExtent, angle })
       }
       list.sort((a, b) => a.position - b.position)
-      let last = -Infinity
-      const kept = list.filter(label => { if (label.position - label.extent / 2 < last + (a.role === 'value' ? 0 : 4)) return false; last = label.position + label.extent / 2; return true })
+      const kept = thinLabels(list, a.axis.tickLblSkip, a.role === 'value' ? 0 : 4)
       if (kept.length < list.length) diagnostics.push({ code: 'chart-label-skip', reason: `Axis ${a.id} labels thinned to avoid overlap` })
       labels.set(a.id, kept)
     }
     const labelIndices = new Map([...labels].map(([id, values]) => [id, new Set(values.map(v => v.index))]))
-    const layout: ChartLayout = { texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics, width }
-    if (!entries) cache.set(model, entries = new Map())
-    const entry = { entries, pins: 0, layout, workspace, tag, key, family }
-    layoutEntries.set(layout, entry)
-    entries.set(workspace, entry)
-    let refs = byWorkspace.get(workspace); if (!refs) byWorkspace.set(workspace, refs = new Set())
-    for (const ref of refs) if (!ref.deref() || !ref.deref()!.key) refs.delete(ref)
-    refs.add(new WeakRef(entry));
-    for (const ref of fontEntries) if (!ref.deref() || !ref.deref()!.key) fontEntries.delete(ref)
-    fontEntries.add(new WeakRef(entry)); collected.register(entry, { workspace, tag }, entry)
-    return layout
-  } catch (e) { workspace.release(tag); throw e }
-}
+    const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics }
+    return { ...data, retainedBytes: retainedBytes(data, widths), width: cachedWidths(widths) }
+ }
 
 onChartModelRelease(releaseChartLayouts)
 
