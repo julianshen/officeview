@@ -314,6 +314,8 @@ export interface ChartExGroup extends ChartGroup {
     plotAreaLine?: import('./style').ChartLineStyle
     /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
     gapWidth?: number
+    /** Waterfall: the increase, decrease and total colours (style palette entries 0, 1, 2; hex), resolved at parse. */
+    palette?: string[]
   }
 }
 

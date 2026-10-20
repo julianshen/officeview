@@ -28,7 +28,8 @@
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
 import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
-import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
+import type { ChartAxis, ChartDiagnostic, ChartExGroup, ChartGroup, ChartModel, ChartTimeUnit } from './model'
+import { WATERFALL_ERROR_POINT, waterfallExtent } from './chartex/waterfall'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
 import { contourGridOf, contourPainted } from './families/contour'
@@ -396,6 +397,11 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       // Contour: the value domain of the drawn grid only.
       const drawn = contourPainted(grid, view.groupSeries(g).length, count)
       for (const s of view.groupSeries(g).slice(0, drawn.rows)) for (let i = 0; i < drawn.cols; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
+      return
+    }
+    // Waterfall (B2): the running totals' extent (0 included), streamed; an error point is skipped and diagnosed.
+    if (group.kind === 'chartEx' && group.family === 'waterfall') {
+      waterfallExtent(group as ChartExGroup, view, g, v => see(p.value, v), () => { if (!diagnostics.some(d => d.code === WATERFALL_ERROR_POINT)) diagnostics.push({ code: WATERFALL_ERROR_POINT, reason: 'Waterfall error points draw no bar and add nothing to the running total' }) })
       return
     }
     const series = view.groupSeries(g)

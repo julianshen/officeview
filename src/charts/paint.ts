@@ -27,6 +27,9 @@ import { paintErrorBars, type ErrorBarPlacement } from './errorBars'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
+import { paintWaterfall, waterfallLevels } from './chartex/waterfall'
+import { FUNNEL_TEXTS, paintFunnel } from './chartex/funnel'
+import type { ChartExGroup } from './model'
 import { chartFont } from './textStyle'
 import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle, titleHeight } from './layout'
 import { paintChartUserShapes } from './userShapes'
@@ -448,6 +451,13 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
     const B = axes.category ?? axes.x!
     /** The coordinate of a value on the group's value axis. */
     const at = (v: number) => along(V, axisFraction(V, v))
+    // Waterfall (B2): floating and anchored bars on the running total, then its connectors.
+    if (group.family === 'waterfall' && group.kind === 'chartEx' && axes.category) {
+      const source = model.source.groups[g] as ChartExGroup
+      paintWaterfall(ctx, { group: source, g, view: model.view, levels: waterfallLevels(source, model.view, g), category: axes.category, between: axes.between, plot, at,
+        categoryIndex: slot => graph.categoryIndex(axes.category!, slot), admitPath, fillWith, strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect) })
+      return
+    }
     const plotted = (v: number | undefined) => v !== undefined && V.plottable(v) ? v : undefined
     const crossing = B.crossesValue ?? Math.max(V.min, Math.min(V.max, 0))
     const stacked = group.grouping === 'stacked' || group.grouping === 'percentStacked' ? (() => {
@@ -709,6 +719,26 @@ function paintRadarChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout
   })
 }
 
+/** A funnel (B2) in the plot area, with its measured category labels; admitted against the path work bound. */
+function paintFunnelChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
+  const plot = layout.plot
+  if (plot.w <= 4 || plot.h <= 4) return
+  let remaining = 262144
+  const admitPath = (cost: number) => {
+    if (cost <= remaining) { remaining -= cost; return true }
+    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
+    return false
+  }
+  if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
+  const axis = model.axes.find(a => a.kind === 'category')
+  paintFunnel(ctx, {
+    group: model.source.groups[0] as ChartExGroup, view: model.view, plot, labels: layout.texts.get(FUNNEL_TEXTS) ?? [],
+    font: chartFont((axis?.text?.sizePt ?? model.fontSizePt) * 96 / 72, familyCss(model.fontFamily)), textColor: TEXT,
+    admitPath, fillWith, strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+  })
+}
+
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
 export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify, chartContext?: ChartDocumentContext): void {
   if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
@@ -761,6 +791,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
       const group = model.groups[0]
       if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
       else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
+      else if (group.family === 'funnel' && group.kind === 'chartEx') paintFunnelChart(ctx, model, layout, familyCss)
       else if (group.family === 'ofPie' && group.series[0]) paintOfPie(ctx, area, group, group.series[0], slot => model.view.source(slot), model.view.slots)
       else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
       paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))

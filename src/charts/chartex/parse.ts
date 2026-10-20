@@ -44,9 +44,10 @@ import { parseLineStyle, resolveSeriesColor } from '../style'
 import { readChartStyleParts } from '../styleParts'
 import { applyDataPrecedence } from '../dataPrecedence'
 import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS } from '../fill'
+import { displayFamilyUnsupported } from './funnel'
 
 /** Families whose painter has landed. Every other family stays `unsupported` (its fallback is kept). */
-export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>()
+export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['waterfall', 'funnel'])
 export const CHARTEX_PENDING = 'ChartEx charts are not supported yet'
 export const CHARTEX_REGION_MAP = 'Region map charts are not supported'
 export const CHARTEX_UNREADABLE = 'This chart could not be read'
@@ -305,6 +306,15 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
     }
   })
 
+  // Waterfall and funnel draw one series: several visible ones are unsupported (map §9; B2).
+  const several = displayFamilyUnsupported(family, infos)
+  if (several) throw new Unsupported(several)
+  // Waterfall: the increase, decrease and total colours are the style palette's first three entries (map §6 [U]).
+  let palette: string[] | undefined
+  if (family === 'waterfall') {
+    charge(3 * (SLOT_BYTES + stringBytes('000000')))
+    palette = [0, 1, 2].map(index => resolveSeriesColor({ index, count: 3, ...(parts ? { parts } : {}), theme }))
+  }
   const bound = infos[0]?.axisIds ?? []
   const category = axes.find(axis => axis.kind === 'category' && bound.includes(axis.id)) ?? firstCategory
   const value = axes.find(axis => axis.kind === 'value' && bound.includes(axis.id)) ?? firstValue
@@ -314,7 +324,7 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
     kind: 'chartEx', family, grouping: 'standard', series, binding, gapWidth: gapWidth !== undefined ? Math.round(gapWidth * 100) : 150, overlap: 0,
     chartEx: {
       data: [...acquired.values()], series: infos, ...(paretoLine ? { paretoLine } : {}), ...(byCategory ? { byCategory } : {}), ...(gapWidth !== undefined ? { gapWidth } : {}),
-      ...(plotAreaFill ? { plotAreaFill } : {}), ...(plotAreaLine ? { plotAreaLine } : {}),
+      ...(plotAreaFill ? { plotAreaFill } : {}), ...(plotAreaLine ? { plotAreaLine } : {}), ...(palette ? { palette } : {}),
     },
   }
   const legend = child(chart, 'legend'), legendPos = attrs(legend).pos ?? 'r'
@@ -429,8 +439,10 @@ function layoutProperties(node: XmlNode | undefined, family: ChartExFamily, char
   const subtotals = child(node, 'subtotals')
   if (subtotals) {
     const idx = getChildren(subtotals, 'idx')
-    charge(idx.length * SLOT_BYTES)
-    out.subtotals = idx.map(item => uint(valOrText(item))).filter((i): i is number => i !== undefined)
+    // The kept list plus the transient index list and set (charged up front; the transients stay charged).
+    charge(idx.length * 6 * SLOT_BYTES)
+    // Sorted and distinct, within the display bound (the waterfall walks them beside its slots).
+    out.subtotals = [...new Set(idx.map(item => uint(valOrText(item))).filter((i): i is number => i !== undefined && i < CHART_POINT_LIMIT))].sort((a, b) => a - b)
   }
   const statistics = attrs(child(node, 'statistics')).quartileMethod
   if (child(node, 'statistics')) out.quartileMethod = statistics === 'inclusive' ? 'inclusive' : 'exclusive'
