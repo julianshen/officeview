@@ -8,7 +8,7 @@ import { prepareChartAxes } from './prepare'
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, parseChartRange } from './parse'
 import type { ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
-import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
+import { CHART_ERROR_BAR_BYTES, ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
 import { ERROR_ROLES, errorRole } from './errorBars'
@@ -202,8 +202,13 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
       return text
     } finally { owner.workspace.release(labelTag) }
   }
+  // Record copies (error bar sets gaining filled custom amounts) coexist with the predecessor's records until the
+  // successor takes over the model's charge: the copies are admitted on their own tag before they are made, and
+  // refunded at that boundary (succession, or the refusal), when the predecessor's records stop being owned.
+  const copyTag = owner ? `${owner.tag}:copy` : ''
+  const reserveCopy = (bytes: number) => { if (owner && !owner.workspace.reserve(bytes, copyTag)) throw new ChartRefusal() }
   try {
-    const next = prepareChartAxes(fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch ?? model.workbookEpoch), owner)
+    const next = prepareChartAxes(fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch ?? model.workbookEpoch, reserveCopy), owner)
     if (owner) {
       owner.workspace.transfer(fillTag, owner.tag, charged.bytes)
       if (chartModelOwner(model)) succeedChartModel(model, next); else adoptChartModel(next, owner)
@@ -215,12 +220,12 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     const refused = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true as const }
     succeedChartModel(model, refused)
     return refused
-  }
+  } finally { if (owner) owner.workspace.release(copyTag) }
 }
 /** The bound admitted before a label is built: the formatter's capped output (CHART_LABEL_LIMIT + 1 units,
  * one past the limit marks truncation), which also bounds the retained label. */
 const LABEL_BOUND_BYTES = stringBytes(' '.repeat(CHART_LABEL_LIMIT + 1))
-function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: (allocation?: ChartTextAllocation) => string, keepEmpty?: boolean) => string, workbookEpoch?: ChartEpoch): ChartModel {
+function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: (allocation?: ChartTextAllocation) => string, keepEmpty?: boolean) => string, workbookEpoch?: ChartEpoch, reserveCopy: (bytes: number) => void = () => {}): ChartModel {
   let truncated = model.truncated ?? false
   // Epoch normalization (spec 5.1): filled values carry the workbook's epoch; only date roles (date-axis categories,
   // values on a date-formatted axis) are converted into the chart epoch, through the civil model. A serial without
@@ -302,6 +307,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
           for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }) }
           return out.done()
         }
+        // The copied array and records are admitted before they are built (the point storage above is charged).
+        reserveCopy(CHART_ERROR_BAR_BYTES.array + series.errorBars.length * CHART_ERROR_BAR_BYTES.spec)
         next.errorBars = series.errorBars.map(bars => {
           const plus = pending[errorRole(bars.dir, 'plus')], minus = pending[errorRole(bars.dir, 'minus')]
           return plus || minus ? { ...bars, ...(plus ? { plus: amounts(plus) } : {}), ...(minus ? { minus: amounts(minus) } : {}) } : bars

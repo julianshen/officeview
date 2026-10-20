@@ -194,3 +194,16 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
+
+## A6b error bars: implemented and unverified behaviour (spec 5.7)
+
+Fixtures are Office-shaped synthetic (`tests/charts-error-bars.test.ts`); none of this is matched against an Office reference yet.
+
+- **100% stacked groups.** Bars are drawn in the normalised (share) space. The anchor is the stacked share. Fixed and custom amounts are divided by the slot's total of |values|, the same normalisation as the point. A percentage is relative to the normalised value. stdDev and stdErr run over the normalised values. This is an **approximation** and is **unverified against Office**.
+- **stdErr** is s/√n, with s the n−1 sample deviation. `val` has no role. Unverified.
+- **stdDev on stacked groups** is centred on the series mean plus the point's stack offset. Unverified.
+- **Absent `val`** is 1 (the schema has no default). Unverified.
+- **Custom amounts** are signed as authored (a negative plus amount draws downward). A point missing an amount its `errBarType` needs draws no bar. Unverified.
+- **Hidden points** (plotVisOnly) leave the stdDev/stdErr computation. Unverified.
+- **Default rendering** without `a:ln` is #595959 at 1 px, with 3 px end caps either side. Unverified constants.
+- **Automatic axes** include the bar ends (100% stacked axes stay 0–100%). Unverified.

@@ -11,7 +11,7 @@ import { parseXlsxChart } from '../src/charts/parse'
 import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart } from '../src/charts/layout'
 import { pointList, PointWriter } from '../src/charts/points'
-import { pendingLines } from '../src/charts/fill'
+import { fillChartRanges, pendingLines } from '../src/charts/fill'
 import { errorBarStatistic } from '../src/charts/errorBars'
 import { chartParseContext, documentChartContext } from '../src/charts/context'
 import { readChartPart } from '../src/charts/read'
@@ -118,6 +118,34 @@ describe('charts-error-bars (Task A6b)', () => {
     const sx = (i: number) => sp.x + sp.w * (i + 0.5) / 2, sy = (v: number) => sp.y + sp.h * (1 - v / 10)
     sameSegments(s.of('#FF0000'), [...vbar(sx(0), sy(3), sy(3.5)), ...vbar(sx(1), sy(4), sy(4.5))])
 
+    // Clustered columns (two series, gap 100): only the second carries bars and they sit on its own bars. band = w/2,
+    // bar width = band/3; series 1's centre = slot start + band/6 + band/3 + band/6 = slot start + 2·band/3.
+    const pair = [{ values: [3, 5], errBars: '' }, { values: [4, 6], errBars: bars({ type: 'plus', val: '1' }) }]
+    const k = paint(category('barChart', pair, { valueScale: [0, 10] })), kp = k.plot, kb = kp.w / 2
+    const ky = (v: number) => kp.y + kp.h * (1 - v / 10)
+    sameSegments(k.of('#FF0000'), [...vbar(kp.x + kb * (0 + 2 / 3), ky(4), ky(5)), ...vbar(kp.x + kb * (1 + 2 / 3), ky(6), ky(7))])
+    // Horizontal clusters: slot i's top edge is plot bottom - band·(i+1); series 1's centre is 2·band/3 below it.
+    const q = paint(category('barChart', pair, { barDir: 'bar', valueScale: [0, 10] })), qp = q.plot, qb = qp.h / 2
+    const qx = (v: number) => qp.x + qp.w * v / 10
+    sameSegments(q.of('#FF0000'), [...hbar(qp.y + qp.h - qb + 2 * qb / 3, qx(4), qx(5)), ...hbar(qp.y + qp.h - 2 * qb + 2 * qb / 3, qx(6), qx(7))])
+
+    // noEndCap is a CT_Boolean: absent element false (caps); empty element true; explicit 1/true true, 0/false false.
+    // Plus only, two points: 2 shafts, plus 2 caps when capped.
+    const segments = (endCap: string) => paint(parse(space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/><errBars><errBarType val="plus"/><errValType val="fixedVal"/>${endCap}<val val="1"/>${RED}</errBars><val>${lit([2, 4])}</val></ser>${AX}</lineChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`))).of('#FF0000').length
+    expect(segments('')).toBe(4)
+    expect(segments('<noEndCap/>')).toBe(2)
+    expect(segments('<noEndCap val="1"/>')).toBe(2)
+    expect(segments('<noEndCap val="true"/>')).toBe(2)
+    expect(segments('<noEndCap val="0"/>')).toBe(4)
+    expect(segments('<noEndCap val="false"/>')).toBe(4)
+
+    // Unknown enumerations, prototype names included, are invalid: diagnosed, never accepted.
+    for (const errBars of [bars({ type: 'toString', val: '1' }), bars({ valType: 'constructor', val: '1' }), bars({ dir: 'hasOwnProperty', val: '1' })]) {
+      const bad = category('lineChart', [{ values: [2, 4], errBars }], { valueScale: [0, 10] })
+      expect(prepared(bad)).toHaveLength(0)
+      expect(codes(bad)).toContain('chart-error-bars-parameter')
+    }
+
     // x on a non-XY chart is never drawn (spec 5.7: y only for non-XY), diagnosed.
     const sideways = category('lineChart', [{ values: [2, 4], errBars: bars({ dir: 'x', val: '1' }) }], { valueScale: [0, 10] })
     expect(prepared(sideways)).toHaveLength(0)
@@ -171,9 +199,38 @@ describe('charts-error-bars (Task A6b)', () => {
     expect(errorBarStatistic('stdErr', points([1, 2, 3]), 1)).toMatchObject({ kind: 'stat', amount: 1 / Math.sqrt(3) })
     expect(errorBarStatistic('stdDev', points([1, 'unavailable', 3]), 1)).toMatchObject({ kind: 'none', reason: expect.stringMatching(/unavailable/) })
     expect(errorBarStatistic('stdDev', points([4, 'blank']), 1)).toMatchObject({ kind: 'none' })
+    // Scaled statistics: finite inputs far from 1 keep their finite deviation. [1e200, 2e200]: sd = √0.5·1e200,
+    // stdErr = sd/√2 = 5e199; [1e-200, 2e-200] the same at 1e-200. A deviation past the float range is dropped.
+    const big = errorBarStatistic('stdDev', points([1e200, 2e200]), 1), bigErr = errorBarStatistic('stdErr', points([1e200, 2e200]), 1)
+    const tiny = errorBarStatistic('stdDev', points([1e-200, 2e-200]), 1), tinyErr = errorBarStatistic('stdErr', points([1e-200, 2e-200]), 1)
+    if (big.kind !== 'stat' || bigErr.kind !== 'stat' || tiny.kind !== 'stat' || tinyErr.kind !== 'stat') throw new Error('no statistic')
+    expect(big.amount / 7.0710678118654755e199).toBeCloseTo(1, 12); expect(big.center! / 1.5e200).toBeCloseTo(1, 12)
+    expect(bigErr.amount / 5e199).toBeCloseTo(1, 12)
+    expect(tiny.amount / 7.0710678118654755e-201).toBeCloseTo(1, 12); expect(tiny.center! / 1.5e-200).toBeCloseTo(1, 12)
+    expect(tinyErr.amount / 5e-201).toBeCloseTo(1, 12)
+    expect(errorBarStatistic('stdDev', points([-1.7e308, 1.7e308]), 1)).toMatchObject({ kind: 'none', reason: expect.stringMatching(/not representable/) })
+    expect(errorBarStatistic('stdDev', points([0, 4]), 1e308)).toMatchObject({ kind: 'none', reason: expect.stringMatching(/not representable/) })
+    const huge = category('lineChart', [{ values: [-1.7e308, 1.7e308], errBars: bars({ valType: 'stdDev', val: '1' }) }])
+    expect(prepared(huge)).toHaveLength(0)
+    expect(huge.preparedAxes!.diagnostics.find(d => d.code === 'chart-error-bars-dropped')?.reason).toMatch(/not representable/)
     const single = category('lineChart', [{ values: [3], errBars: bars({ valType: 'stdDev', val: '1' }) }])
     expect(prepared(single)).toHaveLength(0)
     expect(codes(single)).toContain('chart-error-bars-dropped')
+    // 100% stacked columns (spec 5.8 includes them): bars are drawn in the normalised space. Series 0 [1, 2] under
+    // series 1 [3, 2]: totals 4 and 4, series 0's shares (and stacked tops) 0.25 and 0.5; the axis runs 0..1.
+    // Fixed 1 -> 1/4 = 0.25 (ends 0.5, 0.75); custom 2 -> 0.5 (ends 0.75, 1); percentage 50% -> half the share.
+    const hundred = (errBars: string) => category('barChart', [{ values: [1, 2], errBars }, { values: [3, 2], errBars: '' }], { grouping: 'percentStacked' })
+    const pc = (model: ChartModel) => { const r = paint(model), p = r.plot; return { r, x: (i: number) => p.x + p.w * (i + 0.5) / 2, y: (v: number) => p.y + p.h * (1 - v) } }
+    const f100 = pc(hundred(bars({ type: 'plus', val: '1' })))
+    sameSegments(f100.r.of('#FF0000'), [...vbar(f100.x(0), f100.y(0.25), f100.y(0.5)), ...vbar(f100.x(1), f100.y(0.5), f100.y(0.75))])
+    const c100 = pc(hundred(bars({ type: 'plus', valType: 'cust', plus: lit([2, 2]) })))
+    sameSegments(c100.r.of('#FF0000'), [...vbar(c100.x(0), c100.y(0.25), c100.y(0.75)), ...vbar(c100.x(1), c100.y(0.5), c100.y(1))])
+    const p100 = pc(hundred(bars({ type: 'plus', valType: 'percentage', val: '50' })))
+    sameSegments(p100.r.of('#FF0000'), [...vbar(p100.x(0), p100.y(0.25), p100.y(0.375)), ...vbar(p100.x(1), p100.y(0.5), p100.y(0.75))])
+    // stdDev over the shares 0.25, 0.5: mean 0.375, sd = √(2·0.125²) = 0.125·√2.
+    const s100 = hundred(bars({ valType: 'stdDev', val: '1' }))
+    expect(prepared(s100)[0].center).toBeCloseTo(0.375, 12)
+    expect(prepared(s100)[0].amount).toBeCloseTo(0.125 * Math.SQRT2, 12)
     // Automatic value axes include the bar ends: 1..3 with fixed 10 reach -9 and 13.
     const wide = category('lineChart', [{ values: [1, 2, 3], errBars: bars({ val: '10' }) }])
     const value = wide.preparedAxes!.axes.find(a => a.id === '2')!
@@ -188,7 +245,8 @@ describe('charts-error-bars (Task A6b)', () => {
   })
 
   it('custom plus and minus from caches and the embedded workbook; a missing custom point draws no bar', async () => {
-    // Cached: plus [1, -, 2, -], minus [0.5, -, 0.5, 1]. Point 1 has neither: no bar. Point 3 has no plus: no plus side.
+    // Cached, both: plus [1, -, 2, -], minus [0.5, -, 0.5, 1]. Point 1 has neither and point 3 lacks the plus amount
+    // that "both" needs: neither draws a bar (spec 5.7: missing custom values for a point, no bar for that point).
     const cached = category('lineChart', [{ values: [2, 4, 6, 8], errBars: bars({ valType: 'cust', plus: lit([1, null, 2, null]), minus: lit([0.5, null, 0.5, 1]) }) }], { valueScale: [0, 10] })
     expect(states(cached.groups[0].series[0].errorBars![0].plus)).toEqual([1, 'blank', 2, 'blank'])
     const c = paint(cached), cp = c.plot
@@ -196,12 +254,17 @@ describe('charts-error-bars (Task A6b)', () => {
     sameSegments(c.of('#FF0000'), [
       ...vbar(x(0), y(2), y(3)), ...vbar(x(0), y(2), y(1.5)),
       ...vbar(x(2), y(6), y(8)), ...vbar(x(2), y(6), y(5.5)),
-      ...vbar(x(3), y(8), y(7)),
     ])
+    // A plus-only set needs no minus amount (none is authored); its point without a plus amount draws nothing.
+    const plusOnly = paint(category('lineChart', [{ values: [2, 4], errBars: bars({ valType: 'cust', type: 'plus', plus: lit([1, null]) }) }], { valueScale: [0, 10] }))
+    sameSegments(plusOnly.of('#FF0000'), vbar(x(0, 2), y(2), y(3)))
+    // Minus-only likewise ignores the plus amounts (absent here).
+    const minusOnly = paint(category('lineChart', [{ values: [2, 4], errBars: bars({ valType: 'cust', type: 'minus', minus: lit([null, 1]) }) }], { valueScale: [0, 10] }))
+    sameSegments(minusOnly.of('#FF0000'), vbar(x(1, 2), y(4), y(3)))
 
     // DOCX: no cache, so the custom amounts come from the embedded workbook (spec 6.4 precedence 2). C3 is empty and
-    // C4 holds #N/A: those points draw no plus side. A plus reference to a missing sheet leaves that side unavailable,
-    // diagnosed, while the chart and its other side still draw.
+    // C4 holds #N/A: those points lack the plus amount "both" needs and draw no bar. A plus reference to a missing
+    // sheet leaves that role unavailable, diagnosed: the set draws no bars while the chart and its series still draw.
     const NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
     const xml = (plus: string) => `<c:chartSpace ${NS}><c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/>`
       + `<c:errBars><c:errBarType val="both"/><c:errValType val="cust"/><c:noEndCap val="0"/><c:plus><c:numRef><c:f>${plus}</c:f></c:numRef></c:plus><c:minus><c:numRef><c:f>Sheet1!$D$2:$D$4</c:f></c:numRef></c:minus><c:spPr><a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" w="9525"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr></c:errBars>`
@@ -234,14 +297,14 @@ describe('charts-error-bars (Task A6b)', () => {
     const fx = (i: number) => fp.x + fp.w * (i + 0.5) / 3, fy = (v: number) => fp.y + fp.h * (1 - v / 10)
     sameSegments(f.of('#FF0000'), [
       ...vbar(fx(0), fy(2), fy(3)), ...vbar(fx(0), fy(2), fy(1.5)),
-      ...vbar(fx(1), fy(4), fy(3.5)),
-      ...vbar(fx(2), fy(6), fy(5.5)),
     ])
     expect(missing.unsupported).toBeUndefined()
     expect(missing.diagnostics?.map(d => d.code)).toContain('chart-data-sheet-missing')
     expect(missing.groups[0].series[0].errorBars![0].plus).toBeUndefined()
+    expect(missing.preparedAxes!.diagnostics.map(d => d.code)).toContain('chart-error-bars-custom-missing')
     const m = paint(missing)
-    sameSegments(m.of('#FF0000'), [0, 1, 2].flatMap(i => vbar(fx(i), fy([2, 4, 6][i]), fy([2, 4, 6][i] - 0.5))))
+    expect(m.of('#FF0000')).toHaveLength(0)
+    expect(m.strokes.some(st => st.segments.length >= 2)).toBe(true)
     for (const chart of charts) releaseChartModel(chart)
     expect(doc.workspace.used).toBe(0)
 
@@ -283,6 +346,33 @@ describe('charts-error-bars (Task A6b)', () => {
     expect(preparedAxesBytes(withBars.model.preparedAxes)).toBeLessThanOrEqual(prep[0].bytes)
     releaseChartModel(withBars.model); releaseChartModel(plain.model)
     expect(withBars.workspace.used).toBe(0)
+
+    // A fill adding custom amounts copies the error-bar array and records while the predecessor's still live: the
+    // copy (64 + 128 per set) is admitted on its own tag before it is made and refunded once the successor owns the
+    // model. A budget with no room for it refuses the chart before any copy exists.
+    const fillRun = (refuseCopy: boolean) => {
+      const workspace = createChartWorkspace('mobile')
+      const calls: Array<{ tag: string; bytes: number }> = [], releases: string[] = []
+      const reserve = workspace.reserve.bind(workspace), release = workspace.release.bind(workspace)
+      workspace.reserve = (bytes, tag) => { calls.push({ tag, bytes }); return refuseCopy && tag.endsWith(':copy') ? false : reserve(bytes, tag) }
+      workspace.release = tag => { releases.push(tag); release(tag) }
+      const xml = space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${bars({ valType: 'cust', type: 'plus', plus: '<numRef><f>Styled!$B$1:$B$2</f></numRef>' })}<val>${lit([2, 4])}</val></ser>${AX}</lineChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`)
+      const model = parseXlsxChart(parseXmlOrdered(xml), undefined, { workspace, profile: 'mobile', partPath: 'xl/charts/chart1.xml', pkg: undefined as never })!
+      const filled = fillChartRanges(model, 'Styled', (_sheet, row) => ({ value: row + 1 }))
+      return { filled, calls, releases, workspace }
+    }
+    const ok = fillRun(false), copy = ok.calls.filter(c => c.tag.endsWith(':copy'))
+    expect(copy).toEqual([{ tag: expect.stringMatching(/^chart-model#\d+:copy$/), bytes: 64 + 128 }])
+    expect(ok.releases).toContain(copy[0].tag)
+    expect(states(ok.filled.groups[0].series[0].errorBars![0].plus)).toEqual([1, 2])
+    expect(prepared(ok.filled)).toHaveLength(1)
+    releaseChartModel(ok.filled)
+    expect(ok.workspace.used).toBe(0)
+    const tight = fillRun(true)
+    expect(tight.filled.refused).toBe(true)
+    expect(tight.filled.groups[0].series[0].errorBars![0].plus).toBeUndefined()
+    releaseChartModel(tight.filled)
+    expect(tight.workspace.used).toBe(0)
   })
 
   it('analytic stdDev over 65536 drops the bars', () => {
