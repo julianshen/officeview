@@ -17,6 +17,7 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { contourGridDiagnostic, contourGridOf } from './families/contour'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -30,18 +31,21 @@ export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 
-function parseBandColors(node: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void): string[] | undefined {
-  const list = getChildren(node, 'bandFmts').length ? getChildren(child(node,'bandFmts'),'bandFmt') : getChildren(node,'bandFmt')
-  if (!list.length) return undefined
-  const out: string[] = []
-  for (const bf of list) {
-    const rawIdx = finite(val(child(bf,'idx'))) ?? finite(attrs(bf).idx) ?? out.length
-    const idx = Math.max(0, Math.min(255, Math.trunc(rawIdx)))
-    const spPr = child(bf,'spPr')
-    const fill = spPr ? solid(spPr, theme) : undefined
-    if (fill) { chargeChartColor(charge); out[idx] = fill }
+/**
+ * Contour band formats (`c:bandFmts/c:bandFmt`, CT_BandFmt: a child `c:idx` and `c:spPr`), by band index: the
+ * solid fill and line colours, null for noFill. Each retained colour is charged before it is kept.
+ */
+function parseBandFormats(node: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void): { bandColors?: Array<string | null>; bandLines?: Array<string | null> } {
+  const fills: Array<string | null> = [], lines: Array<string | null> = []
+  for (const bf of getChildren(child(node, 'bandFmts'), 'bandFmt')) {
+    const idx = finite(val(child(bf, 'idx')))
+    if (idx === undefined || !Number.isInteger(idx) || idx < 0 || idx >= 256) continue
+    const spPr = child(bf, 'spPr')
+    const fill = solid(spPr, theme), line = solid(spPr, theme, true)
+    if (fill !== undefined) { chargeChartColor(charge); fills[idx] = fill }
+    if (line !== undefined) { chargeChartColor(charge); lines[idx] = line }
   }
-  return out.length ? out : undefined
+  return { ...(fills.length ? { bandColors: fills } : {}), ...(lines.length ? { bandLines: lines } : {}) }
 }
 const val = (node: XmlNode | undefined) => attrs(node).val
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
@@ -428,6 +432,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   seriesCount = Math.min(seriesCount, CHART_SERIES_LIMIT)
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
+  const authoredSeries: number[] = []
   const cut = { truncated: false }
   let sharedCategoryNode: XmlNode | undefined
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
@@ -563,7 +568,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         color,
         values,
         ...(seriesCategories ? {categories:seriesCategories} : {}),
-        labels: readLabels(child(ser, 'dLbls'), charge),
+        labels: type === 'contour' ? undefined : readLabels(child(ser, 'dLbls'), charge),
         ...(xValues ? { xValues } : {}),
         ...(pointColors.length ? { pointColors } : {}),
         ...(fill ? { fill } : {}),
@@ -582,16 +587,19 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
       })
     }
+    // The contour bands' default colours: the accent cycle of the document's theme (and style/colour parts), charged.
+    const bandAccents = () => Array.from({ length: 6 }, (_, index) => (chargeChartColor(charge), resolveSeriesColor({ index, count: 6, styleId, parts, theme })))
+    authoredSeries.push(getChildren(node, 'ser').length)
     groups.push({
       family: type, grouping, series, binding,
-      labels: readLabels(child(node, 'dLbls'), charge),
+      // CT_SurfaceChart and CT_SurfaceSer have no data labels.
+      labels: type === 'contour' ? undefined : readLabels(child(node, 'dLbls'), charge),
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
       gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
-      ...(type === 'contour' ? { wireframe: val(child(node, 'wireframe')) === '1' || val(child(node, 'wireframe')) === 'true' } : {}),
-      ...(type === 'contour' ? { bandColors: parseBandColors(node, theme, charge) } : {}),
+      ...(type === 'contour' ? { wireframe: child(node, 'wireframe') ? flag(child(node, 'wireframe'), true) : false, ...parseBandFormats(node, theme, charge), bandAccents: bandAccents() } : {}),
       varyColors: vary,
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),
@@ -600,8 +608,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
-  const contourOverflow = groups.some(g => g.family === 'contour' && (g.series.length > 256 || g.series.some(s => (s.values?.length ?? 0) > 256)))
-  if (contourOverflow) truncated = true
+  // The contour grid bound (spec 9): rows from the authored series count, columns from the categories.
+  const contourClips = groups.flatMap((g, i) => g.family === 'contour' ? [contourGridOf({ categories }, g, authoredSeries[i])] : []).filter(grid => grid.clipped)
+  if (contourClips.length) truncated = true
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
@@ -644,7 +653,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
-    ...(contourOverflow ? { diagnostics: [{ code: 'chart-tick-limit', reason: 'Contour grid exceeds 256x256; truncated to 256x256' }] } : {}),
+    ...(contourClips.length ? { diagnostics: contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d }) } : {}),
   }
   return unsupported ? model : admitAxes(model, charge)
 }

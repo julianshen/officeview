@@ -11,6 +11,7 @@ import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
+import { CONTOUR_GRID_LIMIT, contourGridDiagnostic, contourGridOf } from './families/contour'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -319,6 +320,16 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     const reason = `${unrepresentable} date ${unrepresentable === 1 ? 'value has' : 'values have'} no counterpart in the ${epoch} date system`
     charge(stringBytes(reason))
     diagnostics.push({ code: 'chart-date-unrepresentable', reason })
+  }
+  // The contour grid bound (spec 9) over the filled categories: diagnosed once, the chart marked truncated.
+  for (const group of groups) {
+    if (group.family !== 'contour') continue
+    const grid = contourGridOf({ categories }, group)
+    if (!grid.clipped || diagnostics.some(d => d.code === CONTOUR_GRID_LIMIT)) continue
+    const diagnostic = contourGridDiagnostic(grid)
+    charge(stringBytes(diagnostic.code) + stringBytes(diagnostic.reason))
+    diagnostics.push(diagnostic)
+    truncated = true
   }
   const { categoryPending, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
   void categoryPending, void _hidden, void _values, void _diagnostics

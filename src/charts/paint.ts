@@ -4,7 +4,7 @@ import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
- * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
+ * clustered/stacked/100%, line, area, pie, doughnut, scatter, contour). Anything else
  * paints the eager placeholder card. Moved from `src/xlsx/chart.ts` (A0a);
  * since A1a the cartesian families draw on the axis graph (`charts/axes.ts`).
  */
@@ -13,6 +13,7 @@ import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
 import { axisFraction, categoryFraction, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
 import { paintDataLabels } from './labelPaint'
+import { contourEdges, contourGridOf, paintContour } from './families/contour'
 import { plotPoint } from './plotPoint'
 import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
@@ -92,7 +93,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, s: DrawSeries, sourceIndex: n
 }
 
 function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): Box {
-  const entries = legendEntries(model.source, model.view)
+  const entries = legendEntries(model.source, model.view, layout.graph)
   if (!model.legend || !entries.length) return area
   if (model.legendFill && fillWith(ctx, model.legendFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
   strokeBorder(ctx, model.legendLine, '000000', area, area)
@@ -105,7 +106,7 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box,
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
   entries.forEach((entry, i) => {
     if (vertical ? y + line > area.y + area.h + .5 : x + widths[i] > area.x + area.w + .5) return
-    ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw)
+    if (entry.color) { ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw) }
     ctx.fillStyle = TEXT
     if (vertical) ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2, Math.max(1, area.w - sw - gap * 3))
     else ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2)
@@ -157,81 +158,12 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
 }
 
 /**
- * The cartesian families (bar, line, area, scatter) drawn on the axis graph (spec 5.1): every group against its
+ * The cartesian families (bar, line, area, scatter) and contour groups (`families/contour.ts`: the band grid on
+ * its category and series axes) drawn on the axis graph (spec 5.1): every group against its
  * own bound axes, each value axis with its own scale (primary and secondary), crossings, orientation, display
  * units, gridlines and authored tick marks. With one value axis and no authored placement it draws exactly as
  * the engine did before A1a (the same layout arithmetic and drawing order).
  */
-function paintContour(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
-  const rows = group.series.length
-  const cols = Math.max(1, model.categories.length || Math.max(...group.series.map(s => (s.source.values as any)?.length ?? 0), 0))
-  if (!rows || !cols) return
-  const rCount = Math.min(rows, 256), cCount = Math.min(cols, 256)
-  const axisId = group.binding.kind === 'surface' ? group.binding.value : undefined
-  const axis = axisId ? model.axes.find(a => a.id === axisId) : model.axes.find(a => a.kind === 'value')
-  const vals: number[] = []
-  for (let r = 0; r < rCount; r++) for (let c = 0; c < cCount; c++) { const v = group.series[r]?.value(c); if (v !== undefined && Number.isFinite(v)) vals.push(v) }
-  const dataMin = vals.length ? Math.min(...vals) : 0
-  const dataMax = vals.length ? Math.max(...vals) : 1
-  const min = Number.isFinite(dataMin) ? (axis?.min ?? dataMin) : 0
-  const max = Number.isFinite(dataMax) ? (axis?.max ?? dataMax) : 1
-  let major = axis?.majorUnit
-  if (!major || major <= 0) {
-    const range = (max - min) || 1
-    const base = 10 ** Math.floor(Math.log10(range / 5 || 1))
-    major = ([1,2,5].map(m => m*base).find(m => m >= range/5) ?? base*10)
-  }
-  const bandCount = Math.max(1, Math.ceil((max - min) / major))
-  // band index for a z value, on the axis tick grid
-  const bandOf = (z: number) => Math.max(0, Math.min(bandCount - 1, Math.floor((z - min) / major)))
-  const accents = ['4472C4','ED7D31','A5A5A5','FFC000','5B9BD5','70AD47']
-  const bandColor = (band: number) => (group.bandColors && group.bandColors[band]) ? group.bandColors[band]! : accents[band % accents.length]
-  const cellW = box.w / cCount, cellH = box.h / rCount
-  const wireframe = group.wireframe === true
-  const grid: number[][] = []
-  for (let r = 0; r < rCount; r++) {
-    const row: number[] = []
-    for (let c = 0; c < cCount; c++) {
-      const v = group.series[r]?.value(c)
-      row.push(v !== undefined && Number.isFinite(v) ? bandOf(v) : -1)
-    }
-    grid.push(row)
-  }
-  for (let r = 0; r < rCount; r++) {
-    for (let c = 0; c < cCount; c++) {
-      const b = grid[r][c]
-      if (b < 0) continue
-      const x = box.x + c * cellW, y = box.y + r * cellH
-      if (!wireframe) {
-        ctx.fillStyle = '#' + bandColor(b)
-        ctx.fillRect(x, y, cellW, cellH)
-      }
-    }
-  }
-  // wireframe: stroke only band boundaries (edges between differing bands, and next to missing cells)
-  if (wireframe) {
-    ctx.strokeStyle = '#000000'; ctx.lineWidth = 1
-    for (let r = 0; r < rCount; r++) {
-      for (let c = 0; c < cCount; c++) {
-        const b = grid[r][c]
-        if (b < 0) continue
-        const x = box.x + c * cellW, y = box.y + r * cellH
-        // right edge
-        if (c + 1 < cCount && grid[r][c+1] !== b) { ctx.beginPath(); ctx.moveTo(x+cellW, y); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
-        else if (c + 1 >= cCount) { ctx.beginPath(); ctx.moveTo(x+cellW, y); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
-        // bottom edge
-        if (r + 1 < rCount && grid[r+1][c] !== b) { ctx.beginPath(); ctx.moveTo(x, y+cellH); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
-        else if (r + 1 >= rCount) { ctx.beginPath(); ctx.moveTo(x, y+cellH); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
-        // missing neighbour edges
-        if (c + 1 < cCount && grid[r][c+1] < 0) { ctx.beginPath(); ctx.moveTo(x+cellW, y); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
-        if (r + 1 < rCount && grid[r+1][c] < 0) { ctx.beginPath(); ctx.moveTo(x, y+cellH); ctx.lineTo(x+cellW, y+cellH); ctx.stroke() }
-      }
-    }
-    // outer border
-    ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1)
-  }
-}
-
 function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: AxisGraph, box: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): void {
   const placed = graph.groups.filter((g): g is GroupAxes => Boolean(g))
   if (!placed.length) return
@@ -355,7 +287,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       tickMarks(a, a.minorTicks, t => along(a, dateAt(t)), a.axis.minorTickMark)
       tickMarks(a, a.ticks, t => along(a, dateAt(t)), a.axis.majorTickMark)
     }
-    if (a.role === 'category') {
+    if (a.role === 'category' || a.role === 'series') {
       const authored = a.axis.tickMarkSkip ?? 1, skip = Math.max(authored, Math.ceil((between ? n + 1 : n) / 1000))
       const marks = Array.from({ length: Math.ceil((between ? n + 1 : n) / skip) }, (_, k) => k * skip)
       tickMarks(a, marks, k => along(a, between ? (a.reversed ? 1 - k / n : k / n) : categoryFraction(a, k, false)), a.axis.majorTickMark)
@@ -376,11 +308,13 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       }
       continue
     }
-    if (model.view.category(0) === undefined) continue
+    // A series axis (contour rows): the series names, one per drawn row.
+    const names = a.role === 'series' ? layout.texts.get(a.id) ?? [] : undefined
+    if (!names && model.view.category(0) === undefined) continue
     // Legacy positions (band centres) when unreversed and between; otherwise the axis fraction.
     const at = (i: number) => between && !a.reversed ? (a.orientation === 'h' ? plot.x + band * (i + 0.5) : plot.y + plot.h - band * (i + 0.5)) : along(a, categoryFraction(a, i, between))
-    for (let i = 0; i < count; i++) {
-      const c = model.view.category(i)
+    for (let i = 0; i < Math.min(names?.length ?? count, n); i++) {
+      const c = names ? names[i] : model.view.category(i)
       if (c === undefined) continue
       if (a.orientation === 'v') { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, c, place === 'r' ? anchor + 4 : anchor - 4, at(i)) }
       else { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, i, c, at(i), place === 't' ? anchor - 3 : anchor + 3) }
@@ -415,6 +349,11 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
   model.groups.forEach((group, g) => {
     const axes = graph.groups[g]
     if (!axes) return
+    if (group.family === 'contour') {
+      const grid = contourGridOf(model, model.source.groups[g])
+      paintContour(ctx, { group, grid, slots: count, ticks: contourEdges(axes.value), categoryReversed: axes.horizontal.reversed, seriesReversed: axes.vertical.reversed, plot })
+      return
+    }
     const { value: V, horizontal } = axes
     const B = axes.category ?? axes.x!
     /** The coordinate of a value on the group's value axis. */
@@ -667,7 +606,6 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     if (area.w <= 8 || area.h <= 8) return
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
-    else if (group.family === 'contour') paintContour(ctx, model, group, area)
     else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
     paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }

@@ -11,9 +11,10 @@ import { axisGraphBound, axisFraction, categoryFraction, type AxisGraph, type Re
 import { displayView, type DisplayView } from './display'
 import { chartModelOwner, ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
-import { hydrateAxes } from './prepare'
+import { hydrateAxes, seriesLabels } from './prepare'
+import { contourEdges, contourLegendEntries, contourPaintBytes } from './families/contour'
 import { formatNumber } from '../xlsx/chartDescription'
-import { dateTickLabel, dateUnitIndex } from './dates'
+import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -56,10 +57,18 @@ export function axisSide(a: ResolvedAxis, graph: AxisGraph): 'l' | 'r' | 'b' | '
 export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView): string[] {
   if (a.role === 'value') return a.ticks.map(t => formatNumber(a.labelValue(t), a.percent))
   if (a.role === 'date') return a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
-  return Array.from({ length: view.slots }, (_, i) => view.category(i) ?? '')
+  if (a.role === 'series') return seriesLabels(graph, view, a)
+  return Array.from({ length: Math.min(a.slots, view.slots) }, (_, i) => view.category(i) ?? '')
 }
-export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string }> {
+/** Legend entries; an entry without a colour has no swatch (a noFill contour band). */
+export function legendEntries(model: ChartModel, view: DisplayView, graph?: AxisGraph): Array<{ name: string; color?: string }> {
   const group = model.groups[0]
+  if (group?.family === 'contour') {
+    // Contour: the bands (spec 4.1), named by the shared value axis's tick labels.
+    const value = graph?.groups[0]?.value
+    if (!value) return []
+    return contourLegendEntries(group, contourEdges(value), model.preparedAxes?.axes.find(p => p.id === value.id)?.labels ?? axisTexts(value, graph, view), edge => formatNumber(value.labelValue(edge), value.percent))
+  }
   if (group?.family === 'pie' || group?.family === 'doughnut') {
     const s = view.groupSeries(0)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
@@ -154,6 +163,8 @@ export function layoutBound(model: ChartModel): number {
   for (const group of model.groups) for (const s of group.series) { series++; slots = Math.max(slots, s.values.length); text += s.name.length * 2 }
   slots = Math.min(4096, Math.max(1, slots))
   for (const c of model.categories) text += c.length * 2
+  // Contour legend entries: one per band (at most the tick bound), each with its interval text and measured width.
+  for (const group of model.groups) if (group.family === 'contour') text += legendBands(model) * 512
   return (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily)): ChartLayout {
@@ -247,7 +258,7 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     const title = resolveManualLayout(model.titleLayout, { ...area, h: Math.min(96, fontPx * 1.4) + 6 }, w, h, diagnostics)
     if (model.title) area = { ...area, y: area.y + Math.min(96, fontPx * 1.4) + 6, h: area.h - Math.min(96, fontPx * 1.4) - 6 }
     let legendAuto = { ...area }
-    const entriesForLegend = legendEntries(model, view), line = fontPx + 6
+    const entriesForLegend = legendEntries(model, view, graph), line = fontPx + 6
     if (model.legend && entriesForLegend.length) {
       const sizes = entriesForLegend.map(e => width(e.name, chartFont(fontPx, family)) + fontPx * .7 + 12)
       if (model.legend === 'l' || model.legend === 'r' || model.legend === 'tr') {
@@ -316,5 +327,15 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
 
 onChartModelRelease(releaseChartLayouts)
 
-/** The paint-local buffers, admitted before the paint: per group its stack and series buffers (plus the two drop-line extents, A4a). */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? Math.min(group.series.length, 256) * Math.min(256, Math.max(1, ...group.series.map(s => (s.values as any)?.length ?? 0))) * 16 : 0), 0) + view.series.length * 256
+/** The legend bands a contour can list: its prepared value axis's tick intervals, else the tick bound. */
+function legendBands(model: ChartModel): number {
+  const id = model.groups[0]?.binding.kind === 'surface' ? model.groups[0].binding.value : undefined
+  const ticks = model.preparedAxes?.axes.find(a => a.id === id)?.ticks.length
+  return ticks !== undefined ? Math.max(1, ticks) : CHART_TICK_LIMIT
+}
+/**
+ * The paint-local buffers, admitted before the paint: per group its stack and series buffers (plus the two drop-line
+ * extents, A4a); a contour group its band grid (`contourPaintBytes`, the dimensions the painter uses) and the legend
+ * entries the paint rebuilds.
+ */
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + legendBands(model) * 256 : 0), 0) + view.series.length * 256

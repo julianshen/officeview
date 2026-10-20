@@ -57,7 +57,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
       const code = axisFormat(a.axis,inputs) ?? (a.percent ? '0%' : a.role==='date' ? a.dateBase==='years'?'yyyy':a.dateBase==='months'?'mmm yyyy':'m/d/yyyy' : undefined)
       const { labelValue, plottable: _plottable, ...data } = a
-      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : Array.from({ length: Math.min(view.slots, model.categories.length) }, (_, i) => view.category(i) ?? '')
+      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
@@ -70,6 +70,11 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     collected.register(preparedAxes, retained, preparedAxes)
     return { ...model, preparedAxes }
   } finally { workspace.release(tag) }
+}
+/** A series axis's labels: the names of the series it places (a contour group's drawn rows), reusing the model's strings. */
+export function seriesLabels(graph: AxisGraph, view: DisplayView, a: ResolvedAxis): string[] {
+  const g = graph.groups.findIndex(p => p?.vertical === a || p?.horizontal === a)
+  return g < 0 ? [] : view.groupSeries(g).slice(0, a.slots).map(s => s.series.name)
 }
 export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
   const prepared = model.preparedAxes
