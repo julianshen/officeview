@@ -53,7 +53,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const minor = a.minorUnit === undefined ? 0 : 1000
     return n + 2048 + ticks * 640 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
   }, 0)
-  const bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
+  let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
@@ -61,7 +61,14 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const formatter = createChartFormatter(workspace)
     const trendDiagnostics: ChartDiagnostic[] = []
     const trendlines = model.groups.some(g => g.series.some(s => s.trendlines)) ? prepareTrendlines(model, formatter, chartEpoch(model.epoch, model.workbookEpoch), trendDiagnostics, workspace) : []
-    const forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
+    let forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
+    // The forecast's slots and their category label records are admitted before the view, graph and snapshot are
+    // built; refused, the forecast is clipped (diagnosed), never the chart.
+    if (forecast) {
+      const extra = forecastBytes(model, forecast)
+      if (workspace.reserve(extra, tag)) bound += extra
+      else { forecast = undefined; trendDiagnostics.push({ code: 'chart-trendline-extension-clamped', reason: 'A trendline forecast needs more memory than is available for charts: it is clipped to the data' }) }
+    }
     const view = displayView(model, forecast ?? NO_FORECAST), graph = resolveAxes(model, view, undefined, undefined, trendlines.length ? trendlineExtents(trendlines) : undefined)
     if(model.groups.some(g=>g.series.some(s=>[s.values,s.xValues,s.bubbleSizes].some(p=>p?.states.includes(POINT_UNAVAILABLE)))) && !graph.diagnostics.some(d=>d.code==='chart-point-unavailable'))graph.diagnostics.push({code:'chart-point-unavailable',reason:'A required saved chart point is unavailable'})
     const axes = [...graph.axes.values()].map(a => {
@@ -83,6 +90,11 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     return { ...model, preparedAxes }
   } finally { workspace.release(tag) }
 }
+/**
+ * What `forecast` slots add to preparation: per slot and axis a category label record (a string table entry) and
+ * its construction share, plus the view's per-slot work.
+ */
+const forecastBytes = (model: ChartModel, forecast: DisplayForecast): number => (forecast.lead + forecast.trail) * (model.axes.length * 64 + 64)
 export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
   const prepared = model.preparedAxes
   if (!prepared) return resolveAxes(model, view) // bounded compatibility for a hand-built/headless model

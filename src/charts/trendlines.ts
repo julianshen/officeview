@@ -502,7 +502,7 @@ export function paintTrendlines(ctx: CanvasRenderingContext2D, model: ChartModel
       const lines = t.label.split('\n'), height = fontPx * 1.2, avail = Math.max(1, plot.w - 8)
       const width = Math.min(avail, Math.max(...lines.map(l => ctx.measureText(l).width)))
       const right = Math.min(plot.x + plot.w - 4, Math.max(plot.x + 4 + width, end[0]))
-      let y = Math.max(plot.y + 4 + height * lines.length, Math.min(plot.y + plot.h - 4, end[1] - 6))
+      let y = Math.min(plot.y + plot.h - 4, Math.max(plot.y + 4 + height * lines.length, end[1] - 6))
       for (let i = lines.length - 1; i >= 0; i--) {
         if (y - height < plot.y - 1e-6) { note?.('chart-trendline-label-omitted', 'A trendline label line does not fit the plot area and is omitted'); break }
         ctx.fillText(lines[i], right, y, avail); y -= height

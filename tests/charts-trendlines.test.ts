@@ -386,6 +386,74 @@ describe('charts-trendlines (Task A6a)', () => {
     expect(eq.x - Math.min(eq.width, eq.max ?? Infinity)).toBeGreaterThanOrEqual(plot.x - 1e-6)
   })
 
+  it('review R2-I2: a date axis extends its automatic domain to the forecast endpoints; authored bounds win', () => {
+    const red = '<spPr><ln w="19050"><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>'
+    const dated = (body: string, axis = '') => parse(space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + body + red)}<cat>${lit([45000, 45001, 45002, 45003, 45004])}</cat><val>${lit([1, 2, 3, 4, 5])}</val></ser>${AX}</lineChart><dateAx><axId val="1"/>${axis}<baseTimeUnit val="days"/><crossAx val="2"/></dateAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`))
+    // Positions 1..5 are serials 45000..45004 (one day per position): backward 2 / forward 10 reach 44998 and 45014.
+    const model = dated('<backward val="2"/><forward val="10"/>')
+    const axis = model.preparedAxes!.axes.find(a => a.id === '1')!
+    expect(axis.role).toBe('date')
+    expect(axis.min).toBe(44998)
+    expect(axis.max).toBe(45014)
+    expect(axis.slots).toBe(17)
+    // Drawn: the forecast's ends sit in the first and last day slots, inside the plot.
+    const p = paint(model), plot = p.layout.plot, t = p.strokes.find(s => s.style === '#FF0000')!.segments
+    expect(t[0].x1).toBeCloseTo(plot.x + plot.w * 0.5 / 17, 6)
+    expect(t[t.length - 1].x2).toBeCloseTo(plot.x + plot.w * 16.5 / 17, 6)
+    // The series' first point (45000) sits in the third slot.
+    const series = p.strokes.find(s => s.style !== '#FF0000' && s.segments.length === 4)!.segments
+    expect(series[0].x1).toBeCloseTo(plot.x + plot.w * 2.5 / 17, 6)
+    // Authored bounds win.
+    const authored = dated('<forward val="10"/>', '<scaling><orientation val="minMax"/><max val="45006"/></scaling>').preparedAxes!.axes.find(a => a.id === '1')!
+    expect(authored.max).toBe(45006)
+  })
+
+  it('review R2: a log x axis admits each positive forecast endpoint on its own', () => {
+    const model = scatter(range(5), range(5), trend(type('linear') + '<backward val="2"/><forward val="10"/>'), '').preparedAxes!
+    void model
+    const log = parse(space(`<scatterChart><scatterStyle val="lineMarker"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + '<backward val="2"/><forward val="10"/>')}<xVal>${lit(range(5))}</xVal><yVal>${lit(range(5))}</yVal></ser>${AX}</scatterChart><valAx><axId val="1"/><scaling><logBase val="10"/></scaling><axPos val="b"/><crossAx val="2"/></valAx><valAx><axId val="2"/><axPos val="l"/><crossAx val="1"/></valAx>`))
+    const x = log.preparedAxes!.axes.find(a => a.id === '1')!
+    expect(x.log).toBe(10)
+    // The backward end (x = -1) is not plottable on a log axis; the forward end (15) still extends it to 100.
+    expect(x.max).toBeGreaterThanOrEqual(15)
+  })
+
+  it('review R1: forecast slots and their label records are admitted before they are built', () => {
+    // 400 labelled categories and backward 3,500: 3,900 slots and category label records.
+    const labels = ''
+    const ys = range(400)
+    const xml = space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${labels}${trend(type('linear') + '<backward val="3500"/>')}<cat><strLit><ptCount val="400"/>${ys.map((v, i) => `<pt idx="${i}"><v>C${v}</v></pt>`).join('')}</strLit></cat><val>${lit(ys)}</val></ser>${AX}</lineChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`)
+    const run = (parent?: { reserve(bytes: number, tag: string): boolean; release(tag: string, bytes: number): void }) => {
+      const workspace = createChartWorkspace('desktop', parent)
+      const events: string[] = [], sizes = new Map<string, number[]>()
+      const reserve = workspace.reserve.bind(workspace)
+      workspace.reserve = (bytes, tag) => { events.push(tag); sizes.set(tag, [...sizes.get(tag) ?? [], bytes]); return reserve(bytes, tag) }
+      const model = parseXlsxChart(parseXmlOrdered(xml), undefined, { workspace, profile: 'desktop', partPath: 'xl/charts/chart1.xml', pkg: undefined as never })!
+      return { model, events, sizes }
+    }
+    const { model, events } = run()
+    expect(model.preparedAxes!.forecast).toEqual({ lead: 3500, trail: 0 })
+    // Every reservation on the preparation tag happens before the first formatter call (the build), so no growth
+    // is admitted after the graph, labels and snapshot exist.
+    const prepTag = events.find(t => /^chart-prepare#\d+$/.test(t))!
+    const firstFormat = events.findIndex(t => t.startsWith('chart-format#'))
+    expect(firstFormat).toBeGreaterThan(0)
+    expect(events.lastIndexOf(prepTag)).toBeLessThan(firstFormat)
+    expect(events.filter(t => t === prepTag).length).toBe(2)
+    // A tight parent that refuses the forecast's admission: the forecast slots are not built (clipped, diagnosed),
+    // the trendline still draws, and the chart is not refused.
+    const tight = run({ reserve: bytes => bytes < 150_000, release: () => {} })
+    expect(tight.model.unsupported).toBeUndefined()
+    expect(tight.model.preparedAxes!.forecast).toBeUndefined()
+    expect(trendsOf(tight.model)).toHaveLength(1)
+    expect(codes(tight.model)).toContain('chart-trendline-extension-clamped')
+    // The preparation tag saw the up-front bound and the refused forecast admission, and nothing after it.
+    const tightSizes = tight.sizes.get(tight.events.find(t => /^chart-prepare#\d+$/.test(t))!)!
+    expect(tightSizes).toHaveLength(2)
+    expect(tightSizes[0]).toBeLessThan(150_000)
+    expect(tightSizes[1]).toBeGreaterThanOrEqual(150_000)
+  })
+
   it('charts without trendlines carry no trendline record; stacked and pie groups draw none', () => {
     const plain = line([1, 2, 3], '')
     expect(plain.groups[0].series[0].trendlines).toBeUndefined()

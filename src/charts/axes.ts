@@ -296,6 +296,22 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (found.length && !dateText) dates = found
   }
+  // A trendline forecast on a date axis (spec 5.6): its endpoints, in category positions, reach dates extrapolated
+  // along the slots' own dates (the end segment past either end, as the painter projects them).
+  const dateReach = new Map<string, { lo: number; hi: number }>()
+  const dateAt = (x: number): number => {
+    const s = x - 1, i0 = Math.max(0, Math.min(Math.floor(s), count - 2)), a = dateOf(i0)
+    if (a === undefined) return NaN
+    if (count < 2) return a
+    const b = dateOf(i0 + 1)
+    return b === undefined ? NaN : a + (s - i0) * (b - a)
+  }
+  if (dates) for (const t of trendlines ?? []) {
+    const p = placements[t.group]
+    if (!p || p.baseKind !== 'category') continue
+    const lo = Math.floor(dateAt(t.x0)), hi = Math.ceil(dateAt(t.x1)), reach = dateReach.get(p.base)
+    if (Number.isFinite(lo) && Number.isFinite(hi)) dateReach.set(p.base, { lo: Math.min(lo, reach?.lo ?? lo), hi: Math.max(hi, reach?.hi ?? hi) })
+  }
 
   const axes = new Map<string, ResolvedAxis>()
   for (const axis of model.axes) {
@@ -317,7 +333,8 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (role === 'date' && dates) {
       const base = axis.baseTimeUnit ?? autoBaseUnit(dates, epoch)
-      const first = axis.min ?? Math.min(...dates), last = axis.max ?? Math.max(...dates)
+      const reach = dateReach.get(axis.id)
+      const first = axis.min ?? Math.min(...dates, reach?.lo ?? Infinity), last = axis.max ?? Math.max(...dates, reach?.hi ?? -Infinity)
       const lo = dateUnitIndex(first, base, epoch), hi = Math.max(lo, dateUnitIndex(last, base, epoch))
       const major = dateTicks(first, last, axis.majorUnit ?? 1, axis.majorTimeUnit ?? base, epoch)
       if (major.enlarged) diagnostics.push({ code: 'chart-tick-limit', reason: `date axis ${axis.id}: more than ${CHART_TICK_LIMIT} ticks; drawn every ${major.step} ${axis.majorTimeUnit ?? base}` })
@@ -351,7 +368,8 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     for (const t of trendlines ?? []) {
       if (t.group !== g) continue
       if (!logOf(p.value)) { see(p.value, t.y0); see(p.value, t.y1) } else if (t.yPositive !== undefined) { see(p.value, t.yPositive); see(p.value, t.y1) }
-      if (p.baseKind === 'x' && (!logOf(p.base) || t.x0 > 0)) { see(p.base, t.x0); see(p.base, t.x1) }
+      // Each x endpoint on its own: on a log axis a non-positive backward end must not hide the forward end.
+      if (p.baseKind === 'x') for (const x of [t.x0, t.x1]) if (!logOf(p.base) || x > 0) see(p.base, x)
     }
   })
   for (const resolved of axes.values()) {
