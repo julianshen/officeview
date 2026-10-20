@@ -41,7 +41,7 @@ import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartRange } from './model'
 import { CHART_CHUNK_LIMIT, CommentStripper, streamEntry } from './read'
 import { EMBEDDED_DECLARED_LIMIT, failure, internalPath, openEmbeddedWorkbook, resolveExternalData, untilAbort, type EmbeddedFailure, type EmbeddedWorkbook } from './embeddedZip'
-import { CHART_CELL_BYTES, chartLine, scanChartNumber, type ChartCell, type ChartCellLookup, type ChartHiddenLookup, type ChartLine } from './fill'
+import { CHART_CELL_BYTES, chartLine, linePoint, scanChartNumber, type ChartCell, type ChartCellLookup, type ChartHiddenLookup, type ChartLine } from './fill'
 import { CHART_LABEL_LIMIT, parseChartRange } from './parse'
 import { stringBytes } from './points'
 import { sourceFormat } from './format'
@@ -105,7 +105,11 @@ let lastStats: Stats = { parts: {}, cells: 0, strings: 0, rows: 0 }
 export const embeddedWorkbookStats = (): Stats => lastStats
 
 interface Consumer { requests: EmbeddedRequest[]; settle(result: EmbeddedCellsResult): void }
-interface Batch { consumers: Consumer[]; frozen: boolean }
+/** Serves a later request from a completed read's cells, when every cell it needs was read (else undefined). */
+type Server = (requests: EmbeddedRequest[]) => EmbeddedCellsResult | undefined
+/** One embedding read: open (consumers may join) until the load completes, then reading; `ready` gives the
+ * completed read's server. It stays discoverable by part path until its last consumer is done. */
+interface Batch { consumers: Consumer[]; frozen: boolean; ready: Promise<Server | undefined>; publish(server: Server | undefined): void }
 const batches = new WeakMap<object, Map<string, Batch>>()
 let serial = 0
 const facetOf = (workspace: ChartWorkspace): object => (workspace as Partial<ScopedChartWorkspace>).facet ?? workspace
@@ -118,25 +122,35 @@ const facetOf = (workspace: ChartWorkspace): object => (workspace as Partial<Sco
 export async function requestEmbeddedCells(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'profile' | 'workspace' | 'signal'>, rId: string, requests: EmbeddedRequest[]): Promise<EmbeddedCellsResult> {
   const { signal } = context
   if (signal?.aborted) return CANCELLED()
-  const target = await resolveExternalData(context, rId)
-  if (target.kind !== 'internal') return target
-  const facet = facetOf(context.workspace)
-  let open = batches.get(facet)
-  if (!open) batches.set(facet, open = new Map())
-  let consumer!: Consumer
-  const mine = new Promise<EmbeddedCellsResult>(resolve => { consumer = { requests, settle: resolve } })
-  const joined = open.get(target.path)
-  if (joined && !joined.frozen) joined.consumers.push(consumer)
-  else {
-    const batch: Batch = { consumers: [consumer], frozen: false }
-    const list = open
-    open.set(target.path, batch)
-    void runBatch(batch, context, rId, target.path, () => { batch.frozen = true; if (list.get(target.path) === batch) list.delete(target.path) })
-  }
-  const outcome = await untilAbort(mine, signal)
+  // Target resolution is part of the request's lifecycle: an abort returns at once, its charges stay held
+  // (resolveExternalData refunds them when its stream settles), and any later outcome is suppressed.
+  const work = (async (): Promise<EmbeddedCellsResult> => {
+    const target = await resolveExternalData(context, rId)
+    if (target.kind !== 'internal' || signal?.aborted) return target.kind !== 'internal' ? target : CANCELLED()
+    const facet = facetOf(context.workspace)
+    let list = batches.get(facet)
+    if (!list) batches.set(facet, list = new Map())
+    let consumer!: Consumer
+    const mine = new Promise<EmbeddedCellsResult>(resolve => { consumer = { requests, settle: resolve } })
+    const existing = list.get(target.path)
+    if (existing && !existing.frozen) { existing.consumers.push(consumer); return mine }
+    if (existing) {
+      // A read in progress or completed: served from its cells when they cover this request.
+      const served = (await existing.ready)?.(requests)
+      if (served) return served
+      if (signal?.aborted) return CANCELLED()
+    }
+    let publish!: (server: Server | undefined) => void
+    const batch: Batch = { consumers: [consumer], frozen: false, ready: new Promise(resolve => { publish = resolve }), publish: server => publish(server) }
+    const owner = list
+    owner.set(target.path, batch)
+    void runBatch(batch, context, rId, target.path, () => { if (owner.get(target.path) === batch) owner.delete(target.path) })
+    return mine
+  })()
+  const outcome = await untilAbort(work, signal)
   if (outcome && !signal?.aborted) return outcome.value
-  // Publication stops now; a result that still arrives is handed back at once.
-  void mine.then(result => { if (result.kind === 'cells') result.done() })
+  // Publication stops now; a result that still arrives is handed back at once (a failure is dropped).
+  void work.then(result => { if (result.kind === 'cells') result.done() }, () => {})
   return CANCELLED()
 }
 
@@ -395,8 +409,9 @@ async function readSheet(inner: OfficePackage, reader: Reader, plan: Plan): Prom
         col = at ? at.col : col + 1
         if (at && at.row !== row) row = at.row
         if (row < plan.minRow || !needed(plan, row, col)) { current = undefined; return }
-        const xf = Number(attr(names, values, count, 's'))
-        current = { row, col, t: attr(names, values, count, 't'), ...(Number.isSafeInteger(xf) && xf > 0 ? { xf } : {}), formula: false, inIs: 0 }
+        // An absent style index is XF 0 (a valid entry, not necessarily General).
+        const raw = attr(names, values, count, 's'), xf = raw === undefined ? 0 : Number(raw)
+        current = { row, col, t: attr(names, values, count, 't'), ...(Number.isSafeInteger(xf) && xf >= 0 ? { xf } : {}), formula: false, inIs: 0 }
         if (selfClosing) { current = undefined }
         return
       }
@@ -483,7 +498,8 @@ async function readSharedStrings(inner: OfficePackage, reader: Reader, wanted: S
 const general = (n: number) => String(Number(n.toPrecision(15))).replace('e', 'E')
 
 /** Resolves, plans, reads and hands each consumer its cells. Never throws. */
-async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'profile' | 'workspace' | 'signal'>, rId: string, path: string, freeze: () => void): Promise<void> {
+async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'profile' | 'workspace' | 'signal'>, rId: string, path: string, unlist: () => void): Promise<void> {
+  const freeze = () => { batch.frozen = true }
   const { workspace, profile, signal } = context
   const tag = `embedded-cells:${path}#${++serial}`
   const reader = new Reader(workspace, tag, profile, signal)
@@ -491,7 +507,7 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
   let workbook: EmbeddedWorkbook | undefined
   const transient = () => { reader.release('text'); reader.release('load'); reader.release(`stream${CHART_CHUNK_TAG}`); reader.release(`stream${CHART_CROSSING_TAG}`) }
   const fail = (result: EmbeddedFailure) => {
-    freeze()
+    freeze(); unlist(); batch.publish(undefined)
     transient(); reader.release('data'); workbook?.release()
     for (const consumer of batch.consumers) consumer.settle(result)
   }
@@ -508,7 +524,7 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     reader.charge(LOAD_BASE_BYTES, 'loading')
     try { inner = await workspace.hold(OfficePackage.load(opened.bytes), `${tag}:loading`) } catch { throw new Stop(CORRUPT()) }
     reader.live()
-    // From here the consumers are fixed: a later request starts its own read.
+    // From here the consumers are fixed: a later request waits for this read and is served from it if covered.
     freeze()
     const consumers = batch.consumers
     const wanted = new Set<string>()
@@ -539,16 +555,21 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     }
     // Each consumer's resolutions and lines; a chart over the cell budget is refused (the others still read).
     const plans = new Map<string, Plan>()
-    const outcomes = consumers.map(consumer => {
-      const resolved = consumer.requests.map(request => resolve(request.range))
+    const linesOf = (requests: EmbeddedRequest[], resolved: EmbeddedResolution[]) => {
       const lines: ChartLine[] = []
       resolved.forEach((resolution, i) => {
         if (!('range' in resolution)) return
-        const request = consumer.requests[i], range = resolution.range
+        const request = requests[i], range = resolution.range
         lines.push(request.single ? chartLine({ ...range, r1: range.r0, c1: range.c0 }, range.sheet!, true) : chartLine(range, range.sheet!, request.text, request.limit))
       })
-      const cells = lines.reduce((sum, line) => sum + line.count, 0)
-      if (cells > EMBEDDED_CELL_LIMIT) return { refused: failure('refused', 'embedded-cells-limit', 'This chart reads more cells than the viewer reads', EMBEDDED_CELL_LIMIT) }
+      return lines
+    }
+    const overBudget = (lines: ChartLine[]) => lines.reduce((sum, line) => sum + line.count, 0) > EMBEDDED_CELL_LIMIT
+    const CELLS_REFUSED = () => failure('refused', 'embedded-cells-limit', 'This chart reads more cells than the viewer reads', EMBEDDED_CELL_LIMIT)
+    const outcomes = consumers.map(consumer => {
+      const resolved = consumer.requests.map(request => resolve(request.range))
+      const lines = linesOf(consumer.requests, resolved)
+      if (overBudget(lines)) return { refused: CELLS_REFUSED() }
       for (const line of lines) {
         const lower = line.sheet.toLowerCase()
         let plan = plans.get(lower)
@@ -596,7 +617,8 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     const formatOf = (xf: number | undefined): string | undefined => {
       if (xf === undefined) return undefined
       const id = styles.xfs[xf] ?? 0
-      return sourceFormat({ numFmtId: id, ...(styles.numFmts.has(id) ? { formatCode: styles.numFmts.get(id)! } : {}) })
+      const code = sourceFormat({ numFmtId: id, ...(styles.numFmts.has(id) ? { formatCode: styles.numFmts.get(id)! } : {}) })
+      return code && !/^general$/i.test(code) ? code : undefined
     }
     const lookup: ChartCellLookup = (sheet, row, col, text, allocation) => {
       const stored = plans.get(sheet.toLowerCase())?.cells.get(key(row, col))
@@ -618,14 +640,31 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
       const plan = plans.get(sheet.toLowerCase())
       return Boolean(plan && (plan.hiddenRows.has(row) || within(plan.hiddenCols, col)))
     }
-    let remaining = outcomes.filter(outcome => 'resolved' in outcome).length
-    const finish = () => { if (--remaining <= 0) { reader.release('data'); plans.clear() } }
-    if (!remaining) reader.release('data')
+    // The cells are held until the last consumer (initial or served later) is done; the read then leaves the map.
+    let remaining = outcomes.filter(outcome => 'resolved' in outcome).length, dead = false
+    const finish = () => { if (--remaining <= 0 && !dead) { dead = true; reader.release('data'); plans.clear(); unlist() } }
+    const result = (resolved: EmbeddedResolution[]): EmbeddedCells => {
+      let done = false
+      return { kind: 'cells', resolved, lookup, hidden, epoch, ownerSheet, done: () => { if (!done) { done = true; finish() } } }
+    }
+    const wantedAll = (requests: EmbeddedRequest[]) => requests.every(request => !request.range.definedName || wanted.has(request.range.definedName.toUpperCase()))
+    batch.publish(requests => {
+      if (dead || !wantedAll(requests)) return undefined
+      const resolved = requests.map(request => resolve(request.range)), lines = linesOf(requests, resolved)
+      if (overBudget(lines)) return CELLS_REFUSED()
+      for (const line of lines) {
+        const plan = plans.get(line.sheet.toLowerCase())
+        if (!plan) return undefined
+        for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); if (!needed(plan, at.row, at.col)) return undefined }
+      }
+      remaining++
+      return result(resolved)
+    })
+    if (!remaining) { dead = true; reader.release('data'); plans.clear(); unlist() }
     consumers.forEach((consumer, i) => {
       const outcome = outcomes[i]
-      if ('refused' in outcome) { consumer.settle(outcome.refused!); return }
-      let done = false
-      consumer.settle({ kind: 'cells', resolved: outcome.resolved!, lookup, hidden, epoch, ownerSheet, done: () => { if (!done) { done = true; finish() } } })
+      if ('refused' in outcome) consumer.settle(outcome.refused!)
+      else consumer.settle(result(outcome.resolved!))
     })
   } catch (error) {
     fail(error instanceof Stop ? error.result : CORRUPT())

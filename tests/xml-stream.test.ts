@@ -215,7 +215,19 @@ describe('malformed tokens (RED test 10)', () => {
     expect(localName('row')).toBe('row')
   })
 
-  it('a failed tokenizer keeps failing with the same error', () => {
+  it('attribute slots past the current tag are not kept: retained state is one token', () => {
+  // Tags with decreasing attribute counts, each with one large value in its last slot.
+  const ev: XmlEvents = { open() {}, close() {}, text() {} }
+  const t = new XmlTokenizer(ev)
+  const probe = t as unknown as { names: string[]; values: string[] }
+  t.write('<r>')
+  for (let n = 8; n >= 1; n--) t.write(`<e ${Array.from({ length: n }, (_, i) => `a${i}="${i === n - 1 ? 'V'.repeat(1000) : 'x'}"`).join(' ')}/>`)
+  const retained = [...probe.names, ...probe.values].filter(s => s !== undefined).reduce((sum, s) => sum + s.length, 0)
+  expect(retained).toBeLessThanOrEqual(1000 + 2)
+  t.write('<z/>')
+  expect([...probe.names, ...probe.values].filter(s => s).length).toBe(0)
+})
+it('a failed tokenizer keeps failing with the same error', () => {
     const tok = new XmlTokenizer(recorder().handler)
     expect(() => tok.write('<r>&</r>')).toThrow(/reference/)
     expect(() => tok.write('<r/>')).toThrow(/reference/)

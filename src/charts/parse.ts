@@ -440,6 +440,11 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         const c = solid(child(dPt, 'spPr'), theme)
         if (i !== undefined && i >= 0 && i < 256 && c) pointColors[i] = c
       }
+      // Required roles with neither saved data nor a reference (spec 6.4): values always; x values for scatter.
+      const absentRoles: Array<'values' | 'xValues'> = []
+      const sourceless = (node: XmlNode | undefined) => !node || (!hasCache(node) && !formulaOf(node))
+      if (sourceless(valueNode)) absentRoles.push('values')
+      if (type === 'scatter' && sourceless(xNode)) absentRoles.push('xValues')
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
       const groupMarker = val(child(node, 'marker'))
       series.push({
@@ -453,7 +458,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(pending).length ? { pending } : {}),
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
-        ...(!hasCache(valueNode) && !formulaOf(valueNode) ? { absent: ['values' as const] } : {}),
+        ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
       })

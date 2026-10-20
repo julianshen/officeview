@@ -172,6 +172,8 @@ describe('data precedence (spec 6.4)', () => {
       // A values element with neither saved data nor a reference.
       ['no source', { chartXml: chartXml(ser(0, { val: '<c:numRef/>' })), workbook: officeChartWorkbook() }],
       // Scatter x values referenced but unreadable (sheet missing): required for scatter.
+      // Review I4: a scatter series with no c:xVal element (literal y values, cached-only): x values are required.
+      ['scatter without xVal', { chartXml: chartXml(ser(0, { yVal: '<c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numLit>' }), { family: 'scatter' }), workbook: officeChartWorkbook() }],
       ['scatter x', { chartXml: chartXml(ser(0, { xVal: numRef('Gone!$A$2:$A$3'), yVal: numRef('Sheet1!$B$2:$B$3') }), { family: 'scatter' }), workbook: officeChartWorkbook() }],
     ]
     for (const format of ['docx', 'pptx'] as const) {

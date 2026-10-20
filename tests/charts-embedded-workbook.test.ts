@@ -25,7 +25,7 @@ vi.mock('../src/charts/read', async importOriginal => {
   return { ...actual, streamEntry: (file: JSZip.JSZipObject, ...rest: Parameters<typeof actual.streamEntry> extends [unknown, ...infer R] ? R : never) => { streams.names.push(file.name); return actual.streamEntry(file, ...rest) } }
 })
 const { applyDataPrecedence } = await import('../src/charts/dataPrecedence')
-const { embeddedWorkbookStats, EMBEDDED_SST_COUNT, EMBEDDED_SST_BYTES, EMBEDDED_CELL_LIMIT } = await import('../src/charts/embeddedWorkbook')
+const { embeddedWorkbookStats, requestEmbeddedCells, EMBEDDED_SST_COUNT, EMBEDDED_SST_BYTES, EMBEDDED_CELL_LIMIT } = await import('../src/charts/embeddedWorkbook')
 
 const NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
 /** A cacheless line chart: one series per values formula (and an optional categories formula). */
@@ -264,6 +264,68 @@ describe('embedded workbook reader (spec 6.4)', () => {
     } finally { spy.mockRestore(); open() }
   })
 
+  it('review I2: an abort while the chart .rels stream is paused returns cancelled at once; charges held until it settles', async () => {
+    const fixture = buildChartDocx([{ workbook: officeChartWorkbook() }])
+    const pkg = await OfficePackage.load(fixture.bytes)
+    const entry = pkg.entry('word/charts/_rels/chart1.xml.rels') as unknown as { internalStream(type: string): { on(name: string, cb: (chunk: unknown) => void): unknown; pause(): void; resume(): void } }
+    const internal = entry.internalStream.bind(entry)
+    let resume!: () => void, started!: () => void
+    const paused = new Promise<void>(resolve => { started = resolve })
+    entry.internalStream = (type: string) => {
+      const helper = internal(type), on = helper.on.bind(helper)
+      let first = true
+      helper.on = (name, cb) => on(name, name === 'data' ? (chunk: unknown) => { cb(chunk); if (first) { first = false; helper.pause(); resume = () => helper.resume(); started() } } : cb)
+      return helper
+    }
+    const abort = new AbortController(), doc = documentChartContext('desktop', abort.signal)
+    let settled = false
+    const pending = requestEmbeddedCells(chartParseContext(doc, pkg, fixture.chartPaths[0]), 'rId1', [{ range: { sheet: 'Sheet1', r0: 1, c0: 1, r1: 2, c1: 1 }, text: false, limit: 2 }]).then(r => { settled = true; return r })
+    await paused
+    abort.abort()
+    const result = await Promise.race([pending, new Promise<'pending'>(resolve => setTimeout(() => resolve('pending'), 30))])
+    expect(result).toMatchObject({ kind: 'cancelled', diagnostic: { code: 'chart-cancelled' } })
+    expect(settled).toBe(true)
+    expect(doc.workspace.used).toBeGreaterThan(0)
+    resume()
+    await vi.waitFor(() => expect(doc.workspace.used).toBe(0))
+  })
+
+  it('review I3: a cell without s, or with s=0, uses XF 0 (here not General)', async () => {
+    const fixture = buildChartDocx([{ workbook: embeddedWorkbook({ cellXfs: [14, 14], sheets: [{ name: 'Sheet1', data: row(1, '<c r="A1"><v>1</v></c>', cell('B1', 1, { s: 0 }), cell('C1', 1, { s: 1 })) }] }) }])
+    const pkg = await OfficePackage.load(fixture.bytes), doc = documentChartContext('desktop')
+    const result = await requestEmbeddedCells(chartParseContext(doc, pkg, fixture.chartPaths[0]), 'rId1', [{ range: { sheet: 'Sheet1', r0: 0, c0: 0, r1: 0, c1: 2 }, text: true, limit: 3 }])
+    if (result.kind !== 'cells') throw new Error(result.kind)
+    for (const col of [0, 1, 2]) expect(result.lookup('Sheet1', 0, col, true), `col ${col}`).toMatchObject({ formatCode: 'm/d/yyyy', text: '1/1/1900' })
+    result.done()
+    expect(doc.workspace.used).toBe(0)
+  })
+
+  it('review I5: shared work stays discoverable until every consumer is done: one internal read for overlapping requests', async () => {
+    const fixture = buildChartDocx([{ workbook: officeChartWorkbook([4, 6]) }])
+    const pkg = await OfficePackage.load(fixture.bytes), doc = documentChartContext('desktop')
+    const context = chartParseContext(doc, pkg, fixture.chartPaths[0])
+    streams.names.length = 0
+    const both = { range: { sheet: 'Sheet1', r0: 1, c0: 1, r1: 2, c1: 1 }, text: false, limit: 2 }
+    const first = await requestEmbeddedCells(context, 'rId1', [both])
+    // A later request within what was read, while the first consumer still holds the result: served from it.
+    const second = await requestEmbeddedCells(context, 'rId1', [{ range: { sheet: 'Sheet1', r0: 2, c0: 1, r1: 2, c1: 1 }, text: false, limit: 1 }])
+    if (first.kind !== 'cells' || second.kind !== 'cells') throw new Error('not cells')
+    expect(second.lookup('Sheet1', 2, 1, false)).toMatchObject({ number: 6 })
+    expect(streams.names.filter(name => name === fixture.embeddingPaths[0])).toHaveLength(1)
+    // A request needing cells that were not read starts its own read.
+    const third = await requestEmbeddedCells(context, 'rId1', [{ range: { sheet: 'Sheet1', r0: 0, c0: 0, r1: 2, c1: 0 }, text: true, limit: 3 }])
+    expect(third.kind).toBe('cells')
+    expect(streams.names.filter(name => name === fixture.embeddingPaths[0])).toHaveLength(2)
+    if (third.kind === 'cells') third.done()
+    first.done(); second.done()
+    expect(doc.workspace.used).toBe(0)
+    // After every consumer is done, a request reads again.
+    const again = await requestEmbeddedCells(context, 'rId1', [both])
+    expect(streams.names.filter(name => name === fixture.embeddingPaths[0])).toHaveLength(3)
+    if (again.kind === 'cells') again.done()
+    expect(doc.workspace.used).toBe(0)
+  })
+
   it('a corrupt embedding or worksheet is unavailable, never a throw', async () => {
     const corrupt = await precedence([{ chartXml: officeChartXml(), workbook: new Uint8Array([0x50, 0x4b, 3, 4, 1, 2, 3]) }])
     expect(corrupt.charts[0].unsupported).toBe("This chart's data is not available")
@@ -312,5 +374,11 @@ describe('embedded workbook reader (spec 6.4)', () => {
     expect(spread.chart.unsupported).toBeUndefined()
     expect(spread.writes).toBeGreaterThan(4)
     expect(spread.worst).toBeLessThanOrEqual(0)
+    // Review I1: tags with decreasing attribute counts, a 30,000-unit value in each tag's last slot, across chunks.
+    const decreasing = Array.from({ length: 64 }, (_, j) => { const n = 64 - j; return '<ext ' + Array.from({ length: n }, (_, i) => `a${i}="${i === n - 1 ? String.fromCharCode(65 + j % 26).repeat(30000) : 'x'}"`).join(' ') + '/>' }).join('')
+    const stale = await run(`<worksheet ${S}><extLst>${decreasing}</extLst><sheetData>${row(1, cell('B1', 'Name', { t: 'str' }))}${row(2, cell('A2', 'A', { t: 'str' }), cell('B2', 1))}${row(3, cell('A3', 'B', { t: 'str' }), cell('B3', 2))}</sheetData></worksheet>`)
+    expect(stale.chart.unsupported).toBeUndefined()
+    expect(stale.writes).toBeGreaterThan(64)
+    expect(stale.worst).toBeLessThanOrEqual(0)
   })
 })

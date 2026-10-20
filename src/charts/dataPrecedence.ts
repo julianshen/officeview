@@ -72,9 +72,10 @@ const unsupported = (model: ChartModel, diagnostics: ChartDiagnostic[]) => succe
  */
 export async function applyDataPrecedence(model: ChartModel, root: XmlNode, context: ChartParseContext): Promise<ChartModel> {
   if (model.unsupported) return model
-  if (model.groups.some(group => group.series.some(series => series.absent?.includes('values')))) {
-    return unsupported(model, [{ code: 'chart-data-unavailable', reason: 'A series has no values: neither saved data nor a reference' }])
-  }
+  // A required role (values; x values for scatter, and bubble sizes once bubble is read) with neither saved
+  // data nor a reference, cached-only charts included.
+  const absent = model.groups.flatMap(group => group.series.flatMap(series => series.absent ?? []))
+  if (absent.length) return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${absent.includes('values') ? 'values' : 'x values'}: neither saved data nor a reference` }])
   if (!chartHasPending(model)) return model
   // Every role still to read, in a fixed order: the shared categories first, then each series' roles.
   const slots: Array<Slot | 'categories'> = [], requests: EmbeddedRequest[] = []
