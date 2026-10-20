@@ -60,7 +60,7 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
 }
 export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string }> {
   const group = model.groups[0]
-  if (group?.family === 'pie' || group?.family === 'doughnut') {
+  if (group?.family === 'pie' || group?.family === 'doughnut' || group?.family === 'ofPie') {
     const s = view.groupSeries(0)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
   }

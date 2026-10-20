@@ -5,6 +5,7 @@ import type { ChartLayout } from './layout'
 import { labelFont } from './textStyle'
 import { axisFraction, categoryFraction } from './axes'
 import { valueAt, hiddenAt } from './points'
+import { ofPieDisplayValue, ofPiePlan, ofPiePointPlacement } from './families/ofPie'
 export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D, layout: ChartLayout, family: string): void {
   const labels = model.preparedAxes?.dataLabels
   if (!labels?.length) return
@@ -32,6 +33,22 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
       outside = label.position === 'outEnd' || (label.position === 'bestFit' && raw / pieTotal < .12)
       anchorX = cx + Math.cos(angle) * r; anchorY = cy + Math.sin(angle) * r
       x = cx + Math.cos(angle) * (outside ? r + 12 : r * .65); y = cy + Math.sin(angle) * (outside ? r + 12 : r * .65)
+    } else if (g.family === 'ofPie') {
+      // ofPie placement shares the painter's split, geometry and slice angles (families/ofPie).
+      const values: number[] = []
+      for (let i = 0; i < view.slots; i++) values.push(ofPieDisplayValue(valueAt(s.values, view.source(i))))
+      const placement = ofPiePointPlacement(ofPiePlan(g, values, layout.area), slot)
+      if (!placement || !(placement.fraction > 0)) continue
+      outside = label.position === 'outEnd' || (label.position === 'bestFit' && placement.fraction < .12)
+      if (placement.bar) {
+        anchorX = placement.cx - placement.r; anchorY = placement.cy
+        x = placement.cx + placement.r * .3; y = placement.cy
+      } else {
+        anchorX = placement.cx + Math.cos(placement.angle) * placement.r
+        anchorY = placement.cy + Math.sin(placement.angle) * placement.r
+        x = placement.cx + Math.cos(placement.angle) * (outside ? placement.r + 12 : placement.r * .65)
+        y = placement.cy + Math.sin(placement.angle) * (outside ? placement.r + 12 : placement.r * .65)
+      }
     } else {
       const a = layout.graph.groups[label.group]
       if (!a) continue

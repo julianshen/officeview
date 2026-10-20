@@ -182,6 +182,15 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  /** ofPie only: the secondary plot is a smaller pie or a stacked bar (`bar`). */
+  ofPieType?: 'pie' | 'bar'
+  /** ofPie only: how points split into the secondary plot; absent is the Office default `auto` at the engine. */
+  splitType?: 'auto' | 'cust' | 'percent' | 'pos' | 'val'
+  splitPos?: number
+  /** ofPie only: the secondary plot's size in percent of the primary radius (authored 5..200). */
+  secondPieSize?: number
+  /** ofPie only (`cust` split): the authored secondary-plot point indices. */
+  secondPiePt?: number[]
   varyColors?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle

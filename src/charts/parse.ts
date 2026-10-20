@@ -34,11 +34,26 @@ const finite = (raw: string | undefined): number | undefined => raw !== undefine
 
 const GROUPS: Record<string, ChartFamily> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
-  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
+  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', ofPieChart: 'ofPie', scatterChart: 'scatter',
 }
+const OF_PIE_TYPES = ['pie', 'bar'] as const
+const OF_PIE_SPLIT_TYPES = ['auto', 'cust', 'percent', 'pos', 'val'] as const
 const UNSUPPORTED: Record<string, string> = {
   radarChart: 'Radar chart', bubbleChart: 'Bubble chart', stockChart: 'Stock chart', surfaceChart: 'Surface chart',
-  surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
+  surface3DChart: 'Surface chart',
+}
+
+/** ofPie group options (spec 4.1): the secondary plot's shape, the split decision and its size. */
+function ofPieOptions(node: XmlNode): Partial<ChartGroup> {
+  const cust = getChildren(child(node, 'custSplit'), 'secondPiePt').map(pt => finite(attrs(pt).idx)).filter((i): i is number => i !== undefined && Number.isInteger(i) && i >= 0)
+  const secondPieSize = finite(val(child(node, 'secondPieSize')))
+  return {
+    ofPieType: oneOf(val(child(node, 'ofPieType')), OF_PIE_TYPES),
+    splitType: oneOf(val(child(node, 'splitType')), OF_PIE_SPLIT_TYPES),
+    splitPos: finite(val(child(node, 'splitPos'))),
+    ...(secondPieSize !== undefined ? { secondPieSize: Math.max(5, Math.min(200, secondPieSize)) } : {}),
+    ...(cust.length ? { secondPiePt: cust } : {}),
+  }
 }
 
 const hex = hexColor
@@ -288,7 +303,7 @@ const verticalPosition = (axis: ChartAxis | undefined) => axis?.position === 'l'
  * (never written by Office), binds the plot area's first axes of the right kinds, implied when there are none.
  */
 function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): ChartAxisBinding {
-  if (family === 'pie' || family === 'doughnut') return { kind: 'none' }
+  if (family === 'pie' || family === 'doughnut' || family === 'ofPie') return { kind: 'none' }
   const ids = getChildren(node, 'axId').map(val).filter((id): id is string => id !== undefined)
   const axisOf = (id: string) => axes.find(axis => axis.id === id)
   // A plot area without any axis element binds the implied pair even when the group lists axIds.
@@ -420,7 +435,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     if (!type) continue
     const grouping = (val(child(node, 'grouping')) ?? (type === 'bar' ? 'clustered' : 'standard')) as ChartGroup['grouping']
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
-    const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
+    const vary = type === 'pie' || type === 'doughnut' || type === 'ofPie' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
     // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
     const connector = (name: string) => {
       const holder = child(node, name)
@@ -428,7 +443,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       return lineOf(child(holder, 'spPr')) ?? (chargeChartLine(charge), { noFill: false })
     }
     const dropLines = type === 'line' || type === 'area' ? connector('dropLines') : undefined
-    const serLines = type === 'bar' ? connector('serLines') : undefined
+    const serLines = type === 'bar' || type === 'ofPie' ? connector('serLines') : undefined
     const series: ChartSeries[] = []
     const binding = bindingOf(type, node, axes)
     // A date axis reads its categories' saved numbers (serials in the chart epoch; spec 5.1).
@@ -565,7 +580,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
-      ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
+      ...(type === 'pie' || type === 'doughnut' || type === 'ofPie' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
+      ...(type === 'ofPie' ? ofPieOptions(node) : {}),
       varyColors: vary,
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),
@@ -573,7 +589,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   }
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
-  const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
+  const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut' || g.family === 'ofPie')
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'

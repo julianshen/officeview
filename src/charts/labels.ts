@@ -4,6 +4,7 @@ import type { ChartModel, ChartGroup, ChartSeries, ChartDiagnostic } from './mod
 import type { ChartFormatter } from './format-api'
 import { pointAt, valueAt, stringBytes } from './points'
 import { pointFormat, type ChartNumberFormat } from './format'
+import { ofPieDisplayValue, ofPieSplit, type OfPieSplit } from './families/ofPie'
 
 export interface LabelRun { text: string; bold?: boolean; italic?: boolean; color?: string; sizePt?: number }
 export interface LabelOptions extends ChartNumberFormat {
@@ -85,9 +86,9 @@ export function readLabels(n: XmlNode | undefined, charge: (b: number) => void):
   }
   return out
 }
-export const labelDefault = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' ? 'bestFit' : g.grouping === 'stacked' || g.grouping === 'percentStacked' || g.family === 'area' ? 'ctr' : g.family === 'bar' ? 'outEnd' : 'r'
+export const labelDefault = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' || g.family === 'ofPie' ? 'bestFit' : g.grouping === 'stacked' || g.grouping === 'percentStacked' || g.family === 'area' ? 'ctr' : g.family === 'bar' ? 'outEnd' : 'r'
 const controls = (g: ChartGroup, s: ChartSeries, i: number): LabelOptions => ({ ...g.labels, ...s.labels, ...g.labels?.points?.[i], ...s.labels?.points?.[i] })
-const percentFamily = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut'
+const percentFamily = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' || g.family === 'ofPie'
 // The range source is an independent content switch (Excel writes ordinary
 // show flags as false beside it). Manual placement alone cannot enable text.
 const fieldFallback = (o: LabelOptions) => o.fieldSource === true
@@ -115,9 +116,15 @@ export function prepareDataLabels(model: ChartModel, formatter: ChartFormatter, 
   const result: PreparedLabel[] = []
   model.groups.forEach((g, gi) => g.series.forEach((s, si) => {
     if (!g.labels && !s.labels) return
+    // ofPie percentage denominators are regional (the archived split of the display values):
+    // the primary region conserves its total + the synthetic Other, the secondary region its own.
+    const count = Math.min(4096, s.values.length)
+    let split: OfPieSplit | undefined
+    if (g.family === 'ofPie') split = ofPieSplit(g, count, i => ofPieDisplayValue(valueAt(s.values, i)))
     let total = 0
-    for (let i = 0; i < Math.min(4096, s.values.length); i++) total += Math.abs(valueAt(s.values, i) ?? 0)
-    for (let i = 0; i < Math.min(4096, s.values.length); i++) {
+    if (split) total = split.primaryTotal + split.secondaryTotal
+    else for (let i = 0; i < count; i++) total += Math.abs(valueAt(s.values, i) ?? 0)
+    for (let i = 0; i < count; i++) {
       const o = controls(g, s, i)
       if (o.delete) continue
       const emits = emitsLabel(model, g, s, i, o)
@@ -127,7 +134,11 @@ export function prepareDataLabels(model: ChartModel, formatter: ChartFormatter, 
       if (o.showCatName) parts.push((s.categories ?? model.categories)[i] ?? '')
       if (o.showSerName) parts.push(s.name)
       if (o.showVal || fieldFallback(o)) parts.push(p.state === 'error' ? p.code : p.state === 'value' ? formatter.format(p.v, pointFormat(o, s.values, i), epoch) : '')
-      if (o.showPercent && percentFamily(g) && p.state === 'value') parts.push(formatter.format(total ? Math.abs(p.v) / total : 0, o.sourceLinked !== true ? o.formatCode ?? '0%' : '0%', epoch))
+      if (o.showPercent && percentFamily(g) && p.state === 'value') {
+        const denominator = split ? (split.secondary[i] ? split.secondaryTotal : total) : total
+        const share = denominator ? (split ? ofPieDisplayValue(p.v) / denominator : Math.abs(p.v) / denominator) : 0
+        parts.push(formatter.format(share, o.sourceLinked !== true ? o.formatCode ?? '0%' : '0%', epoch))
+      }
       const bubble = valueAt(s.bubbleSizes, i)
       if (o.showBubbleSize && bubble !== undefined) parts.push(formatter.format(bubble, pointFormat(o, s.bubbleSizes, i), epoch))
       let text = ''
