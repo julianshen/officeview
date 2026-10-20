@@ -19,6 +19,7 @@ import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type C
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
 import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
+import { paintChartUserShapes } from './userShapes'
 
 type FamilyCss = (family: string) => string
 /**
@@ -594,11 +595,12 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     }
     paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
     area = layout.area
-    if (area.w <= 8 || area.h <= 8) return
+    if (area.w <= 8 || area.h <= 8) return void paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
     else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
     paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
+    paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }
 }
 let paints = 0

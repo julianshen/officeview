@@ -247,6 +247,8 @@ export interface ChartModel {
   feature?: 'ChartEx'
   /** The chart's storage could not be admitted (a typed refusal before allocation; spec 6.4/6.5). */
   refused?: true
+  /** Drawing overlays from `c:userShapes` (spec 5.11; charts/userShapes.ts), prepared at stage 1. */
+  userShapes?: import('./userShapes').ChartUserShapes
 }
 
 /**

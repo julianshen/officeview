@@ -254,6 +254,33 @@ export async function resolveRelatedParts(context: Pick<ChartParseContext, 'pkg'
   } finally { workspace.release(tag) }
   return out
 }
+/** One relationship Id's target (resolveRelationshipIds): an internal part that exists, or why it is not followed. */
+export type RelationshipTarget = { kind: 'internal'; path: string } | { kind: 'external' | 'outside' | 'missing' }
+/**
+ * A chart-owned part's `.rels` -> the targets of the wanted relationship Ids (A4d: the chart's user shapes and their
+ * pictures), through the same bounded, admitted relationships reader (a paged package reads the part itself). An Id
+ * not in the result is missing; a malformed `.rels` leaves every Id missing; a refused one (admission or size) gives
+ * `'refused'`. Its work is charged to `workspace` and refunded on return.
+ */
+export async function resolveRelationshipIds(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'workspace'>, ids: readonly string[]): Promise<Map<string, RelationshipTarget> | 'refused'> {
+  const { pkg, partPath, workspace } = context, tag = `chart-rels:${partPath}#${++reads}`, out = new Map<string, RelationshipTarget>(), wanted = new Set(ids)
+  const op: Charging = { workspace, tag, live() {}, charge(bytes) { if (!workspace.reserve(bytes, tag)) throw new Stop(REFUSED()) } }
+  try {
+    if (wanted.size) await scanRelationships(pkg, partPath, op, (id, _type, target, mode) => {
+      if (!id || !wanted.has(id) || out.has(id)) return false
+      const path = mode === 'External' || !target ? undefined : internalPath(partPath, target)
+      const entry = path ? rawEntry(pkg, path) : null
+      op.charge(32 + 2 * (path?.length ?? 0))
+      out.set(id, mode === 'External' ? { kind: 'external' } : !target ? { kind: 'missing' } : !path ? { kind: 'outside' } : (entry ? !entry.dir : pkg.has(path)) ? { kind: 'internal', path } : { kind: 'missing' })
+      return out.size === wanted.size
+    }, true)
+  } catch (error) {
+    if (!(error instanceof Stop)) throw error
+    if (error.result.kind === 'refused') return 'refused'
+    out.clear()
+  } finally { workspace.release(tag) }
+  return out
+}
 const rawEntry = (pkg: OfficePackage, path: string): JSZip.JSZipObject | null => {
   const entry = (pkg as { entry?: (path: string) => JSZip.JSZipObject | null }).entry
   try { return entry ? entry.call(pkg, path) : null } catch { return null }
