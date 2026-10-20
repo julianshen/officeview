@@ -18,15 +18,9 @@ import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 
-/** Bounds: series per chart, points per series drawn (display, spec 7). */
-export const CHART_SERIES_LIMIT = 64
-export const CHART_POINT_LIMIT = 4096
-/** Points per series acquired for an analytic element (trendline, stdDev/stdErr error bars; spec 7). */
-export const CHART_ANALYTIC_POINT_LIMIT = 65536
-/** Characters kept per chart label (category, series name); longer labels are cut and the chart marked truncated. */
-export const CHART_LABEL_LIMIT = 255
-/** Hard cap on one fill's label storage (UTF-16 bytes). */
-export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
+/** Bounds: series per chart, points per series drawn (display, spec 7). Re-exported from the leaf limits module. */
+import { CHART_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_SERIES_LIMIT, CHART_ANALYTIC_POINT_LIMIT } from './limits'
+export { CHART_SERIES_LIMIT, CHART_POINT_LIMIT, CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_TEXT_BYTES_LIMIT } from './limits'
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 const val = (node: XmlNode | undefined) => attrs(node).val
@@ -46,7 +40,8 @@ const UNSUPPORTED: Record<string, string> = {
 /** ofPie group options (spec 4.1): the secondary plot's shape, the split decision and its size. */
 function ofPieOptions(node: XmlNode, charge: (b: number) => void): Partial<ChartGroup> {
   // The authored secondPiePt set (source indices): identity-bound one entry each and bounded by the
-  // point limit, as Office applies them to split-like decisions; the workspace prices them once.
+  // point limit, as Office applies them to split-like decisions; each surviving index is one charge,
+  // the same per-entry rule the dPt loop below follows.
   const secondPiePt: number[] = []
   const seen = new Set<number>()
   for (const pt of getChildren(child(node, 'custSplit'), 'secondPiePt')) {
@@ -55,8 +50,8 @@ function ofPieOptions(node: XmlNode, charge: (b: number) => void): Partial<Chart
     if (seen.has(idx)) continue
     seen.add(idx)
     secondPiePt.push(idx)
+    chargeChartPoint(charge)
   }
-  if (secondPiePt.length) chargeChartPoint(charge)
   const secondPieSize = finite(val(child(node, 'secondPieSize')))
   return {
     ofPieType: oneOf(val(child(node, 'ofPieType')), OF_PIE_TYPES),
@@ -591,7 +586,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       family: type, grouping, series, binding,
       labels: readLabels(child(node, 'dLbls'), charge),
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
-      gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? (type === 'ofPie' && val(child(node, 'ofPieType')) === 'bar' ? 150 : type === 'ofPie' ? 50 : 150))),
+      gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' || type === 'ofPie' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),

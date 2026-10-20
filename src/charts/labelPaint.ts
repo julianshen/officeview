@@ -15,8 +15,11 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
   let pieSeries: object | undefined, pieBefore = 0, pieIndex = 0, pieTotal = 0
   let ofPieState: { g: object; s: object; plan: OfPiePlan } | undefined
   for (const label of labels) {
-    const g = model.groups[label.group], s = g.series[label.series], slot = slots.get(label.point)
-    if (slot === undefined || (model.plotVisOnly !== false && (hiddenAt(s.values.hidden, label.point) || hiddenAt(s.xValues?.hidden, label.point)))) continue
+    const g = model.groups[label.group], s = g.series[label.series]
+    // The ofPie Other pseudo label's point (n) is not a displayed source, so it bypasses the slot
+    // lookup and the hidden check entirely.
+    const other = label.other === true, slot = other ? -1 : slots.get(label.point)
+    if (slot === undefined || (!other && model.plotVisOnly !== false && (hiddenAt(s.values.hidden, label.point) || hiddenAt(s.xValues?.hidden, label.point)))) continue
     const raw = valueAt(s.values, label.point) ?? 0
     let x = 0, y = 0, anchorX = 0, anchorY = 0, outside = false
     if (g.family === 'pie' || g.family === 'doughnut') {
@@ -46,7 +49,7 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
         for (let i = 0; i < view.slots; i++) values.push(ofPieDisplayValue(ds?.value(i)))
         state = ofPieState = { g: g, s: s, plan: ofPiePlan(g, values, layout.area, slot => view.source(slot)) }
       }
-      const placement = ofPiePointPlacement(state.plan, label.other === true ? -1 : slot)
+      const placement = ofPiePointPlacement(state.plan, slot)
       if (!placement || !(placement.fraction > 0)) continue
       outside = label.position === 'outEnd' || (label.position === 'bestFit' && placement.fraction < .12)
       if (placement.bar) {

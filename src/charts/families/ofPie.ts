@@ -4,7 +4,7 @@
  * connectors, the label placement and the painter. The painter and the label
  * placement share these exports, so shapes and labels can never disagree.
  */
-import { CHART_POINT_LIMIT } from '../parse'
+import { CHART_POINT_LIMIT } from '../limits'
 import type { ChartGroup, ChartSeries } from '../model'
 import { applyFillStyle, type ChartFillStyle } from '../fills'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from '../style'

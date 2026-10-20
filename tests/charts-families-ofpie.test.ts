@@ -7,6 +7,9 @@ import { parseDocx } from '../src/docx/parse'
 import { parsePptx } from '../src/pptx/parse'
 import { documentChartContext } from '../src/charts/context'
 import { parseXlsxChart } from '../src/charts/parse'
+import { CHART_STYLE_BYTES } from '../src/charts/own'
+import { createChartWorkspace } from '../src/charts/workspace'
+import { releaseChartModel } from '../src/charts/own'
 import { prepareChartAxes } from '../src/charts/prepare'
 import { paintXlsxChart } from '../src/charts/paint'
 import { PointWriter } from '../src/charts/points'
@@ -135,8 +138,8 @@ it('parses ofPie group options and stops rejecting the family; combination pies 
   const minimal = parseChart(`<chartSpace><chart><plotArea><ofPieChart><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`)
   expect(minimal.groups[0].splitType).toBeUndefined() // absent falls back to auto at the engine
   expect(minimal.groups[0].secondPieSize).toBeUndefined() // absent falls back to 75 at the engine
-  // gapWidth defaults differ per variant: 50 % for a pie of pie, 150 % for a bar of pie
-  expect(minimal.groups[0].gapWidth).toBe(50)
+  // gapWidth defaults to the schema's CT_GapAmount value (150 %) for both variants
+  expect(minimal.groups[0].gapWidth).toBe(150)
   expect(parseChart(`<chartSpace><chart><plotArea><ofPieChart><ofPieType val="bar"/><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`).groups[0].gapWidth).toBe(150)
   expect(parseChart(`<chartSpace><chart><plotArea><ofPieChart><secondPieSize val="500"/><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`).groups[0].secondPieSize).toBe(200)
   expect(parseChart(`<chartSpace><chart><plotArea><ofPieChart><secondPieSize val="1"/><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`).groups[0].secondPieSize).toBe(5)
@@ -259,6 +262,11 @@ it('bar-of-pie: the secondary slices stack in a bar moved by gapWidth', () => {
   expect(barRects[1].rect!.h).toBeCloseTo(4 / 7 * barH, 6) // 40 of the 70
   expect(barRects[0].rect!.y).toBeCloseTo(barY, 6)
   expect(barRects[1].rect!.y).toBeCloseTo(barY + 3 / 7 * barH, 6)
+  // unauthored bar segments draw a 1 px white border each (the Office default for bar-of-pie)
+  const whiteBorders = events.filter((e): e is Extract<Event, { kind: 'stroke' }> => e.kind === 'stroke' && e.rect !== undefined && e.style.toLowerCase() === '#ffffff' && Math.abs(e.rect.x - barX) < 1e-6 && Math.abs(e.rect.w - r1) < 1e-6)
+  expect(whiteBorders).toHaveLength(2)
+  expect(whiteBorders[0].rect!.y).toBeCloseTo(barY, 6)
+  expect(whiteBorders[1].rect!.y).toBeCloseTo(barY + 3 / 7 * barH, 6)
 })
 
 it('labels sit on their own slices: the plan is computed once per group and series, with slice/label agreement', () => {
@@ -268,8 +276,11 @@ it('labels sit on their own slices: the plan is computed once per group and seri
   expect(prepared.preparedAxes!.dataLabels, 'four real labels plus the Other one').toHaveLength(5)
   const events = eventsOf(model)
   const texts = events.filter(e => e.kind === 'text').map(e => e.kind === 'text' ? [e.text, e.x, e.y] : null)
-  // the Other slice's value label appears (its value is the secondary total)
-  expect(texts.some(t => t?.[0] === '40')).toBe(true)
+  // the Other slice's value label appears (its value is the secondary total): it is painted,
+  // and it belongs to the primary region like the Other slice itself
+  for (const t of ['10', '20', '30', '40', '70']) expect(texts.some(x => x?.[0] === t)).toBe(true)
+  const other = texts.find(x => x?.[0] === '70')!
+  expect(other![1] as number).toBeLessThan(AREA.x + AREA.w / 2)
   // every label lands on the primary region, and the secondary labels point at the secondary plot:
   // they keep to their region halves of the canvas
   const leftTexts = texts.filter(t => Array.isArray(t) && (t[1] as number) < AREA.x + AREA.w / 2)
@@ -298,6 +309,57 @@ it('hidden categories: slices follow source indices; percent labels agree with t
   const right = arcFills(events, cx2, r1)
   expect(right).toHaveLength(1)
   expect(right[0].style).toBe('#00aa00')
+})
+
+it('explosion: each shifted slice moves along its mid angle; the farthest slice (Other included) shrinks the radius', () => {
+  // The Other slice's dPt explosion (idx 4, the series' point n) is 50 while every read point
+  // explodes 0: the painted primary radius is r1 / 1.5 only if the Other slice joins the
+  // farthest computation.
+  const model = parseChart(`<chartSpace><chart><plotArea><ofPieChart><gapWidth val="0"/><secondPieSize val="100"/><ser><dPt><idx val="4"/><explosion val="50"/></dPt>${valuesXml}</ser></ofPieChart></plotArea></chart></chartSpace>`)
+  expect(model.unsupported).toBeUndefined()
+  const { r1, cx1 } = geo()
+  const shrunk = r1 / 1.5
+  const events = eventsOf(model)
+  const left = events.filter(e => e.kind === 'fill' && e.rect === undefined && e.arcs?.length === 1 && Math.abs(e.arcs[0].r - shrunk) < 1e-9)
+  expect(left, 'three primary-region slice arcs at the shrunk radius').toHaveLength(3)
+  // no primary arc keeps the unshrunk radius; the secondary region has no explosion and keeps r1
+  const unchanged = events.filter((e): e is Extract<Event, { kind: 'fill' }> => e.kind === 'fill' && e.rect === undefined && e.arcs?.length === 1 && Math.abs(e.arcs[0].r - r1) < 1e-9)
+  expect(unchanged.filter(e => e.arcs![0].x < AREA.x + AREA.w / 2), 'no primary arc keeps the unshrunk radius').toHaveLength(0)
+  // unexploded slices keep their centres; their radius is the shrunk one
+  if (left[0].kind !== 'fill' || left[2].kind !== 'fill') throw new Error('fill')
+  expect(left[0].arcs![0].x).toBeCloseTo(cx1, 6)
+  expect(left[0].arcs![0].y).toBeCloseTo(CY, 6)
+  expect(left[0].arcs![0].a1 - left[0].arcs![0].a0).toBeCloseTo(0.1 * R, 9) // 10 of the 100
+  // the Other slice (sweep 0.7R starting at +0.05R) carries the dPt explosion: offset r1·50 % along its mid angle
+  const otherArc = left[2].arcs![0]
+  expect(otherArc.a1 - otherArc.a0).toBeCloseTo(0.7 * R, 9)
+  const otherMid = 0.05 * R + 0.35 * R
+  expect(otherArc.x).toBeCloseTo(cx1 + (shrunk / 2) * Math.cos(otherMid), 6)
+  expect(otherArc.y).toBeCloseTo(CY + (shrunk / 2) * Math.sin(otherMid), 6)
+})
+
+it('secondPiePt charges one CHART_STYLE_BYTES.point each, per surviving entry', () => {
+  const ws = createChartWorkspace('mobile')
+  const charges: number[] = []
+  const recorded = new Proxy(ws, {
+    get(target, key, receiver) {
+      if (key === 'reserve') return (bytes: number, tag: string) => { charges.push(bytes); return target.reserve(bytes, tag) }
+      const value = Reflect.get(target, key, receiver)
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value
+    },
+  })
+  const pointCharges = (xml: string) => {
+    charges.length = 0
+    const model = parseXlsxChart(parseXmlOrdered(xml), undefined, { profile: 'mobile', pkg: undefined as unknown as OfficePackage, partPath: 'xl/charts/chart1.xml', workspace: recorded })!
+    releaseChartModel(model)
+    return charges.filter(b => b === CHART_STYLE_BYTES.point).length
+  }
+  const values = '<ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt><pt idx="2"><v>30</v></pt></numLit></val></ser>'
+  const base = `<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/>${values}</ofPieChart></plotArea></chart></chartSpace>`
+  expect(pointCharges(base), 'no custSplit leaves no secondPiePt charge').toBe(0)
+  // idx 4 repeats (deduped) and 5000 is capped, so only idx 4 and 1 survive: two point charges
+  const cust = `<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit><secondPiePt idx="4"/><secondPiePt idx="1"/><secondPiePt idx="4"/><secondPiePt idx="5000"/></custSplit>${values}</ofPieChart></plotArea></chart></chartSpace>`
+  expect(pointCharges(cust)).toBe(2)
 })
 
 it('conformance sweep: empty, all-blank, NaN, Infinity, negative and single-point series never throw', () => {
@@ -362,6 +424,8 @@ it('ofPie is native through the DOCX and PPTX adapters, with chart coverage', as
 const ofPieConformance = {
   name: 'ofPie',
   chart: (c: string | null) => conformanceSpace(`<c:ofPieChart><c:varyColors val="1"/>${c === null ? '' : `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx><c:val>${c}</c:val></c:ser>`}<c:firstSliceAng val="0"/></c:ofPieChart>`),
-  expect: { 'no series': { kind: 'card' as const } },
+  // Every case except 'no series' is a valid authored ofPie: it paints natively (blank, NaN or
+  // negative input reads as zero, so the painter just has no slices). Only a missing series is a card.
+  expect: { 'no series': { kind: 'card' as const }, 'empty series': { kind: 'native' as const }, 'all blank': { kind: 'native' as const }, 'NaN and infinity': { kind: 'native' as const }, 'negative values': { kind: 'native' as const }, 'single point': { kind: 'native' as const } },
 }
 describe('ofPie family conformance (spec 7)', () => describeFamilyConformance(ofPieConformance))
