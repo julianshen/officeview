@@ -5,7 +5,7 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
-import { XLSX_REQUIREMENTS, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
+import { XLSX_REQUIREMENTS, chartChoiceFeature, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
 import { attemptedMalformedRelationshipIssue, cardChart, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
@@ -220,7 +220,7 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
     return { branch: fallback, mode: 'fallback', ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }
   }
   if (card && depth === 0) {
-    if (unusable) contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'chart', { reason: 'chart-fallback-unusable' })
+    if (unusable) contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'chart', { reason: 'chart-fallback-unusable', message: `chart-fallback-unusable: ${chartCard(card)?.chart.unsupported ?? 'the fallback picture cannot be used'}` })
     return { branch: card, mode: 'choice', ...(unusable ? { unusable } : {}) }
   }
   return undefined
@@ -470,6 +470,8 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
       if (selected?.unusable) for (const drawing of branch) if (drawing.content?.kind === 'xlsxChart') drawing.source.reason = `chart-fallback-unusable: ${drawing.content.chart.unsupported}`
       const carry = (drawings: XlsxDrawing[]): void => { for (const drawing of drawings) { if (drawing.image) drawing.chartFallback = selected!.chartFallback; carry(drawing.children ?? []) } }
       if (selected?.chartFallback) carry(branch)
+      const original = selected?.mode === 'fallback' ? chartChoiceFeature(node) : undefined
+      if (original) for (const drawing of branch) drawing.source.feature = original
       out.push(...branch)
     } else if (name === 'graphic' || name === 'graphicData') {
       out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections, groupStyle))

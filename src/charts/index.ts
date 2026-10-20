@@ -10,7 +10,7 @@
  * content painter. Never import this module eagerly (EAGER_FORBIDDEN).
  */
 import { registerXlsxChartPainter } from '../drawing/content-paint'
-import { chartDescription } from '../xlsx/chartDescription'
+import { chartDescription, chartTypeName } from './describe'
 import { paintXlsxChart } from './paint'
 
 export { chartParseContext, chartParseContextFor } from './context'
@@ -25,8 +25,9 @@ export { releaseChartModel, chartModelOwner, releaseChartRetained } from './own'
 export { paintXlsxChart }
 export { layoutChart, releaseChartLayouts, releaseWorkspaceLayouts, type ChartLayout } from './layout'
 export { acquireChartContext, CHART_STANDALONE_PAINT_PROFILE, type ChartReceiver, type ChartReceiverLease } from './paint'
-export { chartDescription }
+export { chartDescription, chartTypeName }
 registerXlsxChartPainter(paintXlsxChart)
 
 export { sourceFormat } from './format'
 
+export { prepareChartPaintables, CHART_DESCRIPTIONS_PER_PAGE, type PaintableChart, type PlacedChart } from './paintables'

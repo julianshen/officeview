@@ -1220,6 +1220,17 @@ export function renderPages(
   ctx.restore()
 }
 
+/**
+ * The chart boxes one page paints, in reading order (spec 6.6): the header, the body (flow order), then the
+ * footer. Header and footer content is laid out for this page, so a repeated chart appears once per page.
+ */
+export function pageChartBoxes(page: PageLayout, measure: MeasureFn, pageNumber: number, totalPages: number): ImageBox[] {
+  const charts = (boxes: readonly ImageBox[]) => boxes.filter(box => box.drawing?.kind === 'xlsxChart')
+  const repeated = (hf: HFBlock | undefined) => hf && [...hf.imageIndex?.keys() ?? []].some(image => image.drawing?.kind === 'xlsxChart')
+    ? charts(layoutRepeated(hf, measure, pageNumber, totalPages, page).images) : []
+  return [...repeated(page.header), ...charts(page.images.filter(image => !image.repeated)), ...repeated(page.footer)]
+}
+
 /** Replace field runs (PAGE, NUMPAGES) with this page's values. */
 function substituteFields(paragraphs: DocxParagraph[], pageNumber: number, totalPages: number): DocxParagraph[] {
   let needsSub = false

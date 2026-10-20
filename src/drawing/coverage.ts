@@ -35,6 +35,25 @@ export interface DrawingCoverageDocument { drawingCoverage?: DrawingCoverageEntr
  * text-only status instead of claiming a cached diagram rendering.
  */
 /** The coverage feature of a content kind: the `xlsxChart` runtime tag reports `chart` in every format. */
+/** The original feature of an AlternateContent whose Choice holds a chart: `ChartEx` or `chart` (spec 6.6). */
+export function chartChoiceFeature(node: XmlNode): 'chart' | 'ChartEx' | undefined {
+  for (const choice of getChildren(node, 'Choice')) {
+    const data = findGraphicData(choice)
+    if (!data) continue
+    if ((attrs(data).uri ?? '').toLowerCase().includes('chartex')) return 'ChartEx'
+    if (getChildren(data, 'chart').length) return 'chart'
+  }
+  return undefined
+}
+function findGraphicData(node: XmlNode, depth = 0): XmlNode | undefined {
+  for (const [name, child] of orderedChildren(node)) {
+    if (name === 'graphicData') return child
+    if (name === '#text' || depth > 8) continue
+    const found = findGraphicData(child, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
 export const featureOfKind = (content: DrawingContent<unknown, unknown> | undefined) => content?.kind === 'xlsxChart' ? content.chart.feature ?? 'chart' : content?.kind
 export function contentRepresentation<Paragraph, Text>(content: DrawingContent<Paragraph, Text>): DrawingCoverageEntry['selectedRepresentation'] {
   if (content.kind === 'diagram' && content.textOnly) return 'text-only'
@@ -551,7 +570,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
 export function xlsxNodeCoverage(node: XlsxDrawing, unit: number, scope: DrawingCoverageEntry['scope']): DrawingCoverageEntry[] {
   const source = node.source
   const issue = node.drawingGeometry ? resolveGeometry(node.drawingGeometry, node.widthEmu / 9525, node.heightEmu / 9525).issues[0] : undefined
-  const feature = issue ? 'geometry' : featureOfKind(node.content) ?? (source.emptySelection ? 'empty-choice' : source.element === 'pic' ? 'picture' : source.element === 'grpSp' ? 'group' : source.element === 'contentPart' ? 'ink' : source.element === 'graphicFrame' ? 'graphicData' : 'shape')
+  const feature = issue ? 'geometry' : featureOfKind(node.content) ?? source.feature ?? (source.emptySelection ? 'empty-choice' : source.element === 'pic' ? 'picture' : source.element === 'grpSp' ? 'group' : source.element === 'contentPart' ? 'ink' : source.element === 'graphicFrame' ? 'graphicData' : 'shape')
   const status: DrawingCoverageEntry['status'] = issue ? issue.kind === 'unknown-preset' ? 'unsupported' : 'malformed' : node.transformValid === false ? 'malformed' : (source.element === 'graphicFrame' || source.element === 'contentPart') && !node.content && !node.children?.length && !source.emptySelection ? 'unsupported' : source.element === 'pic' && !node.image ? 'malformed' : source.representation === 'fallback' ? 'fallback' : 'native'
   const reason = issue ? `${issue.kind}: ${issue.message}` : node.transformValid === false ? 'invalid-transform' : source.emptySelection ? 'Supported empty Choice selected' : status === 'malformed' && source.element === 'pic' ? 'missing image part or relationship' : status === 'unsupported' ? 'unsupported graphicData payload' : source.reason
   const selectedRepresentation: DrawingCoverageEntry['selectedRepresentation'] = node.content ? contentRepresentation(node.content)

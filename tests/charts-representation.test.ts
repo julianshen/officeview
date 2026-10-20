@@ -272,8 +272,8 @@ describe('representation contract (spec 6.3)', () => {
           expect(outcome.coverage[0], format).toMatchObject({ representation: 'choice' })
         } else {
           expectFallbackPicture(format, outcome, '33', 'ChartEx')
-          // The fallback keeps the original feature (DOCX and XLSX coverage report the fallback picture's feature, unchanged by B1).
-          if (format === 'pptx') expect(outcome.coverage[0].feature, `${format} ${requires}`).toBe('ChartEx')
+          // The fallback keeps the original feature in every format (A7, spec 6.6).
+          expect(outcome.coverage[0].feature, `${format} ${requires}`).toBe('ChartEx')
         }
       }
       vi.doUnmock('../src/charts')

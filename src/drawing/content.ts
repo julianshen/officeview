@@ -526,7 +526,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
       const parsed = await adapters.parseChart(root, path)
       if (parsed.kind === 'native') return { kind: 'xlsxChart', chart: parsed.model }
       chartFailure = cardChart(parsed.reason, parsed.title, parsed.feature)
-      contentDiagnostic(context, 'unsupported-content', path, 'chart', { reason: parsed.kind === 'refused' ? 'chart-refused' : 'unsupported-chart' })
+      contentDiagnostic(context, 'unsupported-content', path, 'chart', { reason: parsed.kind === 'refused' ? 'chart-refused' : 'unsupported-chart', message: `${parsed.kind === 'refused' ? 'chart-refused' : 'unsupported-chart'}: ${parsed.reason}` })
       return undefined
     }
     const tree = child(root, 'spTree')
