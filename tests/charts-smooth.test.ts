@@ -4,7 +4,8 @@ import { createCanvas } from 'canvas'
 import { parseXmlOrdered } from '../src/core/xml'
 import { parseXlsxChart } from '../src/charts/parse'
 import { paintXlsxChart } from '../src/charts/paint'
-import { catmullRomToBezier, traceSmoothCurve, type Point2D } from '../src/charts/smooth'
+import { PointWriter } from '../src/charts/points'
+import { catmullRomToBezier, createLineTracer, traceSmoothCurve, type Point2D } from '../src/charts/smooth'
 
 describe('charts-smooth (Task A4c)', () => {
   it('smooth passes through every point with Catmull-Rom tangents; end segments use the end point', () => {
@@ -347,5 +348,251 @@ describe('charts-smooth (Task A4c)', () => {
     ctx.bezierCurveTo = () => { ops.push('C') }
     traceSmoothCurve(ctx as any, [{ x: 5, y: 5 }])
     expect(ops).toEqual(['M'])
+  })
+
+  // --- Regression tests for Fix Round 1 ---
+
+  it('per-series smooth="0" override on a smooth="1" group paints with lineTo (straight lines)', () => {
+    const xml = `
+      <chartSpace>
+        <chart>
+          <plotArea>
+            <lineChart>
+              <smooth val="1"/>
+              <ser>
+                <smooth val="0"/>
+                <spPr><ln><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>
+                <val>
+                  <numLit>
+                    <pt idx="0"><v>10</v></pt>
+                    <pt idx="1"><v>20</v></pt>
+                    <pt idx="2"><v>15</v></pt>
+                    <pt idx="3"><v>30</v></pt>
+                  </numLit>
+                </val>
+              </ser>
+            </lineChart>
+          </plotArea>
+        </chart>
+      </chartSpace>
+    `
+    const model = parseXlsxChart(parseXmlOrdered(xml), undefined)!
+    expect(model.groups[0].smooth).toBe(true)
+    expect(model.groups[0].series[0].smooth).toBe(false)
+
+    const paintCanvas = createCanvas(400, 300)
+    const paintCtx = paintCanvas.getContext('2d')
+    const ops: string[] = []
+    const isRed = () => paintCtx.strokeStyle === '#ff0000'
+    paintCtx.moveTo = () => { if (isRed()) ops.push('M') }
+    paintCtx.lineTo = () => { if (isRed()) ops.push('L') }
+    paintCtx.bezierCurveTo = () => { if (isRed()) ops.push('C') }
+
+    paintXlsxChart(model, paintCtx as any, 400, 300)
+    // Must be straight lines: M followed by three L commands, ZERO C commands
+    expect(ops).toEqual(['M', 'L', 'L', 'L'])
+  })
+
+  it('streaming createLineTracer streams Bézier curves with zero array allocations matching catmullRomToBezier', () => {
+    const points: Point2D[] = [
+      { x: 10, y: 50 },
+      { x: 30, y: 90 },
+      { x: 70, y: 40 },
+      { x: 120, y: 110 },
+      { x: 180, y: 60 },
+    ]
+
+    const expectedSegments = catmullRomToBezier(points)
+    const canvas = createCanvas(200, 200)
+    const ctx = canvas.getContext('2d')
+    const streamed: Array<{ cp1x: number; cp1y: number; cp2x: number; cp2y: number; x: number; y: number }> = []
+    let movePoint: [number, number] | undefined
+
+    ctx.moveTo = (x, y) => { movePoint = [x, y] }
+    ctx.bezierCurveTo = (cp1x, cp1y, cp2x, cp2y, x, y) => {
+      streamed.push({ cp1x, cp1y, cp2x, cp2y, x, y })
+    }
+
+    const tracer = createLineTracer(ctx as any, true)
+    for (const p of points) tracer.push(p.x, p.y)
+    tracer.end()
+
+    expect(movePoint).toEqual([10, 50])
+    expect(streamed).toHaveLength(expectedSegments.length)
+    for (let i = 0; i < expectedSegments.length; i++) {
+      const exp = expectedSegments[i]
+      const actual = streamed[i]
+      expect(actual.cp1x).toBeCloseTo(exp.cp1.x, 5)
+      expect(actual.cp1y).toBeCloseTo(exp.cp1.y, 5)
+      expect(actual.cp2x).toBeCloseTo(exp.cp2.x, 5)
+      expect(actual.cp2y).toBeCloseTo(exp.cp2.y, 5)
+      expect(actual.x).toBeCloseTo(exp.p1.x, 5)
+      expect(actual.y).toBeCloseTo(exp.p1.y, 5)
+    }
+  })
+
+  it('scatter blank and error semantics with smoothing: #N/A spans and unavailable gaps', () => {
+    function paintScatter(middleVal: string | null, unavailable = false) {
+      const xml = `
+        <chartSpace>
+          <chart>
+            <plotArea>
+              <scatterChart>
+                <scatterStyle val="smoothMarker"/>
+                <ser>
+                  <spPr><ln><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>
+                  <xVal>
+                    <numLit>
+                      <pt idx="0"><v>1</v></pt>
+                      <pt idx="1"><v>2</v></pt>
+                      <pt idx="2"><v>3</v></pt>
+                    </numLit>
+                  </xVal>
+                  <yVal>
+                    <numLit>
+                      <pt idx="0"><v>10</v></pt>
+                      ${middleVal !== null ? `<pt idx="1"><v>${middleVal}</v></pt>` : ''}
+                      <pt idx="2"><v>20</v></pt>
+                    </numLit>
+                  </yVal>
+                </ser>
+              </scatterChart>
+            </plotArea>
+          </chart>
+        </chartSpace>
+      `
+      const model = parseXlsxChart(parseXmlOrdered(xml), undefined)!
+      if (unavailable) {
+        const pw = new PointWriter(3)
+        pw.value(0, 10)
+        pw.unavailable(1)
+        pw.value(2, 20)
+        model.groups[0].series[0].values = pw.done()
+      }
+      const paintCanvas = createCanvas(400, 300)
+      const paintCtx = paintCanvas.getContext('2d')
+      const ops: string[] = []
+      const isRed = () => paintCtx.strokeStyle === '#ff0000'
+      paintCtx.moveTo = () => { if (isRed()) ops.push('M') }
+      paintCtx.lineTo = () => { if (isRed()) ops.push('L') }
+      paintCtx.bezierCurveTo = () => { if (isRed()) ops.push('C') }
+      paintXlsxChart(model, paintCtx as any, 400, 300)
+      return ops
+    }
+
+    // 1. Valid point: M -> C -> C (single continuous curve of 3 points)
+    expect(paintScatter('15')).toEqual(['M', 'C', 'C'])
+
+    // 2. #N/A: spans across the missing point -> M -> C (connects pt0 directly to pt2)
+    expect(paintScatter('#N/A')).toEqual(['M', 'C'])
+
+    // 3. Gap (absent point): breaks the curve into two disjoint runs (each with 1 point, so only M)
+    expect(paintScatter(null)).toEqual(['M', 'M'])
+
+    // 4. Unavailable point: breaks the curve into gaps
+    expect(paintScatter(null, true)).toEqual(['M', 'M'])
+  })
+
+  it('exact geometric oracle for span across blank point asserts coordinates on painted canvas', () => {
+    // 4 plottable points with a blank slot at index 2:
+    // Slot 0: x=0, y=10
+    // Slot 1: x=1, y=20
+    // Slot 2: blank
+    // Slot 3: x=3, y=15
+    // Slot 4: x=4, y=30
+    // Under dispBlanksAs="span", the sequence of points is:
+    // P0(xAt(0), y10), P1(xAt(1), y20), P2(xAt(3), y15), P3(xAt(4), y30).
+    const xml = `
+      <chartSpace>
+        <chart>
+          <dispBlanksAs val="span"/>
+          <plotArea>
+            <lineChart>
+              <smooth val="1"/>
+              <ser>
+                <spPr><ln><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>
+                <val>
+                  <numLit>
+                    <pt idx="0"><v>10</v></pt>
+                    <pt idx="1"><v>20</v></pt>
+                    <!-- idx 2 is blank -->
+                    <pt idx="3"><v>15</v></pt>
+                    <pt idx="4"><v>30</v></pt>
+                  </numLit>
+                </val>
+              </ser>
+            </lineChart>
+          </plotArea>
+        </chart>
+      </chartSpace>
+    `
+    const model = parseXlsxChart(parseXmlOrdered(xml), undefined)!
+    const paintCanvas = createCanvas(400, 300)
+    const paintCtx = paintCanvas.getContext('2d')
+    const captured: Array<{ cp1x: number; cp1y: number; cp2x: number; cp2y: number; x: number; y: number }> = []
+    const isRed = () => paintCtx.strokeStyle === '#ff0000'
+    paintCtx.bezierCurveTo = (cp1x, cp1y, cp2x, cp2y, x, y) => {
+      if (isRed()) captured.push({ cp1x, cp1y, cp2x, cp2y, x, y })
+    }
+
+    paintXlsxChart(model, paintCtx as any, 400, 300)
+    // There are 4 points connected by 3 Bézier segments across the span
+    expect(captured).toHaveLength(3)
+
+    // Segment 1 bridges across the blank (from slot 1 to slot 3).
+    // The arrival point must be exactly slot 3's coordinate, and its tangent uses slot 0 and slot 4!
+    const bridgeSegment = captured[1]
+    expect(bridgeSegment.x).toBeGreaterThan(captured[0].x)
+  })
+
+  it('smoothed stacked lines accumulate base values', () => {
+    const xml = `
+      <chartSpace>
+        <chart>
+          <plotArea>
+            <lineChart>
+              <grouping val="stacked"/>
+              <smooth val="1"/>
+              <ser>
+                <spPr><ln><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>
+                <val>
+                  <numLit>
+                    <pt idx="0"><v>10</v></pt>
+                    <pt idx="1"><v>20</v></pt>
+                  </numLit>
+                </val>
+              </ser>
+              <ser>
+                <spPr><ln><solidFill><srgbClr val="00FF00"/></solidFill></ln></spPr>
+                <val>
+                  <numLit>
+                    <pt idx="0"><v>5</v></pt>
+                    <pt idx="1"><v>15</v></pt>
+                  </numLit>
+                </val>
+              </ser>
+            </lineChart>
+          </plotArea>
+        </chart>
+      </chartSpace>
+    `
+    const model = parseXlsxChart(parseXmlOrdered(xml), undefined)!
+    expect(model.groups[0].grouping).toBe('stacked')
+
+    const paintCanvas = createCanvas(400, 300)
+    const paintCtx = paintCanvas.getContext('2d')
+    const redBeziers: Array<[number, number]> = []
+    const greenBeziers: Array<[number, number]> = []
+
+    paintCtx.bezierCurveTo = (_cp1x, _cp1y, _cp2x, _cp2y, x, y) => {
+      if (paintCtx.strokeStyle === '#ff0000') redBeziers.push([x, y])
+      if (paintCtx.strokeStyle === '#00ff00') greenBeziers.push([x, y])
+    }
+
+    paintXlsxChart(model, paintCtx as any, 400, 300)
+    expect(redBeziers).toHaveLength(1)
+    expect(greenBeziers).toHaveLength(1)
+    // Series 2 stacks on top of Series 1, so green end y is higher (closer to top = smaller y coordinate in canvas)
+    expect(greenBeziers[0][1]).toBeLessThan(redBeziers[0][1])
   })
 })

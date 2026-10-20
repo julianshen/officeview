@@ -2,7 +2,7 @@ import { barGeometry } from './barGeometry'
 import { applyFillStyle, type ChartFillStyle } from './fills'
 import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
-import { traceSmoothCurve, type Point2D } from './smooth'
+import { createLineTracer } from './smooth'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
  * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
@@ -435,7 +435,8 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       // Drop lines (spec 5.8) span, per category, every plotted point of the group to the category axis.
       const drops = group.dropLines && !group.dropLines.noFill ? { lo: new Float64Array(count).fill(NaN), hi: new Float64Array(count).fill(NaN) } : undefined
       for (const s of group.series) {
-        if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 2 : 1) + 1)) continue
+        const lineCost = (s.smooth ?? group.smooth) ? 3 : 1
+        if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 1 + lineCost : lineCost) + 1)) continue
         const src = s.source
         bottom.set(base)
         for (let i = 0; i < count; i++) {
@@ -473,24 +474,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
             ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
             if (applyLineStyle(ctx, src.lineStyle, plot)) {
               ctx.beginPath()
-              const isSmooth = s.smooth ?? group.smooth ?? false
-              if (isSmooth) {
-                let run: Point2D[] = []
-                for (let i = 0; i < count; i++) {
-                  if (!has(i)) {
-                    if (s.plot(i) !== 'span' && run.length > 0) {
-                      traceSmoothCurve(ctx, run)
-                      run = []
-                    }
-                    continue
-                  }
-                  run.push({ x: xAt(i), y: at(top[i]) })
+              const tracer = createLineTracer(ctx, Boolean(s.smooth ?? group.smooth))
+              for (let i = 0; i < count; i++) {
+                if (!has(i)) {
+                  if (s.plot(i) !== 'span') tracer.break()
+                  continue
                 }
-                if (run.length > 0) traceSmoothCurve(ctx, run)
-              } else {
-                let pen = false
-                for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+                tracer.push(xAt(i), at(top[i]))
               }
+              tracer.end()
               ctx.stroke()
             }
           } finally { ctx.restore() }
@@ -525,8 +517,14 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         px = xp(xv); py = at(v)
         return true
       }
+      const isScatterGap = (s: DrawSeries, i: number): boolean => {
+        const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+        const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+        return rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')
+      }
       for (const s of group.series) {
-        if (!admitPath(count * 2 + 1)) continue
+        const lineCost = (s.smooth ?? group.smooth) ? 3 : 1
+        if (!admitPath(count * (s.markers !== false ? 1 + lineCost : lineCost) + 1)) continue
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (s.line) {
           ctx.save()
@@ -534,37 +532,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
             ctx.lineWidth = 2
             if (applyLineStyle(ctx, s.source.lineStyle, plot)) {
               ctx.beginPath()
-              const isSmooth = s.smooth ?? group.smooth ?? false
-              if (isSmooth) {
-                let run: Point2D[] = []
-                for (let i = 0; i < count; i++) {
-                  if (!point(s, i)) {
-                    const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
-                    const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
-                    if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) {
-                      if (run.length > 0) {
-                        traceSmoothCurve(ctx, run)
-                        run = []
-                      }
-                    }
-                    continue
-                  }
-                  run.push({ x: px, y: py })
+              const tracer = createLineTracer(ctx, Boolean(s.smooth ?? group.smooth))
+              for (let i = 0; i < count; i++) {
+                if (!point(s, i)) {
+                  if (isScatterGap(s, i)) tracer.break()
+                  continue
                 }
-                if (run.length > 0) traceSmoothCurve(ctx, run)
-              } else {
-                let pen = false
-                for (let i = 0; i < count; i++) {
-                  if (!point(s, i)) {
-                    const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
-                    const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
-                    if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
-                    continue
-                  }
-                  if (!pen) { ctx.moveTo(px, py); pen = true }
-                  else ctx.lineTo(px, py)
-                }
+                tracer.push(px, py)
               }
+              tracer.end()
               ctx.stroke()
             }
           } finally { ctx.restore() }

@@ -315,6 +315,7 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
 /** A series feeds an analytic element: a trendline, or stdDev/stdErr error bars (spec 7). */
 const isAnalytic = (ser: XmlNode) => Boolean(child(ser, 'trendline')) || getChildren(ser, 'errBars').some(bars => /^std(Dev|Err)$/.test(val(child(bars, 'errValType')) ?? ''))
 const flag = (node: XmlNode | undefined, fallback: boolean) => { const v = val(node); return v === undefined ? fallback : v === '1' || v === 'true' }
+const readSmooth = (el: XmlNode | undefined) => el ? flag(el, true) : undefined
 /** `c16r3:dataDisplayOptions16/c16r3:dispNaAsBlank` in the chart's extension list. */
 function dispNaAsBlank(chart: XmlNode): boolean | undefined {
   for (const ext of getChildren(child(chart, 'extLst'), 'ext')) {
@@ -421,11 +422,6 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const grouping = (val(child(node, 'grouping')) ?? (type === 'bar' ? 'clustered' : 'standard')) as ChartGroup['grouping']
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
     const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
-    const readSmooth = (el: XmlNode | undefined): boolean | undefined => {
-      if (!el) return undefined
-      const v = val(el)
-      return v === '0' || v === 'false' ? false : true
-    }
     const groupSmooth = readSmooth(child(node, 'smooth')) ?? (type === 'scatter' && /smooth/i.test(scatterStyle) ? true : undefined)
     // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
     const connector = (name: string) => {
@@ -564,7 +560,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(smooth !== undefined ? { smooth } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
-        ...(type === 'scatter' ? { line: lineColor !== null && (/line|smooth/i.test(scatterStyle) || Boolean(smooth)), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
+        ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
       })
     }
     groups.push({

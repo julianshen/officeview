@@ -18,19 +18,114 @@ export interface BezierSegment {
   p1: Point2D
 }
 
+export interface LineTracer {
+  push(x: number, y: number): void
+  break(): void
+  end(): void
+}
+
+/**
+ * Creates a streaming line tracer that emits canvas path operations directly
+ * with zero per-point heap allocations.
+ *
+ * When smooth is false, it emits ctx.moveTo on the first point of each run,
+ * and ctx.lineTo on subsequent points.
+ *
+ * When smooth is true, it buffers a sliding window of at most 3 points
+ * (using 6 primitive numbers) and emits Catmull-Rom cubic Bézier curve
+ * segments (tension 1/2) directly to ctx.bezierCurveTo as points arrive.
+ * End segments use the end point as its own neighbour (spec §5.5).
+ */
+export function createLineTracer(ctx: CanvasRenderingContext2D, smooth: boolean): LineTracer {
+  if (!smooth) {
+    let pen = false
+    return {
+      push(x: number, y: number): void {
+        if (!pen) {
+          ctx.moveTo(x, y)
+          pen = true
+        } else {
+          ctx.lineTo(x, y)
+        }
+      },
+      break(): void {
+        pen = false
+      },
+      end(): void {
+        pen = false
+      },
+    }
+  }
+
+  // Smooth mode: state machine with sliding window of primitive coordinates.
+  // count: 0 (no points), 1 (have p0), 2 (have p0, p1), 3 (have prev, p0, p1)
+  let count = 0
+  let prevX = 0, prevY = 0
+  let p0X = 0, p0Y = 0
+  let p1X = 0, p1Y = 0
+
+  function flushLast(): void {
+    if (count < 2) {
+      count = 0
+      return
+    }
+    // Final segment: from p0 to p1.
+    // End segment uses p1 as its own neighbour: next = p1.
+    // If count == 2 (only p0 and p1 existed), prev was p0 (end segment uses p0 as own neighbour).
+    const cp1x = p0X + (p1X - prevX) / 6
+    const cp1y = p0Y + (p1Y - prevY) / 6
+    const cp2x = p1X - (p1X - p0X) / 6
+    const cp2y = p1Y - (p1Y - p0Y) / 6
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p1X, p1Y)
+    count = 0
+  }
+
+  return {
+    push(x: number, y: number): void {
+      if (count === 0) {
+        p0X = x
+        p0Y = y
+        ctx.moveTo(x, y)
+        count = 1
+        return
+      }
+      if (count === 1) {
+        prevX = p0X
+        prevY = p0Y
+        p1X = x
+        p1Y = y
+        count = 2
+        return
+      }
+      // count >= 2: we now have prev, p0, p1, and the new point (x, y) which acts as `next`.
+      // Emit segment from p0 to p1:
+      const cp1x = p0X + (p1X - prevX) / 6
+      const cp1y = p0Y + (p1Y - prevY) / 6
+      const cp2x = p1X - (x - p0X) / 6
+      const cp2y = p1Y - (y - p0Y) / 6
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p1X, p1Y)
+
+      // Slide window:
+      prevX = p0X
+      prevY = p0Y
+      p0X = p1X
+      p0Y = p1Y
+      p1X = x
+      p1Y = y
+      count = 3
+    },
+    break(): void {
+      flushLast()
+    },
+    end(): void {
+      flushLast()
+    },
+  }
+}
+
 /**
  * Converts a sequence of 2D points into cubic Bézier curve segments using
  * Catmull-Rom spline with tension 1/2 (spec §5.5).
- *
- * For each interior point P_i (1 <= i <= n - 2):
- *   T_i = 1/2 * (P_{i+1} - P_{i-1})
- * End segments use the end point as its own neighbour:
- *   T_0 = 1/2 * (P_1 - P_0)
- *   T_{n-1} = 1/2 * (P_{n-1} - P_{n-2})
- *
- * Each cubic Bézier segment from P_i to P_{i+1} has control points:
- *   cp1 = P_i + T_i / 3 = P_i + (P_{i+1} - P_{i-1}) / 6
- *   cp2 = P_{i+1} - T_{i+1} / 3 = P_{i+1} - (P_{i+2} - P_i) / 6
  */
 export function catmullRomToBezier(points: readonly Point2D[]): BezierSegment[] {
   const n = points.length
@@ -60,15 +155,7 @@ export function catmullRomToBezier(points: readonly Point2D[]): BezierSegment[] 
  * Single points issue a moveTo; empty sequences do nothing.
  */
 export function traceSmoothCurve(ctx: CanvasRenderingContext2D, points: readonly Point2D[]): void {
-  if (points.length === 0) return
-  if (points.length === 1) {
-    ctx.moveTo(points[0].x, points[0].y)
-    return
-  }
-  const segments = catmullRomToBezier(points)
-  ctx.moveTo(segments[0].p0.x, segments[0].p0.y)
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]
-    ctx.bezierCurveTo(seg.cp1.x, seg.cp1.y, seg.cp2.x, seg.cp2.y, seg.p1.x, seg.p1.y)
-  }
+  const tracer = createLineTracer(ctx, true)
+  for (let i = 0; i < points.length; i++) tracer.push(points[i].x, points[i].y)
+  tracer.end()
 }
