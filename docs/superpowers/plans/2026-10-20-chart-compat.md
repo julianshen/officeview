@@ -31,6 +31,7 @@
   - Measure with `bun run build && bun scripts/eager-budget.ts`: Node zlib gzip of `dist/index.js`, hard ceiling 38,720.
   - **B0** is the eager size at `3581768`. Task F0 records it in the ledger and the validation doc.
   - After every task, the eager size must be **≤ B0**. Bytes freed earlier (A0a) may be spent later.
+  - **Tolerance (controller ruling, F0):** up to +16 B over B0 is allowed when `dist/index.js` differs only by content-hashed chunk names (hash churn). An early task may also borrow eager bytes, recorded in the ledger and repaid by a later task, always under the hard 38,720 ceiling. [plan r3: opencode N5]
   - Every task records before, after, the running total and the bytes it adds. Always rebuild before measuring.
   - New logic goes lazy. **Never add the embedded-zip inventory or uncached read to `src/core/zip.ts`**; at most a one-line entry accessor.
 - **Eager graph.**
