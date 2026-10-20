@@ -37,6 +37,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After A4b | A4b commit | 38,640 | Before (`f04481f`, rebuilt from a clean `git archive`): 38,636. Title runs, legend overlay/legendEntry, multi-level category tiers (`src/charts/titles.ts`, `src/charts/categories.ts`, layout, paint, parse, style part) are all in the lazy `charts-*` chunk. `dist/index.js` byte-identical to the base build after normalising chunk hashes. Bytes added by A4b: 0 (hash churn only). Running total vs B0: +9 B |
 | After B3 | B3 commit (`f2c8ee3`) | 38,635 | Before (`7c67e33`, rebuilt): 38,640. Histogram and Pareto (`src/charts/chartex/histogram.ts`, the stage-1 hook, the ChartEx adapter): all in the lazy `charts-*` chunk. `dist/index.js` unchanged apart from hash churn (−5 B). Bytes added by B3: 0. Running total vs B0 (38,631): +4 B |
 | After B3 fix round 1 | B3 r1 commit | 38,638 | Before (`d5eaff5`, B3 merged with `feature/chart-compat` at `e7e64f5`, rebuilt): 38,639. Leaf reason constants (`src/charts/limits.ts`), range-safe binning and override remapping (lazy `charts-*`); deferred XLSX chart fallbacks (`settleChartFallbacks` in `src/xlsx/drawing.ts`, in the worker chunks, not `dist/index.js`). `dist/index.js` unchanged apart from hash churn (−1 B). Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 2 | B3 r2 commit | 38,638 | Before (`0cdda65`, rebuilt): 38,638. Branch-unit fallback descriptors and post-settlement media indexing (`src/xlsx/drawing.ts`, `src/xlsx/parse.ts`, worker chunks); plain-first arithmetic and per-slot overrides (lazy `charts-*`). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
 
 ## Spec §8 testing and validation
 
@@ -227,20 +228,26 @@ The following rules are **unverified** ([U]/[P]). No Office-rendered reference h
   - The percent axis is the paretoLine's value axis (min 0, max 1 and `0%` unless authored), placed on the right. The line's colour comes from its `formatIdx` (accent 2 by default).
   - The line's legend name is the owner's name.
 - **Gap width:** an absent `gapWidth` is 0 for binned columns and 150 % for By Category.
-- **Per-point overrides ([P], fix round 1):**
-  - A By Category column that is exactly one source point of its series (the series' categories are unique) keeps that point's `dataPt` fill, colour and line, and its `dataLabel`/`dataLabelHidden`. A Pareto sort moves them with their column.
-  - Binned columns, and categories grouped from several points, drop the overrides with one `chart-histogram-point-overrides` diagnostic.
+- **Per-point overrides ([P], fix rounds 1 and 2):**
+  - The rule is decided per category slot. A By Category column whose slot holds exactly one source point of its series keeps that point's `dataPt` fill, colour and line, and its `dataLabel`/`dataLabelHidden`. A Pareto sort moves them with their column.
+  - Binned columns, and slots grouped from several points, drop only the overrides addressing those points, with one `chart-histogram-point-overrides` diagnostic carrying the count.
   - Series-level labels are always kept, so PA2's counts are drawn.
 - **Hidden series (fix round 1):**
   - A hidden column series is out of layout: it is not drawn, not binned, and not counted by the structural checks.
   - A hidden paretoLine draws no line, but the columns are still sorted by their owner.
   - `ownerIdx` counts every `cx:series` in document position, hidden ones included.
-- **Range safety (fix round 1):**
-  - Bin edges are `lo + i·h` formed by halving and doubling, and differences that pass the double range are taken from quotients. By Category sums divide every term by one power of two when they could overflow, and Pareto fractions are computed on bars scaled by a power of two.
+- **Range safety (fix rounds 1 and 2):**
+  - Ordinary arithmetic is used whenever it stays representable.
+  - A bin edge `lo + i·h` is halved and doubled only when the plain edge overflows, so a subnormal width keeps its value.
+  - Differences are taken from quotients only when the plain difference overflows.
+  - A By Category slot is summed again, with its own power-of-two scale, only when its plain sum overflows, so small sums in other slots are never scaled.
+  - Pareto fractions use plain running sums unless those overflow.
   - Edges that are non-finite or not strictly increasing are refused as "invalid binning".
   - A column whose value passes the double range is refused ("This chart's values are out of range").
-- **Refusal after the data is read (XLSX, fix round 1; every ChartEx family):**
-  - A chart Choice is selected before the workbook fill reads its data. If the fill or stage 1 then refuses it, `settleChartFallbacks` replaces it with its `mc:Fallback`, parsed only at that point. This applies to the resident and the paged XLSX readers.
+- **Refusal after the data is read (XLSX, fix rounds 1 and 2; every ChartEx family):**
+  - A chart Choice is selected before the workbook fill reads its data. If the fill or stage 1 then refuses any chart in the selected branch, `settleChartFallbacks` replaces the whole branch with its `mc:Fallback`, parsed only at that point. "The whole branch" includes a shape beside the chart and a chart inside a group. This applies to the resident and the paged XLSX readers.
+  - The branch's descriptor lives until its charts are final. A paged chart that is still waiting on an importing sheet keeps its Choice, and the paged reader reads the sheet's drawings again once the sheet completes.
+  - A selected fallback's pictures are indexed into the document's media (`collectXlsxImages`), so they paint.
   - The coverage becomes `fallback`/`fallback`, keeping the chart's feature (`ChartEx`), with the refusal as the reason.
   - With no usable fallback, the card stays and its stale `chart` coverage entry is recomputed.
   - DOCX/PPTX need no change: their data is read in the adapter, before selection.

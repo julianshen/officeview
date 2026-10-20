@@ -463,10 +463,12 @@ entirely, and Excel's rendering of that case is **unconfirmed**. [U]
 **Histogram and Pareto overrides [P] (B3 fix round 1, controller ruling).** `dataPt@idx`, `dataLabel@idx` and
 `dataLabelHidden@idx` address source points, but the drawn columns are derived:
 
-- **One column per source point.** A By Category column that is exactly one source point of its series (that
-  series' categories are unique) carries that point's overrides. A Pareto sort moves them with the column.
-- **No single source point.** A binned column, or a category grouped from several points, draws no point override.
-  The overrides are dropped with the diagnostic `chart-histogram-point-overrides`.
+- **One column per source point, decided per category slot (fix round 2).** A By Category column whose slot holds
+  exactly one source point of its series carries that point's overrides. This holds even when other categories of
+  the same series are grouped. A Pareto sort moves the overrides with the column.
+- **No single source point.** A binned column, or a category slot grouped from several points of the series, draws
+  no point override. Only the overrides addressing those points are dropped, with the diagnostic
+  `chart-histogram-point-overrides` (count of dropped overrides).
 - No Office reference shows how Office maps these overrides.
 
 ---

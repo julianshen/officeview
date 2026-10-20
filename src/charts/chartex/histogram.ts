@@ -65,9 +65,9 @@ export function histogramStructure(model: ChartModel): string | undefined {
 }
 
 /**
- * Derived columns: labels, per-series heights and, where a column is exactly one source point of its series
- * (By Category with that series' categories unique), the source index of each column (-1: none). `undefined`
- * sources: the mapping is ambiguous (bins, grouped categories), so point overrides are not carried.
+ * Derived columns: labels, per-series heights and, for By Category, each column's source point per series (-1:
+ * none; -2: several, that slot carries no point override). `undefined` sources (bins): no column is one source
+ * point, so point overrides are not carried.
  */
 interface Derived { labels: string[]; heights: Float64Array[]; sources: Array<Int32Array | undefined>; retained: number }
 /** Values whose sums or edges pass the double range (spec 5.8: never NaN or Infinity drawn as a value). */
@@ -112,20 +112,24 @@ let jobs = 0
 const refuse = (model: ChartModel, reason: string): ChartModel => ({ ...model, preparedAxes: undefined, unsupported: reason, refused: true })
 
 /**
- * The power-of-two divisor that keeps a sum of `count` terms of at most `maxAbs` inside the double range
- * (1 when it fits): dividing by a power of two is exact, so ordinary sums are unchanged.
+ * The power-of-two divisor that keeps a sum of `count` terms of at most `maxAbs` inside the double range. Used only
+ * for a sum whose plain form passed the range: dividing by a power of two is exact for every term it does not
+ * push below the smallest normal, and such a term cannot change an overflowing sum.
  */
-const sumScale = (maxAbs: number, count: number): number => maxAbs > 0 && !Number.isFinite(maxAbs * count * 2) ? 2 ** Math.ceil(Math.log2(maxAbs) + Math.log2(count) + 1 - 1023) : 1
+const sumScale = (maxAbs: number, count: number): number => maxAbs > 0 ? 2 ** Math.max(0, Math.ceil(Math.log2(maxAbs) + Math.log2(Math.max(1, count)) + 1 - 1023)) : 1
 
-/** By Category (map §5.1): equal category texts grouped in first-occurrence order (pooled across series), values summed. */
+/**
+ * By Category (map §5.1): equal category texts grouped in first-occurrence order (pooled across series), values
+ * summed. Each slot is summed plainly; only a slot whose plain sum passes the double range is summed again with its
+ * own power-of-two scale (small representable sums are never scaled). `sources[s][j]`: the source index of the one
+ * point of series s in slot j, -1 none, -2 several (that slot carries no point override).
+ */
 function aggregate(model: ChartModel, visible: ChartSeries[], take: (s: ChartSeries, i: number) => boolean, charge: (bytes: number) => void): Derived | string {
   const index = new Map<string, number>(), labels: string[] = []
-  let maxAbs = 0, count = 0
   for (const s of visible) {
     const categories = s.categories ?? model.categories
     const n = Math.max(s.values.length, categories.length)
     for (let i = 0; i < n; i++) {
-      if (i < s.values.length && take(s, i)) { maxAbs = Math.max(maxAbs, Math.abs(s.values.values[i])); count++ }
       const text = categories[i] ?? ''
       if (index.has(text)) continue
       // A map entry (transient) and a label slot (retained; the text is the source's own string).
@@ -134,23 +138,39 @@ function aggregate(model: ChartModel, visible: ChartSeries[], take: (s: ChartSer
       labels.push(text)
     }
   }
-  // Range-safe sums: every term is divided by one power of two when the plain sum could pass the double range.
-  const scale = sumScale(maxAbs, count)
   charge(labels.length * 12 * visible.length)
   const sources: Array<Int32Array | undefined> = []
   const heights = visible.map(s => {
     const sums = new Float64Array(labels.length), source = new Int32Array(labels.length).fill(-1)
     const categories = s.categories ?? model.categories
-    let ambiguous = false
+    const slot = (i: number) => index.get(categories[i] ?? '')!
     for (let i = 0; i < Math.max(s.values.length, categories.length); i++) {
-      const j = index.get(categories[i] ?? '')!
-      // A column is one source point of this series only while no second point of the series joins it.
-      if (source[j] >= 0) ambiguous = true
-      else source[j] = i
-      if (i < s.values.length && take(s, i)) sums[j] += s.values.values[i] / scale
+      const j = slot(i)
+      // A column is one source point of this series while no second point of the series joins its slot.
+      source[j] = source[j] === -1 ? i : -2
+      if (i < s.values.length && take(s, i)) sums[j] += s.values.values[i]
     }
-    sources.push(ambiguous ? undefined : source)
-    for (let j = 0; j < sums.length; j++) sums[j] *= scale
+    // Slots whose plain sum passed the range: summed again, each with its own scale.
+    const over = new Set<number>()
+    for (let j = 0; j < sums.length; j++) if (!Number.isFinite(sums[j])) over.add(j)
+    if (over.size) {
+      const maxAbs = new Map<number, number>(), count = new Map<number, number>()
+      for (let i = 0; i < s.values.length; i++) {
+        const j = slot(i)
+        if (!over.has(j) || !take(s, i)) continue
+        maxAbs.set(j, Math.max(maxAbs.get(j) ?? 0, Math.abs(s.values.values[i])))
+        count.set(j, (count.get(j) ?? 0) + 1)
+      }
+      const scaled = new Map<number, number>()
+      for (const j of over) scaled.set(j, 0)
+      for (let i = 0; i < s.values.length; i++) {
+        const j = slot(i)
+        if (!over.has(j) || !take(s, i)) continue
+        scaled.set(j, scaled.get(j)! + s.values.values[i] / sumScale(maxAbs.get(j)!, count.get(j)!))
+      }
+      for (const j of over) sums[j] = scaled.get(j)! * sumScale(maxAbs.get(j) ?? 0, count.get(j) ?? 0)
+    }
+    sources.push(source)
     return sums
   })
   if (heights.some(h => h.some(v => !Number.isFinite(v)))) return HISTOGRAM_OUT_OF_RANGE
@@ -200,8 +220,11 @@ function bin(model: ChartModel, group: ChartExGroup, authored: ChartExBinning | 
   if (total > HISTOGRAM_BIN_LIMIT) return HISTOGRAM_INVALID_BINNING
   charge((k + 1) * SLOT_BYTES)
   const edges = new Float64Array(k + 1)
-  // lo + i*h, halved and doubled (exact whenever the plain form neither overflows nor underflows).
-  for (let i = 0; i <= k; i++) edges[i] = single ? lo : 2 * (lo / 2 + i * (h / 2))
+  for (let i = 0; i <= k; i++) {
+    const plain = lo + i * h
+    // Halved and doubled only when the plain edge passes the double range (a subnormal width keeps its value).
+    edges[i] = single ? lo : Number.isFinite(plain) ? plain : 2 * (lo / 2 + i * (h / 2))
+  }
   if (binning.binCount !== undefined && !single && k) edges[k] = O ?? max
   // Validated geometry: finite, strictly increasing edges (an edge lost to precision or range is invalid binning).
   for (let i = 0; i <= k; i++) if (!Number.isFinite(edges[i]) || (!single && i && !(edges[i] > edges[i - 1]))) return HISTOGRAM_INVALID_BINNING
@@ -291,10 +314,12 @@ function sortPareto(derived: Derived, charge: (bytes: number) => void): (Derived
   const labels = order.map(i => derived.labels[i])
   const heights = derived.heights.map(h => Float64Array.from(order, i => h[i]))
   const sources = derived.sources.map(src => src && Int32Array.from(order, i => src[i]))
+  // Plain running sums when they stay in range; otherwise bars divided by a power of two near their largest magnitude.
+  let plain = 0, inRange = true
+  for (let i = 0; i < n; i++) { plain += heights[0]?.[i] ?? 0; if (!Number.isFinite(plain)) inRange = false }
   let largest = 0
-  for (let i = 0; i < n; i++) largest = Math.max(largest, Math.abs(owner[i]))
-  // A power of two (exact division): the plain ratios are unchanged whenever the plain total is representable.
-  const unit = largest > 0 ? 2 ** Math.min(1023, Math.ceil(Math.log2(largest))) : 1
+  if (!inRange) for (let i = 0; i < n; i++) largest = Math.max(largest, Math.abs(owner[i]))
+  const unit = !inRange && largest > 0 ? 2 ** Math.min(1023, Math.ceil(Math.log2(largest))) : 1
   let total = 0
   for (let i = 0; i < n; i++) total += owner[i] / unit
   const cumulative = new Float64Array(n)
@@ -319,10 +344,19 @@ const hasOverrides = (s: ChartSeries) => Boolean(s.dPt?.size || s.pointFills?.so
  * A derived series' point overrides (map §4.2): carried column by column where each column is one source point of
  * the series (`source[j]`: its source index); otherwise none.
  */
-function remapOverrides(s: ChartSeries, source: Int32Array | undefined, built: Derived, charge: (bytes: number) => void): Partial<ChartSeries> {
+function remapOverrides(s: ChartSeries, source: Int32Array | undefined, built: Derived, charge: (bytes: number) => void): { series: Partial<ChartSeries>; dropped: number } {
   const { points: labelPoints, ...labels } = s.labels ?? {}
   const out: Partial<ChartSeries> = s.labels ? { labels } : {}
-  if (!source || !hasOverrides(s)) return out
+  if (!hasOverrides(s)) return { series: out, dropped: 0 }
+  // Every source index an override addresses; those no single column carries are dropped (and counted).
+  const addressed = new Set<number>([...s.dPt?.keys() ?? [], ...Object.keys(labelPoints ?? {}).map(Number)])
+  s.pointFills?.forEach((fill, i) => { if (fill) addressed.add(i) })
+  s.pointColors?.forEach((color, i) => { if (color) addressed.add(i) })
+  if (!source) return { series: out, dropped: addressed.size }
+  const carried = new Set<number>()
+  for (let j = 0; j < source.length; j++) if (source[j] >= 0) carried.add(source[j])
+  let dropped = 0
+  for (const i of addressed) if (!carried.has(i)) dropped++
   const dPt = new Map<number, ChartPointOverride>(), fills: ChartSeries['pointFills'] = [], colors: string[] = [], pointLabels: Record<number, LabelOptions> = {}
   let kept = 0
   for (let j = 0; j < source.length; j++) {
@@ -343,7 +377,7 @@ function remapOverrides(s: ChartSeries, source: Int32Array | undefined, built: D
   if (fills.some(Boolean)) out.pointFills = fills
   if (colors.some(Boolean)) out.pointColors = colors
   if (Object.keys(pointLabels).length) out.labels = { ...labels, points: pointLabels }
-  return out
+  return { series: out, dropped }
 }
 
 /** The derived model: a plain clustered column group (and a Pareto line group), the labels as categories. */
@@ -358,16 +392,17 @@ function assemble(model: ChartModel, group: ChartExGroup, visible: ChartSeries[]
   }
   let dropped = 0
   const series: ChartSeries[] = visible.map((s, i) => {
-    if (!built.sources[i] && hasOverrides(s)) dropped++
+    const remapped = remapOverrides(s, built.sources[i], built, charge)
+    dropped += remapped.dropped
     return {
       name: s.name, color: s.color, values: points(built.heights[i], built, charge),
-      ...(s.fill ? { fill: s.fill } : {}), ...(s.lineStyle ? { lineStyle: s.lineStyle } : {}), ...remapOverrides(s, built.sources[i], built, charge),
+      ...(s.fill ? { fill: s.fill } : {}), ...(s.lineStyle ? { lineStyle: s.lineStyle } : {}), ...remapped.series,
     }
   })
   // Overrides that address a source point no single column draws are dropped, diagnosed once (map §4.2, §5.1 [P]).
   const diagnostics = [...model.diagnostics ?? []]
   if (dropped) {
-    const reason = `Point formatting and label overrides of ${dropped} histogram ${dropped === 1 ? 'series are' : 'series are'} not drawn: a binned or grouped column is not one source point`
+    const reason = `${dropped} point ${dropped === 1 ? 'override is' : 'overrides are'} not drawn: a binned column, or a category grouped from several points, is not one source point`
     charge(stringBytes(HISTOGRAM_OVERRIDES_DROPPED) + stringBytes(reason))
     built.retained += stringBytes(HISTOGRAM_OVERRIDES_DROPPED) + stringBytes(reason)
     diagnostics.push({ code: HISTOGRAM_OVERRIDES_DROPPED, reason })
