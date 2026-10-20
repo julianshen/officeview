@@ -94,3 +94,10 @@ export const chargeChartColor = (charge: ChartCharge | undefined): void => charg
  */
 export const CHART_TRENDLINE_BYTES = Object.freeze({ spec: 160, fit: 192 })
 export const chargeChartTrendline = (charge: ChartCharge | undefined, textUnits = 0): void => charge?.(CHART_TRENDLINE_BYTES.spec + (textUnits ? textUnits * 2 + 64 : 0))
+/**
+ * Error bars (A6b, spec 5.7): a parsed `c:errBars` record is charged at parse (its custom amounts are point storage,
+ * charged as such); a prepared set retains its statistic, priced by `preparedErrorBarBytes`, plus the transient
+ * axis extent it contributes while stage 1 runs.
+ */
+export const CHART_ERROR_BAR_BYTES = Object.freeze({ spec: 128, prepared: 96, extent: 96 })
+export const chargeChartErrorBars = (charge: ChartCharge | undefined): void => charge?.(CHART_ERROR_BAR_BYTES.spec)

@@ -11,6 +11,7 @@ import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { prepareTrendlines, preparedTrendlineBytes, trendlineBound, trendlineExtents, trendlineForecast, type PreparedTrendline } from './trendlines'
 import { chartEpoch } from './dates'
+import { errorBarBound, prepareErrorBars, preparedErrorBarBytes, type PreparedErrorBars } from './errorBars'
 
 type PreparedAxis = Omit<ResolvedAxis, 'labelValue' | 'plottable'> & { labels: string[] }
 export interface PreparedAxes {
@@ -19,6 +20,8 @@ export interface PreparedAxes {
   trendlines?: PreparedTrendline[]
   /** Category slots the trendline forecasts add (the display view reads them); absent: none. */
   forecast?: DisplayForecast
+  /** Validated error bar sets with their analytic amounts (spec 5.7); absent when the chart has none. */
+  errorBars?: PreparedErrorBars[]
   axes: PreparedAxis[]
   groups: Array<{ category?: string; x?: string; value: string; horizontal: string; vertical: string; between: boolean } | undefined>
   diagnostics: ChartDiagnostic[]
@@ -53,7 +56,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const minor = a.minorUnit === undefined ? 0 : 1000
     return n + 2048 + ticks * 640 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
   }, 0)
-  const bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
+  const bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + errorBarBound(model, model.groups.some(g => g.series.some(s => s.trendlines)) ? 4096 : slots) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
@@ -62,7 +65,11 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const trendDiagnostics: ChartDiagnostic[] = []
     const trendlines = model.groups.some(g => g.series.some(s => s.trendlines)) ? prepareTrendlines(model, formatter, chartEpoch(model.epoch, model.workbookEpoch), trendDiagnostics, workspace) : []
     const forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
-    const view = displayView(model, forecast ?? NO_FORECAST), graph = resolveAxes(model, view, undefined, undefined, trendlines.length ? trendlineExtents(trendlines) : undefined)
+    const view = displayView(model, forecast ?? NO_FORECAST)
+    // Error bars (A6b, spec 5.7): their analytic amounts, and the drawn bar ends join the automatic scales.
+    const errors = model.groups.some(g => g.series.some(s => s.errorBars)) ? prepareErrorBars(model, view, trendDiagnostics) : undefined
+    const extents = [...trendlines.length ? trendlineExtents(trendlines) : [], ...errors?.extents ?? []]
+    const graph = resolveAxes(model, view, undefined, undefined, extents.length ? extents : undefined)
     if(model.groups.some(g=>g.series.some(s=>[s.values,s.xValues,s.bubbleSizes].some(p=>p?.states.includes(POINT_UNAVAILABLE)))) && !graph.diagnostics.some(d=>d.code==='chart-point-unavailable'))graph.diagnostics.push({code:'chart-point-unavailable',reason:'A required saved chart point is unavailable'})
     const axes = [...graph.axes.values()].map(a => {
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
@@ -73,7 +80,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
     graph.diagnostics.push(...trendDiagnostics)
-    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(forecast ? { forecast } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
+    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(forecast ? { forecast } : {}), ...(errors?.bars.length ? { errorBars: errors.bars } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
     if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()
     const retained = { workspace, tag: `${tag}:retained` }
@@ -102,5 +109,5 @@ export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
 export function preparedAxesBytes(preparedAxes: PreparedAxes | undefined): number {
   if (!preparedAxes) return 0
   const axes = preparedAxes.axes, graph = preparedAxes
-  return 256 + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
+  return 256 + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + (preparedAxes.errorBars ?? []).reduce((n, b) => n + preparedErrorBarBytes(b), 0) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
 }

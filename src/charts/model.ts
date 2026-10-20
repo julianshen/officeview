@@ -42,7 +42,7 @@ export interface ChartPoints {
 }
 
 /** The data roles of a series (spec 6.4). Names and categories are strings; the rest are `ChartPoint`s. */
-export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus'
+export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus' | 'errorPlusX' | 'errorMinusX'
 
 /** Chart families of streams A and B (spec 4). */
 export type ChartFamily =
@@ -153,8 +153,13 @@ export interface ChartSeries {
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
   /** `c:trendline`s as authored (spec 5.6); fitted in stage 1 (`PreparedAxes.trendlines`). */
   trendlines?: import('./trendlines').ChartTrendline[]
-  /** References still to be filled from worksheet cells (no saved data for that role). */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
+  /** `c:errBars` as authored (spec 5.7): at most one per direction; custom amounts are their own numeric roles. */
+  errorBars?: import('./errorBars').ChartErrorBars[]
+  /**
+   * References still to be filled from worksheet cells (no saved data for that role). The custom error amounts
+   * (`c:plus`/`c:minus`) are `errorPlus`/`errorMinus` for the y (value) direction, `errorPlusX`/`errorMinusX` for x.
+   */
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange }
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which

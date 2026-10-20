@@ -19,6 +19,7 @@ import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type C
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
 import { paintTrendlines } from './trendlines'
+import { paintErrorBars, type ErrorBarPlacement } from './errorBars'
 import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 
 type FamilyCss = (family: string) => string
@@ -361,10 +362,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       return { pos, neg, total }
     })() : undefined
     const share = (v: number, i: number) => group.grouping === 'percentStacked' && stacked ? (stacked.total[i] ? v / stacked.total[i] : 0) : v
+    // Error bars (A6b, spec 5.7): placed by the family block, stroked after its marks; no placement or stroke without them.
+    const errorBars = model.source.preparedAxes?.errorBars?.some(b => b.group === g) === true
+    const errorValue = (v: number) => along(V, axisFraction(V, v, false))
+    let errorPlace: ErrorBarPlacement | undefined
     if (group.family === 'bar' && axes.category) {
       const C = axes.category, vertical = C.orientation === 'v'
       const geometry = barGeometry(group, C, axes.between, plot)
       const width = geometry.width
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: vertical, across: (_ds, order, slot) => { const idx = graph.categoryIndex(C, slot); return Number.isFinite(idx) ? geometry.start(idx, order) + width / 2 : NaN } }
       const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
         if (!admitPath(count * 4)) return
@@ -435,6 +441,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         return edge ? plot.x + (count > 1 ? i * plot.w / (count - 1) : plot.w / 2) : plot.x + band * (i + 0.5)
       }
       const has = (i: number) => !Number.isNaN(top[i])
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, across: (_ds, _order, slot) => xAt(slot) }
       // Drop lines (spec 5.8) span, per category, every plotted point of the group to the category axis.
       const drops = group.dropLines && !group.dropLines.noFill ? { lo: new Float64Array(count).fill(NaN), hi: new Float64Array(count).fill(NaN) } : undefined
       for (const s of group.series) {
@@ -512,6 +519,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         px = xp(xv); py = at(v)
         return true
       }
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } }
       for (const s of group.series) {
         if (!admitPath(count * 2 + 1)) continue
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
@@ -539,6 +547,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
       }
     }
+    if (errorPlace) paintErrorBars(ctx, model.source, g, group.series.map(s => ({ series: s.source, value: s.value, x: s.x, hasX: s.hasX })), count, model.view.source, errorPlace, admitPath, plot)
     // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
     // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
     if (model.source.preparedAxes?.trendlines?.some(t => t.group === g)) {

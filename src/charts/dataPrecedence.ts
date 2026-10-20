@@ -32,6 +32,7 @@ import { chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } f
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
+import { ERROR_ROLES, type ErrorRole } from './errorBars'
 import { requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
 
 export const CHART_DATA_UNAVAILABLE = "This chart's data is not available"
@@ -58,7 +59,7 @@ export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefi
   return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
 }
 
-type Role = 'values' | 'xValues' | 'categories' | 'name'
+type Role = 'values' | 'xValues' | 'categories' | 'name' | ErrorRole
 interface Slot { group: number; series: number; role: Role }
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 
@@ -94,6 +95,8 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
     if (pending.xValues) { slots.push({ group: g, series: s, role: 'xValues' }); requests.push({ range: pending.xValues, text: false, limit }) }
     if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: CHART_POINT_LIMIT }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
+    // Custom error amounts (spec 5.7) are optional: unavailable, that side draws no bars (diagnosed), the chart stays.
+    for (const role of ERROR_ROLES) { const range = pending[role]; if (range) { slots.push({ group: g, series: s, role }); requests.push({ range, text: false, limit: CHART_POINT_LIMIT }) } }
   }))
   const rId = attrs(child(root, 'externalData')).id
   let result: EmbeddedCellsResult

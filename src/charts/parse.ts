@@ -18,6 +18,7 @@ import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
+import { readErrorBars } from './errorBars'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -461,6 +462,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const catNode = type === 'scatter' ? undefined : child(ser, 'cat')
       const pending: NonNullable<ChartSeries['pending']> = {}, refs: NonNullable<ChartSeries['refs']> = {}
       const rangeOf = (node: XmlNode | undefined) => { const f = formulaOf(node); return f ? parseChartRange(f) : undefined }
+      // Error bars (spec 5.7): a custom amount is a numeric role, its saved data read at the display bound (custom
+      // amounts are drawn per displayed point, never analysed); without saved data its reference is pending.
+      const errors = readErrorBars(ser, lineOf, charge, node => hasCache(node) ? { points: numericCache(node, { ...cacheExtent(node, CHART_POINT_LIMIT), formats: false }, charge) } : { range: rangeOf(node) })
+      if (errors) Object.assign(pending, errors.pending)
       // An uncached reference the viewer cannot read (multi-area, a formula) has no data: placeholder, never an empty chart.
       const unreadable = (node: XmlNode | undefined) => { const f = !hasCache(node) ? formulaOf(node) : undefined; if (f && !parseChartRange(f)) unsupported ??= `Chart data uses a reference the viewer cannot read (${f.slice(0, 80)})` }
       unreadable(valueNode); unreadable(xNode); unreadable(catNode)
@@ -556,6 +561,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
         ...(trendlines ? { trendlines } : {}),
+        ...(errors?.bars.length ? { errorBars: errors.bars } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),

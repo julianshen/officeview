@@ -11,6 +11,7 @@ import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
+import { ERROR_ROLES, errorRole } from './errorBars'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -292,6 +293,20 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
+      // Custom error amounts (spec 5.7): numeric roles read at the display bound, the same lines the readers ask for.
+      if (series.errorBars && ERROR_ROLES.some(role => pending[role])) {
+        const amounts = (range: ChartRange): ChartPoints => {
+          const line = chartLine(range, sheetOf(range), false)
+          charge(pointBytes(line.count))
+          const out = new PointWriter(line.count, false, charge)
+          for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }) }
+          return out.done()
+        }
+        next.errorBars = series.errorBars.map(bars => {
+          const plus = pending[errorRole(bars.dir, 'plus')], minus = pending[errorRole(bars.dir, 'minus')]
+          return plus || minus ? { ...bars, ...(plus ? { plus: amounts(plus) } : {}), ...(minus ? { minus: amounts(minus) } : {}) } : bars
+        })
+      }
       if(pending.categories){
         const line=chartLine(pending.categories,sheetOf(pending.categories),true)
         truncated ||= line.truncated
@@ -422,6 +437,7 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
         add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true)
+        for (const role of ERROR_ROLES) add(s.pending?.[role], false)
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }
@@ -437,7 +453,7 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
     if (chart) {
       const add = (range: ChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
       add(chart.categoryPending)
-      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.name); add(s.pending?.categories) }
+      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.name); add(s.pending?.categories); for (const role of ERROR_ROLES) add(s.pending?.[role]) }
       // Names a cached role's provenance reference uses are resolved too (never read as cells).
       if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues) } }
     }
