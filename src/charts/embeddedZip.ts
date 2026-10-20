@@ -28,14 +28,13 @@
  */
 import type JSZip from 'jszip'
 import type { OfficePackage } from '../core/zip'
-import { attrs } from '../core/xml'
 import { PackageError } from '../core/package-error'
+import { XmlTokenizer, localName } from '../core/xml-stream'
 import { bytesRangeSource, readZipInventory, type ZipInventory, type ZipLimits } from '../core/zip-stream'
-import { partRelationshipNodes } from '../drawing/parts'
 import type { ChartParseContext } from './context'
 import type { ChartDiagnostic } from './model'
-import { CHART_CHUNK_LIMIT, streamEntry } from './read'
-import { CHART_CROSSING_TAG, type ChartProfile, type ChartWorkspace, type ScopedChartWorkspace } from './workspace'
+import { CHART_CHUNK_LIMIT, CommentStripper, streamEntry } from './read'
+import { CHART_CHUNK_TAG, CHART_CROSSING_TAG, type ChartProfile, type ChartWorkspace, type ScopedChartWorkspace } from './workspace'
 
 const MiB = 1024 * 1024
 /** Inflated embedding cap. Real chart workbooks are 15-100 KB. */
@@ -47,7 +46,11 @@ const NAME_BYTES = 512
 /** The inventory's upper bound, charged before it is built: per entry its record and its name twice (entry and folded key) at 2 B per unit. */
 export const EMBEDDED_INVENTORY_BYTES = EMBEDDED_ENTRY_LIMIT * (384 + 2 * 2 * NAME_BYTES)
 
-export type EmbeddedTarget = { kind: 'internal'; path: string } | { kind: 'unavailable'; diagnostic: ChartDiagnostic }
+/** A chart part's relationships part is read only up to this many inflated bytes (Office writes well under 1 KB). */
+export const EMBEDDED_RELS_LIMIT = 256 * 1024
+const RELS_TOKEN_CHARS = 16 * 1024
+/** Reserved once before the relationships stream: the in-flight chunk plus the tokenizer's carried token (UTF-16). */
+export const EMBEDDED_RELS_CROSSING = CHART_CHUNK_LIMIT + 2 * RELS_TOKEN_CHARS
 
 export interface EmbeddedWorkbook {
   kind: 'workbook'
@@ -66,8 +69,10 @@ export type EmbeddedWorkbookResult =
   | EmbeddedWorkbook
   | { kind: 'unavailable' | 'refused' | 'cancelled'; diagnostic: ChartDiagnostic; limit?: number }
 type Failure = Exclude<EmbeddedWorkbookResult, EmbeddedWorkbook>
+export type EmbeddedTarget = { kind: 'internal'; path: string } | Failure
 
 const failure = (kind: Failure['kind'], code: string, reason: string, limit?: number): Failure => ({ kind, diagnostic: { code, reason }, ...(limit !== undefined ? { limit } : {}) })
+let reads = 0
 const unavailable = (code: string, reason: string) => failure('unavailable', code, reason) as { kind: 'unavailable'; diagnostic: ChartDiagnostic }
 const CORRUPT = () => failure('unavailable', 'chart-data-corrupt', "The chart's embedded workbook could not be read")
 const CANCELLED = () => failure('cancelled', 'chart-cancelled', 'Reading the chart data was cancelled')
@@ -85,16 +90,106 @@ function internalPath(owner: string, target: string): string | undefined {
   return bits.length ? bits.join('/') : undefined
 }
 
-/** Chart part `.rels` -> the `c:externalData` relationship's internal target. */
-export async function resolveExternalData(pkg: OfficePackage, chartPath: string, rId: string): Promise<EmbeddedTarget> {
-  const rel = (await partRelationshipNodes(pkg, chartPath)).map(node => attrs(node)).find(a => a.Id === rId)
-  if (!rel?.Target) return unavailable('chart-data-missing', "The chart's data relationship is missing")
-  if (rel.TargetMode === 'External') return unavailable('chart-data-external', 'The chart data is linked to an external workbook, which the viewer does not open')
-  const path = internalPath(chartPath, rel.Target)
+class Stop extends Error { constructor(readonly result: Failure) { super(result.diagnostic.reason) } }
+
+/** Charging for one operation: `charge` reserves under the operation's tag (refused -> Stop). */
+interface Charging { workspace: ChartWorkspace; tag: string; charge(bytes: number): void; live(): void }
+
+/**
+ * The chart part's `.rels`, streamed through the raw entry (never the package's cached text/XML), held
+ * to EMBEDDED_RELS_LIMIT chunk by chunk, comments stripped, tokenized with the bounded tokenizer. Only
+ * the requested relationship's Target and TargetMode are kept, charged before they are retained; each
+ * chunk and its decoded text are charged while they are tokenized, the crossing reservation for the
+ * whole stream. Undefined when the part or the id is absent.
+ */
+async function readRelationship(pkg: OfficePackage, owner: string, rId: string, op: Charging): Promise<{ target?: string; external: boolean } | undefined> {
+  const slash = owner.lastIndexOf('/')
+  const relsPath = `${slash < 0 ? '' : owner.slice(0, slash) + '/'}_rels/${owner.slice(slash + 1)}.rels`
+  const entry = rawEntry(pkg, relsPath)
+  if (!entry || entry.dir) return undefined
+  const { workspace } = op, crossingTag = `${op.tag}:rels${CHART_CROSSING_TAG}`, chunkTag = `${op.tag}:rels${CHART_CHUNK_TAG}`
+  const malformed = () => new Stop(unavailable('chart-data-rels-malformed', "The chart's relationships could not be read"))
+  try {
+    if (!workspace.reserve(EMBEDDED_RELS_CROSSING, crossingTag)) throw new Stop(REFUSED())
+    let found: { target?: string; external: boolean } | undefined
+    const tokenizer = new XmlTokenizer({
+      open(qname, names, values, count) {
+        if (found || localName(qname) !== 'Relationship') return
+        let id: string | undefined, target: string | undefined, mode: string | undefined
+        for (let i = 0; i < count; i++) {
+          if (names[i] === 'Id') id = values[i]
+          else if (names[i] === 'Target') target = values[i]
+          else if (names[i] === 'TargetMode') mode = values[i]
+        }
+        if (id !== rId) return
+        op.charge(32 + 2 * (target?.length ?? 0))
+        found = { ...(target !== undefined ? { target } : {}), external: mode === 'External' }
+      },
+      close() {},
+      text() {},
+    }, { maxTokenChars: RELS_TOKEN_CHARS })
+    const comments = new CommentStripper(), decoder = new TextDecoder('utf-8', { fatal: true })
+    let accepted = 0
+    const write = (text: string) => {
+      try { tokenizer.write(text) } catch (error) {
+        if (error instanceof Stop) throw error
+        if (error instanceof PackageError && error.code === 'resource-limit') throw new Stop(failure('refused', 'chart-rels-limit', "The chart's relationships are larger than the viewer reads", RELS_TOKEN_CHARS))
+        throw malformed()
+      }
+    }
+    await streamEntry(entry, chunk => {
+      op.live()
+      if (chunk.length > CHART_CHUNK_LIMIT) throw new Stop(REFUSED())
+      if (accepted + chunk.length > EMBEDDED_RELS_LIMIT) throw new Stop(failure('refused', 'chart-rels-limit', "The chart's relationships are larger than the viewer reads", EMBEDDED_RELS_LIMIT))
+      accepted += chunk.length
+      // The chunk and its decoded text, released once the tokenizer has consumed them.
+      if (!workspace.reserve(3 * chunk.length, chunkTag)) throw new Stop(REFUSED())
+      try {
+        let text: string
+        try { text = decoder.decode(chunk, { stream: true }) } catch { throw malformed() }
+        write(comments.strip(text))
+      } finally { workspace.release(chunkTag) }
+    })
+    op.live()
+    let tail: string
+    try { tail = decoder.decode() } catch { throw malformed() }
+    write(comments.strip(tail, true))
+    try { tokenizer.end() } catch { throw malformed() }
+    return found
+  } catch (error) {
+    if (error instanceof Stop) throw error
+    // An inflate failure of the relationships part.
+    throw malformed()
+  } finally {
+    workspace.release(chunkTag)
+    workspace.release(crossingTag)
+  }
+}
+
+/** The relationship's target, checked: internal, inside the package, present. */
+async function resolveTarget(pkg: OfficePackage, chartPath: string, rId: string, op: Charging): Promise<EmbeddedTarget> {
+  const rel = await readRelationship(pkg, chartPath, rId, op)
+  if (!rel?.target) return unavailable('chart-data-missing', "The chart's data relationship is missing")
+  if (rel.external) return unavailable('chart-data-external', 'The chart data is linked to an external workbook, which the viewer does not open')
+  const path = internalPath(chartPath, rel.target)
   if (!path) return unavailable('chart-data-outside-package', 'The chart data relationship points outside the document package')
   const entry = rawEntry(pkg, path)
   if (!entry || entry.dir) return unavailable('chart-data-missing', "The chart's embedded workbook is missing")
   return { kind: 'internal', path }
+}
+
+/**
+ * Chart part `.rels` -> the `c:externalData` relationship's internal target, through the bounded,
+ * admitted relationships reader. Its work is charged to `workspace` and refunded on return.
+ */
+export async function resolveExternalData(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'workspace'>, rId: string): Promise<EmbeddedTarget> {
+  const { pkg, partPath, workspace } = context, tag = `embedded-rels:${partPath}!${rId}#${++reads}`
+  try {
+    return await resolveTarget(pkg, partPath, rId, { workspace, tag, live() {}, charge(bytes) { if (!workspace.reserve(bytes, tag)) throw new Stop(REFUSED()) } })
+  } catch (error) {
+    if (error instanceof Stop) return error.result
+    throw error
+  } finally { workspace.release(tag) }
 }
 const rawEntry = (pkg: OfficePackage, path: string): JSZip.JSZipObject | null => {
   const entry = (pkg as { entry?: (path: string) => JSZip.JSZipObject | null }).entry
@@ -125,8 +220,6 @@ async function acquire(workspace: ChartWorkspace, signal?: AbortSignal): Promise
   return () => { if (!freed) { freed = true; free() } }
 }
 
-class Stop extends Error { constructor(readonly result: Failure) { super(result.diagnostic.reason) } }
-
 const inventoryLimits = (profile: ChartProfile): ZipLimits => ({
   maxEntries: EMBEDDED_ENTRY_LIMIT,
   maxCentralDirectoryBytes: EMBEDDED_ENTRY_LIMIT * (46 + NAME_BYTES + 2 * 1024),
@@ -143,25 +236,23 @@ function inventoryFailure(error: unknown, profile: ChartProfile): Failure {
   return failure('refused', 'embedded-workbook-declared', "The chart's embedded workbook declares more data than the viewer reads", EMBEDDED_DECLARED_LIMIT[profile])
 }
 
-let reads = 0
 /**
- * Inflate, admit and inventory one chart's embedded workbook. The caller must
- * `release()` a returned workbook once it has read it: that refunds its
- * charges and lets the document's next embedded read start.
+ * Resolve, inflate, admit and inventory one chart's embedded workbook. The
+ * caller must `release()` a returned workbook once it has read it: that
+ * refunds its charges and lets the document's next embedded read start.
+ * Relationship resolution is part of the producer: it runs in the document's
+ * slot, is charged under the producer's tag, and an abort during it returns
+ * `cancelled` at once while its charges stay held until it settles.
  */
 export async function openEmbeddedWorkbook(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'profile' | 'workspace' | 'signal'>, rId: string): Promise<EmbeddedWorkbookResult> {
   const { pkg, partPath, profile, workspace, signal } = context
   if (signal?.aborted) return CANCELLED()
-  const target = await resolveExternalData(pkg, partPath, rId)
-  if (target.kind !== 'internal') return target
   const unlock = await acquire(workspace, signal)
   if (!unlock) return CANCELLED()
-  const entry = rawEntry(pkg, target.path)
-  if (!entry) { unlock(); return unavailable('chart-data-missing', "The chart's embedded workbook is missing") }
-  const tag = `embedded-zip:${target.path}#${++reads}`
+  const tag = `embedded-zip:${partPath}!${rId}#${++reads}`
   let abandoned = false
   // The producer's charges are held until it settles, whatever happens to the signal.
-  const settled = workspace.hold(produce(entry, target.path, profile, workspace, tag, () => abandoned, unlock), tag)
+  const settled = workspace.hold(produce(pkg, partPath, rId, profile, workspace, tag, () => abandoned, unlock), tag)
     .then(result => { if (result.kind !== 'workbook') unlock(); return result }, () => { unlock(); return CORRUPT() })
   const outcome = await untilAbort(settled, signal)
   if (outcome && !signal?.aborted) return outcome.value
@@ -171,7 +262,7 @@ export async function openEmbeddedWorkbook(context: Pick<ChartParseContext, 'pkg
   return CANCELLED()
 }
 
-async function produce(entry: JSZip.JSZipObject, path: string, profile: ChartProfile, workspace: ChartWorkspace, tag: string, abandoned: () => boolean, unlock: () => void): Promise<EmbeddedWorkbookResult> {
+async function produce(pkg: OfficePackage, partPath: string, rId: string, profile: ChartProfile, workspace: ChartWorkspace, tag: string, abandoned: () => boolean, unlock: () => void): Promise<EmbeddedWorkbookResult> {
   const cap = EMBEDDED_WORKBOOK_LIMIT[profile]
   const chunkTag = `${tag}:chunks`, crossingTag = `${tag}${CHART_CROSSING_TAG}`
   let charged = 0
@@ -181,6 +272,11 @@ async function produce(entry: JSZip.JSZipObject, path: string, profile: ChartPro
   }
   const live = () => { if (abandoned()) throw new Stop(CANCELLED()) }
   try {
+    const target = await resolveTarget(pkg, partPath, rId, { workspace, tag, live, charge: bytes => charge(bytes) })
+    live()
+    if (target.kind !== 'internal') return target
+    const path = target.path, entry = rawEntry(pkg, path)
+    if (!entry) return unavailable('chart-data-missing', "The chart's embedded workbook is missing")
     // The in-flight inflate chunk (pako emits at most 16 KiB; a larger one is refused).
     charge(CHART_CHUNK_LIMIT, crossingTag)
     const chunks: Uint8Array[] = []

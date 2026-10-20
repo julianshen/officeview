@@ -13,14 +13,23 @@ import { buildChartDocx, buildChartPptx, embeddedXlsx, type ChartEmbedSpec } fro
 import { buildZip, type BuildEntry } from './helpers/zip-builder'
 import type JSZip from 'jszip'
 
-/** Gate for the embedding's inflate: the first chunk is delivered, the rest wait for `gate.open()`. */
+/**
+ * Gate for an entry's inflate (`target`: the embedding, or the chart's `.rels`); only target streams count in `calls`.
+ * - `collect`: the whole entry is inflated ahead into the mock, the first chunk is forwarded, the rest wait for
+ *   `gate.open()`. It models a producer whose completion is pending, not a paused inflate.
+ * - `pause`: the real stream delivers its first chunk, then JSZip's worker chain is paused (nothing more is read or
+ *   inflated) until `gate.open()`.
+ */
 const gate = vi.hoisted(() => {
   const state = {
     calls: 0,
+    chunks: 0,
+    mode: 'collect' as 'collect' | 'pause',
+    target: 'embedding' as 'embedding' | 'rels',
     pending: undefined as Promise<void> | undefined,
     open: () => {},
-    close() { state.pending = new Promise<void>(resolve => { state.open = resolve }) },
-    reset() { state.calls = 0; state.pending = undefined; state.open = () => {} },
+    close(mode: 'collect' | 'pause' = 'collect', target: 'embedding' | 'rels' = 'embedding') { state.mode = mode; state.target = target; state.pending = new Promise<void>(resolve => { state.open = resolve }) },
+    reset() { state.calls = 0; state.chunks = 0; state.mode = 'collect'; state.target = 'embedding'; state.pending = undefined; state.open = () => {} },
   }
   return state
 })
@@ -29,9 +38,15 @@ vi.mock('../src/charts/read', async importOriginal => {
   return {
     ...actual,
     streamEntry: async (file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array) => void) => {
+      const isTarget = file.name.endsWith('.rels') === (gate.target === 'rels')
+      if (!isTarget) return actual.streamEntry(file, onChunk)
       gate.calls++
       const pending = gate.pending
       if (!pending) return actual.streamEntry(file, onChunk)
+      if (gate.mode === 'pause') {
+        let first = true
+        return actual.streamEntry(file, chunk => { gate.chunks++; onChunk(chunk) }, () => { if (first) { first = false; return pending } })
+      }
       const chunks: Uint8Array[] = []
       await actual.streamEntry(file, chunk => { chunks.push(chunk) })
       onChunk(chunks[0])
@@ -41,7 +56,7 @@ vi.mock('../src/charts/read', async importOriginal => {
   }
 })
 
-const { openEmbeddedWorkbook, resolveExternalData, EMBEDDED_WORKBOOK_LIMIT, EMBEDDED_ENTRY_LIMIT, EMBEDDED_DECLARED_LIMIT } = await import('../src/charts/embeddedZip')
+const { openEmbeddedWorkbook, resolveExternalData, EMBEDDED_RELS_LIMIT, EMBEDDED_RELS_CROSSING, EMBEDDED_WORKBOOK_LIMIT, EMBEDDED_ENTRY_LIMIT, EMBEDDED_DECLARED_LIMIT } = await import('../src/charts/embeddedZip')
 
 const MiB = 1024 * 1024
 afterEach(() => gate.reset())
@@ -110,7 +125,7 @@ describe('embedded workbook access (A3a)', () => {
         expect(read, `${spec.target}`).toMatchObject({ kind: 'unavailable', diagnostic: { code } })
         if (read.kind === 'unavailable') expect(read.diagnostic.reason).toMatch(/\w/)
         expect(doc.workspace.used).toBe(0)
-        expect(await resolveExternalData(context.pkg, context.partPath, 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code } })
+        expect(await resolveExternalData(context, 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code } })
       }
     }
     // None of them inflated anything.
@@ -118,10 +133,10 @@ describe('embedded workbook access (A3a)', () => {
     // An unknown relationship id, and a relationship-less chart part.
     const fixture = docx({ workbook }), pkg = await OfficePackage.load(fixture.bytes)
     const context = chartParseContext(documentChartContext('desktop'), pkg, fixture.chartPaths[0])
-    expect(await resolveExternalData(context.pkg, context.partPath, 'rId9')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-missing' } })
-    expect(await resolveExternalData(context.pkg, 'word/charts/none.xml', 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-missing' } })
+    expect(await resolveExternalData(context, 'rId9')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-missing' } })
+    expect(await resolveExternalData({ ...context, partPath: 'word/charts/none.xml' }, 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-missing' } })
     // Inside the package, `..` that stays inside is fine.
-    expect(await resolveExternalData(context.pkg, context.partPath, 'rId1')).toEqual({ kind: 'internal', path: 'word/embeddings/Microsoft_Excel_Worksheet.xlsx' })
+    expect(await resolveExternalData(context, 'rId1')).toEqual({ kind: 'internal', path: 'word/embeddings/Microsoft_Excel_Worksheet.xlsx' })
   })
 
   it('admission: inflated cap 8 and 4 MiB, at most 256 entries, declared-size sum checked before load; a forged declared size is caught by the inflated counter', async () => {
@@ -236,7 +251,7 @@ describe('embedded workbook access (A3a)', () => {
     expect(other.doc.workspace.used).toBe(0)
   })
 
-  it('cancellation stops publication immediately; charges are held until the gated inflate settles', async () => {
+  it('cancellation stops publication immediately; charges are held until the gated inflate settles (collect-ahead producer)', async () => {
     const workbook = await paddedWorkbook()
     const fixture = buildChartDocx([{ workbook }, { workbook }, { workbook }])
     const controller = new AbortController()
@@ -265,6 +280,102 @@ describe('embedded workbook access (A3a)', () => {
     expect(gate.calls).toBe(1)
     expect(doc.workspace.used).toBe(0)
 
+  })
+
+  it('M1: a producer paused mid-inflate holds only what it has produced; cancellation refunds once it settles', async () => {
+    const workbook = await paddedWorkbook(256 * 1024)
+    const fixture = docx({ workbook })
+    const controller = new AbortController()
+    const pkg = await OfficePackage.load(fixture.bytes)
+    const doc = documentChartContext('desktop', controller.signal)
+    gate.close('pause')
+    const pending = openEmbeddedWorkbook(chartParseContext(doc, pkg, fixture.chartPaths[0]), 'rId1')
+    await vi.waitFor(() => expect(gate.chunks).toBe(1))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    // Really paused: no further chunk is produced, and only the crossing plus one chunk are charged.
+    expect(gate.chunks).toBe(1)
+    const held = doc.workspace.used
+    expect(held).toBeGreaterThan(0)
+    expect(held).toBeLessThanOrEqual(64 * 1024 + 64 * 1024)
+    controller.abort()
+    expect(await pending).toMatchObject({ kind: 'cancelled' })
+    expect(doc.workspace.used).toBe(held)
+    gate.open()
+    await vi.waitFor(() => expect(doc.workspace.used).toBe(0))
+    // The next chunk threw at the source: the inflate ended without producing the rest.
+    expect(gate.chunks).toBeLessThanOrEqual(2)
+  })
+
+  it('I1: the chart .rels is read bounded, admitted and uncached', async () => {
+    const relsPath = 'word/charts/_rels/chart1.xml.rels'
+    const relsXml = (body: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`
+    const comment = `<!--${'x'.repeat(1024 * 1024)}-->`
+    const external = '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="https://example.com/book.xlsx" TargetMode="External"/>'
+    const load = (xml: string) => OfficePackage.load(buildZip([{ name: relsPath, data: xml }]).bytes)
+    const parentOf = (accept: (bytes: number) => boolean) => { const calls: number[] = []; return { calls, reserve: (bytes: number) => { calls.push(bytes); return accept(bytes) }, release: () => {} } }
+
+    // A rejecting parent: refused before anything is decoded; nothing charged, nothing cached.
+    const pkg = await load(relsXml(comment + external))
+    const parent = parentOf(() => false)
+    const rejecting = { profile: 'desktop' as const, workspace: createChartWorkspace('desktop', parent) }
+    const read = await openEmbeddedWorkbook(chartParseContext(rejecting, pkg, 'word/charts/chart1.xml'), 'rId1')
+    expect(read).toMatchObject({ kind: 'refused', diagnostic: { code: 'chart-refused' } })
+    expect(parent.calls[0]).toBe(EMBEDDED_RELS_CROSSING)
+    expect(rejecting.workspace.used).toBe(0)
+    expect(cacheKeys(pkg)).toEqual([])
+    expect(await resolveExternalData(chartParseContext(rejecting, pkg, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'refused' })
+
+    // An admitting workspace: the 1 MiB rels part passes the comment stripper but not the byte cap.
+    const big = await load(relsXml(comment + external))
+    const doc = documentChartContext('desktop')
+    let peak = 0
+    const reserve = doc.workspace.reserve.bind(doc.workspace)
+    doc.workspace.reserve = (bytes, tag) => { const ok = reserve(bytes, tag); peak = Math.max(peak, doc.workspace.used); return ok }
+    expect(await openEmbeddedWorkbook(chartParseContext(doc, big, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'refused', diagnostic: { code: 'chart-rels-limit' }, limit: EMBEDDED_RELS_LIMIT })
+    expect(peak).toBeGreaterThan(0)
+    expect(peak).toBeLessThanOrEqual(EMBEDDED_RELS_CROSSING + 3 * 64 * 1024)
+    expect(doc.workspace.used).toBe(0)
+    expect(cacheKeys(big)).toEqual([])
+
+    // A comment under the cap is stripped, not a token: the relationship after it is found (and still uncached).
+    const commented = await load(relsXml(`<!--${'y'.repeat(100 * 1024)}-->` + external))
+    expect(await openEmbeddedWorkbook(chartParseContext(documentChartContext('desktop'), commented, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-external' } })
+    expect(cacheKeys(commented)).toEqual([])
+
+    // Only the requested id is kept; an oversized attribute is a token refusal; malformed XML is diagnosed.
+    const many = await load(relsXml(Array.from({ length: 200 }, (_, i) => `<Relationship Id="rX${i}" Target="../embeddings/x${i}.xlsx"/>`).join('') + external))
+    expect(await resolveExternalData(chartParseContext(documentChartContext('desktop'), many, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-external' } })
+    const longTarget = await load(relsXml(`<Relationship Id="rId1" Target="${'a/'.repeat(20 * 1024)}x.xlsx"/>`))
+    expect(await resolveExternalData(chartParseContext(documentChartContext('desktop'), longTarget, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'refused', diagnostic: { code: 'chart-rels-limit' } })
+    const broken = await load('<Relationships><Relationship Id="rId1" Target="x.xlsx"></Relationships>')
+    expect(await resolveExternalData(chartParseContext(documentChartContext('desktop'), broken, 'word/charts/chart1.xml'), 'rId1')).toMatchObject({ kind: 'unavailable', diagnostic: { code: 'chart-data-rels-malformed' } })
+  })
+
+  it('I2: an abort during relationship resolution returns cancelled at once; its charges are held until it settles', async () => {
+    const workbook = await embeddedXlsx()
+    for (const spec of [{ workbook }, { target: 'https://example.com/book.xlsx', external: true }] as ChartEmbedSpec[]) {
+      gate.reset()
+      const fixture = docx(spec)
+      const controller = new AbortController()
+      const pkg = await OfficePackage.load(fixture.bytes)
+      const doc = documentChartContext('desktop', controller.signal)
+      gate.close('pause', 'rels')
+      let settled = false
+      const pending = openEmbeddedWorkbook(chartParseContext(doc, pkg, fixture.chartPaths[0]), 'rId1').finally(() => { settled = true })
+      await vi.waitFor(() => expect(gate.chunks).toBe(1))
+      const held = doc.workspace.used
+      expect(held).toBeGreaterThanOrEqual(EMBEDDED_RELS_CROSSING)
+      controller.abort()
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(settled).toBe(true)
+      expect(await pending).toMatchObject({ kind: 'cancelled' })
+      expect(doc.workspace.used).toBe(held)
+      gate.open()
+      await vi.waitFor(() => expect(doc.workspace.used).toBe(0))
+      // Never published late, never cached, and the embedding was never inflated.
+      expect(await pending).toMatchObject({ kind: 'cancelled' })
+      expect(cacheKeys(pkg)).toEqual([])
+    }
   })
 
   it('a corrupt embedded zip is unavailable with a diagnostic', async () => {

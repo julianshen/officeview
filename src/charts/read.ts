@@ -126,8 +126,12 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out
 }
 
-/** Push the entry's inflated chunks, uncached; a throwing consumer aborts the inflate at the source. */
-export function streamEntry(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array) => void): Promise<void> {
+/**
+ * Push the entry's inflated chunks, uncached; a throwing consumer aborts the inflate at the source.
+ * `pauseAfter` may return a promise after a chunk: production pauses (JSZip's worker chain stops
+ * reading and inflating) until it settles.
+ */
+export function streamEntry(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array) => void, pauseAfter?: (chunk: Uint8Array) => Promise<unknown> | void): Promise<void> {
   return new Promise((resolve, reject) => {
     const helper = (file as unknown as { internalStream(type: 'uint8array'): JSZip.JSZipStreamHelper<Uint8Array> }).internalStream('uint8array')
     // As core/zip boundedBytes: JSZip 3.10 has no cancel; catch at the source push/end boundary.
@@ -140,7 +144,12 @@ export function streamEntry(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array
     const abort = (error: unknown) => { if (failed) return; failed = true; reject(error); last.error(error instanceof Error ? error : new Error(String(error))) }
     source.push = (...args) => { try { return push(...args) } catch (error) { abort(error) } }
     source.end = () => { try { return end() } catch (error) { abort(error) } }
-    helper.on('data', (chunk: Uint8Array) => { if (!failed) onChunk(chunk) })
+    helper.on('data', (chunk: Uint8Array) => {
+      if (failed) return
+      onChunk(chunk)
+      const wait = pauseAfter?.(chunk)
+      if (wait) { helper.pause(); void wait.then(() => helper.resume(), () => helper.resume()) }
+    })
       .on('error', (error: Error) => { if (!failed) { failed = true; reject(error) } })
       .on('end', () => { if (!failed) resolve() })
       .resume()
@@ -149,7 +158,7 @@ export function streamEntry(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array
 
 /** Streams comments out (outside CDATA and processing instructions), holding at most 8 characters
  * between chunks; a comment's content is never retained. */
-class CommentStripper {
+export class CommentStripper {
   private state: 'text' | 'comment' | 'cdata' | 'pi' = 'text'
   private carry = ''
   strip(chunk: string, last = false): string {
