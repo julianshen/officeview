@@ -541,6 +541,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const charts = await loadChartModule()
     charts.stampWorkbookEpoch(drawings, this.workbook.formatting.dateSystem)
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
+    // An over-limit analytic chart is refused with its point-limit reason before any memory admission.
+    charts.refuseAnalyticOverLimit(drawings)
     const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
     const diagnostics: WorkerDiagnostic[] = []
     const failed = charts.markUnreadableCharts(drawings, owner, name => {

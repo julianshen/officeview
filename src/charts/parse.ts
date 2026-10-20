@@ -65,7 +65,8 @@ const UNSUPPORTED: Record<string, string> = {
 }
 
 const hex = hexColor
-function solid(spPr: XmlNode | undefined, theme: ThemeContext | undefined, line = false): string | undefined | null {
+/** The explicit solid colour of an `spPr` fill (or its `a:ln` when `line`): `null` for noFill. */
+export function solid(spPr: XmlNode | undefined, theme: ThemeContext | undefined, line = false): string | undefined | null {
   const holder = line ? child(spPr, 'ln') : spPr
   if (!holder) return undefined
   if (child(holder, 'noFill')) return null
@@ -228,7 +229,8 @@ function dispUnitsOf(node: XmlNode | undefined): ChartAxis['dispUnits'] {
   const label = lbl ? richText(child(lbl, 'tx')) || unit : undefined
   return { divisor, unit, ...(label ? { label: label.slice(0, CHART_LABEL_LIMIT) } : {}) }
 }
-function textStyle(node: XmlNode | undefined): ChartTextStyle | undefined {
+/** Placement text properties of a DrawingML `txPr` (size, rotation, vertical). */
+export function textStyle(node: XmlNode | undefined): ChartTextStyle | undefined {
   if (!node) return undefined
   const body = attrs(child(node, 'bodyPr'))
   const size = finite(attrs(child(child(child(node, 'p'), 'pPr'), 'defRPr')).sz)

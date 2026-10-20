@@ -10,7 +10,7 @@ import type { ChartDocumentContext } from '../charts/context'
 import type { ChartResult } from '../charts/model'
 import { loadChartModule, type ChartModule } from '../xlsx/chartLoader'
 import { parseGeometry, resolveGeometry } from './geometry'
-import { supportedChoiceRequirements } from './coverage'
+import { DRAWING_REQUIREMENTS, supportedChoiceRequirements } from './coverage'
 import { parseGroupShapeProperties, resolveDrawingStyle } from './style'
 import { parseTextBody, textFontDefaults, parseAutofitNode } from './text-parse'
 import { isVmlTrue } from './vml'
@@ -355,7 +355,6 @@ export function chartCard(node: XmlNode | undefined, depth = 0): ChartCard | und
   }
   return undefined
 }
-const CHART_EX_REASON = 'ChartEx charts are not supported yet'
 const SOURCE_PROBE_LIMIT = DOCUMENT_DRAWING_NODE_LIMIT * 2
 const cachedGroupIdentity = (group: XmlNode): string | undefined => attrs(child(child(group, 'nvGrpSpPr'), 'cNvPr')).id || attrs(group).id
 /** Raw source capability check: no styles, text models, or cached shapes built. */
@@ -526,7 +525,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
       // leave the Choice unsatisfied; their card is placed only where no representation remains.
       const parsed = await adapters.parseChart(root, path)
       if (parsed.kind === 'native') return { kind: 'xlsxChart', chart: parsed.model }
-      chartFailure = cardChart(parsed.reason, parsed.title)
+      chartFailure = cardChart(parsed.reason, parsed.title, parsed.feature)
       contentDiagnostic(context, 'unsupported-content', path, 'chart', { reason: parsed.kind === 'refused' ? 'chart-refused' : 'unsupported-chart' })
       return undefined
     }
@@ -870,8 +869,8 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   }
   const uri = attrs(graphic).uri?.toLowerCase() ?? ''
   const chartRef = child(graphic, 'chart')
-  if (uri.includes('chartex') || uri.includes('model3d') || child(graphic, 'oMath') || child(graphic, 'oMathPara')) {
-    if (chartRef && uri.includes('chartex')) chartCards.set(chartRef, cardChart(CHART_EX_REASON, undefined, 'ChartEx'))
+  // A ChartEx frame (cx:chart) follows the chart path; the lazy engine dispatches on the part's root namespace.
+  if (uri.includes('model3d') || child(graphic, 'oMath') || child(graphic, 'oMathPara')) {
     contentDiagnostic(context, 'unsupported-content', owner, uri || 'OMML'); return undefined
   }
   const ids = child(graphic, 'relIds')
@@ -879,7 +878,7 @@ export async function prepareDrawingContent<Paragraph = ContentParagraph, Text =
   if (chartRef) {
     const chart = await follow(attrs(chartRef).id, owner, 'chart')
     // Every failed chart reference, a missing one included, keeps its card for the final selection (spec 6.3).
-    if (!chart) chartCards.set(chartRef, chartFailure ?? cardChart('Chart data could not be read'))
+    if (!chart) chartCards.set(chartRef, chartFailure ?? cardChart('Chart data could not be read', undefined, uri.includes('chartex') ? 'ChartEx' : undefined))
     return chart
   }
   const content = child(graphic, 'contentPart')
@@ -1005,20 +1004,17 @@ export async function prepareCompatibleDrawingContent<Paragraph = ContentParagra
   adapters: ContentLoadAdapters<Paragraph, Text> = {},
 ): Promise<PreparedCompatibleContent<Paragraph, Text> | undefined> {
   const maxDepth = 128
-  const requirements = ['a', 'p', 'c', 'dgm', 'dsp', 'ink']
   const payloadNames = ['chart', 'relIds', 'contentPart', 'wsp']
   type Prepared = Omit<PreparedCompatibleContent<Paragraph, Text>, 'selections'>
   type Result = { prepared?: Prepared; selections: ContentSelection[]; failure?: string }
   const structuralFeature = (node: XmlNode, depth: number): string | undefined => {
     if (depth >= maxDepth) return 'drawing-depth'
     const uri = attrs(node).uri?.toLowerCase() ?? ''
-    if (uri.includes('chartex')) return 'ChartEx'
     if (uri.includes('model3d')) return 'model3D'
     for (const [name, childNode] of orderedChildren(node)) {
       if (name === 'AlternateContent' || name === '#text') continue
       if (name === 'm' || name === 'oMath' || name === 'oMathPara') return 'OMML'
       if (name.toLowerCase() === 'model3d') return 'model3D'
-      if (name.toLowerCase() === 'chartex') return 'ChartEx'
       const feature = structuralFeature(childNode, depth + 1)
       if (feature) return feature
     }
@@ -1033,7 +1029,7 @@ export async function prepareCompatibleDrawingContent<Paragraph = ContentParagra
       for (let i = diagnostics.length - 1; i >= 0; i--) if (failedDiagnostics.has(diagnostics[i])) diagnostics.splice(i, 1)
     }
     for (const choice of getChildren(alternate, 'Choice')) {
-      const unknown = supportedChoiceRequirements(choice, requirements).unknown
+      const unknown = supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).unknown
       if (unknown) { failure = unknown; continue }
       const diagnosticStart = diagnostics.length
       const result = await resolveBranch(choice, carrier, depth + 1)
@@ -1063,7 +1059,7 @@ export async function prepareCompatibleDrawingContent<Paragraph = ContentParagra
         if (prepared) continue
         const source: XmlNode = { [name]: childNode, ...(carrier ? { '@attrs': attrs(carrier) } : {}) }
         const content = await prepareDrawingContent(pkg, source, owner, theme, drawingTheme, adapters)
-        result = content ? { prepared: { content, carrier: carrier ?? childNode, reference: childNode }, selections: [] } : { selections: [], failure: 'drawing-content' }
+        result = content ? { prepared: { content, carrier: carrier ?? childNode, reference: childNode }, selections: [] } : { selections: [], failure: attrs(carrier).uri?.toLowerCase().includes('chartex') ? 'ChartEx' : 'drawing-content' }
       } else result = await resolveBranch(childNode, name === 'graphicData' ? childNode : carrier, depth + 1)
       if (result.failure && name === 'AlternateContent') return { selections: [], failure: result.failure }
       failure ??= result.failure

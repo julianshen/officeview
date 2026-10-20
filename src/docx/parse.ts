@@ -10,7 +10,7 @@ import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRun
 import { choiceCards, loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, isExhausted, malformedRelationshipAttempt, markExhausted, reserveDrawingContent } from '../drawing/content'
-import { contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
+import { DOCX_REQUIREMENTS, contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, contentDiagnostic, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
@@ -490,7 +490,7 @@ export function parseParagraph(
     // replacing the unusable fallback's audit and recording why (spec 6.3). Never during a probe.
     const cards = (parent: XmlNode | undefined, depth = 0): XmlNode[] => !parent || depth >= 128 ? [] : orderedChildren(parent).flatMap(([name, child]) =>
       name === 'drawing' ? choiceCards.has(child) ? [child] : [] : name === '#text' || name === 'AlternateContent' && getChildren(child, 'Fallback').length && !isExhausted(child) ? [] : cards(child, depth + 1))
-    const cardChoice = () => getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported && cards(choice).length)
+    const cardChoice = () => getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, DOCX_REQUIREMENTS).supported && cards(choice).length)
     /** The chart card a selected fallback's pictures carry, painted if one fails to decode. */
     const chartFallback = () => { const choice = cardChoice(), card = choice && choiceCards.get(cards(choice)[0])?.drawing; return card?.kind === 'xlsxChart' ? card.chart : undefined }
     const placeCard = (fallback: XmlNode | undefined, audited: number): void => {
@@ -508,7 +508,7 @@ export function parseParagraph(
       markUnselected(choice)
     }
     for (const choice of getChildren(node, 'Choice')) {
-      const understood = supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported
+      const understood = supportedChoiceRequirements(choice, DOCX_REQUIREMENTS).supported
       if (!understood) { skipped.push(choice); continue }
       attemptedChoice ??= choice
       if (orderedChildren(choice).every(([name]) => name === '#text')) {
