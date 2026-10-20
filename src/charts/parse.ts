@@ -104,6 +104,18 @@ function cachePoints<T>(node: XmlNode | undefined, read: (pt: XmlNode) => T, mis
 function cacheStrings(node: XmlNode | undefined, cut?: { truncated: boolean }): Array<string | undefined> {
   return cachePoints<string | undefined>(node, pt => textOf(child(pt, 'v')), undefined, cut)
 }
+
+/** Equal saved category caches can share the already-owned strings. Compare the
+ * original sparse sequence conservatively, without allocating a second string list. */
+function sameCategoryCache(a: XmlNode, b: XmlNode | undefined): boolean {
+  const ac = cacheOf(a), bc = cacheOf(b)
+  if (!ac || !bc || val(child(ac, 'ptCount')) !== val(child(bc, 'ptCount'))) return false
+  const ap = getChildren(ac, 'pt'), bp = getChildren(bc, 'pt')
+  return ap.length === bp.length && ap.every((p, i) => attrs(p).idx === attrs(bp[i]).idx && textOf(child(p, 'v')) === textOf(child(bp[i], 'v')))
+}
+const sameRange = (a: ChartRange | undefined, b: ChartRange | undefined) => a && b
+  && a.sheet === b.sheet && a.definedName === b.definedName && a.r0 === b.r0 && a.r1 === b.r1 && a.c0 === b.c0 && a.c1 === b.c1
+
 /** The label storage a cached category role keeps (each label capped at CHART_LABEL_LIMIT), read before it is built. */
 function labelBytes(node: XmlNode | undefined): number {
   let bytes = 0
@@ -345,6 +357,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
+  let sharedCategoryNode: XmlNode | undefined
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
@@ -405,11 +418,14 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       if (xNode) { const range = rangeOf(xNode); if (range) { if (hasCache(xNode)) refs.xValues = range; else pending.xValues = range } }
       let seriesCategories: string[] | undefined
       if(catNode && (categories.length>0 || categoryPending)) {
-        if(hasCache(catNode)){charge(labelBytes(catNode));seriesCategories=cacheStrings(catNode,cut).map(v=>capLabel(v??'',cut))}
-        else { const range=rangeOf(catNode);if(range)pending.categories=range }
+        if (hasCache(catNode)) {
+          if (!sameCategoryCache(catNode, sharedCategoryNode)) { charge(labelBytes(catNode)); seriesCategories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)) }
+        }
+        else { const range = rangeOf(catNode); if (range && !sameRange(range, categoryPending)) pending.categories = range }
       }
       if (catNode && categories.length === 0 && !categoryPending) {
         if (hasCache(catNode)) {
+          sharedCategoryNode = catNode
           charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode)
           if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
         }

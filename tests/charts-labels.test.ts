@@ -15,12 +15,12 @@ it('label precedence group then series then point; explicit false overrides; del
 })
 it('content flags, separator, rich text, leader lines; dLblPos defaults; bestFit for pie',()=>{
  const l=labels(xml('<dLbls><showVal val="1"/><showCatName val="1"/><showSerName val="1"/><showPercent val="1"/><showLegendKey val="1"/><separator> | </separator></dLbls>'))[0]
- expect(l.text).toBe('North | Sales | 3 | 100%');expect(l.legendKey).toBe(true);expect(l.position).toBe('outEnd')
+ expect(l.text).toBe('North | Sales | 3');expect(l.legendKey).toBe(true);expect(l.position).toBe('outEnd')
  const rich='<dLbls><showVal val="1"/><showLeaderLines val="1"/><dLbl><idx val="0"/><tx><rich><p><r><rPr b="1"/><t>Custom</t></r></p></rich></tx></dLbl></dLbls>'
  const r=labels(xml('',rich,'','pieChart'))[0];expect(r.text).toBe('Custom');expect(r.runs[0].bold).toBe(true);expect(r.position).toBe('bestFit');expect(r.leaderLines).toBe(true)
 })
 it('field-reference and manual-layout labels fall back with chart-label-feature-unsupported',()=>{
- const m=parse(xml('','<dLbls><showVal val="1"/><dLbl><idx val="0"/><layout><manualLayout><x val="0.2"/></manualLayout></layout><extLst><ext><datalabelsRange/></ext></extLst></dLbl></dLbls>'))
+ const m=parse(xml('','<dLbls><showVal val="1"/><dLbl><idx val="0"/><layout><manualLayout><x val="0.2"/></manualLayout></layout><extLst><ext><c15:datalabelsRange xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart"/></ext></extLst></dLbl></dLbls>'))
  expect(m.preparedAxes!.diagnostics).toContainEqual(expect.objectContaining({code:'chart-label-feature-unsupported'}));expect(m.preparedAxes!.dataLabels[0].text).toBe('3')
 })
 it('a label on an #N/A point shows #N/A',()=>{expect(labels(xml('<dLbls><showVal val="1"/></dLbls>','','','lineChart','#N/A'))[0].text).toBe('#N/A')})
@@ -30,6 +30,7 @@ it('native painter draws prepared label text and legend key',()=>{
  paintXlsxChart(m,c as any,400,300);expect(seen).toContain('North, 3')
 })
 import {prepareChartAxes} from '../src/charts/prepare'
+import {layoutChart} from '../src/charts/layout'
 import {PointWriter} from '../src/charts/points'
 import {chartWorkbook} from './helpers/xlsx-chart-fixture'
 import {parseXlsx} from '../src/xlsx/parse'
@@ -50,8 +51,15 @@ it('workbook coverage is native chart, with distinct bar geometry and prepared l
 })
 it('bestFit moves small pie labels outside and draws the requested leader',()=>{
  const m=parse(xml('<dLbls><showVal val="1"/><showLeaderLines val="1"/></dLbls>','','','pieChart').replace('</numLit></val>','<pt idx="1"><v>97</v></pt></numLit></val>'))
- const c=createCanvas(400,300).getContext('2d'),lines:number[][]=[];const line=c.lineTo.bind(c);c.lineTo=(x,y)=>{lines.push([x,y]);line(x,y)}
- paintXlsxChart(m,c as any,400,300);expect(lines.length).toBeGreaterThan(0)
+ const c=createCanvas(400,300).getContext('2d'),lines:number[][]=[],labels=new Map<string,number[]>();const line=c.lineTo.bind(c),text=c.fillText.bind(c);c.lineTo=(x,y)=>{lines.push([x,y]);line(x,y)}
+ c.fillText=(t,x,y,...rest)=>{if(t==='3'||t==='97')labels.set(t,[x+c.measureText(t).width/2,y]);text(t,x,y,...rest)}
+ paintXlsxChart(m,c as any,400,300)
+ const layout=layoutChart(m,400,300,1,0,{width:(t,font)=>{c.font=font;return c.measureText(t).width},lineHeight:()=>12})
+ const box=layout.area,r=Math.min(box.w,box.h)/2-4,cx=box.x+box.w/2,cy=box.y+box.h/2
+ const small=labels.get('3')!,large=labels.get('97')!
+ expect(Math.hypot(small[0]-cx,small[1]-cy)).toBeCloseTo(r+12,4)
+ expect(Math.hypot(large[0]-cx,large[1]-cy)).toBeCloseTo(r*.65,4)
+ expect(lines).toContainEqual([expect.closeTo(small[0],4),expect.closeTo(small[1],4)])
 })
 it('category-name labels use each series own cached categories',()=>{
  const m=parse(xml('<dLbls><showCatName val="1"/></dLbls>').replace('</barChart>','<ser><cat><strLit><pt idx="0"><v>South</v></pt></strLit></cat><val><numLit><pt idx="0"><v>4</v></pt></numLit></val></ser></barChart>'))

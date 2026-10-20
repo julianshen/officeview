@@ -1,3 +1,4 @@
+import { barGeometry } from './barGeometry'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
  * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
@@ -294,18 +295,8 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
     const share = (v: number, i: number) => group.grouping === 'percentStacked' && stacked ? (stacked.total[i] ? v / stacked.total[i] : 0) : v
     if (group.family === 'bar' && axes.category) {
       const C = axes.category, vertical = C.orientation === 'v'
-      const n = group.grouping === 'clustered' ? Math.max(1, group.series.length) : 1
-      const stride = 1 - group.overlap / 100
-      const span = 1 + (n - 1) * stride
-      const len = vertical ? plot.h : plot.w
-      const band = axes.between ? len / C.slots : len / Math.max(1, C.slots - 1)
-      const width = band / (span + group.gapWidth / 100)
-      /** The start of a category's band (legacy arithmetic when between and unreversed). */
-      const slotStart = (idx: number): number => {
-        if (!axes.between) return along(C, categoryFraction(C, idx, false)) - band / 2
-        if (vertical) return C.reversed ? plot.y + band * idx : plot.y + plot.h - band * (idx + 1)
-        return C.reversed ? plot.x + plot.w - band * (idx + 1) : plot.x + band * idx
-      }
+      const geometry = barGeometry(group, C, axes.between, plot)
+      const width = geometry.width
       const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
         if (!admitPath(count * 4)) return
@@ -317,13 +308,12 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
           const v = share(raw, i)
           let from = crossing, to = v
           if (stacked) { const base = v >= 0 ? posBase : negBase; from = base[i]; to = base[i] + v; base[i] = to }
-          const slot = group.grouping === 'clustered' ? si : 0
-          const offset = (band - width * span) / 2 + width * slot * stride
+          const categoryStart = geometry.start(idx, si)
           const a = at(from), b = at(to)
           const color = s.pointColors?.[model.view.source(i)]
           ctx.fillStyle = `#${color && barGroups.length === 1 && group.series.length === 1 ? color : s.color}`
-          if (vertical) ctx.fillRect(Math.min(a, b), slotStart(idx) + offset, Math.abs(b - a), width)
-          else ctx.fillRect(slotStart(idx) + offset, Math.min(a, b), width, Math.abs(b - a))
+          if (vertical) ctx.fillRect(Math.min(a, b), categoryStart, Math.abs(b - a), width)
+          else ctx.fillRect(categoryStart, Math.min(a, b), width, Math.abs(b - a))
         }
       })
     } else if ((group.family === 'line' || group.family === 'area') && horizontal === B) {
@@ -396,7 +386,16 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (s.line) {
           ctx.lineWidth = 2; ctx.beginPath()
           let pen = false
-          for (let i = 0; i < count; i++) { if (!point(s, i)) { const y=s.plot(i),x=s.hasX?s.plot(i,true):i+1;if(y==='gap'||x==='gap')pen=false;continue } if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+          for (let i = 0; i < count; i++) {
+            if (!point(s, i)) {
+              const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+              const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+              if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
+              continue
+            }
+            if (!pen) { ctx.moveTo(px, py); pen = true }
+            else ctx.lineTo(px, py)
+          }
           ctx.stroke()
         }
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) { ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill() }

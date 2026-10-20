@@ -2,7 +2,8 @@
  * Placements share a pressure-evicted LRU per receiving workspace.
  * A conservative construction bound is reserved before measurement or graph construction.
  */
-import { labelFont } from './labelPaint'
+import { chartFont, labelFont } from './textStyle'
+export { chartFont } from './textStyle'
 import type { ChartModel, ChartManualLayout, ChartDiagnostic, ChartTextStyle } from './model'
 import type { TextMeasure } from './format-api'
 import type { ChartDocumentContext } from './context'
@@ -25,7 +26,6 @@ export interface ChartLayout {
   fontPx: number; labels: Map<string, AxisLabel[]>; diagnostics: ChartDiagnostic[]
   width(text: string, font: string): number
 }
-export const chartFont = (px: number, family: string) => `${px}px ${family}`
 export function textAngle(text: ChartTextStyle | undefined): number {
   return (text?.vertical === 'vert270' ? -90 : text?.vertical === 'vert' || text?.vertical === 'eaVert' ? 90 : text?.rotation ?? 0) * Math.PI / 180
 }

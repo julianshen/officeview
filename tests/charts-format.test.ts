@@ -57,3 +57,5 @@ it('overlong cached source codes become General before entering the retained for
  const p=new PointWriter(1,true);p.value(0,12,'0'.repeat(256))
  expect(p.done().formats).toEqual(['General'])
 })
+
+it('M8: General scientific text uses Excel uppercase E',()=>{expect(createChartFormatter(createChartWorkspace('mobile')).format(1e21,undefined,'1900')).toBe('1E+21')})

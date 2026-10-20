@@ -1,80 +1,139 @@
 /** Data-label controls and size-independent text (spec 5.3). No canvas is retained. */
-import { attrs,getChildren,orderedChildren,textOf,type XmlNode } from '../core/xml'
-import type { ChartModel,ChartGroup,ChartSeries,ChartDiagnostic } from './model'
+import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
+import type { ChartModel, ChartGroup, ChartSeries, ChartDiagnostic } from './model'
 import type { ChartFormatter } from './format-api'
-import {pointAt,valueAt,stringBytes} from './points'
-import {pointFormat,type ChartNumberFormat} from './format'
-export interface LabelRun {text:string;bold?:boolean;italic?:boolean;color?:string;sizePt?:number}
+import { pointAt, valueAt, stringBytes } from './points'
+import { pointFormat, type ChartNumberFormat } from './format'
+
+export interface LabelRun { text: string; bold?: boolean; italic?: boolean; color?: string; sizePt?: number }
 export interface LabelOptions extends ChartNumberFormat {
-  showVal?:boolean;showCatName?:boolean;showSerName?:boolean;showPercent?:boolean;showBubbleSize?:boolean;showLegendKey?:boolean;showLeaderLines?:boolean;delete?:boolean
-  separator?:string;position?:string;runs?:LabelRun[];unsupported?:boolean
+  showVal?: boolean
+  showCatName?: boolean
+  showSerName?: boolean
+  showPercent?: boolean
+  showBubbleSize?: boolean
+  showLegendKey?: boolean
+  showLeaderLines?: boolean
+  delete?: boolean
+  separator?: string
+  position?: string
+  runs?: LabelRun[]
+  unsupported?: boolean
+  /** An unsupported authored text source, distinct from unsupported placement. */
+  fieldSource?: boolean
 }
-export interface LabelControls extends LabelOptions {points?:Record<number,LabelOptions>}
-export interface PreparedLabel {group:number;series:number;point:number;text:string;runs:LabelRun[];position:string;legendKey:boolean;leaderLines:boolean}
-const child=(n:XmlNode|undefined,k:string)=>getChildren(n,k)[0]
-const flags=['showVal','showCatName','showSerName','showPercent','showBubbleSize','showLegendKey','showLeaderLines','delete'] as const
-function options(n:XmlNode,charge:(b:number)=>void):LabelOptions {
+export interface LabelControls extends LabelOptions { points?: Record<number, LabelOptions> }
+export interface PreparedLabel {
+  group: number; series: number; point: number; text: string; runs: LabelRun[]
+  position: string; legendKey: boolean; leaderLines: boolean
+}
+const child = (n: XmlNode | undefined, k: string) => getChildren(n, k)[0]
+const contentFlags = ['showVal', 'showCatName', 'showSerName', 'showPercent', 'showBubbleSize', 'showLegendKey'] as const
+const flags = [...contentFlags, 'showLeaderLines', 'delete'] as const
+const isOn = (n: XmlNode) => attrs(n).val !== '0' && attrs(n).val !== 'false'
+
+function options(n: XmlNode, charge: (b: number) => void): LabelOptions {
   charge(256)
-  const out:LabelOptions={}
-  for(const key of flags){const v=child(n,key);if(v)out[key]=attrs(v).val!=='0'&&attrs(v).val!=='false'}
-  const fmt=child(n,'numFmt');if(fmt){const a=attrs(fmt);if(a.formatCode!==undefined){charge(544);out.formatCode=a.formatCode.length>255?'General':a.formatCode}if(a.sourceLinked!==undefined)out.sourceLinked=a.sourceLinked==='1'||a.sourceLinked==='true'}
-  const sep=child(n,'separator');if(sep){charge(544);out.separator=textOf(sep).slice(0,256)}
-  const pos=attrs(child(n,'dLblPos')).val;if(pos){charge(64);out.position=pos.slice(0,16)}
-  const tx=child(n,'tx'),rich=child(tx,'rich')
-  if(rich){
-    const runs:LabelRun[]=[];let left=256
-    for(const p of getChildren(rich,'p'))for(const [kind,r] of orderedChildren(p)){
-      if(!left)break
-      if(kind!=='r'&&kind!=='fld'&&kind!=='br')continue
-      charge(128+left*2)
-      const text=kind==='br'?'\n':textOf(child(r,'t')).slice(0,left),pr=child(r,'rPr'),a=attrs(pr)
-      const rgb=attrs(child(child(pr,'solidFill'),'srgbClr')).val
-      const size=Number(a.sz)
-      runs.push({text,...(a.b?{bold:a.b==='1'||a.b==='true'}:{}),...(a.i?{italic:a.i==='1'||a.i==='true'}:{}),...(rgb&&/^[a-f0-9]{6}$/i.test(rgb)?{color:'#'+rgb}:{}),...(size>0?{sizePt:Math.max(6,Math.min(72,size/100))}:{})});left-=text.length
-      if(kind==='fld')out.unsupported=true
+  const out: LabelOptions = {}
+  for (const key of flags) { const v = child(n, key); if (v) out[key] = isOn(v) }
+  const fmt = child(n, 'numFmt')
+  if (fmt) {
+    const a = attrs(fmt)
+    if (a.formatCode !== undefined) { charge(544); out.formatCode = a.formatCode.length > 255 ? 'General' : a.formatCode }
+    if (a.sourceLinked !== undefined) out.sourceLinked = a.sourceLinked === '1' || a.sourceLinked === 'true'
+  }
+  const sep = child(n, 'separator')
+  if (sep) { charge(544); out.separator = textOf(sep).slice(0, 256) }
+  const pos = attrs(child(n, 'dLblPos')).val
+  if (pos) { charge(64); out.position = pos.slice(0, 16) }
+  const tx = child(n, 'tx'), rich = child(tx, 'rich')
+  if (rich) {
+    const runs: LabelRun[] = []
+    let left = 256
+    for (const p of getChildren(rich, 'p')) for (const [kind, r] of orderedChildren(p)) {
+      if (!left) break
+      if (kind !== 'r' && kind !== 'fld' && kind !== 'br') continue
+      charge(128 + left * 2)
+      const text = kind === 'br' ? '\n' : textOf(child(r, 't')).slice(0, left)
+      const a = attrs(child(r, 'rPr'))
+      const rgb = attrs(child(child(child(r, 'rPr'), 'solidFill'), 'srgbClr')).val
+      const size = Number(a.sz)
+      runs.push({ text, ...(a.b ? { bold: a.b === '1' || a.b === 'true' } : {}), ...(a.i ? { italic: a.i === '1' || a.i === 'true' } : {}), ...(rgb && /^[a-f0-9]{6}$/i.test(rgb) ? { color: '#' + rgb } : {}), ...(size > 0 ? { sizePt: Math.max(6, Math.min(72, size / 100)) } : {}) })
+      left -= text.length
+      if (kind === 'fld' && attrs(r).type?.toUpperCase() === 'CELLRANGE') out.fieldSource = true
     }
-    out.runs=runs
+    out.runs = runs
   }
-  if(child(n,'layout')||child(n,'extLst')||child(tx,'strRef'))out.unsupported=true
+  // XML helpers strip prefixes. Inspect only the named value-from-cells extension,
+  // not unrelated Office extensions such as c15:leaderLines.
+  for (const ext of getChildren(child(n, 'extLst'), 'ext')) {
+    const show = child(ext, 'showDataLabelsRange')
+    if (child(ext, 'datalabelsRange') || show) out.fieldSource = show ? isOn(show) : true
+  }
+  if (child(tx, 'strRef')) out.fieldSource = true
+  if (out.fieldSource || child(child(n, 'layout'), 'manualLayout')) out.unsupported = true
   return out
 }
-export function readLabels(n:XmlNode|undefined,charge:(b:number)=>void):LabelControls|undefined {
-  if(!n)return undefined
-  const out:LabelControls=options(n,charge)
-  for(const p of getChildren(n,'dLbl')){
-    const i=Number(attrs(child(p,'idx')).val)
-    if(!Number.isInteger(i)||i<0||i>=4096)continue
-    const v=options(p,charge);(out.points??={})[i]=v
+export function readLabels(n: XmlNode | undefined, charge: (b: number) => void): LabelControls | undefined {
+  if (!n) return undefined
+  const out: LabelControls = options(n, charge)
+  for (const p of getChildren(n, 'dLbl')) {
+    const i = Number(attrs(child(p, 'idx')).val)
+    if (!Number.isInteger(i) || i < 0 || i >= 4096) continue
+    const v = options(p, charge)
+      ; (out.points ??= {})[i] = v
   }
   return out
 }
-export const labelDefault=(g:ChartGroup)=>g.family==='pie'||g.family==='doughnut'?'bestFit':g.grouping==='stacked'||g.grouping==='percentStacked'||g.family==='area'?'ctr':g.family==='bar'?'outEnd':'r'
-const controls=(g:ChartGroup,s:ChartSeries,i:number):LabelOptions=>({...g.labels,...s.labels,...g.labels?.points?.[i],...s.labels?.points?.[i]})
-export function labelPreparationBound(model:ChartModel):number {
-  let n=0
-  for(const g of model.groups)for(const s of g.series)if(g.labels||s.labels)n+=Math.min(4096,s.values.length)*4096
-  return n
+export const labelDefault = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' ? 'bestFit' : g.grouping === 'stacked' || g.grouping === 'percentStacked' || g.family === 'area' ? 'ctr' : g.family === 'bar' ? 'outEnd' : 'r'
+const controls = (g: ChartGroup, s: ChartSeries, i: number): LabelOptions => ({ ...g.labels, ...s.labels, ...g.labels?.points?.[i], ...s.labels?.points?.[i] })
+const percentFamily = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut'
+// A text-source fallback never overrides authored off controls. Manual placement
+// alone is not a text source and cannot turn a label on.
+const fieldFallback = (o: LabelOptions) => o.fieldSource && !contentFlags.some(key => o[key] === false)
+function emitsLabel(model: ChartModel, g: ChartGroup, s: ChartSeries, i: number, o: LabelOptions): boolean {
+  if (o.delete) return false
+  if (o.runs?.some(r => r.text.length > 0)) return true
+  if (o.showLegendKey || (o.showCatName && (s.categories ?? model.categories)[i]) || (o.showSerName && s.name)) return true
+  const point = pointAt(s.values, i)
+  return Boolean(((o.showVal || fieldFallback(o)) && (point.state === 'value' || point.state === 'error'))
+    || (o.showPercent && percentFamily(g) && point.state === 'value')
+    || (o.showBubbleSize && valueAt(s.bubbleSizes, i) !== undefined))
 }
-export const labelBytes=(labels:readonly PreparedLabel[])=>labels.reduce((n,l)=>n+256+stringBytes(l.text),0)
-export function prepareDataLabels(model:ChartModel,formatter:ChartFormatter,epoch:'1900'|'1904',diagnostics:ChartDiagnostic[]):PreparedLabel[]{
-  const result:PreparedLabel[]=[]
-  model.groups.forEach((g,gi)=>g.series.forEach((s,si)=>{
-    if(!g.labels&&!s.labels)return
-    let total=0;for(let i=0;i<Math.min(4096,s.values.length);i++)total+=Math.abs(valueAt(s.values,i)??0)
-    for(let i=0;i<Math.min(4096,s.values.length);i++){
-      const o=controls(g,s,i);if(o.delete)continue
-      if(o.unsupported&&!diagnostics.some(d=>d.code==='chart-label-feature-unsupported'))diagnostics.push({code:'chart-label-feature-unsupported',reason:'Field-reference or manual-layout data label uses its ordinary position and saved/generated text'})
-      const p=pointAt(s.values,i),parts:string[]=[]
-      if(o.showCatName)parts.push((s.categories??model.categories)[i]??'')
-      if(o.showSerName)parts.push(s.name)
-      if(o.showVal)parts.push(p.state==='error'?p.code:p.state==='value'?formatter.format(p.v,pointFormat(o,s.values,i),epoch):'')
-      if(o.showPercent&&p.state==='value')parts.push(formatter.format(total?Math.abs(p.v)/total:0,pointFormat(o,s.values,i)??'0%',epoch))
-      const bubble=valueAt(s.bubbleSizes,i);if(o.showBubbleSize&&bubble!==undefined)parts.push(formatter.format(bubble,pointFormat(o,s.bubbleSizes,i),epoch))
-      let text='';for(const part of parts){if(!part)continue;text=(text+(text?(o.separator??', '):'')+part).slice(0,256)}
-      if(o.runs)text=o.runs.map(r=>r.text).join('').slice(0,256)
-      if(!text&&o.unsupported)text=p.state==='error'?p.code:p.state==='value'?formatter.format(p.v,pointFormat(o,s.values,i),epoch):''
-      if(!text&&!o.showLegendKey)continue
-      result.push({group:gi,series:si,point:i,text,runs:o.runs??[],position:o.position??labelDefault(g),legendKey:o.showLegendKey===true,leaderLines:o.showLeaderLines===true})
+export function labelPreparationBound(model: ChartModel): number {
+  let count = 0
+  for (const g of model.groups) for (const s of g.series) {
+    if (!g.labels && !s.labels) continue
+    for (let i = 0; i < Math.min(4096, s.values.length); i++) if (emitsLabel(model, g, s, i, controls(g, s, i))) count++
+  }
+  // Each retained record has one <=256-unit string. Only one point's controls,
+  // parts, and concatenation intermediates coexist; formatter work has its own owner.
+  return count ? count * (256 + (stringBytes('') + 512)) + 8192 : 0
+}
+export const labelBytes = (labels: readonly PreparedLabel[]) => labels.reduce((n, l) => n + 256 + stringBytes(l.text), 0)
+export function prepareDataLabels(model: ChartModel, formatter: ChartFormatter, epoch: '1900' | '1904', diagnostics: ChartDiagnostic[]): PreparedLabel[] {
+  const result: PreparedLabel[] = []
+  model.groups.forEach((g, gi) => g.series.forEach((s, si) => {
+    if (!g.labels && !s.labels) return
+    let total = 0
+    for (let i = 0; i < Math.min(4096, s.values.length); i++) total += Math.abs(valueAt(s.values, i) ?? 0)
+    for (let i = 0; i < Math.min(4096, s.values.length); i++) {
+      const o = controls(g, s, i)
+      if (!emitsLabel(model, g, s, i, o)) continue
+      if (o.unsupported && !diagnostics.some(d => d.code === 'chart-label-feature-unsupported')) diagnostics.push({ code: 'chart-label-feature-unsupported', reason: 'Field-reference or manual-layout data label uses its ordinary position and saved/generated text' })
+      const p = pointAt(s.values, i), parts: string[] = []
+      if (o.showCatName) parts.push((s.categories ?? model.categories)[i] ?? '')
+      if (o.showSerName) parts.push(s.name)
+      if (o.showVal) parts.push(p.state === 'error' ? p.code : p.state === 'value' ? formatter.format(p.v, pointFormat(o, s.values, i), epoch) : '')
+      if (o.showPercent && percentFamily(g) && p.state === 'value') parts.push(formatter.format(total ? Math.abs(p.v) / total : 0, o.sourceLinked !== true ? o.formatCode ?? '0%' : '0%', epoch))
+      const bubble = valueAt(s.bubbleSizes, i)
+      if (o.showBubbleSize && bubble !== undefined) parts.push(formatter.format(bubble, pointFormat(o, s.bubbleSizes, i), epoch))
+      let text = ''
+      for (const part of parts) { if (part) text = (text + (text ? (o.separator ?? ', ') : '') + part).slice(0, 256) }
+      if (o.runs?.length) text = o.runs.map(r => r.text).join('').slice(0, 256)
+      if (!text && fieldFallback(o)) text = p.state === 'error' ? p.code : p.state === 'value' ? formatter.format(p.v, pointFormat(o, s.values, i), epoch) : ''
+      if (!text && !o.showLegendKey) continue
+      result.push({ group: gi, series: si, point: i, text, runs: o.runs ?? [], position: o.position ?? labelDefault(g), legendKey: o.showLegendKey === true, leaderLines: o.showLeaderLines === true })
     }
   }))
   return result

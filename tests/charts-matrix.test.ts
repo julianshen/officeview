@@ -19,10 +19,11 @@ import {paintXlsxChart} from '../src/charts/paint'
 import {createCanvas} from 'canvas'
 import {prepareChartAxes} from '../src/charts/prepare'
 import {PointWriter} from '../src/charts/points'
-function painted(family:string,middle:string,mode:string){
+function painted(family:string,middle:string,mode:string,log=false){
  const values=`<numLit><pt idx="0"><v>2</v></pt>${middle?`<pt idx="1"><v>${middle}</v></pt>`:''}<pt idx="2"><v>4</v></pt></numLit>`
  const m=parseXlsxChart(parseXmlOrdered(`<chartSpace><chart><dispBlanksAs val="${mode}"/><plotArea><${family}Chart>${family==='scatter'?'<scatterStyle val="line"/>':''}<ser><spPr><ln><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr><${family==='scatter'?'yVal':'val'}>${values}</${family==='scatter'?'yVal':'val'}></ser></${family}Chart></plotArea></chart></chartSpace>`),undefined)!
- expect(m.unsupported).toBeUndefined();const c=createCanvas(400,300).getContext('2d'),paths:string[][]=[];let path:string[]=[]
+ expect(m.unsupported).toBeUndefined();if(log){const binding=m.groups[0].binding;if(binding.kind!=='xy')throw Error('not xy');m.axes.find(axis=>axis.id===binding.y)!.logBase=10; m.preparedAxes=prepareChartAxes({...m,preparedAxes:undefined}).preparedAxes}
+ const c=createCanvas(400,300).getContext('2d'),paths:string[][]=[];let path:string[]=[]
  const begin=c.beginPath.bind(c),move=c.moveTo.bind(c),line=c.lineTo.bind(c),stroke=c.stroke.bind(c)
  c.beginPath=()=>{path=[];begin()};c.moveTo=(x,y)=>{path.push('M');move(x,y)};c.lineTo=(x,y)=>{path.push('L');line(x,y)};c.stroke=()=>{if(c.strokeStyle==='#ff0000')paths.push([...path]);stroke()}
  paintXlsxChart(m,c as any,400,300);return paths
@@ -36,3 +37,5 @@ it('unavailable plot inputs publish the required diagnostic',()=>{
  const p=new PointWriter(2);p.value(0,1);p.unavailable(1);m.groups[0].series[0].values=p.done()
  expect(prepareChartAxes(m).preparedAxes!.diagnostics).toContainEqual(expect.objectContaining({code:'chart-point-unavailable'}))
 })
+
+it('M1: a nonpositive scatter value on a log axis breaks the line',()=>{expect(painted('scatter','-1','span',true)).toContainEqual(['M','M'])})

@@ -4,7 +4,7 @@ import { displayView, type DisplayView } from './display'
 import { dateUnitIndex } from './dates'
 import { prepareDataLabels, labelPreparationBound, labelBytes, type PreparedLabel } from './labels'
 import { createChartFormatter, axisFormat } from './format'
-import { valueAt, stringBytes } from './points'
+import { valueAt, stringBytes, POINT_UNAVAILABLE } from './points'
 import type { ChartModel, ChartDiagnostic } from './model'
 import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
@@ -51,7 +51,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
     const view = displayView(model), graph = resolveAxes(model, view)
-    if(model.groups.some(g=>g.series.some(s=>[s.values,s.xValues,s.bubbleSizes].some(p=>p?.states.includes(3)))) && !graph.diagnostics.some(d=>d.code==='chart-point-unavailable'))graph.diagnostics.push({code:'chart-point-unavailable',reason:'A required saved chart point is unavailable'})
+    if(model.groups.some(g=>g.series.some(s=>[s.values,s.xValues,s.bubbleSizes].some(p=>p?.states.includes(POINT_UNAVAILABLE)))) && !graph.diagnostics.some(d=>d.code==='chart-point-unavailable'))graph.diagnostics.push({code:'chart-point-unavailable',reason:'A required saved chart point is unavailable'})
     const formatter = createChartFormatter(workspace)
     const axes = [...graph.axes.values()].map(a => {
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
