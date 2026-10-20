@@ -19,7 +19,7 @@ import {
 import type { ChartModel } from '../src/charts/model'
 import type { DrawingCoverageEntry } from '../src/drawing/coverage'
 import { buildChartDocx, buildChartPptx } from './helpers/chart-fixtures'
-import { conformanceSpace, describeFamilyConformance } from './helpers/chart-family-conformance'
+import { describeFamilyConformance, OF_PIE_FAMILY } from './helpers/chart-family-conformance'
 
 const parseChart = (xml: string): ChartModel => parseXlsxChart(parseXmlOrdered(xml), undefined)!
 
@@ -421,11 +421,4 @@ it('ofPie is native through the DOCX and PPTX adapters, with chart coverage', as
 })
 
 // The family conformance harness (spec 7): ofPie with no series is a card; every other case is native.
-const ofPieConformance = {
-  name: 'ofPie',
-  chart: (c: string | null) => conformanceSpace(`<c:ofPieChart><c:varyColors val="1"/>${c === null ? '' : `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx><c:val>${c}</c:val></c:ser>`}<c:firstSliceAng val="0"/></c:ofPieChart>`),
-  // Every case except 'no series' is a valid authored ofPie: it paints natively (blank, NaN or
-  // negative input reads as zero, so the painter just has no slices). Only a missing series is a card.
-  expect: { 'no series': { kind: 'card' as const }, 'empty series': { kind: 'native' as const }, 'all blank': { kind: 'native' as const }, 'NaN and infinity': { kind: 'native' as const }, 'negative values': { kind: 'native' as const }, 'single point': { kind: 'native' as const } },
-}
-describe('ofPie family conformance (spec 7)', () => describeFamilyConformance(ofPieConformance))
+describe('ofPie family conformance (spec 7)', () => describeFamilyConformance(OF_PIE_FAMILY))

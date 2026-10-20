@@ -61,11 +61,15 @@ export type ChartAxisBinding =
   | { kind: 'none' }
   | { kind: 'cartesian'; category?: string; x?: string; value: string }
   | { kind: 'xy'; x: string; y: string }
-  | { kind: 'radial'; value: string }
+  | { kind: 'radial'; value: string; category?: string }
   | { kind: 'surface'; category: string; series: string; value: string }
 
 /** Placement-only text properties (DrawingML txPr). Rotation is degrees clockwise. */
-export interface ChartTextStyle { sizePt?: number; rotation?: number; vertical?: string }
+export interface ChartTextStyle {
+  sizePt?: number; rotation?: number; vertical?: string
+  /** Run properties (ChartEx `txPr` defRPr or first run; CSS hex without `#`). */
+  color?: string; bold?: boolean; italic?: boolean
+}
 export interface ChartManualLayout {
   x?: number; y?: number; w?: number; h?: number
   xMode?: 'edge' | 'factor'; yMode?: 'edge' | 'factor'; wMode?: 'edge' | 'factor'; hMode?: 'edge' | 'factor'
@@ -104,6 +108,8 @@ export interface ChartAxis {
   tickMarkSkip?: number
   /** `c:dispUnits`: tick values are divided by `divisor`; `label` is the unit label drawn beside the axis (spec 5.1). */
   dispUnits?: { divisor: number; unit: string; label?: string }
+  /** `c:catAx/c:noMultiLvlLbl`: a multi-level category axis shows only its innermost level (spec 5.9). */
+  noMultiLvlLbl?: true
   /** `c:dateAx` time units (spec 5.1); `auto` (`c:auto`) lets text categories fall back to a category axis. */
   baseTimeUnit?: ChartTimeUnit
   majorTimeUnit?: ChartTimeUnit
@@ -111,6 +117,10 @@ export interface ChartAxis {
   auto?: boolean
   /** No axis element: the plot area had none and its groups no `c:axId`, so a primary pair is implied (A1a). */
   implicit?: true
+  /** The axis title's text style (ChartEx `axis/title/txPr`). */
+  titleText?: ChartTextStyle
+  /** ChartEx `cx:units@unit` (chartex-map §1): `percentage` means the values are fractions shown x100 %. */
+  unit?: string
 }
 export type ChartTickMark = 'cross' | 'in' | 'out' | 'none'
 export type ChartTimeUnit = 'days' | 'months' | 'years'
@@ -129,6 +139,8 @@ export interface ChartRange {
 
 export interface ChartSeries {
   labels?: import('./labels').LabelControls
+  /** The series index (`c:idx`; its position when absent or invalid): the key of its legend entry (spec 5.10). */
+  index?: number
   name: string
   /** CSS hex without `#`. */
   color: string
@@ -141,6 +153,7 @@ export interface ChartSeries {
   pointColors?: string[]
   line?: boolean
   markers?: boolean
+  smooth?: boolean
   fill?: import('./fills').ChartFillStyle
   lineStyle?: import('./style').ChartLineStyle
   markerStyle?: import('./markers').ChartMarkerStyle
@@ -151,14 +164,16 @@ export interface ChartSeries {
   explosion?: number
   dPt?: Map<number, import('./style').ChartPointOverride>
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
+  /** `c:trendline`s as authored (spec 5.6); fitted in stage 1 (`PreparedAxes.trendlines`). */
+  trendlines?: import('./trendlines').ChartTrendline[]
   /** References still to be filled from worksheet cells (no saved data for that role). */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange }
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which
    * points sit in hidden rows or columns (plotVisOnly provenance; spec 5.8, 6.4).
    */
-  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange }
+  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange; bubbleSizes?: ChartRange }
   /** Roles with neither saved data nor a reference (spec 6.4 precedence 3): unavailable, never blank. */
   absent?: ChartRole[]
   /**
@@ -166,12 +181,27 @@ export interface ChartSeries {
    * its numeric roles are acquired in full up to CHART_ANALYTIC_POINT_LIMIT (spec 7),
    * and only the drawing is capped at CHART_POINT_LIMIT. `refused`: an input
    * exceeded that bound, so the analytic element is dropped (never computed from
-   * a prefix) and the series is acquired for display only.
+   * a prefix) and the series is acquired for display only. `chart`: the series is the input of an analytic
+   * ChartEx family (histogram, Pareto, box & whisker, treemap, sunburst): every role, categories included, is
+   * acquired in full up to CHART_ANALYTIC_POINT_LIMIT on every path (cache, defined name, host sheet, embedded
+   * workbook); above it, or with a required value point unavailable, the whole chart is refused.
    */
-  analytic?: true | 'refused'
+  analytic?: true | 'refused' | 'chart'
+}
+
+export interface ChartUpDownBar {
+  fill?: import('./fills').ChartFillStyle
+  line?: import('./style').ChartLineStyle
+}
+
+export interface ChartUpDownBars {
+  upBars?: ChartUpDownBar
+  downBars?: ChartUpDownBar
 }
 
 export interface ChartGroup {
+  /** The group's kind: absent for classic (`c:`) groups; `chartEx` for a ChartEx group (`ChartExGroup`). */
+  kind?: 'chartEx'
   labels?: import('./labels').LabelControls
   family: ChartFamily
   grouping: ChartGrouping
@@ -191,9 +221,95 @@ export interface ChartGroup {
   secondPieSize?: number
   /** ofPie only (`cust` split): the authored secondary-plot point indices. */
   secondPiePt?: number[]
+  /** Contour: `c:wireframe` (band boundaries only). */
+  wireframe?: boolean
+  /** Contour `c:bandFmts` by band index: the fill colour (hex), null for noFill; holes take the accent cycle. */
+  bandColors?: Array<string | null>
+  /** Contour `c:bandFmts` by band index: the line colour (hex) a wireframe strokes, null for noFill. */
+  bandLines?: Array<string | null>
+  /** Contour: the document's accent cycle (hex), resolved at parse time, for bands without an authored colour. */
+  bandAccents?: string[]
   varyColors?: boolean
+  smooth?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle
+  /** Bubble (spec 4.1): `c:bubbleScale` percent (0-300, default 100), `c:sizeRepresents`, `c:showNegBubbles`. */
+  bubbleScale?: number
+  sizeRepresents?: 'area' | 'w'
+  showNegBubbles?: boolean
+  /** Radar (spec 4.1): `c:radarStyle`. */
+  radarStyle?: 'standard' | 'marker' | 'filled'
+  /** Stock (spec 4.1): `c:hiLowLines` and `c:upDownBars`. */
+  hiLowLines?: import('./style').ChartLineStyle
+  upDownBars?: ChartUpDownBars
+}
+
+/**
+ * One outer level of multi-level categories (spec 5.9; `multiLvlStrCache/lvl` after the first): group `k` starts at
+ * category index `starts[k]` (ascending) and spans until the next start of this level or of any level outside it.
+ */
+export interface ChartCategoryLevel { starts: Uint32Array; labels: string[] }
+/**
+ * A title run with its formatting resolved (spec 5.10: rPr, paragraph default, txPr, style part; absent: the
+ * theme default). A run whose text is `\n` separates paragraphs.
+ */
+export type ChartTextRun = import('./labels').LabelRun
+/**
+ * ChartEx (`cx:`, Office 2016+) groups, read against docs/charts/chartex-map.md (spec 4.2, 4.3). A ChartEx chart is
+ * the same `ChartModel`: its one group is a `ChartExGroup`, whose `series` carry the bound roles (values,
+ * categories, names; cached, or pending references for the workbook) and whose `chartEx` payload keeps the
+ * ID-keyed data sets (all levels) and the per-series layout properties the family painters need.
+ */
+export type ChartExLayout = 'clusteredColumn' | 'paretoLine' | 'waterfall' | 'funnel' | 'boxWhisker' | 'treemap' | 'sunburst' | 'regionMap'
+export type ChartExFamily = 'waterfall' | 'histogram' | 'pareto' | 'boxWhisker' | 'funnel' | 'treemap' | 'sunburst'
+/** One `cx:lvl` (map §2.1): points `0..ptCount-1`; a missing `pt@idx` is blank (numeric) or `undefined` (string). */
+export type ChartExLevel = { ptCount: number; name?: string; formatCode?: string } &
+  ({ kind: 'num'; points: ChartPoints } | { kind: 'str'; values: Array<string | undefined> })
+/** A `cx:numDim`/`cx:strDim`: its `@type`, its reference (`cx:f`; a defined name or a single-area range) and its levels. */
+export interface ChartExDimension { kind: 'num' | 'str'; type: string; ref?: ChartRange; dir: 'col' | 'row'; levels: ChartExLevel[] }
+/** A `cx:data` set, keyed by `@id` (resolved by value, never by position). */
+export interface ChartExData { id: number; dimensions: ChartExDimension[] }
+export interface ChartExBinning { intervalClosed: 'l' | 'r'; binSize?: number; binCount?: number; underflow?: number | 'auto'; overflow?: number | 'auto' }
+/** `cx:layoutPr` (map §4), with the map's absence defaults applied. */
+export interface ChartExLayoutProperties {
+  visibility: { connectorLines: boolean; meanLine: boolean; meanMarker: boolean; nonoutliers: boolean; outliers: boolean }
+  binning?: ChartExBinning
+  /** `cx:aggregation`: by-category columns (equal categories grouped, values summed). */
+  aggregation?: true
+  /** `cx:subtotals/cx:idx@val`: 0-based subtotal point indices. */
+  subtotals?: number[]
+  quartileMethod?: 'inclusive' | 'exclusive'
+  parentLabelLayout?: 'none' | 'banner' | 'overlapping'
+}
+/** One `cx:series` as authored (map §2.3). */
+export interface ChartExSeriesInfo {
+  layout: ChartExLayout
+  dataId?: number
+  ownerIdx?: number
+  hidden: boolean
+  formatIdx: number
+  axisIds: string[]
+  layoutPr: ChartExLayoutProperties
+}
+export interface ChartExGroup extends ChartGroup {
+  kind: 'chartEx'
+  family: ChartExFamily
+  chartEx: {
+    /** The data sets the series bind (by `dataId`). */
+    data: ChartExData[]
+    /** Parallel to the group's `series`. */
+    series: ChartExSeriesInfo[]
+    /** Pareto: the `paretoLine` series (no data of its own; bound through `ownerIdx`). */
+    paretoLine?: ChartExSeriesInfo
+    /** By-category histogram (Excel "By Category"): the column series carries `cx:aggregation`; equal categories
+     * are grouped and their values summed (map §3, §5.1). */
+    byCategory?: true
+    /** `cx:plotArea/cx:spPr` (the whole plot area; the inner `cx:plotSurface` is the model's `plotAreaFill`). */
+    plotAreaFill?: import('./fills').ChartFillStyle
+    plotAreaLine?: import('./style').ChartLineStyle
+    /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
+    gapWidth?: number
+  }
 }
 
 export interface ChartModel {
@@ -204,6 +320,18 @@ export interface ChartModel {
   legendLayout?: ChartManualLayout
   text?: ChartTextStyle
   title?: string
+  /** The title's runs, formatting resolved (absent: one unformatted run of `title`). */
+  titleRuns?: ChartTextRun[]
+  /** `c:title/c:overlay`: the title takes no space from the plot. */
+  titleOverlay?: true
+  /** `c:legend/c:overlay`: the legend takes no space from the plot and is painted over it. */
+  legendOverlay?: true
+  /** `c:legendEntry/c:delete`: sorted legend entry indices removed (a series' `c:idx`; a point legend: the point index). */
+  legendDeleted?: Uint32Array
+  /** Outer category levels, innermost first (the innermost labels are `categories`; spec 5.9). */
+  categoryLevels?: ChartCategoryLevel[]
+  /** The title's text style (ChartEx `title/txPr`). */
+  titleText?: ChartTextStyle
   chartAreaFill?: import('./fills').ChartFillStyle
   chartAreaLine?: import('./style').ChartLineStyle
   plotAreaFill?: import('./fills').ChartFillStyle
@@ -227,6 +355,8 @@ export interface ChartModel {
   categoryValues?: ChartPoints
   /** The shared category reference still to be filled from worksheet cells. */
   categoryPending?: ChartRange
+  /** `categoryPending` is a multi-level reference (`c:multiLvlStrRef`): its outer lines are outer levels (spec 5.9). */
+  categoryMultiLevel?: true
   /** The shared category reference (kept beside a cache, for provenance only). */
   categoryRef?: ChartRange
   /** Sorted category indices whose cell sits in a hidden row or column of the category reference. */
@@ -256,6 +386,8 @@ export interface ChartModel {
   feature?: 'ChartEx'
   /** The chart's storage could not be admitted (a typed refusal before allocation; spec 6.4/6.5). */
   refused?: true
+  /** Drawing overlays from `c:userShapes` (spec 5.11; charts/userShapes.ts), prepared at stage 1. */
+  userShapes?: import('./userShapes').ChartUserShapes
 }
 
 /**
@@ -265,5 +397,5 @@ export interface ChartModel {
  */
 export type ChartResult<Model = ChartModel> =
   | { kind: 'native'; model: Model }
-  | { kind: 'unsupported'; reason: string; title?: string }
-  | { kind: 'refused'; reason: string; title?: string }
+  | { kind: 'unsupported'; reason: string; title?: string; feature?: 'ChartEx' }
+  | { kind: 'refused'; reason: string; title?: string; feature?: 'ChartEx' }

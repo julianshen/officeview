@@ -7,7 +7,7 @@ import { pointAt, valueAt, stringBytes } from './points'
 import { pointFormat, type ChartNumberFormat } from './format'
 import { ofPieDisplayValue, ofPieOtherIndex, ofPieSplit, type OfPieSplit } from './families/ofPie'
 
-export interface LabelRun { text: string; bold?: boolean; italic?: boolean; color?: string; sizePt?: number }
+export interface LabelRun { text: string; bold?: boolean; italic?: boolean; color?: string; sizePt?: number; /** Typeface (titles). */ font?: string; /** Underlined (titles). */ underline?: boolean }
 export interface LabelOptions extends ChartNumberFormat {
   showVal?: boolean
   showCatName?: boolean
@@ -23,6 +23,10 @@ export interface LabelOptions extends ChartNumberFormat {
   unsupported?: boolean
   /** An unsupported authored text source, distinct from unsupported placement. */
   fieldSource?: boolean
+  /** ChartEx label box and text styling (`dataLabels`/`dataLabel` `spPr` and `txPr`). */
+  fill?: import('./fills').ChartFillStyle
+  line?: import('./style').ChartLineStyle
+  text?: import('./model').ChartTextStyle
 }
 export interface LabelControls extends LabelOptions { points?: Record<number, LabelOptions> }
 export interface PreparedLabel {

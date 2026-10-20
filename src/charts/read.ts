@@ -21,9 +21,10 @@
  * once, through the workspace, and is refunded to it on release.
  *
  * The root element's namespace is resolved from its own declarations (default
- * or prefixed). Only the classic chart namespace (transitional or strict), or
- * an unbound root, continues; ChartEx and any other namespace stop the read at
- * the root, so a non-classic part never reaches the classic parser.
+ * or prefixed). The classic chart namespace (transitional or strict), an
+ * unbound root, or the ChartEx part namespace (marked: `isChartExRoot`, so the
+ * engine dispatches it to the ChartEx parser) continues; any other namespace
+ * stops the read at the root.
  */
 import type JSZip from 'jszip'
 import type { OfficePackage } from '../core/zip'
@@ -44,6 +45,10 @@ export const CHART_READ_CROSSING = CHART_CHUNK_LIMIT + 2 * TOKEN_CHARS
 const SLICE = 16 * 1024
 export { CHART_CROSSING_TAG, CHART_CHUNK_TAG }
 const CLASSIC = new Set(['http://schemas.openxmlformats.org/drawingml/2006/chart', 'http://purl.oclc.org/ooxml/drawingml/chart'])
+export const CHART_EX = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
+/** Roots read from a ChartEx (`cx:chartSpace`) part: the engine's dispatch key (spec 6.2), by real namespace. */
+const chartExRoots = new WeakSet<XmlNode>()
+export const isChartExRoot = (root: XmlNode): boolean => chartExRoots.has(root)
 
 export type ChartRead =
   | { kind: 'tree'; root: XmlNode; release: () => void }
@@ -251,7 +256,7 @@ function treeBuilder(charge: (bytes: number) => void) {
       const parent = stack[stack.length - 1]
       if (parent) flushText(parent)
       // Price everything this node retains first: nothing below is allocated before the charge succeeds.
-      let bytes = ELEMENT_BYTES + 2 * qname.length, declared = 0
+      let bytes = ELEMENT_BYTES + 2 * qname.length, declared = 0, chartEx = false
       for (let i = 0; i < count; i++) {
         bytes += ATTRIBUTE_BYTES + 2 * (names[i].length + values[i].length)
         if (declaration(names[i])) declared++
@@ -262,7 +267,9 @@ function treeBuilder(charge: (bytes: number) => void) {
         const colon = qname.indexOf(':'), want = colon < 0 ? 'xmlns' : `xmlns:${qname.slice(0, colon)}`
         let uri: string | undefined
         for (let i = 0; i < count; i++) if (names[i] === want) uri = values[i]
-        if (localName(qname) === 'chartSpace' && uri !== undefined && !CLASSIC.has(uri)) {
+        // The ChartEx part namespace (MS-ODRAWXML 2.24; chartex-map §0) continues to its own parser.
+        if (localName(qname) === 'chartSpace' && uri === CHART_EX) chartEx = true
+        else if (localName(qname) === 'chartSpace' && uri !== undefined && !CLASSIC.has(uri)) {
           state.stop = /chartex/i.test(uri)
             ? { kind: 'unsupported', reason: 'ChartEx charts are not supported yet', code: 'unsupported-chart', feature: 'ChartEx' }
             : { kind: 'unsupported', reason: 'This chart format is not supported', code: 'unsupported-chart' }
@@ -283,7 +290,7 @@ function treeBuilder(charge: (bytes: number) => void) {
         const name = localName(qname)
         const list = parent.grouped.get(name) ?? []
         list.push(open.node); parent.grouped.set(name, list); parent.ordered.push([name, open.node])
-      } else state.root = open.node
+      } else { state.root = open.node; if (chartEx) chartExRoots.add(open.node) }
       if (selfClosing) finish(open)
       else stack.push(open)
     },

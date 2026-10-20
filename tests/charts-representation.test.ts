@@ -13,7 +13,8 @@ import { drawingPartContext } from '../src/drawing/parts'
 import { parseThemeContext } from '../src/drawing/style'
 import { chartParseContextFor, documentChartContext } from '../src/charts/context'
 import { parseXlsxChart } from '../src/charts/parse'
-import { CHART_READ_CROSSING, ELEMENT_BYTES, NAMESPACE_BINDING_BYTES, NAMESPACE_SCOPE_BYTES, NamespaceScope, readChartPart } from '../src/charts/read'
+import { parseChartPart } from '../src/charts/dataPrecedence'
+import { CHART_READ_CROSSING, ELEMENT_BYTES, NAMESPACE_BINDING_BYTES, NAMESPACE_SCOPE_BYTES, NamespaceScope, isChartExRoot, readChartPart } from '../src/charts/read'
 import { paintDrawingContent } from '../src/drawing/content-paint'
 import { getPaintables } from '../src/render/paint'
 import { parseDocx } from '../src/docx/parse'
@@ -38,6 +39,8 @@ const PIC = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
 const XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
 const CX = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
 const CX1 = 'http://schemas.microsoft.com/office/drawing/2015/9/8/chartex'
+const CX2 = 'http://schemas.microsoft.com/office/drawing/2015/10/21/chartex'
+const CX4 = 'http://schemas.microsoft.com/office/drawing/2016/5/10/chartex'
 const RED = 'FF0000', BLUE = '0000FF'
 const EMU = 9525
 const W_PX = 200, H_PX = 160
@@ -48,9 +51,9 @@ const axes = '<c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><
 const space = (chart: string, extra = '') => `<c:chartSpace xmlns:c="${C}" xmlns:a="${A}">${extra}<c:chart>${chart}</c:chart></c:chartSpace>`
 /** A stacked column chart: blue segments above red ones. */
 const STACKED = space(`<c:autoTitleDeleted val="1"/><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:varyColors val="0"/>${ser(0, RED, [2, 2])}${ser(1, BLUE, [2, 2])}<c:overlap val="100"/><c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}</c:plotArea>`)
-/** surface3DChart stays unsupported in the engine (spec 4.1). */
+/** surface3DChart stays unsupported in the engine (spec 4.1); its card reads the spec's text. */
 const SURFACE = space(`<c:title><c:tx><c:rich><a:p><a:r><a:t>Surf</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:surface3DChart>${ser(0, RED, [1, 2])}</c:surface3DChart>${axes}</c:plotArea>`)
-const SURFACE_REASON = 'Surface chart is not supported'
+const SURFACE_REASON = '3-D surface charts are shown as a placeholder'
 const png = () => { const c = createCanvas(2, 2); const g = c.getContext('2d'); g.fillStyle = '#00ff00'; g.fillRect(0, 0, 2, 2); return new Uint8Array(c.toBuffer('image/png')) }
 
 async function packageOf(parts: Record<string, string | Uint8Array>): Promise<OfficePackage> {
@@ -82,7 +85,7 @@ function picture(format: Format, id: number, rid = 'im'): string {
 }
 const alternate = (choice: string, fallback: string | undefined, requires = 'c', prefix = 'mc') =>
   `<${prefix}:AlternateContent${prefix === 'mc' ? '' : ` xmlns:${prefix}="${MC}"`}><${prefix}:Choice Requires="${requires}">${choice}</${prefix}:Choice>${fallback === undefined ? '' : `<${prefix}:Fallback>${fallback}</${prefix}:Fallback>`}</${prefix}:AlternateContent>`
-const NAMESPACES = `xmlns:mc="${MC}" xmlns:c="${C}" xmlns:a="${A}" xmlns:r="${R}" xmlns:cx="${CX}" xmlns:cx1="${CX1}" xmlns:pic="${PIC}" xmlns:ch="${C}"`
+const NAMESPACES = `xmlns:mc="${MC}" xmlns:c="${C}" xmlns:a="${A}" xmlns:r="${R}" xmlns:cx="${CX}" xmlns:cx1="${CX1}" xmlns:cx2="${CX2}" xmlns:cx4="${CX4}" xmlns:pic="${PIC}" xmlns:ch="${C}"`
 
 interface Built { pkg: OfficePackage; chartPath: string }
 /** A one-object document whose body is `body`; `chart` (and `chartEx`) are its chart parts. */
@@ -236,14 +239,55 @@ describe('representation contract (spec 6.3)', () => {
     }
   })
 
+  it('cx choices are attempted in docx, pptx and xlsx when the engine loads', async () => {
+    // Office-shaped synthetic MC bodies (Requires="cx1", the chartex graphicData URI) in each consumer.
+    for (const native of [false, true]) {
+      vi.resetModules()
+      const calls: string[] = []
+      vi.doMock('../src/charts', async () => {
+        const actual = await vi.importActual<typeof import('../src/charts')>('../src/charts')
+        const { isChartExRoot } = await vi.importActual<typeof import('../src/charts/read')>('../src/charts/read')
+        return {
+          ...actual,
+          parseChartPart: async (...args: Parameters<typeof actual.parseChartPart>) => {
+            if (!isChartExRoot(args[0])) return actual.parseChartPart(...args)
+            calls.push(args[2].partPath)
+            // A painted ChartEx family (later tasks) satisfies the Choice; today's engine leaves it unsupported.
+            return native ? { kind: 'native' as const, model: actual.parseXlsxChart(parseXmlOrdered(STACKED), undefined)! } : actual.parseChartPart(...args)
+          },
+        }
+      })
+      const parsers = { parseDocx: (await import('../src/docx/parse')).parseDocx, parsePptx: (await import('../src/pptx/parse')).parsePptx, parseXlsx: (await import('../src/xlsx/parse')).parseXlsx }
+      // The chartex Requires namespaces of the native fixtures: cx1 (most), cx2 (funnel), cx4 (region map).
+      for (const format of FORMATS) for (const requires of ['cx1', 'cx2', 'cx4']) {
+        calls.length = 0
+        const body = alternate(graphicObject(format, 32, chartExPayload, CX), picture(format, 33), requires)
+        const outcome = await resolve(format, await build(format, body, { chartEx: true }), parsers)
+        // The cx Choice reached the engine's ChartEx dispatch with its own part.
+        expect(calls.length, `${format} ${requires} native=${native}: attempted`).toBeGreaterThan(0)
+        expect(calls.every(path => /charts\/chartEx1\.xml$/.test(path)), format).toBe(true)
+        if (native) {
+          expect(outcome.contents.map(c => c.kind), format).toEqual(['xlsxChart'])
+          expect(outcome.pictures, format).toBe(0)
+          expect(outcome.coverage[0], format).toMatchObject({ representation: 'choice' })
+        } else {
+          expectFallbackPicture(format, outcome, '33', 'ChartEx')
+          // The fallback keeps the original feature (DOCX and XLSX coverage report the fallback picture's feature, unchanged by B1).
+          if (format === 'pptx') expect(outcome.coverage[0].feature, `${format} ${requires}`).toBe('ChartEx')
+        }
+      }
+      vi.doUnmock('../src/charts')
+    }
+  })
+
   it('standalone unsupported chart becomes a card with the reason, the original feature and one representation', async () => {
     for (const format of FORMATS) {
       const card = expectCard(format, await resolve(format, await build(format, graphicObject(format, 40, chartPayload()))), SURFACE_REASON)
       expect(card.chart.title, format).toBe('Surf')
     }
-    // A standalone ChartEx frame keeps its original feature.
+    // A standalone ChartEx frame keeps its original feature (B1: its part, with no series, is unreadable).
     const ex = await resolve('pptx', await build('pptx', graphicObject('pptx', 41, chartExPayload, CX), { chartEx: true }))
-    expect(expectCard('pptx', ex, 'ChartEx charts are not supported yet', 'ChartEx').chart.unsupported).toBe('ChartEx charts are not supported yet')
+    expect(expectCard('pptx', ex, 'This chart could not be read', 'ChartEx').chart.feature).toBe('ChartEx')
   })
 
   it('a chart Choice with no fallback becomes its card (standalone and no-fallback)', async () => {
@@ -617,7 +661,10 @@ describe('fix round 1: admitted bounded read and namespace dispatch (spec 6.5, I
   const contentTheme = { colors: new Map<string, string>(), fonts: new Map<string, string>() }
   async function attempt(part: string | Uint8Array, chartContext = documentChartContext('desktop')) {
     const pkg = await packageOf({ 'word/_rels/document.xml.rels': rels(['rC', 'chart', 'charts/chart1.xml']), 'word/charts/chart1.xml': part })
-    const parseChart = vi.fn(async (root: Parameters<typeof parseXlsxChart>[0]) => ({ kind: 'native' as const, model: parseXlsxChart(root, undefined)! }))
+    // The classic parser is reached only for a classic root; a ChartEx root goes to the engine's ChartEx parser.
+    const parseChart = vi.fn(async (root: Parameters<typeof parseXlsxChart>[0], path: string) => isChartExRoot(root)
+      ? parseChartPart(root, undefined, chartParseContextFor(pkg, path))
+      : { kind: 'native' as const, model: parseXlsxChart(root, undefined)! })
     const node = graphicData()
     const content = await prepareDrawingContent(pkg, node, 'word/document.xml', contentTheme, parseThemeContext(), { parseChart, chartContext })
     return { pkg, content, parseChart, card: chartCard(node)?.chart }
@@ -649,11 +696,18 @@ describe('fix round 1: admitted bounded read and namespace dispatch (spec 6.5, I
       if (expected === 'classic') {
         expect(parseChart, label).toHaveBeenCalledTimes(1)
         expect(content?.kind === 'xlsxChart' && content.chart.groups[0]?.series.length, label).toBe(2)
+      } else if (expected === 'ChartEx') {
+        // A ChartEx root (any prefix or encoding) is read and dispatched to the ChartEx parser, never the classic one:
+        // this part has no series, so it is unreadable and keeps its ChartEx feature.
+        expect(parseChart, label).toHaveBeenCalledTimes(1)
+        expect(isChartExRoot(parseChart.mock.calls[0][0]), label).toBe(true)
+        expect(content, label).toBeUndefined()
+        expect(card, label).toMatchObject({ unsupported: 'This chart could not be read', feature: 'ChartEx' })
       } else {
-        // A non-classic part never reaches the classic parser.
+        // Any other namespace stops the read: nothing reaches a parser.
         expect(parseChart, label).not.toHaveBeenCalled()
         expect(content, label).toBeUndefined()
-        expect(card, label).toMatchObject(expected === 'ChartEx' ? { unsupported: 'ChartEx charts are not supported yet', feature: 'ChartEx' } : { unsupported: 'This chart format is not supported' })
+        expect(card, label).toMatchObject({ unsupported: 'This chart format is not supported' })
       }
     }
   })

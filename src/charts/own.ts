@@ -88,3 +88,9 @@ export const chargeChartLine = (charge: ChartCharge | undefined): void => charge
 export const chargeChartMarker = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.marker)
 export const chargeChartPoint = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.point)
 export const chargeChartColor = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.color)
+/**
+ * Trendlines (A6a, spec 5.6): a parsed record (plus its label format and name text) is charged at parse; a prepared
+ * fit retains its coefficients, at most 512 samples (x, y) and its label, priced by `preparedTrendlineBytes`.
+ */
+export const CHART_TRENDLINE_BYTES = Object.freeze({ spec: 160, fit: 192 })
+export const chargeChartTrendline = (charge: ChartCharge | undefined, textUnits = 0): void => charge?.(CHART_TRENDLINE_BYTES.spec + (textUnits ? textUnits * 2 + 64 : 0))
