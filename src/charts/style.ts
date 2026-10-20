@@ -6,8 +6,9 @@
  * 1. the chart style part (`cs:chartStyle`): its `dataPoint` (or `dataPointLine` for line and scatter)
  *    entry: an explicit colour wins; a `phClr` colour takes the `styleClr` colour (an index into the colour
  *    part, or `auto`: the next level) with the entry's own transforms applied;
- * 2. the colour part (`cs:colorStyle`): its colour list cycled per series, each further cycle taking the
- *    part's next `cs:variation` (lumMod/lumOff and the other colour transforms);
+ * 2. the colour part (`cs:colorStyle`): `cycle` (and unknown methods) cycle its colour list per series, each
+ *    further cycle taking the part's next `cs:variation`; `withinLinear`/`acrossLinear` (and *Reversed) select
+ *    the first / modulo colour with an approximated brightness ramp (see `linearBrightness`);
  * 3. `c:style` (1-48): the gallery column ((n-1) mod 8) picks greyscale (0), the six accents (1), or a single
  *    accent (2-7). The single-colour columns spread a shade/tint over the series in (-70%, 70%), as LibreOffice's
  *    `oox` import approximates Office 2007 (`DetailFormatterBase::getPhColor`); not verified against Office;
@@ -143,10 +144,33 @@ function resolve(color: ColorDefinition, theme: ThemeContext | undefined, extra:
   return hexColor(resolveDrawingColor(fallback(placeholder ? color : withExtra(color)), usable, base))
 }
 
-/** Level 2: the colour part's colour for `index`, with the variation of its cycle. */
-function colorPartColor(part: ChartColorPart, index: number): ColorDefinition | undefined {
+/**
+ * The brightness ramp of the linear methods. MS-ODRAWXML 2.8.4.2 specifies the colour selection and that
+ * brightness progresses with index/count (reversed for the *Reversed methods) but gives no formula: this
+ * symmetric lumMod/lumOff ramp, darker (-LINEAR_SPREAD) to lighter (+LINEAR_SPREAD) across the objects, is an
+ * APPROXIMATION, not verified against Office.
+ */
+export const LINEAR_SPREAD = 0.5
+function linearBrightness(index: number, count: number, reversed: boolean): Transform[] {
+  const progress = count > 1 ? Math.min(index, count - 1) / (count - 1) : 0.5
+  const b = Math.round(((reversed ? 1 - progress : progress) * 2 - 1) * LINEAR_SPREAD * 100000)
+  return b < 0 ? [t('lumMod', 100000 + b)] : b > 0 ? [t('lumMod', 100000 - b), t('lumOff', b)] : []
+}
+
+/**
+ * Level 2: the colour part's colour for `index` of `count` objects (MS-ODRAWXML 2.8.4.2): `withinLinear` takes the
+ * first colour for every object, `acrossLinear` the colour modulo the list, both with the brightness ramp above
+ * (the *Reversed methods reverse it); `cycle` and unknown methods (2.8.4.1) cycle with the part's variations.
+ */
+function colorPartColor(part: ChartColorPart, index: number, count: number): ColorDefinition | undefined {
   if (!part.colors.length) return undefined
-  const n = part.colors.length, color = part.colors[index % n]
+  const n = part.colors.length
+  const linear = /^(within|across)Linear(Reversed)?$/.exec(part.method)
+  if (linear) {
+    const color = linear[1] === 'within' ? part.colors[0] : part.colors[index % n]
+    return { ...color, transforms: [...color.transforms, ...linearBrightness(index, count, Boolean(linear[2]))] }
+  }
+  const color = part.colors[index % n]
   const variation = part.variations.length ? part.variations[Math.floor(index / n) % part.variations.length] : []
   return { ...color, transforms: [...color.transforms, ...variation] }
 }
@@ -169,7 +193,7 @@ export function resolveSeriesColor(options: SeriesColorOptions): string {
   const { theme, parts } = options
   const index = Number.isSafeInteger(options.index) && options.index >= 0 ? options.index : 0
   const count = options.count ?? index + 1
-  const below = (): ColorDefinition => (parts?.color && colorPartColor(parts.color, index)) || styleColor(index, count, options.styleId)
+  const below = (): ColorDefinition => (parts?.color && colorPartColor(parts.color, index, count)) || styleColor(index, count, options.styleId)
   const entry = options.line ? parts?.style?.dataPointLine ?? parts?.style?.dataPoint : parts?.style?.dataPoint
   if (entry && (entry.color || typeof entry.styleColor === 'number')) {
     // The styleClr colour (an index into the colour part, or auto) is the entry's phClr.

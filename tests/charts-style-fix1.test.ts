@@ -23,6 +23,7 @@ import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { parseChartPart } from '../src/charts/dataPrecedence'
 import { paintMarker, type MarkerSymbol } from '../src/charts/markers'
+import { resolveSeriesColor } from '../src/charts/style'
 
 const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart', A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const CS = 'http://schemas.microsoft.com/office/drawing/2012/chartStyle'
@@ -442,5 +443,37 @@ describe('A4a fix round 2', () => {
       expect(result.kind).toBe('refused')
       expect(used).toBe(0)
     })
+  })
+})
+
+describe('A4a fix round 3: linear colour methods (MS-ODRAWXML 2.8.4.2)', () => {
+  const part = (method: string) => ({ color: { method, colors: [{ kind: 'srgb' as const, value: 'FF0000', transforms: [] }, { kind: 'srgb' as const, value: '00FF00', transforms: [] }], variations: [[], [{ name: 'lumMod', value: '50000' }]] } })
+  const rgb = (hex: string) => [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16))
+  const lum = (hex: string) => { const [r, g, b] = rgb(hex); return Math.max(r, g, b) + Math.min(r, g, b) }
+  const colors = (method: string, count: number) => Array.from({ length: count }, (_, index) => resolveSeriesColor({ index, count, parts: part(method) }))
+  it('withinLinear: every object takes the first colour, brightness rising with index/count', () => {
+    const within = colors('withinLinear', 3)
+    // Index 1 of 3 is red (a shade or tint of FF0000), never green.
+    for (const hex of within) { const [r, g, b] = rgb(hex); expect(r).toBeGreaterThan(g); expect(g).toBe(b) }
+    expect(lum(within[0])).toBeLessThan(lum(within[1]))
+    expect(lum(within[1])).toBeLessThan(lum(within[2]))
+  })
+  it('acrossLinear: the colour is chosen modulo the list, brightness rising with index/count', () => {
+    const across = colors('acrossLinear', 4)
+    const hue = (hex: string) => { const [r, g] = rgb(hex); return r > g ? 'red' : 'green' }
+    expect(across.map(hue)).toEqual(['red', 'green', 'red', 'green'])
+    expect(lum(across[0])).toBeLessThan(lum(across[2]))
+    expect(lum(across[1])).toBeLessThan(lum(across[3]))
+  })
+  it('reversed variants reverse the progression', () => {
+    expect(colors('withinLinearReversed', 3)).toEqual(colors('withinLinear', 3).reverse())
+    const across = colors('acrossLinear', 4), reversed = colors('acrossLinearReversed', 4)
+    expect(reversed.map(h => rgb(h)[0] > rgb(h)[1])).toEqual(across.map(h => rgb(h)[0] > rgb(h)[1]))
+    expect(lum(reversed[0])).toBeGreaterThan(lum(reversed[2]))
+    expect(lum(reversed[1])).toBeGreaterThan(lum(reversed[3]))
+  })
+  it('an unknown method cycles with the part variations', () => {
+    expect(colors('somethingNew', 3)).toEqual(['FF0000', '00FF00', srgb('FF0000', ['lumMod', 50000])])
+    expect(colors('cycle', 3)).toEqual(colors('somethingNew', 3))
   })
 })
