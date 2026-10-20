@@ -663,7 +663,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     }
     const fontPx = model.fontSizePt * 96 / 72
     // An overlaid title or legend (spec 5.10) takes no space and is painted over the plot, after it.
-    if (model.title && !model.titleOverlay) paintTitle(ctx, model, layout, fontPx, familyCss)
+    if (model.title && !model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)
     if (!model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
     const area = layout.area
     if (area.w > 8 && area.h > 8) {
@@ -673,7 +673,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
       paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
     }
     if (model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
-    if (model.title && model.titleOverlay) paintTitle(ctx, model, layout, fontPx, familyCss)
+    if (model.title && model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }
 }
 let paints = 0

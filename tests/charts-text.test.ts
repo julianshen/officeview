@@ -12,6 +12,7 @@ import { parseXlsxChart } from '../src/charts/parse'
 import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart, type ChartLayout } from '../src/charts/layout'
 import { createChartWorkspace } from '../src/charts/workspace'
+import { pendingLines } from '../src/charts/fill'
 import { displayView } from '../src/charts/display'
 import { categoryTiers, readCategoryLevels, CHART_CATEGORY_LEVEL_UNREADABLE } from '../src/charts/categories'
 import { getChildren, type XmlNode } from '../src/core/xml'
@@ -455,6 +456,93 @@ describe('charts-text (Task A4b fix round 1)', () => {
       expect(model.categoryLevels).toBeUndefined()
       expect(model.diagnostics?.some(d => d.code === CHART_CATEGORY_LEVEL_UNREADABLE)).toBe(true)
       expect(model.categories).toEqual(['Q1', 'Q2', 'Q1', 'Q2'])
+    }
+  })
+})
+
+describe('charts-text (Task A4b fix round 2)', () => {
+  it('I1 residual: unordered levels build only bounded valid entries, never per-source-point temporaries', () => {
+    // Two valid labels in descending order among 10,000 invalid indices (past the 2 categories).
+    const pts = `<pt idx="1"><v>Second</v></pt>${Array.from({ length: 10000 }, (_, k) => `<pt idx="${5 + k}"><v>x</v></pt>`).join('')}<pt idx="0"><v>First</v></pt>`
+    const cat = parseXmlOrdered(`<cat><multiLvlStrRef><multiLvlStrCache><ptCount val="2"/><lvl><pt idx="0"><v>a</v></pt><pt idx="1"><v>b</v></pt></lvl><lvl>${pts}</lvl></multiLvlStrCache></multiLvlStrRef></cat>`)
+    // Record the largest array any map/filter/slice/from call produces while the level is read.
+    const proto = Array.prototype as unknown as Record<string, (...a: unknown[]) => unknown>
+    const names = ['map', 'filter', 'slice', 'concat'] as const, saved = names.map(n => proto[n])
+    const from = Array.from
+    let largest = 0
+    names.forEach((n, i) => { proto[n] = function (this: unknown[], ...a: unknown[]) { const r = saved[i].apply(this, a) as unknown[]; largest = Math.max(largest, r.length); return r } })
+    Array.from = ((...a: Parameters<typeof Array.from>) => { const r = from(...a); largest = Math.max(largest, r.length); return r }) as typeof Array.from
+    let charged = 0, levels
+    try { levels = readCategoryLevels(cat, 2, b => { charged += b }, { truncated: false }, 255) } finally { names.forEach((n, i) => { proto[n] = saved[i] }); Array.from = from }
+    expect(largest).toBeLessThan(100)
+    expect(levels!.map(l => ({ starts: [...l.starts], labels: l.labels }))).toEqual([{ starts: [0, 1], labels: ['First', 'Second'] }])
+    // The admission covers what is built: the retained level and the two-entry sort workspace only.
+    expect(charged).toBeLessThan(1024)
+  })
+
+  it('I2 residual: a first line that does not fit half the chart is omitted; the plot never goes negative', () => {
+    const big = '<title><tx><rich><bodyPr/><p><r><rPr sz="7200"/><t>Huge</t></r></p><p><r><t>Second</t></r></p></rich></tx></title>'
+    const small = paint(parse(space(bars(three) + axes(), big)), 400, 100)
+    expect(small.text('Huge')).toHaveLength(0)
+    expect(small.text('Second')).toHaveLength(0)
+    expect(small.layout.diagnostics.some(d => d.code === 'chart-title-truncated')).toBe(true)
+    expect(small.layout.area.h).toBeGreaterThan(0)
+    expect(small.layout.plot.h).toBeGreaterThan(0)
+    // The same title fits in a tall chart (both lines drawn).
+    const tall = paint(parse(space(bars(three) + axes(), big)), 400, 400)
+    expect(tall.text('Huge')).toHaveLength(1)
+    expect(tall.text('Second')).toHaveLength(1)
+    expect(tall.layout.title.h).toBeLessThanOrEqual(400 / 2)
+    // A plain title in a very short chart is omitted the same way.
+    const plain = paint(parse(space(bars(three) + axes(), '<title><tx><rich><p><r><t>Plain</t></r></p></rich></tx></title>')), 400, 44)
+    expect(plain.text('Plain')).toHaveLength(0)
+    expect(plain.layout.area.h).toBeGreaterThanOrEqual(0)
+  })
+
+  it('I3 residual: a single varyColors series lists and deletes legend entries by point index', () => {
+    const vary = (family: string, legend: string) => {
+      const series = `<ser><idx val="7"/><order val="0"/><tx><v>S7</v></tx><cat>${strLit(['A', 'B', 'C'])}</cat><val>${lit([1, 2, 3])}</val></ser>`
+      const group = family === 'bar' ? `<barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="1"/>${series}${AX}</barChart>` : `<lineChart><grouping val="standard"/><varyColors val="1"/>${series}${AX}</lineChart>`
+      return paint(parse(space(group + axes(), undefined, legend)))
+    }
+    const names = (p: ReturnType<typeof paint>) => p.texts.map(t => t.text).filter(t => /^(A|B|C|S7)$/.test(t))
+    const legend = (idx?: number) => `<legend><legendPos val="r"/>${idx === undefined ? '' : `<legendEntry><idx val="${idx}"/><delete val="1"/></legendEntry>`}</legend>`
+    for (const family of ['bar', 'line']) {
+      const all = vary(family, legend())
+      // Category axis labels A, B, C plus the legend's A, B, C: no series entry.
+      expect(names(all).filter(t => t === 'S7'), family).toEqual([])
+      expect(names(all).filter(t => t === 'B'), family).toHaveLength(2)
+      const del = vary(family, legend(1))
+      expect(names(del).filter(t => t === 'B'), family).toHaveLength(1)
+      expect(names(del).filter(t => t === 'A'), family).toHaveLength(2)
+      // The series c:idx is not a point: nothing is deleted.
+      expect(names(vary(family, legend(7))).filter(t => t === 'C'), family).toHaveLength(2)
+      // Each entry's swatch is its point's colour: the legend shows the second accent (point 1).
+      expect(all.count('ED7D31', all.layout.legend, 12), family).toBeGreaterThan(20)
+    }
+  })
+
+  it('R1: paged acquisition reads only the outer levels the fill keeps (resident and paged agree)', async () => {
+    // A vertical reference of 20 columns (19 outer levels), each outer level with one label at row 1.
+    const letters = 'ABCDEFGHIJKLMNOPQRST'.split('')
+    const cells = [
+      ...letters.slice(0, 19).map((c, k) => ({ ref: `${c}1`, v: `L${19 - k}` })),
+      ...Array.from({ length: 40 }, (_, r) => ({ ref: `T${r + 1}`, v: `I${r}` })),
+      ...Array.from({ length: 40 }, (_, r) => ({ ref: `U${r + 1}`, v: r + 1 })),
+    ]
+    const xml = space(bars(`<ser><idx val="0"/><order val="0"/><tx><v>S</v></tx><cat><multiLvlStrRef><f>Styled!$A$1:$T$40</f></multiLvlStrRef></cat><val><numRef><f>Styled!$U$1:$U$40</f></numRef></val></ser>`) + axes())
+    const parsed = parse(xml)
+    expect(parsed.categoryMultiLevel).toBe(true)
+    const lines = pendingLines([{ content: { kind: 'xlsxChart', chart: parsed } as never }], 'Styled')
+    // The value line, the innermost category line and eight outer lines: never the 11 levels the fill cannot keep.
+    expect(lines).toHaveLength(1 + 1 + 8)
+    expect(lines.reduce((n, l) => n + l.count, 0)).toBe(10 * 40)
+    const [resident, paged] = await residentAndPaged(await chartWorkbookBytes(xml, { cells }))
+    for (const model of [resident, paged]) {
+      expect(model.categoryLevels).toHaveLength(8)
+      expect(model.categoryLevels!.map(l => l.labels)).toEqual(Array.from({ length: 8 }, (_, k) => [`L${k + 1}`]))
+      expect(model.diagnostics?.some(d => d.code === 'chart-category-levels-truncated')).toBe(true)
+      expect(model.truncated).toBe(true)
     }
   })
 })

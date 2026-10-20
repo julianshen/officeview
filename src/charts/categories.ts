@@ -33,33 +33,41 @@ const child = (node: XmlNode | undefined, name: string) => getChildren(node, nam
  */
 export function readCategoryLevels(cat: XmlNode | undefined, count: number, charge: (bytes: number) => void, cut: { truncated: boolean }, labelLimit: number): ChartCategoryLevel[] | undefined {
   if (!count || !child(cat, 'multiLvlStrRef')) return undefined
-  const lvls = getChildren(child(child(cat, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl')
+  // The source lists are read in place (never copied): only bounded, admitted storage is built.
+  const lvls = items(child(child(cat, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl')
   const out: ChartCategoryLevel[] = []
-  const index = (pt: XmlNode) => { const idx = Number(attrs(pt).idx); return Number.isInteger(idx) && idx >= 0 && idx < count ? idx : -1 }
+  const index = (pt: unknown) => { if (!pt || typeof pt !== 'object') return -1; const idx = Number(attrs(pt as XmlNode).idx); return Number.isInteger(idx) && idx >= 0 && idx < count ? idx : -1 }
+  const label = (pt: unknown) => textOf(child(pt as XmlNode, 'v'))
   let total = 0
   for (let l = 1; l < lvls.length; l++) {
     if (out.length >= CHART_CATEGORY_LEVELS) { cut.truncated = true; break }
     // Sizing walk: how many labels (an upper bound when indices repeat), their text, and whether indices ascend.
-    const pts = getChildren(lvls[l], 'pt')
+    const level = lvls[l], pts = level && typeof level === 'object' ? items(level as XmlNode, 'pt') : []
     let n = 0, units = 0, ascending = true, last = -1, over = false
-    for (const pt of pts) {
-      const idx = index(pt)
+    for (let k = 0; k < pts.length; k++) {
+      const idx = index(pts[k])
       if (idx < 0) continue
       if (idx <= last) ascending = false
       last = Math.max(last, idx)
       if (total + ++n > CHART_CATEGORY_TIER_LABELS) { over = true; break }
-      units += Math.min(textOf(child(pt, 'v')).length, labelLimit)
+      units += Math.min(label(pts[k]).length, labelLimit)
     }
     if (over) { cut.truncated = true; break }
+    // Retained storage, plus for unordered indices the sort workspace (a key and a source position per valid label).
     charge(LEVEL_BYTES + n * (START_BYTES + LABEL_BYTES) + units * 2 + (ascending ? 0 : n * SORT_BYTES))
     const starts = new Uint32Array(n), labels: string[] = []
     const keep = (text: string) => { if (text.length > labelLimit) cut.truncated = true; return text.slice(0, labelLimit) }
     if (ascending) {
-      for (const pt of pts) { const idx = index(pt); if (idx >= 0) { starts[labels.length] = idx; labels.push(keep(textOf(child(pt, 'v')))) } }
+      for (let k = 0; k < pts.length; k++) { const idx = index(pts[k]); if (idx >= 0) { starts[labels.length] = idx; labels.push(keep(label(pts[k]))) } }
     } else {
-      // Out of order or repeated indices: sorted, the first label of an index kept.
-      const order = pts.map((pt, k) => [index(pt), k] as const).filter(([idx]) => idx >= 0).sort((a, b) => a[0] - b[0] || a[1] - b[1])
-      for (const [idx, k] of order) if (!labels.length || starts[labels.length - 1] !== idx) { starts[labels.length] = idx; labels.push(keep(textOf(child(pts[k], 'v')))) }
+      // Out of order or repeated indices: valid labels only, sorted by (index, source order), the first of an index kept.
+      const keys = new Float64Array(n), positions = new Uint32Array(n)
+      for (let k = 0, v = 0; k < pts.length && v < n; k++) { const idx = index(pts[k]); if (idx >= 0) { keys[v] = idx * KEY_SPAN + v; positions[v] = k; v++ } }
+      keys.sort()
+      for (const key of keys) {
+        const idx = Math.floor(key / KEY_SPAN), v = key - idx * KEY_SPAN
+        if (!labels.length || starts[labels.length - 1] !== idx) { starts[labels.length] = idx; labels.push(keep(label(pts[positions[v]]))) }
+      }
     }
     out.push({ starts: labels.length === n ? starts : starts.slice(0, labels.length), labels })
     total += labels.length
@@ -67,6 +75,13 @@ export function readCategoryLevels(cat: XmlNode | undefined, count: number, char
   // Levels without any label draw nothing; a source whose outer levels are all empty is single-level.
   while (out.length && !out[out.length - 1].labels.length) out.pop()
   return out.length ? out : undefined
+}
+/** A sort key's ordinal span (more than the 4,096 labels a level can keep). */
+const KEY_SPAN = 8192
+/** A node's children of one name, read in place: the parser's own array (never copied), or a one-element list. */
+function items(node: XmlNode | undefined, name: string): readonly unknown[] {
+  const value = node?.[name]
+  return Array.isArray(value) ? value : value === undefined || value === null ? [] : [value]
 }
 
 /** Diagnostics of multi-level categories filled from worksheet cells (spec 5.9, 6.6). */

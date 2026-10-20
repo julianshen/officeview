@@ -33,6 +33,8 @@ export interface ChartLayout {
   graph: AxisGraph; view: DisplayView; area: Box; plot: Box; title: Box; legend: Box
   /** Title lines when the title has runs (absent: the single plain title line). */
   titleLines?: TitleLine[]
+  /** The title does not fit in half the chart height and is not drawn (spec 5.10 placement bound). */
+  titleOmitted?: true
   /** Category-axis tiers by axis id, innermost first (multi-level categories). */
   tiers: Map<string, CategoryTier[]>
   readonly retainedBytes: number
@@ -75,14 +77,17 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
   return Array.from({ length: view.slots }, (_, i) => view.category(i) ?? '')
 }
 /**
- * The legend's entries (shared by layout and paint). `legendEntry/delete` removes an entry by its index: a series
- * entry by the series' `c:idx`; a point legend (pie and doughnut, whose single series varies its colours) by the
- * point index.
+ * The legend's entries (shared by layout and paint). A point legend (pie and doughnut, and any chart whose single
+ * series has varyColors on) lists the points (categories); otherwise the series. `legendEntry/delete` removes a point
+ * entry by its point index and a series entry by the series' `c:idx`.
  */
 export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string }> {
   const group = model.groups[0], deleted = model.legendDeleted
-  if (group?.family === 'pie' || group?.family === 'doughnut') {
-    const s = view.groupSeries(0)[0]?.series
+  // Point entries: pie and doughnut, and any chart whose single series varies its colours (varyColors).
+  const only = model.groups.reduce((n, g) => n + g.series.length, 0) === 1 ? model.groups.findIndex(g => g.series.length === 1) : -1
+  const pointGroup = group?.family === 'pie' || group?.family === 'doughnut' ? 0 : only >= 0 && model.groups[only].varyColors ? only : -1
+  if (pointGroup >= 0) {
+    const s = view.groupSeries(pointGroup)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => i).filter(i => !hiddenAt(deleted, view.source(i))).map(i => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
   }
   if (!deleted?.length) return view.series.map(({ series }) => ({ name: series.name, color: series.color }))
@@ -291,18 +296,25 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
       return { runs: measured, px: runs.length ? Math.max(...measured.map(r => r.px)) : titlePx, width: measured.reduce((n, r) => n + r.width, 0), ascent }
     }) : undefined
     // The title band never takes more than half the chart area (at least its first line): later lines are omitted.
+    // The title band never takes more than half the chart area: lines that do not fit are omitted, the first line
+    // too (then no title is drawn), each omission with a diagnostic. The plot keeps the rest, never a negative height.
+    const room = area.h / 2
+    let titleShown = Boolean(model.title)
     if (titleLinesOf) {
-      const room = Math.max(titleLinesOf[0].px, area.h / 2 - 6)
-      let kept = 1
-      while (kept < titleLinesOf.length && titleHeight(titleLinesOf.slice(0, kept + 1)) <= room) kept++
+      let kept = 0
+      while (kept < titleLinesOf.length && titleHeight(titleLinesOf.slice(0, kept + 1)) + 6 <= room) kept++
       if (kept < titleLinesOf.length) {
         titleLinesOf = titleLinesOf.slice(0, kept)
-        diagnostics.push({ code: 'chart-title-truncated', reason: 'Title lines beyond half the chart height are not drawn' })
+        diagnostics.push({ code: 'chart-title-truncated', reason: kept ? 'Title lines beyond half the chart height are not drawn' : 'The title does not fit in half the chart height and is not drawn' })
       }
+      if (!kept) titleShown = false
+    } else if (titleShown && titlePx + 6 > room) {
+      titleShown = false
+      diagnostics.push({ code: 'chart-title-truncated', reason: 'The title does not fit in half the chart height and is not drawn' })
     }
-    const titleBand = (titleLinesOf ? titleHeight(titleLinesOf) : titlePx) + 6
-    const title = resolveManualLayout(model.titleLayout, { ...area, h: titleBand }, w, h, diagnostics)
-    if (model.title && !model.titleOverlay) area = { ...area, y: area.y + titleBand, h: area.h - titleBand }
+    const titleBand = titleShown ? (titleLinesOf ? titleHeight(titleLinesOf) : titlePx) + 6 : 0
+    const title = resolveManualLayout(model.titleLayout, { ...area, h: titleBand || titlePx + 6 }, w, h, diagnostics)
+    if (titleShown && !model.titleOverlay) area = { ...area, y: area.y + titleBand, h: area.h - titleBand }
     let legendAuto = { ...area }
     const entriesForLegend = legendEntries(model, view), line = fontPx + 6
     if (model.legend && entriesForLegend.length) {
@@ -378,7 +390,7 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     }
     const labelIndices = new Map([...labels].map(([id, values]) => [id, new Set(values.map(v => v.index))]))
     for (const label of model.preparedAxes?.dataLabels??[]) for(const run of label.runs.length?label.runs:[{text:label.text}]) width(run.text,labelFont(run,fontPx,family))
-    const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics, tiers: tierMap, ...(titleLinesOf ? { titleLines: titleLinesOf } : {}) }
+    const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics, tiers: tierMap, ...(titleLinesOf ? { titleLines: titleLinesOf } : {}), ...(model.title && !titleShown ? { titleOmitted: true as const } : {}) }
     return { ...data, retainedBytes: retainedBytes(data, widths), width: cachedWidths(widths) }
  }
 

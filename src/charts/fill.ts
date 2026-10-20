@@ -11,7 +11,7 @@ import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
-import { fillCategoryLevels } from './categories'
+import { CHART_CATEGORY_LEVELS, fillCategoryLevels } from './categories'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -441,7 +441,8 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
       // A multi-level reference's outer lines are read too (its outer levels).
       if (chart.categoryMultiLevel && chart.categoryPending && !chart.categoryPending.definedName) {
         const range = chart.categoryPending, inner = chartLine(range, ownerSheet, true)
-        for (let level = 1; level < outerLevelCount(range, inner); level++) out.push({ ...inner, fixed: inner.fixed - level })
+        // Only the outer levels the fill can keep are acquired (the fill reports the excess from the full range).
+        for (let level = 1; level < Math.min(outerLevelCount(range, inner), CHART_CATEGORY_LEVELS + 1); level++) out.push({ ...inner, fixed: inner.fixed - level })
       }
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
