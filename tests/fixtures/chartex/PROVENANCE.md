@@ -9,18 +9,34 @@ They are untrusted test data. Nothing in them is executed.
 - **Source:** LibreOffice core, `chart2/qa/extras/data/`, on GitHub at
   <https://github.com/LibreOffice/core>. Each file is pinned to a full commit
   SHA (see the table), never to `master`.
-- **Licence:** MPL-2.0 is recorded, under LibreOffice project policy. Contributors
-  license their work under MPL-2.0 or dual MPL-2.0/LGPLv3+, and the repository
-  carries `COPYING.MPL`. The test documents have no per-file header. All of them
-  were committed in 2025–2026 by Kurt Nordback (tdf#165742 chartex series) or
-  Devansh Varshney (histogram import/export).
-  **Needs owner confirmation:** GitHub's licence detector reports the repo as
-  GPL-3.0, because the top-level `COPYING` is the GPLv3 text that covers the
-  combined binary. **The determination is pending.** Nothing in this file settles it.
-  *If* MPL-2.0 is confirmed, MPL-2.0 is a file-level licence, and redistributing
-  these files unmodified next to MIT code would be permitted, provided this
-  notice and the MPL-2.0 terms (<https://mozilla.org/MPL/2.0/>) stay with them.
-  The files must not be modified in place.
+- **Licence: MPL-2.0** (contributed under the MPL-2.0 / LGPLv3+ dual licence;
+  we use them under MPL-2.0). Checked against primary sources on 2026-10-21:
+  - LibreOffice's product licence (`readlicense_oo/license/license.xml`) says the
+    product is made available under MPL-2.0; the repository carries
+    `COPYING.MPL` and `COPYING.LGPL`. GitHub reports the repo as GPL-3.0 only
+    because its detector reads the top-level `COPYING`, which is the GPLv3 text
+    for bundled third-party components. It is not the licence of contributed
+    files.
+  - The files carry no per-file header, so their licence follows the
+    contributors' standing licence statements (TDF wiki,
+    `Development/Developers`):
+    - Kurt Nordback (commits `2dba43e317`, `8cbd028c0b`, `94a1e0c05c`,
+      `996bf74008`, `c84c7b3c81`) commits as `kurt.nordback@collabora.com`. The
+      documents' `docProps/core.xml` creator is Andras Timar, also
+      `@collabora.com`. Both are covered by Collabora's company statement:
+      "All contributions past, present, and future … made to LibreOffice from
+      Collabora are available under the terms the MPL / LGPLv3+"
+      (<https://lists.freedesktop.org/archives/libreoffice/2012-April/030629.html>).
+    - Devansh Varshney (commits `5e836dfec5`, `88550ce19c`; the two histogram
+      files) has an individual statement: "All of my past & future
+      contributions to LibreOffice may be licensed under the MPLv2/LGPLv3+ dual
+      license"
+      (<https://lists.freedesktop.org/archives/libreoffice/2024-January/091510.html>).
+  - None of the fixture commits mentions a third-party (for example Bugzilla)
+    attachment as the source.
+  - MPL-2.0 is a file-level licence. These files are redistributed unmodified
+    next to MIT code, with this notice and the MPL-2.0 terms
+    (<https://mozilla.org/MPL/2.0/>). The files must not be modified in place.
 
 ## How "Office-authored" was checked
 
