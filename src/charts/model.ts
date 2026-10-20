@@ -149,6 +149,8 @@ export interface ChartSeries {
    * points sit in hidden rows or columns (plotVisOnly provenance; spec 5.8, 6.4).
    */
   refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange }
+  /** Roles with neither saved data nor a reference (spec 6.4 precedence 3): unavailable, never blank. */
+  absent?: ChartRole[]
   /**
    * The series feeds an analytic element (a trendline, stdDev/stdErr error bars):
    * its numeric roles are acquired in full up to CHART_ANALYTIC_POINT_LIMIT (spec 7),

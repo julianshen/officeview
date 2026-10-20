@@ -74,10 +74,11 @@ export interface EmbeddedWorkbook {
 export type EmbeddedWorkbookResult =
   | EmbeddedWorkbook
   | { kind: 'unavailable' | 'refused' | 'cancelled'; diagnostic: ChartDiagnostic; limit?: number }
-type Failure = Exclude<EmbeddedWorkbookResult, EmbeddedWorkbook>
+export type EmbeddedFailure = Exclude<EmbeddedWorkbookResult, EmbeddedWorkbook>
+type Failure = EmbeddedFailure
 export type EmbeddedTarget = { kind: 'internal'; path: string } | Failure
 
-const failure = (kind: Failure['kind'], code: string, reason: string, limit?: number): Failure => ({ kind, diagnostic: { code, reason }, ...(limit !== undefined ? { limit } : {}) })
+export const failure = (kind: Failure['kind'], code: string, reason: string, limit?: number): Failure => ({ kind, diagnostic: { code, reason }, ...(limit !== undefined ? { limit } : {}) })
 let reads = 0
 const unavailable = (code: string, reason: string) => failure('unavailable', code, reason) as { kind: 'unavailable'; diagnostic: ChartDiagnostic }
 const CORRUPT = () => failure('unavailable', 'chart-data-corrupt', "The chart's embedded workbook could not be read")
@@ -85,7 +86,7 @@ const CANCELLED = () => failure('cancelled', 'chart-cancelled', 'Reading the cha
 const REFUSED = () => failure('refused', 'chart-refused', 'This chart needs more memory than is available for charts')
 
 /** A package-internal part path, or undefined when the target leaves the package or is not a relative/absolute part reference. */
-function internalPath(owner: string, target: string): string | undefined {
+export function internalPath(owner: string, target: string): string | undefined {
   let decoded: string
   try { decoded = decodeURIComponent(target) } catch { return undefined }
   if (/[\\\0?#]/.test(decoded) || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(decoded) || decoded.startsWith('//')) return undefined
@@ -210,7 +211,7 @@ const rawEntry = (pkg: OfficePackage, path: string): JSZip.JSZipObject | null =>
 /** One embedded read at a time per document: the queue is keyed by the document's chart facet. */
 const lanes = new WeakMap<object, Promise<void>>()
 /** True once `p` settles, false as soon as `signal` aborts (whichever is first). */
-function untilAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<{ value: T } | undefined> {
+export function untilAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<{ value: T } | undefined> {
   if (!signal) return p.then(value => ({ value }))
   if (signal.aborted) return Promise.resolve(undefined)
   return new Promise<{ value: T } | undefined>((resolve, reject) => {

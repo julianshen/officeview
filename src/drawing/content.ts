@@ -315,12 +315,9 @@ export interface ContentLoadAdapters<Paragraph, Text> {
 export function defaultParseChart(pkg: OfficePackage, theme: ThemeContext, chartContext?: ChartDocumentContext): (root: XmlNode, path: string) => Promise<ChartResult<XlsxChartModel>> {
   return async (root, path) => {
     // A malformed chart part or a failed engine load never fails the document: it reads as unsupported (spec 6.3).
-    let chart: XlsxChartModel | undefined, charts: ChartModule | undefined
-    try { charts = await loadChartModule(); chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
-    if (chart && !chart.unsupported) return { kind: 'native', model: chart }
-    // A discarded model returns its storage to the chart workspace; the card is a new, storage-free model.
-    if (chart) charts?.releaseChartModel(chart)
-    return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
+    // The engine shapes the representation and applies DOCX/PPTX data precedence (embedded workbook; spec 6.4).
+    try { const charts = await loadChartModule(); return await charts.parseChartPart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme), charts.parseXlsxChart) }
+    catch { return { kind: 'unsupported', reason: 'This chart could not be read' } }
   }
 }
 /** Caller adapters spread over the defaults: a caller passing only text adapters still gets the default `parseChart`. */
