@@ -152,8 +152,21 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     if (!owner.workspace.reserve(bytes, fillTag)) throw new ChartRefusal()
     charged.bytes += bytes
   }
+  // A label or name: its input-derived bound (the formatter's capped output) is admitted before any text is
+  // formatted or materialized; the charge is then trimmed to the text actually retained.
+  const labelTag = owner ? `${owner.tag}:label` : ''
+  const label = (produce: () => string, keepEmpty = true): string => {
+    if (!owner) return produce()
+    if (!owner.workspace.reserve(LABEL_BOUND_BYTES, labelTag)) throw new ChartRefusal()
+    try {
+      const text = produce()
+      const kept = text || keepEmpty ? stringBytes(text) : 0
+      if (kept) { owner.workspace.transfer(labelTag, fillTag, Math.min(kept, LABEL_BOUND_BYTES)); charged.bytes += Math.min(kept, LABEL_BOUND_BYTES) }
+      return text
+    } finally { owner.workspace.release(labelTag) }
+  }
   try {
-    const next = fillModel(model, ownerSheet, lookup, hidden, charge)
+    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label)
     if (owner) {
       owner.workspace.transfer(fillTag, owner.tag, charged.bytes)
       if (chartModelOwner(model)) succeedChartModel(model, next); else adoptChartModel(next, owner)
@@ -167,7 +180,10 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     return refused
   }
 }
-function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void): ChartModel {
+/** The bound admitted before a label is built: the formatter's capped output (CHART_LABEL_LIMIT + 1 units,
+ * one past the limit marks truncation), which also bounds the retained label. */
+const LABEL_BOUND_BYTES = stringBytes(' '.repeat(CHART_LABEL_LIMIT + 1))
+function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: () => string, keepEmpty?: boolean) => string): ChartModel {
   let truncated = model.truncated ?? false
   const sheetOf = (range: ChartRange) => range.sheet ?? ownerSheet
   /** A role's own provenance: the sorted indices of its cells in hidden rows or columns (admitted, then built). */
@@ -188,10 +204,12 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     const labels: string[] = []
     for (let i = 0; i < line.count; i++) {
       const at = linePoint(line, i)
-      let text = asText(lookup(line.sheet, at.row, at.col, true))
-      if (text.length > CHART_LABEL_LIMIT) { truncated = true; text = text.slice(0, CHART_LABEL_LIMIT) }
-      charge(stringBytes(text))
-      labels.push(text)
+      labels.push(label(() => {
+        const text = asText(lookup(line.sheet, at.row, at.col, true))
+        if (text.length <= CHART_LABEL_LIMIT) return text
+        truncated = true
+        return text.slice(0, CHART_LABEL_LIMIT)
+      }))
     }
     categories = labels
     categoryHidden = provenance(line)
@@ -209,7 +227,7 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
         truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
-        const out = new PointWriter(line.count)
+        const out = new PointWriter(line.count, false, charge)
         for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }) }
         return withHidden(out.done(), provenance(line))
       }
@@ -220,9 +238,13 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       if (pending.xValues) next.xValues = fill(pending.xValues)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
       if (pending.name) {
-        const full = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0, true)), text = full.slice(0, CHART_LABEL_LIMIT)
-        if (full.length > CHART_LABEL_LIMIT) truncated = true
-        if (text) { charge(stringBytes(text)); next.name = text }
+        const name = pending.name
+        const text = label(() => {
+          const full = asText(lookup(sheetOf(name), name.r0, name.c0, true))
+          if (full.length > CHART_LABEL_LIMIT) truncated = true
+          return full.slice(0, CHART_LABEL_LIMIT)
+        }, false)
+        if (text) next.name = text
       }
       if (next.pointColors && next.values.length > next.pointColors.length) {
         const first = next.pointColors

@@ -128,7 +128,7 @@ function cacheExtent(node: XmlNode | undefined, limit: number): { length: number
  */
 function numericCache(node: XmlNode | undefined, extent: { length: number; formats: boolean }, charge: (bytes: number) => void): ChartPoints {
   charge(pointBytes(extent.length, extent.formats))
-  const out = new PointWriter(extent.length, extent.formats)
+  const out = new PointWriter(extent.length, extent.formats, charge)
   for (const pt of getChildren(cacheOf(node), 'pt')) {
     const index = finite(attrs(pt).idx)
     if (index === undefined || index < 0 || !Number.isInteger(index) || index >= extent.length) continue

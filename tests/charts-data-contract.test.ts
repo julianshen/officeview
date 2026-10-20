@@ -23,6 +23,10 @@ import { documentChartContext } from '../src/charts/context'
 import * as pages from '../src/xlsx/storage/sourcePages'
 import { chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
 import { list, pts } from './helpers/chart-points'
+import v8 from 'node:v8'
+import vm from 'node:vm'
+v8.setFlagsFromString('--expose_gc')
+const gc = vm.runInNewContext('gc') as () => void
 
 // Every chart workspace the engine creates is recorded with its parent's charges (D0 ownership).
 const workspaces = vi.hoisted(() => [] as Array<{ workspace: { used: number; reserve(bytes: number, tag: string): boolean }; parent: Array<{ op: 'reserve' | 'release'; tag: string; bytes: number; ok: boolean }> | undefined }>)
@@ -356,6 +360,68 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     expect(roomy.used).toBe(0)
   })
 
+  it('retained format and error-code tables are admitted before they are retained (R1)', () => {
+    // A one-point cache whose point carries a 10,000-character format code.
+    const fmt = '0'.repeat(10_000)
+    const xmlFmt = space(`<c:lineChart><c:ser><c:tx><c:v>S</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0" formatCode="${fmt}"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser></c:lineChart>`)
+    const workspace = createChartWorkspace('desktop')
+    const model = charts.parseXlsxChart(parseXmlOrdered(xmlFmt), undefined, { profile: 'desktop', workspace } as never)!
+    expect(list(model.groups[0].series[0].values)).toEqual([{ state: 'value', v: 5, fmt }])
+    // The retained charge is the role's whole storage, its format table included.
+    expect(workspace.used).toBe(charts.storageBytes(model.groups[0].series[0].values))
+    expect(workspace.used).toBeGreaterThan(20_000)
+    // Room for the typed storage but not the format string: refused before the format is retained, nothing held.
+    let held = 0
+    const tight = createChartWorkspace('desktop', { reserve: bytes => { if (held + bytes > 1000) return false; held += bytes; return true }, release: (_t, bytes) => { held -= bytes } })
+    const refused = charts.parseXlsxChart(parseXmlOrdered(xmlFmt), undefined, { profile: 'desktop', workspace: tight } as never)!
+    expect(refused.refused).toBe(true)
+    expect(tight.used).toBe(0)
+    expect(held).toBe(0)
+    // An unknown error code from a cell goes to the role's code table: admitted too.
+    const pending = charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:val>${ref('S!$A$1:$A$2')}</c:val></c:ser></c:lineChart>`)), undefined)!
+    const codes = createChartWorkspace('desktop')
+    const filled = charts.fillChartRanges(pending, 'S', (_s, r) => ({ value: '#WEIRD!', error: r ? '#OTHER!' : '#WEIRD!' }), { workspace: codes })
+    expect(filled.groups[0].series[0].values.codes).toEqual(['#WEIRD!', '#OTHER!'])
+    expect(codes.used).toBe(charts.storageBytes(filled.groups[0].series[0].values))
+  })
+
+  it('category labels and series names are admitted by an input bound before any text is built, then trimmed (R3)', () => {
+    const cached = '<c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit>'
+    const withCats = charts.parseXlsxChart(parseXmlOrdered(space(`<c:barChart><c:ser><c:cat>${strRef('S!$B$1:$B$2')}</c:cat><c:val>${cached}</c:val></c:ser></c:barChart>`)), undefined)!
+    const withName = charts.parseXlsxChart(parseXmlOrdered(space(`<c:barChart><c:ser><c:tx>${strRef('S!$C$1')}</c:tx><c:val>${cached}</c:val></c:ser></c:barChart>`)), undefined)!
+    for (const model of [withCats, withName]) {
+      const refusing = createChartWorkspace('desktop', { reserve: () => false, release: () => {} })
+      const texts = vi.fn((_s: string, _r: number, _c: number, text: boolean) => ({ value: 'label', ...(text ? { text: 'label' } : {}) }))
+      const refused = charts.fillChartRanges(model, 'S', texts, { workspace: refusing })
+      expect(refused.refused).toBe(true)
+      // No label or name was formatted or materialized.
+      expect(texts.mock.calls.filter(call => call[3]).length).toBe(0)
+      expect(refusing.used).toBe(0)
+      // With room, the charge is trimmed to exactly the retained text.
+      const roomy = createChartWorkspace('desktop')
+      const ok = charts.fillChartRanges(model, 'S', texts, { workspace: roomy })
+      const retained = model === withCats ? ok.categories.reduce((sum, c) => sum + charts.stringBytes(c), 0) : charts.stringBytes(ok.groups[0].series[0].name)
+      expect(model === withCats ? ok.categories : [ok.groups[0].series[0].name]).toEqual(model === withCats ? ['label', 'label'] : ['label'])
+      expect(roomy.used).toBe(retained)
+    }
+  })
+
+  it('an unretained paged reply keeps its chart-facet charge while it lives and returns it once when released (R2)', async () => {
+    const bytes = await workbook(xml, sheet)
+    const h = await pagedSource(bytes)
+    // No pool bound: the reply is the parsed payload itself (never retained).
+    let reply: Awaited<ReturnType<typeof h.read>> | undefined = await h.read({ set: () => true })
+    const document = facet()
+    expect(reply.drawings[0].content?.kind === 'xlsxChart' && (reply.drawings[0].content as { chart: ChartModel }).chart.unsupported).toBeFalsy()
+    expect(document.used).toBeGreaterThan(0)
+    const owned = document.used
+    // Released when the reply is: collected (here) or transferred away and collected.
+    reply = undefined
+    for (let i = 0; i < 20 && document.used; i++) { gc(); await new Promise(resolve => setTimeout(resolve, 10)) }
+    expect(document.used).toBe(0)
+    expect(owned).toBeGreaterThan(0)
+  })
+
   it('the chart sublimit holds across the charts of a paged document: a chart past it is refused, an evicted one returns its room', async () => {
     // Two analytic charts on one sheet, 65,536 points each (576 KiB of storage each, more than a chart read's
     // transient work); the facet has room for one.
@@ -417,7 +483,8 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     // Trees were refunded to the share; the model storage was not refunded (it moved to the pool entry with the payload).
     const modelBytes = shareHeld(log)
     expect(modelBytes).toBeGreaterThan(0)
-    expect(charged.filter(e => e.tag.startsWith('chart-model#')).reduce((sum, e) => sum + e.bytes, 0)).toBe(modelBytes)
+    // (Label bounds are admitted first and trimmed to the retained text, so the net held is at most what was charged.)
+    expect(charged.filter(e => e.tag.startsWith('chart-model#')).reduce((sum, e) => sum + e.bytes, 0)).toBeGreaterThanOrEqual(modelBytes)
     expect(document.used).toBe(modelBytes)
     const peak = Math.max(...sets)
     expect(sets.some((n, i) => i > 0 && n < sets[i - 1])).toBe(true)

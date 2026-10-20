@@ -504,8 +504,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       parsed.chartScope?.handOff()
       const charts = parsed.chartScope ? await loadChartModule() : undefined
       const releaseCharts = () => { if (charts) forEachChart(parsed.drawings.drawings, chart => charts.releaseChartModel(chart)) }
-      // A chart still waiting on another sheet's import is answered, never cached.
-      if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) { releaseCharts(); return parsed.drawings }
+      // A chart still waiting on another sheet's import is answered, never cached. An unretained reply keeps its
+      // charts' facet charge while it lives: it is returned when the reply is released (collected after it is
+      // posted or dropped; charts/own.ts), exactly once.
+      if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) return parsed.drawings
       return this.retainDrawings(parsed.drawings, parsed.workingSet - (parsed.payloadBytes ?? 0) - (parsed.modelBytes ?? 0), memory, releaseCharts)
     } catch (cause) {
       if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
@@ -747,21 +749,23 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * is owned by its pool entry (transferred, never charged twice), so the read's
    * share holds only the outgoing clone beside it: two live allocations. The
    * retained charts keep their document chart-facet charge until the entry ends
-   * (eviction, close); a payload that is not retained releases it at once
-   * (`releaseCharts`): its reply is a transport copy the share holds. */
+   * (eviction, close: `releaseCharts`); a payload that is not retained is the
+   * reply itself and keeps its charge until that reply is released (collected;
+   * charts/own.ts). Each model's charge is returned exactly once. */
   private retainDrawings(result: SheetDrawings, workingSet: number, memory?: DrawingMemory, releaseCharts: () => void = () => {}): SheetDrawings {
     const pool = this.drawingState.pool
-    if (result.completeness !== 'complete' || !pool || pool.closed) { releaseCharts(); return result }
+    if (result.completeness !== 'complete' || !pool || pool.closed) return result
     const bytes = drawingFootprint(result)
     const holder: { entry?: PoolEntry } = {}
     holder.entry = pool.retain(`drawings:${this.stamp.docId}:${this.sheet.sheetId}`, {
       tier: 'rebuildable', bytes, owner: this.sheet.sheetId,
       onRelease: () => { releaseCharts(); if (this.drawingsCache?.entry === holder.entry) this.drawingsCache = undefined },
     }) ?? undefined
-    if (!holder.entry) { releaseCharts(); return result }
+    if (!holder.entry) return result
     // The clone sits beside the retained copy until the reply is sent.
-    // An explicit entry release does not call onRelease: the charts' facet charge is released here too.
-    if (memory && !memory.set(workingSet + bytes)) { holder.entry.release(); releaseCharts(); return result }
+    // The clone cannot be admitted: the entry is dropped (an explicit release does not call onRelease) and the
+    // parsed payload is the reply, keeping its charts' facet charge until it is released.
+    if (memory && !memory.set(workingSet + bytes)) { holder.entry.release(); return result }
     this.drawingsCache = { entry: holder.entry, result, releaseCharts }
     return structuredClone(result)
   }

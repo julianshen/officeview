@@ -31,14 +31,16 @@ export function storageBytes(points: ChartPoints): number {
   return bytes
 }
 
-/** Builds one role's storage in place (the caller admitted `pointBytes(length, formats)` first). */
+/** Builds one role's storage in place. The caller admitted `pointBytes(length, formats)` first; every string
+ * the role's tables retain (a distinct format code, an unknown error code) is admitted through `charge` before
+ * it is retained, so the owner's charge always equals `storageBytes`. */
 export class PointWriter {
   readonly states: Uint8Array
   readonly values: Float64Array
   private formatIndex?: Uint16Array
   private codes?: string[]
   private formats?: string[]
-  constructor(readonly length: number, withFormats = false) {
+  constructor(readonly length: number, withFormats = false, private readonly charge: (bytes: number) => void = () => {}) {
     this.states = new Uint8Array(length)
     this.values = new Float64Array(length)
     if (withFormats) this.formatIndex = new Uint16Array(length)
@@ -48,7 +50,7 @@ export class PointWriter {
     if (fmt && this.formatIndex) {
       const formats = this.formats ??= []
       let k = formats.indexOf(fmt)
-      if (k < 0 && formats.length < 0xfffe) k = formats.push(fmt) - 1
+      if (k < 0 && formats.length < 0xfffe) { this.charge(stringBytes(fmt)); k = formats.push(fmt) - 1 }
       if (k >= 0) this.formatIndex[i] = k + 1
     }
   }
@@ -60,7 +62,7 @@ export class PointWriter {
     if (index === undefined) {
       const codes = this.codes ??= []
       let k = codes.indexOf(text)
-      if (k < 0) k = codes.push(text) - 1
+      if (k < 0) { this.charge(stringBytes(text)); k = codes.push(text) - 1 }
       index = CHART_ERROR_CODES.length + k
     }
     this.states[i] = POINT_ERROR; this.values[i] = index
