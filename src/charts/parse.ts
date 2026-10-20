@@ -20,6 +20,7 @@ import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 import { readCategoryLevels } from './categories'
 import { CHART_TITLE_LINE_LIMIT, CHART_TITLE_RUN_LIMIT, CHART_TITLE_TEXT_LIMIT, CHART_TITLE_TRUNCATED, runsText, titleRuns } from './titles'
 import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
+import { readErrorBars } from './errorBars'
 import { contourGridDiagnostic, contourGridOf } from './families/contour'
 import { readBubbleOptions } from './families/bubble'
 import { readRadarStyle } from './families/radar'
@@ -379,7 +380,8 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
   return { kind: 'cartesian', category: category ?? ids.find(id => id !== value) ?? '', value }
 }
 /** A series feeds an analytic element: a trendline, or stdDev/stdErr error bars (spec 7). */
-const isAnalytic = (ser: XmlNode) => Boolean(child(ser, 'trendline')) || getChildren(ser, 'errBars').some(bars => /^std(Dev|Err)$/.test(val(child(bars, 'errValType')) ?? ''))
+const statisticErrorBars = (ser: XmlNode) => getChildren(ser, 'errBars').some(bars => /^std(Dev|Err)$/.test(val(child(bars, 'errValType')) ?? ''))
+const isAnalytic = (ser: XmlNode) => Boolean(child(ser, 'trendline')) || statisticErrorBars(ser)
 const flag = (node: XmlNode | undefined, fallback: boolean) => { const v = val(node); return v === undefined ? fallback : v === '1' || v === 'true' }
 const readSmooth = (el: XmlNode | undefined) => el ? flag(el, true) : undefined
 /** `c16r3:dataDisplayOptions16/c16r3:dispNaAsBlank` in the chart's extension list. */
@@ -488,6 +490,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const type = GROUPS[name]
     if (!type) continue
     const grouping = (val(child(node, 'grouping')) ?? (type === 'bar' ? 'clustered' : 'standard')) as ChartGroup['grouping']
+    // A 100% stacked statistic normalises by every sibling's value at each index: all series of such a group are
+    // analytic dependencies, acquired in full (spec 7) with the same refusal and unavailable rules.
+    const stackedStatistic = grouping === 'percentStacked' && getChildren(node, 'ser').some(statisticErrorBars)
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
     const radarStyle = type === 'radar' ? readRadarStyle(node) : undefined
     const xy = type === 'scatter' || type === 'bubble'
@@ -537,6 +542,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const catNode = xy ? undefined : child(ser, 'cat')
       const pending: NonNullable<ChartSeries['pending']> = {}, refs: NonNullable<ChartSeries['refs']> = {}
       const rangeOf = (node: XmlNode | undefined) => { const f = formulaOf(node); return f ? parseChartRange(f) : undefined }
+      // Error bars (spec 5.7): a custom amount is a numeric role, its saved data read at the display bound (custom
+      // amounts are drawn per displayed point, never analysed); without saved data its reference is pending.
+      const errors = readErrorBars(ser, lineOf, charge, node => hasCache(node) ? { points: numericCache(node, { ...cacheExtent(node, CHART_POINT_LIMIT), formats: false }, charge) } : { range: rangeOf(node) })
+      if (errors) Object.assign(pending, errors.pending)
       // An uncached reference the viewer cannot read (multi-area, a formula) has no data: placeholder, never an empty chart.
       const unreadable = (node: XmlNode | undefined) => { const f = !hasCache(node) ? formulaOf(node) : undefined; if (f && !parseChartRange(f)) unsupported ??= `Chart data uses a reference the viewer cannot read (${f.slice(0, 80)})` }
       unreadable(valueNode); unreadable(xNode); unreadable(sizeNode); unreadable(catNode)
@@ -547,7 +556,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       // Analytic inputs are acquired in full (up to CHART_ANALYTIC_POINT_LIMIT) before any display cap;
       // more than that refuses the analytic element (spec 7), never a prefix: the series is then drawn capped.
       // Extents are read first, so nothing is built before the decision and its admission.
-      let analytic: ChartSeries['analytic'] = isAnalytic(ser) ? true : undefined
+      let analytic: ChartSeries['analytic'] = stackedStatistic || isAnalytic(ser) ? true : undefined
       const limit = analytic ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT
       let valueExtent = cacheExtent(valueNode, limit), xExtent = xNode ? cacheExtent(xNode, limit) : undefined
       if (analytic && (valueExtent.over || xExtent?.over)) {
@@ -646,6 +655,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
         ...(trendlines ? { trendlines } : {}),
+        ...(errors?.bars.length ? { errorBars: errors.bars } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(smooth !== undefined ? { smooth } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
