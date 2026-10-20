@@ -1,6 +1,7 @@
 /** Size-independent stage 1. Data-only axis snapshots survive structuredClone; closures live in stage 2. */
 import { resolveAxes, type AxisGraph, type ResolvedAxis } from './axes'
-import { displayView, type DisplayView } from './display'
+import { displayView, type DisplayForecast, type DisplayView } from './display'
+const NO_FORECAST: DisplayForecast = { lead: 0, trail: 0 }
 import { dateUnitIndex } from './dates'
 import { prepareDataLabels, labelPreparationBound, labelBytes, type PreparedLabel } from './labels'
 import { createChartFormatter, axisFormat } from './format'
@@ -8,10 +9,16 @@ import { valueAt, stringBytes, POINT_UNAVAILABLE } from './points'
 import type { ChartModel, ChartDiagnostic } from './model'
 import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
+import { prepareTrendlines, preparedTrendlineBytes, trendlineBound, trendlineExtents, trendlineForecast, type PreparedTrendline } from './trendlines'
+import { chartEpoch } from './dates'
 
 type PreparedAxis = Omit<ResolvedAxis, 'labelValue' | 'plottable'> & { labels: string[] }
 export interface PreparedAxes {
   dataLabels: PreparedLabel[]
+  /** Fitted trendlines (spec 5.6); absent when the chart has none. */
+  trendlines?: PreparedTrendline[]
+  /** Category slots the trendline forecasts add (the display view reads them); absent: none. */
+  forecast?: DisplayForecast
   axes: PreparedAxis[]
   groups: Array<{ category?: string; x?: string; value: string; horizontal: string; vertical: string; between: boolean } | undefined>
   diagnostics: ChartDiagnostic[]
@@ -46,22 +53,34 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const minor = a.minorUnit === undefined ? 0 : 1000
     return n + 2048 + ticks * 640 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
   }, 0)
-  const bound = 4096 + labelPreparationBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
+  let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
-    const view = displayView(model), graph = resolveAxes(model, view)
-    if(model.groups.some(g=>g.series.some(s=>[s.values,s.xValues,s.bubbleSizes].some(p=>p?.states.includes(POINT_UNAVAILABLE)))) && !graph.diagnostics.some(d=>d.code==='chart-point-unavailable'))graph.diagnostics.push({code:'chart-point-unavailable',reason:'A required saved chart point is unavailable'})
+    // Trendlines first (A6a, spec 5.6): their forecast adds category slots and their extent joins the automatic scales.
     const formatter = createChartFormatter(workspace)
+    const trendDiagnostics: ChartDiagnostic[] = []
+    const trendlines = model.groups.some(g => g.series.some(s => s.trendlines)) ? prepareTrendlines(model, formatter, chartEpoch(model.epoch, model.workbookEpoch), trendDiagnostics, workspace) : []
+    let forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
+    // The forecast's slots and their category label records are admitted before the view, graph and snapshot are
+    // built; refused, the forecast is clipped (diagnosed), never the chart.
+    if (forecast) {
+      const extra = forecastBytes(model, forecast)
+      if (workspace.reserve(extra, tag)) bound += extra
+      else { forecast = undefined; trendDiagnostics.push({ code: 'chart-trendline-extension-clamped', reason: 'A trendline forecast needs more memory than is available for charts: it is clipped to the data' }) }
+    }
+    const view = displayView(model, forecast ?? NO_FORECAST), graph = resolveAxes(model, view, undefined, undefined, trendlines.length ? trendlineExtents(trendlines) : undefined)
+    if(model.groups.some(g=>g.series.some(s=>[s.values,s.xValues,s.bubbleSizes].some(p=>p?.states.includes(POINT_UNAVAILABLE)))) && !graph.diagnostics.some(d=>d.code==='chart-point-unavailable'))graph.diagnostics.push({code:'chart-point-unavailable',reason:'A required saved chart point is unavailable'})
     const axes = [...graph.axes.values()].map(a => {
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
       const code = axisFormat(a.axis,inputs) ?? (a.percent ? '0%' : a.role==='date' ? a.dateBase==='years'?'yyyy':a.dateBase==='months'?'mmm yyyy':'m/d/yyyy' : undefined)
       const { labelValue, plottable: _plottable, ...data } = a
-      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length) }, (_, i) => view.category(i) ?? '')
+      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
-    const preparedAxes: PreparedAxes = { dataLabels, axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
+    graph.diagnostics.push(...trendDiagnostics)
+    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(forecast ? { forecast } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
     if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()
     const retained = { workspace, tag: `${tag}:retained` }
@@ -71,6 +90,11 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     return { ...model, preparedAxes }
   } finally { workspace.release(tag) }
 }
+/**
+ * What `forecast` slots add to preparation: per slot and axis a category label record (a string table entry) and
+ * its construction share, plus the view's per-slot work.
+ */
+const forecastBytes = (model: ChartModel, forecast: DisplayForecast): number => (forecast.lead + forecast.trail) * (model.axes.length * 64 + 64)
 /** A series axis's labels: the names of the series it places (a contour group's drawn rows), reusing the model's strings. */
 export function seriesLabels(graph: AxisGraph, view: DisplayView, a: ResolvedAxis): string[] {
   const g = graph.groups.findIndex(p => p?.vertical === a || p?.horizontal === a)
@@ -95,5 +119,5 @@ export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
 export function preparedAxesBytes(preparedAxes: PreparedAxes | undefined): number {
   if (!preparedAxes) return 0
   const axes = preparedAxes.axes, graph = preparedAxes
-  return 256 + labelBytes(preparedAxes.dataLabels??[]) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
+  return 256 + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
 }

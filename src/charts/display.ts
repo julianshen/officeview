@@ -49,8 +49,11 @@ function sourceOf(hidden: Uint32Array | undefined, slot: number): number {
 }
 const allHidden = (points: ChartPoints) => points.length > 0 && (points.hidden?.length ?? 0) >= points.length
 
-export function displayView(model: ChartModel): DisplayView {
+/** Category slots a trendline forecast adds before and after the data (A6a, spec 5.6); absent: none. */
+export interface DisplayForecast { lead: number; trail: number }
+export function displayView(model: ChartModel, forecast: DisplayForecast | undefined = model.preparedAxes?.forecast): DisplayView {
   const visibleOnly = model.plotVisOnly !== false
+  const lead = forecast?.lead ?? 0
   let extent = model.categories.length
   for (const group of model.groups) for (const s of group.series) extent = Math.max(extent, s.values.length)
   extent = Math.min(extent, CHART_POINT_LIMIT)
@@ -58,18 +61,19 @@ export function displayView(model: ChartModel): DisplayView {
   const categoryHidden = visibleOnly ? model.categoryHidden : undefined
   let hiddenCategories = 0
   for (const i of categoryHidden ?? []) if (i < extent) hiddenCategories++
-  const slots = Math.max(extent - hiddenCategories, 1)
-  const source = (slot: number) => sourceOf(categoryHidden, slot)
+  const slots = Math.max(extent - hiddenCategories, 1) + lead + (forecast?.trail ?? 0)
+  // Forecast slots hold no data: a leading slot's source is -1, a trailing one's lies past the extent.
+  const source = (slot: number) => slot < lead ? -1 : sourceOf(categoryHidden, slot - lead)
   const make = (s: ChartSeries): DisplaySeries => {
     const read = (points: ChartPoints | undefined, slot: number) => {
       const i = source(slot)
-      if (!points || i >= extent || i >= points.length) return undefined
+      if (!points || i < 0 || i >= extent || i >= points.length) return undefined
       if (visibleOnly && (hiddenAt(points.hidden, i) || (s.xValues && hiddenAt(s.xValues.hidden, i)) || hiddenAt(s.values.hidden, i))) return undefined
       return valueAt(points, i)
     }
     const point = (slot:number, x=false): ChartPoint | undefined => {
       const i=source(slot), points=x?s.xValues:s.values
-      if(i>=extent || (visibleOnly && (hiddenAt(s.values.hidden,i)||hiddenAt(s.xValues?.hidden,i))))return undefined
+      if(i<0 || i>=extent || (visibleOnly && (hiddenAt(s.values.hidden,i)||hiddenAt(s.xValues?.hidden,i))))return undefined
       return points ? pointAt(points,i) : {state:'blank'}
     }
     return { point, series: s, value: slot => read(s.values, slot), x: slot => read(s.xValues, slot), hasX: Boolean(s.xValues?.length) }
@@ -78,7 +82,7 @@ export function displayView(model: ChartModel): DisplayView {
   return {
     slots,
     source,
-    category: slot => { const i = source(slot); return i < extent ? model.categories[i] : undefined },
+    category: slot => { const i = source(slot); return i >= 0 && i < extent ? model.categories[i] : undefined },
     series: byGroup.flat(),
     groupSeries: group => byGroup[group] ?? [],
   }

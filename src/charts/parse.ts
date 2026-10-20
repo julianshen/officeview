@@ -17,6 +17,7 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
 import { contourGridDiagnostic, contourGridOf } from './families/contour'
 import { readBubbleOptions } from './families/bubble'
 import { readRadarStyle } from './families/radar'
@@ -491,6 +492,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const fill = parseFillStyle(spPr, theme, charge)
       const lineStyle = lineOf(spPr)
       const markerStyle = parseMarker(child(ser, 'marker'), theme, charge)
+      const trendlines = readTrendlines(ser, lineOf, charge)
       const invertIfNegative = child(ser, 'invertIfNegative') ? flag(child(ser, 'invertIfNegative'), false) : undefined
       const invertColor = invertIfNegative !== undefined ? invertFill(ser, theme) : undefined
       if (invertColor) chargeChartColor(charge)
@@ -607,6 +609,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(pending).length ? { pending } : {}),
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
+        ...(trendlines ? { trendlines } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(smooth !== undefined ? { smooth } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
@@ -641,6 +644,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(stockOpts?.upDownBars ? { upDownBars: stockOpts.upDownBars } : {}),
     })
   }
+  markTrendlineLegendDeletions(legend, groups)
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')

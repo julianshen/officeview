@@ -20,6 +20,7 @@ import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
+import { paintTrendlines } from './trendlines'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
@@ -112,7 +113,9 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box,
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
   entries.forEach((entry, i) => {
     if (vertical ? y + line > area.y + area.h + .5 : x + widths[i] > area.x + area.w + .5) return
-    if (entry.color) { ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw) }
+    // A trendline's key is a short line in its colour (A6a); a series keeps its swatch; a colourless band has none.
+    if (entry.color && entry.line) { ctx.strokeStyle = ctx.fillStyle = `#${entry.color}`; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x + gap, y + line / 2); ctx.lineTo(x + gap + sw, y + line / 2); ctx.stroke() }
+    else if (entry.color) { ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw) }
     ctx.fillStyle = TEXT
     if (vertical) ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2, Math.max(1, area.w - sw - gap * 3))
     else ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2)
@@ -576,6 +579,21 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         at,
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
+    }
+    // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
+    // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
+    if (model.source.preparedAxes?.trendlines?.some(t => t.group === g)) {
+      const value = (y: number) => along(V, axisFraction(V, y, false))
+      const base = (x: number): number => {
+        if (group.family === 'scatter' || !axes.category) return plot.x + axisFraction(B, x, false) * plot.w
+        // Forecast slots lead the data (preparedAxes.forecast): position x sits in slot x - 1 + lead.
+        const C = axes.category, slot = x - 1
+        if (C.role !== 'date') return along(C, categoryFraction(C, slot + (model.source.preparedAxes?.forecast?.lead ?? 0), axes.between))
+        const i0 = Math.max(0, Math.min(Math.floor(slot), count - 2)), at0 = graph.categoryIndex(C, i0)
+        const idx = count > 1 ? at0 + (slot - i0) * (graph.categoryIndex(C, i0 + 1) - at0) : at0
+        return along(C, categoryFraction(C, idx, axes.between))
+      }
+      paintTrendlines(ctx, model.source, g, (x, y, out) => { const b = base(x), v = value(y); const xFirst = group.family === 'scatter' || horizontal === B; out[0] = xFirst ? b : v; out[1] = xFirst ? v : b; return true }, admitPath, plot, font(fontPx, family, familyCss), fontPx, TEXT, (code, reason) => { if (!layout.diagnostics.some(d => d.code === code)) layout.diagnostics.push({ code, reason }) })
     }
   })
   } finally { ctx.restore() }

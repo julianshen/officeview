@@ -27,7 +27,7 @@
  */
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
-import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, type ChartEpoch } from './dates'
+import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
@@ -272,7 +272,9 @@ const AXIS_ROLE: Record<ChartAxis['kind'], ResolvedAxis['role']> = { category: '
  * The axis graph of a (filled) model over its display view: placement, domains, scales, ticks, crossings and
  * display units. `workbookEpoch` is precedence 2 of the chart epoch (spec 5.1).
  */
-export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission): AxisGraph {
+/** A drawn trendline's extent in data units (A6a, spec 5.6): automatic scales include it; authored bounds still win. */
+export interface TrendlineExtent { group: number; x0: number; x1: number; y0: number; y1: number; yPositive?: number }
+export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission, trendlines?: readonly TrendlineExtent[]): AxisGraph {
   if (admission && !admission.workspace.reserve(axisGraphBound(model, view?.slots ?? displaySlotsBound(model)), admission.tag)) throw new ChartRefusal()
   view ??= displayView(model)
   const diagnostics: ChartDiagnostic[] = []
@@ -304,6 +306,30 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (found.length && !dateText) dates = found
   }
+  // Trendline forecasts on a date axis (spec 5.6): each drawn trendline's endpoint positions, projected per axis
+  // once its base unit is known (below).
+  const forecastEnds = new Map<string, number[]>()
+  if (dates) for (const t of trendlines ?? []) {
+    const p = placements[t.group]
+    if (p && p.baseKind === 'category') forecastEnds.set(p.base, [...forecastEnds.get(p.base) ?? [], t.x0, t.x1])
+  }
+  /**
+   * The unit-index range a date axis needs for its forecasts: each endpoint projected exactly as the painter does
+   * (the slots' calendar unit indices, interpolated, the end segment extrapolated past either end), the lowest
+   * and highest taken whatever the source date order, widened to whole units.
+   */
+  const forecastReach = (id: string, base: ChartTimeUnit): { lo: number; hi: number } | undefined => {
+    const ends = forecastEnds.get(id)
+    if (!ends) return undefined
+    const index = (slot: number) => { const v = dateOf(slot); return v === undefined ? NaN : dateUnitIndex(v, base, epoch) }
+    let lo = Infinity, hi = -Infinity
+    for (const x of ends) {
+      const s = x - 1, i0 = Math.max(0, Math.min(Math.floor(s), count - 2)), a = index(i0)
+      const at = count < 2 ? a : a + (s - i0) * (index(i0 + 1) - a)
+      if (Number.isFinite(at)) { lo = Math.min(lo, at); hi = Math.max(hi, at) }
+    }
+    return Number.isFinite(lo) ? { lo: Math.floor(lo + 1e-9), hi: Math.ceil(hi - 1e-9) } : undefined
+  }
 
   const axes = new Map<string, ResolvedAxis>()
   for (const axis of model.axes) {
@@ -325,7 +351,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (role === 'date' && dates) {
       const base = axis.baseTimeUnit ?? autoBaseUnit(dates, epoch)
-      const first = axis.min ?? Math.min(...dates), last = axis.max ?? Math.max(...dates)
+      let first = axis.min ?? Math.min(...dates), last = axis.max ?? Math.max(...dates)
+      // The forecast reach, in this base unit, moves an automatic bound by whole calendar units from the data's own
+      // first/last date (so ticks keep their day of month); authored bounds win.
+      const reach = forecastReach(axis.id, base)
+      if (reach) {
+        const below = reach.lo - dateUnitIndex(first, base, epoch), above = reach.hi - dateUnitIndex(last, base, epoch)
+        if (axis.min === undefined && below < 0) first = shiftDateUnits(first, below, base, epoch) ?? first
+        if (axis.max === undefined && above > 0) last = shiftDateUnits(last, above, base, epoch) ?? last
+      }
       const lo = dateUnitIndex(first, base, epoch), hi = Math.max(lo, dateUnitIndex(last, base, epoch))
       const major = dateTicks(first, last, axis.majorUnit ?? 1, axis.majorTimeUnit ?? base, epoch)
       if (major.enlarged) diagnostics.push({ code: 'chart-tick-limit', reason: `date axis ${axis.id}: more than ${CHART_TICK_LIMIT} ticks; drawn every ${major.step} ${axis.majorTimeUnit ?? base}` })
@@ -374,6 +408,12 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       }
     } else for (const s of series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
     if (p.baseKind === 'x') for (const s of series) for (let i = 0; i < count; i++) { const v = s.hasX ? s.x(i) : i + 1; if (v !== undefined) see(p.base, v) }
+    for (const t of trendlines ?? []) {
+      if (t.group !== g) continue
+      if (!logOf(p.value)) { see(p.value, t.y0); see(p.value, t.y1) } else if (t.yPositive !== undefined) { see(p.value, t.yPositive); see(p.value, t.y1) }
+      // Each x endpoint on its own: on a log axis a non-positive backward end must not hide the forward end.
+      if (p.baseKind === 'x') for (const x of [t.x0, t.x1]) if (!logOf(p.base) || x > 0) see(p.base, x)
+    }
   })
   for (const resolved of axes.values()) {
     if (resolved.role !== 'value') continue

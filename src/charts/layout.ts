@@ -17,6 +17,7 @@ import { stringBytes } from './points'
 import { formatNumber } from '../xlsx/chartDescription'
 import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
 import { radarTexts } from './families/radar'
+import { trendlineLegendEntries } from './trendlines'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -28,7 +29,7 @@ export interface ChartLayout {
   labelIndices: Map<string, Set<number>>
   fontPx: number; labels: Map<string, AxisLabel[]>; diagnostics: ChartDiagnostic[]
   /** The legend entries, built once (bounded and admitted with the layout) and reused by the paint. */
-  legendEntries: Array<{ name: string; color?: string }>
+  legendEntries: Array<{ name: string; color?: string; line?: true }>
   width(text: string, font: string): number
 }
 export function textAngle(text: ChartTextStyle | undefined): number {
@@ -66,9 +67,10 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
 }
 /**
  * Legend entries; an entry without a colour has no swatch (a noFill contour band). A contour lists at most `limit`
- * bands (the rows its legend can show), each name cut to the label limit (`truncated` notes a cut).
+ * bands (the rows its legend can show), each name cut to the label limit (`truncated` notes a cut). Drawn trendlines
+ * follow the series (A6a; `line`: a line key).
  */
-export function legendEntries(model: ChartModel, view: DisplayView, graph?: AxisGraph, limit = Infinity, truncated?: () => void): Array<{ name: string; color?: string }> {
+export function legendEntries(model: ChartModel, view: DisplayView, graph?: AxisGraph, limit = Infinity, truncated?: () => void): Array<{ name: string; color?: string; line?: true }> {
   const group = model.groups[0]
   if (group?.family === 'contour') {
     // Contour: the bands (spec 4.1), named by the shared value axis's tick labels.
@@ -80,7 +82,8 @@ export function legendEntries(model: ChartModel, view: DisplayView, graph?: Axis
     const s = view.groupSeries(0)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
   }
-  return view.series.map(({ series }) => ({ name: series.name, color: series.color }))
+  // Drawn trendlines follow the series (A6a, spec 5.6/5.10).
+  return [...view.series.map(({ series }) => ({ name: series.name, color: series.color })), ...trendlineLegendEntries(model)]
 }
 interface Entry {
   contexts: Map<ChartWorkspace, Map<string, Entry>>
@@ -179,6 +182,8 @@ export function layoutBound(model: ChartModel, w = Infinity, h = Infinity): numb
   // Contour legend entries: one per band the legend can show (at most the tick bound), each with its bounded name,
   // a transient endpoint cut and its measured width, plus a possible truncation diagnostic.
   if (model.groups[0]?.family === 'contour') text += Math.min(legendBands(model), legendCapacity(model, w, h)) * CONTOUR_LEGEND_ENTRY_BYTES + 512
+  // Trendline legend entries (A6a): a generated or authored name (at most 255 + the series name's units) and its width.
+  for (const group of model.groups) for (const s of group.series) text += (s.trendlines?.length ?? 0) * (2 * (264 + s.name.length) + 128)
   // The retained diagnostics (stage 1's and up to three layout ones) are priced as retainedBytes prices them.
   const diagnostics = (model.preparedAxes?.diagnostics ?? []).reduce((n, d) => n + 64 + d.code.length * 2 + d.reason.length * 2, 1024)
   return (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
@@ -231,9 +236,10 @@ function retainedBytes(layout: Omit<ChartLayout, 'width' | 'retainedBytes'>, wid
   for (const axis of layout.graph.axes.values()) bytes += 1024 + (axis.ticks.length + axis.minorTicks.length) * 16
   for (const [id, strings] of layout.texts) bytes += 96 + id.length * 2 + strings.reduce((n, s) => n + 48 + s.length * 2, 0)
   for (const labels of layout.labels.values()) bytes += 128 + labels.length * 192
-  // Legend entries: a contour's names are its own strings; other families' reuse the model's (records only).
+  // Legend entries: a contour's names and a trendline's generated name (A6a) are their own strings; other families'
+  // reuse the model's (records only).
   const ownNames = layout.graph.groups[0]?.group.family === 'contour'
-  for (const entry of layout.legendEntries) bytes += 64 + (ownNames ? stringBytes(entry.name) : 0)
+  for (const entry of layout.legendEntries) bytes += 64 + (ownNames || entry.line ? stringBytes(entry.name) : 0)
   for (const [font, strings] of widths) {
     bytes += 96 + font.length * 2
     for (const text of strings.keys()) bytes += 64 + text.length * 2
@@ -366,4 +372,4 @@ function legendBands(model: ChartModel): number {
  * extents, A4a); a contour group its band grid (`contourPaintBytes`, the dimensions the painter uses) and its band
  * edges. The legend entries are the layout's (retained there), never rebuilt by the paint.
  */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0), 0) + view.series.length * 256
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.trendlines?.length ?? 0) * 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0), 0) + view.series.length * 256

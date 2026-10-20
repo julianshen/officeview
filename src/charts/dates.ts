@@ -119,6 +119,13 @@ export function dateTicks(start: number, end: number, step: number, unit: ChartT
   return { ticks, step: unitStep, enlarged }
 }
 
+/** `serial` moved by whole `unit`s: days add, months and years step the calendar (EDATE); undefined off the calendar. */
+export function shiftDateUnits(serial: number, units: number, unit: ChartTimeUnit, epoch: ChartEpoch): number | undefined {
+  if (unit === 'days') return serial + units
+  const base = Math.floor(serial), day = edateSerial(base, units * (unit === 'years' ? 12 : 1), epoch)
+  return typeof day === 'number' ? day + (serial - base) : undefined
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 /** A plain civil label for a date-axis tick (m/d/yyyy, Mmm yyyy or yyyy by unit). Number-format-driven labels are A2's. */
 export function dateTickLabel(serial: number, unit: ChartTimeUnit, epoch: ChartEpoch): string {
