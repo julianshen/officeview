@@ -18,7 +18,7 @@ import { parseDrawingColor, type ColorDefinition } from '../drawing/style'
 import type { ChartParseContext } from './context'
 import { resolveRelatedParts } from './embeddedZip'
 import { readChartPart } from './read'
-import type { ChartColorPart, ChartStyleEntry, ChartStyleParts, ChartStylePart } from './style'
+import type { ChartColorPart, ChartStyleEntry, ChartStyleParts, ChartStylePart, ChartStyleText } from './style'
 
 export const CHART_STYLE_COLORS = 64, CHART_STYLE_VARIATIONS = 64, CHART_STYLE_TRANSFORMS = 16
 const COLOR_BYTES = 96, TRANSFORM_BYTES = 64, ENTRY_BYTES = 96
@@ -93,7 +93,33 @@ function colorOf(name: string, node: XmlNode): ColorDefinition | undefined {
   return parseDrawingColor(holder)
 }
 
-/** `cs:chartStyle`: the data point entries' spPr colour and fillRef/lnRef `cs:styleClr`. */
+/** `cs:title`'s text defaults (spec 5.10): `cs:defRPr` sz/b/i and its solidFill colour, else the `cs:fontRef` colour. */
+function textEntry(node: XmlNode | undefined, charge: (bytes: number) => void): ChartStyleText | undefined {
+  if (!node) return undefined
+  const def = child(node, 'defRPr'), a = attrs(def)
+  const size = Number(a.sz)
+  const flag = (raw: string | undefined) => raw === undefined ? undefined : raw === '1' || raw === 'true'
+  const fill = child(def, 'solidFill')
+  const ref = child(node, 'fontRef')
+  const refColor = ref && orderedChildren(ref).some(([n]) => n !== '#text') ? parseDrawingColor(ref) : undefined
+  const source = fill ? parseDrawingColor(fill) : refColor, sized = a.sz !== undefined && size > 0
+  const latin = attrs(child(def, 'latin')).typeface, refIdx = attrs(ref).idx
+  const font = latin ? latin.slice(0, 64) : refIdx === 'major' || refIdx === 'minor' ? refIdx : undefined
+  if (!source && !sized && flag(a.b) === undefined && flag(a.i) === undefined && !font && a.u === undefined) return undefined
+  charge(ENTRY_BYTES)
+  const color = keepColor(source, charge)
+  const text: ChartStyleText = {
+    ...(sized ? { sizePt: Math.max(6, Math.min(72, size / 100)) } : {}),
+    ...(flag(a.b) !== undefined ? { bold: flag(a.b) } : {}),
+    ...(flag(a.i) !== undefined ? { italic: flag(a.i) } : {}),
+    ...(color ? { color } : {}),
+    ...(font ? { font } : {}),
+    ...(a.u !== undefined ? { underline: a.u !== 'none' } : {}),
+  }
+  return text
+}
+
+/** `cs:chartStyle`: the data point entries' spPr colour and fillRef/lnRef `cs:styleClr`, and the title's text defaults. */
 function stylePart(root: XmlNode, charge: (bytes: number) => void): ChartStylePart | undefined {
   const entry = (name: string, line: boolean): ChartStyleEntry | undefined => {
     const node = child(root, name)
@@ -109,7 +135,7 @@ function stylePart(root: XmlNode, charge: (bytes: number) => void): ChartStylePa
     charge(ENTRY_BYTES)
     return { ...(color ? { color } : {}), ...(styleColor !== undefined ? { styleColor } : {}) }
   }
-  const dataPoint = entry('dataPoint', false), dataPointLine = entry('dataPointLine', true)
-  if (!dataPoint && !dataPointLine) return undefined
-  return { ...(dataPoint ? { dataPoint } : {}), ...(dataPointLine ? { dataPointLine } : {}) }
+  const dataPoint = entry('dataPoint', false), dataPointLine = entry('dataPointLine', true), title = textEntry(child(root, 'title'), charge)
+  if (!dataPoint && !dataPointLine && !title) return undefined
+  return { ...(dataPoint ? { dataPoint } : {}), ...(dataPointLine ? { dataPointLine } : {}), ...(title ? { title } : {}) }
 }
