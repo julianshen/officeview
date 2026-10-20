@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { parseXlsx } from '../src/xlsx/parse'
 import { paintDrawingContent } from '../src/drawing/content-paint'
 import { CACHED_COLUMN, addDefinedNames, addNumberFormat, chartWorkbook, emu, openpyxlFrame } from './helpers/xlsx-chart-fixture'
-import { pts } from './helpers/chart-points'
+import { list, pts } from './helpers/chart-points'
 
 describe('worksheet chart frames', () => {
   test('an anchored chart frame with an empty xfrm takes its anchor box (openpyxl)', async () => {
@@ -48,7 +48,7 @@ describe('worksheet chart data', () => {
     if (content?.kind !== 'xlsxChart') return
     expect(content.chart.title).toBe('Bar chart')
     expect(content.chart.categories).toEqual(['Q1', 'Q2', 'Q3', 'Q4', 'Q5'])
-    expect(content.chart.groups[0].series[0].values).toEqual(pts(10, 20, 30, 40, 50))
+    expect(list(content.chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30, 40, 50))
     expect(content.chart.groups[0].series[0].pending).toBeUndefined()
     expect(content.chart.categoryPending).toBeUndefined()
     expect(sheet.drawingCoverage?.find(entry => entry.element === 'graphicFrame')).toMatchObject({ feature: 'chart', selectedRepresentation: 'chart', status: 'native' })
@@ -84,16 +84,16 @@ describe('chart references: formats, defined names, unreadable areas', () => {
     // 0.00 (built-in 2) on whole numbers keeps its decimals.
     const fixed = await chartOf(uncached('Styled!$K$20:$K$22', 'Styled!$L$20:$L$22'), '', [0, 1, 2].flatMap(i => [{ ref: `K${20 + i}`, v: 45292 + 31 * i, style: 2 }, { ref: `L${20 + i}`, v: i }]))
     expect(fixed.categories).toEqual(['45292.00', '45323.00', '45354.00'])
-    expect(chart.groups[0].series[0].values).toEqual(pts(10, 20, 30))
+    expect(list(chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30))
   })
 
   test('series read through workbook and sheet-scoped defined names', async () => {
     const chart = await chartOf(uncached('Cats', 'Sales'), '<definedName name="Sales">Styled!$L$20:$L$22</definedName><definedName name="Cats" localSheetId="0">Styled!$K$20:$K$22</definedName><definedName name="Cats">Styled!$A$1:$A$1</definedName>')
     expect(chart.unsupported).toBeUndefined()
-    expect(chart.groups[0].series[0].values).toEqual(pts(10, 20, 30))
+    expect(list(chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30))
     expect(chart.categories).toEqual(['1,234.50', '2,469.00', '3,703.50'])
     const qualified = await chartOf(uncached('Styled!Cats', "'Styled'!Sales"), '<definedName name="Sales">Styled!$L$20:$L$22</definedName><definedName name="Cats" localSheetId="0">Styled!$K$20:$K$22</definedName>')
-    expect(qualified.groups[0].series[0].values).toEqual(pts(10, 20, 30))
+    expect(list(qualified.groups[0].series[0].values)).toEqual(pts(10, 20, 30))
   })
 
   test('an undefined name, a multi-area name and a multi-area reference show a placeholder, never an empty chart', async () => {
@@ -137,7 +137,8 @@ describe('chart parser', async () => {
     const doughnut = parse(space(`<doughnutChart>${ser(0, [1, 2])}<holeSize val="60"/></doughnutChart>`))
     expect(doughnut.groups[0]).toMatchObject({ family: 'doughnut', holeSize: 60 })
     const scatter = parse(space('<scatterChart><scatterStyle val="lineMarker"/><ser><idx val="0"/><xVal><numLit><pt idx="0"><v>1</v></pt><pt idx="1"><v>4</v></pt></numLit></xVal><yVal><numLit><pt idx="0"><v>2</v></pt><pt idx="1"><v>3</v></pt></numLit></yVal></ser></scatterChart>'))
-    expect(scatter.groups[0].series[0]).toMatchObject({ xValues: pts(1, 4), values: pts(2, 3), line: true, markers: true })
+    expect(scatter.groups[0].series[0]).toMatchObject({ line: true, markers: true })
+    expect([list(scatter.groups[0].series[0].xValues), list(scatter.groups[0].series[0].values)]).toEqual([pts(1, 4), pts(2, 3)])
   })
 
   test('bar and line together share the axes; a pie combination is a placeholder', () => {
@@ -158,7 +159,8 @@ describe('chart parser', async () => {
     const cells: Record<string, unknown> = { 'Owner|0|1': 'Revenue', 'Owner|1|0': 'Jan', 'Owner|2|0': 'Feb', 'Owner|3|0': 'Mar', 'Data|1|1': 5, 'Data|2|1': 'x', 'Data|3|1': 7 }
     const filled = fillChartRanges(model, 'Owner', (sheet, r, c) => { const value = cells[`${sheet}|${r}|${c}`] as string | number | undefined; return value === undefined ? undefined : { value } })
     expect(filled.categories).toEqual(['Jan', 'Feb', 'Mar'])
-    expect(filled.groups[0].series[0]).toMatchObject({ name: 'Revenue', values: pts(5, undefined, 7) })
+    expect(filled.groups[0].series[0]).toMatchObject({ name: 'Revenue' })
+    expect(list(filled.groups[0].series[0].values)).toEqual(pts(5, undefined, 7))
     expect(chartDescription(filled)).toBe('Chart. Line chart, 1 series; 3 categories (Jan, Feb, Mar); Revenue: 5, 7.')
     const long = parse('<chartSpace><chart><plotArea><barChart><ser><val><numRef><f>A1:A10000</f></numRef></val></ser></barChart></plotArea></chart></chartSpace>')
     const bounded = fillChartRanges(long, 'S', () => ({ value: 1 }))

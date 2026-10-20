@@ -5,7 +5,7 @@
  * theme and pictures) from the worker; anything it cannot carry is an explicit
  * visible diagnostic, never a silent omission.
  */
-import { pts } from './helpers/chart-points'
+import { list, plain, pts } from './helpers/chart-points'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -200,7 +200,7 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const geometry = await settledGeometry(await openPaged(bytes))
     const actual = geometry.drawingsIn(...box)!
     expect(actual.map(key)).toEqual(expected.map(key))
-    expect(actual.map(node => node.content)).toEqual(expected.map(node => node.content))
+    expect(actual.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
     expect(geometry.diagnostics).toEqual([])
   })
 
@@ -211,13 +211,13 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const { geometry: object } = await resident(bytes)
     const expected = object.drawingsIn(...box)!
     const content = expected[0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual(pts(8, 7, 6, 5))
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts(8, 7, 6, 5))
     expect(content?.kind === 'xlsxChart' && content.chart.categories).toEqual(['0', '1', '2', '3'])
     // D0: the fixture's hidden row 3 is kept as provenance (plotVisOnly applies at draw), on both paths.
-    expect(content?.kind === 'xlsxChart' && [content.chart.groups[0].series[0].hidden, content.chart.categoryHidden]).toEqual([[2], [2]])
+    expect(content?.kind === 'xlsxChart' && [[...content.chart.groups[0].series[0].values.hidden ?? []], [...content.chart.categoryHidden ?? []]]).toEqual([[2], [2]])
     const remote = await openPaged(bytes)
     const geometry = await settledGeometry(remote)
-    expect(geometry.drawingsIn(...box)!.map(node => node.content)).toEqual(expected.map(node => node.content))
+    expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
     // The chart's workspace charges went through the read's share, and the share ended with the read.
     expect(kernels[0].lifecycleStats().transientBytes).toBe(0)
   })
@@ -237,9 +237,9 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const { geometry: object } = await resident(patched)
     const expected = object.drawingsIn(...box)!
     const content = expected[0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual(pts('#N/A', '#DIV/0!', 'unavailable', 5))
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts('#N/A', '#DIV/0!', 'unavailable', 5))
     const geometry = await settledGeometry(await openPaged(patched))
-    expect(geometry.drawingsIn(...box)!.map(node => node.content)).toEqual(expected.map(node => node.content))
+    expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
   })
 
   it('resolves a defined-name series from the paged workbook exactly as the resident sheet does', async () => {
@@ -249,10 +249,10 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const { geometry: object } = await resident(bytes)
     const expected = object.drawingsIn(...box)!
     const content = expected[0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual(pts(8, 7, 6, 5))
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts(8, 7, 6, 5))
     expect(content?.kind === 'xlsxChart' && content.chart.categories).toEqual(['0', '1', '2', '3'])
     const geometry = await settledGeometry(await openPaged(bytes))
-    expect(geometry.drawingsIn(...box)!.map(node => node.content)).toEqual(expected.map(node => node.content))
+    expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
   })
 
   it('transports pictures with their bytes within the image budgets', async () => {

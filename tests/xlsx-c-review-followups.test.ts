@@ -1,5 +1,5 @@
 /** Stream C review follow-ups that the reviewer's reproductions do not cover directly. */
-import { pts } from './helpers/chart-points'
+import { list, pts } from './helpers/chart-points'
 import { describe, expect, it } from 'vitest'
 import { RemoteDrawingCache, type DrawingHost } from '../src/worker/viewerRemoteDrawings'
 import type { CacheIdentity, SheetDrawings, WorkerReply } from '../src/xlsx/view/contracts'
@@ -45,12 +45,12 @@ describe('resident charts follow the document value policy', () => {
   it('engine: the evaluated values', async () => {
     const doc = await parseXlsx(await chartWorkbook(xml, { cells, patch }))
     const chart = doc.sheets[0].drawings![0].content
-    expect(chart?.kind === 'xlsxChart' && chart.chart.groups[0].series[0].values).toEqual(pts(7, 6))
+    expect(list(chart?.kind === 'xlsxChart' && chart.chart.groups[0].series[0].values)).toEqual(pts(7, 6))
   })
   it('cached: the saved value; an uncached formula has no value', async () => {
     const doc = await parseXlsx(await chartWorkbook(xml, { cells, patch }), { valuePolicy: 'cached' })
     const chart = doc.sheets[0].drawings![0].content
-    expect(chart?.kind === 'xlsxChart' && chart.chart.groups[0].series[0].values).toEqual(pts(99, 'unavailable'))
+    expect(list(chart?.kind === 'xlsxChart' && chart.chart.groups[0].series[0].values)).toEqual(pts(99, 'unavailable'))
   })
 })
 

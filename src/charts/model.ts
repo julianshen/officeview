@@ -21,6 +21,26 @@ export type ChartPoint =
   | { state: 'error'; code: string }
   | { state: 'unavailable' }
 
+/**
+ * One numeric role's points, stored compactly (no object per point; see
+ * `charts/points.ts`): `states[i]` is 0 blank, 1 value, 2 error, 3 unavailable;
+ * `values[i]` is the number of a value point, or an error point's code index
+ * (into CHART_ERROR_CODES, then `codes`). `formats`/`formatIndex` keep
+ * per-point `pt@formatCode` (index 0: none). `hidden` lists, sorted, the point
+ * indices whose cell sits in a hidden row or column of this role's own source
+ * range (plotVisOnly provenance; spec 5.8). Sparse cache indices are kept: a
+ * missing `pt@idx` is a blank point at its index (spec 6.4).
+ */
+export interface ChartPoints {
+  length: number
+  states: Uint8Array
+  values: Float64Array
+  codes?: string[]
+  formats?: string[]
+  formatIndex?: Uint16Array
+  hidden?: Uint32Array
+}
+
 /** The data roles of a series (spec 6.4). Names and categories are strings; the rest are `ChartPoint`s. */
 export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus'
 
@@ -85,10 +105,9 @@ export interface ChartSeries {
   color: string
   /** Per-series categories when they differ from the model's shared list. */
   categories?: string[]
-  /** Sparse cache indices are kept: a missing `pt@idx` is a `blank` point at its index (spec 6.4). */
-  values: ChartPoint[]
-  xValues?: ChartPoint[]
-  bubbleSizes?: ChartPoint[]
+  values: ChartPoints
+  xValues?: ChartPoints
+  bubbleSizes?: ChartPoints
   /** Per-point colours (pie slices, varyColors). */
   pointColors?: string[]
   line?: boolean
@@ -96,10 +115,11 @@ export interface ChartSeries {
   /** References still to be filled from worksheet cells (no saved data for that role). */
   pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
   /**
-   * Point indices whose worksheet cell sits in a hidden row or column (provenance
-   * kept at fill for `plotVisOnly`; applied at draw by `displayModel`). Cached data has none.
+   * Each role's worksheet reference, kept even when saved data (a cache) supplies
+   * its values: the cache decides the values, the reference still decides which
+   * points sit in hidden rows or columns (plotVisOnly provenance; spec 5.8, 6.4).
    */
-  hidden?: number[]
+  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange }
   /**
    * The series feeds an analytic element (a trendline, stdDev/stdErr error bars):
    * its numeric roles are acquired in full up to CHART_ANALYTIC_POINT_LIMIT (spec 7),
@@ -131,8 +151,10 @@ export interface ChartModel {
   categories: string[]
   /** The shared category reference still to be filled from worksheet cells. */
   categoryPending?: ChartRange
-  /** Category indices whose cell sits in a hidden row or column (see `ChartSeries.hidden`). */
-  categoryHidden?: number[]
+  /** The shared category reference (kept beside a cache, for provenance only). */
+  categoryRef?: ChartRange
+  /** Sorted category indices whose cell sits in a hidden row or column of the category reference. */
+  categoryHidden?: Uint32Array
   legend?: 'r' | 'l' | 't' | 'b' | 'tr'
   fontFamily: string
   fontSizePt: number
@@ -149,6 +171,8 @@ export interface ChartModel {
   unsupported?: string
   /** A card's original feature when it is not a classic chart (spec 6.3). */
   feature?: 'ChartEx'
+  /** The chart's storage could not be admitted (a typed refusal before allocation; spec 6.4/6.5). */
+  refused?: true
 }
 
 /**

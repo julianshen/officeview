@@ -31,6 +31,7 @@ import { registerOrdered, type XmlNode } from '../core/xml'
 import { XmlTokenizer, localName } from '../core/xml-stream'
 import { PackageError } from '../core/package-error'
 import type { ChartParseContext } from './context'
+import { CHART_CHUNK_TAG, CHART_CROSSING_TAG } from './workspace'
 
 const MiB = 1024 * 1024
 export const CHART_PART_LIMIT = { desktop: 8 * MiB, mobile: 4 * MiB } as const
@@ -41,8 +42,7 @@ const TOKEN_CHARS = CHART_TOKEN_CHARS
 /** Reserved once before the stream: the crossing chunk plus the tokenizer's carried token (UTF-16). */
 export const CHART_READ_CROSSING = CHART_CHUNK_LIMIT + 2 * TOKEN_CHARS
 const SLICE = 16 * 1024
-/** Tag suffixes of the read's transient decode charges (the crossing reservation, one chunk's bytes and text). */
-export const CHART_CROSSING_TAG = ':crossing', CHART_CHUNK_TAG = ':chunk'
+export { CHART_CROSSING_TAG, CHART_CHUNK_TAG }
 const CLASSIC = new Set(['http://schemas.openxmlformats.org/drawingml/2006/chart', 'http://purl.oclc.org/ooxml/drawingml/chart'])
 
 export type ChartRead =

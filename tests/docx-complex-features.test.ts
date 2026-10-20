@@ -291,8 +291,10 @@ describe('DOCX complex drawing and style regressions', () => {
     )
     expect(collectDocImages(doc)).toHaveLength(1)
     expect(collectDocImages(doc)[0]).toMatchObject({
-      drawing: { kind: 'xlsxChart', chart: { groups: [{ family: 'bar', barDir: 'col', grouping: 'clustered', overlap: -27, series: [{ name: 'Series', values: [{ state: 'value', v: 4 }] }] }], categories: ['Category'] } }
+      drawing: { kind: 'xlsxChart', chart: { groups: [{ family: 'bar', barDir: 'col', grouping: 'clustered', overlap: -27, series: [{ name: 'Series' }] }], categories: ['Category'] } }
     })
+    const drawn = (collectDocImages(doc)[0] as unknown as { drawing: { chart: { groups: Array<{ series: Array<{ values: { states: Uint8Array; values: Float64Array } }> }> } } }).drawing.chart.groups[0].series[0].values
+    expect([Array.from(drawn.states), Array.from(drawn.values)]).toEqual([[1], [4]])
     const { createCanvas } = await import('canvas')
     const ctx = createCanvas(816, 1056).getContext('2d')
     renderPages(layoutDocx(doc, measure), ctx as never)

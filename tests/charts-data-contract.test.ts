@@ -17,15 +17,20 @@ import { ViewerKernel, connectInProcess } from '../src/worker/viewerKernel'
 import { createViewerClient } from '../src/worker/viewerClient'
 import { RemoteWorkbook, openRemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { drawingFootprint } from '../src/xlsx/view/drawingPayload'
-import type { ChartModel } from '../src/charts/model'
-import type { ChartParentLedger } from '../src/charts/workspace'
+import type { ChartModel, ChartPoint } from '../src/charts/model'
+import { CHART_WORKSPACE_LIMIT, createChartWorkspace, type ChartParentLedger } from '../src/charts/workspace'
+import { documentChartContext } from '../src/charts/context'
 import * as pages from '../src/xlsx/storage/sourcePages'
 import { chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
-import { pts } from './helpers/chart-points'
+import { list, pts } from './helpers/chart-points'
 
 // Every chart workspace the engine creates is recorded with its parent's charges (D0 ownership).
 const workspaces = vi.hoisted(() => [] as Array<{ workspace: { used: number; reserve(bytes: number, tag: string): boolean }; parent: Array<{ op: 'reserve' | 'release'; tag: string; bytes: number; ok: boolean }> | undefined }>)
 const onReserve = vi.hoisted(() => ({ hook: undefined as undefined | (() => void) }))
+// Paged reads: each scope's share charges (the read's construction share), and a pressure pre-reserved in new
+// parentless workspaces (document facets) to exercise the aggregate chart sublimit.
+const scopes = vi.hoisted(() => [] as Array<{ share: Array<{ op: 'reserve' | 'release'; tag: string; bytes: number; ok: boolean }> }>)
+const pressure = vi.hoisted(() => ({ bytes: 0 }))
 vi.mock('../src/charts/workspace', async original => {
   const actual = await original<typeof import('../src/charts/workspace')>()
   return {
@@ -37,10 +42,19 @@ vi.mock('../src/charts/workspace', async original => {
         release: (tag, bytes) => { parent.release(tag, bytes); log!.push({ op: 'release', tag, bytes, ok: true }) },
       }
       const workspace = actual.createChartWorkspace(profile, wrapped)
+      if (!parent && pressure.bytes) workspace.reserve(pressure.bytes, 'test-pressure')
       const reserve = workspace.reserve.bind(workspace)
       workspace.reserve = (bytes, tag) => { onReserve.hook?.(); return reserve(bytes, tag) }
       workspaces.push({ workspace, parent: log })
       return workspace
+    },
+    scopeChartWorkspace: (document: Parameters<typeof actual.scopeChartWorkspace>[0], share: ChartParentLedger) => {
+      const log: (typeof scopes)[number]['share'] = []
+      scopes.push({ share: log })
+      return actual.scopeChartWorkspace(document, {
+        reserve: (bytes, tag) => { const ok = share.reserve(bytes, tag); log.push({ op: 'reserve', tag, bytes, ok }); return ok },
+        release: (tag, bytes) => { share.release(tag, bytes); log.push({ op: 'release', tag, bytes, ok: true }) },
+      })
     },
   }
 })
@@ -72,7 +86,7 @@ const row = (r: number, cells: string, attrs = '') => `<row r="${r}"${attrs}>${c
 const column = (count: number, value: (i: number) => number) => Array.from({ length: count }, (_, i) => row(i + 1, num(`A${i + 1}`, value(i)))).join('')
 
 const opened: Array<{ release(): Promise<void> }> = []
-afterEach(async () => { for (const source of opened.splice(0)) await source.release(); workspaces.length = 0; onReserve.hook = undefined })
+afterEach(async () => { for (const source of opened.splice(0)) await source.release(); workspaces.length = 0; scopes.length = 0; pressure.bytes = 0; onReserve.hook = undefined })
 async function resident(bytes: Uint8Array): Promise<ChartModel> {
   const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
   const content = doc.sheets[0].drawings![0].content
@@ -118,9 +132,12 @@ describe('D0 data contract: point states (spec 5.8, 6.4)', () => {
     ].join('')
     const bytes = await workbook(xml, sheet)
     const fromCells = await resident(bytes)
-    expect(fromCells.groups[0].series[0].values).toEqual(pts(1, undefined, '#N/A', '#DIV/0!', 'unavailable', 6, undefined, '#N/A'))
+    expect(list(fromCells.groups[0].series[0].values)).toEqual(pts(1, undefined, '#N/A', '#DIV/0!', 'unavailable', 6, undefined, '#N/A'))
     // Sparse cache indices are kept: missing pt@idx are blank at their index, never compacted or zero.
-    expect(fromCells.groups[0].series[1].values).toEqual([{ state: 'value', v: 1 }, { state: 'blank' }, { state: 'error', code: '#N/A' }, { state: 'error', code: '#DIV/0!' }, { state: 'blank' }, { state: 'blank' }, { state: 'blank' }, { state: 'value', v: 3, fmt: '0.0' }])
+    expect(list(fromCells.groups[0].series[1].values)).toEqual([{ state: 'value', v: 1 }, { state: 'blank' }, { state: 'error', code: '#N/A' }, { state: 'error', code: '#DIV/0!' }, { state: 'blank' }, { state: 'blank' }, { state: 'blank' }, { state: 'value', v: 3, fmt: '0.0' }])
+    // Stored compactly: one state byte and one float per point, no object per point.
+    expect(fromCells.groups[0].series[0].values.states).toBeInstanceOf(Uint8Array)
+    expect(fromCells.groups[0].series[0].values.values).toBeInstanceOf(Float64Array)
     expect(fromCells.categories).toEqual(['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'])
     // The group's binding is recorded structurally from its axIds (A1a validates it).
     expect(fromCells.groups[0].binding).toEqual({ kind: 'cartesian', category: '1', value: '2' })
@@ -133,12 +150,12 @@ describe('D0 data contract: point states (spec 5.8, 6.4)', () => {
 
   it('an empty ptCount=0 cache is present and empty; a formula without a saved value under the engine policy is evaluated', async () => {
     const empty = charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:val><c:numRef><c:f>A1:A3</c:f><c:numCache><c:ptCount val="0"/></c:numCache></c:numRef></c:val></c:ser></c:lineChart>`)), undefined)!
-    expect(empty.groups[0].series[0].values).toEqual([])
+    expect(empty.groups[0].series[0].values).toHaveLength(0)
     expect(empty.groups[0].series[0].pending).toBeUndefined()
     const bytes = await workbook(space(`<c:lineChart><c:ser><c:val>${ref('Styled!$A$1:$A$2')}</c:val></c:ser></c:lineChart>`), row(1, num('A1', 3)) + row(2, cell('A2', '<f>A1*2</f>')))
     const doc = await parseXlsx(await OfficePackage.load(bytes))
     const content = doc.sheets[0].drawings![0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual(pts(3, 6))
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts(3, 6))
   })
 })
 
@@ -154,7 +171,9 @@ describe('D0 analytic acquisition before display caps (spec 7)', () => {
     expect(input.kind === 'input' && mean(input.values)).toBe(1)
     // Display still draws 4,096 and says so.
     expect(cached.truncated).toBe(true)
-    expect(charts.displayModel(cached).groups[0].series[0].values).toHaveLength(4096)
+    const view = charts.displayView(cached)
+    expect(view.slots).toBe(4096)
+    expect(view.series[0].value(4095)).toBe(0)
     // Without an analytic element the series is a display series: 4,096 points.
     const plain = charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:val>${lit(data)}</c:val></c:ser></c:lineChart>`)), undefined)!
     expect(plain.groups[0].series[0].values).toHaveLength(4096)
@@ -228,32 +247,152 @@ describe('D0 plotVisOnly (spec 5.8)', () => {
     for (const [option, visibleOnly] of [['', true], ['<c:plotVisOnly val="1"/>', true], ['<c:plotVisOnly val="0"/>', false]] as const) {
       const bytes = await workbook(xml(option), sheet, cols)
       const chart = await resident(bytes)
-      // The fill keeps every point and records the hidden provenance; both paths agree.
-      expect(chart.groups[0].series[0].values).toEqual(pts(10, 20, 30, 40))
-      expect(chart.groups[0].series[0].hidden).toEqual([1])
-      expect(chart.groups[0].series[1].hidden).toEqual([0, 1, 2, 3])
-      expect(chart.categoryHidden).toEqual([1])
+      // The fill keeps every point and records each role's own hidden provenance; both paths agree.
+      expect(list(chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30, 40))
+      expect([...chart.groups[0].series[0].values.hidden ?? []]).toEqual([1])
+      expect([...chart.groups[0].series[1].values.hidden ?? []]).toEqual([0, 1, 2, 3])
+      expect([...chart.categoryHidden ?? []]).toEqual([1])
       expect(await paged(bytes)).toEqual(chart)
-      const shown = charts.displayModel(chart)
+      const view = charts.displayView(chart)
       if (visibleOnly) {
-        // Hidden row 2 leaves the categories and every series; the all-hidden column C series is not drawn.
-        expect(shown.categories).toEqual(['c1', 'c3', 'c4'])
-        expect(shown.groups[0].series.map(s => s.values)).toEqual([pts(10, 30, 40)])
+        // Hidden row 2 leaves the categories (and the points paired with it); the all-hidden column C series is not drawn.
+        expect(Array.from({ length: view.slots }, (_, i) => view.category(i))).toEqual(['c1', 'c3', 'c4'])
+        expect(view.series.map(s => Array.from({ length: view.slots }, (_, i) => s.value(i)))).toEqual([[10, 30, 40]])
         expect(blue(chart)).toBe(0)
       } else {
-        expect(shown).toBe(chart)
+        expect(view.slots).toBe(4)
+        expect(view.series.map(s => Array.from({ length: view.slots }, (_, i) => s.value(i)))).toEqual([[10, 20, 30, 40], [100, 200, 300, 400]])
         expect(blue(chart)).toBeGreaterThan(50)
       }
     }
   })
+
+  const drawn = (view: ReturnType<typeof charts.displayView>) => view.series.map(s => Array.from({ length: view.slots }, (_, i) => s.value(i)))
+  it('applies plotVisOnly per series and role by its own provenance: independent and offset ranges, scatter x/y pairing (I2)', async () => {
+    // Only worksheet row 2 is hidden. Series A reads A1:A3 (its index 1 is hidden); series B reads C10:C12 (nothing hidden).
+    const rows = [1, 2, 3, 10, 11, 12].map(r => row(r, (r <= 3 ? num(`A${r}`, r) : '') + (r >= 10 ? num(`C${r}`, (r - 9) * 10) : ''), r === 2 ? ' hidden="1"' : '')).join('')
+    const bars = space(`<c:barChart><c:ser><c:idx val="0"/><c:val>${ref('Styled!$A$1:$A$3')}</c:val></c:ser><c:ser><c:idx val="1"/><c:val>${ref('Styled!$C$10:$C$12')}</c:val></c:ser></c:barChart>`)
+    const bytes = await workbook(bars, rows)
+    const chart = await resident(bytes)
+    expect([...chart.groups[0].series[0].values.hidden ?? []]).toEqual([1])
+    expect(chart.groups[0].series[1].values.hidden).toBeUndefined()
+    expect(await paged(bytes)).toEqual(chart)
+    // A's hidden A2 is a gap in A only; B's visible C11 = 20 is drawn (never a union of indices across series).
+    expect(drawn(charts.displayView(chart))).toEqual([[1, undefined, 3], [10, 20, 30]])
+    // Scatter: x from A1:A3 (row 2 hidden), y from C10:C12: the pair at index 1 is not drawn; the rest are.
+    const scatter = space(`<c:scatterChart><c:scatterStyle val="marker"/><c:ser><c:idx val="0"/><c:xVal>${ref('Styled!$A$1:$A$3')}</c:xVal><c:yVal>${ref('Styled!$C$10:$C$12')}</c:yVal></c:ser></c:scatterChart>`)
+    const xy = await resident(await workbook(scatter, rows))
+    expect([...xy.groups[0].series[0].xValues!.hidden ?? []]).toEqual([1])
+    expect(xy.groups[0].series[0].values.hidden).toBeUndefined()
+    const view = charts.displayView(xy)
+    expect(Array.from({ length: view.slots }, (_, i) => [view.series[0].x(i), view.series[0].value(i)])).toEqual([[1, 10], [undefined, undefined], [3, 30]])
+    expect(await paged(await workbook(scatter, rows))).toEqual(xy)
+  })
+
+  it('a cached role keeps its reference for provenance: cached values win, hidden rows and columns still apply (I3)', async () => {
+    // The caches say [1,2,3] and [7,8,9]; the worksheet says otherwise. Row 2 and column C are hidden.
+    const cached = (f: string, values: number[]) => `<c:numRef><c:f>${f}</c:f><c:numCache><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`
+    const rows = [1, 2, 3].map(r => row(r, num(`A${r}`, r * 100) + num(`C${r}`, r * 1000), r === 2 ? ' hidden="1"' : '')).join('')
+    for (const [option, visibleOnly] of [['', true], ['<c:plotVisOnly val="0"/>', false]] as const) {
+      const xml2 = space(`<c:lineChart><c:ser><c:idx val="0"/><c:val>${cached('Styled!$A$1:$A$3', [1, 2, 3])}</c:val></c:ser><c:ser><c:idx val="1"/><c:val>${cached('Styled!$C$1:$C$3', [7, 8, 9])}</c:val></c:ser></c:lineChart>`, option)
+      const bytes = await workbook(xml2, rows, '<col min="3" max="3" width="9" hidden="1" customWidth="1"/>')
+      const chart = await resident(bytes)
+      expect(list(chart.groups[0].series[0].values)).toEqual(pts(1, 2, 3))
+      expect(list(chart.groups[0].series[1].values)).toEqual(pts(7, 8, 9))
+      expect([...chart.groups[0].series[0].values.hidden ?? []]).toEqual([1])
+      expect([...chart.groups[0].series[1].values.hidden ?? []]).toEqual([0, 1, 2])
+      expect(await paged(bytes)).toEqual(chart)
+      expect(drawn(charts.displayView(chart))).toEqual(visibleOnly ? [[1, undefined, 3]] : [[1, 2, 3], [7, 8, 9]])
+    }
+  })
 })
 
-describe('D0 ownership: the paged document pool is the chart workspace parent (spec 6.4, 6.5)', () => {
+describe('D0 ownership: one document chart facet; the paged read share is its parent while the read builds (spec 6.4, 6.5)', () => {
   const xml = space(`<c:barChart><c:ser><c:cat>${strRef('Styled!$B$1:$B$3')}</c:cat><c:val>${ref('Styled!$A$1:$A$3')}</c:val></c:ser></c:barChart>`)
   const sheet = [1, 2, 3].map(r => row(r, num(`A${r}`, r) + str(`B${r}`, `c${r}`))).join('')
   const transient = (tag: string) => tag.endsWith(':crossing') || tag.endsWith(':chunk')
-  /** The pool bytes the chart workspace's parent holds now (charged minus refunded, tree charges only). */
-  const parentHeld = (log: NonNullable<(typeof workspaces)[number]['parent']>) => log.reduce((sum, e) => sum + (e.ok ? (e.op === 'reserve' ? e.bytes : -e.bytes) : 0), 0)
+  type Log = (typeof scopes)[number]['share']
+  /** The share bytes a scope's charges hold now (charged minus refunded; transient decode work is never in the share). */
+  const shareHeld = (log: Log) => log.reduce((sum, e) => sum + (e.ok && !transient(e.tag) ? (e.op === 'reserve' ? e.bytes : -e.bytes) : 0), 0)
+  const facet = () => workspaces.find(entry => !entry.parent)!.workspace
+
+  it('a resident model keeps its storage charged in the document workspace while it lives, and returns it on dispose', async () => {
+    // The review's probe: an uncached analytic reference A1:A4097, parsed with a real document context and a logging parent.
+    const parentLog: Array<[string, number]> = []
+    let parentHeld = 0
+    const context = documentChartContext('desktop', undefined, { reserve: (bytes, tag) => { parentLog.push([tag, bytes]); parentHeld += bytes; return true }, release: (_tag, bytes) => { parentHeld -= bytes } })
+    const bytes = await workbook(space(`<c:lineChart><c:ser>${TRENDLINE}<c:val>${ref('Styled!$A$1:$A$4097')}</c:val></c:ser></c:lineChart>`), row(1, num('A1', 5)))
+    const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached', chartContext: context })
+    const content = doc.sheets[0].drawings![0].content
+    if (content?.kind !== 'xlsxChart') throw new Error('no chart')
+    expect(content.chart.groups[0].series[0].values).toHaveLength(4097)
+    expect(content.chart.groups[0].series[0].values.values[0]).toBe(5)
+    // The live model's storage (9 B per point) is owned by the document facet, and through it by the parent.
+    expect(context.workspace.used).toBeGreaterThanOrEqual(4097 * 9)
+    expect(parentHeld).toBe(context.workspace.used)
+    expect(charts.chartModelOwner(content.chart)?.workspace).toBe(context.workspace)
+    charts.releaseChartModel(content.chart)
+    expect(context.workspace.used).toBe(0)
+    expect(parentHeld).toBe(0)
+  })
+
+  it('a fill whose storage the chart workspace refuses is refused before any cell is read or point built', () => {
+    const model = charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:val>${ref('S!$A$1:$A$100')}</c:val></c:ser></c:lineChart>`)), undefined)!
+    // Room for less than 100 points (900 B) in the parent ledger.
+    let parentHeld = 0
+    const workspace = createChartWorkspace('desktop', { reserve: bytes => { if (parentHeld + bytes > 500) return false; parentHeld += bytes; return true }, release: (_tag, bytes) => { parentHeld -= bytes } })
+    const lookup = vi.fn(() => ({ value: 1 }))
+    const filled = charts.fillChartRanges(model, 'S', lookup, { workspace })
+    expect(lookup).not.toHaveBeenCalled()
+    expect(filled).toMatchObject({ refused: true, unsupported: 'This chart needs more memory than is available for charts' })
+    expect(workspace.used).toBe(0)
+    expect(parentHeld).toBe(0)
+    // With room, the same fill is charged before it is built and stays charged with the model.
+    const roomy = createChartWorkspace('desktop')
+    const ok = charts.fillChartRanges(model, 'S', lookup, { workspace: roomy })
+    expect(ok.groups[0].series[0].values).toHaveLength(100)
+    expect(roomy.used).toBe(100 * 9)
+    charts.releaseChartModel(ok)
+    expect(roomy.used).toBe(0)
+  })
+
+  it('the chart sublimit holds across the charts of a paged document: a chart past it is refused, an evicted one returns its room', async () => {
+    // Two analytic charts on one sheet, 65,536 points each (576 KiB of storage each, more than a chart read's
+    // transient work); the facet has room for one.
+    const big = (s: number) => space(`<c:lineChart><c:ser><c:idx val="${s}"/>${TRENDLINE}<c:val>${ref('Styled!$A$1:$A$65536')}</c:val></c:ser></c:lineChart>`)
+    const second = `<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>20</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="3048000" cy="1905000"/><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 2"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rChart2"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor>`
+    const bytes = await chartWorkbookBytes(big(0), { patch: async zip => {
+      const path = 'xl/worksheets/sheet1.xml', s0 = await zip.file(path)!.async('string')
+      zip.file(path, s0.replace(/<sheetData>[\s\S]*<\/sheetData>/, `<sheetData>${column(8, i => i)}</sheetData>`))
+      const drawing = await zip.file('xl/drawings/drawing1.xml')!.async('string')
+      zip.file('xl/drawings/drawing1.xml', drawing.replace('</xdr:wsDr>', `${second}</xdr:wsDr>`))
+      zip.file('xl/drawings/_rels/drawing1.xml.rels', '<Relationships><Relationship Id="rChart" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/><Relationship Id="rChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/></Relationships>')
+      zip.file('xl/charts/chart2.xml', big(1))
+    } })
+    const limit = CHART_WORKSPACE_LIMIT.desktop
+    // One chart's storage (and any chart read's transient work) fits; two charts' storage does not.
+    pressure.bytes = limit - Math.round(65536 * 9 * 1.5)
+    const h = await pagedSource(bytes)
+    const pool = new MemoryPool({ limitBytes: 256 * 1024 * 1024 })
+    h.source.bindMemory!(pool)
+    const share = pool.charge()
+    const result = await h.read({ set: n => share.set(n) })
+    share.release()
+    const kinds = result.drawings.map(d => d.content?.kind === 'xlsxChart' ? (d.content.chart.refused ? 'refused' : d.content.chart.unsupported ?? 'native') : d.content?.kind)
+    expect(kinds).toEqual(['native', 'refused'])
+    // The retained native chart holds its storage in the document facet beyond the read.
+    const document = facet()
+    expect(document.used - pressure.bytes).toBeGreaterThanOrEqual(65536 * 9)
+    // A repeated read is a cache hit: its clone is a transport copy in the share, never a second facet charge.
+    const held = document.used
+    const again = pool.charge()
+    await h.read({ set: n => again.set(n) })
+    again.release()
+    expect(document.used).toBe(held)
+    // Eviction returns the room.
+    pool.trim(0)
+    expect(document.used).toBe(pressure.bytes)
+  }, 60_000)
 
   it('paged charts reserve through the parent document pool: the retained model plus the outgoing clone peak is charged as two live allocations; cancellation, eviction and last release return the parent to its baseline', async () => {
     const bytes = await workbook(xml, sheet)
@@ -267,63 +406,65 @@ describe('D0 ownership: the paged document pool is the chart workspace parent (s
     const result = await h.read({ set: n => { sets.push(n); return share.set(n) } })
     expect(result.completeness).toBe('complete')
     const chart = result.drawings[0].content
-    expect(chart?.kind === 'xlsxChart' && chart.chart.groups[0].series[0].values).toEqual(pts(1, 2, 3))
-    // The chart workspace was created with the share as its parent: its tree charges reached the share (once),
-    // and were refunded to it when the tree was released, so the parent holds nothing of the chart read.
-    const { workspace, parent } = workspaces.at(-1)!
-    expect(parent).toBeDefined()
-    const trees = parent!.filter(e => e.op === 'reserve' && !transient(e.tag))
-    expect(trees.length).toBeGreaterThan(0)
-    expect(parent!.some(e => e.op === 'reserve' && transient(e.tag))).toBe(true)
-    expect(parentHeld(parent!.filter(e => !transient(e.tag)))).toBe(0)
-    expect(workspace.used).toBe(0)
-    // The tree was in the share at its peak, and the share went down when it was refunded.
-    const peak = Math.max(...sets), treeBytes = trees.reduce((sum, e) => sum + e.bytes, 0)
+    expect(list(chart?.kind === 'xlsxChart' && chart.chart.groups[0].series[0].values)).toEqual(pts(1, 2, 3))
+    // The read worked in a scope of the one document facet, whose parent was the read's share: tree and model
+    // charges reached the share (each once) while the read built, and the share was handed off when the payload got
+    // its owner (the retained entry) -- the document facet keeps the retained model's charge.
+    const document = facet(), log = scopes.at(-1)!.share
+    const charged = log.filter(e => e.op === 'reserve' && e.ok && !transient(e.tag))
+    expect(charged.some(e => e.tag.startsWith('chart-read:'))).toBe(true)
+    expect(charged.some(e => e.tag.startsWith('chart-model#'))).toBe(true)
+    // Trees were refunded to the share; the model storage was not refunded (it moved to the pool entry with the payload).
+    const modelBytes = shareHeld(log)
+    expect(modelBytes).toBeGreaterThan(0)
+    expect(charged.filter(e => e.tag.startsWith('chart-model#')).reduce((sum, e) => sum + e.bytes, 0)).toBe(modelBytes)
+    expect(document.used).toBe(modelBytes)
+    const peak = Math.max(...sets)
     expect(sets.some((n, i) => i > 0 && n < sets[i - 1])).toBe(true)
-    expect(peak).toBeGreaterThanOrEqual(treeBytes)
-    // Two live allocations: the retained payload (its pool entry) and the outgoing clone (the share). The parsed
-    // payload left the share when its pool entry took it: the share holds the clone, not the payload twice.
+    expect(peak).toBeGreaterThanOrEqual(charged.filter(e => e.tag.startsWith('chart-read:')).reduce((sum, e) => sum + e.bytes, 0))
+    // Two live allocations: the retained payload (its pool entry, model storage included) and the outgoing clone
+    // (the share). The parsed payload, model included, left the share when its pool entry took it.
     const retained = pool.stats().byTier.rebuildable
     expect(retained).toBe(drawingFootprint(result))
     const payloadSet = sets.at(-2)!, cloneSet = sets.at(-1)!
     expect(cloneSet - payloadSet).toBe(drawingFootprint(result) - drawingFootprint(result.drawings))
     // (The pool also caches the decoded cell pages the fill read: their own retained tier, not chart bytes.)
     expect(pool.stats().transientBytes).toBe(cloneSet)
-    // The reply is posted: the share ends (last release of the read).
     share.release()
     expect(pool.stats().transientBytes).toBe(0)
     expect(pool.stats().byTier.rebuildable).toBe(retained)
 
-    // 2. Eviction returns the pool to its baseline.
+    // 2. Eviction returns the pool and the document facet to their baselines.
     pool.trim(0)
     expect(pool.stats().byTier.rebuildable).toBe(0)
     expect(pool.stats().totalBytes).toBe(baseline)
+    expect(document.used).toBe(0)
 
-    // 3. A read cancelled during its chart read: the share and the workspace's parent return to baseline.
+    // 3. A read cancelled during its chart read: the share and the document facet return to baseline.
     const controller = new AbortController(), cancelShare = pool.charge()
     onReserve.hook = () => controller.abort()
     const cancelled = await h.read({ set: n => cancelShare.set(n) }, controller.signal)
     onReserve.hook = undefined
     expect(cancelled.completeness).toBe('incomplete')
     await new Promise(resolve => setTimeout(resolve, 20))
-    const after = workspaces.at(-1)!
-    expect(after.workspace.used).toBe(0)
-    expect(parentHeld(after.parent!.filter(e => !transient(e.tag)))).toBe(0)
+    expect(document.used).toBe(0)
+    expect(shareHeld(scopes.at(-1)!.share)).toBe(0)
     cancelShare.release()
     expect(pool.stats().transientBytes).toBe(0)
     expect(pool.stats().byTier.rebuildable).toBe(0)
 
-    // 4. Last release of the document: a retained payload is released with the source.
+    // 4. Last release of the document: a retained payload and its facet charge go with the source.
     const again = pool.charge()
     await h.read({ set: n => again.set(n) })
     again.release()
     expect(pool.stats().byTier.rebuildable).toBeGreaterThan(0)
+    expect(document.used).toBeGreaterThan(0)
     await h.source.release()
     opened.length = 0
-    // Nothing of the charts stays: no retained payload, no share (the session's own bind-time bytes went with it).
     expect(pool.stats().byTier.rebuildable).toBe(0)
     expect(pool.stats().transientBytes).toBe(0)
     expect(pool.stats().totalBytes).toBeLessThanOrEqual(baseline)
+    expect(document.used).toBe(0)
   })
 
   it('largeSource reopens with saved values in the same chart workspace: one workspace per document, no orphaned charge', async () => {
@@ -338,9 +479,12 @@ describe('D0 ownership: the paged document pool is the chart workspace parent (s
     expect(cap.armed).toBe(false)
     expect(doc.diagnostics?.some(d => d.kind === 'cached-values' || /saved/i.test(d.message))).toBe(true)
     const content = doc.sheets[0].drawings![0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual(pts(1, 2, 3))
-    // Both parses read their charts in the one document workspace, and it holds nothing afterwards.
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts(1, 2, 3))
+    // Both parses read their charts in the one document workspace. The discarded first parse returned its storage:
+    // the workspace holds exactly the live model's, and nothing once that model is released.
     expect(workspaces).toHaveLength(1)
+    expect(workspaces[0].workspace.used).toBeGreaterThan(0)
+    if (content?.kind === 'xlsxChart') charts.releaseChartModel(content.chart)
     expect(workspaces[0].workspace.used).toBe(0)
   })
 
@@ -368,7 +512,7 @@ describe('D0 ownership: the paged document pool is the chart workspace parent (s
       const content = (state as unknown as { drawings: Array<{ content?: { kind: string; chart?: ChartModel } }> }).drawings[0].content
       expect(content?.chart?.groups[0].series).toHaveLength(64)
       expect(content?.chart?.groups[0].series[63].values).toHaveLength(4096)
-      expect(content?.chart?.groups[0].series[63].values[4095]).toEqual({ state: 'value', v: 4095 + 63 })
+      expect(content?.chart?.groups[0].series[63].values.values[4095]).toBe(4095 + 63)
       expect(remote.mainLedger.peakBytes).toBeLessThanOrEqual(MAIN_THREAD_BUDGETS.D)
     } finally { await remote.close() }
   }, 120_000)
@@ -396,25 +540,38 @@ describe('D0 ownership: the paged document pool is the chart workspace parent (s
       return held
     }
     const rawPrefix = pages.textPrefix
-    const prefix = vi.spyOn(pages, 'textPrefix').mockImplementation((...args: Parameters<typeof rawPrefix>) => { events.push(`build ${args[2]}`); return rawPrefix(...args) })
+    const prefix = vi.spyOn(pages, 'textPrefix').mockImplementation((...args: Parameters<typeof rawPrefix>) => { const out = rawPrefix(...args); events.push(`build ${args[2]} ${out.text.length}`); return out })
     try {
       const charged: number[] = []
       const result = await store.readDrawings({ stamp: store.stamp, signal: new AbortController().signal }, 'D', { set: n => { charged.push(n); events.push(`set ${n}`); return true } })
       expect(result.completeness).toBe('complete')
       const values = result.drawings[0].content!.chart!.groups[0].series[0].values
-      expect(values.slice(0, 6)).toEqual(pts('#N/A', 'unavailable', 2, '#N/A', 'unavailable', 5))
+      expect((list(values) as ChartPoint[]).slice(0, 6)).toEqual(pts('#N/A', 'unavailable', 2, '#N/A', 'unavailable', 5))
       // The cell workspace is admitted before the first page is owned.
       const firstPage = events.indexOf('page')
       expect(firstPage).toBeGreaterThan(0)
       expect(events.slice(0, firstPage).some(e => e.startsWith('set '))).toBe(true)
       // At most one decoded page is owned at any moment.
       expect(maxOwned).toBe(1)
-      // Every prefix (an error code: at most 16 units; a label) is built only after an accepted reservation grew the share.
-      for (let i = 0; i < events.length; i++) if (events[i].startsWith('build')) {
-        const lastSet = events.slice(0, i).reverse().find(e => e.startsWith('set '))
-        expect(lastSet).toBeDefined()
+      // Every prefix (an error code: at most 16 units; a label) is built right after its own reservation: the event
+      // immediately before each build is an accepted `set`.
+      const buildAt = events.flatMap((e, k) => e.startsWith('build') ? [k] : [])
+      expect(buildAt.length).toBeGreaterThan(40)
+      for (const k of buildAt) expect(events[k - 1]).toMatch(/^set /)
+      expect(events.some(e => /^build 4 4$/.test(e))).toBe(true) // '#N/A': the code prefix, at most CHART_ERROR_CODE_LIMIT units
+      // And that reservation is the one admitting it: refusing exactly that `set` means the prefix is never built
+      // (checked for the first error-code prefix and the first label prefix).
+      const targets = [buildAt.find(k => events[k].startsWith('build 4 ')), buildAt.find(k => events[k].startsWith('build 256 '))]
+      for (const target of targets) {
+        expect(target).toBeDefined()
+        const refuseAt = events.slice(0, target!).filter(e => e.startsWith('set ')).length - 1
+        const builtBefore = buildAt.filter(k => k < target!).length
+        events.length = 0
+        let calls = 0
+        const refused = await store.readDrawings({ stamp: store.stamp, signal: new AbortController().signal }, 'D', { set: n => { events.push(`set ${n}`); return calls++ !== refuseAt } })
+        expect(refused.completeness).toBe('incomplete')
+        expect(events.filter(e => e.startsWith('build')).length).toBe(builtBefore)
       }
-      expect(events).toContain('build 4') // '#N/A': the code prefix, never more than CHART_ERROR_CODE_LIMIT units
     } finally { prefix.mockRestore() }
   })
 })

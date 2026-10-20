@@ -22,8 +22,11 @@ export function chartDescription(model: XlsxChartModel): string {
   const parts = [`${name} ${grouping ? grouping + kind.toLowerCase() : kind}, ${series.length} series`]
   if (model.categories.length) parts.push(`${model.categories.length} categories${model.categories.length <= 12 ? ` (${model.categories.join(', ')})` : ''}`)
   for (const s of series.slice(0, 8)) {
-    const nums = s.values.flatMap(p => p.state === 'value' ? [p.v] : [])
-    parts.push(nums.length ? `${s.name}: ${nums.length <= 12 ? nums.map(n => formatNumber(n)).join(', ') : `${formatNumber(nums.reduce((a, b) => Math.min(a, b)))} to ${formatNumber(nums.reduce((a, b) => Math.max(a, b)))}`}` : `${s.name}: no data`)
+    // Read from the compact storage (state 1: a value): the first 12 values, else the range.
+    const first: number[] = []
+    let count = 0, min = Infinity, max = -Infinity
+    for (let i = 0; i < s.values.length; i++) if (s.values.states[i] === 1) { const v = s.values.values[i]; if (count++ < 12) first.push(v); min = Math.min(min, v); max = Math.max(max, v) }
+    parts.push(count ? `${s.name}: ${count <= 12 ? first.map(n => formatNumber(n)).join(', ') : `${formatNumber(min)} to ${formatNumber(max)}`}` : `${s.name}: no data`)
   }
   return parts.join('; ') + (model.truncated ? '; data truncated.' : '.')
 }

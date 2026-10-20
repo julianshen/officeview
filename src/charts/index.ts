@@ -18,7 +18,8 @@ export { readChartPart, type ChartRead } from './read'
 export * from './parse'
 export * from './fill'
 export * from './points'
-export { displayModel } from './display'
+export { displayView, type DisplayView } from './display'
+export { releaseChartModel, chartModelOwner } from './own'
 export { paintXlsxChart }
 export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)

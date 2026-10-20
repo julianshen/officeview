@@ -468,7 +468,9 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     // Under the cached policy an uncached formula has no value (view/values isValueUnavailable).
     const cached = options.valuePolicy === 'cached'
     try {
-      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: () => {}, release: () => {} }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
+      // The fill's new storage is admitted to the document's chart workspace (the one its parsed models are
+      // owned by) before it is built, and stays charged for the models' lifetime (D0).
+      (await loadChartModule()).fillWorkbookCharts(sheets, { workspace: drawingPartContext(pkg).chart?.workspace, names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: () => {}, release: () => {} }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
     } catch { /* charts keep their placeholder state; the workbook stays usable */ }
   }
   return doc

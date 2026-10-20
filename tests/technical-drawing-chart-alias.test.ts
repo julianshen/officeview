@@ -45,7 +45,7 @@ it('raw chart model retained by sheetCharts remains charged after the geometry a
  expect(retainedChart.groups[0].series[0].values).toHaveLength(1000)
  geometry=null
  await remote.close();await collect()
- expect(retainedChart.groups[0].series[0].values[999]).toEqual({ state: 'value', v: 1041 })
+ expect([retainedChart.groups[0].series[0].values.states[999], retainedChart.groups[0].series[0].values.values[999]]).toEqual([1, 1041])
  console.log('retained actual sheetCharts model',JSON.stringify({points:retainedChart.groups[0].series[0].values.length,drawingsCharged:ledger.snapshot().byPool.drawings,ledger:ledger.snapshot()}))
  expect(ledger.snapshot().byPool.drawings).toBeGreaterThanOrEqual(8000)
  retainedChart=null as any

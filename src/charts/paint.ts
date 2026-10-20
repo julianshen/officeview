@@ -6,31 +6,33 @@
  */
 import { paintChartPlaceholder } from '../drawing/content-paint'
 import { formatNumber } from '../xlsx/chartDescription'
-import { displayModel } from './display'
+import { displayView, type DisplayView } from './display'
 import type { ChartAxis, ChartGroup, ChartModel, ChartSeries } from './model'
-import { pointValue } from './points'
 
 type FamilyCss = (family: string) => string
 /**
- * What the painter draws: the display model (plotVisOnly applied, points capped)
- * with every point as its plotted number. Every non-value state (blank, error,
- * unavailable) is a gap here, as before D0; the per-family point matrix
- * (spec 5.8) is A2's.
+ * What the painter draws: the display view (plotVisOnly per role, points
+ * capped), read slot by slot from the compact storage; no per-point array is
+ * copied. Every non-value state (blank, error, unavailable) is a gap here, as
+ * before D0; the per-family point matrix (spec 5.8) is A2's.
  */
-type Num = number | undefined
-interface DrawSeries extends Omit<ChartSeries, 'values' | 'xValues'> { values: Num[]; xValues?: Num[] }
+interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' | 'line' | 'markers'> {
+  value(slot: number): number | undefined
+  x(slot: number): number | undefined
+  hasX: boolean
+}
 interface DrawGroup extends Omit<ChartGroup, 'series'> { series: DrawSeries[] }
 type AxisScale = Pick<ChartAxis, 'min' | 'max' | 'majorUnit' | 'gridlines' | 'deleted' | 'title'>
-interface DrawModel extends Omit<ChartModel, 'groups'> { groups: DrawGroup[]; categoryAxis: AxisScale; valueAxis: AxisScale }
+interface DrawModel extends Omit<ChartModel, 'groups'> { groups: DrawGroup[]; view: DisplayView; categoryAxis: AxisScale; valueAxis: AxisScale }
 const NO_AXIS: AxisScale = { gridlines: false, deleted: false }
-function drawModel(source: ChartModel): DrawModel {
-  const model = displayModel(source)
+function drawModel(model: ChartModel): DrawModel {
+  const view = displayView(model)
   const scatter = model.groups[0]?.family === 'scatter'
   const values = model.axes.filter(axis => axis.kind === 'value')
-  const nums = (points: ChartSeries['values']) => points.map(pointValue)
   return {
     ...model,
-    groups: model.groups.map(group => ({ ...group, series: group.series.map(({ values: points, xValues, ...s }): DrawSeries => ({ ...s, values: nums(points), ...(xValues ? { xValues: nums(xValues) } : {}) })) })),
+    view,
+    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX }): DrawSeries => ({ name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, value, x, hasX })) })),
     // The first category (else date) axis; scatter's x and y are its first two value axes.
     categoryAxis: model.axes.find(axis => axis.kind === 'category') ?? model.axes.find(axis => axis.kind === 'date') ?? (scatter ? values[0] : undefined) ?? NO_AXIS,
     valueAxis: (scatter ? values[1] : values[0]) ?? NO_AXIS,
@@ -55,8 +57,9 @@ interface Box { x: number; y: number; w: number; h: number }
 function legendEntries(model: DrawModel): Array<{ name: string; color: string }> {
   const group = model.groups[0]
   if (group && (group.family === 'pie' || group.family === 'doughnut')) {
-    const s = group.series[0]
-    return (s?.values ?? []).map((_, i) => ({ name: model.categories[i] ?? String(i + 1), color: s.pointColors?.[i] ?? s.color })).slice(0, 64)
+    const s = group.series[0], out: Array<{ name: string; color: string }> = []
+    if (s) for (let slot = 0; slot < Math.min(model.view.slots, 64); slot++) { const i = model.view.source(slot); out.push({ name: model.view.category(slot) ?? String(i + 1), color: s.pointColors?.[i] ?? s.color }) }
+    return out
   }
   return model.groups.flatMap(g => g.series).map(s => ({ name: s.name, color: s.color }))
 }
@@ -102,7 +105,8 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box,
 function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
   const series = group.series[0]
   if (!series) return
-  const values = series.values.map(v => v !== undefined && v > 0 ? v : 0)
+  const values: number[] = []
+  for (let slot = 0; slot < model.view.slots; slot++) { const v = series.value(slot); values.push(v !== undefined && v > 0 ? v : 0) }
   const total = values.reduce((a, b) => a + b, 0)
   if (!(total > 0)) return
   const r = Math.max(1, Math.min(box.w, box.h) / 2 - 4), cx = box.x + box.w / 2, cy = box.y + box.h / 2
@@ -114,7 +118,7 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
     ctx.moveTo(cx, cy)
     ctx.arc(cx, cy, r, angle, angle + sweep)
     ctx.closePath()
-    ctx.fillStyle = `#${series.pointColors?.[i] ?? series.color}`
+    ctx.fillStyle = `#${series.pointColors?.[model.view.source(i)] ?? series.color}`
     ctx.fill()
     ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1; ctx.stroke()
     angle += sweep
@@ -125,31 +129,33 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
     ctx.fillStyle = '#FFFFFF'
     ctx.fill()
   }
-  void model
 }
 
 function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Box, fontPx: number, family: string, familyCss: FamilyCss): void {
   const scatter = model.groups.every(g => g.family === 'scatter')
   const horizontal = model.groups.some(g => g.family === 'bar' && g.barDir === 'bar')
   const percent = model.groups.some(g => g.grouping === 'percentStacked')
-  const count = Math.max(model.categories.length, ...model.groups.flatMap(g => g.series.map(s => s.values.length)), 1)
+  const count = model.view.slots
   // Value extents, honouring stacking.
   let lo = Infinity, hi = -Infinity
   const stackedValues = new Map<DrawGroup, { pos: number[]; neg: number[]; total: number[] }>()
   for (const group of model.groups) {
     if (group.grouping === 'stacked' || group.grouping === 'percentStacked') {
       const pos = new Array<number>(count).fill(0), neg = new Array<number>(count).fill(0), total = new Array<number>(count).fill(0)
-      for (const s of group.series) s.values.forEach((v, i) => { if (v === undefined || i >= count) return; if (v >= 0) pos[i] += v; else neg[i] += v; total[i] += Math.abs(v) })
+      for (const s of group.series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v === undefined) continue; if (v >= 0) pos[i] += v; else neg[i] += v; total[i] += Math.abs(v) }
       stackedValues.set(group, { pos, neg, total })
       if (group.grouping === 'stacked') for (let i = 0; i < count; i++) { lo = Math.min(lo, neg[i]); hi = Math.max(hi, pos[i]) }
-    } else for (const s of group.series) for (const v of s.values) if (v !== undefined) { lo = Math.min(lo, v); hi = Math.max(hi, v) }
+    } else for (const s of group.series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) { lo = Math.min(lo, v); hi = Math.max(hi, v) } }
   }
   if (!Number.isFinite(lo)) { lo = 0; hi = 1 }
   const scale = niceScale(lo, hi, model.valueAxis, percent)
   let xs: { min: number; max: number; step: number } | undefined
   if (scatter) {
     let xlo = Infinity, xhi = -Infinity
-    for (const s of model.groups.flatMap(g => g.series)) (s.xValues?.length ? s.xValues : s.values.map((_, i) => i + 1)).forEach(v => { if (v !== undefined) { xlo = Math.min(xlo, v); xhi = Math.max(xhi, v) } })
+    for (const group of model.groups) for (const s of group.series) for (let i = 0; i < count; i++) {
+      const v = s.hasX ? s.x(i) : i + 1
+      if (v !== undefined) { xlo = Math.min(xlo, v); xhi = Math.max(xhi, v) }
+    }
     if (!Number.isFinite(xlo)) { xlo = 0; xhi = 1 }
     xs = niceScale(xlo, xhi, model.categoryAxis, false)
   }
@@ -163,7 +169,9 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
   const titleBand = fontPx + 6
   let plot: Box = { ...box }
   if (horizontal) {
-    const catWidth = model.categoryAxis.deleted ? 0 : Math.min(box.w * 0.35, Math.max(0, ...model.categories.map(c => ctx.measureText(c).width)) + 8)
+    let widestLabel = 0
+    if (!model.categoryAxis.deleted) for (let slot = 0; slot < count; slot++) { const c = model.view.category(slot); if (c !== undefined) widestLabel = Math.max(widestLabel, ctx.measureText(c).width) }
+    const catWidth = model.categoryAxis.deleted ? 0 : Math.min(box.w * 0.35, widestLabel + 8)
     plot = { x: box.x + catWidth + (catTitle ? titleBand : 0), y: box.y + 4, w: box.w - catWidth - (catTitle ? titleBand : 0) - 8, h: box.h - catLabelHeight - (valueTitle ? titleBand : 0) - 4 }
   } else {
     plot = { x: box.x + valueLabelWidth + (valueTitle ? titleBand : 0), y: box.y + 4, w: box.w - valueLabelWidth - (valueTitle ? titleBand : 0) - 8, h: box.h - catLabelHeight - (catTitle ? titleBand : 0) - 4 }
@@ -195,16 +203,18 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
     if (horizontal) { const x = Math.round(plot.x + zero * plot.w) + 0.5; ctx.moveTo(x, plot.y); ctx.lineTo(x, plot.y + plot.h) }
     else { const y = Math.round(plot.y + plot.h - zero * plot.h) + 0.5; ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y) }
     ctx.stroke()
-    if (!model.categoryAxis.deleted && model.categories.length) {
+    if (!model.categoryAxis.deleted && model.view.category(0) !== undefined) {
       ctx.fillStyle = TEXT
-      const widest = Math.max(...model.categories.map(c => ctx.measureText(c).width))
+      let widest = 0
+      for (let slot = 0; slot < count; slot++) { const c = model.view.category(slot); if (c !== undefined) widest = Math.max(widest, ctx.measureText(c).width) }
       const skip = horizontal ? Math.max(1, Math.ceil((fontPx + 2) / band)) : Math.max(1, Math.ceil((widest + 6) / band))
-      model.categories.forEach((c, i) => {
-        if (i % skip) return
+      for (let i = 0; i < count; i++) {
+        const c = model.view.category(i)
+        if (c === undefined || i % skip) continue
         // Horizontal bars list categories top-down in reverse (Excel's default orientation).
         if (horizontal) { ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(c, plot.x - 4, plot.y + plot.h - band * (i + 0.5)) }
         else { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(c, plot.x + band * (i + 0.5), plot.y + plot.h + 3, skip * band) }
-      })
+      }
     }
   } else if (xs && !model.categoryAxis.deleted) {
     ctx.fillStyle = TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
@@ -235,18 +245,20 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
       const width = band / (span + group.gapWidth / 100)
       const posBase = new Array<number>(count).fill(0), negBase = new Array<number>(count).fill(0)
       group.series.forEach((s, si) => {
-        s.values.forEach((raw, i) => {
-          if (raw === undefined || i >= count) return
+        for (let i = 0; i < count; i++) {
+          const raw = s.value(i)
+          if (raw === undefined) continue
           const v = share(raw, i)
           let from = 0, to = v
           if (stacked) { const base = v >= 0 ? posBase : negBase; from = base[i]; to = base[i] + v; base[i] = to }
           const slot = group.grouping === 'clustered' ? si : 0
           const offset = (band - width * span) / 2 + width * slot * stride
           const a = at(vpos(from)), b = at(vpos(to))
-          ctx.fillStyle = `#${s.pointColors?.[i] && barGroups.length === 1 && group.series.length === 1 ? s.pointColors[i] : s.color}`
+          const color = s.pointColors?.[model.view.source(i)]
+          ctx.fillStyle = `#${color && barGroups.length === 1 && group.series.length === 1 ? color : s.color}`
           if (horizontal) ctx.fillRect(Math.min(a, b), plot.y + plot.h - band * (i + 1) + offset, Math.abs(b - a), width)
           else ctx.fillRect(plot.x + band * i + offset, Math.min(a, b), width, Math.abs(b - a))
-        })
+        }
       })
     } else if (group.family === 'line' || group.family === 'area') {
       const base = new Array<number>(count).fill(0)
@@ -256,7 +268,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
       for (const s of group.series) {
         const bottom = base.slice()
         const top = Array.from({ length: count }, (_, i) => {
-          const raw = s.values[i]
+          const raw = s.value(i)
           if (raw === undefined) return stacked && edge ? base[i] : undefined
           const v = share(raw, i)
           if (stacked) { base[i] += v; return base[i] }
@@ -290,7 +302,8 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
     } else if (group.family === 'scatter' && xs) {
       const xp = (v: number) => plot.x + (v - xs!.min) / (xs!.max - xs!.min) * plot.w
       for (const s of group.series) {
-        const pts = s.values.map((v, i) => { const x = s.xValues?.length ? s.xValues[i] : i + 1; return v === undefined || x === undefined ? undefined : [xp(x), at(vpos(v))] as const })
+        const pts: Array<readonly [number, number] | undefined> = []
+        for (let i = 0; i < count; i++) { const v = s.value(i), x = s.hasX ? s.x(i) : i + 1; pts.push(v === undefined || x === undefined ? undefined : [xp(x), at(vpos(v))] as const) }
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (s.line) {
           ctx.lineWidth = 2; ctx.beginPath()

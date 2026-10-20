@@ -31,6 +31,8 @@ import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type Aggrega
 import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
 import type { SheetMetadata } from '../storage/sheetRecords'
+import type { ChartWorkspace } from '../../charts/workspace'
+import type { ChartModel } from '../../charts/model'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
 import type { XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../types'
@@ -63,7 +65,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   private drawingCache?: DrawingAnchor[]
   /** S13.2: the parsed drawing payload, retained (evictable) in the document pool so
    * repeated reads (stale retries, re-shown sheets) clone instead of re-parsing. */
-  private drawingsCache?: { entry: PoolEntry; result: SheetDrawings }
+  private drawingsCache?: { entry: PoolEntry; result: SheetDrawings; releaseCharts: () => void }
   constructor(readonly stamp: SourceStamp, private readonly workbook: PagedWorkbook, private readonly sheet: PagedSheet, private readonly drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger() }, private readonly pacing: StorePacing = {}) {}
 
   get extent(): SourceStore['extent'] {
@@ -495,11 +497,16 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, profile, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit) => this.fillCharts(drawings, owner, controller.signal, names, admit) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
       nodes.record(sheetId, parsed.nodes)
+      // The payload now has its owner: the read's share stops holding its chart storage (D0). The retained entry
+      // or the reply owns those bytes; the document facet keeps a retained chart's charge until the entry ends.
+      parsed.chartScope?.handOff()
+      const charts = parsed.chartScope ? await loadChartModule() : undefined
+      const releaseCharts = () => { if (charts) forEachChart(parsed.drawings.drawings, chart => charts.releaseChartModel(chart)) }
       // A chart still waiting on another sheet's import is answered, never cached.
-      if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) return parsed.drawings
-      return this.retainDrawings(parsed.drawings, parsed.workingSet - (parsed.payloadBytes ?? 0), memory)
+      if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) { releaseCharts(); return parsed.drawings }
+      return this.retainDrawings(parsed.drawings, parsed.workingSet - (parsed.payloadBytes ?? 0) - (parsed.modelBytes ?? 0), memory, releaseCharts)
     } catch (cause) {
       if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -528,7 +535,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * Worst case: one decoded page plus the admitted chart storage.
    * Cells past a loading sheet's frontier stay unknown (pendingSheets); a
    * failed sheet turns its charts into placeholders and is never cached. */
-  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
+  private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true, workspace?: ChartWorkspace): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
     const charts = await loadChartModule()
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
     const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
@@ -730,7 +737,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (state[slot] === 4) return { value: undefined, unavailable: true }
       const number = state[slot] === 1 ? nums[slot] : null
       return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(state[slot] === 5 ? { error: errors[slot]! } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
-    }, undefined, (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col))
+    }, undefined, { hidden: (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col), workspace })
     return done()
   }
 
@@ -738,20 +745,24 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * answers with a clone; otherwise the parsed payload itself is the answer.
    * `workingSet` is the read's charge WITHOUT the payload (D0): a retained payload
    * is owned by its pool entry (transferred, never charged twice), so the read's
-   * share holds only the outgoing clone beside it: two live allocations. */
-  private retainDrawings(result: SheetDrawings, workingSet: number, memory?: DrawingMemory): SheetDrawings {
+   * share holds only the outgoing clone beside it: two live allocations. The
+   * retained charts keep their document chart-facet charge until the entry ends
+   * (eviction, close); a payload that is not retained releases it at once
+   * (`releaseCharts`): its reply is a transport copy the share holds. */
+  private retainDrawings(result: SheetDrawings, workingSet: number, memory?: DrawingMemory, releaseCharts: () => void = () => {}): SheetDrawings {
     const pool = this.drawingState.pool
-    if (result.completeness !== 'complete' || !pool || pool.closed) return result
+    if (result.completeness !== 'complete' || !pool || pool.closed) { releaseCharts(); return result }
     const bytes = drawingFootprint(result)
     const holder: { entry?: PoolEntry } = {}
     holder.entry = pool.retain(`drawings:${this.stamp.docId}:${this.sheet.sheetId}`, {
       tier: 'rebuildable', bytes, owner: this.sheet.sheetId,
-      onRelease: () => { if (this.drawingsCache?.entry === holder.entry) this.drawingsCache = undefined },
+      onRelease: () => { releaseCharts(); if (this.drawingsCache?.entry === holder.entry) this.drawingsCache = undefined },
     }) ?? undefined
-    if (!holder.entry) return result
+    if (!holder.entry) { releaseCharts(); return result }
     // The clone sits beside the retained copy until the reply is sent.
-    if (memory && !memory.set(workingSet + bytes)) { holder.entry.release(); return result }
-    this.drawingsCache = { entry: holder.entry, result }
+    // An explicit entry release does not call onRelease: the charts' facet charge is released here too.
+    if (memory && !memory.set(workingSet + bytes)) { holder.entry.release(); releaseCharts(); return result }
+    this.drawingsCache = { entry: holder.entry, result, releaseCharts }
     return structuredClone(result)
   }
 
@@ -801,6 +812,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   async release(): Promise<void> {
     this.released = true
     this.drawingsCache?.entry.release()
+    this.drawingsCache?.releaseCharts()
     this.drawingsCache = undefined
   }
 }
@@ -812,6 +824,8 @@ export interface PagedDrawingState {
   /** The document pool, once the session binds it. */
   pool?: MemoryPool
   nodes: DrawingNodeLedger
+  /** The document's chart facet (D0): one chart sublimit across every read and retained chart of the document. */
+  charts?: { workspace?: unknown }
 }
 function memoryRefusal(): SheetDrawings {
   return unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', failure('resource-limit', 'worker memory budget'), DRAWING_MEMORY_REFUSED)
@@ -849,6 +863,13 @@ export interface PagedSourceOptions {
   drawingPayloadBytes?: number
   /** Request-decode clock and host yield (tests inject both). */
   pacing?: StorePacing
+}
+/** Every chart model of a drawing tree. */
+function forEachChart(drawings: readonly XlsxDrawing[], visit: (chart: ChartModel) => void): void {
+  for (const node of drawings) {
+    if (node.content?.kind === 'xlsxChart') visit(node.content.chart)
+    if (node.children) forEachChart(node.children, visit)
+  }
 }
 /** Whether a cell sits in an authored hidden row or column (chart `plotVisOnly` provenance, as buildGeometry reads them). */
 function hiddenCell(meta: SheetMetadata | undefined, row: number, col: number): boolean {

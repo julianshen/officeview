@@ -142,7 +142,7 @@ class RangePackage extends OfficePackage {
   /** The chart workspace's profile (desktop / mobile limits). */
   readonly chartProfile: 'desktop' | 'mobile'
 
-  constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal, private readonly memory?: DrawingMemory, profile: ProfileId = 'D') {
+  constructor(private readonly src: RangeSource, private readonly inventory: ZipInventory, private readonly limits: PagedDrawingLimits, private readonly signal: AbortSignal, private readonly memory?: DrawingMemory, profile: ProfileId = 'D', readonly chartDocument?: { workspace?: unknown }) {
     super(new JSZip())
     this.chartProfile = profile === 'M' ? 'mobile' : 'desktop'
   }
@@ -250,17 +250,41 @@ const transientChartTag = (tag: string) => tag.endsWith(':crossing') || tag.ends
 const escapeAttr = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
 const aborted = (signal: AbortSignal) => signal.reason ?? new DOMException('Aborted', 'AbortError')
 
+/** A paged read's scoped chart workspace (charts/workspace `scopeChartWorkspace`), as this module sees it. */
+export interface PagedChartScope { readonly shareBytes: number; handOff(): void; releaseAll(): void }
+export interface PagedDrawingOptions {
+  memory?: DrawingMemory
+  startNodes?: number
+  profile?: ProfileId
+  /** The document's chart facet holder (one per paged document; created by the chart engine on first use). */
+  chartDocument?: { workspace?: unknown }
+  fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string, names: DefinedNameMetadata[], admit: (bytes: number) => boolean, workspace: unknown) => Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }>
+}
 export async function loadPagedSheetDrawings(
   source: { src: RangeSource; inventory: ZipInventory },
   sheet: PagedDrawingSheet,
   geometry: SheetGeometry,
   limits: PagedDrawingLimits,
   signal: AbortSignal,
-  options: { memory?: DrawingMemory; startNodes?: number; profile?: ProfileId; fillCharts?: (drawings: XlsxDrawing[], ownerSheet: string, names: DefinedNameMetadata[], admit: (bytes: number) => boolean) => Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> } = {},
+  options: PagedDrawingOptions = {},
 ): Promise<PagedSheetDrawings> {
   const legacy = sheet.legacyDrawingIds ?? []
   if (!sheet.drawingIds.length && !legacy.length) return { drawings: sheetDrawingPayload([], undefined, [], limits.payloadBytes), nodes: 0, workingSet: 0 }
-  const pkg = new RangePackage(source.src, source.inventory, limits, signal, options.memory, options.profile)
+  const pkg = new RangePackage(source.src, source.inventory, limits, signal, options.memory, options.profile, options.chartDocument)
+  const scope = () => drawingPartContext(pkg).chart?.workspace as unknown as PagedChartScope | undefined
+  // A read that fails, is cancelled or is refused refunds every chart charge it holds (document facet and share).
+  try {
+    const result = await readPagedSheetDrawings(pkg, sheet, geometry, limits, signal, options)
+    const chartScope = scope()
+    if (result.drawings.completeness !== 'complete' && !result.payloadBytes) { chartScope?.releaseAll(); return result }
+    return chartScope ? { ...result, chartScope } : result
+  } catch (error) {
+    scope()?.releaseAll()
+    throw error
+  }
+}
+async function readPagedSheetDrawings(pkg: RangePackage, sheet: PagedDrawingSheet, geometry: SheetGeometry, limits: PagedDrawingLimits, signal: AbortSignal, options: PagedDrawingOptions): Promise<PagedSheetDrawings> {
+  const legacy = sheet.legacyDrawingIds ?? []
   const context = drawingPartContext(pkg)
   const startNodes = context.nodes = options.startNodes ?? 0
   // Theme: the workbook relationship, exactly as parse.ts finds it.
@@ -302,7 +326,7 @@ export async function loadPagedSheetDrawings(
       try { names = parseDefinedNames(await pkg.xml('xl/workbook.xml')) } catch { if (signal.aborted) throw aborted(signal) }
     }
     // The chart cell workspace is admitted against the drawing memory before any read.
-    const filled = await options.fillCharts(shell.drawings!, sheet.name, names, bytes => !options.memory || options.memory.set(pkg.workingSet + bytes))
+    const filled = await options.fillCharts(shell.drawings!, sheet.name, names, bytes => !options.memory || options.memory.set(pkg.workingSet + bytes), context.chart?.workspace)
     if (signal.aborted) throw aborted(signal)
     if (filled.pendingSheets.length) pendingSheets = filled.pendingSheets
     if (filled.refused) {
@@ -317,12 +341,15 @@ export async function loadPagedSheetDrawings(
   }
   const payload = sheetDrawingPayload(shell.drawings ?? [], theme, diagnostics, limits.payloadBytes)
   const drawings = pendingSheets && payload.completeness === 'complete' ? { ...payload, pendingSheets } : payload
-  const payloadBytes = drawingFootprint(drawings.drawings)
+  // Chart model storage is already in the share (charged through the read's chart scope before it was built):
+  // the payload adds only the rest of its footprint, so each byte counts once.
+  const modelBytes = (context.chart?.workspace as unknown as PagedChartScope | undefined)?.shareBytes ?? 0
+  const payloadBytes = Math.max(0, drawingFootprint(drawings.drawings) - modelBytes)
   const workingSet = pkg.workingSet + payloadBytes
   if (options.memory && !options.memory.set(workingSet)) {
     return { drawings: unavailableDrawings('This sheet\'s drawings need more worker memory than the document has free and are not shown', { code: 'resource-limit', retryable: false, message: 'worker memory budget' }, DRAWING_MEMORY_REFUSED), nodes, workingSet: pkg.workingSet, payloadBytes: 0 }
   }
-  return { drawings, nodes, workingSet, payloadBytes, ...(uncacheable ? { uncacheable: true } : {}) }
+  return { drawings, nodes, workingSet, payloadBytes, modelBytes, ...(uncacheable ? { uncacheable: true } : {}) }
 }
 export interface PagedSheetDrawings {
   drawings: SheetDrawings
@@ -330,8 +357,12 @@ export interface PagedSheetDrawings {
   nodes: number
   /** Charged working-set estimate at the end of the parse (the payload included). */
   workingSet: number
-  /** The part of `workingSet` that is the payload itself (filled chart models included). */
+  /** The part of `workingSet` that is the payload itself, chart model storage excepted. */
   payloadBytes?: number
+  /** The part of `workingSet` that is chart model storage (charged through the read's chart scope). */
+  modelBytes?: number
+  /** The read's chart scope: the caller hands it off once the payload has its owner (retained entry or reply). */
+  chartScope?: PagedChartScope
   /** A chart read a failed sheet: answer, but never cache this payload. */
   uncacheable?: boolean
 }

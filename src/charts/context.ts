@@ -12,7 +12,7 @@
 import type { OfficePackage } from '../core/zip'
 import type { ThemeContext } from '../drawing/style'
 import { drawingPartContext } from '../drawing/parts'
-import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
+import { createChartWorkspace, scopeChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 
 /** Document-level: one per parse, shared by every chart of the document. */
 export interface ChartDocumentContext {
@@ -47,9 +47,20 @@ export function chartParseContext(doc: ChartDocumentContext, pkg: OfficePackage,
  * `RangePackage`): the chart workspace it gets on demand uses that ledger as its
  * parent, so chart bytes are counted once in the document pool share (D0).
  */
-interface LedgeredPackage { chartLedger?: ChartParentLedger; chartProfile?: ChartProfile }
-/** The production hook: the package's document context (created on demand, desktop unless the package says) for one chart part. */
+interface LedgeredPackage { chartLedger?: ChartParentLedger; chartProfile?: ChartProfile; chartDocument?: { workspace?: ChartWorkspace } }
+/**
+ * The production hook: the package's document context for one chart part,
+ * created on demand (desktop unless the package says). A paged read's package
+ * also carries its document's chart facet holder: the read then works in a
+ * scoped view of that one document facet (the chart sublimit across every read
+ * and retained chart), charged to the read's share until the read is answered.
+ */
 export function chartParseContextFor(pkg: OfficePackage, partPath: string, theme?: ThemeContext): ChartParseContext {
   const slot = drawingPartContext(pkg), own = pkg as LedgeredPackage
+  if (!slot.chart && own.chartDocument && own.chartLedger) {
+    const profile = own.chartProfile ?? 'desktop'
+    const document = own.chartDocument.workspace ??= createChartWorkspace(profile)
+    slot.chart = { profile, workspace: scopeChartWorkspace(document, own.chartLedger) }
+  }
   return chartParseContext(slot.chart ??= documentChartContext(own.chartProfile ?? 'desktop', undefined, own.chartLedger), pkg, partPath, theme)
 }

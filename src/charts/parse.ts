@@ -6,8 +6,9 @@
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
-import type { ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoint, ChartRange, ChartSeries } from './model'
-import { BLANK, knownError } from './points'
+import type { ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import { PointWriter, knownError, pointBytes } from './points'
+import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -99,15 +100,46 @@ function cachePoints<T>(node: XmlNode | undefined, read: (pt: XmlNode) => T, mis
 function cacheStrings(node: XmlNode | undefined, cut?: { truncated: boolean }): Array<string | undefined> {
   return cachePoints<string | undefined>(node, pt => textOf(child(pt, 'v')), undefined, cut)
 }
-/** A saved numeric point (spec 5.8): a number, an error code (#N/A kept distinct) or blank (empty or other text). */
-function savedPoint(pt: XmlNode): ChartPoint {
-  const text = textOf(child(pt, 'v'))
-  const v = finite(text)
-  if (v === undefined) return knownError(text) ?? BLANK
-  const fmt = attrs(pt).formatCode
-  return fmt ? { state: 'value', v, fmt } : { state: 'value', v }
+/** The label storage a cached category role keeps (each label capped at CHART_LABEL_LIMIT), read before it is built. */
+function labelBytes(node: XmlNode | undefined): number {
+  let bytes = 0
+  for (const pt of getChildren(cacheOf(node), 'pt')) bytes += Math.min(textOf(child(pt, 'v')).length, CHART_LABEL_LIMIT) * 2 + 32
+  return bytes
 }
-const numericCache = (node: XmlNode | undefined, cut: { truncated: boolean }, limit: number) => cachePoints(node, savedPoint, BLANK, cut, limit)
+/** The extent of a saved numeric role, read without building storage: its length (sparse indices kept, ptCount
+ * padding included), whether a declared count or an index exceeds `limit`, and whether points carry formats. */
+function cacheExtent(node: XmlNode | undefined, limit: number): { length: number; over: boolean; formats: boolean } {
+  const cache = cacheOf(node)
+  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  let length = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0)), over = declared > limit, formats = false
+  for (const pt of getChildren(cache, 'pt')) {
+    const index = finite(attrs(pt).idx)
+    if (index === undefined || index < 0 || !Number.isInteger(index)) continue
+    if (index >= limit) { over = true; continue }
+    length = Math.max(length, index + 1)
+    if (attrs(pt).formatCode) formats = true
+  }
+  return { length, over, formats }
+}
+/**
+ * A saved numeric role (spec 5.8): a number is a value (with its `pt@formatCode`), a known error code (#N/A kept
+ * distinct) an error, empty or other text blank; a missing index is blank at its position. The storage is
+ * admitted through `charge` before it is built.
+ */
+function numericCache(node: XmlNode | undefined, extent: { length: number; formats: boolean }, charge: (bytes: number) => void): ChartPoints {
+  charge(pointBytes(extent.length, extent.formats))
+  const out = new PointWriter(extent.length, extent.formats)
+  for (const pt of getChildren(cacheOf(node), 'pt')) {
+    const index = finite(attrs(pt).idx)
+    if (index === undefined || index < 0 || !Number.isInteger(index) || index >= extent.length) continue
+    const text = textOf(child(pt, 'v'))
+    const v = finite(text)
+    if (v !== undefined) out.value(index, v, attrs(pt).formatCode)
+    else if (knownError(text) !== undefined) out.error(index, text.trim())
+  }
+  return out.done()
+}
+
 function hasCache(node: XmlNode | undefined): boolean {
   return Boolean(child(child(node, 'numRef'), 'numCache') ?? child(child(node, 'strRef'), 'strCache') ?? child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache') ?? child(node, 'numLit') ?? child(node, 'strLit'))
 }
@@ -187,10 +219,25 @@ function dispNaAsBlank(chart: XmlNode): boolean | undefined {
 
 /** Read one chart part. `undefined` for a part that is not a chart document. */
 /** `_context` is the chart's parse context (F0 threads it; A1a/D0 consume it). */
-export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _context?: ChartParseContext): ChartModel | undefined {
+export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, context?: ChartParseContext): ChartModel | undefined {
   const chart = child(root, 'chart')
   const plot = child(chart, 'plotArea')
   if (!chart || !plot) return undefined
+  // The model's point storage is charged to the document's chart workspace before it is built, and stays
+  // charged for the model's lifetime (charts/own.ts). A refusal stops the parse and refunds what it charged.
+  const owner = context?.workspace ? modelOwner(context.workspace) : undefined
+  const charge = (bytes: number) => { if (owner && !owner.workspace.reserve(bytes, owner.tag)) throw new ChartRefusal() }
+  try {
+    const model = readChart(root, chart, plot, theme, charge)
+    if (owner) adoptChartModel(model, owner)
+    return model
+  } catch (error) {
+    owner?.workspace.release(owner.tag)
+    if (!(error instanceof ChartRefusal)) throw error
+    return { ...placeholderChart(titleOf(child(chart, 'title')), 'This chart needs more memory than is available for charts'), refused: true }
+  }
+}
+function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void): ChartModel {
   const minorFont = theme?.fonts.minor.latin ?? 'Calibri'
   const sizeRaw = finite(attrs(getChildren(child(child(root, 'txPr'), 'p'), 'pPr').map(p => child(p, 'defRPr'))[0]).sz)
   const autoDeleted = val(child(chart, 'autoTitleDeleted')) === '1'
@@ -198,7 +245,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
-  let categories: string[] = [], categoryPending: ChartRange | undefined
+  let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) axes.push(axisOf(node, AXIS_KINDS[name], axes.length))
   for (const [name, node] of orderedChildren(plot)) {
@@ -223,7 +270,8 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _
       const valueNode = child(ser, type === 'scatter' ? 'yVal' : 'val')
       const xNode = type === 'scatter' ? child(ser, 'xVal') : undefined
       const catNode = type === 'scatter' ? undefined : child(ser, 'cat')
-      const pending: NonNullable<ChartSeries['pending']> = {}
+      const pending: NonNullable<ChartSeries['pending']> = {}, refs: NonNullable<ChartSeries['refs']> = {}
+      const rangeOf = (node: XmlNode | undefined) => { const f = formulaOf(node); return f ? parseChartRange(f) : undefined }
       // An uncached reference the viewer cannot read (multi-area, a formula) has no data: placeholder, never an empty chart.
       const unreadable = (node: XmlNode | undefined) => { const f = !hasCache(node) ? formulaOf(node) : undefined; if (f && !parseChartRange(f)) unsupported ??= `Chart data uses a reference the viewer cannot read (${f.slice(0, 80)})` }
       unreadable(valueNode); unreadable(xNode); unreadable(catNode)
@@ -233,23 +281,23 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _
       const literalName = textOf(child(tx, 'v')) || cacheStrings(tx)[0]
       // Analytic inputs are acquired in full (up to CHART_ANALYTIC_POINT_LIMIT) before any display cap;
       // more than that refuses the analytic element (spec 7), never a prefix: the series is then drawn capped.
-      const state: { analytic?: ChartSeries['analytic'] } = isAnalytic(ser) ? { analytic: true } : {}
-      const acquire = (node: XmlNode | undefined) => {
-        if (state.analytic !== true) return numericCache(node, cut, CHART_POINT_LIMIT)
-        const over = { truncated: false }
-        const points = numericCache(node, over, CHART_ANALYTIC_POINT_LIMIT)
-        if (over.truncated) { state.analytic = 'refused'; cut.truncated = true }
-        return points
-      }
-      let values = acquire(valueNode)
-      if (!hasCache(valueNode)) { const range = formulaOf(valueNode) && parseChartRange(formulaOf(valueNode)!); if (range) pending.values = range }
-      let xValues = xNode ? acquire(xNode) : undefined
-      const analytic = state.analytic
-      if (analytic === 'refused') { values = values.slice(0, CHART_POINT_LIMIT); xValues = xValues?.slice(0, CHART_POINT_LIMIT) }
-      if (xNode && !hasCache(xNode)) { const range = formulaOf(xNode) && parseChartRange(formulaOf(xNode)!); if (range) pending.xValues = range }
+      // Extents are read first, so nothing is built before the decision and its admission.
+      let analytic: ChartSeries['analytic'] = isAnalytic(ser) ? true : undefined
+      const limit = analytic ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT
+      let valueExtent = cacheExtent(valueNode, limit), xExtent = xNode ? cacheExtent(xNode, limit) : undefined
+      if (analytic && (valueExtent.over || xExtent?.over)) {
+        analytic = 'refused'
+        valueExtent = cacheExtent(valueNode, CHART_POINT_LIMIT); xExtent = xNode ? cacheExtent(xNode, CHART_POINT_LIMIT) : undefined
+        cut.truncated = true
+      } else if (valueExtent.over || xExtent?.over) cut.truncated = true
+      const values = numericCache(valueNode, valueExtent, charge)
+      const xValues = xNode && xExtent ? numericCache(xNode, xExtent, charge) : undefined
+      // A role's reference is kept beside its cache: the cache gives the values, the reference the provenance.
+      if (!hasCache(valueNode)) { const range = rangeOf(valueNode); if (range) pending.values = range } else { const range = rangeOf(valueNode); if (range) refs.values = range }
+      if (xNode) { const range = rangeOf(xNode); if (range) { if (hasCache(xNode)) refs.xValues = range; else pending.xValues = range } }
       if (catNode && categories.length === 0 && !categoryPending) {
-        if (hasCache(catNode)) categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut))
-        else { const range = formulaOf(catNode) && parseChartRange(formulaOf(catNode)!); if (range) categoryPending = range }
+        if (hasCache(catNode)) { charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode) }
+        else { const range = rangeOf(catNode); if (range) categoryPending = range }
       }
       // Display points past the bound are dropped at draw time (analytic series keep them for analysis).
       if (values.length > CHART_POINT_LIMIT || (xValues && xValues.length > CHART_POINT_LIMIT)) truncated = true
@@ -269,6 +317,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _
         ...(xValues ? { xValues } : {}),
         ...(pointColors.length ? { pointColors } : {}),
         ...(Object.keys(pending).length ? { pending } : {}),
+        ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
@@ -297,6 +346,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, _
     axes,
     categories,
     ...(categoryPending ? { categoryPending } : {}),
+    ...(categoryRef ? { categoryRef } : {}),
     ...(legend ? { legend: (val(child(legend, 'legendPos')) ?? 'r') as ChartModel['legend'] } : {}),
     // Chart-level options as authored; absent stays undefined (Office defaults: gap, plot visible only).
     ...(child(chart, 'dispBlanksAs') ? { dispBlanksAs: blanks === 'gap' || blanks === 'span' ? blanks : 'zero' } : {}),

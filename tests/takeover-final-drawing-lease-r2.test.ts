@@ -37,7 +37,7 @@ async function open() {
  expect(remote.drawings('1').state).toBe('ready')
  return remote
 }
-const values=(g:SheetGeometry)=>(g.sizedDrawings![0].content as any).chart.groups[0].series[0].values as Array<{ state: string; v?: number }>
+const values=(g:SheetGeometry)=>(g.sizedDrawings![0].content as any).chart.groups[0].series[0].values as { length: number; values: Float64Array }
 
 it('a real paged chart remapped for session widths keeps its reachable chart data charged after worker/source close',async()=>{
  const remote=await open(),ledger=remote.mainLedger
@@ -46,10 +46,10 @@ it('a real paged chart remapped for session widths keeps its reachable chart dat
  expect(geometry.sizedDrawings).toHaveLength(1)
  expect(geometry.sizedDrawings![0].xEmu/9525).toBe(520)
  expect(values(geometry)).toHaveLength(1000)
- expect(values(geometry)[0]).toEqual({ state: 'value', v: 42 })
+ expect(values(geometry).values[0]).toBe(42)
  expect(ledger.snapshot().byPool.drawings).toBeGreaterThanOrEqual(8000+SIZED_DRAWING_BYTES)
  await remote.close();await collect()
- expect(values(geometry)[999]).toEqual({ state: 'value', v: 1041 })
+ expect(values(geometry).values[999]).toBe(1041)
  console.log('retained resized chart after source close',JSON.stringify({points:values(geometry).length,minimumDataBytes:8000,drawingsCharged:ledger.snapshot().byPool.drawings,copies:SIZED_DRAWING_BYTES,ledger:ledger.snapshot()}))
  expect(ledger.snapshot().byPool.drawings).toBeGreaterThanOrEqual(8000+SIZED_DRAWING_BYTES)
  geometry=null;await collect()
