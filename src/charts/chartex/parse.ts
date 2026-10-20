@@ -138,16 +138,25 @@ function admission(charge: (bytes: number) => void): Admission {
  */
 function boundedRuns(paragraphs: XmlNode[], admit: Admission): string | undefined {
   admit.charge(LABEL_BOUND)
+  // `room` is what the bound still admits; every separator and run part is counted against it before it is
+  // appended, the walk stops when it is spent, and a slice end is never negative.
+  const CAP = CHART_LABEL_LIMIT + 1
   let text = '', length = 0
   outer: for (const [index, p] of paragraphs.entries()) {
-    if (index && text) { text += '\n'; length++ }
+    if (index && text) {
+      length++
+      if (text.length >= CAP) break
+      text += '\n'
+    }
     for (const [name, run] of orderedChildren(p)) {
       if (name !== 'r' && name !== 'fld') continue
       for (const t of getChildren(run, 't')) {
         const part = own(t)
-        text += part.slice(0, CHART_LABEL_LIMIT + 1 - text.length)
         length += part.length
-        if (text.length > CHART_LABEL_LIMIT) break outer
+        const room = CAP - text.length
+        if (room <= 0) break outer
+        text += part.length > room ? part.slice(0, room) : part
+        if (text.length >= CAP) break outer
       }
     }
   }
@@ -286,7 +295,7 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
     const color = explicit ?? resolveSeriesColor({ index: info.formatIdx, count: nodes.length, ...(parts ? { parts } : {}), theme })
     series.push({
       ...seriesRoles(data, name, color, admit),
-      ...styleOf(node, spPr, fill, line, theme, admit),
+      ...styleOf(node, spPr, fill, line, theme, admit, analytic ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT),
       ...(analytic ? { analytic: 'chart' as const } : {}),
     })
     infos.push(info)
@@ -336,8 +345,10 @@ const numberField = <K extends string>(key: K, raw: string | undefined): Partial
 }
 
 /** Series styling (map §4.2): `spPr` fill and line, `dataPt` overrides, data labels. */
+/** `limit`: the source-index domain of overrides (the analytic input bound, or the display bound). Indices past the
+ * display bound are kept in the sparse `dPt` map and label `points` record only; the dense arrays stay display-sized. */
 function styleOf(node: XmlNode, spPr: XmlNode | undefined, fill: (spPr: XmlNode | undefined) => ChartFillStyle | undefined,
-  line: (spPr: XmlNode | undefined) => ChartLineStyle | undefined, theme: ThemeContext | undefined, admit: Admission): Partial<ChartSeries> {
+  line: (spPr: XmlNode | undefined) => ChartLineStyle | undefined, theme: ThemeContext | undefined, admit: Admission, limit: number): Partial<ChartSeries> {
   const out: Partial<ChartSeries> = {}
   const seriesFill = fill(spPr), seriesLine = line(spPr)
   if (seriesFill) out.fill = seriesFill
@@ -345,18 +356,18 @@ function styleOf(node: XmlNode, spPr: XmlNode | undefined, fill: (spPr: XmlNode 
   const dPt = new Map<number, ChartPointOverride>(), pointFills: Array<ChartFillStyle | undefined> = [], pointColors: string[] = []
   for (const point of getChildren(node, 'dataPt')) {
     const i = uint(attrs(point).idx)
-    if (i === undefined || i >= CHART_POINT_LIMIT || dPt.has(i) || pointFills[i] || pointColors[i]) continue
+    if (i === undefined || i >= limit || dPt.has(i)) continue
     chargeChartPoint(admit.charge)
     const ptSpPr = child(point, 'spPr'), ptFill = fill(ptSpPr), ptLine = line(ptSpPr), color = solid(ptSpPr, theme)
-    if (ptFill) pointFills[i] = ptFill
-    if (color) pointColors[i] = color
+    if (ptFill && i < CHART_POINT_LIMIT) pointFills[i] = ptFill
+    if (color && i < CHART_POINT_LIMIT) pointColors[i] = color
     // An override with nothing the model draws (effects only, as FN1) is not kept.
     if (ptFill || color || ptLine) dPt.set(i, { ...(ptFill ? { fill: ptFill } : {}), ...(color ? { color } : {}), ...(ptLine ? { line: ptLine } : {}) })
   }
   if (dPt.size) out.dPt = dPt
   if (pointFills.some(Boolean)) out.pointFills = pointFills
   if (pointColors.some(Boolean)) out.pointColors = pointColors
-  const labels = dataLabels(child(node, 'dataLabels'), fill, line, theme, admit)
+  const labels = dataLabels(child(node, 'dataLabels'), fill, line, theme, admit, limit)
   if (labels) out.labels = labels
   return out
 }
@@ -366,7 +377,7 @@ function styleOf(node: XmlNode, spPr: XmlNode | undefined, fill: (spPr: XmlNode 
  * `spPr`/`txPr`; `dataLabel@idx` overrides field by field; `dataLabelHidden@idx` deletes that point's label.
  */
 function dataLabels(node: XmlNode | undefined, fill: (spPr: XmlNode | undefined) => ChartFillStyle | undefined,
-  line: (spPr: XmlNode | undefined) => ChartLineStyle | undefined, theme: ThemeContext | undefined, admit: Admission): LabelControls | undefined {
+  line: (spPr: XmlNode | undefined) => ChartLineStyle | undefined, theme: ThemeContext | undefined, admit: Admission, limit: number): LabelControls | undefined {
   if (!node) return undefined
   const options = (n: XmlNode, series: boolean): LabelOptions => {
     admit.charge(LABEL_RECORD_BYTES)
@@ -395,11 +406,11 @@ function dataLabels(node: XmlNode | undefined, fill: (spPr: XmlNode | undefined)
   const points: Record<number, LabelOptions> = {}
   for (const p of getChildren(node, 'dataLabel')) {
     const i = uint(attrs(p).idx)
-    if (i !== undefined && i < CHART_POINT_LIMIT) points[i] = options(p, false)
+    if (i !== undefined && i < limit) points[i] = options(p, false)
   }
   for (const p of getChildren(node, 'dataLabelHidden')) {
     const i = uint(attrs(p).idx)
-    if (i !== undefined && i < CHART_POINT_LIMIT) { admit.charge(LABEL_RECORD_BYTES); points[i] = { delete: true } }
+    if (i !== undefined && i < limit) { admit.charge(LABEL_RECORD_BYTES); points[i] = { delete: true } }
   }
   if (Object.keys(points).length) out.points = points
   return out

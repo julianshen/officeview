@@ -28,7 +28,7 @@ import type { ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartModel, ChartRange, ChartResult, ChartSeries } from './model'
 import { CHART_POINT_LIMIT, parseXlsxChart } from './parse'
-import { categoryLimit, chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
+import { CHART_TOO_MANY_POINTS, analyticOverLimit, categoryLimit, chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
@@ -87,6 +87,8 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
   const absent = model.groups.flatMap(group => group.series.flatMap(series => series.absent ?? []))
   if (absent.length) return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${absent.includes('values') ? 'values' : 'x values'}: neither saved data nor a reference` }])
   if (!chartHasPending(model)) return model
+  // An analytic ChartEx reference over the analytic bound is refused before the embedding is opened or admitted.
+  if (analyticOverLimit(model)) return successor(model, { unsupported: CHART_TOO_MANY_POINTS, refused: true, preparedAxes: undefined })
   // Every role still to read, in a fixed order: the shared categories first, then each series' roles.
   const slots: Array<Slot | 'categories'> = [], requests: EmbeddedRequest[] = []
   if (model.categoryPending) { slots.push('categories'); requests.push({ range: model.categoryPending, text: true, limit: CHART_POINT_LIMIT }) }
