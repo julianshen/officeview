@@ -56,7 +56,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const minor = a.minorUnit === undefined ? 0 : 1000
     return n + 2048 + ticks * 640 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
   }, 0)
-  const bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + errorBarBound(model, model.groups.some(g => g.series.some(s => s.trendlines)) ? 4096 : slots) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
+  let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + errorBarBound(model, model.groups.some(g => g.series.some(s => s.trendlines)) ? 4096 : slots) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
@@ -64,7 +64,14 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const formatter = createChartFormatter(workspace)
     const trendDiagnostics: ChartDiagnostic[] = []
     const trendlines = model.groups.some(g => g.series.some(s => s.trendlines)) ? prepareTrendlines(model, formatter, chartEpoch(model.epoch, model.workbookEpoch), trendDiagnostics, workspace) : []
-    const forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
+    let forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
+    // The forecast's slots and their category label records are admitted before the view, graph and snapshot are
+    // built; refused, the forecast is clipped (diagnosed), never the chart.
+    if (forecast) {
+      const extra = forecastBytes(model, forecast)
+      if (workspace.reserve(extra, tag)) bound += extra
+      else { forecast = undefined; trendDiagnostics.push({ code: 'chart-trendline-extension-clamped', reason: 'A trendline forecast needs more memory than is available for charts: it is clipped to the data' }) }
+    }
     const view = displayView(model, forecast ?? NO_FORECAST)
     // Error bars (A6b, spec 5.7): their analytic amounts, and the drawn bar ends join the automatic scales.
     const errors = model.groups.some(g => g.series.some(s => s.errorBars)) ? prepareErrorBars(model, view, trendDiagnostics) : undefined
@@ -75,7 +82,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
       const code = axisFormat(a.axis,inputs) ?? (a.percent ? '0%' : a.role==='date' ? a.dateBase==='years'?'yyyy':a.dateBase==='months'?'mmm yyyy':'m/d/yyyy' : undefined)
       const { labelValue, plottable: _plottable, ...data } = a
-      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : Array.from({ length: Math.min(view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
+      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
@@ -89,6 +96,16 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     collected.register(preparedAxes, retained, preparedAxes)
     return { ...model, preparedAxes }
   } finally { workspace.release(tag) }
+}
+/**
+ * What `forecast` slots add to preparation: per slot and axis a category label record (a string table entry) and
+ * its construction share, plus the view's per-slot work.
+ */
+const forecastBytes = (model: ChartModel, forecast: DisplayForecast): number => (forecast.lead + forecast.trail) * (model.axes.length * 64 + 64)
+/** A series axis's labels: the names of the series it places (a contour group's drawn rows), reusing the model's strings. */
+export function seriesLabels(graph: AxisGraph, view: DisplayView, a: ResolvedAxis): string[] {
+  const g = graph.groups.findIndex(p => p?.vertical === a || p?.horizontal === a)
+  return g < 0 ? [] : view.groupSeries(g).slice(0, a.slots).map(s => s.series.name)
 }
 export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
   const prepared = model.preparedAxes

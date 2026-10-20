@@ -379,7 +379,8 @@ export function markTrendlineLegendDeletions(legend: XmlNode | undefined, groups
   for (const group of groups) for (const series of group.series) for (const spec of series.trendlines ?? []) if (deleted.has(index++)) spec.legendDeleted = true
 }
 
-const stackedOrRadial = (group: ChartGroup) => group.family === 'pie' || group.family === 'doughnut' || group.grouping === 'stacked' || group.grouping === 'percentStacked'
+/** Families Excel draws no trendline on: pie/doughnut, radar, the 2D surface (contour), and stacked groups. */
+const stackedOrRadial = (group: ChartGroup) => group.family === 'pie' || group.family === 'doughnut' || group.family === 'radar' || group.family === 'contour' || group.grouping === 'stacked' || group.grouping === 'percentStacked'
 let jobs = 0
 /**
  * Stage 1: every series' trendlines from its full analytic input. Diagnostics go to `diagnostics` (one per code
@@ -392,7 +393,7 @@ export function prepareTrendlines(model: ChartModel, formatter: ChartFormatter, 
   model.groups.forEach((group, g) => group.series.forEach((series, s) => {
     const specs = series.trendlines
     if (!specs?.length) return
-    if (stackedOrRadial(group)) { report('chart-trendline-dropped', `Trendlines are not drawn on ${group.family === 'pie' || group.family === 'doughnut' ? group.family : 'stacked'} charts`); return }
+    if (stackedOrRadial(group)) { report('chart-trendline-dropped', `Trendlines are not drawn on ${group.grouping === 'stacked' || group.grouping === 'percentStacked' ? 'stacked' : group.family} charts`); return }
     if (series.analytic !== true) { report('chart-trendline-dropped', 'A trendline series has more than 65,536 points: the trendline is dropped, never fitted to a prefix'); return }
     const source = pairSource(model, group, series, visibleOnly)
     if (!source) { report('chart-trendline-dropped', 'A trendline series has an unavailable point: the trendline is dropped'); return }
@@ -502,7 +503,7 @@ export function paintTrendlines(ctx: CanvasRenderingContext2D, model: ChartModel
       const lines = t.label.split('\n'), height = fontPx * 1.2, avail = Math.max(1, plot.w - 8)
       const width = Math.min(avail, Math.max(...lines.map(l => ctx.measureText(l).width)))
       const right = Math.min(plot.x + plot.w - 4, Math.max(plot.x + 4 + width, end[0]))
-      let y = Math.max(plot.y + 4 + height * lines.length, Math.min(plot.y + plot.h - 4, end[1] - 6))
+      let y = Math.min(plot.y + plot.h - 4, Math.max(plot.y + 4 + height * lines.length, end[1] - 6))
       for (let i = lines.length - 1; i >= 0; i--) {
         if (y - height < plot.y - 1e-6) { note?.('chart-trendline-label-omitted', 'A trendline label line does not fit the plot area and is omitted'); break }
         ctx.fillText(lines[i], right, y, avail); y -= height

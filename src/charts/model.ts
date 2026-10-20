@@ -61,7 +61,7 @@ export type ChartAxisBinding =
   | { kind: 'none' }
   | { kind: 'cartesian'; category?: string; x?: string; value: string }
   | { kind: 'xy'; x: string; y: string }
-  | { kind: 'radial'; value: string }
+  | { kind: 'radial'; value: string; category?: string }
   | { kind: 'surface'; category: string; series: string; value: string }
 
 /** Placement-only text properties (DrawingML txPr). Rotation is degrees clockwise. */
@@ -141,6 +141,7 @@ export interface ChartSeries {
   pointColors?: string[]
   line?: boolean
   markers?: boolean
+  smooth?: boolean
   fill?: import('./fills').ChartFillStyle
   lineStyle?: import('./style').ChartLineStyle
   markerStyle?: import('./markers').ChartMarkerStyle
@@ -159,13 +160,13 @@ export interface ChartSeries {
    * References still to be filled from worksheet cells (no saved data for that role). The custom error amounts
    * (`c:plus`/`c:minus`) are `errorPlus`/`errorMinus` for the y (value) direction, `errorPlusX`/`errorMinusX` for x.
    */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange }
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange }
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which
    * points sit in hidden rows or columns (plotVisOnly provenance; spec 5.8, 6.4).
    */
-  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange }
+  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange; bubbleSizes?: ChartRange }
   /** Roles with neither saved data nor a reference (spec 6.4 precedence 3): unavailable, never blank. */
   absent?: ChartRole[]
   /**
@@ -176,6 +177,16 @@ export interface ChartSeries {
    * a prefix) and the series is acquired for display only.
    */
   analytic?: true | 'refused'
+}
+
+export interface ChartUpDownBar {
+  fill?: import('./fills').ChartFillStyle
+  line?: import('./style').ChartLineStyle
+}
+
+export interface ChartUpDownBars {
+  upBars?: ChartUpDownBar
+  downBars?: ChartUpDownBar
 }
 
 export interface ChartGroup {
@@ -189,9 +200,27 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  /** Contour: `c:wireframe` (band boundaries only). */
+  wireframe?: boolean
+  /** Contour `c:bandFmts` by band index: the fill colour (hex), null for noFill; holes take the accent cycle. */
+  bandColors?: Array<string | null>
+  /** Contour `c:bandFmts` by band index: the line colour (hex) a wireframe strokes, null for noFill. */
+  bandLines?: Array<string | null>
+  /** Contour: the document's accent cycle (hex), resolved at parse time, for bands without an authored colour. */
+  bandAccents?: string[]
   varyColors?: boolean
+  smooth?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle
+  /** Bubble (spec 4.1): `c:bubbleScale` percent (0-300, default 100), `c:sizeRepresents`, `c:showNegBubbles`. */
+  bubbleScale?: number
+  sizeRepresents?: 'area' | 'w'
+  showNegBubbles?: boolean
+  /** Radar (spec 4.1): `c:radarStyle`. */
+  radarStyle?: 'standard' | 'marker' | 'filled'
+  /** Stock (spec 4.1): `c:hiLowLines` and `c:upDownBars`. */
+  hiLowLines?: import('./style').ChartLineStyle
+  upDownBars?: ChartUpDownBars
 }
 
 export interface ChartModel {
@@ -254,6 +283,8 @@ export interface ChartModel {
   feature?: 'ChartEx'
   /** The chart's storage could not be admitted (a typed refusal before allocation; spec 6.4/6.5). */
   refused?: true
+  /** Drawing overlays from `c:userShapes` (spec 5.11; charts/userShapes.ts), prepared at stage 1. */
+  userShapes?: import('./userShapes').ChartUserShapes
 }
 
 /**

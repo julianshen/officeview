@@ -48,9 +48,9 @@ const axes = '<c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><
 const space = (chart: string, extra = '') => `<c:chartSpace xmlns:c="${C}" xmlns:a="${A}">${extra}<c:chart>${chart}</c:chart></c:chartSpace>`
 /** A stacked column chart: blue segments above red ones. */
 const STACKED = space(`<c:autoTitleDeleted val="1"/><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="stacked"/><c:varyColors val="0"/>${ser(0, RED, [2, 2])}${ser(1, BLUE, [2, 2])}<c:overlap val="100"/><c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}</c:plotArea>`)
-/** surface3DChart stays unsupported in the engine (spec 4.1). */
+/** surface3DChart stays unsupported in the engine (spec 4.1); its card reads the spec's text. */
 const SURFACE = space(`<c:title><c:tx><c:rich><a:p><a:r><a:t>Surf</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:surface3DChart>${ser(0, RED, [1, 2])}</c:surface3DChart>${axes}</c:plotArea>`)
-const SURFACE_REASON = 'Surface chart is not supported'
+const SURFACE_REASON = '3-D surface charts are shown as a placeholder'
 const png = () => { const c = createCanvas(2, 2); const g = c.getContext('2d'); g.fillStyle = '#00ff00'; g.fillRect(0, 0, 2, 2); return new Uint8Array(c.toBuffer('image/png')) }
 
 async function packageOf(parts: Record<string, string | Uint8Array>): Promise<OfficePackage> {
