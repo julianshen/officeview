@@ -37,6 +37,30 @@ export function succeedChartModel(previous: ChartModel, next: ChartModel): void 
   collected?.unregister(previous)
   adoptChartModel(next, owner)
 }
+/**
+ * Bytes a chart operation published into a longer-lived source structure (a formatter diagnostic on the sheet):
+ * transferred from the operation's tag to one owner per target, which lives as long as the target (the sheet,
+ * hence the document), not the chart model. Refunded once: `releaseChartRetained` (the document's release) or
+ * the target's collection.
+ */
+const retained = new WeakMap<object, Owner>()
+export function retainWithTarget(target: object, workspace: ChartWorkspace, fromTag: string, bytes: number): void {
+  let owner = retained.get(target)
+  if (!owner || owner.workspace !== workspace) {
+    if (owner) releaseChartRetained(target)
+    owner = modelOwner(workspace)
+    retained.set(target, owner)
+    collected?.register(target, owner, target)
+  }
+  workspace.transfer(fromTag, owner.tag, bytes)
+}
+export function releaseChartRetained(target: object): void {
+  const owner = retained.get(target)
+  if (!owner) return
+  retained.delete(target)
+  collected?.unregister(target)
+  owner.workspace.release(owner.tag)
+}
 /** Refunds a model's storage (idempotent). */
 export function releaseChartModel(model: ChartModel): void {
   const owner = owners.get(model)

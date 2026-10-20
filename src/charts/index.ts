@@ -19,7 +19,7 @@ export * from './parse'
 export * from './fill'
 export * from './points'
 export { displayView, type DisplayView } from './display'
-export { releaseChartModel, chartModelOwner } from './own'
+export { releaseChartModel, chartModelOwner, releaseChartRetained } from './own'
 export { paintXlsxChart }
 export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)

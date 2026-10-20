@@ -6,7 +6,7 @@
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, parseChartRange } from './parse'
 import type { ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
-import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, succeedChartModel } from './own'
+import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 
 export type ChartCellValue = string | number | boolean | null | undefined
@@ -26,7 +26,11 @@ export interface ChartCell {
 }
 /** The formatter's allocation observer (cellFormat `FormatAllocation`): each working buffer is reported before it
  * is allocated; `allocate` throws to refuse it. */
-export interface ChartTextAllocation { allocate(bytes: number): void; release(bytes: number): void }
+export interface ChartTextAllocation {
+  allocate(bytes: number): void; release(bytes: number): void
+  /** Bytes the formatter publishes into a structure that outlives it (`targets[0]`, e.g. a sheet diagnostic). */
+  retain?(targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic'): void
+}
 /** `text`: the caller needs the formatted label (categories, names); values never format. A label's formatting
  * reports its working buffers through `allocation` (the chart workspace admits them, or refuses by throwing). */
 export type ChartCellLookup = (sheet: string, row: number, col: number, text: boolean, allocation?: ChartTextAllocation) => ChartCell | undefined
@@ -163,6 +167,8 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
   const label = (produce: (allocation?: ChartTextAllocation) => string, keepEmpty = true): string => {
     if (!owner) return produce()
     if (!owner.workspace.reserve(LABEL_BOUND_BYTES, labelTag)) throw new ChartRefusal()
+    // `admitted`: what the label tag owns (reserved, less what moved to a longer-lived owner); `live`: the
+    // formatter's current working set, always covered by `admitted`.
     let live = 0, admitted = LABEL_BOUND_BYTES
     const allocation: ChartTextAllocation = {
       allocate: bytes => {
@@ -172,11 +178,18 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
         admitted = live
       },
       release: bytes => { live -= bytes },
+      // A published diagnostic outlives the label: its admitted bytes move to the sheet's owner (charts/own.ts),
+      // kept beyond the label's trim and a later refusal, refunded with the document.
+      retain: (targets, bytes, commit) => {
+        const target = targets[0]
+        if (target && bytes > 0 && bytes <= admitted) { retainWithTarget(target, owner.workspace, labelTag, bytes); admitted -= bytes; live -= bytes }
+        commit()
+      },
     }
     try {
       const text = produce(allocation)
-      const kept = text || keepEmpty ? stringBytes(text) : 0
-      if (kept) { owner.workspace.transfer(labelTag, fillTag, Math.min(kept, LABEL_BOUND_BYTES)); charged.bytes += Math.min(kept, LABEL_BOUND_BYTES) }
+      const kept = Math.min(text || keepEmpty ? stringBytes(text) : 0, admitted)
+      if (kept) { owner.workspace.transfer(labelTag, fillTag, kept); charged.bytes += kept }
       return text
     } finally { owner.workspace.release(labelTag) }
   }

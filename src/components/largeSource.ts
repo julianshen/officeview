@@ -46,7 +46,7 @@ async function releaseDocumentCharts(doc: XlsxDocument): Promise<void> {
   if (!doc.sheets.some(sheet => hasXlsxCharts(sheet.drawings))) return
   const charts = await loadChartModule().catch(() => undefined)
   const visit = (nodes: readonly XlsxDrawing[] | undefined): void => { for (const node of nodes ?? []) { if (node.content?.kind === 'xlsxChart') charts?.releaseChartModel(node.content.chart); visit(node.children) } }
-  for (const sheet of doc.sheets) visit(sheet.drawings)
+  for (const sheet of doc.sheets) { visit(sheet.drawings); charts?.releaseChartRetained(sheet) }
 }
 /** Engine evaluation with caps; an evaluator resource hit reopens with saved values (decision 2). */
 async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: number; maxArraySide: number; maxMaterializedCells: number }, policy: 'engine' | 'cached', formulasNotRecalculated: number | undefined, ctx: Ctx): Promise<XlsxDocument> {

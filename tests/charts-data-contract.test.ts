@@ -439,6 +439,44 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     }
   })
 
+  it('a diagnostic the label formatter publishes keeps its charge with the sheet, beyond the label and a later refusal (R5)', async () => {
+    const { cellDisplayText } = await import('../src/xlsx/render')
+    const cached = '<c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit>'
+    const model = charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:cat>${strRef('S!$A$1:$A$2')}</c:cat><c:val>${cached}</c:val></c:ser></c:lineChart>`)), undefined)!
+    const diagnosticBytes = (sheet: { diagnostics?: Array<{ message: string }> }) => (sheet.diagnostics ?? []).reduce((n, d) => n + d.message.length * 2 + 72, 32)
+    // Row 0 uses an unsupported format (a diagnostic is published), row 1 a scientific one.
+    const lookupOn = (sheet: object): Parameters<typeof charts.fillChartRanges>[2] => (_s, r, _c, text, allocation) => ({ value: 12345, ...(text ? { text: cellDisplayText(sheet as never, { value: 12345, style: { numFmtId: 164, formatCode: r ? '0.00E+00' : '[FOO]0' } } as never, { maxOutput: 256, allocate: bytes => allocation?.allocate(bytes), release: bytes => allocation?.release(bytes), retain: (targets, bytes, commit, kind) => allocation?.retain?.(targets, bytes, commit, kind) }) } : {}) })
+    // 1. A successful fill: the labels are charged with the model, the diagnostic with the sheet.
+    const sheet: { diagnostics?: Array<{ message: string }> } = {}
+    const workspace = createChartWorkspace('desktop')
+    const ok = charts.fillChartRanges(model, 'S', lookupOn(sheet), { workspace })
+    expect(ok.categories).toEqual(['12345', '1.23E+04'])
+    expect(sheet.diagnostics).toHaveLength(1)
+    const labels = ok.categories.reduce((n, c) => n + charts.stringBytes(c), 0)
+    expect(workspace.used).toBe(labels + diagnosticBytes(sheet))
+    // The model's release returns only the labels; the diagnostic stays charged while the sheet holds it.
+    charts.releaseChartModel(ok)
+    expect(workspace.used).toBe(diagnosticBytes(sheet))
+    // Released once, with the sheet (the document's release).
+    charts.releaseChartRetained(sheet)
+    expect(workspace.used).toBe(0)
+    charts.releaseChartRetained(sheet)
+    expect(workspace.used).toBe(0)
+
+    // 2. A later refusal (the second label's formatter workspace) refunds the labels and keeps the diagnostic.
+    const other: { diagnostics?: Array<{ message: string }> } = {}
+    let held = 0
+    const tight = createChartWorkspace('desktop', { reserve: bytes => { if (held + bytes > 2600) return false; held += bytes; return true }, release: (_t, bytes) => { held -= bytes } })
+    const refused = charts.fillChartRanges(model, 'S', lookupOn(other), { workspace: tight })
+    expect(refused.refused).toBe(true)
+    expect(other.diagnostics).toHaveLength(1)
+    expect(tight.used).toBe(diagnosticBytes(other))
+    expect(held).toBe(diagnosticBytes(other))
+    charts.releaseChartRetained(other)
+    expect(tight.used).toBe(0)
+    expect(held).toBe(0)
+  })
+
   it('the resident fill wires the formatter\'s observers into the chart workspace and propagates a refusal (R4)', async () => {
     // A category formatted with 0.00E+00, parsed with a 600 B chart parent: the chart is refused, never a silent fallback.
     const bytes = await workbook(space(`<c:lineChart><c:ser><c:cat>${strRef('Styled!$B$1')}</c:cat><c:val>${ref('Styled!$A$1')}</c:val></c:ser></c:lineChart>`), row(1, num('A1', 1) + cell('B1', '<v>12345</v>', ' s="3"')), '')
