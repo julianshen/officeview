@@ -354,6 +354,8 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   }
   model.groups.forEach((group, g) => {
     const p = placements[g]
+    // A radar's radial value axis takes its domain from the group's values (it has no planar placement).
+    if (group.binding.kind === 'radial') { const id = group.binding.value; for (const s of view.groupSeries(g)) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) see(id, v) } }
     if (!p) return
     const grid = grids[g]
     if (grid) {

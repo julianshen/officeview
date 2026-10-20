@@ -22,6 +22,7 @@ import { documentChartContext } from '../src/charts/context'
 import { parseDocx } from '../src/docx/parse'
 import type { ChartModel } from '../src/charts/model'
 import { buildChartDocx } from './helpers/chart-fixtures'
+import { SURFACE3D_FAMILY, describeFamilyConformance } from './helpers/chart-family-conformance'
 
 const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart'
 const A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -291,7 +292,7 @@ describe('charts-families-contour (Task A5d)', () => {
     expect(contents).toHaveLength(1)
     const card = contents[0]
     if (card.kind !== 'xlsxChart') throw new Error('not a chart card')
-    expect(card.chart.unsupported).toBe('Surface chart is not supported')
+    expect(card.chart.unsupported).toBe('3-D surface charts are shown as a placeholder')
     expect(card.chart.groups).toEqual([])
     expect((doc.drawingCoverage ?? []).filter(e => e.scope === 'original')[0]).toMatchObject({ feature: 'chart', selectedRepresentation: 'chart-placeholder' })
     // With an authored fallback picture (mc:AlternateContent): the picture, never a card.
@@ -323,6 +324,10 @@ describe('charts-families-contour (Task A5d)', () => {
     for (const k of ['x', 'y', 'w', 'h'] as const) expect(only[k]).toBeCloseTo(sp[k], 9)
   })
 })
+
+// The A5a family harness: contour and wireframe contour are registered in CLASSIC_FAMILIES (run by the
+// bubble/radar suite with native expectations); surface3D is a card in every case.
+describeFamilyConformance(SURFACE3D_FAMILY)
 
 /** A DOCX whose chart sits in mc:Choice with a fallback picture (the representation contract, spec 6.3). */
 async function surfaceWithFallback(chart: string) {

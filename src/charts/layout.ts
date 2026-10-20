@@ -15,6 +15,7 @@ import { hydrateAxes, seriesLabels } from './prepare'
 import { contourEdges, contourLegendEntries, contourPaintBytes } from './families/contour'
 import { formatNumber } from '../xlsx/chartDescription'
 import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
+import { radarTexts } from './families/radar'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -165,7 +166,9 @@ export function layoutBound(model: ChartModel): number {
   for (const c of model.categories) text += c.length * 2
   // Contour legend entries: one per band (at most the tick bound), each with its interval text and measured width.
   for (const group of model.groups) if (group.family === 'contour') text += legendBands(model) * 512
-  return (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text
+  // The retained diagnostics (stage 1's and up to three layout ones) are priced as retainedBytes prices them.
+  const diagnostics = (model.preparedAxes?.diagnostics ?? []).reduce((n, d) => n + 64 + d.code.length * 2 + d.reason.length * 2, 1024)
+  return (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily)): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')
@@ -288,6 +291,12 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
       const side = axisSide(a, graph); bands[side].push(band)
       if (a.display?.label && !a.deleted) bands[side].push(fontPx + 6)
       if (a.axis.title) bands[side].push(fontPx + 6)
+    }
+    // Radar (spec 4.1): its radial tick labels and category labels are measured here; they sit on no planar axis.
+    for (const [id, strings] of radarTexts(model, graph, view, a => model.preparedAxes?.axes.find(p => p.id === a.id)?.labels ?? axisTexts(a, graph, view))) {
+      texts.set(id, strings)
+      const a = graph.axes.get(id), px = (a?.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72
+      for (const s of strings) width(s, chartFont(px, family))
     }
     const inset = (box: Box): Box => {
       let x = box.x, width = box.w, height = box.h, y = box.y + 4

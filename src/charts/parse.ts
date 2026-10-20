@@ -18,6 +18,8 @@ import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 import { contourGridDiagnostic, contourGridOf } from './families/contour'
+import { readBubbleOptions } from './families/bubble'
+import { readRadarStyle } from './families/radar'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -52,10 +54,12 @@ const finite = (raw: string | undefined): number | undefined => raw !== undefine
 
 const GROUPS: Record<string, ChartFamily> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
-  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter', surfaceChart: 'contour',
+  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
+  bubbleChart: 'bubble', radarChart: 'radar', surfaceChart: 'contour',
 }
+/** Chart types the engine does not draw, with the card's reason (spec 4.1; surface3D: the spec's card text). */
 const UNSUPPORTED: Record<string, string> = {
-  radarChart: 'Radar chart', bubbleChart: 'Bubble chart', stockChart: 'Stock chart', surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
+  stockChart: 'Stock chart is not supported', surface3DChart: '3-D surface charts are shown as a placeholder', ofPieChart: 'Pie-of-pie chart is not supported',
 }
 
 const hex = hexColor
@@ -308,10 +312,11 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
   if (family === 'pie' || family === 'doughnut') return { kind: 'none' }
   const ids = getChildren(node, 'axId').map(val).filter((id): id is string => id !== undefined)
   const axisOf = (id: string) => axes.find(axis => axis.id === id)
+  const xy = family === 'scatter' || family === 'bubble'
   // A plot area without any axis element binds the implied pair even when the group lists axIds.
   if (!ids.length || !axes.some(axis => !axis.implicit)) {
     const values = axes.filter(axis => axis.kind === 'value')
-    if (family === 'scatter') {
+    if (xy) {
       const x = values.find(horizontalPosition) ?? values[0], y = values.find(axis => axis !== x)
       return { kind: 'xy', x: x?.id ?? impliedAxis(axes, 'value', '#x'), y: y?.id ?? impliedAxis(axes, 'value', '#y') }
     }
@@ -321,11 +326,12 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
       return { kind: 'surface', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), series: series?.id ?? impliedAxis(axes, 'series', '#ser'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
     }
     const category = axes.find(axis => axis.kind === 'category' || axis.kind === 'date')
+    if (family === 'radar') return { kind: 'radial', value: values[0]?.id ?? impliedAxis(axes, 'value', '#val'), ...(category ? { category: category.id } : {}) }
     return { kind: 'cartesian', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
   }
   const valueIds = ids.filter(id => axisOf(id)?.kind === 'value')
   const xFirst = (pair: string[]) => verticalPosition(axisOf(pair[0])) && horizontalPosition(axisOf(pair[1])) ? [pair[1], pair[0]] : pair
-  if (family === 'scatter') {
+  if (xy) {
     const [x, y] = valueIds.length >= 2 ? xFirst(valueIds) : [ids[0], ids[1]]
     return { kind: 'xy', x: x ?? '', y: y ?? '' }
   }
@@ -336,6 +342,7 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
     return { kind: 'surface', category: category ?? '', series: series ?? '', value }
   }
   const category = ids.find(id => { const kind = axisOf(id)?.kind; return kind === 'category' || kind === 'date' })
+  if (family === 'radar') return { kind: 'radial', value: valueIds[0] ?? ids.find(id => id !== category) ?? '', ...(category !== undefined ? { category } : {}) }
   if (category === undefined && valueIds.length >= 2) { const [x, value] = xFirst(valueIds); return { kind: 'cartesian', x, value } }
   const value = valueIds[0] ?? ids.find(id => id !== category) ?? ''
   return { kind: 'cartesian', category: category ?? ids.find(id => id !== value) ?? '', value }
@@ -343,6 +350,7 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
 /** A series feeds an analytic element: a trendline, or stdDev/stdErr error bars (spec 7). */
 const isAnalytic = (ser: XmlNode) => Boolean(child(ser, 'trendline')) || getChildren(ser, 'errBars').some(bars => /^std(Dev|Err)$/.test(val(child(bars, 'errValType')) ?? ''))
 const flag = (node: XmlNode | undefined, fallback: boolean) => { const v = val(node); return v === undefined ? fallback : v === '1' || v === 'true' }
+const readSmooth = (el: XmlNode | undefined) => el ? flag(el, true) : undefined
 /** `c16r3:dataDisplayOptions16/c16r3:dispNaAsBlank` in the chart's extension list. */
 function dispNaAsBlank(chart: XmlNode): boolean | undefined {
   for (const ext of getChildren(child(chart, 'extLst'), 'ext')) {
@@ -444,12 +452,15 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     axes.push(axis)
   }
   for (const [name, node] of orderedChildren(plot)) {
-    if (UNSUPPORTED[name]) { unsupported ??= `${UNSUPPORTED[name]} is not supported`; continue }
+    if (UNSUPPORTED[name]) { unsupported ??= UNSUPPORTED[name]; continue }
     const type = GROUPS[name]
     if (!type) continue
     const grouping = (val(child(node, 'grouping')) ?? (type === 'bar' ? 'clustered' : 'standard')) as ChartGroup['grouping']
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
+    const radarStyle = type === 'radar' ? readRadarStyle(node) : undefined
+    const xy = type === 'scatter' || type === 'bubble'
     const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
+    const groupSmooth = readSmooth(child(node, 'smooth')) ?? (type === 'scatter' && /smooth/i.test(scatterStyle) ? true : undefined)
     // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
     const connector = (name: string) => {
       const holder = child(node, name)
@@ -472,8 +483,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const lineColor = solid(spPr, theme, true)
       const fillColor = solid(spPr, theme)
       // Precedence (spec 5.11): an explicit spPr colour, else the style part, colour part, c:style, accent cycle.
-      const color = (type === 'line' || type === 'scatter' ? lineColor ?? fillColor : fillColor ?? lineColor)
-        ?? resolveSeriesColor({ index, count: seriesCount, line: type === 'line' || type === 'scatter', styleId, parts, theme })
+      const lineLike = type === 'line' || type === 'scatter' || (type === 'radar' && radarStyle !== 'filled')
+      const color = (lineLike ? lineColor ?? fillColor : fillColor ?? lineColor)
+        ?? resolveSeriesColor({ index, count: seriesCount, line: lineLike, styleId, parts, theme })
       const fill = parseFillStyle(spPr, theme, charge)
       const lineStyle = lineOf(spPr)
       const markerStyle = parseMarker(child(ser, 'marker'), theme, charge)
@@ -481,16 +493,19 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const invertColor = invertIfNegative !== undefined ? invertFill(ser, theme) : undefined
       if (invertColor) chargeChartColor(charge)
       const rawExplosion = finite(val(child(ser, 'explosion')))
+      const serSmooth = readSmooth(child(ser, 'smooth'))
+      const smooth = serSmooth ?? groupSmooth
       const explosion = rawExplosion !== undefined ? Math.max(0, Math.min(400, rawExplosion)) : undefined
       const tx = child(ser, 'tx')
-      const valueNode = child(ser, type === 'scatter' ? 'yVal' : 'val')
-      const xNode = type === 'scatter' ? child(ser, 'xVal') : undefined
-      const catNode = type === 'scatter' ? undefined : child(ser, 'cat')
+      const valueNode = child(ser, xy ? 'yVal' : 'val')
+      const xNode = xy ? child(ser, 'xVal') : undefined
+      const sizeNode = type === 'bubble' ? child(ser, 'bubbleSize') : undefined
+      const catNode = xy ? undefined : child(ser, 'cat')
       const pending: NonNullable<ChartSeries['pending']> = {}, refs: NonNullable<ChartSeries['refs']> = {}
       const rangeOf = (node: XmlNode | undefined) => { const f = formulaOf(node); return f ? parseChartRange(f) : undefined }
       // An uncached reference the viewer cannot read (multi-area, a formula) has no data: placeholder, never an empty chart.
       const unreadable = (node: XmlNode | undefined) => { const f = !hasCache(node) ? formulaOf(node) : undefined; if (f && !parseChartRange(f)) unsupported ??= `Chart data uses a reference the viewer cannot read (${f.slice(0, 80)})` }
-      unreadable(valueNode); unreadable(xNode); unreadable(catNode)
+      unreadable(valueNode); unreadable(xNode); unreadable(sizeNode); unreadable(catNode)
       const txFormula = child(tx, 'strRef') && !child(child(tx, 'strRef'), 'strCache') ? formulaOf(tx) : undefined
       const nameRange = txFormula ? parseChartRange(txFormula) : undefined
       if (nameRange) pending.name = nameRange
@@ -508,9 +523,14 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       } else if (valueExtent.over || xExtent?.over) cut.truncated = true
       const values = numericCache(valueNode, valueExtent, charge)
       const xValues = xNode && xExtent ? numericCache(xNode, xExtent, charge) : undefined
+      // Bubble sizes are a display-only numeric role, admitted like the others before they are built.
+      const sizeExtent = sizeNode ? cacheExtent(sizeNode, CHART_POINT_LIMIT) : undefined
+      if (sizeExtent?.over) cut.truncated = true
+      const bubbleSizes = sizeNode && sizeExtent ? numericCache(sizeNode, sizeExtent, charge) : undefined
       // A role's reference is kept beside its cache: the cache gives the values, the reference the provenance.
       if (!hasCache(valueNode)) { const range = rangeOf(valueNode); if (range) pending.values = range } else { const range = rangeOf(valueNode); if (range) refs.values = range }
       if (xNode) { const range = rangeOf(xNode); if (range) { if (hasCache(xNode)) refs.xValues = range; else pending.xValues = range } }
+      if (sizeNode) { const range = rangeOf(sizeNode); if (range) { if (hasCache(sizeNode)) refs.bubbleSizes = range; else pending.bubbleSizes = range } }
       let seriesCategories: string[] | undefined
       if(catNode && (categories.length>0 || categoryPending)) {
         if (hasCache(catNode)) {
@@ -556,11 +576,13 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
           ...(ptExp !== undefined ? { explosion: Math.max(0, Math.min(400, ptExp)) } : {}),
         })
       }
-      // Required roles with neither saved data nor a reference (spec 6.4): values always; x values for scatter.
-      const absentRoles: Array<'values' | 'xValues'> = []
+      // Required roles with neither saved data nor a reference (spec 6.4): values always; x values for scatter and
+      // bubble; bubble sizes for bubble.
+      const absentRoles: Array<'values' | 'xValues' | 'bubbleSizes'> = []
       const sourceless = (node: XmlNode | undefined) => !node || (!hasCache(node) && !formulaOf(node))
       if (sourceless(valueNode)) absentRoles.push('values')
-      if (type === 'scatter' && sourceless(xNode)) absentRoles.push('xValues')
+      if (xy && sourceless(xNode)) absentRoles.push('xValues')
+      if (type === 'bubble' && sourceless(sizeNode)) absentRoles.push('bubbleSizes')
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
       const groupMarker = val(child(node, 'marker'))
       series.push({
@@ -570,6 +592,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(seriesCategories ? {categories:seriesCategories} : {}),
         labels: type === 'contour' ? undefined : readLabels(child(ser, 'dLbls'), charge),
         ...(xValues ? { xValues } : {}),
+        ...(bubbleSizes ? { bubbleSizes } : {}),
         ...(pointColors.length ? { pointColors } : {}),
         ...(fill ? { fill } : {}),
         ...(lineStyle ? { lineStyle } : {}),
@@ -583,8 +606,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
+        ...(smooth !== undefined ? { smooth } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
+        ...(type === 'radar' ? { line: lineColor !== null, markers: radarStyle === 'marker' && !markerNone } : {}),
       })
     }
     // The contour bands' default colours: the accent cycle of the document's theme (and style/colour parts), charged.
@@ -601,6 +626,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
       ...(type === 'contour' ? { wireframe: child(node, 'wireframe') ? flag(child(node, 'wireframe'), true) : false, ...parseBandFormats(node, theme, charge), bandAccents: bandAccents() } : {}),
       varyColors: vary,
+      ...(groupSmooth !== undefined ? { smooth: groupSmooth } : {}),
+      ...(type === 'bubble' ? readBubbleOptions(node) : {}),
+      ...(radarStyle ? { radarStyle } : {}),
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),
     })
@@ -614,6 +642,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
+  else if (groups.some(g => g.family === 'radar') && groups.some(g => g.family !== 'radar')) unsupported ??= 'Combination radar charts are not supported'
   if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : val(child(root, 'lang'))?.startsWith('zh') ? '圖表標題' : 'Chart Title'
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
