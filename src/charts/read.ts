@@ -95,7 +95,7 @@ export async function readChartPart(pkg: OfficePackage, path: string, context: P
     tokenizer.end()
   }
   try {
-    if (entry) await stream(entry, chunk => feed(chunk, true))
+    if (entry) await streamEntry(entry, chunk => feed(chunk, true))
     else {
       // A paged package reads the part itself, admitted against its own pool (bounded by the same cap).
       let bytes: Uint8Array | undefined
@@ -127,7 +127,7 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 /** Push the entry's inflated chunks, uncached; a throwing consumer aborts the inflate at the source. */
-function stream(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array) => void): Promise<void> {
+export function streamEntry(file: JSZip.JSZipObject, onChunk: (chunk: Uint8Array) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const helper = (file as unknown as { internalStream(type: 'uint8array'): JSZip.JSZipStreamHelper<Uint8Array> }).internalStream('uint8array')
     // As core/zip boundedBytes: JSZip 3.10 has no cancel; catch at the source push/end boundary.
