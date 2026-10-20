@@ -27,7 +27,7 @@
  */
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
-import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, type ChartEpoch } from './dates'
+import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
@@ -296,21 +296,29 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (found.length && !dateText) dates = found
   }
-  // A trendline forecast on a date axis (spec 5.6): its endpoints, in category positions, reach dates extrapolated
-  // along the slots' own dates (the end segment past either end, as the painter projects them).
-  const dateReach = new Map<string, { lo: number; hi: number }>()
-  const dateAt = (x: number): number => {
-    const s = x - 1, i0 = Math.max(0, Math.min(Math.floor(s), count - 2)), a = dateOf(i0)
-    if (a === undefined) return NaN
-    if (count < 2) return a
-    const b = dateOf(i0 + 1)
-    return b === undefined ? NaN : a + (s - i0) * (b - a)
-  }
+  // Trendline forecasts on a date axis (spec 5.6): each drawn trendline's endpoint positions, projected per axis
+  // once its base unit is known (below).
+  const forecastEnds = new Map<string, number[]>()
   if (dates) for (const t of trendlines ?? []) {
     const p = placements[t.group]
-    if (!p || p.baseKind !== 'category') continue
-    const lo = Math.floor(dateAt(t.x0)), hi = Math.ceil(dateAt(t.x1)), reach = dateReach.get(p.base)
-    if (Number.isFinite(lo) && Number.isFinite(hi)) dateReach.set(p.base, { lo: Math.min(lo, reach?.lo ?? lo), hi: Math.max(hi, reach?.hi ?? hi) })
+    if (p && p.baseKind === 'category') forecastEnds.set(p.base, [...forecastEnds.get(p.base) ?? [], t.x0, t.x1])
+  }
+  /**
+   * The unit-index range a date axis needs for its forecasts: each endpoint projected exactly as the painter does
+   * (the slots' calendar unit indices, interpolated, the end segment extrapolated past either end), the lowest
+   * and highest taken whatever the source date order, widened to whole units.
+   */
+  const forecastReach = (id: string, base: ChartTimeUnit): { lo: number; hi: number } | undefined => {
+    const ends = forecastEnds.get(id)
+    if (!ends) return undefined
+    const index = (slot: number) => { const v = dateOf(slot); return v === undefined ? NaN : dateUnitIndex(v, base, epoch) }
+    let lo = Infinity, hi = -Infinity
+    for (const x of ends) {
+      const s = x - 1, i0 = Math.max(0, Math.min(Math.floor(s), count - 2)), a = index(i0)
+      const at = count < 2 ? a : a + (s - i0) * (index(i0 + 1) - a)
+      if (Number.isFinite(at)) { lo = Math.min(lo, at); hi = Math.max(hi, at) }
+    }
+    return Number.isFinite(lo) ? { lo: Math.floor(lo + 1e-9), hi: Math.ceil(hi - 1e-9) } : undefined
   }
 
   const axes = new Map<string, ResolvedAxis>()
@@ -333,8 +341,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (role === 'date' && dates) {
       const base = axis.baseTimeUnit ?? autoBaseUnit(dates, epoch)
-      const reach = dateReach.get(axis.id)
-      const first = axis.min ?? Math.min(...dates, reach?.lo ?? Infinity), last = axis.max ?? Math.max(...dates, reach?.hi ?? -Infinity)
+      let first = axis.min ?? Math.min(...dates), last = axis.max ?? Math.max(...dates)
+      // The forecast reach, in this base unit, moves an automatic bound by whole calendar units from the data's own
+      // first/last date (so ticks keep their day of month); authored bounds win.
+      const reach = forecastReach(axis.id, base)
+      if (reach) {
+        const below = reach.lo - dateUnitIndex(first, base, epoch), above = reach.hi - dateUnitIndex(last, base, epoch)
+        if (axis.min === undefined && below < 0) first = shiftDateUnits(first, below, base, epoch) ?? first
+        if (axis.max === undefined && above > 0) last = shiftDateUnits(last, above, base, epoch) ?? last
+      }
       const lo = dateUnitIndex(first, base, epoch), hi = Math.max(lo, dateUnitIndex(last, base, epoch))
       const major = dateTicks(first, last, axis.majorUnit ?? 1, axis.majorTimeUnit ?? base, epoch)
       if (major.enlarged) diagnostics.push({ code: 'chart-tick-limit', reason: `date axis ${axis.id}: more than ${CHART_TICK_LIMIT} ticks; drawn every ${major.step} ${axis.majorTimeUnit ?? base}` })

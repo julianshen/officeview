@@ -12,7 +12,8 @@ import { layoutChart } from '../src/charts/layout'
 import { fitTrendline, TRENDLINE_SAMPLE_LIMIT, type ChartTrendline, type TrendlineFit } from '../src/charts/trendlines'
 import type { ChartModel } from '../src/charts/model'
 import { createChartWorkspace } from '../src/charts/workspace'
-import { preparedAxesBytes } from '../src/charts/prepare'
+import { hydrateAxes, preparedAxesBytes } from '../src/charts/prepare'
+import { displayView } from '../src/charts/display'
 import { parseXlsx } from '../src/xlsx/parse'
 import { chartWorkbook } from './helpers/xlsx-chart-fixture'
 
@@ -452,6 +453,40 @@ describe('charts-trendlines (Task A6a)', () => {
     expect(tightSizes).toHaveLength(2)
     expect(tightSizes[0]).toBeLessThan(150_000)
     expect(tightSizes[1]).toBeGreaterThanOrEqual(150_000)
+  })
+
+  it('review R3-I2: date forecasts fit their automatic domain (descending dates, month and year units, automatic unit)', () => {
+    const dated = (cats: number[], body: string, unit?: string) => parse(space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + body)}<cat>${lit(cats)}</cat><val>${lit(cats.map((_, i) => i + 1))}</val></ser>${AX}</lineChart><dateAx><axId val="1"/>${unit ? `<baseTimeUnit val="${unit}"/>` : ''}<crossAx val="2"/></dateAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`))
+    /** The painter's projection of a category position onto the date axis (relative unit index), and the axis. */
+    const ends = (model: ChartModel) => {
+      const view = displayView(model), graph = hydrateAxes(model, view), axis = graph.axes.get('1')!, t = trendsOf(model)[0]
+      const projected = (x: number) => { const s = x - 1, i = Math.max(0, Math.min(Math.floor(s), view.slots - 2)); return graph.categoryIndex(axis, i) + (s - i) * (graph.categoryIndex(axis, i + 1) - graph.categoryIndex(axis, i)) }
+      const a = projected(t.samples[0]), b = projected(t.samples[t.samples.length - 2])
+      return { axis, lo: Math.min(a, b), hi: Math.max(a, b) }
+    }
+    // Descending days 45004..45000, backward 2 / forward 10: the projections reach 45006 and 44990, whichever comes first.
+    const down = ends(dated([45004, 45003, 45002, 45001, 45000], '<backward val="2"/><forward val="10"/>', 'days'))
+    expect(down.axis.min).toBe(44990); expect(down.axis.max).toBe(45006)
+    expect(down.lo).toBeCloseTo(0, 9); expect(down.hi).toBeCloseTo(down.axis.slots - 1, 9)
+    // Month boundary: Jan 1, Feb 1, Mar 1 2023 (months), forward 1 -> April 2023, a whole calendar month on.
+    const month = ends(dated([44927, 44958, 44986], '<forward val="1"/>', 'months'))
+    expect(month.axis.min).toBe(44927); expect(month.axis.max).toBe(45017)
+    expect(month.axis.slots).toBe(4)
+    expect(month.lo).toBeCloseTo(0, 9); expect(month.hi).toBeCloseTo(3, 9)
+    expect(month.axis.ticks).toEqual([44927, 44958, 44986, 45017])
+    // Year unit: 2020, 2021, 2022 (Jan 1), backward 1 / forward 2 -> 2019 .. 2024.
+    const year = ends(dated([43831, 44197, 44562], '<backward val="1"/><forward val="2"/>', 'years'))
+    expect(year.axis.min).toBe(43466); expect(year.axis.max).toBe(45292)
+    expect(year.axis.slots).toBe(6)
+    expect(year.lo).toBeCloseTo(0, 9); expect(year.hi).toBeCloseTo(5, 9)
+    // Automatic unit (the 15th of each month -> months): backward 1 / forward 2 -> Dec 15 2022 .. May 15 2023.
+    const auto = ends(dated([44941, 44972, 45000], '<backward val="1"/><forward val="2"/>'))
+    expect(auto.axis.dateBase).toBe('months')
+    expect(auto.axis.min).toBe(44910); expect(auto.axis.max).toBe(45061)
+    expect(auto.lo).toBeCloseTo(0, 9); expect(auto.hi).toBeCloseTo(auto.axis.slots - 1, 9)
+    // Authored bounds still win over the forecast.
+    const capped = parse(space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + '<forward val="3"/>')}<cat>${lit([44927, 44958, 44986])}</cat><val>${lit([1, 2, 3])}</val></ser>${AX}</lineChart><dateAx><axId val="1"/><scaling><orientation val="minMax"/><max val="45017"/></scaling><baseTimeUnit val="months"/><crossAx val="2"/></dateAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`))
+    expect(capped.preparedAxes!.axes.find(a => a.id === '1')!.max).toBe(45017)
   })
 
   it('charts without trendlines carry no trendline record; stacked and pie groups draw none', () => {
