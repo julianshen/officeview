@@ -2,6 +2,7 @@ import { barGeometry } from './barGeometry'
 import { applyFillStyle, type ChartFillStyle } from './fills'
 import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
+import { paintOfPie } from './families/ofPie'
 import { createLineTracer } from './smooth'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
@@ -20,7 +21,9 @@ import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
+import { tierEdge } from './categories'
 import { paintTrendlines } from './trendlines'
+import { paintErrorBars, type ErrorBarPlacement } from './errorBars'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
@@ -28,7 +31,7 @@ import { paintWaterfall, waterfallLevels } from './chartex/waterfall'
 import { FUNNEL_TEXTS, paintFunnel } from './chartex/funnel'
 import type { ChartExGroup } from './model'
 import { chartFont } from './textStyle'
-import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
+import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle, titleHeight } from './layout'
 import { paintChartUserShapes } from './userShapes'
 
 type FamilyCss = (family: string) => string
@@ -125,6 +128,53 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box,
     if (vertical) y += line; else x += widths[i]
   })
   return area
+}
+
+/**
+ * The chart title (spec 5.10): a plain title is one centred line (compressed to the box); a title with runs is drawn
+ * line by line, each run in its resolved font and colour, every line centred as a whole and compressed to fit.
+ */
+function paintTitle(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, fontPx: number, familyCss: FamilyCss): void {
+  const box = layout.title
+  if (model.titleFill && fillWith(ctx, model.titleFill, 'FFFFFF', box)) ctx.fillRect(box.x, box.y, box.w, box.h)
+  strokeBorder(ctx, model.titleLine, '000000', box, box)
+  const titlePx = Math.min(96, fontPx * 1.4), cx = box.x + box.w / 2
+  ctx.textBaseline = 'top'
+  const lines = layout.titleLines
+  if (!lines) {
+    ctx.font = font(titlePx, model.fontFamily, familyCss)
+    ctx.fillStyle = TEXT; ctx.textAlign = 'center'
+    ctx.fillText(model.title!, cx, box.y, box.w)
+    return
+  }
+  let y = box.y
+  /** An underline below the baseline, in the run's colour, about a sixteenth of its size thick. */
+  const underline = (x: number, baseline: number, width: number, px: number, color: string) => {
+    ctx.fillStyle = color
+    ctx.fillRect(x, baseline + Math.max(1, px / 12), width, Math.max(1, px / 16))
+  }
+  lines.forEach((line, i) => {
+    if (line.runs.length === 1) {
+      // A single run keeps the plain title's centred, compressed drawing (from the line top).
+      const { run, font: css, width, px } = line.runs[0]
+      ctx.font = css; ctx.fillStyle = run.color ?? TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
+      ctx.fillText(run.text, cx, y, box.w)
+      const shown = Math.min(width, box.w)
+      if (run.underline) underline(cx - shown / 2, y + line.ascent, shown, px, run.color ?? TEXT)
+    } else if (line.runs.length) {
+      // Mixed runs sit on one shared baseline (the tallest ascent below the line top), centred as a whole.
+      const scale = line.width > box.w ? box.w / line.width : 1, baseline = y + line.ascent
+      let x = cx - line.width * scale / 2
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
+      for (const { run, font: css, width, px } of line.runs) {
+        ctx.font = css; ctx.fillStyle = run.color ?? TEXT
+        if (scale < 1) ctx.fillText(run.text, x, baseline, Math.max(1, width * scale)); else ctx.fillText(run.text, x, baseline)
+        if (run.underline) underline(x, baseline, width * scale, px, run.color ?? TEXT)
+        x += width * scale
+      }
+    }
+    y += titleHeight([line]) * (i < lines.length - 1 ? 1.2 : 1)
+  })
 }
 
 function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
@@ -331,6 +381,37 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       if (a.orientation === 'v') { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, c, place === 'r' ? anchor + 4 : anchor - 4, at(i)) }
       else { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, i, c, at(i), place === 't' ? anchor - 3 : anchor + 3) }
     }
+    // Multi-level categories (spec 5.9): each outer tier beyond the innermost labels, group labels centred on their
+    // spans (compressed to fit) and separators at the group edges from the axis through the tier.
+    const tiers = layout.tiers.get(a.id)
+    if (tiers?.length) {
+      const outward = place === 'b' || place === 'r' ? 1 : -1, edge = (k: number) => along(a, tierEdge(k, n, between, a.reversed))
+      ctx.save()
+      try {
+        ctx.font = font((a.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72, family, familyCss)
+        ctx.strokeStyle = '#BFBFBF'; ctx.lineWidth = 1
+        let offset = labelBand(a)
+        for (const tier of tiers) {
+          ctx.fillStyle = TEXT
+          for (const g of tier.groups) {
+            const e0 = edge(g.start), e1 = edge(g.end), centre = (e0 + e1) / 2
+            if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; ctx.fillText(g.text, centre, anchor + outward * (offset + 3), Math.max(1, Math.abs(e1 - e0) - 4)) }
+            else { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g.text, anchor + outward * (offset + tier.size / 2), centre, Math.max(1, tier.size - 4)) }
+          }
+          // Separators at each group's edges (a shared edge once), from the axis through this tier.
+          const end = anchor + outward * (offset + tier.size)
+          const separator = (k: number) => {
+            const p = Math.round(edge(k)) + 0.5
+            if (a.orientation === 'h') { ctx.moveTo(p, anchor); ctx.lineTo(p, end) } else { ctx.moveTo(anchor, p); ctx.lineTo(end, p) }
+          }
+          ctx.beginPath()
+          let last = -1
+          for (const g of tier.groups) { if (g.start !== last) separator(g.start); separator(g.end); last = g.end }
+          ctx.stroke()
+          offset += tier.size
+        }
+      } finally { ctx.restore() }
+    }
 
   }
   // Axis titles and display-unit labels. Every save is balanced in finally, so a throw never leaks state (spec 6.5 containment).
@@ -385,10 +466,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       return { pos, neg, total }
     })() : undefined
     const share = (v: number, i: number) => group.grouping === 'percentStacked' && stacked ? (stacked.total[i] ? v / stacked.total[i] : 0) : v
+    // Error bars (A6b, spec 5.7): placed by the family block, stroked after its marks; no placement or stroke without them.
+    const errorBars = model.source.preparedAxes?.errorBars?.some(b => b.group === g) === true
+    const errorValue = (v: number) => along(V, axisFraction(V, v, false))
+    let errorPlace: ErrorBarPlacement | undefined
     if (group.family === 'bar' && axes.category) {
       const C = axes.category, vertical = C.orientation === 'v'
       const geometry = barGeometry(group, C, axes.between, plot)
       const width = geometry.width
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: vertical, across: (_ds, order, slot) => { const idx = graph.categoryIndex(C, slot); return Number.isFinite(idx) ? geometry.start(idx, order) + width / 2 : NaN } }
       const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
         if (!admitPath(count * 4)) return
@@ -459,6 +545,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         return edge ? plot.x + (count > 1 ? i * plot.w / (count - 1) : plot.w / 2) : plot.x + band * (i + 0.5)
       }
       const has = (i: number) => !Number.isNaN(top[i])
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, across: (_ds, _order, slot) => xAt(slot) }
       // Drop lines (spec 5.8) span, per category, every plotted point of the group to the category axis.
       const drops = group.dropLines && !group.dropLines.noFill ? { lo: new Float64Array(count).fill(NaN), hi: new Float64Array(count).fill(NaN) } : undefined
       for (const s of group.series) {
@@ -544,6 +631,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         px = xp(xv); py = at(v)
         return true
       }
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } }
       const isScatterGap = (s: DrawSeries, i: number): boolean => {
         const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
         const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
@@ -575,6 +663,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
       }
     } else if (group.family === 'bubble' && axes.x) {
+      if (errorBars) { const X = axes.x, xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w; errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } } }
       paintBubbles(ctx, group, group.series, axes.x, V, { plot, slots: count, source: model.view.source, visibleOnly: model.plotVisOnly !== false, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box) })
     } else if (group.family === 'stock' && horizontal === B) {
       paintStock(ctx, group, group.series, axes, {
@@ -590,6 +679,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
     }
+    if (errorPlace) paintErrorBars(ctx, model.source, g, group.series.map(s => ({ series: s.source, value: s.value, x: s.x, hasX: s.hasX })), count, model.view.source, errorPlace, admitPath, plot)
     // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
     // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
     if (model.source.preparedAxes?.trendlines?.some(t => t.group === g)) {
@@ -665,7 +755,9 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     layout = layoutChart(source, w, h, dpr, fontGeneration(ctx), {
       width: (text, css) => { const previous = ctx.font; try { ctx.font = css; return ctx.measureText(text).width } finally { ctx.font = previous } },
       lineHeight: () => source.fontSizePt * 96 / 72,
-    }, context, familyCss(source.fontFamily))
+      // The em ascent where the canvas reports it (fontBoundingBoxAscent; node-canvas emHeightAscent).
+      ascent: css => { const previous = ctx.font; try { ctx.font = css; const m = ctx.measureText('') as TextMetrics & { emHeightAscent?: number }; const a = m.fontBoundingBoxAscent ?? m.emHeightAscent; return Number.isFinite(a) && a! > 0 ? a! : Number.NaN } finally { ctx.font = previous } },
+    }, context, familyCss(source.fontFamily), familyCss)
     releaseLayout = holdChartLayout(layout)
     const paintBytes = paintWorkspaceBytes(source, layout.view)
     if (!reserveChartLayoutWorkspace(workspace, paintBytes, admission.tag)) throw new ChartRefusal()
@@ -691,26 +783,22 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
       try { ctx.strokeStyle = GRID; ctx.lineWidth = 1; applyLineStyle(ctx, model.chartAreaLine, whole); ctx.strokeRect(0.5, 0.5, w - 1, h - 1) } finally { ctx.restore() }
     }
     const fontPx = model.fontSizePt * 96 / 72
-    const pad = Math.min(10, w * 0.04, h * 0.04)
-    let area: Box = { x: pad, y: pad, w: w - pad * 2, h: h - pad * 2 }
-    if (model.title) {
-      if (model.titleFill && fillWith(ctx, model.titleFill, 'FFFFFF', layout.title)) ctx.fillRect(layout.title.x, layout.title.y, layout.title.w, layout.title.h)
-      strokeBorder(ctx, model.titleLine, '000000', layout.title, layout.title)
-      const titlePx = Math.min(96, fontPx * 1.4)
-      ctx.font = font(titlePx, model.fontFamily, familyCss)
-      ctx.fillStyle = TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
-      ctx.fillText(model.title, layout.title.x + layout.title.w / 2, layout.title.y, layout.title.w)
-      area = { ...area, y: area.y + titlePx + 6, h: area.h - titlePx - 6 }
+    // An overlaid title or legend (spec 5.10) takes no space and is painted over the plot, after it.
+    if (model.title && !model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)
+    if (!model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
+    const area = layout.area
+    if (area.w > 8 && area.h > 8) {
+      const group = model.groups[0]
+      if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
+      else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
+      else if (group.family === 'funnel' && group.kind === 'chartEx') paintFunnelChart(ctx, model, layout, familyCss)
+      else if (group.family === 'ofPie' && group.series[0]) paintOfPie(ctx, area, group, group.series[0], slot => model.view.source(slot), model.view.slots)
+      else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
+      paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
     }
-    paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
-    area = layout.area
-    if (area.w <= 8 || area.h <= 8) return void paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
-    const group = model.groups[0]
-    if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
-    else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
-    else if (group.family === 'funnel' && group.kind === 'chartEx') paintFunnelChart(ctx, model, layout, familyCss)
-    else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
-    paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
+    if (model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
+    if (model.title && model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)
+    // User shapes (A4c) sit over everything the chart draws.
     paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }
 }

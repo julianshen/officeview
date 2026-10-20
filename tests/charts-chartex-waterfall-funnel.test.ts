@@ -377,3 +377,17 @@ describe('B2 review round 1', () => {
     close(label!.y, total.y - 8, 4)
   })
 })
+
+describe('B2 merge with feature (A6b error bars)', () => {
+  it('waterfall and funnel never draw error bars: a set on such a model is dropped and diagnosed', async () => {
+    for (const xml of [waterfall([10, -3, 5]), funnel([{ values: [1, 2, 3] }])]) {
+      const result = await adapt(xml)
+      if (result.kind !== 'native') throw new Error('native')
+      const bars = { dir: 'y', type: 'both', valType: 'fixedVal', val: 1, noEndCap: false } as const
+      const withBars: ChartModel = { ...result.model, preparedAxes: undefined, groups: result.model.groups.map(g => ({ ...g, series: g.series.map(s => ({ ...s, errorBars: [bars] })) })) }
+      const prepared = prepareChartAxes(withBars)
+      expect(prepared.preparedAxes!.errorBars ?? []).toHaveLength(0)
+      expect(prepared.preparedAxes!.diagnostics.map(d => d.code)).toContain('chart-error-bars-dropped')
+    }
+  })
+})

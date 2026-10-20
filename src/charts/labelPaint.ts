@@ -7,6 +7,7 @@ import { axisFraction, categoryFraction } from './axes'
 import { valueAt, hiddenAt } from './points'
 import { waterfallLevels, waterfallSeries, type WaterfallLevels } from './chartex/waterfall'
 import { funnelGeometry, funnelLabelAnchor, funnelSeries } from './chartex/funnel'
+import { ofPieDisplayValue, ofPiePlan, ofPiePointPlacement, type OfPiePlan } from './families/ofPie'
 export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D, layout: ChartLayout, family: string): void {
   const labels = model.preparedAxes?.dataLabels
   if (!labels?.length) return
@@ -17,9 +18,13 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
   // Waterfall levels and funnel geometry, built once per paint (the paint workspace admitted them: paintWorkspaceBytes).
   let levels: WaterfallLevels | undefined, funnel: ReturnType<typeof funnelGeometry> | undefined
   const textWidth = (label: (typeof labels)[number]) => (label.legendKey ? 12 : 0) + (label.runs.length ? label.runs : [{ text: label.text }]).reduce((n, run) => n + layout.width(run.text, labelFont(run, layout.fontPx, family)), 0)
+  let ofPieState: { g: object; s: object; plan: OfPiePlan } | undefined
   for (const label of labels) {
-    const g = model.groups[label.group], s = g.series[label.series], slot = slots.get(label.point)
-    if (slot === undefined || (model.plotVisOnly !== false && (hiddenAt(s.values.hidden, label.point) || hiddenAt(s.xValues?.hidden, label.point)))) continue
+    const g = model.groups[label.group], s = g.series[label.series]
+    // The ofPie Other pseudo label's point (n) is not a displayed source, so it bypasses the slot
+    // lookup and the hidden check entirely.
+    const other = label.other === true, slot = other ? -1 : slots.get(label.point)
+    if (slot === undefined || (!other && model.plotVisOnly !== false && (hiddenAt(s.values.hidden, label.point) || hiddenAt(s.xValues?.hidden, label.point)))) continue
     const raw = valueAt(s.values, label.point) ?? 0
     let x = 0, y = 0, anchorX = 0, anchorY = 0, outside = false
     if (g.family === 'pie' || g.family === 'doughnut') {
@@ -45,6 +50,30 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
       const at = funnelLabelAnchor(funnel, plot, slot, label.position, textWidth(label))
       if (!at) continue
       x = at.x; y = at.y
+    } else if (g.family === 'ofPie') {
+      // ofPie placement shares the painter's plan (the split, geometry and slice angles, computed
+      // once per group and series, like the pie's running totals). A label's point is its source
+      // index in the display; the pseudo point n (the synthetic Other slice) places on the primary
+      // region via its -1 marker.
+      let state = ofPieState
+      if (state === undefined || state.g !== g || state.s !== s) {
+        const ds = view.groupSeries(label.group).find(d => d.series === s)
+        const values: number[] = []
+        for (let i = 0; i < view.slots; i++) values.push(ofPieDisplayValue(ds?.value(i)))
+        state = ofPieState = { g: g, s: s, plan: ofPiePlan(g, values, layout.area, slot => view.source(slot)) }
+      }
+      const placement = ofPiePointPlacement(state.plan, slot)
+      if (!placement || !(placement.fraction > 0)) continue
+      outside = label.position === 'outEnd' || (label.position === 'bestFit' && placement.fraction < .12)
+      if (placement.bar) {
+        anchorX = placement.cx - placement.r; anchorY = placement.cy
+        x = placement.cx + placement.r * .3; y = placement.cy
+      } else {
+        anchorX = placement.cx + Math.cos(placement.angle) * placement.r
+        anchorY = placement.cy + Math.sin(placement.angle) * placement.r
+        x = placement.cx + Math.cos(placement.angle) * (outside ? placement.r + 12 : placement.r * .65)
+        y = placement.cy + Math.sin(placement.angle) * (outside ? placement.r + 12 : placement.r * .65)
+      }
     } else {
       const a = layout.graph.groups[label.group]
       if (!a) continue

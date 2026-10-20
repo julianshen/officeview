@@ -176,3 +176,11 @@ export const SURFACE3D_FAMILY: ConformanceFamily = {
   chart: c => conformanceSpace(`<c:surface3DChart><c:wireframe val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surface3DChart>${CAT_VAL_SER}`),
   expect: { 'no series': { kind: 'card' }, 'empty series': { kind: 'card' }, 'all blank': { kind: 'card' }, 'NaN and infinity': { kind: 'card' }, 'negative values': { kind: 'card' }, 'single point': { kind: 'card' }, 'unavailable point': { kind: 'card' } },
 }
+
+/** ofPie (spec 4.1): a valid authored ofPie paints natively in every data case (blank, NaN or negative
+ * input reads as zero, so the painter just has no slices); only a missing series is a card. */
+export const OF_PIE_FAMILY: ConformanceFamily = {
+  name: 'ofPie',
+  chart: c => conformanceSpace(`<c:ofPieChart><c:varyColors val="1"/>${c === null ? '' : `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx><c:val>${c}</c:val></c:ser>`}<c:firstSliceAng val="0"/></c:ofPieChart>`),
+  expect: { 'no series': { kind: 'card' }, 'empty series': { kind: 'native' }, 'all blank': { kind: 'native' }, 'NaN and infinity': { kind: 'native' }, 'negative values': { kind: 'native' }, 'single point': { kind: 'native' }, 'unavailable point': { kind: 'native' } },
+}
