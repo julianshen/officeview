@@ -19,6 +19,7 @@ import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './s
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 import { readBubbleOptions } from './families/bubble'
 import { readRadarStyle } from './families/radar'
+import { readStockOptions } from './families/stock'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -37,10 +38,10 @@ const finite = (raw: string | undefined): number | undefined => raw !== undefine
 const GROUPS: Record<string, ChartFamily> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
   pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
-  bubbleChart: 'bubble', radarChart: 'radar',
+  bubbleChart: 'bubble', radarChart: 'radar', stockChart: 'stock',
 }
 const UNSUPPORTED: Record<string, string> = {
-  stockChart: 'Stock chart', surfaceChart: 'Surface chart',
+  surfaceChart: 'Surface chart',
   surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
 }
 
@@ -429,6 +430,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const radarStyle = type === 'radar' ? readRadarStyle(node) : undefined
     const xy = type === 'scatter' || type === 'bubble'
     const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
+    const stockOpts = type === 'stock' ? readStockOptions(node, theme, charge) : undefined
     // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
     const connector = (name: string) => {
       const holder = child(node, name)
@@ -575,13 +577,17 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
         ...(type === 'radar' ? { line: lineColor !== null, markers: radarStyle === 'marker' && !markerNone } : {}),
+        ...(type === 'stock' ? { markers: !markerNone && Boolean(child(ser, 'marker')) } : {}),
       })
+    }
+    if (type === 'stock' && series.length !== 3 && series.length !== 4) {
+      unsupported ??= `Stock charts require 3 (high, low, close) or 4 (open, high, low, close) series, got ${series.length}`
     }
     groups.push({
       family: type, grouping, series, binding,
       labels: readLabels(child(node, 'dLbls'), charge),
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
-      gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
+      gapWidth: Math.max(0, Math.min(500, stockOpts?.gapWidth ?? finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
@@ -590,6 +596,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(radarStyle ? { radarStyle } : {}),
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),
+      ...(stockOpts?.hiLowLines ? { hiLowLines: stockOpts.hiLowLines } : {}),
+      ...(stockOpts?.upDownBars ? { upDownBars: stockOpts.upDownBars } : {}),
     })
   }
   // Implied axes (a plot area without axis elements) are retained like authored ones.

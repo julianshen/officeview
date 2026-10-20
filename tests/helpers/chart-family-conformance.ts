@@ -131,6 +131,11 @@ const CAT_VAL = '<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax
 const VAL_VAL = '<c:valAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx>'
 const ser = (inner: string) => `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx>${inner}</c:ser>`
 const categorySeries = (cache: string | null) => cache === null ? '' : ser(`<c:val>${cache}</c:val>`)
+const stockSeries = (c: string | null) => c === null ? '' : [
+  `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>High</c:v></c:tx><c:val>${c}</c:val></c:ser>`,
+  `<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Low</c:v></c:tx><c:val>${c}</c:val></c:ser>`,
+  `<c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:v>Close</c:v></c:tx><c:val>${c}</c:val></c:ser>`,
+].join('')
 
 /** The families the engine draws natively at A5a; later family tasks add theirs. */
 export const CLASSIC_FAMILIES: ConformanceFamily[] = [
@@ -144,4 +149,5 @@ export const CLASSIC_FAMILIES: ConformanceFamily[] = [
   { name: 'bubble', chart: c => conformanceSpace(`<c:bubbleChart><c:varyColors val="0"/>${c === null ? '' : ser(`<c:xVal>${c}</c:xVal><c:yVal>${c}</c:yVal><c:bubbleSize>${c}</c:bubbleSize><c:bubble3D val="0"/>`)}<c:bubbleScale val="100"/><c:showNegBubbles val="0"/><c:axId val="1"/><c:axId val="2"/></c:bubbleChart>${VAL_VAL}`) },
   { name: 'radar', chart: c => conformanceSpace(`<c:radarChart><c:radarStyle val="marker"/><c:varyColors val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/></c:radarChart>${CAT_VAL}`) },
   { name: 'filled radar', chart: c => conformanceSpace(`<c:radarChart><c:radarStyle val="filled"/><c:varyColors val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/></c:radarChart>${CAT_VAL}`) },
+  { name: 'stock', chart: c => conformanceSpace(`<c:stockChart>${stockSeries(c)}<c:hiLowLines/><c:axId val="1"/><c:axId val="2"/></c:stockChart>${CAT_VAL}`) },
 ]

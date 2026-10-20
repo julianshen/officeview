@@ -20,6 +20,7 @@ import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
+import { paintStock } from './families/stock'
 import { chartFont } from './textStyle'
 import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 
@@ -539,6 +540,18 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       }
     } else if (group.family === 'bubble' && axes.x) {
       paintBubbles(ctx, group, group.series, axes.x, V, { plot, slots: count, source: model.view.source, visibleOnly: model.plotVisOnly !== false, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box) })
+    } else if (group.family === 'stock' && horizontal === B) {
+      paintStock(ctx, group, group.series, axes, {
+        plot,
+        slots: count,
+        source: model.view.source,
+        admitPath,
+        fillWith,
+        strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+        drawMarker: (c, s, i, x, y, r) => drawMarker(c, s as DrawSeries, i, x, y, r),
+        plotted,
+        at,
+      })
     }
   })
   } finally { ctx.restore() }
