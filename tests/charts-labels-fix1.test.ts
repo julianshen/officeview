@@ -52,9 +52,9 @@ it('I2: Office 2013 leader-line extensions and empty layouts do not enable disab
   expect(model.preparedAxes!.diagnostics.some(d => d.code === 'chart-label-feature-unsupported')).toBe(false)
 })
 
-it('I2: disabled labels stay disabled even with a real unsupported text source', () => {
+it('I2 / round-2 ruling: a range source enables fallback independently of ordinary flags', () => {
   const ext = '<c:extLst><c:ext><c15:datalabelsRange/><c15:showDataLabelsRange val="1"/></c:ext></c:extLst>'
-  expect(parse(chart(controls(false) + ext)).preparedAxes!.dataLabels).toEqual([])
+  expect(parse(chart(controls(false) + ext)).preparedAxes!.dataLabels.map(l => l.text)).toEqual(['1', '2'])
   expect(parse(chart(ext)).preparedAxes!.dataLabels.map(l => l.text)).toEqual(['1', '2'])
   const manual = '<c:dLbl><c:idx val="0"/><c:layout><c:manualLayout><c:x val="0.2"/></c:manualLayout></c:layout></c:dLbl>'
   expect(parse(chart(manual)).preparedAxes!.dataLabels).toEqual([])

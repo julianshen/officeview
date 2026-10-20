@@ -71,7 +71,7 @@ function options(n: XmlNode, charge: (b: number) => void): LabelOptions {
     if (child(ext, 'datalabelsRange') || show) out.fieldSource = show ? isOn(show) : true
   }
   if (child(tx, 'strRef')) out.fieldSource = true
-  if (out.fieldSource || child(child(n, 'layout'), 'manualLayout')) out.unsupported = true
+  if (child(child(n, 'layout'), 'manualLayout')) out.unsupported = true
   return out
 }
 export function readLabels(n: XmlNode | undefined, charge: (b: number) => void): LabelControls | undefined {
@@ -88,9 +88,9 @@ export function readLabels(n: XmlNode | undefined, charge: (b: number) => void):
 export const labelDefault = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' ? 'bestFit' : g.grouping === 'stacked' || g.grouping === 'percentStacked' || g.family === 'area' ? 'ctr' : g.family === 'bar' ? 'outEnd' : 'r'
 const controls = (g: ChartGroup, s: ChartSeries, i: number): LabelOptions => ({ ...g.labels, ...s.labels, ...g.labels?.points?.[i], ...s.labels?.points?.[i] })
 const percentFamily = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut'
-// A text-source fallback never overrides authored off controls. Manual placement
-// alone is not a text source and cannot turn a label on.
-const fieldFallback = (o: LabelOptions) => o.fieldSource && !contentFlags.some(key => o[key] === false)
+// The range source is an independent content switch (Excel writes ordinary
+// show flags as false beside it). Manual placement alone cannot enable text.
+const fieldFallback = (o: LabelOptions) => o.fieldSource === true
 function emitsLabel(model: ChartModel, g: ChartGroup, s: ChartSeries, i: number, o: LabelOptions): boolean {
   if (o.delete) return false
   if (o.runs?.some(r => r.text.length > 0)) return true
@@ -119,12 +119,14 @@ export function prepareDataLabels(model: ChartModel, formatter: ChartFormatter, 
     for (let i = 0; i < Math.min(4096, s.values.length); i++) total += Math.abs(valueAt(s.values, i) ?? 0)
     for (let i = 0; i < Math.min(4096, s.values.length); i++) {
       const o = controls(g, s, i)
-      if (!emitsLabel(model, g, s, i, o)) continue
-      if (o.unsupported && !diagnostics.some(d => d.code === 'chart-label-feature-unsupported')) diagnostics.push({ code: 'chart-label-feature-unsupported', reason: 'Field-reference or manual-layout data label uses its ordinary position and saved/generated text' })
+      if (o.delete) continue
+      const emits = emitsLabel(model, g, s, i, o)
+      if (((emits && o.unsupported) || fieldFallback(o)) && !diagnostics.some(d => d.code === 'chart-label-feature-unsupported')) diagnostics.push({ code: 'chart-label-feature-unsupported', reason: 'Field-reference or manual-layout data label uses its ordinary position and saved/generated text' })
+      if (!emits) continue
       const p = pointAt(s.values, i), parts: string[] = []
       if (o.showCatName) parts.push((s.categories ?? model.categories)[i] ?? '')
       if (o.showSerName) parts.push(s.name)
-      if (o.showVal) parts.push(p.state === 'error' ? p.code : p.state === 'value' ? formatter.format(p.v, pointFormat(o, s.values, i), epoch) : '')
+      if (o.showVal || fieldFallback(o)) parts.push(p.state === 'error' ? p.code : p.state === 'value' ? formatter.format(p.v, pointFormat(o, s.values, i), epoch) : '')
       if (o.showPercent && percentFamily(g) && p.state === 'value') parts.push(formatter.format(total ? Math.abs(p.v) / total : 0, o.sourceLinked !== true ? o.formatCode ?? '0%' : '0%', epoch))
       const bubble = valueAt(s.bubbleSizes, i)
       if (o.showBubbleSize && bubble !== undefined) parts.push(formatter.format(bubble, pointFormat(o, s.bubbleSizes, i), epoch))
