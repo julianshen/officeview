@@ -6,10 +6,11 @@
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
-import type { ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import type { ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 import { admitChartModel } from './axisBinding'
+import { prepareChartAxes } from './prepare'
 import { CHART_AXIS_UNPLACEABLE, placeAxes } from './axes'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
@@ -196,6 +197,27 @@ function dispUnitsOf(node: XmlNode | undefined): ChartAxis['dispUnits'] {
   const label = lbl ? richText(child(lbl, 'tx')) || unit : undefined
   return { divisor, unit, ...(label ? { label: label.slice(0, CHART_LABEL_LIMIT) } : {}) }
 }
+function textStyle(node: XmlNode | undefined): ChartTextStyle | undefined {
+  if (!node) return undefined
+  const body = attrs(child(node, 'bodyPr'))
+  const size = finite(attrs(child(child(child(node, 'p'), 'pPr'), 'defRPr')).sz)
+  const rot = finite(body.rot)
+  return { ...(size !== undefined ? { sizePt: Math.max(6, Math.min(72, size / 100)) } : {}),
+    ...(rot !== undefined ? { rotation: rot / 60000 } : {}), ...(oneOf(body.vert, ['horz', 'vert', 'vert270', 'eaVert', 'wordArtVert', 'wordArtVertRtl', 'mongolianVert'] as const) ? { vertical: body.vert } : {}) }
+}
+function manualLayout(node: XmlNode | undefined): ChartManualLayout | undefined {
+  const manual = child(child(node, 'layout'), 'manualLayout')
+  if (!manual) return undefined
+  const layout: ChartManualLayout = {}
+  for (const key of ['x', 'y', 'w', 'h'] as const) {
+    const n = finite(val(child(manual, key))); if (n !== undefined) layout[key] = n
+    const mode = oneOf(val(child(manual, `${key}Mode`)), ['edge', 'factor'] as const)
+    if (mode) layout[`${key}Mode`] = mode
+  }
+  const target = oneOf(val(child(manual, 'layoutTarget')), ['inner', 'outer'] as const)
+  if (target) layout.target = target
+  return layout
+}
 function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxis {
   const scaling = child(node, 'scaling')
   const numFmt = attrs(child(node, 'numFmt'))
@@ -217,6 +239,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
     majorTickMark: oneOf(val(child(node, 'majorTickMark')), TICK_MARKS),
     minorTickMark: oneOf(val(child(node, 'minorTickMark')), TICK_MARKS),
     tickLblPos: oneOf(val(child(node, 'tickLblPos')), ['nextTo', 'low', 'high', 'none'] as const),
+    text: textStyle(child(node, 'txPr')),
     tickLblSkip: skip('tickLblSkip'), tickMarkSkip: skip('tickMarkSkip'),
     dispUnits: dispUnitsOf(child(node, 'dispUnits')),
     baseTimeUnit: oneOf(val(child(node, 'baseTimeUnit')), TIME_UNITS),
@@ -242,7 +265,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
 
 /** The retained size of one axis record: a fixed record (its scalar fields) plus its strings. */
 const AXIS_RECORD_BYTES = 256
-export const axisBytes = (axis: ChartAxis): number => AXIS_RECORD_BYTES + [axis.id, axis.title, axis.formatCode, axis.dispUnits?.unit, axis.dispUnits?.label].reduce((sum, text) => sum + (text ? stringBytes(text) : 0), 0)
+export const axisBytes = (axis: ChartAxis): number => AXIS_RECORD_BYTES + (axis.text ? 64 : 0) + [axis.id, axis.title, axis.formatCode, axis.dispUnits?.unit, axis.dispUnits?.label].reduce((sum, text) => sum + (text ? stringBytes(text) : 0), 0)
 /** An implied axis (A1a): the plot area had no axis of that kind for a group without axIds; added once. */
 function impliedAxis(axes: ChartAxis[], kind: ChartAxis['kind'], id: string): string {
   if (!axes.some(axis => axis.id === id)) axes.push({ id, kind, gridlines: false, deleted: false, implicit: true })
@@ -304,7 +327,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, c
   const owner = context?.workspace ? modelOwner(context.workspace) : undefined
   const charge = (bytes: number) => { if (owner && !owner.workspace.reserve(bytes, owner.tag)) throw new ChartRefusal() }
   try {
-    const model = readChart(root, chart, plot, theme, charge)
+    const model = prepareChartAxes(readChart(root, chart, plot, theme, charge), owner)
     if (owner) adoptChartModel(model, owner)
     return model
   } catch (error) {
@@ -429,6 +452,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const legend = child(chart, 'legend')
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
+  const layouts = [plot, child(chart, 'title'), legend]
+  for (const node of layouts) if (child(child(node, 'layout'), 'manualLayout')) charge(128)
+  if (child(root, 'txPr')) charge(64)
+  const plotLayout = manualLayout(plot), titleLayout = manualLayout(child(chart, 'title')), legendLayout = manualLayout(legend), text = textStyle(child(root, 'txPr'))
   const model: ChartModel = {
     ...(title ? { title } : {}),
     groups,
@@ -443,8 +470,12 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     ...(child(chart, 'plotVisOnly') ? { plotVisOnly: flag(child(chart, 'plotVisOnly'), true) } : {}),
     ...(naAsBlank !== undefined ? { dispNaAsBlank: naAsBlank } : {}),
     ...(child(root, 'date1904') ? { epoch: flag(child(root, 'date1904'), true) ? '1904' as const : '1900' as const } : {}),
+    ...(plotLayout ? { plotLayout } : {}),
+    ...(titleLayout ? { titleLayout } : {}),
+    ...(legendLayout ? { legendLayout } : {}),
+    ...(text ? { text } : {}),
     fontFamily: minorFont,
-    fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(36, sizeRaw / 100)) : 10,
+    fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
   }

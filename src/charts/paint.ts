@@ -5,14 +5,14 @@
  * since A1a the cartesian families draw on the axis graph (`charts/axes.ts`).
  */
 import { paintChartPlaceholder } from '../drawing/content-paint'
-import { formatNumber } from '../xlsx/chartDescription'
 import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
-import { axisFraction, categoryFraction, resolveAxes, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
-import { ChartRefusal, chartModelOwner } from './own'
+import { axisFraction, categoryFraction, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
+import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
-import { dateTickLabel, dateUnitIndex } from './dates'
+import { dateUnitIndex } from './dates'
+import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 
 type FamilyCss = (family: string) => string
 /**
@@ -28,8 +28,7 @@ interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' 
 }
 interface DrawGroup extends Omit<ChartGroup, 'series'> { series: DrawSeries[] }
 interface DrawModel extends Omit<ChartModel, 'groups'> { groups: DrawGroup[]; view: DisplayView; source: ChartModel }
-function drawModel(model: ChartModel): DrawModel {
-  const view = displayView(model)
+function drawModel(model: ChartModel, view = displayView(model)): DrawModel {
   return {
     ...model,
     view,
@@ -41,52 +40,26 @@ const font = (sizePx: number, family: string, familyCss: FamilyCss, bold = false
 const TEXT = '#595959', GRID = '#D9D9D9'
 
 interface Box { x: number; y: number; w: number; h: number }
-function legendEntries(model: DrawModel): Array<{ name: string; color: string }> {
-  const group = model.groups[0]
-  if (group && (group.family === 'pie' || group.family === 'doughnut')) {
-    const s = group.series[0], out: Array<{ name: string; color: string }> = []
-    if (s) for (let slot = 0; slot < Math.min(model.view.slots, 64); slot++) { const i = model.view.source(slot); out.push({ name: model.view.category(slot) ?? String(i + 1), color: s.pointColors?.[i] ?? s.color }) }
-    return out
-  }
-  return model.groups.flatMap(g => g.series).map(s => ({ name: s.name, color: s.color }))
-}
 
-function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss): Box {
-  const entries = legendEntries(model)
+function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): Box {
+  const entries = legendEntries(model.source, model.view)
   if (!model.legend || !entries.length) return area
   ctx.font = font(fontPx, family, familyCss)
   const sw = fontPx * 0.7, gap = 6
-  const widths = entries.map(e => ctx.measureText(e.name).width + sw + gap * 2)
+  const widths = entries.map(e => layout.width(e.name, font(fontPx, family, familyCss)) + sw + gap * 2)
   const line = fontPx + 6
-  if (model.legend === 'r' || model.legend === 'l' || model.legend === 'tr') {
-    const width = Math.min(area.w * 0.4, Math.max(...widths) + gap)
-    const total = Math.min(entries.length, Math.max(1, Math.floor(area.h / line))) * line
-    const x = model.legend === 'l' ? area.x : area.x + area.w - width
-    let y = model.legend === 'tr' ? area.y : area.y + (area.h - total) / 2
-    ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
-    for (const entry of entries) {
-      if (y + line > area.y + area.h + 0.5) break
-      ctx.fillStyle = `#${entry.color}`
-      ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw)
-      ctx.fillStyle = TEXT
-      ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2, width - sw - gap * 3)
-      y += line
-    }
-    return model.legend === 'l' ? { x: area.x + width, y: area.y, w: area.w - width, h: area.h } : { ...area, w: area.w - width }
-  }
-  const total = widths.reduce((a, b) => a + b, 0)
-  let x = area.x + Math.max(0, (area.w - total) / 2)
-  const y = model.legend === 't' ? area.y : area.y + area.h - line
+  const vertical = model.legend === 'r' || model.legend === 'l' || model.legend === 'tr'
+  let x = area.x, y = area.y
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
   entries.forEach((entry, i) => {
-    if (x + widths[i] > area.x + area.w + 0.5) return
-    ctx.fillStyle = `#${entry.color}`
-    ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw)
+    if (vertical ? y + line > area.y + area.h + .5 : x + widths[i] > area.x + area.w + .5) return
+    ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw)
     ctx.fillStyle = TEXT
-    ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2)
-    x += widths[i]
+    if (vertical) ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2, Math.max(1, area.w - sw - gap * 3))
+    else ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2)
+    if (vertical) y += line; else x += widths[i]
   })
-  return model.legend === 't' ? { x: area.x, y: area.y + line, w: area.w, h: area.h - line } : { ...area, h: area.h - line }
+  return area
 }
 
 function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
@@ -124,79 +97,47 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
  * units, gridlines and authored tick marks. With one value axis and no authored placement it draws exactly as
  * the engine did before A1a (the same layout arithmetic and drawing order).
  */
-function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: AxisGraph, box: Box, fontPx: number, family: string, familyCss: FamilyCss): void {
+function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: AxisGraph, box: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): void {
   const placed = graph.groups.filter((g): g is GroupAxes => Boolean(g))
   if (!placed.length) return
   const count = model.view.slots
   ctx.font = font(fontPx, family, familyCss)
   const used = [...graph.axes.values()].filter(a => placed.some(g => g.horizontal === a || g.vertical === a))
+  let remaining = 262144
+  const limited = () => { if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' }) }
+  const admitPath = (cost: number) => { if (cost > remaining) { limited(); return false }; remaining -= cost; return true }
+  const drawableAxes = new Set(used.filter(a => admitPath(16 + 4 * (a.ticks.length + a.minorTicks.length + Math.min(1000, a.slots)))))
   const valueAxes = used.filter(a => placed.some(g => g.value === a))
   const baseAxes = used.filter(a => !valueAxes.includes(a))
-  const crossOf = (a: ResolvedAxis) => a.crosses !== undefined ? graph.axes.get(a.crosses) : undefined
   /** Category labels sit between ticks unless the plot authored crossBetween=midCat (legacy: band centres). */
   const labelsBetween = (a: ResolvedAxis) => { const g = placed.find(p => p.category === a); return !(g && (g.value.axis.crossBetween ?? a.axis.crossBetween) === 'midCat') }
-  const valueText = (a: ResolvedAxis, t: number) => formatNumber(a.labelValue(t), a.percent)
   const shown = (a: ResolvedAxis) => !a.deleted && a.axis.tickLblPos !== 'none'
-  /**
-   * Where an axis's tick labels go: a plot edge, or next to the axis line. Without an authored tickLblPos the
-   * engine's legacy placement is kept (the near edge), except that an axis authored to cross at the maximum (a
-   * secondary axis) or across a reversed axis takes the far edge.
-   */
-  const labelPlace = (a: ResolvedAxis): 'near' | 'far' | 'axis' => {
-    const pos = a.axis.tickLblPos
-    const reversedCross = crossOf(a)?.reversed === true
-    if (pos === undefined) return (a.axis.crosses === 'max') !== reversedCross ? 'far' : 'near'
-    if (pos === 'low') return reversedCross ? 'far' : 'near'
-    if (pos === 'high') return reversedCross ? 'near' : 'far'
-    return 'axis'
-  }
-  const sideOf = (a: ResolvedAxis): 'l' | 'r' | 'b' | 't' => {
-    const place = labelPlace(a)
-    if (place === 'axis') return a.side
-    return a.orientation === 'v' ? (place === 'near' ? 'l' : 'r') : (place === 'near' ? 'b' : 't')
-  }
-  const titleBand = fontPx + 6
-  const dateLabels = (a: ResolvedAxis) => a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
-  /** The thickness of an axis's tick labels on its side (the engine's legacy measures). */
-  const labelBand = (a: ResolvedAxis): number => {
-    if (a.deleted) return 0
-    if (a.axis.tickLblPos === 'none') return 0
-    if (a.orientation === 'h') return fontPx + 6
-    if (a.role === 'value') return Math.max(...a.ticks.map(t => ctx.measureText(valueText(a, t)).width)) + 6 + (a.axis.majorTickMark === 'out' || a.axis.majorTickMark === 'cross' ? 4 : 0)
-    let widest = 0
-    if (a.role === 'date') for (const text of dateLabels(a)) widest = Math.max(widest, ctx.measureText(text).width)
-    else for (let slot = 0; slot < count; slot++) { const c = model.view.category(slot); if (c !== undefined) widest = Math.max(widest, ctx.measureText(c).width) }
-    return Math.min(box.w * 0.35, widest + 8)
-  }
-  // Layout: each side's bands from the plot outward (tick labels, display-unit label, title), applied in the
-  // engine's legacy order so a single-axis chart keeps its exact geometry.
-  const bands: Record<'l' | 'r' | 'b' | 't', number[]> = { l: [], r: [], b: [], t: [] }
-  for (const a of [...valueAxes, ...baseAxes].sort((p, q) => (p.orientation === 'v' ? 0 : 1) - (q.orientation === 'v' ? 0 : 1))) {
-    const side = sideOf(a)
-    bands[side].push(labelBand(a))
-    if (a.display?.label && !a.deleted) bands[side].push(titleBand)
-    if (a.axis.title) bands[side].push(titleBand)
-  }
-  // Legacy: one band list per side (vertical axes first); horizontal-bar charts reserve the category band first.
-  let x = box.x, w = box.w
-  for (const b of bands.l) { x += b; w -= b }
-  w -= 8
-  for (const b of bands.r) w -= b
-  let h = box.h
-  for (const b of bands.b) h -= b
-  h -= 4
-  let y = box.y + 4
-  for (const b of bands.t) { y += b; h -= b }
-  const plot: Box = { x, y, w, h }
+  const sideOf = (a: ResolvedAxis) => axisSide(a, graph)
+  const dateLabels = (a: ResolvedAxis) => layout.texts.get(a.id)!
+  const labelBand = (a: ResolvedAxis) => layout.axisBands.get(a.id) ?? 0
+  const plot = layout.plot
   if (plot.w <= 4 || plot.h <= 4) return
   /** A coordinate along an axis's direction (x for horizontal axes, y for vertical ones) at fraction f. */
   const along = (a: ResolvedAxis, f: number) => a.orientation === 'h' ? plot.x + f * plot.w : plot.y + plot.h - f * plot.h
   /** The coordinate of an axis's line across the plot (its crossing on the axis it crosses). */
   const across = (a: ResolvedAxis) => a.orientation === 'h' ? plot.y + plot.h - a.crossesFraction * plot.h : plot.x + a.crossesFraction * plot.w
   const labelAnchor = (a: ResolvedAxis): number => {
-    const place = labelPlace(a)
+    const place = labelPlace(a, graph)
     if (a.orientation === 'h') return place === 'near' ? plot.y + plot.h : place === 'far' ? plot.y : across(a)
     return place === 'near' ? plot.x : place === 'far' ? plot.x + plot.w : across(a)
+  }
+  const label = (a: ResolvedAxis, index: number, text: string, x: number, y: number, maxWidth?: number) => {
+    if (!layout.labelIndices.get(a.id)?.has(index)) return
+    const angle = textAngle(a.axis.text ?? model.text)
+    ctx.font = font((a.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72, family, familyCss)
+    if (!angle) { if (maxWidth === undefined) ctx.fillText(text, x, y); else ctx.fillText(text, x, y, maxWidth) }
+    else {
+      const box = layout.labels.get(a.id)!.find(l => l.index === index)!
+      if (a.orientation === 'h') y += (ctx.textBaseline === 'bottom' ? -1 : 1) * box.crossExtent / 2
+      else x += (ctx.textAlign === 'right' ? -1 : 1) * box.crossExtent / 2
+      ctx.save(); try { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.translate(x, y); ctx.rotate(angle); ctx.fillText(text, 0, 0) } finally { ctx.restore() }
+    }
+    ctx.font = font(fontPx, family, familyCss)
   }
   const tickMarks = (a: ResolvedAxis, values: readonly number[], position: (v: number) => number, mark: string | undefined) => {
     if (!mark || mark === 'none' || a.deleted) return
@@ -222,8 +163,9 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
   // Value axes: gridlines (and the scale's lower bound) and tick labels.
   ctx.lineWidth = 1
   for (const a of valueAxes) {
+    if (!drawableAxes.has(a)) continue
     if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, axisFraction(a, t)) }
-    for (const t of a.ticks) {
+    for (const [i, t] of a.ticks.entries()) {
       const f = axisFraction(a, t)
       ctx.strokeStyle = GRID
       if (a.axis.gridlines || t === a.min) gridline(a, f)
@@ -232,22 +174,23 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       const anchor = labelAnchor(a), right = sideOf(a) === 'r', top = sideOf(a) === 't'
       // An authored outward tick mark pushes the labels clear of it.
       const pad = a.axis.majorTickMark === 'out' || a.axis.majorTickMark === 'cross' ? 4 : 0
-      if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = top ? 'bottom' : 'top'; ctx.fillText(valueText(a, t), plot.x + f * plot.w, top ? anchor - 3 - pad : anchor + 3 + pad) }
-      else { ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'middle'; ctx.fillText(valueText(a, t), right ? anchor + 4 + pad : anchor - 4 - pad, plot.y + plot.h - f * plot.h) }
+      if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = top ? 'bottom' : 'top'; label(a, i, layout.texts.get(a.id)![i], plot.x + f * plot.w, top ? anchor - 3 - pad : anchor + 3 + pad) }
+      else { ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, layout.texts.get(a.id)![i], right ? anchor + 4 + pad : anchor - 4 - pad, plot.y + plot.h - f * plot.h) }
     }
     tickMarks(a, a.minorTicks, t => along(a, axisFraction(a, t)), a.axis.minorTickMark)
     tickMarks(a, a.ticks, t => along(a, axisFraction(a, t)), a.axis.majorTickMark)
   }
   // Category, date and x axes: the axis line at its crossing, then labels.
   for (const a of baseAxes) {
+    if (!drawableAxes.has(a)) continue
     if (a.role === 'value') {
       // An x value axis (scatter): minor gridlines, then labels and gridlines per tick as before, then tick marks.
       const xAt = (t: number) => plot.x + axisFraction(a, t, false) * plot.w
       if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, axisFraction(a, t, false)) }
       ctx.textAlign = 'center'; ctx.textBaseline = 'top'
-      for (const t of a.ticks) {
+      for (const [i, t] of a.ticks.entries()) {
         const px = plot.x + axisFraction(a, t, false) * plot.w
-        if (shown(a)) { ctx.fillStyle = TEXT; ctx.fillText(formatNumber(a.labelValue(t), a.percent), px, labelAnchor(a) + 3) }
+        if (shown(a)) { ctx.fillStyle = TEXT; label(a, i, layout.texts.get(a.id)![i], px, labelAnchor(a) + 3) }
         if (a.axis.gridlines) { ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, plot.y); ctx.lineTo(Math.round(px) + 0.5, plot.y + plot.h); ctx.stroke() }
       }
       tickMarks(a, a.minorTicks, xAt, a.axis.minorTickMark)
@@ -274,6 +217,11 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       tickMarks(a, a.minorTicks, t => along(a, dateAt(t)), a.axis.minorTickMark)
       tickMarks(a, a.ticks, t => along(a, dateAt(t)), a.axis.majorTickMark)
     }
+    if (a.role === 'category') {
+      const authored = a.axis.tickMarkSkip ?? 1, skip = Math.max(authored, Math.ceil((between ? n + 1 : n) / 1000))
+      const marks = Array.from({ length: Math.ceil((between ? n + 1 : n) / skip) }, (_, k) => k * skip)
+      tickMarks(a, marks, k => along(a, between ? (a.reversed ? 1 - k / n : k / n) : categoryFraction(a, k, false)), a.axis.majorTickMark)
+    }
     if (!shown(a)) continue
     const anchor = labelAnchor(a), place = sideOf(a)
     ctx.fillStyle = TEXT
@@ -281,31 +229,25 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       // Date axes: labels at the major ticks (calendar steps), thinned in screen order (whatever the axis direction)
       // so they never overlap: a label is kept when its extent clears the last kept one.
       const texts = dateLabels(a)
-      const items = a.ticks.map((t, k) => ({ k, p: along(a, dateAt(t)), extent: a.orientation === 'h' ? ctx.measureText(texts[k]).width : fontPx }))
+      const items = a.ticks.map((t, k) => ({ k, p: along(a, dateAt(t)) }))
       items.sort((p, q) => p.p - q.p)
-      let last = -Infinity
-      for (const { k, p, extent } of items) {
-        if (p - extent / 2 < last + 4) continue
-        last = p + extent / 2
-        if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; ctx.fillText(texts[k], p, place === 't' ? anchor - 3 : anchor + 3) }
-        else { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; ctx.fillText(texts[k], place === 'r' ? anchor + 4 : anchor - 4, p) }
+      for (const { k, p } of items) {
+        if (!layout.labelIndices.get(a.id)?.has(k)) continue
+        if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, k, texts[k], p, place === 't' ? anchor - 3 : anchor + 3) }
+        else { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, k, texts[k], place === 'r' ? anchor + 4 : anchor - 4, p) }
       }
       continue
     }
     if (model.view.category(0) === undefined) continue
-    let widest = 0
-    for (let slot = 0; slot < count; slot++) { const c = model.view.category(slot); if (c !== undefined) widest = Math.max(widest, ctx.measureText(c).width) }
-    const skip = a.axis.tickLblSkip ?? (a.orientation === 'v' ? Math.max(1, Math.ceil((fontPx + 2) / band)) : Math.max(1, Math.ceil((widest + 6) / band)))
     // Legacy positions (band centres) when unreversed and between; otherwise the axis fraction.
     const at = (i: number) => between && !a.reversed ? (a.orientation === 'h' ? plot.x + band * (i + 0.5) : plot.y + plot.h - band * (i + 0.5)) : along(a, categoryFraction(a, i, between))
     for (let i = 0; i < count; i++) {
       const c = model.view.category(i)
-      if (c === undefined || i % skip) continue
-      if (a.orientation === 'v') { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; ctx.fillText(c, place === 'r' ? anchor + 4 : anchor - 4, at(i)) }
-      else { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; ctx.fillText(c, at(i), place === 't' ? anchor - 3 : anchor + 3, skip * band) }
+      if (c === undefined) continue
+      if (a.orientation === 'v') { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, c, place === 'r' ? anchor + 4 : anchor - 4, at(i)) }
+      else { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, i, c, at(i), place === 't' ? anchor - 3 : anchor + 3) }
     }
-    const marks = Array.from({ length: between ? n + 1 : n }, (_, k) => k)
-    tickMarks(a, marks.filter(k => k % (a.axis.tickMarkSkip ?? 1) === 0), k => along(a, between ? (a.reversed ? 1 - k / n : k / n) : categoryFraction(a, k, false)), a.axis.majorTickMark)
+
   }
   // Axis titles and display-unit labels. Every save is balanced in finally, so a throw never leaks state (spec 6.5 containment).
   ctx.fillStyle = TEXT
@@ -363,6 +305,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       }
       const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
+        if (!admitPath(count * 4)) return
         for (let i = 0; i < count; i++) {
           const raw = plotted(s.value(i))
           if (raw === undefined) continue
@@ -395,6 +338,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       }
       const has = (i: number) => !Number.isNaN(top[i])
       for (const s of group.series) {
+        if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 2 : 1) + 1)) continue
         bottom.set(base)
         for (let i = 0; i < count; i++) {
           const raw = plotted(s.value(i))
@@ -437,6 +381,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         return true
       }
       for (const s of group.series) {
+        if (!admitPath(count * 2 + 1)) continue
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (s.line) {
           ctx.lineWidth = 2; ctx.beginPath()
@@ -454,26 +399,32 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
 export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify, chartContext?: ChartDocumentContext): void {
   if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
-  const model = drawModel(source)
-  // The axis graph's construction is admitted to a chart workspace before it is built, and refunded after the
-  // paint; a refusal paints the contained card before anything else is drawn. The workspace (spec 6.4):
-  // 1. the model's own (a paged read's answered scope charges its document facet);
-  // 2. else the chart context of the preparation or lease that is painting (its assets' `chartContext`, from
-  //    `acquireChartContext`, or one a synchronous renderPages/renderSlide caller passes);
-  // 3. else a bounded per-call workspace (CHART_STANDALONE_PAINT_PROFILE), created for this paint only.
-  const owner = chartModelOwner(source)
-  const ownerWorkspace = owner && ((owner.workspace as { facet?: ChartWorkspace }).facet ?? owner.workspace)
-  const workspace = ownerWorkspace ?? chartContext?.workspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
-  const admission = { workspace, tag: `${owner?.tag ?? `chart-paint#${++paints}`}:paint` }
-  let graph: AxisGraph | undefined
+  const ownerWorkspace = ownedChartWorkspace(source)
+  const workspace = chartContext?.workspace ?? ownerWorkspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
+  const standalone = !chartContext && !ownerWorkspace
+  const context = chartContext ?? { profile: 'mobile' as const, workspace }
+  const admission = { workspace, tag: `chart-paint#${++paints}` }
+  let layout: ChartLayout
+  let releaseLayout = () => {}
   try {
-    if (!isRound(source)) graph = resolveAxes(source, model.view, undefined, admission)
+    const physicalDpr = ctx.canvas?.ownerDocument?.defaultView?.devicePixelRatio ?? globalThis.devicePixelRatio
+    const dpr = Number.isFinite(physicalDpr) && physicalDpr > 0 ? physicalDpr : 1
+    layout = layoutChart(source, w, h, dpr, fontGeneration(ctx), {
+      width: (text, css) => { const previous = ctx.font; try { ctx.font = css; return ctx.measureText(text).width } finally { ctx.font = previous } },
+      lineHeight: () => source.fontSizePt * 96 / 72,
+    }, context, familyCss(source.fontFamily))
+    releaseLayout = holdChartLayout(layout)
+    const paintBytes = paintWorkspaceBytes(source, layout.view)
+    if (!reserveChartLayoutWorkspace(workspace, paintBytes, admission.tag)) throw new ChartRefusal()
   } catch (error) {
-    admission.workspace.release(admission.tag)
+    workspace.release(admission.tag)
+    releaseLayout()
+    if (standalone) releaseWorkspaceLayouts(workspace)
     if (!(error instanceof ChartRefusal)) throw error
     paintChartPlaceholder({ ...source, unsupported: 'This chart needs more memory than is available for charts' }, ctx, w, h, familyCss)
     return
   }
+  const model = drawModel(source, layout.view), graph = layout.graph
   ctx.save()
   try {
     ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
@@ -483,20 +434,20 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     const pad = Math.min(10, w * 0.04, h * 0.04)
     let area: Box = { x: pad, y: pad, w: w - pad * 2, h: h - pad * 2 }
     if (model.title) {
-      const titlePx = fontPx * 1.4
+      const titlePx = Math.min(96, fontPx * 1.4)
       ctx.font = font(titlePx, model.fontFamily, familyCss)
       ctx.fillStyle = TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
-      ctx.fillText(model.title, w / 2, area.y, area.w)
+      ctx.fillText(model.title, layout.title.x + layout.title.w / 2, layout.title.y, layout.title.w)
       area = { ...area, y: area.y + titlePx + 6, h: area.h - titlePx - 6 }
     }
-    area = paintLegend(ctx, model, area, fontPx, model.fontFamily, familyCss)
+    paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
+    area = layout.area
     if (area.w <= 8 || area.h <= 8) return
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
-    else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss)
-  } finally { ctx.restore(); admission.workspace.release(admission.tag) }
+    else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
+  } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }
 }
-const isRound = (model: ChartModel) => model.groups[0]?.family === 'pie' || model.groups[0]?.family === 'doughnut'
 let paints = 0
 /**
  * The profile of the bounded per-call workspace a synchronous paint uses when the model has no owner, no chart
@@ -510,6 +461,17 @@ export interface ChartReceiver { owner: object; profile?: ChartProfile; context?
 /** A receiving context held by one preparation or asset lease; `release` ends the hold (idempotent). */
 export interface ChartReceiverLease { context: ChartDocumentContext; release(): void }
 interface Held { context: ChartDocumentContext; refs: number }
+const workspaceLeases = new WeakMap<ChartWorkspace, number>()
+function holdLayouts(workspace: ChartWorkspace): () => void {
+  workspaceLeases.set(workspace, (workspaceLeases.get(workspace) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return; released = true
+    const n = (workspaceLeases.get(workspace) ?? 1) - 1
+    if (n) workspaceLeases.set(workspace, n)
+    else { workspaceLeases.delete(workspace); releaseWorkspaceLayouts(workspace) }
+  }
+}
 /** Receiving contexts per document, then per parent ledger (null: none), then per profile. */
 const documents = new WeakMap<object, Map<ChartParentLedger | null, Map<ChartProfile, Held>>>()
 /**
@@ -520,7 +482,7 @@ const documents = new WeakMap<object, Map<ChartParentLedger | null, Map<ChartPro
  * or profile never reuses an earlier receiver's context, and simultaneous receivers keep their own.
  */
 export function acquireChartContext(receiver: ChartReceiver): ChartReceiverLease {
-  if (receiver.context) return { context: receiver.context, release: () => {} }
+  if (receiver.context) return { context: receiver.context, release: holdLayouts(receiver.context.workspace) }
   const profile = receiver.profile ?? 'desktop', parent = receiver.parent ?? null
   let byParent = documents.get(receiver.owner)
   if (!byParent) documents.set(receiver.owner, byParent = new Map())
@@ -529,16 +491,27 @@ export function acquireChartContext(receiver: ChartReceiver): ChartReceiverLease
   let held = byProfile.get(profile)
   if (!held) byProfile.set(profile, held = { context: documentChartContext(profile, undefined, receiver.parent), refs: 0 })
   held.refs++
-  const entry = held
+  const entry = held, releaseLayouts = holdLayouts(held.context.workspace)
   let released = false
   return {
     context: entry.context,
     release: () => {
       if (released) return
       released = true
+      releaseLayouts()
       if (--entry.refs > 0) return
       byProfile!.delete(profile)
       if (!byProfile!.size) byParent!.delete(parent)
     },
   }
+}
+
+// FontFaceSet is realm-local. Embedded-font aliases also participate in the layout key.
+const fontSets = new WeakMap<FontFaceSet, { generation: number }>()
+function fontGeneration(ctx: CanvasRenderingContext2D): number {
+  const fonts = ctx.canvas?.ownerDocument?.fonts ?? (globalThis as { fonts?: FontFaceSet }).fonts
+  if (!fonts) return 0
+  let state = fontSets.get(fonts)
+  if (!state) { state = { generation: 0 }; const current = state; fonts.addEventListener('loadingdone', () => { current.generation++; invalidateChartFonts() }); fontSets.set(fonts, state) }
+  return state.generation
 }

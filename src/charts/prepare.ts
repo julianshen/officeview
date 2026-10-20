@@ -1,0 +1,87 @@
+/** Size-independent stage 1. Data-only axis snapshots survive structuredClone; closures live in stage 2. */
+import { resolveAxes, type AxisGraph, type ResolvedAxis } from './axes'
+import { displayView, type DisplayView } from './display'
+import { dateTickLabel, dateUnitIndex } from './dates'
+import { formatNumber } from '../xlsx/chartDescription'
+import { valueAt, stringBytes } from './points'
+import type { ChartModel, ChartDiagnostic } from './model'
+import { ChartRefusal, onChartModelRelease } from './own'
+import { createChartWorkspace, type ChartWorkspace } from './workspace'
+
+type PreparedAxis = Omit<ResolvedAxis, 'labelValue' | 'plottable'> & { labels: string[] }
+export interface PreparedAxes {
+  axes: PreparedAxis[]
+  groups: Array<{ category?: string; x?: string; value: string; horizontal: string; vertical: string; between: boolean } | undefined>
+  diagnostics: ChartDiagnostic[]
+  epoch: AxisGraph['epoch']
+}
+interface PreparedOwner { workspace: ChartWorkspace; tag: string }
+const owners = new WeakMap<PreparedAxes, PreparedOwner>()
+const collected = new FinalizationRegistry<PreparedOwner>(owner => owner.workspace.release(owner.tag))
+onChartModelRelease((model, next) => {
+  const prepared = model.preparedAxes
+  if (!prepared || prepared === next?.preparedAxes) return
+  const owner = owners.get(prepared)
+  if (owner) { owners.delete(prepared); collected.unregister(prepared); owner.workspace.release(owner.tag) }
+})
+let jobs = 0
+export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWorkspace; tag: string }): ChartModel {
+  if (model.unsupported) return model
+  if (model.categoryPending || model.groups.some(g => g.series.some(s => s.pending))) {
+    const { preparedAxes: _previous, ...pending } = model
+    return pending
+  }
+  const workspace = owner?.workspace ?? createChartWorkspace('mobile'), tag = `chart-prepare#${++jobs}`
+  let slots = model.categories.length
+  for (const g of model.groups) for (const s of g.series) slots = Math.max(slots, s.values.length)
+  slots = Math.min(4096, Math.max(1, slots))
+  // The live resolved graph and the data-only snapshot coexist while building.
+  // Automatic linear scales use a 1/2/5 step around five intervals (at most 16 ticks including endpoints).
+  // Date/log/authored units keep the full 1,000-tick bound. Categories reuse input strings, without formatting.
+  const axesBound = model.axes.reduce((n, a) => {
+    const numeric = a.kind === 'value' || a.kind === 'date'
+    const ticks = !numeric ? 0 : a.kind === 'date' || a.logBase !== undefined || a.majorUnit !== undefined ? 1000 : 16
+    const minor = a.minorUnit === undefined ? 0 : 1000
+    return n + 2048 + ticks * 256 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
+  }, 0)
+  const bound = 4096 + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
+    + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
+  if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
+  try {
+    const view = displayView(model), graph = resolveAxes(model, view)
+    const axes = [...graph.axes.values()].map(a => {
+      const { labelValue, plottable: _plottable, ...data } = a
+      const labels = a.role === 'value' ? a.ticks.map(t => formatNumber(labelValue(t), a.percent)) : a.role === 'date' ? a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch)) : Array.from({ length: Math.min(view.slots, model.categories.length) }, (_, i) => view.category(i) ?? '')
+      return { ...data, labels }
+    })
+    const preparedAxes: PreparedAxes = { axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
+    const bytes = preparedAxesBytes(preparedAxes)
+    if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()
+    const retained = { workspace, tag: `${tag}:retained` }
+    workspace.transfer(tag, retained.tag, bytes)
+    owners.set(preparedAxes, retained)
+    collected.register(preparedAxes, retained, preparedAxes)
+    return { ...model, preparedAxes }
+  } finally { workspace.release(tag) }
+}
+export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
+  const prepared = model.preparedAxes
+  if (!prepared) return resolveAxes(model, view) // bounded compatibility for a hand-built/headless model
+  const axes = new Map<string, ResolvedAxis>()
+  for (const data of prepared.axes) axes.set(data.id, { ...data, labelValue: t => t / (data.display?.divisor ?? 1), plottable: v => !data.log || v > 0 })
+  return { axes, diagnostics: prepared.diagnostics, epoch: prepared.epoch,
+    groups: prepared.groups.map((g, i) => g ? { group: model.groups[i], ...(g.category ? { category: axes.get(g.category)! } : {}), ...(g.x ? { x: axes.get(g.x)! } : {}), value: axes.get(g.value)!, horizontal: axes.get(g.horizontal)!, vertical: axes.get(g.vertical)!, between: g.between } : undefined),
+    categoryIndex: (axis, slot) => {
+      if (axis.role !== 'date' || !axis.dateBase) return slot
+      const v = valueAt(model.categoryValues, view.source(slot))
+      return v === undefined ? NaN : dateUnitIndex(v, axis.dateBase, prepared.epoch) - (axis.dateStart ?? 0)
+    },
+  }
+}
+
+/** Footprint of the transferable stage-1 records (same pricing as their owner). */
+export function preparedAxesBytes(preparedAxes: PreparedAxes | undefined): number {
+  if (!preparedAxes) return 0
+  const axes = preparedAxes.axes, graph = preparedAxes
+  return 256 + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
+}

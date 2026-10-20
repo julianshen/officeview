@@ -64,6 +64,14 @@ export type ChartAxisBinding =
   | { kind: 'radial'; value: string }
   | { kind: 'surface'; category: string; series: string; value: string }
 
+/** Placement-only text properties (DrawingML txPr). Rotation is degrees clockwise. */
+export interface ChartTextStyle { sizePt?: number; rotation?: number; vertical?: string }
+export interface ChartManualLayout {
+  x?: number; y?: number; w?: number; h?: number
+  xMode?: 'edge' | 'factor'; yMode?: 'edge' | 'factor'; wMode?: 'edge' | 'factor'; hMode?: 'edge' | 'factor'
+  target?: 'inner' | 'outer'
+}
+
 /** An axis keyed by its `axId` (spec 5.1). A deleted axis still defines the scale. */
 export interface ChartAxis {
   id: string
@@ -91,6 +99,7 @@ export interface ChartAxis {
   majorTickMark?: ChartTickMark
   minorTickMark?: ChartTickMark
   tickLblPos?: 'nextTo' | 'low' | 'high' | 'none'
+  text?: ChartTextStyle
   tickLblSkip?: number
   tickMarkSkip?: number
   /** `c:dispUnits`: tick values are divided by `divisor`; `label` is the unit label drawn beside the axis (spec 5.1). */
@@ -163,6 +172,12 @@ export interface ChartGroup {
 }
 
 export interface ChartModel {
+  /** Immutable, transferable stage-1 domains, ticks and label strings. */
+  preparedAxes?: import('./prepare').PreparedAxes
+  plotLayout?: ChartManualLayout
+  titleLayout?: ChartManualLayout
+  legendLayout?: ChartManualLayout
+  text?: ChartTextStyle
   title?: string
   groups: ChartGroup[]
   /** Every axis of the plot area, in document order; group bindings reference them by `id`. */

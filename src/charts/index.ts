@@ -21,6 +21,7 @@ export * from './points'
 export { displayView, type DisplayView } from './display'
 export { releaseChartModel, chartModelOwner, releaseChartRetained } from './own'
 export { paintXlsxChart }
+export { layoutChart, releaseChartLayouts, releaseWorkspaceLayouts, type ChartLayout } from './layout'
 export { acquireChartContext, CHART_STANDALONE_PAINT_PROFILE, type ChartReceiver, type ChartReceiverLease } from './paint'
 export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)
