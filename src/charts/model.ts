@@ -111,6 +111,8 @@ export interface ChartAxis {
   auto?: boolean
   /** No axis element: the plot area had none and its groups no `c:axId`, so a primary pair is implied (A1a). */
   implicit?: true
+  /** ChartEx `cx:units@unit` (chartex-map §1): `percentage` means the values are fractions shown x100 %. */
+  unit?: string
 }
 export type ChartTickMark = 'cross' | 'in' | 'out' | 'none'
 export type ChartTimeUnit = 'days' | 'months' | 'years'
@@ -172,6 +174,8 @@ export interface ChartSeries {
 }
 
 export interface ChartGroup {
+  /** The group's kind: absent for classic (`c:`) groups; `chartEx` for a ChartEx group (`ChartExGroup`). */
+  kind?: 'chartEx'
   labels?: import('./labels').LabelControls
   family: ChartFamily
   grouping: ChartGrouping
@@ -185,6 +189,60 @@ export interface ChartGroup {
   varyColors?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle
+}
+
+/**
+ * ChartEx (`cx:`, Office 2016+) groups, read against docs/charts/chartex-map.md (spec 4.2, 4.3). A ChartEx chart is
+ * the same `ChartModel`: its one group is a `ChartExGroup`, whose `series` carry the bound roles (values,
+ * categories, names; cached, or pending references for the workbook) and whose `chartEx` payload keeps the
+ * ID-keyed data sets (all levels) and the per-series layout properties the family painters need.
+ */
+export type ChartExLayout = 'clusteredColumn' | 'paretoLine' | 'waterfall' | 'funnel' | 'boxWhisker' | 'treemap' | 'sunburst' | 'regionMap'
+export type ChartExFamily = 'waterfall' | 'histogram' | 'pareto' | 'boxWhisker' | 'funnel' | 'treemap' | 'sunburst'
+/** One `cx:lvl` (map §2.1): points `0..ptCount-1`; a missing `pt@idx` is blank (numeric) or `undefined` (string). */
+export type ChartExLevel = { ptCount: number; name?: string; formatCode?: string } &
+  ({ kind: 'num'; points: ChartPoints } | { kind: 'str'; values: Array<string | undefined> })
+/** A `cx:numDim`/`cx:strDim`: its `@type`, its reference (`cx:f`; a defined name or a single-area range) and its levels. */
+export interface ChartExDimension { kind: 'num' | 'str'; type: string; ref?: ChartRange; dir: 'col' | 'row'; levels: ChartExLevel[] }
+/** A `cx:data` set, keyed by `@id` (resolved by value, never by position). */
+export interface ChartExData { id: number; dimensions: ChartExDimension[] }
+export interface ChartExBinning { intervalClosed: 'l' | 'r'; binSize?: number; binCount?: number; underflow?: number | 'auto'; overflow?: number | 'auto' }
+/** `cx:layoutPr` (map §4), with the map's absence defaults applied. */
+export interface ChartExLayoutProperties {
+  visibility: { connectorLines: boolean; meanLine: boolean; meanMarker: boolean; nonoutliers: boolean; outliers: boolean }
+  binning?: ChartExBinning
+  /** `cx:aggregation`: pre-aggregated ("By Category") columns. */
+  aggregation?: true
+  /** `cx:subtotals/cx:idx@val`: 0-based subtotal point indices. */
+  subtotals?: number[]
+  quartileMethod?: 'inclusive' | 'exclusive'
+  parentLabelLayout?: 'none' | 'banner' | 'overlapping'
+}
+/** One `cx:series` as authored (map §2.3). */
+export interface ChartExSeriesInfo {
+  layout: ChartExLayout
+  dataId?: number
+  ownerIdx?: number
+  hidden: boolean
+  formatIdx: number
+  axisIds: string[]
+  layoutPr: ChartExLayoutProperties
+}
+export interface ChartExGroup extends ChartGroup {
+  kind: 'chartEx'
+  family: ChartExFamily
+  chartEx: {
+    /** The data sets the series bind (by `dataId`). */
+    data: ChartExData[]
+    /** Parallel to the group's `series`. */
+    series: ChartExSeriesInfo[]
+    /** Pareto: the `paretoLine` series (no data of its own; bound through `ownerIdx`). */
+    paretoLine?: ChartExSeriesInfo
+    /** Histogram (by category): the column series has `cx:aggregation`, or no binning. */
+    byCategory?: true
+    /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
+    gapWidth?: number
+  }
 }
 
 export interface ChartModel {
@@ -256,5 +314,5 @@ export interface ChartModel {
  */
 export type ChartResult<Model = ChartModel> =
   | { kind: 'native'; model: Model }
-  | { kind: 'unsupported'; reason: string; title?: string }
-  | { kind: 'refused'; reason: string; title?: string }
+  | { kind: 'unsupported'; reason: string; title?: string; feature?: 'ChartEx' }
+  | { kind: 'refused'; reason: string; title?: string; feature?: 'ChartEx' }

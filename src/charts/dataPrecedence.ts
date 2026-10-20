@@ -32,6 +32,8 @@ import { chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } f
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
+import { isChartExRoot } from './read'
+import { parseChartExPart } from './chartex/parse'
 import { requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
 
 export const CHART_DATA_UNAVAILABLE = "This chart's data is not available"
@@ -43,6 +45,8 @@ const XLSX_PART = /^\/?xl\//i
  * test's module-level substitute is honoured). A discarded model returns its storage to the workspace.
  */
 export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefined, context: ChartParseContext, parse: typeof parseXlsxChart = parseXlsxChart): Promise<ChartResult> {
+  // Dispatch on the part's real root namespace (spec 6.2): a ChartEx part never reaches the classic parser.
+  if (isChartExRoot(root)) return parseChartExPart(root, theme, context)
   let chart: ChartModel | undefined
   // The style and colour parts (spec 5.11) are read first: the parse bakes the series colours from them.
   const style = await readChartStyleParts(context)
@@ -95,7 +99,8 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
     if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: CHART_POINT_LIMIT }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
   }))
-  const rId = attrs(child(root, 'externalData')).id
+  // Classic: c:externalData; ChartEx: cx:chartData/cx:externalData (chartex-map §2.1).
+  const rId = attrs(child(root, 'externalData') ?? child(child(root, 'chartData'), 'externalData')).id
   let result: EmbeddedCellsResult
   try {
     result = rId ? await requestEmbeddedCells(context, rId, requests) : { kind: 'unavailable', diagnostic: { code: 'chart-data-missing', reason: 'The chart has no embedded workbook' } }

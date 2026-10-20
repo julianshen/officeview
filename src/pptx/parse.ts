@@ -8,7 +8,7 @@ import type { ChartDocumentContext } from '../charts/context'
 import { attrs, elementChildren, getChildren, orderedChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
 import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
-import { pptxCoverage, supportedChoiceRequirements } from '../drawing/coverage'
+import { DRAWING_REQUIREMENTS, pptxCoverage, supportedChoiceRequirements } from '../drawing/coverage'
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { emuToPx } from '../core/geometry'
@@ -620,7 +620,6 @@ interface Representation {
 }
 
 const MAX_DRAWING_DEPTH = 128
-const SUPPORTED_DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink']
 
 /** Per-slide decisions avoid rescanning a selected subtree at every enclosing Choice. */
 class DrawingCompatibility {
@@ -657,8 +656,7 @@ class DrawingCompatibility {
       if (name === 'graphicData') {
         const uri = attrs(child).uri?.toLowerCase() ?? ''
         if (uri.includes('model3d')) return 'model3D'
-        if (uri.includes('chartex')) return 'ChartEx'
-        if (['chart', 'relIds', 'contentPart', 'wsp'].some(tag => getChildren(child, tag).length) && !this.contents.has(child)) return 'drawing-content'
+        if (['chart', 'relIds', 'contentPart', 'wsp'].some(tag => getChildren(child, tag).length) && !this.contents.has(child)) return uri.includes('chartex') ? 'ChartEx' : 'drawing-content'
       }
       if (name === 'contentPart') { if (!this.contents.has(child) && !this.contents.has(node)) return 'drawing-content'; continue }
       const feature = this.unsupportedFeature(child, depth + 1)
@@ -674,7 +672,7 @@ class DrawingCompatibility {
     for (const choice of getChildren(node, 'Choice')) {
       const unsupported = this.unsupportedFeature(choice, depth + 1)
       // Requires is resolved through the Choice's in-scope namespace bindings.
-      const unknownRequirement = supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).unknown
+      const unknownRequirement = supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).unknown
       if (!unsupported && !unknownRequirement) {
         const selected: Representation = { node: choice, representation: 'choice' }
         this.selections.set(node, selected)
@@ -685,7 +683,7 @@ class DrawingCompatibility {
     this.failures.set(node, feature ?? 'AlternateContent')
     const fallback = getChildren(node, 'Fallback')[0]
     // No representation remains (no fallback, or every fallback picture is unusable): an attempted chart Choice shows its card (spec 6.3).
-    const card = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, SUPPORTED_DRAWING_REQUIREMENTS).supported && chartCard(choice))
+    const card = getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).supported && chartCard(choice))
     // The whole fallback is evaluated: only pictures without a usable image (or groups of only those) make it unusable.
     // An attempted chart's fallback is judged by whether any usable selected content remains: a shape, a usable
     // picture, a frame or part whose content resolves, or a group or nested alternative holding such content.
