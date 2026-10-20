@@ -1,6 +1,6 @@
 # ChartEx field map (normative)
 
-Status: **draft for review, fix round 1** (task B1 step 1). It needs approval from two
+Status: **draft for review, fix round 2** (task B1 step 1). It needs approval from two
 reviewer families before the parser is written.
 Scope: spec `docs/superpowers/specs/2026-10-20-chart-compat-design.md` §4.2 and §4.3.
 
@@ -521,7 +521,12 @@ falls in exactly one bin.
      outer bins;
    - `U` and `O` are both set with `U ≥ O` (`r`) or `U > O` (`l`);
    - Scott's `h` is non-finite or `≤ 0` with `hi > lo`;
-   - `k + outer bins > 4,096` (the work bound, spec §6.5).
+   - the total bin count (`k` plus the outer bins) is **more than 1,000**. This
+     is the spec §7 "Authored parameters out of range … bins > 1,000" rule;
+     histogram bins are essential, so the chart is refused. It applies to every
+     binning mode, for example `binCount=2000` over 0..1. This histogram limit
+     is separate from, and not replaced by, the 4,096 treemap/sunburst node
+     bound (§7).
 8. **Labels** use Office interval notation: inner bins `(a, b]` / `[a, b)` (`r`)
    or `[a, b)` (`l`), underflow `≤U` (`r`) / `<U` (`l`), overflow `>O` (`r`) /
    `≥O` (`l`). [D-hist shows these only as images, so the exact glyphs and
@@ -643,10 +648,20 @@ initially empty. Rows are processed top to bottom. For each row:
 1. **Depth.** `d` is the index of the deepest non-blank level cell. If no
    level cell is non-blank, the row is excluded, with a diagnostic. [P]
 2. **Ancestor reset.** For each level `j = 1..d` in order:
-   - if cell `j` is non-blank, set `P[j]` to it and **clear `P[j+1..L]`**. A
-     changed ancestor resets every inherited lower level, so an old child is
-     never attached beneath a new parent. [P]
-   - otherwise, keep `P[j]` as it is.
+   - If cell `j` is non-blank and **differs** from the current `P[j]`, set
+     `P[j]` to it and **clear `P[j+1..L]`**. A changed ancestor resets every
+     inherited lower level, so an old child is never attached beneath a new
+     parent. [P]
+   - If cell `j` is non-blank and **equal** to the current `P[j]` (a repeated
+     identical ancestor), keep `P[j]` and **do not clear** the lower levels:
+     the inherited child is kept. [P]
+   - If cell `j` is blank, keep `P[j]` as it is.
+   - **Repeated-parent example:** `Best/First/A` followed by `Best/./B`. `Best`
+     equals `P[1]`, so `P[2] = First` survives, and the second row is
+     `Best/First/B`.
+   - **Changed-parent example:** `X/Y/Z` followed by `W/./V`. `W ≠ X` clears
+     `P[2..3]`, so `Y` is **not** inherited, and the blank level falls under
+     step 3's unnamed-node rule (`W/""/V`).
 3. **Recursive carry-forward.** A blank cell at level `j ≤ d` takes `P[j]`,
    which is the nearest non-blank value above in that column **that no
    ancestor change has cleared since**. Because `P` persists across rows, this
@@ -783,8 +798,9 @@ text. This applies when:
 - an analytic family has a required point that is `unavailable` ("This
   chart's data is not available", §2.4 and spec §5.8);
 - a §6.4 embedded-workbook admission check or budget is breached;
-- the binning is invalid (§5.1 step 7), or the histogram bins or treemap and
-  sunburst nodes exceed 4,096.
+- the binning is invalid (§5.1 step 7), including a histogram with more than
+  1,000 bins (spec §7);
+- treemap or sunburst nodes exceed 4,096 (spec §6.5), a separate bound.
 
 ## 12. Open questions for reviewers
 
