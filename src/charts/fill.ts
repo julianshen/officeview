@@ -199,7 +199,7 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     } finally { owner.workspace.release(labelTag) }
   }
   try {
-    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch)
+    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch ?? model.workbookEpoch)
     if (owner) {
       owner.workspace.transfer(fillTag, owner.tag, charged.bytes)
       if (chartModelOwner(model)) succeedChartModel(model, next); else adoptChartModel(next, owner)
@@ -251,7 +251,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       const at = linePoint(line, i)
       labels.push(label(allocation => {
         const cell = lookup(line.sheet, at.row, at.col, true, allocation)
-        if (numbers) writeCell(numbers, i, cell, () => { truncated = true }, toChart)
+        // A text cell stays text even when it looks like a number (spec 5.1): its category is not a date.
+        if (numbers && typeof cell?.value !== 'string') writeCell(numbers, i, cell, () => { truncated = true }, toChart)
         const text = asText(cell)
         if (text.length <= CHART_LABEL_LIMIT) return text
         truncated = true
@@ -350,11 +351,29 @@ export function fillWorkbookCharts<Cell extends { row: number; col: number; valu
     return Boolean(sheet && (rowOf(sheet, rowIndex)?.hidden || sheet.cols?.some(spec => spec.hidden && spec.min <= col && col <= spec.max)))
   }
   const resolve = chartNameResolver(options.names ?? [], sheets)
+  for (const sheet of sheets) stampWorkbookEpoch(sheet.drawings, sheet.semantics?.dateSystem)
   // The workbook's date system (every sheet shares it): filled date roles carry it (spec 5.1).
   const epoch = sheets[0]?.semantics?.dateSystem
   for (const sheet of sheets) {
     try { fillDrawings(sheet.drawings, sheet.name, lookup, resolve, { hidden, workspace: options.workspace, ...(epoch ? { epoch } : {}) }) }
     catch { /* a chart that cannot be filled keeps its placeholder state; the workbook stays usable */ }
+  }
+}
+/**
+ * Carries a 1904 workbook's epoch on every chart model of a drawing tree (spec 5.1 precedence 2), cached-only
+ * charts included, so the transferable model resolves its chart epoch the same way in every paint realm. A new
+ * model object takes over the old one's charge. A 1900 workbook stamps nothing (absent means 1900).
+ */
+export function stampWorkbookEpoch(drawings: XlsxDrawingLike[] | undefined, epoch: ChartEpoch | undefined): void {
+  if (epoch !== '1904') return
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart && content.chart.workbookEpoch !== epoch) {
+      const next: ChartModel = { ...content.chart, workbookEpoch: epoch }
+      succeedChartModel(content.chart, next)
+      content.chart = next
+    }
+    if (node.children) stampWorkbookEpoch(node.children, epoch)
   }
 }
 /** Resolve defined names of a drawing tree in place (paged readers resolve before reading cells). */

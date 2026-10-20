@@ -20,14 +20,21 @@
  * date axis fall back to a category axis (`chart-date-axis-categorical`).
  *
  * The graph is derived per paint and retained nowhere (A1b's charged layout
- * sidecar is the place to cache it); it allocates only bounded tick arrays.
+ * sidecar is the place to cache it). Its construction (records, maps, closures,
+ * date lists, tick arrays and the painter's tick labels) is a paint-local
+ * transient that is still admitted: given an admission, `resolveAxes` reserves
+ * `axisGraphBound` on the chart workspace before it builds anything and throws
+ * ChartRefusal when refused; the caller refunds the tag after the paint.
  * Tick label text (number formats) is A2's: the graph gives tick values, the
  * display-unit divisor (`labelValue`) and the unit label.
  */
 import { displayView, type DisplayView } from './display'
+import { CHART_POINT_LIMIT } from './parse'
 import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, type ChartEpoch } from './dates'
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
-import { valueAt } from './points'
+import { stringBytes, valueAt } from './points'
+import { ChartRefusal } from './own'
+import type { ChartWorkspace } from './workspace'
 
 export const CHART_AXIS_UNPLACEABLE = 'chart-axis-unplaceable'
 type Orientation = 'h' | 'v'
@@ -142,7 +149,10 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 /** Where `v` sits along a value axis, 0 at its start (orientation applied). `clampValue: false` keeps values outside the scale outside. */
 export function axisFraction(axis: ResolvedAxis, v: number, clampValue = true): number {
   const x = clampValue ? clamp(v, axis.min, axis.max) : v
-  const f = axis.log ? (Math.log(x) - Math.log(axis.min)) / (Math.log(axis.max) - Math.log(axis.min)) : (x - axis.min) / (axis.max - axis.min)
+  const span = axis.max - axis.min
+  // A span past the double range normalises on halves (exact scaling by 2), so extreme finite scales stay finite.
+  const f = axis.log ? (Math.log(x) - Math.log(axis.min)) / (Math.log(axis.max) - Math.log(axis.min))
+    : Number.isFinite(span) ? (x - axis.min) / span : (x / 2 - axis.min / 2) / (axis.max / 2 - axis.min / 2)
   return axis.reversed ? 1 - f : f
 }
 /** Where position `index` sits along a category or date axis: band centres (`between`) or on the ticks. */
@@ -174,13 +184,17 @@ function linearScale(lo: number, hi: number, axis: ChartAxis, percent: boolean, 
   else {
     min = axis.min ?? Math.min(0, lo); max = axis.max ?? Math.max(0, hi)
     if (!(max > min)) max = min + 1
+    // A span past the double range: the data's own bounds, ticks at both ends and the middle (a rendering bound).
+    if (!Number.isFinite(max - min)) {
+      const half = max / 2 - min / 2
+      return { min, max, major: half, minor: half, ticks: [min, min / 2 + max / 2, max], minorTicks: [] }
+    }
     major = axis.majorUnit && axis.majorUnit > 0 ? axis.majorUnit : niceStep((max - min) / 5)
     if (!Number.isFinite(major) || !(major > 0)) major = max - min
     if (axis.min === undefined) min = Math.floor(min / major) * major
     if (axis.max === undefined) max = Math.ceil(max / major) * major
     if (!(max > min)) max = min + major
   }
-  if (!Number.isFinite(max - min)) return { min, max, major: max, minor: max, ticks: [min, max].filter(Number.isFinite), minorTicks: [] }
   if (tickCount(min, max, major) > CHART_TICK_LIMIT) {
     const enlarged = niceStep((max - min) / (CHART_TICK_LIMIT - 1))
     note(`major unit ${major} gives more than ${CHART_TICK_LIMIT} ticks; drawn every ${enlarged}`)
@@ -218,14 +232,37 @@ function logScale(lo: number, hi: number, axis: ChartAxis, base: number): Scale 
   return { min, max, major: base, minor: base, log: base, ticks, minorTicks }
 }
 
+/** One resolved axis record, its maps and closures. */
+const AXIS_GRAPH_RECORD_BYTES = 1024
+/** A tick label string the painter builds (number or date text, at most 32 units). */
+const TICK_LABEL_BYTES = stringBytes(' '.repeat(32))
+/**
+ * The construction bound of a graph over `slots` display slots: per axis its record and at most CHART_TICK_LIMIT
+ * major and minor ticks with their label strings; the date list; per group the painter's stacking and position
+ * arrays. Admitted before anything is built (spec 6.4/6.5: paint-local transients are charged, then refunded).
+ */
+export function axisGraphBound(model: ChartModel, slots: number): number {
+  return model.axes.length * (AXIS_GRAPH_RECORD_BYTES + 2 * CHART_TICK_LIMIT * (8 + TICK_LABEL_BYTES)) + slots * 16 + model.groups.length * (512 + slots * 48)
+}
+/** The display slots a model can draw, read without building its view (the display bound caps it). */
+function displaySlotsBound(model: ChartModel): number {
+  let extent = Math.max(1, model.categories.length)
+  for (const group of model.groups) for (const s of group.series) extent = Math.max(extent, s.values.length)
+  return Math.min(extent, CHART_POINT_LIMIT)
+}
+/** Where a graph's construction is charged: the chart workspace and the tag the caller refunds after the paint. */
+export interface AxisGraphAdmission { workspace: ChartWorkspace; tag: string }
+
 const AXIS_ROLE: Record<ChartAxis['kind'], ResolvedAxis['role']> = { category: 'category', date: 'date', value: 'value', series: 'series' }
 /**
  * The axis graph of a (filled) model over its display view: placement, domains, scales, ticks, crossings and
  * display units. `workbookEpoch` is precedence 2 of the chart epoch (spec 5.1).
  */
-export function resolveAxes(model: ChartModel, view: DisplayView = displayView(model), workbookEpoch?: ChartEpoch): AxisGraph {
+export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission): AxisGraph {
+  if (admission && !admission.workspace.reserve(axisGraphBound(model, view?.slots ?? displaySlotsBound(model)), admission.tag)) throw new ChartRefusal()
+  view ??= displayView(model)
   const diagnostics: ChartDiagnostic[] = []
-  const epoch = chartEpoch(model.epoch, workbookEpoch)
+  const epoch = chartEpoch(model.epoch, workbookEpoch ?? model.workbookEpoch)
   const placed = placeAxes(model)
   const placements = placed.ok ? placed.groups : model.groups.map(() => undefined)
   if (!placed.ok) diagnostics.push({ code: CHART_AXIS_UNPLACEABLE, reason: placed.reason })

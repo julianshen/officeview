@@ -7,7 +7,9 @@
 import { describe, expect, it } from 'vitest'
 import { createCanvas } from 'canvas'
 import { parseXmlOrdered } from '../src/core/xml'
-import { axisFraction, categoryFraction, resolveAxes } from '../src/charts/axes'
+import { axisFraction, axisGraphBound, categoryFraction, resolveAxes } from '../src/charts/axes'
+import { ChartRefusal } from '../src/charts/own'
+import { realmChartWorkspace } from '../src/charts/paint'
 import { chartModelOwner, paintXlsxChart, parseXlsxChart, pointBytes, releaseChartModel, stringBytes } from '../src/charts'
 import { createChartWorkspace } from '../src/charts/workspace'
 import type { ChartParseContext } from '../src/charts/context'
@@ -240,5 +242,107 @@ describe('axis graph (spec 5.1)', () => {
     // An extreme finite scale is bounded the same way.
     const extreme = resolveAxes(parse(bar(ser(0, [0, 1e300])) + catAx('1', '2') + valAx('2', '1', '<c:majorUnit val="1"/>'))).axes.get('2')!
     expect(extreme.ticks.length).toBeLessThanOrEqual(1000)
+  })
+})
+
+/** A context that records every call (and still draws). */
+function recorder(w = 800, h = 500) {
+  const canvas = createCanvas(w, h), target = canvas.getContext('2d')
+  const calls: Array<[string, unknown[]]> = []
+  const ctx = new Proxy(target, {
+    get(t, p) { const v = Reflect.get(t, p); return typeof v === 'function' ? (...args: unknown[]) => { calls.push([String(p), args]); return v.apply(t, args) } : v },
+    set(t, p, v) { return Reflect.set(t, p, v) },
+  }) as unknown as CanvasRenderingContext2D
+  return { ctx, calls, texts: () => calls.filter(([name]) => name === 'fillText').map(([, args]) => String(args[0])), of: (name: string) => calls.filter(([n]) => n === name).map(([, args]) => args as number[]) }
+}
+const dateLine = (dateAx: string, family: 'line' | 'bar' = 'line') => {
+  const s = `<c:ser><c:idx val="0"/><c:order val="0"/><c:cat>${lit([45000, 45001, 45002])}</c:cat><c:val>${lit([1, 2, 3])}</c:val></c:ser>`
+  const group = family === 'line' ? `<c:lineChart><c:grouping val="standard"/>${s}<c:axId val="1"/><c:axId val="2"/></c:lineChart>` : `<c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/>${s}<c:axId val="1"/><c:axId val="2"/></c:barChart>`
+  return parse(`${group}<c:dateAx><c:axId val="1"/><c:baseTimeUnit val="days"/>${dateAx}<c:crossAx val="2"/></c:dateAx>` + valAx('2', '1'))
+}
+
+describe('A1a fix round 1: admission, label order, minor elements, extreme scales', () => {
+  it('I3: graph and tick construction is admitted to the chart workspace before it is built, refused when full, refunded after paint', () => {
+    const plot = bar(ser(0, [3, 7, 2])) + catAx('1', '2') + valAx('2', '1', '<c:majorGridlines/><c:minorUnit val="0.5"/><c:minorGridlines/>')
+    const workspace = createChartWorkspace('desktop')
+    const context = { workspace, profile: 'desktop', partPath: 'chart1.xml' } as unknown as ChartParseContext
+    const model = parseXlsxChart(parseXmlOrdered(space(plot)), undefined, context)!
+    const held = workspace.used
+    // With room: the paint reserves its construction bound first, and refunds it after the paint.
+    const log: string[] = []
+    const reserve = workspace.reserve.bind(workspace)
+    workspace.reserve = (bytes, tag) => { log.push(`${tag}:${bytes}`); return reserve(bytes, tag) }
+    const drawn = recorder()
+    paintXlsxChart(model, drawn.ctx, 800, 500)
+    expect(log.length).toBe(1)
+    expect(log[0]).toMatch(/:paint:\d+$/)
+    expect(Number(log[0].split(':').pop())).toBeGreaterThanOrEqual(axisGraphBound(model, 3))
+    expect(workspace.used).toBe(held)
+    expect(drawn.of('fillRect').length).toBeGreaterThan(3)
+    // Full: resolveAxes refuses before building, and the paint is the contained card (no native bars), nothing held.
+    workspace.reserve(workspace.limit - workspace.used, 'pressure')
+    expect(() => resolveAxes(model, undefined, undefined, { workspace, tag: 'probe' })).toThrow(ChartRefusal)
+    const full = recorder()
+    paintXlsxChart(model, full.ctx, 800, 500)
+    expect(full.texts().join(' ')).toMatch(/memory/)
+    expect(full.texts()).not.toContain('C1')
+    expect(workspace.used).toBe(workspace.limit)
+    workspace.release('pressure')
+    expect(workspace.used).toBe(held)
+    // An unowned model (a structured clone in another realm) is charged to this realm's own paint workspace.
+    const realm = realmChartWorkspace()
+    const before = realm.used
+    const clone = recorder()
+    paintXlsxChart(structuredClone(model), clone.ctx, 800, 500)
+    expect(clone.of('fillRect').length).toBe(drawn.of('fillRect').length)
+    expect(realm.used).toBe(before)
+  })
+
+  it('I4: date labels are thinned in screen order: a reversed horizontal axis and both vertical orientations keep every label that fits', () => {
+    const labels = ['3/15/2023', '3/16/2023', '3/17/2023']
+    for (const model of [dateLine(''), dateLine('<c:scaling><c:orientation val="maxMin"/></c:scaling>'), dateLine('', 'bar'), dateLine('<c:scaling><c:orientation val="maxMin"/></c:scaling>', 'bar')]) {
+      const { ctx, texts } = recorder()
+      paintXlsxChart(model, ctx, 800, 500)
+      expect(texts().filter(t => labels.includes(t)).sort()).toEqual(labels)
+    }
+  })
+
+  it('I5: minor ticks and minor gridlines are drawn on scatter x and date axes', () => {
+    const lines = (model: ChartModel) => { const r = recorder(); paintXlsxChart(model, r.ctx, 800, 500); return r.of('moveTo').length }
+    const scatter = (extra: string) => parse(`<c:scatterChart><c:scatterStyle val="marker"/>${xy(0, [0, 1, 2], [1, 2, 3])}<c:axId val="10"/><c:axId val="20"/></c:scatterChart>`
+      + valAx('10', '20', `<c:axPos val="b"/><c:scaling><c:max val="2"/><c:min val="0"/></c:scaling>${extra}<c:majorUnit val="1"/>`) + valAx('20', '10', '<c:axPos val="l"/>'))
+    const plain = scatter(''), minor = scatter('<c:minorGridlines/><c:minorTickMark val="out"/><c:minorUnit val="0.25"/>')
+    const minors = resolveAxes(minor).axes.get('10')!.minorTicks
+    expect(minors).toEqual([0.25, 0.5, 0.75, 1.25, 1.5, 1.75])
+    // One gridline and one tick mark per minor tick.
+    expect(lines(minor) - lines(plain)).toBe(2 * minors.length)
+    // Their geometry: the gridlines sit at the minor fractions of the plot width.
+    const r = recorder(); paintXlsxChart(minor, r.ctx, 800, 500)
+    const xs = new Set(r.of('moveTo').map(([x]) => x))
+    const gx = r.of('moveTo').map(([x]) => x).filter(x => Number.isInteger(x - 0.5))
+    expect(gx.length).toBeGreaterThanOrEqual(minors.length)
+    expect(xs.size).toBeGreaterThan(minors.length)
+    // Date axes: minor ticks from minorUnit/minorTimeUnit, drawn as gridlines and marks.
+    const dPlain = dateLine(''), dMinor = dateLine('<c:minorGridlines/><c:minorTickMark val="cross"/><c:minorUnit val="1"/><c:minorTimeUnit val="days"/>')
+    const dTicks = resolveAxes(dMinor).axes.get('1')!.minorTicks
+    expect(dTicks).toEqual([45000, 45001, 45002])
+    expect(lines(dMinor) - lines(dPlain)).toBe(2 * dTicks.length)
+  })
+
+  it('I6: extreme finite linear ranges normalise without overflow and paint finite coordinates', () => {
+    const model = parse(line(ser(0, [-1e308, 0, 1e308])) + catAx('1', '2') + valAx('2', '1', '<c:scaling><c:max val="1e308"/><c:min val="-1e308"/></c:scaling>'))
+    const value = resolveAxes(model).axes.get('2')!
+    expect([-1e308, 0, 1e308].map(v => axisFraction(value, v))).toEqual([0, 0.5, 1])
+    expect(value.ticks.every(Number.isFinite)).toBe(true)
+    const auto = resolveAxes(parse(line(ser(0, [-1e308, 1e308])) + catAx('1', '2') + valAx('2', '1'))).axes.get('2')!
+    expect([auto.min, auto.max].every(Number.isFinite)).toBe(true)
+    expect(axisFraction(auto, 0)).toBeCloseTo(0.5)
+    for (const m of [model, parse(line(ser(0, [-1e308, 1e308])) + catAx('1', '2') + valAx('2', '1'))]) {
+      const r = recorder()
+      paintXlsxChart(m, r.ctx, 800, 500)
+      const coords = [...r.of('moveTo'), ...r.of('lineTo'), ...r.of('fillRect'), ...r.of('arc')].flat().filter(v => typeof v === 'number')
+      expect(coords.length).toBeGreaterThan(0)
+      expect(coords.every(Number.isFinite)).toBe(true)
+    }
   })
 })

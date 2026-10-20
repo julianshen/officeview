@@ -188,8 +188,13 @@ export interface ChartModel {
   plotVisOnly?: boolean
   /** `c16r3:dataDisplayOptions16/dispNaAsBlank`. */
   dispNaAsBlank?: boolean
-  /** The chart epoch (spec 5.1). */
+  /** The chart epoch as authored (`c:date1904`; spec 5.1). */
   epoch?: '1900' | '1904'
+  /**
+   * The containing workbook's epoch (spec 5.1 precedence 2), carried on the transferable model so every paint
+   * realm resolves the same chart epoch. Stamped by the XLSX fills for a 1904 workbook; absent means 1900.
+   */
+  workbookEpoch?: '1904'
   /** Display points dropped by the per-chart bound. */
   truncated?: boolean
   /** Diagnostics of the parse and fill (spec 6.6), e.g. `chart-axis-unplaceable`, `chart-date-unrepresentable`. */

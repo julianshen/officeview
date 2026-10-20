@@ -107,6 +107,8 @@ export interface ScopedChartWorkspace extends ChartWorkspace {
   handOff(): void
   /** The read failed or was cancelled: everything it still holds is refunded to both. Later reservations are refused. */
   releaseAll(): void
+  /** The document facet itself: where a model's later, paint-local charges go once the read is answered (A1a). */
+  readonly facet: ChartWorkspace
 }
 /**
  * A paged read's chart workspace (D0): every charge counts in the **document**
@@ -121,6 +123,7 @@ export function scopeChartWorkspace(document: ChartWorkspace, share: ChartParent
   let detached = false, closed = false
   const scope: ScopedChartWorkspace = {
     get limit() { return document.limit },
+    facet: document,
     get used() { return document.used },
     get shareBytes() { let sum = 0; for (const [tag, bytes] of held) if (!transientTag(tag)) sum += bytes; return detached ? 0 : sum },
     reserve(bytes, tag) {

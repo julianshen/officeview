@@ -12,7 +12,8 @@ import { chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
 import { parseXmlOrdered } from '../src/core/xml'
 import { chartEpoch, convertSerial, dateTicks, dateUnitIndex, isDateFormat } from '../src/charts/dates'
 import { resolveAxes } from '../src/charts/axes'
-import { fillChartRanges, parseXlsxChart, type ChartCell } from '../src/charts'
+import { fillChartRanges, paintXlsxChart, parseXlsxChart, type ChartCell } from '../src/charts'
+import { createCanvas } from 'canvas'
 import { valueAt, pointAt } from '../src/charts/points'
 import { encodeCivil } from '../src/xlsx/formula/serial'
 import type { ChartModel } from '../src/charts/model'
@@ -183,5 +184,75 @@ describe('chart dates (spec 5.1)', () => {
   it('classifies date number formats', () => {
     for (const code of ['m/d/yyyy', 'd-mmm-yy', 'mmm-yy', 'yyyy', 'h:mm AM/PM', '[$-409]mmmm d, yyyy', 'dd/mm/yyyy hh:mm']) expect(isDateFormat(code)).toBe(true)
     for (const code of [undefined, 'General', '0.00', '#,##0', '0%', '"days"0', '0.0E+00', '[Red]0.00', '\\d0']) expect(isDateFormat(code)).toBe(false)
+  })
+})
+
+/** A context that records every call (and still draws). */
+function recorder(w = 800, h = 400) {
+  const canvas = createCanvas(w, h), target = canvas.getContext('2d')
+  const calls: Array<[string, unknown[]]> = []
+  const ctx = new Proxy(target, {
+    get(t, p) { const v = Reflect.get(t, p); return typeof v === 'function' ? (...args: unknown[]) => { calls.push([String(p), args]); return v.apply(t, args) } : v },
+    set(t, p, v) { return Reflect.set(t, p, v) },
+  }) as unknown as CanvasRenderingContext2D
+  return { ctx, calls, texts: () => calls.filter(([name]) => name === 'fillText').map(([, args]) => String(args[0])) }
+}
+async function bothPaths(bytes: Uint8Array): Promise<{ resident: ChartModel; paged: ChartModel }> {
+  const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
+  const content = doc.sheets[0].drawings![0].content
+  if (content?.kind !== 'xlsxChart') throw new Error('no chart')
+  const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'A1a-r1', profile: 'D' })
+  expect((await session.done).kind).toBe('complete')
+  const source = createPagedWorkbookSource(session)
+  opened.push(source)
+  const store = source.store('1')
+  const read = await store.readDrawings!({ stamp: store.stamp, signal: new AbortController().signal }, 'D')
+  const pagedContent = read.drawings[0].content
+  if (pagedContent?.kind !== 'xlsxChart') throw new Error('no chart')
+  return { resident: content.chart, paged: pagedContent.chart }
+}
+const date1904Workbook = (patch = true) => async (zip: import('jszip')) => {
+  if (!patch) return
+  const wb = await zip.file('xl/workbook.xml')!.async('string')
+  zip.file('xl/workbook.xml', wb.replace('<sheets>', '<workbookPr date1904="1"/><sheets>'))
+}
+
+describe('A1a fix round 1: epochs and category source types (spec 5.1)', () => {
+  it('I1: a 1904 workbook without a chart date1904 paints its cached date axis in 1904, in every realm', async () => {
+    const xml = space(`<c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:order val="0"/><c:cat><c:numRef><c:f>Styled!$A$1:$A$3</c:f><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>0</c:v></c:pt><c:pt idx="1"><c:v>1</c:v></c:pt><c:pt idx="2"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:cat><c:val>${num([1, 2, 3])}</c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart>`
+      + `<c:dateAx><c:axId val="1"/><c:baseTimeUnit val="days"/><c:crossAx val="2"/></c:dateAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/></c:valAx>`)
+    const bytes = await chartWorkbookBytes(xml, { cells: [{ ref: 'A1', v: 0 }, { ref: 'A2', v: 1 }, { ref: 'A3', v: 2 }], patch: date1904Workbook() })
+    const { resident, paged } = await bothPaths(bytes)
+    for (const model of [resident, paged, structuredClone(resident), structuredClone(paged)]) {
+      // The authored chart epoch stays absent; the resolved one travels with the model.
+      expect(model.epoch).toBeUndefined()
+      expect(model.workbookEpoch).toBe('1904')
+      expect(resolveAxes(model).epoch).toBe('1904')
+      const { ctx, texts } = recorder()
+      paintXlsxChart(model, ctx, 800, 400)
+      expect(texts()).toEqual(expect.arrayContaining(['1/1/1904', '1/2/1904', '1/3/1904']))
+      expect(texts().some(t => t.endsWith('/1900'))).toBe(false)
+    }
+    // A 1900 workbook carries nothing (absent means the 1900 system).
+    const plain = await bothPaths(await chartWorkbookBytes(xml, { cells: [{ ref: 'A1', v: 1 }] }))
+    expect([plain.resident.workbookEpoch, plain.paged.workbookEpoch]).toEqual([undefined, undefined])
+  })
+
+  it('I2: numeric-looking text categories stay text: cached and filled, resident and paged, fall back to categorical', async () => {
+    const chart = (cat: string) => space(`<c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:order val="0"/><c:cat>${cat}</c:cat><c:val>${num([1, 2, 3])}</c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart>`
+      + `<c:dateAx><c:axId val="1"/><c:crossAx val="2"/></c:dateAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/></c:valAx>`)
+    const roleOf = (model: ChartModel) => { const graph = resolveAxes(model); return { role: graph.axes.get('1')!.role, fallback: graph.diagnostics.some(d => d.code === 'chart-date-axis-categorical'), index: [0, 1, 2].map(i => graph.categoryIndex(graph.axes.get('1')!, i)) } }
+    const ref = '<c:numRef><c:f>Styled!$A$1:$A$3</c:f></c:numRef>'
+    // Text cells that look like numbers.
+    const text = await bothPaths(await chartWorkbookBytes(chart(ref), { cells: [{ ref: 'A1', v: '45000' }, { ref: 'A2', v: '45001' }, { ref: 'A3', v: '45010' }] }))
+    const cachedText = parse(chart(str(['45000', '45001', '45010'])))
+    for (const model of [text.resident, text.paged, cachedText]) expect(roleOf(model)).toEqual({ role: 'category', fallback: true, index: [0, 1, 2] })
+    // Number cells and a numeric cache are dates, with the same positions.
+    const numbers = await bothPaths(await chartWorkbookBytes(chart(ref), { cells: [{ ref: 'A1', v: 45000 }, { ref: 'A2', v: 45001 }, { ref: 'A3', v: 45010 }] }))
+    const cachedNumbers = parse(chart(num([45000, 45001, 45010])))
+    for (const model of [numbers.resident, numbers.paged, cachedNumbers]) expect(roleOf(model)).toEqual({ role: 'date', fallback: false, index: [0, 1, 10] })
+    // A paged-style cell that carries both a scanned number and its text value is still text.
+    const filled = fillChartRanges(parse(chart(ref)), 'Styled', (_s, row) => ({ value: String(45000 + row), number: 45000 + row, text: String(45000 + row) }))
+    expect(roleOf(filled).role).toBe('category')
   })
 })

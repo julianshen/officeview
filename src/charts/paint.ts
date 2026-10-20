@@ -8,7 +8,9 @@ import { paintChartPlaceholder } from '../drawing/content-paint'
 import { formatNumber } from '../xlsx/chartDescription'
 import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
-import { axisFraction, categoryFraction, resolveAxes, type GroupAxes, type ResolvedAxis } from './axes'
+import { axisFraction, categoryFraction, resolveAxes, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
+import { ChartRefusal, chartModelOwner } from './own'
+import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { dateTickLabel, dateUnitIndex } from './dates'
 
 type FamilyCss = (family: string) => string
@@ -121,8 +123,7 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
  * units, gridlines and authored tick marks. With one value axis and no authored placement it draws exactly as
  * the engine did before A1a (the same layout arithmetic and drawing order).
  */
-function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Box, fontPx: number, family: string, familyCss: FamilyCss): void {
-  const graph = resolveAxes(model.source, model.view)
+function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: AxisGraph, box: Box, fontPx: number, family: string, familyCss: FamilyCss): void {
   const placed = graph.groups.filter((g): g is GroupAxes => Boolean(g))
   if (!placed.length) return
   const count = model.view.slots
@@ -239,14 +240,17 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
   // Category, date and x axes: the axis line at its crossing, then labels.
   for (const a of baseAxes) {
     if (a.role === 'value') {
-      // An x value axis (scatter): labels and gridlines per tick, as before.
+      // An x value axis (scatter): minor gridlines, then labels and gridlines per tick as before, then tick marks.
+      const xAt = (t: number) => plot.x + axisFraction(a, t, false) * plot.w
+      if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, axisFraction(a, t, false)) }
       ctx.textAlign = 'center'; ctx.textBaseline = 'top'
       for (const t of a.ticks) {
         const px = plot.x + axisFraction(a, t, false) * plot.w
         if (shown(a)) { ctx.fillStyle = TEXT; ctx.fillText(formatNumber(a.labelValue(t), a.percent), px, labelAnchor(a) + 3) }
         if (a.axis.gridlines) { ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, plot.y); ctx.lineTo(Math.round(px) + 0.5, plot.y + plot.h); ctx.stroke() }
       }
-      tickMarks(a, a.ticks, t => plot.x + axisFraction(a, t, false) * plot.w, a.axis.majorTickMark)
+      tickMarks(a, a.minorTicks, xAt, a.axis.minorTickMark)
+      tickMarks(a, a.ticks, xAt, a.axis.majorTickMark)
       continue
     }
     const n = a.slots
@@ -261,22 +265,30 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
       else { ctx.moveTo(line, plot.y); ctx.lineTo(line, plot.y + plot.h) }
       ctx.stroke()
     }
+    // Date axes: gridlines and tick marks at the calendar ticks (major and minor), drawn whether or not labels are.
+    const dateAt = (t: number) => categoryFraction(a, dateUnitIndex(t, a.dateBase!, graph.epoch) - a.dateStart!, between)
+    if (a.role === 'date') {
+      if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, dateAt(t)) }
+      if (a.axis.gridlines) { ctx.strokeStyle = GRID; for (const t of a.ticks) gridline(a, dateAt(t)) }
+      tickMarks(a, a.minorTicks, t => along(a, dateAt(t)), a.axis.minorTickMark)
+      tickMarks(a, a.ticks, t => along(a, dateAt(t)), a.axis.majorTickMark)
+    }
     if (!shown(a)) continue
     const anchor = labelAnchor(a), place = sideOf(a)
     ctx.fillStyle = TEXT
     if (a.role === 'date') {
-      // Date axes: labels at the major ticks (calendar steps), thinned so they never overlap.
+      // Date axes: labels at the major ticks (calendar steps), thinned in screen order (whatever the axis direction)
+      // so they never overlap: a label is kept when its extent clears the last kept one.
       const texts = dateLabels(a)
+      const items = a.ticks.map((t, k) => ({ k, p: along(a, dateAt(t)), extent: a.orientation === 'h' ? ctx.measureText(texts[k]).width : fontPx }))
+      items.sort((p, q) => p.p - q.p)
       let last = -Infinity
-      a.ticks.forEach((t, k) => {
-        const f = categoryFraction(a, dateUnitIndex(t, a.dateBase!, graph.epoch) - a.dateStart!, between)
-        const p = along(a, f), width = a.orientation === 'h' ? ctx.measureText(texts[k]).width : fontPx
-        if (p - width / 2 < last + 4) return
-        last = p + width / 2
+      for (const { k, p, extent } of items) {
+        if (p - extent / 2 < last + 4) continue
+        last = p + extent / 2
         if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; ctx.fillText(texts[k], p, place === 't' ? anchor - 3 : anchor + 3) }
         else { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; ctx.fillText(texts[k], place === 'r' ? anchor + 4 : anchor - 4, p) }
-      })
-      tickMarks(a, a.ticks, t => along(a, categoryFraction(a, dateUnitIndex(t, a.dateBase!, graph.epoch) - a.dateStart!, between)), a.axis.majorTickMark)
+      }
       continue
     }
     if (model.view.category(0) === undefined) continue
@@ -440,6 +452,22 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Bo
 export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify): void {
   if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
   const model = drawModel(source)
+  // The axis graph's construction is admitted to the chart workspace before it is built (the model's own; an
+  // unowned model, such as a structured clone, uses this realm's paint workspace) and refunded after the paint.
+  // A refusal paints the contained card before anything else is drawn.
+  const owner = chartModelOwner(source)
+  // A paged read's scoped workspace refuses once the read is answered; a paint charges its document facet.
+  const ownerWorkspace = owner && ((owner.workspace as { facet?: ChartWorkspace }).facet ?? owner.workspace)
+  const admission = { workspace: ownerWorkspace ?? realmChartWorkspace(), tag: `${owner?.tag ?? `chart-realm#${++paints}`}:paint` }
+  let graph: AxisGraph | undefined
+  try {
+    if (!isRound(source)) graph = resolveAxes(source, model.view, undefined, admission)
+  } catch (error) {
+    admission.workspace.release(admission.tag)
+    if (!(error instanceof ChartRefusal)) throw error
+    paintChartPlaceholder({ ...source, unsupported: 'This chart needs more memory than is available for charts' }, ctx, w, h, familyCss)
+    return
+  }
   ctx.save()
   try {
     ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
@@ -459,6 +487,10 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     if (area.w <= 8 || area.h <= 8) return
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
-    else paintCartesian(ctx, model, area, fontPx, model.fontFamily, familyCss)
-  } finally { ctx.restore() }
+    else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss)
+  } finally { ctx.restore(); admission.workspace.release(admission.tag) }
 }
+const isRound = (model: ChartModel) => model.groups[0]?.family === 'pie' || model.groups[0]?.family === 'doughnut'
+let paints = 0, realm: ChartWorkspace | undefined
+/** This realm's chart workspace for painting unowned models (a transferred render uses its own; spec 6.4). */
+export const realmChartWorkspace = (): ChartWorkspace => realm ??= createChartWorkspace('desktop')

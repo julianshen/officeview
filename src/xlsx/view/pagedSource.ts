@@ -539,6 +539,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * failed sheet turns its charts into placeholders and is never cached. */
   private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true, workspace?: ChartWorkspace): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
     const charts = await loadChartModule()
+    charts.stampWorkbookEpoch(drawings, this.workbook.formatting.dateSystem)
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
     const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
     const diagnostics: WorkerDiagnostic[] = []
