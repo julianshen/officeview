@@ -210,6 +210,15 @@ describe('charts-error-bars (Task A6b)', () => {
     expect(tinyErr.amount / 5e-201).toBeCloseTo(1, 12)
     expect(errorBarStatistic('stdDev', points([-1.7e308, 1.7e308]), 1)).toMatchObject({ kind: 'none', reason: expect.stringMatching(/not representable/) })
     expect(errorBarStatistic('stdDev', points([0, 4]), 1e308)).toMatchObject({ kind: 'none', reason: expect.stringMatching(/not representable/) })
+    // Only the final amount must be representable. [-1.7e308, 1.7e308]: scaled values ±1, mean 0, scaled sample
+    // deviation √2. stdErr = √2/√2 · 1.7e308 = 1.7e308; stdDev × 0.1 = 0.1·√2·1.7e308 ≈ 2.4041630560342617e307;
+    // stdDev × 0 = 0. stdDev × 1 (√2·1.7e308) is past the float range: dropped.
+    const edge = points([-1.7e308, 1.7e308])
+    const edgeErr = errorBarStatistic('stdErr', edge, 1), edgeTenth = errorBarStatistic('stdDev', edge, 0.1), edgeZero = errorBarStatistic('stdDev', edge, 0)
+    if (edgeErr.kind !== 'stat' || edgeTenth.kind !== 'stat' || edgeZero.kind !== 'stat') throw new Error('representable statistic refused')
+    expect(edgeErr.amount / 1.7e308).toBeCloseTo(1, 12)
+    expect(edgeTenth.amount / 2.4041630560342617e307).toBeCloseTo(1, 12)
+    expect(edgeZero.amount).toBe(0); expect(edgeZero.center).toBe(0)
     const huge = category('lineChart', [{ values: [-1.7e308, 1.7e308], errBars: bars({ valType: 'stdDev', val: '1' }) }])
     expect(prepared(huge)).toHaveLength(0)
     expect(huge.preparedAxes!.diagnostics.find(d => d.code === 'chart-error-bars-dropped')?.reason).toMatch(/not representable/)
@@ -418,6 +427,36 @@ describe('charts-error-bars (Task A6b)', () => {
 
   it('analytic stdDev over 65536 drops the bars', () => {
     const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
+    // 100% stacked: the shares' denominators need every sibling in full. Two series of 4,097 ones, stdDev on the
+    // first only: the sibling is acquired analytically too (4,097 points), every share is 0.5, so the mean is 0.5 and
+    // the deviation 0 (a display-capped sibling would make the last share 1).
+    const ones = (n: number) => Array.from({ length: n }, () => 1)
+    const stack = (sibling: number[]) => category('barChart', [{ values: ones(4097), errBars: bars({ valType: 'stdDev', val: '1' }) }, { values: sibling, errBars: '' }], { grouping: 'percentStacked' })
+    const full = stack(ones(4097))
+    expect(full.groups[0].series.map(x => [x.analytic, x.values.length])).toEqual([[true, 4097], [true, 4097]])
+    expect(prepared(full)[0].center).toBeCloseTo(0.5, 12)
+    expect(prepared(full)[0].amount).toBe(0)
+    // A sibling past 65,536 is refused, so the bars are dropped (never computed with it read as zero or a prefix).
+    const tooLong = stack(ones(65537))
+    expect(tooLong.groups[0].series[1].analytic).toBe('refused')
+    expect(prepared(tooLong)).toHaveLength(0)
+    expect(tooLong.preparedAxes!.diagnostics.find(d => d.code === 'chart-error-bars-dropped')?.reason).toMatch(/100% stacked series has more than 65,536/)
+    // Fill path: an uncached sibling is filled at the analytic bound (4,097 cells), and an unavailable sibling cell
+    // drops the bars.
+    const filled = (cell: (row: number) => { value: number } | { value: undefined; unavailable: true }) => {
+      const xml = space(`<barChart><barDir val="col"/><grouping val="percentStacked"/><ser><idx val="0"/><order val="0"/>${bars({ valType: 'stdDev', val: '1' })}<val>${lit(ones(4097))}</val></ser>`
+        + `<ser><idx val="1"/><order val="1"/><val><numRef><f>Styled!$A$1:$A$4097</f></numRef></val></ser><overlap val="100"/>${AX}</barChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`)
+      const model = parse(xml)
+      expect(model.groups[0].series[1].analytic).toBe(true)
+      return fillChartRanges(model, 'Styled', (_sheet, row) => cell(row))
+    }
+    const viaFill = filled(() => ({ value: 1 }))
+    expect(viaFill.groups[0].series[1].values.length).toBe(4097)
+    expect(prepared(viaFill)[0].center).toBeCloseTo(0.5, 12)
+    expect(prepared(viaFill)[0].amount).toBe(0)
+    const unavailable = filled(row => row === 4096 ? { value: undefined, unavailable: true } : { value: 1 })
+    expect(prepared(unavailable)).toHaveLength(0)
+    expect(unavailable.preparedAxes!.diagnostics.find(d => d.code === 'chart-error-bars-dropped')?.reason).toMatch(/100% stacked series has an unavailable point/)
     const over = category('lineChart', [{ values: range(65537), errBars: bars({ valType: 'stdDev', val: '1' }) }])
     expect(over.groups[0].series[0].analytic).toBe('refused')
     expect(prepared(over)).toHaveLength(0)

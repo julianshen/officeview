@@ -161,9 +161,10 @@ export function errorBarStatistic(kind: 'stdDev' | 'stdErr', points: ChartPoints
     const d = read(i) / scale - mean
     squares += d * d
   }
-  const deviation = Math.sqrt(squares / (n - 1)) * scale
-  const center = mean * scale
-  const amount = kind === 'stdDev' ? deviation * val : deviation / Math.sqrt(n)
+  // Stay dimensionless (every scaled value in [-1, 1]) until the multiplier or the √n divisor is in, then rescale once:
+  // only the final amount must be representable, never an intermediate (stdErr of [-1.7e308, 1.7e308] is 1.7e308).
+  const factor = kind === 'stdDev' ? (val === 0 ? 0 : Math.sqrt(squares / (n - 1)) * val) : Math.sqrt(squares / (n - 1)) / Math.sqrt(n)
+  const amount = factor === 0 ? 0 : factor * scale, center = mean * scale
   if (!Number.isFinite(amount) || !Number.isFinite(center)) return unrepresentable
   return kind === 'stdDev' ? { kind: 'stat', center, amount, n } : { kind: 'stat', amount, n }
 }
@@ -302,6 +303,12 @@ export function prepareErrorBars(model: ChartModel, view: DisplayView, diagnosti
           // 100% stacked: the statistic runs over the plotted shares (each value over its index's total of |values|
           // across the group's drawn series), the space the bars are drawn in (an unverified approximation).
           const visible = (other: ChartSeries, i: number) => !visibleOnly || !(hiddenAt(other.values.hidden, i) || hiddenAt(other.xValues?.hidden, i))
+          // Every sibling feeds the denominators, so each is acquired analytically too (parse and fill): one past the
+          // bound, or with an unavailable value, drops the bars; never read as zero or from a prefix.
+          if (group.grouping === 'percentStacked') {
+            if (group.series.some(other => other.analytic !== true)) { report('chart-error-bars-dropped', 'A 100% stacked series has more than 65,536 points: the standard deviation or error bars of its group are dropped, never computed from a prefix'); return }
+            if (group.series.some(other => other.values.states.includes(POINT_UNAVAILABLE))) { report('chart-error-bars-dropped', 'A 100% stacked series has an unavailable point: the standard deviation or error bars of its group are dropped'); return }
+          }
           const normalise = group.grouping === 'percentStacked' ? (i: number, v: number) => {
             let total = 0
             for (const other of group.series) { const w = valueAt(other.values, i); if (w !== undefined && visible(other, i)) total += Math.abs(w) }
