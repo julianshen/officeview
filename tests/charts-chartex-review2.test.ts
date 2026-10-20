@@ -9,9 +9,14 @@ import { parseXmlOrdered } from '../src/core/xml'
 import { parseChartEx } from '../src/charts/chartex/parse'
 import { createChartWorkspace } from '../src/charts/workspace'
 import { fillChartRanges } from '../src/charts/fill'
+import { releaseChartModel } from '../src/charts/own'
 import { PagedXlsxSheetAdapter } from '../src/xlsx/view/pagedSource'
 import type { ChartModel } from '../src/charts/model'
-import type { ChartParseContext } from '../src/charts/context'
+import { chartParseContext, documentChartContext, type ChartParseContext } from '../src/charts/context'
+import { OfficePackage } from '../src/core/zip'
+import { readChartPart } from '../src/charts/read'
+import { parseChartExPart } from '../src/charts/chartex/parse'
+import { buildChartPptx, embeddedWorkbook } from './helpers/chart-fixtures'
 
 const context = (): ChartParseContext => ({ partPath: 'xl/charts/chartEx1.xml', profile: 'desktop', workspace: createChartWorkspace('desktop'), pkg: {} as ChartParseContext['pkg'] })
 const root = (data: string, series: string, title = '') => parseXmlOrdered(`<chartSpace><chartData>${data}</chartData><chart>${title}<plotArea><plotAreaRegion>${series}</plotAreaRegion></plotArea></chart></chartSpace>`)
@@ -33,6 +38,26 @@ describe('B1 review round 2', () => {
     expect({ unsupported: chart.unsupported, refused: chart.refused }).toEqual({ unsupported: 'This chart has too many data points to summarize', refused: true })
     // Nothing was admitted for the refused chart's points.
     expect(requested.every(bytes => bytes === 0)).toBe(true)
+  })
+
+  it('I1 (round 3): over-limit defined names in an embedded workbook keep the point-limit reason, before the cell budget', async () => {
+    // codex's probe: five analytic series, each a defined name of 65,537 cells (together over the embedded cell budget).
+    const data = Array.from({ length: 5 }, (_, i) => `<cx:data id="${i}"><cx:numDim type="val"><cx:f>Data${i}</cx:f></cx:numDim></cx:data>`).join('')
+    const series = Array.from({ length: 5 }, (_, i) => `<cx:series layoutId="clusteredColumn"><cx:dataId val="${i}"/><cx:layoutPr><cx:binning/></cx:layoutPr></cx:series>`).join('')
+    const xml = `<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cx:chartData><cx:externalData r:id="rId1"/>${data}</cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion>${series}</cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>`
+    const names = (n: number) => Array.from({ length: 5 }, (_, i) => ({ name: `Data${i}`, formula: `Sheet1!$${String.fromCharCode(65 + i)}$1:$${String.fromCharCode(65 + i)}$${n}` }))
+    for (const [n, expected] of [[65537, 'refused'], [3, 'native']] as const) {
+      const fixture = buildChartPptx([{ chartXml: xml, workbook: embeddedWorkbook({ sheets: [{ name: 'Sheet1', data: '<row r="1"><c r="A1"><v>1</v></c></row>' }], definedNames: names(n) }) }])
+      const pkg = await OfficePackage.load(fixture.bytes), doc = documentChartContext('desktop'), ctx = chartParseContext(doc, pkg, fixture.chartPaths[0])
+      const read = await readChartPart(pkg, fixture.chartPaths[0], ctx)
+      if (read?.kind !== 'tree') throw new Error('read')
+      const result = await parseChartExPart(read.root, undefined, ctx, new Set(['histogram']))
+      if (expected === 'refused') expect(result).toMatchObject({ kind: 'refused', reason: 'This chart has too many data points to summarize', feature: 'ChartEx' })
+      else expect(result.kind, 'within the bound the names are read').toBe('native')
+      if (result.kind === 'native') releaseChartModel(result.model)
+      read.release()
+      expect(doc.workspace.used).toBe(0)
+    }
   })
 
   it('I4: paragraph separators count toward the text cap and the walk stops at it (no unbounded slice)', () => {

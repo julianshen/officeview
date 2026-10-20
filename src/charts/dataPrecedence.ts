@@ -34,7 +34,7 @@ import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
 import { isChartExRoot } from './read'
 import { parseChartExPart } from './chartex/parse'
-import { requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
+import { EMBEDDED_TOO_MANY_POINTS, requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
 
 export const CHART_DATA_UNAVAILABLE = "This chart's data is not available"
 const XLSX_PART = /^\/?xl\//i
@@ -95,10 +95,10 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
   model.groups.forEach((group, g) => group.series.forEach((series, s) => {
     const pending = series.pending
     if (!pending) return
-    const limit = seriesLimit(series)
-    if (pending.values) { slots.push({ group: g, series: s, role: 'values' }); requests.push({ range: pending.values, text: false, limit }) }
+    const limit = seriesLimit(series), analytic = series.analytic === 'chart' ? { analytic: true as const } : {}
+    if (pending.values) { slots.push({ group: g, series: s, role: 'values' }); requests.push({ range: pending.values, text: false, limit, ...analytic }) }
     if (pending.xValues) { slots.push({ group: g, series: s, role: 'xValues' }); requests.push({ range: pending.xValues, text: false, limit }) }
-    if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: categoryLimit(series) }) }
+    if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: categoryLimit(series), ...analytic }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
   }))
   // Classic: c:externalData; ChartEx: cx:chartData/cx:externalData (chartex-map §2.1).
@@ -107,7 +107,8 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
   try {
     result = rId ? await requestEmbeddedCells(context, rId, requests) : { kind: 'unavailable', diagnostic: { code: 'chart-data-missing', reason: 'The chart has no embedded workbook' } }
   } catch { result = { kind: 'unavailable', diagnostic: { code: 'chart-data-corrupt', reason: "The chart's embedded workbook could not be read" } } }
-  if (result.kind === 'refused') return successor(model, { unsupported: 'This chart needs more memory than is available for charts', refused: true, preparedAxes: undefined }, [result.diagnostic])
+  // The typed analytic refusal keeps its point-limit reason; any other refusal is a memory refusal.
+  if (result.kind === 'refused') return successor(model, { unsupported: result.diagnostic.code === EMBEDDED_TOO_MANY_POINTS ? CHART_TOO_MANY_POINTS : 'This chart needs more memory than is available for charts', refused: true, preparedAxes: undefined }, [result.diagnostic])
   if (result.kind === 'cancelled') return successor(model, { unsupported: 'Reading the chart data was cancelled', preparedAxes: undefined }, [result.diagnostic])
   const cells = result.kind === 'cells' ? result : undefined
   try {

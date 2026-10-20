@@ -52,7 +52,8 @@ export function chartLine(range: ChartRange, ownerSheet: string, text: boolean, 
   const length = vertical ? rows : cols
   return { sheet: range.sheet ?? ownerSheet, vertical, fixed: vertical ? range.c1 : range.r1, start: vertical ? range.r0 : range.c0, count: Math.min(length, limit), truncated: length > limit, text }
 }
-const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1; return cols === 1 || rows >= cols ? rows : cols }
+/** The length of the one line a range yields (its longer extent, rows on a tie). */
+export const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1; return cols === 1 || rows >= cols ? rows : cols }
 /**
  * The acquisition bound of a series' numeric roles (spec 7): an analytic series
  * is acquired in full up to CHART_ANALYTIC_POINT_LIMIT; a reference longer than
