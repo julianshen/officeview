@@ -45,6 +45,8 @@ const group = (model: ChartModel): ChartExGroup => {
 /** A sparse numeric cache of `count` points (two written), bound by one series of `layout`. */
 const cachedPart = (layout: string, count: number, layoutPr = layout === 'clusteredColumn' ? '<cx:layoutPr><cx:binning /></cx:layoutPr>' : '') =>
   `<cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:lvl ptCount="${count}"><cx:pt idx="0">1</cx:pt><cx:pt idx="${count - 1}">2</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData>${plot(`<cx:series layoutId="${layout}"><cx:dataId val="0" />${layoutPr}</cx:series>`)}`
+/** The total of a binned histogram's counts (B3 derives the columns at stage 1). */
+const binTotal = (model: ChartModel) => pointList(model.groups[0].series[0].values).reduce((n, p) => n + (p.state === 'value' ? p.v : 0), 0)
 /** A reference-only histogram part. */
 const referencePart = (formula: string, externalData = false) =>
   `<cx:chartData>${externalData ? '<cx:externalData r:id="rId1" />' : ''}<cx:data id="0"><cx:numDim type="val"><cx:f>${formula}</cx:f></cx:numDim></cx:data></cx:chartData>${plot('<cx:series layoutId="clusteredColumn"><cx:dataId val="0" /><cx:layoutPr><cx:binning /></cx:layoutPr></cx:series>')}`
@@ -58,11 +60,16 @@ describe('B1 review round 1', () => {
       else {
         expect(result.kind, `${count}`).toBe('native')
         if (result.kind === 'native') {
-          expect(result.model.groups[0].series[0].values.length, `${count}`).toBe(expected)
-          expect(result.model.groups[0].series[0].analytic).toBe('chart')
+          // B3: stage 1 bins every acquired point; both values (index 0 and the last index) are counted.
+          expect(binTotal(result.model), `${count}`).toBe(2)
           expect(result.model.truncated, `${count}: never truncated`).toBeUndefined()
           releaseChartModel(result.model)
         }
+        // The parse itself acquires every point (binning is stage 1's).
+        const raw = parseChartEx(p.root, theme, p.context)
+        expect(raw.groups[0].series[0].values.length, `${count}`).toBe(expected)
+        expect(raw.groups[0].series[0].analytic).toBe('chart')
+        releaseChartModel(raw)
       }
       p.release()
     }
@@ -87,9 +94,8 @@ describe('B1 review round 1', () => {
       if (expected === 'refused') expect(filled, `${count}`).toMatchObject({ unsupported: 'This chart has too many data points to summarize', refused: true })
       else {
         expect(filled.unsupported, `${count}`).toBeUndefined()
-        const values = filled.groups[0].series[0].values
-        expect(values.length, `${count}`).toBe(expected)
-        expect(pointList(values).at(-1), `${count}`).toEqual({ state: 'value', v: count })
+        // B3: the filled values 1..count are binned at stage 1; the counts sum to every point.
+        expect(binTotal(filled), `${count}`).toBe(expected)
         expect(filled.truncated, `${count}`).toBeUndefined()
       }
       releaseChartModel(filled)
@@ -116,8 +122,8 @@ describe('B1 review round 1', () => {
       else {
         expect(result.kind, `${count}`).toBe('native')
         if (result.kind === 'native') {
-          expect(result.model.groups[0].series[0].values.length, `${count}`).toBe(expected)
-          expect(pointList(result.model.groups[0].series[0].values).at(-1)).toEqual({ state: 'value', v: count })
+          // B3: binned at stage 1; the counts sum to every point read from the embedded workbook.
+          expect(binTotal(result.model), `${count}`).toBe(expected)
           releaseChartModel(result.model)
         }
       }

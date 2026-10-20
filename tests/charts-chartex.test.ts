@@ -210,13 +210,13 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
   })
 
   it('region map, blocked families and unreadable parts return unsupported so the fallback picture is kept', async () => {
-    // Nothing is painted until its family task lands (B2-B5).
-    expect([...CHARTEX_PAINTED]).toEqual([])
-    const files: Array<[string, string?]> = [
-      ['waterfall/waterfall.xlsx'], ['funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml'], ['SimpleHistogram/SimpleHistogram.xlsx'],
-      ['paretoLine/paretoLine.xlsx'], ['boxWhisker/boxWhisker.xlsx'], ['treemap/treemap.xlsx'], ['sunburst/sunburst.xlsx'],
+    // Nothing is painted until its family task lands (B2-B5): every family not yet painted keeps its fallback.
+    const files: Array<[string, string | undefined, string]> = [
+      ['waterfall/waterfall.xlsx', undefined, 'waterfall'], ['funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml', 'funnel'], ['SimpleHistogram/SimpleHistogram.xlsx', undefined, 'histogram'],
+      ['paretoLine/paretoLine.xlsx', undefined, 'pareto'], ['boxWhisker/boxWhisker.xlsx', undefined, 'boxWhisker'], ['treemap/treemap.xlsx', undefined, 'treemap'], ['sunburst/sunburst.xlsx', undefined, 'sunburst'],
     ]
-    for (const [file, path] of files) {
+    for (const [file, path, family] of files) {
+      if (CHARTEX_PAINTED.has(family as never)) continue
       const p = await nativePart(file, path)
       // The default adapter dispatches the cx root to the ChartEx parser (never the classic one).
       const result = await parseChartPart(p.root, theme, p.context)

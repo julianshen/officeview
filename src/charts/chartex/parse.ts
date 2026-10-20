@@ -36,17 +36,19 @@ import type {
 import type { LabelControls, LabelOptions } from '../labels'
 import type { ChartFillStyle } from '../fills'
 import type { ChartLineStyle, ChartPointOverride } from '../style'
-import { ChartRefusal, adoptChartModel, chargeChartPoint, modelOwner, releaseChartModel } from '../own'
+import { ChartRefusal, adoptChartModel, chargeChartPoint, chartModelOwner, modelOwner, releaseChartModel, succeedChartModel } from '../own'
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, CHART_SERIES_LIMIT, CHART_TEXT_BYTES_LIMIT, axisBytes, parseChartRange, placeholderChart, solid, textStyle } from '../parse'
 import { PointWriter, knownError, pointBytes, stringBytes } from '../points'
 import { parseFillStyle } from '../fills'
 import { parseLineStyle, resolveSeriesColor } from '../style'
 import { readChartStyleParts } from '../styleParts'
 import { applyDataPrecedence } from '../dataPrecedence'
-import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS } from '../fill'
+import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS, chartHasPending, chartHasRefs } from '../fill'
+import { prepareChartAxes } from '../prepare'
+import { HISTOGRAM_FAMILIES, histogramStructure, prepareHistogramModel } from './histogram'
 
 /** Families whose painter has landed. Every other family stays `unsupported` (its fallback is kept). */
-export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>()
+export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['histogram', 'pareto'])
 export const CHARTEX_PENDING = 'ChartEx charts are not supported yet'
 export const CHARTEX_REGION_MAP = 'Region map charts are not supported'
 export const CHARTEX_UNREADABLE = 'This chart could not be read'
@@ -281,9 +283,14 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
     const info: ChartExSeriesInfo = {
       layout, ...(dataId !== undefined ? { dataId } : {}),
       ...(uint(a.ownerIdx) !== undefined ? { ownerIdx: uint(a.ownerIdx) } : {}), hidden: bool(a.hidden, false),
-      formatIdx: uint(a.formatIdx) ?? position, axisIds, layoutPr: layoutProperties(child(node, 'layoutPr'), family, charge),
+      formatIdx: uint(a.formatIdx) ?? position, axisIds, layoutPr: layoutProperties(child(node, 'layoutPr'), family, charge), position,
     }
-    if (layout === 'paretoLine') { paretoLine = info; return }
+    if (layout === 'paretoLine') {
+      // The line's colour and authored stroke (B3, map §5.2): it is drawn from its owner's data.
+      const spPr = child(node, 'spPr'), lineStyle = line(spPr)
+      paretoLine = { ...info, color: solid(spPr, theme) ?? resolveSeriesColor({ index: info.formatIdx, count: nodes.length, ...(parts ? { parts } : {}), theme }), ...(lineStyle ? { lineStyle } : {}) }
+      return
+    }
     if (info.dataId === undefined || !dataSets.has(info.dataId)) throw new Unsupported(CHARTEX_UNREADABLE)
     let data = acquired.get(info.dataId)
     if (!data) { data = readData(info.dataId, dataSets.get(info.dataId)!, analytic, admit, diagnose); acquired.set(info.dataId, data) }
@@ -585,6 +592,13 @@ export async function parseChartExPart(root: XmlNode, theme: ThemeContext | unde
     style?.release()
     if (!model.unsupported && !paint) model = { ...placeholderAfter(model), unsupported: CHARTEX_PENDING }
     else if (!model.unsupported && !XLSX_PART.test(context.partPath)) model = await applyDataPrecedence(model, root, context)
+    // Histogram and Pareto (B3): structural checks now (the fallback is kept), and stage 1 (binning) once the data is
+    // complete; an XLSX chart with references is binned by the workbook fill (hidden-cell provenance).
+    if (!model.unsupported && paint && HISTOGRAM_FAMILIES.has(selected.family)) {
+      const structural = histogramStructure(model)
+      if (structural) { const next = { ...model, unsupported: structural }; succeedChartModel(model, next); model = next }
+      else if (!model.preparedAxes && !chartHasPending(model) && !(XLSX_PART.test(context.partPath) && chartHasRefs(model))) model = prepareHistogramModel(model, m => prepareChartAxes(m, chartModelOwner(m)))
+    }
   } catch { if (model) releaseChartModel(model); model = undefined } finally { style?.release() }
   if (model && !model.unsupported) return { kind: 'native', model }
   const title = model?.title

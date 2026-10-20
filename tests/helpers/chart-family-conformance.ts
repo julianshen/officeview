@@ -19,6 +19,7 @@ import { OfficePackage } from '../../src/core/zip'
 import { parseXmlOrdered } from '../../src/core/xml'
 import { documentChartContext, chartParseContext } from '../../src/charts/context'
 import { parseChartPart } from '../../src/charts/dataPrecedence'
+import { parseChartEx, parseChartExPart } from '../../src/charts/chartex/parse'
 import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
@@ -32,15 +33,24 @@ export const conformanceCache = (count: number, points: Array<string | undefined
   `<c:numRef><c:f>Sheet1!$B$2:$B$${count + 1}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${count}"/>${points.map((v, i) => v === undefined ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`
 
 export type ConformanceCase = 'no series' | 'empty series' | 'all blank' | 'NaN and infinity' | 'negative values' | 'single point' | 'unavailable point'
-/** The numeric cache of each case's series; `null`: the group has no series. */
-export const CONFORMANCE_CASES: Readonly<Record<Exclude<ConformanceCase, 'unavailable point'>, string | null>> = {
+/** Each case's numeric points (count, point texts; `undefined` leaves the index out); `null`: the group has no series. */
+const CONFORMANCE_POINTS: Readonly<Record<Exclude<ConformanceCase, 'unavailable point'>, readonly [number, Array<string | undefined>] | null>> = {
   'no series': null,
-  'empty series': conformanceCache(0, []),
-  'all blank': conformanceCache(3, [undefined, '', undefined]),
-  'NaN and infinity': conformanceCache(4, ['NaN', 'Infinity', '-Infinity', '1e999']),
-  'negative values': conformanceCache(3, ['-3', '-1', '-2']),
-  'single point': conformanceCache(1, ['5']),
+  'empty series': [0, []],
+  'all blank': [3, [undefined, '', undefined]],
+  'NaN and infinity': [4, ['NaN', 'Infinity', '-Infinity', '1e999']],
+  'negative values': [3, ['-3', '-1', '-2']],
+  'single point': [1, ['5']],
 }
+const casesOf = (encode: (count: number, points: Array<string | undefined>) => string) =>
+  Object.fromEntries(Object.entries(CONFORMANCE_POINTS).map(([name, p]) => [name, p && encode(p[0], p[1])])) as Record<Exclude<ConformanceCase, 'unavailable point'>, string | null>
+/** The numeric cache of each case's series; `null`: the group has no series. */
+export const CONFORMANCE_CASES = casesOf(conformanceCache)
+/** A ChartEx numeric level (`cx:lvl` content of a `cx:numDim`) of the given point texts; `undefined` leaves the index out (blank). */
+export const conformanceLevel = (count: number, points: Array<string | undefined>) =>
+  `<cx:lvl ptCount="${count}">${points.map((v, i) => v === undefined ? '' : `<cx:pt idx="${i}">${v}</cx:pt>`).join('')}</cx:lvl>`
+/** The ChartEx numeric level of each case (ChartEx families). */
+export const CONFORMANCE_LEVELS = casesOf(conformanceLevel)
 
 export interface ConformanceFamily {
   /** The family's name in test titles. */
@@ -50,6 +60,8 @@ export interface ConformanceFamily {
    * source (a `c:numRef` with its cache) for every numeric role of its one series; `null` means no series.
    */
   chart(cache: string | null): string
+  /** A ChartEx family: `chart` receives a `cx:lvl` (CONFORMANCE_LEVELS) and returns a whole `cx:chartSpace`, read by the ChartEx adapter. */
+  chartEx?: true
   /** Per case, the representation the family must give (default: either) and diagnostic codes it must emit. */
   expect?: Partial<Record<ConformanceCase, { kind?: 'native' | 'card'; diagnostics?: string[] }>>
 }
@@ -84,6 +96,21 @@ function withUnavailable(model: ChartModel): ChartModel {
 
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
+  const doc = documentChartContext('desktop')
+  const context = chartParseContext(doc, await pkg(), partPath)
+  if (family.chartEx) {
+    // A ChartEx part goes to the ChartEx adapter (a root parsed here carries no reader mark for the dispatch).
+    if (name === 'unavailable point') {
+      // An analytic family refuses a chart with an unavailable required point (chartex-map §2.4): a card.
+      const parsed = parseChartEx(parseXmlOrdered(family.chart(CONFORMANCE_LEVELS['single point'])), undefined, context)
+      const model = parsed.unsupported ? parsed : prepareChartAxes(withUnavailable(parsed))
+      const painted = paint(model)
+      return model.unsupported ? { kind: 'card', reason: model.unsupported, diagnostics: collect(model), card: painted.card } : { kind: 'native', diagnostics: collect(model), card: painted.card }
+    }
+    const result = await parseChartExPart(parseXmlOrdered(family.chart(CONFORMANCE_LEVELS[name])), undefined, context)
+    if (result.kind === 'native') return { kind: 'native', diagnostics: collect(result.model), card: paint(result.model).card }
+    return { kind: 'card', reason: result.reason, diagnostics: [], card: paint(placeholderChart(result.title, result.reason)).card }
+  }
   if (name === 'unavailable point') {
     const parsed = parseXlsxChart(parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point'])), undefined)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
@@ -91,8 +118,6 @@ export async function runConformanceCase(family: ConformanceFamily, name: Confor
     const painted = paint(model)
     return { kind: 'native', diagnostics: collect(model), card: painted.card }
   }
-  const doc = documentChartContext('desktop')
-  const context = chartParseContext(doc, await pkg(), partPath)
   const result = await parseChartPart(parseXmlOrdered(family.chart(CONFORMANCE_CASES[name])), undefined, context)
   if (result.kind === 'native') {
     const painted = paint(result.model)

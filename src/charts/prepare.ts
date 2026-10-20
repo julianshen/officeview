@@ -11,6 +11,7 @@ import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { prepareTrendlines, preparedTrendlineBytes, trendlineBound, trendlineExtents, trendlineForecast, type PreparedTrendline } from './trendlines'
 import { chartEpoch } from './dates'
+import { deriveHistogram, isHistogramGroup } from './chartex/histogram'
 
 type PreparedAxis = Omit<ResolvedAxis, 'labelValue' | 'plottable'> & { labels: string[] }
 export interface PreparedAxes {
@@ -41,6 +42,8 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     return pending
   }
   const workspace = owner?.workspace ?? createChartWorkspace('mobile'), tag = `chart-prepare#${++jobs}`
+  // ChartEx histogram and Pareto (B3): binned or aggregated into plain column and line groups first.
+  if (model.groups.some(isHistogramGroup)) { model = deriveHistogram(model, workspace, owner?.tag); if (model.unsupported) return model }
   let slots = model.categories.length
   for (const g of model.groups) for (const s of g.series) slots = Math.max(slots, s.values.length)
   slots = Math.min(4096, Math.max(1, slots))

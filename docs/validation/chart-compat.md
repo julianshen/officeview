@@ -194,3 +194,35 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
+
+## B3 histogram and Pareto: implemented and unverified rules (chartex-map §5)
+
+Implemented in `src/charts/chartex/histogram.ts`. Stage 1 (`prepareChartAxes`) turns the ChartEx group into a plain clustered column group (and a line group for the Pareto), labelled with the bin or category texts. Tests are in `tests/charts-chartex-histogram.test.ts`. The native evidence is HI1, HI2, PA1 and PA2, read end to end. Every other part is Office-shaped synthetic.
+
+The following rules are **unverified** ([U]/[P]). No Office-rendered reference has been compared for any of them.
+- **Scott variant:** `h = 3.49·s·n^(−1/3)` with the sample s of the inner set. Bins start at `min` (or U), with no rounding of `h` or of the start.
+- **Automatic bins, binCount and closure `l`:** no native example exists for `binCount`, and none for automatic binning with a count. Closure `l` and its mirrored outer bins (`<U`, `≥O`) also have no native example.
+- **Degenerate inputs:**
+  - `hi = lo` gives one bin `[lo, lo]` in every mode.
+  - An empty inner set draws only the outer bins.
+  - A Scott width that cannot be computed (fewer than two inner values) while `hi > lo` is refused as "invalid binning".
+- **Bin labels:**
+  - The glyphs are `(a, b]`, `[a, b)`, `≤U`, `>O`, `<U` and `≥O`.
+  - Edges use the category axis's authored format, else the first value's source format, else General (15 significant digits). This makes long labels for Scott widths.
+  - An empty trailing inner bin is drawn (HI2 `(13, 15]`), and its upper edge is not clipped to O.
+- **Hidden cells:** under plotVisOnly, hidden source cells are excluded from the analytic input.
+- **Several column series:** a histogram pools one set of bins over every visible series, drawn clustered, and requires every series to use the same binning. A Pareto with more than one column series is unsupported.
+- **By Category:**
+  - Categories are grouped by exact text in first-occurrence order and their values summed.
+  - A category whose points are all blank or error still appears, at 0.
+  - A missing category dimension is unsupported.
+  - Controller ruling: the brief's "pre-aggregated data drawn as given" is tested as unique categories drawn as given. Duplicates are summed.
+- **Pareto:**
+  - The owner is the series `ownerIdx` names (document position).
+  - Ties keep their prior order (bin order, or the first occurrence of the category).
+  - The line passes through the band centres. An all-zero total draws a zero line.
+  - The percent axis is the paretoLine's value axis (min 0, max 1 and `0%` unless authored), placed on the right. The line's colour comes from its `formatIdx` (accent 2 by default).
+  - The line's legend name is the owner's name.
+- **Gap width:** an absent `gapWidth` is 0 for binned columns and 150 % for By Category.
+- **Per-point overrides:** `dataPt` and per-point labels are dropped from the derived columns, because their source-index meaning for bins is unconfirmed. Series-level labels are kept, so PA2's counts are drawn.
+- **Accessible description:** the derived groups describe as "Column chart" (no histogram/Pareto name, which would cost eager bytes).

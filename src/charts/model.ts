@@ -267,6 +267,11 @@ export interface ChartExSeriesInfo {
   formatIdx: number
   axisIds: string[]
   layoutPr: ChartExLayoutProperties
+  /** 0-based position among the plot area's `cx:series` (document order; what `ownerIdx` counts). */
+  position?: number
+  /** A `paretoLine` (it carries no data series): its resolved colour and authored line (map §5.2). */
+  color?: string
+  lineStyle?: import('./style').ChartLineStyle
 }
 export interface ChartExGroup extends ChartGroup {
   kind: 'chartEx'
