@@ -141,6 +141,16 @@ export interface ChartSeries {
   pointColors?: string[]
   line?: boolean
   markers?: boolean
+  fill?: import('./fills').ChartFillStyle
+  lineStyle?: import('./style').ChartLineStyle
+  markerStyle?: import('./markers').ChartMarkerStyle
+  invertIfNegative?: boolean
+  /** The fill of inverted negative points (c14 `invertSolidFillFmt`); absent: white, as Office. */
+  invertColor?: string
+  /** Percent of the radius, clamped 0-400. */
+  explosion?: number
+  dPt?: Map<number, import('./style').ChartPointOverride>
+  pointFills?: Array<import('./fills').ChartFillStyle | undefined>
   /** References still to be filled from worksheet cells (no saved data for that role). */
   pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
   /**
@@ -173,6 +183,8 @@ export interface ChartGroup {
   holeSize?: number
   firstSliceAngle?: number
   varyColors?: boolean
+  dropLines?: import('./style').ChartLineStyle
+  serLines?: import('./style').ChartLineStyle
 }
 
 export interface ChartModel {
@@ -183,6 +195,17 @@ export interface ChartModel {
   legendLayout?: ChartManualLayout
   text?: ChartTextStyle
   title?: string
+  chartAreaFill?: import('./fills').ChartFillStyle
+  chartAreaLine?: import('./style').ChartLineStyle
+  plotAreaFill?: import('./fills').ChartFillStyle
+  plotAreaLine?: import('./style').ChartLineStyle
+  legendFill?: import('./fills').ChartFillStyle
+  legendLine?: import('./style').ChartLineStyle
+  titleFill?: import('./fills').ChartFillStyle
+  titleLine?: import('./style').ChartLineStyle
+  styleId?: number
+  /** The chart-area fill when `chartSpace/spPr` has none and `c:style` gives a non-white default (DOCX/PPTX; spec 5.4). */
+  chartAreaDefault?: string
   groups: ChartGroup[]
   /** Every axis of the plot area, in document order; group bindings reference them by `id`. */
   axes: ChartAxis[]

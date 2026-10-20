@@ -30,6 +30,8 @@ export interface ChartParseContext {
   profile: ChartProfile
   workspace: ChartWorkspace
   epoch?: '1900' | '1904'
+  /** The chart's style and colour parts, read before the parse (charts/styleParts.ts; spec 5.11). */
+  styleParts?: import('./style').ChartStyleParts
 }
 
 /** The document's chart context; `parent` is the paged worker's document-pool share, when there is one. */

@@ -31,6 +31,7 @@ import { CHART_POINT_LIMIT, parseXlsxChart } from './parse'
 import { chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
+import { readChartStyleParts } from './styleParts'
 import { requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
 
 export const CHART_DATA_UNAVAILABLE = "This chart's data is not available"
@@ -43,10 +44,15 @@ const XLSX_PART = /^\/?xl\//i
  */
 export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefined, context: ChartParseContext, parse: typeof parseXlsxChart = parseXlsxChart): Promise<ChartResult> {
   let chart: ChartModel | undefined
+  // The style and colour parts (spec 5.11) are read first: the parse bakes the series colours from them.
+  const style = await readChartStyleParts(context)
+  // An authored style or colour part that cannot be admitted refuses the chart (spec 6.4), never default colours.
+  if (style === 'refused') return { kind: 'refused', reason: 'This chart needs more memory than is available for charts' }
   try {
-    chart = parse(root, theme, context)
+    chart = parse(root, theme, style ? { ...context, styleParts: style.parts } : context)
+    style?.release()
     if (chart && !XLSX_PART.test(context.partPath)) chart = await applyDataPrecedence(chart, root, context)
-  } catch { if (chart) releaseChartModel(chart); chart = undefined }
+  } catch { if (chart) releaseChartModel(chart); chart = undefined } finally { style?.release() }
   if (chart && !chart.unsupported) return { kind: 'native', model: chart }
   if (chart) releaseChartModel(chart)
   return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }

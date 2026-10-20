@@ -74,3 +74,17 @@ export function releaseChartModel(model: ChartModel): void {
   collected?.unregister(model)
   owner.workspace.release(owner.tag)
 }
+/**
+ * Retained chart formatting (A4a, spec 5.4/5.11): fills, gradient stops, lines, markers and per-point overrides are
+ * priced here and charged to the model's tag *before* each object is built (the parser passes its `charge`). A
+ * gradient keeps at most CHART_GRADIENT_STOP_LIMIT stops, each charged, so a long `gsLst` neither grows unbounded
+ * nor costs a flat estimate.
+ */
+export const CHART_GRADIENT_STOP_LIMIT = 32
+export const CHART_STYLE_BYTES = Object.freeze({ fill: 96, stop: 64, line: 112, dash: 64, marker: 96, point: 160, color: 32 })
+export type ChartCharge = (bytes: number) => void
+export const chargeChartFill = (charge: ChartCharge | undefined, stops = 0): void => charge?.(CHART_STYLE_BYTES.fill + Math.min(stops, CHART_GRADIENT_STOP_LIMIT) * CHART_STYLE_BYTES.stop)
+export const chargeChartLine = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.line)
+export const chargeChartMarker = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.marker)
+export const chargeChartPoint = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.point)
+export const chargeChartColor = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.color)

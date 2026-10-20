@@ -29,3 +29,4 @@ export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)
 
 export { sourceFormat } from './format'
+

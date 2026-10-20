@@ -176,3 +176,21 @@ re-recorded. Intentional deltas are display-formatted ticks, new data labels,
 and the specified blank/error gap/zero/span behavior. Pie bestFit uses a bounded
 small-slice outside-placement heuristic; independent Office matching of label
 placement remains pending. No acceptance checkbox is advanced by these tests.
+
+## A4a colour precedence: implemented and unverified behaviour (spec 5.11)
+
+- **Implemented.** Series colours (and varyColors point colours) follow spPr, then the chart style part (`cs:chartStyle` `dataPoint`/`dataPointLine`), then the colour part (`cs:colorStyle`), then `c:style`, then the theme accent cycle. The cycle uses the variation table of Office's default colour part (colors1.xml, `id="10"`) for every cycle after the sixth series.
+- **Colour part methods.** MS-ODRAWXML §2.8.4.2 fixes how colours are chosen and in what order, and the engine follows it:
+  - both methods select from the **total set**, the part's colours expanded by its variations (§2.8.3.2: colour fastest, then variation); the set is indexed, never materialized;
+  - `withinLinear` gives every object the **first** colour of the total set, which includes its first variation;
+  - `acrossLinear` picks the colour by index modulo the size of the total set;
+  - transforms apply in this order: the colour's own, then the variation, then the brightness ramp;
+  - in both, brightness progresses with index/count; the `…Reversed` methods run that progression backwards;
+  - `cycle`, and any unknown method (§2.8.4.1), cycles through the colours, applying the part's variations.
+
+  The spec gives no brightness formula. The engine uses a symmetric lumMod/lumOff ramp from −50% (darker) to +50% (lighter) across the objects (`LINEAR_SPREAD`, `linearBrightness` in `src/charts/style.ts`). This ramp is an **approximation** and is **unverified against Office**.
+- **`c:style` single-colour columns: unverified.** Greyscale (column 0) and single-accent (columns 2-7) styles spread a shade or tint over (-70%, 70%) across the series. This follows LibreOffice's `oox` import (`DetailFormatterBase::getPhColor`), not Office output.
+- **Explicit `c:symbol val="auto"`: unverified.** The marker cycle order (diamond, square, triangle, x, star, circle, plus, dot, dash) is recalled, not measured. A series without `c:marker` keeps the engine's default circle.
+- **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
+- **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
+- **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
