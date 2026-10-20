@@ -44,15 +44,26 @@ const UNSUPPORTED: Record<string, string> = {
 }
 
 /** ofPie group options (spec 4.1): the secondary plot's shape, the split decision and its size. */
-function ofPieOptions(node: XmlNode): Partial<ChartGroup> {
-  const cust = getChildren(child(node, 'custSplit'), 'secondPiePt').map(pt => finite(attrs(pt).idx)).filter((i): i is number => i !== undefined && Number.isInteger(i) && i >= 0)
+function ofPieOptions(node: XmlNode, charge: (b: number) => void): Partial<ChartGroup> {
+  // The authored secondPiePt set (source indices): identity-bound one entry each and bounded by the
+  // point limit, as Office applies them to split-like decisions; the workspace prices them once.
+  const secondPiePt: number[] = []
+  const seen = new Set<number>()
+  for (const pt of getChildren(child(node, 'custSplit'), 'secondPiePt')) {
+    const idx = finite(attrs(pt).idx)
+    if (idx === undefined || !Number.isInteger(idx) || idx < 0 || idx >= CHART_POINT_LIMIT) continue
+    if (seen.has(idx)) continue
+    seen.add(idx)
+    secondPiePt.push(idx)
+  }
+  if (secondPiePt.length) chargeChartPoint(charge)
   const secondPieSize = finite(val(child(node, 'secondPieSize')))
   return {
     ofPieType: oneOf(val(child(node, 'ofPieType')), OF_PIE_TYPES),
     splitType: oneOf(val(child(node, 'splitType')), OF_PIE_SPLIT_TYPES),
     splitPos: finite(val(child(node, 'splitPos'))),
     ...(secondPieSize !== undefined ? { secondPieSize: Math.max(5, Math.min(200, secondPieSize)) } : {}),
-    ...(cust.length ? { secondPiePt: cust } : {}),
+    ...(secondPiePt.length ? { secondPiePt } : {}),
   }
 }
 
@@ -520,6 +531,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       // varyColors: each point takes the automatic colour of its index, by the same precedence as series.
       const pointCount = Math.max(Math.min(values.length, CHART_POINT_LIMIT), 1)
       if (vary) for (let i = 0; i < pointCount && i < 256; i++) pointColors[i] = resolveSeriesColor({ index: i, count: Math.min(pointCount, 256), styleId, parts, theme })
+      // The ofPie series' synthetic Other slice is the point `n` (index n = the point count): it takes
+      // the automatic colour of its index like any point.
+      if (type === 'ofPie' && vary && pointCount < 256) pointColors[pointCount] = resolveSeriesColor({ index: pointCount, count: pointCount, styleId, parts, theme })
       for (const dPt of getChildren(ser, 'dPt')) {
         const i = finite(val(child(dPt, 'idx')))
         if (i === undefined || !Number.isInteger(i) || i < 0 || i >= 256) continue
@@ -577,11 +591,11 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       family: type, grouping, series, binding,
       labels: readLabels(child(node, 'dLbls'), charge),
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
-      gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
+      gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? (type === 'ofPie' && val(child(node, 'ofPieType')) === 'bar' ? 150 : type === 'ofPie' ? 50 : 150))),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' || type === 'ofPie' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
-      ...(type === 'ofPie' ? ofPieOptions(node) : {}),
+      ...(type === 'ofPie' ? ofPieOptions(node, charge) : {}),
       varyColors: vary,
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),

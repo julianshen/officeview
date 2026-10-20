@@ -60,7 +60,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : Array.from({ length: Math.min(view.slots, model.categories.length) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
-    const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
+    const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics,view)
     const preparedAxes: PreparedAxes = { dataLabels, axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
     if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()

@@ -5,7 +5,7 @@ import type { ChartLayout } from './layout'
 import { labelFont } from './textStyle'
 import { axisFraction, categoryFraction } from './axes'
 import { valueAt, hiddenAt } from './points'
-import { ofPieDisplayValue, ofPiePlan, ofPiePointPlacement } from './families/ofPie'
+import { ofPieDisplayValue, ofPiePlan, ofPiePointPlacement, type OfPiePlan } from './families/ofPie'
 export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D, layout: ChartLayout, family: string): void {
   const labels = model.preparedAxes?.dataLabels
   if (!labels?.length) return
@@ -13,6 +13,7 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
   for (let i = 0; i < view.slots; i++) slots.set(view.source(i), i)
   const along = (a: NonNullable<(typeof layout.graph.groups)[number]>['value'], v: number) => a.orientation === 'h' ? plot.x + axisFraction(a, v) * plot.w : plot.y + plot.h - axisFraction(a, v) * plot.h
   let pieSeries: object | undefined, pieBefore = 0, pieIndex = 0, pieTotal = 0
+  let ofPieState: { g: object; s: object; plan: OfPiePlan } | undefined
   for (const label of labels) {
     const g = model.groups[label.group], s = g.series[label.series], slot = slots.get(label.point)
     if (slot === undefined || (model.plotVisOnly !== false && (hiddenAt(s.values.hidden, label.point) || hiddenAt(s.xValues?.hidden, label.point)))) continue
@@ -34,10 +35,18 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
       anchorX = cx + Math.cos(angle) * r; anchorY = cy + Math.sin(angle) * r
       x = cx + Math.cos(angle) * (outside ? r + 12 : r * .65); y = cy + Math.sin(angle) * (outside ? r + 12 : r * .65)
     } else if (g.family === 'ofPie') {
-      // ofPie placement shares the painter's split, geometry and slice angles (families/ofPie).
-      const values: number[] = []
-      for (let i = 0; i < view.slots; i++) values.push(ofPieDisplayValue(valueAt(s.values, view.source(i))))
-      const placement = ofPiePointPlacement(ofPiePlan(g, values, layout.area), slot)
+      // ofPie placement shares the painter's plan (the split, geometry and slice angles, computed
+      // once per group and series, like the pie's running totals). A label's point is its source
+      // index in the display; the pseudo point n (the synthetic Other slice) places on the primary
+      // region via its -1 marker.
+      let state = ofPieState
+      if (state === undefined || state.g !== g || state.s !== s) {
+        const ds = view.groupSeries(label.group).find(d => d.series === s)
+        const values: number[] = []
+        for (let i = 0; i < view.slots; i++) values.push(ofPieDisplayValue(ds?.value(i)))
+        state = ofPieState = { g: g, s: s, plan: ofPiePlan(g, values, layout.area, slot => view.source(slot)) }
+      }
+      const placement = ofPiePointPlacement(state.plan, label.other === true ? -1 : slot)
       if (!placement || !(placement.fraction > 0)) continue
       outside = label.position === 'outEnd' || (label.position === 'bestFit' && placement.fraction < .12)
       if (placement.bar) {

@@ -4,6 +4,7 @@
  * connectors, the label placement and the painter. The painter and the label
  * placement share these exports, so shapes and labels can never disagree.
  */
+import { CHART_POINT_LIMIT } from '../parse'
 import type { ChartGroup, ChartSeries } from '../model'
 import { applyFillStyle, type ChartFillStyle } from '../fills'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from '../style'
@@ -18,19 +19,30 @@ export interface OfPieSplit { secondary: boolean[]; primaryTotal: number; second
 /**
  * The split decision over `count` slot-ordered points (`valueOf(i)` returns
  * the display value). `splitType` defaults to the Office default `auto`: the
- * last `ceil(n/3)` points move to the secondary plot (never fewer than two). `pos` moves the last
+ * last `ceil(n/3)` points move to the secondary plot. `pos` moves the last
  * `splitPos` points (clamped to the count), `val` every point below
  * `splitPos`, `percent` every point below `splitPos` % of the total, and
- * `cust` the authored `secondPiePt` indices (indices past the point count and
- * negatives are ignored, as Office does). The two regional totals conserve
+ * `cust` the authored `secondPiePt` indices. The two regional totals conserve
  * the drawn values: the synthetic Other slice always equals `secondaryTotal`.
+ *
+ * Blank, error, unavailable and zero points are never moved by `val` or
+ * `percent` (the display value of each is 0): they keep their zero sweep in
+ * the primary region, as the plain pie draws them. `pos` and `cust` are
+ * position-based and move points regardless. Negative values read 0, so they
+ * follow the pie family's convention too.
+ *
+ * The indices are in the caller's display space; `sourceOf(i)` (identity
+ * unless given) translates a slot to its source index for the `cust` set,
+ * whose indices are source indices as Office writes them.
  */
-export function ofPieSplit(group: { splitType?: string; splitPos?: number; secondPiePt?: number[] }, count: number, valueOf: (i: number) => number): OfPieSplit {
+export function ofPieSplit(group: { splitType?: string; splitPos?: number; secondPiePt?: number[] }, count: number, valueOf: (i: number) => number, sourceOf: (i: number) => number = i => i): OfPieSplit {
   const secondary = new Array<boolean>(count).fill(false)
   let primaryTotal = 0, secondaryTotal = 0
   switch (group.splitType) {
     case 'cust': {
-      for (const i of group.secondPiePt ?? []) if (Number.isInteger(i) && i >= 0 && i < count) secondary[i] = true
+      const wanted = new Set<number>()
+      for (const i of group.secondPiePt ?? []) if (Number.isInteger(i) && i >= 0) wanted.add(i)
+      for (let i = 0; i < count; i++) if (wanted.has(sourceOf(i))) secondary[i] = true
       break
     }
     case 'pos': {
@@ -40,18 +52,18 @@ export function ofPieSplit(group: { splitType?: string; splitPos?: number; secon
     }
     case 'val': {
       const splitPos = group.splitPos ?? 0
-      for (let i = 0; i < count; i++) if (valueOf(i) < splitPos) secondary[i] = true
+      for (let i = 0; i < count; i++) { const v = valueOf(i); if (v > 0 && v < splitPos) secondary[i] = true }
       break
     }
     case 'percent': {
       const splitPos = group.splitPos ?? 0
       let total = 0
       for (let i = 0; i < count; i++) total += valueOf(i)
-      for (let i = 0; i < count; i++) if (valueOf(i) < splitPos / 100 * total) secondary[i] = true
+      for (let i = 0; i < count; i++) { const v = valueOf(i); if (v > 0 && v < splitPos / 100 * total) secondary[i] = true }
       break
     }
-    default: { // auto: the last ceil(n/3) points, but never fewer than two (the Office default's floor)
-      const moved = Math.min(count, Math.max(2, Math.ceil(count / 3)))
+    default: { // auto: the last ceil(n/3) points
+      const moved = Math.min(count, Math.ceil(count / 3))
       for (let i = Math.max(0, count - moved); i < count; i++) secondary[i] = true
     }
   }
@@ -72,12 +84,13 @@ export interface OfPieLayout {
  * The two-region layout on `area`: horizontal margins of 5 on each side, a
  * radius cap of (h - 8) / 2, and one span 2r1 + gap + 2r2 = w - 10 (both
  * regions fit the area at once), so r1 = min((h - 8) / 2, (w - 10) / (2 + 2s + k)).
- * The pie gap is 25 % of r1; the bar gap is `gapWidth` % of r2 (the authored
- * 0-500). s is `secondPieSize` (percent of r1), clamped 5..200; r2 = s r1.
+ * The gap is `gapWidth` % of r2 for both variants (the authored 0-500, whose
+ * Office default is 50 for a pie of pie and 150 for a bar of pie).
+ * s is `secondPieSize` (percent of r1), clamped 5..200; r2 = s r1.
  */
 export function ofPieLayout(area: Box, type: 'pie' | 'bar', secondPieSize: number, gapWidth: number): OfPieLayout {
   const s = Math.min(Math.max(secondPieSize, 5), 200) / 100
-  const k = type === 'bar' ? Math.min(Math.max(gapWidth, 0), 500) / 100 * s : 0.25
+  const k = s * Math.min(Math.max(gapWidth, 0), 500) / 100
   const r1 = Math.min((area.h - 8) / 2, (area.w - 10) / (2 + 2 * s + k))
   const gap = k * r1, r2 = s * r1, cy = area.y + area.h / 2
   const primary = { cx: area.x + 5 + r1, cy, r: r1 }
@@ -87,22 +100,29 @@ export function ofPieLayout(area: Box, type: 'pie' | 'bar', secondPieSize: numbe
     : { primary, secondary: { cx, cy, r: r2 }, gap }
 }
 
-export interface OfPieSlice { source: number; start: number; sweep: number }
+export interface OfPieSlice { slot: number; source: number; start: number; sweep: number }
 export interface OfPieSlices {
   /** Primary slices in order (angles in radians, from the base angle). */
   primary: OfPieSlice[]
-  /** The synthetic Other slice, drawn last; `source` is -1. Its value is `secondaryTotal`. */
+  /** The synthetic Other slice, drawn last; `slot` and `source` are -1. Its value is `secondaryTotal`. */
   other: OfPieSlice
   /**
    * Secondary slices in order. For pie-of-pie the angles are radians; for
    * bar-of-pie `start`/`sweep` are height fractions over the bar, stacking
    * down from its top.
    */
-  secondary: OfPieSlice[]
+  secondary: OfPieSlices['primary']
 }
 
 export const ofPieType = (group: OfPieGroup): 'pie' | 'bar' => group.ofPieType === 'bar' ? 'bar' : 'pie'
 export const ofPieSecondPieSize = (group: OfPieGroup): number => group.secondPieSize ?? 75
+
+/**
+ * The synthetic Other slice is Office's point `n` (index `n` in any point
+ * indexing): at most the series' point count capped at the point limit, and
+ * at least 1 (an empty series keeps index 1 for it).
+ */
+export const ofPieOtherIndex = (pointCount: number): number => Math.max(Math.min(pointCount, CHART_POINT_LIMIT), 1)
 
 /**
  * Slice angles for both regions, from one split and layout. The primary pie
@@ -110,26 +130,31 @@ export const ofPieSecondPieSize = (group: OfPieGroup): number => group.secondPie
  * conserved total `primaryTotal + secondaryTotal`; the secondary region draws
  * its own points over `secondaryTotal` (a full small pie, or the bar's
  * fractions stacking down from the top).
+ *
+ * Each slice carries the display slot it belongs to and the source index
+ * `sourceOf(slot)` maps it to (for dPt, pointColors and cust matching); the
+ * Other slice carries -1 for both.
  */
-export function ofPieSlices(group: { firstSliceAngle?: number }, values: readonly number[], split: OfPieSplit, layout: OfPieLayout): OfPieSlices {
+export function ofPieSlices(group: { firstSliceAngle?: number }, values: readonly number[], split: OfPieSplit, layout: OfPieLayout, sourceOf: (i: number) => number = i => i): OfPieSlices {
   const base = ((group.firstSliceAngle ?? 0) - 90) * Math.PI / 180
   const primary: OfPieSlice[] = []
   const secondary: OfPieSlice[] = []
   const total = split.primaryTotal + split.secondaryTotal
   let start = base, secondaryStart = base
   if (layout.bar) secondaryStart = 0 // the bar's fractions have no base angle: the first secondary point sits at the top
-  for (let i = 0; i < values.length; i++) {
-    if (split.secondary[i]) {
-      const sweep = split.secondaryTotal > 0 ? values[i] / split.secondaryTotal : 0
-      secondary.push({ source: i, start: secondaryStart, sweep })
+  for (let slot = 0; slot < values.length; slot++) {
+    const source = sourceOf(slot)
+    if (split.secondary[slot]) {
+      const sweep = split.secondaryTotal > 0 ? values[slot] / split.secondaryTotal : 0
+      secondary.push({ slot, source, start: secondaryStart, sweep })
       secondaryStart += sweep
     } else {
-      const sweep = total > 0 ? values[i] / total * Math.PI * 2 : 0
-      primary.push({ source: i, start, sweep })
+      const sweep = total > 0 ? values[slot] / total * Math.PI * 2 : 0
+      primary.push({ slot, source, start, sweep })
       start += sweep
     }
   }
-  const other = { source: -1, start, sweep: total > 0 ? split.secondaryTotal / total * Math.PI * 2 : 0 }
+  const other = { slot: -1, source: -1, start, sweep: total > 0 ? split.secondaryTotal / total * Math.PI * 2 : 0 }
   return { primary, other, secondary }
 }
 
@@ -155,12 +180,12 @@ export interface OfPiePlan { split: OfPieSplit; layout: OfPieLayout; slices: OfP
 /** The ofPie fields any group must carry; painters see a DrawGroup, labels a plain ChartGroup. */
 export type OfPieGroup = Pick<ChartGroup, 'family' | 'gapWidth' | 'firstSliceAngle' | 'ofPieType' | 'splitType' | 'splitPos' | 'secondPieSize' | 'secondPiePt' | 'serLines'>
 
-/** One step from a display-value array (order = the values' indices) to everything about the two regions. */
-export function ofPiePlan(group: OfPieGroup, values: readonly number[], area: Box): OfPiePlan {
+/** One step from a display-value array (order = the display slots) to everything about the two regions. */
+export function ofPiePlan(group: OfPieGroup, values: readonly number[], area: Box, sourceOf: (i: number) => number = i => i): OfPiePlan {
   const type = ofPieType(group)
-  const split = ofPieSplit(group, values.length, i => values[i])
+  const split = ofPieSplit(group, values.length, i => values[i], sourceOf)
   const layout = ofPieLayout(area, type, ofPieSecondPieSize(group), group.gapWidth)
-  return { split, layout, slices: ofPieSlices(group, values, split, layout), type }
+  return { split, layout, slices: ofPieSlices(group, values, split, layout, sourceOf), type }
 }
 
 export interface OfPieLabelPoint { cx: number; cy: number; r: number; angle: number; fraction: number; bar?: boolean }
@@ -171,11 +196,18 @@ export interface OfPieLabelPoint { cx: number; cy: number; r: number; angle: num
  * denominator (the conserved primary total including Other on the primary
  * region, the secondary total in the secondary region) for the best-fit rule.
  * On the bar the point is a segment; `fraction` its share of the bar.
+ *
+ * The point is a display slot; the pseudo point -1 is the synthetic Other
+ * slice, placed on the primary region like any primary slice. Nothing to
+ * place for unknown slots or a too-small Other slice.
  */
 export function ofPiePointPlacement(plan: OfPiePlan, point: number): OfPieLabelPoint | undefined {
   const { split, layout, slices } = plan
-  if (point < 0) return undefined
-  const slice = slices.primary.find(s => s.source === point) ?? slices.secondary.find(s => s.source === point)
+  if (point < 0) {
+    if (!(slices.other.sweep > 0)) return undefined
+    return { cx: layout.primary.cx, cy: layout.primary.cy, r: layout.primary.r, angle: slices.other.start + slices.other.sweep / 2, fraction: slices.other.sweep / (Math.PI * 2) }
+  }
+  const slice = slices.primary.find(s => s.slot === point) ?? slices.secondary.find(s => s.slot === point)
   if (!slice) return undefined
   const primary = split.secondary[point] !== true
   const fraction = layout.bar && !primary ? slice.sweep : (slice.sweep / (Math.PI * 2))
@@ -234,15 +266,22 @@ const borderOf = (series: OfPieSeries, sourceIndex: number): ChartLineStyle | un
  * slice), the secondary region (a small pie, or the stacked bar), and the
  * serLines connectors. Explosion shifts each primary slice along its mid
  * angle like the plain pie; the radius shrinks so the farthest stays inside.
+ *
+ * Style lookups (dPt, pointColors, line overrides) run at the source index
+ * the slot maps to; the Other slice reads Office's point `n` (padding the
+ * series' point count) for its fill, border and explosion. The connectors
+ * draw only when `<c:serLines>` is present, in the authored style or grey.
  */
-export function paintOfPie(ctx: CanvasRenderingContext2D, area: Box, group: OfPieGroup, series: OfPieSeries, source: (slot: number) => number, slots: number): void {
+export function paintOfPie(ctx: CanvasRenderingContext2D, area: Box, group: OfPieGroup, series: OfPieSeries, sourceOf: (slot: number) => number, slots: number): void {
   const values: number[] = []
   for (let slot = 0; slot < slots; slot++) values.push(ofPieDisplayValue(series.value(slot)))
-  const { split, layout, slices } = ofPiePlan(group, values, area)
+  const { split, layout, slices } = ofPiePlan(group, values, area, sourceOf)
   if (!((split.primaryTotal + split.secondaryTotal) > 0)) return
-  const explosionOf = (slot: number) => series.source.dPt?.get(source(slot))?.explosion ?? series.source.explosion ?? 0
-  let farthest = 0
-  for (let slot = 0; slot < slots; slot++) if (!split.secondary[slot]) farthest = Math.max(farthest, explosionOf(slot))
+  // The synthetic Other point is the series' point `n`; its dPt overrides fill, line and explosion (spec 4.1).
+  const otherIndex = ofPieOtherIndex(series.source.values.length)
+  const explosionOf = (srcIndex: number) => series.source.dPt?.get(srcIndex)?.explosion ?? series.source.explosion ?? 0
+  let farthest = explosionOf(otherIndex) // the Other slice is drawn on the primary region too
+  for (const slice of slices.primary) farthest = Math.max(farthest, explosionOf(slice.source))
   const r1 = layout.primary.r / (1 + farthest / 100)
   for (const slice of slices.primary) {
     if (slice.sweep <= 0) continue
@@ -259,17 +298,17 @@ export function paintOfPie(ctx: CanvasRenderingContext2D, area: Box, group: OfPi
     if (!border) { ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.stroke() } else strokeBorder(ctx, border, box)
   }
   if (slices.other.sweep > 0) {
-    const offset = (explosionOf(-1) / 100) * r1
-    const sx = layout.primary.cx + offset * Math.cos(slices.other.start + slices.other.sweep / 2)
-    const sy = layout.primary.cy + offset * Math.sin(slices.other.start + slices.other.sweep / 2)
+    const offset = (explosionOf(otherIndex) / 100) * r1
+    const mid = slices.other.start + slices.other.sweep / 2
+    const sx = layout.primary.cx + offset * Math.cos(mid), sy = layout.primary.cy + offset * Math.sin(mid)
     const box = { x: sx - r1, y: sy - r1, w: r1 * 2, h: r1 * 2 }
     ctx.beginPath()
     ctx.moveTo(sx, sy)
     ctx.arc(sx, sy, r1, slices.other.start, slices.other.start + slices.other.sweep)
     ctx.closePath()
-    const fill = sliceFill(series, -1)
+    const fill = sliceFill(series, otherIndex), border = borderOf(series, otherIndex)
     if (fillWith(ctx, fill.fill, fill.color, box)) ctx.fill()
-    if (!series.source.lineStyle) { ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.stroke() } else strokeBorder(ctx, series.source.lineStyle, box)
+    if (!border) { ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.stroke() } else strokeBorder(ctx, border, box)
   }
   if (layout.bar) {
     for (const slice of slices.secondary) {
@@ -278,11 +317,11 @@ export function paintOfPie(ctx: CanvasRenderingContext2D, area: Box, group: OfPi
       const box = { x: layout.bar.x, y: layout.bar.y + slice.start * layout.bar.h, w: layout.bar.w, h: slice.sweep * layout.bar.h }
       ctx.beginPath()
       if (fillWith(ctx, fill.fill, fill.color, box)) ctx.fillRect(box.x, box.y, box.w, box.h)
-      strokeBorder(ctx, border, box, box)
+      if (!border) { ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.strokeRect(box.x, box.y, box.w, box.h) } else strokeBorder(ctx, border, box, box)
     }
   } else {
     let far = 0
-    for (const slice of slices.secondary) if (split.secondary[slice.source]) far = Math.max(far, explosionOf(slice.source))
+    for (const slice of slices.secondary) far = Math.max(far, explosionOf(slice.source))
     const r2 = layout.secondary.r / (1 + far / 100)
     for (const slice of slices.secondary) {
       if (slice.sweep <= 0) continue
@@ -304,7 +343,9 @@ export function paintOfPie(ctx: CanvasRenderingContext2D, area: Box, group: OfPi
 
 /** The serLines connectors: an authored line style, else a 1px grey line each. */
 function drawConnectors(ctx: CanvasRenderingContext2D, serLines: ChartLineStyle | undefined, layout: OfPieLayout, other: OfPieSlice): void {
-  const authored = Boolean(serLines && !serLines.noFill && (lineHasColor(serLines) || serLines.width !== undefined))
+  // Office draws none when the element is absent; noFill suppresses them too.
+  if (!serLines || serLines.noFill) return
+  const authored = lineHasColor(serLines) || serLines.width !== undefined
   ctx.strokeStyle = '#D9D9D9'
   ctx.lineWidth = 1
   for (const line of ofPieConnectors(layout, other)) {
@@ -313,7 +354,7 @@ function drawConnectors(ctx: CanvasRenderingContext2D, serLines: ChartLineStyle 
     ctx.lineTo(line.x2, line.y2)
     if (authored) {
       ctx.save()
-      try { ctx.strokeStyle = '#595959'; applyLineStyle(ctx, serLines!, layout.bar ?? { x: Math.min(line.x1, line.x2), y: Math.min(line.y1, line.y2), w: Math.abs(line.x2 - line.x1) || 1, h: Math.abs(line.y2 - line.y1) || 1 }); ctx.stroke() } finally { ctx.restore() }
+      try { ctx.strokeStyle = '#595959'; applyLineStyle(ctx, serLines, layout.bar ?? { x: Math.min(line.x1, line.x2), y: Math.min(line.y1, line.y2), w: Math.abs(line.x2 - line.x1) || 1, h: Math.abs(line.y2 - line.y1) || 1 }); ctx.stroke() } finally { ctx.restore() }
     } else ctx.stroke()
   }
 }
