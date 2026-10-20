@@ -42,7 +42,10 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
   }
   const workspace = owner?.workspace ?? createChartWorkspace('mobile'), tag = `chart-prepare#${++jobs}`
   let slots = model.categories.length
-  for (const g of model.groups) for (const s of g.series) slots = Math.max(slots, s.values.length)
+  for (const g of model.groups) {
+    if (g.family === 'boxWhisker') slots = Math.max(slots, g.series.length)
+    else for (const s of g.series) slots = Math.max(slots, s.values.length)
+  }
   slots = Math.min(4096, Math.max(1, slots))
   // The live resolved graph and the data-only snapshot coexist while building.
   // Automatic linear scales use a 1/2/5 step around five intervals (at most 16 ticks including endpoints).
@@ -75,7 +78,8 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
       const code = axisFormat(a.axis,inputs) ?? (a.percent ? '0%' : a.role==='date' ? a.dateBase==='years'?'yyyy':a.dateBase==='months'?'mmm yyyy':'m/d/yyyy' : undefined)
       const { labelValue, plottable: _plottable, ...data } = a
-      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
+      const bw = graph.groups.find(g => g?.category === a)?.group
+      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : bw?.family === 'boxWhisker' ? bw.series.map((s, i) => view.category(i) ?? s.name ?? String(i + 1)) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)

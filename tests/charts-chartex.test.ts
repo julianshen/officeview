@@ -211,10 +211,10 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
 
   it('region map, blocked families and unreadable parts return unsupported so the fallback picture is kept', async () => {
     // Nothing is painted until its family task lands (B2-B5).
-    expect([...CHARTEX_PAINTED]).toEqual([])
+    expect([...CHARTEX_PAINTED]).toEqual(['boxWhisker'])
     const files: Array<[string, string?]> = [
       ['waterfall/waterfall.xlsx'], ['funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml'], ['SimpleHistogram/SimpleHistogram.xlsx'],
-      ['paretoLine/paretoLine.xlsx'], ['boxWhisker/boxWhisker.xlsx'], ['treemap/treemap.xlsx'], ['sunburst/sunburst.xlsx'],
+      ['paretoLine/paretoLine.xlsx'], ['treemap/treemap.xlsx'], ['sunburst/sunburst.xlsx'],
     ]
     for (const [file, path] of files) {
       const p = await nativePart(file, path)

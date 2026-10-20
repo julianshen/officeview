@@ -20,6 +20,8 @@ import { parseXmlOrdered } from '../../src/core/xml'
 import { documentChartContext, chartParseContext } from '../../src/charts/context'
 import { parseChartPart } from '../../src/charts/dataPrecedence'
 import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
+import { isChartExRoot } from '../../src/charts/read'
+import { parseChartEx } from '../../src/charts/chartex/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
 import { PointWriter } from '../../src/charts/points'
@@ -85,7 +87,10 @@ function withUnavailable(model: ChartModel): ChartModel {
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
   if (name === 'unavailable point') {
-    const parsed = parseXlsxChart(parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point'])), undefined)
+    const xml = parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point']))
+    const doc = documentChartContext('desktop')
+    const context = chartParseContext(doc, await pkg(), partPath)
+    const parsed = isChartExRoot(xml) ? parseChartEx(xml, undefined, context) : parseXlsxChart(xml, undefined, context)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
     const model = prepareChartAxes(withUnavailable(parsed))
     const painted = paint(model)
@@ -162,4 +167,36 @@ export const SURFACE3D_FAMILY: ConformanceFamily = {
   name: 'surface3D',
   chart: c => conformanceSpace(`<c:surface3DChart><c:wireframe val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surface3DChart>${CAT_VAL_SER}`),
   expect: { 'no series': { kind: 'card' }, 'empty series': { kind: 'card' }, 'all blank': { kind: 'card' }, 'NaN and infinity': { kind: 'card' }, 'negative values': { kind: 'card' }, 'single point': { kind: 'card' }, 'unavailable point': { kind: 'card' } },
+}
+
+function convertCacheToLvl(c: string): string {
+  const countMatch = c.match(/<c:ptCount\s+val="(\d+)"\/>/)
+  const ptCount = countMatch ? countMatch[1] : '0'
+  const pts: string[] = []
+  const ptRegex = /<c:pt\s+idx="(\d+)">\s*<c:v>(.*?)<\/c:v>\s*<\/c:pt>/g
+  let match
+  while ((match = ptRegex.exec(c)) !== null) {
+    pts.push(`<cx:pt idx="${match[1]}">${match[2]}</cx:pt>`)
+  }
+  return `<cx:lvl ptCount="${ptCount}" formatCode="General">${pts.join('')}</cx:lvl>`
+}
+
+/** boxWhisker (ChartEx family, Task B4). */
+export const BOX_WHISKER_FAMILY: ConformanceFamily = {
+  name: 'boxWhisker',
+  chart: c => {
+    if (c === null) {
+      return `<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData/><cx:chart><cx:plotArea><cx:plotAreaRegion></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>`
+    }
+    return `<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val">${convertCacheToLvl(c)}</cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"><cx:dataId val="0"/><cx:layoutPr><cx:visibility meanLine="0" meanMarker="1" nonoutliers="0" outliers="1"/><cx:statistics quartileMethod="exclusive"/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>`
+  },
+  expect: {
+    'no series': { kind: 'card' },
+    'empty series': { kind: 'native' },
+    'all blank': { kind: 'native' },
+    'NaN and infinity': { kind: 'native' },
+    'negative values': { kind: 'native' },
+    'single point': { kind: 'native' },
+    'unavailable point': { kind: 'native', diagnostics: ['chart-point-unavailable'] },
+  },
 }

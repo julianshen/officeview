@@ -378,6 +378,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     if (series) series.slots = Math.max(1, drawn.rows)
   })
 
+  // Box & whisker: category slots equal the series count (one box per series).
+  model.groups.forEach((group, g) => {
+    if (group.family !== 'boxWhisker') return
+    const p = placements[g]
+    if (!p) return
+    const category = axes.get(p.base)
+    if (category) category.slots = Math.max(1, group.series.length)
+  })
+
   // Value domains: each value axis over the groups bound to it (stacking per group), as the engine always has.
   const lows = new Map<string, number>(), highs = new Map<string, number>(), skipped = new Map<string, number>()
   const percentAxes = new Set<string>()
@@ -396,6 +405,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       // Contour: the value domain of the drawn grid only.
       const drawn = contourPainted(grid, view.groupSeries(g).length, count)
       for (const s of view.groupSeries(g).slice(0, drawn.rows)) for (let i = 0; i < drawn.cols; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
+      return
+    }
+    if (group.family === 'boxWhisker') {
+      for (const s of group.series) {
+        for (let i = 0; i < (s.values?.length ?? 0); i++) {
+          const v = valueAt(s.values, i)
+          if (v !== undefined) see(p.value, v)
+        }
+      }
       return
     }
     const series = view.groupSeries(g)

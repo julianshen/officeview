@@ -24,6 +24,7 @@ import { paintTrendlines } from './trendlines'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
+import { paintBoxWhisker } from './chartex/boxWhisker'
 import { chartFont } from './textStyle'
 import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 import { paintChartUserShapes } from './userShapes'
@@ -578,6 +579,14 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         plotted,
         at,
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
+      })
+    } else if (group.family === 'boxWhisker' && horizontal === B) {
+      paintBoxWhisker(ctx, group, group.series, axes, {
+        plot,
+        admitPath,
+        fillWith,
+        strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+        at,
       })
     }
     // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x

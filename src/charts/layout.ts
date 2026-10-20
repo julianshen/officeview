@@ -63,6 +63,8 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
   if (a.role === 'value') return a.ticks.map(t => formatNumber(a.labelValue(t), a.percent))
   if (a.role === 'date') return a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
   if (a.role === 'series') return seriesLabels(graph, view, a)
+  const bw = graph.groups.find(g => g?.category === a)?.group
+  if (bw?.family === 'boxWhisker') return bw.series.map((s, i) => view.category(i) ?? s.name ?? String(i + 1))
   return Array.from({ length: Math.min(a.slots, view.slots) }, (_, i) => view.category(i) ?? '')
 }
 /**

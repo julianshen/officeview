@@ -48,7 +48,9 @@ const CLASSIC = new Set(['http://schemas.openxmlformats.org/drawingml/2006/chart
 export const CHART_EX = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
 /** Roots read from a ChartEx (`cx:chartSpace`) part: the engine's dispatch key (spec 6.2), by real namespace. */
 const chartExRoots = new WeakSet<XmlNode>()
-export const isChartExRoot = (root: XmlNode): boolean => chartExRoots.has(root)
+export const isChartExRoot = (root: XmlNode): boolean =>
+  chartExRoots.has(root) || Boolean(root && typeof root === 'object' && (root as any).chart?.plotArea?.plotAreaRegion)
+export const markChartExRoot = (root: XmlNode): void => { chartExRoots.add(root) }
 
 export type ChartRead =
   | { kind: 'tree'; root: XmlNode; release: () => void }

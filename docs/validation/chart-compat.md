@@ -194,3 +194,11 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
+
+## B4 Box & whisker (ChartEx): implemented and unverified behaviour (spec 4.3, chartex-map §8)
+
+- **Implemented.** Box & whisker marks are drawn natively per series. Points in `value` state form the sorted distribution; blank and error points are excluded; an unavailable point or points exceeding 65,536 refuse the chart. Medians, quartiles, whiskers within 1.5×IQR, outlier markers, inner points (non-outliers), mean markers (×), and connected mean lines are rendered according to the series layout properties and visibility flags.
+- **`inclusive` quartile method: unverified.** When $n$ is odd, the `inclusive` method includes the median in both halves when calculating $Q_1$ and $Q_3$, following the ST_QuartileMethod specification and `chartex-map.md` §8. This behaviour is unconfirmed against native Office ground truth because available native Office fixtures (BW1, BW2) use `exclusive`.
+- **Absence defaults for box visibility flags: unverified.** Defaults (`connectorLines: true, meanLine: false, meanMarker: true, nonoutliers: false, outliers: true`) follow `chartex-map.md` §4.1 / §8 when `visibility` is omitted (as in BW2b).
+- **1.5×IQR whisker factor: unverified.** Standard Tukey box plot factor $1.5 \times \text{IQR}$ is used to determine whisker reach and outlier classification. Microsoft documentation states that points beyond whiskers are outliers, but does not explicitly document the 1.5 multiplier.
+- **Category axis slot mapping: unverified.** One box is drawn per series along the category axis with spacing governed by `gapWidth`. Box labels default to series name, else ordinal.

@@ -46,7 +46,7 @@ import { applyDataPrecedence } from '../dataPrecedence'
 import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS } from '../fill'
 
 /** Families whose painter has landed. Every other family stays `unsupported` (its fallback is kept). */
-export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>()
+export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['boxWhisker'])
 export const CHARTEX_PENDING = 'ChartEx charts are not supported yet'
 export const CHARTEX_REGION_MAP = 'Region map charts are not supported'
 export const CHARTEX_UNREADABLE = 'This chart could not be read'
