@@ -5,7 +5,7 @@ import type { FontDiagnostic } from '../core/fonts/types'
  * Shared "document → canvas paintables" extraction. Single source of truth
  * used by <OfficeDoc> (React) and the pixel-diff/golden harness.
  */
-import { collectDocImages, createMeasurer, layoutDocx, pageChartBoxes, renderPages } from '../docx/layout'
+import { collectDocImages, createMeasurer, layoutDocx, pageChartBound, pageChartBoxes, renderPages } from '../docx/layout'
 import { fontFamilyCss as fontFamilyCssDocx } from '../docx/styles'
 import { decodeImageAsset, releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../core/images'
 import { inheritedCanvasLang } from '../core/text-metrics'
@@ -29,10 +29,12 @@ export interface PageSpec {
 export interface PaintableArray extends Array<Paintable> {
   dispose: () => void
   fontDiagnostics: FontDiagnostic[]
+  /** Chart preparation diagnostics by unit (spec 6.6): missed picture deadlines, description limits/refusals. */
+  chartDiagnostics?: ChartPaintables['diagnostics']
 }
-function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagnostics: FontDiagnostic[] = [], decoded: Array<CanvasImageSource | undefined> = []): PaintableArray {
+function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagnostics: FontDiagnostic[] = [], decoded: Array<CanvasImageSource | undefined> = [], charts?: ChartPaintables): PaintableArray {
   let released = false
-  return Object.assign(pages, { fontDiagnostics, dispose: () => {
+  return Object.assign(pages, { fontDiagnostics, ...(charts?.diagnostics.length ? { chartDiagnostics: charts.diagnostics } : {}), dispose: () => {
     if (released) return
     released = true
     dispose()
@@ -52,29 +54,60 @@ export interface Paintable {
    * static bitmap cannot hold the sheet, so `paint` draws a notice instead of a
    * partial grid that would look complete. */
   refusal?: readonly StaticExportLimit[]
-  /** The unit's charts in reading order: accessible descriptions with their placement in spec px (spec 6.6). */
+  /** The unit's charts in reading order: accessible descriptions with their placement in spec px (spec 6.6). A
+   * notice entry ends a list that could not hold every chart (over the per-page limit, or refused memory). */
   charts?: readonly PaintableChart[]
+  /** The unit's true chart count (may exceed the described entries). */
+  chartTotal?: number
 }
 export type PaintableChart = import('../charts/paintables').PaintableChart
-type PlacedChart = import('../charts/paintables').PlacedChart
-type ChartMetadata = { charts: PaintableChart[][]; release(): void }
-/** Pre-paint chart preparation through the lazy engine: user-shape pictures decoded in this realm (a model
- * transferred from a worker realm shows them at its first paint) and each unit's chart descriptions, charged to
- * the receiving chart workspace. A failure leaves the pages without descriptions, never without pages. */
-async function chartMetadata(lease: ChartReceiverLease | undefined, units: PlacedChart[][]): Promise<ChartMetadata | undefined> {
-  if (!lease || !units.some(unit => unit.length)) return undefined
-  try { return await (await loadChartModule()).prepareChartPaintables(lease.context, units) } catch { return undefined }
+type ChartPaintables = import('../charts/paintables').ChartPaintables
+type ChartPageSource = import('../charts/paintables').ChartPageSource
+/** Pre-paint chart preparation through the lazy engine: user-shape pictures decoded in this realm within a bounded,
+ * cancellable wait (a model transferred from a worker realm shows them at its first paint) and each unit's chart
+ * descriptions, admitted to the receiving chart workspace before they are built. A failure leaves the pages without
+ * descriptions, never without pages. */
+async function chartMetadata(lease: ChartReceiverLease | undefined, source: ChartPageSource, options: PaintOptions | undefined, describe = true): Promise<ChartPaintables | undefined> {
+  if (!lease) return undefined
+  let any = false
+  for (let page = 0; page < source.pages && !any; page++) any = source.bound(page) > 0
+  if (!any) return undefined
+  try {
+    return await (await loadChartModule()).prepareChartPaintables(lease.context, source, {
+      describe, ...(options?.signal ? { signal: options.signal } : {}), ...(options?.chartClock ? { clock: options.chartClock } : {}), ...(options?.chartDeadlineMs !== undefined ? { deadlineMs: options.chartDeadlineMs } : {}),
+    })
+  } catch { return undefined }
 }
-type ChartShape = { content?: DrawingContent<unknown, unknown>; children?: ChartShape[]; xEmu?: number; yEmu?: number; widthEmu?: number; heightEmu?: number }
-/** A slide's (or sheet's) charts in z-order; a grouped chart is placed at its outermost group's box. */
-function placedSceneCharts(nodes: readonly ChartShape[], scale: number, out: PlacedChart[] = [], box?: ChartShape): PlacedChart[] {
+/** The unit's chart fields of a Paintable. */
+const chartFields = (metadata: ChartPaintables | undefined, index: number): Pick<Paintable, 'charts' | 'chartTotal'> => {
+  const page = metadata?.pages[index]
+  return page?.total ? { charts: page.charts, chartTotal: page.total } : {}
+}
+type ChartShape = { content?: DrawingContent<unknown, unknown>; children?: ChartShape[]; xEmu?: number; yEmu?: number; widthEmu?: number; heightEmu?: number; group?: { chOff: { x: number; y: number }; chExt: { width: number; height: number } } }
+function countSceneCharts(nodes: readonly ChartShape[], depth = 0): number {
+  let n = 0
+  if (depth > 64) return 0
+  for (const node of nodes) { if (node.content?.kind === 'xlsxChart') n++; if (node.children?.length) n += countSceneCharts(node.children, depth + 1) }
+  return n
+}
+/** A slide's (or sheet's) charts in z-order, each at its own box mapped through its groups' child spaces. */
+function placedSceneCharts(nodes: readonly ChartShape[], scale: number, out: import('../charts/paintables').PlacedChart[] = [], map = { ox: 0, oy: 0, sx: 1, sy: 1 }, depth = 0): import('../charts/paintables').PlacedChart[] {
+  if (depth > 64) return out
   for (const node of nodes) {
-    const at = box ?? node
-    if (node.content?.kind === 'xlsxChart') out.push({ chart: node.content.chart, x: (at.xEmu ?? 0) * scale, y: (at.yEmu ?? 0) * scale, width: (at.widthEmu ?? 0) * scale, height: (at.heightEmu ?? 0) * scale })
-    if (node.children?.length) placedSceneCharts(node.children, scale, out, at)
+    const x = map.ox + map.sx * (node.xEmu ?? 0), y = map.oy + map.sy * (node.yEmu ?? 0), w = map.sx * (node.widthEmu ?? 0), h = map.sy * (node.heightEmu ?? 0)
+    if (node.content?.kind === 'xlsxChart') out.push({ chart: node.content.chart, x: x * scale, y: y * scale, width: w * scale, height: h * scale })
+    if (node.children?.length) {
+      // A group's children are in its child space: chOff/chExt map onto the group's own box (scene-paint.ts).
+      const g = node.group, gw = g?.chExt.width, gh = g?.chExt.height
+      const sx = g && gw && gw > 0 ? w / gw : map.sx, sy = g && gh && gh > 0 ? h / gh : map.sy
+      placedSceneCharts(node.children, scale, out, g ? { ox: x - sx * g.chOff.x, oy: y - sy * g.chOff.y, sx, sy } : map, depth + 1)
+    }
   }
   return out
 }
+const sceneSource = (units: ReadonlyArray<readonly ChartShape[]>, scale: (unit: number) => number): ChartPageSource => ({
+  pages: units.length, bound: unit => countSceneCharts(units[unit]), collect: unit => placedSceneCharts(units[unit], scale(unit)),
+})
 
 /** @internal One static sheet unit (S2.3 budgeted path): the whole-sheet raster,
  * or a typed `large-export-limit` refusal unit. Shared by getPaintables and the
@@ -171,6 +204,12 @@ export interface PaintOptions {
   chartProfile?: import('../charts/workspace').ChartProfile
   /** The receiving document's live parent budget (an interactive viewer's main-thread ledger) for that created context. */
   chartParent?: import('../charts/workspace').ChartParentLedger
+  /** Aborts pre-paint chart preparation (the viewer unmounted or changed document). */
+  signal?: AbortSignal
+  /** @internal The chart picture deadline's clock and length (tests drive them; default real time, 1.5 s). */
+  chartClock?: import('../charts/paintables').ChartClock
+  /** @internal */
+  chartDeadlineMs?: number
 }
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
@@ -290,7 +329,7 @@ export function getPaintables(
       let decoded: Array<CanvasImageSource | undefined> = []
       // The receiving chart context these pages charge their transferred charts to (released with the pages).
       let charts: ChartReceiverLease | undefined
-      let metadata: ChartMetadata | undefined
+      let metadata: ChartPaintables | undefined
       try {
         const baseFamilyCss = (family: string) => fontFamilyCssDocx(lease.resolve(family))
         const measure = await measurerFromDoc(withFallbackFonts(baseFamilyCss, options?.fallbackFonts))
@@ -306,10 +345,14 @@ export function getPaintables(
         // Each page paints on its own canvas, so PAGE/NUMPAGES fields must be
         // resolved against the whole document, not the single-page array.
         const total = pages.length
-        metadata = charts && await chartMetadata(charts, pages.map((page, index) => pageChartBoxes(page, measure, index + 1, total).map(box => ({ chart: (box.drawing as { chart: PlacedChart['chart'] }).chart, x: box.xPx, y: box.yPx, width: box.widthPx, height: box.heightPx }))))
+        metadata = await chartMetadata(charts, {
+          pages: pages.length,
+          bound: index => pageChartBound(pages[index]),
+          collect: index => pageChartBoxes(pages[index], measure, index + 1, total).map(box => ({ chart: (box.drawing as { chart: import('../charts/model').ChartModel }).chart, x: box.xPx, y: box.yPx, width: box.widthPx, height: box.heightPx })),
+        }, options)
         return withLease(pages.map((page, index) => ({
           spec: { widthPx: Math.ceil(page.widthPx), heightPx: Math.ceil(page.heightPx) },
-          ...(metadata?.charts[index].length ? { charts: metadata.charts[index] } : {}),
+          ...chartFields(metadata, index),
           paint: (ctx) => {
             ctx.fillStyle = '#ffffff'
             ctx.fillRect(0, 0, page.widthPx, page.heightPx)
@@ -326,7 +369,7 @@ export function getPaintables(
               },
             })
           },
-        })), () => { metadata?.release(); charts?.release(); lease.dispose() }, lease.diagnostics, decoded)
+        })), () => { metadata?.release(); charts?.release(); lease.dispose() }, lease.diagnostics, decoded, metadata)
       } catch (error) { releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
     })
   }
@@ -334,7 +377,7 @@ export function getPaintables(
     return acquireFonts(doc, options?.registerFont).then(async lease => {
       let decoded: Array<CanvasImageSource | undefined> = []
       let charts: ChartReceiverLease | undefined
-      let metadata: ChartMetadata | undefined
+      let metadata: ChartPaintables | undefined
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
         charts = await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []), chartReceiver(doc, options))
@@ -343,18 +386,18 @@ export function getPaintables(
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
         recordChartFallbacks([doc.drawingCoverage, ...doc.sheets.map(sheet => sheet.drawingCoverage)], failedSceneFallbacks(doc.sheets.flatMap(sheet => sheet.drawings ?? []), decoded))
         // Sheet charts are described by the sheet viewer; here only their pictures are prepared (no placement).
-        metadata = charts && await chartMetadata(charts, doc.sheets.map(sheet => placedSceneCharts(sheet.drawings ?? [], 0)))
+        metadata = await chartMetadata(charts, sceneSource(doc.sheets.map(sheet => sheet.drawings ?? []), () => 1 / 9525), options, false)
         metadata?.release()
         return withLease(doc.sheets.map((sheet): Paintable =>
           sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) }, watermark),
-        ), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded)
+        ), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded, metadata)
       } catch (error) { releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
     })
   }
   return acquireFonts(doc, options?.registerFont).then(async lease => {
     let decoded: Array<CanvasImageSource | undefined> = []
     let charts: ChartReceiverLease | undefined
-    let metadata: ChartMetadata | undefined
+    let metadata: ChartPaintables | undefined
     try {
       const sm = slideMetrics(doc)
       const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
@@ -362,12 +405,12 @@ export function getPaintables(
       decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
       recordChartFallbacks([doc.drawingCoverage], failedSceneFallbacks(doc.slides.flatMap(slide => slide.shapes), decoded))
-      metadata = charts && await chartMetadata(charts, doc.slides.map(slide => placedSceneCharts(slide.shapes, sm.widthPx / (slide.widthEmu || doc.slides[0].widthEmu || 1))))
+      metadata = await chartMetadata(charts, sceneSource(doc.slides.map(slide => slide.shapes), unit => sm.widthPx / (doc.slides[unit].widthEmu || 1)), options)
       return withLease(doc.slides.map((slide, index) => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-        ...(metadata?.charts[index].length ? { charts: metadata.charts[index] } : {}),
+        ...chartFields(metadata, index),
         paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image), ...(charts ? { chartContext: charts.context } : {}) }),
-      })), () => { metadata?.release(); charts?.release(); lease.dispose() }, lease.diagnostics, decoded)
+      })), () => { metadata?.release(); charts?.release(); lease.dispose() }, lease.diagnostics, decoded, metadata)
     } catch (error) { releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
   })
 }

@@ -41,18 +41,21 @@ export function chartDescription(model: ChartModel): string {
   if (model.unsupported || !kind) return clip(`${name} placeholder: ${model.unsupported ?? 'This chart has no data to draw'}.`, CHART_DESCRIPTION_LIMIT)
   const group = model.groups.find(g => g.family === 'stock') ?? model.groups[0]
   const grouping = group.grouping === 'stacked' ? 'stacked ' : group.grouping === 'percentStacked' ? '100% stacked ' : ''
-  const series = model.groups.flatMap(g => g.series)
-  const parts = [`${name} ${grouping ? grouping + kind.toLowerCase() : kind}, ${series.length} series`]
+  // The first 8 series are read in place; the rest are only counted (no copy of the series list).
+  let count = 0
+  const series: typeof group.series = []
+  for (const g of model.groups) for (const s of g.series) if (count++ < 8) series.push(s)
+  const parts = [`${name} ${grouping ? grouping + kind.toLowerCase() : kind}, ${count} series`]
   if (model.categories.length) parts.push(`${model.categories.length} categories${model.categories.length <= 12 ? ` (${model.categories.map(c => clip(c, NAME_LIMIT)).join(', ')})` : ''}`)
-  for (const s of series.slice(0, 8)) {
+  for (const s of series) {
     // Read from the compact storage (state 1: a value): the first 12 values, else the range.
     const first: number[] = []
-    let count = 0, min = Infinity, max = -Infinity
+    let n = 0, min = Infinity, max = -Infinity
     const values = s.values
-    for (let i = 0; i < (values?.length ?? 0); i++) if (values.states[i] === 1) { const v = values.values[i]; if (count++ < 12) first.push(v); min = Math.min(min, v); max = Math.max(max, v) }
+    for (let i = 0; i < (values?.length ?? 0); i++) if (values.states[i] === 1) { const v = values.values[i]; if (n++ < 12) first.push(v); min = Math.min(min, v); max = Math.max(max, v) }
     const label = clip(s.name, NAME_LIMIT)
-    parts.push(count ? `${label}: ${count <= 12 ? first.map(n => formatNumber(n)).join(', ') : `${formatNumber(min)} to ${formatNumber(max)}`}` : `${label}: no data`)
+    parts.push(n ? `${label}: ${n <= 12 ? first.map(v => formatNumber(v)).join(', ') : `${formatNumber(min)} to ${formatNumber(max)}`}` : `${label}: no data`)
   }
-  if (series.length > 8) parts.push(`${series.length - 8} more series`)
+  if (count > 8) parts.push(`${count - 8} more series`)
   return clip(parts.join('; ') + (model.truncated ? '; data truncated.' : '.'), CHART_DESCRIPTION_LIMIT)
 }

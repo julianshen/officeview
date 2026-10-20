@@ -30,4 +30,4 @@ registerXlsxChartPainter(paintXlsxChart)
 
 export { sourceFormat } from './format'
 
-export { prepareChartPaintables, CHART_DESCRIPTIONS_PER_PAGE, type PaintableChart, type PlacedChart } from './paintables'
+export { prepareChartPaintables, CHART_DESCRIPTIONS_PER_PAGE, CHART_PICTURE_DEADLINE_MS, type PaintableChart, type PlacedChart, type ChartPageSource, type ChartClock } from './paintables'

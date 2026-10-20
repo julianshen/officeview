@@ -25,7 +25,7 @@ const titled = (title: string, kind: 'bar' | 'line' = 'bar') => {
 const SURFACE = officeChartXml().replace(/<c:barChart>.*<\/c:barChart>/, '<c:surface3DChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:surface3DChart>')
 const lists = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('[data-testid="officeview-page-charts"] ul')]
 
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); vi.doUnmock('../src/core/images') })
 
 describe('accessible chart descriptions (spec 6.6)', () => {
   it('two charts on one page expose two role=img entries in reading order', async () => {
@@ -164,6 +164,192 @@ describe('A4d carry-over: transferred user-shape pictures', () => {
     const fresh = await import('../src/render/paint')
     const pages = await fresh.getPaintables(transferred)
     expect(greenPixels(pages), 'the first paint already shows the picture').toBe(expected)
+    pages.dispose()
+  })
+})
+
+/** A hand-driven clock: `fire()` ends every pending wait; nothing depends on wall time. */
+function manualClock() {
+  const waits: Array<{ resolve(): void; ms: number }> = []
+  return {
+    waits,
+    clock: { after(ms: number) { let resolve = () => {}; const done = new Promise<void>(r => { resolve = r }); waits.push({ resolve, ms }); return { done, cancel: () => {} } } },
+    fire() { for (const w of waits.splice(0)) w.resolve() },
+  }
+}
+const flush = async (turns = 20) => { for (let i = 0; i < turns; i++) await Promise.resolve() }
+
+describe('bounded, cancellable picture wait (A7 review I1)', () => {
+  async function transferredRealm() {
+    const bytes = await docxWithPictureForWait()
+    const parsed = await parseDocx(await OfficePackage.load(bytes))
+    const transferred = structuredClone(parsed)
+    vi.resetModules()
+    // The fresh realm's decoder never finishes until the test says so.
+    let finish: (bitmap: unknown) => void = () => {}
+    const decodes: number[] = []
+    vi.doMock('../src/core/images', async () => {
+      const actual = await vi.importActual<typeof import('../src/core/images')>('../src/core/images')
+      return { ...actual, decodeImage: vi.fn(async (data: Uint8Array, mime?: string) => { decodes.push(data.length); await new Promise(r => { finish = r }); return actual.decodeImage(data, mime) }) }
+    })
+    const paint = await import('../src/render/paint')
+    const { documentChartContext } = await import('../src/charts/context')
+    return { transferred, paint, documentChartContext, decodes, finish: () => finish(undefined) }
+  }
+
+  it('a picture that misses the deadline publishes the page without it, with a diagnostic; it appears at the next paint', async () => {
+    const realm = await transferredRealm()
+    const context = realm.documentChartContext('desktop')
+    const { clock, fire, waits } = manualClock()
+    let done = false
+    const pending = realm.paint.getPaintables(realm.transferred, { chartContext: context, chartClock: clock }).then(p => { done = true; return p })
+    await vi.waitFor(() => expect(realm.decodes.length).toBe(1))
+    await flush()
+    expect(done, 'waiting for the picture, within the deadline').toBe(false)
+    expect(waits.map(w => w.ms)).toEqual([1500])
+    fire()
+    const pages = await pending
+    expect(pages.chartDiagnostics).toEqual([expect.objectContaining({ page: 0, code: 'chart-user-shapes-deadline' })])
+    expect(greenOf(pages), 'published without the picture').toBe(0)
+    // The in-flight decode stays charged until it settles, then the painter shows it at the next paint.
+    const charged = context.workspace.used
+    realm.finish()
+    await vi.waitFor(() => expect(context.workspace.used).toBeLessThan(charged))
+    await flush()
+    expect(greenOf(pages), 'the next paint shows it').toBeGreaterThan(1000)
+    pages.dispose()
+  })
+
+  it('aborting (the viewer unmounted) ends the wait at once and holds nothing past the decode', async () => {
+    const realm = await transferredRealm()
+    const context = realm.documentChartContext('desktop')
+    const { clock, waits } = manualClock()
+    const abort = new AbortController()
+    const before = context.workspace.used
+    const pending = realm.paint.getPaintables(realm.transferred, { chartContext: context, chartClock: clock, signal: abort.signal })
+    await vi.waitFor(() => expect(realm.decodes.length).toBe(1))
+    abort.abort()
+    const pages = await pending
+    expect(waits).toHaveLength(1)
+    expect(pages.chartDiagnostics ?? [], 'an abort is not a missed deadline').toEqual([])
+    pages.dispose()
+    // Only the in-flight decode (its surface and transient) is still charged; it is released as it settles.
+    const { releaseChartModel } = await import('../src/charts/own')
+    for (const image of collectCharts(realm.transferred)) releaseChartModel(image)
+    realm.finish()
+    await vi.waitFor(() => expect(context.workspace.used).toBe(before))
+  })
+})
+
+/** The transferred-picture fixture of the A4d test, reused. */
+async function docxWithPictureForWait(): Promise<Uint8Array> {
+  const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart', A = 'http://schemas.openxmlformats.org/drawingml/2006/main', R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships', CDR = 'http://schemas.openxmlformats.org/drawingml/2006/chartDrawing'
+  const JSZip = (await import('jszip')).default
+  const c = createCanvas(4, 4); const g = c.getContext('2d'); g.fillStyle = '#00ff00'; g.fillRect(0, 0, 4, 4)
+  const chart = `<c:chartSpace xmlns:c="${C}" xmlns:a="${A}" xmlns:r="${R}"><c:chart><c:autoTitleDeleted val="1"/><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:spPr><a:solidFill><a:srgbClr val="808080"/></a:solidFill></c:spPr><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/></c:valAx></c:plotArea></c:chart><c:userShapes r:id="rU"/></c:chartSpace>`
+  const shapes = `<c:userShapes xmlns:c="${C}" xmlns:cdr="${CDR}" xmlns:a="${A}" xmlns:r="${R}"><cdr:relSizeAnchor><cdr:from><cdr:x>0</cdr:x><cdr:y>0</cdr:y></cdr:from><cdr:to><cdr:x>0.25</cdr:x><cdr:y>0.25</cdr:y></cdr:to><cdr:pic><cdr:nvPicPr><cdr:cNvPr id="2" name="Picture 1"/><cdr:cNvPicPr/></cdr:nvPicPr><cdr:blipFill><a:blip r:embed="rI"/><a:stretch><a:fillRect/></a:stretch></cdr:blipFill><cdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></cdr:spPr></cdr:pic></cdr:relSizeAnchor></c:userShapes>`
+  const zip = await JSZip.loadAsync(buildChartDocx([{ chartXml: chart }]).bytes)
+  zip.file('word/charts/_rels/chart1.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rU" Type="${R}/chartUserShapes" Target="../drawings/drawing1.xml"/></Relationships>`)
+  zip.file('word/drawings/drawing1.xml', shapes)
+  zip.file('word/drawings/_rels/drawing1.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rI" Type="${R}/image" Target="../media/image1.png"/></Relationships>`)
+  zip.file('word/media/image1.png', new Uint8Array(c.toBuffer('image/png')))
+  return zip.generateAsync({ type: 'uint8array' })
+}
+function greenOf(pages: Awaited<ReturnType<typeof getPaintables>>): number {
+  const { widthPx, heightPx } = pages[0].spec
+  const canvas = createCanvas(widthPx, heightPx)
+  pages[0].paint(canvas.getContext('2d') as unknown as CanvasRenderingContext2D)
+  const data = canvas.getContext('2d').getImageData(0, 0, widthPx, heightPx).data
+  let green = 0
+  for (let i = 0; i < data.length; i += 4) if (data[i] < 40 && data[i + 1] > 200 && data[i + 2] < 40) green++
+  return green
+}
+function collectCharts(doc: { sections: Array<{ paragraphs: Array<{ images?: Array<{ drawing?: { kind: string; chart?: unknown } }> }> }> }): Array<import('../src/charts/model').ChartModel> {
+  return doc.sections.flatMap(s => s.paragraphs.flatMap(p => (p.images ?? []).flatMap(i => i.drawing?.kind === 'xlsxChart' ? [i.drawing.chart as import('../src/charts/model').ChartModel] : [])))
+}
+
+describe('admission and complete lists (A7 review I2, I3, M1)', () => {
+  const model = (title: string) => {
+    let reads = 0
+    const chart = { ...cardChart('reason', title) }
+    Object.defineProperty(chart, 'title', { get() { reads++; return title } })
+    return { chart, reads: () => reads }
+  }
+
+  it('admits each page before building it; a refused page gets a notice and a diagnostic, later pages are unaffected', async () => {
+    const { prepareChartPaintables, DESCRIPTION_WORK_BYTES } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    // The parent refuses only page 0's admission.
+    const workspace = createChartWorkspace('mobile', { reserve: (_bytes, tag) => !tag.endsWith(':page0'), release: () => {} })
+    const a = model('Refused'), b = model('Kept')
+    const observed: number[] = []
+    const result = await prepareChartPaintables({ profile: 'mobile', workspace }, {
+      pages: 3,
+      bound: page => page === 2 ? 0 : 1,
+      collect: page => { observed.push(workspace.used); return [{ chart: page === 0 ? a.chart : b.chart, x: 1, y: 2, width: 3, height: 4 }] },
+    })
+    expect(a.reads(), 'nothing of the refused page was built').toBe(0)
+    expect(observed, 'only page 1 was collected').toHaveLength(1)
+    expect(observed[0], 'its bound was charged before construction').toBeGreaterThanOrEqual(DESCRIPTION_WORK_BYTES)
+    expect(result.pages[0]).toEqual({ total: 1, charts: [expect.objectContaining({ notice: true, description: expect.stringMatching(/could not be kept in memory \(1 chart\)/) })] })
+    expect(result.pages[1].charts.map(c => c.description)).toEqual(['Chart: Kept. placeholder: reason.'])
+    expect(result.pages[2]).toEqual({ charts: [], total: 0 })
+    expect(result.diagnostics).toEqual([expect.objectContaining({ page: 0, code: 'chart-description-refused' })])
+    // Reconciled to the exact retention, then refunded.
+    expect(workspace.used).toBeLessThan(DESCRIPTION_WORK_BYTES)
+    result.release()
+    expect(workspace.used).toBe(0)
+  })
+
+  it('repeated charts over many pages: each page is bounded at construction, the string is retained once', async () => {
+    const { prepareChartPaintables, DESCRIPTION_WORK_BYTES } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    const workspace = createChartWorkspace('mobile')
+    const shared = model('Masthead')
+    const peaks: number[] = []
+    const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 200, bound: () => 1, collect: () => { peaks.push(workspace.used); return [{ chart: shared.chart, x: 0, y: 0, width: 1, height: 1 }] } })
+    expect(result.pages.every(p => p.charts.length === 1)).toBe(true)
+    const retained = workspace.used
+    // The construction peak never exceeds the retained set plus one page's bound.
+    expect(Math.max(...peaks)).toBeLessThanOrEqual(retained + DESCRIPTION_WORK_BYTES + 64 * 4096)
+    expect(retained, 'one string, 200 small entries').toBeLessThan(2 * 'Chart: Masthead. placeholder: reason.'.length + 200 * 64 + 1)
+    result.release()
+  })
+
+  it('65 charts on one slide: 64 described, a "1 more chart not listed" note, and the true total', async () => {
+    const pptx = await parsePptx(await OfficePackage.load(buildChartPptx(Array.from({ length: 65 }, (_, i) => ({ chartXml: titled(`C${i + 1}`), workbook: officeChartWorkbook([1, 2]) }))).bytes))
+    expect((pptx.drawingCoverage ?? []).filter(e => e.scope === 'original' && e.selectedRepresentation === 'chart')).toHaveLength(65)
+    const pages = await getPaintables(pptx)
+    expect(pages[0].chartTotal).toBe(65)
+    expect(pages[0].charts).toHaveLength(65)
+    expect(pages[0].charts!.filter(c => !c.notice)).toHaveLength(64)
+    expect(pages[0].charts!.at(-1)).toMatchObject({ notice: true, description: '1 more chart not listed.' })
+    expect(pages.chartDiagnostics).toEqual([expect.objectContaining({ page: 0, code: 'chart-description-limit' })])
+    pages.dispose()
+    const view = render(<OfficeDoc document={pptx} />)
+    await waitFor(() => expect(view.container.querySelectorAll('[role="img"]').length).toBe(64))
+    expect(lists(view.container)[0].getAttribute('aria-label')).toBe('Charts on slide 1 (65)')
+    expect(within(lists(view.container)[0]).getByRole('note').getAttribute('aria-label')).toBe('1 more chart not listed.')
+    view.unmount()
+  }, 60_000)
+
+  it('grouped charts are placed at their own page-space boxes', async () => {
+    const JSZip = (await import('jszip')).default
+    const zip = await JSZip.loadAsync(buildChartPptx([{ chartXml: titled('Left'), workbook: officeChartWorkbook([1, 2]) }, { chartXml: titled('Right'), workbook: officeChartWorkbook([3, 4]) }]).bytes)
+    let slide = await zip.file('ppt/slides/slide1.xml')!.async('string')
+    slide = slide.replace('<a:off x="838300"', '<a:off x="6000000"')
+    // A group whose child space is twice its own box (children are drawn at half size), placed at (952500, 952500).
+    slide = slide.replace(/(<p:graphicFrame>.*<\/p:graphicFrame>)/, '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="90" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="952500" y="952500"/><a:ext cx="6096000" cy="3429000"/><a:chOff x="0" y="0"/><a:chExt cx="12192000" cy="6858000"/></a:xfrm></p:grpSpPr>$1</p:grpSp>')
+    zip.file('ppt/slides/slide1.xml', slide)
+    const pptx = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    const pages = await getPaintables(pptx)
+    const [left, right] = pages[0].charts!
+    const px = (emu: number) => emu / 9525
+    expect(left.x).toBeCloseTo(px(952500 + 838200 / 2), 0)
+    expect(left.y).toBeCloseTo(px(952500 + 1825625 / 2), 0)
+    expect(left.width).toBeCloseTo(px(5486400 / 2), 0)
+    expect(right.x).toBeCloseTo(px(952500 + 6000000 / 2), 0)
+    expect(right.width).toBeCloseTo(left.width, 3)
     pages.dispose()
   })
 })

@@ -14,7 +14,8 @@ import { parseDocx } from '../src/docx/parse'
 import { parsePptx } from '../src/pptx/parse'
 import { parseXlsx } from '../src/xlsx/parse'
 import { parseXlsxChart } from '../src/charts/parse'
-import { parseChartPart } from '../src/charts/dataPrecedence'
+import { applyDataPrecedence } from '../src/charts/dataPrecedence'
+import { readChartPart } from '../src/charts/read'
 import { chartParseContextFor } from '../src/charts/context'
 import { prepareChartAxes } from '../src/charts/prepare'
 import { fillChartRanges } from '../src/charts/fill'
@@ -128,11 +129,13 @@ describe('chart diagnostics (spec 6.6)', () => {
   const diagnostic = (list: Array<{ code: string; reason: string }> | undefined, code: string) => list?.find(d => d.code === code)
 
   it('every new diagnostic code is emitted with a reason', async () => {
-    // chart-data-unavailable: a reference series with no cache and nothing to read it from.
-    const pkg = await packageOf({ 'word/charts/chart1.xml': space(`<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}</c:plotArea>`) })
-    const unavailable = await parseChartPart(parseXmlOrdered((await pkg.text('word/charts/chart1.xml'))!), undefined, chartParseContextFor(pkg, 'word/charts/chart1.xml'), parseXlsxChart)
-    expect(unavailable.kind).toBe('unsupported')
-    expectReason(unavailable.kind === 'unsupported' ? (unavailable as { diagnostics?: Array<{ code: string; reason: string }> }).diagnostics?.find(d => d.code === 'chart-data-unavailable') ?? { code: 'chart-data-unavailable', reason: unavailable.reason } : undefined, 'chart-data-unavailable')
+    // chart-data-unavailable: a series with neither saved values nor a reference, observed on the produced model.
+    const absentXml = space(`<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Empty</c:v></c:tx></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}</c:plotArea>`)
+    const absentPkg = await packageOf({ 'word/charts/chart1.xml': absentXml })
+    const absentRoot = parseXmlOrdered(absentXml)
+    const absent = await applyDataPrecedence(parseXlsxChart(absentRoot, theme)!, absentRoot, chartParseContextFor(absentPkg, 'word/charts/chart1.xml'))
+    expect(absent.unsupported).toBeTruthy()
+    expectReason(diagnostic(absent.diagnostics, 'chart-data-unavailable'), 'chart-data-unavailable')
 
     // chart-point-unavailable: a numeric point that does not exist (prepared at stage 1).
     const sparse = model(space(`<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>${ser(0, [1, 2])}<c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}</c:plotArea>`))
@@ -144,13 +147,20 @@ describe('chart diagnostics (spec 6.6)', () => {
     const filled = fillChartRanges(dated, 'S', (_sheet: string, row: number) => { const v = row === 0 ? 60 : 45000; return { value: v, number: v, text: String(v) } }, { epoch: '1900' })
     expectReason(diagnostic(filled.diagnostics, 'chart-date-unrepresentable'), 'chart-date-unrepresentable')
 
-    // chart-refused: a workspace that cannot hold the chart's read.
+    // chart-refused: a workspace that cannot hold the chart part's read; the read itself reports the code.
     const refusing = createChartWorkspace('mobile')
     refusing.reserve(32 * 1024 * 1024, 'full')
-    const refusedPkg = await packageOf({ 'word/charts/chart1.xml': COLUMN })
-    const refused = await parseChartPart(parseXmlOrdered(COLUMN), undefined, { ...chartParseContextFor(refusedPkg, 'word/charts/chart1.xml'), workspace: refusing }, parseXlsxChart)
-    expect(refused.kind).toBe('refused')
-    expectReason({ code: 'chart-refused', reason: (refused as { reason: string }).reason }, 'chart-refused')
+    const refused = await readChartPart(await packageOf({ 'word/charts/chart1.xml': COLUMN }), 'word/charts/chart1.xml', { profile: 'mobile', workspace: refusing })
+    expect(refused).toMatchObject({ kind: 'refused', code: 'chart-refused' })
+    expectReason(refused as { code: string; reason: string }, 'chart-refused')
+    // The drawing-level record of a refused chart carries the code as its reason and the human reason as its message.
+    const docRefusedPkg = await build('docx', graphicObject('docx', 60, '<c:chart r:id="rC"/>'), COLUMN)
+    const { documentChartContext } = await import('../src/charts/context')
+    const full = documentChartContext('mobile')
+    full.workspace.reserve(32 * 1024 * 1024, 'full')
+    await parseDocx(docRefusedPkg, { chartContext: full })
+    const docRefused = drawingPartContext(docRefusedPkg).diagnostics.find(d => d.reason === 'chart-refused')
+    expectReason(docRefused && { code: 'chart-refused', message: docRefused.message }, 'chart-refused')
 
     // chart-fallback-unusable: the Fallback picture has no image part; the card records why.
     const broken = await build('xlsx', alternate(graphicObject('xlsx', 50, '<c:chart r:id="rC"/>'), picture('xlsx', 51)), SURFACE, null)
