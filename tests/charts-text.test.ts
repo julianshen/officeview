@@ -546,3 +546,27 @@ describe('charts-text (Task A4b fix round 2)', () => {
     }
   })
 })
+
+describe('charts-text (Task A4b fix round 3)', () => {
+  it('axis bands that exhaust a small placement leave an empty, never negative, plot (automatic and fallback)', () => {
+    const big = '<title><tx><rich><bodyPr/><p><r><rPr sz="7200"/><t>Huge</t></r></p></rich></tx></title>'
+    const manual = '<layout><manualLayout><x val="0.9"/><y val="0.9"/><w val="0.05"/><h val="0.05"/></manualLayout></layout>'
+    const cases: Array<[string, number, number]> = [
+      [space(bars(three) + axes(), big), 400, 20],
+      [space(bars(three) + axes(), big), 20, 400],
+      [space(bars(three) + axes(), undefined, '<legend><legendPos val="b"/></legend>'), 60, 24],
+      // A manual outer plot that leaves no room falls back to the (also exhausted) automatic plot.
+      [space(manual + bars(three) + axes(), big), 400, 20],
+    ]
+    for (const [xml, w, h] of cases) {
+      const model = parse(xml)
+      const p = paint(model, w, h)
+      expect(p.layout.plot.h, `${w}x${h}`).toBeGreaterThanOrEqual(0)
+      expect(p.layout.plot.w, `${w}x${h}`).toBeGreaterThanOrEqual(0)
+      // Nothing is plotted in an empty plot: no bar colour appears.
+      if (p.layout.plot.h === 0 || p.layout.plot.w === 0) expect(p.count('FF0000', { x: 0, y: 0, w, h }, 10), `${w}x${h}`).toBe(0)
+    }
+    const fallback = paint(parse(cases[3][0]), 400, 20)
+    expect(fallback.layout.diagnostics.some(d => d.code === 'chart-layout-invalid')).toBe(true)
+  })
+})

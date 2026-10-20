@@ -369,6 +369,9 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     const auto = inset(area)
     let plot = model.plotLayout?.target === 'inner' ? resolveManualLayout(model.plotLayout, auto, w, h, diagnostics) : inset(resolveManualLayout(model.plotLayout, area, w, h, diagnostics))
     if (plot.w <= 0 || plot.h <= 0) { plot = auto; if (model.plotLayout) diagnostics.push({ code: 'chart-layout-invalid', reason: 'Manual outer layout leaves no plot; automatic layout used' }) }
+    // Axis bands can exhaust a small placement (automatic layout and its fallback alike): the plot is then an empty,
+    // never negative, box and nothing is plotted in it.
+    if (!(plot.w > 0) || !(plot.h > 0)) plot = { x: plot.x, y: plot.y, w: Math.max(0, plot.w || 0), h: Math.max(0, plot.h || 0) }
     const labels = new Map<string, AxisLabel[]>()
     for (const a of used) {
       const list: AxisLabel[] = [], strings = texts.get(a.id)!, angle = textAngle(a.axis.text ?? model.text)
