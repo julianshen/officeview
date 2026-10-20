@@ -12,6 +12,7 @@ import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithT
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
 import { CHART_CATEGORY_LEVELS, fillCategoryLevels } from './categories'
+import { CONTOUR_GRID_LIMIT, contourGridDiagnostic, contourGridOf } from './families/contour'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -295,8 +296,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       const binding = group.binding
       const valueDates = dateFormatted(binding.kind === 'cartesian' ? binding.value : binding.kind === 'xy' ? binding.y : undefined) ? toChart : undefined
       const xDates = dateFormatted(binding.kind === 'xy' || binding.kind === 'cartesian' ? binding.x : undefined) ? toChart : undefined
-      const fill = (range: ChartRange, map?: (v: number) => number | undefined): ChartPoints => {
-        const line = chartLine(range, sheetOf(range), false, limit)
+      const fill = (range: ChartRange, map?: (v: number) => number | undefined, bound = limit): ChartPoints => {
+        const line = chartLine(range, sheetOf(range), false, bound)
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
         truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
@@ -310,6 +311,9 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
+      // Bubble sizes (spec 6.4): display-only (never an analytic input, so the display bound), never dates.
+      if (pending.bubbleSizes) next.bubbleSizes = fill(pending.bubbleSizes, undefined, CHART_POINT_LIMIT)
+      else if (series.refs?.bubbleSizes && series.bubbleSizes) next.bubbleSizes = cached(series.bubbleSizes, series.refs.bubbleSizes)
       if(pending.categories){
         const line=chartLine(pending.categories,sheetOf(pending.categories),true)
         truncated ||= line.truncated
@@ -338,6 +342,16 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     const reason = `${unrepresentable} date ${unrepresentable === 1 ? 'value has' : 'values have'} no counterpart in the ${epoch} date system`
     charge(stringBytes(reason))
     diagnostics.push({ code: 'chart-date-unrepresentable', reason })
+  }
+  // The contour grid bound (spec 9) over the filled categories: diagnosed once, the chart marked truncated.
+  for (const group of groups) {
+    if (group.family !== 'contour') continue
+    const grid = contourGridOf({ categories }, group)
+    if (!grid.clipped || diagnostics.some(d => d.code === CONTOUR_GRID_LIMIT)) continue
+    const diagnostic = contourGridDiagnostic(grid)
+    charge(stringBytes(diagnostic.code) + stringBytes(diagnostic.reason))
+    diagnostics.push(diagnostic)
+    truncated = true
   }
   const { categoryPending, categoryMultiLevel: _multi, categoryLevels: _levels, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
   void categoryPending, void _multi, void _levels, void _hidden, void _values, void _diagnostics
@@ -446,7 +460,7 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
       }
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
-        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true)
+        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false); add(s.pending?.categories, true)
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }
@@ -462,9 +476,9 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
     if (chart) {
       const add = (range: ChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
       add(chart.categoryPending)
-      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.name); add(s.pending?.categories) }
+      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.bubbleSizes); add(s.pending?.name); add(s.pending?.categories) }
       // Names a cached role's provenance reference uses are resolved too (never read as cells).
-      if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues) } }
+      if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues); add(s.refs?.bubbleSizes) } }
     }
     if (node.children) pendingRanges(node.children, ownerSheet, out, withNames)
   }

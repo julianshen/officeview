@@ -570,3 +570,45 @@ describe('charts-text (Task A4b fix round 3)', () => {
     expect(fallback.layout.diagnostics.some(d => d.code === 'chart-layout-invalid')).toBe(true)
   })
 })
+
+describe('charts-text (A4b merged with feature: trendlines, contour, forecast)', () => {
+  const trend = (body = '<trendlineType val="linear"/>') => `<trendline>${body}</trendline>`
+  const legendNames = (p: ReturnType<typeof paint>) => p.texts.filter(t => t.x >= p.layout.legend.x - 1 && t.y >= p.layout.legend.y - 1 && t.y <= p.layout.legend.y + p.layout.legend.h + 1).map(t => t.text)
+  it('legend: point entries and legendEntry deletion combine with trendline entries and contour bands', () => {
+    // A single varyColors series with a trendline: its points, then the trendline entry; point 1 deleted.
+    const vary = (legend: string) => paint(parse(space(`<barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="1"/><ser><idx val="7"/><order val="0"/><tx><v>S7</v></tx>${trend()}<cat>${strLit(['A', 'B', 'C'])}</cat><val>${lit([1, 2, 3])}</val></ser>${AX}</barChart>` + axes(), undefined, legend)))
+    expect(legendNames(vary('<legend><legendPos val="r"/></legend>'))).toEqual(['A', 'B', 'C', 'Linear (S7)'])
+    expect(legendNames(vary('<legend><legendPos val="r"/><legendEntry><idx val="1"/><delete val="1"/></legendEntry></legend>'))).toEqual(['A', 'C', 'Linear (S7)'])
+    // Series keyed by c:idx, the trendline by A6a's numbering (after the two series: entry 2).
+    const two = (entries: number[]) => paint(parse(space(bars(`<ser><idx val="0"/><order val="0"/><tx><v>Series 0</v></tx>${fill('FF0000')}${trend()}<cat>${strLit(['a', 'b', 'c'])}</cat><val>${lit([1, 3, 2])}</val></ser>` + ser(1, [2, 1, 3])) + axes(), undefined, `<legend><legendPos val="r"/>${entries.map(i => `<legendEntry><idx val="${i}"/><delete val="1"/></legendEntry>`).join('')}</legend>`)))
+    expect(legendNames(two([]))).toEqual(['Series 0', 'Series 1', 'Linear (Series 0)'])
+    expect(legendNames(two([1]))).toEqual(['Series 0', 'Linear (Series 0)'])
+    expect(legendNames(two([2]))).toEqual(['Series 0', 'Series 1'])
+    // A contour's band legend: band entries deleted by band index.
+    const contour = (legend: string) => {
+      const cats = `<cat>${strLit(['C0', 'C1', 'C2'])}</cat>`
+      const row = (i: number, v: number[]) => `<ser><idx val="${i}"/><order val="${i}"/><tx><v>R${i}</v></tx>${cats}<val>${lit(v)}</val></ser>`
+      return paint(parse(`<chartSpace><chart><autoTitleDeleted val="1"/><plotArea><surfaceChart>${row(0, [1, 3, 5])}${row(1, [2, 4, 6])}<axId val="1"/><axId val="2"/><axId val="3"/></surfaceChart><catAx><axId val="1"/><crossAx val="3"/></catAx><valAx><axId val="3"/><majorUnit val="2"/><crossAx val="1"/></valAx><serAx><axId val="2"/><crossAx val="3"/></serAx></plotArea>${legend}</chart></chartSpace>`))
+    }
+    const bands = legendNames(contour('<legend><legendPos val="r"/></legend>'))
+    expect(bands.length).toBeGreaterThan(1)
+    expect(legendNames(contour('<legend><legendPos val="r"/><legendEntry><idx val="0"/><delete val="1"/></legendEntry></legend>'))).toEqual(bands.slice(1))
+  })
+
+  it('category tiers combine with forecast slots, and titles with contour axes', () => {
+    const level = (labels: Array<string | undefined>) => `<lvl>${labels.map((t, k) => t ? `<pt idx="${k}"><v>${t}</v></pt>` : '').join('')}</lvl>`
+    const cat = `<cat><multiLvlStrRef><f>Sheet1!$A$1:$B$4</f><multiLvlStrCache><ptCount val="4"/>${level(['Q1', 'Q2', 'Q1', 'Q2'])}${level(['2023', undefined, '2024', undefined])}</multiLvlStrCache></multiLvlStrRef></cat>`
+    // A line with a 2-period forward forecast: the axis has 6 slots, the tiers span the 4 real categories only.
+    const p = paint(parse(space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/><tx><v>S</v></tx>${trend('<trendlineType val="linear"/><forward val="2"/>')}${cat}<val>${lit([1, 2, 3, 4])}</val></ser>${AX}</lineChart>` + axes())))
+    const plot = p.layout.plot, slots = 6
+    expect(p.text('2023')[0].x).toBeCloseTo(plot.x + plot.w * (1 / slots), 0)
+    expect(p.text('2024')[0].x).toBeCloseTo(plot.x + plot.w * (3 / slots), 0)
+    expect(p.text('2023')[0].y).toBeGreaterThan(p.text('Q1')[0].y + 8)
+    // A titled contour keeps its series-axis labels and band legend below a run-formatted title.
+    const contour = paint(parse(`<chartSpace><chart><title><tx><rich><bodyPr/><p><r><rPr b="1"><solidFill><srgbClr val="C00000"/></solidFill></rPr><t>Surface</t></r><r><t> map</t></r></p></rich></tx></title><plotArea><surfaceChart><ser><idx val="0"/><order val="0"/><tx><v>R0</v></tx><cat>${strLit(['C0', 'C1'])}</cat><val>${lit([1, 3])}</val></ser><ser><idx val="1"/><order val="1"/><tx><v>R1</v></tx><cat>${strLit(['C0', 'C1'])}</cat><val>${lit([2, 4])}</val></ser><axId val="1"/><axId val="2"/><axId val="3"/></surfaceChart><catAx><axId val="1"/><crossAx val="3"/></catAx><valAx><axId val="3"/><crossAx val="1"/></valAx><serAx><axId val="2"/><crossAx val="3"/></serAx></plotArea></chart></chartSpace>`))
+    expect(contour.text('Surface')[0]).toMatchObject({ fill: '#C00000' })
+    expect(contour.text('R0')).toHaveLength(1)
+    expect(contour.text('R1')).toHaveLength(1)
+    expect(contour.text('R0')[0].y).toBeGreaterThan(contour.layout.title.y + contour.layout.title.h)
+  })
+})

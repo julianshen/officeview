@@ -11,9 +11,13 @@ import { axisGraphBound, axisFraction, categoryFraction, type AxisGraph, type Re
 import { displayView, type DisplayView } from './display'
 import { chartModelOwner, ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
-import { hydrateAxes } from './prepare'
+import { hydrateAxes, seriesLabels } from './prepare'
+import { CONTOUR_LEGEND_ENTRY_BYTES, CONTOUR_LEGEND_NAME_LIMIT, CONTOUR_LEGEND_TRUNCATED, contourEdges, contourLegendEntries, contourPaintBytes } from './families/contour'
+import { stringBytes } from './points'
 import { formatNumber } from '../xlsx/chartDescription'
-import { dateTickLabel, dateUnitIndex } from './dates'
+import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
+import { radarTexts } from './families/radar'
+import { trendlineLegendEntries } from './trendlines'
 import { hiddenAt } from './points'
 import { categoryTiers, tierBound, tierBytes, type TierGroup } from './categories'
 import { titleLines } from './titles'
@@ -42,6 +46,8 @@ export interface ChartLayout {
   texts: Map<string, string[]>
   labelIndices: Map<string, Set<number>>
   fontPx: number; labels: Map<string, AxisLabel[]>; diagnostics: ChartDiagnostic[]
+  /** The legend entries, built once (bounded and admitted with the layout) and reused by the paint. */
+  legendEntries: Array<{ name: string; color?: string; line?: true }>
   width(text: string, font: string): number
 }
 export function textAngle(text: ChartTextStyle | undefined): number {
@@ -74,26 +80,42 @@ export function axisSide(a: ResolvedAxis, graph: AxisGraph): 'l' | 'r' | 'b' | '
 export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView): string[] {
   if (a.role === 'value') return a.ticks.map(t => formatNumber(a.labelValue(t), a.percent))
   if (a.role === 'date') return a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
-  return Array.from({ length: view.slots }, (_, i) => view.category(i) ?? '')
+  if (a.role === 'series') return seriesLabels(graph, view, a)
+  return Array.from({ length: Math.min(a.slots, view.slots) }, (_, i) => view.category(i) ?? '')
 }
 /**
- * The legend's entries (shared by layout and paint). A point legend (pie and doughnut, and any chart whose single
- * series has varyColors on) lists the points (categories); otherwise the series. `legendEntry/delete` removes a point
- * entry by its point index and a series entry by the series' `c:idx`.
+ * The legend's entries (shared by layout and paint); an entry without a colour has no swatch (a noFill contour band).
+ * - A contour lists its bands (at most `limit`, the rows its legend can show; each name cut to the label limit,
+ *   `truncated` noting a cut), named by the shared value axis's tick labels (A5d).
+ * - A point legend (pie and doughnut, and any chart whose single series has varyColors on) lists the points.
+ * - Otherwise the series, then the drawn trendlines (A6a; `line`: a line key).
+ * `legendEntry/delete` removes a point entry by its point index, a contour band by its band index and a series entry
+ * by the series' `c:idx`; trendline entries carry their own deletion (A6a numbering: after the series).
  */
-export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string }> {
+export function legendEntries(model: ChartModel, view: DisplayView, graph?: AxisGraph, limit = Infinity, truncated?: () => void): Array<{ name: string; color?: string; line?: true }> {
   const group = model.groups[0], deleted = model.legendDeleted
+  if (group?.family === 'contour') {
+    const value = graph?.groups[0]?.value
+    if (!value) return []
+    const bands = contourLegendEntries(group, contourEdges(value), model.preparedAxes?.axes.find(p => p.id === value.id)?.labels ?? axisTexts(value, graph, view), edge => formatNumber(value.labelValue(edge), value.percent), deleted?.length ? limit + deleted.length : limit, deleted?.length ? undefined : truncated)
+    if (!deleted?.length) return bands
+    const kept = bands.filter((_, i) => !hiddenAt(deleted, i))
+    if (kept.length > limit) truncated?.()
+    return kept.slice(0, limit)
+  }
   // Point entries: pie and doughnut, and any chart whose single series varies its colours (varyColors).
   const only = model.groups.reduce((n, g) => n + g.series.length, 0) === 1 ? model.groups.findIndex(g => g.series.length === 1) : -1
   const pointGroup = group?.family === 'pie' || group?.family === 'doughnut' ? 0 : only >= 0 && model.groups[only].varyColors ? only : -1
   if (pointGroup >= 0) {
     const s = view.groupSeries(pointGroup)[0]?.series
-    return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => i).filter(i => !hiddenAt(deleted, view.source(i))).map(i => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
+    const points = s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => i).filter(i => !hiddenAt(deleted, view.source(i))).map(i => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
+    return pointGroup === 0 && (group.family === 'pie' || group.family === 'doughnut') ? points : [...points, ...trendlineLegendEntries(model)]
   }
-  if (!deleted?.length) return view.series.map(({ series }) => ({ name: series.name, color: series.color }))
   // A series entry is keyed by its c:idx (never its document position); a model built without one keeps its position.
-  const order = new Map(model.groups.flatMap(g => g.series).map((s, i) => [s, s.index ?? i]))
-  return view.series.filter(({ series }) => !hiddenAt(deleted, order.get(series) ?? -1)).map(({ series }) => ({ name: series.name, color: series.color }))
+  const order = deleted?.length ? new Map(model.groups.flatMap(g => g.series).map((s, i) => [s, s.index ?? i])) : undefined
+  const series = order ? view.series.filter(({ series }) => !hiddenAt(deleted, order.get(series) ?? -1)) : view.series
+  // Drawn trendlines follow the series (A6a, spec 5.6/5.10).
+  return [...series.map(({ series }) => ({ name: series.name, color: series.color })), ...trendlineLegendEntries(model)]
 }
 /** The title font: the run's italic/bold, size (else the default title size) and typeface (else the chart family, as CSS). */
 export const titleFont = (run: ChartTextRun | undefined, defaultPx: number, family: string, familyCss: (family: string) => string = JSON.stringify) =>
@@ -185,15 +207,29 @@ export function ownedChartWorkspace(model: ChartModel): ChartWorkspace | undefin
   const owner = chartModelOwner(model)?.workspace
   return owner && ((owner as { facet?: ChartWorkspace }).facet ?? owner)
 }
+/** The legend rows a w x h chart can show: vertical legends one per text line, horizontal ones one per minimal entry width. */
+export function legendCapacity(model: ChartModel, w: number, h: number): number {
+  const fontPx = model.fontSizePt * 96 / 72
+  const vertical = model.legend === 'l' || model.legend === 'r' || model.legend === 'tr'
+  return Math.max(1, Math.floor(vertical ? h / (fontPx + 6) : w / (fontPx * .7 + 12)) + 1)
+}
 /** Temporary construction bound, including labels/maps, legend widths and display closures. */
-export function layoutBound(model: ChartModel): number {
+export function layoutBound(model: ChartModel, w = Infinity, h = Infinity): number {
   let slots = model.categories.length, series = 0, text = 0
   for (const group of model.groups) for (const s of group.series) { series++; slots = Math.max(slots, s.values.length); text += s.name.length * 2 }
   slots = Math.min(4096, Math.max(1, slots))
   for (const c of model.categories) text += c.length * 2
+  // Contour legend entries: one per band the legend can show (at most the tick bound), each with its bounded name,
+  // a transient endpoint cut and its measured width, plus a possible truncation diagnostic; bands deleted by
+  // legendEntry are read past the capacity too (at most one more per deletion).
+  if (model.groups[0]?.family === 'contour') text += (Math.min(legendBands(model), legendCapacity(model, w, h)) + (model.legendDeleted?.length ?? 0)) * CONTOUR_LEGEND_ENTRY_BYTES + 512
+  // Trendline legend entries (A6a): a generated or authored name (at most 255 + the series name's units) and its width.
+  for (const group of model.groups) for (const s of group.series) text += (s.trendlines?.length ?? 0) * (2 * (264 + s.name.length) + 128)
+  // The retained diagnostics (stage 1's and up to three layout ones) are priced as retainedBytes prices them.
+  const diagnostics = (model.preparedAxes?.diagnostics ?? []).reduce((n, d) => n + 64 + d.code.length * 2 + d.reason.length * 2, 1024)
   // Title runs and category tiers add nothing for a model without them.
   const titled = (model.titleRuns ?? []).reduce((n, r) => n + 512 + r.text.length * 4, 0)
-  return titled + tierBound(model.categoryLevels) + (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text
+  return titled + tierBound(model.categoryLevels) + (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily), familyCss: (family: string) => string = JSON.stringify): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')
@@ -208,7 +244,7 @@ export function layoutChart(model: ChartModel, w: number, h: number, dpr: number
   const key = JSON.stringify([w, h, dpr, fontGeneration, family, ...runFamilies])
   const hit = entries.get(key)
   if (hit) { touch(hit); return hit.layout }
-  const tag = `chart-layout#${++serial}`, bound = layoutBound(model)
+  const tag = `chart-layout#${++serial}`, bound = layoutBound(model, w, h)
   if (!reserveChartLayoutWorkspace(workspace, bound, tag)) throw new ChartRefusal()
   try {
     const layout = buildLayout(model, w, h, measure, family, familyCss)
@@ -245,6 +281,10 @@ function retainedBytes(layout: Omit<ChartLayout, 'width' | 'retainedBytes'>, wid
   for (const axis of layout.graph.axes.values()) bytes += 1024 + (axis.ticks.length + axis.minorTicks.length) * 16
   for (const [id, strings] of layout.texts) bytes += 96 + id.length * 2 + strings.reduce((n, s) => n + 48 + s.length * 2, 0)
   for (const labels of layout.labels.values()) bytes += 128 + labels.length * 192
+  // Legend entries: a contour's names and a trendline's generated name (A6a) are their own strings; other families'
+  // reuse the model's (records only).
+  const ownNames = layout.graph.groups[0]?.group.family === 'contour'
+  for (const entry of layout.legendEntries) bytes += 64 + (ownNames || entry.line ? stringBytes(entry.name) : 0)
   for (const [font, strings] of widths) {
     bytes += 96 + font.length * 2
     for (const text of strings.keys()) bytes += 64 + text.length * 2
@@ -316,7 +356,10 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     const title = resolveManualLayout(model.titleLayout, { ...area, h: titleBand || titlePx + 6 }, w, h, diagnostics)
     if (titleShown && !model.titleOverlay) area = { ...area, y: area.y + titleBand, h: area.h - titleBand }
     let legendAuto = { ...area }
-    const entriesForLegend = legendEntries(model, view), line = fontPx + 6
+    // Built once, bounded to the rows the legend can show (admitted by layoutBound before this build), and retained.
+    const entriesForLegend = model.legend ? legendEntries(model, view, graph, legendCapacity(model, w, h), () => {
+      if (!diagnostics.some(d => d.code === CONTOUR_LEGEND_TRUNCATED)) diagnostics.push({ code: CONTOUR_LEGEND_TRUNCATED, reason: `Legend names longer than ${CONTOUR_LEGEND_NAME_LIMIT} characters are cut` })
+    }) : [], line = fontPx + 6
     if (model.legend && entriesForLegend.length) {
       const sizes = entriesForLegend.map(e => width(e.name, chartFont(fontPx, family)) + fontPx * .7 + 12)
       if (model.legend === 'l' || model.legend === 'r' || model.legend === 'tr') {
@@ -358,6 +401,12 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
         for (const tier of tiers) bands[side].push(tier.size)
       }
     }
+    // Radar (spec 4.1): its radial tick labels and category labels are measured here; they sit on no planar axis.
+    for (const [id, strings] of radarTexts(model, graph, view, a => model.preparedAxes?.axes.find(p => p.id === a.id)?.labels ?? axisTexts(a, graph, view))) {
+      texts.set(id, strings)
+      const a = graph.axes.get(id), px = (a?.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72
+      for (const s of strings) width(s, chartFont(px, family))
+    }
     const inset = (box: Box): Box => {
       let x = box.x, width = box.w, height = box.h, y = box.y + 4
       for (const b of bands.l) { x += b; width -= b }; width -= 8
@@ -393,11 +442,21 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     }
     const labelIndices = new Map([...labels].map(([id, values]) => [id, new Set(values.map(v => v.index))]))
     for (const label of model.preparedAxes?.dataLabels??[]) for(const run of label.runs.length?label.runs:[{text:label.text}]) width(run.text,labelFont(run,fontPx,family))
-    const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics, tiers: tierMap, ...(titleLinesOf ? { titleLines: titleLinesOf } : {}), ...(model.title && !titleShown ? { titleOmitted: true as const } : {}) }
+    const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics, legendEntries: entriesForLegend, tiers: tierMap, ...(titleLinesOf ? { titleLines: titleLinesOf } : {}), ...(model.title && !titleShown ? { titleOmitted: true as const } : {}) }
     return { ...data, retainedBytes: retainedBytes(data, widths), width: cachedWidths(widths) }
  }
 
 onChartModelRelease(releaseChartLayouts)
 
-/** The paint-local buffers, admitted before the paint: per group its stack and series buffers (plus the two drop-line extents, A4a). */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48), 0) + view.series.length * 256
+/** The legend bands a contour can list: its prepared value axis's tick intervals, else the tick bound. */
+function legendBands(model: ChartModel): number {
+  const id = model.groups[0]?.binding.kind === 'surface' ? model.groups[0].binding.value : undefined
+  const ticks = model.preparedAxes?.axes.find(a => a.id === id)?.ticks.length
+  return ticks !== undefined ? Math.max(1, ticks) : CHART_TICK_LIMIT
+}
+/**
+ * The paint-local buffers, admitted before the paint: per group its stack and series buffers (plus the two drop-line
+ * extents, A4a); a contour group its band grid (`contourPaintBytes`, the dimensions the painter uses) and its band
+ * edges. The legend entries are the layout's (retained there), never rebuilt by the paint.
+ */
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.trendlines?.length ?? 0) * 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0), 0) + view.series.length * 256

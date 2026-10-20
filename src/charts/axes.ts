@@ -27,10 +27,11 @@
  */
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
-import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, type ChartEpoch } from './dates'
+import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
+import { contourGridOf, contourPainted } from './families/contour'
 import type { ChartWorkspace } from './workspace'
 
 export const CHART_AXIS_UNPLACEABLE = 'chart-axis-unplaceable'
@@ -44,6 +45,8 @@ export interface GroupPlacement {
   value: string
   horizontal: string
   vertical: string
+  /** A contour group: its category axis runs horizontally, its series axis vertically; the value axis gives the bands. */
+  surface?: boolean
 }
 
 /** The family's base axis runs vertically (horizontal bars) or horizontally (everything else). */
@@ -68,6 +71,7 @@ export function placeAxes(model: ChartModel): { ok: true; groups: Array<GroupPla
       const o = binding.x !== undefined ? 'h' : baseOrientation(group)
       placement = { base, baseKind: binding.category !== undefined ? 'category' : 'x', value: binding.value, horizontal: o === 'h' ? base : binding.value, vertical: o === 'h' ? binding.value : base }
     } else if (binding.kind === 'xy') placement = { base: binding.x, baseKind: 'x', value: binding.y, horizontal: binding.x, vertical: binding.y }
+    else if (binding.kind === 'surface') placement = { base: binding.category, baseKind: 'category', value: binding.value, horizontal: binding.category, vertical: binding.series, surface: true }
     groups.push(placement)
     if (!placement) continue
     for (const [id, o] of [[placement.horizontal, 'h'], [placement.vertical, 'v']] as const) {
@@ -76,6 +80,8 @@ export function placeAxes(model: ChartModel): { ok: true; groups: Array<GroupPla
       orientation.set(id, o)
     }
     const base = byId.get(placement.base), value = byId.get(placement.value)
+    // Three contour axes cross in pairs Office wires several ways (catAx to valAx or serAx); the top view needs none.
+    if (placement.surface) { horizontalBase = true; continue }
     if (base?.crossAx !== undefined && base.crossAx !== placement.value) return { ok: false, reason: `axis ${placement.base} crosses axis ${base.crossAx}, not ${placement.value}` }
     if (value?.crossAx !== undefined && value.crossAx !== placement.base) return { ok: false, reason: `axis ${placement.value} crosses axis ${value.crossAx}, not ${placement.base}` }
     if (placement.horizontal === placement.base) horizontalBase = true; else verticalBase = true
@@ -266,7 +272,9 @@ const AXIS_ROLE: Record<ChartAxis['kind'], ResolvedAxis['role']> = { category: '
  * The axis graph of a (filled) model over its display view: placement, domains, scales, ticks, crossings and
  * display units. `workbookEpoch` is precedence 2 of the chart epoch (spec 5.1).
  */
-export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission): AxisGraph {
+/** A drawn trendline's extent in data units (A6a, spec 5.6): automatic scales include it; authored bounds still win. */
+export interface TrendlineExtent { group: number; x0: number; x1: number; y0: number; y1: number; yPositive?: number }
+export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission, trendlines?: readonly TrendlineExtent[]): AxisGraph {
   if (admission && !admission.workspace.reserve(axisGraphBound(model, view?.slots ?? displaySlotsBound(model)), admission.tag)) throw new ChartRefusal()
   view ??= displayView(model)
   const diagnostics: ChartDiagnostic[] = []
@@ -275,9 +283,13 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   const placements = placed.ok ? placed.groups : model.groups.map(() => undefined)
   if (!placed.ok) diagnostics.push({ code: CHART_AXIS_UNPLACEABLE, reason: placed.reason })
   const orientation = new Map<string, Orientation>(), partner = new Map<string, string>()
+  // Contour: the category and series axes cross each other (the plot's edges), whatever their crossAx names.
+  const surfaceCross = new Map<string, string>()
+  const grids = model.groups.map(group => group.family === 'contour' ? contourGridOf(model, group) : undefined)
   placements.forEach(p => {
     if (!p) return
     orientation.set(p.horizontal, 'h'); orientation.set(p.vertical, 'v')
+    if (p.surface) { surfaceCross.set(p.horizontal, p.vertical); surfaceCross.set(p.vertical, p.horizontal) }
     if (!partner.has(p.base)) partner.set(p.base, p.value)
     if (!partner.has(p.value)) partner.set(p.value, p.base)
   })
@@ -293,6 +305,30 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       else if (label) dateText = true
     }
     if (found.length && !dateText) dates = found
+  }
+  // Trendline forecasts on a date axis (spec 5.6): each drawn trendline's endpoint positions, projected per axis
+  // once its base unit is known (below).
+  const forecastEnds = new Map<string, number[]>()
+  if (dates) for (const t of trendlines ?? []) {
+    const p = placements[t.group]
+    if (p && p.baseKind === 'category') forecastEnds.set(p.base, [...forecastEnds.get(p.base) ?? [], t.x0, t.x1])
+  }
+  /**
+   * The unit-index range a date axis needs for its forecasts: each endpoint projected exactly as the painter does
+   * (the slots' calendar unit indices, interpolated, the end segment extrapolated past either end), the lowest
+   * and highest taken whatever the source date order, widened to whole units.
+   */
+  const forecastReach = (id: string, base: ChartTimeUnit): { lo: number; hi: number } | undefined => {
+    const ends = forecastEnds.get(id)
+    if (!ends) return undefined
+    const index = (slot: number) => { const v = dateOf(slot); return v === undefined ? NaN : dateUnitIndex(v, base, epoch) }
+    let lo = Infinity, hi = -Infinity
+    for (const x of ends) {
+      const s = x - 1, i0 = Math.max(0, Math.min(Math.floor(s), count - 2)), a = index(i0)
+      const at = count < 2 ? a : a + (s - i0) * (index(i0 + 1) - a)
+      if (Number.isFinite(at)) { lo = Math.min(lo, at); hi = Math.max(hi, at) }
+    }
+    return Number.isFinite(lo) ? { lo: Math.floor(lo + 1e-9), hi: Math.ceil(hi - 1e-9) } : undefined
   }
 
   const axes = new Map<string, ResolvedAxis>()
@@ -315,7 +351,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     if (role === 'date' && dates) {
       const base = axis.baseTimeUnit ?? autoBaseUnit(dates, epoch)
-      const first = axis.min ?? Math.min(...dates), last = axis.max ?? Math.max(...dates)
+      let first = axis.min ?? Math.min(...dates), last = axis.max ?? Math.max(...dates)
+      // The forecast reach, in this base unit, moves an automatic bound by whole calendar units from the data's own
+      // first/last date (so ticks keep their day of month); authored bounds win.
+      const reach = forecastReach(axis.id, base)
+      if (reach) {
+        const below = reach.lo - dateUnitIndex(first, base, epoch), above = reach.hi - dateUnitIndex(last, base, epoch)
+        if (axis.min === undefined && below < 0) first = shiftDateUnits(first, below, base, epoch) ?? first
+        if (axis.max === undefined && above > 0) last = shiftDateUnits(last, above, base, epoch) ?? last
+      }
       const lo = dateUnitIndex(first, base, epoch), hi = Math.max(lo, dateUnitIndex(last, base, epoch))
       const major = dateTicks(first, last, axis.majorUnit ?? 1, axis.majorTimeUnit ?? base, epoch)
       if (major.enlarged) diagnostics.push({ code: 'chart-tick-limit', reason: `date axis ${axis.id}: more than ${CHART_TICK_LIMIT} ticks; drawn every ${major.step} ${axis.majorTimeUnit ?? base}` })
@@ -324,6 +368,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     axes.set(axis.id, resolved)
   }
+  // Contour axes have the drawn grid's slots: its columns on the category axis, its rows on the series axis.
+  placements.forEach((p, g) => {
+    const grid = grids[g]
+    if (!p?.surface || !grid) return
+    const drawn = contourPainted(grid, view.groupSeries(g).length, count)
+    const category = axes.get(p.horizontal), series = axes.get(p.vertical)
+    if (category) category.slots = drawn.cols
+    if (series) series.slots = Math.max(1, drawn.rows)
+  })
 
   // Value domains: each value axis over the groups bound to it (stacking per group), as the engine always has.
   const lows = new Map<string, number>(), highs = new Map<string, number>(), skipped = new Map<string, number>()
@@ -335,7 +388,16 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   }
   model.groups.forEach((group, g) => {
     const p = placements[g]
+    // A radar's radial value axis takes its domain from the group's values (it has no planar placement).
+    if (group.binding.kind === 'radial') { const id = group.binding.value; for (const s of view.groupSeries(g)) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) see(id, v) } }
     if (!p) return
+    const grid = grids[g]
+    if (grid) {
+      // Contour: the value domain of the drawn grid only.
+      const drawn = contourPainted(grid, view.groupSeries(g).length, count)
+      for (const s of view.groupSeries(g).slice(0, drawn.rows)) for (let i = 0; i < drawn.cols; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
+      return
+    }
     const series = view.groupSeries(g)
     if (group.grouping === 'percentStacked') percentAxes.add(p.value)
     else if (group.grouping === 'stacked') {
@@ -346,6 +408,12 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       }
     } else for (const s of series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
     if (p.baseKind === 'x') for (const s of series) for (let i = 0; i < count; i++) { const v = s.hasX ? s.x(i) : i + 1; if (v !== undefined) see(p.base, v) }
+    for (const t of trendlines ?? []) {
+      if (t.group !== g) continue
+      if (!logOf(p.value)) { see(p.value, t.y0); see(p.value, t.y1) } else if (t.yPositive !== undefined) { see(p.value, t.yPositive); see(p.value, t.y1) }
+      // Each x endpoint on its own: on a log axis a non-positive backward end must not hide the forward end.
+      if (p.baseKind === 'x') for (const x of [t.x0, t.x1]) if (!logOf(p.base) || x > 0) see(p.base, x)
+    }
   })
   for (const resolved of axes.values()) {
     if (resolved.role !== 'value') continue
@@ -373,7 +441,7 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   })
   const betweenOf = (id: string) => groups.find(g => g?.category?.id === id)?.between ?? true
   for (const resolved of axes.values()) {
-    const crossId = resolved.axis.crossAx !== undefined && axes.has(resolved.axis.crossAx) ? resolved.axis.crossAx : partner.get(resolved.id)
+    const crossId = surfaceCross.get(resolved.id) ?? (resolved.axis.crossAx !== undefined && axes.has(resolved.axis.crossAx) ? resolved.axis.crossAx : partner.get(resolved.id))
     const cross = crossId !== undefined ? axes.get(crossId) : undefined
     if (!cross) continue
     resolved.crosses = cross.id

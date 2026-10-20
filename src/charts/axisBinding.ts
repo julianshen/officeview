@@ -38,6 +38,7 @@ export function validateAxisBinding(family: ChartFamily, binding: ChartAxisBindi
         ?? check('value', binding.value, ['value']) ?? distinct((binding.category ?? binding.x)!, binding.value)
     case 'xy': return check('x', binding.x, ['value']) ?? check('y', binding.y, ['value']) ?? distinct(binding.x, binding.y)
     case 'radial': return check('value', binding.value, ['value'])
+      ?? (binding.category !== undefined ? check('category', binding.category, CATEGORY_KINDS) ?? distinct(binding.category, binding.value) : undefined)
     case 'surface':
       return check('category', binding.category, CATEGORY_KINDS) ?? check('series', binding.series, ['series']) ?? check('value', binding.value, ['value'])
         ?? distinct(binding.category, binding.series, binding.value)
