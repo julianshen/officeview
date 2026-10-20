@@ -739,7 +739,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (state[slot] === 4) return { value: undefined, unavailable: true }
       const number = state[slot] === 1 ? nums[slot] : null
       return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(state[slot] === 5 ? { error: errors[slot]! } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
-    }, undefined, { hidden: (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col), workspace })
+    }, undefined, { hidden: (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col), workspace, epoch: this.workbook.formatting.dateSystem })
     return done()
   }
 
