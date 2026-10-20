@@ -156,6 +156,7 @@ The stream-B field-map task must produce `docs/charts/chartex-map.md`. Its eleme
 - **Deleted axes.** A deleted axis (`delete=1`) still defines the scale; it is just not drawn.
 - **Scale and ticks.**
   - `crossBetween` (between, the bar default; midCat, the line/area default) controls whether categories sit between ticks or on them.
+  - **Compatibility amendment (A1a ruling, unverified):** when `crossBetween` is **absent**, the engine keeps the legacy per-family geometry (bar and line between categories, area on them). Office-authored files carry the element explicitly; the validation doc marks this default unverified until an Office reference exists.
   - `orientation=maxMin` reverses the axis.
   - `logBase` (2–1000) makes a log scale. Values ≤ 0 on a log axis are skipped, with the diagnostic `chart-invalid-log-value` [rev: agy 1].
   - Also: `min`/`max`, `majorUnit`/`minorUnit`, `majorGridlines`/`minorGridlines`, `majorTickMark`/`minorTickMark`, and `tickLblPos` (nextTo, low, high, none).
