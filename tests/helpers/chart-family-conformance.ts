@@ -16,11 +16,11 @@ import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../../src/core/zip'
-import { parseXmlOrdered } from '../../src/core/xml'
+import { parseXmlOrdered, type XmlNode } from '../../src/core/xml'
 import { documentChartContext, chartParseContext } from '../../src/charts/context'
 import { parseChartPart } from '../../src/charts/dataPrecedence'
 import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
-import { isChartExRoot, markChartExRoot } from '../../src/charts/read'
+import { isChartExRoot, readChartPart } from '../../src/charts/read'
 import { parseChartEx } from '../../src/charts/chartex/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
@@ -84,29 +84,39 @@ function withUnavailable(model: ChartModel): ChartModel {
   return { ...model, preparedAxes: undefined, groups: model.groups.map(g => ({ ...g, series: g.series.map(s => ({ ...s, values: mark(s.values)!, ...(s.xValues ? { xValues: mark(s.xValues) } : {}), ...(s.bubbleSizes ? { bubbleSizes: mark(s.bubbleSizes) } : {}) })) })) }
 }
 
+/**
+ * A family's chart part as a tree. A ChartEx part (cx namespace) goes through the production bounded reader from a
+ * one-part package, so the engine's namespace dispatch (`isChartExRoot`) is the real one; a classic part is parsed
+ * directly, as before.
+ */
+async function chartTree(raw: string, partPath: string, context: ReturnType<typeof chartParseContext>): Promise<{ root: XmlNode; release: () => void }> {
+  if (!raw.includes('http://schemas.microsoft.com/office/drawing/2014/chartex')) return { root: parseXmlOrdered(raw), release: () => {} }
+  const path = partPath.replace(/^\//, '')
+  const zip = new JSZip()
+  zip.file(path, raw)
+  const read = await readChartPart(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })), path, context)
+  if (read?.kind !== 'tree') throw new Error(`${path}: ${read ? read.reason : 'missing'}`)
+  return { root: read.root, release: read.release }
+}
+
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
   const doc = documentChartContext('desktop')
   const context = chartParseContext(doc, await pkg(), partPath)
   if (name === 'unavailable point') {
-    const rawXml = family.chart(CONFORMANCE_CASES['single point'])
-    const xml = parseXmlOrdered(rawXml)
-    if (rawXml.includes('http://schemas.microsoft.com/office/drawing/2014/chartex')) {
-      markChartExRoot(xml)
-    }
-    const parsed = isChartExRoot(xml) ? parseChartEx(xml, undefined, context) : parseXlsxChart(xml, undefined, context)
+    const tree = await chartTree(family.chart(CONFORMANCE_CASES['single point']), partPath, context)
+    const xml = tree.root
+    let parsed: ChartModel | undefined
+    try { parsed = isChartExRoot(xml) ? parseChartEx(xml, undefined, context) : parseXlsxChart(xml, undefined, context) } finally { tree.release() }
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
     const model = prepareChartAxes(withUnavailable(parsed))
     if (!model || model.unsupported) return { kind: 'card', reason: model?.unsupported, diagnostics: model ? collect(model) : [], card: true }
     const painted = paint(model)
     return { kind: 'native', diagnostics: collect(model), card: painted.card }
   }
-  const rawXml = family.chart(CONFORMANCE_CASES[name])
-  const xml = parseXmlOrdered(rawXml)
-  if (rawXml.includes('http://schemas.microsoft.com/office/drawing/2014/chartex')) {
-    markChartExRoot(xml)
-  }
-  const result = await parseChartPart(xml, undefined, context)
+  const tree = await chartTree(family.chart(CONFORMANCE_CASES[name]), partPath, context)
+  let result: Awaited<ReturnType<typeof parseChartPart>>
+  try { result = await parseChartPart(tree.root, undefined, context) } finally { tree.release() }
   if (result.kind === 'native') {
     const painted = paint(result.model)
     return { kind: 'native', diagnostics: collect(result.model), card: painted.card }

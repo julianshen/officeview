@@ -12,7 +12,7 @@ import { computeBoxWhiskerStats } from '../src/charts/chartex/boxWhisker'
 import type { ChartModel } from '../src/charts/model'
 import { parseChartEx } from '../src/charts/chartex/parse'
 import { paintXlsxChart } from '../src/charts/paint'
-import { parseXml, parseXmlOrdered } from '../src/core/xml'
+import { parseXml } from '../src/core/xml'
 import { chartParseContextFor } from '../src/charts/context'
 import { OfficePackage } from '../src/core/zip'
 import JSZip from 'jszip'
@@ -21,15 +21,80 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseXlsx } from '../src/xlsx/parse'
 import { parseChartPart } from '../src/charts/dataPrecedence'
-import { markChartExRoot } from '../src/charts/read'
+import { readChartPart } from '../src/charts/read'
 import { BOX_WHISKER_FAMILY, describeFamilyConformance } from './helpers/chart-family-conformance'
-import { CHART_ANALYTIC_POINT_LIMIT } from '../src/charts/parse'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_POINT_LIMIT } from '../src/charts/parse'
 import { CHART_TOO_MANY_POINTS } from '../src/charts/fill'
+import { layoutChart } from '../src/charts/layout'
+import { prepareChartAxes } from '../src/charts/prepare'
+import { ChartRefusal } from '../src/charts/own'
+import { createChartWorkspace } from '../src/charts/workspace'
 
 const FIXTURES = join(__dirname, 'fixtures', 'chartex')
 const fixture = (name: string) => new Uint8Array(readFileSync(join(FIXTURES, name)))
 const pkgPromise = new JSZip().generateAsync({ type: 'uint8array' }).then(b => OfficePackage.load(b))
 const testContext = async () => chartParseContextFor(await pkgPromise, 'xl/charts/chartEx1.xml')
+
+/** A synthetic part read by the production bounded reader (real namespace dispatch) from a one-part package. */
+async function readSynthetic(xml: string, path: string) {
+  const zip = new JSZip()
+  zip.file(path, xml)
+  const pkg = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+  const context = chartParseContextFor(pkg, path)
+  const read = await readChartPart(pkg, path, context)
+  if (read?.kind !== 'tree') throw new Error(`${path}: ${read ? read.reason : 'missing'}`)
+  return { root: read.root, context, release: read.release }
+}
+/** The production adapter (`parseChartPart`) on a DOCX (default) or PPTX part path. */
+async function adapt(xml: string, path = 'word/charts/chart1.xml') {
+  const part = await readSynthetic(xml, path)
+  try { return await parseChartPart(part.root, undefined, part.context) } finally { part.release() }
+}
+/** A native model through the adapter: the DOCX/PPTX path runs stage 1 (prepare) once. */
+async function nativeModel(xml: string, path?: string): Promise<ChartModel> {
+  const result = await adapt(xml, path)
+  if (result.kind !== 'native') throw new Error(`${result.kind}: ${result.reason}`)
+  return result.model
+}
+/** The parsed model before stage 1 (no fill, no prepare). */
+async function rawModel(xml: string): Promise<ChartModel> {
+  const part = await readSynthetic(xml, 'xl/charts/chartEx1.xml')
+  try { return parseChartEx(part.root, undefined, part.context) } finally { part.release() }
+}
+/** The plot box the painter uses (same layout key as paintXlsxChart at dpr 1). */
+function plotOf(model: ChartModel, w = 400, h = 300) {
+  const ctx = createCanvas(w, h).getContext('2d')
+  return layoutChart(model, w, h, 1, 0, { width: (text: string, css: string) => { ctx.font = css; return ctx.measureText(text).width }, lineHeight: () => model.fontSizePt * 96 / 72 })
+}
+interface Segment { x1: number; y1: number; x2: number; y2: number; stroke: string }
+/** Paints and records the filled rectangles inside the canvas, every moveTo/lineTo segment and every dot. */
+function record(model: ChartModel, w = 400, h = 300) {
+  const ctx = createCanvas(w, h).getContext('2d')
+  const rects: Array<{ x: number; y: number; w: number; h: number }> = [], segments: Segment[] = [], dots: Array<{ x: number; y: number; r: number }> = []
+  let card = false
+  const fillRect = ctx.fillRect.bind(ctx), moveTo = ctx.moveTo.bind(ctx), lineTo = ctx.lineTo.bind(ctx), arc = ctx.arc.bind(ctx)
+  ctx.fillRect = (x, y, rw, rh) => {
+    if (String(ctx.fillStyle).toLowerCase() === '#f7f7f7' && rw === w && rh === h) card = true
+    if (rw > 2 && rh > 1 && y > 0 && y + rh < h && !(rw === w && rh === h)) rects.push({ x, y, w: rw, h: rh })
+    fillRect(x, y, rw, rh)
+  }
+  let lx = 0, ly = 0
+  ctx.moveTo = (x, y) => { lx = x; ly = y; moveTo(x, y) }
+  ctx.lineTo = (x, y) => { segments.push({ x1: lx, y1: ly, x2: x, y2: y, stroke: String(ctx.strokeStyle).toLowerCase() }); lx = x; ly = y; lineTo(x, y) }
+  ctx.arc = (x, y, r, sa, ea) => { if (r <= 4) dots.push({ x, y, r }); arc(x, y, r, sa, ea) }
+  paintXlsxChart(model, ctx as unknown as CanvasRenderingContext2D, w, h)
+  return { rects, segments, dots, card }
+}
+interface SeriesSpec { values: number[]; cats?: Array<string | null>; catCount?: number; name?: string; hidden?: boolean; vis?: string; method?: 'inclusive' | 'exclusive' }
+/** An Office-shaped synthetic box & whisker part (one data set per series; `null` category: no pt, i.e. empty). */
+function bwXml(series: SeriesSpec[], scaling = ''): string {
+  const data = series.map((s, i) => {
+    const cat = s.cats ? `<cx:strDim type="cat"><cx:lvl ptCount="${s.catCount ?? s.cats.length}">${s.cats.map((c, j) => c === null ? '' : `<cx:pt idx="${j}">${c}</cx:pt>`).join('')}</cx:lvl></cx:strDim>` : ''
+    return `<cx:data id="${i}">${cat}<cx:numDim type="val"><cx:lvl ptCount="${s.values.length}" formatCode="General">${s.values.map((v, j) => `<cx:pt idx="${j}">${v}</cx:pt>`).join('')}</cx:lvl></cx:numDim></cx:data>`
+  }).join('')
+  const nodes = series.map((s, i) => `<cx:series layoutId="boxWhisker"${s.hidden ? ' hidden="1"' : ''}>${s.name ? `<cx:tx><cx:txData><cx:v>${s.name}</cx:v></cx:txData></cx:tx>` : ''}<cx:dataId val="${i}"/><cx:layoutPr>${s.vis ? `<cx:visibility ${s.vis}/>` : ''}<cx:statistics quartileMethod="${s.method ?? 'exclusive'}"/></cx:layoutPr></cx:series>`).join('')
+  return `<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData>${data}</cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion>${nodes}</cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling${scaling}/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>`
+}
 
 describe('box & whisker (ChartEx, Task B4)', () => {
   it('exclusive and inclusive split halves with or without the median; odd and even n', () => {
@@ -219,112 +284,122 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     }
 
     // 1. With outliers="1": 2 outliers (-20 and 50) drawn as dots
-    const mWith = parseChartEx(parseXml(makeXml('1')), undefined, await testContext())
+    const mWith = await nativeModel(makeXml('1'))
     expect(countDots(mWith)).toBe(2)
 
     // 2. With outliers="0": 0 outlier dots drawn
-    const mWithout = parseChartEx(parseXml(makeXml('0')), undefined, await testContext())
+    const mWithout = await nativeModel(makeXml('0'))
     expect(countDots(mWithout)).toBe(0)
+
+    // 3. Pixel positions (M4). One box, no categories: one slot of the plot width (between), gapWidth 1 = 100%, so
+    // the box is w/2 wide starting at plot.x + w/4; its centre is plot.x + w/2. The value axis is -30..60:
+    // y(v) = plot.y + plot.h * (60 - v) / 90.
+    const { plot } = plotOf(mWith)
+    const y = (v: number) => plot.y + plot.h * (60 - v) / 90
+    const cx = plot.x + plot.w / 2, x0 = plot.x + plot.w / 4, x1 = plot.x + plot.w * 3 / 4
+    const drawn = record(mWith)
+    expect(drawn.rects).toHaveLength(1)
+    expect(drawn.rects[0].x).toBeCloseTo(x0, 6)
+    expect(drawn.rects[0].w).toBeCloseTo(plot.w / 2, 6)
+    expect(drawn.rects[0].y).toBeCloseTo(y(19), 6) // Q3
+    expect(drawn.rects[0].h).toBeCloseTo(y(11) - y(19), 6) // Q1 - Q3
+    const near = (sg: Segment, a: [number, number], b: [number, number]) =>
+      Math.abs(sg.x1 - a[0]) < 1e-6 && Math.abs(sg.y1 - a[1]) < 1e-6 && Math.abs(sg.x2 - b[0]) < 1e-6 && Math.abs(sg.y2 - b[1]) < 1e-6
+    // Lower whisker from the box bottom (Q1 = 11) to the furthest inlier 10; upper from Q3 = 19 to 20 (not the fences).
+    expect(drawn.segments.filter(sg => near(sg, [cx, y(11)], [cx, y(10)]))).toHaveLength(1)
+    expect(drawn.segments.filter(sg => near(sg, [cx, y(19)], [cx, y(20)]))).toHaveLength(1)
+    // Median 15 across the box.
+    expect(drawn.segments.filter(sg => near(sg, [x0, y(15)], [x1, y(15)]))).toHaveLength(1)
+    // Outliers -20 and 50 on the centre line.
+    expect(drawn.dots.map(d => [d.x, d.y])).toEqual([[cx, y(-20)], [cx, y(50)]].map(([a, b]) => [expect.closeTo(a, 6), expect.closeTo(b, 6)]))
   })
 
   it('mean marker, mean line and inner points', async () => {
-    // 2 series:
-    // Series 0: [10, 20, 30] -> mean = 20, inliers = [10, 20, 30], outliers = []
-    // Series 1: [40, 50, 60] -> mean = 50, inliers = [40, 50, 60], outliers = []
-    const makeXml = (meanMarker: '0' | '1', meanLine: '0' | '1', nonoutliers: '0' | '1') => `
-      <cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-        <cx:chartData>
-          <cx:data id="0">
-            <cx:numDim type="val">
-              <cx:lvl ptCount="3"><cx:pt idx="0">10</cx:pt><cx:pt idx="1">20</cx:pt><cx:pt idx="2">30</cx:pt></cx:lvl>
-            </cx:numDim>
-          </cx:data>
-          <cx:data id="1">
-            <cx:numDim type="val">
-              <cx:lvl ptCount="3"><cx:pt idx="0">40</cx:pt><cx:pt idx="1">50</cx:pt><cx:pt idx="2">60</cx:pt></cx:lvl>
-            </cx:numDim>
-          </cx:data>
-        </cx:chartData>
-        <cx:chart>
-          <cx:plotArea>
-            <cx:plotAreaRegion>
-              <cx:series layoutId="boxWhisker">
-                <cx:dataId val="0"/>
-                <cx:layoutPr>
-                  <cx:visibility meanLine="${meanLine}" meanMarker="${meanMarker}" nonoutliers="${nonoutliers}" outliers="1"/>
-                  <cx:statistics quartileMethod="exclusive"/>
-                </cx:layoutPr>
-              </cx:series>
-              <cx:series layoutId="boxWhisker">
-                <cx:dataId val="1"/>
-                <cx:layoutPr>
-                  <cx:visibility meanLine="${meanLine}" meanMarker="${meanMarker}" nonoutliers="${nonoutliers}" outliers="1"/>
-                  <cx:statistics quartileMethod="exclusive"/>
-                </cx:layoutPr>
-              </cx:series>
-            </cx:plotAreaRegion>
-            <cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis>
-            <cx:axis id="1"><cx:valScaling min="0" max="70"/><cx:majorGridlines/><cx:tickLabels/></cx:axis>
-          </cx:plotArea>
-        </cx:chart>
-      </cx:chartSpace>
-    `
+    // Two series, no categories (one box per series):
+    // Series 0: [10, 20, 30] -> mean 20, inliers [10, 20, 30]. Series 1: [40, 50, 60] -> mean 50, inliers [40, 50, 60].
+    // Geometry: 2 slots of plot.w / 2 (between), gapWidth 100% -> each box plot.w / 4 wide, centred in its slot:
+    // centre(k) = plot.x + k * plot.w / 2 + plot.w / 4. Value axis 0..70: y(v) = plot.y + plot.h * (70 - v) / 70.
+    const xml = (v0: string, v1 = v0) => bwXml([
+      { values: [10, 20, 30], vis: v0 },
+      { values: [40, 50, 60], vis: v1 },
+    ], ' min="0" max="70"')
+    const vis = (meanMarker: 0 | 1, meanLine: 0 | 1, nonoutliers: 0 | 1) => `meanLine="${meanLine}" meanMarker="${meanMarker}" nonoutliers="${nonoutliers}" outliers="1"`
+    const model0 = await nativeModel(xml(vis(1, 0, 0)))
+    const { plot } = plotOf(model0)
+    const y = (v: number) => plot.y + plot.h * (70 - v) / 70
+    const centre = (k: number) => plot.x + k * plot.w / 2 + plot.w / 4
+    const colors = model0.groups[0].series.map(s => `#${s.color.toLowerCase()}`)
+    /** Mean-line segments: neither vertical (whiskers), the box width (medians), nor the plot width (gridlines). */
+    const meanLines = (r: ReturnType<typeof record>) => r.segments.filter(sg => Math.abs(sg.x2 - sg.x1) > plot.w / 3 && Math.abs(sg.x2 - sg.x1) < plot.w * 2 / 3)
+    /** Mean-marker strokes: the two 8 px diagonals of each ×. */
+    const crosses = (r: ReturnType<typeof record>) => r.segments.filter(sg => Math.abs(Math.abs(sg.x2 - sg.x1) - 8) < 1e-6 && Math.abs(Math.abs(sg.y2 - sg.y1) - 8) < 1e-6)
 
-    const probe = async (xml: string) => {
-      const model = parseChartEx(parseXml(xml), undefined, await testContext())
-      const canvas = createCanvas(400, 300)
-      const ctx = canvas.getContext('2d')
-      let dots = 0 // circle markers
-      let diagonalSegments = 0
-      let connectedMeanLines = 0
-      const segments: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
+    // 1. meanMarker on: one × per series, centred on (centre(k), y(mean)).
+    const r1 = record(model0)
+    const x1 = crosses(r1)
+    expect(x1).toHaveLength(4)
+    expect(x1.map(sg => [(sg.x1 + sg.x2) / 2, (sg.y1 + sg.y2) / 2])).toEqual([
+      [centre(0), y(20)], [centre(0), y(20)], [centre(1), y(50)], [centre(1), y(50)],
+    ].map(([a, b]) => [expect.closeTo(a, 6), expect.closeTo(b, 6)]))
+    expect(meanLines(r1)).toHaveLength(0)
+    expect(r1.dots).toHaveLength(0)
 
-      const origArc = ctx.arc.bind(ctx)
-      ctx.arc = (x, y, r, sa, ea) => {
-        if (r <= 4) dots++
-        origArc(x, y, r, sa, ea)
-      }
+    // 2. meanLine on for both: exactly one segment from series 0's mean to series 1's mean, in series 1's colour.
+    const r2 = record(await nativeModel(xml(vis(0, 1, 0))))
+    expect(crosses(r2)).toHaveLength(0)
+    expect(r2.dots).toHaveLength(0)
+    const m2 = meanLines(r2)
+    expect(m2).toHaveLength(1)
+    expect(m2[0].x1).toBeCloseTo(centre(0), 6)
+    expect(m2[0].y1).toBeCloseTo(y(20), 6)
+    expect(m2[0].x2).toBeCloseTo(centre(1), 6)
+    expect(m2[0].y2).toBeCloseTo(y(50), 6)
+    expect(m2[0].stroke).toBe(colors[1])
 
-      let lx = 0, ly = 0
-      ctx.moveTo = (x, y) => { lx = x; ly = y }
-      ctx.lineTo = (x, y) => {
-        const dx = Math.abs(x - lx), dy = Math.abs(y - ly)
-        segments.push({ x1: lx, y1: ly, x2: x, y2: y })
-        // Mean marker has two diagonal strokes of radius r (~4px, so dx~8, dy~8)
-        if (dx > 2 && dx < 12 && dy > 2 && dy < 12) diagonalSegments++
-        // Mean line spans from box 0 center to box 1 center (dx > 50, dy > 20)
-        if (dx > 50 && dy > 10) connectedMeanLines++
-        lx = x; ly = y
-      }
+    // 3. M1: the flag is per series. One side off: no join.
+    expect(meanLines(record(await nativeModel(xml(vis(0, 1, 0), vis(0, 0, 0)))))).toHaveLength(0)
+    expect(meanLines(record(await nativeModel(xml(vis(0, 0, 0), vis(0, 1, 0)))))).toHaveLength(0)
 
-      paintXlsxChart(model, ctx as any, 400, 300)
-      return { dots, diagonalSegments, connectedMeanLines, segments }
+    // 4. nonoutliers on: the 3 + 3 inner points, on each box's centre line at their values.
+    const r4 = record(await nativeModel(xml(vis(0, 0, 1))))
+    expect(crosses(r4)).toHaveLength(0)
+    expect(meanLines(r4)).toHaveLength(0)
+    expect(r4.dots.map(d => [d.x, d.y])).toEqual([
+      [centre(0), y(10)], [centre(0), y(20)], [centre(0), y(30)], [centre(1), y(40)], [centre(1), y(50)], [centre(1), y(60)],
+    ].map(([a, b]) => [expect.closeTo(a, 6), expect.closeTo(b, 6)]))
+  })
+
+  it('in category mode the mean line joins each series\' means across categories (N2)', async () => {
+    // 2 categories x 2 series, meanLine on, markers off.
+    // s0: A [9, 10, 11] mean 10, B [19, 20, 21] mean 20. s1: A [39, 40, 41] mean 40, B [49, 50, 51] mean 50.
+    // Clustered geometry: band = plot.w / 2, box = band / 3; start(k, s) = plot.x + k*band + band/6 + s*band/3, so the
+    // centres are plot.x + plot.w * {1/6 (A,s0), 1/3 (A,s1), 2/3 (B,s0), 5/6 (B,s1)}. y(v) = plot.y + plot.h * (60 - v) / 60.
+    // Right: (A,s0)->(B,s0) and (A,s1)->(B,s1). Wrong (box order): (A,s0)->(A,s1), (A,s1)->(B,s0), (B,s0)->(B,s1).
+    const vis = 'meanLine="1" meanMarker="0" nonoutliers="0" outliers="1"'
+    const cats = ['A', 'A', 'A', 'B', 'B', 'B']
+    const model = await nativeModel(bwXml([
+      { values: [9, 10, 11, 19, 20, 21], cats, vis },
+      { values: [39, 40, 41, 49, 50, 51], cats, vis },
+    ], ' min="0" max="60"'))
+    const { plot } = plotOf(model)
+    const y = (v: number) => plot.y + plot.h * (60 - v) / 60
+    const x = (f: number) => plot.x + plot.w * f
+    const colors = model.groups[0].series.map(s => `#${s.color.toLowerCase()}`)
+    const r = record(model)
+    // Box widths are plot.w / 6 (medians); gridlines are plot.w; whiskers are vertical: keep the slanted joins.
+    const lines = r.segments.filter(sg => Math.abs(sg.y2 - sg.y1) > 1e-6 && Math.abs(sg.x2 - sg.x1) > 1e-6)
+    expect(lines).toHaveLength(2)
+    const want = [
+      { x1: x(1 / 6), y1: y(10), x2: x(2 / 3), y2: y(20), stroke: colors[0] },
+      { x1: x(1 / 3), y1: y(40), x2: x(5 / 6), y2: y(50), stroke: colors[1] },
+    ]
+    for (const [i, w] of want.entries()) {
+      expect(lines[i].x1).toBeCloseTo(w.x1, 6)
+      expect(lines[i].y1).toBeCloseTo(w.y1, 6)
+      expect(lines[i].x2).toBeCloseTo(w.x2, 6)
+      expect(lines[i].y2).toBeCloseTo(w.y2, 6)
+      expect(lines[i].stroke).toBe(w.stroke)
     }
-
-    // 1. Base: meanMarker="1", meanLine="0", nonoutliers="0"
-    const r1 = await probe(makeXml('1', '0', '0'))
-    // 2 series -> 2 mean markers (each has 2 diagonal strokes -> 4 diagonal segments)
-    expect(r1.diagonalSegments).toBe(4)
-    expect(r1.connectedMeanLines).toBe(0)
-    expect(r1.dots).toBe(0) // No inner points
-
-    // 2. meanMarker="0", meanLine="1", nonoutliers="0"
-    const r2 = await probe(makeXml('0', '1', '0'))
-    expect(r2.diagonalSegments).toBe(0)
-    expect(r2.connectedMeanLines).toBe(1) // 1 line connecting the 2 means
-    expect(r2.dots).toBe(0)
-    const meanLineSegment = r2.segments.find(s => Math.abs(s.x2 - s.x1) > 50 && Math.abs(s.y2 - s.y1) > 10)
-    expect(meanLineSegment).toBeDefined()
-    // Series 1 mean is 20, Series 2 mean is 40.
-    // Higher value has lower canvas y, so y1 (mean 20) is strictly greater than y2 (mean 40).
-    expect(meanLineSegment!.y1).toBeGreaterThan(meanLineSegment!.y2)
-
-    // 3. meanMarker="0", meanLine="0", nonoutliers="1"
-    const r3 = await probe(makeXml('0', '0', '1'))
-    expect(r3.diagonalSegments).toBe(0)
-    expect(r3.connectedMeanLines).toBe(0)
-    // 3 inliers in series 0 + 3 inliers in series 1 = 6 inner dots
-    expect(r3.dots).toBe(6)
   })
 
   it('BW1, BW2a, BW2b native models, drawing coverage and geometry', async () => {
@@ -420,7 +495,7 @@ describe('box & whisker (ChartEx, Task B4)', () => {
         <cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart>
       </cx:chartSpace>
     `
-    const emptyModel = parseChartEx(parseXml(emptyXml), undefined, await testContext())
+    const emptyModel = await nativeModel(emptyXml)
     expect(emptyModel.unsupported).toBeUndefined()
     const canvasEmpty = createCanvas(400, 300)
     const ctxEmpty = canvasEmpty.getContext('2d')
@@ -437,109 +512,37 @@ describe('box & whisker (ChartEx, Task B4)', () => {
   })
 
   it('groups boxes by category when cat dimension is present; 2 categories x 2 series side-by-side', async () => {
-    const xml = `
-      <cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-        <cx:chartData>
-          <cx:data id="0">
-            <cx:strDim type="cat">
-              <cx:lvl ptCount="8">
-                <cx:pt idx="0">Cat A</cx:pt>
-                <cx:pt idx="1">Cat A</cx:pt>
-                <cx:pt idx="2">Cat A</cx:pt>
-                <cx:pt idx="3">Cat A</cx:pt>
-                <cx:pt idx="4">Cat B</cx:pt>
-                <cx:pt idx="5">Cat B</cx:pt>
-                <cx:pt idx="6">Cat B</cx:pt>
-                <cx:pt idx="7">Cat B</cx:pt>
-              </cx:lvl>
-            </cx:strDim>
-            <cx:numDim type="val">
-              <cx:lvl ptCount="8">
-                <cx:pt idx="0">10</cx:pt>
-                <cx:pt idx="1">11</cx:pt>
-                <cx:pt idx="2">12</cx:pt>
-                <cx:pt idx="3">13</cx:pt>
-                <cx:pt idx="4">20</cx:pt>
-                <cx:pt idx="5">21</cx:pt>
-                <cx:pt idx="6">22</cx:pt>
-                <cx:pt idx="7">23</cx:pt>
-              </cx:lvl>
-            </cx:numDim>
-          </cx:data>
-          <cx:data id="1">
-            <cx:strDim type="cat">
-              <cx:lvl ptCount="8">
-                <cx:pt idx="0">Cat A</cx:pt>
-                <cx:pt idx="1">Cat A</cx:pt>
-                <cx:pt idx="2">Cat A</cx:pt>
-                <cx:pt idx="3">Cat A</cx:pt>
-                <cx:pt idx="4">Cat B</cx:pt>
-                <cx:pt idx="5">Cat B</cx:pt>
-                <cx:pt idx="6">Cat B</cx:pt>
-                <cx:pt idx="7">Cat B</cx:pt>
-              </cx:lvl>
-            </cx:strDim>
-            <cx:numDim type="val">
-              <cx:lvl ptCount="8">
-                <cx:pt idx="0">30</cx:pt>
-                <cx:pt idx="1">31</cx:pt>
-                <cx:pt idx="2">32</cx:pt>
-                <cx:pt idx="3">33</cx:pt>
-                <cx:pt idx="4">40</cx:pt>
-                <cx:pt idx="5">41</cx:pt>
-                <cx:pt idx="6">42</cx:pt>
-                <cx:pt idx="7">43</cx:pt>
-              </cx:lvl>
-            </cx:numDim>
-          </cx:data>
-        </cx:chartData>
-        <cx:chart>
-          <cx:plotArea>
-            <cx:plotAreaRegion>
-              <cx:series layoutId="boxWhisker"><cx:dataId val="0"/></cx:series>
-              <cx:series layoutId="boxWhisker"><cx:dataId val="1"/></cx:series>
-            </cx:plotAreaRegion>
-            <cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis>
-            <cx:axis id="1"><cx:valScaling min="0" max="60"/><cx:majorGridlines/><cx:tickLabels/></cx:axis>
-          </cx:plotArea>
-        </cx:chart>
-      </cx:chartSpace>
-    `
-    const model = parseChartEx(parseXml(xml), undefined, await testContext())
+    // s0: A [10, 11, 12, 13] B [20, 21, 22, 23]; s1: A [30, 31, 32, 33] B [40, 41, 42, 43] (n = 4: Q1/Q3 = halves' medians).
+    // A s0: Q1 10.5, Q3 12.5; A s1: 30.5 / 32.5; B s0: 20.5 / 22.5; B s1: 40.5 / 42.5.
+    // Clustered geometry (2 slots, between, gapWidth 100%, 2 series): band = plot.w / 2, box w = band / 3 = plot.w / 6,
+    // start(k, s) = plot.x + k*band + band/6 + s*band/3 = plot.x + plot.w * {1/12, 1/4, 7/12, 3/4}.
+    // y(v) = plot.y + plot.h * (60 - v) / 60; a box spans y(Q3)..y(Q1), h = plot.h * 2 / 60.
+    const cats = ['Cat A', 'Cat A', 'Cat A', 'Cat A', 'Cat B', 'Cat B', 'Cat B', 'Cat B']
+    const model = await nativeModel(bwXml([
+      { values: [10, 11, 12, 13, 20, 21, 22, 23], cats },
+      { values: [30, 31, 32, 33, 40, 41, 42, 43], cats },
+    ], ' min="0" max="60"'))
     expect(model.unsupported).toBeUndefined()
+    const layout = plotOf(model)
+    const { plot } = layout
+    const y = (v: number) => plot.y + plot.h * (60 - v) / 60
+    expect(model.groups[0].gapWidth ?? 100).toBe(100)
+    expect(model.preparedAxes?.axes.find(a => a.role === 'category')?.labels).toEqual(['Cat A', 'Cat B'])
 
-    const boxes: Array<{ x: number; y: number; w: number; h: number }> = []
-    const canvas = createCanvas(400, 300)
-    const ctx = canvas.getContext('2d')
-    const origFillRect = ctx.fillRect.bind(ctx)
-    ctx.fillRect = (x, y, w, h) => {
-      if (w > 2 && h > 1 && y > 0 && y + h < 300 && !(w === 400 && h === 300)) {
-        boxes.push({ x, y, w, h })
-      }
-      origFillRect(x, y, w, h)
+    const boxes = record(model).rects.sort((p, q) => p.x - q.x)
+    const want = [
+      { f: 1 / 12, q3: 12.5 }, // Cat A, series 0
+      { f: 1 / 4, q3: 32.5 }, // Cat A, series 1
+      { f: 7 / 12, q3: 22.5 }, // Cat B, series 0
+      { f: 3 / 4, q3: 42.5 }, // Cat B, series 1
+    ]
+    expect(boxes).toHaveLength(4)
+    for (const [i, w] of want.entries()) {
+      expect(boxes[i].x).toBeCloseTo(plot.x + plot.w * w.f, 6)
+      expect(boxes[i].w).toBeCloseTo(plot.w / 6, 6)
+      expect(boxes[i].y).toBeCloseTo(y(w.q3), 6)
+      expect(boxes[i].h).toBeCloseTo(plot.h * 2 / 60, 6)
     }
-
-    paintXlsxChart(model, ctx as any, 400, 300)
-
-    // Expect 4 boxes total: Cat A (Series 1, Series 2) and Cat B (Series 1, Series 2)
-    expect(boxes.length).toBe(4)
-
-    // Sort by x
-    boxes.sort((a, b) => a.x - b.x)
-
-    // All boxes should have the same width
-    expect(boxes[0].w).toBe(boxes[1].w)
-    expect(boxes[1].w).toBe(boxes[2].w)
-    expect(boxes[2].w).toBe(boxes[3].w)
-
-    // Within Cat A: Series 1 and Series 2 sit side-by-side
-    expect(boxes[1].x).toBeCloseTo(boxes[0].x + boxes[0].w, 1)
-
-    // Cat B is strictly to the right of Cat A with gap
-    expect(boxes[2].x).toBeGreaterThan(boxes[1].x + boxes[1].w)
-
-    // Within Cat B: Series 1 and Series 2 sit side-by-side
-    expect(boxes[3].x).toBeCloseTo(boxes[2].x + boxes[2].w, 1)
   })
 
   it('refuses analytic input over 65,536 limit (never using a prefix)', async () => {
@@ -571,11 +574,116 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(model.unsupported).toBe(CHART_TOO_MANY_POINTS)
     expect(model.refused).toBe(true)
 
-    // Adapter returns kind: 'refused'
-    const orderedXml = parseXmlOrdered(xml)
-    markChartExRoot(orderedXml)
-    const result = await parseChartPart(orderedXml, undefined, await testContext())
+    // Adapter returns kind: 'refused' (the part is read by the production reader: real namespace dispatch)
+    const result = await adapt(xml, 'xl/charts/chartEx1.xml')
     expect(result).toMatchObject({ kind: 'refused', reason: CHART_TOO_MANY_POINTS })
+  })
+
+  it('DOCX and PPTX parts are prepared once in stage 1; paint never computes statistics (N1)', async () => {
+    // [5, 1, 4, 2, 3] -> sorted 1..5, n = 5 (odd), exclusive: median 3, Q1 = median[1, 2] = 1.5, Q3 = median[4, 5] = 4.5,
+    // IQR 3, fences -3 / 9 -> whiskers 1 / 5, no outliers, mean 3.
+    for (const path of ['word/charts/chart1.xml', 'ppt/charts/chart1.xml']) {
+      const model = await nativeModel(bwXml([{ values: [5, 1, 4, 2, 3] }], ' min="0" max="6"'), path)
+      const prepared = model.preparedAxes?.boxWhisker
+      expect(prepared, path).toHaveLength(1)
+      expect(prepared![0].boxes).toHaveLength(1)
+      expect(prepared![0].boxes[0].stats).toMatchObject({ n: 5, q1: 1.5, median: 3, q3: 4.5, iqr: 3, lowerWhisker: 1, upperWhisker: 5, mean: 3, outliers: [] })
+      expect(record(model).rects, path).toHaveLength(1)
+      // Without stage-1 records the painter draws no box (and no card): nothing is computed per frame.
+      const unprepared = record({ ...model, preparedAxes: undefined })
+      expect(unprepared.rects, path).toHaveLength(0)
+      expect(unprepared.card, path).toBe(false)
+    }
+  })
+
+  it('statistics scratch and retained point lists are charged through the workspace before allocation (I4)', async () => {
+    // One series 1..1000 with inner points on: the value buffer (1000 x 8 B) is scratch, the inner-point list
+    // (1000 x 8 B) and the box record (160 B) are retained; there are no outliers (fences far outside 1..1000).
+    const n = 1000
+    const values = Array.from({ length: n }, (_, i) => i + 1)
+    const raw = await rawModel(bwXml([{ values, vis: 'meanLine="0" meanMarker="1" nonoutliers="1" outliers="1"' }]))
+    expect(raw.preparedAxes).toBeUndefined()
+
+    const workspace = createChartWorkspace('desktop')
+    const reserves: Array<{ bytes: number; tag: string }> = [], transfers: Array<{ to: string; bytes: number }> = []
+    const reserve = workspace.reserve.bind(workspace), transfer = workspace.transfer.bind(workspace)
+    workspace.reserve = (bytes, tag) => { reserves.push({ bytes, tag }); return reserve(bytes, tag) }
+    workspace.transfer = (from, to, bytes) => { transfers.push({ to, bytes }); transfer(from, to, bytes) }
+    const prepared = prepareChartAxes(raw, { workspace, tag: 'model' })
+    const scratch = reserves.filter(r => r.tag.endsWith(':box-scratch'))
+    expect(Math.max(0, ...scratch.map(r => r.bytes))).toBeGreaterThanOrEqual(n * 8)
+    expect(prepared.preparedAxes?.boxWhisker?.[0].boxes[0].stats.inliers).toHaveLength(n)
+    const retained = transfers.find(t => t.to.endsWith(':retained'))!
+    expect(retained.bytes).toBeGreaterThanOrEqual(160 + n * 8)
+    // Scratch is refunded: only the retained record stays charged.
+    expect(workspace.used).toBe(retained.bytes)
+
+    // A workspace that refuses the scratch refuses the preparation (and refunds everything).
+    const tight = createChartWorkspace('desktop')
+    const tightReserve = tight.reserve.bind(tight)
+    tight.reserve = (bytes, tag) => !tag.endsWith(':box-scratch') && tightReserve(bytes, tag)
+    expect(() => prepareChartAxes(raw, { workspace: tight, tag: 'model' })).toThrow(ChartRefusal)
+    expect(tight.used).toBe(0)
+  })
+
+  it('category grouping is linear per series and more than 4,096 distinct categories refuse (N3)', async () => {
+    // 1. One series, 400 points over 40 categories. A per-category rescan reads 40 x 400 = 16,000 category slots in the
+    // grouping alone; bucketing reads each slot a small constant number of times (distinct passes + two bucket passes).
+    const n = 400
+    const raw = await rawModel(bwXml([{ values: Array.from({ length: n }, (_, j) => j), cats: Array.from({ length: n }, (_, j) => `c${j % 40}`) }]))
+    let reads = 0
+    const counted = new Proxy(raw.categories as string[], { get(target, key, receiver) { if (typeof key === 'string' && /^\d+$/.test(key)) reads++; return Reflect.get(target, key, receiver) } })
+    const group = raw.groups[0]
+    const model: ChartModel = { ...raw, categories: counted, groups: [{ ...group, series: group.series.map(s => ({ ...s, categories: counted })) }] }
+    const prepared = prepareChartAxes(model)
+    expect(prepared.preparedAxes?.boxWhisker?.[0].boxes).toHaveLength(40)
+    // Box k holds j = k, k + 40, ...: 10 points k..k+360 -> median k + 180.
+    expect(prepared.preparedAxes!.boxWhisker![0].boxes.map(b => b.stats.median)).toEqual(Array.from({ length: 40 }, (_, k) => k + 180))
+    expect(reads).toBeLessThanOrEqual(8 * n)
+
+    // 2. 4,097 distinct categories (one point each) refuse the chart (never a prefix); 4,096 are drawn natively.
+    const many = (k: number) => bwXml([{ values: Array.from({ length: k }, (_, j) => j), cats: Array.from({ length: k }, (_, j) => `k${j}`) }])
+    const over = prepareChartAxes(await rawModel(many(CHART_POINT_LIMIT + 1)))
+    expect(over).toMatchObject({ unsupported: CHART_TOO_MANY_POINTS, refused: true })
+    expect(await adapt(many(CHART_POINT_LIMIT + 1))).toMatchObject({ kind: 'refused', reason: CHART_TOO_MANY_POINTS })
+    const at = await nativeModel(many(CHART_POINT_LIMIT))
+    expect(at.preparedAxes?.boxWhisker?.[0].boxes).toHaveLength(CHART_POINT_LIMIT)
+    expect(at.preparedAxes?.axes.find(a => a.role === 'category')?.slots).toBe(CHART_POINT_LIMIT)
+  })
+
+  it('hidden series are skipped: no box, no slot, no label, no share of the value scale (M2)', async () => {
+    // Alpha [10, 20, 30], Beta hidden [1000, 1001, 1002], Gamma [40, 50, 60]. Two visible series, no categories:
+    // 2 slots, box w = plot.w / 4 at plot.x + plot.w * {1/8, 5/8}.
+    const model = await nativeModel(bwXml([
+      { name: 'Alpha', values: [10, 20, 30] },
+      { name: 'Beta', values: [1000, 1001, 1002], hidden: true },
+      { name: 'Gamma', values: [40, 50, 60] },
+    ]))
+    const prepared = model.preparedAxes!
+    expect(prepared.boxWhisker?.[0].boxes.map(b => b.seriesIndex)).toEqual([0, 2])
+    expect(prepared.axes.find(a => a.role === 'category')?.labels).toEqual(['Alpha', 'Gamma'])
+    expect(prepared.axes.find(a => a.role === 'value')!.max).toBeLessThan(1000)
+    const { plot } = plotOf(model)
+    const rects = record(model).rects.sort((p, q) => p.x - q.x)
+    expect(rects).toHaveLength(2)
+    expect(rects[0].x).toBeCloseTo(plot.x + plot.w / 8, 6)
+    expect(rects[1].x).toBeCloseTo(plot.x + plot.w * 5 / 8, 6)
+    expect(rects[0].w).toBeCloseTo(plot.w / 4, 6)
+  })
+
+  it('empty categories form their own group; points without a category are diagnosed, never silently dropped', async () => {
+    // 1. Categories A, '', A, '' over 1, 2, 3, 4: A = [1, 3] (median 2), '' = [2, 4] (median 3).
+    const mixed = await nativeModel(bwXml([{ values: [1, 2, 3, 4], cats: ['A', null, 'A', null] }]))
+    expect(mixed.preparedAxes?.boxWhisker?.[0].boxes.map(b => [b.slotIndex, b.stats.median])).toEqual([[0, 2], [1, 3]])
+    expect(mixed.preparedAxes?.axes.find(a => a.role === 'category')?.labels).toEqual(['A', ''])
+    // 2. Every category empty: no category dimension, one box per series over all four points (median 2.5).
+    const blank = await nativeModel(bwXml([{ values: [1, 2, 3, 4], cats: [null, null, null, null] }]))
+    expect(blank.preparedAxes?.boxWhisker?.[0].hasCategories).toBe(false)
+    expect(blank.preparedAxes?.boxWhisker?.[0].boxes.map(b => b.stats.median)).toEqual([2.5])
+    // 3. A category dimension shorter than the values: points 2 and 3 have no category; they are diagnosed.
+    const short = await nativeModel(bwXml([{ values: [1, 2, 3, 4], cats: ['A', 'B'] }]))
+    expect(short.preparedAxes?.boxWhisker?.[0].boxes.map(b => b.stats.median)).toEqual([1, 2])
+    expect(short.preparedAxes?.diagnostics).toContainEqual({ code: 'chart-point-uncategorized', reason: '2 box & whisker points have no category and are not drawn' })
   })
 
   describeFamilyConformance(BOX_WHISKER_FAMILY)

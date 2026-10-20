@@ -36,7 +36,8 @@ import type {
 import type { LabelControls, LabelOptions } from '../labels'
 import type { ChartFillStyle } from '../fills'
 import type { ChartLineStyle, ChartPointOverride } from '../style'
-import { ChartRefusal, adoptChartModel, chargeChartPoint, modelOwner, releaseChartModel } from '../own'
+import { ChartRefusal, adoptChartModel, chargeChartPoint, chartModelOwner, modelOwner, releaseChartModel, succeedChartModel } from '../own'
+import { prepareChartAxes } from '../prepare'
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, CHART_SERIES_LIMIT, CHART_TEXT_BYTES_LIMIT, axisBytes, parseChartRange, placeholderChart, solid, textStyle } from '../parse'
 import { PointWriter, knownError, pointBytes, stringBytes } from '../points'
 import { parseFillStyle } from '../fills'
@@ -584,13 +585,28 @@ export async function parseChartExPart(root: XmlNode, theme: ThemeContext | unde
     model = parseChartEx(root, theme, style ? { ...context, styleParts: style.parts } : context)
     style?.release()
     if (!model.unsupported && !paint) model = { ...placeholderAfter(model), unsupported: CHARTEX_PENDING }
-    else if (!model.unsupported && !XLSX_PART.test(context.partPath)) model = await applyDataPrecedence(model, root, context)
+    else if (!model.unsupported && !XLSX_PART.test(context.partPath)) {
+      model = await applyDataPrecedence(model, root, context)
+      // A DOCX/PPTX chart whose data needed no fill (its own cache) is prepared here, as the XLSX fill and the
+      // embedded-workbook fill prepare theirs: stage 1 runs once, charged, and paint only reads it (spec 6.5).
+      if (!model.unsupported && !model.preparedAxes) model = prepareOwned(model)
+    }
   } catch { if (model) releaseChartModel(model); model = undefined } finally { style?.release() }
   if (model && !model.unsupported) return { kind: 'native', model }
   const title = model?.title
   if (model) releaseChartModel(model)
   // A required point that is unavailable (no cache and no readable workbook value) refuses the chart (B1 rulings).
   return { kind: model?.refused || model?.unsupported === CHART_DATA_NOT_AVAILABLE ? 'refused' : 'unsupported', reason: model?.unsupported ?? CHARTEX_UNREADABLE, ...(title ? { title } : {}), feature: 'ChartEx' }
+}
+/** Stage 1 for a painted model, charged to the model's owner; a refusal keeps the model as a refused placeholder. */
+function prepareOwned(model: ChartModel): ChartModel {
+  let next: ChartModel
+  try { next = prepareChartAxes(model, chartModelOwner(model)) } catch (error) {
+    if (!(error instanceof ChartRefusal)) throw error
+    next = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true }
+  }
+  if (next !== model) succeedChartModel(model, next)
+  return next
 }
 /** A parsed model whose family is not painted: released here (its title is kept for the result). */
 function placeholderAfter(model: ChartModel): ChartModel {

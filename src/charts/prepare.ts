@@ -11,8 +11,8 @@ import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { prepareTrendlines, preparedTrendlineBytes, trendlineBound, trendlineExtents, trendlineForecast, type PreparedTrendline } from './trendlines'
 import { chartEpoch } from './dates'
-import { boxWhiskerDistinctCategories, boxWhiskerVisibleSeriesCount, boxWhiskerCategoryLabels, prepareBoxWhisker, preparedBoxWhiskerBytes, boxWhiskerBound, type PreparedBoxWhiskerGroup } from './chartex/boxWhisker'
-import { CHART_DATA_NOT_AVAILABLE } from './fill'
+import { BOX_WHISKER_TOO_MANY_CATEGORIES, boxWhiskerCategoryLabels, prepareBoxWhisker, preparedBoxWhiskerBytes, boxWhiskerBound, type PreparedBoxWhiskerGroup } from './chartex/boxWhisker'
+import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS } from './fill'
 
 type PreparedAxis = Omit<ResolvedAxis, 'labelValue' | 'plottable'> & { labels: string[] }
 export interface PreparedAxes {
@@ -47,14 +47,9 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     return { ...model, unsupported: CHART_DATA_NOT_AVAILABLE, refused: true }
   }
   const workspace = owner?.workspace ?? createChartWorkspace('mobile'), tag = `chart-prepare#${++jobs}`
+  const boxDiagnostics: ChartDiagnostic[] = []
   let slots = model.categories.length
-  for (const g of model.groups) {
-    if (g.family === 'boxWhisker') {
-      const distinct = boxWhiskerDistinctCategories(model.categories, g)
-      slots = Math.max(slots, distinct ? distinct.length : boxWhiskerVisibleSeriesCount(g))
-    }
-    else for (const s of g.series) slots = Math.max(slots, s.values.length)
-  }
+  for (const g of model.groups) for (const s of g.series) slots = Math.max(slots, s.values.length)
   slots = Math.min(4096, Math.max(1, slots))
   // The live resolved graph and the data-only snapshot coexist while building.
   // Automatic linear scales use a 1/2/5 step around five intervals (at most 16 ticks including endpoints).
@@ -68,7 +63,21 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
   let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + boxWhiskerBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
+  // Box & whisker statistics (B4): charged through the workspace before each allocation; scratch per series is
+  // released as soon as the series is summarised, retained lists join the prepared record's charge.
+  const scratchTag = `${tag}:box-scratch`
   try {
+    let boxWhisker: PreparedBoxWhiskerGroup[] | undefined
+    if (model.groups.some(g => g.family === 'boxWhisker')) {
+      const prepared = prepareBoxWhisker(model, {
+        retain: bytes => { if (!workspace.reserve(bytes, tag)) throw new ChartRefusal(); bound += bytes },
+        scratch: bytes => { if (!workspace.reserve(bytes, scratchTag)) throw new ChartRefusal() },
+        releaseScratch: () => workspace.release(scratchTag),
+      }, boxDiagnostics)
+      // More distinct categories than the display limit refuse the chart: a prefix would misstate the statistics.
+      if (prepared === BOX_WHISKER_TOO_MANY_CATEGORIES) { const { preparedAxes: _previous, ...rest } = model; return { ...rest, unsupported: CHART_TOO_MANY_POINTS, refused: true } }
+      boxWhisker = prepared
+    }
     // Trendlines first (A6a, spec 5.6): their forecast adds category slots and their extent joins the automatic scales.
     const formatter = createChartFormatter(workspace)
     const trendDiagnostics: ChartDiagnostic[] = []
@@ -92,8 +101,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       return { ...data, labels }
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
-    graph.diagnostics.push(...trendDiagnostics)
-    const boxWhisker = model.groups.some(g => g.family === 'boxWhisker') ? prepareBoxWhisker(model) : undefined
+    graph.diagnostics.push(...trendDiagnostics, ...boxDiagnostics)
     const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(forecast ? { forecast } : {}), ...(boxWhisker?.length ? { boxWhisker } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
     if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()
@@ -102,7 +110,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     owners.set(preparedAxes, retained)
     collected.register(preparedAxes, retained, preparedAxes)
     return { ...model, preparedAxes }
-  } finally { workspace.release(tag) }
+  } finally { workspace.release(scratchTag); workspace.release(tag) }
 }
 /**
  * What `forecast` slots add to preparation: per slot and axis a category label record (a string table entry) and

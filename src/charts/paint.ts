@@ -24,7 +24,7 @@ import { paintTrendlines } from './trendlines'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
-import { paintBoxWhisker, prepareBoxWhisker } from './chartex/boxWhisker'
+import { paintBoxWhisker } from './chartex/boxWhisker'
 import { chartFont } from './textStyle'
 import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 import { paintChartUserShapes } from './userShapes'
@@ -581,9 +581,9 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
     } else if (group.family === 'boxWhisker' && horizontal === B) {
+      // Stage-1 records only: an unprepared model draws no boxes (statistics are never computed at paint).
       const preparedGroup = model.source.preparedAxes?.boxWhisker?.find(bg => bg.groupIndex === g)
-        ?? prepareBoxWhisker(model.source).find(bg => bg.groupIndex === g)
-      paintBoxWhisker(ctx, group, group.series, axes, {
+      paintBoxWhisker(ctx, group, model.source.groups[g].series, axes, {
         plot,
         admitPath,
         fillWith,

@@ -28,7 +28,7 @@
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
 import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
-import { boxWhiskerDistinctCategories, boxWhiskerVisibleSeriesCount } from './chartex/boxWhisker'
+import { boxWhiskerDistinctCategories, boxWhiskerSeriesHidden, boxWhiskerVisibleSeriesCount } from './chartex/boxWhisker'
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
@@ -387,7 +387,7 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     const category = axes.get(p.base)
     if (category) {
       const distinct = boxWhiskerDistinctCategories(model.categories, group)
-      category.slots = distinct ? Math.max(1, distinct.length) : Math.max(1, boxWhiskerVisibleSeriesCount(group))
+      category.slots = Math.min(CHART_POINT_LIMIT, distinct ? Math.max(1, distinct.length) : Math.max(1, boxWhiskerVisibleSeriesCount(group)))
     }
   })
 
@@ -412,7 +412,8 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       return
     }
     if (group.family === 'boxWhisker') {
-      for (const s of group.series) {
+      for (const [si, s] of group.series.entries()) {
+        if (boxWhiskerSeriesHidden(group, si)) continue
         for (let i = 0; i < (s.values?.length ?? 0); i++) {
           const v = valueAt(s.values, i)
           if (v !== undefined) see(p.value, v)
