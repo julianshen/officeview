@@ -1,6 +1,6 @@
 # ChartEx field map (normative)
 
-Status: **draft for review** (task B1 step 1). It needs approval from two
+Status: **draft for review, fix round 1** (task B1 step 1). It needs approval from two
 reviewer families before the parser is written.
 Scope: spec `docs/superpowers/specs/2026-10-20-chart-compat-design.md` §4.2 and §4.3.
 
@@ -17,11 +17,46 @@ support, this map says so, and the parser follows this map.
 | `cx` | `http://schemas.microsoft.com/office/drawing/2014/chartex` | chartEx part root and all elements below |
 | `a` | `http://schemas.openxmlformats.org/drawingml/2006/main` | `spPr`, `txPr`, `rich` |
 | `r` | `http://schemas.openxmlformats.org/officeDocument/2006/relationships` | `externalData@r:id` |
-| `cx1` | `http://schemas.microsoft.com/office/drawing/2015/9/8/chartex` | `mc:Choice Requires="cx1"` in XLSX drawings [N: all xlsx] |
-| `cx2` | `http://schemas.microsoft.com/office/drawing/2015/10/21/chartex` | `mc:Choice Requires="cx2"` in PPTX slides [N: FN2] |
+### `mc:Choice` requirement namespaces observed
 
-The graphic frame's `a:graphicData@uri` is the 2014 `cx` URI in every native
-file. The dispatch check is `cx1` or `cx2` in `Requires` plus that `uri`.
+The prefixes below are the ones Office happened to write. **The prefix is
+lexical and not significant**: only the URI it is bound to matters.
+
+| Prefix seen | URI | Where | Source |
+|---|---|---|---|
+| `cx1` | `http://schemas.microsoft.com/office/drawing/2015/9/8/chartex` | XLSX drawings | [N: WF1, WF2, HI1, HI2, PA1, PA2, BW1, BW2 (both drawings), TM, SB] |
+| `cx2` | `http://schemas.microsoft.com/office/drawing/2015/10/21/chartex` | XLSX drawing **and** PPTX slide | [N: FN1 (xlsx), FN2 (pptx)] |
+| `cx4` | `http://schemas.microsoft.com/office/drawing/2016/5/10/chartex` | XLSX drawing (region map) | [N: RM] |
+
+The token tracks the writer's feature version, not the container format. In
+every native file the graphic frame's `a:graphicData@uri`, and the root
+namespace of all 14 chart parts, is the 2014 `cx` URI.
+
+### Dispatch rule (normative)
+
+Dispatch resolves every token in an `mc:Choice@Requires` attribute to the
+namespace URI bound to it in scope. Choices are matched on URIs and never on
+prefix spelling.
+
+1. A Choice is **attempted as ChartEx** when every token in `Requires` resolves
+   to a URI in the ChartEx set and the frame's `a:graphicData@uri` is the 2014
+   `cx` URI. The ChartEx set is:
+   - `http://schemas.microsoft.com/office/drawing/2014/chartex`
+   - `http://schemas.microsoft.com/office/drawing/2015/9/8/chartex`
+   - `http://schemas.microsoft.com/office/drawing/2015/10/21/chartex`
+   - `http://schemas.microsoft.com/office/drawing/2016/5/10/chartex`
+
+   Each is observed natively, except 2014, which appears as a part and
+   `graphicData` URI. Other `…/chartex` URIs are not admitted.
+2. A token that does not resolve, or that resolves to a URI outside the
+   ChartEx set (and outside the URIs the consumer already understands), makes
+   the Choice not satisfiable. The `mc:Fallback` is then taken.
+3. The `cx4` region-map Choice is **attempted**. The parser then identifies
+   `layoutId="regionMap"` before it reads `layoutPr/geography` or decodes
+   `cx:binary`, and returns **unsupported** (§10). Attempting the Choice does
+   not mean region maps are rendered.
+4. The eager cost of dispatch is limited to this namespace check. Everything
+   else is lazy.
 
 ### Source tags
 
@@ -38,6 +73,32 @@ Every row carries one or more source tags:
 - **[U] unconfirmed.** Neither MS-ODRAWXML nor a native part confirms it. The
   rule stated is a project decision, and it is flagged for a numeric oracle or
   for owner review.
+- **[P] project rule.** A deliberate rule that the sources do not establish,
+  for example an inference from native *inputs* where no Office *output* (a
+  rendered fallback, or a cache of derived values) shows what Office does with
+  them. It is normative for this viewer and remains a validation obligation
+  until an Office reference confirms it.
+
+[N] means **the XML shows this**. It never means "Office renders it this way":
+the absence of an element proves only absence, and any rendering consequence
+of that absence is [P] or [U].
+
+### Outcomes (spec §4.2, §4.3, §5.8, §6.3, §6.4)
+
+The parser returns exactly one of three outcomes:
+
+- `native(model)`
+- `unsupported(reason)`: the fallback is selected, else the card. Used for an
+  unreadable part, region map, a blocked or unknown layout, a structural
+  violation, or a required data **role** that is unavailable (§6.4).
+- `refused(reason)`: the fallback is selected, else the card with the reason's
+  text. Used for:
+  - an analytic budget breach (§7: 65,536 points per series, processed
+    fully), with the card "This chart has too many data points to summarize";
+  - an analytic family where a required **point** is `unavailable` (§5.8),
+    with the card "This chart's data is not available";
+  - a §6.4 embedded-workbook budget breach;
+  - invalid binning parameters (§5.1).
 
 "Default" means the value the parser uses when the attribute or element is
 absent. "none (schema)" means that MS-ODRAWXML gives no default.
@@ -141,8 +202,11 @@ natives; chart-space `spPr` in WF2. No native writes any of the three
 attributes.]
 
 - A `dashboard` root is **unsupported**. [U]
-- `fallbackImg` is not used, because the drawing's `mc:Fallback` is the
-  fallback path (§6.3).
+- The following are **ignored on read**: `chartSpace@version`,
+  `@featureList` and `@fallbackImg`, and the `clrMapOvr`, `fmtOvrs` and
+  `printSettings` elements. No native writes `version` or `featureList`.
+  `fallbackImg` is not used because the drawing's `mc:Fallback` is the
+  fallback path (§6.3). Chart-space `spPr` and `txPr` are read.
 
 `cx:chart` (CT_Chart 2.24.3.13) contains `title` (0..1), `plotArea` (1),
 `legend` (0..1) and `extLst`.
@@ -213,40 +277,81 @@ Axes:
 | `lvl@name` | — | opt | none | level name | [S] |
 | `lvl/pt@idx` | — | **req** | n/a | 0-based point index. Text is the value: xsd:double for numeric (FN2 `4.2999999999999998`), string for string. | [S] 2.24.3.88 / .70; [N: FN2] |
 
-### 2.2 Value resolution: XLSX has no cache
+### 2.2 Value resolution (spec §6.4 saved-state policy)
 
-**Native finding [N: every xlsx fixture]:** Excel writes XLSX dimensions as
-`<cx:f>_xlchart.vN.M</cx:f>` with **no `cx:lvl` cache**. `_xlchart.vN.M` is a
-hidden workbook defined name (`xl/workbook.xml` `definedName hidden="1"`) whose
-value is a sheet range, for example `Sheet1!$C$4:$C$15` (WF1) or
-`Table1!$A$2:$A$10` (BW2). `N` varies: `v1` in most files, `v2` in FN1 and `v5`
-in RM. The parser must therefore:
+**Native finding [N: all 12 xlsx fixtures, 13 parts]:** every XLSX dimension
+in this corpus is `<cx:f>_xlchart.vN.M</cx:f>` with **no `cx:lvl` cache**.
+`_xlchart.vN.M` is a hidden workbook defined name (`xl/workbook.xml`
+`definedName hidden="1"`) whose value is a sheet range, for example
+`Sheet1!$C$4:$C$15` (WF1) or `Table1!$A$2:$A$10` (BW2). `N` varies: `v1` in most
+files, `v2` in FN1, `v5` in RM.
 
-1. If the dimension has `lvl` children, use them. This is form B or a form A
-   cache [N: FN2].
-2. Otherwise, in XLSX, resolve `f` via the workbook's defined names. The value
-   is either the name or a direct range, and the cells are read from the
-   already-parsed sheet model. A range that crosses sheets, or one that cannot
-   be resolved, makes the chart **unsupported** (§4.2), so the fallback is kept.
-3. Otherwise (DOCX/PPTX with no cache, or an unreadable embedded workbook),
-   the chart is **unsupported**. The embedded workbook is never parsed. [U:
-   project decision. FN2 shows that PowerPoint does write the cache.]
+This disproves a cache-only XLSX reader. It does not prove that XLSX never
+carries a cache, since MS-ODRAWXML allows `f, nf?, lvl*`. FN2 (PPTX) carries
+caches for all six dimensions.
+
+The spec §6.4 precedence applies **per data role**: series name, categories,
+values and sizes.
+
+1. **Saved data present.** The dimension has `lvl` children: a form A cache
+   or form B literal [S][N: FN2]. Use it, even when it is partial:
+   - sparse `pt@idx` positions are kept;
+   - a missing index is **blank**, never compacted and never zero;
+   - `ptCount="0"` is a present, empty cache.
+2. **Cache absent, reference present.**
+   - **XLSX:** resolve `f` (a defined name or a direct range) against the host
+     workbook. Names are resolved via `xl/workbook.xml` `definedNames`, and
+     cells are read through the existing XLSX fill path (`fillWorkbookCharts`
+     / paged `fillCharts`).
+   - **DOCX/PPTX:** resolve `chartData/externalData@r:id` through the
+     chartEx part's `.rels` to the **package-internal** embedded workbook. That
+     workbook is read by the bounded values-only reader of spec §6.4
+     (`src/charts/embeddedWorkbook.ts`), which resolves `f` (a defined name or
+     a range) within it, reads saved `<v>` values only, and applies §6.4's
+     admission and budgets.
+     - An `External` target, an external defined name or a corrupt embedding
+       makes the role unavailable, with a diagnostic.
+     - A budget breach gives **refused**.
+     - `externalData@autoUpdate` is ignored, because the viewer shows saved
+       values.
+3. **Neither.** The role is **unavailable**, marked by an explicit sentinel
+   that is distinct from blank.
+
+Required roles:
+
+- Values (`val`/`size`) are required for every family.
+- Categories are optional and default to the 1..n ordinals [P].
+- If a required role of any drawn series is unavailable, the chart is
+  `unsupported("This chart's data is not available")` (§6.4).
+- Point-level unavailability inside an available role follows §2.4.
+- A range that spans sheets, or that cannot be parsed, makes the role
+  unavailable.
 
 A multi-column `f` range (TM/SB `Sheet1!$B$4:$D$14`, under the `col`
 direction) yields **one level per column**, with the leftmost column as the
-root level (§7). When the cache is used, the order of multiple `lvl` elements
-(leaf first or root first) **is unconfirmed: no native part has a multi-level
-cache.** [U] The proposed rule follows the classic `c:multiLvlStrRef`
-convention: the first `lvl` is the **leaf** level. It needs a native PPTX
-treemap or sunburst before it becomes normative.
+root level [P] (§7).
+
+**Multi-level caches are an explicit unsupported subcase.** No native part has
+more than one `lvl` in a dimension, so the order (leaf first or root first) is
+unknown [U]. A dimension with two or more cached `lvl` elements is
+**uninterpretable saved data**. For that role only, it is treated as absent,
+and step 2 applies: the XLSX range, or the embedded workbook range, read
+root-leftmost.
+
+If step 2 yields nothing, the chart is
+`unsupported("multi-level cache order unconfirmed")`.
+
+This is a [P] narrowing of §6.4's cache-first rule, limited to multi-level
+caches. It is flagged for the controller and lifted once a native PPTX or DOCX
+treemap or sunburst confirms the order.
 
 ### 2.3 Series binding
 
 | Element / attribute | Card. | Default | Meaning | Source |
 |---|---|---|---|---|
 | `series/dataId@val` | 0..1 | none | `data@id` of this series' data set. **Absent is valid**: a `paretoLine` series has no dataId and takes its data from its owner (§5). Any other series with no dataId, or with a dangling id, is unsupported. | [S] 2.24.3.21; [N: PA1, PA2 paretoLine has no dataId] |
-| role of each dim | — | — | Within a data set, the dimension is chosen by `@type`, never by position: `val`/`size`/`colorVal` give the values, `cat`/`entityId` give the categories. If there is no `cat` dimension, categories are the 1-based point ordinals [N: WF1, HI1, BW1 have only `numDim val`]. If several dims share a type, the first wins and a diagnostic is raised [U]. | [S][N] |
-| point count | — | — | `max(ptCount)` over the bound dims, or the resolved range length. A value point that is blank, non-numeric or missing is **excluded from statistics** (histogram, box, Pareto) and drawn as a gap or zero per family (§§3–8). | [U] |
+| role of each dim | — | — | Within a data set, the dimension is chosen by `@type`, never by position: `val`/`size`/`colorVal` give the values, `cat`/`entityId` give the categories. The XML of WF1, HI1 and BW1 has **no `cat` dimension** [N]. Category labels then become the 1-based ordinals [P: no Office output shows the displayed labels]. If several dims share a type, the first wins and a diagnostic is raised [P]. | [S][N][P] |
+| point count | — | — | `max(ptCount)` over the bound dims, or the resolved range length. Point states follow §2.4. | [P] |
 | `series@layoutId` | **req** | n/a | family selector (§3) | [S] |
 | `series@hidden` | opt | `0` | the series is hidden from layout | [S][N: FN2 two series `hidden="1"`] |
 | `series@ownerIdx` | opt | none | index of the owning series (paretoLine → its histogram) | [S][N: PA1 `ownerIdx="0"`] |
@@ -259,6 +364,34 @@ treemap or sunburst before it becomes normative.
 `plotAreaRegion`, 0-based. [N: PA1 owner is the first series; U as a general
 rule]
 
+### 2.4 Point states (spec §5.8)
+
+Every numeric input point (`val`, `size`) is exactly one of the following:
+
+- **value:** a finite number. A cached `pt` holds an xsd:double; a cell
+  value is scanned with the Excel numeric-text rules (`scanChartNumber`).
+- **blank:** a missing `pt@idx` within `ptCount`, or an empty cell.
+- **error(code):** an error cell (`#N/A`, kept distinct from the other codes).
+- **unavailable:** a formula cell with no saved `<v>`, or a point whose role
+  could only be resolved through a reference that failed (§2.2).
+
+The state is preserved through fill and is never normalised early.
+
+Family use:
+
+| Family | value | blank | error(code) | unavailable |
+|---|---|---|---|---|
+| Histogram, Pareto, box & whisker, treemap, sunburst (**analytic**) | used | excluded from the computation | excluded from the computation | **refused** ("This chart's data is not available") |
+| Waterfall | used | contributes 0 to the accumulator; no bar [P] | no bar, contributes 0, diagnostic [P] | no bar, contributes 0, `chart-point-unavailable` diagnostic [P] |
+| Funnel | used | no bar [P] | no bar [P] | no bar, plus diagnostic [P] |
+
+The analytic budget is 65,536 points per series, counted over **all** points
+including blanks and errors, and processed fully. A breach is **refused** ("This
+chart has too many data points to summarize"). A prefix is never summarised
+(spec §4.3, §7).
+
+Treemap and sunburst weight rules are in §7.
+
 ---
 
 ## 3. Layout selection (§4.3 "Layout selection")
@@ -268,7 +401,7 @@ natively.
 
 | layoutId | Family | Discriminator | Native |
 |---|---|---|---|
-| `clusteredColumn` | **histogram** when `layoutPr/binning` is present; **pre-aggregated column** (Excel "By Category") when `layoutPr/aggregation` is present or no binning | `binning` / `aggregation` choice (2.24.3.84) | HI1, HI2, PA1, PA2 (binning). `aggregation` is unconfirmed. |
+| `clusteredColumn` | **binned histogram** when `layoutPr/binning` is present. **By-category histogram** (Excel "By Category": equal categories grouped, values summed, §5.1) when `layoutPr/aggregation` is present. With neither element: unsupported [P]. | `binning` / `aggregation` choice (2.24.3.84) | HI1, HI2, PA1, PA2 (binning). `aggregation` is unconfirmed natively. |
 | `paretoLine` | **Pareto** cumulative line. Only valid with `ownerIdx` pointing at a `clusteredColumn` series. | `ownerIdx` | PA1, PA2 |
 | `waterfall` | waterfall | | WF1, WF2 |
 | `funnel` | funnel | | FN1, FN2 |
@@ -302,16 +435,15 @@ All attributes are optional xsd:boolean, and **none has a schema default**.
 
 | Attribute | Applies to | Parser default when absent | Meaning [S] | Native |
 |---|---|---|---|---|
-| `connectorLines` | waterfall | **`1`** [U] | "visibility of connector lines between data points" | WF2 `1`. WF1 has no visibility element. |
+| `connectorLines` | waterfall | **`1`** [U] | "visibility of connector lines between data points" | WF2 `1`. WF1 has no `layoutPr/visibility` (its `dataLabels/visibility` is a different element, §4.2). |
 | `meanLine` | boxWhisker | **`0`** [U] | "visibility of the line connecting all mean points" | BW1, BW2a `0` |
 | `meanMarker` | boxWhisker | **`1`** [U] | "visibility of markers denoting the mean" | BW1, BW2a `1` |
 | `nonoutliers` | boxWhisker | **`0`** [U] | "visibility of non-outlier data points" (inner points) | BW1, BW2a `0` |
 | `outliers` | boxWhisker | **`1`** [U] | "visibility of outlier data points" | BW1, BW2a `1` |
 
-The absence defaults equal the values Excel writes for a newly inserted chart
-(every Excel-written box and whisker writes all four flags explicitly). BW2b
-omits `visibility` entirely, and Excel's rendering of that case is
-**unconfirmed**. [U]
+The absence defaults equal the values written in the observed BW1 and BW2a
+parts, which write all four flags explicitly. BW2b omits `layoutPr/visibility`
+entirely, and Excel's rendering of that case is **unconfirmed**. [U]
 
 ### 4.2 Data-point and label overrides (§4.3 "data-point overrides")
 
@@ -344,33 +476,81 @@ omits `visibility` entirely, and Excel's rendering of that case is
 | `binning@underflow` | opt | absent = **no underflow bin** | ST_DoubleOrAutomatic. A number creates a bin for values `≤ underflow` [D-hist "below or equal"]. `auto` is an automatic cut-off. | [S][N: HI2 `11`]; `auto` is unconfirmed |
 | `binning@overflow` | opt | absent = **no overflow bin** | a bin for values `> overflow` [D-hist "above"]. `auto` is automatic. | [S][N: HI2 `14`]; `auto` is unconfirmed |
 
-Binning algorithm:
+Binning algorithm [P unless tagged]. The algorithm is disjoint: every value
+falls in exactly one bin.
 
-1. Take the finite numeric values `v`, excluding blanks and text.
-2. Let `lo` be `underflow` if it is set, else `min(v)`. Let `hi` be `overflow`
-   if it is set, else `max(v)`.
-3. Width: `binSize`, or `(hi−lo)/k` with `k = binCount − (#under/overflow bins
-   present)`, or Scott's rule `h = 3.49·σ·n^(−1/3)` (σ is the sample standard
-   deviation). Bins start at `lo`. **The exact Scott variant (sample or
-   population σ, rounding of `h` and of the bin start) is unconfirmed and needs
-   a numeric oracle** [U].
-4. Interval closure follows `intervalClosed`. The first inner bin is closed on
-   both ends when `r` (`[lo, lo+h]`), matching Excel's label `[a, b]`. [U]
-5. Labels use Office interval notation: inner bins `(a, b]` (or `[a, b)`),
-   underflow `≤lo`, overflow `>hi`. [D-hist shows these only as images: U on
-   exact glyphs and number format]
-6. Counts are drawn as columns with `catScaling@gapWidth` (natively `0` for
-   histograms).
+1. **Inputs.**
+   - Points in the `value` state, taken over all of them (the §2.4 states and
+     the analytic budget apply).
+   - `U` = `underflow` and `O` = `overflow`, when numeric.
+   - `underflow="auto"` or `overflow="auto"` has unconfirmed semantics [U], so
+     the chart is **unsupported** until an oracle exists.
+2. **Outer bins first, removed before inner binning.**
+   - Closure `r` (the default): the underflow bin is `{v ≤ U}` [D-hist "below
+     or equal"] and the overflow bin is `{v > O}` [D-hist "above"].
+   - Closure `l`: the underflow bin is `{v < U}` and the overflow bin is
+     `{v ≥ O}` (mirrored so the bins stay disjoint) [P].
+   - The inner set is what remains: `U < v ≤ O` (`r`) or `U ≤ v < O` (`l`),
+     with a missing bound treated as unbounded.
+3. **Range.** `lo = U` if set, else `min(inner)`. `hi = O` if set, else
+   `max(inner)`.
+4. **Width `h` and inner-bin count `k`.**
+   - **binSize:** `h = binSize` and `k = max(1, ceil((hi − lo) / h))`.
+   - **binCount:** `k = binCount − [U set] − [O set]` (the count includes the
+     outer bins [D-hist]), and `h = (hi − lo) / k`.
+   - **Automatic:** Scott's rule [D-hist], `h = 3.49 · s · n^(−1/3)`, where `s`
+     is the sample standard deviation of the inner set, and
+     `k = max(1, ceil((hi − lo) / h))`.
+
+   The exact Scott variant (sample or population σ, rounding of `h` and of the
+   bin start) is **[U], pending a numeric oracle**.
+5. **Inner bins.** The edges are `eᵢ = lo + i·h` for `i = 0..k`.
+   - `r`: bin `i` is `(eᵢ, eᵢ₊₁]`. When `U` is **not** set, bin 0 is
+     `[e₀, e₁]`, so that `min` is included.
+   - `l`: bin `i` is `[eᵢ, eᵢ₊₁)`. When `O` is **not** set, the last bin is
+     `[eₖ₋₁, eₖ]`, so that `max` is included.
+
+   Membership is decided only on the inner set, so a value never counts twice.
+6. **Degenerate inputs.**
+   - An empty inner set produces no inner bins; the outer bins are still drawn.
+   - `hi = lo` produces one inner bin `[lo, lo]`.
+7. **Refused** (`refused("invalid binning")`, the card), when any of these
+   holds:
+   - `binSize` is non-finite or `≤ 0`;
+   - `binCount` has no parseable value, or `k < 1` after subtracting the
+     outer bins;
+   - `U` and `O` are both set with `U ≥ O` (`r`) or `U > O` (`l`);
+   - Scott's `h` is non-finite or `≤ 0` with `hi > lo`;
+   - `k + outer bins > 4,096` (the work bound, spec §6.5).
+8. **Labels** use Office interval notation: inner bins `(a, b]` / `[a, b)` (`r`)
+   or `[a, b)` (`l`), underflow `≤U` (`r`) / `<U` (`l`), overflow `>O` (`r`) /
+   `≥O` (`l`). [D-hist shows these only as images, so the exact glyphs and
+   number format are U]
+9. Counts are drawn as columns with `catScaling@gapWidth`, which is natively
+   `0` for histograms (HI1, HI2).
 
 HI2 worked example (values 12, 10, 11, 13, 15; binSize 2; underflow 11;
-overflow 14; `r`): bins `≤11` → {10, 11} = 2, `(11,13]` → {12, 13} = 2,
-`>14` → {15} = 1. Whether an empty `(13,14]` bin appears before the overflow
-bin is unconfirmed [U: oracle].
+overflow 14; `r`):
 
-Pre-aggregated data ("By Category"): a `clusteredColumn` series with
-`aggregation` (or with no binning) is drawn as given, one column per category
-point. [S CT_Aggregation 2.24.3.2][D-pareto "By Category"]. **No native part.**
-[U]
+- Underflow `≤11` = {10, 11} = 2. Overflow `>14` = {15} = 1.
+- The inner set is {12, 13}, with `lo = 11`, `hi = 14` and
+  `k = ceil(3/2) = 2`, giving the bins `(11,13]` = {12, 13} = 2 and
+  `(13,15]` = {} = 0.
+- Whether Excel shows the empty second inner bin, and whether its upper label
+  is clipped to 14, is [U: oracle].
+
+**By-category histogram (`aggregation`, Excel "By Category").**
+
+- Equal categories are grouped and their values **summed**. [D-hist "The histogram will group the same categories and sum the values
+  in the value axis"; S CT_Aggregation 2.24.3.2]
+- Category equality is exact string equality of the displayed category text
+  [P]. Groups are ordered by first occurrence [P].
+- Blank and error values contribute nothing. An unavailable value gives
+  **refused** (§2.4).
+- Example: `(A,2), (A,3), (B,1)` gives the bars `A = 5`, `B = 1`.
+- A missing `cat` dimension is unsupported [P].
+- **There is no native `aggregation` part** [U]. In particular, whether Excel
+  writes `<cx:aggregation/>` for "By Category" is unconfirmed.
 
 ### 5.2 Pareto
 
@@ -379,6 +559,8 @@ point. [S CT_Aggregation 2.24.3.2][D-pareto "By Category"]. **No native part.**
 | owner series | 1 | n/a | `clusteredColumn` with `binning`, or by category | [N: PA1, PA2] |
 | `paretoLine` series | 1 | n/a | `ownerIdx` points at the owner. **No `dataId`** (the data comes from the owner). Has its own `axisId`. | [S][N: PA1 `<cx:series layoutId="paretoLine" ownerIdx="0">…<cx:axisId val="2" />`] |
 | percent axis | 1 | n/a | `valScaling min="0" max="1"` + `units unit="percentage"`. The line is plotted as a **fraction 0..1** and labelled 0 %–100 %. | [N: PA1, PA2 axis 2] |
+| column gap: `catScaling@gapWidth` on the category axis (identified by the scaling child, §1) | opt | none (schema). When absent, the parser uses `0` for binned owners (histogram look) [P]. | gap between Pareto columns as a ratio of the column width | [S][N: PA1 `0`, PA2 `2.54999995`] |
+| bars | — | — | binned owner: the §5.1 bins, including the outer bins; by-category owner: the §5.1 aggregated groups | [P] |
 
 Rules:
 
@@ -419,8 +601,8 @@ Rules:
   [U]). A `dataPt@idx` `spPr` overrides one bar.
 - Connector lines join the end of bar *i* to the start of bar *i+1* when
   `connectorLines` is true [D-wf].
-- Categories: the `cat` dimension if present, else ordinals [N: WF1, WF2 have
-  no `cat` dimension].
+- Categories: the `cat` dimension if present. The XML of WF1 and WF2 has no
+  `cat` dimension [N], and ordinal labels are then used [P].
 
 ---
 
@@ -428,38 +610,79 @@ Rules:
 
 | Element / attribute | Card. | Default | Meaning | Source |
 |---|---|---|---|---|
-| `strDim type="cat"` (multi-level) | 1 | n/a | category path, one level per column (root = leftmost) | [N: TM, SB `_xlchart.v1.0` = `Sheet1!$B$4:$D$14`] |
+| `strDim type="cat"` (multi-level) | 1 | n/a | category path, one level per column. Root = leftmost is [P]. | [N: TM, SB `_xlchart.v1.0` = `Sheet1!$B$4:$D$14`, a 3-column range] |
 | `numDim type="size"` | 1 | n/a | leaf weight | [N: TM, SB] |
 | `parentLabelLayout@val` | 0..1 | **unconfirmed** [U]. The proposed treemap default is `overlapping` (the Excel UI default) and is unverified. Sunburst ignores it. | `none` (no parent labels), `banner` (banner above the category), `overlapping` (label laid out within the category) (2.24.4.17) | [S]; TM writes `<cx:layoutPr />` (absent); SB has no layoutPr |
 
-### Hierarchy derivation (from the TM/SB sheet data; native)
+### Hierarchy derivation
 
-TM/SB rows (B, C, D | E):
+**What is native [N]:** only the *input* cells of TM and SB, and the fact that
+their parts reference `B4:D14` (paths) and `E4:E14` (weights). Their parts have
+no cached levels or derived tree, and their XLSX fallback is a text box, not a
+rendered chart.
+
+**Every rule below is therefore a project rule [P].** Each is a validation
+obligation until a discriminating Office reference confirms it: a rendered
+fallback picture, or a PowerPoint cache of the derived paths.
+
+TM/SB input rows (B, C, D | E); `.` is an empty cell:
 
 ```
-Best  First  A | 3        Worst Third  E | 4
-      .      B | 4              Fourth . | 3
-      .      C | 2              Fifth  . | 4
-      .      D | 3              Sixth  F | 5
-      .      E | 4
-      Second C | 5
-      .      D | 6
+r4  Best  First  A | 3        r11 Worst Third  E | 4
+r5  .     .      B | 4        r12 .     Fourth . | 3
+r6  .     .      C | 2        r13 .     Fifth  . | 4
+r7  .     .      D | 3        r14 .     Sixth  F | 5
+r8  .     .      E | 4
+r9  .     Second C | 5
+r10 .     .      D | 6
 ```
 
-1. **Carry-forward rule:** a blank cell in a non-leaf column, followed by a
-   non-blank cell further right in the same row, inherits the value from the
-   row above in that column. (Row 5: blank B and C, then D=B, gives the path
-   Best/First/B.)
-2. **Short-path rule:** a row whose trailing columns are blank is a **leaf at
-   its last non-blank level**. (Row 12: B blank → Worst, C=Fourth, D blank, so
-   the leaf is Worst/Fourth with weight 3.) Carry-forward never fills the
-   trailing blanks.
-3. Node identity is the **full path** (all levels), so `C` under First and `C`
-   under Second are different nodes.
-4. Duplicate full paths are summed. [U: there is no native example]
-5. A weight that is ≤ 0, blank or non-numeric excludes its row, and a
-   diagnostic is raised. [U]
-6. A parent's weight is the sum of its descendants.
+The parser keeps a **current path** `P[1..L]`, one entry per level and
+initially empty. Rows are processed top to bottom. For each row:
+
+1. **Depth.** `d` is the index of the deepest non-blank level cell. If no
+   level cell is non-blank, the row is excluded, with a diagnostic. [P]
+2. **Ancestor reset.** For each level `j = 1..d` in order:
+   - if cell `j` is non-blank, set `P[j]` to it and **clear `P[j+1..L]`**. A
+     changed ancestor resets every inherited lower level, so an old child is
+     never attached beneath a new parent. [P]
+   - otherwise, keep `P[j]` as it is.
+3. **Recursive carry-forward.** A blank cell at level `j ≤ d` takes `P[j]`,
+   which is the nearest non-blank value above in that column **that no
+   ancestor change has cleared since**. Because `P` persists across rows, this
+   lookup reaches back through any number of blank rows. [P]
+   - In r10, B and C are blank. B comes from r4 (Best) and C from r9 (Second),
+     giving Best/Second/D.
+   - If `P[j]` is empty because of a reset (for example `X/Y/Z` followed by
+     `W/./V`), the level becomes an **unnamed node `""`**, with a diagnostic.
+     [P, U]
+4. **Short path.** The row's leaf path is `P[1..d]`. Levels deeper than `d`
+   are ignored and are **not** filled from `P`. [P]
+   - r12: B is blank, so it takes Worst. C=Fourth clears D. D is blank and
+     `d = 2`, so the leaf is Worst/Fourth with weight 3.
+5. **Identity.** A node is identified by its **full path**, so `C` under
+   Best/First and `C` under Best/Second are different nodes. [P]
+6. **Weights.** The weight comes from the `size` point (§2.4 states):
+   - `value > 0` is used;
+   - `≤ 0`, blank or error excludes the row, with a diagnostic;
+   - unavailable gives **refused**.
+7. **Aggregation.**
+   - Duplicate full paths are **summed**. [P; no native example]
+   - A parent's weight is the **sum of its descendants**. [P]
+   - A path that is both a leaf (from a short row) and a prefix of deeper rows
+     keeps its own weight as an unnamed child `""`. [P, U]
+8. **Bounds.** More than 4,096 nodes (spec §6.5) gives **refused**.
+
+Derived TM/SB tree [P]:
+
+- Best (27)
+  - First (16): A 3, B 4, C 2, D 3, E 4
+  - Second (11): C 5, D 6
+- Worst (16)
+  - Third (4): E 4
+  - Fourth 3
+  - Fifth 4
+  - Sixth (5): F 5
 
 Layout: the treemap uses squarified rectangles. The sunburst draws rings by
 depth (the root level is the inner ring), with angle proportional to subtree
@@ -475,9 +698,12 @@ oracles. [U]
 |---|---|---|---|---|
 | `statistics@quartileMethod` | 0..1 | none (schema); parser **`exclusive`** [U] | `inclusive`: "includes the median when splitting the dataset into quartiles". `exclusive`: "excludes the median when splitting". (2.24.4.19) | [S][D-box "Inclusive median … included … if N is odd"][N: BW1, BW2 `exclusive`]; `inclusive` is unconfirmed natively |
 | `visibility@meanLine/meanMarker/nonoutliers/outliers` | opt | §4.1 | | [S][N: BW1] |
-| data | 1 per series | n/a | one box per series. BW1 has 3 series with `numDim val` each and **no `cat` dimension**, so the box labels come from ordinals or series names. | [N: BW1, BW2a] |
+| data | 1 per series | n/a | one box per series. In BW1, the XML has 3 series with one `numDim val` each and **no `cat` dimension**. Box labels then come from the series name, else the ordinal. This is [P]: no Office output shows the displayed labels. | [N: BW1, BW2a (XML)][P] |
+| box spacing: `catScaling@gapWidth` on the category axis (identified by the scaling child, §1) | opt | none (schema); the parser uses `1` when absent [P] | gap between boxes as a ratio of the box width | [S][N: BW1 `1`, BW2a `2.47000003`, BW2b `0.0599999987`] |
 
-Statistics per series (values: finite numbers only, sorted, n = count):
+Statistics per series use the points in the `value` state. Blank and error
+points are excluded, and an `unavailable` point gives **refused** (§2.4). The
+values are sorted, and *n* is their count.
 
 - **Median**: the usual median.
 - **Q1, Q3**: per ST_QuartileMethod, when *n* is odd the median is
@@ -498,8 +724,9 @@ Statistics per series (values: finite numbers only, sorted, n = count):
 - The **mean marker** (×) is drawn when `meanMarker` is set. The **mean line**
   connects the means of consecutive series when `meanLine` is set [S wording].
   **Inner points** are drawn when `nonoutliers` is set.
-- A series with no numeric values draws no box [N: BW2b references an empty
-  range, `Sheet1!$D$5:$D$13`], and the chart is still supported. [U render]
+- A series with no `value` points draws no box, and the chart is still
+  supported. [N: BW2b references an empty range, `Sheet1!$D$5:$D$13`;
+  P/U for the rendering]
 
 ---
 
@@ -528,35 +755,64 @@ parser must recognise it **before** reading geography and must never decode
 
 ---
 
-## 11. Unsupported conditions (all return "unsupported" under §6.3)
+## 11. Outcome conditions (spec §6.3)
 
-- The part cannot be parsed, its root is not `cx:chartSpace`, or it has no
-  `plotAreaRegion/series`.
-- An unknown `layoutId`, mixed families, or any `regionMap`.
-- A `dataId` that resolves to no `data`, or a required dimension (§§5–9) that
-  is missing.
-- XLSX: an `f` that does not resolve to a single-sheet range. DOCX/PPTX: no
-  `lvl` cache.
-- Analytic inputs over the §7 limit (spec: never truncated).
+**unsupported(reason).** The fallback is selected, else the card. This applies
+when:
+
+- the part cannot be parsed, exceeds the 8/4 MiB part cap, has a root that is
+  not `cx:chartSpace` (or is a `dashboard`), or has no
+  `plotAreaRegion/series`;
+- the `layoutId` is unknown, the families are mixed, any series is
+  `regionMap` (recognised before `geography` is read), or the family is
+  listed as blocked;
+- a non-paretoLine series has a `dataId` that resolves to no `data`;
+- a required dimension (§§5–9) is missing, or a required **role** is
+  unavailable after the §2.2 precedence ("This chart's data is not
+  available", §6.4);
+- the histogram has `underflow` or `overflow` set to `auto`, or a
+  `clusteredColumn` series has neither `binning` nor `aggregation`;
+- there are multiple visible funnel series;
+- a dimension has a multi-level cache and no resolvable `f`.
+
+**refused(reason).** The fallback is selected, else the card with the reason's
+text. This applies when:
+
+- an analytic input exceeds 65,536 points per series ("This chart has too many
+  data points to summarize"); a prefix is never used;
+- an analytic family has a required point that is `unavailable` ("This
+  chart's data is not available", §2.4 and spec §5.8);
+- a §6.4 embedded-workbook admission check or budget is breached;
+- the binning is invalid (§5.1 step 7), or the histogram bins or treemap and
+  sunburst nodes exceed 4,096.
 
 ## 12. Open questions for reviewers
 
-1. **Multi-level `lvl` cache order** (§2.2): no native part has one. A PPTX
+1. **Multi-level `lvl` cache order** (§2.2): no native part has one, so the
+   [P] narrowing of the cache-first rule needs a controller ruling. A PPTX
    treemap or sunburst saved by PowerPoint is needed.
 2. **Quartile computation** (§8): half-medians or interpolation. BW1 cannot
    discriminate, so an oracle with even *n* is needed.
 3. **Waterfall subtotal height** (§6): `acc` or the cell value. There is no
    native `subtotals/idx`.
 4. **Histogram**: the Scott's-rule variant and bin alignment. `binCount`,
-   `intervalClosed="l"` and `underflow/overflow="auto"` have no native example.
-   Bin-label glyphs are unconfirmed.
+   `intervalClosed="l"` (including the mirrored outer-bin closure) and
+   `underflow/overflow="auto"` have no native example. Bin-label glyphs, and
+   whether an empty last inner bin is shown, are unconfirmed.
 5. **Absence defaults** for `connectorLines`, the box visibility flags,
    `quartileMethod`, `intervalClosed` and `parentLabelLayout`: MS-ODRAWXML gives
-   none, and every native writes them explicitly. The proposed defaults are
-   Excel's new-chart values.
-6. **By-category histogram / Pareto (`aggregation`)**: no native part.
-7. **Schema/native mismatches** to accept: `binSize`/`binCount`/`axisId` are
+   none. They are omitted in WF1 (`connectorLines`), BW2b (all box flags) and
+   TM/SB (`parentLabelLayout`), and Excel's rendering of those parts is
+   unknown. The proposed defaults are the values written in the parts that do
+   carry them.
+6. **By-category histogram / Pareto (`aggregation`)**: no native part. The
+   summing rule rests on [D-hist].
+7. **Hierarchy rules** (§7): carry-forward, ancestor reset, short path,
+   unnamed `""` nodes and summation are all [P], pending an Office-rendered
+   reference.
+8. **Schema/native mismatches** to accept: `binSize`/`binCount`/`axisId` are
    written as `@val` attributes rather than text, and `externalData@cx:autoUpdate`
    is written namespace-qualified.
-8. **Fixture licence** (PROVENANCE.md): MPL-2.0 per LibreOffice policy. Owner
-   confirmation is needed.
+9. **Fixture licence** (PROVENANCE.md): MPL-2.0 per LibreOffice policy. Owner
+   confirmation is still pending; it is not resolved by any general repository
+   licence statement.

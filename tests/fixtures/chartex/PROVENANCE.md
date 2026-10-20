@@ -16,34 +16,53 @@ They are untrusted test data. Nothing in them is executed.
   Devansh Varshney (histogram import/export).
   **Needs owner confirmation:** GitHub's licence detector reports the repo as
   GPL-3.0, because the top-level `COPYING` is the GPLv3 text that covers the
-  combined binary. MPL-2.0 is a file-level licence, so redistributing these
-  files unmodified next to MIT code is permitted, provided this notice and the
-  MPL-2.0 terms (<https://mozilla.org/MPL/2.0/>) stay with them. The files must
-  not be modified in place.
+  combined binary. **The determination is pending.** Nothing in this file settles it.
+  *If* MPL-2.0 is confirmed, MPL-2.0 is a file-level licence, and redistributing
+  these files unmodified next to MIT code would be permitted, provided this
+  notice and the MPL-2.0 terms (<https://mozilla.org/MPL/2.0/>) stay with them.
+  The files must not be modified in place.
 
 ## How "Office-authored" was checked
 
-1. `docProps/app.xml` `<Application>` names Microsoft Excel, Microsoft Excel
-   Online or Microsoft Office PowerPoint.
-2. **Pristine-serialisation check.** Office's ChartEx serialiser writes every
-   empty element with a space before `/>` (for example `<cx:subtotals />`). An
-   element written as `…"/>` with no space marks a hand edit made at zip level
-   with `app.xml` left intact. Every `chartEx*.xml` part committed here has zero
-   such elements. To reproduce: `unzip -p F xl/charts/chartEx1.xml | grep -c '[^ ]/>'`
-   should print 0.
-3. **Git history.** Where a file was modified after its first commit, the
-   first-commit version was compared with the later one. If the later version
-   added hand-edited elements, the pristine version was kept.
+This is a screening process, not proof of authorship.
 
-Rejected candidates from the same folder:
+1. **Metadata.** `docProps/app.xml` `<Application>`/`<AppVersion>` reports
+   Microsoft Excel, Microsoft Excel Online or Microsoft Office PowerPoint.
+   - This is a **metadata-reported** producer: a later zip-level edit can leave
+     `app.xml` untouched.
+   - No file here was independently re-saved in Office for this project.
+   - The AppVersion values (16.0300, 16.0000) identify the product line, not a
+     precise build.
+2. **Serialisation screening heuristic.** Office's ChartEx serialiser, as seen
+   in these files, writes every empty element with a space before `/>` (for
+   example `<cx:subtotals />`). An element written as `…"/>` **flags a
+   possible** hand edit for closer inspection; it does not prove one.
+   Whitespace and hex case are not authorship evidence on their own.
+   - Every `chartEx*.xml` part committed here has zero flagged elements.
+   - To reproduce: `unzip -p F xl/charts/chartEx1.xml | grep -c '[^ ]/>'`
+     prints 0.
+3. **Git history and XML comparison (the deciding check).** Where a file was
+   modified after its first commit, the first-commit part was diffed against
+   the later one, and the earliest version that matches the Office metadata was
+   kept.
 
-- `funnel1.xlsx`: hand-edited `cx:spPr` (lower-case `c55a11`, no space before `/>`).
+Rejected candidates from the same folder. The reasons below are this
+project's assessment; reviewers could not independently retrieve the rejected
+bytes, so they are not independently confirmed.
+
 - `sunburst.xlsx` and `regionMap.xlsx` at master (`03ecbbadd4`, "Support more
-  children of layoutPr"): these add hand-written `<cx:parentLabelLayout val="overlapping"/>`
-  and `<cx:regionLabelLayout val="bestFitOnly"/>`. The pristine `2dba43e317`
-  versions are kept instead.
+  children of layoutPr"). **Confirmed by XML diff** against `2dba43e317`: the
+  later commit adds `<cx:parentLabelLayout val="overlapping"/>` (sunburst) and
+  `<cx:regionLabelLayout val="bestFitOnly"/>` (region map), and the commit's
+  purpose is to test those elements. The pristine `2dba43e317` versions are
+  kept.
+- `funnel1.xlsx`: its series `cx:spPr` was flagged by the heuristic
+  (lower-case `c55a11`, no space before `/>`). It has a single commit, so there
+  is no earlier version to diff against. It was excluded as **likely
+  modified**, not proven modified; FN1 and FN2 cover funnel without it.
 - `color_funnel.xlsx` and `tdf163727_histogram_roundtrip_multi_chart.xlsx`:
-  saved by Collabora Office/LibreOffice, so not Office-authored.
+  `app.xml` names Collabora Office/LibreOffice, so they are not Office-authored
+  by their own metadata.
 
 ## Files
 
@@ -72,11 +91,18 @@ Notes:
 - All XLSX parts reference data only through hidden `_xlchart.vN.M` defined
   names in `xl/workbook.xml`. They carry **no** cached `cx:lvl`. The PPTX part is
   the only one with cached points.
-- In XLSX the `mc:Fallback` is an `xdr:sp` text box, not a picture. In PPTX it is
-  a `p:pic`. The `mc:Choice` requirement is `cx1`
-  (`http://schemas.microsoft.com/office/drawing/2015/9/8/chartex`) in XLSX and
-  `cx2` (`…/2015/10/21/chartex`) in PPTX. The part namespace is always
-  `http://schemas.microsoft.com/office/drawing/2014/chartex`.
+- In XLSX the `mc:Fallback` is an `xdr:sp` text box, not a picture. In PPTX it
+  is a `p:pic`.
+- `mc:Choice@Requires` tokens and their bound URIs. The prefix is lexical; the
+  URI is what matters.
+  - `cx1` = `http://schemas.microsoft.com/office/drawing/2015/9/8/chartex`:
+    WF1, WF2, HI1, HI2, PA1, PA2, BW1 (and both BW2 drawings), TM, SB.
+  - `cx2` = `http://schemas.microsoft.com/office/drawing/2015/10/21/chartex`:
+    **FN1 (xlsx)** and FN2 (pptx).
+  - `cx4` = `http://schemas.microsoft.com/office/drawing/2016/5/10/chartex`:
+    RM (xlsx).
+- The `a:graphicData@uri`, and the root namespace of all 14 chart parts, is
+  always `http://schemas.microsoft.com/office/drawing/2014/chartex`.
 
 ## Families
 
