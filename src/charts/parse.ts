@@ -6,7 +6,7 @@
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
-import type { ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import type { ChartDiagnostic, ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 import { admitChartModel } from './axisBinding'
@@ -17,6 +17,8 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { readCategoryLevels } from './categories'
+import { CHART_TITLE_LINE_LIMIT, CHART_TITLE_RUN_LIMIT, CHART_TITLE_TEXT_LIMIT, CHART_TITLE_TRUNCATED, runsText, titleRuns } from './titles'
 import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
 import { contourGridDiagnostic, contourGridOf } from './families/contour'
 import { readBubbleOptions } from './families/bubble'
@@ -100,6 +102,9 @@ function capLabel(text: string, cut: { truncated: boolean }): string {
 /** Saved data of a role: its cache (numRef/strRef/multiLvlStrRef) or literal. */
 const cacheOf = (node: XmlNode | undefined) => child(child(node, 'numRef'), 'numCache') ?? child(child(node, 'strRef'), 'strCache')
   ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl') ?? child(node, 'numLit') ?? child(node, 'strLit')
+/** The declared point count of a saved source; a multi-level cache declares it once, on the cache (spec 5.9). */
+const declaredCount = (node: XmlNode | undefined, cache: XmlNode | undefined) =>
+  finite(val(child(cache, 'ptCount') ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'ptCount')))
 /**
  * The saved points of a data source by `pt@idx`, sparse indices kept: a missing
  * index (or ptCount padding) is `missing` at its position, never compacted.
@@ -108,7 +113,7 @@ const cacheOf = (node: XmlNode | undefined) => child(child(node, 'numRef'), 'num
 function cachePoints<T>(node: XmlNode | undefined, read: (pt: XmlNode) => T, missing: T, cut?: { truncated: boolean }, limit = CHART_POINT_LIMIT): T[] {
   const cache = cacheOf(node)
   const out: T[] = []
-  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  const declared = declaredCount(node, cache) ?? 0
   if (cut && declared > limit) cut.truncated = true
   const count = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0))
   for (const pt of getChildren(cache, 'pt')) {
@@ -145,7 +150,7 @@ function labelBytes(node: XmlNode | undefined): number {
  * padding included), whether a declared count or an index exceeds `limit`, and whether points carry formats. */
 function cacheExtent(node: XmlNode | undefined, limit: number): { length: number; over: boolean; formats: boolean } {
   const cache = cacheOf(node)
-  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  const declared = declaredCount(node, cache) ?? 0
   let length = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0)), over = declared > limit, formats = Boolean(textOf(child(cache, 'formatCode')))
   for (const pt of getChildren(cache, 'pt')) {
     const index = finite(attrs(pt).idx)
@@ -281,6 +286,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
     auto: child(node, 'auto') ? flag(child(node, 'auto'), true) : undefined,
     minorGridlines: child(node, 'minorGridlines') ? true : undefined,
     sourceLinked: numFmt.sourceLinked !== undefined ? numFmt.sourceLinked === '1' || numFmt.sourceLinked === 'true' : undefined,
+    noMultiLvlLbl: kind === 'category' && child(node, 'noMultiLvlLbl') && flag(child(node, 'noMultiLvlLbl'), true) ? true as const : undefined,
   }
   const present = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<ChartAxis>
   return {
@@ -447,6 +453,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const authoredSeries: number[] = []
   const cut = { truncated: false }
   let sharedCategoryNode: XmlNode | undefined
+  let categoryLevels: ChartModel['categoryLevels'], categoryMultiLevel = false
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
@@ -548,9 +555,11 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         if (hasCache(catNode)) {
           sharedCategoryNode = catNode
           charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode)
+          // Outer levels of a multi-level cache (spec 5.9), charged before they are kept.
+          categoryLevels = readCategoryLevels(catNode, categories.length, charge, cut, CHART_LABEL_LIMIT)
           if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
         }
-        else { const range = rangeOf(catNode); if (range) categoryPending = range }
+        else { const range = rangeOf(catNode); if (range) { categoryPending = range; if (child(catNode, 'multiLvlStrRef')) categoryMultiLevel = true } }
       }
       // Display points past the bound are dropped at draw time (analytic series keep them for analysis).
       if (values.length > CHART_POINT_LIMIT || (xValues && xValues.length > CHART_POINT_LIMIT)) truncated = true
@@ -592,6 +601,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
       const groupMarker = val(child(node, 'marker'))
       series.push({
+        index,
         name: capLabel(literalName || `Series ${index + 1}`, cut),
         color,
         values,
@@ -646,7 +656,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(stockOpts?.upDownBars ? { upDownBars: stockOpts.upDownBars } : {}),
     })
   }
-  markTrendlineLegendDeletions(legend, groups)
+  const allSeries = groups.flatMap(g => g.series), pointLegend = allSeries.length === 1 && groups.find(g => g.series.length === 1)?.varyColors
+  // Trendline entry indices never coincide with another entry's key: after the highest series c:idx, or after the
+  // points of a point legend (Office's numbering is unverified).
+  markTrendlineLegendDeletions(legend, groups, pointLegend ? Math.min(64, Math.max(categories.length, allSeries[0].values.length)) : allSeries.reduce((n, s) => Math.max(n, s.index ?? 0), -1) + 1)
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
@@ -658,6 +671,28 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
   else if (groups.some(g => g.family === 'radar') && groups.some(g => g.family !== 'radar')) unsupported ??= 'Combination radar charts are not supported'
   if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : val(child(root, 'lang'))?.startsWith('zh') ? '圖表標題' : 'Chart Title'
+  // Title runs (formatting precedence: rPr, paragraph, txPr, style part, theme) and overlays; legend entries deleted.
+  const titleNode = child(chart, 'title'), titleDiagnostics: ChartDiagnostic[] = []
+  const resolved = title ? titleRuns(titleNode, title, theme, parts?.style?.title, charge) : undefined
+  const runs = resolved?.runs
+  // Runs cut by the title bounds: the title shown (painted and described) is what the runs keep, and it is reported.
+  if (resolved?.truncated) {
+    title = runsText(resolved.runs).replace(/\n/g, ' ').trim() || title
+    truncated = true
+    const reason = `The title keeps ${CHART_TITLE_RUN_LIMIT} runs, ${CHART_TITLE_LINE_LIMIT} lines and ${CHART_TITLE_TEXT_LIMIT} characters`
+    charge(64 + stringBytes(CHART_TITLE_TRUNCATED) + stringBytes(reason))
+    titleDiagnostics.push({ code: CHART_TITLE_TRUNCATED, reason })
+  }
+  const overlay = (node: XmlNode | undefined) => Boolean(child(node, 'overlay')) && flag(child(node, 'overlay'), true)
+  const deleted = new Set<number>()
+  for (const entry of getChildren(legend, 'legendEntry')) {
+    const idx = finite(val(child(entry, 'idx')))
+    // An entry index is a series c:idx (unsigned int) or a point index; the number of entries kept is bounded.
+    if (deleted.size >= CHART_POINT_LIMIT) break
+    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx <= 0xFFFFFFFF) deleted.add(idx)
+  }
+  if (deleted.size) charge(64 + deleted.size * 4)
+  const legendDeleted = deleted.size ? Uint32Array.from([...deleted].sort((a, b) => a - b)) : undefined
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
   const layouts = [plot, child(chart, 'title'), legend]
@@ -666,11 +701,17 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const plotLayout = manualLayout(plot), titleLayout = manualLayout(child(chart, 'title')), legendLayout = manualLayout(legend), text = textStyle(child(root, 'txPr'))
   const model: ChartModel = {
     ...(title ? { title } : {}),
+    ...(runs ? { titleRuns: runs } : {}),
+    ...(title && overlay(titleNode) ? { titleOverlay: true as const } : {}),
+    ...(legend && overlay(legend) ? { legendOverlay: true as const } : {}),
+    ...(legendDeleted ? { legendDeleted } : {}),
+    ...(categoryLevels ? { categoryLevels } : {}),
     groups,
     axes,
     categories,
     ...(categoryValues ? { categoryValues } : {}),
     ...(categoryPending ? { categoryPending } : {}),
+    ...(categoryPending && categoryMultiLevel ? { categoryMultiLevel: true as const } : {}),
     ...(categoryRef ? { categoryRef } : {}),
     ...(legend ? { legend: (val(child(legend, 'legendPos')) ?? 'r') as ChartModel['legend'] } : {}),
     // Chart-level options as authored; absent stays undefined (Office defaults: gap, plot visible only).
@@ -696,7 +737,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
-    ...(contourClips.length ? { diagnostics: contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d }) } : {}),
+    ...(titleDiagnostics.length || contourClips.length ? { diagnostics: [...titleDiagnostics, ...contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d })] } : {}),
   }
   return unsupported ? model : admitAxes(model, charge)
 }

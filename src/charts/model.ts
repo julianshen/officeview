@@ -108,6 +108,8 @@ export interface ChartAxis {
   tickMarkSkip?: number
   /** `c:dispUnits`: tick values are divided by `divisor`; `label` is the unit label drawn beside the axis (spec 5.1). */
   dispUnits?: { divisor: number; unit: string; label?: string }
+  /** `c:catAx/c:noMultiLvlLbl`: a multi-level category axis shows only its innermost level (spec 5.9). */
+  noMultiLvlLbl?: true
   /** `c:dateAx` time units (spec 5.1); `auto` (`c:auto`) lets text categories fall back to a category axis. */
   baseTimeUnit?: ChartTimeUnit
   majorTimeUnit?: ChartTimeUnit
@@ -137,6 +139,8 @@ export interface ChartRange {
 
 export interface ChartSeries {
   labels?: import('./labels').LabelControls
+  /** The series index (`c:idx`; its position when absent or invalid): the key of its legend entry (spec 5.10). */
+  index?: number
   name: string
   /** CSS hex without `#`. */
   color: string
@@ -232,6 +236,16 @@ export interface ChartGroup {
 }
 
 /**
+ * One outer level of multi-level categories (spec 5.9; `multiLvlStrCache/lvl` after the first): group `k` starts at
+ * category index `starts[k]` (ascending) and spans until the next start of this level or of any level outside it.
+ */
+export interface ChartCategoryLevel { starts: Uint32Array; labels: string[] }
+/**
+ * A title run with its formatting resolved (spec 5.10: rPr, paragraph default, txPr, style part; absent: the
+ * theme default). A run whose text is `\n` separates paragraphs.
+ */
+export type ChartTextRun = import('./labels').LabelRun
+/**
  * ChartEx (`cx:`, Office 2016+) groups, read against docs/charts/chartex-map.md (spec 4.2, 4.3). A ChartEx chart is
  * the same `ChartModel`: its one group is a `ChartExGroup`, whose `series` carry the bound roles (values,
  * categories, names; cached, or pending references for the workbook) and whose `chartEx` payload keeps the
@@ -297,6 +311,16 @@ export interface ChartModel {
   legendLayout?: ChartManualLayout
   text?: ChartTextStyle
   title?: string
+  /** The title's runs, formatting resolved (absent: one unformatted run of `title`). */
+  titleRuns?: ChartTextRun[]
+  /** `c:title/c:overlay`: the title takes no space from the plot. */
+  titleOverlay?: true
+  /** `c:legend/c:overlay`: the legend takes no space from the plot and is painted over it. */
+  legendOverlay?: true
+  /** `c:legendEntry/c:delete`: sorted legend entry indices removed (a series' `c:idx`; a point legend: the point index). */
+  legendDeleted?: Uint32Array
+  /** Outer category levels, innermost first (the innermost labels are `categories`; spec 5.9). */
+  categoryLevels?: ChartCategoryLevel[]
   /** The title's text style (ChartEx `title/txPr`). */
   titleText?: ChartTextStyle
   chartAreaFill?: import('./fills').ChartFillStyle
@@ -322,6 +346,8 @@ export interface ChartModel {
   categoryValues?: ChartPoints
   /** The shared category reference still to be filled from worksheet cells. */
   categoryPending?: ChartRange
+  /** `categoryPending` is a multi-level reference (`c:multiLvlStrRef`): its outer lines are outer levels (spec 5.9). */
+  categoryMultiLevel?: true
   /** The shared category reference (kept beside a cache, for provenance only). */
   categoryRef?: ChartRange
   /** Sorted category indices whose cell sits in a hidden row or column of the category reference. */

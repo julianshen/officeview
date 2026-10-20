@@ -5,7 +5,7 @@ import type { ChartFormatter } from './format-api'
 import { pointAt, valueAt, stringBytes } from './points'
 import { pointFormat, type ChartNumberFormat } from './format'
 
-export interface LabelRun { text: string; bold?: boolean; italic?: boolean; color?: string; sizePt?: number }
+export interface LabelRun { text: string; bold?: boolean; italic?: boolean; color?: string; sizePt?: number; /** Typeface (titles). */ font?: string; /** Underlined (titles). */ underline?: boolean }
 export interface LabelOptions extends ChartNumberFormat {
   showVal?: boolean
   showCatName?: boolean
