@@ -2,6 +2,7 @@ import { barGeometry } from './barGeometry'
 import { applyFillStyle, type ChartFillStyle } from './fills'
 import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
+import { traceSmoothCurve, type Point2D } from './smooth'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
  * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
@@ -27,7 +28,7 @@ type FamilyCss = (family: string) => string
  * copied. Every non-value state (blank, error, unavailable) is a gap here, as
  * before D0; the per-family point matrix (spec 5.8) is A2's.
  */
-interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' | 'line' | 'markers'> {
+interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' | 'line' | 'markers' | 'smooth'> {
   /** The model series drawn (its formatting: fill, line, marker, dPt overrides) and its position in its group. */
   source: ChartSeries
   order: number
@@ -43,7 +44,7 @@ function drawModel(model: ChartModel, view = displayView(model)): DrawModel {
     ...model,
     view,
     source: model,
-    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX, point }): DrawSeries => ({ source: s, order: Math.max(0, group.series.indexOf(s)), name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, value, x, hasX, plot:(slot,x)=>{ const p=point(slot,x);return p ? plotPoint(p,group.family,group.grouping,model.dispBlanksAs,model.dispNaAsBlank) : 'gap' } })) })),
+    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX, point }): DrawSeries => ({ source: s, order: Math.max(0, group.series.indexOf(s)), name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, smooth: s.smooth, value, x, hasX, plot:(slot,x)=>{ const p=point(slot,x);return p ? plotPoint(p,group.family,group.grouping,model.dispBlanksAs,model.dispNaAsBlank) : 'gap' } })) })),
   }
 }
 const font = (sizePx: number, family: string, familyCss: FamilyCss, bold = false) => `${bold ? 'bold ' : ''}${sizePx}px ${familyCss(family)}`
@@ -472,8 +473,24 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
             ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
             if (applyLineStyle(ctx, src.lineStyle, plot)) {
               ctx.beginPath()
-              let pen = false
-              for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+              const isSmooth = s.smooth ?? group.smooth ?? false
+              if (isSmooth) {
+                let run: Point2D[] = []
+                for (let i = 0; i < count; i++) {
+                  if (!has(i)) {
+                    if (s.plot(i) !== 'span' && run.length > 0) {
+                      traceSmoothCurve(ctx, run)
+                      run = []
+                    }
+                    continue
+                  }
+                  run.push({ x: xAt(i), y: at(top[i]) })
+                }
+                if (run.length > 0) traceSmoothCurve(ctx, run)
+              } else {
+                let pen = false
+                for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+              }
               ctx.stroke()
             }
           } finally { ctx.restore() }
@@ -517,16 +534,36 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
             ctx.lineWidth = 2
             if (applyLineStyle(ctx, s.source.lineStyle, plot)) {
               ctx.beginPath()
-              let pen = false
-              for (let i = 0; i < count; i++) {
-                if (!point(s, i)) {
-                  const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
-                  const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
-                  if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
-                  continue
+              const isSmooth = s.smooth ?? group.smooth ?? false
+              if (isSmooth) {
+                let run: Point2D[] = []
+                for (let i = 0; i < count; i++) {
+                  if (!point(s, i)) {
+                    const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+                    const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+                    if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) {
+                      if (run.length > 0) {
+                        traceSmoothCurve(ctx, run)
+                        run = []
+                      }
+                    }
+                    continue
+                  }
+                  run.push({ x: px, y: py })
                 }
-                if (!pen) { ctx.moveTo(px, py); pen = true }
-                else ctx.lineTo(px, py)
+                if (run.length > 0) traceSmoothCurve(ctx, run)
+              } else {
+                let pen = false
+                for (let i = 0; i < count; i++) {
+                  if (!point(s, i)) {
+                    const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+                    const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+                    if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
+                    continue
+                  }
+                  if (!pen) { ctx.moveTo(px, py); pen = true }
+                  else ctx.lineTo(px, py)
+                }
               }
               ctx.stroke()
             }

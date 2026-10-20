@@ -141,6 +141,7 @@ export interface ChartSeries {
   pointColors?: string[]
   line?: boolean
   markers?: boolean
+  smooth?: boolean
   fill?: import('./fills').ChartFillStyle
   lineStyle?: import('./style').ChartLineStyle
   markerStyle?: import('./markers').ChartMarkerStyle
@@ -183,6 +184,7 @@ export interface ChartGroup {
   holeSize?: number
   firstSliceAngle?: number
   varyColors?: boolean
+  smooth?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle
 }
