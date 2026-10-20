@@ -10,6 +10,7 @@ import type { ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, Ch
 import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 import { admitChartModel } from './axisBinding'
+import { readLabels } from './labels'
 import { prepareChartAxes } from './prepare'
 import { CHART_AXIS_UNPLACEABLE, placeAxes } from './axes'
 
@@ -103,6 +104,18 @@ function cachePoints<T>(node: XmlNode | undefined, read: (pt: XmlNode) => T, mis
 function cacheStrings(node: XmlNode | undefined, cut?: { truncated: boolean }): Array<string | undefined> {
   return cachePoints<string | undefined>(node, pt => textOf(child(pt, 'v')), undefined, cut)
 }
+
+/** Equal saved category caches can share the already-owned strings. Compare the
+ * original sparse sequence conservatively, without allocating a second string list. */
+function sameCategoryCache(a: XmlNode, b: XmlNode | undefined): boolean {
+  const ac = cacheOf(a), bc = cacheOf(b)
+  if (!ac || !bc || val(child(ac, 'ptCount')) !== val(child(bc, 'ptCount'))) return false
+  const ap = getChildren(ac, 'pt'), bp = getChildren(bc, 'pt')
+  return ap.length === bp.length && ap.every((p, i) => attrs(p).idx === attrs(bp[i]).idx && textOf(child(p, 'v')) === textOf(child(bp[i], 'v')))
+}
+const sameRange = (a: ChartRange | undefined, b: ChartRange | undefined) => a && b
+  && a.sheet === b.sheet && a.definedName === b.definedName && a.r0 === b.r0 && a.r1 === b.r1 && a.c0 === b.c0 && a.c1 === b.c1
+
 /** The label storage a cached category role keeps (each label capped at CHART_LABEL_LIMIT), read before it is built. */
 function labelBytes(node: XmlNode | undefined): number {
   let bytes = 0
@@ -114,7 +127,7 @@ function labelBytes(node: XmlNode | undefined): number {
 function cacheExtent(node: XmlNode | undefined, limit: number): { length: number; over: boolean; formats: boolean } {
   const cache = cacheOf(node)
   const declared = finite(val(child(cache, 'ptCount'))) ?? 0
-  let length = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0)), over = declared > limit, formats = false
+  let length = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0)), over = declared > limit, formats = Boolean(textOf(child(cache, 'formatCode')))
   for (const pt of getChildren(cache, 'pt')) {
     const index = finite(attrs(pt).idx)
     if (index === undefined || index < 0 || !Number.isInteger(index)) continue
@@ -137,7 +150,7 @@ function numericCache(node: XmlNode | undefined, extent: { length: number; forma
     if (index === undefined || index < 0 || !Number.isInteger(index) || index >= extent.length) continue
     const text = textOf(child(pt, 'v'))
     const v = finite(text)
-    if (v !== undefined) out.value(index, v, attrs(pt).formatCode)
+    if (v !== undefined) out.value(index, v, attrs(pt).formatCode ?? textOf(child(cacheOf(node), 'formatCode')))
     else if (knownError(text) !== undefined) out.error(index, text.trim())
   }
   return out.done()
@@ -259,7 +272,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
     gridlines: Boolean(child(node, 'majorGridlines')),
     deleted: val(child(node, 'delete')) === '1' || val(child(node, 'delete')) === 'true',
     ...(title ? { title } : {}),
-    ...(formatCode && formatCode !== 'General' ? { formatCode } : {}),
+    ...(formatCode !== undefined ? { formatCode: formatCode.length > 255 ? 'General' : formatCode } : {}),
   }
 }
 
@@ -344,6 +357,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
+  let sharedCategoryNode: XmlNode | undefined
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
@@ -402,8 +416,16 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       // A role's reference is kept beside its cache: the cache gives the values, the reference the provenance.
       if (!hasCache(valueNode)) { const range = rangeOf(valueNode); if (range) pending.values = range } else { const range = rangeOf(valueNode); if (range) refs.values = range }
       if (xNode) { const range = rangeOf(xNode); if (range) { if (hasCache(xNode)) refs.xValues = range; else pending.xValues = range } }
+      let seriesCategories: string[] | undefined
+      if(catNode && (categories.length>0 || categoryPending)) {
+        if (hasCache(catNode)) {
+          if (!sameCategoryCache(catNode, sharedCategoryNode)) { charge(labelBytes(catNode)); seriesCategories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)) }
+        }
+        else { const range = rangeOf(catNode); if (range && !sameRange(range, categoryPending)) pending.categories = range }
+      }
       if (catNode && categories.length === 0 && !categoryPending) {
         if (hasCache(catNode)) {
+          sharedCategoryNode = catNode
           charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode)
           if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
         }
@@ -424,6 +446,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         name: capLabel(literalName || `Series ${index + 1}`, cut),
         color,
         values,
+        ...(seriesCategories ? {categories:seriesCategories} : {}),
+        labels: readLabels(child(ser, 'dLbls'), charge),
         ...(xValues ? { xValues } : {}),
         ...(pointColors.length ? { pointColors } : {}),
         ...(Object.keys(pending).length ? { pending } : {}),
@@ -435,6 +459,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     }
     groups.push({
       family: type, grouping, series, binding,
+      labels: readLabels(child(node, 'dLbls'), charge),
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
       gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),

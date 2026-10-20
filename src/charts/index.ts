@@ -25,3 +25,5 @@ export { layoutChart, releaseChartLayouts, releaseWorkspaceLayouts, type ChartLa
 export { acquireChartContext, CHART_STANDALONE_PAINT_PROFILE, type ChartReceiver, type ChartReceiverLease } from './paint'
 export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)
+
+export { sourceFormat } from './format'

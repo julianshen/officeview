@@ -139,7 +139,7 @@ describe('D0 data contract: point states (spec 5.8, 6.4)', () => {
     const fromCells = await resident(bytes)
     expect(list(fromCells.groups[0].series[0].values)).toEqual(pts(1, undefined, '#N/A', '#DIV/0!', 'unavailable', 6, undefined, '#N/A'))
     // Sparse cache indices are kept: missing pt@idx are blank at their index, never compacted or zero.
-    expect(list(fromCells.groups[0].series[1].values)).toEqual([{ state: 'value', v: 1 }, { state: 'blank' }, { state: 'error', code: '#N/A' }, { state: 'error', code: '#DIV/0!' }, { state: 'blank' }, { state: 'blank' }, { state: 'blank' }, { state: 'value', v: 3, fmt: '0.0' }])
+    expect(list(fromCells.groups[0].series[1].values)).toEqual([{ state: 'value', v: 1, fmt: 'General' }, { state: 'blank' }, { state: 'error', code: '#N/A' }, { state: 'error', code: '#DIV/0!' }, { state: 'blank' }, { state: 'blank' }, { state: 'blank' }, { state: 'value', v: 3, fmt: '0.0' }])
     // Stored compactly: one state byte and one float per point, no object per point.
     expect(fromCells.groups[0].series[0].values.states).toBeInstanceOf(Uint8Array)
     expect(fromCells.groups[0].series[0].values.values).toBeInstanceOf(Float64Array)
@@ -362,18 +362,18 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
   })
 
   it('retained format and error-code tables are admitted before they are retained (R1)', () => {
-    // A one-point cache whose point carries a 10,000-character format code.
-    const fmt = '0'.repeat(10_000)
+    // Exercise retained-format admission at A2's maximum supported code length.
+    const fmt = '0'.repeat(255)
     const xmlFmt = space(`<c:lineChart><c:ser><c:tx><c:v>S</c:v></c:tx><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0" formatCode="${fmt}"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser></c:lineChart>`)
     const workspace = createChartWorkspace('desktop')
     const model = charts.parseXlsxChart(parseXmlOrdered(xmlFmt), undefined, { profile: 'desktop', workspace } as never)!
     expect(list(model.groups[0].series[0].values)).toEqual([{ state: 'value', v: 5, fmt }])
     // The retained charge is the role's whole storage, its format table included (plus the model's axis records, A1a).
     expect(workspace.used - preparedAxesBytes(model.preparedAxes)).toBe(charts.storageBytes(model.groups[0].series[0].values) + model.axes.reduce((sum, axis) => sum + charts.axisBytes(axis), 0))
-    expect(workspace.used).toBeGreaterThan(20_000)
+    expect(workspace.used).toBeGreaterThan(510)
     // Room for the typed storage but not the format string: refused before the format is retained, nothing held.
     let held = 0
-    const tight = createChartWorkspace('desktop', { reserve: bytes => { if (held + bytes > 1000) return false; held += bytes; return true }, release: (_t, bytes) => { held -= bytes } })
+    const tight = createChartWorkspace('desktop', { reserve: bytes => { if (held + bytes > 500) return false; held += bytes; return true }, release: (_t, bytes) => { held -= bytes } })
     const refused = charts.parseXlsxChart(parseXmlOrdered(xmlFmt), undefined, { profile: 'desktop', workspace: tight } as never)!
     expect(refused.refused).toBe(true)
     expect(tight.used).toBe(0)
@@ -736,4 +736,11 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
       }
     } finally { prefix.mockRestore() }
   })
+})
+it('A2 resident and paged uncached values retain number formats for sourceLinked labels',async()=>{
+ const {addNumberFormat}=await import('./helpers/xlsx-chart-fixture')
+ const chart=space('<c:barChart><c:dLbls><c:showVal val="1"/><c:numFmt sourceLinked="1"/></c:dLbls><c:ser><c:val><c:numRef><c:f>Styled!$A$1:$A$2</c:f></c:numRef></c:val></c:ser></c:barChart>')
+ const bytes=await chartWorkbookBytes(chart,{cells:[{ref:'A1',v:.25,style:3},{ref:'A2',v:12}],patch:zip=>addNumberFormat(zip,10)})
+ const a=await resident(bytes),b=await paged(bytes)
+ expect(a.unsupported).toBeUndefined();expect(a.preparedAxes!.dataLabels.map(l=>l.text)).toEqual(['25.00%','12']);expect(b).toEqual(a)
 })

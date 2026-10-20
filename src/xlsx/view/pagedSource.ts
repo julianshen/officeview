@@ -554,7 +554,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const pending = new Set<string>()
     const lines = charts.pendingLines(drawings, owner).filter(line => sheetOf(line.sheet)?.state !== 'incomplete')
     const points = lines.reduce((total, line) => total + line.count, 0)
-    const base = points * charts.CHART_CELL_BYTES
+    const base = points * (charts.CHART_CELL_BYTES + 8)
     if (!admit(base)) {
       charts.refuseCharts(drawings, 'This chart needs more worker memory than the document has free')
       return done()
@@ -602,6 +602,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const strings: Array<string | undefined> = new Array(wantsText.length)
     const errors: Array<string | undefined> = new Array(wantsText.length)
     const labels: Array<string | undefined> = new Array(wantsText.length)
+    const formatCodes: Array<string | undefined> = new Array(wantsText.length)
     let reserved = base
     // Live charges of the records being read (a page, a string record) that the pool could not keep:
     // part of EVERY admission until the record is released (ownRecord / disown).
@@ -696,6 +697,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           if (index < 0) continue
           if (this.isUnavailable(p, index)) { state[cell.slot] = 4; continue }
           const kind = p.kinds[index], style = styles[p.styles[index]]
+          formatCodes[cell.slot] = charts.sourceFormat(style)
           if (kind === K_SST) { deferred.push({ slot: cell.slot, kind, source: 'sst', id: p.nums[index], style }); continue }
           if (kind === K_TEXT || kind === K_ERROR) {
             if ((p.flags[index] & F_BLOB) !== 0) { deferred.push({ slot: cell.slot, kind, source: 'blob', id: p.nums[index], style }); continue }
@@ -739,7 +741,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (slot === undefined || state[slot] === 0) return undefined
       if (state[slot] === 4) return { value: undefined, unavailable: true }
       const number = state[slot] === 1 ? nums[slot] : null
-      return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(state[slot] === 5 ? { error: errors[slot]! } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
+      return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, formatCode:formatCodes[slot], ...(state[slot] === 5 ? { error: errors[slot]! } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
     }, undefined, { hidden: (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col), workspace, epoch: this.workbook.formatting.dateSystem })
     return done()
   }
