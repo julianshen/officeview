@@ -147,6 +147,8 @@ export interface PaintOptions {
    */
   chartContext?: import('../charts/context').ChartDocumentContext
   chartProfile?: import('../charts/workspace').ChartProfile
+  /** The receiving document's live parent budget (an interactive viewer's main-thread ledger) for that created context. */
+  chartParent?: import('../charts/workspace').ChartParentLedger
 }
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
@@ -253,7 +255,7 @@ export function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsse
 }
 
 /** The receiving document for its transferred chart models (spec 6.4). */
-const chartReceiver = (doc: object, options?: PaintOptions) => ({ owner: doc, ...(options?.chartProfile ? { profile: options.chartProfile } : {}), ...(options?.chartContext ? { context: options.chartContext } : {}) })
+export const chartReceiver = (doc: object, options?: PaintOptions) => ({ owner: doc, ...(options?.chartProfile ? { profile: options.chartProfile } : {}), ...(options?.chartContext ? { context: options.chartContext } : {}), ...(options?.chartParent ? { parent: options.chartParent } : {}) })
 /** Prepare embedded fonts before measurement/painting. Low-level renderSlide stays synchronous. */
 export function getPaintables(
   doc: DocxDocument | XlsxDocument | PptxDocument,

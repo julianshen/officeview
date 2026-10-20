@@ -12,6 +12,11 @@ import { ChartRefusal } from '../src/charts/own'
 import { CHART_STANDALONE_PAINT_PROFILE, receivedChartContext } from '../src/charts/paint'
 import { documentChartContext } from '../src/charts/context'
 import { ensureChartEngine, ensureChartPainter } from '../src/xlsx/chartLoader'
+import { parseXlsx } from '../src/xlsx/parse'
+import { chartWorkbook } from './helpers/xlsx-chart-fixture'
+import { mainChartParent, prepareSheetAssets } from '../src/components/xlsx/sheetAssets'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
+import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { chartModelOwner, paintXlsxChart, parseXlsxChart, pointBytes, releaseChartModel, stringBytes } from '../src/charts'
 import { createChartWorkspace } from '../src/charts/workspace'
 import type { ChartParseContext } from '../src/charts/context'
@@ -457,5 +462,64 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
       const coords = [...r.of('moveTo'), ...r.of('lineTo'), ...r.of('arc')].flat().filter(c => typeof c === 'number')
       expect(coords.every(Number.isFinite)).toBe(true)
     }
+  })
+})
+
+describe('A1a fix round 3: the interactive sheet preparation receives charts into the viewer budget', () => {
+  const PLOT = bar(ser(0, [3, 7, 2])) + catAx('1', '2') + valAx('2', '1')
+  /** A resident workbook whose chart model is replaced by a structured clone (an unowned, transferred model). */
+  async function transferredDoc() {
+    const doc = await parseXlsx(await chartWorkbook(space(PLOT)))
+    const node = doc.sheets[0].drawings![0]
+    if (node.content?.kind !== 'xlsxChart') throw new Error('no chart')
+    const clone = structuredClone(node.content.chart)
+    node.content = { ...node.content, chart: clone }
+    expect(chartModelOwner(clone)).toBeUndefined()
+    return { doc, clone }
+  }
+  const refusingParent = () => {
+    const calls: number[] = []
+    return { calls, parent: { reserve: (bytes: number) => { calls.push(bytes); return false }, release: () => {} } }
+  }
+
+  it('R2: prepareSheetAssets keeps a supplied chart context (its parent is called; no headroom paints the card)', async () => {
+    const { doc, clone } = await transferredDoc()
+    const { calls, parent } = refusingParent()
+    const supplied = documentChartContext('mobile', undefined, parent)
+    const lease = await prepareSheetAssets(doc, { chartContext: supplied, profile: 'M' })
+    try {
+      expect(receivedChartContext(clone)).toBe(supplied)
+      const r = recorder()
+      paintXlsxChart(clone, r.ctx, 800, 500)
+      expect(calls.length).toBe(1)
+      expect(r.texts().join(' ')).toMatch(/memory/)
+    } finally { lease.dispose() }
+  })
+
+  it('R2: without a supplied context, the receiving facet is profile-sized and parented to the viewer ledger (chartParent)', async () => {
+    const { doc, clone } = await transferredDoc()
+    const ledger = new MainMemoryLedger()
+    const parent = mainChartParent(ledger, MAIN_THREAD_BUDGETS.M)
+    const lease = await prepareSheetAssets(doc, { chartParent: parent, profile: 'M' })
+    try {
+      const context = receivedChartContext(clone)!
+      expect(context.profile).toBe('mobile')
+      expect(context.workspace.limit).toBe(32 * 1024 * 1024)
+      // With room: the paint's charge reaches the viewer ledger, and returns after the paint.
+      let peak = 0
+      const set = ledger.set.bind(ledger)
+      ledger.set = (pool, owner, bytes) => { if (pool === 'drawings' && owner === 'charts') peak = Math.max(peak, bytes); set(pool, owner, bytes) }
+      const ok = recorder()
+      paintXlsxChart(clone, ok.ctx, 800, 500)
+      expect(ok.texts()).toContain('C1')
+      expect(peak).toBeGreaterThan(0)
+      expect(ledger.ownerBytes('drawings', 'charts')).toBe(0)
+      // The viewer ledger full: the card.
+      ledger.set('layout', 'pressure', MAIN_THREAD_BUDGETS.M)
+      const full = recorder()
+      paintXlsxChart(clone, full.ctx, 800, 500)
+      expect(full.texts().join(' ')).toMatch(/memory/)
+      expect(ledger.ownerBytes('drawings', 'charts')).toBe(0)
+    } finally { lease.dispose() }
   })
 })

@@ -10,7 +10,7 @@ import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
 import { axisFraction, categoryFraction, resolveAxes, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
 import { ChartRefusal, chartModelOwner } from './own'
-import { createChartWorkspace, type ChartProfile, type ChartWorkspace } from './workspace'
+import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateTickLabel, dateUnitIndex } from './dates'
 
@@ -509,16 +509,17 @@ const received = new WeakMap<ChartModel, ChartDocumentContext>()
 const documents = new WeakMap<object, ChartDocumentContext>()
 type ChartCarrier = { content?: { kind: string; chart?: ChartModel }; children?: readonly ChartCarrier[] }
 /** What the receiving side knows: its document (the key of its one chart context), the viewer profile, or a context it already holds. */
-export interface ChartReceiver { owner: object; profile?: ChartProfile; context?: ChartDocumentContext }
+export interface ChartReceiver { owner: object; profile?: ChartProfile; context?: ChartDocumentContext; parent?: ChartParentLedger }
 /**
  * The receiving side of a transfer (spec 6.4): every unowned chart model of `contents` is associated with the
- * receiving document's chart context, created once per document from the viewer profile (mobile: 32 MiB) unless
- * the caller passes one, so its paints are charged to that document's chart facet and parent.
+ * receiving document's chart context, created once per document from the viewer profile (mobile: 32 MiB) and the
+ * receiver's live parent budget unless the caller passes a context, so its paints are charged to that document's chart facet and parent.
  */
 export function receiveCharts(contents: readonly ChartCarrier[], receiver: ChartReceiver): ChartDocumentContext {
   let context = documents.get(receiver.owner)
   if (receiver.context && context !== receiver.context) documents.set(receiver.owner, context = receiver.context)
-  if (!context) documents.set(receiver.owner, context = documentChartContext(receiver.profile ?? 'desktop'))
+  // Created once per receiving document: profile-sized, and parented to the receiver's live budget when it has one.
+  if (!context) documents.set(receiver.owner, context = documentChartContext(receiver.profile ?? 'desktop', undefined, receiver.parent))
   const walk = (nodes: readonly ChartCarrier[]) => {
     for (const node of nodes) {
       const chart = node.content?.kind === 'xlsxChart' ? node.content.chart : undefined

@@ -59,7 +59,7 @@ import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
-import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import { SheetImageCache, imageBudgetFor, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -396,6 +396,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string } | null>(null)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
+  // Transferred chart models are charged to this viewer's live main-thread budget (spec 6.4), like its drawings.
+  const chartParent = useMemo(() => mainChartParent(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]), [mainLedger, budgetProfile])
   // One image budget shared by every lease of this viewer (overlapping swaps included).
   const imageCache = useRef<SheetImageCache | null>(null)
   const imageCacheFor = () => {
@@ -412,7 +414,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!activeSheetId) return
     let cancelled = false
     const sheetIndex = sheetIds.indexOf(activeSheetId)
-    void loadAssets(activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor() }).then(next => {
+    void loadAssets(activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId })
