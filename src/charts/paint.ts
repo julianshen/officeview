@@ -162,6 +162,56 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
  * units, gridlines and authored tick marks. With one value axis and no authored placement it draws exactly as
  * the engine did before A1a (the same layout arithmetic and drawing order).
  */
+function paintContour(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
+  const rows = group.series.length
+  const cols = Math.max(1, model.categories.length || Math.max(...group.series.map(s => s.source.values.length), 0))
+  if (!rows || !cols) return
+  // Grid cap 256x256.
+  const rCount = Math.min(rows, 256), cCount = Math.min(cols, 256)
+  // Value axis major unit for banding.
+  const axisId = group.binding.kind === 'surface' ? group.binding.value : undefined
+  const axis = axisId ? model.axes.find(a => a.id === axisId) : model.axes.find(a => a.kind === 'value')
+  const major = (axis && (axis as any).majorUnit) || 1
+  // Collect z values.
+  const grid: Array<Array<number | undefined>> = []
+  let min = Infinity, max = -Infinity
+  for (let r = 0; r < rCount; r++) {
+    const row: Array<number | undefined> = []
+    for (let c = 0; c < cCount; c++) {
+      const v = (group.series[r]?.source.values as any)?.[c]
+      row.push(v)
+      if (v !== undefined && Number.isFinite(v)) { min = Math.min(min, v); max = Math.max(max, v) }
+    }
+    grid.push(row)
+  }
+  if (!Number.isFinite(min)) { min = 0; max = 1 }
+  if (min === max) max = min + (major || 1)
+  const bandCount = Math.max(1, Math.ceil((max - min) / (major || 1)))
+  const cellW = box.w / cCount, cellH = box.h / rCount
+  // wireframe?
+  const wireframe = group.wireframe === true
+  // Band colours: accent cycle fallback.
+  const accents = ['4472C4','ED7D31','A5A5A5','FFC000','5B9BD5','70AD47']
+  const bandColor = (band: number) => (group.bandColors && group.bandColors[band]) ? group.bandColors[band]! : accents[band % accents.length]
+  for (let r = 0; r < rCount; r++) {
+    for (let c = 0; c < cCount; c++) {
+      const z = grid[r][c]
+      if (z === undefined || !Number.isFinite(z)) continue
+      const band = Math.max(0, Math.min(bandCount - 1, Math.floor((z - min) / (major || 1))))
+      const x = box.x + c * cellW, y = box.y + r * cellH
+      ctx.fillStyle = '#' + bandColor(band)
+      ctx.fillRect(x, y, cellW, cellH)
+      if (wireframe) {
+        ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1)
+      }
+    }
+  }
+  if (wireframe) {
+    // boundaries only already drawn per cell; ensure outer border
+    ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1)
+  }
+}
+
 function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: AxisGraph, box: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): void {
   const placed = graph.groups.filter((g): g is GroupAxes => Boolean(g))
   if (!placed.length) return
@@ -597,6 +647,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     if (area.w <= 8 || area.h <= 8) return
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
+    else if (group.family === 'contour') paintContour(ctx, model, group, area)
     else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
     paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }

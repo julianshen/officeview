@@ -182,6 +182,8 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  wireframe?: boolean
+  bandColors?: string[]
   varyColors?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle

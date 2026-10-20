@@ -29,16 +29,28 @@ export const CHART_LABEL_LIMIT = 255
 export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
+
+function parseBandColors(node: XmlNode, theme: ThemeContext | undefined): string[] | undefined {
+  const list = getChildren(node, 'bandFmts').length ? getChildren(child(node,'bandFmts'),'bandFmt') : getChildren(node,'bandFmt')
+  if (!list.length) return undefined
+  const out: string[] = []
+  for (const bf of list) {
+    const idx = finite(val(child(bf,'idx'))) ?? out.length
+    const spPr = child(bf,'spPr')
+    const fill = spPr ? solid(spPr, theme) : undefined
+    if (fill) out[idx] = fill
+  }
+  return out.length ? out : undefined
+}
 const val = (node: XmlNode | undefined) => attrs(node).val
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 
 const GROUPS: Record<string, ChartFamily> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
-  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
+  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter', surfaceChart: 'contour',
 }
 const UNSUPPORTED: Record<string, string> = {
-  radarChart: 'Radar chart', bubbleChart: 'Bubble chart', stockChart: 'Stock chart', surfaceChart: 'Surface chart',
-  surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
+  radarChart: 'Radar chart', bubbleChart: 'Bubble chart', stockChart: 'Stock chart', surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
 }
 
 const hex = hexColor
@@ -298,6 +310,11 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
       const x = values.find(horizontalPosition) ?? values[0], y = values.find(axis => axis !== x)
       return { kind: 'xy', x: x?.id ?? impliedAxis(axes, 'value', '#x'), y: y?.id ?? impliedAxis(axes, 'value', '#y') }
     }
+    if (family === 'contour') {
+      const category = axes.find(axis => axis.kind === 'category' || axis.kind === 'date')
+      const series = axes.find(axis => axis.kind === 'series')
+      return { kind: 'surface', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), series: series?.id ?? impliedAxis(axes, 'series', '#ser'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
+    }
     const category = axes.find(axis => axis.kind === 'category' || axis.kind === 'date')
     return { kind: 'cartesian', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
   }
@@ -306,6 +323,12 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
   if (family === 'scatter') {
     const [x, y] = valueIds.length >= 2 ? xFirst(valueIds) : [ids[0], ids[1]]
     return { kind: 'xy', x: x ?? '', y: y ?? '' }
+  }
+  if (family === 'contour') {
+    const category = ids.find(id => { const kind = axisOf(id)?.kind; return kind === 'category' || kind === 'date' })
+    const series = ids.find(id => axisOf(id)?.kind === 'series')
+    const value = valueIds[0] ?? ids.find(id => id !== category && id !== series) ?? ''
+    return { kind: 'surface', category: category ?? '', series: series ?? '', value }
   }
   const category = ids.find(id => { const kind = axisOf(id)?.kind; return kind === 'category' || kind === 'date' })
   if (category === undefined && valueIds.length >= 2) { const [x, value] = xFirst(valueIds); return { kind: 'cartesian', x, value } }
@@ -566,6 +589,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
+      ...(type === 'contour' ? { wireframe: val(child(node, 'wireframe')) === '1' || val(child(node, 'wireframe')) === 'true' } : {}),
+      ...(type === 'contour' ? { bandColors: parseBandColors(node, theme) } : {}),
       varyColors: vary,
       ...(dropLines ? { dropLines } : {}),
       ...(serLines ? { serLines } : {}),
