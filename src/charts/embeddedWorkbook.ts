@@ -182,7 +182,7 @@ class Reader {
     const write = (text: string) => {
       try { tokenizer.write(text) } catch (error) {
         if (error instanceof Stop || error instanceof Done) throw error
-        if (error instanceof PackageError && error.code === 'resource-limit') throw new Stop(failure('refused', 'embedded-workbook-token', "The chart's embedded workbook contains markup larger than the viewer reads", TOKEN_CHARS))
+        if (error instanceof PackageError && error.code === 'resource-limit') throw new Stop(failure('refused', 'embedded-workbook-markup', "The chart's embedded workbook contains markup larger or deeper than the viewer reads"))
         throw malformed()
       }
     }
@@ -503,8 +503,10 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     // JSZip's directory structures, admitted before the load (bounded by the admitted inventory).
     reader.charge(LOAD_BASE_BYTES + LOAD_ENTRY_BYTES * opened.inventory.entries.length, 'load')
     let inner: OfficePackage
-    // The load is not abortable: it is awaited to the end, its charge held until then.
-    try { inner = await OfficePackage.load(opened.bytes) } catch { throw new Stop(CORRUPT()) }
+    // The load is not abortable: its working set is held (`hold`) until it actually settles, whatever the
+    // signal does; the retained directory stays charged under `load` until the parts are read.
+    reader.charge(LOAD_BASE_BYTES, 'loading')
+    try { inner = await workspace.hold(OfficePackage.load(opened.bytes), `${tag}:loading`) } catch { throw new Stop(CORRUPT()) }
     reader.live()
     // From here the consumers are fixed: a later request starts its own read.
     freeze()

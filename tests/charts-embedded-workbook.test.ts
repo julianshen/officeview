@@ -229,6 +229,41 @@ describe('embedded workbook reader (spec 6.4)', () => {
     expect(workspace.used).toBe(0)
   })
 
+  it('cancellation mid-read: a gated embedded load returns cancelled at once; its charges are held until it settles', async () => {
+    const fixture = buildChartDocx([{ chartXml: officeChartXml(), workbook: officeChartWorkbook() }])
+    const pkg = await OfficePackage.load(fixture.bytes)
+    const abort = new AbortController()
+    const doc = documentChartContext('desktop', abort.signal)
+    const context = chartParseContext(doc, pkg, fixture.chartPaths[0])
+    const read = await readChartPart(pkg, fixture.chartPaths[0], context)
+    if (read?.kind !== 'tree') throw new Error('unreadable')
+    const model = parseXlsxChart(read.root, undefined, context)!
+    read.release()
+    const modelBytes = doc.workspace.used
+    // Gate the embedding's load (the outer package is already loaded): it starts, then waits.
+    let open!: () => void, started!: () => void
+    const gate = new Promise<void>(resolve => { open = resolve })
+    const loading = new Promise<void>(resolve => { started = resolve })
+    const real = OfficePackage.load.bind(OfficePackage)
+    const spy = vi.spyOn(OfficePackage, 'load').mockImplementation(async data => { started(); await gate; return real(data) })
+    try {
+      let settled = false
+      const pending = applyDataPrecedence(model, read.root, context).then(chart => { settled = true; return chart })
+      await loading
+      const held = doc.workspace.used
+      expect(held).toBeGreaterThan(modelBytes)
+      abort.abort()
+      const chart = await pending
+      // Publication stopped at once, while the load is still gated: the charges stay held.
+      expect(settled).toBe(true)
+      expect(chart.diagnostics).toContainEqual(expect.objectContaining({ code: 'chart-cancelled' }))
+      expect(doc.workspace.used).toBeGreaterThan(modelBytes)
+      open()
+      // Once the load settles, the read stops and refunds; only the (cancelled) model's own charge remains.
+      await vi.waitFor(() => { releaseChartModel(chart); expect(doc.workspace.used).toBe(0) })
+    } finally { spy.mockRestore(); open() }
+  })
+
   it('a corrupt embedding or worksheet is unavailable, never a throw', async () => {
     const corrupt = await precedence([{ chartXml: officeChartXml(), workbook: new Uint8Array([0x50, 0x4b, 3, 4, 1, 2, 3]) }])
     expect(corrupt.charts[0].unsupported).toBe("This chart's data is not available")
