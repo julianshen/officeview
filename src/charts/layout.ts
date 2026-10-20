@@ -18,6 +18,7 @@ import { formatNumber } from '../xlsx/chartDescription'
 import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
 import { radarTexts } from './families/radar'
 import { trendlineLegendEntries } from './trendlines'
+import { hierarchyLayoutBytes, hierarchyLegend, hierarchyPaintBytes, hierarchyTexts } from './chartex/hierarchyStyle'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -78,6 +79,9 @@ export function legendEntries(model: ChartModel, view: DisplayView, graph?: Axis
     if (!value) return []
     return contourLegendEntries(group, contourEdges(value), model.preparedAxes?.axes.find(p => p.id === value.id)?.labels ?? axisTexts(value, graph, view), edge => formatNumber(value.labelValue(edge), value.percent), limit, truncated)
   }
+  // Treemap/sunburst (B5): the root-level branches.
+  const branches = hierarchyLegend(model, Math.min(limit, 4096))
+  if (branches) return branches
   if (group?.family === 'pie' || group?.family === 'doughnut') {
     const s = view.groupSeries(0)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
@@ -186,7 +190,7 @@ export function layoutBound(model: ChartModel, w = Infinity, h = Infinity): numb
   for (const group of model.groups) for (const s of group.series) text += (s.trendlines?.length ?? 0) * (2 * (264 + s.name.length) + 128)
   // The retained diagnostics (stage 1's and up to three layout ones) are priced as retainedBytes prices them.
   const diagnostics = (model.preparedAxes?.diagnostics ?? []).reduce((n, d) => n + 64 + d.code.length * 2 + d.reason.length * 2, 1024)
-  return (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
+  return hierarchyLayoutBytes(model) + (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily)): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')
@@ -355,6 +359,9 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     }
     const labelIndices = new Map([...labels].map(([id, values]) => [id, new Set(values.map(v => v.index))]))
     for (const label of model.preparedAxes?.dataLabels??[]) for(const run of label.runs.length?label.runs:[{text:label.text}]) width(run.text,labelFont(run,fontPx,family))
+    // Treemap/sunburst node labels (B5): measured here, read by the paint.
+    const nodes = hierarchyTexts(model)
+    if (nodes) for (const text of nodes.texts) width(text, chartFont(nodes.px, family))
     const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics, legendEntries: entriesForLegend }
     return { ...data, retainedBytes: retainedBytes(data, widths), width: cachedWidths(widths) }
  }
@@ -372,4 +379,4 @@ function legendBands(model: ChartModel): number {
  * extents, A4a); a contour group its band grid (`contourPaintBytes`, the dimensions the painter uses) and its band
  * edges. The legend entries are the layout's (retained there), never rebuilt by the paint.
  */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.trendlines?.length ?? 0) * 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0), 0) + view.series.length * 256
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + hierarchyPaintBytes(model) + (model.preparedAxes?.trendlines?.length ?? 0) * 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0), 0) + view.series.length * 256

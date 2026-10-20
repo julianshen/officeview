@@ -163,7 +163,12 @@ export interface ChartSeries {
   /** `c:trendline`s as authored (spec 5.6); fitted in stage 1 (`PreparedAxes.trendlines`). */
   trendlines?: import('./trendlines').ChartTrendline[]
   /** References still to be filled from worksheet cells (no saved data for that role). */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange }
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; levels?: ChartRange }
+  /** Treemap/sunburst (chartex-map §7): the category reference is a path with one level per column (`col`) or row
+   * (`row`) of `pending.levels`, root first; every level is read (charts/chartex/hierarchy.ts). */
+  levelDir?: 'col' | 'row'
+  /** The filled category levels of a hierarchy, root first, one entry per point ('' is a blank cell). */
+  levels?: string[][]
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which
@@ -286,6 +291,8 @@ export interface ChartExGroup extends ChartGroup {
     plotAreaLine?: import('./style').ChartLineStyle
     /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
     gapWidth?: number
+    /** Treemap/sunburst: the colour of each root-level branch (resolved at parse, indexed modulo its length). */
+    palette?: string[]
   }
 }
 

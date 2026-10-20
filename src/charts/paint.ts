@@ -27,6 +27,9 @@ import { paintStock } from './families/stock'
 import { chartFont } from './textStyle'
 import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 import { paintChartUserShapes } from './userShapes'
+import { paintTreemap, type HierarchyPaintKit } from './chartex/treemap'
+import { paintSunburst } from './chartex/sunburst'
+import { isHierarchyGroup } from './chartex/hierarchy'
 
 type FamilyCss = (family: string) => string
 /**
@@ -676,6 +679,14 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     area = layout.area
     if (area.w <= 8 || area.h <= 8) return void paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
     const group = model.groups[0]
+    // Treemap and sunburst (B5) draw their nodes and node labels themselves; no generic data labels.
+    if (isHierarchyGroup(source.groups[0])) {
+      const css = familyCss(source.fontFamily)
+      const kit: HierarchyPaintKit = { fillWith, strokeBorder, width: layout.width, font: px => chartFont(px, css) }
+      if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
+      if (group.family === 'treemap') paintTreemap(ctx, source, area, kit); else paintSunburst(ctx, source, area, kit)
+      return void paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
+    }
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
     else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
     else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)

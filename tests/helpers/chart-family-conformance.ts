@@ -19,6 +19,9 @@ import { OfficePackage } from '../../src/core/zip'
 import { parseXmlOrdered } from '../../src/core/xml'
 import { documentChartContext, chartParseContext } from '../../src/charts/context'
 import { parseChartPart } from '../../src/charts/dataPrecedence'
+import { readChartPart } from '../../src/charts/read'
+import { parseChartEx } from '../../src/charts/chartex/parse'
+import type { XmlNode } from '../../src/core/xml'
 import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
@@ -82,18 +85,35 @@ function withUnavailable(model: ChartModel): ChartModel {
   return { ...model, preparedAxes: undefined, groups: model.groups.map(g => ({ ...g, series: g.series.map(s => ({ ...s, values: mark(s.values)!, ...(s.xValues ? { xValues: mark(s.xValues) } : {}), ...(s.bubbleSizes ? { bubbleSizes: mark(s.bubbleSizes) } : {}) })) })) }
 }
 
+const CHARTEX_NS = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
+/** The part's root as the engine reads it: a ChartEx part goes through the production reader, so its root is
+ * dispatched to the ChartEx parser (B5); a classic part is parsed directly, as before. */
+async function rootOf(xml: string, partPath: string): Promise<{ root: XmlNode; pkg: OfficePackage; chartEx: boolean }> {
+  if (!xml.includes(CHARTEX_NS)) return { root: parseXmlOrdered(xml), pkg: await pkg(), chartEx: false }
+  const zip = new JSZip()
+  zip.file(partPath.replace(/^\//, ''), xml)
+  const loaded = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+  const read = await readChartPart(loaded, partPath.replace(/^\//, ''), chartParseContext(documentChartContext('desktop'), loaded, partPath))
+  if (read?.kind !== 'tree') throw new Error(`conformance: ${read ? read.reason : 'unreadable'}`)
+  return { root: read.root, pkg: loaded, chartEx: true }
+}
+
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
   if (name === 'unavailable point') {
-    const parsed = parseXlsxChart(parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point'])), undefined)
+    const read = await rootOf(family.chart(CONFORMANCE_CASES['single point']), partPath)
+    const parsed = read.chartEx ? parseChartEx(read.root, undefined, chartParseContext(documentChartContext('desktop'), read.pkg, partPath)) : parseXlsxChart(read.root, undefined)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
     const model = prepareChartAxes(withUnavailable(parsed))
+    // Stage 1 may refuse the chart (an analytic family with an unavailable required point): a card with its reason.
+    if (model.unsupported) return { kind: 'card', reason: model.unsupported, diagnostics: [], card: paint(placeholderChart(model.title, model.unsupported)).card }
     const painted = paint(model)
     return { kind: 'native', diagnostics: collect(model), card: painted.card }
   }
   const doc = documentChartContext('desktop')
-  const context = chartParseContext(doc, await pkg(), partPath)
-  const result = await parseChartPart(parseXmlOrdered(family.chart(CONFORMANCE_CASES[name])), undefined, context)
+  const read = await rootOf(family.chart(CONFORMANCE_CASES[name]), partPath)
+  const context = chartParseContext(doc, read.pkg, partPath)
+  const result = await parseChartPart(read.root, undefined, context)
   if (result.kind === 'native') {
     const painted = paint(result.model)
     return { kind: 'native', diagnostics: collect(result.model), card: painted.card }
