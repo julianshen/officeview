@@ -406,6 +406,62 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     }
   })
 
+  it('a label formatter\'s working buffers are admitted to the chart workspace: a tight budget refuses before the request proceeds (R4)', async () => {
+    const { cellDisplayText } = await import('../src/xlsx/render')
+    const scientific = { numFmtId: 164, formatCode: '0.00E+00' }
+    const cached = '<c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit>'
+    const models = [
+      charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:cat>${strRef('S!$A$1')}</c:cat><c:val>${cached}</c:val></c:ser></c:lineChart>`)), undefined)!,
+      charts.parseXlsxChart(parseXmlOrdered(space(`<c:lineChart><c:ser><c:tx>${strRef('S!$A$1')}</c:tx><c:val>${cached}</c:val></c:ser></c:lineChart>`)), undefined)!,
+    ]
+    for (const model of models) {
+      // The formatter reports each working buffer through the observer the fill hands the lookup.
+      const requests: number[] = []
+      const lookup: Parameters<typeof charts.fillChartRanges>[2] = (_s, _r, _c, text, allocation) => ({ value: 12345, ...(text ? { text: cellDisplayText({} as never, { value: 12345, style: scientific } as never, { maxOutput: 256, allocate: bytes => { requests.push(bytes); allocation?.allocate(bytes) }, release: bytes => allocation?.release(bytes) }) } : {}) })
+      let held = 0, peak = 0
+      const tight = createChartWorkspace('desktop', { reserve: bytes => { if (held + bytes > 600) return false; held += bytes; peak = Math.max(peak, held); return true }, release: (_t, bytes) => { held -= bytes } })
+      const refused = charts.fillChartRanges(model, 'S', lookup, { workspace: tight })
+      expect(refused.refused).toBe(true)
+      // The formatter asked for its 2,048 B workspace and was refused there: it went no further, nothing is held.
+      expect(requests.at(-1)).toBe(128 * 8 + 1024)
+      expect(peak).toBeLessThanOrEqual(600)
+      expect(held).toBe(0)
+      expect(tight.used).toBe(0)
+      // With room, every working buffer was admitted at its peak and the charge is trimmed to the retained text.
+      requests.length = 0
+      let roomyPeak = 0
+      const roomy = createChartWorkspace('desktop', { reserve: bytes => { held += bytes; roomyPeak = Math.max(roomyPeak, held); return true }, release: (_t, bytes) => { held -= bytes } })
+      const ok = charts.fillChartRanges(model, 'S', lookup, { workspace: roomy })
+      expect(model === models[0] ? ok.categories : [ok.groups[0].series[0].name]).toEqual(['1.23E+04'])
+      expect(roomyPeak).toBeGreaterThanOrEqual(Math.max(...requests))
+      expect(roomy.used).toBe(charts.stringBytes('1.23E+04'))
+      held = 0
+    }
+  })
+
+  it('the resident fill wires the formatter\'s observers into the chart workspace and propagates a refusal (R4)', async () => {
+    // A category formatted with 0.00E+00, parsed with a 600 B chart parent: the chart is refused, never a silent fallback.
+    const bytes = await workbook(space(`<c:lineChart><c:ser><c:cat>${strRef('Styled!$B$1')}</c:cat><c:val>${ref('Styled!$A$1')}</c:val></c:ser></c:lineChart>`), row(1, num('A1', 1) + cell('B1', '<v>12345</v>', ' s="3"')), '')
+    const styled = await import('jszip').then(async ({ default: JSZip }) => {
+      const zip = await JSZip.loadAsync(bytes)
+      const styles = await zip.file('xl/styles.xml')!.async('string')
+      zip.file('xl/styles.xml', styles.replace('<cellXfs count="3">', '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.00E+00"/></numFmts><cellXfs count="4">').replace('</cellXfs>', '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'))
+      return zip.generateAsync({ type: 'uint8array' })
+    })
+    // The parent leaves the chart read and the numeric storage alone and gives label formatting 600 B.
+    let held = 0
+    const label = (tag: string) => tag.endsWith(':label')
+    const context = documentChartContext('desktop', undefined, { reserve: (n, tag) => { if (!label(tag)) return true; if (held + n > 600) return false; held += n; return true }, release: (tag, n) => { if (label(tag)) held -= n } })
+    const doc = await parseXlsx(await OfficePackage.load(styled), { valuePolicy: 'cached', chartContext: context })
+    const content = doc.sheets[0].drawings![0].content
+    expect(content?.kind === 'xlsxChart' && content.chart.refused).toBe(true)
+    expect(held).toBe(0)
+    // With room, the same category is formatted.
+    const roomy = await parseXlsx(await OfficePackage.load(styled), { valuePolicy: 'cached' })
+    const fine = roomy.sheets[0].drawings![0].content
+    expect(fine?.kind === 'xlsxChart' && fine.chart.categories).toEqual(['1.23E+04'])
+  })
+
   it('an unretained paged reply keeps its chart-facet charge while it lives and returns it once when released (R2)', async () => {
     const bytes = await workbook(xml, sheet)
     const h = await pagedSource(bytes)

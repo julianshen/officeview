@@ -24,8 +24,12 @@ export interface ChartCell {
   /** An error cell's code (`#N/A`, `#DIV/0!`, ...). */ error?: string
   /** The cell has no value to show (a formula without a saved value under the saved-value policy). */ unavailable?: boolean
 }
-/** `text`: the caller needs the formatted label (categories, names); values never format. */
-export type ChartCellLookup = (sheet: string, row: number, col: number, text: boolean) => ChartCell | undefined
+/** The formatter's allocation observer (cellFormat `FormatAllocation`): each working buffer is reported before it
+ * is allocated; `allocate` throws to refuse it. */
+export interface ChartTextAllocation { allocate(bytes: number): void; release(bytes: number): void }
+/** `text`: the caller needs the formatted label (categories, names); values never format. A label's formatting
+ * reports its working buffers through `allocation` (the chart workspace admits them, or refuses by throwing). */
+export type ChartCellLookup = (sheet: string, row: number, col: number, text: boolean, allocation?: ChartTextAllocation) => ChartCell | undefined
 /** Whether a worksheet cell sits in a hidden row or column (provenance for `plotVisOnly`). */
 export type ChartHiddenLookup = (sheet: string, row: number, col: number) => boolean
 
@@ -152,14 +156,25 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     if (!owner.workspace.reserve(bytes, fillTag)) throw new ChartRefusal()
     charged.bytes += bytes
   }
-  // A label or name: its input-derived bound (the formatter's capped output) is admitted before any text is
-  // formatted or materialized; the charge is then trimmed to the text actually retained.
+  // A label or name: the formatter's capped output is admitted before any text is formatted or materialized;
+  // every working buffer the formatter reports beyond it is admitted (at the live peak) before it is allocated,
+  // and a refusal stops the formatter there. The charge is then trimmed to the text actually retained.
   const labelTag = owner ? `${owner.tag}:label` : ''
-  const label = (produce: () => string, keepEmpty = true): string => {
+  const label = (produce: (allocation?: ChartTextAllocation) => string, keepEmpty = true): string => {
     if (!owner) return produce()
     if (!owner.workspace.reserve(LABEL_BOUND_BYTES, labelTag)) throw new ChartRefusal()
+    let live = 0, admitted = LABEL_BOUND_BYTES
+    const allocation: ChartTextAllocation = {
+      allocate: bytes => {
+        live += bytes
+        if (live <= admitted) return
+        if (!owner.workspace.reserve(live - admitted, labelTag)) throw new ChartRefusal()
+        admitted = live
+      },
+      release: bytes => { live -= bytes },
+    }
     try {
-      const text = produce()
+      const text = produce(allocation)
       const kept = text || keepEmpty ? stringBytes(text) : 0
       if (kept) { owner.workspace.transfer(labelTag, fillTag, Math.min(kept, LABEL_BOUND_BYTES)); charged.bytes += Math.min(kept, LABEL_BOUND_BYTES) }
       return text
@@ -183,7 +198,7 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
 /** The bound admitted before a label is built: the formatter's capped output (CHART_LABEL_LIMIT + 1 units,
  * one past the limit marks truncation), which also bounds the retained label. */
 const LABEL_BOUND_BYTES = stringBytes(' '.repeat(CHART_LABEL_LIMIT + 1))
-function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: () => string, keepEmpty?: boolean) => string): ChartModel {
+function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: (allocation?: ChartTextAllocation) => string, keepEmpty?: boolean) => string): ChartModel {
   let truncated = model.truncated ?? false
   const sheetOf = (range: ChartRange) => range.sheet ?? ownerSheet
   /** A role's own provenance: the sorted indices of its cells in hidden rows or columns (admitted, then built). */
@@ -204,8 +219,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     const labels: string[] = []
     for (let i = 0; i < line.count; i++) {
       const at = linePoint(line, i)
-      labels.push(label(() => {
-        const text = asText(lookup(line.sheet, at.row, at.col, true))
+      labels.push(label(allocation => {
+        const text = asText(lookup(line.sheet, at.row, at.col, true, allocation))
         if (text.length <= CHART_LABEL_LIMIT) return text
         truncated = true
         return text.slice(0, CHART_LABEL_LIMIT)
@@ -239,8 +254,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
       if (pending.name) {
         const name = pending.name
-        const text = label(() => {
-          const full = asText(lookup(sheetOf(name), name.r0, name.c0, true))
+        const text = label(allocation => {
+          const full = asText(lookup(sheetOf(name), name.r0, name.c0, true, allocation))
           if (full.length > CHART_LABEL_LIMIT) truncated = true
           return full.slice(0, CHART_LABEL_LIMIT)
         }, false)
@@ -263,7 +278,7 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
  * visited (rows by binary search, cells by binary search), and labels are
  * formatted on demand: the workspace is bounded by the chart point limits. */
 export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue; valueIsError?: boolean }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; hidden?: boolean; cells: ReadonlyArray<Cell> }>; cols?: ReadonlyArray<{ min: number; max: number; hidden?: boolean }>; drawings?: XlsxDrawingLike[] }>(
-  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell) => string; available?: (cell: Cell) => boolean; workspace?: ChartWorkspace } = {},
+  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell, allocation?: ChartTextAllocation) => string; available?: (cell: Cell) => boolean; workspace?: ChartWorkspace } = {},
 ): void {
   const sheetByName = (name: string) => sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
   const sortedRows = new WeakMap<object, boolean>()
@@ -276,7 +291,7 @@ export function fillWorkbookCharts<Cell extends { row: number; col: number; valu
   }
   const isSorted = <T>(owner: object, items: ReadonlyArray<T>, key: (item: T) => number) => { let known = sortedRows.get(owner); if (known === undefined) { known = ascending(items, key); sortedRows.set(owner, known) } return known }
   const rowOf = (sheet: Sheet, rowIndex: number) => search(sheet.rows, row => row.index, rowIndex, isSorted(sheet.rows, sheet.rows, row => row.index))
-  const lookup: ChartCellLookup = (name, rowIndex, col, wantText) => {
+  const lookup: ChartCellLookup = (name, rowIndex, col, wantText, allocation) => {
     const sheet = sheetByName(name)
     if (!sheet) return undefined
     const row = rowOf(sheet, rowIndex)
@@ -284,7 +299,8 @@ export function fillWorkbookCharts<Cell extends { row: number; col: number; valu
     if (!cell) return undefined
     if (options.available && !options.available(cell)) return { value: undefined, unavailable: true }
     let text: string | undefined
-    if (wantText && options.text) { try { text = options.text(sheet, cell) } catch { text = undefined } }
+    // A refused formatter allocation refuses the chart (never a silent fallback); other formatter failures read raw.
+    if (wantText && options.text) { try { text = options.text(sheet, cell, allocation) } catch (error) { if (error instanceof ChartRefusal) throw error; text = undefined } }
     return { value: cell.value, ...(cell.valueIsError === true ? { error: String(cell.value) } : {}), ...(text !== undefined ? { text } : {}) }
   }
   const hidden: ChartHiddenLookup = (name, rowIndex, col) => {
