@@ -365,9 +365,9 @@ export function trendlineLegendEntries(model: ChartModel): Array<{ name: string;
   return out
 }
 /**
- * `c:legend/c:legendEntry[c:delete=1]` for trendline entries: legend entries index the series first (in plot
- * order; a single varyColors series: its points), then every trendline in series order (Office-unverified
- * numbering). Marks the deleted ones in place.
+ * `c:legend/c:legendEntry[c:delete=1]` for trendline entries, numbered in series order after `entriesBefore` (the
+ * highest series c:idx + 1, or a point legend's point count), so a trendline never shares a series or point key
+ * (Office-unverified numbering). Marks the deleted ones in place.
  */
 export function markTrendlineLegendDeletions(legend: XmlNode | undefined, groups: readonly ChartGroup[], entriesBefore?: number): void {
   const deleted = new Set<number>()

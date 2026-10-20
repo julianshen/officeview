@@ -579,11 +579,19 @@ describe('charts-text (A4b merged with feature: trendlines, contour, forecast)',
     const vary = (legend: string) => paint(parse(space(`<barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="1"/><ser><idx val="7"/><order val="0"/><tx><v>S7</v></tx>${trend()}<cat>${strLit(['A', 'B', 'C'])}</cat><val>${lit([1, 2, 3])}</val></ser>${AX}</barChart>` + axes(), undefined, legend)))
     expect(legendNames(vary('<legend><legendPos val="r"/></legend>'))).toEqual(['A', 'B', 'C', 'Linear (S7)'])
     expect(legendNames(vary('<legend><legendPos val="r"/><legendEntry><idx val="1"/><delete val="1"/></legendEntry></legend>'))).toEqual(['A', 'C', 'Linear (S7)'])
-    // Series keyed by c:idx, the trendline by A6a's numbering (after the two series: entry 2).
+    // Series keyed by c:idx (0, 1), the trendline after the highest key: entry 2.
     const two = (entries: number[]) => paint(parse(space(bars(`<ser><idx val="0"/><order val="0"/><tx><v>Series 0</v></tx>${fill('FF0000')}${trend()}<cat>${strLit(['a', 'b', 'c'])}</cat><val>${lit([1, 3, 2])}</val></ser>` + ser(1, [2, 1, 3])) + axes(), undefined, `<legend><legendPos val="r"/>${entries.map(i => `<legendEntry><idx val="${i}"/><delete val="1"/></legendEntry>`).join('')}</legend>`)))
     expect(legendNames(two([]))).toEqual(['Series 0', 'Series 1', 'Linear (Series 0)'])
     expect(legendNames(two([1]))).toEqual(['Series 0', 'Linear (Series 0)'])
     expect(legendNames(two([2]))).toEqual(['Series 0', 'Series 1'])
+    // Noncontiguous c:idx (3 and 9): trendlines are numbered after the highest key (10, 11), never colliding with a series.
+    const sparse = (entries: number[]) => paint(parse(space(bars(`<ser><idx val="9"/><order val="0"/><tx><v>S9</v></tx>${fill('FF0000')}${trend()}<cat>${strLit(['a', 'b', 'c'])}</cat><val>${lit([1, 3, 2])}</val></ser><ser><idx val="3"/><order val="1"/><tx><v>S3</v></tx>${fill('00FF00')}${trend('<trendlineType val="linear"/><name>T3</name>')}<cat>${strLit(['a', 'b', 'c'])}</cat><val>${lit([2, 1, 3])}</val></ser>`) + axes(), undefined, `<legend><legendPos val="r"/>${entries.map(i => `<legendEntry><idx val="${i}"/><delete val="1"/></legendEntry>`).join('')}</legend>`)))
+    expect(legendNames(sparse([]))).toEqual(['S9', 'S3', 'Linear (S9)', 'T3'])
+    // Index 3 is series S3 only (positional numbering would also have hit the first trendline).
+    expect(legendNames(sparse([3]))).toEqual(['S9', 'Linear (S9)', 'T3'])
+    expect(legendNames(sparse([2]))).toEqual(['S9', 'S3', 'Linear (S9)', 'T3'])
+    expect(legendNames(sparse([10]))).toEqual(['S9', 'S3', 'T3'])
+    expect(legendNames(sparse([9, 11]))).toEqual(['S3', 'Linear (S9)'])
     // A contour's band legend: band entries deleted by band index.
     const contour = (legend: string) => {
       const cats = `<cat>${strLit(['C0', 'C1', 'C2'])}</cat>`

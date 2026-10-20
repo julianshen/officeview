@@ -654,9 +654,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(stockOpts?.upDownBars ? { upDownBars: stockOpts.upDownBars } : {}),
     })
   }
-  // Trendline entries follow the legend's other entries: the series, or a single varyColors series' points (A4b).
   const allSeries = groups.flatMap(g => g.series), pointLegend = allSeries.length === 1 && groups.find(g => g.series.length === 1)?.varyColors
-  markTrendlineLegendDeletions(legend, groups, pointLegend ? Math.min(64, Math.max(categories.length, allSeries[0].values.length)) : undefined)
+  // Trendline entry indices never coincide with another entry's key: after the highest series c:idx, or after the
+  // points of a point legend (Office's numbering is unverified).
+  markTrendlineLegendDeletions(legend, groups, pointLegend ? Math.min(64, Math.max(categories.length, allSeries[0].values.length)) : allSeries.reduce((n, s) => Math.max(n, s.index ?? 0), -1) + 1)
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
