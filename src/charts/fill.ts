@@ -3,37 +3,82 @@
  * cells, defined names, paged-reader lines and the decimal scanner. Moved
  * from `src/xlsx/chart.ts` (A0a) behaviour-identically.
  */
-import { CHART_LABEL_LIMIT, CHART_POINT_LIMIT, parseChartRange } from './parse'
-import type { XlsxChartModel, XlsxChartRange, XlsxChartSeries } from '../xlsx/chartModel'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, parseChartRange } from './parse'
+import type { ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
+import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
+import type { ChartWorkspace } from './workspace'
 
 export type ChartCellValue = string | number | boolean | null | undefined
-/** Cell lookup for filling uncached references: `sheet` is the resolved sheet name. */
-export interface ChartCell { value: ChartCellValue; /** The cell's formatted text (number/date format), as Excel shows it. */ text?: string; /** The value could not be read in full (a numeric form past the scanner's exact range). */ truncated?: boolean; /** The value's numeric reading when the reader computed it without building the text (null: not a number). */ number?: number | null }
-/** `text`: the caller needs the formatted label (categories, names); values never format. */
-export type ChartCellLookup = (sheet: string, row: number, col: number, text: boolean) => ChartCell | undefined
+/**
+ * Cell lookup for filling uncached references: `sheet` is the resolved sheet
+ * name. The point state comes from the cell itself, the same way on every path
+ * (spec 5.8): `error` keeps the error code, `unavailable` marks a formula with
+ * no saved value, a missing cell is blank.
+ */
+export interface ChartCell {
+  value: ChartCellValue
+  /** The cell's formatted text (number/date format), as Excel shows it. */ text?: string
+  /** The value could not be read in full (a numeric form past the scanner's exact range). */ truncated?: boolean
+  /** The value's numeric reading when the reader computed it without building the text (null: not a number). */ number?: number | null
+  /** An error cell's code (`#N/A`, `#DIV/0!`, ...). */ error?: string
+  /** The cell has no value to show (a formula without a saved value under the saved-value policy). */ unavailable?: boolean
+}
+/** The formatter's allocation observer (cellFormat `FormatAllocation`): each working buffer is reported before it
+ * is allocated; `allocate` throws to refuse it. */
+export interface ChartTextAllocation {
+  allocate(bytes: number): void; release(bytes: number): void
+  /** Bytes the formatter publishes into a structure that outlives it (`targets[0]`, e.g. a sheet diagnostic). */
+  retain?(targets: readonly object[], bytes: number, commit: () => void, kind?: 'diagnostic'): void
+}
+/** `text`: the caller needs the formatted label (categories, names); values never format. A label's formatting
+ * reports its working buffers through `allocation` (the chart workspace admits them, or refuses by throwing). */
+export type ChartCellLookup = (sheet: string, row: number, col: number, text: boolean, allocation?: ChartTextAllocation) => ChartCell | undefined
+/** Whether a worksheet cell sits in a hidden row or column (provenance for `plotVisOnly`). */
+export type ChartHiddenLookup = (sheet: string, row: number, col: number) => boolean
 
 /** The one line of cells a chart consumes from a range (a 2-D range keeps its
- * last row/column, the level nearest the data), bounded by CHART_POINT_LIMIT.
+ * last row/column, the level nearest the data), bounded by `limit` (the display
+ * bound, or the analytic bound for an analytic series' numeric roles).
  * Readers and the fill use this same sequence. */
 export interface ChartLine { sheet: string; vertical: boolean; fixed: number; start: number; count: number; truncated: boolean; text: boolean }
-export function chartLine(range: XlsxChartRange, ownerSheet: string, text: boolean): ChartLine {
+export function chartLine(range: ChartRange, ownerSheet: string, text: boolean, limit = CHART_POINT_LIMIT): ChartLine {
   const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1
   const vertical = cols === 1 || rows >= cols
   const length = vertical ? rows : cols
-  return { sheet: range.sheet ?? ownerSheet, vertical, fixed: vertical ? range.c1 : range.r1, start: vertical ? range.r0 : range.c0, count: Math.min(length, CHART_POINT_LIMIT), truncated: length > CHART_POINT_LIMIT, text }
+  return { sheet: range.sheet ?? ownerSheet, vertical, fixed: vertical ? range.c1 : range.r1, start: vertical ? range.r0 : range.c0, count: Math.min(length, limit), truncated: length > limit, text }
+}
+const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1; return cols === 1 || rows >= cols ? rows : cols }
+/**
+ * The acquisition bound of a series' numeric roles (spec 7): an analytic series
+ * is acquired in full up to CHART_ANALYTIC_POINT_LIMIT; a reference longer than
+ * that refuses the analytic element (never a prefix) and the series is acquired
+ * for display only. Readers and the fill decide it the same way.
+ */
+export function seriesLimit(series: ChartSeries): number {
+  if (series.analytic !== true) return CHART_POINT_LIMIT
+  const ranges = [series.pending?.values, series.pending?.xValues].filter((range): range is ChartRange => Boolean(range && !range.definedName))
+  return ranges.some(range => lineLength(range) > CHART_ANALYTIC_POINT_LIMIT) ? CHART_POINT_LIMIT : CHART_ANALYTIC_POINT_LIMIT
+}
+/** Writes the point state of one filled cell (spec 5.8); `onTruncated` hears a value the reader could not read in full. */
+function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onTruncated: () => void): void {
+  if (!cell) return // blank
+  if (cell.unavailable) { out.unavailable(i); return }
+  if (cell.error !== undefined) { out.error(i, cell.error); return }
+  // A numeric form the scanner cannot read exactly has no value, and the chart says it is truncated.
+  if (cell.truncated) { onTruncated(); out.unavailable(i); return }
+  const number = cell.number !== undefined ? cell.number ?? undefined : numberOf(cell.value)
+  if (number !== undefined) out.value(i, number)
 }
 /** The cell coordinates of point `i` on a line. */
 export const linePoint = (line: ChartLine, i: number): { row: number; col: number } => line.vertical ? { row: line.start + i, col: line.fixed } : { row: line.fixed, col: line.start + i }
 
-export function chartHasPending(model: XlsxChartModel): boolean {
+export function chartHasPending(model: ChartModel): boolean {
   return Boolean(model.categoryPending) || model.groups.some(g => g.series.some(s => s.pending))
 }
-/** The cells a range resolves to, row-major, bounded by CHART_POINT_LIMIT. */
-function rangeCells(range: XlsxChartRange, sheet: string, lookup: ChartCellLookup, text: boolean): { values: Array<ChartCell | undefined>; truncated: boolean } {
-  const line = chartLine(range, sheet, text)
-  const values: Array<ChartCell | undefined> = []
-  for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); values.push(lookup(line.sheet, at.row, at.col, text)) }
-  return { values, truncated: line.truncated }
+/** A cached role keeps its reference for plotVisOnly provenance (spec 5.8): such a chart is visited by the fill too. */
+export function chartHasRefs(model: ChartModel): boolean {
+  return Boolean(model.categoryRef) || model.groups.some(g => g.series.some(s => s.refs))
 }
 const numberOf = (value: ChartCellValue): number | undefined => typeof value === 'number' ? (Number.isFinite(value) ? value : undefined)
   : typeof value === 'string' ? scanChartNumber(value.length, i => value.charCodeAt(i)) : undefined
@@ -54,9 +99,9 @@ export function chartNameResolver(names: readonly ChartDefinedName[], sheets: Re
 }
 /** Replace defined-name references by the ranges they name; a name that is
  * missing or not a single area turns the chart into a placeholder. */
-export function resolveChartNames(model: XlsxChartModel, ownerSheet: string, resolve: ChartNameResolver | undefined): XlsxChartModel {
+export function resolveChartNames(model: ChartModel, ownerSheet: string, resolve: ChartNameResolver | undefined): ChartModel {
   let unsupported = model.unsupported
-  const fix = (range: XlsxChartRange | undefined): XlsxChartRange | undefined => {
+  const fix = (range: ChartRange | undefined): ChartRange | undefined => {
     if (!range?.definedName) return range
     const formula = resolve?.(range.definedName, range.sheet ?? ownerSheet)
     const target = formula ? parseChartRange(formula.replace(/^=/, '')) : undefined
@@ -64,41 +109,171 @@ export function resolveChartNames(model: XlsxChartModel, ownerSheet: string, res
     unsupported ??= `Chart data name “${range.definedName}” ${formula ? 'is not a single worksheet range' : 'is not defined in this workbook'}`
     return undefined
   }
-  if (!chartHasPending(model)) return model
-  const categoryPending = fix(model.categoryPending)
+  // A cached role's reference only gives provenance: a name that does not resolve drops it, the cache stays.
+  const ref = (range: ChartRange | undefined): ChartRange | undefined => {
+    if (!range?.definedName) return range
+    const formula = resolve?.(range.definedName, range.sheet ?? ownerSheet)
+    const target = formula ? parseChartRange(formula.replace(/^=/, '')) : undefined
+    return target && !target.definedName ? target : undefined
+  }
+  if (!chartHasPending(model) && !chartHasRefs(model)) return model
+  const categoryPending = fix(model.categoryPending), categoryRef = ref(model.categoryRef)
+  const roles = <T extends Record<string, ChartRange | undefined>>(table: T | undefined, map: (range: ChartRange | undefined) => ChartRange | undefined): T | undefined => {
+    if (!table) return undefined
+    const out = Object.fromEntries(Object.entries(table).map(([key, range]) => [key, map(range)]).filter(([, range]) => range)) as T
+    return Object.keys(out).length ? out : undefined
+  }
   const groups = model.groups.map(group => ({ ...group, series: group.series.map(series => {
-    if (!series.pending) return series
-    const pending = Object.fromEntries(Object.entries(series.pending).map(([key, range]) => [key, fix(range)]).filter(([, range]) => range)) as NonNullable<XlsxChartSeries['pending']>
-    const { pending: _old, ...rest } = series
-    void _old
-    return Object.keys(pending).length ? { ...rest, pending } : rest
+    if (!series.pending && !series.refs) return series
+    const pending = roles(series.pending, fix), refs = roles(series.refs, ref)
+    const { pending: _old, refs: _refs, ...rest } = series
+    void _old, void _refs
+    return { ...rest, ...(pending ? { pending } : {}), ...(refs ? { refs } : {}) }
   }) }))
-  const { categoryPending: _cat, ...rest } = model
-  void _cat
-  return { ...rest, groups, ...(categoryPending ? { categoryPending } : {}), ...(unsupported ? { unsupported } : {}) }
+  const { categoryPending: _cat, categoryRef: _ref, ...rest } = model
+  void _cat, void _ref
+  const next = { ...rest, groups, ...(categoryPending ? { categoryPending } : {}), ...(categoryRef ? { categoryRef } : {}), ...(unsupported ? { unsupported } : {}) }
+  succeedChartModel(model, next)
+  return next
 }
 
-/** Fill uncached references from worksheet cells (returns a new model). */
-export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, lookup: ChartCellLookup): XlsxChartModel {
-  let truncated = model.truncated ?? false
-  const sheetOf = (range: XlsxChartRange) => range.sheet ?? ownerSheet
-  let categories = model.categories
-  if (model.categoryPending) {
-    const cells = rangeCells(model.categoryPending, sheetOf(model.categoryPending), lookup, true)
-    truncated ||= cells.truncated
-    categories = cells.values.map(cell => { const text = asText(cell); if (text.length > CHART_LABEL_LIMIT) { truncated = true; return text.slice(0, CHART_LABEL_LIMIT) } return text })
+/** What a fill needs beside the cells: hidden-cell provenance and the chart workspace that owns new storage. */
+export interface ChartFillOptions { hidden?: ChartHiddenLookup; workspace?: ChartWorkspace }
+/**
+ * Fill uncached references from worksheet cells (returns a new model that takes
+ * over the old one's charge). Every cell is written straight into the role's
+ * compact storage (no object per point), the line order is kept (no
+ * compaction), and every role with a worksheet reference (filled, or cached
+ * with its reference kept) records the indices of its own cells in hidden rows
+ * or columns (plotVisOnly provenance, applied per role at draw time).
+ *
+ * All new storage is admitted to the model's chart workspace (its owner, else
+ * `options.workspace`) before it is built. A refusal returns the model as a
+ * refused placeholder and refunds what the fill charged.
+ */
+export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, options: ChartFillOptions = {}): ChartModel {
+  const { hidden } = options
+  const owner = chartModelOwner(model) ?? (options.workspace ? modelOwner(options.workspace) : undefined)
+  const fillTag = owner ? `${owner.tag}:fill` : '', charged = { bytes: 0 }
+  const charge = (bytes: number) => {
+    if (!owner) return
+    if (!owner.workspace.reserve(bytes, fillTag)) throw new ChartRefusal()
+    charged.bytes += bytes
   }
+  // A label or name: the formatter's capped output is admitted before any text is formatted or materialized;
+  // every working buffer the formatter reports beyond it is admitted (at the live peak) before it is allocated,
+  // and a refusal stops the formatter there. The charge is then trimmed to the text actually retained.
+  const labelTag = owner ? `${owner.tag}:label` : ''
+  const label = (produce: (allocation?: ChartTextAllocation) => string, keepEmpty = true): string => {
+    if (!owner) return produce()
+    if (!owner.workspace.reserve(LABEL_BOUND_BYTES, labelTag)) throw new ChartRefusal()
+    // `admitted`: what the label tag owns (reserved, less what moved to a longer-lived owner); `live`: the
+    // formatter's current working set, always covered by `admitted`.
+    let live = 0, admitted = LABEL_BOUND_BYTES
+    const allocation: ChartTextAllocation = {
+      allocate: bytes => {
+        live += bytes
+        if (live <= admitted) return
+        if (!owner.workspace.reserve(live - admitted, labelTag)) throw new ChartRefusal()
+        admitted = live
+      },
+      release: bytes => { live -= bytes },
+      // A published diagnostic outlives the label: its admitted bytes move to the sheet's owner (charts/own.ts),
+      // kept beyond the label's trim and a later refusal, refunded with the document.
+      retain: (targets, bytes, commit) => {
+        const target = targets[0]
+        if (target && bytes > 0 && bytes <= admitted) { retainWithTarget(target, owner.workspace, labelTag, bytes); admitted -= bytes; live -= bytes }
+        commit()
+      },
+    }
+    try {
+      const text = produce(allocation)
+      const kept = Math.min(text || keepEmpty ? stringBytes(text) : 0, admitted)
+      if (kept) { owner.workspace.transfer(labelTag, fillTag, kept); charged.bytes += kept }
+      return text
+    } finally { owner.workspace.release(labelTag) }
+  }
+  try {
+    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label)
+    if (owner) {
+      owner.workspace.transfer(fillTag, owner.tag, charged.bytes)
+      if (chartModelOwner(model)) succeedChartModel(model, next); else adoptChartModel(next, owner)
+    }
+    return next
+  } catch (error) {
+    if (owner) owner.workspace.release(fillTag)
+    if (!(error instanceof ChartRefusal)) throw error
+    const refused = { ...model, unsupported: 'This chart needs more memory than is available for charts', refused: true as const }
+    succeedChartModel(model, refused)
+    return refused
+  }
+}
+/** The bound admitted before a label is built: the formatter's capped output (CHART_LABEL_LIMIT + 1 units,
+ * one past the limit marks truncation), which also bounds the retained label. */
+const LABEL_BOUND_BYTES = stringBytes(' '.repeat(CHART_LABEL_LIMIT + 1))
+function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: (allocation?: ChartTextAllocation) => string, keepEmpty?: boolean) => string): ChartModel {
+  let truncated = model.truncated ?? false
+  const sheetOf = (range: ChartRange) => range.sheet ?? ownerSheet
+  /** A role's own provenance: the sorted indices of its cells in hidden rows or columns (admitted, then built). */
+  const provenance = (line: ChartLine): Uint32Array | undefined => {
+    if (!hidden) return undefined
+    let count = 0
+    for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); if (hidden(line.sheet, at.row, at.col)) count++ }
+    if (!count) return undefined
+    charge(count * 4)
+    const out = new Uint32Array(count)
+    for (let i = 0, k = 0; i < line.count; i++) { const at = linePoint(line, i); if (hidden(line.sheet, at.row, at.col)) out[k++] = i }
+    return out
+  }
+  let categories = model.categories, categoryHidden = model.categoryHidden
+  if (model.categoryPending) {
+    const line = chartLine(model.categoryPending, sheetOf(model.categoryPending), true)
+    truncated ||= line.truncated
+    const labels: string[] = []
+    for (let i = 0; i < line.count; i++) {
+      const at = linePoint(line, i)
+      labels.push(label(allocation => {
+        const text = asText(lookup(line.sheet, at.row, at.col, true, allocation))
+        if (text.length <= CHART_LABEL_LIMIT) return text
+        truncated = true
+        return text.slice(0, CHART_LABEL_LIMIT)
+      }))
+    }
+    categories = labels
+    categoryHidden = provenance(line)
+  } else if (model.categoryRef && categories.length) categoryHidden = provenance(chartLine(model.categoryRef, sheetOf(model.categoryRef), true, categories.length))
   const groups = model.groups.map(group => ({
     ...group,
     series: group.series.map(series => {
-      if (!series.pending) return series
-      const { pending, ...rest } = series
-      const next: XlsxChartSeries = { ...rest }
-      // A numeric form the scanner cannot read exactly is an unavailable point, and the chart says it is truncated.
-      const asNumber = (cell: ChartCell | undefined): number | undefined => { if (cell?.truncated) { truncated = true; return undefined } if (cell && cell.number !== undefined) return cell.number ?? undefined; return numberOf(cell?.value) }
-      if (pending.values) { const cells = rangeCells(pending.values, sheetOf(pending.values), lookup, false); truncated ||= cells.truncated; next.values = cells.values.map(asNumber) }
-      if (pending.xValues) { const cells = rangeCells(pending.xValues, sheetOf(pending.xValues), lookup, false); truncated ||= cells.truncated; next.xValues = cells.values.map(asNumber) }
-      if (pending.name) { const full = asText(lookup(sheetOf(pending.name), pending.name.r0, pending.name.c0, true)); const text = full.slice(0, CHART_LABEL_LIMIT); if (full.length > CHART_LABEL_LIMIT) truncated = true; if (text) next.name = text }
+      if (!series.pending && !series.refs) return series
+      const { pending = {}, ...rest } = series
+      const next: ChartSeries = { ...rest }
+      const limit = seriesLimit(series)
+      if (series.analytic === true && limit === CHART_POINT_LIMIT) next.analytic = 'refused'
+      const fill = (range: ChartRange): ChartPoints => {
+        const line = chartLine(range, sheetOf(range), false, limit)
+        // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
+        truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
+        charge(pointBytes(line.count))
+        const out = new PointWriter(line.count, false, charge)
+        for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }) }
+        return withHidden(out.done(), provenance(line))
+      }
+      // A cached role keeps its values; its reference adds only its own provenance.
+      const cached = (points: ChartPoints, range: ChartRange) => points.length ? withHidden(points, provenance(chartLine(range, sheetOf(range), false, points.length))) : points
+      if (pending.values) next.values = fill(pending.values)
+      else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
+      if (pending.xValues) next.xValues = fill(pending.xValues)
+      else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
+      if (pending.name) {
+        const name = pending.name
+        const text = label(allocation => {
+          const full = asText(lookup(sheetOf(name), name.r0, name.c0, true, allocation))
+          if (full.length > CHART_LABEL_LIMIT) truncated = true
+          return full.slice(0, CHART_LABEL_LIMIT)
+        }, false)
+        if (text) next.name = text
+      }
       if (next.pointColors && next.values.length > next.pointColors.length) {
         const first = next.pointColors
         next.pointColors = Array.from({ length: Math.min(256, next.values.length) }, (_, i) => first[i] ?? first[i % first.length])
@@ -106,17 +281,17 @@ export function fillChartRanges(model: XlsxChartModel, ownerSheet: string, looku
       return next
     }),
   }))
-  const { categoryPending, ...rest } = model
-  void categoryPending
-  return { ...rest, categories, groups, ...(truncated ? { truncated: true } : {}) }
+  const { categoryPending, categoryHidden: _hidden, ...rest } = model
+  void categoryPending, void _hidden
+  return { ...rest, categories, ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}) }
 }
 
 /** Resident workbooks: fill every uncached chart reference from parsed cells,
  * after evaluation and semantics. Only the cells on the consumed lines are
  * visited (rows by binary search, cells by binary search), and labels are
  * formatted on demand: the workspace is bounded by the chart point limits. */
-export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; cells: ReadonlyArray<Cell> }>; drawings?: XlsxDrawingLike[] }>(
-  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell) => string; available?: (cell: Cell) => boolean } = {},
+export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue; valueIsError?: boolean }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; hidden?: boolean; cells: ReadonlyArray<Cell> }>; cols?: ReadonlyArray<{ min: number; max: number; hidden?: boolean }>; drawings?: XlsxDrawingLike[] }>(
+  sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell, allocation?: ChartTextAllocation) => string; available?: (cell: Cell) => boolean; workspace?: ChartWorkspace } = {},
 ): void {
   const sheetByName = (name: string) => sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
   const sortedRows = new WeakMap<object, boolean>()
@@ -128,27 +303,33 @@ export function fillWorkbookCharts<Cell extends { row: number; col: number; valu
     return undefined
   }
   const isSorted = <T>(owner: object, items: ReadonlyArray<T>, key: (item: T) => number) => { let known = sortedRows.get(owner); if (known === undefined) { known = ascending(items, key); sortedRows.set(owner, known) } return known }
-  const lookup: ChartCellLookup = (name, rowIndex, col, wantText) => {
+  const rowOf = (sheet: Sheet, rowIndex: number) => search(sheet.rows, row => row.index, rowIndex, isSorted(sheet.rows, sheet.rows, row => row.index))
+  const lookup: ChartCellLookup = (name, rowIndex, col, wantText, allocation) => {
     const sheet = sheetByName(name)
     if (!sheet) return undefined
-    const row = search(sheet.rows, row => row.index, rowIndex, isSorted(sheet.rows, sheet.rows, row => row.index))
+    const row = rowOf(sheet, rowIndex)
     const cell = row && search(row.cells, cell => cell.col, col, isSorted(row.cells, row.cells, cell => cell.col))
     if (!cell) return undefined
-    if (options.available && !options.available(cell)) return { value: undefined }
+    if (options.available && !options.available(cell)) return { value: undefined, unavailable: true }
     let text: string | undefined
-    if (wantText && options.text) { try { text = options.text(sheet, cell) } catch { text = undefined } }
-    return { value: cell.value, ...(text !== undefined ? { text } : {}) }
+    // A refused formatter allocation refuses the chart (never a silent fallback); other formatter failures read raw.
+    if (wantText && options.text) { try { text = options.text(sheet, cell, allocation) } catch (error) { if (error instanceof ChartRefusal) throw error; text = undefined } }
+    return { value: cell.value, ...(cell.valueIsError === true ? { error: String(cell.value) } : {}), ...(text !== undefined ? { text } : {}) }
+  }
+  const hidden: ChartHiddenLookup = (name, rowIndex, col) => {
+    const sheet = sheetByName(name)
+    return Boolean(sheet && (rowOf(sheet, rowIndex)?.hidden || sheet.cols?.some(spec => spec.hidden && spec.min <= col && col <= spec.max)))
   }
   const resolve = chartNameResolver(options.names ?? [], sheets)
   for (const sheet of sheets) {
-    try { fillDrawings(sheet.drawings, sheet.name, lookup, resolve) }
+    try { fillDrawings(sheet.drawings, sheet.name, lookup, resolve, { hidden, workspace: options.workspace }) }
     catch { /* a chart that cannot be filled keeps its placeholder state; the workbook stays usable */ }
   }
 }
 /** Resolve defined names of a drawing tree in place (paged readers resolve before reading cells). */
 export function resolveDrawingNames(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, resolve: ChartNameResolver | undefined): void {
   for (const node of drawings ?? []) {
-    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
     if (content?.kind === 'xlsxChart' && content.chart) content.chart = resolveChartNames(content.chart, ownerSheet, resolve)
     if (node.children) resolveDrawingNames(node.children, ownerSheet, resolve)
   }
@@ -159,23 +340,24 @@ export function drawingsNeedNames(drawings: XlsxDrawingLike[] | undefined): bool
 }
 export interface XlsxDrawingLike { content?: { kind: string }; children?: XlsxDrawingLike[] }
 /** Fill uncached chart references of a drawing tree in place. */
-export function fillDrawings(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, lookup: ChartCellLookup, resolve?: ChartNameResolver): void {
+export function fillDrawings(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, lookup: ChartCellLookup, resolve?: ChartNameResolver, options: ChartFillOptions = {}): void {
   for (const node of drawings ?? []) {
-    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
-    if (content?.kind === 'xlsxChart' && content.chart && chartHasPending(content.chart)) content.chart = fillChartRanges(resolveChartNames(content.chart, ownerSheet, resolve), ownerSheet, lookup)
-    if (node.children) fillDrawings(node.children, ownerSheet, lookup, resolve)
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart && !content.chart.unsupported && (chartHasPending(content.chart) || (options.hidden && chartHasRefs(content.chart)))) content.chart = fillChartRanges(resolveChartNames(content.chart, ownerSheet, resolve), ownerSheet, lookup, options)
+    if (node.children) fillDrawings(node.children, ownerSheet, lookup, resolve, options)
   }
 }
 /** The lines a drawing tree still needs (defined names resolved first), for paged readers. */
 export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: ChartLine[] = []): ChartLine[] {
   for (const node of drawings ?? []) {
-    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
     const chart = content?.kind === 'xlsxChart' ? content.chart : undefined
     if (chart) {
-      const add = (range: XlsxChartRange | undefined, text: boolean) => { if (range && !range.definedName) out.push(chartLine(range, ownerSheet, text)) }
+      const add = (range: ChartRange | undefined, text: boolean, limit?: number) => { if (range && !range.definedName) out.push(chartLine(range, ownerSheet, text, limit)) }
       add(chart.categoryPending, true)
       for (const group of chart.groups) for (const s of group.series) {
-        add(s.pending?.values, false); add(s.pending?.xValues, false); add(s.pending?.categories, true)
+        const limit = seriesLimit(s)
+        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true)
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }
@@ -184,14 +366,16 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
   return out
 }
 /** Every reference a drawing tree still needs, for paged readers. */
-export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: Array<XlsxChartRange & { sheet: string }> = [], withNames = false): Array<XlsxChartRange & { sheet: string }> {
+export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, out: Array<ChartRange & { sheet: string }> = [], withNames = false): Array<ChartRange & { sheet: string }> {
   for (const node of drawings ?? []) {
-    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
     const chart = content?.kind === 'xlsxChart' ? content.chart : undefined
     if (chart) {
-      const add = (range: XlsxChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
+      const add = (range: ChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
       add(chart.categoryPending)
       for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.name); add(s.pending?.categories) }
+      // Names a cached role's provenance reference uses are resolved too (never read as cells).
+      if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues) } }
     }
     if (node.children) pendingRanges(node.children, ownerSheet, out, withNames)
   }
@@ -201,8 +385,8 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
 /** Charts that still need cells become placeholders with `reason` (a refused read). */
 export function refuseCharts(drawings: XlsxDrawingLike[] | undefined, reason: string): void {
   for (const node of drawings ?? []) {
-    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
-    if (content?.kind === 'xlsxChart' && content.chart && chartHasPending(content.chart)) content.chart = { ...content.chart, unsupported: reason }
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart && chartHasPending(content.chart)) { const next = { ...content.chart, unsupported: reason }; succeedChartModel(content.chart, next); content.chart = next }
     if (node.children) refuseCharts(node.children, reason)
   }
 }
@@ -213,11 +397,11 @@ export const CHART_CELL_BYTES = 160
 export function markUnreadableCharts(drawings: XlsxDrawingLike[] | undefined, ownerSheet: string, reasonFor: (sheet: string) => string | undefined): boolean {
   let marked = false
   for (const node of drawings ?? []) {
-    const content = node.content as { kind: string; chart?: XlsxChartModel } | undefined
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
     if (content?.kind === 'xlsxChart' && content.chart && !content.chart.unsupported) {
       for (const line of pendingLines([node], ownerSheet)) {
         const reason = reasonFor(line.sheet)
-        if (reason) { content.chart = { ...content.chart, unsupported: reason }; marked = true; break }
+        if (reason) { const next = { ...content.chart, unsupported: reason }; succeedChartModel(content.chart, next); content.chart = next; marked = true; break }
       }
     }
     if (node.children && markUnreadableCharts(node.children, ownerSheet, reasonFor)) marked = true

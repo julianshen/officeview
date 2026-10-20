@@ -126,10 +126,10 @@ function expectModel(chart: XlsxChartModel, name: ChartName): void {
   expect(chart.unsupported).toBeUndefined()
   const group = chart.groups[0]
   expect(chart.groups).toHaveLength(1)
-  if (name === 'stackedColumn') expect(group).toMatchObject({ type: 'bar', barDir: 'col', grouping: 'stacked' })
-  if (name === 'horizontalBar') expect(group).toMatchObject({ type: 'bar', barDir: 'bar', grouping: 'clustered' })
-  if (name === 'line') expect(group).toMatchObject({ type: 'line', grouping: 'standard' })
-  if (name === 'pie') expect(group).toMatchObject({ type: 'pie' })
+  if (name === 'stackedColumn') expect(group).toMatchObject({ family: 'bar', barDir: 'col', grouping: 'stacked' })
+  if (name === 'horizontalBar') expect(group).toMatchObject({ family: 'bar', barDir: 'bar', grouping: 'clustered' })
+  if (name === 'line') expect(group).toMatchObject({ family: 'line', grouping: 'standard' })
+  if (name === 'pie') expect(group).toMatchObject({ family: 'pie' })
   expect(group.series.map(s => s.color)).toEqual(name === 'stackedColumn' ? [RED, BLUE] : [name === 'pie' ? group.series[0].color : RED])
 }
 
@@ -167,9 +167,9 @@ describe('one lazy chart engine (spec 6.1, 6.2)', () => {
     const textOnly = { parseParagraph: () => ({ runs: [], align: 'left' as const }), parseDiagramText: () => 'text' }
     const defaulted = await prepareDrawingContent(pkg, node, 'word/document.xml', contentTheme, theme, textOnly)
     expect(defaulted?.kind).toBe('xlsxChart')
-    if (defaulted?.kind === 'xlsxChart') expect(defaulted.chart.groups[0]).toMatchObject({ type: 'bar', barDir: 'bar' })
+    if (defaulted?.kind === 'xlsxChart') expect(defaulted.chart.groups[0]).toMatchObject({ family: 'bar', barDir: 'bar' })
 
-    const override: XlsxChartModel = { groups: [], categories: ['override'], categoryAxis: { gridlines: false, deleted: false }, valueAxis: { gridlines: false, deleted: false }, fontFamily: 'Calibri', fontSizePt: 10 }
+    const override: XlsxChartModel = { groups: [], axes: [], categories: ['override'], fontFamily: 'Calibri', fontSizePt: 10 }
     const parseChart = vi.fn(async () => ({ kind: 'native' as const, model: override }))
     const overridden = await prepareDrawingContent(await zip({ 'word/charts/chart1.xml': CHARTS.horizontalBar, 'word/_rels/document.xml.rels': chartRels('charts/chart1.xml') }), node, 'word/document.xml', contentTheme, theme, { ...textOnly, parseChart })
     expect(parseChart).toHaveBeenCalledWith(expect.anything(), 'word/charts/chart1.xml')

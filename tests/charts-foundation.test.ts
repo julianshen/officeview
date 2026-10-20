@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CHART_WORKSPACE_LIMIT, createChartWorkspace, type ChartParentLedger } from '../src/charts/workspace'
 import { admitChartModel, validateAxisBinding } from '../src/charts/axisBinding'
 import { documentChartContext, chartParseContext } from '../src/charts/context'
-import type { ChartAxis, ChartAxisBinding, ChartGroup, ChartModel, ChartPoint, ChartResult, ChartSeries } from '../src/charts/model'
+import type { ChartAxis, ChartAxisBinding, ChartGroup, ChartModel, ChartPoint, ChartPoints, ChartResult, ChartSeries } from '../src/charts/model'
+import { PointWriter, pointList } from '../src/charts/points'
 import type { ChartPoint as LegacyReexport, XlsxChartModel } from '../src/xlsx/chartModel'
 import { parseXlsx } from '../src/xlsx/parse'
 import { CACHED_COLUMN, chartWorkbook, openpyxlFrame } from './helpers/xlsx-chart-fixture'
@@ -122,17 +123,20 @@ describe('chart workspace (spec 6.4/6.5)', () => {
 })
 
 const axis = (id: string, kind: ChartAxis['kind']): ChartAxis => ({ id, kind, deleted: false, gridlines: false })
-const values = (...v: number[]): ChartPoint[] => v.map(n => ({ state: 'value', v: n }))
-const series = (): ChartSeries => ({ name: 'S1', values: values(1, 2) })
-const group = (family: ChartGroup['family'], binding: ChartAxisBinding): ChartGroup => ({ family, grouping: 'standard', series: [series()], binding })
+const values = (...v: number[]): ChartPoints => { const out = new PointWriter(v.length); v.forEach((n, i) => out.value(i, n)); return out.done() }
+const series = (): ChartSeries => ({ name: 'S1', color: '4472C4', values: values(1, 2) })
+const group = (family: ChartGroup['family'], binding: ChartAxisBinding): ChartGroup => ({ family, grouping: 'standard', series: [series()], binding, gapWidth: 150, overlap: 0 })
 const model = (groups: ChartGroup[], axes: ChartAxis[]): ChartModel => ({ groups, axes, categories: [], fontFamily: 'Calibri', fontSizePt: 10 })
 
 describe('chart model contracts (spec 5.1, 5.8, 6.3)', () => {
   it('point states are value, blank, error(code) and unavailable; #N/A keeps its identity', () => {
     const points: ChartPoint[] = [{ state: 'value', v: 1, fmt: '0.0' }, { state: 'blank' }, { state: 'error', code: '#N/A' }, { state: 'error', code: '#DIV/0!' }, { state: 'unavailable' }]
     expect(points.map(p => p.state)).toEqual(['value', 'blank', 'error', 'error', 'unavailable'])
-    const legacy: XlsxChartModel['groups'][number]['series'][number]['values'] = [1, undefined]
-    expect(legacy).toEqual([1, undefined])
+    // D0: the legacy alias is the final shape: compact point storage, read through the ChartPoint accessor view.
+    const writer = new PointWriter(4, true)
+    writer.value(0, 1, '0.0'); writer.error(2, '#N/A'); writer.unavailable(3)
+    const legacy: XlsxChartModel['groups'][number]['series'][number]['values'] = writer.done()
+    expect(pointList(legacy)).toEqual([{ state: 'value', v: 1, fmt: '0.0' }, { state: 'blank' }, { state: 'error', code: '#N/A' }, { state: 'unavailable' }])
     const reexported: LegacyReexport = { state: 'blank' }
     expect(reexported.state).toBe('blank')
     const results: ChartResult[] = [{ kind: 'native', model: model([], []) }, { kind: 'unsupported', reason: 'x' }, { kind: 'refused', reason: 'y' }]

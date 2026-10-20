@@ -313,9 +313,12 @@ export interface ContentLoadAdapters<Paragraph, Text> {
 export function defaultParseChart(pkg: OfficePackage, theme: ThemeContext, chartContext?: ChartDocumentContext): (root: XmlNode, path: string) => Promise<ChartResult<XlsxChartModel>> {
   return async (root, path) => {
     // A malformed chart part or a failed engine load never fails the document: it reads as unsupported (spec 6.3).
-    let chart: XlsxChartModel | undefined
-    try { const charts = await loadChartModule(); chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
-    return chart && !chart.unsupported ? { kind: 'native', model: chart } : { kind: 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
+    let chart: XlsxChartModel | undefined, charts: ChartModule | undefined
+    try { charts = await loadChartModule(); chart = charts.parseXlsxChart(root, theme, chartContext ? charts.chartParseContext(chartContext, pkg, path, theme) : charts.chartParseContextFor(pkg, path, theme)) } catch { chart = undefined }
+    if (chart && !chart.unsupported) return { kind: 'native', model: chart }
+    // A discarded model returns its storage to the chart workspace; the card is a new, storage-free model.
+    if (chart) charts?.releaseChartModel(chart)
+    return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
   }
 }
 /** Caller adapters spread over the defaults: a caller passing only text adapters still gets the default `parseChart`. */
@@ -333,7 +336,7 @@ const chartCards = new WeakMap<XmlNode, XlsxChartModel>()
 type ChartCard = Extract<DrawingContent, { kind: 'xlsxChart' }>
 /** A placeholder card model (the engine's `placeholderChart`, without loading the engine). */
 export const cardChart = (reason: string, title?: string, feature?: 'ChartEx'): XlsxChartModel =>
-  ({ ...(title ? { title } : {}), groups: [], categories: [], categoryAxis: { gridlines: false, deleted: false }, valueAxis: { gridlines: false, deleted: false }, fontFamily: 'Calibri', fontSizePt: 10, unsupported: reason, ...(feature ? { feature } : {}) })
+  ({ ...(title ? { title } : {}), groups: [], axes: [], categories: [], fontFamily: 'Calibri', fontSizePt: 10, unsupported: reason, ...(feature ? { feature } : {}) })
 /** AlternateContent wrappers whose resolver selected no usable representation (every Choice failed and the
  * Fallback is absent or unusable). Recorded by each format's resolver from its actual selection result. */
 const exhausted = new WeakSet<XmlNode>()

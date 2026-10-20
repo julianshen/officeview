@@ -118,10 +118,13 @@ it('a refused label reservation materializes nothing and is not counted as admis
    const at=roomy.findIndex((bytes,i)=>i+1<roomy.length&&roomy[i+1]-bytes===2*'label text'.length)
    expect(at).toBeGreaterThanOrEqual(0)
    const workspace=roomy[at]
-   const result=await fresh.read({set:(bytes:number)=>{const ok=!refused&&bytes<=workspace;if(ok)accepted.push(bytes);else{refused=true;refusedAt.push(bytes)}return ok}})
+   // D0: the share is no longer monotonic (the chart workspace refunds its parsed tree before the fill), so the
+   // refusal is placed by position in the learned sequence: everything up to the workspace charge is accepted.
+   let call=0
+   const result=await fresh.read({set:(bytes:number)=>{const ok=!refused&&call++<=at;if(ok)accepted.push(bytes);else{refused=true;refusedAt.push(bytes)}return ok}})
    expect(refusedAt.length).toBeGreaterThan(0)
+   expect(accepted.at(-1)).toBe(workspace)
    expect(refusedAt[0]-workspace).toBe(2*'label text'.length)
-   expect(accepted.every(bytes=>bytes<refusedAt[0])).toBe(true)
    expect(result.completeness).toBe('incomplete')
    expect(afterRefusal).toEqual([])
   } finally {await fresh.source.release()}

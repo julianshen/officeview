@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { list, pts } from './helpers/chart-points'
 import {expect,it} from 'vitest'
 import {writeFile} from 'node:fs/promises'
 import {chartWorkbookBytes} from './helpers/xlsx-chart-fixture'
@@ -25,8 +26,8 @@ for(const [name,text,expected]of [['safe-hex','0x10000000000000',undefined],['sa
   if(name==='control')expect(raw).toBe('0x\u0011')
   const resident=(h.doc.sheets[0].drawings![0].content as any).chart,paged=(await h.read()).drawings[0].content.chart
   evidence[name]={raw,expected,resident:resident.groups[0].series[0].values,paged:paged.groups[0].series[0].values,truncated:resident.truncated};await save()
-  expect(resident.groups[0].series[0].values).toEqual([expected])
-  expect(paged.groups[0].series[0].values).toEqual([expected])
+  expect(list(resident.groups[0].series[0].values)).toEqual(pts(expected))
+  expect(list(paged.groups[0].series[0].values)).toEqual(pts(expected))
  }finally{await h.source.release()}
 })
 it('grouped chart categories keep the canonical formatted prefix on both paths',async()=>{

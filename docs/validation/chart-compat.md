@@ -28,6 +28,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After A0b fix round 2 | A0b r2 commit | 38,639 | Exhausted-wrapper propagation, persistent priced namespace scopes, streamed comment discard and token-limit classification; outside `dist/index.js` (+2 B hash churn only). Running total vs B0: +8 B |
 | After A0b fix round 3 | A0b r3 commit | 38,635 | Exhaustion from the fallback's actual resolution (PPTX, XLSX); outside `dist/index.js` (hash churn only). Running total vs B0: +4 B |
 | After A0b fix round 4 | A0b r4 commit | 38,637 | PPTX fallback exhaustion from remaining usable content; outside `dist/index.js` (hash churn only). Running total vs B0: +6 B |
+| After D0 | D0 commit | 38,637 | Before (fdd1117, rebuilt): 38,637. The point-state model, analytic acquisition, display model, paged parent ledger and largeSource context reuse live in the lazy `charts-*`, `office-worker`, `largeSource-*` and paged-drawings chunks. `dist/index.js` is byte-identical to the base build once chunk hashes are normalised (intermediate builds measured 38,639: hash churn only). Bytes added by D0: 0. Running total vs B0: +6 B |
 
 ## Spec §8 testing and validation
 
@@ -38,10 +39,10 @@ One case per §8 bullet (leaf level: sub-bullets of Goldens, References and Brow
 | CH-8-1 | Numeric oracles: hand-computed values for ticks, date axes (both systems), display units, number-format classes, ofPie splits, stock roles, bubble scaling, trendlines, error bars, histogram bins, Pareto, box-whisker quartiles, waterfall subtotals, treemap/sunburst aggregation | pending | |
 | CH-8-2 | Unit tests: parse to model, and paint with a recording context, for every family and element | pending | |
 | CH-8-3 | Representation tests: spec 6.3 in all three formats, including no-fallback and chunk failure | pending | A0b: `tests/charts-representation.test.ts` (Office-shaped synthetic): MC with injected unsupported/refused and surface3DChart, ChartEx with fallback, nested/alias/unknown Requires and the standalone card in all three formats; no-fallback card and broken fallback picture (all three formats); chunk failure (DOCX, PPTX) |
-| CH-8-4 | Data tests: spec 6.4 (embedded workbook, precedence, budgets, cancellation) | pending | |
+| CH-8-4 | Data tests: spec 6.4 (embedded workbook, precedence, budgets, cancellation) | pending | D0 (XLSX clause only; Office-shaped synthetic): `tests/charts-data-contract.test.ts` resident vs paged point arrays (sparse caches, references, blanks, #N/A vs #DIV/0!, formulas without saved values), analytic acquisition (65,536 / refusal), plotVisOnly provenance, paged parent-ledger ownership and largeSource single workspace. The embedded workbook is a later task |
 | CH-8-5 | Robustness tests: extreme scales, tiny units, huge forecasts, 200 charts per document, a torture file per format, asserting allocation/work counters | pending | |
 | CH-8-6 | Goldens: synthetic chart gallery (one chart per family and major element), per format, recorded on the Mac | pending | |
-| CH-8-7 | Goldens: existing XLSX chart goldens pixel-identical, except listed spec 5 deltas with reasons | pending | |
+| CH-8-7 | Goldens: existing XLSX chart goldens pixel-identical, except listed spec 5 deltas with reasons | pending | D0: strict goldens 3/3, `tests/goldens` untouched (no golden contains a chart). Listed delta (spec 5.8 `plotVisOnly`, Office default on): a reference-filled point in a hidden row or column is no longer drawn, and a series whose every point is hidden is not drawn (`tests/charts-data-contract.test.ts` pixel check). Non-value point states still draw as gaps (the matrix is A2) |
 | CH-8-8 | References: Office-authored files and screenshots in validation/office-reference/ with producer and version, one per promised semantic case | pending | |
 | CH-8-9 | References: interim python-docx/python-pptx/openpyxl + LibreOffice evidence marked unverified; Office-matched not claimed | pending | |
 | CH-8-10 | References: smoothing claimed matched only after reference comparison | pending | |

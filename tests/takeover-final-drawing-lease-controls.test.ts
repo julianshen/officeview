@@ -44,7 +44,7 @@ it('control: an original sheet drawing-array owner keeps the payload charged thr
  const charged=ledger.snapshot().byPool.drawings
  expect(charged).toBeGreaterThanOrEqual(8000)
  await remote.close();await collect()
- expect((sheet.drawings![0].content as any).chart.groups[0].series[0].values[999]).toBe(1041)
+ expect((sheet.drawings![0].content as any).chart.groups[0].series[0].values.values[999]).toBe(1041)
  expect(ledger.snapshot().byPool.drawings).toBe(charged)
  sheet=null as any;await collect()
  expect(ledger.snapshot().byPool.drawings).toBe(0)
@@ -60,7 +60,7 @@ it('a raw paged geometry query result also retains its reachable chart data thro
  let nodes=(()=>{const geometry=pagedSheetGeometry(remote,'1',createIdentityOrder(),visibilityFromHidden(createIntervalSet([])));return geometry.drawingsIn(0,0,4000,4000,20000)!})()
  expect(nodes).toHaveLength(1)
  await remote.close();await collect()
- expect((nodes[0].content as any).chart.groups[0].series[0].values[999]).toBe(1041)
+ expect((nodes[0].content as any).chart.groups[0].series[0].values.values[999]).toBe(1041)
  console.log('retained unsized query chart after source close',JSON.stringify({points:1000,minimumDataBytes:8000,drawingsCharged:ledger.snapshot().byPool.drawings}))
  expect(ledger.snapshot().byPool.drawings).toBeGreaterThanOrEqual(8000)
  nodes=null as any;await collect()

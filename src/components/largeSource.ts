@@ -6,8 +6,10 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { parseXlsx } from '../xlsx/parse'
+import { drawingPartContext } from '../drawing/parts'
 import { countLoadEvaluatedFormulas, savedValuesStatus } from '../xlsx/view/values'
-import type { XlsxDocument } from '../xlsx/types'
+import type { XlsxDocument, XlsxDrawing } from '../xlsx/types'
+import { hasXlsxCharts, loadChartModule } from '../xlsx/chartLoader'
 import { isRtf } from '../rtf/parse'
 import type { ByteStreamReader } from '../core/stream'
 import { isPackageError, throwIfAborted, type PackageErrorCode } from '../core/package-error'
@@ -39,6 +41,13 @@ function settledEarly(admission: SpreadsheetAdmission): admission is Extract<Spr
   return admission.mode === 'refuse'
 }
 
+/** A discarded parse returns its charts' storage to the document's chart workspace (D0: nothing orphaned). */
+async function releaseDocumentCharts(doc: XlsxDocument): Promise<void> {
+  if (!doc.sheets.some(sheet => hasXlsxCharts(sheet.drawings))) return
+  const charts = await loadChartModule().catch(() => undefined)
+  const visit = (nodes: readonly XlsxDrawing[] | undefined): void => { for (const node of nodes ?? []) { if (node.content?.kind === 'xlsxChart') charts?.releaseChartModel(node.content.chart); visit(node.children) } }
+  for (const sheet of doc.sheets) { visit(sheet.drawings); charts?.releaseChartRetained(sheet) }
+}
 /** Engine evaluation with caps; an evaluator resource hit reopens with saved values (decision 2). */
 async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: number; maxArraySide: number; maxMaterializedCells: number }, policy: 'engine' | 'cached', formulasNotRecalculated: number | undefined, ctx: Ctx): Promise<XlsxDocument> {
   let doc: XlsxDocument | undefined
@@ -46,12 +55,13 @@ async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: nu
   if (policy === 'engine') {
     doc = await parseXlsx(pkg, { evaluation })
     // Rule 5: an evaluator resource hit is never published; reopen with saved values.
-    if (evaluationHitCap(doc)) { doc = undefined; capped = true }
+    if (evaluationHitCap(doc)) { await releaseDocumentCharts(doc); doc = undefined; capped = true }
     throwIfAborted(ctx.signal)
   }
   if (doc === undefined) {
-    // Saved values only: the allocation is the element envelope already admitted.
-    doc = await parseXlsx(pkg, { valuePolicy: 'cached' })
+    // Saved values only: the allocation is the element envelope already admitted. One chart
+    // workspace per document (D0): the reopen keeps the first parse's, so no charge is orphaned.
+    doc = await parseXlsx(pkg, { valuePolicy: 'cached', chartContext: drawingPartContext(pkg).chart })
     addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countLoadEvaluatedFormulas(doc), capped ? 'formula evaluation limit' : undefined)!)
   }
   return doc

@@ -16,9 +16,9 @@
  *
  * A refusal (the workspace or its parent ledger) stops the read before the
  * allocation: the result is `refused` and everything charged is refunded.
- * A paged package's own ledger (`chartLedger`) is charged for the tree as
- * well, so its pool keeps owning what it owned before (explicit accounting,
- * never bypassed).
+ * A paged package's pool is the workspace's parent (`chartLedger`, wired by
+ * `chartParseContextFor`; D0), so every byte charged here reaches that pool
+ * once, through the workspace, and is refunded to it on release.
  *
  * The root element's namespace is resolved from its own declarations (default
  * or prefixed). Only the classic chart namespace (transitional or strict), or
@@ -30,8 +30,8 @@ import type { OfficePackage } from '../core/zip'
 import { registerOrdered, type XmlNode } from '../core/xml'
 import { XmlTokenizer, localName } from '../core/xml-stream'
 import { PackageError } from '../core/package-error'
-import type { ChartParentLedger } from './workspace'
 import type { ChartParseContext } from './context'
+import { CHART_CHUNK_TAG, CHART_CROSSING_TAG } from './workspace'
 
 const MiB = 1024 * 1024
 export const CHART_PART_LIMIT = { desktop: 8 * MiB, mobile: 4 * MiB } as const
@@ -42,6 +42,7 @@ const TOKEN_CHARS = CHART_TOKEN_CHARS
 /** Reserved once before the stream: the crossing chunk plus the tokenizer's carried token (UTF-16). */
 export const CHART_READ_CROSSING = CHART_CHUNK_LIMIT + 2 * TOKEN_CHARS
 const SLICE = 16 * 1024
+export { CHART_CROSSING_TAG, CHART_CHUNK_TAG }
 const CLASSIC = new Set(['http://schemas.openxmlformats.org/drawingml/2006/chart', 'http://purl.oclc.org/ooxml/drawingml/chart'])
 
 export type ChartRead =
@@ -56,17 +57,14 @@ export async function readChartPart(pkg: OfficePackage, path: string, context: P
   const entry = (pkg as { entry?: (path: string) => JSZip.JSZipObject | null }).entry?.(path) ?? null
   if (!entry && !pkg.has(path)) return undefined
   const workspace = context.workspace, cap = CHART_PART_LIMIT[context.profile]
-  const ledger = (pkg as { chartLedger?: ChartParentLedger }).chartLedger
-  const tag = `chart-read:${path}#${++reads}`, chunkTag = `${tag}:chunk`
-  let ledgerBytes = 0
-  const refund = () => { workspace.release(chunkTag); workspace.release(tag); if (ledgerBytes) ledger?.release(tag, ledgerBytes); ledgerBytes = 0 }
+  // Tags: the tree, the crossing reservation and the per-chunk transient. A parent that already admitted
+  // the part's bytes and text (a paged package) is told which charges are transient decode work by the tag.
+  const tag = `chart-read:${path}#${++reads}`, chunkTag = `${tag}${CHART_CHUNK_TAG}`, crossingTag = `${tag}${CHART_CROSSING_TAG}`
+  const refund = () => { workspace.release(chunkTag); workspace.release(crossingTag); workspace.release(tag) }
   const refused = (): never => { throw new Stop({ kind: 'refused', reason: 'This chart needs more memory than is available for charts', code: 'chart-refused' }) }
-  /** Tree bytes: the chart workspace and, for a paged package, its pool. Charged before the node exists. */
-  const charge = (bytes: number) => {
-    if (!workspace.reserve(bytes, tag)) refused()
-    if (ledger) { if (!ledger.reserve(bytes, tag)) refused(); ledgerBytes += bytes }
-  }
-  if (!workspace.reserve(CHART_READ_CROSSING, tag)) return { kind: 'refused', reason: 'This chart needs more memory than is available for charts', code: 'chart-refused' }
+  /** Tree bytes, charged to the workspace (and through it to its parent) before the node exists. */
+  const charge = (bytes: number) => { if (!workspace.reserve(bytes, tag)) refused() }
+  if (!workspace.reserve(CHART_READ_CROSSING, crossingTag)) return { kind: 'refused', reason: 'This chart needs more memory than is available for charts', code: 'chart-refused' }
 
   const builder = treeBuilder(charge)
   const tokenizer = new XmlTokenizer(builder.events, { maxTokenChars: TOKEN_CHARS })

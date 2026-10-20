@@ -5,6 +5,7 @@
  * theme and pictures) from the worker; anything it cannot carry is an explicit
  * visible diagnostic, never a silent omission.
  */
+import { list, plain, pts } from './helpers/chart-points'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -31,6 +32,7 @@ import v8 from 'node:v8'
 import vm from 'node:vm'
 import { xlsxEntries } from './helpers/xlsx-package'
 import { dataRows, EMU_PER_PX } from './helpers/xlsx-structure-fixtures'
+import JSZip from 'jszip'
 
 // Counts real parses (the wrapper calls through).
 const parses = vi.hoisted(() => ({ count: 0 }))
@@ -198,7 +200,7 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const geometry = await settledGeometry(await openPaged(bytes))
     const actual = geometry.drawingsIn(...box)!
     expect(actual.map(key)).toEqual(expected.map(key))
-    expect(actual.map(node => node.content)).toEqual(expected.map(node => node.content))
+    expect(actual.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
     expect(geometry.diagnostics).toEqual([])
   })
 
@@ -209,10 +211,35 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const { geometry: object } = await resident(bytes)
     const expected = object.drawingsIn(...box)!
     const content = expected[0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual([8, 7, 6, 5])
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts(8, 7, 6, 5))
     expect(content?.kind === 'xlsxChart' && content.chart.categories).toEqual(['0', '1', '2', '3'])
-    const geometry = await settledGeometry(await openPaged(bytes))
-    expect(geometry.drawingsIn(...box)!.map(node => node.content)).toEqual(expected.map(node => node.content))
+    // D0: the fixture's hidden row 3 is kept as provenance (plotVisOnly applies at draw), on both paths.
+    expect(content?.kind === 'xlsxChart' && [[...content.chart.groups[0].series[0].values.hidden ?? []], [...content.chart.categoryHidden ?? []]]).toEqual([[2], [2]])
+    const remote = await openPaged(bytes)
+    const geometry = await settledGeometry(remote)
+    expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
+    // The chart's workspace charges went through the read's share, and the share ended with the read.
+    expect(kernels[0].lifecycleStats().transientBytes).toBe(0)
+  })
+
+  it('carries error and unavailable point states from the paged cells exactly as the resident sheet does (D0)', async () => {
+    const uncached = `<?xml version="1.0"?><c:chartSpace xmlns:c="${C_NS}"><c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:val><c:numRef><c:f>S!$A$1:$A$4</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`
+    const chart = frame(6, 'Chart 1', `<c:chart xmlns:c="${C_NS}" xmlns:r="${R_NS}" r:id="rC1"/>`, 0)
+    const bytes = drawingWorkbook({ anchors: chart, content: true, chart: uncached })
+    // A1 #N/A, A2 #DIV/0! (error cells), A3 a formula without a saved value, A4 a number.
+    const zip = await JSZip.loadAsync(bytes)
+    const sheetPath = 'xl/worksheets/sheet1.xml'
+    const sheet = (await zip.file(sheetPath)!.async('string'))
+      .replace('<c r="A1"><v>8</v></c>', '<c r="A1" t="e"><v>#N/A</v></c>').replace('<c r="A2"><v>7</v></c>', '<c r="A2" t="e"><v>#DIV/0!</v></c>').replace('<c r="A3"><v>6</v></c>', '<c r="A3"><f>1+1</f></c>')
+    expect(sheet).toContain('#DIV/0!')
+    zip.file(sheetPath, sheet)
+    const patched = await zip.generateAsync({ type: 'uint8array' })
+    const { geometry: object } = await resident(patched)
+    const expected = object.drawingsIn(...box)!
+    const content = expected[0].content
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts('#N/A', '#DIV/0!', 'unavailable', 5))
+    const geometry = await settledGeometry(await openPaged(patched))
+    expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
   })
 
   it('resolves a defined-name series from the paged workbook exactly as the resident sheet does', async () => {
@@ -222,10 +249,10 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     const { geometry: object } = await resident(bytes)
     const expected = object.drawingsIn(...box)!
     const content = expected[0].content
-    expect(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values).toEqual([8, 7, 6, 5])
+    expect(list(content?.kind === 'xlsxChart' && content.chart.groups[0].series[0].values)).toEqual(pts(8, 7, 6, 5))
     expect(content?.kind === 'xlsxChart' && content.chart.categories).toEqual(['0', '1', '2', '3'])
     const geometry = await settledGeometry(await openPaged(bytes))
-    expect(geometry.drawingsIn(...box)!.map(node => node.content)).toEqual(expected.map(node => node.content))
+    expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
   })
 
   it('transports pictures with their bytes within the image budgets', async () => {
