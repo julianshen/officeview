@@ -13,9 +13,10 @@ import { admitChartModel } from './axisBinding'
 import { readLabels } from './labels'
 import { prepareChartAxes } from './prepare'
 import { CHART_AXIS_UNPLACEABLE, placeAxes } from './axes'
-import { parseFillStyle } from './fills'
+import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
+import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -40,10 +41,7 @@ const UNSUPPORTED: Record<string, string> = {
   surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
 }
 
-function hex(color: { r: number; g: number; b: number } | undefined): string | undefined {
-  if (!color) return undefined
-  return [color.r, color.g, color.b].map(c => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('').toUpperCase()
-}
+const hex = hexColor
 function solid(spPr: XmlNode | undefined, theme: ThemeContext | undefined, line = false): string | undefined | null {
   const holder = line ? child(spPr, 'ln') : spPr
   if (!holder) return undefined
@@ -337,7 +335,7 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, c
   const owner = context?.workspace ? modelOwner(context.workspace) : undefined
   const charge = (bytes: number) => { if (owner && !owner.workspace.reserve(bytes, owner.tag)) throw new ChartRefusal() }
   try {
-    const model = prepareChartAxes(readChart(root, chart, plot, theme, charge), owner)
+    const model = prepareChartAxes(readChart(root, chart, plot, theme, charge, context), owner)
     if (owner) adoptChartModel(model, owner)
     return model
   } catch (error) {
@@ -346,35 +344,64 @@ export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, c
     return { ...placeholderChart(titleOf(child(chart, 'title')), 'This chart needs more memory than is available for charts'), refused: true }
   }
 }
-function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void): ChartModel {
+/**
+ * `c:style` (1-48): a direct child of the chart space, or the usual Office wrapper
+ * `mc:AlternateContent` (`c14:style`, which is 100 + the style, or the fallback `c:style`).
+ */
+function chartStyleId(root: XmlNode): number | undefined {
+  const valid = (n: number | undefined) => n !== undefined && Number.isInteger(n) && n >= 1 && n <= 48 ? n : undefined
+  const direct = valid(finite(val(child(root, 'style'))))
+  if (direct !== undefined) return direct
+  for (const alternate of getChildren(root, 'AlternateContent')) {
+    const fallback = valid(finite(val(child(child(alternate, 'Fallback'), 'style'))))
+    if (fallback !== undefined) return fallback
+    for (const choice of getChildren(alternate, 'Choice')) {
+      const c14 = finite(val(child(choice, 'style')))
+      if (c14 !== undefined && valid(c14 - 100) !== undefined) return c14 - 100
+    }
+  }
+  return undefined
+}
+/** The c14 `invertSolidFillFmt` colour of a series (the fill of its inverted negative points), from its extension list. */
+function invertFill(ser: XmlNode, theme: ThemeContext | undefined): string | undefined {
+  for (const ext of getChildren(child(ser, 'extLst'), 'ext')) {
+    const fill = child(child(child(ext, 'invertSolidFillFmt'), 'spPr'), 'solidFill')
+    if (fill) return hex(resolveDrawingColor(parseDrawingColor(fill), theme))
+  }
+  return undefined
+}
+const XLSX_PART = /^\/?xl\//i
+function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void, context?: ChartParseContext): ChartModel {
   const minorFont = theme?.fonts.minor.latin ?? 'Calibri'
   const sizeRaw = finite(attrs(getChildren(child(child(root, 'txPr'), 'p'), 'pPr').map(p => child(p, 'defRPr'))[0]).sz)
   const autoDeleted = val(child(chart, 'autoTitleDeleted')) === '1'
   let title = titleOf(child(chart, 'title'))
-  const styleId = finite(val(child(root, 'style')) ?? val(child(chart, 'style')))
-  if (styleId !== undefined) charge(16)
+  // Formatting (spec 5.4, 5.11): every retained fill, line, marker and point override is charged through
+  // charts/own.ts before it is built.
+  const styleId = chartStyleId(root)
+  const parts = context?.styleParts
+  const lineOf = (spPr: XmlNode | undefined) => parseLineStyle(child(spPr, 'ln'), theme, charge)
   const chartSpaceSpPr = child(root, 'spPr')
-  const chartAreaFill = parseFillStyle(chartSpaceSpPr, theme)
-  const chartAreaLine = parseLineStyle(chartSpaceSpPr ? child(chartSpaceSpPr, 'ln') : undefined, theme)
-  if (chartAreaFill) charge(64)
-  if (chartAreaLine) charge(48)
-  const titleNode = child(chart, 'title')
-  const titleSpPr = titleNode ? child(titleNode, 'spPr') : undefined
-  const titleFill = parseFillStyle(titleSpPr, theme)
-  const titleLine = parseLineStyle(titleSpPr ? child(titleSpPr, 'ln') : undefined, theme)
-  if (titleFill) charge(64)
-  if (titleLine) charge(48)
+  const chartAreaFill = parseFillStyle(chartSpaceSpPr, theme, charge)
+  const chartAreaLine = lineOf(chartSpaceSpPr)
+  // A missing chart-area fill: white for an Excel chart; for DOCX and PPTX the c:style default (styles 41-48 are
+  // the dark row: dk1), else white (spec 5.4).
+  const darkStyle = !chartAreaFill && styleId !== undefined && styleId >= 41 && context?.partPath !== undefined && !XLSX_PART.test(context.partPath)
+  const chartAreaDefault = darkStyle ? hex(resolveDrawingColor({ kind: 'scheme', value: 'dk1', transforms: [] }, theme)) ?? '000000' : undefined
+  const titleSpPr = child(child(chart, 'title'), 'spPr')
+  const titleFill = parseFillStyle(titleSpPr, theme, charge)
+  const titleLine = lineOf(titleSpPr)
   const plotSpPr = child(plot, 'spPr')
-  const plotAreaFill = parseFillStyle(plotSpPr, theme)
-  const plotAreaLine = parseLineStyle(plotSpPr ? child(plotSpPr, 'ln') : undefined, theme)
-  if (plotAreaFill) charge(64)
-  if (plotAreaLine) charge(48)
+  const plotAreaFill = parseFillStyle(plotSpPr, theme, charge)
+  const plotAreaLine = lineOf(plotSpPr)
   const legend = child(chart, 'legend')
-  const legendSpPr = legend ? child(legend, 'spPr') : undefined
-  const legendFill = parseFillStyle(legendSpPr, theme)
-  const legendLine = parseLineStyle(legendSpPr ? child(legendSpPr, 'ln') : undefined, theme)
-  if (legendFill) charge(64)
-  if (legendLine) charge(48)
+  const legendSpPr = child(legend, 'spPr')
+  const legendFill = parseFillStyle(legendSpPr, theme, charge)
+  const legendLine = lineOf(legendSpPr)
+  // The series count of the whole chart: c:style's single-colour columns spread their shades over it.
+  let seriesCount = 0
+  for (const [name, node] of orderedChildren(plot)) if (GROUPS[name]) seriesCount += getChildren(node, 'ser').length
+  seriesCount = Math.min(seriesCount, CHART_SERIES_LIMIT)
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
@@ -394,16 +421,14 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const grouping = (val(child(node, 'grouping')) ?? (type === 'bar' ? 'clustered' : 'standard')) as ChartGroup['grouping']
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
     const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
-    const dropLinesNode = child(node, 'dropLines')
-    const dropLines = dropLinesNode
-      ? parseLineStyle(child(dropLinesNode, 'spPr') ? child(child(dropLinesNode, 'spPr'), 'ln') : undefined, theme) ?? { noFill: false, color: 'D9D9D9', width: 1 }
-      : undefined
-    if (dropLines) charge(48)
-    const serLinesNode = child(node, 'serLines')
-    const serLines = serLinesNode
-      ? parseLineStyle(child(serLinesNode, 'spPr') ? child(child(serLinesNode, 'spPr'), 'ln') : undefined, theme) ?? { noFill: false, color: 'D9D9D9', width: 1 }
-      : undefined
-    if (serLines) charge(48)
+    // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
+    const connector = (name: string) => {
+      const holder = child(node, name)
+      if (!holder) return undefined
+      return lineOf(child(holder, 'spPr')) ?? (chargeChartLine(charge), { noFill: false })
+    }
+    const dropLines = type === 'line' || type === 'area' ? connector('dropLines') : undefined
+    const serLines = type === 'bar' ? connector('serLines') : undefined
     const series: ChartSeries[] = []
     const binding = bindingOf(type, node, axes)
     // A date axis reads its categories' saved numbers (serials in the chart epoch; spec 5.1).
@@ -415,25 +440,19 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const index = rawIndex !== undefined && Number.isSafeInteger(rawIndex) && rawIndex >= 0 ? rawIndex : seriesTotal
       seriesTotal++
       const spPr = child(ser, 'spPr')
-      const fill = parseFillStyle(spPr, theme)
-      const lineStyle = parseLineStyle(spPr ? child(spPr, 'ln') : undefined, theme)
-      if (fill) charge(64)
-      if (lineStyle) charge(48)
-      const lineColor = lineStyle?.color ?? solid(spPr, theme, true)
-      const fillColor = fill?.kind === 'solid' ? fill.color : solid(spPr, theme)
-      const explicitColor = (type === 'line' || type === 'scatter' ? lineColor ?? fillColor : fillColor ?? lineColor)
-      const color = resolveSeriesColor({
-        spPrColor: explicitColor ?? undefined,
-        seriesIndex: index,
-        theme,
-        styleId,
-      })
-      const markerNode = child(ser, 'marker')
-      const markerStyle = parseMarker(markerNode, theme)
-      if (markerStyle) charge(48)
+      const lineColor = solid(spPr, theme, true)
+      const fillColor = solid(spPr, theme)
+      // Precedence (spec 5.11): an explicit spPr colour, else the style part, colour part, c:style, accent cycle.
+      const color = (type === 'line' || type === 'scatter' ? lineColor ?? fillColor : fillColor ?? lineColor)
+        ?? resolveSeriesColor({ index, count: seriesCount, line: type === 'line' || type === 'scatter', styleId, parts, theme })
+      const fill = parseFillStyle(spPr, theme, charge)
+      const lineStyle = lineOf(spPr)
+      const markerStyle = parseMarker(child(ser, 'marker'), theme, charge)
       const invertIfNegative = child(ser, 'invertIfNegative') ? flag(child(ser, 'invertIfNegative'), false) : undefined
-      const explosion = finite(val(child(ser, 'explosion')))
-      if (explosion !== undefined) charge(16)
+      const invertColor = invertIfNegative !== undefined ? invertFill(ser, theme) : undefined
+      if (invertColor) chargeChartColor(charge)
+      const rawExplosion = finite(val(child(ser, 'explosion')))
+      const explosion = rawExplosion !== undefined ? Math.max(0, Math.min(400, rawExplosion)) : undefined
       const tx = child(ser, 'tx')
       const valueNode = child(ser, type === 'scatter' ? 'yVal' : 'val')
       const xNode = type === 'scatter' ? child(ser, 'xVal') : undefined
@@ -483,19 +502,20 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const pointColors: string[] = []
       const pointFills: Array<import('./fills').ChartFillStyle | undefined> = []
       const dPtMap = new Map<number, ChartPointOverride>()
-      if (vary) for (let i = 0; i < Math.max(Math.min(values.length, CHART_POINT_LIMIT), 1) && i < 256; i++) {
-        pointColors[i] = resolveSeriesColor({ seriesIndex: i, theme, styleId })
-      }
+      // varyColors: each point takes the automatic colour of its index, by the same precedence as series.
+      const pointCount = Math.max(Math.min(values.length, CHART_POINT_LIMIT), 1)
+      if (vary) for (let i = 0; i < pointCount && i < 256; i++) pointColors[i] = resolveSeriesColor({ index: i, count: Math.min(pointCount, 256), styleId, parts, theme })
       for (const dPt of getChildren(ser, 'dPt')) {
         const i = finite(val(child(dPt, 'idx')))
-        if (i === undefined || i < 0 || i >= 256) continue
+        if (i === undefined || !Number.isInteger(i) || i < 0 || i >= 256) continue
+        chargeChartPoint(charge)
         const ptSpPr = child(dPt, 'spPr')
-        const ptFill = parseFillStyle(ptSpPr, theme)
-        const ptLine = parseLineStyle(ptSpPr ? child(ptSpPr, 'ln') : undefined, theme)
-        const ptMarker = parseMarker(child(dPt, 'marker'), theme)
+        const ptFill = parseFillStyle(ptSpPr, theme, charge)
+        const ptLine = lineOf(ptSpPr)
+        const ptMarker = parseMarker(child(dPt, 'marker'), theme, charge)
         const ptInv = child(dPt, 'invertIfNegative') ? flag(child(dPt, 'invertIfNegative'), false) : undefined
         const ptExp = finite(val(child(dPt, 'explosion')))
-        const c = ptFill?.kind === 'solid' ? ptFill.color : solid(ptSpPr, theme)
+        const c = solid(ptSpPr, theme)
         if (c) pointColors[i] = c
         if (ptFill) pointFills[i] = ptFill
         dPtMap.set(i, {
@@ -504,9 +524,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
           ...(ptLine ? { line: ptLine } : {}),
           ...(ptMarker ? { marker: ptMarker } : {}),
           ...(ptInv !== undefined ? { invertIfNegative: ptInv } : {}),
-          ...(ptExp !== undefined ? { explosion: ptExp } : {}),
+          ...(ptExp !== undefined ? { explosion: Math.max(0, Math.min(400, ptExp)) } : {}),
         })
-        charge(64)
       }
       // Required roles with neither saved data nor a reference (spec 6.4): values always; x values for scatter.
       const absentRoles: Array<'values' | 'xValues'> = []
@@ -527,6 +546,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(lineStyle ? { lineStyle } : {}),
         ...(markerStyle ? { markerStyle } : {}),
         ...(invertIfNegative !== undefined ? { invertIfNegative } : {}),
+        ...(invertColor ? { invertColor } : {}),
         ...(explosion !== undefined ? { explosion } : {}),
         ...(dPtMap.size > 0 ? { dPt: dPtMap } : {}),
         ...(pointFills.some(Boolean) ? { pointFills } : {}),
@@ -534,8 +554,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
-        ...(type === 'line' ? { line: lineStyle ? !lineStyle.noFill : lineColor !== null, markers: markerStyle ? markerStyle.symbol !== 'none' : (!markerNone && groupMarker !== '0') } : {}),
-        ...(type === 'scatter' ? { line: lineStyle ? !lineStyle.noFill : (lineColor !== null && /line|smooth/i.test(scatterStyle)), markers: markerStyle ? markerStyle.symbol !== 'none' : (!markerNone && !/^(line|smooth)$/i.test(scatterStyle)) } : {}),
+        ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
+        ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
       })
     }
     groups.push({
@@ -591,6 +611,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     ...(titleFill ? { titleFill } : {}),
     ...(titleLine ? { titleLine } : {}),
     ...(styleId !== undefined ? { styleId } : {}),
+    ...(chartAreaDefault ? { chartAreaDefault } : {}),
     fontFamily: minorFont,
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),

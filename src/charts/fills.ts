@@ -5,6 +5,7 @@
 import { attrs, getChild, getChildren, type XmlNode } from '../core/xml'
 import { getPatternTile } from '../drawing/pattern'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext, type DrawingColor } from '../drawing/style'
+import { CHART_GRADIENT_STOP_LIMIT, chargeChartFill, type ChartCharge } from './own'
 
 export interface SolidFill {
   kind: 'solid'
@@ -45,7 +46,8 @@ export interface Box {
   h: number
 }
 
-function hexColor(color: DrawingColor | undefined): string | undefined {
+/** The one hex helper of the chart formatting code (CSS hex without `#`, upper case). */
+export function hexColor(color: DrawingColor | undefined): string | undefined {
   if (!color) return undefined
   const r = Math.max(0, Math.min(255, Math.round(color.r))).toString(16).padStart(2, '0')
   const g = Math.max(0, Math.min(255, Math.round(color.g))).toString(16).padStart(2, '0')
@@ -72,60 +74,50 @@ function toCssColor(color: string, alpha?: number): string {
   return `#${color}`
 }
 
-/** Parse fill from spPr node or direct fill container. */
-export function parseFillStyle(node: XmlNode | undefined, theme?: ThemeContext): ChartFillStyle | undefined {
+/**
+ * Parse the fill of an spPr (or a direct fill container). Each retained fill is charged through `charge`
+ * (charts/own.ts) before it is built; a gradient keeps at most CHART_GRADIENT_STOP_LIMIT stops, each charged.
+ */
+export function parseFillStyle(node: XmlNode | undefined, theme?: ThemeContext, charge?: ChartCharge): ChartFillStyle | undefined {
   if (!node) return undefined
-  if (getChild(node, 'noFill')) return { kind: 'none' }
+  if (getChild(node, 'noFill')) { chargeChartFill(charge); return { kind: 'none' } }
 
-  // 1. solidFill
   const solidNode = getChild(node, 'solidFill')
   if (solidNode) {
-    const parsed = parseDrawingColor(solidNode)
-    const resolved = resolveDrawingColor(parsed, theme)
+    const resolved = resolveDrawingColor(parseDrawingColor(solidNode), theme)
     const hex = hexColor(resolved)
-    if (hex) return { kind: 'solid', color: hex, alpha: resolved?.a }
+    if (hex) { chargeChartFill(charge); return { kind: 'solid', color: hex, ...(resolved && resolved.a < 1 ? { alpha: resolved.a } : {}) } }
   }
 
-  // 2. gradFill
   const gradNode = getChild(node, 'gradFill')
   if (gradNode) {
-    const gsLst = getChild(gradNode, 'gsLst')
+    const gs = getChildren(getChild(gradNode, 'gsLst'), 'gs').slice(0, CHART_GRADIENT_STOP_LIMIT)
+    chargeChartFill(charge, Math.max(gs.length, 2))
     const stops: GradientStop[] = []
-    if (gsLst) {
-      for (const gs of getChildren(gsLst, 'gs')) {
-        const posRaw = attrs(gs).pos
-        const pos = posRaw !== undefined ? Math.max(0, Math.min(1, Number(posRaw) / 100000)) : 0
-        const parsed = parseDrawingColor(gs)
-        const resolved = resolveDrawingColor(parsed, theme)
-        const hex = hexColor(resolved) ?? '000000'
-        stops.push({ position: pos, color: hex, alpha: resolved?.a })
-      }
+    for (const stop of gs) {
+      const posRaw = Number(attrs(stop).pos)
+      const resolved = resolveDrawingColor(parseDrawingColor(stop), theme)
+      stops.push({ position: Number.isFinite(posRaw) ? Math.max(0, Math.min(1, posRaw / 100000)) : 0, color: hexColor(resolved) ?? '000000', ...(resolved && resolved.a < 1 ? { alpha: resolved.a } : {}) })
     }
     const lin = getChild(gradNode, 'lin')
-    const path = getChild(gradNode, 'path')
-    const angleRaw = lin ? attrs(lin).ang : undefined
-    const angle = angleRaw !== undefined ? Number(angleRaw) / 60000 : 90
+    const angleRaw = Number(lin ? attrs(lin).ang : undefined)
     return {
       kind: 'gradient',
-      gradient: path ? 'path' : 'linear',
-      angle,
+      gradient: getChild(gradNode, 'path') ? 'path' : 'linear',
+      angle: Number.isFinite(angleRaw) ? angleRaw / 60000 : 90,
       stops: stops.length ? stops : [{ position: 0, color: 'FFFFFF' }, { position: 1, color: '000000' }],
     }
   }
 
-  // 3. pattFill
   const pattNode = getChild(node, 'pattFill')
   if (pattNode) {
-    const preset = attrs(pattNode).prst ?? 'pct50'
-    const fgNode = getChild(pattNode, 'fgClr')
-    const bgNode = getChild(pattNode, 'bgClr')
-    const fgResolved = resolveDrawingColor(fgNode ? parseDrawingColor(fgNode) : undefined, theme)
-    const bgResolved = resolveDrawingColor(bgNode ? parseDrawingColor(bgNode) : undefined, theme)
+    const fgNode = getChild(pattNode, 'fgClr'), bgNode = getChild(pattNode, 'bgClr')
+    chargeChartFill(charge)
     return {
       kind: 'pattern',
-      preset,
-      fgColor: hexColor(fgResolved) ?? '000000',
-      bgColor: hexColor(bgResolved) ?? 'FFFFFF',
+      preset: attrs(pattNode).prst ?? 'pct50',
+      fgColor: hexColor(resolveDrawingColor(fgNode ? parseDrawingColor(fgNode) : undefined, theme)) ?? '000000',
+      bgColor: hexColor(resolveDrawingColor(bgNode ? parseDrawingColor(bgNode) : undefined, theme)) ?? 'FFFFFF',
     }
   }
 

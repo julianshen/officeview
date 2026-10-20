@@ -5,6 +5,7 @@ import { attrs, getChild, type XmlNode } from '../core/xml'
 import type { ThemeContext } from '../drawing/style'
 import { parseFillStyle, type ChartFillStyle } from './fills'
 import { parseLineStyle, type ChartLineStyle } from './style'
+import { chargeChartMarker, type ChartCharge } from './own'
 
 export type MarkerSymbol =
   | 'circle'
@@ -19,17 +20,11 @@ export type MarkerSymbol =
   | 'none'
   | 'auto'
 
-export const MARKER_AUTO_CYCLE: readonly MarkerSymbol[] = [
-  'square',
-  'diamond',
-  'triangle',
-  'x',
-  'star',
-  'dot',
-  'dash',
-  'circle',
-  'plus',
-] as const
+/**
+ * The series cycle of an explicit `c:symbol val="auto"` (Excel's automatic marker order, from memory: not yet
+ * verified against Office output). A series with no `c:marker` keeps the engine's default circle.
+ */
+export const MARKER_AUTO_CYCLE: readonly MarkerSymbol[] = ['diamond', 'square', 'triangle', 'x', 'star', 'circle', 'plus', 'dot', 'dash'] as const
 
 export interface ChartMarkerStyle {
   symbol?: MarkerSymbol
@@ -57,15 +52,18 @@ const KNOWN_SYMBOLS = new Set<string>([
   'circle', 'square', 'diamond', 'triangle', 'x', 'star', 'dash', 'dot', 'plus', 'none', 'auto',
 ])
 
-export function parseMarker(node: XmlNode | undefined, theme?: ThemeContext): ChartMarkerStyle | undefined {
+/** A `c:marker` (series or dPt): symbol, size (points, clamped 2-72) and its spPr fill and line, charged before it is built. */
+export function parseMarker(node: XmlNode | undefined, theme?: ThemeContext, charge?: ChartCharge): ChartMarkerStyle | undefined {
   if (!node) return undefined
   const symVal = attrs(getChild(node, 'symbol')).val
   const symbol = symVal && KNOWN_SYMBOLS.has(symVal) ? (symVal as MarkerSymbol) : undefined
   const sizeRaw = attrs(getChild(node, 'size')).val
-  const size = sizeRaw !== undefined && Number.isFinite(Number(sizeRaw)) ? clampMarkerSize(Number(sizeRaw)) : undefined
+  const size = sizeRaw !== undefined && sizeRaw.trim() !== '' && Number.isFinite(Number(sizeRaw)) ? clampMarkerSize(Number(sizeRaw)) : undefined
   const spPr = getChild(node, 'spPr')
-  const fill = parseFillStyle(spPr, theme)
-  const line = parseLineStyle(spPr ? getChild(spPr, 'ln') : undefined, theme)
+  if (!symbol && size === undefined && !spPr) return undefined
+  chargeChartMarker(charge)
+  const fill = parseFillStyle(spPr, theme, charge)
+  const line = parseLineStyle(spPr ? getChild(spPr, 'ln') : undefined, theme, charge)
 
   if (!symbol && size === undefined && !fill && !line) return undefined
   return {

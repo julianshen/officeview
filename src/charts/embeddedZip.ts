@@ -110,15 +110,30 @@ interface Charging { workspace: ChartWorkspace; tag: string; charge(bytes: numbe
  * whole stream. Undefined when the part or the id is absent.
  */
 async function readRelationship(pkg: OfficePackage, owner: string, rId: string, op: Charging): Promise<{ target?: string; external: boolean } | undefined> {
+  let found: { target?: string; external: boolean } | undefined
+  await scanRelationships(pkg, owner, op, (id, _type, target, mode) => {
+    if (found || id !== rId) return false
+    op.charge(32 + 2 * (target?.length ?? 0))
+    found = { ...(target !== undefined ? { target } : {}), external: mode === 'External' }
+    return true
+  })
+  return found
+}
+/**
+ * Streams a part's `.rels` through the bounded relationships reader, calling `visit` with each relationship's
+ * Id, Type, Target and TargetMode until it returns true. The visitor charges whatever it keeps. False when the
+ * relationships part is absent.
+ */
+async function scanRelationships(pkg: OfficePackage, owner: string, op: Charging, visit: (id: string | undefined, type: string | undefined, target: string | undefined, mode: string | undefined) => boolean): Promise<boolean> {
   const slash = owner.lastIndexOf('/')
   const relsPath = `${slash < 0 ? '' : owner.slice(0, slash) + '/'}_rels/${owner.slice(slash + 1)}.rels`
   const entry = rawEntry(pkg, relsPath)
-  if (!entry || entry.dir) return undefined
+  if (!entry || entry.dir) return false
   const { workspace } = op, crossingTag = `${op.tag}:rels${CHART_CROSSING_TAG}`, chunkTag = `${op.tag}:rels${CHART_CHUNK_TAG}`
   const malformed = () => new Stop(unavailable('chart-data-rels-malformed', "The chart's relationships could not be read"))
   try {
     if (!workspace.reserve(EMBEDDED_RELS_CROSSING, crossingTag)) throw new Stop(REFUSED())
-    let found: { target?: string; external: boolean } | undefined, depth = 0
+    let done = false, depth = 0
     const tokenizer = new XmlTokenizer({
       // The grammar is checked here, before the tokenizer pushes the name or keeps the attributes past this token.
       open(qname, names, values, count, selfClosing) {
@@ -126,16 +141,15 @@ async function readRelationship(pkg: OfficePackage, owner: string, rId: string, 
         if (count > RELS_ATTRIBUTES) throw malformed()
         for (let i = 0; i < count; i++) if (names[i].length > RELS_NAME_CHARS || values[i].length > RELS_VALUE_CHARS) throw malformed()
         if (!selfClosing) depth++
-        if (found || localName(qname) !== 'Relationship') return
-        let id: string | undefined, target: string | undefined, mode: string | undefined
+        if (done || localName(qname) !== 'Relationship') return
+        let id: string | undefined, type: string | undefined, target: string | undefined, mode: string | undefined
         for (let i = 0; i < count; i++) {
           if (names[i] === 'Id') id = values[i]
+          else if (names[i] === 'Type') type = values[i]
           else if (names[i] === 'Target') target = values[i]
           else if (names[i] === 'TargetMode') mode = values[i]
         }
-        if (id !== rId) return
-        op.charge(32 + 2 * (target?.length ?? 0))
-        found = { ...(target !== undefined ? { target } : {}), external: mode === 'External' }
+        done = visit(id, type, target, mode)
       },
       close() { depth-- },
       text(text) { if (/\S/.test(text)) throw malformed() },
@@ -167,7 +181,7 @@ async function readRelationship(pkg: OfficePackage, owner: string, rId: string, 
     try { tail = decoder.decode() } catch { throw malformed() }
     write(comments.strip(tail, true))
     try { tokenizer.end() } catch { throw malformed() }
-    return found
+    return true
   } catch (error) {
     if (error instanceof Stop) throw error
     // An inflate failure of the relationships part.
@@ -202,6 +216,30 @@ export async function resolveExternalData(context: Pick<ChartParseContext, 'pkg'
     if (error instanceof Stop) return error.result
     throw error
   } finally { workspace.release(tag) }
+}
+/**
+ * Chart part `.rels` -> the internal targets of the first relationship of each wanted Type (matched by its last
+ * path segment, e.g. `chartStyle`, `chartColorStyle`), through the same bounded, admitted relationships reader.
+ * Its work is charged to `workspace` and refunded on return. External, outside-package or missing targets are
+ * left out; a malformed or refused `.rels` yields no targets.
+ */
+export async function resolveRelatedParts(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'workspace'>, types: readonly string[]): Promise<Map<string, string>> {
+  const { pkg, partPath, workspace } = context, tag = `chart-rels:${partPath}#${++reads}`, out = new Map<string, string>()
+  const op: Charging = { workspace, tag, live() {}, charge(bytes) { if (!workspace.reserve(bytes, tag)) throw new Stop(REFUSED()) } }
+  try {
+    await scanRelationships(pkg, partPath, op, (_id, type, target, mode) => {
+      const kind = type?.slice(type.lastIndexOf('/') + 1)
+      if (!kind || !types.includes(kind) || out.has(kind) || mode === 'External' || !target) return false
+      const path = internalPath(partPath, target)
+      const entry = path ? rawEntry(pkg, path) : null
+      if (path && entry && !entry.dir) { op.charge(32 + 2 * path.length); out.set(kind, path) }
+      return out.size === types.length
+    })
+  } catch (error) {
+    if (!(error instanceof Stop)) throw error
+    out.clear()
+  } finally { workspace.release(tag) }
+  return out
 }
 const rawEntry = (pkg: OfficePackage, path: string): JSZip.JSZipObject | null => {
   const entry = (pkg as { entry?: (path: string) => JSZip.JSZipObject | null }).entry

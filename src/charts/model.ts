@@ -145,6 +145,9 @@ export interface ChartSeries {
   lineStyle?: import('./style').ChartLineStyle
   markerStyle?: import('./markers').ChartMarkerStyle
   invertIfNegative?: boolean
+  /** The fill of inverted negative points (c14 `invertSolidFillFmt`); absent: white, as Office. */
+  invertColor?: string
+  /** Percent of the radius, clamped 0-400. */
   explosion?: number
   dPt?: Map<number, import('./style').ChartPointOverride>
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
@@ -201,6 +204,8 @@ export interface ChartModel {
   titleFill?: import('./fills').ChartFillStyle
   titleLine?: import('./style').ChartLineStyle
   styleId?: number
+  /** The chart-area fill when `chartSpace/spPr` has none and `c:style` gives a non-white default (DOCX/PPTX; spec 5.4). */
+  chartAreaDefault?: string
   groups: ChartGroup[]
   /** Every axis of the plot area, in document order; group bindings reference them by `id`. */
   axes: ChartAxis[]
