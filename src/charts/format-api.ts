@@ -12,4 +12,6 @@ export interface ChartFormatter {
 export interface TextMeasure {
   width(text: string, font: string): number
   lineHeight(font: string): number
+  /** The font's ascent above the alphabetic baseline (optional; layout falls back to a fraction of the size). */
+  ascent?(font: string): number
 }

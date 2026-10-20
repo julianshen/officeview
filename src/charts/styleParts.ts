@@ -103,7 +103,9 @@ function textEntry(node: XmlNode | undefined, charge: (bytes: number) => void): 
   const ref = child(node, 'fontRef')
   const refColor = ref && orderedChildren(ref).some(([n]) => n !== '#text') ? parseDrawingColor(ref) : undefined
   const source = fill ? parseDrawingColor(fill) : refColor, sized = a.sz !== undefined && size > 0
-  if (!source && !sized && flag(a.b) === undefined && flag(a.i) === undefined) return undefined
+  const latin = attrs(child(def, 'latin')).typeface, refIdx = attrs(ref).idx
+  const font = latin ? latin.slice(0, 64) : refIdx === 'major' || refIdx === 'minor' ? refIdx : undefined
+  if (!source && !sized && flag(a.b) === undefined && flag(a.i) === undefined && !font && a.u === undefined) return undefined
   charge(ENTRY_BYTES)
   const color = keepColor(source, charge)
   const text: ChartStyleText = {
@@ -111,6 +113,8 @@ function textEntry(node: XmlNode | undefined, charge: (bytes: number) => void): 
     ...(flag(a.b) !== undefined ? { bold: flag(a.b) } : {}),
     ...(flag(a.i) !== undefined ? { italic: flag(a.i) } : {}),
     ...(color ? { color } : {}),
+    ...(font ? { font } : {}),
+    ...(a.u !== undefined ? { underline: a.u !== 'none' } : {}),
   }
   return text
 }

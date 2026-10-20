@@ -133,19 +133,28 @@ function paintTitle(ctx: CanvasRenderingContext2D, model: DrawModel, layout: Cha
     return
   }
   let y = box.y
+  /** An underline below the baseline, in the run's colour, about a sixteenth of its size thick. */
+  const underline = (x: number, baseline: number, width: number, px: number, color: string) => {
+    ctx.fillStyle = color
+    ctx.fillRect(x, baseline + Math.max(1, px / 12), width, Math.max(1, px / 16))
+  }
   lines.forEach((line, i) => {
-    // Runs share the line's top; a single run keeps the plain title's centred, compressed drawing.
     if (line.runs.length === 1) {
-      const { run, font: css } = line.runs[0]
-      ctx.font = css; ctx.fillStyle = run.color ?? TEXT; ctx.textAlign = 'center'
+      // A single run keeps the plain title's centred, compressed drawing (from the line top).
+      const { run, font: css, width, px } = line.runs[0]
+      ctx.font = css; ctx.fillStyle = run.color ?? TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
       ctx.fillText(run.text, cx, y, box.w)
+      const shown = Math.min(width, box.w)
+      if (run.underline) underline(cx - shown / 2, y + line.ascent, shown, px, run.color ?? TEXT)
     } else if (line.runs.length) {
-      const scale = line.width > box.w ? box.w / line.width : 1
+      // Mixed runs sit on one shared baseline (the tallest ascent below the line top), centred as a whole.
+      const scale = line.width > box.w ? box.w / line.width : 1, baseline = y + line.ascent
       let x = cx - line.width * scale / 2
-      ctx.textAlign = 'left'
-      for (const { run, font: css, width } of line.runs) {
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
+      for (const { run, font: css, width, px } of line.runs) {
         ctx.font = css; ctx.fillStyle = run.color ?? TEXT
-        if (scale < 1) ctx.fillText(run.text, x, y, Math.max(1, width * scale)); else ctx.fillText(run.text, x, y)
+        if (scale < 1) ctx.fillText(run.text, x, baseline, Math.max(1, width * scale)); else ctx.fillText(run.text, x, baseline)
+        if (run.underline) underline(x, baseline, width * scale, px, run.color ?? TEXT)
         x += width * scale
       }
     }
@@ -625,7 +634,9 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     layout = layoutChart(source, w, h, dpr, fontGeneration(ctx), {
       width: (text, css) => { const previous = ctx.font; try { ctx.font = css; return ctx.measureText(text).width } finally { ctx.font = previous } },
       lineHeight: () => source.fontSizePt * 96 / 72,
-    }, context, familyCss(source.fontFamily))
+      // The em ascent where the canvas reports it (fontBoundingBoxAscent; node-canvas emHeightAscent).
+      ascent: css => { const previous = ctx.font; try { ctx.font = css; const m = ctx.measureText('') as TextMetrics & { emHeightAscent?: number }; const a = m.fontBoundingBoxAscent ?? m.emHeightAscent; return Number.isFinite(a) && a! > 0 ? a! : Number.NaN } finally { ctx.font = previous } },
+    }, context, familyCss(source.fontFamily), familyCss)
     releaseLayout = holdChartLayout(layout)
     const paintBytes = paintWorkspaceBytes(source, layout.view)
     if (!reserveChartLayoutWorkspace(workspace, paintBytes, admission.tag)) throw new ChartRefusal()

@@ -131,6 +131,8 @@ export interface ChartRange {
 
 export interface ChartSeries {
   labels?: import('./labels').LabelControls
+  /** The series index (`c:idx`; its position when absent or invalid): the key of its legend entry (spec 5.10). */
+  index?: number
   name: string
   /** CSS hex without `#`. */
   color: string
@@ -214,7 +216,7 @@ export interface ChartModel {
   titleOverlay?: true
   /** `c:legend/c:overlay`: the legend takes no space from the plot and is painted over it. */
   legendOverlay?: true
-  /** `c:legendEntry/c:delete`: sorted legend entry indices removed (series order; a varyColors pie: point index). */
+  /** `c:legendEntry/c:delete`: sorted legend entry indices removed (a series' `c:idx`; a point legend: the point index). */
   legendDeleted?: Uint32Array
   /** Outer category levels, innermost first (the innermost labels are `categories`; spec 5.9). */
   categoryLevels?: ChartCategoryLevel[]
@@ -241,6 +243,8 @@ export interface ChartModel {
   categoryValues?: ChartPoints
   /** The shared category reference still to be filled from worksheet cells. */
   categoryPending?: ChartRange
+  /** `categoryPending` is a multi-level reference (`c:multiLvlStrRef`): its outer lines are outer levels (spec 5.9). */
+  categoryMultiLevel?: true
   /** The shared category reference (kept beside a cache, for provenance only). */
   categoryRef?: ChartRange
   /** Sorted category indices whose cell sits in a hidden row or column of the category reference. */

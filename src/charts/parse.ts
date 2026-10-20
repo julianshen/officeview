@@ -6,7 +6,7 @@
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
-import type { ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import type { ChartDiagnostic, ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 import { admitChartModel } from './axisBinding'
@@ -18,7 +18,7 @@ import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
 import { readCategoryLevels } from './categories'
-import { titleRuns } from './titles'
+import { CHART_TITLE_LINE_LIMIT, CHART_TITLE_RUN_LIMIT, CHART_TITLE_TEXT_LIMIT, CHART_TITLE_TRUNCATED, runsText, titleRuns } from './titles'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -412,7 +412,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
   let sharedCategoryNode: XmlNode | undefined
-  let categoryLevels: ChartModel['categoryLevels']
+  let categoryLevels: ChartModel['categoryLevels'], categoryMultiLevel = false
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
@@ -504,7 +504,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
           categoryLevels = readCategoryLevels(catNode, categories.length, charge, cut, CHART_LABEL_LIMIT)
           if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
         }
-        else { const range = rangeOf(catNode); if (range) categoryPending = range }
+        else { const range = rangeOf(catNode); if (range) { categoryPending = range; if (child(catNode, 'multiLvlStrRef')) categoryMultiLevel = true } }
       }
       // Display points past the bound are dropped at draw time (analytic series keep them for analysis).
       if (values.length > CHART_POINT_LIMIT || (xValues && xValues.length > CHART_POINT_LIMIT)) truncated = true
@@ -544,6 +544,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
       const groupMarker = val(child(node, 'marker'))
       series.push({
+        index,
         name: capLabel(literalName || `Series ${index + 1}`, cut),
         color,
         values,
@@ -588,13 +589,24 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
   if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : val(child(root, 'lang'))?.startsWith('zh') ? '圖表標題' : 'Chart Title'
   // Title runs (formatting precedence: rPr, paragraph, txPr, style part, theme) and overlays; legend entries deleted.
-  const titleNode = child(chart, 'title')
-  const runs = title ? titleRuns(titleNode, title, theme, parts?.style?.title, charge) : undefined
+  const titleNode = child(chart, 'title'), titleDiagnostics: ChartDiagnostic[] = []
+  const resolved = title ? titleRuns(titleNode, title, theme, parts?.style?.title, charge) : undefined
+  const runs = resolved?.runs
+  // Runs cut by the title bounds: the title shown (painted and described) is what the runs keep, and it is reported.
+  if (resolved?.truncated) {
+    title = runsText(resolved.runs).replace(/\n/g, ' ').trim() || title
+    truncated = true
+    const reason = `The title keeps ${CHART_TITLE_RUN_LIMIT} runs, ${CHART_TITLE_LINE_LIMIT} lines and ${CHART_TITLE_TEXT_LIMIT} characters`
+    charge(64 + stringBytes(CHART_TITLE_TRUNCATED) + stringBytes(reason))
+    titleDiagnostics.push({ code: CHART_TITLE_TRUNCATED, reason })
+  }
   const overlay = (node: XmlNode | undefined) => Boolean(child(node, 'overlay')) && flag(child(node, 'overlay'), true)
   const deleted = new Set<number>()
   for (const entry of getChildren(legend, 'legendEntry')) {
     const idx = finite(val(child(entry, 'idx')))
-    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx < CHART_POINT_LIMIT) deleted.add(idx)
+    // An entry index is a series c:idx (unsigned int) or a point index; the number of entries kept is bounded.
+    if (deleted.size >= CHART_POINT_LIMIT) break
+    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx <= 0xFFFFFFFF) deleted.add(idx)
   }
   if (deleted.size) charge(64 + deleted.size * 4)
   const legendDeleted = deleted.size ? Uint32Array.from([...deleted].sort((a, b) => a - b)) : undefined
@@ -616,6 +628,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     categories,
     ...(categoryValues ? { categoryValues } : {}),
     ...(categoryPending ? { categoryPending } : {}),
+    ...(categoryPending && categoryMultiLevel ? { categoryMultiLevel: true as const } : {}),
     ...(categoryRef ? { categoryRef } : {}),
     ...(legend ? { legend: (val(child(legend, 'legendPos')) ?? 'r') as ChartModel['legend'] } : {}),
     // Chart-level options as authored; absent stays undefined (Office defaults: gap, plot visible only).
@@ -641,6 +654,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
+    ...(titleDiagnostics.length ? { diagnostics: titleDiagnostics } : {}),
   }
   return unsupported ? model : admitAxes(model, charge)
 }

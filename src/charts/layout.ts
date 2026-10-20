@@ -22,7 +22,11 @@ import type { ChartTextRun } from './model'
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
 /** One title line: its runs with their fonts and measured widths, the line height and total width (spec 5.10). */
-export interface TitleLine { runs: Array<{ run: ChartTextRun; font: string; width: number }>; px: number; width: number }
+export interface TitleLine {
+  runs: Array<{ run: ChartTextRun; font: string; width: number; px: number }>
+  /** The line height (its tallest run), total width and shared baseline below the line top (the tallest ascent). */
+  px: number; width: number; ascent: number
+}
 /** A drawn tier of multi-level categories (spec 5.9): its depth (px across the axis) and groups. */
 export interface CategoryTier { size: number; groups: TierGroup[] }
 export interface ChartLayout {
@@ -71,8 +75,9 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
   return Array.from({ length: view.slots }, (_, i) => view.category(i) ?? '')
 }
 /**
- * The legend's entries (shared by layout and paint). `legendEntry/delete` removes an entry by its index: the series'
- * position in the chart (document order) or, for a varyColors pie legend, the point index (Office-unverified keying).
+ * The legend's entries (shared by layout and paint). `legendEntry/delete` removes an entry by its index: a series
+ * entry by the series' `c:idx`; a point legend (pie and doughnut, whose single series varies its colours) by the
+ * point index.
  */
 export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string }> {
   const group = model.groups[0], deleted = model.legendDeleted
@@ -81,12 +86,15 @@ export function legendEntries(model: ChartModel, view: DisplayView): Array<{ nam
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => i).filter(i => !hiddenAt(deleted, view.source(i))).map(i => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
   }
   if (!deleted?.length) return view.series.map(({ series }) => ({ name: series.name, color: series.color }))
-  const order = new Map(model.groups.flatMap(g => g.series).map((s, i) => [s, i]))
+  // A series entry is keyed by its c:idx (never its document position); a model built without one keeps its position.
+  const order = new Map(model.groups.flatMap(g => g.series).map((s, i) => [s, s.index ?? i]))
   return view.series.filter(({ series }) => !hiddenAt(deleted, order.get(series) ?? -1)).map(({ series }) => ({ name: series.name, color: series.color }))
 }
-/** The title font: the run's italic/bold and size (else the default title size) in the chart family. */
-export const titleFont = (run: ChartTextRun | undefined, defaultPx: number, family: string) =>
-  `${run?.italic ? 'italic ' : ''}${run?.bold ? 'bold ' : ''}${run?.sizePt !== undefined ? Math.min(96, run.sizePt * 96 / 72) : defaultPx}px ${family}`
+/** The title font: the run's italic/bold, size (else the default title size) and typeface (else the chart family, as CSS). */
+export const titleFont = (run: ChartTextRun | undefined, defaultPx: number, family: string, familyCss: (family: string) => string = JSON.stringify) =>
+  `${run?.italic ? 'italic ' : ''}${run?.bold ? 'bold ' : ''}${run?.sizePt !== undefined ? Math.min(96, run.sizePt * 96 / 72) : defaultPx}px ${run?.font ? familyCss(run.font) : family}`
+/** A font's ascent when the measure cannot report it: 0.8 of its size (typical Latin faces; unverified). */
+export const FALLBACK_ASCENT = 0.8
 const titleRunPx = (run: ChartTextRun, defaultPx: number) => run.sizePt !== undefined ? Math.min(96, run.sizePt * 96 / 72) : defaultPx
 /** The height of title lines: each line its tallest run, 1.2 x for every line but the last (one line: its size). */
 export const titleHeight = (lines: readonly TitleLine[]) => lines.reduce((n, line, i) => n + line.px * (i < lines.length - 1 ? 1.2 : 1), 0)
@@ -182,7 +190,7 @@ export function layoutBound(model: ChartModel): number {
   const titled = (model.titleRuns ?? []).reduce((n, r) => n + 512 + r.text.length * 4, 0)
   return titled + tierBound(model.categoryLevels) + (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text
 }
-export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily)): ChartLayout {
+export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily), familyCss: (family: string) => string = JSON.stringify): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')
   let workspace = context?.workspace ?? ownedChartWorkspace(model) ?? defaults.get(model)
   if (!workspace) { workspace = createChartWorkspace('mobile'); defaults.set(model, workspace) }
@@ -190,13 +198,15 @@ export function layoutChart(model: ChartModel, w: number, h: number, dpr: number
   if (!contexts) { contexts = new Map(); cache.set(model, contexts) }
   let entries = contexts.get(workspace)
   if (!entries) { entries = new Map(); contexts.set(workspace, entries) }
-  const key = JSON.stringify([w, h, dpr, fontGeneration, family])
+  // Run typefaces (titles) are part of the key through their CSS names.
+  const runFamilies = model.titleRuns?.some(r => r.font) ? model.titleRuns.filter(r => r.font).map(r => familyCss(r.font!)) : []
+  const key = JSON.stringify([w, h, dpr, fontGeneration, family, ...runFamilies])
   const hit = entries.get(key)
   if (hit) { touch(hit); return hit.layout }
   const tag = `chart-layout#${++serial}`, bound = layoutBound(model)
   if (!reserveChartLayoutWorkspace(workspace, bound, tag)) throw new ChartRefusal()
   try {
-    const layout = buildLayout(model, w, h, measure, family)
+    const layout = buildLayout(model, w, h, measure, family, familyCss)
     if (layout.retainedBytes > bound) throw new ChartRefusal()
     const retainedTag = `${tag}:retained`
     workspace.transfer(tag, retainedTag, layout.retainedBytes)
@@ -235,7 +245,7 @@ function retainedBytes(layout: Omit<ChartLayout, 'width' | 'retainedBytes'>, wid
     for (const text of strings.keys()) bytes += 64 + text.length * 2
   }
   for (const diagnostic of layout.diagnostics) bytes += 64 + diagnostic.code.length * 2 + diagnostic.reason.length * 2
-  for (const line of layout.titleLines ?? []) bytes += 128 + line.runs.length * 96
+  for (const line of layout.titleLines ?? []) bytes += 128 + line.runs.reduce((n, r) => n + 112 + r.font.length * 2, 0)
   for (const tiers of layout.tiers.values()) bytes += 96 + tierBytes(tiers.map(t => t.groups))
   return bytes
 }
@@ -260,7 +270,7 @@ function thinLabels(list: AxisLabel[], authored: number | undefined, gap: number
   }
   return []
 }
-function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasure, family: string): ChartLayout {
+function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasure, family: string, familyCss: (family: string) => string): ChartLayout {
     const widths = new Map<string, Map<string, number>>()
     const width = (text: string, font: string) => {
       let byText = widths.get(font); if (!byText) widths.set(font, byText = new Map())
@@ -274,10 +284,22 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
     let area: Box = { x: pad, y: pad, w: w - pad * 2, h: h - pad * 2 }
     // Title (spec 5.10): one line at 1.4 x the chart size, or its run lines; an overlaid title takes no space.
     const titlePx = Math.min(96, fontPx * 1.4)
-    const titleLinesOf = model.title && model.titleRuns ? titleLines(model.titleRuns).map((runs): TitleLine => {
-      const measured = runs.map(run => { const font = titleFont(run, titlePx, family); return { run, font, width: width(run.text, font) } })
-      return { runs: measured, px: runs.length ? Math.max(...runs.map(run => titleRunPx(run, titlePx))) : titlePx, width: measured.reduce((n, r) => n + r.width, 0) }
+    let titleLinesOf = model.title && model.titleRuns ? titleLines(model.titleRuns).map((runs): TitleLine => {
+      const measured = runs.map(run => { const font = titleFont(run, titlePx, family, familyCss), px = titleRunPx(run, titlePx); return { run, font, px, width: width(run.text, font) } })
+      // Mixed sizes share one baseline: the tallest ascent below the line top.
+      const ascent = measured.reduce((n, r) => { const a = measure.ascent?.(r.font); return Math.max(n, a !== undefined && Number.isFinite(a) && a > 0 ? a : r.px * FALLBACK_ASCENT) }, 0)
+      return { runs: measured, px: runs.length ? Math.max(...measured.map(r => r.px)) : titlePx, width: measured.reduce((n, r) => n + r.width, 0), ascent }
     }) : undefined
+    // The title band never takes more than half the chart area (at least its first line): later lines are omitted.
+    if (titleLinesOf) {
+      const room = Math.max(titleLinesOf[0].px, area.h / 2 - 6)
+      let kept = 1
+      while (kept < titleLinesOf.length && titleHeight(titleLinesOf.slice(0, kept + 1)) <= room) kept++
+      if (kept < titleLinesOf.length) {
+        titleLinesOf = titleLinesOf.slice(0, kept)
+        diagnostics.push({ code: 'chart-title-truncated', reason: 'Title lines beyond half the chart height are not drawn' })
+      }
+    }
     const titleBand = (titleLinesOf ? titleHeight(titleLinesOf) : titlePx) + 6
     const title = resolveManualLayout(model.titleLayout, { ...area, h: titleBand }, w, h, diagnostics)
     if (model.title && !model.titleOverlay) area = { ...area, y: area.y + titleBand, h: area.h - titleBand }

@@ -13,10 +13,13 @@ import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart, type ChartLayout } from '../src/charts/layout'
 import { createChartWorkspace } from '../src/charts/workspace'
 import { displayView } from '../src/charts/display'
-import { categoryTiers } from '../src/charts/categories'
+import { categoryTiers, readCategoryLevels, CHART_CATEGORY_LEVEL_UNREADABLE } from '../src/charts/categories'
+import { getChildren, type XmlNode } from '../src/core/xml'
+import { titleRuns, CHART_TITLE_RUN_LIMIT, CHART_TITLE_LINE_LIMIT } from '../src/charts/titles'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { ChartParseContext } from '../src/charts/context'
 import type { ChartModel } from '../src/charts/model'
+import type { ThemeContext } from '../src/drawing/style'
 import { chartWorkbook, chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
 import { OfficePackage } from '../src/core/zip'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
@@ -26,7 +29,10 @@ const opened: Array<{ release(): Promise<void> }> = []
 afterEach(async () => { for (const source of opened.splice(0)) await source.release() })
 /** The same workbook read resident (parseXlsx) and paged (the import session's drawing read): the chart models. */
 async function residentAndPaged(bytes: Uint8Array): Promise<[ChartModel, ChartModel]> {
-  const resident = (await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })).sheets[0].drawings?.[0].content
+  const doc = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
+  const resident = doc.sheets[0].drawings?.[0].content
+  // Native success: the coverage representation is the chart itself, not a card or fallback picture.
+  expect(doc.drawingCoverage?.[0]).toMatchObject({ selectedRepresentation: 'chart' })
   const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'A4b', profile: 'D' })
   expect((await session.done).kind).toBe('complete')
   const source = createPagedWorkbookSource(session)
@@ -289,5 +295,166 @@ describe('charts-text (Task A4b)', () => {
     const singleMin = minimum(chart(`<cat>${strLit(inner)}</cat>`)), multiple = minimum(chart(multi([years])))
     expect(multiple - singleMin).toBeGreaterThanOrEqual(64 + 2 * (4 + 32 + 8))
     expect(parse(chart(multi([years])), ws(multiple - 1)).refused).toBe(true)
+  })
+})
+
+describe('charts-text (Task A4b fix round 1)', () => {
+  const level = (labels: Array<string | undefined>) => `<lvl>${labels.map((t, k) => t ? `<pt idx="${k}"><v>${t}</v></pt>` : '').join('')}</lvl>`
+  /** A `<cat>` multi-level cache whose label reads are counted (each `v` text read through a getter). */
+  function countedCat(inner: number, outer: Array<Array<string | undefined>>) {
+    const cat = parseXmlOrdered(`<cat><multiLvlStrRef><multiLvlStrCache><ptCount val="${inner}"/>${level(Array.from({ length: inner }, (_, i) => `L${i}`))}${outer.map(level).join('')}</multiLvlStrCache></multiLvlStrRef></cat>`)
+    const counter = { reads: 0 }
+    const lvls = getChildren(getChildren(getChildren(cat, 'multiLvlStrRef')[0], 'multiLvlStrCache')[0], 'lvl')
+    for (const lvl of lvls.slice(1)) for (const pt of getChildren(lvl, 'pt')) {
+      const v = getChildren(pt, 'v')[0] as XmlNode, text = v['#text']
+      Object.defineProperty(v, '#text', { get: () => { counter.reads++; return text } })
+    }
+    return { cat, counter }
+  }
+
+  it('I1: outer category levels are admitted before they are built, and levels past the bounds are never read', () => {
+    const outer = Array.from({ length: 20 }, (_, l) => Array.from({ length: 100 }, (_, k) => `G${l}-${k}`))
+    // A refusing charge: the first admission comes after sizing only the first outer level.
+    const refused = countedCat(100, outer)
+    let readsAtCharge = -1
+    expect(() => readCategoryLevels(refused.cat, 100, () => { readsAtCharge = refused.counter.reads; throw new Error('refused') }, { truncated: false }, 255)).toThrow('refused')
+    expect(readsAtCharge).toBeLessThanOrEqual(100)
+    // Accepted: 8 levels kept; the ninth and later are never read (sizing + build of the 8 kept only).
+    const kept = countedCat(100, outer), cut = { truncated: false }, charges: number[] = []
+    const levels = readCategoryLevels(kept.cat, 100, b => { charges.push(b) }, cut, 255)!
+    expect(levels).toHaveLength(8)
+    expect(cut.truncated).toBe(true)
+    expect(kept.counter.reads).toBeLessThanOrEqual(2 * 8 * 100)
+    expect(charges).toHaveLength(8)
+    // The label bound: a level that would pass 4,096 labels stops its sizing walk at the first label over.
+    const big = Array.from({ length: 3000 }, (_, k) => `B${k}`)
+    const wide = countedCat(3000, [big, big]), wideCut = { truncated: false }
+    expect(readCategoryLevels(wide.cat, 3000, () => {}, wideCut, 255)).toHaveLength(1)
+    expect(wideCut.truncated).toBe(true)
+    expect(wide.counter.reads).toBeLessThanOrEqual(3000 * 2 + 4096 - 3000 + 1)
+    // Out-of-order and repeated indices are sorted (first label of an index kept); a long label is cut and reported.
+    const shuffled = parseXmlOrdered(`<cat><multiLvlStrRef><multiLvlStrCache><ptCount val="4"/>${level(['a', 'b', 'c', 'd'])}<lvl><pt idx="2"><v>Y2</v></pt><pt idx="0"><v>Y0</v></pt><pt idx="2"><v>dup</v></pt><pt idx="3"><v>${'x'.repeat(300)}</v></pt></lvl></multiLvlStrCache></multiLvlStrRef></cat>`)
+    const shuffledCut = { truncated: false }
+    const sorted = readCategoryLevels(shuffled, 4, () => {}, shuffledCut, 255)!
+    expect([...sorted[0].starts]).toEqual([0, 2, 3])
+    expect(sorted[0].labels.slice(0, 2)).toEqual(['Y0', 'Y2'])
+    expect(sorted[0].labels[2]).toHaveLength(255)
+    expect(shuffledCut.truncated).toBe(true)
+  })
+
+  it('I2/M1: every title record counts against the bound, the band stays within the chart, and cuts are reported', () => {
+    const brs = '<title><tx><rich><bodyPr/><p><r><t>A</t></r>' + '<br/>'.repeat(1000) + '<r><t>B</t></r></p></rich></tx></title>'
+    const records = titleRuns(parseXmlOrdered(brs), 'A B', undefined, undefined, () => {})!
+    expect(records.runs.length).toBeLessThanOrEqual(CHART_TITLE_RUN_LIMIT)
+    expect(records.runs.filter(r => r.text === '\n').length).toBeLessThan(CHART_TITLE_LINE_LIMIT)
+    expect(records.truncated).toBe(true)
+    const model = parse(space(bars(three) + axes(), brs))
+    expect(model.truncated).toBe(true)
+    expect(model.diagnostics?.some(d => d.code === 'chart-title-truncated')).toBe(true)
+    const p = paint(model)
+    expect(p.layout.title.h).toBeLessThanOrEqual(H / 2)
+    expect(p.layout.area.h).toBeGreaterThan(H / 3)
+    // The data is still drawn.
+    expect(p.count('FF0000', p.layout.plot, 10)).toBeGreaterThan(100)
+    // Paragraph separators count too.
+    const paras = '<title><tx><rich><bodyPr/>' + Array.from({ length: 40 }, (_, i) => `<p><r><t>P${i}</t></r></p>`).join('') + '</rich></tx></title>'
+    const many = parse(space(bars(three) + axes(), paras))
+    expect(many.titleRuns!.filter(r => r.text === '\n').length).toBe(CHART_TITLE_LINE_LIMIT - 1)
+    const drawn = paint(many)
+    expect(drawn.layout.title.h).toBeLessThanOrEqual(H / 2)
+    expect(drawn.layout.diagnostics.some(d => d.code === 'chart-title-truncated')).toBe(true)
+    // 65 text runs: the 65th is dropped, the model says so and the shown title is what the runs keep.
+    const runs65 = '<title><tx><rich><bodyPr/><p>' + Array.from({ length: 64 }, (_, i) => `<r><rPr b="${i % 2}"/><t>r${i} </t></r>`).join('') + '<r><t>LOST</t></r></p></rich></tx></title>'
+    const cut = parse(space(bars(three) + axes(), runs65))
+    expect(cut.titleRuns).toHaveLength(64)
+    expect(cut.truncated).toBe(true)
+    expect(cut.title).not.toContain('LOST')
+    expect(paint(cut).texts.some(t => t.text.includes('LOST'))).toBe(false)
+  })
+
+  it('I3: legend entries are deleted by series c:idx, never by position', () => {
+    const named = (idx: number, values: number[], color: string) => `<ser><idx val="${idx}"/><order val="${idx}"/><tx><v>S${idx}</v></tx>${fill(color)}<cat>${strLit(['a', 'b'])}</cat><val>${lit(values)}</val></ser>`
+    const legend = (idx: number) => `<legend><legendPos val="r"/><legendEntry><idx val="${idx}"/><delete val="1"/></legendEntry></legend>`
+    const chart = (idx: number) => paint(parse(space(bars(named(7, [1, 2], 'FF0000') + named(42, [2, 1], '00FF00')) + axes(), undefined, legend(idx))))
+    expect(chart(42).texts.map(t => t.text).filter(t => /^S\d+$/.test(t))).toEqual(['S7'])
+    expect(chart(7).texts.map(t => t.text).filter(t => /^S\d+$/.test(t))).toEqual(['S42'])
+    expect(chart(0).texts.map(t => t.text).filter(t => /^S\d+$/.test(t))).toEqual(['S7', 'S42'])
+    // A combination chart: the line series (c:idx 2, second in document order) is the deleted entry.
+    const combo = paint(parse(space(`${bars(named(5, [1, 2], 'FF0000'))}<lineChart><grouping val="standard"/>${named(2, [2, 1], '0000FF')}${AX}</lineChart>` + axes(), undefined, legend(2))))
+    expect(combo.texts.map(t => t.text).filter(t => /^S\d+$/.test(t))).toEqual(['S5'])
+    expect(combo.count('0000FF', combo.layout.legend, 10)).toBe(0)
+    expect(combo.count('0000FF', combo.layout.plot, 10)).toBeGreaterThan(20)
+    // A large series index is a valid key (not bounded like a point offset).
+    expect(paint(parse(space(bars(named(70000, [1, 2], 'FF0000') + named(1, [2, 1], '00FF00')) + axes(), undefined, legend(70000)))).texts.map(t => t.text).filter(t => /^S\d+$/.test(t))).toEqual(['S1'])
+  })
+
+  it('I4: authored typeface and underline resolve through the chain and are painted', async () => {
+    // A run whose only formatting is a typeface and an underline keeps its runs.
+    const only = parse(space(bars(three) + axes(), '<title><tx><rich><bodyPr/><p><r><rPr u="sng"><latin typeface="Courier New"/></rPr><t>Mono</t></r></p></rich></tx></title>'))
+    expect(only.titleRuns).toEqual([{ text: 'Mono', font: 'Courier New', underline: true }])
+    const p = paint(only), mono = p.text('Mono')[0]
+    expect(mono.font).toBe(`${10 * 96 / 72 * 1.4}px "Courier New"`)
+    // The underline: a #595959 band under the text, inside the title box, below the glyphs' baseline.
+    const box = p.layout.title
+    let rows = 0
+    for (let y = Math.floor(box.y); y < box.y + box.h; y++) if (p.count('595959', { x: mono.x - 20, y, w: 40, h: 1 }, 30) >= 30) rows++
+    expect(rows).toBeGreaterThanOrEqual(1)
+    const plain = paint(parse(space(bars(three) + axes(), '<title><tx><rich><bodyPr/><p><r><rPr><latin typeface="Courier New"/></rPr><t>Mono</t></r></p></rich></tx></title>')))
+    let plainRows = 0
+    for (let y = Math.floor(box.y); y < box.y + box.h; y++) if (plain.count('595959', { x: mono.x - 20, y, w: 40, h: 1 }, 30) >= 30) plainRows++
+    expect(plainRows).toBe(0)
+    // Inheritance and override: the paragraph's typeface reaches a run that states none; a run's u="none" overrides txPr's.
+    const inherit = parse(space(bars(three) + axes(), '<title><tx><rich><bodyPr/><p><pPr><defRPr><latin typeface="Georgia"/></defRPr></pPr><r><rPr/><t>One</t></r><r><rPr u="none"><latin typeface="Arial"/></rPr><t>Two</t></r></p></rich></tx><txPr><bodyPr/><p><pPr><defRPr u="sng"/></pPr></p></txPr></title>'))
+    expect(inherit.titleRuns).toEqual([{ text: 'One', font: 'Georgia', underline: true }, { text: 'Two', font: 'Arial', underline: false }])
+    const two = paint(inherit)
+    expect(two.text('One')[0].font).toBe(`${10 * 96 / 72 * 1.4}px "Georgia"`)
+    expect(two.text('Two')[0].font).toBe(`${10 * 96 / 72 * 1.4}px "Arial"`)
+    // Theme references resolve to the theme's fonts (+mj-lt: major), and the style part's fontRef idx="major" too.
+    const theme = { palette: {}, colors: {}, colorMap: {}, fonts: { minor: { latin: 'Minor Face' }, major: { latin: 'Major Face' } } } as unknown as ThemeContext
+    const themed = parseXlsxChart(parseXmlOrdered(space(bars(three) + axes(), '<title><tx><rich><bodyPr/><p><r><rPr><latin typeface="+mj-lt"/></rPr><t>T</t></r></p></rich></tx></title>')), theme)!
+    expect(themed.titleRuns).toEqual([{ text: 'T', font: 'Major Face' }])
+    const styled = parseXlsxChart(parseXmlOrdered(space(bars(three) + axes(), '<title><tx><strRef><f>A1</f><strCache><ptCount val="1"/><pt idx="0"><v>S</v></pt></strCache></strRef></tx></title>')), theme, { styleParts: { style: { title: { font: 'major', underline: true } } } } as unknown as ChartParseContext)!
+    expect(styled.titleRuns).toEqual([{ text: 'S', font: 'Major Face', underline: true }])
+  })
+
+  it('M2: mixed-size runs share one baseline', () => {
+    const rich = '<title><tx><rich><bodyPr/><p><r><rPr sz="1200"><solidFill><srgbClr val="FF0000"/></solidFill></rPr><t>Run</t></r><r><rPr sz="2800"><solidFill><srgbClr val="00B050"/></solidFill></rPr><t>Para</t></r></p></rich></tx></title>'
+    const p = paint(parse(space(bars(three) + axes(), rich)))
+    const run = p.text('Run')[0], para = p.text('Para')[0]
+    expect(run.y).toBeCloseTo(para.y, 5)
+    // Ink: both words (no descenders) end on the same row; the small word's top is well below the large one's.
+    const box = p.layout.title, rows = (hex: string) => { const out: number[] = []; for (let y = Math.floor(box.y); y < box.y + box.h; y++) if (p.count(hex, { x: box.x, y, w: box.w, h: 1 }, 40) > 0) out.push(y); return out }
+    const red = rows('FF0000'), green = rows('00B050')
+    expect(Math.abs(red[red.length - 1] - green[green.length - 1])).toBeLessThanOrEqual(2)
+    expect(red[0] - green[0]).toBeGreaterThan(8)
+  })
+
+  it('I5: uncached multi-level references read their outer levels from the worksheet (resident and paged)', async () => {
+    const cells = [
+      { ref: 'A1', v: '2023' }, { ref: 'B1', v: 'Q1' }, { ref: 'B2', v: 'Q2' }, { ref: 'A3', v: '2024' }, { ref: 'B3', v: 'Q1' }, { ref: 'B4', v: 'Q2' },
+      { ref: 'C1', v: 3 }, { ref: 'C2', v: 7 }, { ref: 'C3', v: 2 }, { ref: 'C4', v: 9 },
+    ]
+    const xml = space(bars(`<ser><idx val="0"/><order val="0"/><tx><v>S</v></tx><cat><multiLvlStrRef><f>Styled!$A$1:$B$4</f></multiLvlStrRef></cat><val><numRef><f>Styled!$C$1:$C$4</f></numRef></val></ser>`) + axes())
+    const [resident, paged] = await residentAndPaged(await chartWorkbookBytes(xml, { cells }))
+    for (const model of [resident, paged]) {
+      expect(model.categories).toEqual(['Q1', 'Q2', 'Q1', 'Q2'])
+      expect(model.categoryLevels?.map(l => ({ starts: [...l.starts], labels: l.labels }))).toEqual([{ starts: [0, 2], labels: ['2023', '2024'] }])
+      expect(model.categoryMultiLevel).toBeUndefined()
+    }
+    // Drawn as the cached hierarchy is.
+    const p = paint(resident)
+    expect(p.text('2023')[0].x).toBeCloseTo(p.layout.plot.x + p.layout.plot.w * .25, 0)
+    expect(p.text('2024')[0].x).toBeCloseTo(p.layout.plot.x + p.layout.plot.w * .75, 0)
+    // An outer cell without a saved value: the level is not drawn and a diagnostic says so (never silently flat).
+    const unreadable = await chartWorkbookBytes(xml, { cells: cells.filter(c => c.ref !== 'A3'), patch: async (zip: JSZip) => {
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      zip.file('xl/worksheets/sheet1.xml', sheet.replace(/(<row r="3"[^>]*>)/, '$1<c r="A3"><f>B9&amp;"x"</f></c>'))
+    } })
+    const [r2, p2] = await residentAndPaged(unreadable)
+    for (const model of [r2, p2]) {
+      expect(model.categoryLevels).toBeUndefined()
+      expect(model.diagnostics?.some(d => d.code === CHART_CATEGORY_LEVEL_UNREADABLE)).toBe(true)
+      expect(model.categories).toEqual(['Q1', 'Q2', 'Q1', 'Q2'])
+    }
   })
 })

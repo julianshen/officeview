@@ -19,45 +19,96 @@ import type { DisplayView } from './display'
 
 export const CHART_CATEGORY_TIER_LABELS = 4096
 export const CHART_CATEGORY_LEVELS = 8
-const LEVEL_BYTES = 64, LABEL_BYTES = 32, START_BYTES = 4
+const LEVEL_BYTES = 64, LABEL_BYTES = 32, START_BYTES = 4, SORT_BYTES = 48
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 
-/** The outer levels' labels of a category data source, by level, as (index, text) in ascending index order. */
-function outerPoints(cat: XmlNode | undefined, count: number, labelLimit: number): Array<Array<[number, string]>> {
-  const cache = child(child(cat, 'multiLvlStrRef'), 'multiLvlStrCache')
-  return getChildren(cache, 'lvl').slice(1).map(lvl => {
-    const seen = new Set<number>(), points: Array<[number, string]> = []
-    for (const pt of getChildren(lvl, 'pt')) {
-      const idx = Number(attrs(pt).idx)
-      if (!Number.isInteger(idx) || idx < 0 || idx >= count || seen.has(idx)) continue
-      seen.add(idx)
-      points.push([idx, textOf(child(pt, 'v')).slice(0, labelLimit)])
-    }
-    return points.sort((a, b) => a[0] - b[0])
-  })
-}
-
 /**
  * The outer levels of a multi-level category source whose innermost level has `count` labels: undefined when it
- * has none. `cut.truncated` records dropped levels. Each kept level is charged through `charge` before it is built.
+ * has none. `cut.truncated` records dropped levels and cut labels.
+ *
+ * Admission comes first (spec 6.4): each level is sized by a walk that builds nothing, its storage (and, for a level
+ * whose indices are not strictly ascending, the sort workspace) is charged, and only then is it built. The walk stops
+ * at the first level that would exceed the bounds: no level outside it is read.
  */
 export function readCategoryLevels(cat: XmlNode | undefined, count: number, charge: (bytes: number) => void, cut: { truncated: boolean }, labelLimit: number): ChartCategoryLevel[] | undefined {
   if (!count || !child(cat, 'multiLvlStrRef')) return undefined
-  // The level lists are transient (bounded by the part already admitted); only what is kept is retained.
-  const levels = outerPoints(cat, count, labelLimit), out: ChartCategoryLevel[] = []
+  const lvls = getChildren(child(child(cat, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl')
+  const out: ChartCategoryLevel[] = []
+  const index = (pt: XmlNode) => { const idx = Number(attrs(pt).idx); return Number.isInteger(idx) && idx >= 0 && idx < count ? idx : -1 }
   let total = 0
-  for (const points of levels) {
-    if (out.length >= CHART_CATEGORY_LEVELS || total + points.length > CHART_CATEGORY_TIER_LABELS) { cut.truncated = true; break }
-    charge(LEVEL_BYTES + points.reduce((n, [, text]) => n + START_BYTES + LABEL_BYTES + text.length * 2, 0))
-    const starts = new Uint32Array(points.length), labels: string[] = []
-    points.forEach(([idx, text], k) => { starts[k] = idx; labels.push(text) })
-    out.push({ starts, labels })
-    total += points.length
+  for (let l = 1; l < lvls.length; l++) {
+    if (out.length >= CHART_CATEGORY_LEVELS) { cut.truncated = true; break }
+    // Sizing walk: how many labels (an upper bound when indices repeat), their text, and whether indices ascend.
+    const pts = getChildren(lvls[l], 'pt')
+    let n = 0, units = 0, ascending = true, last = -1, over = false
+    for (const pt of pts) {
+      const idx = index(pt)
+      if (idx < 0) continue
+      if (idx <= last) ascending = false
+      last = Math.max(last, idx)
+      if (total + ++n > CHART_CATEGORY_TIER_LABELS) { over = true; break }
+      units += Math.min(textOf(child(pt, 'v')).length, labelLimit)
+    }
+    if (over) { cut.truncated = true; break }
+    charge(LEVEL_BYTES + n * (START_BYTES + LABEL_BYTES) + units * 2 + (ascending ? 0 : n * SORT_BYTES))
+    const starts = new Uint32Array(n), labels: string[] = []
+    const keep = (text: string) => { if (text.length > labelLimit) cut.truncated = true; return text.slice(0, labelLimit) }
+    if (ascending) {
+      for (const pt of pts) { const idx = index(pt); if (idx >= 0) { starts[labels.length] = idx; labels.push(keep(textOf(child(pt, 'v')))) } }
+    } else {
+      // Out of order or repeated indices: sorted, the first label of an index kept.
+      const order = pts.map((pt, k) => [index(pt), k] as const).filter(([idx]) => idx >= 0).sort((a, b) => a[0] - b[0] || a[1] - b[1])
+      for (const [idx, k] of order) if (!labels.length || starts[labels.length - 1] !== idx) { starts[labels.length] = idx; labels.push(keep(textOf(child(pts[k], 'v')))) }
+    }
+    out.push({ starts: labels.length === n ? starts : starts.slice(0, labels.length), labels })
+    total += labels.length
   }
   // Levels without any label draw nothing; a source whose outer levels are all empty is single-level.
   while (out.length && !out[out.length - 1].labels.length) out.pop()
   return out.length ? out : undefined
+}
+
+/** Diagnostics of multi-level categories filled from worksheet cells (spec 5.9, 6.6). */
+export const CHART_CATEGORY_LEVELS_TRUNCATED = 'chart-category-levels-truncated'
+export const CHART_CATEGORY_LEVEL_UNREADABLE = 'chart-category-level-unreadable'
+/** One cell of a worksheet category level: empty, a label start, or unreadable (no saved value / not read). */
+export type LevelCell = 'empty' | 'label' | 'unreadable'
+
+/**
+ * The outer levels of an uncached multi-level category reference (spec 5.9), read through the fill's lookup: the
+ * range's lines outside the innermost one (a vertical range's columns leftward of the last, a horizontal range's
+ * rows above the last), innermost first. A non-empty cell starts a group. Same bounds and admission order as the
+ * cache; a level whose cells cannot be read is not drawn (with every level outside it) and a diagnostic says so,
+ * never a silent flattening.
+ */
+export function fillCategoryLevels(lines: number, count: number, cell: (level: number, i: number) => LevelCell, text: (level: number, i: number) => string,
+  charge: (bytes: number) => void, diagnostics: Array<{ code: string; reason: string }>, labelLimit: number): { levels?: ChartCategoryLevel[]; truncated: boolean } {
+  const out: ChartCategoryLevel[] = []
+  let total = 0, truncated = false
+  for (let l = 1; l < lines; l++) {
+    if (out.length >= CHART_CATEGORY_LEVELS) { truncated = true; diagnostics.push({ code: CHART_CATEGORY_LEVELS_TRUNCATED, reason: `Only ${CHART_CATEGORY_LEVELS} outer category levels are drawn` }); break }
+    let n = 0, unreadable = false, over = false
+    for (let i = 0; i < count; i++) {
+      const state = cell(l, i)
+      if (state === 'unreadable') { unreadable = true; break }
+      if (state === 'label' && total + ++n > CHART_CATEGORY_TIER_LABELS) { over = true; break }
+    }
+    if (unreadable) { diagnostics.push({ code: CHART_CATEGORY_LEVEL_UNREADABLE, reason: `Outer category level ${l} could not be read from the worksheet; it and the levels outside it are not drawn` }); break }
+    if (over) { truncated = true; diagnostics.push({ code: CHART_CATEGORY_LEVELS_TRUNCATED, reason: `Outer category labels beyond ${CHART_CATEGORY_TIER_LABELS} are not drawn` }); break }
+    // Starts and records first; each label's text is admitted by `text` as it is formatted.
+    charge(LEVEL_BYTES + n * (START_BYTES + LABEL_BYTES))
+    const starts = new Uint32Array(n), labels: string[] = []
+    for (let i = 0; i < count && labels.length < n; i++) if (cell(l, i) === 'label') {
+      const value = text(l, i)
+      if (value.length > labelLimit) truncated = true
+      starts[labels.length] = i; labels.push(value.slice(0, labelLimit))
+    }
+    out.push({ starts, labels })
+    total += n
+  }
+  while (out.length && !out[out.length - 1].labels.length) out.pop()
+  return { ...(out.length ? { levels: out } : {}), truncated }
 }
 
 /** One drawn group of a tier: display slots [start, end) and its label. */

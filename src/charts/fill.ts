@@ -11,6 +11,7 @@ import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
+import { fillCategoryLevels } from './categories'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -79,6 +80,12 @@ function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onT
 }
 /** The cell coordinates of point `i` on a line. */
 export const linePoint = (line: ChartLine, i: number): { row: number; col: number } => line.vertical ? { row: line.start + i, col: line.fixed } : { row: line.fixed, col: line.start + i }
+
+/** How many lines a multi-level category reference holds (the innermost included): columns of a vertical range, rows of a horizontal one. */
+export const outerLevelCount = (range: ChartRange, line: ChartLine): number => line.vertical ? range.c1 - range.c0 + 1 : range.r1 - range.r0 + 1
+/** The cell of point `i` on outer level `level` (1: next to the innermost line). */
+export const outerLevelCell = (line: ChartLine, level: number, i: number): { row: number; col: number } =>
+  line.vertical ? { row: line.start + i, col: line.fixed - level } : { row: line.fixed - level, col: line.start + i }
 
 export function chartHasPending(model: ChartModel): boolean {
   return Boolean(model.categoryPending) || model.groups.some(g => g.series.some(s => s.pending))
@@ -242,7 +249,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     for (let i = 0, k = 0; i < line.count; i++) { const at = linePoint(line, i); if (hidden(line.sheet, at.row, at.col)) out[k++] = i }
     return out
   }
-  let categories = model.categories, categoryHidden = model.categoryHidden, categoryValues = model.categoryValues
+  let categories = model.categories, categoryHidden = model.categoryHidden, categoryValues = model.categoryValues, categoryLevels = model.categoryLevels
+  const levelDiagnostics: Array<{ code: string; reason: string }> = []
   if (model.categoryPending) {
     const line = chartLine(model.categoryPending, sheetOf(model.categoryPending), true)
     truncated ||= line.truncated
@@ -265,6 +273,16 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     categories = labels
     categoryHidden = provenance(line)
     if (numbers) categoryValues = numbers.done()
+    // An uncached multi-level reference (spec 5.9): its outer lines are the outer levels, read through the same lookup.
+    if (model.categoryMultiLevel) {
+      const range = model.categoryPending, outer = (level: number, i: number) => outerLevelCell(line, level, i)
+      const filled = fillCategoryLevels(outerLevelCount(range, line), line.count, (level, i) => {
+        const at = outer(level, i), cell = lookup(line.sheet, at.row, at.col, false)
+        return cell?.unavailable ? 'unreadable' : cell && (cell.error !== undefined || rawText(cell.value) !== '') ? 'label' : 'empty'
+      }, (level, i) => label(allocation => { const at = outer(level, i); return asText(lookup(line.sheet, at.row, at.col, true, allocation)) }), charge, levelDiagnostics, CHART_LABEL_LIMIT)
+      categoryLevels = filled.levels
+      truncated ||= filled.truncated
+    }
   } else if (model.categoryRef && categories.length) categoryHidden = provenance(chartLine(model.categoryRef, sheetOf(model.categoryRef), true, categories.length))
   const groups = model.groups.map(group => ({
     ...group,
@@ -315,14 +333,15 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     }),
   }))
   const diagnostics = model.diagnostics ? [...model.diagnostics] : []
+  for (const d of levelDiagnostics) { charge(stringBytes(d.code) + stringBytes(d.reason)); diagnostics.push(d) }
   if (unrepresentable) {
     const reason = `${unrepresentable} date ${unrepresentable === 1 ? 'value has' : 'values have'} no counterpart in the ${epoch} date system`
     charge(stringBytes(reason))
     diagnostics.push({ code: 'chart-date-unrepresentable', reason })
   }
-  const { categoryPending, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
-  void categoryPending, void _hidden, void _values, void _diagnostics
-  return { ...rest, categories, ...(categoryValues ? { categoryValues } : {}), ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}), ...(diagnostics.length ? { diagnostics } : {}) }
+  const { categoryPending, categoryMultiLevel: _multi, categoryLevels: _levels, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
+  void categoryPending, void _multi, void _levels, void _hidden, void _values, void _diagnostics
+  return { ...rest, categories, ...(categoryLevels ? { categoryLevels } : {}), ...(categoryValues ? { categoryValues } : {}), ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}), ...(diagnostics.length ? { diagnostics } : {}) }
 }
 
 /** Resident workbooks: fill every uncached chart reference from parsed cells,
@@ -419,6 +438,11 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
     if (chart) {
       const add = (range: ChartRange | undefined, text: boolean, limit?: number) => { if (range && !range.definedName) out.push(chartLine(range, ownerSheet, text, limit)) }
       add(chart.categoryPending, true)
+      // A multi-level reference's outer lines are read too (its outer levels).
+      if (chart.categoryMultiLevel && chart.categoryPending && !chart.categoryPending.definedName) {
+        const range = chart.categoryPending, inner = chartLine(range, ownerSheet, true)
+        for (let level = 1; level < outerLevelCount(range, inner); level++) out.push({ ...inner, fixed: inner.fixed - level })
+      }
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
         add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true)
