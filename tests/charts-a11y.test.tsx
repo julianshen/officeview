@@ -291,9 +291,9 @@ describe('admission and complete lists (A7 review I2, I3, M1)', () => {
     expect(a.reads(), 'nothing of the refused page was built').toBe(0)
     expect(observed, 'only page 1 was collected').toHaveLength(1)
     expect(observed[0], 'its bound was charged before construction').toBeGreaterThanOrEqual(DESCRIPTION_WORK_BYTES)
-    expect(result.pages[0]).toEqual({ total: 1, charts: [expect.objectContaining({ notice: true, description: 'Chart descriptions for this page could not be kept in memory.' })] })
-    expect(result.pages[1].charts.map(c => c.description)).toEqual(['Chart: Kept. placeholder: reason.'])
-    expect(result.pages[2]).toEqual({ charts: [], total: 0 })
+    expect(result.page(0)).toEqual({ total: 1, charts: [expect.objectContaining({ notice: true, description: 'Chart descriptions for this page could not be kept in memory.' })] })
+    expect(result.page(1).charts.map(c => c.description)).toEqual(['Chart: Kept. placeholder: reason.'])
+    expect(result.page(2)).toEqual({ charts: [], total: 0 })
     expect(result.diagnostics).toEqual([expect.objectContaining({ page: 0, code: 'chart-description-refused', reason: expect.stringMatching(/\(1 chart\)/) })])
     // Reconciled to the exact retention, then refunded.
     expect(workspace.used).toBeLessThan(DESCRIPTION_WORK_BYTES)
@@ -308,7 +308,7 @@ describe('admission and complete lists (A7 review I2, I3, M1)', () => {
     const shared = model('Masthead')
     const peaks: number[] = []
     const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 200, bound: () => 1, collect: () => { peaks.push(workspace.used); return [{ chart: shared.chart, x: 0, y: 0, width: 1, height: 1 }] } })
-    expect(result.pages.every(p => p.charts.length === 1)).toBe(true)
+    expect(Array.from({ length: 200 }, (_, i) => result.page(i).charts.length).every(n => n === 1)).toBe(true)
     const retained = workspace.used
     // The construction peak never exceeds the retained set plus one page's bound.
     expect(Math.max(...peaks)).toBeLessThanOrEqual(retained + DESCRIPTION_WORK_BYTES + 64 * 4096)
@@ -363,7 +363,7 @@ describe('A7 review round 2 (R1, R2, R3, M1)', () => {
     const workspace = createChartWorkspace('mobile', { reserve: () => false, release: () => {} })
     const chart = cardChart('reason', 'Never built')
     const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 3, bound: () => 2, collect: () => { throw new Error('never collected') } })
-    for (const page of result.pages) expect(page.charts).toEqual([expect.objectContaining({ notice: true, description: 'Chart descriptions for this page could not be kept in memory.' })])
+    for (const page of [0, 1, 2].map(i => result.page(i))) expect(page.charts).toEqual([expect.objectContaining({ notice: true, description: 'Chart descriptions for this page could not be kept in memory.' })])
     expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'chart-description-refused' })])
     expect(workspace.used).toBe(0)
     void chart
@@ -391,7 +391,7 @@ describe('A7 review round 2 (R1, R2, R3, M1)', () => {
     const { createChartWorkspace } = await import('../src/charts/workspace')
     const workspace = createChartWorkspace('mobile', { reserve: (_bytes, tag) => !tag.endsWith(':page0'), release: () => {} })
     const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 1, bound: () => 3, collect: () => [] })
-    expect(result.pages[0].total).toBe(3)
+    expect(result.page(0).total).toBe(3)
     const reason = result.diagnostics[0].reason
     expect(workspace.used).toBe(RECORD_BYTES + 64 + 2 * reason.length)
     result.release()
@@ -431,5 +431,35 @@ describe('A7 review round 2 (R1, R2, R3, M1)', () => {
     // A horizontally flipped group mirrors it about x = 200.
     expect(await build(' flipH="1"')).toEqual([200, 100, 100, 50])
     expect(await build('')).toEqual([100, 100, 100, 50])
+  })
+})
+
+describe('A7 review round 3 (R2: the result never grows uncharged)', () => {
+  it('100,000 refused or empty pages store nothing and charge nothing, yet every refused page reads its notice', async () => {
+    const { prepareChartPaintables } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    const refusing = createChartWorkspace('mobile', { reserve: () => false, release: () => {} })
+    const refused = await prepareChartPaintables({ profile: 'mobile', workspace: refusing }, { pages: 100_000, bound: page => page % 2, collect: () => { throw new Error('never collected') } })
+    expect(refused.stored).toBe(0)
+    expect(refusing.used).toBe(0)
+    expect(refused.diagnostics).toHaveLength(1)
+    expect(refused.page(99_999).charts).toEqual([expect.objectContaining({ notice: true })])
+    expect(refused.page(99_998).charts).toEqual([])
+    const open = createChartWorkspace('mobile')
+    const empty = await prepareChartPaintables({ profile: 'mobile', workspace: open }, { pages: 100_000, bound: () => 0, collect: () => [] })
+    expect(empty.stored).toBe(0)
+    expect(open.used).toBe(0)
+  })
+
+  it('stored pages are exactly the charged ones', async () => {
+    const { prepareChartPaintables, RECORD_BYTES, ENTRY_BYTES, MAP_BYTES } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    const workspace = createChartWorkspace('mobile')
+    const chart = cardChart('reason', 'Sparse')
+    const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 10_000, bound: page => page % 1000 === 0 ? 1 : 0, collect: () => [{ chart, x: 0, y: 0, width: 1, height: 1 }] })
+    expect(result.stored).toBe(10)
+    expect(workspace.used).toBe(10 * (RECORD_BYTES + ENTRY_BYTES) + 2 * 'Chart: Sparse. placeholder: reason.'.length + MAP_BYTES)
+    result.release()
+    expect(workspace.used).toBe(0)
   })
 })

@@ -80,7 +80,7 @@ async function chartMetadata(lease: ChartReceiverLease | undefined, source: Char
 }
 /** The unit's chart fields of a Paintable. */
 const chartFields = (metadata: ChartPaintables | undefined, index: number): Pick<Paintable, 'charts' | 'chartTotal'> => {
-  const page = metadata?.pages[index]
+  const page = metadata?.page(index)
   // A refused page whose record could not be charged keeps its static notice, with no total.
   return page?.charts.length ? { charts: page.charts, ...(page.total ? { chartTotal: page.total } : {}) } : {}
 }

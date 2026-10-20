@@ -44,7 +44,18 @@ export interface ChartPaintablesOptions {
   /** False: decode pictures only (no descriptions are built or retained). */
   describe?: boolean
 }
-export interface ChartPaintables { pages: PageChartMetadata[]; diagnostics: Array<ChartDiagnostic & { page: number }>; release(): void }
+/**
+ * The job's result. Only pages with a charged record are stored (sparsely, by index); an empty page and a refused
+ * page whose record could not be charged are answered from static values, so the result never grows uncharged
+ * with the page count.
+ */
+export interface ChartPaintables {
+  page(index: number): PageChartMetadata
+  /** @internal The number of stored (charged) page records. */
+  readonly stored: number
+  diagnostics: Array<ChartDiagnostic & { page: number }>
+  release(): void
+}
 
 export const CHART_DESCRIPTIONS_PER_PAGE = 64
 export const CHART_PICTURE_DEADLINE_MS = 1500
@@ -66,8 +77,8 @@ const realClock: ChartClock = {
 }
 let serial = 0
 
-/** Retained per page record (the record and its entry array). */
-export const RECORD_BYTES = 96
+/** Retained per stored page record (the record, its entry array and its slot in the result map). */
+export const RECORD_BYTES = 128
 /** Retained per described model in the shared description map. */
 export const MAP_BYTES = 48
 /** Retained per diagnostic beside its reason string. */
@@ -96,7 +107,9 @@ export async function prepareChartPaintables(context: ChartDocumentContext, sour
   const describe = options.describe !== false
   const diagnostics: ChartPaintables['diagnostics'] = []
   const described = new Map<ChartModel, string>()
-  const pages: PageChartMetadata[] = []
+  const stored = new Map<number, PageChartMetadata>()
+  /** Pages refused without a charged record: answered by the static notice (bound > 0 at lookup). */
+  let unrecordedRefusals = false
   const pending: Array<Promise<boolean>> = []
   const pendingPages: number[] = []
   /** Records a diagnostic with its retained charge, or the one shared static diagnostic when that is refused. */
@@ -107,7 +120,7 @@ export async function prepareChartPaintables(context: ChartDocumentContext, sour
   try {
     for (let page = 0; page < source.pages; page++) {
       const bound = Math.max(0, Math.floor(source.bound(page)))
-      if (!bound) { pages.push(EMPTY_PAGE); continue }
+      if (!bound) continue
       const listed = Math.min(bound, CHART_DESCRIPTIONS_PER_PAGE)
       work = `${retained}:page${page}`
       // Admission before construction: placements, one description's working set and the worst-case retention
@@ -115,11 +128,11 @@ export async function prepareChartPaintables(context: ChartDocumentContext, sour
       const ask = PAGE_BYTES + RECORD_BYTES + bound * PLACED_BYTES
         + (describe ? DESCRIPTION_WORK_BYTES + listed * (ENTRY_BYTES + MAP_BYTES + 2 * CHART_DESCRIPTION_LIMIT) + NOTICE_BYTES + DIAGNOSTIC_BYTES + 2 * 160 : 0)
       if (!workspace.reserve(ask, work)) {
-        if (!describe) { pages.push(EMPTY_PAGE); continue }
+        if (!describe) continue
         const reason = `Chart descriptions for this ${source.pages > 1 ? 'page' : 'document'} could not be kept in memory (${bound} ${bound === 1 ? 'chart' : 'charts'}).`
         // A charged record keeps the true total; otherwise the static notice still makes the omission readable.
-        if (workspace.reserve(RECORD_BYTES, retained)) pages.push({ charts: REFUSED_LIST, total: bound })
-        else pages.push(REFUSED_PAGE)
+        if (workspace.reserve(RECORD_BYTES, retained)) stored.set(page, { charts: REFUSED_LIST, total: bound })
+        else unrecordedRefusals = true
         diagnose(page, 'chart-description-refused', reason)
         continue
       }
@@ -151,9 +164,11 @@ export async function prepareChartPaintables(context: ChartDocumentContext, sour
         }
       }
       // Reconcile: keep the exact retained bytes (record, entries, strings, diagnostic), refund the transient rest.
-      workspace.transfer(work, retained, Math.min(exact, ask))
+      // A page that turned out to hold no chart stores no record.
+      if (!total) exact -= RECORD_BYTES
+      if (exact > 0) workspace.transfer(work, retained, Math.min(exact, ask))
       workspace.release(work)
-      pages.push({ charts, total })
+      if (total) stored.set(page, { charts, total })
     }
     if (pending.length) {
       const settled = pending.map(() => false)
@@ -184,5 +199,11 @@ export async function prepareChartPaintables(context: ChartDocumentContext, sour
   } finally {
     workspace.release(waiting)
   }
-  return { pages, diagnostics, release: () => workspace.release(retained) }
+  const refusedAt = (index: number) => describe && unrecordedRefusals && source.bound(index) > 0
+  return {
+    page: index => stored.get(index) ?? (refusedAt(index) ? REFUSED_PAGE : EMPTY_PAGE),
+    get stored() { return stored.size },
+    diagnostics,
+    release: () => { stored.clear(); workspace.release(retained) },
+  }
 }
