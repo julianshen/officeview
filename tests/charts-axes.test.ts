@@ -9,7 +9,9 @@ import { createCanvas } from 'canvas'
 import { parseXmlOrdered } from '../src/core/xml'
 import { axisFraction, axisGraphBound, categoryFraction, resolveAxes } from '../src/charts/axes'
 import { ChartRefusal } from '../src/charts/own'
-import { CHART_STANDALONE_PAINT_PROFILE, receivedChartContext } from '../src/charts/paint'
+import { CHART_STANDALONE_PAINT_PROFILE } from '../src/charts/paint'
+import { paintDrawingContent } from '../src/drawing/content-paint'
+import type { SheetAssetsLease } from '../src/components/xlsx/sheetAssets'
 import { documentChartContext } from '../src/charts/context'
 import { ensureChartEngine, ensureChartPainter } from '../src/xlsx/chartLoader'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -406,8 +408,8 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
     expect(chartModelOwner(clone)).toBeUndefined()
     // The receiving side (an M-profile viewer) associates the transferred models with its document context.
     const receiving = { sheets: [{ drawings: [{ content: { kind: 'xlsxChart', chart: clone } }] }] }
-    await ensureChartPainter(receiving.sheets[0].drawings as never, { owner: receiving, profile: 'mobile' })
-    const context = receivedChartContext(clone)!
+    const received = (await ensureChartPainter(receiving.sheets[0].drawings as never, { owner: receiving, profile: 'mobile' }))!
+    const context = received.context
     expect(context.profile).toBe('mobile')
     expect(context.workspace.limit).toBe(32 * 1024 * 1024)
     // The same document reuses its context; a paint charges it and refunds after.
@@ -415,7 +417,7 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
     const reserve = context.workspace.reserve.bind(context.workspace)
     context.workspace.reserve = (b, t) => { log.push(b); return reserve(b, t) }
     const ok = recorder()
-    paintXlsxChart(clone, ok.ctx, 800, 500)
+    paintXlsxChart(clone, ok.ctx, 800, 500, undefined, context)
     expect(log.length).toBe(1)
     expect(context.workspace.used).toBe(0)
     expect(ok.texts()).toContain('C1')
@@ -423,16 +425,18 @@ describe('A1a fix round 2: measured construction, receiving-document budgets, on
     context.workspace.reserve = reserve
     context.workspace.reserve(context.workspace.limit, 'pressure')
     const full = recorder()
-    paintXlsxChart(clone, full.ctx, 800, 500)
+    paintXlsxChart(clone, full.ctx, 800, 500, undefined, context)
     expect(full.texts().join(' ')).toMatch(/memory/)
     context.workspace.release('pressure')
+    received.release()
     // getPaintables-style callers pass the viewer profile; the parent ledger is honoured.
     let parentHeld = 0
     const parentContext = documentChartContext('desktop', undefined, { reserve: b => { if (parentHeld + b > 10) return false; parentHeld += b; return true }, release: (_t, b) => { parentHeld -= b } })
     const other = structuredClone(owned)
-    await ensureChartEngine([{ content: { kind: 'xlsxChart', chart: other } as never }], { owner: {}, context: parentContext })
+    const passed = (await ensureChartEngine([{ content: { kind: 'xlsxChart', chart: other } as never }], { owner: {}, context: parentContext }))!
+    expect(passed.context).toBe(parentContext)
     const refused = recorder()
-    paintXlsxChart(other, refused.ctx, 800, 500)
+    paintXlsxChart(other, refused.ctx, 800, 500, undefined, passed.context)
     expect(refused.texts().join(' ')).toMatch(/memory/)
     expect(parentHeld).toBe(0)
     // Synchronous paints with nothing received: an explicit context wins; else a bounded per-call workspace.
@@ -488,9 +492,8 @@ describe('A1a fix round 3: the interactive sheet preparation receives charts int
     const supplied = documentChartContext('mobile', undefined, parent)
     const lease = await prepareSheetAssets(doc, { chartContext: supplied, profile: 'M' })
     try {
-      expect(receivedChartContext(clone)).toBe(supplied)
-      const r = recorder()
-      paintXlsxChart(clone, r.ctx, 800, 500)
+      expect(lease.assets.chartContext).toBe(supplied)
+      const r = paintLease(clone, lease)
       expect(calls.length).toBe(1)
       expect(r.texts().join(' ')).toMatch(/memory/)
     } finally { lease.dispose() }
@@ -502,24 +505,91 @@ describe('A1a fix round 3: the interactive sheet preparation receives charts int
     const parent = mainChartParent(ledger, MAIN_THREAD_BUDGETS.M)
     const lease = await prepareSheetAssets(doc, { chartParent: parent, profile: 'M' })
     try {
-      const context = receivedChartContext(clone)!
+      const context = lease.assets.chartContext!
       expect(context.profile).toBe('mobile')
       expect(context.workspace.limit).toBe(32 * 1024 * 1024)
       // With room: the paint's charge reaches the viewer ledger, and returns after the paint.
       let peak = 0
       const set = ledger.set.bind(ledger)
       ledger.set = (pool, owner, bytes) => { if (pool === 'drawings' && owner === 'charts') peak = Math.max(peak, bytes); set(pool, owner, bytes) }
-      const ok = recorder()
-      paintXlsxChart(clone, ok.ctx, 800, 500)
+      const ok = paintLease(clone, lease)
       expect(ok.texts()).toContain('C1')
       expect(peak).toBeGreaterThan(0)
       expect(ledger.ownerBytes('drawings', 'charts')).toBe(0)
       // The viewer ledger full: the card.
       ledger.set('layout', 'pressure', MAIN_THREAD_BUDGETS.M)
-      const full = recorder()
-      paintXlsxChart(clone, full.ctx, 800, 500)
+      const full = paintLease(clone, lease)
       expect(full.texts().join(' ')).toMatch(/memory/)
       expect(ledger.ownerBytes('drawings', 'charts')).toBe(0)
     } finally { lease.dispose() }
+  })
+})
+
+/** Paints a chart through the content painter with a sheet lease's assets (the per-paint chart context). */
+function paintLease(chart: ChartModel, lease: SheetAssetsLease) {
+  const r = recorder()
+  paintDrawingContent({ kind: 'xlsxChart', chart } as never, r.ctx, 800, 500, { assets: lease.assets })
+  return r
+}
+
+describe('A1a fix round 4: receiving contexts follow the active parent and profile', () => {
+  const PLOT = bar(ser(0, [3, 7, 2])) + catAx('1', '2') + valAx('2', '1')
+  async function transferredDoc() {
+    const doc = await parseXlsx(await chartWorkbook(space(PLOT)))
+    const node = doc.sheets[0].drawings![0]
+    if (node.content?.kind !== 'xlsxChart') throw new Error('no chart')
+    const clone = structuredClone(node.content.chart)
+    node.content = { ...node.content, chart: clone }
+    return { doc, clone }
+  }
+  const counting = (admit: boolean) => {
+    const calls: number[] = []
+    let held = 0
+    return { calls, get held() { return held }, parent: { reserve: (b: number) => { calls.push(b); if (!admit) return false; held += b; return true }, release: (_t: string, b: number) => { held -= b } } }
+  }
+
+  it('prepare, dispose, prepare again with a refusing mobile parent: the card, no call to the old parent, 32 MiB', async () => {
+    const { doc, clone } = await transferredDoc()
+    const first = counting(true), second = counting(false)
+    const a = await prepareSheetAssets(doc, { chartParent: first.parent, profile: 'D' })
+    expect(paintLease(clone, a).texts()).toContain('C1')
+    expect(first.calls.length).toBe(1)
+    a.dispose()
+    const b = await prepareSheetAssets(doc, { chartParent: second.parent, profile: 'M' })
+    try {
+      expect(b.assets.chartContext).not.toBe(a.assets.chartContext)
+      expect(b.assets.chartContext!.workspace.limit).toBe(32 * 1024 * 1024)
+      expect(paintLease(clone, b).texts().join(' ')).toMatch(/memory/)
+      expect(first.calls.length).toBe(1)
+      expect(second.calls.length).toBe(1)
+    } finally { b.dispose() }
+  })
+
+  it('a parentless first preparation followed by a parented one charges the parent', async () => {
+    const { doc, clone } = await transferredDoc()
+    const a = await prepareSheetAssets(doc, { profile: 'D' })
+    const later = counting(false)
+    const b = await prepareSheetAssets(doc, { chartParent: later.parent, profile: 'D' })
+    try {
+      expect(paintLease(clone, a).texts()).toContain('C1')
+      expect(paintLease(clone, b).texts().join(' ')).toMatch(/memory/)
+      expect(later.calls.length).toBe(1)
+    } finally { a.dispose(); b.dispose() }
+  })
+
+  it('two simultaneous receivers each charge their own parent', async () => {
+    const { doc, clone } = await transferredDoc()
+    const one = counting(true), two = counting(true)
+    const a = await prepareSheetAssets(doc, { chartParent: one.parent, profile: 'D' })
+    const b = await prepareSheetAssets(doc, { chartParent: two.parent, profile: 'M' })
+    try {
+      paintLease(clone, a); paintLease(clone, b); paintLease(clone, a)
+      expect([one.calls.length, two.calls.length]).toEqual([2, 1])
+      expect([one.held, two.held]).toEqual([0, 0])
+      // The same (document, parent, profile) shares one context while either lease lives.
+      const c = await prepareSheetAssets(doc, { chartParent: one.parent, profile: 'D' })
+      expect(c.assets.chartContext).toBe(a.assets.chartContext)
+      c.dispose()
+    } finally { a.dispose(); b.dispose() }
   })
 })

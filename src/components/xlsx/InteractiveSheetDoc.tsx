@@ -421,7 +421,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, chartParent])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current

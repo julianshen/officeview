@@ -458,12 +458,12 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
   // The axis graph's construction is admitted to a chart workspace before it is built, and refunded after the
   // paint; a refusal paints the contained card before anything else is drawn. The workspace (spec 6.4):
   // 1. the model's own (a paged read's answered scope charges its document facet);
-  // 2. else the caller's chart context (the synchronous renderPages/renderSlide assets);
-  // 3. else the receiving document's context the model was associated with (`receiveCharts`);
-  // 4. else a bounded per-call workspace (CHART_STANDALONE_PAINT_PROFILE), created for this paint only.
+  // 2. else the chart context of the preparation or lease that is painting (its assets' `chartContext`, from
+  //    `acquireChartContext`, or one a synchronous renderPages/renderSlide caller passes);
+  // 3. else a bounded per-call workspace (CHART_STANDALONE_PAINT_PROFILE), created for this paint only.
   const owner = chartModelOwner(source)
   const ownerWorkspace = owner && ((owner.workspace as { facet?: ChartWorkspace }).facet ?? owner.workspace)
-  const workspace = ownerWorkspace ?? chartContext?.workspace ?? received.get(source)?.workspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
+  const workspace = ownerWorkspace ?? chartContext?.workspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
   const admission = { workspace, tag: `${owner?.tag ?? `chart-paint#${++paints}`}:paint` }
   let graph: AxisGraph | undefined
   try {
@@ -502,33 +502,43 @@ let paints = 0
  * The profile of the bounded per-call workspace a synchronous paint uses when the model has no owner, no chart
  * context is passed and no receiving document was associated (a headless `renderPages`/`renderSlide` of a
  * transferred model): a fresh 32 MiB (mobile-limit) chart workspace per call, released with the paint.
+ * (The receiving preparation's context, when there is one, is passed per paint instead.)
  */
 export const CHART_STANDALONE_PAINT_PROFILE: ChartProfile = 'mobile'
-/** Transferred (unowned) models associated with the receiving document's chart context. */
-const received = new WeakMap<ChartModel, ChartDocumentContext>()
-const documents = new WeakMap<object, ChartDocumentContext>()
-type ChartCarrier = { content?: { kind: string; chart?: ChartModel }; children?: readonly ChartCarrier[] }
-/** What the receiving side knows: its document (the key of its one chart context), the viewer profile, or a context it already holds. */
+/** What the receiving side knows: its document, the viewer profile, its live parent budget, or a context it already holds. */
 export interface ChartReceiver { owner: object; profile?: ChartProfile; context?: ChartDocumentContext; parent?: ChartParentLedger }
+/** A receiving context held by one preparation or asset lease; `release` ends the hold (idempotent). */
+export interface ChartReceiverLease { context: ChartDocumentContext; release(): void }
+interface Held { context: ChartDocumentContext; refs: number }
+/** Receiving contexts per document, then per parent ledger (null: none), then per profile. */
+const documents = new WeakMap<object, Map<ChartParentLedger | null, Map<ChartProfile, Held>>>()
 /**
- * The receiving side of a transfer (spec 6.4): every unowned chart model of `contents` is associated with the
- * receiving document's chart context, created once per document from the viewer profile (mobile: 32 MiB) and the
- * receiver's live parent budget unless the caller passes a context, so its paints are charged to that document's chart facet and parent.
+ * The receiving side of a transfer (spec 6.4): the chart context a preparation (or asset lease) paints its
+ * transferred models with, carried per paint (`ContentPaintAssets.chartContext`). A supplied context is used as is.
+ * Otherwise there is one context per (document, parent ledger, profile): profile-sized (mobile: 32 MiB) and parented
+ * to that live budget, shared by the leases that hold it and dropped when the last one is released. A later parent
+ * or profile never reuses an earlier receiver's context, and simultaneous receivers keep their own.
  */
-export function receiveCharts(contents: readonly ChartCarrier[], receiver: ChartReceiver): ChartDocumentContext {
-  let context = documents.get(receiver.owner)
-  if (receiver.context && context !== receiver.context) documents.set(receiver.owner, context = receiver.context)
-  // Created once per receiving document: profile-sized, and parented to the receiver's live budget when it has one.
-  if (!context) documents.set(receiver.owner, context = documentChartContext(receiver.profile ?? 'desktop', undefined, receiver.parent))
-  const walk = (nodes: readonly ChartCarrier[]) => {
-    for (const node of nodes) {
-      const chart = node.content?.kind === 'xlsxChart' ? node.content.chart : undefined
-      if (chart && !chartModelOwner(chart)) received.set(chart, context!)
-      if (node.children) walk(node.children)
-    }
+export function acquireChartContext(receiver: ChartReceiver): ChartReceiverLease {
+  if (receiver.context) return { context: receiver.context, release: () => {} }
+  const profile = receiver.profile ?? 'desktop', parent = receiver.parent ?? null
+  let byParent = documents.get(receiver.owner)
+  if (!byParent) documents.set(receiver.owner, byParent = new Map())
+  let byProfile = byParent.get(parent)
+  if (!byProfile) byParent.set(parent, byProfile = new Map())
+  let held = byProfile.get(profile)
+  if (!held) byProfile.set(profile, held = { context: documentChartContext(profile, undefined, receiver.parent), refs: 0 })
+  held.refs++
+  const entry = held
+  let released = false
+  return {
+    context: entry.context,
+    release: () => {
+      if (released) return
+      released = true
+      if (--entry.refs > 0) return
+      byProfile!.delete(profile)
+      if (!byProfile!.size) byParent!.delete(parent)
+    },
   }
-  walk(contents)
-  return context
 }
-/** The receiving document's chart context a transferred model was associated with. */
-export const receivedChartContext = (model: ChartModel): ChartDocumentContext | undefined => received.get(model)

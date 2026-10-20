@@ -21,15 +21,16 @@ export function hasXlsxCharts(drawings: readonly ChartCarrier[] | undefined): bo
   return false
 }
 
-/** The receiving document (spec 6.4): its transferred chart models are charged to its chart context. */
+/** The receiving document (spec 6.4) and the context lease its paints carry. */
 export type ChartReceiver = import('../charts/paint').ChartReceiver
+export type ChartReceiverLease = import('../charts/paint').ChartReceiverLease
 /** Preparation before paint (spec 6.5): a load failure is swallowed, so pages still return, with cards. With a
- * receiver, the document's transferred chart models are associated with its chart context. */
-export const ensureChartEngine = (contents: readonly ChartCarrier[], receiver?: ChartReceiver): Promise<unknown> =>
-  hasXlsxCharts(contents) ? loadChartModule().then(charts => { if (receiver) charts.receiveCharts(contents as never, receiver) }).catch(() => {}) : Promise.resolve()
-/** Make the chart painter available before a sheet with charts is painted (and receive its transferred models). */
-export async function ensureChartPainter(drawings: readonly XlsxDrawing[] | undefined, receiver?: ChartReceiver): Promise<void> {
-  if (!hasXlsxCharts(drawings)) return
+ * receiver, the receiving chart context this preparation's paints carry (release it with the preparation). */
+export const ensureChartEngine = (contents: readonly ChartCarrier[], receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> =>
+  hasXlsxCharts(contents) ? loadChartModule().then(charts => receiver ? charts.acquireChartContext(receiver) : undefined).catch(() => undefined) : Promise.resolve(undefined)
+/** Make the chart painter available before a sheet with charts is painted (and acquire its receiving context). */
+export async function ensureChartPainter(drawings: readonly XlsxDrawing[] | undefined, receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> {
+  if (!hasXlsxCharts(drawings)) return undefined
   const charts = await loadChartModule()
-  if (receiver) charts.receiveCharts(drawings as never, receiver)
+  return receiver ? charts.acquireChartContext(receiver) : undefined
 }

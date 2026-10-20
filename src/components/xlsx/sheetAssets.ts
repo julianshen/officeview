@@ -18,7 +18,7 @@
 import type { XlsxDocument, XlsxDrawing } from '../../xlsx/types'
 import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
-import { ensureChartPainter } from '../../xlsx/chartLoader'
+import { ensureChartPainter, type ChartReceiverLease } from '../../xlsx/chartLoader'
 import { acquireFonts } from '../../core/fonts/register'
 import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
@@ -223,7 +223,9 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
   const cache = options.imageCache ?? new SheetImageCache(imageBudgetFor(profile))
   return acquireFonts(doc, options.registerFont).then(async lease => {
     const held: ImageCandidates[] = []
-    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset) }
+    // This lease's receiving chart context (per document, parent and profile), carried by its assets, released with it.
+    let charts: ChartReceiverLease | undefined
+    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset); charts?.release() }
     try {
       const sheet = doc.sheets[options.sheetIndex ?? 0]
       const indexed = doc.images ?? []
@@ -232,7 +234,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       const cached = collectCachedPictures(drawings)
       // The receiving document's chart budget for transferred models (spec 6.4): a supplied context as is; else one
       // per viewer document, sized by the viewer profile and parented to the viewer's live ledger (chartParent).
-      await ensureChartPainter(drawings, chartReceiver(options.chartOwner ?? doc, { chartProfile: profile === 'M' ? 'mobile' : 'desktop', ...options }))
+      charts = await ensureChartPainter(drawings, chartReceiver(options.chartOwner ?? doc, { chartProfile: profile === 'M' ? 'mobile' : 'desktop', ...options }))
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {
@@ -249,7 +251,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       await Promise.all(cached.map(async image => { byObject.set(image, await take(image)) }))
       let released = false
       return {
-        assets: { images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts) },
+        assets: { images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) },
         fontDiagnostics: lease.diagnostics,
         decodedBytes,
         imageBudgetBytes: cache.limitBytes,
