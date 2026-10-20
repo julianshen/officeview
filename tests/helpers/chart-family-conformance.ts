@@ -23,7 +23,7 @@ import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
 import { PointWriter } from '../../src/charts/points'
-import type { ChartDiagnostic, ChartModel, ChartPoints } from '../../src/charts/model'
+import type { ChartDiagnostic, ChartModel, ChartPoints, ChartResult } from '../../src/charts/model'
 
 export const CONFORMANCE_NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
 
@@ -52,6 +52,12 @@ export interface ConformanceFamily {
   chart(cache: string | null): string
   /** Per case, the representation the family must give (default: either) and diagnostic codes it must emit. */
   expect?: Partial<Record<ConformanceCase, { kind?: 'native' | 'card'; diagnostics?: string[] }>>
+  /**
+   * The adapter call for this family's part (default: `parseChartPart` on the parsed tree). A family whose parts
+   * reach the adapter through another production path (ChartEx: the bounded `readChartPart`) supplies it; the
+   * `unavailable point` case then marks the single-point model this returns.
+   */
+  parse?(xml: string, partPath: string): Promise<ChartResult>
 }
 
 export interface ConformanceRun { kind: 'native' | 'card'; reason?: string; diagnostics: ChartDiagnostic[]; card: boolean }
@@ -84,6 +90,12 @@ function withUnavailable(model: ChartModel): ChartModel {
 
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
+  if (name === 'unavailable point' && family.parse) {
+    const result = await family.parse(family.chart(CONFORMANCE_CASES['single point']), partPath)
+    if (result.kind !== 'native') return { kind: 'card', reason: result.reason, diagnostics: [], card: paint(placeholderChart(result.title, result.reason)).card }
+    const model = prepareChartAxes(withUnavailable(result.model))
+    return { kind: 'native', diagnostics: collect(model), card: paint(model).card }
+  }
   if (name === 'unavailable point') {
     const parsed = parseXlsxChart(parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point'])), undefined)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
@@ -93,7 +105,8 @@ export async function runConformanceCase(family: ConformanceFamily, name: Confor
   }
   const doc = documentChartContext('desktop')
   const context = chartParseContext(doc, await pkg(), partPath)
-  const result = await parseChartPart(parseXmlOrdered(family.chart(CONFORMANCE_CASES[name])), undefined, context)
+  const xml = family.chart(CONFORMANCE_CASES[name])
+  const result = family.parse ? await family.parse(xml, partPath) : await parseChartPart(parseXmlOrdered(xml), undefined, context)
   if (result.kind === 'native') {
     const painted = paint(result.model)
     return { kind: 'native', diagnostics: collect(result.model), card: painted.card }

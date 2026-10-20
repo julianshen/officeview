@@ -14,7 +14,7 @@
  *   - `plotVisOnly=0` draws everything. Saved data without a worksheet
  *     reference has no provenance and is drawn as saved.
  */
-import type { ChartModel, ChartPoints, ChartSeries, ChartPoint } from './model'
+import type { ChartExGroup, ChartModel, ChartPoints, ChartSeries, ChartPoint } from './model'
 import { CHART_POINT_LIMIT } from './parse'
 import { hiddenAt, valueAt, pointAt } from './points'
 
@@ -51,8 +51,22 @@ const allHidden = (points: ChartPoints) => points.length > 0 && (points.hidden?.
 
 /** Category slots a trendline forecast adds before and after the data (A6a, spec 5.6); absent: none. */
 export interface DisplayForecast { lead: number; trail: number }
+/**
+ * Waterfall and funnel (B2) label their slots with the model's categories; a ChartEx category role filled per series
+ * (XLSX `_xlchart` names) leaves those empty, so the first visible series' categories are used, else the 1-based
+ * ordinals (chartex-map §2.3 [P]). Undefined for every other chart. Callers price the labels (`displayLabelBytes`).
+ */
+export function displayFamilyCategories(model: ChartModel): readonly string[] | 'ordinal' | undefined {
+  const group = model.groups[0]
+  if (model.categories.length || !group || group.kind !== 'chartEx' || (group.family !== 'waterfall' && group.family !== 'funnel')) return undefined
+  const infos = (group as ChartExGroup).chartEx.series
+  return group.series.find((s, i) => !infos[i]?.hidden && s.categories?.length)?.categories ?? 'ordinal'
+}
+/** The bound of `slots` display-family label strings (ordinals of at most 4 digits) and their slots. */
+export const displayLabelBytes = (slots: number): number => slots * 64
 export function displayView(model: ChartModel, forecast: DisplayForecast | undefined = model.preparedAxes?.forecast): DisplayView {
   const visibleOnly = model.plotVisOnly !== false
+  const extra = displayFamilyCategories(model)
   const lead = forecast?.lead ?? 0
   let extent = model.categories.length
   for (const group of model.groups) for (const s of group.series) extent = Math.max(extent, s.values.length)
@@ -82,7 +96,7 @@ export function displayView(model: ChartModel, forecast: DisplayForecast | undef
   return {
     slots,
     source,
-    category: slot => { const i = source(slot); return i >= 0 && i < extent ? model.categories[i] : undefined },
+    category: slot => { const i = source(slot); return i >= 0 && i < extent ? model.categories[i] ?? (extra === 'ordinal' ? String(i + 1) : extra?.[i]) : undefined },
     series: byGroup.flat(),
     groupSeries: group => byGroup[group] ?? [],
   }

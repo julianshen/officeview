@@ -89,7 +89,7 @@ export function readLabels(n: XmlNode | undefined, charge: (b: number) => void):
   }
   return out
 }
-export const labelDefault = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' ? 'bestFit' : g.grouping === 'stacked' || g.grouping === 'percentStacked' || g.family === 'area' ? 'ctr' : g.family === 'bar' ? 'outEnd' : 'r'
+export const labelDefault = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut' ? 'bestFit' : g.grouping === 'stacked' || g.grouping === 'percentStacked' || g.family === 'area' || g.family === 'funnel' ? 'ctr' : g.family === 'bar' || g.family === 'waterfall' ? 'outEnd' : 'r'
 const controls = (g: ChartGroup, s: ChartSeries, i: number): LabelOptions => ({ ...g.labels, ...s.labels, ...g.labels?.points?.[i], ...s.labels?.points?.[i] })
 const percentFamily = (g: ChartGroup) => g.family === 'pie' || g.family === 'doughnut'
 // The range source is an independent content switch (Excel writes ordinary

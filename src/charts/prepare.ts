@@ -1,6 +1,6 @@
 /** Size-independent stage 1. Data-only axis snapshots survive structuredClone; closures live in stage 2. */
 import { resolveAxes, type AxisGraph, type ResolvedAxis } from './axes'
-import { displayView, type DisplayForecast, type DisplayView } from './display'
+import { displayView, displayFamilyCategories, displayLabelBytes, type DisplayForecast, type DisplayView } from './display'
 const NO_FORECAST: DisplayForecast = { lead: 0, trail: 0 }
 import { dateUnitIndex } from './dates'
 import { prepareDataLabels, labelPreparationBound, labelBytes, type PreparedLabel } from './labels'
@@ -54,7 +54,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     return n + 2048 + ticks * 640 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
   }, 0)
   let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
-    + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0)
+    + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0) + (displayFamilyCategories(model) ? model.axes.length * displayLabelBytes(slots) : 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
     // Trendlines first (A6a, spec 5.6): their forecast adds category slots and their extent joins the automatic scales.
@@ -75,7 +75,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
       const code = axisFormat(a.axis,inputs) ?? (a.percent ? '0%' : a.role==='date' ? a.dateBase==='years'?'yyyy':a.dateBase==='months'?'mmm yyyy':'m/d/yyyy' : undefined)
       const { labelValue, plottable: _plottable, ...data } = a
-      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
+      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, (displayFamilyCategories(model) ? view.slots : model.categories.length) + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
     const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)

@@ -34,6 +34,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After A1a fix round 2 | A1a r2 commit | 38,636 | Streamed line/area/scatter construction, receiving-document chart contexts (`receiveCharts`, `PaintOptions.chartContext`/`chartProfile`, `ContentPaintAssets.chartContext`) and the finite-scale fallback: lazy `charts-*`, `office-worker` and `InteractiveSheetDoc` chunks. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes. Running total vs B0: +5 B |
 | After A1a fix round 3 | A1a r3 commit | 38,639 | The interactive sheet preparation forwards the chart context and parents the receiving chart facet to the viewer's main-thread ledger (`mainChartParent`): `InteractiveSheetDoc`, `office-worker` and `charts-*` chunks only. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes (hash churn only). Running total vs B0: +8 B |
 | After A1a fix round 4 | A1a r4 commit | 38,637 | Receiving chart contexts per (document, parent, profile), held by preparation/asset leases and carried per paint (`acquireChartContext`, `ContentPaintAssets.chartContext`): `charts-*`, `office-worker` and `InteractiveSheetDoc` chunks only. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes. Running total vs B0: +6 B |
+| After B2 | B2 commit | 38,636 | Before (`7c67e33` tree plus B2's type-only `chartEx.palette` field, rebuilt): 38,640. Waterfall and funnel families (`src/charts/chartex/waterfall.ts`, `funnel.ts`) and their hooks in axes, display, prepare, layout, labels and paint live in the lazy `charts-*` chunk; `dist/index.js` changes by hash churn only. Bytes added by B2: −4 (hash churn). Running total vs B0: +5 B. Ceiling 38,647 |
 
 ## Spec §8 testing and validation
 
@@ -194,3 +195,37 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
+
+## B2 waterfall and funnel (ChartEx display families)
+
+Waterfall and funnel are painted natively (`CHARTEX_PAINTED`). They are display families: at most 4,096 points are
+drawn, and the model is capped and marked `truncated` at parse (cache) or fill (reference). This was already
+implemented and tested in B1 (`charts-chartex-review.test.ts` I1).
+
+Native evidence: WF1, WF2 and FN1 (Excel) and FN2 (PowerPoint) render natively end to end. The `mc:Choice` is
+selected, and FN2's coverage is `native` / `chart`. The subtotal, override, connector-off and several-series cases
+use Office-shaped synthetic parts, which are not Office evidence.
+
+Rules implemented from the map but **unverified** against Office output:
+
+- **Subtotal height** (map §6, §12.3): a subtotal bar is drawn from 0 to the running total `acc`, not to the
+  point's own cell value. The accumulator continues from it. No native part lists a `subtotals/idx`. The data label
+  of a subtotal still shows the point's own value.
+- **Absent `connectorLines`** defaults to on (map §4.1). WF1 omits it and draws 11 connectors.
+- **Connector geometry and style:** a horizontal line at the level after bar *i*, from its far edge to the near edge
+  of bar *i+1*. It is drawn only between two adjacent drawn bars, as a thin grey line (`#7F7F7F`, 0.75 pt).
+- **Kind colours:** increase, decrease and total use style palette entries 0, 1 and 2 (accents 1-3), resolved at
+  parse. The legend shows Increase, Decrease and Total. A `dataPt` fill or colour overrides one bar. A series-level
+  `spPr` fill is not applied to the bars.
+- **Waterfall point states** (map §2.4 [P]): blank, error, unavailable and hidden points draw no bar and contribute 0.
+  An error is diagnosed (`chart-waterfall-error-point`); an unavailable point raises `chart-point-unavailable`.
+- **Ordinal category labels** (map §2.3 [P]): a waterfall or funnel with no category dimension is labelled 1..n. A
+  category role filled per series (XLSX `_xlchart` names) is used for the labels.
+- **Funnel geometry** (map §9 [U]): bars run top to bottom in source order. Each bar is centred, its width is
+  value / max of the plot width, and its thickness is band / (1 + gapWidth). Values of zero or below draw a
+  zero-width bar but keep their label. Category labels are drawn right-aligned to the left of the plot.
+- **Funnel label positions:** `ctr` (the default) is the bar centre. `inEnd`, `inBase` and `outEnd` are placed at
+  the bar ends, and `t`, `b`, `l` and `r` are offset 8 px. The waterfall default is `outEnd`.
+- **Several visible series** are unsupported, and the fallback picture is kept. The map states this for funnel;
+  for waterfall it is a [P] extension. Hidden series are never drawn and are left out of the funnel legend.
+

@@ -18,6 +18,9 @@ import { formatNumber } from '../xlsx/chartDescription'
 import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
 import { radarTexts } from './families/radar'
 import { trendlineLegendEntries } from './trendlines'
+import { WATERFALL_LEGEND, waterfallColor, waterfallPaintBytes, WATERFALL_KINDS } from './chartex/waterfall'
+import { FUNNEL_TEXTS, funnelSeries, funnelTexts } from './chartex/funnel'
+import type { ChartExGroup } from './model'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -78,6 +81,10 @@ export function legendEntries(model: ChartModel, view: DisplayView, graph?: Axis
     if (!value) return []
     return contourLegendEntries(group, contourEdges(value), model.preparedAxes?.axes.find(p => p.id === value.id)?.labels ?? axisTexts(value, graph, view), edge => formatNumber(value.labelValue(edge), value.percent), limit, truncated)
   }
+  // Waterfall (B2): the increase, decrease and total kinds in their colours (map §6 [U]).
+  if (group?.kind === 'chartEx' && group.family === 'waterfall') return WATERFALL_LEGEND.map((name, k) => ({ name, color: waterfallColor(group as ChartExGroup, WATERFALL_KINDS[k]) }))
+  // Funnel (B2): the drawn (visible) series only.
+  if (group?.kind === 'chartEx' && group.family === 'funnel') { const s = funnelSeries(group as ChartExGroup, view)?.series; return s ? [{ name: s.name, color: s.color }] : [] }
   if (group?.family === 'pie' || group?.family === 'doughnut') {
     const s = view.groupSeries(0)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
@@ -182,6 +189,8 @@ export function layoutBound(model: ChartModel, w = Infinity, h = Infinity): numb
   // Contour legend entries: one per band the legend can show (at most the tick bound), each with its bounded name,
   // a transient endpoint cut and its measured width, plus a possible truncation diagnostic.
   if (model.groups[0]?.family === 'contour') text += Math.min(legendBands(model), legendCapacity(model, w, h)) * CONTOUR_LEGEND_ENTRY_BYTES + 512
+  // Waterfall legend entries (B2): three fixed kind names and their widths.
+  if (model.groups[0]?.family === 'waterfall') text += WATERFALL_LEGEND.reduce((n, name) => n + 64 + 2 * name.length + 128, 0)
   // Trendline legend entries (A6a): a generated or authored name (at most 255 + the series name's units) and its width.
   for (const group of model.groups) for (const s of group.series) text += (s.trendlines?.length ?? 0) * (2 * (264 + s.name.length) + 128)
   // The retained diagnostics (stage 1's and up to three layout ones) are priced as retainedBytes prices them.
@@ -238,7 +247,8 @@ function retainedBytes(layout: Omit<ChartLayout, 'width' | 'retainedBytes'>, wid
   for (const labels of layout.labels.values()) bytes += 128 + labels.length * 192
   // Legend entries: a contour's names and a trendline's generated name (A6a) are their own strings; other families'
   // reuse the model's (records only).
-  const ownNames = layout.graph.groups[0]?.group.family === 'contour'
+  // The waterfall's three kind names are not model strings either.
+  const ownNames = layout.graph.groups[0]?.group.family === 'contour' || layout.graph.groups[0]?.group.family === 'waterfall'
   for (const entry of layout.legendEntries) bytes += 64 + (ownNames || entry.line ? stringBytes(entry.name) : 0)
   for (const [font, strings] of widths) {
     bytes += 96 + font.length * 2
@@ -323,6 +333,15 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
       const a = graph.axes.get(id), px = (a?.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72
       for (const s of strings) width(s, chartFont(px, family))
     }
+    // Funnel (B2): its category labels sit left of the bars (it has no placed axis): measured here, in their band.
+    const funnelLabels = funnelTexts(model, view)
+    if (funnelLabels?.length) {
+      texts.set(FUNNEL_TEXTS, funnelLabels)
+      const axis = model.axes.find(a => a.kind === 'category'), px = (axis?.text?.sizePt ?? model.fontSizePt) * 96 / 72
+      let widest = 0
+      for (const s of funnelLabels) widest = Math.max(widest, width(s, chartFont(px, family)))
+      if (widest > 0) bands.l.push(Math.min(area.w * .35, widest + 12))
+    }
     const inset = (box: Box): Box => {
       let x = box.x, width = box.w, height = box.h, y = box.y + 4
       for (const b of bands.l) { x += b; width -= b }; width -= 8
@@ -372,4 +391,4 @@ function legendBands(model: ChartModel): number {
  * extents, A4a); a contour group its band grid (`contourPaintBytes`, the dimensions the painter uses) and its band
  * edges. The legend entries are the layout's (retained there), never rebuilt by the paint.
  */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.trendlines?.length ?? 0) * 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0), 0) + view.series.length * 256
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.trendlines?.length ?? 0) * 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48) + (group.family === 'contour' ? contourPaintBytes(model, group) + 64 + (legendBands(model) + 1) * 8 : 0) + (group.family === 'waterfall' ? waterfallPaintBytes(view.slots) : 0), 0) + view.series.length * 256
