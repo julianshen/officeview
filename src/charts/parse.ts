@@ -6,7 +6,7 @@
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
-import type { ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import type { ChartDiagnostic, ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 import { admitChartModel } from './axisBinding'
@@ -17,6 +17,8 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { readCategoryLevels } from './categories'
+import { CHART_TITLE_LINE_LIMIT, CHART_TITLE_RUN_LIMIT, CHART_TITLE_TEXT_LIMIT, CHART_TITLE_TRUNCATED, runsText, titleRuns } from './titles'
 import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
 import { readErrorBars } from './errorBars'
 import { contourGridDiagnostic, contourGridOf } from './families/contour'
@@ -24,15 +26,9 @@ import { readBubbleOptions } from './families/bubble'
 import { readRadarStyle } from './families/radar'
 import { readStockOptions } from './families/stock'
 
-/** Bounds: series per chart, points per series drawn (display, spec 7). */
-export const CHART_SERIES_LIMIT = 64
-export const CHART_POINT_LIMIT = 4096
-/** Points per series acquired for an analytic element (trendline, stdDev/stdErr error bars; spec 7). */
-export const CHART_ANALYTIC_POINT_LIMIT = 65536
-/** Characters kept per chart label (category, series name); longer labels are cut and the chart marked truncated. */
-export const CHART_LABEL_LIMIT = 255
-/** Hard cap on one fill's label storage (UTF-16 bytes). */
-export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
+/** Bounds: series per chart, points per series drawn (display, spec 7). Re-exported from the leaf limits module. */
+import { CHART_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_SERIES_LIMIT, CHART_ANALYTIC_POINT_LIMIT } from './limits'
+export { CHART_SERIES_LIMIT, CHART_POINT_LIMIT, CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_TEXT_BYTES_LIMIT } from './limits'
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 
@@ -57,16 +53,44 @@ const finite = (raw: string | undefined): number | undefined => raw !== undefine
 
 const GROUPS: Record<string, ChartFamily> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
-  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
+  pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', ofPieChart: 'ofPie', scatterChart: 'scatter',
   bubbleChart: 'bubble', radarChart: 'radar', surfaceChart: 'contour', stockChart: 'stock',
 }
-/** Chart types the engine does not draw, with the card's reason (spec 4.1; surface3D: the spec's card text). */
+const OF_PIE_TYPES = ['pie', 'bar'] as const
+const OF_PIE_SPLIT_TYPES = ['auto', 'cust', 'percent', 'pos', 'val'] as const
+/** Chart types the engine does not draw, with the card's reason (spec 4.1; surface3D: the spec's card text). ofPie now draws natively. */
 const UNSUPPORTED: Record<string, string> = {
-  surface3DChart: '3-D surface charts are shown as a placeholder', ofPieChart: 'Pie-of-pie chart is not supported',
+  surface3DChart: '3-D surface charts are shown as a placeholder',
+}
+
+/** ofPie group options (spec 4.1): the secondary plot's shape, the split decision and its size. */
+function ofPieOptions(node: XmlNode, charge: (b: number) => void): Partial<ChartGroup> {
+  // The authored secondPiePt set (source indices): identity-bound one entry each and bounded by the
+  // point limit, as Office applies them to split-like decisions; each surviving index is one charge,
+  // the same per-entry rule the dPt loop below follows.
+  const secondPiePt: number[] = []
+  const seen = new Set<number>()
+  for (const pt of getChildren(child(node, 'custSplit'), 'secondPiePt')) {
+    const idx = finite(attrs(pt).idx)
+    if (idx === undefined || !Number.isInteger(idx) || idx < 0 || idx >= CHART_POINT_LIMIT) continue
+    if (seen.has(idx)) continue
+    seen.add(idx)
+    secondPiePt.push(idx)
+    chargeChartPoint(charge)
+  }
+  const secondPieSize = finite(val(child(node, 'secondPieSize')))
+  return {
+    ofPieType: oneOf(val(child(node, 'ofPieType')), OF_PIE_TYPES),
+    splitType: oneOf(val(child(node, 'splitType')), OF_PIE_SPLIT_TYPES),
+    splitPos: finite(val(child(node, 'splitPos'))),
+    ...(secondPieSize !== undefined ? { secondPieSize: Math.max(5, Math.min(200, secondPieSize)) } : {}),
+    ...(secondPiePt.length ? { secondPiePt } : {}),
+  }
 }
 
 const hex = hexColor
-function solid(spPr: XmlNode | undefined, theme: ThemeContext | undefined, line = false): string | undefined | null {
+/** The explicit solid colour of an `spPr` fill (or its `a:ln` when `line`): `null` for noFill. */
+export function solid(spPr: XmlNode | undefined, theme: ThemeContext | undefined, line = false): string | undefined | null {
   const holder = line ? child(spPr, 'ln') : spPr
   if (!holder) return undefined
   if (child(holder, 'noFill')) return null
@@ -100,6 +124,9 @@ function capLabel(text: string, cut: { truncated: boolean }): string {
 /** Saved data of a role: its cache (numRef/strRef/multiLvlStrRef) or literal. */
 const cacheOf = (node: XmlNode | undefined) => child(child(node, 'numRef'), 'numCache') ?? child(child(node, 'strRef'), 'strCache')
   ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl') ?? child(node, 'numLit') ?? child(node, 'strLit')
+/** The declared point count of a saved source; a multi-level cache declares it once, on the cache (spec 5.9). */
+const declaredCount = (node: XmlNode | undefined, cache: XmlNode | undefined) =>
+  finite(val(child(cache, 'ptCount') ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'ptCount')))
 /**
  * The saved points of a data source by `pt@idx`, sparse indices kept: a missing
  * index (or ptCount padding) is `missing` at its position, never compacted.
@@ -108,7 +135,7 @@ const cacheOf = (node: XmlNode | undefined) => child(child(node, 'numRef'), 'num
 function cachePoints<T>(node: XmlNode | undefined, read: (pt: XmlNode) => T, missing: T, cut?: { truncated: boolean }, limit = CHART_POINT_LIMIT): T[] {
   const cache = cacheOf(node)
   const out: T[] = []
-  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  const declared = declaredCount(node, cache) ?? 0
   if (cut && declared > limit) cut.truncated = true
   const count = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0))
   for (const pt of getChildren(cache, 'pt')) {
@@ -145,7 +172,7 @@ function labelBytes(node: XmlNode | undefined): number {
  * padding included), whether a declared count or an index exceeds `limit`, and whether points carry formats. */
 function cacheExtent(node: XmlNode | undefined, limit: number): { length: number; over: boolean; formats: boolean } {
   const cache = cacheOf(node)
-  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  const declared = declaredCount(node, cache) ?? 0
   let length = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0)), over = declared > limit, formats = Boolean(textOf(child(cache, 'formatCode')))
   for (const pt of getChildren(cache, 'pt')) {
     const index = finite(attrs(pt).idx)
@@ -229,7 +256,8 @@ function dispUnitsOf(node: XmlNode | undefined): ChartAxis['dispUnits'] {
   const label = lbl ? richText(child(lbl, 'tx')) || unit : undefined
   return { divisor, unit, ...(label ? { label: label.slice(0, CHART_LABEL_LIMIT) } : {}) }
 }
-function textStyle(node: XmlNode | undefined): ChartTextStyle | undefined {
+/** Placement text properties of a DrawingML `txPr` (size, rotation, vertical). */
+export function textStyle(node: XmlNode | undefined): ChartTextStyle | undefined {
   if (!node) return undefined
   const body = attrs(child(node, 'bodyPr'))
   const size = finite(attrs(child(child(child(node, 'p'), 'pPr'), 'defRPr')).sz)
@@ -280,6 +308,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
     auto: child(node, 'auto') ? flag(child(node, 'auto'), true) : undefined,
     minorGridlines: child(node, 'minorGridlines') ? true : undefined,
     sourceLinked: numFmt.sourceLinked !== undefined ? numFmt.sourceLinked === '1' || numFmt.sourceLinked === 'true' : undefined,
+    noMultiLvlLbl: kind === 'category' && child(node, 'noMultiLvlLbl') && flag(child(node, 'noMultiLvlLbl'), true) ? true as const : undefined,
   }
   const present = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<ChartAxis>
   return {
@@ -312,7 +341,7 @@ const verticalPosition = (axis: ChartAxis | undefined) => axis?.position === 'l'
  * (never written by Office), binds the plot area's first axes of the right kinds, implied when there are none.
  */
 function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): ChartAxisBinding {
-  if (family === 'pie' || family === 'doughnut') return { kind: 'none' }
+  if (family === 'pie' || family === 'doughnut' || family === 'ofPie') return { kind: 'none' }
   const ids = getChildren(node, 'axId').map(val).filter((id): id is string => id !== undefined)
   const axisOf = (id: string) => axes.find(axis => axis.id === id)
   const xy = family === 'scatter' || family === 'bubble'
@@ -447,6 +476,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const authoredSeries: number[] = []
   const cut = { truncated: false }
   let sharedCategoryNode: XmlNode | undefined
+  let categoryLevels: ChartModel['categoryLevels'], categoryMultiLevel = false
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
@@ -466,7 +496,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
     const radarStyle = type === 'radar' ? readRadarStyle(node) : undefined
     const xy = type === 'scatter' || type === 'bubble'
-    const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
+    const vary = type === 'pie' || type === 'doughnut' || type === 'ofPie' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
     const groupSmooth = readSmooth(child(node, 'smooth')) ?? (type === 'scatter' && /smooth/i.test(scatterStyle) ? true : undefined)
     const stockOpts = type === 'stock' ? readStockOptions(node, theme, charge) : undefined
     // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
@@ -476,7 +506,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       return lineOf(child(holder, 'spPr')) ?? (chargeChartLine(charge), { noFill: false })
     }
     const dropLines = type === 'line' || type === 'area' ? connector('dropLines') : undefined
-    const serLines = type === 'bar' ? connector('serLines') : undefined
+    const serLines = type === 'bar' || type === 'ofPie' ? connector('serLines') : undefined
     const series: ChartSeries[] = []
     const binding = bindingOf(type, node, axes)
     // A date axis reads its categories' saved numbers (serials in the chart epoch; spec 5.1).
@@ -555,9 +585,11 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         if (hasCache(catNode)) {
           sharedCategoryNode = catNode
           charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode)
+          // Outer levels of a multi-level cache (spec 5.9), charged before they are kept.
+          categoryLevels = readCategoryLevels(catNode, categories.length, charge, cut, CHART_LABEL_LIMIT)
           if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
         }
-        else { const range = rangeOf(catNode); if (range) categoryPending = range }
+        else { const range = rangeOf(catNode); if (range) { categoryPending = range; if (child(catNode, 'multiLvlStrRef')) categoryMultiLevel = true } }
       }
       // Display points past the bound are dropped at draw time (analytic series keep them for analysis).
       if (values.length > CHART_POINT_LIMIT || (xValues && xValues.length > CHART_POINT_LIMIT)) truncated = true
@@ -567,6 +599,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       // varyColors: each point takes the automatic colour of its index, by the same precedence as series.
       const pointCount = Math.max(Math.min(values.length, CHART_POINT_LIMIT), 1)
       if (vary) for (let i = 0; i < pointCount && i < 256; i++) pointColors[i] = resolveSeriesColor({ index: i, count: Math.min(pointCount, 256), styleId, parts, theme })
+      // The ofPie series' synthetic Other slice is the point `n` (index n = the point count): it takes
+      // the automatic colour of its index like any point.
+      if (type === 'ofPie' && vary && pointCount < 256) pointColors[pointCount] = resolveSeriesColor({ index: pointCount, count: pointCount, styleId, parts, theme })
       for (const dPt of getChildren(ser, 'dPt')) {
         const i = finite(val(child(dPt, 'idx')))
         if (i === undefined || !Number.isInteger(i) || i < 0 || i >= 256) continue
@@ -599,6 +634,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
       const groupMarker = val(child(node, 'marker'))
       series.push({
+        index,
         name: capLabel(literalName || `Series ${index + 1}`, cut),
         color,
         values,
@@ -642,7 +678,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       gapWidth: Math.max(0, Math.min(500, stockOpts?.gapWidth ?? finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
-      ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
+      ...(type === 'pie' || type === 'doughnut' || type === 'ofPie' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
+      ...(type === 'ofPie' ? ofPieOptions(node, charge) : {}),
       ...(type === 'contour' ? { wireframe: child(node, 'wireframe') ? flag(child(node, 'wireframe'), true) : false, ...parseBandFormats(node, theme, charge), bandAccents: bandAccents() } : {}),
       varyColors: vary,
       ...(groupSmooth !== undefined ? { smooth: groupSmooth } : {}),
@@ -654,10 +691,13 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(stockOpts?.upDownBars ? { upDownBars: stockOpts.upDownBars } : {}),
     })
   }
-  markTrendlineLegendDeletions(legend, groups)
+  const allSeries = groups.flatMap(g => g.series), pointLegend = allSeries.length === 1 && groups.find(g => g.series.length === 1)?.varyColors
+  // Trendline entry indices never coincide with another entry's key: after the highest series c:idx, or after the
+  // points of a point legend (Office's numbering is unverified).
+  markTrendlineLegendDeletions(legend, groups, pointLegend ? Math.min(64, Math.max(categories.length, allSeries[0].values.length)) : allSeries.reduce((n, s) => Math.max(n, s.index ?? 0), -1) + 1)
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
-  const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
+  const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut' || g.family === 'ofPie')
   // The contour grid bound (spec 9): rows from the authored series count, columns from the categories.
   const contourClips = groups.flatMap((g, i) => g.family === 'contour' ? [contourGridOf({ categories }, g, authoredSeries[i])] : []).filter(grid => grid.clipped)
   if (contourClips.length) truncated = true
@@ -666,6 +706,28 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
   else if (groups.some(g => g.family === 'radar') && groups.some(g => g.family !== 'radar')) unsupported ??= 'Combination radar charts are not supported'
   if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : val(child(root, 'lang'))?.startsWith('zh') ? '圖表標題' : 'Chart Title'
+  // Title runs (formatting precedence: rPr, paragraph, txPr, style part, theme) and overlays; legend entries deleted.
+  const titleNode = child(chart, 'title'), titleDiagnostics: ChartDiagnostic[] = []
+  const resolved = title ? titleRuns(titleNode, title, theme, parts?.style?.title, charge) : undefined
+  const runs = resolved?.runs
+  // Runs cut by the title bounds: the title shown (painted and described) is what the runs keep, and it is reported.
+  if (resolved?.truncated) {
+    title = runsText(resolved.runs).replace(/\n/g, ' ').trim() || title
+    truncated = true
+    const reason = `The title keeps ${CHART_TITLE_RUN_LIMIT} runs, ${CHART_TITLE_LINE_LIMIT} lines and ${CHART_TITLE_TEXT_LIMIT} characters`
+    charge(64 + stringBytes(CHART_TITLE_TRUNCATED) + stringBytes(reason))
+    titleDiagnostics.push({ code: CHART_TITLE_TRUNCATED, reason })
+  }
+  const overlay = (node: XmlNode | undefined) => Boolean(child(node, 'overlay')) && flag(child(node, 'overlay'), true)
+  const deleted = new Set<number>()
+  for (const entry of getChildren(legend, 'legendEntry')) {
+    const idx = finite(val(child(entry, 'idx')))
+    // An entry index is a series c:idx (unsigned int) or a point index; the number of entries kept is bounded.
+    if (deleted.size >= CHART_POINT_LIMIT) break
+    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx <= 0xFFFFFFFF) deleted.add(idx)
+  }
+  if (deleted.size) charge(64 + deleted.size * 4)
+  const legendDeleted = deleted.size ? Uint32Array.from([...deleted].sort((a, b) => a - b)) : undefined
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
   const layouts = [plot, child(chart, 'title'), legend]
@@ -674,11 +736,17 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const plotLayout = manualLayout(plot), titleLayout = manualLayout(child(chart, 'title')), legendLayout = manualLayout(legend), text = textStyle(child(root, 'txPr'))
   const model: ChartModel = {
     ...(title ? { title } : {}),
+    ...(runs ? { titleRuns: runs } : {}),
+    ...(title && overlay(titleNode) ? { titleOverlay: true as const } : {}),
+    ...(legend && overlay(legend) ? { legendOverlay: true as const } : {}),
+    ...(legendDeleted ? { legendDeleted } : {}),
+    ...(categoryLevels ? { categoryLevels } : {}),
     groups,
     axes,
     categories,
     ...(categoryValues ? { categoryValues } : {}),
     ...(categoryPending ? { categoryPending } : {}),
+    ...(categoryPending && categoryMultiLevel ? { categoryMultiLevel: true as const } : {}),
     ...(categoryRef ? { categoryRef } : {}),
     ...(legend ? { legend: (val(child(legend, 'legendPos')) ?? 'r') as ChartModel['legend'] } : {}),
     // Chart-level options as authored; absent stays undefined (Office defaults: gap, plot visible only).
@@ -704,7 +772,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
-    ...(contourClips.length ? { diagnostics: contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d }) } : {}),
+    ...(titleDiagnostics.length || contourClips.length ? { diagnostics: [...titleDiagnostics, ...contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d })] } : {}),
   }
   return unsupported ? model : admitAxes(model, charge)
 }

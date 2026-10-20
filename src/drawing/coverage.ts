@@ -72,6 +72,10 @@ const knownNamespaceUris: Record<string, string> = {
   dgm: 'http://schemas.openxmlformats.org/drawingml/2006/diagram',
   dsp: 'http://schemas.microsoft.com/office/drawing/2008/diagram',
   ink: 'http://www.w3.org/2003/InkML',
+  cx: 'http://schemas.microsoft.com/office/drawing/2014/chartex',
+  cx1: 'http://schemas.microsoft.com/office/drawing/2015/9/8/chartex',
+  cx2: 'http://schemas.microsoft.com/office/drawing/2015/10/21/chartex',
+  cx4: 'http://schemas.microsoft.com/office/drawing/2016/5/10/chartex',
   xdr: 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
   w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
   wp: 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
@@ -82,6 +86,10 @@ const knownNamespaceUris: Record<string, string> = {
   wpc: 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
 }
 
+/** Each consumer's understood mc:Choice requirements; ChartEx Choices (matched by URI: the 2014 part namespace and the 2015/9/8, 2015/10/21 and 2016/5/10 Requires namespaces of the native fixtures) are attempted through the lazy chart engine (spec 6.2). */
+export const DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink', 'cx', 'cx1', 'cx2', 'cx4']
+export const XLSX_REQUIREMENTS = ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink', 'cx', 'cx1', 'cx2', 'cx4']
+export const DOCX_REQUIREMENTS = ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic', 'cx', 'cx1', 'cx2', 'cx4']
 /** MC Requires identifies namespace URIs, not the lexical prefix spelling. */
 export function supportedChoiceRequirements(choice: XmlNode, supported: readonly string[]): { supported: boolean; unknown?: string } {
   const allowedUris = new Set(supported.map(prefix => knownNamespaceUris[prefix]).filter(Boolean))
@@ -402,7 +410,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
     const source = shape?.source
     const chosen = name === 'AlternateContent' ? selectedBranch?.(node) : undefined
     const attempted = name === 'AlternateContent' && !chosen
-      ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'p', 'c', 'dgm', 'dsp', 'ink']).supported) ?? getChildren(node, 'Choice')[0]
+      ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).supported) ?? getChildren(node, 'Choice')[0]
       : undefined
     const own = name === 'AlternateContent' ? firstIdentity(chosen ?? attempted) : identity(node)
     let nested: { branch: XmlNode; representation: 'choice' | 'fallback' } | undefined
@@ -467,7 +475,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
       if (name === 'grpSp') walk(node, path, scope === 'diagnostic' ? 'diagnostic' : 'descendant', depth + 1, inheritedRepresentation)
       if (name === 'AlternateContent') {
         const chosen = selectedBranch?.(node)
-        const attempted = !chosen ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'p', 'c', 'dgm', 'dsp', 'ink']).supported) ?? getChildren(node, 'Choice')[0] : undefined
+        const attempted = !chosen ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).supported) ?? getChildren(node, 'Choice')[0] : undefined
         const branch = chosen ?? attempted
         if (branch) walk(branch, `${path}/${chosen ? getChildren(node, 'Fallback').includes(chosen) ? 'fallback' : 'choice' : 'attempted'}`, chosen ? 'descendant' : 'diagnostic', depth + 1,
           chosen ? getChildren(node, 'Fallback').includes(chosen) ? 'fallback' : 'choice' : inheritedRepresentation)

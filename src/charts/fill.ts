@@ -5,12 +5,13 @@ import { prepareChartAxes } from './prepare'
  * cells, defined names, paged-reader lines and the decimal scanner. Moved
  * from `src/xlsx/chart.ts` (A0a) behaviour-identically.
  */
-import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, parseChartRange } from './parse'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, CHART_TEXT_BYTES_LIMIT, parseChartRange } from './parse'
 import type { ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
-import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
+import { POINT_UNAVAILABLE, PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { CHART_ERROR_BAR_BYTES, ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
+import { CHART_CATEGORY_LEVELS, fillCategoryLevels } from './categories'
 import { ERROR_ROLES, errorRole } from './errorBars'
 import { CONTOUR_GRID_LIMIT, contourGridDiagnostic, contourGridOf } from './families/contour'
 
@@ -54,7 +55,8 @@ export function chartLine(range: ChartRange, ownerSheet: string, text: boolean, 
   const length = vertical ? rows : cols
   return { sheet: range.sheet ?? ownerSheet, vertical, fixed: vertical ? range.c1 : range.r1, start: vertical ? range.r0 : range.c0, count: Math.min(length, limit), truncated: length > limit, text }
 }
-const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1; return cols === 1 || rows >= cols ? rows : cols }
+/** The length of the one line a range yields (its longer extent, rows on a tie). */
+export const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1, cols = range.c1 - range.c0 + 1; return cols === 1 || rows >= cols ? rows : cols }
 /**
  * The acquisition bound of a series' numeric roles (spec 7): an analytic series
  * is acquired in full up to CHART_ANALYTIC_POINT_LIMIT; a reference longer than
@@ -62,10 +64,19 @@ const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1
  * for display only. Readers and the fill decide it the same way.
  */
 export function seriesLimit(series: ChartSeries): number {
+  // An analytic ChartEx family's series is always acquired to the analytic bound; a longer reference refuses the
+  // whole chart in the fill (never a display prefix).
+  if (series.analytic === 'chart') return CHART_ANALYTIC_POINT_LIMIT
   if (series.analytic !== true) return CHART_POINT_LIMIT
   const ranges = [series.pending?.values, series.pending?.xValues].filter((range): range is ChartRange => Boolean(range && !range.definedName))
   return ranges.some(range => lineLength(range) > CHART_ANALYTIC_POINT_LIMIT) ? CHART_POINT_LIMIT : CHART_ANALYTIC_POINT_LIMIT
 }
+/** The category acquisition bound of a series: an analytic ChartEx series pairs every value with its category. */
+export const categoryLimit = (series: ChartSeries): number => series.analytic === 'chart' ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT
+export const CHART_TOO_MANY_POINTS = 'This chart has too many data points to summarize'
+export const CHART_DATA_NOT_AVAILABLE = "This chart's data is not available"
+/** A whole-chart analytic refusal (spec 4.3, 7; chartex-map §2.4): the chart is refused with `message`. */
+export class ChartAnalyticRefusal extends ChartRefusal {}
 /** Writes the point state of one filled cell (spec 5.8); `onTruncated` hears a value the reader could not read in full.
  * `map` converts a date role's serial into the chart epoch (undefined: no counterpart, the point is unavailable). */
 function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onTruncated: () => void, map?: (v: number) => number | undefined): void {
@@ -81,6 +92,12 @@ function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onT
 }
 /** The cell coordinates of point `i` on a line. */
 export const linePoint = (line: ChartLine, i: number): { row: number; col: number } => line.vertical ? { row: line.start + i, col: line.fixed } : { row: line.fixed, col: line.start + i }
+
+/** How many lines a multi-level category reference holds (the innermost included): columns of a vertical range, rows of a horizontal one. */
+export const outerLevelCount = (range: ChartRange, line: ChartLine): number => line.vertical ? range.c1 - range.c0 + 1 : range.r1 - range.r0 + 1
+/** The cell of point `i` on outer level `level` (1: next to the innermost line). */
+export const outerLevelCell = (line: ChartLine, level: number, i: number): { row: number; col: number } =>
+  line.vertical ? { row: line.start + i, col: line.fixed - level } : { row: line.fixed - level, col: line.start + i }
 
 export function chartHasPending(model: ChartModel): boolean {
   return Boolean(model.categoryPending) || model.groups.some(g => g.series.some(s => s.pending))
@@ -218,10 +235,24 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
   } catch (error) {
     if (owner) owner.workspace.release(fillTag)
     if (!(error instanceof ChartRefusal)) throw error
-    const refused = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true as const }
+    const reason = error instanceof ChartAnalyticRefusal ? error.message : 'This chart needs more memory than is available for charts'
+    const refused = { ...model, preparedAxes: undefined, unsupported: reason, refused: true as const }
     succeedChartModel(model, refused)
     return refused
   } finally { if (owner) owner.workspace.release(copyTag) }
+}
+/** The label bytes a ChartEx parse admitted (spec 7 budget): title, axis titles, series names and every cached
+ * string level (series categories from a cache share those strings, so they are not counted twice). */
+function admittedLabelBytes(model: ChartModel): number {
+  const text = (t: string | undefined) => t ? stringBytes(t) : 0
+  let bytes = text(model.title)
+  for (const axis of model.axes) bytes += text(axis.title)
+  for (const group of model.groups) {
+    for (const series of group.series) bytes += text(series.name)
+    const data = (group as { chartEx?: { data: Array<{ dimensions: Array<{ levels: Array<{ kind: string; values?: Array<string | undefined> }> }> }> } }).chartEx?.data ?? []
+    for (const set of data) for (const dim of set.dimensions) for (const level of dim.levels) for (const value of level.values ?? []) bytes += text(value)
+  }
+  return bytes
 }
 /** The bound admitted before a label is built: the formatter's capped output (CHART_LABEL_LIMIT + 1 units,
  * one past the limit marks truncation), which also bounds the retained label. */
@@ -249,7 +280,21 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     for (let i = 0, k = 0; i < line.count; i++) { const at = linePoint(line, i); if (hidden(line.sheet, at.row, at.col)) out[k++] = i }
     return out
   }
-  let categories = model.categories, categoryHidden = model.categoryHidden, categoryValues = model.categoryValues
+  // The chart-wide label budget (spec 7: 4 MiB) of a ChartEx chart, every family and series together: what the
+  // parse admitted (title, axis titles, series names, cached labels) counts first; reference-filled categories and
+  // names join it, and labels past it are dropped (empty), the chart marked truncated and diagnosed.
+  const budgeted = model.groups.some(group => group.kind === 'chartEx')
+  let labelBytes = budgeted ? admittedLabelBytes(model) : 0, labelsDropped = 0, labelsCut = 0
+  /** One budgeted label (built under the formatter's bound): cut to the label limit, or dropped past the budget. */
+  const budget = (text: string): string => {
+    const kept = text.length > CHART_LABEL_LIMIT ? (labelsCut++, text.slice(0, CHART_LABEL_LIMIT)) : text
+    if (!kept) return kept
+    if (labelBytes + stringBytes(kept) > CHART_TEXT_BYTES_LIMIT) { labelsDropped++; return '' }
+    labelBytes += stringBytes(kept)
+    return kept
+  }
+  let categories = model.categories, categoryHidden = model.categoryHidden, categoryValues = model.categoryValues, categoryLevels = model.categoryLevels
+  const levelDiagnostics: Array<{ code: string; reason: string }> = []
   if (model.categoryPending) {
     const line = chartLine(model.categoryPending, sheetOf(model.categoryPending), true)
     truncated ||= line.truncated
@@ -272,6 +317,16 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     categories = labels
     categoryHidden = provenance(line)
     if (numbers) categoryValues = numbers.done()
+    // An uncached multi-level reference (spec 5.9): its outer lines are the outer levels, read through the same lookup.
+    if (model.categoryMultiLevel) {
+      const range = model.categoryPending, outer = (level: number, i: number) => outerLevelCell(line, level, i)
+      const filled = fillCategoryLevels(outerLevelCount(range, line), line.count, (level, i) => {
+        const at = outer(level, i), cell = lookup(line.sheet, at.row, at.col, false)
+        return cell?.unavailable ? 'unreadable' : cell && (cell.error !== undefined || rawText(cell.value) !== '') ? 'label' : 'empty'
+      }, (level, i) => label(allocation => { const at = outer(level, i); return asText(lookup(line.sheet, at.row, at.col, true, allocation)) }), charge, levelDiagnostics, CHART_LABEL_LIMIT)
+      categoryLevels = filled.levels
+      truncated ||= filled.truncated
+    }
   } else if (model.categoryRef && categories.length) categoryHidden = provenance(chartLine(model.categoryRef, sheetOf(model.categoryRef), true, categories.length))
   const groups = model.groups.map(group => ({
     ...group,
@@ -279,15 +334,17 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       if (!series.pending && !series.refs) return series
       const { pending = {}, ...rest } = series
       const next: ChartSeries = { ...rest }
-      const limit = seriesLimit(series)
+      const limit = seriesLimit(series), whole = series.analytic === 'chart'
       if (series.analytic === true && limit === CHART_POINT_LIMIT) next.analytic = 'refused'
       const binding = group.binding
       const valueDates = dateFormatted(binding.kind === 'cartesian' ? binding.value : binding.kind === 'xy' ? binding.y : undefined) ? toChart : undefined
       const xDates = dateFormatted(binding.kind === 'xy' || binding.kind === 'cartesian' ? binding.x : undefined) ? toChart : undefined
       const fill = (range: ChartRange, map?: (v: number) => number | undefined, bound = limit): ChartPoints => {
         const line = chartLine(range, sheetOf(range), false, bound)
+        // An analytic ChartEx input longer than the analytic bound refuses the chart before anything is read.
+        if (whole && line.truncated) throw new ChartAnalyticRefusal(CHART_TOO_MANY_POINTS)
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
-        truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
+        if (!whole) truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
         const out = new PointWriter(line.count, 'lazy', charge)
         for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }, map) }
@@ -297,6 +354,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       const cached = (points: ChartPoints, range: ChartRange) => points.length ? withHidden(points, provenance(chartLine(range, sheetOf(range), false, points.length))) : points
       if (pending.values) next.values = fill(pending.values, valueDates)
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
+      // An analytic family with a required value point unavailable is refused (chartex-map §2.4).
+      if (whole && pending.values && next.values.states.includes(POINT_UNAVAILABLE)) throw new ChartAnalyticRefusal(CHART_DATA_NOT_AVAILABLE)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
       // Custom error amounts (spec 5.7): numeric roles read at the display bound, the same lines the readers ask for.
@@ -319,15 +378,21 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       if (pending.bubbleSizes) next.bubbleSizes = fill(pending.bubbleSizes, undefined, CHART_POINT_LIMIT)
       else if (series.refs?.bubbleSizes && series.bubbleSizes) next.bubbleSizes = cached(series.bubbleSizes, series.refs.bubbleSizes)
       if(pending.categories){
-        const line=chartLine(pending.categories,sheetOf(pending.categories),true)
+        const line=chartLine(pending.categories,sheetOf(pending.categories),true,categoryLimit(series))
+        if (whole && line.truncated) throw new ChartAnalyticRefusal(CHART_TOO_MANY_POINTS)
         truncated ||= line.truncated
         charge(line.count*8)
-        next.categories=Array.from({length:line.count},(_,i)=>{const at=linePoint(line,i);return label(allocation=>asText(lookup(line.sheet,at.row,at.col,true,allocation)).slice(0,CHART_LABEL_LIMIT))})
+        // The formatter's output is bounded (LABEL_BOUND_BYTES) before it is built; a ChartEx chart then budgets it.
+        next.categories=Array.from({length:line.count},(_,i)=>{const at=linePoint(line,i);return label(allocation=>{
+          const text=asText(lookup(line.sheet,at.row,at.col,true,allocation))
+          return budgeted ? budget(text) : text.slice(0,CHART_LABEL_LIMIT)
+        })})
       }
       if (pending.name) {
         const name = pending.name
         const text = label(allocation => {
           const full = asText(lookup(sheetOf(name), name.r0, name.c0, true, allocation))
+          if (budgeted) return budget(full)
           if (full.length > CHART_LABEL_LIMIT) truncated = true
           return full.slice(0, CHART_LABEL_LIMIT)
         }, false)
@@ -341,6 +406,10 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     }),
   }))
   const diagnostics = model.diagnostics ? [...model.diagnostics] : []
+  for (const d of levelDiagnostics) { charge(stringBytes(d.code) + stringBytes(d.reason)); diagnostics.push(d) }
+  const note = (code: string, reason: string) => { charge(stringBytes(code) + stringBytes(reason)); diagnostics.push({ code, reason }) }
+  if (labelsCut) { truncated = true; note('chart-label-truncated', `${labelsCut} ${labelsCut === 1 ? 'label was' : 'labels were'} cut to ${CHART_LABEL_LIMIT} characters`) }
+  if (labelsDropped) { truncated = true; note('chart-label-budget', `${labelsDropped} ${labelsDropped === 1 ? 'label was' : 'labels were'} dropped past the chart's 4 MiB label budget`) }
   if (unrepresentable) {
     const reason = `${unrepresentable} date ${unrepresentable === 1 ? 'value has' : 'values have'} no counterpart in the ${epoch} date system`
     charge(stringBytes(reason))
@@ -356,9 +425,9 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     diagnostics.push(diagnostic)
     truncated = true
   }
-  const { categoryPending, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
-  void categoryPending, void _hidden, void _values, void _diagnostics
-  return { ...rest, categories, ...(categoryValues ? { categoryValues } : {}), ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}), ...(diagnostics.length ? { diagnostics } : {}) }
+  const { categoryPending, categoryMultiLevel: _multi, categoryLevels: _levels, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
+  void categoryPending, void _multi, void _levels, void _hidden, void _values, void _diagnostics
+  return { ...rest, categories, ...(categoryLevels ? { categoryLevels } : {}), ...(categoryValues ? { categoryValues } : {}), ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}), ...(diagnostics.length ? { diagnostics } : {}) }
 }
 
 /** Resident workbooks: fill every uncached chart reference from parsed cells,
@@ -455,9 +524,15 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
     if (chart) {
       const add = (range: ChartRange | undefined, text: boolean, limit?: number) => { if (range && !range.definedName) out.push(chartLine(range, ownerSheet, text, limit)) }
       add(chart.categoryPending, true)
+      // A multi-level reference's outer lines are read too (its outer levels).
+      if (chart.categoryMultiLevel && chart.categoryPending && !chart.categoryPending.definedName) {
+        const range = chart.categoryPending, inner = chartLine(range, ownerSheet, true)
+        // Only the outer levels the fill can keep are acquired (the fill reports the excess from the full range).
+        for (let level = 1; level < Math.min(outerLevelCount(range, inner), CHART_CATEGORY_LEVELS + 1); level++) out.push({ ...inner, fixed: inner.fixed - level })
+      }
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
-        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false); add(s.pending?.categories, true)
+        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false); add(s.pending?.categories, true, categoryLimit(s))
         for (const role of ERROR_ROLES) add(s.pending?.[role], false)
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
@@ -483,6 +558,30 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
   return out
 }
 
+/**
+ * Preflight before any acquisition or memory admission (spec 4.3, 7): an analytic ChartEx chart whose resolved
+ * reference is longer than the analytic bound is refused with the point-limit reason, so a reader never turns the
+ * known result into a memory card by admitting a capped prefix first. Defined names must be resolved before.
+ */
+/** Whether an analytic ChartEx series has a concrete reference longer than the analytic bound. */
+export const analyticOverLimit = (chart: ChartModel): boolean => chart.groups.some(group => group.series.some(series => series.analytic === 'chart'
+  && [series.pending?.values, series.pending?.categories].some(range => range && !range.definedName && lineLength(range) > CHART_ANALYTIC_POINT_LIMIT)))
+export function refuseAnalyticOverLimit(drawings: XlsxDrawingLike[] | undefined): void {
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
+    const chart = content?.kind === 'xlsxChart' ? content.chart : undefined
+    if (chart && !chart.unsupported && analyticOverLimit(chart)) {
+      // Its references are dropped: no reader collects or admits lines for a refused chart.
+      const groups = chart.groups.map(group => ({ ...group, series: group.series.map(series => { const { pending: _pending, ...rest } = series; void _pending; return rest }) }))
+      const { categoryPending: _category, ...rest } = chart
+      void _category
+      const next: ChartModel = { ...rest, groups, preparedAxes: undefined, unsupported: CHART_TOO_MANY_POINTS, refused: true }
+      succeedChartModel(chart, next)
+      content!.chart = next
+    }
+    if (node.children) refuseAnalyticOverLimit(node.children)
+  }
+}
 /** Charts that still need cells become placeholders with `reason` (a refused read). */
 export function refuseCharts(drawings: XlsxDrawingLike[] | undefined, reason: string): void {
   for (const node of drawings ?? []) {

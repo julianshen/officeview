@@ -85,7 +85,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, model.categories.length + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
-    const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics)
+    const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics,view)
     graph.diagnostics.push(...trendDiagnostics)
     const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(forecast ? { forecast } : {}), ...(errors?.bars.length ? { errorBars: errors.bars } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
