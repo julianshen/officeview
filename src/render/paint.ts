@@ -141,6 +141,12 @@ export interface PaintOptions {
    * rendering (and goldens) never move; pinned chains are host-deterministic.
    */
   fallbackFonts?: FallbackFontsOptions
+  /**
+   * The receiving document's chart budget (spec 6.4): transferred chart models are charged to this context, or to
+   * one created once per document with `chartProfile` (the viewer profile; mobile is 32 MiB; default desktop).
+   */
+  chartContext?: import('../charts/context').ChartDocumentContext
+  chartProfile?: import('../charts/workspace').ChartProfile
 }
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
@@ -246,6 +252,8 @@ export function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsse
   return images
 }
 
+/** The receiving document for its transferred chart models (spec 6.4). */
+const chartReceiver = (doc: object, options?: PaintOptions) => ({ owner: doc, ...(options?.chartProfile ? { profile: options.chartProfile } : {}), ...(options?.chartContext ? { context: options.chartContext } : {}) })
 /** Prepare embedded fonts before measurement/painting. Low-level renderSlide stays synchronous. */
 export function getPaintables(
   doc: DocxDocument | XlsxDocument | PptxDocument,
@@ -262,7 +270,7 @@ export function getPaintables(
         const pages = layoutDocx(doc, measure)
         // One decode per unique candidate pair; failures degrade to a blank slot.
         const docImages = collectDocImages(doc)
-        await ensureChartEngine(docImages.map(image => ({ content: image.drawing })))
+        await ensureChartEngine(docImages.map(image => ({ content: image.drawing })), chartReceiver(doc, options))
         decoded = await decodeImageAssets(docImages, options?.decodeImage)
         const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
         const failed = new Map<ImageSelection, string>()
@@ -297,7 +305,7 @@ export function getPaintables(
       let decoded: Array<CanvasImageSource | undefined> = []
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
-        await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
+        await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []), chartReceiver(doc, options))
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
@@ -313,7 +321,7 @@ export function getPaintables(
     try {
       const sm = slideMetrics(doc)
       const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
-      await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes))
+      await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes), chartReceiver(doc, options))
       decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
       recordChartFallbacks([doc.drawingCoverage], failedSceneFallbacks(doc.slides.flatMap(slide => slide.shapes), decoded))

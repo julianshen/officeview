@@ -10,7 +10,8 @@ import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
 import { axisFraction, categoryFraction, resolveAxes, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
 import { ChartRefusal, chartModelOwner } from './own'
-import { createChartWorkspace, type ChartWorkspace } from './workspace'
+import { createChartWorkspace, type ChartProfile, type ChartWorkspace } from './workspace'
+import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateTickLabel, dateUnitIndex } from './dates'
 
 type FamilyCss = (family: string) => string
@@ -341,7 +342,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
     const plotted = (v: number | undefined) => v !== undefined && V.plottable(v) ? v : undefined
     const crossing = B.crossesValue ?? Math.max(V.min, Math.min(V.max, 0))
     const stacked = group.grouping === 'stacked' || group.grouping === 'percentStacked' ? (() => {
-      const pos = new Array<number>(count).fill(0), neg = new Array<number>(count).fill(0), total = new Array<number>(count).fill(0)
+      const pos = new Float64Array(count), neg = new Float64Array(count), total = new Float64Array(count)
       for (const s of group.series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v === undefined) continue; if (v >= 0) pos[i] += v; else neg[i] += v; total[i] += Math.abs(v) }
       return { pos, neg, total }
     })() : undefined
@@ -360,7 +361,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (vertical) return C.reversed ? plot.y + band * idx : plot.y + plot.h - band * (idx + 1)
         return C.reversed ? plot.x + plot.w - band * (idx + 1) : plot.x + band * idx
       }
-      const posBase = new Array<number>(count).fill(0), negBase = new Array<number>(count).fill(0)
+      const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
         for (let i = 0; i < count; i++) {
           const raw = plotted(s.value(i))
@@ -380,7 +381,10 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         }
       })
     } else if ((group.family === 'line' || group.family === 'area') && horizontal === B) {
-      const base = new Array<number>(count).fill(0)
+      // Streamed per series over three reused per-slot buffers (the running stack base, this series' bottom and
+      // top; NaN marks no point), so the construction does not grow with the series count. Each series is drawn
+      // as soon as it is computed, in the same order as before.
+      const base = new Float64Array(count), bottom = new Float64Array(count), top = new Float64Array(count)
       const edge = !axes.between
       const band = plot.w / count
       const xAt = (i: number) => {
@@ -389,27 +393,23 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (B.role === 'date' || B.reversed) return along(B, categoryFraction(B, idx, axes.between))
         return edge ? plot.x + (count > 1 ? i * plot.w / (count - 1) : plot.w / 2) : plot.x + band * (i + 0.5)
       }
-      const layers: Array<{ s: DrawSeries; top: Array<number | undefined>; bottom: number[] }> = []
+      const has = (i: number) => !Number.isNaN(top[i])
       for (const s of group.series) {
-        const bottom = base.slice()
-        const top = Array.from({ length: count }, (_, i) => {
+        bottom.set(base)
+        for (let i = 0; i < count; i++) {
           const raw = plotted(s.value(i))
-          if (raw === undefined) return stacked && group.family === 'area' ? base[i] : undefined
-          if (!Number.isFinite(xAt(i))) return undefined
+          if (raw === undefined) { top[i] = stacked && group.family === 'area' ? base[i] : NaN; continue }
+          if (!Number.isFinite(xAt(i))) { top[i] = NaN; continue }
           const v = share(raw, i)
-          if (stacked) { base[i] += v; return base[i] }
-          return v
-        })
-        layers.push({ s, top, bottom })
-      }
-      for (const { s, top, bottom } of layers) {
+          if (stacked) { base[i] += v; top[i] = base[i] } else top[i] = v
+        }
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (group.family === 'area') {
           ctx.beginPath()
           let started = false
-          top.forEach((v, i) => { if (v === undefined) return; const px = xAt(i), py = at(v); if (!started) { ctx.moveTo(px, py); started = true } else ctx.lineTo(px, py) })
+          for (let i = 0; i < count; i++) { if (!has(i)) continue; const px = xAt(i), py = at(top[i]); if (!started) { ctx.moveTo(px, py); started = true } else ctx.lineTo(px, py) }
           if (!started) continue
-          for (let i = count - 1; i >= 0; i--) if (top[i] !== undefined) ctx.lineTo(xAt(i), at(stacked ? bottom[i] : crossing))
+          for (let i = count - 1; i >= 0; i--) if (has(i)) ctx.lineTo(xAt(i), at(stacked ? bottom[i] : crossing))
           ctx.closePath()
           ctx.globalAlpha = stacked ? 1 : 0.85
           ctx.fill()
@@ -420,28 +420,31 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
           ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
           ctx.beginPath()
           let pen = false
-          top.forEach((v, i) => { if (v === undefined) { pen = false; return } const px = xAt(i), py = at(v); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) })
+          for (let i = 0; i < count; i++) { if (!has(i)) { pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
           ctx.stroke()
         }
-        if (s.markers) top.forEach((v, i) => { if (v === undefined) return; ctx.beginPath(); ctx.arc(xAt(i), at(v), 2.5, 0, Math.PI * 2); ctx.fill() })
+        if (s.markers) for (let i = 0; i < count; i++) { if (!has(i)) continue; ctx.beginPath(); ctx.arc(xAt(i), at(top[i]), 2.5, 0, Math.PI * 2); ctx.fill() }
       }
     } else if (group.family === 'scatter' && axes.x) {
+      // Points are recomputed for each pass (line, markers) rather than kept: nothing per point outlives the pass.
       const X = axes.x
       const xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w
+      let px = 0, py = 0
+      const point = (s: DrawSeries, i: number): boolean => {
+        const v = plotted(s.value(i)), xv = s.hasX ? s.x(i) : i + 1
+        if (v === undefined || xv === undefined || !X.plottable(xv)) return false
+        px = xp(xv); py = at(v)
+        return true
+      }
       for (const s of group.series) {
-        const pts: Array<readonly [number, number] | undefined> = []
-        for (let i = 0; i < count; i++) {
-          const v = plotted(s.value(i)), xv = s.hasX ? s.x(i) : i + 1
-          pts.push(v === undefined || xv === undefined || !X.plottable(xv) ? undefined : [xp(xv), at(v)] as const)
-        }
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (s.line) {
           ctx.lineWidth = 2; ctx.beginPath()
           let pen = false
-          for (const p of pts) { if (!p) { pen = false; continue } if (!pen) { ctx.moveTo(p[0], p[1]); pen = true } else ctx.lineTo(p[0], p[1]) }
+          for (let i = 0; i < count; i++) { if (!point(s, i)) { pen = false; continue } if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
           ctx.stroke()
         }
-        if (s.markers !== false) for (const p of pts) if (p) { ctx.beginPath(); ctx.arc(p[0], p[1], 3, 0, Math.PI * 2); ctx.fill() }
+        if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) { ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill() }
       }
     }
   })
@@ -449,16 +452,19 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
 }
 
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
-export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify): void {
+export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify, chartContext?: ChartDocumentContext): void {
   if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
   const model = drawModel(source)
-  // The axis graph's construction is admitted to the chart workspace before it is built (the model's own; an
-  // unowned model, such as a structured clone, uses this realm's paint workspace) and refunded after the paint.
-  // A refusal paints the contained card before anything else is drawn.
+  // The axis graph's construction is admitted to a chart workspace before it is built, and refunded after the
+  // paint; a refusal paints the contained card before anything else is drawn. The workspace (spec 6.4):
+  // 1. the model's own (a paged read's answered scope charges its document facet);
+  // 2. else the caller's chart context (the synchronous renderPages/renderSlide assets);
+  // 3. else the receiving document's context the model was associated with (`receiveCharts`);
+  // 4. else a bounded per-call workspace (CHART_STANDALONE_PAINT_PROFILE), created for this paint only.
   const owner = chartModelOwner(source)
-  // A paged read's scoped workspace refuses once the read is answered; a paint charges its document facet.
   const ownerWorkspace = owner && ((owner.workspace as { facet?: ChartWorkspace }).facet ?? owner.workspace)
-  const admission = { workspace: ownerWorkspace ?? realmChartWorkspace(), tag: `${owner?.tag ?? `chart-realm#${++paints}`}:paint` }
+  const workspace = ownerWorkspace ?? chartContext?.workspace ?? received.get(source)?.workspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
+  const admission = { workspace, tag: `${owner?.tag ?? `chart-paint#${++paints}`}:paint` }
   let graph: AxisGraph | undefined
   try {
     if (!isRound(source)) graph = resolveAxes(source, model.view, undefined, admission)
@@ -491,6 +497,37 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
   } finally { ctx.restore(); admission.workspace.release(admission.tag) }
 }
 const isRound = (model: ChartModel) => model.groups[0]?.family === 'pie' || model.groups[0]?.family === 'doughnut'
-let paints = 0, realm: ChartWorkspace | undefined
-/** This realm's chart workspace for painting unowned models (a transferred render uses its own; spec 6.4). */
-export const realmChartWorkspace = (): ChartWorkspace => realm ??= createChartWorkspace('desktop')
+let paints = 0
+/**
+ * The profile of the bounded per-call workspace a synchronous paint uses when the model has no owner, no chart
+ * context is passed and no receiving document was associated (a headless `renderPages`/`renderSlide` of a
+ * transferred model): a fresh 32 MiB (mobile-limit) chart workspace per call, released with the paint.
+ */
+export const CHART_STANDALONE_PAINT_PROFILE: ChartProfile = 'mobile'
+/** Transferred (unowned) models associated with the receiving document's chart context. */
+const received = new WeakMap<ChartModel, ChartDocumentContext>()
+const documents = new WeakMap<object, ChartDocumentContext>()
+type ChartCarrier = { content?: { kind: string; chart?: ChartModel }; children?: readonly ChartCarrier[] }
+/** What the receiving side knows: its document (the key of its one chart context), the viewer profile, or a context it already holds. */
+export interface ChartReceiver { owner: object; profile?: ChartProfile; context?: ChartDocumentContext }
+/**
+ * The receiving side of a transfer (spec 6.4): every unowned chart model of `contents` is associated with the
+ * receiving document's chart context, created once per document from the viewer profile (mobile: 32 MiB) unless
+ * the caller passes one, so its paints are charged to that document's chart facet and parent.
+ */
+export function receiveCharts(contents: readonly ChartCarrier[], receiver: ChartReceiver): ChartDocumentContext {
+  let context = documents.get(receiver.owner)
+  if (receiver.context && context !== receiver.context) documents.set(receiver.owner, context = receiver.context)
+  if (!context) documents.set(receiver.owner, context = documentChartContext(receiver.profile ?? 'desktop'))
+  const walk = (nodes: readonly ChartCarrier[]) => {
+    for (const node of nodes) {
+      const chart = node.content?.kind === 'xlsxChart' ? node.content.chart : undefined
+      if (chart && !chartModelOwner(chart)) received.set(chart, context!)
+      if (node.children) walk(node.children)
+    }
+  }
+  walk(contents)
+  return context
+}
+/** The receiving document's chart context a transferred model was associated with. */
+export const receivedChartContext = (model: ChartModel): ChartDocumentContext | undefined => received.get(model)

@@ -3,7 +3,7 @@ import { resolveGeometry } from './geometry'
 import { paintGeometry } from './paint'
 import type { DrawingContent, DrawingContentShape, ContentPaintAssets } from './content'
 import type { XlsxChartModel } from '../xlsx/chartModel'
-type XlsxChartPainter = (chart: XlsxChartModel, ctx: CanvasRenderingContext2D, width: number, height: number, familyCss?: (family: string) => string) => void
+type XlsxChartPainter = (chart: XlsxChartModel, ctx: CanvasRenderingContext2D, width: number, height: number, familyCss?: (family: string) => string, chartContext?: import('../charts/context').ChartDocumentContext) => void
 /** Set by the lazy chart engine when it loads (src/charts). */
 let xlsxChartPainter: XlsxChartPainter | undefined
 export function registerXlsxChartPainter(painter: XlsxChartPainter): void { xlsxChartPainter = painter }
@@ -104,7 +104,7 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
     else {
       // Containment (spec 6.5): a throwing engine paints the card and never leaks state into later shapes.
       ctx.save()
-      try { xlsxChartPainter(chart, ctx, width, height, css) }
+      try { xlsxChartPainter(chart, ctx, width, height, css, options.assets?.chartContext) }
       catch { ctx.restore(); ctx.save(); paintChartPlaceholder({ ...chart, unsupported: 'This chart could not be drawn' }, ctx, width, height, css) }
       finally { ctx.restore() }
     }

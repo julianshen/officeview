@@ -9,7 +9,9 @@ import { createCanvas } from 'canvas'
 import { parseXmlOrdered } from '../src/core/xml'
 import { axisFraction, axisGraphBound, categoryFraction, resolveAxes } from '../src/charts/axes'
 import { ChartRefusal } from '../src/charts/own'
-import { realmChartWorkspace } from '../src/charts/paint'
+import { CHART_STANDALONE_PAINT_PROFILE, receivedChartContext } from '../src/charts/paint'
+import { documentChartContext } from '../src/charts/context'
+import { ensureChartEngine, ensureChartPainter } from '../src/xlsx/chartLoader'
 import { chartModelOwner, paintXlsxChart, parseXlsxChart, pointBytes, releaseChartModel, stringBytes } from '../src/charts'
 import { createChartWorkspace } from '../src/charts/workspace'
 import type { ChartParseContext } from '../src/charts/context'
@@ -289,13 +291,10 @@ describe('A1a fix round 1: admission, label order, minor elements, extreme scale
     expect(workspace.used).toBe(workspace.limit)
     workspace.release('pressure')
     expect(workspace.used).toBe(held)
-    // An unowned model (a structured clone in another realm) is charged to this realm's own paint workspace.
-    const realm = realmChartWorkspace()
-    const before = realm.used
+    // An unowned model (a structured clone) with nothing received paints in a bounded per-call workspace (R2).
     const clone = recorder()
     paintXlsxChart(structuredClone(model), clone.ctx, 800, 500)
     expect(clone.of('fillRect').length).toBe(drawn.of('fillRect').length)
-    expect(realm.used).toBe(before)
   })
 
   it('I4: date labels are thinned in screen order: a reversed horizontal axis and both vertical orientations keep every label that fits', () => {
@@ -342,6 +341,120 @@ describe('A1a fix round 1: admission, label order, minor elements, extreme scale
       paintXlsxChart(m, r.ctx, 800, 500)
       const coords = [...r.of('moveTo'), ...r.of('lineTo'), ...r.of('fillRect'), ...r.of('arc')].flat().filter(v => typeof v === 'number')
       expect(coords.length).toBeGreaterThan(0)
+      expect(coords.every(Number.isFinite)).toBe(true)
+    }
+  })
+})
+
+describe('A1a fix round 2: measured construction, receiving-document budgets, one-sided extremes', () => {
+  /** Paints while recording every per-slot array the construction allocates (length >= `slots`). */
+  function measured(model: ChartModel, slots: number, paint: () => void): number {
+    let bytes = 0
+    const note = (length: number) => { if (length >= slots) bytes += length * 8 }
+    const g = globalThis as unknown as Record<string, unknown>
+    const F64 = Float64Array, Arr = Array, from = Array.from, slice = Array.prototype.slice
+    class SpyF64 extends F64 { constructor(...args: unknown[]) { super(...(args as unknown as [number])); note(this.length) } }
+    class SpyArray extends Arr<unknown> { constructor(...args: unknown[]) { super(...(args as unknown as [number])); note(this.length) } }
+    g.Float64Array = SpyF64; g.Array = SpyArray
+    Array.from = function (this: unknown, ...args: Parameters<typeof Array.from>) { const out = (from as (...a: unknown[]) => unknown[]).apply(Arr, args); note(out.length); return out } as typeof Array.from
+    Array.prototype.slice = function (this: unknown[], start?: number, end?: number) { const out = slice.call(this, start, end); note(out.length); return out }
+    try { paint() } finally { g.Float64Array = F64; g.Array = Arr; Array.from = from; Array.prototype.slice = slice }
+    void model
+    return bytes
+  }
+  const many = (family: 'line' | 'area' | 'scatter', grouping = 'standard') => {
+    const values = Array.from({ length: 4096 }, (_, i) => (i * 7) % 13)
+    const series = Array.from({ length: 64 }, (_, k) => family === 'scatter' ? xy(k, values.map((_, i) => i), values) : ser(k, values))
+    const group = family === 'scatter' ? `<c:scatterChart><c:scatterStyle val="lineMarker"/>${series.join('')}<c:axId val="10"/><c:axId val="20"/></c:scatterChart>` + valAx('10', '20', '<c:axPos val="b"/>') + valAx('20', '10', '<c:axPos val="l"/>')
+      : `<c:${family}Chart><c:grouping val="${grouping}"/>${series.join('')}<c:axId val="1"/><c:axId val="2"/></c:${family}Chart>` + catAx('1', '2') + valAx('2', '1')
+    return parse(group)
+  }
+
+  it('R1: 64 series x 4,096 points: the measured construction stays within the admitted bound, which does not scale with series', () => {
+    const models = [many('area', 'stacked'), many('line'), many('scatter')]
+    for (const model of models) {
+      const bound = axisGraphBound(model, 4096)
+      const bytes = measured(model, 4096, () => { const r = recorder(400, 300); paintXlsxChart(model, r.ctx, 400, 300) })
+      // Stacked areas keep the stack sums and the three streamed buffers: per-slot arrays exist, and stay bounded.
+      if (model === models[0]) expect(bytes).toBeGreaterThanOrEqual(6 * 4096 * 8)
+      expect(bytes).toBeLessThanOrEqual(bound)
+    }
+    {
+      const model = models[0], bound = axisGraphBound(model, 4096)
+      // A parent with exactly the bound admits the paint; one byte less refuses it with the card.
+      for (const [room, native] of [[bound, true], [bound - 1, false]] as const) {
+        let held = 0
+        const workspace = createChartWorkspace('desktop', { reserve: b => { if (held + b > room) return false; held += b; return true }, release: (_t, b) => { held -= b } })
+        const context = documentChartContext('desktop', undefined, undefined)
+        const r = recorder(400, 300)
+        paintXlsxChart(model, r.ctx, 400, 300, undefined, { ...context, workspace })
+        expect(r.texts().join(' ').includes('memory')).toBe(!native)
+        expect(held).toBe(0)
+      }
+    }
+  }, 120_000)
+
+  it('R2: a transferred model is charged to the receiving document chart facet and its profile; with no headroom it is a card', async () => {
+    const plot = bar(ser(0, [3, 7, 2])) + catAx('1', '2') + valAx('2', '1')
+    const owned = parseXlsxChart(parseXmlOrdered(space(plot)), undefined, { workspace: createChartWorkspace('desktop'), profile: 'desktop', partPath: 'c.xml' } as unknown as ChartParseContext)!
+    const clone = structuredClone(owned)
+    expect(chartModelOwner(clone)).toBeUndefined()
+    // The receiving side (an M-profile viewer) associates the transferred models with its document context.
+    const receiving = { sheets: [{ drawings: [{ content: { kind: 'xlsxChart', chart: clone } }] }] }
+    await ensureChartPainter(receiving.sheets[0].drawings as never, { owner: receiving, profile: 'mobile' })
+    const context = receivedChartContext(clone)!
+    expect(context.profile).toBe('mobile')
+    expect(context.workspace.limit).toBe(32 * 1024 * 1024)
+    // The same document reuses its context; a paint charges it and refunds after.
+    const log: number[] = []
+    const reserve = context.workspace.reserve.bind(context.workspace)
+    context.workspace.reserve = (b, t) => { log.push(b); return reserve(b, t) }
+    const ok = recorder()
+    paintXlsxChart(clone, ok.ctx, 800, 500)
+    expect(log.length).toBe(1)
+    expect(context.workspace.used).toBe(0)
+    expect(ok.texts()).toContain('C1')
+    // No headroom in the receiving document: the card.
+    context.workspace.reserve = reserve
+    context.workspace.reserve(context.workspace.limit, 'pressure')
+    const full = recorder()
+    paintXlsxChart(clone, full.ctx, 800, 500)
+    expect(full.texts().join(' ')).toMatch(/memory/)
+    context.workspace.release('pressure')
+    // getPaintables-style callers pass the viewer profile; the parent ledger is honoured.
+    let parentHeld = 0
+    const parentContext = documentChartContext('desktop', undefined, { reserve: b => { if (parentHeld + b > 10) return false; parentHeld += b; return true }, release: (_t, b) => { parentHeld -= b } })
+    const other = structuredClone(owned)
+    await ensureChartEngine([{ content: { kind: 'xlsxChart', chart: other } as never }], { owner: {}, context: parentContext })
+    const refused = recorder()
+    paintXlsxChart(other, refused.ctx, 800, 500)
+    expect(refused.texts().join(' ')).toMatch(/memory/)
+    expect(parentHeld).toBe(0)
+    // Synchronous paints with nothing received: an explicit context wins; else a bounded per-call workspace.
+    const loose = structuredClone(owned)
+    const explicit = recorder()
+    paintXlsxChart(loose, explicit.ctx, 800, 500, undefined, parentContext)
+    expect(explicit.texts().join(' ')).toMatch(/memory/)
+    const standalone = recorder()
+    paintXlsxChart(loose, standalone.ctx, 800, 500)
+    expect(standalone.texts()).toContain('C1')
+    expect(CHART_STANDALONE_PAINT_PROFILE).toBe('mobile')
+  })
+
+  it('R3: one-sided extreme auto scales fall back to finite bounds with the rendering-bound diagnostic', () => {
+    for (const v of [1.7e308, -1.7e308]) {
+      const graph = resolveAxes(parse(line(ser(0, [v])) + catAx('1', '2') + valAx('2', '1')))
+      const value = graph.axes.get('2')!
+      expect([value.min, value.max, value.major].every(Number.isFinite)).toBe(true)
+      expect(value.max).toBeGreaterThan(value.min)
+      expect(value.ticks.length).toBeGreaterThan(1)
+      expect(value.ticks.every(Number.isFinite)).toBe(true)
+      expect(Number.isFinite(axisFraction(value, v))).toBe(true)
+      expect(axisFraction(value, v)).toBe(v > 0 ? 1 : 0)
+      expect(graph.diagnostics.map(d => d.code)).toContain('chart-tick-limit')
+      const r = recorder()
+      paintXlsxChart(parse(line(ser(0, [v, v / 2])) + catAx('1', '2') + valAx('2', '1')), r.ctx, 800, 500)
+      const coords = [...r.of('moveTo'), ...r.of('lineTo'), ...r.of('arc')].flat().filter(c => typeof c === 'number')
       expect(coords.every(Number.isFinite)).toBe(true)
     }
   })

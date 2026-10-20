@@ -36,6 +36,8 @@ export interface ContentPaintAssets {
   fallbackFonts?: import('../core/fonts/fallback').FallbackFontsOptions
   /** Optional embedded font resolver for mapping families to registered aliases. */
   resolveFont?: import('../core/fonts/register').FontResolver
+  /** The chart context a synchronous paint charges its chart construction to (spec 6.4; A1a). */
+  chartContext?: import('../charts/context').ChartDocumentContext
 }
 const num = (v: string | undefined, fallback = 0): number => v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback
 const child = (n: XmlNode | undefined, name: string) => getChildren(n, name)[0]

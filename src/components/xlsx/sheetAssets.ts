@@ -214,7 +214,8 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       const drawings = sheet?.drawings ?? []
       const wanted = [...imageIndexes(drawings)].filter(index => index >= 0 && index < indexed.length).sort((a, b) => a - b)
       const cached = collectCachedPictures(drawings)
-      await ensureChartPainter(drawings)
+      // The viewer profile sizes the receiving document's chart budget for transferred models (spec 6.4).
+      await ensureChartPainter(drawings, { owner: doc, profile: profile === 'M' ? 'mobile' : 'desktop' })
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {

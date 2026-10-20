@@ -177,6 +177,16 @@ function steps(min: number, max: number, step: number, limit = CHART_TICK_LIMIT)
 }
 
 interface Scale { min: number; max: number; major: number; minor: number; log?: number; ticks: number[]; minorTicks: number[] }
+const finiteScale = (min: number, max: number, major: number) => Number.isFinite(min) && Number.isFinite(max) && Number.isFinite(max - min) && max > min && Number.isFinite(major) && major > 0
+/**
+ * A scale whose span or nice rounding passes the double range (a visible rendering bound, `chart-tick-limit`):
+ * the finite bounds themselves, ticks at both ends and the middle, normalised on halves (`axisFraction`).
+ */
+function extremeScale(min: number, max: number, note: (reason: string) => void): Scale {
+  const half = max / 2 - min / 2
+  note(`the scale ${min}..${max} passes the number range when rounded; drawn on its finite bounds`)
+  return { min, max, major: half, minor: half, ticks: [min, min / 2 + max / 2, max], minorTicks: [] }
+}
 /** The linear scale of [lo, hi] (the engine's auto scale; authored min/max/units win), tick-bounded. */
 function linearScale(lo: number, hi: number, axis: ChartAxis, percent: boolean, note: (reason: string) => void): Scale {
   let min: number, max: number, major: number
@@ -184,23 +194,24 @@ function linearScale(lo: number, hi: number, axis: ChartAxis, percent: boolean, 
   else {
     min = axis.min ?? Math.min(0, lo); max = axis.max ?? Math.max(0, hi)
     if (!(max > min)) max = min + 1
-    // A span past the double range: the data's own bounds, ticks at both ends and the middle (a rendering bound).
-    if (!Number.isFinite(max - min)) {
-      const half = max / 2 - min / 2
-      return { min, max, major: half, minor: half, ticks: [min, min / 2 + max / 2, max], minorTicks: [] }
-    }
+    const bounds = { min, max }
+    if (!Number.isFinite(max - min)) return extremeScale(bounds.min, bounds.max, note)
     major = axis.majorUnit && axis.majorUnit > 0 ? axis.majorUnit : niceStep((max - min) / 5)
     if (!Number.isFinite(major) || !(major > 0)) major = max - min
     if (axis.min === undefined) min = Math.floor(min / major) * major
     if (axis.max === undefined) max = Math.ceil(max / major) * major
     if (!(max > min)) max = min + major
+    // Nice rounding of a one-sided extreme can overflow: never publish a non-finite scale.
+    if (!finiteScale(min, max, major)) return extremeScale(bounds.min, bounds.max, note)
   }
   if (tickCount(min, max, major) > CHART_TICK_LIMIT) {
     const enlarged = niceStep((max - min) / (CHART_TICK_LIMIT - 1))
     note(`major unit ${major} gives more than ${CHART_TICK_LIMIT} ticks; drawn every ${enlarged}`)
     major = enlarged
+    const bounds = { min, max }
     if (axis.min === undefined && !percent) min = Math.floor(min / major) * major
     if (axis.max === undefined && !percent) max = Math.ceil(max / major) * major
+    if (!finiteScale(min, max, major)) return extremeScale(bounds.min, bounds.max, note)
   }
   let minor = axis.minorUnit && axis.minorUnit > 0 ? axis.minorUnit : major / 5
   if (tickCount(min, max, minor) > CHART_TICK_LIMIT) {
