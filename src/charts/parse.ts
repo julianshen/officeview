@@ -17,6 +17,7 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { readTrendlines } from './trendlines'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -448,6 +449,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       const fill = parseFillStyle(spPr, theme, charge)
       const lineStyle = lineOf(spPr)
       const markerStyle = parseMarker(child(ser, 'marker'), theme, charge)
+      const trendlines = readTrendlines(ser, lineOf, charge)
       const invertIfNegative = child(ser, 'invertIfNegative') ? flag(child(ser, 'invertIfNegative'), false) : undefined
       const invertColor = invertIfNegative !== undefined ? invertFill(ser, theme) : undefined
       if (invertColor) chargeChartColor(charge)
@@ -553,6 +555,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(Object.keys(pending).length ? { pending } : {}),
         ...(Object.keys(refs).length ? { refs } : {}),
         ...(analytic ? { analytic } : {}),
+        ...(trendlines ? { trendlines } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),

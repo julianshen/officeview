@@ -18,6 +18,7 @@ import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
+import { paintTrendlines } from './trendlines'
 import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 
 type FamilyCss = (family: string) => string
@@ -534,6 +535,20 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         }
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
       }
+    }
+    // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
+    // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
+    if (model.source.preparedAxes?.trendlines?.some(t => t.group === g)) {
+      const value = (y: number) => along(V, axisFraction(V, y, false))
+      const base = (x: number): number => {
+        if (group.family === 'scatter' || !axes.category) return plot.x + axisFraction(B, x, false) * plot.w
+        const C = axes.category, slot = x - 1
+        if (C.role !== 'date') return along(C, categoryFraction(C, slot, axes.between))
+        const i0 = Math.max(0, Math.min(Math.floor(slot), count - 2)), at0 = graph.categoryIndex(C, i0)
+        const idx = count > 1 ? at0 + (slot - i0) * (graph.categoryIndex(C, i0 + 1) - at0) : at0
+        return along(C, categoryFraction(C, idx, axes.between))
+      }
+      paintTrendlines(ctx, model.source, g, (x, y, out) => { const b = base(x), v = value(y); const xFirst = group.family === 'scatter' || horizontal === B; out[0] = xFirst ? b : v; out[1] = xFirst ? v : b; return true }, admitPath, plot, font(fontPx, family, familyCss), fontPx, TEXT)
     }
   })
   } finally { ctx.restore() }

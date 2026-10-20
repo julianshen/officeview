@@ -151,6 +151,8 @@ export interface ChartSeries {
   explosion?: number
   dPt?: Map<number, import('./style').ChartPointOverride>
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
+  /** `c:trendline`s as authored (spec 5.6); fitted in stage 1 (`PreparedAxes.trendlines`). */
+  trendlines?: import('./trendlines').ChartTrendline[]
   /** References still to be filled from worksheet cells (no saved data for that role). */
   pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
   /**
