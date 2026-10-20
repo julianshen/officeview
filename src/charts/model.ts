@@ -212,6 +212,15 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  /** ofPie only: the secondary plot is a smaller pie or a stacked bar (`bar`). */
+  ofPieType?: 'pie' | 'bar'
+  /** ofPie only: how points split into the secondary plot; absent is the Office default `auto` at the engine. */
+  splitType?: 'auto' | 'cust' | 'percent' | 'pos' | 'val'
+  splitPos?: number
+  /** ofPie only: the secondary plot's size in percent of the primary radius (authored 5..200). */
+  secondPieSize?: number
+  /** ofPie only (`cust` split): the authored secondary-plot point indices. */
+  secondPiePt?: number[]
   /** Contour: `c:wireframe` (band boundaries only). */
   wireframe?: boolean
   /** Contour `c:bandFmts` by band index: the fill colour (hex), null for noFill; holes take the accent cycle. */

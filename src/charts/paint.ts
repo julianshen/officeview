@@ -2,6 +2,7 @@ import { barGeometry } from './barGeometry'
 import { applyFillStyle, type ChartFillStyle } from './fills'
 import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
+import { paintOfPie } from './families/ofPie'
 import { createLineTracer } from './smooth'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
@@ -750,6 +751,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
       const group = model.groups[0]
       if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
       else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
+      else if (group.family === 'ofPie' && group.series[0]) paintOfPie(ctx, area, group, group.series[0], slot => model.view.source(slot), model.view.slots)
       else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
       paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
     }
