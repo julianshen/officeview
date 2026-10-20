@@ -4,7 +4,7 @@
  * legendEntry delete) and multi-level categories (grouped tiers, noMultiLvlLbl). Each case asserts painted output
  * and geometry, not only the model. Synthetic ("Office-shaped synthetic") fixtures only.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import { parseXmlOrdered } from '../src/core/xml'
@@ -17,7 +17,26 @@ import { categoryTiers } from '../src/charts/categories'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { ChartParseContext } from '../src/charts/context'
 import type { ChartModel } from '../src/charts/model'
-import { chartWorkbook } from './helpers/xlsx-chart-fixture'
+import { chartWorkbook, chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
+import { OfficePackage } from '../src/core/zip'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+
+const opened: Array<{ release(): Promise<void> }> = []
+afterEach(async () => { for (const source of opened.splice(0)) await source.release() })
+/** The same workbook read resident (parseXlsx) and paged (the import session's drawing read): the chart models. */
+async function residentAndPaged(bytes: Uint8Array): Promise<[ChartModel, ChartModel]> {
+  const resident = (await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })).sheets[0].drawings?.[0].content
+  const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'A4b', profile: 'D' })
+  expect((await session.done).kind).toBe('complete')
+  const source = createPagedWorkbookSource(session)
+  opened.push(source)
+  const store = source.store('1')
+  const read = await store.readDrawings!({ stamp: store.stamp, signal: new AbortController().signal }, 'D')
+  const paged = read.drawings[0].content
+  if (resident?.kind !== 'xlsxChart' || paged?.kind !== 'xlsxChart') throw new Error('no chart')
+  return [resident.chart, paged.chart]
+}
 
 const W = 400, H = 260
 const lit = (values: number[]) => `<numLit><ptCount val="${values.length}"/>${values.map((v, i) => `<pt idx="${i}"><v>${v}</v></pt>`).join('')}</numLit>`
@@ -147,6 +166,11 @@ describe('charts-text (Task A4b)', () => {
     const styled = await packaged(`<title>${cached}</title>`)
     expect(styled.text('Cached')[0]).toMatchObject({ font: `bold ${20 * 96 / 72}px "Calibri"`, fill: '#C00000' })
     expect(styled.count('C00000', styled.layout.title)).toBeGreaterThan(10)
+    // Resident and paged reads see the same style part: the same resolved runs.
+    const rels = `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/></Relationships>`
+    const [resident, paged] = await residentAndPaged(await chartWorkbookBytes(space(bars(three) + axes(), `<title>${cached}</title>`), { patch: (zip: JSZip) => { zip.file('xl/charts/_rels/chart1.xml.rels', rels); zip.file('xl/charts/style1.xml', styleXml) } }))
+    expect(resident.titleRuns).toEqual([{ text: 'Cached', sizePt: 20, bold: true, color: '#C00000' }])
+    expect(paged.titleRuns).toEqual(resident.titleRuns)
     const overridden = await packaged(`<title>${cached}<txPr><bodyPr/><p><pPr><defRPr sz="1000" b="0"/></pPr></p></txPr></title>`)
     expect(overridden.text('Cached')[0]).toMatchObject({ font: `${10 * 96 / 72}px "Calibri"`, fill: '#C00000' })
   })
