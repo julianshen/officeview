@@ -176,3 +176,13 @@ re-recorded. Intentional deltas are display-formatted ticks, new data labels,
 and the specified blank/error gap/zero/span behavior. Pie bestFit uses a bounded
 small-slice outside-placement heuristic; independent Office matching of label
 placement remains pending. No acceptance checkbox is advanced by these tests.
+
+## A4a colour precedence: implemented and unverified behaviour (spec 5.11)
+
+- **Implemented.** Series colours (and varyColors point colours) follow spPr, then the chart style part (`cs:chartStyle` `dataPoint`/`dataPointLine`), then the colour part (`cs:colorStyle`), then `c:style`, then the theme accent cycle. The cycle uses the variation table of Office's default colour part (colors1.xml, `id="10"`) for every cycle after the sixth series.
+- **Colour part methods: documented limitation.** `cs:colorStyle@meth` is read but only `cycle` is implemented. MS-ODRAWXML names `withinLinear` and `acrossLinear`, but gives no numeric rule for the shades they produce, and no Office-authored reference file is in the repo. The engine therefore treats both as `cycle`: colour `i mod n`, with the part's variation `floor(i / n)`. **Unverified against Office.** The method is preserved on the parsed part (`ChartColorPart.method`), so an Office-derived rule can replace this without a format change.
+- **`c:style` single-colour columns: unverified.** Greyscale (column 0) and single-accent (columns 2-7) styles spread a shade or tint over (-70%, 70%) across the series. This follows LibreOffice's `oox` import (`DetailFormatterBase::getPhColor`), not Office output.
+- **Explicit `c:symbol val="auto"`: unverified.** The marker cycle order (diamond, square, triangle, x, star, circle, plus, dot, dash) is recalled, not measured. A series without `c:marker` keeps the engine's default circle.
+- **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
+- **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
+- **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.

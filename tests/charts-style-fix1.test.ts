@@ -21,6 +21,8 @@ import { chartWorkbook, chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
 import { OfficePackage } from '../src/core/zip'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+import { parseChartPart } from '../src/charts/dataPrecedence'
+import { paintMarker, type MarkerSymbol } from '../src/charts/markers'
 
 const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart', A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const CS = 'http://schemas.microsoft.com/office/drawing/2012/chartStyle'
@@ -339,5 +341,106 @@ describe('A4a fix round 1: admission and charging (I8)', () => {
     expect(three.used - two.used).toBeGreaterThan(0)
     expect(many.used - two.used).toBe(30 * (three.used - two.used))
     expect(huge).toEqual(many)
+  })
+})
+
+describe('A4a fix round 2', () => {
+  const gradientLine = (stops: number) => `<a:ln w="25400"><a:gradFill><a:gsLst>${Array.from({ length: stops }, (_, i) => `<a:gs pos="${Math.round(i / Math.max(1, stops - 1) * 100000)}"><a:srgbClr val="0000${(i % 256).toString(16).padStart(2, '0')}"/></a:gs>`).join('')}</a:gsLst><a:lin ang="0"/></a:gradFill></a:ln>`
+  const strokeChart = (stops: number) => space(`<c:lineChart><c:grouping val="standard"/>${ser(0, [1, 2, 3], `<c:spPr>${gradientLine(stops)}</c:spPr>`)}<c:marker val="1"/>${AX}</c:lineChart>${AXES}`)
+  const parseWith = (xml: string, room = Infinity) => {
+    let held = 0, peak = 0
+    const workspace = createChartWorkspace('desktop', { reserve: (b: number) => { if (held + b > room) return false; held += b; peak = Math.max(peak, held); return true }, release: (_t: string, b: number) => { held -= b } })
+    const model = parseXlsxChart(parseXmlOrdered(xml), undefined, { pkg: {} as never, partPath: 'xl/charts/chart1.xml', profile: 'desktop', workspace })!
+    return { model, used: workspace.used, peak }
+  }
+
+  it('R1: a gradient stroke charges its fill and every kept stop before it is built; one byte short refuses the chart', () => {
+    const two = parseWith(strokeChart(2)), three = parseWith(strokeChart(3)), many = parseWith(strokeChart(32)), huge = parseWith(strokeChart(1000))
+    expect(three.used - two.used).toBeGreaterThan(0)
+    expect(many.used - two.used).toBe(30 * (three.used - two.used))
+    expect(huge.used).toBe(many.used)
+    const line = huge.model.groups[0].series[0].lineStyle!
+    expect(line.fill?.kind === 'gradient' && line.fill.stops.length).toBe(32)
+    // The refusal boundary is the parse's admitted peak: exactly that admits, one byte less refuses.
+    expect(many.peak - two.peak).toBe(30 * (three.used - two.used))
+    expect(parseWith(strokeChart(32), many.peak).model.refused).toBeUndefined()
+    expect(parseWith(strokeChart(32), many.peak - 1).model.refused).toBe(true)
+  })
+
+  it('R2: solid fill and line alpha reach the canvas (zero and partial), unauthored colours stay opaque', () => {
+    const alpha = (a: number) => `<a:srgbClr val="FF0000"><a:alpha val="${a}"/></a:srgbClr>`
+    expect(pixels(parse(space(bars(ser(0, [3, 5])), { root: `<c:spPr><a:solidFill>${alpha(0)}</a:solidFill></c:spPr>` }))).at(3, 3)[3]).toBe(0)
+    const half = pixels(parse(space(bars(ser(0, [3, 5])), { root: `<c:spPr><a:solidFill>${alpha(50000)}</a:solidFill></c:spPr>` }))).at(3, 3)
+    expect(half[0]).toBe(255); expect(half[3]).toBeGreaterThan(120); expect(half[3]).toBeLessThan(135)
+    // Bars and series strokes: the fill and stroke styles in force carry the alpha.
+    const record = (serExtra: string, family: 'bar' | 'line') => {
+      const model = parse(space(family === 'bar' ? bars(ser(0, [3, 5], serExtra)) : `<c:lineChart><c:grouping val="standard"/>${ser(0, [1, 3, 2], serExtra + '<c:marker><c:symbol val="none"/></c:marker>')}<c:marker val="1"/>${AX}</c:lineChart>${AXES}`, { legend: false }))
+      const canvas = createCanvas(400, 260), ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+      const fills: string[] = [], strokes: string[] = []
+      const fr = ctx.fillRect.bind(ctx), st = ctx.stroke.bind(ctx)
+      ctx.fillRect = (x, y, w, h) => { if (!(x === 0 && y === 0)) fills.push(String(ctx.fillStyle)); fr(x, y, w, h) }
+      ctx.stroke = (...a: []) => { strokes.push(String(ctx.strokeStyle)); st(...a) }
+      paintXlsxChart(model, ctx, 400, 260)
+      return { fills, strokes }
+    }
+    expect(record(`<c:spPr><a:solidFill>${alpha(0)}</a:solidFill></c:spPr>`, 'bar').fills).toEqual(['rgba(255, 0, 0, 0.00)', 'rgba(255, 0, 0, 0.00)'])
+    expect(record(`<c:spPr><a:solidFill>${alpha(40000)}</a:solidFill></c:spPr>`, 'bar').fills).toEqual(['rgba(255, 0, 0, 0.40)', 'rgba(255, 0, 0, 0.40)'])
+    expect(record(`<c:spPr><a:ln w="25400"><a:solidFill>${alpha(0)}</a:solidFill></a:ln></c:spPr>`, 'line').strokes.at(-1)).toBe('rgba(255, 0, 0, 0.00)')
+    expect(record(`<c:spPr><a:ln w="25400"><a:solidFill>${alpha(40000)}</a:solidFill></a:ln></c:spPr>`, 'line').strokes.at(-1)).toBe('rgba(255, 0, 0, 0.40)')
+    expect(record(solid('00FF00'), 'bar').fills).toEqual(['#00ff00', '#00ff00'])
+  })
+
+  it('R3: every marker symbol honours fill and stroke suppression; line symbols draw border-only', () => {
+    const symbols: MarkerSymbol[] = ['circle', 'square', 'diamond', 'triangle', 'x', 'star', 'dash', 'dot', 'plus']
+    for (const symbol of symbols) {
+      const ctx = createCanvas(40, 40).getContext('2d') as unknown as CanvasRenderingContext2D
+      let fills = 0, strokes = 0
+      const f = ctx.fill.bind(ctx), st = ctx.stroke.bind(ctx)
+      ctx.fill = (...a: []) => { fills++; f(...a) }
+      ctx.stroke = (...a: []) => { strokes++; st(...a) }
+      paintMarker(ctx, 20, 20, symbol, 10, false, false)
+      expect([symbol, fills, strokes]).toEqual([symbol, 0, 0])
+      paintMarker(ctx, 20, 20, symbol, 10, false, true)
+      expect([symbol, fills, strokes]).toEqual([symbol, 0, 1])
+    }
+    // Through the painter: fill and line both noFill paint nothing; a border-only dot shows its border colour.
+    const chart = (symbol: string, spPr: string) => parse(space(`<c:lineChart><c:grouping val="standard"/>${ser(0, [5, 5, 5], `<c:spPr><a:ln><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val="${symbol}"/><c:size val="20"/><c:spPr>${spPr}</c:spPr></c:marker>`)}<c:marker val="1"/>${AX}</c:lineChart>${AXES}`, { legend: false }))
+    for (const symbol of ['x', 'plus', 'dash', 'dot']) {
+      expect([symbol, pixels(chart(symbol, '<a:noFill/><a:ln><a:noFill/></a:ln>')).count('4472C4', 40)]).toEqual([symbol, 0])
+      expect([symbol, pixels(chart(symbol, '<a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln>')).count('00FF00', 40) > 0]).toEqual([symbol, true])
+    }
+  })
+
+  describe('R4: an authored colour or style part that cannot be admitted refuses the chart', () => {
+    const files = async () => {
+      const bytes = await chartWorkbookBytes(space(bars(four())), { patch: (zip: JSZip) => {
+        zip.file('xl/charts/_rels/chart1.xml.rels', RELS)
+        zip.file('xl/charts/style1.xml', style(AUTO_PH))
+        zip.file('xl/charts/colors1.xml', COLORS)
+      } })
+      return OfficePackage.load(bytes)
+    }
+    const run = async (refuse: (tag: string) => boolean) => {
+      const pkg = await files()
+      let held = 0
+      const workspace = createChartWorkspace('desktop', { reserve: (b: number, tag: string) => { if (refuse(tag)) return false; held += b; return true }, release: (_t: string, b: number) => { held -= b } })
+      const root = parseXmlOrdered((await pkg.text('xl/charts/chart1.xml'))!)
+      const result = await parseChartPart(root, undefined, { pkg, partPath: 'xl/charts/chart1.xml', profile: 'desktop', workspace })
+      return { result, held, used: workspace.used }
+    }
+    it('admitted: native, the part colours', async () => {
+      const { result } = await run(() => false)
+      expect(result.kind === 'native' && result.model.groups[0].series.map(s => s.color)).toEqual(['FF0000', '00FF00', '800000', '008000'])
+    })
+    it('read-time refusal of the colour part', async () => {
+      const { result, used } = await run(tag => tag.startsWith('chart-read:xl/charts/colors1.xml'))
+      expect(result.kind).toBe('refused')
+      expect(used).toBe(0)
+    })
+    it('extraction-time refusal (the kept palette)', async () => {
+      const { result, used } = await run(tag => tag.startsWith('chart-style:'))
+      expect(result.kind).toBe('refused')
+      expect(used).toBe(0)
+    })
   })
 })

@@ -120,31 +120,24 @@ export function paintMarker(
       if (hasStroke) ctx.stroke()
       break
 
+    // Line symbols have no interior: they draw with the border, or, with no border, in the fill colour;
+    // with both suppressed they draw nothing.
     case 'x':
-      ctx.moveTo(cx - r, cy - r)
-      ctx.lineTo(cx + r, cy + r)
-      ctx.moveTo(cx - r, cy + r)
-      ctx.lineTo(cx + r, cy - r)
-      ctx.stroke()
-      break
-
     case 'plus':
-      ctx.moveTo(cx - r, cy)
-      ctx.lineTo(cx + r, cy)
-      ctx.moveTo(cx, cy - r)
-      ctx.lineTo(cx, cy + r)
-      ctx.stroke()
+    case 'dash': {
+      if (!hasFill && !hasStroke) break
+      if (symbol === 'x') { ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r); ctx.moveTo(cx - r, cy + r); ctx.lineTo(cx + r, cy - r) }
+      else if (symbol === 'plus') { ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r) }
+      else { ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy) }
+      if (!hasStroke) { ctx.save(); ctx.strokeStyle = ctx.fillStyle; ctx.stroke(); ctx.restore() }
+      else ctx.stroke()
       break
-
-    case 'dash':
-      ctx.moveTo(cx - r, cy)
-      ctx.lineTo(cx + r, cy)
-      ctx.stroke()
-      break
+    }
 
     case 'dot':
       ctx.arc(cx, cy, Math.max(1, r * 0.45), 0, Math.PI * 2)
-      ctx.fill()
+      if (hasFill) ctx.fill()
+      if (hasStroke) ctx.stroke()
       break
 
     case 'star': {

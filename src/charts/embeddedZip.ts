@@ -233,9 +233,9 @@ export async function resolveExternalData(context: Pick<ChartParseContext, 'pkg'
  * Chart part `.rels` -> the internal targets of the first relationship of each wanted Type (matched by its last
  * path segment, e.g. `chartStyle`, `chartColorStyle`), through the same bounded, admitted relationships reader.
  * Its work is charged to `workspace` and refunded on return. External, outside-package or missing targets are
- * left out; a malformed or refused `.rels` yields no targets.
+ * left out; a malformed `.rels` yields no targets, a refused one (admission or size) `'refused'`.
  */
-export async function resolveRelatedParts(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'workspace'>, types: readonly string[]): Promise<Map<string, string>> {
+export async function resolveRelatedParts(context: Pick<ChartParseContext, 'pkg' | 'partPath' | 'workspace'>, types: readonly string[]): Promise<Map<string, string> | 'refused'> {
   const { pkg, partPath, workspace } = context, tag = `chart-rels:${partPath}#${++reads}`, out = new Map<string, string>()
   const op: Charging = { workspace, tag, live() {}, charge(bytes) { if (!workspace.reserve(bytes, tag)) throw new Stop(REFUSED()) } }
   try {
@@ -249,6 +249,7 @@ export async function resolveRelatedParts(context: Pick<ChartParseContext, 'pkg'
     }, true)
   } catch (error) {
     if (!(error instanceof Stop)) throw error
+    if (error.result.kind === 'refused') return 'refused'
     out.clear()
   } finally { workspace.release(tag) }
   return out

@@ -17,7 +17,7 @@
  */
 import { attrs, getChild, type XmlNode } from '../core/xml'
 import { resolveDrawingColor, type ColorDefinition, type ThemeContext } from '../drawing/style'
-import { applyFillStyle, hexColor, parseFillStyle, type ChartFillStyle, type Box } from './fills'
+import { applyFillStyle, hexColor, parseFillStyle, toCssColor, type ChartFillStyle, type Box } from './fills'
 import type { ChartMarkerStyle } from './markers'
 import { chargeChartLine, type ChartCharge } from './own'
 
@@ -84,8 +84,8 @@ export function parseLineStyle(ln: XmlNode | undefined, theme?: ThemeContext, ch
   const cap = CAPS[attrs(ln).cap ?? '']
   const dash = attrs(getChild(ln, 'prstDash')).val
   const join: CanvasLineJoin | undefined = getChild(ln, 'round') ? 'round' : getChild(ln, 'bevel') ? 'bevel' : getChild(ln, 'miter') ? 'miter' : undefined
-  // The line's own fill (its stroke colour); a nested charge is not needed: it lives inside the line's price.
-  const fill = noFill ? undefined : parseFillStyle(ln, theme)
+  // The line's own fill (its stroke colour), charged with its kept stops before it is built.
+  const fill = noFill ? undefined : parseFillStyle(ln, theme, charge)
   return {
     ...(attrs(ln).w !== undefined && Number.isFinite(w) && w >= 0 ? { width: w / 12700 * 96 / 72 } : {}),
     ...(cap ? { cap } : {}),
@@ -116,7 +116,7 @@ export function applyLineStyle(ctx: CanvasRenderingContext2D, line: ChartLineSty
     const previous = ctx.fillStyle
     if (applyFillStyle(ctx, line.fill, bounds)) ctx.strokeStyle = ctx.fillStyle
     ctx.fillStyle = previous
-  } else if (line.color) ctx.strokeStyle = `#${line.color}`
+  } else if (line.color) ctx.strokeStyle = toCssColor(line.color, line.fill?.kind === 'solid' ? line.fill.alpha : undefined)
   return true
 }
 

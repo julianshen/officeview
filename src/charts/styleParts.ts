@@ -8,7 +8,10 @@
  * - what is kept (at most CHART_STYLE_COLORS colours and CHART_STYLE_VARIATIONS variations of at most
  *   CHART_STYLE_TRANSFORMS transforms) is charged to the document workspace under its own tag before it is
  *   built, and refunded by `release()` once the parse has used it;
- * - a missing, malformed, unsupported or refused part is skipped: precedence falls to the next level.
+ * - a missing, malformed or unsupported part is skipped: precedence falls to the next level;
+ * - a part (or its `.rels`, or the kept extract) that cannot be admitted refuses the chart (spec 6.4): an authored
+ *   colour never silently falls back to a lower level because of headroom, and a palette is never compacted
+ *   around a refused entry. Everything charged so far is refunded.
  */
 import { attrs, getChildren, orderedChildren, type XmlNode } from '../core/xml'
 import { parseDrawingColor, type ColorDefinition } from '../drawing/style'
@@ -23,15 +26,20 @@ const child = (node: XmlNode | undefined, name: string) => getChildren(node, nam
 let reads = 0
 
 export interface ChartStylePartsRead { parts: ChartStyleParts; release(): void }
+class StyleRefused extends Error {}
 
-/** Reads the chart's style and colour parts; undefined when it has neither (or neither could be read). */
-export async function readChartStyleParts(context: ChartParseContext): Promise<ChartStylePartsRead | undefined> {
+/**
+ * Reads the chart's style and colour parts: undefined when it has neither (or neither could be read),
+ * `'refused'` when an authored part could not be admitted.
+ */
+export async function readChartStyleParts(context: ChartParseContext): Promise<ChartStylePartsRead | 'refused' | undefined> {
   if (context.signal?.aborted) return undefined
   const { workspace } = context, tag = `chart-style:${context.partPath}#${++reads}`
   const release = () => workspace.release(tag)
-  const charge = (bytes: number) => workspace.reserve(bytes, tag)
+  const charge = (bytes: number) => { if (!workspace.reserve(bytes, tag)) throw new StyleRefused() }
   try {
     const targets = await resolveRelatedParts(context, ['chartStyle', 'chartColorStyle'])
+    if (targets === 'refused') return 'refused'
     if (!targets.size) return undefined
     const parts: ChartStyleParts = {}
     const colorPath = targets.get('chartColorStyle'), stylePath = targets.get('chartStyle')
@@ -39,35 +47,36 @@ export async function readChartStyleParts(context: ChartParseContext): Promise<C
     if (stylePath) { const style = await extract(context, stylePath, root => stylePart(root, charge)); if (style) parts.style = style }
     if (!parts.color && !parts.style) { release(); return undefined }
     return { parts, release }
-  } catch {
+  } catch (error) {
     release()
-    return undefined
+    return error instanceof StyleRefused ? 'refused' : undefined
   }
 }
 
 async function extract<T>(context: ChartParseContext, path: string, read: (root: XmlNode) => T | undefined): Promise<T | undefined> {
   const tree = await readChartPart(context.pkg, path, context)
+  if (tree?.kind === 'refused') throw new StyleRefused()
   if (tree?.kind !== 'tree') return undefined
   try { return read(tree.root) } finally { tree.release() }
 }
 
 /** A colour, its transforms capped, charged before it is kept. */
-function keepColor(color: ColorDefinition | undefined, charge: (bytes: number) => boolean): ColorDefinition | undefined {
+function keepColor(color: ColorDefinition | undefined, charge: (bytes: number) => void): ColorDefinition | undefined {
   if (!color) return undefined
   const transforms = color.transforms.slice(0, CHART_STYLE_TRANSFORMS)
-  if (!charge(COLOR_BYTES + transforms.length * TRANSFORM_BYTES + 2 * (color.value?.length ?? 0))) return undefined
+  charge(COLOR_BYTES + transforms.length * TRANSFORM_BYTES + 2 * (color.value?.length ?? 0))
   return { ...color, transforms }
 }
 
 /** `cs:colorStyle`: `meth`, its colour list (any DrawingML colour) and its `cs:variation` transform lists. */
-function colorPart(root: XmlNode, charge: (bytes: number) => boolean): ChartColorPart | undefined {
+function colorPart(root: XmlNode, charge: (bytes: number) => void): ChartColorPart | undefined {
   const colors: ColorDefinition[] = [], variations: ChartColorPart['variations'] = []
   for (const [name, node] of orderedChildren(root)) {
     if (name === 'variation') {
       if (variations.length >= CHART_STYLE_VARIATIONS) continue
       const transforms = orderedChildren(node).filter(([n]) => n !== '#text').slice(0, CHART_STYLE_TRANSFORMS)
         .map(([n, t]) => ({ name: n, ...(attrs(t).val !== undefined ? { value: attrs(t).val } : {}) }))
-      if (!charge(COLOR_BYTES + transforms.length * TRANSFORM_BYTES)) break
+      charge(COLOR_BYTES + transforms.length * TRANSFORM_BYTES)
       variations.push(transforms)
     } else if (name !== '#text' && name !== 'extLst' && colors.length < CHART_STYLE_COLORS) {
       const color = keepColor(colorOf(name, node), charge)
@@ -85,7 +94,7 @@ function colorOf(name: string, node: XmlNode): ColorDefinition | undefined {
 }
 
 /** `cs:chartStyle`: the data point entries' spPr colour and fillRef/lnRef `cs:styleClr`. */
-function stylePart(root: XmlNode, charge: (bytes: number) => boolean): ChartStylePart | undefined {
+function stylePart(root: XmlNode, charge: (bytes: number) => void): ChartStylePart | undefined {
   const entry = (name: string, line: boolean): ChartStyleEntry | undefined => {
     const node = child(root, name)
     if (!node) return undefined
@@ -97,7 +106,7 @@ function stylePart(root: XmlNode, charge: (bytes: number) => boolean): ChartStyl
     // The reference's own colour (a phClr stand-in when the spPr has none) is the styleClr; an explicit spPr colour wins.
     const color = holder ? keepColor(parseDrawingColor(holder), charge) : undefined
     if (!color && styleColor === undefined) return undefined
-    if (!charge(ENTRY_BYTES)) return undefined
+    charge(ENTRY_BYTES)
     return { ...(color ? { color } : {}), ...(styleColor !== undefined ? { styleColor } : {}) }
   }
   const dataPoint = entry('dataPoint', false), dataPointLine = entry('dataPointLine', true)

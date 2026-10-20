@@ -46,6 +46,8 @@ export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefi
   let chart: ChartModel | undefined
   // The style and colour parts (spec 5.11) are read first: the parse bakes the series colours from them.
   const style = await readChartStyleParts(context)
+  // An authored style or colour part that cannot be admitted refuses the chart (spec 6.4), never default colours.
+  if (style === 'refused') return { kind: 'refused', reason: 'This chart needs more memory than is available for charts' }
   try {
     chart = parse(root, theme, style ? { ...context, styleParts: style.parts } : context)
     style?.release()

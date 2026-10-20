@@ -55,7 +55,8 @@ export function hexColor(color: DrawingColor | undefined): string | undefined {
   return `${r}${g}${b}`.toUpperCase()
 }
 
-function toCssColor(color: string, alpha?: number): string {
+/** A CSS colour for a hex colour and its DrawingML alpha (opaque `#hex` when there is none). */
+export function toCssColor(color: string, alpha?: number): string {
   if (color.startsWith('#') || color.startsWith('rgb')) {
     if (alpha !== undefined && alpha < 1 && color.startsWith('#') && color.length === 7) {
       const r = parseInt(color.slice(1, 3), 16)

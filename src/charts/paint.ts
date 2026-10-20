@@ -55,8 +55,9 @@ const PT = 96 / 72
 
 /** Fills `box`'s path or rect with an authored fill; false for noFill (nothing painted). */
 function fillWith(ctx: CanvasRenderingContext2D, fill: ChartFillStyle | undefined, color: string, box: Box): boolean {
-  if (fill && fill.kind !== 'solid') return applyFillStyle(ctx, fill, box)
-  ctx.fillStyle = `#${fill?.kind === 'solid' ? fill.color : color}`
+  // An authored fill keeps its alpha (applyFillStyle); an unauthored colour is opaque.
+  if (fill) return applyFillStyle(ctx, fill, box)
+  ctx.fillStyle = `#${color}`
   return true
 }
 /** Strokes the current path with an authored border (only one that carries a colour or width). */
