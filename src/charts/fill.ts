@@ -5,9 +5,9 @@ import { prepareChartAxes } from './prepare'
  * cells, defined names, paged-reader lines and the decimal scanner. Moved
  * from `src/xlsx/chart.ts` (A0a) behaviour-identically.
  */
-import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, parseChartRange } from './parse'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, CHART_TEXT_BYTES_LIMIT, parseChartRange } from './parse'
 import type { ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
-import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
+import { POINT_UNAVAILABLE, PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
 import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
@@ -60,10 +60,19 @@ const lineLength = (range: ChartRange) => { const rows = range.r1 - range.r0 + 1
  * for display only. Readers and the fill decide it the same way.
  */
 export function seriesLimit(series: ChartSeries): number {
+  // An analytic ChartEx family's series is always acquired to the analytic bound; a longer reference refuses the
+  // whole chart in the fill (never a display prefix).
+  if (series.analytic === 'chart') return CHART_ANALYTIC_POINT_LIMIT
   if (series.analytic !== true) return CHART_POINT_LIMIT
   const ranges = [series.pending?.values, series.pending?.xValues].filter((range): range is ChartRange => Boolean(range && !range.definedName))
   return ranges.some(range => lineLength(range) > CHART_ANALYTIC_POINT_LIMIT) ? CHART_POINT_LIMIT : CHART_ANALYTIC_POINT_LIMIT
 }
+/** The category acquisition bound of a series: an analytic ChartEx series pairs every value with its category. */
+export const categoryLimit = (series: ChartSeries): number => series.analytic === 'chart' ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT
+export const CHART_TOO_MANY_POINTS = 'This chart has too many data points to summarize'
+export const CHART_DATA_NOT_AVAILABLE = "This chart's data is not available"
+/** A whole-chart analytic refusal (spec 4.3, 7; chartex-map §2.4): the chart is refused with `message`. */
+export class ChartAnalyticRefusal extends ChartRefusal {}
 /** Writes the point state of one filled cell (spec 5.8); `onTruncated` hears a value the reader could not read in full.
  * `map` converts a date role's serial into the chart epoch (undefined: no counterpart, the point is unavailable). */
 function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onTruncated: () => void, map?: (v: number) => number | undefined): void {
@@ -211,7 +220,8 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
   } catch (error) {
     if (owner) owner.workspace.release(fillTag)
     if (!(error instanceof ChartRefusal)) throw error
-    const refused = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true as const }
+    const reason = error instanceof ChartAnalyticRefusal ? error.message : 'This chart needs more memory than is available for charts'
+    const refused = { ...model, preparedAxes: undefined, unsupported: reason, refused: true as const }
     succeedChartModel(model, refused)
     return refused
   }
@@ -242,6 +252,10 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     for (let i = 0, k = 0; i < line.count; i++) { const at = linePoint(line, i); if (hidden(line.sheet, at.row, at.col)) out[k++] = i }
     return out
   }
+  // The chart-wide label budget (spec 7: 4 MiB) of analytic ChartEx categories: labels past it are dropped (empty),
+  // the chart is marked truncated and diagnosed. Cached labels already in the model count first.
+  let labelBytes = 0, labelsDropped = 0, labelsCut = 0
+  for (const group of model.groups) for (const series of group.series) if (series.analytic === 'chart') for (const text of series.categories ?? []) labelBytes += stringBytes(text)
   let categories = model.categories, categoryHidden = model.categoryHidden, categoryValues = model.categoryValues
   if (model.categoryPending) {
     const line = chartLine(model.categoryPending, sheetOf(model.categoryPending), true)
@@ -272,15 +286,17 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       if (!series.pending && !series.refs) return series
       const { pending = {}, ...rest } = series
       const next: ChartSeries = { ...rest }
-      const limit = seriesLimit(series)
+      const limit = seriesLimit(series), whole = series.analytic === 'chart'
       if (series.analytic === true && limit === CHART_POINT_LIMIT) next.analytic = 'refused'
       const binding = group.binding
       const valueDates = dateFormatted(binding.kind === 'cartesian' ? binding.value : binding.kind === 'xy' ? binding.y : undefined) ? toChart : undefined
       const xDates = dateFormatted(binding.kind === 'xy' || binding.kind === 'cartesian' ? binding.x : undefined) ? toChart : undefined
       const fill = (range: ChartRange, map?: (v: number) => number | undefined): ChartPoints => {
         const line = chartLine(range, sheetOf(range), false, limit)
+        // An analytic ChartEx input longer than the analytic bound refuses the chart before anything is read.
+        if (whole && line.truncated) throw new ChartAnalyticRefusal(CHART_TOO_MANY_POINTS)
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
-        truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
+        if (!whole) truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
         const out = new PointWriter(line.count, 'lazy', charge)
         for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }, map) }
@@ -290,13 +306,24 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       const cached = (points: ChartPoints, range: ChartRange) => points.length ? withHidden(points, provenance(chartLine(range, sheetOf(range), false, points.length))) : points
       if (pending.values) next.values = fill(pending.values, valueDates)
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
+      // An analytic family with a required value point unavailable is refused (chartex-map §2.4).
+      if (whole && pending.values && next.values.states.includes(POINT_UNAVAILABLE)) throw new ChartAnalyticRefusal(CHART_DATA_NOT_AVAILABLE)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
       if(pending.categories){
-        const line=chartLine(pending.categories,sheetOf(pending.categories),true)
+        const line=chartLine(pending.categories,sheetOf(pending.categories),true,categoryLimit(series))
+        if (whole && line.truncated) throw new ChartAnalyticRefusal(CHART_TOO_MANY_POINTS)
         truncated ||= line.truncated
         charge(line.count*8)
-        next.categories=Array.from({length:line.count},(_,i)=>{const at=linePoint(line,i);return label(allocation=>asText(lookup(line.sheet,at.row,at.col,true,allocation)).slice(0,CHART_LABEL_LIMIT))})
+        next.categories=Array.from({length:line.count},(_,i)=>{const at=linePoint(line,i);return label(allocation=>{
+          const text=asText(lookup(line.sheet,at.row,at.col,true,allocation))
+          if (!whole) return text.slice(0,CHART_LABEL_LIMIT)
+          const kept=text.length>CHART_LABEL_LIMIT?(labelsCut++,text.slice(0,CHART_LABEL_LIMIT)):text
+          // The formatter's output is bounded (LABEL_BOUND_BYTES) before it is built; past the chart budget it is dropped.
+          if (labelBytes+stringBytes(kept)>CHART_TEXT_BYTES_LIMIT) { labelsDropped++; return '' }
+          labelBytes+=stringBytes(kept)
+          return kept
+        })})
       }
       if (pending.name) {
         const name = pending.name
@@ -315,6 +342,9 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     }),
   }))
   const diagnostics = model.diagnostics ? [...model.diagnostics] : []
+  const note = (code: string, reason: string) => { charge(stringBytes(code) + stringBytes(reason)); diagnostics.push({ code, reason }) }
+  if (labelsCut) { truncated = true; note('chart-label-truncated', `${labelsCut} ${labelsCut === 1 ? 'label was' : 'labels were'} cut to ${CHART_LABEL_LIMIT} characters`) }
+  if (labelsDropped) { truncated = true; note('chart-label-budget', `${labelsDropped} ${labelsDropped === 1 ? 'label was' : 'labels were'} dropped past the chart's 4 MiB label budget`) }
   if (unrepresentable) {
     const reason = `${unrepresentable} date ${unrepresentable === 1 ? 'value has' : 'values have'} no counterpart in the ${epoch} date system`
     charge(stringBytes(reason))
@@ -421,7 +451,7 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
       add(chart.categoryPending, true)
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
-        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true)
+        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true, categoryLimit(s))
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }

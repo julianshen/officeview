@@ -123,7 +123,7 @@ export const withHidden = (points: ChartPoints, hidden: Uint32Array | undefined)
  * from a prefix or a partial set.
  */
 export function analyticInput(series: Pick<ChartSeries, 'analytic' | 'values' | 'xValues'>, role: 'values' | 'xValues' = 'values'): { kind: 'input'; values: number[] } | { kind: 'refused'; reason: string } {
-  if (series.analytic !== true) return { kind: 'refused', reason: series.analytic === 'refused' ? 'analytic-point-limit' : 'not-analytic' }
+  if (series.analytic !== true && series.analytic !== 'chart') return { kind: 'refused', reason: series.analytic === 'refused' ? 'analytic-point-limit' : 'not-analytic' }
   const points = series[role], values: number[] = []
   for (let i = 0; i < (points?.length ?? 0); i++) {
     const state = points!.states[i]

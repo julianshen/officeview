@@ -28,7 +28,7 @@ import type { ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartModel, ChartRange, ChartResult, ChartSeries } from './model'
 import { CHART_POINT_LIMIT, parseXlsxChart } from './parse'
-import { chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
+import { categoryLimit, chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
@@ -96,7 +96,7 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
     const limit = seriesLimit(series)
     if (pending.values) { slots.push({ group: g, series: s, role: 'values' }); requests.push({ range: pending.values, text: false, limit }) }
     if (pending.xValues) { slots.push({ group: g, series: s, role: 'xValues' }); requests.push({ range: pending.xValues, text: false, limit }) }
-    if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: CHART_POINT_LIMIT }) }
+    if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: categoryLimit(series) }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
   }))
   // Classic: c:externalData; ChartEx: cx:chartData/cx:externalData (chartex-map §2.1).

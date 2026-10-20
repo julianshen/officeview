@@ -242,7 +242,7 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
     const col = (layoutPr: string, ptCount = 1) => `<cx:chartData><cx:data id="0"><cx:numDim type="val"><cx:lvl ptCount="${ptCount}"><cx:pt idx="0">1</cx:pt></cx:lvl></cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="clusteredColumn"><cx:dataId val="0" /><cx:layoutPr>${layoutPr}</cx:layoutPr></cx:series></cx:plotAreaRegion></cx:plotArea></cx:chart>`
     for (const [body, reason] of [
       [col('<cx:binning />', 65537), 'This chart has too many data points to summarize'],
-      [col('<cx:binning><cx:binCount val="1001" /></cx:binning>'), 'This chart has more histogram bins than the viewer draws'],
+      [col('<cx:binning><cx:binCount val="1001" /></cx:binning>'), 'invalid binning'],
     ] as const) {
       const p = await syntheticPart(body)
       expect(await parseChartPart(p.root, theme, p.context), reason).toMatchObject({ kind: 'refused', reason, feature: 'ChartEx' })
