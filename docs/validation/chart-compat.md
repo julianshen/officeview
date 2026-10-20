@@ -35,6 +35,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After A1a fix round 3 | A1a r3 commit | 38,639 | The interactive sheet preparation forwards the chart context and parents the receiving chart facet to the viewer's main-thread ledger (`mainChartParent`): `InteractiveSheetDoc`, `office-worker` and `charts-*` chunks only. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes (hash churn only). Running total vs B0: +8 B |
 | After A1a fix round 4 | A1a r4 commit | 38,637 | Receiving chart contexts per (document, parent, profile), held by preparation/asset leases and carried per paint (`acquireChartContext`, `ContentPaintAssets.chartContext`): `charts-*`, `office-worker` and `InteractiveSheetDoc` chunks only. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes. Running total vs B0: +6 B |
 | After B2 | B2 commit | 38,636 | Before (`7c67e33` tree plus B2's type-only `chartEx.palette` field, rebuilt): 38,640. Waterfall and funnel families (`src/charts/chartex/waterfall.ts`, `funnel.ts`) and their hooks in axes, display, prepare, layout, labels and paint live in the lazy `charts-*` chunk; `dist/index.js` changes by hash churn only. Bytes added by B2: −4 (hash churn). Running total vs B0: +5 B. Ceiling 38,647 |
+| After B2 fix round 1 | B2 r1 commit | 38,635 | Subtotal state gate, finite funnel ratio, hidden series out of the display view, funnel label pricing: lazy `charts-*` chunk only (hash churn). Running total vs B0: +4 B |
 
 ## Spec §8 testing and validation
 
@@ -226,6 +227,10 @@ Rules implemented from the map but **unverified** against Office output:
   zero-width bar but keep their label. Category labels are drawn right-aligned to the left of the plot.
 - **Funnel label positions:** `ctr` (the default) is the bar centre. `inEnd`, `inBase` and `outEnd` are placed at
   the bar ends, and `t`, `b`, `l` and `r` are offset 8 px. The waterfall default is `outEnd`.
-- **Several visible series** are unsupported, and the fallback picture is kept. The map states this for funnel;
-  for waterfall it is a [P] extension. Hidden series are never drawn and are left out of the funnel legend.
+- **Several visible series** are unsupported, and the fallback picture is kept. For funnel this is map §9 [U]. For
+  waterfall it is a **[P] project rule**, recorded in map §6 by controller ruling at B2 review round 1: no native
+  file shows a multi-series waterfall. Hidden series never reach the display view, so they change neither the
+  slots, the geometry, the labels nor the legend.
+- **Subtotal point states [P]:** a subtotal index on a hidden, blank, error or unavailable point draws no bar and
+  leaves the running total unchanged; an error is diagnosed like any other waterfall point.
 

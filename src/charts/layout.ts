@@ -189,6 +189,9 @@ export function layoutBound(model: ChartModel, w = Infinity, h = Infinity): numb
   // Contour legend entries: one per band the legend can show (at most the tick bound), each with its bounded name,
   // a transient endpoint cut and its measured width, plus a possible truncation diagnostic.
   if (model.groups[0]?.family === 'contour') text += Math.min(legendBands(model), legendCapacity(model, w, h)) * CONTOUR_LEGEND_ENTRY_BYTES + 512
+  // Funnel category labels (B2): each drawn slot's label is retained in the texts map (record + UTF-16) and its
+  // measured width (entry + UTF-16), priced from the strings the layout will select, before any is built.
+  if (model.groups[0]?.family === 'funnel') { const view = displayView(model); for (let slot = 0; slot < view.slots; slot++) text += 8 + 112 + 4 * (view.category(slot)?.length ?? 0) }
   // Waterfall legend entries (B2): three fixed kind names and their widths.
   if (model.groups[0]?.family === 'waterfall') text += WATERFALL_LEGEND.reduce((n, name) => n + 64 + 2 * name.length + 128, 0)
   // Trendline legend entries (A6a): a generated or authored name (at most 255 + the series name's units) and its width.

@@ -7,7 +7,8 @@
  * - A subtotal point (its source index is in `cx:subtotals`) is drawn from 0 to the running total, anchored on the
  *   axis, and the accumulator continues from it. Its own cell value is not used for the height [U: the map's rule;
  *   no native part lists a subtotal].
- * - Blank, error, unavailable and hidden points draw no bar and contribute 0 [P].
+ * - Blank, error, unavailable and hidden points draw no bar and contribute 0 [P]; a subtotal index on such a point
+ *   draws no bar either (the accumulator is unchanged).
  * - Colours: increase, decrease and total take the style palette entries 0, 1, 2 (accents 1-3; resolved at parse
  *   into `chartEx.palette`) [U]; a `dataPt@idx` fill or colour overrides one bar.
  * - Connector lines (`cx:visibility@connectorLines`, absent: on [U]) join the level after bar i to the next bar.
@@ -37,7 +38,7 @@ export type WaterfallVisit = (slot: number, source: number, kind: WaterfallKind,
 /**
  * Streams the bars of one series over `slots` display slots. `source` is the display view's (monotonic) source
  * index of a slot, `point` the slot's point (undefined: hidden), `subtotals` the sorted, distinct subtotal indices.
- * `skipped` is told of every value-less, non-subtotal slot (its state; undefined when hidden).
+ * `skipped` is told of every value-less slot, subtotal or not (its state; undefined when hidden).
  */
 export function forEachWaterfallBar(slots: number, source: (slot: number) => number, point: (slot: number) => ChartPoint | undefined,
   subtotals: readonly number[], visit: WaterfallVisit, skipped?: (slot: number, state: ChartPoint['state'] | undefined) => void): void {
@@ -45,9 +46,10 @@ export function forEachWaterfallBar(slots: number, source: (slot: number) => num
   for (let slot = 0; slot < slots; slot++) {
     const i = source(slot)
     while (k < subtotals.length && subtotals[k] < i) k++
-    if (k < subtotals.length && subtotals[k] === i) { visit(slot, i, 'total', 0, acc); continue }
+    // Every point, a subtotal included, is gated by its visibility and state first (map §2.4).
     const p = point(slot)
     if (p?.state !== 'value') { skipped?.(slot, p?.state); continue }
+    if (k < subtotals.length && subtotals[k] === i) { visit(slot, i, 'total', 0, acc); continue }
     const from = acc
     acc += p.v
     visit(slot, i, p.v >= 0 ? 'increase' : 'decrease', from, acc)

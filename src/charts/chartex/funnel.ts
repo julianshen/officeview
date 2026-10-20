@@ -52,7 +52,8 @@ export function funnelGeometry(slots: number, point: (slot: number) => ChartPoin
     bar: slot => {
       const p = slot >= 0 && slot < slots ? point(slot) : undefined
       if (p?.state !== 'value') return undefined
-      const w = max > 0 ? plot.w * Math.max(0, p.v) / max : 0
+      // The ratio first: v / max ≤ 1, so a large finite value never overflows.
+      const w = max > 0 ? plot.w * (Math.max(0, p.v) / max) : 0
       return { x: cx - w / 2, y: plot.y + band * slot + (band - thick) / 2, w, h: thick }
     },
   }

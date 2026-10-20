@@ -52,24 +52,26 @@ const allHidden = (points: ChartPoints) => points.length > 0 && (points.hidden?.
 /** Category slots a trendline forecast adds before and after the data (A6a, spec 5.6); absent: none. */
 export interface DisplayForecast { lead: number; trail: number }
 /**
- * Waterfall and funnel (B2) label their slots with the model's categories; a ChartEx category role filled per series
- * (XLSX `_xlchart` names) leaves those empty, so the first visible series' categories are used, else the 1-based
- * ordinals (chartex-map §2.3 [P]). Undefined for every other chart. Callers price the labels (`displayLabelBytes`).
+ * Waterfall and funnel (B2) draw one visible series: a `hidden` series (map §2.3: hidden from layout) never reaches
+ * the view, its slots or its labels. The slots are labelled with the first visible series' categories (a ChartEx
+ * role, cached or filled per series from the XLSX `_xlchart` names), else the 1-based ordinals (chartex-map §2.3
+ * [P]). Undefined for every other chart. Callers price the labels (`displayLabelBytes`).
  */
-export function displayFamilyCategories(model: ChartModel): readonly string[] | 'ordinal' | undefined {
+export function displayFamily(model: ChartModel): { drawn(series: ChartSeries): boolean; categories: readonly string[] | 'ordinal' } | undefined {
   const group = model.groups[0]
-  if (model.categories.length || !group || group.kind !== 'chartEx' || (group.family !== 'waterfall' && group.family !== 'funnel')) return undefined
+  if (!group || group.kind !== 'chartEx' || (group.family !== 'waterfall' && group.family !== 'funnel')) return undefined
   const infos = (group as ChartExGroup).chartEx.series
-  return group.series.find((s, i) => !infos[i]?.hidden && s.categories?.length)?.categories ?? 'ordinal'
+  const drawn = (series: ChartSeries) => { const i = group.series.indexOf(series); return i >= 0 && infos[i]?.hidden !== true }
+  return { drawn, categories: group.series.find(s => drawn(s) && s.categories?.length)?.categories ?? 'ordinal' }
 }
 /** The bound of `slots` display-family label strings (ordinals of at most 4 digits) and their slots. */
 export const displayLabelBytes = (slots: number): number => slots * 64
 export function displayView(model: ChartModel, forecast: DisplayForecast | undefined = model.preparedAxes?.forecast): DisplayView {
   const visibleOnly = model.plotVisOnly !== false
-  const extra = displayFamilyCategories(model)
+  const family = displayFamily(model), labels = family?.categories
   const lead = forecast?.lead ?? 0
-  let extent = model.categories.length
-  for (const group of model.groups) for (const s of group.series) extent = Math.max(extent, s.values.length)
+  let extent = family ? (labels === 'ordinal' ? 0 : labels!.length) : model.categories.length
+  for (const group of model.groups) for (const s of group.series) if (!family || family.drawn(s)) extent = Math.max(extent, s.values.length)
   extent = Math.min(extent, CHART_POINT_LIMIT)
   // Hidden categories within the drawn extent leave the axis.
   const categoryHidden = visibleOnly ? model.categoryHidden : undefined
@@ -92,11 +94,11 @@ export function displayView(model: ChartModel, forecast: DisplayForecast | undef
     }
     return { point, series: s, value: slot => read(s.values, slot), x: slot => read(s.xValues, slot), hasX: Boolean(s.xValues?.length) }
   }
-  const byGroup = model.groups.map(group => group.series.filter(s => !(visibleOnly && allHidden(s.values))).map(make))
+  const byGroup = model.groups.map(group => group.series.filter(s => !(visibleOnly && allHidden(s.values)) && (!family || family.drawn(s))).map(make))
   return {
     slots,
     source,
-    category: slot => { const i = source(slot); return i >= 0 && i < extent ? model.categories[i] ?? (extra === 'ordinal' ? String(i + 1) : extra?.[i]) : undefined },
+    category: slot => { const i = source(slot); return i >= 0 && i < extent ? !family ? model.categories[i] : labels === 'ordinal' ? String(i + 1) : labels![i] : undefined },
     series: byGroup.flat(),
     groupSeries: group => byGroup[group] ?? [],
   }

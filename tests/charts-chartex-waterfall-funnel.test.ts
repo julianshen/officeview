@@ -18,7 +18,9 @@ import { readChartPart } from '../src/charts/read'
 import { parseChartPart } from '../src/charts/dataPrecedence'
 import { isChartExGroup } from '../src/charts/chartex/parse'
 import { forEachWaterfallBar, waterfallLevels, WATERFALL_CONNECTOR, type WaterfallKind } from '../src/charts/chartex/waterfall'
-import { CHARTEX_SEVERAL_VISIBLE, funnelGeometry } from '../src/charts/chartex/funnel'
+import { CHARTEX_SEVERAL_VISIBLE, FUNNEL_TEXTS, funnelGeometry } from '../src/charts/chartex/funnel'
+import { documentChartContext } from '../src/charts/context'
+import { ChartRefusal } from '../src/charts/own'
 import { prepareChartAxes } from '../src/charts/prepare'
 import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart } from '../src/charts/layout'
@@ -292,3 +294,86 @@ const chartExFamily = (layout: 'waterfall' | 'funnel'): ConformanceFamily => ({
 })
 describeFamilyConformance(chartExFamily('waterfall'))
 describeFamilyConformance(chartExFamily('funnel'))
+
+describe('B2 review round 1', () => {
+  it('I1: a subtotal is gated by its point state and visibility like any point', async () => {
+    // Subtotal index 1 in each case: a hidden (undefined), blank, error or unavailable point draws no bar and the
+    // accumulator stays 10; a value subtotal draws [0, acc].
+    for (const state of [undefined, { state: 'blank' }, { state: 'error', code: '#DIV/0!' }, { state: 'unavailable' }] as Array<ChartPoint | undefined>) {
+      const points: Array<ChartPoint | undefined> = [{ state: 'value', v: 10 }, state, { state: 'value', v: 5 }]
+      const bars: Array<[number, WaterfallKind, number, number]> = [], skipped: Array<[number, string | undefined]> = []
+      forEachWaterfallBar(3, s => s, s => points[s], [1], (slot, _i, kind, from, to) => bars.push([slot, kind, from, to]), (slot, st) => skipped.push([slot, st]))
+      expect(bars, String(state?.state)).toEqual([[0, 'increase', 0, 10], [2, 'increase', 10, 15]])
+      expect(skipped).toEqual([[1, state?.state]])
+    }
+    // Through the adapter: a missing cached subtotal point (blank) has no level; an error subtotal is diagnosed.
+    const blank = await native(waterfall([10, undefined, 5], '<cx:subtotals><cx:idx val="1" /></cx:subtotals>'))
+    const levels = waterfallLevels(blank.groups[0] as ChartExGroup, displayView(blank), 0)
+    expect([...levels.from]).toEqual([0, NaN, 10])
+    expect([...levels.to]).toEqual([10, NaN, 15])
+    expect(record(blank).marks).toHaveLength(2)
+    const error = await native(waterfall([10, '#DIV/0!', 5], '<cx:subtotals><cx:idx val="1" /></cx:subtotals>'))
+    expect(error.preparedAxes!.diagnostics.map(d => d.code)).toContain('chart-waterfall-error-point')
+    expect(record(error).marks).toHaveLength(2)
+  })
+
+  it('I2: large finite funnel values give finite full- and half-width bars', async () => {
+    const points: ChartPoint[] = [{ state: 'value', v: 1e308 }, { state: 'value', v: 5e307 }]
+    const geometry = funnelGeometry(2, s => points[s], { x: 0, y: 0, w: 100, h: 20 }, 0)
+    expect(geometry.bar(0)).toEqual({ x: 0, y: 0, w: 100, h: 10 })
+    expect(geometry.bar(1)).toEqual({ x: 25, y: 10, w: 50, h: 10 })
+    const marks = record(await native(funnel([{ values: [1e308, 5e307] }]))).marks
+    expect(marks).toHaveLength(2)
+    for (const m of marks) expect([m.x, m.w].every(Number.isFinite)).toBe(true)
+    close(marks[1].w / marks[0].w, 0.5)
+  })
+
+  it('I3: a hidden series never changes the funnel slots, geometry or labels', async () => {
+    const hidden = { values: Array.from({ length: 100 }, (_, i) => i + 1), hidden: true }
+    const alone = record(await native(funnel([{ values: [1, 2] }], ['a', 'b'])))
+    expect(alone.marks).toHaveLength(2)
+    for (const series of [[{ values: [1, 2] }, hidden], [hidden, { values: [1, 2] }]] as Array<Array<{ values: number[]; hidden?: boolean }>>) {
+      // Categories per data set: the visible series' own two; the hidden one's hundred are ignored.
+      const xml = funnel(series, undefined).replace(/<cx:data id="(\d)">/g, (_m, id) => `<cx:data id="${id}"><cx:strDim type="cat">${level(series[Number(id)].hidden ? Array.from({ length: 100 }, (_, i) => `h${i}`) : ['a', 'b'])}</cx:strDim>`)
+      const model = await native(xml)
+      expect(displayView(model).slots).toBe(2)
+      const drawn = record(model)
+      expect(drawn.marks.map(m => [m.x, m.y, m.w, m.h])).toEqual(alone.marks.map(m => [m.x, m.y, m.w, m.h]))
+      expect(drawn.texts.filter(t => t.align === 'right').map(t => t.text)).toEqual(['a', 'b'])
+    }
+  })
+
+  it('I4: funnel category labels are priced before the layout builds them', async () => {
+    // 4,096 unique 255-unit category labels filled per series (model categories empty, as the XLSX fill leaves them).
+    const labels = Array.from({ length: 4096 }, (_, i) => `${i}`.padEnd(255, 'x'))
+    const parsed = await native(funnel([{ values: labels.map((_, i) => i + 1) }], labels))
+    const model: ChartModel = { ...parsed, categories: [] }
+    let measured = 0
+    const measure = { width: (t: string, f: string) => { if (t.endsWith('xxxx')) measured++; measureCtx.font = f; return measureCtx.measureText(t).width }, lineHeight: () => 13 }
+    // Sufficient admission: the layout is built (every label measured once) and retained within its bound.
+    const layout = layoutChart(model, W, H, 1, 0, measure, documentChartContext('desktop'))
+    expect(layout.texts.get(FUNNEL_TEXTS)).toHaveLength(4096)
+    expect(measured).toBe(4096)
+    // Genuinely insufficient admission: refused before any label is measured.
+    measured = 0
+    const tight = documentChartContext('desktop', undefined, { reserve: () => false, release: () => {} })
+    expect(() => layoutChart(model, W, H, 1, 0, measure, tight)).toThrow(ChartRefusal)
+    expect(measured).toBe(0)
+  })
+
+  it('I5: a waterfall with several visible series is unsupported (project rule; the fallback is kept)', async () => {
+    const two = waterfall([1, 2]).replace('</cx:series>', '</cx:series><cx:series layoutId="waterfall"><cx:dataId val="0" /></cx:series>')
+    expect(await adapt(two)).toMatchObject({ kind: 'unsupported', reason: CHARTEX_SEVERAL_VISIBLE, feature: 'ChartEx' })
+    expect((await adapt(two.replace('<cx:series layoutId="waterfall"><cx:dataId val="0" /></cx:series></cx:plotAreaRegion>', '<cx:series layoutId="waterfall" hidden="1"><cx:dataId val="0" /></cx:series></cx:plotAreaRegion>'))).kind).toBe('native')
+  })
+
+  it('M1: a subtotal label keeps its cell value and sits on the anchored bar (label policy unverified)', async () => {
+    const model = await native(waterfall([10, -3, 5, 99, 4], '<cx:subtotals><cx:idx val="3" /></cx:subtotals>', '<cx:dataLabels pos="outEnd"><cx:visibility value="1" /></cx:dataLabels>'))
+    const drawn = record(model)
+    const total = [...drawn.marks].sort((p, q) => p.x - q.x)[3]
+    const label = drawn.texts.find(t => t.text === '99')
+    expect(label, 'the subtotal label shows the cell value').toBeDefined()
+    // outEnd of the anchored [0, 12] bar: 8 px above its top, centred on it.
+    close(label!.y, total.y - 8, 4)
+  })
+})
