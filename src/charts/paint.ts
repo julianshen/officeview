@@ -2,6 +2,7 @@ import { barGeometry } from './barGeometry'
 import { applyFillStyle, type ChartFillStyle } from './fills'
 import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
 import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
+import { createLineTracer } from './smooth'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
  * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
@@ -28,7 +29,7 @@ type FamilyCss = (family: string) => string
  * copied. Every non-value state (blank, error, unavailable) is a gap here, as
  * before D0; the per-family point matrix (spec 5.8) is A2's.
  */
-interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' | 'line' | 'markers'> {
+interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' | 'line' | 'markers' | 'smooth'> {
   /** The model series drawn (its formatting: fill, line, marker, dPt overrides) and its position in its group. */
   source: ChartSeries
   order: number
@@ -44,7 +45,7 @@ function drawModel(model: ChartModel, view = displayView(model)): DrawModel {
     ...model,
     view,
     source: model,
-    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX, point }): DrawSeries => ({ source: s, order: Math.max(0, group.series.indexOf(s)), name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, value, x, hasX, plot:(slot,x)=>{ const p=point(slot,x);return p ? plotPoint(p,group.family,group.grouping,model.dispBlanksAs,model.dispNaAsBlank) : 'gap' } })) })),
+    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX, point }): DrawSeries => ({ source: s, order: Math.max(0, group.series.indexOf(s)), name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, smooth: s.smooth, value, x, hasX, plot:(slot,x)=>{ const p=point(slot,x);return p ? plotPoint(p,group.family,group.grouping,model.dispBlanksAs,model.dispNaAsBlank) : 'gap' } })) })),
   }
 }
 const font = (sizePx: number, family: string, familyCss: FamilyCss, bold = false) => `${bold ? 'bold ' : ''}${sizePx}px ${familyCss(family)}`
@@ -435,7 +436,8 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       // Drop lines (spec 5.8) span, per category, every plotted point of the group to the category axis.
       const drops = group.dropLines && !group.dropLines.noFill ? { lo: new Float64Array(count).fill(NaN), hi: new Float64Array(count).fill(NaN) } : undefined
       for (const s of group.series) {
-        if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 2 : 1) + 1)) continue
+        const lineCost = (s.smooth ?? group.smooth) ? 3 : 1
+        if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 1 + lineCost : lineCost) + 1)) continue
         const src = s.source
         bottom.set(base)
         for (let i = 0; i < count; i++) {
@@ -473,8 +475,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
             ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
             if (applyLineStyle(ctx, src.lineStyle, plot)) {
               ctx.beginPath()
-              let pen = false
-              for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+              const tracer = createLineTracer(ctx, Boolean(s.smooth ?? group.smooth))
+              for (let i = 0; i < count; i++) {
+                if (!has(i)) {
+                  if (s.plot(i) !== 'span') tracer.break()
+                  continue
+                }
+                tracer.push(xAt(i), at(top[i]))
+              }
+              tracer.end()
               ctx.stroke()
             }
           } finally { ctx.restore() }
@@ -509,8 +518,14 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         px = xp(xv); py = at(v)
         return true
       }
+      const isScatterGap = (s: DrawSeries, i: number): boolean => {
+        const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+        const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+        return rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')
+      }
       for (const s of group.series) {
-        if (!admitPath(count * 2 + 1)) continue
+        const lineCost = (s.smooth ?? group.smooth) ? 3 : 1
+        if (!admitPath(count * (s.markers !== false ? 1 + lineCost : lineCost) + 1)) continue
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (s.line) {
           ctx.save()
@@ -518,17 +533,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
             ctx.lineWidth = 2
             if (applyLineStyle(ctx, s.source.lineStyle, plot)) {
               ctx.beginPath()
-              let pen = false
+              const tracer = createLineTracer(ctx, Boolean(s.smooth ?? group.smooth))
               for (let i = 0; i < count; i++) {
                 if (!point(s, i)) {
-                  const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
-                  const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
-                  if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
+                  if (isScatterGap(s, i)) tracer.break()
                   continue
                 }
-                if (!pen) { ctx.moveTo(px, py); pen = true }
-                else ctx.lineTo(px, py)
+                tracer.push(px, py)
               }
+              tracer.end()
               ctx.stroke()
             }
           } finally { ctx.restore() }
