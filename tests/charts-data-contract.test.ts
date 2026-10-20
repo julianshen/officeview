@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { preparedAxesBytes } from '../src/charts/prepare'
 /**
  * D0: the resident and paged XLSX data contract (spec 5.8 point states, 6.4
  * per-role precedence, 7 analytic vs display limits, 5.8 plotVisOnly, 6.4/6.5
@@ -355,7 +356,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     const roomy = createChartWorkspace('desktop')
     const ok = charts.fillChartRanges(model, 'S', lookup, { workspace: roomy })
     expect(ok.groups[0].series[0].values).toHaveLength(100)
-    expect(roomy.used).toBe(100 * 9)
+    expect(roomy.used - preparedAxesBytes(ok.preparedAxes)).toBe(100 * 9)
     charts.releaseChartModel(ok)
     expect(roomy.used).toBe(0)
   })
@@ -368,7 +369,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     const model = charts.parseXlsxChart(parseXmlOrdered(xmlFmt), undefined, { profile: 'desktop', workspace } as never)!
     expect(list(model.groups[0].series[0].values)).toEqual([{ state: 'value', v: 5, fmt }])
     // The retained charge is the role's whole storage, its format table included (plus the model's axis records, A1a).
-    expect(workspace.used).toBe(charts.storageBytes(model.groups[0].series[0].values) + model.axes.reduce((sum, axis) => sum + charts.axisBytes(axis), 0))
+    expect(workspace.used - preparedAxesBytes(model.preparedAxes)).toBe(charts.storageBytes(model.groups[0].series[0].values) + model.axes.reduce((sum, axis) => sum + charts.axisBytes(axis), 0))
     expect(workspace.used).toBeGreaterThan(20_000)
     // Room for the typed storage but not the format string: refused before the format is retained, nothing held.
     let held = 0
@@ -382,7 +383,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     const codes = createChartWorkspace('desktop')
     const filled = charts.fillChartRanges(pending, 'S', (_s, r) => ({ value: '#WEIRD!', error: r ? '#OTHER!' : '#WEIRD!' }), { workspace: codes })
     expect(filled.groups[0].series[0].values.codes).toEqual(['#WEIRD!', '#OTHER!'])
-    expect(codes.used).toBe(charts.storageBytes(filled.groups[0].series[0].values))
+    expect(codes.used - preparedAxesBytes(filled.preparedAxes)).toBe(charts.storageBytes(filled.groups[0].series[0].values))
   })
 
   it('category labels and series names are admitted by an input bound before any text is built, then trimmed (R3)', () => {
@@ -402,7 +403,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
       const ok = charts.fillChartRanges(model, 'S', texts, { workspace: roomy })
       const retained = model === withCats ? ok.categories.reduce((sum, c) => sum + charts.stringBytes(c), 0) : charts.stringBytes(ok.groups[0].series[0].name)
       expect(model === withCats ? ok.categories : [ok.groups[0].series[0].name]).toEqual(model === withCats ? ['label', 'label'] : ['label'])
-      expect(roomy.used).toBe(retained)
+      expect(roomy.used - preparedAxesBytes(ok.preparedAxes)).toBe(retained)
     }
   })
 
@@ -434,7 +435,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
       const ok = charts.fillChartRanges(model, 'S', lookup, { workspace: roomy })
       expect(model === models[0] ? ok.categories : [ok.groups[0].series[0].name]).toEqual(['1.23E+04'])
       expect(roomyPeak).toBeGreaterThanOrEqual(Math.max(...requests))
-      expect(roomy.used).toBe(charts.stringBytes('1.23E+04'))
+      expect(roomy.used - preparedAxesBytes(ok.preparedAxes)).toBe(charts.stringBytes('1.23E+04'))
       held = 0
     }
   })
@@ -453,7 +454,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     expect(ok.categories).toEqual(['12345', '1.23E+04'])
     expect(sheet.diagnostics).toHaveLength(1)
     const labels = ok.categories.reduce((n, c) => n + charts.stringBytes(c), 0)
-    expect(workspace.used).toBe(labels + diagnosticBytes(sheet))
+    expect(workspace.used - preparedAxesBytes(ok.preparedAxes)).toBe(labels + diagnosticBytes(sheet))
     // The model's release returns only the labels; the diagnostic stays charged while the sheet holds it.
     charts.releaseChartModel(ok)
     expect(workspace.used).toBe(diagnosticBytes(sheet))
@@ -530,7 +531,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
       zip.file('xl/charts/chart2.xml', big(1))
     } })
     const limit = CHART_WORKSPACE_LIMIT.desktop
-    // One chart's storage (and any chart read's transient work) fits; two charts' storage does not.
+    // One analytic chart plus stage-1 graph construction fits; retaining it leaves too little room to construct the second.
     pressure.bytes = limit - Math.round(65536 * 9 * 1.5)
     const h = await pagedSource(bytes)
     const pool = new MemoryPool({ limitBytes: 256 * 1024 * 1024 })
@@ -578,7 +579,7 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     const modelBytes = shareHeld(log)
     expect(modelBytes).toBeGreaterThan(0)
     // (Label bounds are admitted first and trimmed to the retained text, so the net held is at most what was charged.)
-    expect(charged.filter(e => e.tag.startsWith('chart-model#')).reduce((sum, e) => sum + e.bytes, 0)).toBeGreaterThanOrEqual(modelBytes)
+    expect(charged.filter(e => (e.tag.startsWith('chart-model#') || e.tag.startsWith('chart-prepare#'))).reduce((sum, e) => sum + e.bytes, 0)).toBeGreaterThanOrEqual(modelBytes)
     expect(document.used).toBe(modelBytes)
     const peak = Math.max(...sets)
     expect(sets.some((n, i) => i > 0 && n < sets[i - 1])).toBe(true)

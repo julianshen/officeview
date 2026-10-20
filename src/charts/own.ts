@@ -18,6 +18,9 @@ import type { ChartWorkspace } from './workspace'
 /** A refused storage reservation: the build stops before the allocation (spec 6.4/6.5). */
 export class ChartRefusal extends Error {}
 interface Owner { workspace: ChartWorkspace; tag: string }
+const releaseListeners = new Set<(model: ChartModel, next?: ChartModel) => void>()
+/** Lazy sidecars register their disposal hook without making parse depend on layout. */
+export function onChartModelRelease(listener: (model: ChartModel, next?: ChartModel) => void): void { releaseListeners.add(listener) }
 const owners = new WeakMap<ChartModel, Owner>()
 const collected = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry<Owner>(owner => owner.workspace.release(owner.tag)) : undefined
 let tags = 0
@@ -33,6 +36,7 @@ export const chartModelOwner = (model: ChartModel): Owner | undefined => owners.
 export function succeedChartModel(previous: ChartModel, next: ChartModel): void {
   const owner = owners.get(previous)
   if (!owner || previous === next) return
+  for (const release of releaseListeners) release(previous, next)
   owners.delete(previous)
   collected?.unregister(previous)
   adoptChartModel(next, owner)
@@ -63,6 +67,7 @@ export function releaseChartRetained(target: object): void {
 }
 /** Refunds a model's storage (idempotent). */
 export function releaseChartModel(model: ChartModel): void {
+  for (const release of releaseListeners) release(model)
   const owner = owners.get(model)
   if (!owner) return
   owners.delete(model)

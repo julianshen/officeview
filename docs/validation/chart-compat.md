@@ -97,3 +97,39 @@ area blank/#N/A cells are checked under each `dispBlanksAs` value (gap, zero, sp
 | CH-5.8-18 | Pie, doughnut | #N/A | no slice | pending | |
 | CH-5.8-19 | Pie, doughnut | other error | no slice | pending | |
 | CH-5.8-20 | Pie, doughnut | unavailable | no slice, plus diagnostic | pending | |
+
+## A1b placement and typography validation (uncommitted candidate)
+
+A1b adds a transferable stage-1 axis/tick/label snapshot and a realm-local,
+placement-keyed layout sidecar. Retained layouts belong to the receiving chart
+workspace; paint scratch is released on return. Font publication, resize, model
+replacement and receiver disposal invalidate the sidecar. An active paint pins
+its invalidated entry until it returns. The synchronous API without an explicit
+context retains its existing bounded per-call default.
+
+`tests/charts-layout.test.ts` covers placement keys, warm measurement reuse,
+refusal before measurement, transfer, receiver/model disposal, reentrant disposal,
+font publication and registered family resolution, 6–72 pt bounds, axis rotation,
+label thinning, separate tickMarkSkip, manual edge/factor/default/inner layout,
+refill ownership and the path work cap. Existing accounting tests keep their
+point/string byte assertions after deducting the separately owned preparation
+snapshot. These are synthetic evidence, **not Office-matched references**.
+
+The deleted A1a 41-paint scratch harness could not be reused. A reconstructed
+node-canvas harness captured 38 paints / 15 distinct cases from the existing
+chart, drawing and document suites. Fourteen matched initially; a 100×100 chart
+exposed unnecessary value-label thinning. After its regression test/fix, its PNG
+also matches exactly (SHA256
+`9535280548247157ebd54e205ed5f7a6e0065b6ec315af252ab9a3cb3e25718d`).
+This is narrower coverage than A1a's original 41 paints. No golden was re-recorded.
+Intentional changes are authored text size/rotation and manual placement,
+nonoverlapping label thinning, tickMarkSkip with hidden labels, and dropping later
+series when the path work bound would be exceeded.
+
+A clean archive of base `416117d` builds an eager bundle of 38,637 bytes; the
+candidate build measured 38,639 bytes with bun/node:zlib. Normalizing lazy chunk
+hashes makes index.js byte-identical: +2 B from the base, +8 B from B0 (38,631),
+below the task ceiling of 38,647. Detailed final gates and unresolved validation
+limits are in `task-A1b-report.md` in the controller's SDD directory. Browser and
+independent Office-reference validation remain pending; no acceptance box is
+advanced on the strength of the node-canvas checks.

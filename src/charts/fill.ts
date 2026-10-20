@@ -1,3 +1,4 @@
+import { prepareChartAxes } from './prepare'
 /**
  * Chart data fill (lazy chunk): uncached references resolved from worksheet
  * cells, defined names, paged-reader lines and the decimal scanner. Moved
@@ -199,7 +200,7 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     } finally { owner.workspace.release(labelTag) }
   }
   try {
-    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch ?? model.workbookEpoch)
+    const next = prepareChartAxes(fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch ?? model.workbookEpoch), owner)
     if (owner) {
       owner.workspace.transfer(fillTag, owner.tag, charged.bytes)
       if (chartModelOwner(model)) succeedChartModel(model, next); else adoptChartModel(next, owner)
@@ -369,7 +370,12 @@ export function stampWorkbookEpoch(drawings: XlsxDrawingLike[] | undefined, epoc
   for (const node of drawings ?? []) {
     const content = node.content as { kind: string; chart?: ChartModel } | undefined
     if (content?.kind === 'xlsxChart' && content.chart && content.chart.workbookEpoch !== epoch) {
-      const next: ChartModel = { ...content.chart, workbookEpoch: epoch }
+      let next: ChartModel
+      try { next = prepareChartAxes({ ...content.chart, workbookEpoch: epoch }, chartModelOwner(content.chart)) }
+      catch (error) {
+        if (!(error instanceof ChartRefusal)) throw error
+        next = { ...content.chart, workbookEpoch: epoch, unsupported: 'This chart needs more memory than is available for charts', refused: true }
+      }
       succeedChartModel(content.chart, next)
       content.chart = next
     }

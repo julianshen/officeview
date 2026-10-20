@@ -19,12 +19,9 @@
  * value on a log axis is skipped (`chart-invalid-log-value`); text categories on a
  * date axis fall back to a category axis (`chart-date-axis-categorical`).
  *
- * The graph is derived per paint and retained nowhere (A1b's charged layout
- * sidecar is the place to cache it). Its construction (records, maps, closures,
- * date lists, tick arrays and the painter's tick labels) is a paint-local
- * transient that is still admitted: given an admission, `resolveAxes` reserves
- * `axisGraphBound` on the chart workspace before it builds anything and throws
- * ChartRefusal when refused; the caller refunds the tag after the paint.
+ * Stage 1 (`prepare.ts`) derives the domains and ticks and publishes a data-only snapshot; stage 2 hydrates
+ * its closures into a charged placement sidecar. Headless hand-built models can still resolve directly.
+ * Given an admission, this helper reserves `axisGraphBound` before construction; its caller releases the tag.
  * Tick label text (number formats) is A2's: the graph gives tick values, the
  * display-unit divisor (`labelValue`) and the unit label.
  */
