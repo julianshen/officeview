@@ -61,7 +61,7 @@ export type ChartAxisBinding =
   | { kind: 'none' }
   | { kind: 'cartesian'; category?: string; x?: string; value: string }
   | { kind: 'xy'; x: string; y: string }
-  | { kind: 'radial'; value: string }
+  | { kind: 'radial'; value: string; category?: string }
   | { kind: 'surface'; category: string; series: string; value: string }
 
 /** Placement-only text properties (DrawingML txPr). Rotation is degrees clockwise. */
@@ -153,13 +153,13 @@ export interface ChartSeries {
   dPt?: Map<number, import('./style').ChartPointOverride>
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
   /** References still to be filled from worksheet cells (no saved data for that role). */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange }
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which
    * points sit in hidden rows or columns (plotVisOnly provenance; spec 5.8, 6.4).
    */
-  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange }
+  refs?: { values?: ChartRange; xValues?: ChartRange; categories?: ChartRange; bubbleSizes?: ChartRange }
   /** Roles with neither saved data nor a reference (spec 6.4 precedence 3): unavailable, never blank. */
   absent?: ChartRole[]
   /**
@@ -187,6 +187,12 @@ export interface ChartGroup {
   smooth?: boolean
   dropLines?: import('./style').ChartLineStyle
   serLines?: import('./style').ChartLineStyle
+  /** Bubble (spec 4.1): `c:bubbleScale` percent (0-300, default 100), `c:sizeRepresents`, `c:showNegBubbles`. */
+  bubbleScale?: number
+  sizeRepresents?: 'area' | 'w'
+  showNegBubbles?: boolean
+  /** Radar (spec 4.1): `c:radarStyle`. */
+  radarStyle?: 'standard' | 'marker' | 'filled'
 }
 
 export interface ChartModel {
