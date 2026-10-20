@@ -18,6 +18,7 @@ import { formatNumber } from '../xlsx/chartDescription'
 import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
 import { radarTexts } from './families/radar'
 import { trendlineLegendEntries } from './trendlines'
+import { boxWhiskerCategoryLabels } from './chartex/boxWhisker'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -64,7 +65,7 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
   if (a.role === 'date') return a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
   if (a.role === 'series') return seriesLabels(graph, view, a)
   const bw = graph.groups.find(g => g?.category === a)?.group
-  if (bw?.family === 'boxWhisker') return bw.series.map((s, i) => view.category(i) ?? s.name ?? String(i + 1))
+  if (bw?.family === 'boxWhisker') return boxWhiskerCategoryLabels(Array.from({ length: view.slots }, (_, i) => view.category(i) ?? ''), bw)
   return Array.from({ length: Math.min(a.slots, view.slots) }, (_, i) => view.category(i) ?? '')
 }
 /**

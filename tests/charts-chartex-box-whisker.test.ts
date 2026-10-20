@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseXlsx } from '../src/xlsx/parse'
 import { parseChartPart } from '../src/charts/dataPrecedence'
+import { markChartExRoot } from '../src/charts/read'
 import { BOX_WHISKER_FAMILY, describeFamilyConformance } from './helpers/chart-family-conformance'
 import { CHART_ANALYTIC_POINT_LIMIT } from '../src/charts/parse'
 import { CHART_TOO_MANY_POINTS } from '../src/charts/fill'
@@ -42,12 +43,14 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc9.q1).toBe(4)
     expect(exc9.q3).toBe(7.5)
     expect(exc9.iqr).toBe(3.5)
+    expect(exc9.mean).toBeCloseTo(52 / 9, 6)
 
     const inc9 = computeBoxWhiskerStats(odd9, 'inclusive')!
     expect(inc9.median).toBe(6)
     expect(inc9.q1).toBe(4)
     expect(inc9.q3).toBe(7)
     expect(inc9.iqr).toBe(3)
+    expect(inc9.mean).toBeCloseTo(52 / 9, 6)
 
     // --- 2. Odd n: n = 7 (sorted: 10, 20, 30, 40, 50, 60, 70) ---
     // Median index = 3, median = 40.
@@ -59,12 +62,14 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc7.q1).toBe(20)
     expect(exc7.q3).toBe(60)
     expect(exc7.iqr).toBe(40)
+    expect(exc7.mean).toBe(40)
 
     const inc7 = computeBoxWhiskerStats(odd7, 'inclusive')!
     expect(inc7.median).toBe(40)
     expect(inc7.q1).toBe(25)
     expect(inc7.q3).toBe(55)
     expect(inc7.iqr).toBe(30)
+    expect(inc7.mean).toBe(40)
 
     // --- 3. Odd n: n = 3 (sorted: 10, 30, 50) ---
     // Median index = 1, median = 30.
@@ -75,11 +80,13 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc3.median).toBe(30)
     expect(exc3.q1).toBe(10)
     expect(exc3.q3).toBe(50)
+    expect(exc3.mean).toBe(30)
 
     const inc3 = computeBoxWhiskerStats(odd3, 'inclusive')!
     expect(inc3.median).toBe(30)
     expect(inc3.q1).toBe(20)
     expect(inc3.q3).toBe(40)
+    expect(inc3.mean).toBe(30)
 
     // --- 4. Odd n: n = 1 (single value: 42) ---
     const odd1 = [42]
@@ -87,11 +94,13 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc1.median).toBe(42)
     expect(exc1.q1).toBe(42)
     expect(exc1.q3).toBe(42)
+    expect(exc1.mean).toBe(42)
 
     const inc1 = computeBoxWhiskerStats(odd1, 'inclusive')!
     expect(inc1.median).toBe(42)
     expect(inc1.q1).toBe(42)
     expect(inc1.q3).toBe(42)
+    expect(inc1.mean).toBe(42)
 
     // --- 5. Even n: n = 6 (sorted: 2, 4, 6, 8, 10, 12) ---
     // Median = (6 + 8) / 2 = 7.
@@ -104,9 +113,11 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc6.median).toBe(7)
     expect(exc6.q1).toBe(4)
     expect(exc6.q3).toBe(10)
+    expect(exc6.mean).toBe(7)
     expect(inc6.median).toBe(7)
     expect(inc6.q1).toBe(4)
     expect(inc6.q3).toBe(10)
+    expect(inc6.mean).toBe(7)
 
     // --- 6. Even n: n = 4 (sorted: 10, 20, 30, 40) ---
     // Median = 25. Lower half [10, 20] -> Q1 = 15. Upper half [30, 40] -> Q3 = 35.
@@ -116,9 +127,11 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc4.median).toBe(25)
     expect(exc4.q1).toBe(15)
     expect(exc4.q3).toBe(35)
+    expect(exc4.mean).toBe(25)
     expect(inc4.median).toBe(25)
     expect(inc4.q1).toBe(15)
     expect(inc4.q3).toBe(35)
+    expect(inc4.mean).toBe(25)
 
     // --- 7. Even n: n = 2 (sorted: 10, 20) ---
     const even2 = [20, 10]
@@ -127,9 +140,11 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(exc2.median).toBe(15)
     expect(exc2.q1).toBe(10)
     expect(exc2.q3).toBe(20)
+    expect(exc2.mean).toBe(15)
     expect(inc2.median).toBe(15)
     expect(inc2.q1).toBe(10)
     expect(inc2.q3).toBe(20)
+    expect(inc2.mean).toBe(15)
   })
 
   it('whiskers within 1.5 IQR; outliers when visible', async () => {
@@ -148,11 +163,12 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     // Outliers: [-20, 50].
     // Inliers: [10, 12, 14, 16, 18, 20].
     const data = [14, 50, 10, 18, -20, 16, 20, 12]
-    const stats = computeBoxWhiskerStats(data, 'exclusive')!
+    const stats = computeBoxWhiskerStats(data, 'exclusive', true)!
     expect(stats.q1).toBe(11)
     expect(stats.median).toBe(15)
     expect(stats.q3).toBe(19)
     expect(stats.iqr).toBe(8)
+    expect(stats.mean).toBe(15)
     expect(stats.lowerWhisker).toBe(10)
     expect(stats.upperWhisker).toBe(20)
     expect(stats.outliers).toEqual([-20, 50])
@@ -261,6 +277,7 @@ describe('box & whisker (ChartEx, Task B4)', () => {
       let dots = 0 // circle markers
       let diagonalSegments = 0
       let connectedMeanLines = 0
+      const segments: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
 
       const origArc = ctx.arc.bind(ctx)
       ctx.arc = (x, y, r, sa, ea) => {
@@ -272,6 +289,7 @@ describe('box & whisker (ChartEx, Task B4)', () => {
       ctx.moveTo = (x, y) => { lx = x; ly = y }
       ctx.lineTo = (x, y) => {
         const dx = Math.abs(x - lx), dy = Math.abs(y - ly)
+        segments.push({ x1: lx, y1: ly, x2: x, y2: y })
         // Mean marker has two diagonal strokes of radius r (~4px, so dx~8, dy~8)
         if (dx > 2 && dx < 12 && dy > 2 && dy < 12) diagonalSegments++
         // Mean line spans from box 0 center to box 1 center (dx > 50, dy > 20)
@@ -280,7 +298,7 @@ describe('box & whisker (ChartEx, Task B4)', () => {
       }
 
       paintXlsxChart(model, ctx as any, 400, 300)
-      return { dots, diagonalSegments, connectedMeanLines }
+      return { dots, diagonalSegments, connectedMeanLines, segments }
     }
 
     // 1. Base: meanMarker="1", meanLine="0", nonoutliers="0"
@@ -295,6 +313,11 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(r2.diagonalSegments).toBe(0)
     expect(r2.connectedMeanLines).toBe(1) // 1 line connecting the 2 means
     expect(r2.dots).toBe(0)
+    const meanLineSegment = r2.segments.find(s => Math.abs(s.x2 - s.x1) > 50 && Math.abs(s.y2 - s.y1) > 10)
+    expect(meanLineSegment).toBeDefined()
+    // Series 1 mean is 20, Series 2 mean is 40.
+    // Higher value has lower canvas y, so y1 (mean 20) is strictly greater than y2 (mean 40).
+    expect(meanLineSegment!.y1).toBeGreaterThan(meanLineSegment!.y2)
 
     // 3. meanMarker="0", meanLine="0", nonoutliers="1"
     const r3 = await probe(makeXml('0', '0', '1'))
@@ -349,6 +372,22 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     const chart2a = drawing2a.content.chart
     expect(chart2a.groups[0].gapWidth).toBe(247)
 
+    const cov2a = doc2.sheets[0]!.drawingCoverage?.find(c => c.feature === 'ChartEx' || c.feature === 'chart')
+    expect(cov2a).toMatchObject({ status: 'native', selectedRepresentation: 'chart' })
+
+    const canvas2a = createCanvas(400, 300)
+    const ctx2a = canvas2a.getContext('2d')
+    let rects2a = 0, card2a = false, w2a = 0
+    const origFillRect2a = ctx2a.fillRect.bind(ctx2a)
+    ctx2a.fillRect = (x, y, w, h) => {
+      if (String(ctx2a.fillStyle).toLowerCase() === '#f7f7f7' && w === 400 && h === 300) card2a = true
+      if (w > 2 && h > 1 && y > 0 && y + h < 300) { rects2a++; w2a = w }
+      origFillRect2a(x, y, w, h)
+    }
+    paintXlsxChart(chart2a, ctx2a as any, 400, 300)
+    expect(card2a).toBe(false)
+    expect(rects2a).toBe(3) // 3 boxes (Table1 has 3 series: B, C, D)
+
     // 3. BW2b: box-whisker-gapwidth.xlsx chart 2 (Table2 on Sheet1: D5:D13, gapWidth = 0.06)
     const drawing2b = doc2.sheets[1]!.drawings![0]!
     expect(drawing2b.content?.kind).toBe('xlsxChart')
@@ -359,16 +398,19 @@ describe('box & whisker (ChartEx, Task B4)', () => {
 
     const canvas2b = createCanvas(400, 300)
     const ctx2b = canvas2b.getContext('2d')
-    let rects2b = 0, card2b = false
+    let rects2b = 0, card2b = false, w2b = 0
     const origFillRect2b = ctx2b.fillRect.bind(ctx2b)
     ctx2b.fillRect = (x, y, w, h) => {
       if (String(ctx2b.fillStyle).toLowerCase() === '#f7f7f7' && w === 400 && h === 300) card2b = true
-      if (w > 2 && h > 1 && y > 0 && y + h < 300) rects2b++
+      if (w > 2 && h > 1 && y > 0 && y + h < 300) { rects2b++; w2b = w }
       origFillRect2b(x, y, w, h)
     }
     paintXlsxChart(chart2b, ctx2b as any, 400, 300)
     expect(card2b).toBe(false)
     expect(rects2b).toBe(1) // 1 box for D5:D13
+
+    // Gap width check (M5): BW2b gapWidth (0.06) produces a significantly wider box than BW2a gapWidth (2.47)
+    expect(w2b).toBeGreaterThan(w2a * 2)
 
     // 4. Empty series: draws no box and remains supported
     const emptyXml = `
@@ -392,6 +434,112 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     paintXlsxChart(emptyModel, ctxEmpty as any, 400, 300)
     expect(emptyCard).toBe(false)
     expect(emptyRects).toBe(0) // No boxes drawn for empty series
+  })
+
+  it('groups boxes by category when cat dimension is present; 2 categories x 2 series side-by-side', async () => {
+    const xml = `
+      <cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <cx:chartData>
+          <cx:data id="0">
+            <cx:strDim type="cat">
+              <cx:lvl ptCount="8">
+                <cx:pt idx="0">Cat A</cx:pt>
+                <cx:pt idx="1">Cat A</cx:pt>
+                <cx:pt idx="2">Cat A</cx:pt>
+                <cx:pt idx="3">Cat A</cx:pt>
+                <cx:pt idx="4">Cat B</cx:pt>
+                <cx:pt idx="5">Cat B</cx:pt>
+                <cx:pt idx="6">Cat B</cx:pt>
+                <cx:pt idx="7">Cat B</cx:pt>
+              </cx:lvl>
+            </cx:strDim>
+            <cx:numDim type="val">
+              <cx:lvl ptCount="8">
+                <cx:pt idx="0">10</cx:pt>
+                <cx:pt idx="1">11</cx:pt>
+                <cx:pt idx="2">12</cx:pt>
+                <cx:pt idx="3">13</cx:pt>
+                <cx:pt idx="4">20</cx:pt>
+                <cx:pt idx="5">21</cx:pt>
+                <cx:pt idx="6">22</cx:pt>
+                <cx:pt idx="7">23</cx:pt>
+              </cx:lvl>
+            </cx:numDim>
+          </cx:data>
+          <cx:data id="1">
+            <cx:strDim type="cat">
+              <cx:lvl ptCount="8">
+                <cx:pt idx="0">Cat A</cx:pt>
+                <cx:pt idx="1">Cat A</cx:pt>
+                <cx:pt idx="2">Cat A</cx:pt>
+                <cx:pt idx="3">Cat A</cx:pt>
+                <cx:pt idx="4">Cat B</cx:pt>
+                <cx:pt idx="5">Cat B</cx:pt>
+                <cx:pt idx="6">Cat B</cx:pt>
+                <cx:pt idx="7">Cat B</cx:pt>
+              </cx:lvl>
+            </cx:strDim>
+            <cx:numDim type="val">
+              <cx:lvl ptCount="8">
+                <cx:pt idx="0">30</cx:pt>
+                <cx:pt idx="1">31</cx:pt>
+                <cx:pt idx="2">32</cx:pt>
+                <cx:pt idx="3">33</cx:pt>
+                <cx:pt idx="4">40</cx:pt>
+                <cx:pt idx="5">41</cx:pt>
+                <cx:pt idx="6">42</cx:pt>
+                <cx:pt idx="7">43</cx:pt>
+              </cx:lvl>
+            </cx:numDim>
+          </cx:data>
+        </cx:chartData>
+        <cx:chart>
+          <cx:plotArea>
+            <cx:plotAreaRegion>
+              <cx:series layoutId="boxWhisker"><cx:dataId val="0"/></cx:series>
+              <cx:series layoutId="boxWhisker"><cx:dataId val="1"/></cx:series>
+            </cx:plotAreaRegion>
+            <cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis>
+            <cx:axis id="1"><cx:valScaling min="0" max="60"/><cx:majorGridlines/><cx:tickLabels/></cx:axis>
+          </cx:plotArea>
+        </cx:chart>
+      </cx:chartSpace>
+    `
+    const model = parseChartEx(parseXml(xml), undefined, await testContext())
+    expect(model.unsupported).toBeUndefined()
+
+    const boxes: Array<{ x: number; y: number; w: number; h: number }> = []
+    const canvas = createCanvas(400, 300)
+    const ctx = canvas.getContext('2d')
+    const origFillRect = ctx.fillRect.bind(ctx)
+    ctx.fillRect = (x, y, w, h) => {
+      if (w > 2 && h > 1 && y > 0 && y + h < 300 && !(w === 400 && h === 300)) {
+        boxes.push({ x, y, w, h })
+      }
+      origFillRect(x, y, w, h)
+    }
+
+    paintXlsxChart(model, ctx as any, 400, 300)
+
+    // Expect 4 boxes total: Cat A (Series 1, Series 2) and Cat B (Series 1, Series 2)
+    expect(boxes.length).toBe(4)
+
+    // Sort by x
+    boxes.sort((a, b) => a.x - b.x)
+
+    // All boxes should have the same width
+    expect(boxes[0].w).toBe(boxes[1].w)
+    expect(boxes[1].w).toBe(boxes[2].w)
+    expect(boxes[2].w).toBe(boxes[3].w)
+
+    // Within Cat A: Series 1 and Series 2 sit side-by-side
+    expect(boxes[1].x).toBeCloseTo(boxes[0].x + boxes[0].w, 1)
+
+    // Cat B is strictly to the right of Cat A with gap
+    expect(boxes[2].x).toBeGreaterThan(boxes[1].x + boxes[1].w)
+
+    // Within Cat B: Series 1 and Series 2 sit side-by-side
+    expect(boxes[3].x).toBeCloseTo(boxes[2].x + boxes[2].w, 1)
   })
 
   it('refuses analytic input over 65,536 limit (never using a prefix)', async () => {
@@ -424,7 +572,9 @@ describe('box & whisker (ChartEx, Task B4)', () => {
     expect(model.refused).toBe(true)
 
     // Adapter returns kind: 'refused'
-    const result = await parseChartPart(parseXmlOrdered(xml), undefined, await testContext())
+    const orderedXml = parseXmlOrdered(xml)
+    markChartExRoot(orderedXml)
+    const result = await parseChartPart(orderedXml, undefined, await testContext())
     expect(result).toMatchObject({ kind: 'refused', reason: CHART_TOO_MANY_POINTS })
   })
 

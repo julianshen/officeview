@@ -20,7 +20,7 @@ import { parseXmlOrdered } from '../../src/core/xml'
 import { documentChartContext, chartParseContext } from '../../src/charts/context'
 import { parseChartPart } from '../../src/charts/dataPrecedence'
 import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
-import { isChartExRoot } from '../../src/charts/read'
+import { isChartExRoot, markChartExRoot } from '../../src/charts/read'
 import { parseChartEx } from '../../src/charts/chartex/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
@@ -86,19 +86,27 @@ function withUnavailable(model: ChartModel): ChartModel {
 
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
+  const doc = documentChartContext('desktop')
+  const context = chartParseContext(doc, await pkg(), partPath)
   if (name === 'unavailable point') {
-    const xml = parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point']))
-    const doc = documentChartContext('desktop')
-    const context = chartParseContext(doc, await pkg(), partPath)
+    const rawXml = family.chart(CONFORMANCE_CASES['single point'])
+    const xml = parseXmlOrdered(rawXml)
+    if (rawXml.includes('http://schemas.microsoft.com/office/drawing/2014/chartex')) {
+      markChartExRoot(xml)
+    }
     const parsed = isChartExRoot(xml) ? parseChartEx(xml, undefined, context) : parseXlsxChart(xml, undefined, context)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
     const model = prepareChartAxes(withUnavailable(parsed))
+    if (!model || model.unsupported) return { kind: 'card', reason: model?.unsupported, diagnostics: model ? collect(model) : [], card: true }
     const painted = paint(model)
     return { kind: 'native', diagnostics: collect(model), card: painted.card }
   }
-  const doc = documentChartContext('desktop')
-  const context = chartParseContext(doc, await pkg(), partPath)
-  const result = await parseChartPart(parseXmlOrdered(family.chart(CONFORMANCE_CASES[name])), undefined, context)
+  const rawXml = family.chart(CONFORMANCE_CASES[name])
+  const xml = parseXmlOrdered(rawXml)
+  if (rawXml.includes('http://schemas.microsoft.com/office/drawing/2014/chartex')) {
+    markChartExRoot(xml)
+  }
+  const result = await parseChartPart(xml, undefined, context)
   if (result.kind === 'native') {
     const painted = paint(result.model)
     return { kind: 'native', diagnostics: collect(result.model), card: painted.card }
@@ -170,13 +178,13 @@ export const SURFACE3D_FAMILY: ConformanceFamily = {
 }
 
 function convertCacheToLvl(c: string): string {
-  const countMatch = c.match(/<c:ptCount\s+val="(\d+)"\/>/)
+  const countMatch = c.match(/<c:ptCount[^>]*val="(\d+)"/i)
   const ptCount = countMatch ? countMatch[1] : '0'
   const pts: string[] = []
-  const ptRegex = /<c:pt\s+idx="(\d+)">\s*<c:v>(.*?)<\/c:v>\s*<\/c:pt>/g
+  const ptRegex = /<c:pt[^>]*idx="(\d+)"[^>]*>[\s\S]*?<c:v>([\s\S]*?)<\/c:v>[\s\S]*?<\/c:pt>/gi
   let match
   while ((match = ptRegex.exec(c)) !== null) {
-    pts.push(`<cx:pt idx="${match[1]}">${match[2]}</cx:pt>`)
+    pts.push(`<cx:pt idx="${match[1]}">${match[2].trim()}</cx:pt>`)
   }
   return `<cx:lvl ptCount="${ptCount}" formatCode="General">${pts.join('')}</cx:lvl>`
 }
@@ -197,6 +205,6 @@ export const BOX_WHISKER_FAMILY: ConformanceFamily = {
     'NaN and infinity': { kind: 'native' },
     'negative values': { kind: 'native' },
     'single point': { kind: 'native' },
-    'unavailable point': { kind: 'native', diagnostics: ['chart-point-unavailable'] },
+    'unavailable point': { kind: 'card' },
   },
 }

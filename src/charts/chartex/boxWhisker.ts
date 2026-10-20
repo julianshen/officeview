@@ -1,5 +1,5 @@
 /**
- * The ChartEx Box & Whisker family painter (spec 4.3, docs/charts/chartex-map.md §8; lazy chart chunk).
+ * The ChartEx Box & Whisker family painter and preparation (spec 4.3, docs/charts/chartex-map.md §8; lazy chart chunk).
  *
  * Rules:
  * - Statistics use points in `value` state (blank and error points excluded).
@@ -11,14 +11,24 @@
  * - Mean marker (×) is drawn when `visibility.meanMarker` is true (default true).
  * - Mean line connects consecutive series means when `visibility.meanLine` is true (default false).
  * - Empty series draws no box, and the chart remains supported.
+ * - Categories: when a `cat` dimension is present, boxes are grouped by category with series side-by-side.
+ *   When absent, each series is drawn as one box along the axis.
+ * - Hidden series are skipped.
+ * - Prepared in stage 1 (preparation) so statistics are retained without paint-time allocation.
  */
 import type { ChartFillStyle } from '../fills'
-import type { ChartSeries, ChartExSeriesInfo } from '../model'
+import type { ChartGroup, ChartModel, ChartSeries, ChartExSeriesInfo, ChartExGroup } from '../model'
 import { applyLineStyle, type ChartLineStyle } from '../style'
 import { barGeometry } from '../barGeometry'
 import type { GroupAxes } from '../axes'
 import type { Box } from '../layout'
-import { analyticInput } from '../points'
+import { POINT_UNAVAILABLE, stringBytes, valueAt } from '../points'
+
+export class BoxWhiskerUnavailableError extends Error {
+  constructor() {
+    super("This chart's data is not available")
+  }
+}
 
 export interface BoxWhiskerStats {
   n: number
@@ -32,7 +42,7 @@ export interface BoxWhiskerStats {
   upperWhisker: number
   mean: number
   outliers: number[]
-  inliers: number[]
+  inliers?: number[]
 }
 
 function medianOf(arr: readonly number[]): number {
@@ -43,7 +53,11 @@ function medianOf(arr: readonly number[]): number {
 }
 
 /** Computes box and whisker statistics for a dataset according to the specified quartile method. */
-export function computeBoxWhiskerStats(values: readonly number[], quartileMethod: 'inclusive' | 'exclusive' = 'exclusive'): BoxWhiskerStats | undefined {
+export function computeBoxWhiskerStats(
+  values: readonly number[],
+  quartileMethod: 'inclusive' | 'exclusive' = 'exclusive',
+  keepInliers = false
+): BoxWhiskerStats | undefined {
   if (values.length === 0) return undefined
   const sorted = [...values].sort((a, b) => a - b)
   const n = sorted.length
@@ -83,14 +97,14 @@ export function computeBoxWhiskerStats(values: readonly number[], quartileMethod
     if (v < lowerBound || v > upperBound) {
       outliers.push(v)
     } else {
-      inliers.push(v)
+      if (keepInliers) inliers.push(v)
       if (v < minInlier) minInlier = v
       if (v > maxInlier) maxInlier = v
     }
   }
 
-  const lowerWhisker = inliers.length > 0 ? minInlier : q1
-  const upperWhisker = inliers.length > 0 ? maxInlier : q3
+  const lowerWhisker = minInlier !== Infinity ? minInlier : q1
+  const upperWhisker = maxInlier !== -Infinity ? maxInlier : q3
 
   let sum = 0
   for (const v of sorted) sum += v
@@ -108,8 +122,200 @@ export function computeBoxWhiskerStats(values: readonly number[], quartileMethod
     upperWhisker,
     mean,
     outliers,
-    inliers,
+    ...(keepInliers ? { inliers } : {}),
   }
+}
+
+/** Extracts distinct category names in appearance order, or returns undefined if no cat dimension exists. */
+export function boxWhiskerDistinctCategories(categories: readonly string[], group?: ChartGroup): string[] | undefined {
+  let source: readonly string[] = categories
+  if ((!source || source.length === 0) && group) {
+    const s = group.series.find(ser => ser.categories && ser.categories.length > 0)
+    if (s?.categories) source = s.categories
+  }
+  if (!source || source.length === 0) return undefined
+  const seen = new Set<string>()
+  const list: string[] = []
+  for (const c of source) {
+    if (c !== '' && !seen.has(c)) {
+      seen.add(c)
+      list.push(c)
+    }
+  }
+  return list.length > 0 ? list : undefined
+}
+
+/** Counts non-hidden series in a box & whisker group. */
+export function boxWhiskerVisibleSeriesCount(group: ChartGroup): number {
+  const ex = group.kind === 'chartEx' ? (group as ChartExGroup) : undefined
+  return group.series.filter((_, si) => !ex?.chartEx?.series?.[si]?.hidden).length
+}
+
+/** Formats category axis labels for box & whisker (shared helper for prepare and layout). */
+export function boxWhiskerCategoryLabels(categories: readonly string[], group: ChartGroup): string[] {
+  const distinct = boxWhiskerDistinctCategories(categories, group)
+  if (distinct) return distinct
+  const ex = group.kind === 'chartEx' ? (group as ChartExGroup) : undefined
+  return group.series
+    .filter((_, i) => !ex?.chartEx?.series?.[i]?.hidden)
+    .map((s, i) => s.name ?? String(i + 1))
+}
+
+export interface PreparedBox {
+  seriesIndex: number
+  visibleSeriesIndex: number
+  slotIndex: number // Category index if hasCategories, else visibleSeriesIndex
+  seriesSlot: number // visibleSeriesIndex if hasCategories, else 0
+  stats: BoxWhiskerStats
+  color?: string
+  source?: ChartSeries
+  quartileMethod: 'inclusive' | 'exclusive'
+  meanMarker: boolean
+  meanLine: boolean
+  nonoutliers: boolean
+  outliers: boolean
+}
+
+export interface PreparedBoxWhiskerGroup {
+  groupIndex: number
+  hasCategories: boolean
+  distinctCategories?: string[]
+  boxes: PreparedBox[]
+  visibleSeriesCount: number
+  gapWidth: number
+}
+
+/** Computes and retains all Box & Whisker statistics in stage 1 (prepare). */
+export function prepareBoxWhisker(model: ChartModel): PreparedBoxWhiskerGroup[] {
+  const result: PreparedBoxWhiskerGroup[] = []
+
+  model.groups.forEach((group, g) => {
+    if (group.family !== 'boxWhisker') return
+
+    // An unavailable point in an analytic series refuses the chart.
+    for (const s of group.series) {
+      if (s.values?.states?.includes(POINT_UNAVAILABLE)) {
+        throw new BoxWhiskerUnavailableError()
+      }
+    }
+
+    const exGroup = group.kind === 'chartEx' ? (group as ChartExGroup) : undefined
+    const distinct = boxWhiskerDistinctCategories(model.categories, group)
+    const hasCategories = distinct !== undefined
+
+    // Filter out hidden series
+    const visibleSeries: Array<{ s: ChartSeries; si: number }> = []
+    for (let si = 0; si < group.series.length; si++) {
+      const s = group.series[si]
+      const exInfo = exGroup?.chartEx?.series?.[si]
+      if (exInfo?.hidden) continue
+      visibleSeries.push({ s, si })
+    }
+
+    const visibleSeriesCount = Math.max(1, visibleSeries.length)
+    const boxes: PreparedBox[] = []
+
+    if (hasCategories && distinct) {
+      for (let k = 0; k < distinct.length; k++) {
+        const catName = distinct[k]
+        for (let vsi = 0; vsi < visibleSeries.length; vsi++) {
+          const { s, si } = visibleSeries[vsi]
+          const exInfo = exGroup?.chartEx?.series?.[si]
+          const qMethod = exInfo?.layoutPr?.quartileMethod ?? 'exclusive'
+          const vis = exInfo?.layoutPr?.visibility ?? { connectorLines: true, meanLine: false, meanMarker: true, nonoutliers: false, outliers: true }
+
+          const values: number[] = []
+          const len = s.values?.length ?? 0
+          for (let j = 0; j < len; j++) {
+            const pointCat = s.categories?.[j] ?? model.categories?.[j]
+            if (pointCat === catName && s.values.states[j] === 1) {
+              const val = valueAt(s.values, j)
+              if (val !== undefined) values.push(val)
+            }
+          }
+
+          const stats = computeBoxWhiskerStats(values, qMethod, vis.nonoutliers === true)
+          if (!stats) continue
+
+          boxes.push({
+            seriesIndex: si,
+            visibleSeriesIndex: vsi,
+            slotIndex: k,
+            seriesSlot: vsi,
+            stats,
+            color: s.color,
+            source: s,
+            quartileMethod: qMethod,
+            meanMarker: vis.meanMarker !== false,
+            meanLine: vis.meanLine === true,
+            nonoutliers: vis.nonoutliers === true,
+            outliers: vis.outliers !== false,
+          })
+        }
+      }
+    } else {
+      for (let vsi = 0; vsi < visibleSeries.length; vsi++) {
+        const { s, si } = visibleSeries[vsi]
+        const exInfo = exGroup?.chartEx?.series?.[si]
+        const qMethod = exInfo?.layoutPr?.quartileMethod ?? 'exclusive'
+        const vis = exInfo?.layoutPr?.visibility ?? { connectorLines: true, meanLine: false, meanMarker: true, nonoutliers: false, outliers: true }
+
+        const values: number[] = []
+        const len = s.values?.length ?? 0
+        for (let j = 0; j < len; j++) {
+          if (s.values.states[j] === 1) {
+            const val = valueAt(s.values, j)
+            if (val !== undefined) values.push(val)
+          }
+        }
+
+        const stats = computeBoxWhiskerStats(values, qMethod, vis.nonoutliers === true)
+        if (!stats) continue
+
+        boxes.push({
+          seriesIndex: si,
+          visibleSeriesIndex: vsi,
+          slotIndex: vsi,
+          seriesSlot: 0,
+          stats,
+          color: s.color,
+          source: s,
+          quartileMethod: qMethod,
+          meanMarker: vis.meanMarker !== false,
+          meanLine: vis.meanLine === true,
+          nonoutliers: vis.nonoutliers === true,
+          outliers: vis.outliers !== false,
+        })
+      }
+    }
+
+    result.push({
+      groupIndex: g,
+      hasCategories,
+      distinctCategories: distinct,
+      boxes,
+      visibleSeriesCount,
+      gapWidth: group.gapWidth ?? 100,
+    })
+  })
+
+  return result
+}
+
+export function preparedBoxWhiskerBytes(prepared?: PreparedBoxWhiskerGroup[]): number {
+  if (!prepared) return 0
+  let bytes = 0
+  for (const g of prepared) {
+    bytes += 128 + (g.distinctCategories ? g.distinctCategories.reduce((n, c) => n + stringBytes(c), 64) : 0)
+    for (const b of g.boxes) {
+      bytes += 160 + b.stats.outliers.length * 8 + (b.stats.inliers ? b.stats.inliers.length * 8 : 0)
+    }
+  }
+  return bytes
+}
+
+export function boxWhiskerBound(model: ChartModel): number {
+  return model.groups.filter(g => g.family === 'boxWhisker').reduce((n, g) => n + 2048 + g.series.length * 512, 0)
 }
 
 export interface BoxWhiskerPaintKit {
@@ -132,38 +338,37 @@ export interface BoxWhiskerGroupLike {
   chartEx?: { series: ChartExSeriesInfo[] }
 }
 
-/** Paints a Box & Whisker group. */
+/** Paints a Box & Whisker group using precomputed stage-1 summaries. */
 export function paintBoxWhisker(
   ctx: CanvasRenderingContext2D,
   group: BoxWhiskerGroupLike,
   seriesList: readonly BoxWhiskerSeriesLike[],
   axes: GroupAxes,
-  kit: BoxWhiskerPaintKit
+  kit: BoxWhiskerPaintKit,
+  prepared?: PreparedBoxWhiskerGroup
 ): void {
   const catAxis = axes.category ?? axes.x!
   const gap = group.gapWidth ?? 100
-  const geom = barGeometry({ grouping: 'standard', overlap: 0, gapWidth: gap, series: { length: 1 } }, catAxis, axes.between, kit.plot)
 
-  const meanPoints: Array<{ x: number; y: number }> = []
+  // Fallback preparation if none was provided
+  const preparedBoxes = prepared?.boxes ?? []
+  const hasCategories = prepared?.hasCategories ?? false
+  const visibleSeriesCount = prepared?.visibleSeriesCount ?? Math.max(1, seriesList.length)
 
-  for (let si = 0; si < seriesList.length; si++) {
-    const s = seriesList[si]
-    const src = s.source ?? (s as unknown as ChartSeries)
-    const exInfo = group.chartEx?.series?.[si]
+  const geom = hasCategories
+    ? barGeometry({ grouping: 'clustered', overlap: 0, gapWidth: gap, series: { length: visibleSeriesCount } }, catAxis, axes.between, kit.plot)
+    : barGeometry({ grouping: 'standard', overlap: 0, gapWidth: gap, series: { length: 1 } }, catAxis, axes.between, kit.plot)
 
-    const input = analyticInput(src, 'values')
-    if (input.kind !== 'input' || input.values.length === 0) continue
+  const meanPoints: Array<{ x: number; y: number; meanLine: boolean; color: string }> = []
 
-    const qMethod = exInfo?.layoutPr?.quartileMethod ?? 'exclusive'
-    const vis = exInfo?.layoutPr?.visibility ?? { connectorLines: true, meanLine: false, meanMarker: true, nonoutliers: false, outliers: true }
-
-    const stats = computeBoxWhiskerStats(input.values, qMethod)
-    if (!stats) continue
-
-    const xStart = geom.start(si, 0)
+  for (const box of preparedBoxes) {
+    const stats = box.stats
+    const xStart = geom.start(box.slotIndex, box.seriesSlot)
     const W = geom.width
     const xCenter = xStart + W / 2
-    const color = s.color ?? src.color ?? '5b9bd5'
+
+    const src = box.source ?? seriesList[box.seriesIndex]?.source ?? (seriesList[box.seriesIndex] as unknown as ChartSeries)
+    const color = box.color ?? src?.color ?? '5b9bd5'
 
     const yQ3 = kit.at(stats.q3)
     const yQ1 = kit.at(stats.q1)
@@ -182,7 +387,7 @@ export function paintBoxWhisker(
       try {
         ctx.strokeStyle = `#${color}`
         ctx.lineWidth = 1
-        applyLineStyle(ctx, src.lineStyle, kit.plot)
+        applyLineStyle(ctx, src?.lineStyle, kit.plot)
         ctx.beginPath()
         // Lower whisker
         ctx.moveTo(xCenter, yBot)
@@ -198,10 +403,10 @@ export function paintBoxWhisker(
 
     // 2. Box rectangle
     if (kit.admitPath(5)) {
-      if (kit.fillWith(ctx, src.fill, color, boxRect)) {
+      if (kit.fillWith(ctx, src?.fill, color, boxRect)) {
         ctx.fillRect(boxRect.x, boxRect.y, boxRect.w, boxRect.h)
       }
-      kit.strokeBorder(ctx, src.lineStyle, color, boxRect, boxRect)
+      kit.strokeBorder(ctx, src?.lineStyle, color, boxRect, boxRect)
     }
 
     // 3. Median line
@@ -211,7 +416,7 @@ export function paintBoxWhisker(
       try {
         ctx.strokeStyle = `#${color}`
         ctx.lineWidth = 1
-        applyLineStyle(ctx, src.lineStyle, kit.plot)
+        applyLineStyle(ctx, src?.lineStyle, kit.plot)
         ctx.beginPath()
         ctx.moveTo(xStart, yMedian)
         ctx.lineTo(xStart + W, yMedian)
@@ -222,7 +427,7 @@ export function paintBoxWhisker(
     }
 
     // 4. Outliers
-    if (vis.outliers !== false && stats.outliers.length > 0) {
+    if (box.outliers && stats.outliers.length > 0) {
       if (kit.admitPath(stats.outliers.length * 4)) {
         ctx.save()
         try {
@@ -243,7 +448,7 @@ export function paintBoxWhisker(
     }
 
     // 5. Inner points (non-outliers)
-    if (vis.nonoutliers === true && stats.inliers.length > 0) {
+    if (box.nonoutliers && stats.inliers && stats.inliers.length > 0) {
       if (kit.admitPath(stats.inliers.length * 4)) {
         ctx.save()
         try {
@@ -265,9 +470,9 @@ export function paintBoxWhisker(
 
     // 6. Mean marker (cross '×')
     const yMean = kit.at(stats.mean)
-    meanPoints.push({ x: xCenter, y: yMean })
+    meanPoints.push({ x: xCenter, y: yMean, meanLine: box.meanLine, color })
 
-    if (vis.meanMarker !== false) {
+    if (box.meanMarker) {
       if (kit.admitPath(4)) {
         ctx.save()
         try {
@@ -287,22 +492,23 @@ export function paintBoxWhisker(
     }
   }
 
-  // 7. Mean line connecting consecutive series means
-  const anyMeanLine = Boolean(group.chartEx?.series.some(s => s.layoutPr?.visibility?.meanLine === true))
-  if (anyMeanLine && meanPoints.length >= 2) {
-    if (kit.admitPath(meanPoints.length * 2)) {
-      ctx.save()
-      try {
-        ctx.strokeStyle = '#595959'
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(meanPoints[0].x, meanPoints[0].y)
-        for (let i = 1; i < meanPoints.length; i++) {
-          ctx.lineTo(meanPoints[i].x, meanPoints[i].y)
+  // 7. Mean line connecting consecutive series means that have meanLine enabled (M1)
+  for (let i = 0; i + 1 < meanPoints.length; i++) {
+    const p1 = meanPoints[i]
+    const p2 = meanPoints[i + 1]
+    if (p1.meanLine && p2.meanLine) {
+      if (kit.admitPath(2)) {
+        ctx.save()
+        try {
+          ctx.strokeStyle = `#${p1.color ?? p2.color ?? '595959'}`
+          ctx.lineWidth = 1
+          ctx.beginPath()
+          ctx.moveTo(p1.x, p1.y)
+          ctx.lineTo(p2.x, p2.y)
+          ctx.stroke()
+        } finally {
+          ctx.restore()
         }
-        ctx.stroke()
-      } finally {
-        ctx.restore()
       }
     }
   }

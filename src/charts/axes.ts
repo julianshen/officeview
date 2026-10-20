@@ -28,6 +28,7 @@
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
 import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
+import { boxWhiskerDistinctCategories, boxWhiskerVisibleSeriesCount } from './chartex/boxWhisker'
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
@@ -378,13 +379,16 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     if (series) series.slots = Math.max(1, drawn.rows)
   })
 
-  // Box & whisker: category slots equal the series count (one box per series).
+  // Box & whisker: category slots equal distinct categories count if present, else series count.
   model.groups.forEach((group, g) => {
     if (group.family !== 'boxWhisker') return
     const p = placements[g]
     if (!p) return
     const category = axes.get(p.base)
-    if (category) category.slots = Math.max(1, group.series.length)
+    if (category) {
+      const distinct = boxWhiskerDistinctCategories(model.categories, group)
+      category.slots = distinct ? Math.max(1, distinct.length) : Math.max(1, boxWhiskerVisibleSeriesCount(group))
+    }
   })
 
   // Value domains: each value axis over the groups bound to it (stacking per group), as the engine always has.

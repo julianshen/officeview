@@ -24,7 +24,7 @@ import { paintTrendlines } from './trendlines'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
-import { paintBoxWhisker } from './chartex/boxWhisker'
+import { paintBoxWhisker, prepareBoxWhisker } from './chartex/boxWhisker'
 import { chartFont } from './textStyle'
 import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 import { paintChartUserShapes } from './userShapes'
@@ -581,13 +581,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
     } else if (group.family === 'boxWhisker' && horizontal === B) {
+      const preparedGroup = model.source.preparedAxes?.boxWhisker?.find(bg => bg.groupIndex === g)
+        ?? prepareBoxWhisker(model.source).find(bg => bg.groupIndex === g)
       paintBoxWhisker(ctx, group, group.series, axes, {
         plot,
         admitPath,
         fillWith,
         strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
         at,
-      })
+      }, preparedGroup)
     }
     // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
     // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
