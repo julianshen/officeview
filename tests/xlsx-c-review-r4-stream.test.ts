@@ -68,13 +68,13 @@ for (const repeats of [200,10_000]) it(`format expansion is covered by accepted 
 it('refusing a raw-prefix reservation builds no prefix string',async()=>{
  const bytes=await chartWorkbookBytes(xml('Styled!A1','Styled!B1'),{cells:[{ref:'A1',v:'label text'},{ref:'B1',v:5}]})
  const h=await open(bytes)
- let workspace=0,last=0
+ let workspace=0,last=0,at=-1
  const raw=pages.textPrefix
  try{
   // Adapted: the prefix is now reserved immediately before it is built, so the point
   // workspace is the charge before that reservation (the last two charges before the build).
   const charges:number[]=[]
-  const spy=vi.spyOn(pages,'textPrefix').mockImplementation((...args:Parameters<typeof raw>)=>{workspace=charges[charges.length-2];return raw(...args)})
+  const spy=vi.spyOn(pages,'textPrefix').mockImplementation((...args:Parameters<typeof raw>)=>{workspace=charges[charges.length-2];at=charges.length-2;return raw(...args)})
   try{await h.read({set:(n:number)=>{last=n;charges.push(n);return true}})}finally{spy.mockRestore()}
   void last
  }finally{await h.source.release()}
@@ -84,7 +84,8 @@ it('refusing a raw-prefix reservation builds no prefix string',async()=>{
   const built:number[]=[],reserves:any[]=[]
   const spy=vi.spyOn(pages,'textPrefix').mockImplementation((...args:Parameters<typeof raw>)=>{const out=raw(...args);built.push(out.text.length);return out})
   let result:any
-  try{result=await fresh.read({set:(n:number)=>{reserves.push({n,accepted:n<=workspace});return n<=workspace}})}finally{spy.mockRestore()}
+  // D0: the share is not monotonic (the parsed chart tree is refunded before the fill): refuse by position.
+  try{result=await fresh.read({set:(n:number)=>{const accepted=reserves.length<=at;reserves.push({n,accepted});return accepted}})}finally{spy.mockRestore()}
   evidence.prefix={workspace,built,reserves,complete:result.completeness};await save()
   expect(result.completeness).toBe('incomplete')
   expect(reserves.some(e=>!e.accepted&&e.n===workspace+20)).toBe(true)

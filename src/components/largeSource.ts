@@ -6,6 +6,7 @@
  */
 import type { OfficePackage } from '../core/zip'
 import { parseXlsx } from '../xlsx/parse'
+import { drawingPartContext } from '../drawing/parts'
 import { countLoadEvaluatedFormulas, savedValuesStatus } from '../xlsx/view/values'
 import type { XlsxDocument } from '../xlsx/types'
 import { isRtf } from '../rtf/parse'
@@ -50,8 +51,9 @@ async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: nu
     throwIfAborted(ctx.signal)
   }
   if (doc === undefined) {
-    // Saved values only: the allocation is the element envelope already admitted.
-    doc = await parseXlsx(pkg, { valuePolicy: 'cached' })
+    // Saved values only: the allocation is the element envelope already admitted. One chart
+    // workspace per document (D0): the reopen keeps the first parse's, so no charge is orphaned.
+    doc = await parseXlsx(pkg, { valuePolicy: 'cached', chartContext: drawingPartContext(pkg).chart })
     addDiagnostic(doc, NOTICE_CACHED_VALUES, savedValuesStatus('cached', formulasNotRecalculated ?? countLoadEvaluatedFormulas(doc), capped ? 'formula evaluation limit' : undefined)!)
   }
   return doc

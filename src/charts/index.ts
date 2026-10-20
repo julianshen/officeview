@@ -17,6 +17,8 @@ export { chartParseContext, chartParseContextFor } from './context'
 export { readChartPart, type ChartRead } from './read'
 export * from './parse'
 export * from './fill'
+export * from './points'
+export { displayModel } from './display'
 export { paintXlsxChart }
 export { chartDescription }
 registerXlsxChartPainter(paintXlsxChart)

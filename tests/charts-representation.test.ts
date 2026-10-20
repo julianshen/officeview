@@ -11,7 +11,7 @@ import { namespaceScope, namespaceUri, parseXmlOrdered } from '../src/core/xml'
 import { chartCard, prepareCompatibleDrawingContent, prepareDrawingContent, type DrawingContent } from '../src/drawing/content'
 import { drawingPartContext } from '../src/drawing/parts'
 import { parseThemeContext } from '../src/drawing/style'
-import { documentChartContext } from '../src/charts/context'
+import { chartParseContextFor, documentChartContext } from '../src/charts/context'
 import { parseXlsxChart } from '../src/charts/parse'
 import { CHART_READ_CROSSING, ELEMENT_BYTES, NAMESPACE_BINDING_BYTES, NAMESPACE_SCOPE_BYTES, NamespaceScope, readChartPart } from '../src/charts/read'
 import { paintDrawingContent } from '../src/drawing/content-paint'
@@ -579,7 +579,7 @@ describe('fix round 1: the real engine balances every save (spec 6.5, I5)', () =
   it.each(['rotated axis title', 'plot area'] as const)('a throw inside the %s save leaves the caller\'s depth and transform', async where => {
     await import('../src/charts') // the real engine registers its painter
     const chart = parseXlsxChart(parseXmlOrdered(titled), undefined)!
-    expect(chart.categoryAxis.title).toBe('Category')
+    expect(chart.axes.find(axis => axis.kind === 'category')?.title).toBe('Category')
     const canvas = createCanvas(W_PX, H_PX), real = canvas.getContext('2d')
     let depth = 0, thrown = false
     const ctx = new Proxy(real, {
@@ -679,27 +679,34 @@ describe('fix round 1: admitted bounded read and namespace dispatch (spec 6.5, I
     expect(drawingPartContext(pkg).diagnostics.some(d => d.reason === 'chart-refused')).toBe(true)
   })
 
-  it('I6: a paged package keeps owning the chart tree through its own ledger', async () => {
-    // The paged RangePackage shape: no zip entry, its own bounded bytes() and a chartLedger (its pool).
+  it('I6/D0: a paged package\'s pool is its chart workspace\'s parent: each chart byte is counted once there and refunded', async () => {
+    // The paged RangePackage shape: no zip entry, its own bounded bytes() and a chartLedger (its pool share),
+    // which the production hook (chartParseContextFor) makes the parent of the package's chart workspace.
     const bytes = new TextEncoder().encode(STACKED)
-    const pool = { charged: 0, refuseAfter: Infinity }
+    const pool = { charged: 0, refuseAfter: Infinity, peak: 0 }
     const paged = (refuseAfter = Infinity) => {
-      pool.charged = 0; pool.refuseAfter = refuseAfter
+      pool.charged = 0; pool.refuseAfter = refuseAfter; pool.peak = 0
       return { has: () => true, bytes: async (_path: string, max?: number) => { if (max !== undefined && bytes.length > max) throw new Error('Part byte limit exceeded'); return bytes },
-        chartLedger: { reserve: (n: number) => { if (pool.charged + n > pool.refuseAfter) return false; pool.charged += n; return true }, release: () => {} } } as unknown as OfficePackage
+        chartLedger: { reserve: (n: number) => { if (pool.charged + n > pool.refuseAfter) return false; pool.charged += n; pool.peak = Math.max(pool.peak, pool.charged); return true }, release: (_tag: string, n: number) => { pool.charged -= n } } } as unknown as OfficePackage
     }
-    const context = documentChartContext('desktop')
-    const read = await readChartPart(paged(), 'xl/charts/chart1.xml', context)
+    const pkg = paged()
+    const context = chartParseContextFor(pkg, 'xl/charts/chart1.xml')
+    const read = await readChartPart(pkg, 'xl/charts/chart1.xml', context)
     expect(read?.kind).toBe('tree')
-    // The pool was charged for every tree node; the workspace holds the tree (and the crossing), not the pool's raw bytes.
-    expect(pool.charged).toBeGreaterThan(0)
-    expect(context.workspace.used).toBe(CHART_READ_CROSSING + pool.charged)
+    // Every byte the workspace holds (the crossing and the tree) is held once in the pool, no more.
+    expect(context.workspace.used).toBeGreaterThan(CHART_READ_CROSSING)
+    expect(pool.charged).toBe(context.workspace.used)
+    expect(pool.peak).toBeGreaterThan(CHART_READ_CROSSING)
     if (read?.kind === 'tree') read.release()
     expect(context.workspace.used).toBe(0)
-    // The pool refusing part way refuses the read and refunds the workspace.
-    const refused = await readChartPart(paged(500), 'xl/charts/chart1.xml', context)
+    expect(pool.charged).toBe(0)
+    // The pool refusing part way refuses the read and refunds both.
+    const refusing = paged(CHART_READ_CROSSING + 500)
+    const refusedContext = chartParseContextFor(refusing, 'xl/charts/chart1.xml')
+    const refused = await readChartPart(refusing, 'xl/charts/chart1.xml', refusedContext)
     expect(refused).toMatchObject({ kind: 'refused', code: 'chart-refused' })
-    expect(context.workspace.used).toBe(0)
+    expect(refusedContext.workspace.used).toBe(0)
+    expect(pool.charged).toBe(0)
   })
 
   it('I6: every allocation of the read is charged first, peaks within the limit and is released', async () => {

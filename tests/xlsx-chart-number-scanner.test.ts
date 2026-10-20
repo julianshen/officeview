@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { pts } from './helpers/chart-points'
 import { scanChartNumber } from '../src/charts'
 
 const scan = (text: string) => scanChartNumber(text.length, i => text.charCodeAt(i))
@@ -49,7 +50,7 @@ describe('resident and paged charts agree on numeric text', async () => {
     const source = createPagedWorkbookSource(session), adapter = source.store('1') as any
     try {
       const paged = (await adapter.readDrawings({ stamp: adapter.stamp, signal: new AbortController().signal }, 'D')).drawings[0].content
-      expect(resident.chart.groups[0].series[0].values).toEqual([7.5, undefined, undefined])
+      expect(resident.chart.groups[0].series[0].values).toEqual(pts(7.5, undefined, undefined))
       expect(paged.chart.groups[0].series[0].values).toEqual(resident.chart.groups[0].series[0].values)
     } finally { await source.release() }
   })

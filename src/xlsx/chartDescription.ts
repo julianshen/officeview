@@ -16,14 +16,14 @@ export function chartDescription(model: XlsxChartModel): string {
   const name = model.title ? `Chart: ${model.title}.` : 'Chart.'
   if (model.unsupported) return `${name} ${model.unsupported}; it is not drawn.`
   const group = model.groups[0]
-  const kind = group.type === 'bar' ? TYPE_NAMES[group.barDir === 'bar' ? 'bar' : 'col'] : TYPE_NAMES[group.type]
+  const kind = group.family === 'bar' ? TYPE_NAMES[group.barDir === 'bar' ? 'bar' : 'col'] : TYPE_NAMES[group.family]
   const grouping = group.grouping === 'stacked' ? 'stacked ' : group.grouping === 'percentStacked' ? '100% stacked ' : ''
   const series = model.groups.flatMap(g => g.series)
   const parts = [`${name} ${grouping ? grouping + kind.toLowerCase() : kind}, ${series.length} series`]
   if (model.categories.length) parts.push(`${model.categories.length} categories${model.categories.length <= 12 ? ` (${model.categories.join(', ')})` : ''}`)
   for (const s of series.slice(0, 8)) {
-    const nums = s.values.filter((v): v is number => v !== undefined)
-    parts.push(nums.length ? `${s.name}: ${nums.length <= 12 ? nums.map(n => formatNumber(n)).join(', ') : `${formatNumber(Math.min(...nums))} to ${formatNumber(Math.max(...nums))}`}` : `${s.name}: no data`)
+    const nums = s.values.flatMap(p => p.state === 'value' ? [p.v] : [])
+    parts.push(nums.length ? `${s.name}: ${nums.length <= 12 ? nums.map(n => formatNumber(n)).join(', ') : `${formatNumber(nums.reduce((a, b) => Math.min(a, b)))} to ${formatNumber(nums.reduce((a, b) => Math.max(a, b)))}`}` : `${s.name}: no data`)
   }
   return parts.join('; ') + (model.truncated ? '; data truncated.' : '.')
 }

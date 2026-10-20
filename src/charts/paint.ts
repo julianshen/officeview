@@ -6,10 +6,37 @@
  */
 import { paintChartPlaceholder } from '../drawing/content-paint'
 import { formatNumber } from '../xlsx/chartDescription'
-import type { XlsxChartAxis, XlsxChartGroup, XlsxChartModel, XlsxChartSeries } from '../xlsx/chartModel'
+import { displayModel } from './display'
+import type { ChartAxis, ChartGroup, ChartModel, ChartSeries } from './model'
+import { pointValue } from './points'
 
 type FamilyCss = (family: string) => string
-function niceScale(lo: number, hi: number, axis: XlsxChartAxis, percent: boolean): { min: number; max: number; step: number } {
+/**
+ * What the painter draws: the display model (plotVisOnly applied, points capped)
+ * with every point as its plotted number. Every non-value state (blank, error,
+ * unavailable) is a gap here, as before D0; the per-family point matrix
+ * (spec 5.8) is A2's.
+ */
+type Num = number | undefined
+interface DrawSeries extends Omit<ChartSeries, 'values' | 'xValues'> { values: Num[]; xValues?: Num[] }
+interface DrawGroup extends Omit<ChartGroup, 'series'> { series: DrawSeries[] }
+type AxisScale = Pick<ChartAxis, 'min' | 'max' | 'majorUnit' | 'gridlines' | 'deleted' | 'title'>
+interface DrawModel extends Omit<ChartModel, 'groups'> { groups: DrawGroup[]; categoryAxis: AxisScale; valueAxis: AxisScale }
+const NO_AXIS: AxisScale = { gridlines: false, deleted: false }
+function drawModel(source: ChartModel): DrawModel {
+  const model = displayModel(source)
+  const scatter = model.groups[0]?.family === 'scatter'
+  const values = model.axes.filter(axis => axis.kind === 'value')
+  const nums = (points: ChartSeries['values']) => points.map(pointValue)
+  return {
+    ...model,
+    groups: model.groups.map(group => ({ ...group, series: group.series.map(({ values: points, xValues, ...s }): DrawSeries => ({ ...s, values: nums(points), ...(xValues ? { xValues: nums(xValues) } : {}) })) })),
+    // The first category (else date) axis; scatter's x and y are its first two value axes.
+    categoryAxis: model.axes.find(axis => axis.kind === 'category') ?? model.axes.find(axis => axis.kind === 'date') ?? (scatter ? values[0] : undefined) ?? NO_AXIS,
+    valueAxis: (scatter ? values[1] : values[0]) ?? NO_AXIS,
+  }
+}
+function niceScale(lo: number, hi: number, axis: AxisScale, percent: boolean): { min: number; max: number; step: number } {
   if (percent) return { min: axis.min ?? 0, max: axis.max ?? 1, step: axis.majorUnit ?? 0.2 }
   let min = axis.min ?? Math.min(0, lo), max = axis.max ?? Math.max(0, hi)
   if (!(max > min)) max = min + 1
@@ -25,16 +52,16 @@ const font = (sizePx: number, family: string, familyCss: FamilyCss, bold = false
 const TEXT = '#595959', GRID = '#D9D9D9'
 
 interface Box { x: number; y: number; w: number; h: number }
-function legendEntries(model: XlsxChartModel): Array<{ name: string; color: string }> {
+function legendEntries(model: DrawModel): Array<{ name: string; color: string }> {
   const group = model.groups[0]
-  if (group && (group.type === 'pie' || group.type === 'doughnut')) {
+  if (group && (group.family === 'pie' || group.family === 'doughnut')) {
     const s = group.series[0]
     return (s?.values ?? []).map((_, i) => ({ name: model.categories[i] ?? String(i + 1), color: s.pointColors?.[i] ?? s.color })).slice(0, 64)
   }
   return model.groups.flatMap(g => g.series).map(s => ({ name: s.name, color: s.color }))
 }
 
-function paintLegend(ctx: CanvasRenderingContext2D, model: XlsxChartModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss): Box {
+function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss): Box {
   const entries = legendEntries(model)
   if (!model.legend || !entries.length) return area
   ctx.font = font(fontPx, family, familyCss)
@@ -72,7 +99,7 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: XlsxChartModel, area:
   return model.legend === 't' ? { x: area.x, y: area.y + line, w: area.w, h: area.h - line } : { ...area, h: area.h - line }
 }
 
-function paintPie(ctx: CanvasRenderingContext2D, model: XlsxChartModel, group: XlsxChartGroup, box: Box): void {
+function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
   const series = group.series[0]
   if (!series) return
   const values = series.values.map(v => v !== undefined && v > 0 ? v : 0)
@@ -92,7 +119,7 @@ function paintPie(ctx: CanvasRenderingContext2D, model: XlsxChartModel, group: X
     ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1; ctx.stroke()
     angle += sweep
   })
-  if (group.type === 'doughnut') {
+  if (group.family === 'doughnut') {
     ctx.beginPath()
     ctx.arc(cx, cy, r * (group.holeSize ?? 50) / 100, 0, Math.PI * 2)
     ctx.fillStyle = '#FFFFFF'
@@ -101,14 +128,14 @@ function paintPie(ctx: CanvasRenderingContext2D, model: XlsxChartModel, group: X
   void model
 }
 
-function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, box: Box, fontPx: number, family: string, familyCss: FamilyCss): void {
-  const scatter = model.groups.every(g => g.type === 'scatter')
-  const horizontal = model.groups.some(g => g.type === 'bar' && g.barDir === 'bar')
+function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, box: Box, fontPx: number, family: string, familyCss: FamilyCss): void {
+  const scatter = model.groups.every(g => g.family === 'scatter')
+  const horizontal = model.groups.some(g => g.family === 'bar' && g.barDir === 'bar')
   const percent = model.groups.some(g => g.grouping === 'percentStacked')
   const count = Math.max(model.categories.length, ...model.groups.flatMap(g => g.series.map(s => s.values.length)), 1)
   // Value extents, honouring stacking.
   let lo = Infinity, hi = -Infinity
-  const stackedValues = new Map<XlsxChartGroup, { pos: number[]; neg: number[]; total: number[] }>()
+  const stackedValues = new Map<DrawGroup, { pos: number[]; neg: number[]; total: number[] }>()
   for (const group of model.groups) {
     if (group.grouping === 'stacked' || group.grouping === 'percentStacked') {
       const pos = new Array<number>(count).fill(0), neg = new Array<number>(count).fill(0), total = new Array<number>(count).fill(0)
@@ -197,11 +224,11 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, bo
   try {
   ctx.beginPath(); ctx.rect(plot.x, plot.y, plot.w, plot.h); ctx.clip()
   const at = (f: number) => horizontal ? plot.x + f * plot.w : plot.y + plot.h - f * plot.h
-  const barGroups = model.groups.filter(g => g.type === 'bar')
+  const barGroups = model.groups.filter(g => g.family === 'bar')
   for (const group of model.groups) {
     const stacked = stackedValues.get(group)
     const share = (v: number, i: number) => group.grouping === 'percentStacked' && stacked ? (stacked.total[i] ? v / stacked.total[i] : 0) : v
-    if (group.type === 'bar') {
+    if (group.family === 'bar') {
       const n = group.grouping === 'clustered' ? Math.max(1, group.series.length) : 1
       const stride = 1 - group.overlap / 100
       const span = 1 + (n - 1) * stride
@@ -221,11 +248,11 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, bo
           else ctx.fillRect(plot.x + band * i + offset, Math.min(a, b), width, Math.abs(b - a))
         })
       })
-    } else if (group.type === 'line' || group.type === 'area') {
+    } else if (group.family === 'line' || group.family === 'area') {
       const base = new Array<number>(count).fill(0)
-      const edge = group.type === 'area'
+      const edge = group.family === 'area'
       const xAt = (i: number) => edge ? plot.x + (count > 1 ? i * plot.w / (count - 1) : plot.w / 2) : plot.x + band * (i + 0.5)
-      const layers: Array<{ s: XlsxChartSeries; top: Array<number | undefined>; bottom: number[] }> = []
+      const layers: Array<{ s: DrawSeries; top: Array<number | undefined>; bottom: number[] }> = []
       for (const s of group.series) {
         const bottom = base.slice()
         const top = Array.from({ length: count }, (_, i) => {
@@ -260,7 +287,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, bo
         }
         if (s.markers) top.forEach((v, i) => { if (v === undefined) return; ctx.beginPath(); ctx.arc(xAt(i), at(vpos(v)), 2.5, 0, Math.PI * 2); ctx.fill() })
       }
-    } else if (group.type === 'scatter' && xs) {
+    } else if (group.family === 'scatter' && xs) {
       const xp = (v: number) => plot.x + (v - xs!.min) / (xs!.max - xs!.min) * plot.w
       for (const s of group.series) {
         const pts = s.values.map((v, i) => { const x = s.xValues?.length ? s.xValues[i] : i + 1; return v === undefined || x === undefined ? undefined : [xp(x), at(vpos(v))] as const })
@@ -279,8 +306,9 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: XlsxChartModel, bo
 }
 
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
-export function paintXlsxChart(model: XlsxChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify): void {
-  if (model.unsupported || !model.groups.length) { paintChartPlaceholder(model, ctx, w, h, familyCss); return }
+export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify): void {
+  if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
+  const model = drawModel(source)
   ctx.save()
   try {
     ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
@@ -299,7 +327,7 @@ export function paintXlsxChart(model: XlsxChartModel, ctx: CanvasRenderingContex
     area = paintLegend(ctx, model, area, fontPx, model.fontFamily, familyCss)
     if (area.w <= 8 || area.h <= 8) return
     const group = model.groups[0]
-    if (group.type === 'pie' || group.type === 'doughnut') paintPie(ctx, model, group, area)
+    if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
     else paintCartesian(ctx, model, area, fontPx, model.fontFamily, familyCss)
   } finally { ctx.restore() }
 }

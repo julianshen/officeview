@@ -30,6 +30,7 @@ import {
 import { addRecord, answerOverview, emptyAggregate, mergeAggregate, type AggregateOutcome } from '../storage/overviewIndex'
 import { isValueUnavailable, SAVED_VALUES_DIAGNOSTIC, SAVED_VALUES_STATUS, valueAuthority, valueStatus } from './values'
 import type { PagedImportSession, PagedSheet, PagedWorkbook } from '../storage/pagedImport'
+import type { SheetMetadata } from '../storage/sheetRecords'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
 import type { XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../types'
@@ -494,11 +495,11 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit) => this.fillCharts(drawings, owner, controller.signal, names, admit) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, profile, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit) => this.fillCharts(drawings, owner, controller.signal, names, admit) })
       nodes.record(sheetId, parsed.nodes)
       // A chart still waiting on another sheet's import is answered, never cached.
       if (parsed.drawings.pendingSheets?.length || parsed.uncacheable) return parsed.drawings
-      return this.retainDrawings(parsed.drawings, parsed.workingSet, memory)
+      return this.retainDrawings(parsed.drawings, parsed.workingSet - (parsed.payloadBytes ?? 0), memory)
     } catch (cause) {
       if (controller.signal.aborted) return unavailableDrawings('Drawing read cancelled', failure('cancelled', 'Request cancelled', true))
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -585,9 +586,11 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     // 3./4. Stream the pages in order; strings admitted before they are built.
     const nums = new Float64Array(wantsText.length)
-    // 0 unknown, 1 number, 2 text that is not a number, 3 present without a value
+    // 0 unknown, 1 number, 2 text that is not a number, 3 present without a value,
+    // 4 unavailable (a formula without a saved value), 5 an error cell (its code in `errors`; spec 5.8)
     const state = new Uint8Array(wantsText.length)
     const strings: Array<string | undefined> = new Array(wantsText.length)
+    const errors: Array<string | undefined> = new Array(wantsText.length)
     const labels: Array<string | undefined> = new Array(wantsText.length)
     let reserved = base
     // Live charges of the records being read (a page, a string record) that the pool could not keep:
@@ -624,9 +627,17 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     // Number reading and label construction for one cell's text (record: typed storage).
     const takeText = (slot: number, kind: number, record: { text: Uint16Array; textStart: Uint32Array }, at: number, style: XlsxCellStyle | undefined): boolean => {
       const from = record.textStart[at], length = record.textStart[at + 1] - from
-      // The numeric reading streams the typed text (never built); labels are capped prefixes.
-      const scanned = kind === K_ERROR ? undefined : charts.scanChartNumber(length, k => record.text[from + k])
-      if (scanned !== undefined) { nums[slot] = scanned; state[slot] = 1 } else state[slot] = 2
+      if (kind === K_ERROR) {
+        // Error identity (spec 5.8): the code is a short prefix, admitted before it is built.
+        const units = Math.min(length, charts.CHART_ERROR_CODE_LIMIT)
+        if (!reserve(units * 2)) return false
+        errors[slot] = textPrefix(record, at, units).text
+        state[slot] = 5
+      } else {
+        // The numeric reading streams the typed text (never built); labels are capped prefixes.
+        const scanned = charts.scanChartNumber(length, k => record.text[from + k])
+        if (scanned !== undefined) { nums[slot] = scanned; state[slot] = 1 } else state[slot] = 2
+      }
       if (!wantsText[slot]) return true
       // Admitted, then built: at most LIMIT + 1 units (one past the limit marks truncation).
       if (!reserve(Math.min(length, LIMIT + 1) * 2)) return false
@@ -673,7 +684,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           if (signal.aborted) return done()
           const index = this.find(p, cell.row, cell.col)
           if (index < 0) continue
-          if (this.isUnavailable(p, index)) { state[cell.slot] = 3; continue }
+          if (this.isUnavailable(p, index)) { state[cell.slot] = 4; continue }
           const kind = p.kinds[index], style = styles[p.styles[index]]
           if (kind === K_SST) { deferred.push({ slot: cell.slot, kind, source: 'sst', id: p.nums[index], style }); continue }
           if (kind === K_TEXT || kind === K_ERROR) {
@@ -712,17 +723,22 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         } finally { disown(record, 'string') }
       }
     }
+    // The same point states as the resident fill (charts.cellPoint): unavailable and error keep their identity.
     charts.fillDrawings(drawings, owner, (sheet, row, col) => {
       const slot = slots.get(key(sheet, row, col))
       if (slot === undefined || state[slot] === 0) return undefined
+      if (state[slot] === 4) return { value: undefined, unavailable: true }
       const number = state[slot] === 1 ? nums[slot] : null
-      return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
-    })
+      return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(state[slot] === 5 ? { error: errors[slot]! } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
+    }, undefined, (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col))
     return done()
   }
 
   /** Keeps a complete payload in the pool (when one is bound and it fits) and
-   * answers with a clone; otherwise the parsed payload itself is the answer. */
+   * answers with a clone; otherwise the parsed payload itself is the answer.
+   * `workingSet` is the read's charge WITHOUT the payload (D0): a retained payload
+   * is owned by its pool entry (transferred, never charged twice), so the read's
+   * share holds only the outgoing clone beside it: two live allocations. */
   private retainDrawings(result: SheetDrawings, workingSet: number, memory?: DrawingMemory): SheetDrawings {
     const pool = this.drawingState.pool
     if (result.completeness !== 'complete' || !pool || pool.closed) return result
@@ -833,6 +849,16 @@ export interface PagedSourceOptions {
   drawingPayloadBytes?: number
   /** Request-decode clock and host yield (tests inject both). */
   pacing?: StorePacing
+}
+/** Whether a cell sits in an authored hidden row or column (chart `plotVisOnly` provenance, as buildGeometry reads them). */
+function hiddenCell(meta: SheetMetadata | undefined, row: number, col: number): boolean {
+  if (!meta) return false
+  const rows = meta.hiddenRows
+  if (meta.unorderedRows) return rows.some(run => run.r0 <= row && row <= run.r1) || meta.cols.some(spec => spec.hidden && spec.min <= col && col <= spec.max)
+  let lo = 0, hi = rows.length
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (rows[mid].r1 < row) lo = mid + 1; else hi = mid }
+  if (lo < rows.length && rows[lo].r0 <= row) return true
+  return meta.cols.some(spec => spec.hidden && spec.min <= col && col <= spec.max)
 }
 export function createPagedWorkbookSource(session: PagedImportSession, options: PagedSourceOptions = {}): WorkbookSource {
   const { workbook } = session

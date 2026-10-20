@@ -42,8 +42,14 @@ export function chartParseContext(doc: ChartDocumentContext, pkg: OfficePackage,
   return { ...(theme ? { theme } : {}), pkg, partPath, ...(doc.signal ? { signal: doc.signal } : {}), profile: doc.profile, workspace: doc.workspace, ...(epoch ? { epoch } : {}) }
 }
 
-/** The production hook: the package's document context (created on demand, desktop) for one chart part. */
+/**
+ * A package that carries its own memory ledger (the paged worker's
+ * `RangePackage`): the chart workspace it gets on demand uses that ledger as its
+ * parent, so chart bytes are counted once in the document pool share (D0).
+ */
+interface LedgeredPackage { chartLedger?: ChartParentLedger; chartProfile?: ChartProfile }
+/** The production hook: the package's document context (created on demand, desktop unless the package says) for one chart part. */
 export function chartParseContextFor(pkg: OfficePackage, partPath: string, theme?: ThemeContext): ChartParseContext {
-  const slot = drawingPartContext(pkg)
-  return chartParseContext(slot.chart ??= documentChartContext('desktop'), pkg, partPath, theme)
+  const slot = drawingPartContext(pkg), own = pkg as LedgeredPackage
+  return chartParseContext(slot.chart ??= documentChartContext(own.chartProfile ?? 'desktop', undefined, own.chartLedger), pkg, partPath, theme)
 }

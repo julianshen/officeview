@@ -333,7 +333,7 @@ const chartCards = new WeakMap<XmlNode, XlsxChartModel>()
 type ChartCard = Extract<DrawingContent, { kind: 'xlsxChart' }>
 /** A placeholder card model (the engine's `placeholderChart`, without loading the engine). */
 export const cardChart = (reason: string, title?: string, feature?: 'ChartEx'): XlsxChartModel =>
-  ({ ...(title ? { title } : {}), groups: [], categories: [], categoryAxis: { gridlines: false, deleted: false }, valueAxis: { gridlines: false, deleted: false }, fontFamily: 'Calibri', fontSizePt: 10, unsupported: reason, ...(feature ? { feature } : {}) })
+  ({ ...(title ? { title } : {}), groups: [], axes: [], categories: [], fontFamily: 'Calibri', fontSizePt: 10, unsupported: reason, ...(feature ? { feature } : {}) })
 /** AlternateContent wrappers whose resolver selected no usable representation (every Choice failed and the
  * Fallback is absent or unusable). Recorded by each format's resolver from its actual selection result. */
 const exhausted = new WeakSet<XmlNode>()
