@@ -87,7 +87,26 @@ export interface ChartAxis {
   /** Number format and whether it follows the source (spec 5.2). */
   formatCode?: string
   sourceLinked?: boolean
+  /** Tick marks and label placement as authored (absent: the legacy drawing, no marks, labels at the plot edge). */
+  majorTickMark?: ChartTickMark
+  minorTickMark?: ChartTickMark
+  tickLblPos?: 'nextTo' | 'low' | 'high' | 'none'
+  tickLblSkip?: number
+  tickMarkSkip?: number
+  /** `c:dispUnits`: tick values are divided by `divisor`; `label` is the unit label drawn beside the axis (spec 5.1). */
+  dispUnits?: { divisor: number; unit: string; label?: string }
+  /** `c:dateAx` time units (spec 5.1); `auto` (`c:auto`) lets text categories fall back to a category axis. */
+  baseTimeUnit?: ChartTimeUnit
+  majorTimeUnit?: ChartTimeUnit
+  minorTimeUnit?: ChartTimeUnit
+  auto?: boolean
+  /** No axis element: the plot area had none and its groups no `c:axId`, so a primary pair is implied (A1a). */
+  implicit?: true
 }
+export type ChartTickMark = 'cross' | 'in' | 'out' | 'none'
+export type ChartTimeUnit = 'days' | 'months' | 'years'
+/** A chart diagnostic (spec 6.6): a code and its reason. */
+export interface ChartDiagnostic { code: string; reason: string }
 
 /**
  * A single-area worksheet reference, 0-based and inclusive, that a series role
@@ -149,6 +168,12 @@ export interface ChartModel {
   /** Every axis of the plot area, in document order; group bindings reference them by `id`. */
   axes: ChartAxis[]
   categories: string[]
+  /**
+   * The numeric reading of the shared categories when they sit on a date axis (spec 5.1): serials in the chart
+   * epoch (a filled serial from another epoch is converted, or unavailable when it has no counterpart). A label
+   * without a number here is text: the date axis then falls back to a category axis.
+   */
+  categoryValues?: ChartPoints
   /** The shared category reference still to be filled from worksheet cells. */
   categoryPending?: ChartRange
   /** The shared category reference (kept beside a cache, for provenance only). */
@@ -163,10 +188,17 @@ export interface ChartModel {
   plotVisOnly?: boolean
   /** `c16r3:dataDisplayOptions16/dispNaAsBlank`. */
   dispNaAsBlank?: boolean
-  /** The chart epoch (spec 5.1). */
+  /** The chart epoch as authored (`c:date1904`; spec 5.1). */
   epoch?: '1900' | '1904'
+  /**
+   * The containing workbook's epoch (spec 5.1 precedence 2), carried on the transferable model so every paint
+   * realm resolves the same chart epoch. Stamped by the XLSX fills for a 1904 workbook; absent means 1900.
+   */
+  workbookEpoch?: '1904'
   /** Display points dropped by the per-chart bound. */
   truncated?: boolean
+  /** Diagnostics of the parse and fill (spec 6.6), e.g. `chart-axis-unplaceable`, `chart-date-unrepresentable`. */
+  diagnostics?: ChartDiagnostic[]
   /** Set when the chart cannot be drawn: the reason shown on the placeholder card. */
   unsupported?: string
   /** A card's original feature when it is not a classic chart (spec 6.3). */

@@ -367,8 +367,8 @@ describe('D0 ownership: one document chart facet; the paged read share is its pa
     const workspace = createChartWorkspace('desktop')
     const model = charts.parseXlsxChart(parseXmlOrdered(xmlFmt), undefined, { profile: 'desktop', workspace } as never)!
     expect(list(model.groups[0].series[0].values)).toEqual([{ state: 'value', v: 5, fmt }])
-    // The retained charge is the role's whole storage, its format table included.
-    expect(workspace.used).toBe(charts.storageBytes(model.groups[0].series[0].values))
+    // The retained charge is the role's whole storage, its format table included (plus the model's axis records, A1a).
+    expect(workspace.used).toBe(charts.storageBytes(model.groups[0].series[0].values) + model.axes.reduce((sum, axis) => sum + charts.axisBytes(axis), 0))
     expect(workspace.used).toBeGreaterThan(20_000)
     // Room for the typed storage but not the format string: refused before the format is retained, nothing held.
     let held = 0

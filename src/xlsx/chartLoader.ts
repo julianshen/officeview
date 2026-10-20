@@ -21,9 +21,16 @@ export function hasXlsxCharts(drawings: readonly ChartCarrier[] | undefined): bo
   return false
 }
 
-/** Preparation before paint (spec 6.5): a load failure is swallowed, so pages still return, with cards. */
-export const ensureChartEngine = (contents: readonly ChartCarrier[]): Promise<unknown> => hasXlsxCharts(contents) ? loadChartModule().catch(() => {}) : Promise.resolve()
-/** Make the chart painter available before a sheet with charts is painted. */
-export async function ensureChartPainter(drawings: readonly XlsxDrawing[] | undefined): Promise<void> {
-  if (hasXlsxCharts(drawings)) await loadChartModule()
+/** The receiving document (spec 6.4) and the context lease its paints carry. */
+export type ChartReceiver = import('../charts/paint').ChartReceiver
+export type ChartReceiverLease = import('../charts/paint').ChartReceiverLease
+/** Preparation before paint (spec 6.5): a load failure is swallowed, so pages still return, with cards. With a
+ * receiver, the receiving chart context this preparation's paints carry (release it with the preparation). */
+export const ensureChartEngine = (contents: readonly ChartCarrier[], receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> =>
+  hasXlsxCharts(contents) ? loadChartModule().then(charts => receiver ? charts.acquireChartContext(receiver) : undefined).catch(() => undefined) : Promise.resolve(undefined)
+/** Make the chart painter available before a sheet with charts is painted (and acquire its receiving context). */
+export async function ensureChartPainter(drawings: readonly XlsxDrawing[] | undefined, receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> {
+  if (!hasXlsxCharts(drawings)) return undefined
+  const charts = await loadChartModule()
+  return receiver ? charts.acquireChartContext(receiver) : undefined
 }

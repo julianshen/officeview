@@ -7,8 +7,10 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
 import type { ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
-import { PointWriter, knownError, pointBytes } from './points'
+import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
+import { admitChartModel } from './axisBinding'
+import { CHART_AXIS_UNPLACEABLE, placeAxes } from './axes'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -175,19 +177,62 @@ export function parseChartRange(formula: string): ChartRange | undefined {
 }
 
 const AXIS_KINDS: Record<string, ChartAxis['kind']> = { catAx: 'category', dateAx: 'date', valAx: 'value', serAx: 'series' }
+const oneOf = <T extends string>(raw: string | undefined, allowed: readonly T[]): T | undefined => allowed.includes(raw as T) ? raw as T : undefined
+const TICK_MARKS = ['cross', 'in', 'out', 'none'] as const
+const TIME_UNITS = ['days', 'months', 'years'] as const
+/** `c:builtInUnit` divisors and default unit labels (spec 5.1). The labels for hundreds, thousands, millions, billions
+ * and trillions are Office's words; the others are unverified against an Office reference. */
+const BUILT_IN_UNITS: Record<string, readonly [number, string]> = {
+  hundreds: [1e2, 'Hundreds'], thousands: [1e3, 'Thousands'], tenThousands: [1e4, 'Ten Thousands'], hundredThousands: [1e5, 'Hundred Thousands'],
+  millions: [1e6, 'Millions'], tenMillions: [1e7, 'Ten Millions'], hundredMillions: [1e8, 'Hundred Millions'], billions: [1e9, 'Billions'], trillions: [1e12, 'Trillions'],
+}
+function dispUnitsOf(node: XmlNode | undefined): ChartAxis['dispUnits'] {
+  if (!node) return undefined
+  const builtIn = BUILT_IN_UNITS[val(child(node, 'builtInUnit')) ?? '']
+  const custom = finite(val(child(node, 'custUnit')))
+  const [divisor, unit] = builtIn ?? (custom !== undefined && custom > 0 ? [custom, `x${custom}`] as const : [undefined, ''])
+  if (divisor === undefined) return undefined
+  const lbl = child(node, 'dispUnitsLbl')
+  const label = lbl ? richText(child(lbl, 'tx')) || unit : undefined
+  return { divisor, unit, ...(label ? { label: label.slice(0, CHART_LABEL_LIMIT) } : {}) }
+}
 function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxis {
   const scaling = child(node, 'scaling')
-  const formatCode = attrs(child(node, 'numFmt')).formatCode
+  const numFmt = attrs(child(node, 'numFmt'))
+  const formatCode = numFmt.formatCode
   const title = titleOf(child(node, 'title'))
   const crossAx = val(child(node, 'crossAx'))
+  const number = (name: string, from: XmlNode | undefined = node) => finite(val(child(from, name)))
+  const positive = (name: string) => { const v = number(name); return v !== undefined && v > 0 ? v : undefined }
+  const skip = (name: string) => { const v = number(name); return v !== undefined && Number.isInteger(v) && v >= 1 ? v : undefined }
+  const fields = {
+    position: oneOf(val(child(node, 'axPos')), ['b', 't', 'l', 'r'] as const),
+    crosses: oneOf(val(child(node, 'crosses')), ['autoZero', 'min', 'max'] as const),
+    crossesAt: number('crossesAt'),
+    min: number('min', scaling), max: number('max', scaling),
+    majorUnit: positive('majorUnit'), minorUnit: positive('minorUnit'),
+    logBase: number('logBase', scaling),
+    reversed: val(child(scaling, 'orientation')) === 'maxMin' ? true : undefined,
+    crossBetween: oneOf(val(child(node, 'crossBetween')), ['between', 'midCat'] as const),
+    majorTickMark: oneOf(val(child(node, 'majorTickMark')), TICK_MARKS),
+    minorTickMark: oneOf(val(child(node, 'minorTickMark')), TICK_MARKS),
+    tickLblPos: oneOf(val(child(node, 'tickLblPos')), ['nextTo', 'low', 'high', 'none'] as const),
+    tickLblSkip: skip('tickLblSkip'), tickMarkSkip: skip('tickMarkSkip'),
+    dispUnits: dispUnitsOf(child(node, 'dispUnits')),
+    baseTimeUnit: oneOf(val(child(node, 'baseTimeUnit')), TIME_UNITS),
+    majorTimeUnit: oneOf(val(child(node, 'majorTimeUnit')), TIME_UNITS),
+    minorTimeUnit: oneOf(val(child(node, 'minorTimeUnit')), TIME_UNITS),
+    auto: child(node, 'auto') ? flag(child(node, 'auto'), true) : undefined,
+    minorGridlines: child(node, 'minorGridlines') ? true : undefined,
+    sourceLinked: numFmt.sourceLinked !== undefined ? numFmt.sourceLinked === '1' || numFmt.sourceLinked === 'true' : undefined,
+  }
+  const present = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<ChartAxis>
   return {
-    // An axis without an axId keeps a positional id (A1a validates references).
+    // An axis without an axId keeps a positional id.
     id: val(child(node, 'axId')) ?? `#${index}`,
     kind,
     ...(crossAx !== undefined ? { crossAx } : {}),
-    ...(finite(val(child(scaling, 'min'))) !== undefined ? { min: finite(val(child(scaling, 'min'))) } : {}),
-    ...(finite(val(child(scaling, 'max'))) !== undefined ? { max: finite(val(child(scaling, 'max'))) } : {}),
-    ...(finite(val(child(node, 'majorUnit'))) ? { majorUnit: finite(val(child(node, 'majorUnit'))) } : {}),
+    ...present,
     gridlines: Boolean(child(node, 'majorGridlines')),
     deleted: val(child(node, 'delete')) === '1' || val(child(node, 'delete')) === 'true',
     ...(title ? { title } : {}),
@@ -195,15 +240,46 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
   }
 }
 
-/** A group's axis binding, recorded structurally from its `c:axId`s (A1a validates it). */
-function bindingOf(family: ChartFamily, node: XmlNode, axes: readonly ChartAxis[]): ChartAxisBinding {
+/** The retained size of one axis record: a fixed record (its scalar fields) plus its strings. */
+const AXIS_RECORD_BYTES = 256
+export const axisBytes = (axis: ChartAxis): number => AXIS_RECORD_BYTES + [axis.id, axis.title, axis.formatCode, axis.dispUnits?.unit, axis.dispUnits?.label].reduce((sum, text) => sum + (text ? stringBytes(text) : 0), 0)
+/** An implied axis (A1a): the plot area had no axis of that kind for a group without axIds; added once. */
+function impliedAxis(axes: ChartAxis[], kind: ChartAxis['kind'], id: string): string {
+  if (!axes.some(axis => axis.id === id)) axes.push({ id, kind, gridlines: false, deleted: false, implicit: true })
+  return id
+}
+const horizontalPosition = (axis: ChartAxis | undefined) => axis?.position === 'b' || axis?.position === 't'
+const verticalPosition = (axis: ChartAxis | undefined) => axis?.position === 'l' || axis?.position === 'r'
+/**
+ * A group's axis binding from its own `c:axId`s (spec 5.1): a category or date axis is the category axis, a value
+ * axis the value axis; two value axes are x and y (or x and value), the horizontal one (`axPos` b/t) being x.
+ * Unresolved ids are kept so validation names them. A group without axIds, or a plot area without any axis element
+ * (never written by Office), binds the plot area's first axes of the right kinds, implied when there are none.
+ */
+function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): ChartAxisBinding {
   if (family === 'pie' || family === 'doughnut') return { kind: 'none' }
   const ids = getChildren(node, 'axId').map(val).filter((id): id is string => id !== undefined)
-  if (family === 'scatter') return { kind: 'xy', x: ids[0] ?? '', y: ids[1] ?? '' }
-  const kindOf = (id: string) => axes.find(axis => axis.id === id)?.kind
-  const category = ids.find(id => kindOf(id) === 'category' || kindOf(id) === 'date')
-  const value = ids.find(id => kindOf(id) === 'value') ?? ''
-  return { kind: 'cartesian', ...(category !== undefined ? { category } : {}), value }
+  const axisOf = (id: string) => axes.find(axis => axis.id === id)
+  // A plot area without any axis element binds the implied pair even when the group lists axIds.
+  if (!ids.length || !axes.some(axis => !axis.implicit)) {
+    const values = axes.filter(axis => axis.kind === 'value')
+    if (family === 'scatter') {
+      const x = values.find(horizontalPosition) ?? values[0], y = values.find(axis => axis !== x)
+      return { kind: 'xy', x: x?.id ?? impliedAxis(axes, 'value', '#x'), y: y?.id ?? impliedAxis(axes, 'value', '#y') }
+    }
+    const category = axes.find(axis => axis.kind === 'category' || axis.kind === 'date')
+    return { kind: 'cartesian', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
+  }
+  const valueIds = ids.filter(id => axisOf(id)?.kind === 'value')
+  const xFirst = (pair: string[]) => verticalPosition(axisOf(pair[0])) && horizontalPosition(axisOf(pair[1])) ? [pair[1], pair[0]] : pair
+  if (family === 'scatter') {
+    const [x, y] = valueIds.length >= 2 ? xFirst(valueIds) : [ids[0], ids[1]]
+    return { kind: 'xy', x: x ?? '', y: y ?? '' }
+  }
+  const category = ids.find(id => { const kind = axisOf(id)?.kind; return kind === 'category' || kind === 'date' })
+  if (category === undefined && valueIds.length >= 2) { const [x, value] = xFirst(valueIds); return { kind: 'cartesian', x, value } }
+  const value = valueIds[0] ?? ids.find(id => id !== category) ?? ''
+  return { kind: 'cartesian', category: category ?? ids.find(id => id !== value) ?? '', value }
 }
 /** A series feeds an analytic element: a trendline, or stdDev/stdErr error bars (spec 7). */
 const isAnalytic = (ser: XmlNode) => Boolean(child(ser, 'trendline')) || getChildren(ser, 'errBars').some(bars => /^std(Dev|Err)$/.test(val(child(bars, 'errValType')) ?? ''))
@@ -245,9 +321,14 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
-  let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined
+  let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
-  for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) axes.push(axisOf(node, AXIS_KINDS[name], axes.length))
+  for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
+    // Each axis record the model retains (its scale, placement and label fields; spec 5.1) is charged before it is kept.
+    const axis = axisOf(node, AXIS_KINDS[name], axes.length)
+    charge(axisBytes(axis))
+    axes.push(axis)
+  }
   for (const [name, node] of orderedChildren(plot)) {
     if (UNSUPPORTED[name]) { unsupported ??= `${UNSUPPORTED[name]} is not supported`; continue }
     const type = GROUPS[name]
@@ -256,6 +337,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
     const vary = type === 'pie' || type === 'doughnut' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
     const series: ChartSeries[] = []
+    const binding = bindingOf(type, node, axes)
+    // A date axis reads its categories' saved numbers (serials in the chart epoch; spec 5.1).
+    const dateAxis = binding.kind === 'cartesian' && axes.find(axis => axis.id === binding.category)?.kind === 'date'
     for (const ser of getChildren(node, 'ser')) {
       if (seriesTotal >= CHART_SERIES_LIMIT) { truncated = true; break }
       // Series indices are unsigned integers; anything else falls back to the series position.
@@ -296,7 +380,10 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       if (!hasCache(valueNode)) { const range = rangeOf(valueNode); if (range) pending.values = range } else { const range = rangeOf(valueNode); if (range) refs.values = range }
       if (xNode) { const range = rangeOf(xNode); if (range) { if (hasCache(xNode)) refs.xValues = range; else pending.xValues = range } }
       if (catNode && categories.length === 0 && !categoryPending) {
-        if (hasCache(catNode)) { charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode) }
+        if (hasCache(catNode)) {
+          charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode)
+          if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
+        }
         else { const range = rangeOf(catNode); if (range) categoryPending = range }
       }
       // Display points past the bound are dropped at draw time (analytic series keep them for analysis).
@@ -324,7 +411,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       })
     }
     groups.push({
-      family: type, grouping, series, binding: bindingOf(type, node, axes),
+      family: type, grouping, series, binding,
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
       gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
@@ -332,6 +419,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
     })
   }
+  // Implied axes (a plot area without axis elements) are retained like authored ones.
+  for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
@@ -345,6 +434,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     groups,
     axes,
     categories,
+    ...(categoryValues ? { categoryValues } : {}),
     ...(categoryPending ? { categoryPending } : {}),
     ...(categoryRef ? { categoryRef } : {}),
     ...(legend ? { legend: (val(child(legend, 'legendPos')) ?? 'r') as ChartModel['legend'] } : {}),
@@ -358,7 +448,20 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
   }
-  return model
+  return unsupported ? model : admitAxes(model, charge)
+}
+
+/**
+ * Axis admission (spec 5.1): every group binding must name existing axes of the right kinds, and the groups must be
+ * placeable together; otherwise the chart is a card with `chart-axis-unplaceable` (never drawn on a guessed axis).
+ */
+function admitAxes(model: ChartModel, charge: (bytes: number) => void): ChartModel {
+  const admitted = admitChartModel(model)
+  const placed = admitted.kind === 'native' ? placeAxes(model) : undefined
+  const reason = admitted.kind !== 'native' ? admitted.reason : placed && !placed.ok ? placed.reason : undefined
+  if (reason === undefined) return model
+  charge(2 * stringBytes(reason))
+  return { ...model, unsupported: `This chart's axes cannot be placed (${reason})`, diagnostics: [...model.diagnostics ?? [], { code: CHART_AXIS_UNPLACEABLE, reason }] }
 }
 
 /** A placeholder model for a chart that could not be read. */

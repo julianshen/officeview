@@ -15,7 +15,7 @@ import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
 import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
-import { ensureChartEngine, ensureChartPainter } from '../xlsx/chartLoader'
+import { ensureChartEngine, ensureChartPainter, type ChartReceiverLease } from '../xlsx/chartLoader'
 import type { PptxDocument } from '../pptx/types'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 import type { ImageSelection } from '../core/svg'
@@ -141,6 +141,14 @@ export interface PaintOptions {
    * rendering (and goldens) never move; pinned chains are host-deterministic.
    */
   fallbackFonts?: FallbackFontsOptions
+  /**
+   * The receiving document's chart budget (spec 6.4): transferred chart models are charged to this context, or to
+   * one created once per document with `chartProfile` (the viewer profile; mobile is 32 MiB; default desktop).
+   */
+  chartContext?: import('../charts/context').ChartDocumentContext
+  chartProfile?: import('../charts/workspace').ChartProfile
+  /** The receiving document's live parent budget (an interactive viewer's main-thread ledger) for that created context. */
+  chartParent?: import('../charts/workspace').ChartParentLedger
 }
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
@@ -246,6 +254,8 @@ export function collectCachedPictures(nodes: ContentCarrier[]): ContentImageAsse
   return images
 }
 
+/** The receiving document for its transferred chart models (spec 6.4). */
+export const chartReceiver = (doc: object, options?: PaintOptions) => ({ owner: doc, ...(options?.chartProfile ? { profile: options.chartProfile } : {}), ...(options?.chartContext ? { context: options.chartContext } : {}), ...(options?.chartParent ? { parent: options.chartParent } : {}) })
 /** Prepare embedded fonts before measurement/painting. Low-level renderSlide stays synchronous. */
 export function getPaintables(
   doc: DocxDocument | XlsxDocument | PptxDocument,
@@ -256,13 +266,15 @@ export function getPaintables(
     return acquireFonts(doc, options?.registerFont).then(async (lease) => {
       // Decoded before the lease exists: a later failure must close them too.
       let decoded: Array<CanvasImageSource | undefined> = []
+      // The receiving chart context these pages charge their transferred charts to (released with the pages).
+      let charts: ChartReceiverLease | undefined
       try {
         const baseFamilyCss = (family: string) => fontFamilyCssDocx(lease.resolve(family))
         const measure = await measurerFromDoc(withFallbackFonts(baseFamilyCss, options?.fallbackFonts))
         const pages = layoutDocx(doc, measure)
         // One decode per unique candidate pair; failures degrade to a blank slot.
         const docImages = collectDocImages(doc)
-        await ensureChartEngine(docImages.map(image => ({ content: image.drawing })))
+        charts = await ensureChartEngine(docImages.map(image => ({ content: image.drawing })), chartReceiver(doc, options))
         decoded = await decodeImageAssets(docImages, options?.decodeImage)
         const decodedByObject = new Map<ContentImageAsset, CanvasImageSource | undefined>(docImages.map((img, index) => [img, decoded[index]]))
         const failed = new Map<ImageSelection, string>()
@@ -283,44 +295,47 @@ export function getPaintables(
               ...(watermark ? { watermark } : {}),
               assets: {
                 imageFor: (image) => decodedByObject.get(image),
+                ...(charts ? { chartContext: charts.context } : {}),
                 ...(options?.fallbackFonts ? { fallbackFonts: options.fallbackFonts } : {}),
                 resolveFont: lease.resolve,
               },
             })
           },
-        })), lease.dispose, lease.diagnostics, decoded)
-      } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
+        })), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded)
+      } catch (error) { releaseDecoded(decoded); charts?.release(); lease.dispose(); throw error }
     })
   }
   if ('sheets' in doc) {
     return acquireFonts(doc, options?.registerFont).then(async lease => {
       let decoded: Array<CanvasImageSource | undefined> = []
+      let charts: ChartReceiverLease | undefined
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
-        await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
+        charts = await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []), chartReceiver(doc, options))
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
         recordChartFallbacks([doc.drawingCoverage, ...doc.sheets.map(sheet => sheet.drawingCoverage)], failedSceneFallbacks(doc.sheets.flatMap(sheet => sheet.drawings ?? []), decoded))
         return withLease(doc.sheets.map((sheet): Paintable =>
-          sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts) }, watermark),
-        ), lease.dispose, lease.diagnostics, decoded)
-      } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
+          sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) }, watermark),
+        ), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded)
+      } catch (error) { releaseDecoded(decoded); charts?.release(); lease.dispose(); throw error }
     })
   }
   return acquireFonts(doc, options?.registerFont).then(async lease => {
     let decoded: Array<CanvasImageSource | undefined> = []
+    let charts: ChartReceiverLease | undefined
     try {
       const sm = slideMetrics(doc)
       const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
-      await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes))
+      charts = await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes), chartReceiver(doc, options))
       decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
       recordChartFallbacks([doc.drawingCoverage], failedSceneFallbacks(doc.slides.flatMap(slide => slide.shapes), decoded))
       return withLease(doc.slides.map(slide => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },
-        paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image) }),
-      })), lease.dispose, lease.diagnostics, decoded)
-    } catch (error) { releaseDecoded(decoded); lease.dispose(); throw error }
+        paint: ctx => renderSlide(slide, ctx, sm, decoded, watermark, withFallbackFonts(lease.resolve, options?.fallbackFonts), { imageFor: image => decodedByObject.get(image), ...(charts ? { chartContext: charts.context } : {}) }),
+      })), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded)
+    } catch (error) { releaseDecoded(decoded); charts?.release(); lease.dispose(); throw error }
   })
 }

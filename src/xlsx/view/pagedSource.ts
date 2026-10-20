@@ -539,6 +539,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * failed sheet turns its charts into placeholders and is never cached. */
   private async fillCharts(drawings: XlsxDrawing[], owner: string, signal: AbortSignal, names: readonly { name: string; source: string; localSheetIndex?: number }[] = [], admit: (bytes: number) => boolean = () => true, workspace?: ChartWorkspace): Promise<{ pendingSheets: string[]; uncacheable?: boolean; refused?: boolean; diagnostics?: WorkerDiagnostic[] }> {
     const charts = await loadChartModule()
+    charts.stampWorkbookEpoch(drawings, this.workbook.formatting.dateSystem)
     charts.resolveDrawingNames(drawings, owner, charts.chartNameResolver(names, this.workbook.sheets))
     const sheetOf = (name: string) => this.workbook.sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
     const diagnostics: WorkerDiagnostic[] = []
@@ -739,7 +740,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (state[slot] === 4) return { value: undefined, unavailable: true }
       const number = state[slot] === 1 ? nums[slot] : null
       return { value: strings[slot] ?? (state[slot] === 1 ? nums[slot] : undefined), number, ...(state[slot] === 5 ? { error: errors[slot]! } : {}), ...(labels[slot] !== undefined ? { text: labels[slot] } : {}) }
-    }, undefined, { hidden: (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col), workspace })
+    }, undefined, { hidden: (sheet, row, col) => hiddenCell(sheetOf(sheet)?.metadata, row, col), workspace, epoch: this.workbook.formatting.dateSystem })
     return done()
   }
 

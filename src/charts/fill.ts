@@ -8,6 +8,7 @@ import type { ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, pointBytes, stringBytes, withHidden } from './points'
 import { ChartRefusal, adoptChartModel, chartModelOwner, modelOwner, retainWithTarget, succeedChartModel } from './own'
 import type { ChartWorkspace } from './workspace'
+import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './dates'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -60,15 +61,18 @@ export function seriesLimit(series: ChartSeries): number {
   const ranges = [series.pending?.values, series.pending?.xValues].filter((range): range is ChartRange => Boolean(range && !range.definedName))
   return ranges.some(range => lineLength(range) > CHART_ANALYTIC_POINT_LIMIT) ? CHART_POINT_LIMIT : CHART_ANALYTIC_POINT_LIMIT
 }
-/** Writes the point state of one filled cell (spec 5.8); `onTruncated` hears a value the reader could not read in full. */
-function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onTruncated: () => void): void {
+/** Writes the point state of one filled cell (spec 5.8); `onTruncated` hears a value the reader could not read in full.
+ * `map` converts a date role's serial into the chart epoch (undefined: no counterpart, the point is unavailable). */
+function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onTruncated: () => void, map?: (v: number) => number | undefined): void {
   if (!cell) return // blank
   if (cell.unavailable) { out.unavailable(i); return }
   if (cell.error !== undefined) { out.error(i, cell.error); return }
   // A numeric form the scanner cannot read exactly has no value, and the chart says it is truncated.
   if (cell.truncated) { onTruncated(); out.unavailable(i); return }
   const number = cell.number !== undefined ? cell.number ?? undefined : numberOf(cell.value)
-  if (number !== undefined) out.value(i, number)
+  if (number === undefined) return
+  const v = map ? map(number) : number
+  if (v === undefined) out.unavailable(i); else out.value(i, v)
 }
 /** The cell coordinates of point `i` on a line. */
 export const linePoint = (line: ChartLine, i: number): { row: number; col: number } => line.vertical ? { row: line.start + i, col: line.fixed } : { row: line.fixed, col: line.start + i }
@@ -138,7 +142,8 @@ export function resolveChartNames(model: ChartModel, ownerSheet: string, resolve
 }
 
 /** What a fill needs beside the cells: hidden-cell provenance and the chart workspace that owns new storage. */
-export interface ChartFillOptions { hidden?: ChartHiddenLookup; workspace?: ChartWorkspace }
+/** `epoch`: the workbook's date system, which filled values carry (spec 5.1); date roles are converted to the chart epoch. */
+export interface ChartFillOptions { hidden?: ChartHiddenLookup; workspace?: ChartWorkspace; epoch?: ChartEpoch }
 /**
  * Fill uncached references from worksheet cells (returns a new model that takes
  * over the old one's charge). Every cell is written straight into the role's
@@ -194,7 +199,7 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
     } finally { owner.workspace.release(labelTag) }
   }
   try {
-    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label)
+    const next = fillModel(model, ownerSheet, lookup, hidden, charge, label, options.epoch ?? model.workbookEpoch)
     if (owner) {
       owner.workspace.transfer(fillTag, owner.tag, charged.bytes)
       if (chartModelOwner(model)) succeedChartModel(model, next); else adoptChartModel(next, owner)
@@ -211,8 +216,17 @@ export function fillChartRanges(model: ChartModel, ownerSheet: string, lookup: C
 /** The bound admitted before a label is built: the formatter's capped output (CHART_LABEL_LIMIT + 1 units,
  * one past the limit marks truncation), which also bounds the retained label. */
 const LABEL_BOUND_BYTES = stringBytes(' '.repeat(CHART_LABEL_LIMIT + 1))
-function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: (allocation?: ChartTextAllocation) => string, keepEmpty?: boolean) => string): ChartModel {
+function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLookup, hidden: ChartHiddenLookup | undefined, charge: (bytes: number) => void, label: (produce: (allocation?: ChartTextAllocation) => string, keepEmpty?: boolean) => string, workbookEpoch?: ChartEpoch): ChartModel {
   let truncated = model.truncated ?? false
+  // Epoch normalization (spec 5.1): filled values carry the workbook's epoch; only date roles (date-axis categories,
+  // values on a date-formatted axis) are converted into the chart epoch, through the civil model. A serial without
+  // a counterpart is unavailable (chart-date-unrepresentable). Saved data is already in the chart epoch.
+  const epoch = chartEpoch(model.epoch, workbookEpoch), source = workbookEpoch ?? epoch
+  let unrepresentable = 0
+  const toChart = source === epoch ? undefined : (v: number) => { const out = convertSerial(v, source, epoch); if (out === undefined) unrepresentable++; return out }
+  const axisById = (id: string | undefined) => id === undefined ? undefined : model.axes.find(axis => axis.id === id)
+  const dateFormatted = (id: string | undefined) => isDateFormat(axisById(id)?.formatCode)
+  const dateCategories = model.groups.some(g => g.binding.kind === 'cartesian' && axisById(g.binding.category)?.kind === 'date')
   const sheetOf = (range: ChartRange) => range.sheet ?? ownerSheet
   /** A role's own provenance: the sorted indices of its cells in hidden rows or columns (admitted, then built). */
   const provenance = (line: ChartLine): Uint32Array | undefined => {
@@ -225,15 +239,21 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     for (let i = 0, k = 0; i < line.count; i++) { const at = linePoint(line, i); if (hidden(line.sheet, at.row, at.col)) out[k++] = i }
     return out
   }
-  let categories = model.categories, categoryHidden = model.categoryHidden
+  let categories = model.categories, categoryHidden = model.categoryHidden, categoryValues = model.categoryValues
   if (model.categoryPending) {
     const line = chartLine(model.categoryPending, sheetOf(model.categoryPending), true)
     truncated ||= line.truncated
     const labels: string[] = []
+    // A date axis keeps its categories' numbers too (the same cells, never re-read from the formatted labels).
+    let numbers: PointWriter | undefined
+    if (dateCategories) { charge(pointBytes(line.count)); numbers = new PointWriter(line.count, false, charge) }
     for (let i = 0; i < line.count; i++) {
       const at = linePoint(line, i)
       labels.push(label(allocation => {
-        const text = asText(lookup(line.sheet, at.row, at.col, true, allocation))
+        const cell = lookup(line.sheet, at.row, at.col, true, allocation)
+        // A text cell stays text even when it looks like a number (spec 5.1): its category is not a date.
+        if (numbers && typeof cell?.value !== 'string') writeCell(numbers, i, cell, () => { truncated = true }, toChart)
+        const text = asText(cell)
         if (text.length <= CHART_LABEL_LIMIT) return text
         truncated = true
         return text.slice(0, CHART_LABEL_LIMIT)
@@ -241,6 +261,7 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     }
     categories = labels
     categoryHidden = provenance(line)
+    if (numbers) categoryValues = numbers.done()
   } else if (model.categoryRef && categories.length) categoryHidden = provenance(chartLine(model.categoryRef, sheetOf(model.categoryRef), true, categories.length))
   const groups = model.groups.map(group => ({
     ...group,
@@ -250,20 +271,23 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       const next: ChartSeries = { ...rest }
       const limit = seriesLimit(series)
       if (series.analytic === true && limit === CHART_POINT_LIMIT) next.analytic = 'refused'
-      const fill = (range: ChartRange): ChartPoints => {
+      const binding = group.binding
+      const valueDates = dateFormatted(binding.kind === 'cartesian' ? binding.value : binding.kind === 'xy' ? binding.y : undefined) ? toChart : undefined
+      const xDates = dateFormatted(binding.kind === 'xy' || binding.kind === 'cartesian' ? binding.x : undefined) ? toChart : undefined
+      const fill = (range: ChartRange, map?: (v: number) => number | undefined): ChartPoints => {
         const line = chartLine(range, sheetOf(range), false, limit)
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
         truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
         const out = new PointWriter(line.count, false, charge)
-        for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }) }
+        for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }, map) }
         return withHidden(out.done(), provenance(line))
       }
       // A cached role keeps its values; its reference adds only its own provenance.
       const cached = (points: ChartPoints, range: ChartRange) => points.length ? withHidden(points, provenance(chartLine(range, sheetOf(range), false, points.length))) : points
-      if (pending.values) next.values = fill(pending.values)
+      if (pending.values) next.values = fill(pending.values, valueDates)
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
-      if (pending.xValues) next.xValues = fill(pending.xValues)
+      if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
       if (pending.name) {
         const name = pending.name
@@ -281,16 +305,22 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       return next
     }),
   }))
-  const { categoryPending, categoryHidden: _hidden, ...rest } = model
-  void categoryPending, void _hidden
-  return { ...rest, categories, ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}) }
+  const diagnostics = model.diagnostics ? [...model.diagnostics] : []
+  if (unrepresentable) {
+    const reason = `${unrepresentable} date ${unrepresentable === 1 ? 'value has' : 'values have'} no counterpart in the ${epoch} date system`
+    charge(stringBytes(reason))
+    diagnostics.push({ code: 'chart-date-unrepresentable', reason })
+  }
+  const { categoryPending, categoryHidden: _hidden, categoryValues: _values, diagnostics: _diagnostics, ...rest } = model
+  void categoryPending, void _hidden, void _values, void _diagnostics
+  return { ...rest, categories, ...(categoryValues ? { categoryValues } : {}), ...(categoryHidden ? { categoryHidden } : {}), groups, ...(truncated ? { truncated: true } : {}), ...(diagnostics.length ? { diagnostics } : {}) }
 }
 
 /** Resident workbooks: fill every uncached chart reference from parsed cells,
  * after evaluation and semantics. Only the cells on the consumed lines are
  * visited (rows by binary search, cells by binary search), and labels are
  * formatted on demand: the workspace is bounded by the chart point limits. */
-export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue; valueIsError?: boolean }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; hidden?: boolean; cells: ReadonlyArray<Cell> }>; cols?: ReadonlyArray<{ min: number; max: number; hidden?: boolean }>; drawings?: XlsxDrawingLike[] }>(
+export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue; valueIsError?: boolean }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; hidden?: boolean; cells: ReadonlyArray<Cell> }>; cols?: ReadonlyArray<{ min: number; max: number; hidden?: boolean }>; drawings?: XlsxDrawingLike[]; semantics?: { dateSystem?: ChartEpoch } }>(
   sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell, allocation?: ChartTextAllocation) => string; available?: (cell: Cell) => boolean; workspace?: ChartWorkspace } = {},
 ): void {
   const sheetByName = (name: string) => sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
@@ -321,9 +351,29 @@ export function fillWorkbookCharts<Cell extends { row: number; col: number; valu
     return Boolean(sheet && (rowOf(sheet, rowIndex)?.hidden || sheet.cols?.some(spec => spec.hidden && spec.min <= col && col <= spec.max)))
   }
   const resolve = chartNameResolver(options.names ?? [], sheets)
+  for (const sheet of sheets) stampWorkbookEpoch(sheet.drawings, sheet.semantics?.dateSystem)
+  // The workbook's date system (every sheet shares it): filled date roles carry it (spec 5.1).
+  const epoch = sheets[0]?.semantics?.dateSystem
   for (const sheet of sheets) {
-    try { fillDrawings(sheet.drawings, sheet.name, lookup, resolve, { hidden, workspace: options.workspace }) }
+    try { fillDrawings(sheet.drawings, sheet.name, lookup, resolve, { hidden, workspace: options.workspace, ...(epoch ? { epoch } : {}) }) }
     catch { /* a chart that cannot be filled keeps its placeholder state; the workbook stays usable */ }
+  }
+}
+/**
+ * Carries a 1904 workbook's epoch on every chart model of a drawing tree (spec 5.1 precedence 2), cached-only
+ * charts included, so the transferable model resolves its chart epoch the same way in every paint realm. A new
+ * model object takes over the old one's charge. A 1900 workbook stamps nothing (absent means 1900).
+ */
+export function stampWorkbookEpoch(drawings: XlsxDrawingLike[] | undefined, epoch: ChartEpoch | undefined): void {
+  if (epoch !== '1904') return
+  for (const node of drawings ?? []) {
+    const content = node.content as { kind: string; chart?: ChartModel } | undefined
+    if (content?.kind === 'xlsxChart' && content.chart && content.chart.workbookEpoch !== epoch) {
+      const next: ChartModel = { ...content.chart, workbookEpoch: epoch }
+      succeedChartModel(content.chart, next)
+      content.chart = next
+    }
+    if (node.children) stampWorkbookEpoch(node.children, epoch)
   }
 }
 /** Resolve defined names of a drawing tree in place (paged readers resolve before reading cells). */
