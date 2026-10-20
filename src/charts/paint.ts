@@ -1,4 +1,7 @@
 import { barGeometry } from './barGeometry'
+import { applyFillStyle } from './fills'
+import { paintMarker, resolveMarkerSymbol, clampMarkerSize } from './markers'
+import { applyLineStyle, invertColor } from './style'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
  * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
@@ -48,6 +51,14 @@ interface Box { x: number; y: number; w: number; h: number }
 function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): Box {
   const entries = legendEntries(model.source, model.view)
   if (!model.legend || !entries.length) return area
+  if (model.legendFill && model.legendFill.kind !== 'none') {
+    applyFillStyle(ctx, model.legendFill, area)
+    ctx.fillRect(area.x, area.y, area.w, area.h)
+  }
+  if (model.legendLine && !model.legendLine.noFill) {
+    applyLineStyle(ctx, model.legendLine, area)
+    ctx.strokeRect(area.x, area.y, area.w, area.h)
+  }
   ctx.font = font(fontPx, family, familyCss)
   const sw = fontPx * 0.7, gap = 6
   const widths = entries.map(e => layout.width(e.name, font(fontPx, family, familyCss)) + sw + gap * 2)
@@ -69,6 +80,8 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box,
 function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
   const series = group.series[0]
   if (!series) return
+  const origSeries = model.source.groups.find(g => g.family === 'pie' || g.family === 'doughnut')?.series[0]
+  const seriesExp = origSeries?.explosion ?? 0
   const values: number[] = []
   for (let slot = 0; slot < model.view.slots; slot++) { const v = series.value(slot); values.push(v !== undefined && v > 0 ? v : 0) }
   const total = values.reduce((a, b) => a + b, 0)
@@ -78,12 +91,26 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
   values.forEach((value, i) => {
     if (!value) return
     const sweep = value / total * Math.PI * 2
+    const srcIdx = model.view.source(i)
+    const ptExp = origSeries?.dPt?.get(srcIdx)?.explosion ?? seriesExp
+    const bisector = angle + sweep / 2
+    const expDist = (ptExp / 100) * r
+    const scx = cx + expDist * Math.cos(bisector)
+    const scy = cy + expDist * Math.sin(bisector)
+
     ctx.beginPath()
-    ctx.moveTo(cx, cy)
-    ctx.arc(cx, cy, r, angle, angle + sweep)
+    ctx.moveTo(scx, scy)
+    ctx.arc(scx, scy, r, angle, angle + sweep)
     ctx.closePath()
-    ctx.fillStyle = `#${series.pointColors?.[model.view.source(i)] ?? series.color}`
-    ctx.fill()
+
+    const ptFill = origSeries?.pointFills?.[srcIdx]
+    if (ptFill && ptFill.kind !== 'none') {
+      applyFillStyle(ctx, ptFill, { x: scx - r, y: scy - r, w: r * 2, h: r * 2 })
+      ctx.fill()
+    } else {
+      ctx.fillStyle = `#${series.pointColors?.[srcIdx] ?? series.color}`
+      ctx.fill()
+    }
     ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1; ctx.stroke()
     angle += sweep
   })
@@ -277,6 +304,14 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
   ctx.save()
   try {
   ctx.beginPath(); ctx.rect(plot.x, plot.y, plot.w, plot.h); ctx.clip()
+  if (model.plotAreaFill && model.plotAreaFill.kind !== 'none') {
+    applyFillStyle(ctx, model.plotAreaFill, plot)
+    ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  }
+  if (model.plotAreaLine && !model.plotAreaLine.noFill) {
+    applyLineStyle(ctx, model.plotAreaLine, plot)
+    ctx.strokeRect(plot.x, plot.y, plot.w, plot.h)
+  }
   const barGroups = model.groups.filter(g => g.family === 'bar')
   model.groups.forEach((group, g) => {
     const axes = graph.groups[g]
@@ -300,6 +335,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
         if (!admitPath(count * 4)) return
+        const origSeries = model.source.groups[g]?.series[si]
         for (let i = 0; i < count; i++) {
           const sample = s.plot(i), raw = plotted(typeof sample==='number'?sample:undefined)
           if (raw === undefined) continue
@@ -310,12 +346,52 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
           if (stacked) { const base = v >= 0 ? posBase : negBase; from = base[i]; to = base[i] + v; base[i] = to }
           const categoryStart = geometry.start(idx, si)
           const a = at(from), b = at(to)
-          const color = s.pointColors?.[model.view.source(i)]
-          ctx.fillStyle = `#${color && barGroups.length === 1 && group.series.length === 1 ? color : s.color}`
-          if (vertical) ctx.fillRect(Math.min(a, b), categoryStart, Math.abs(b - a), width)
-          else ctx.fillRect(categoryStart, Math.min(a, b), width, Math.abs(b - a))
+          const srcIdx = model.view.source(i)
+          const color = s.pointColors?.[srcIdx]
+          const barBaseColor = color && (barGroups.length === 1 && (group.series.length === 1 || group.varyColors)) ? color : s.color
+          const invert = origSeries?.invertIfNegative ?? origSeries?.dPt?.get(srcIdx)?.invertIfNegative
+          const effectiveColor = v < 0 && invert ? invertColor(barBaseColor) : barBaseColor
+          const ptFill = origSeries?.pointFills?.[srcIdx] ?? (v < 0 && invert ? { kind: 'solid', color: effectiveColor } : origSeries?.fill)
+          const barBox = vertical
+            ? { x: Math.min(a, b), y: categoryStart, w: Math.abs(b - a), h: width }
+            : { x: categoryStart, y: Math.min(a, b), w: width, h: Math.abs(b - a) }
+          if (ptFill && ptFill.kind !== 'none') {
+            applyFillStyle(ctx, ptFill, barBox)
+            ctx.fillRect(barBox.x, barBox.y, barBox.w, barBox.h)
+          } else {
+            ctx.fillStyle = `#${effectiveColor}`
+            ctx.fillRect(barBox.x, barBox.y, barBox.w, barBox.h)
+          }
         }
       })
+      if (group.serLines && !group.serLines.noFill && stacked && count > 1) {
+        ctx.save()
+        try {
+          applyLineStyle(ctx, group.serLines, plot)
+          ctx.beginPath()
+          for (let i = 0; i < count - 1; i++) {
+            const idx1 = graph.categoryIndex(C, i)
+            const idx2 = graph.categoryIndex(C, i + 1)
+            if (!Number.isFinite(idx1) || !Number.isFinite(idx2)) continue
+            const x1 = geometry.start(idx1, 0) + (vertical ? 0 : width)
+            const x2 = geometry.start(idx2, 0)
+            let cum1 = crossing, cum2 = crossing
+            for (const s of group.series) {
+              const sample1 = s.plot(i), sample2 = s.plot(i + 1)
+              const r1 = plotted(typeof sample1 === 'number' ? sample1 : undefined) ?? 0
+              const r2 = plotted(typeof sample2 === 'number' ? sample2 : undefined) ?? 0
+              cum1 += share(r1, i)
+              cum2 += share(r2, i + 1)
+              const y1 = at(cum1), y2 = at(cum2)
+              if (vertical) { ctx.moveTo(y1, x1 + width); ctx.lineTo(y2, x2) }
+              else { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2) }
+            }
+          }
+          ctx.stroke()
+        } finally {
+          ctx.restore()
+        }
+      }
     } else if ((group.family === 'line' || group.family === 'area') && horizontal === B) {
       // Streamed per series over three reused per-slot buffers (the running stack base, this series' bottom and
       // top; NaN marks no point), so the construction does not grow with the series count. Each series is drawn
@@ -332,6 +408,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       const has = (i: number) => !Number.isNaN(top[i])
       for (const s of group.series) {
         if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 2 : 1) + 1)) continue
+        const origSeries = model.source.groups[g]?.series.find(ser => ser.name === s.name)
         bottom.set(base)
         for (let i = 0; i < count; i++) {
           const sample = s.plot(i), raw = plotted(typeof sample==='number'?sample:undefined)
@@ -355,18 +432,75 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
           }
           if(!any)continue
           ctx.globalAlpha = stacked ? 1 : 0.85
-          ctx.fill()
+          if (origSeries?.fill && origSeries.fill.kind !== 'none') {
+            applyFillStyle(ctx, origSeries.fill, plot)
+            ctx.fill()
+          } else {
+            ctx.fillStyle = `#${s.color}`
+            ctx.fill()
+          }
           ctx.globalAlpha = 1
           continue
         }
-        if (s.line !== false) {
-          ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
-          ctx.beginPath()
-          let pen = false
-          for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
-          ctx.stroke()
+        if (group.dropLines && !group.dropLines.noFill) {
+          ctx.save()
+          try {
+            applyLineStyle(ctx, group.dropLines, plot)
+            ctx.beginPath()
+            for (let i = 0; i < count; i++) {
+              if (!has(i)) continue
+              const px = xAt(i)
+              ctx.moveTo(px, at(top[i]))
+              ctx.lineTo(px, at(crossing))
+            }
+            ctx.stroke()
+          } finally {
+            ctx.restore()
+          }
         }
-        if (s.markers) for (let i = 0; i < count; i++) { if (!has(i)) continue; ctx.beginPath(); ctx.arc(xAt(i), at(top[i]), 2.5, 0, Math.PI * 2); ctx.fill() }
+        if (s.line !== false) {
+          ctx.save()
+          try {
+            if (origSeries?.lineStyle) {
+              applyLineStyle(ctx, origSeries.lineStyle, plot)
+            } else {
+              ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
+              ctx.strokeStyle = `#${s.color}`
+            }
+            ctx.beginPath()
+            let pen = false
+            for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+            ctx.stroke()
+          } finally {
+            ctx.restore()
+          }
+        }
+        if (s.markers) {
+          for (let i = 0; i < count; i++) {
+            if (!has(i)) continue
+            const srcIdx = model.view.source(i)
+            const mStyle = origSeries?.dPt?.get(srcIdx)?.marker ?? origSeries?.markerStyle
+            const serIdx = model.source.groups[g]?.series.indexOf(origSeries!) ?? 0
+            const sym = resolveMarkerSymbol(mStyle?.symbol, serIdx)
+            const sz = clampMarkerSize(mStyle?.size, 5)
+            ctx.save()
+            try {
+              if (mStyle?.fill && mStyle.fill.kind !== 'none') {
+                applyFillStyle(ctx, mStyle.fill, { x: xAt(i) - sz / 2, y: at(top[i]) - sz / 2, w: sz, h: sz })
+              } else {
+                ctx.fillStyle = `#${s.color}`
+              }
+              let hasStroke = false
+              if (mStyle?.line && !mStyle.line.noFill) {
+                applyLineStyle(ctx, mStyle.line)
+                hasStroke = true
+              }
+              paintMarker(ctx, xAt(i), at(top[i]), sym, sz, true, hasStroke)
+            } finally {
+              ctx.restore()
+            }
+          }
+        }
       }
     } else if (group.family === 'scatter' && axes.x) {
       // Points are recomputed for each pass (line, markers) rather than kept: nothing per point outlives the pass.
@@ -382,23 +516,61 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       }
       for (const s of group.series) {
         if (!admitPath(count * 2 + 1)) continue
+        const origSeries = model.source.groups[g]?.series.find(ser => ser.name === s.name)
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (s.line) {
-          ctx.lineWidth = 2; ctx.beginPath()
-          let pen = false
-          for (let i = 0; i < count; i++) {
-            if (!point(s, i)) {
-              const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
-              const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
-              if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
-              continue
+          ctx.save()
+          try {
+            if (origSeries?.lineStyle) {
+              applyLineStyle(ctx, origSeries.lineStyle, plot)
+            } else {
+              ctx.lineWidth = 2
+              ctx.strokeStyle = `#${s.color}`
             }
-            if (!pen) { ctx.moveTo(px, py); pen = true }
-            else ctx.lineTo(px, py)
+            ctx.beginPath()
+            let pen = false
+            for (let i = 0; i < count; i++) {
+              if (!point(s, i)) {
+                const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+                const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+                if (rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')) pen = false
+                continue
+              }
+              if (!pen) { ctx.moveTo(px, py); pen = true }
+              else ctx.lineTo(px, py)
+            }
+            ctx.stroke()
+          } finally {
+            ctx.restore()
           }
-          ctx.stroke()
         }
-        if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) { ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill() }
+        if (s.markers !== false) {
+          for (let i = 0; i < count; i++) {
+            if (point(s, i)) {
+              const srcIdx = model.view.source(i)
+              const mStyle = origSeries?.dPt?.get(srcIdx)?.marker ?? origSeries?.markerStyle
+              const serIdx = model.source.groups[g]?.series.indexOf(origSeries!) ?? 0
+              const sym = resolveMarkerSymbol(mStyle?.symbol, serIdx)
+              const sz = clampMarkerSize(mStyle?.size, 6)
+              ctx.save()
+              try {
+                if (mStyle?.fill && mStyle.fill.kind !== 'none') {
+                  applyFillStyle(ctx, mStyle.fill, { x: px - sz / 2, y: py - sz / 2, w: sz, h: sz })
+                } else {
+                  ctx.fillStyle = `#${s.color}`
+                }
+                let hasStroke = false
+                if (mStyle?.line && !mStyle.line.noFill) {
+                  applyLineStyle(ctx, mStyle.line)
+                  hasStroke = true
+                }
+                paintMarker(ctx, px, py, sym, sz, true, hasStroke)
+              } finally {
+                ctx.restore()
+              }
+            }
+          }
+        }
       }
     }
   })
@@ -437,12 +609,35 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
   ctx.save()
   try {
     ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
-    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, w, h)
-    ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
+    if (model.chartAreaFill) {
+      if (model.chartAreaFill.kind !== 'none') {
+        applyFillStyle(ctx, model.chartAreaFill, { x: 0, y: 0, w, h })
+        ctx.fillRect(0, 0, w, h)
+      }
+    } else {
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, w, h)
+    }
+    if (model.chartAreaLine) {
+      if (!model.chartAreaLine.noFill) {
+        applyLineStyle(ctx, model.chartAreaLine, { x: 0, y: 0, w, h })
+        ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
+      }
+    } else {
+      ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
+    }
     const fontPx = model.fontSizePt * 96 / 72
     const pad = Math.min(10, w * 0.04, h * 0.04)
     let area: Box = { x: pad, y: pad, w: w - pad * 2, h: h - pad * 2 }
     if (model.title) {
+      if (model.titleFill && model.titleFill.kind !== 'none') {
+        applyFillStyle(ctx, model.titleFill, layout.title)
+        ctx.fillRect(layout.title.x, layout.title.y, layout.title.w, layout.title.h)
+      }
+      if (model.titleLine && !model.titleLine.noFill) {
+        applyLineStyle(ctx, model.titleLine, layout.title)
+        ctx.strokeRect(layout.title.x, layout.title.y, layout.title.w, layout.title.h)
+      }
       const titlePx = Math.min(96, fontPx * 1.4)
       ctx.font = font(titlePx, model.fontFamily, familyCss)
       ctx.fillStyle = TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'

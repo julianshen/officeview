@@ -141,6 +141,13 @@ export interface ChartSeries {
   pointColors?: string[]
   line?: boolean
   markers?: boolean
+  fill?: import('./fills').ChartFillStyle
+  lineStyle?: import('./style').ChartLineStyle
+  markerStyle?: import('./markers').ChartMarkerStyle
+  invertIfNegative?: boolean
+  explosion?: number
+  dPt?: Map<number, import('./style').ChartPointOverride>
+  pointFills?: Array<import('./fills').ChartFillStyle | undefined>
   /** References still to be filled from worksheet cells (no saved data for that role). */
   pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange }
   /**
@@ -173,6 +180,8 @@ export interface ChartGroup {
   holeSize?: number
   firstSliceAngle?: number
   varyColors?: boolean
+  dropLines?: import('./style').ChartLineStyle
+  serLines?: import('./style').ChartLineStyle
 }
 
 export interface ChartModel {
@@ -183,6 +192,15 @@ export interface ChartModel {
   legendLayout?: ChartManualLayout
   text?: ChartTextStyle
   title?: string
+  chartAreaFill?: import('./fills').ChartFillStyle
+  chartAreaLine?: import('./style').ChartLineStyle
+  plotAreaFill?: import('./fills').ChartFillStyle
+  plotAreaLine?: import('./style').ChartLineStyle
+  legendFill?: import('./fills').ChartFillStyle
+  legendLine?: import('./style').ChartLineStyle
+  titleFill?: import('./fills').ChartFillStyle
+  titleLine?: import('./style').ChartLineStyle
+  styleId?: number
   groups: ChartGroup[]
   /** Every axis of the plot area, in document order; group bindings reference them by `id`. */
   axes: ChartAxis[]
