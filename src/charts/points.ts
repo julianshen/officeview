@@ -40,13 +40,15 @@ export class PointWriter {
   private formatIndex?: Uint16Array
   private codes?: string[]
   private formats?: string[]
-  constructor(readonly length: number, withFormats = false, private readonly charge: (bytes: number) => void = () => {}) {
+  constructor(readonly length: number, private readonly withFormats: boolean | 'lazy' = false, private readonly charge: (bytes: number) => void = () => {}) {
     this.states = new Uint8Array(length)
     this.values = new Float64Array(length)
-    if (withFormats) this.formatIndex = new Uint16Array(length)
+    if (withFormats === true) this.formatIndex = new Uint16Array(length)
   }
   value(i: number, v: number, fmt?: string): void {
+    if(fmt && fmt.length>255)fmt='General'
     this.states[i] = POINT_VALUE; this.values[i] = v
+    if(fmt && this.withFormats==='lazy' && !this.formatIndex){this.charge(this.length*2);this.formatIndex=new Uint16Array(this.length)}
     if (fmt && this.formatIndex) {
       const formats = this.formats ??= []
       let k = formats.indexOf(fmt)

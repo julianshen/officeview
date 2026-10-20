@@ -1,3 +1,4 @@
+import { sourceFormat } from './format'
 import { prepareChartAxes } from './prepare'
 /**
  * Chart data fill (lazy chunk): uncached references resolved from worksheet
@@ -19,6 +20,7 @@ export type ChartCellValue = string | number | boolean | null | undefined
  * no saved value, a missing cell is blank.
  */
 export interface ChartCell {
+  formatCode?: string
   value: ChartCellValue
   /** The cell's formatted text (number/date format), as Excel shows it. */ text?: string
   /** The value could not be read in full (a numeric form past the scanner's exact range). */ truncated?: boolean
@@ -73,7 +75,7 @@ function writeCell(out: PointWriter, i: number, cell: ChartCell | undefined, onT
   const number = cell.number !== undefined ? cell.number ?? undefined : numberOf(cell.value)
   if (number === undefined) return
   const v = map ? map(number) : number
-  if (v === undefined) out.unavailable(i); else out.value(i, v)
+  if (v === undefined) out.unavailable(i); else out.value(i, v, cell.formatCode)
 }
 /** The cell coordinates of point `i` on a line. */
 export const linePoint = (line: ChartLine, i: number): { row: number; col: number } => line.vertical ? { row: line.start + i, col: line.fixed } : { row: line.fixed, col: line.start + i }
@@ -247,7 +249,7 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
     const labels: string[] = []
     // A date axis keeps its categories' numbers too (the same cells, never re-read from the formatted labels).
     let numbers: PointWriter | undefined
-    if (dateCategories) { charge(pointBytes(line.count)); numbers = new PointWriter(line.count, false, charge) }
+    if (dateCategories) { charge(pointBytes(line.count)); numbers = new PointWriter(line.count, 'lazy', charge) }
     for (let i = 0; i < line.count; i++) {
       const at = linePoint(line, i)
       labels.push(label(allocation => {
@@ -280,7 +282,7 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
         truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
-        const out = new PointWriter(line.count, false, charge)
+        const out = new PointWriter(line.count, 'lazy', charge)
         for (let i = 0; i < line.count; i++) { const at = linePoint(line, i); writeCell(out, i, lookup(line.sheet, at.row, at.col, false), () => { truncated = true }, map) }
         return withHidden(out.done(), provenance(line))
       }
@@ -290,6 +292,12 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
+      if(pending.categories){
+        const line=chartLine(pending.categories,sheetOf(pending.categories),true)
+        truncated ||= line.truncated
+        charge(line.count*8)
+        next.categories=Array.from({length:line.count},(_,i)=>{const at=linePoint(line,i);return label(allocation=>asText(lookup(line.sheet,at.row,at.col,true,allocation)).slice(0,CHART_LABEL_LIMIT))})
+      }
       if (pending.name) {
         const name = pending.name
         const text = label(allocation => {
@@ -321,7 +329,7 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
  * after evaluation and semantics. Only the cells on the consumed lines are
  * visited (rows by binary search, cells by binary search), and labels are
  * formatted on demand: the workspace is bounded by the chart point limits. */
-export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue; valueIsError?: boolean }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; hidden?: boolean; cells: ReadonlyArray<Cell> }>; cols?: ReadonlyArray<{ min: number; max: number; hidden?: boolean }>; drawings?: XlsxDrawingLike[]; semantics?: { dateSystem?: ChartEpoch } }>(
+export function fillWorkbookCharts<Cell extends { row: number; col: number; value: ChartCellValue; valueIsError?: boolean; style?: {numFmtId:number;formatCode?:string} }, Sheet extends { name: string; workbookIndex?: number; rows: ReadonlyArray<{ index: number; hidden?: boolean; cells: ReadonlyArray<Cell> }>; cols?: ReadonlyArray<{ min: number; max: number; hidden?: boolean }>; drawings?: XlsxDrawingLike[]; semantics?: { dateSystem?: ChartEpoch } }>(
   sheets: readonly Sheet[], options: { names?: readonly ChartDefinedName[]; text?: (sheet: Sheet, cell: Cell, allocation?: ChartTextAllocation) => string; available?: (cell: Cell) => boolean; workspace?: ChartWorkspace } = {},
 ): void {
   const sheetByName = (name: string) => sheets.find(candidate => candidate.name.toLowerCase() === name.toLowerCase())
@@ -345,7 +353,7 @@ export function fillWorkbookCharts<Cell extends { row: number; col: number; valu
     let text: string | undefined
     // A refused formatter allocation refuses the chart (never a silent fallback); other formatter failures read raw.
     if (wantText && options.text) { try { text = options.text(sheet, cell, allocation) } catch (error) { if (error instanceof ChartRefusal) throw error; text = undefined } }
-    return { value: cell.value, ...(cell.valueIsError === true ? { error: String(cell.value) } : {}), ...(text !== undefined ? { text } : {}) }
+    return { value: cell.value, formatCode:sourceFormat(cell.style), ...(cell.valueIsError === true ? { error: String(cell.value) } : {}), ...(text !== undefined ? { text } : {}) }
   }
   const hidden: ChartHiddenLookup = (name, rowIndex, col) => {
     const sheet = sheetByName(name)

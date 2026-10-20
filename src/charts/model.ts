@@ -128,6 +128,7 @@ export interface ChartRange {
 }
 
 export interface ChartSeries {
+  labels?: import('./labels').LabelControls
   name: string
   /** CSS hex without `#`. */
   color: string
@@ -159,6 +160,7 @@ export interface ChartSeries {
 }
 
 export interface ChartGroup {
+  labels?: import('./labels').LabelControls
   family: ChartFamily
   grouping: ChartGrouping
   barDir?: 'col' | 'bar'

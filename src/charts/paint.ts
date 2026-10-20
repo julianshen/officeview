@@ -8,6 +8,8 @@ import { paintChartPlaceholder } from '../drawing/content-paint'
 import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
 import { axisFraction, categoryFraction, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
+import { paintDataLabels } from './labelPaint'
+import { plotPoint } from './plotPoint'
 import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
@@ -25,6 +27,7 @@ interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' 
   value(slot: number): number | undefined
   x(slot: number): number | undefined
   hasX: boolean
+  plot(slot:number, x?:boolean): number|'gap'|'span'
 }
 interface DrawGroup extends Omit<ChartGroup, 'series'> { series: DrawSeries[] }
 interface DrawModel extends Omit<ChartModel, 'groups'> { groups: DrawGroup[]; view: DisplayView; source: ChartModel }
@@ -33,7 +36,7 @@ function drawModel(model: ChartModel, view = displayView(model)): DrawModel {
     ...model,
     view,
     source: model,
-    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX }): DrawSeries => ({ name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, value, x, hasX })) })),
+    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX, point }): DrawSeries => ({ name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, value, x, hasX, plot:(slot,x)=>{ const p=point(slot,x);return p ? plotPoint(p,group.family,group.grouping,model.dispBlanksAs,model.dispNaAsBlank) : 'gap' } })) })),
   }
 }
 const font = (sizePx: number, family: string, familyCss: FamilyCss, bold = false) => `${bold ? 'bold ' : ''}${sizePx}px ${familyCss(family)}`
@@ -307,7 +310,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       group.series.forEach((s, si) => {
         if (!admitPath(count * 4)) return
         for (let i = 0; i < count; i++) {
-          const raw = plotted(s.value(i))
+          const sample = s.plot(i), raw = plotted(typeof sample==='number'?sample:undefined)
           if (raw === undefined) continue
           const idx = graph.categoryIndex(C, i)
           if (!Number.isFinite(idx)) continue
@@ -341,7 +344,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 2 : 1) + 1)) continue
         bottom.set(base)
         for (let i = 0; i < count; i++) {
-          const raw = plotted(s.value(i))
+          const sample = s.plot(i), raw = plotted(typeof sample==='number'?sample:undefined)
           if (raw === undefined) { top[i] = stacked && group.family === 'area' ? base[i] : NaN; continue }
           if (!Number.isFinite(xAt(i))) { top[i] = NaN; continue }
           const v = share(raw, i)
@@ -350,11 +353,17 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
         if (group.family === 'area') {
           ctx.beginPath()
-          let started = false
-          for (let i = 0; i < count; i++) { if (!has(i)) continue; const px = xAt(i), py = at(top[i]); if (!started) { ctx.moveTo(px, py); started = true } else ctx.lineTo(px, py) }
-          if (!started) continue
-          for (let i = count - 1; i >= 0; i--) if (has(i)) ctx.lineTo(xAt(i), at(stacked ? bottom[i] : crossing))
-          ctx.closePath()
+          let any = false
+          for(let start=0;start<count;){
+            if(!has(start)){start++;continue}
+            let end=start
+            while(end+1<count&&has(end+1))end++
+            ctx.moveTo(xAt(start),at(top[start]));any=true
+            for(let i=start+1;i<=end;i++)ctx.lineTo(xAt(i),at(top[i]))
+            for(let i=end;i>=start;i--)ctx.lineTo(xAt(i),at(stacked?bottom[i]:crossing))
+            ctx.closePath();start=end+1
+          }
+          if(!any)continue
           ctx.globalAlpha = stacked ? 1 : 0.85
           ctx.fill()
           ctx.globalAlpha = 1
@@ -364,7 +373,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
           ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
           ctx.beginPath()
           let pen = false
-          for (let i = 0; i < count; i++) { if (!has(i)) { pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+          for (let i = 0; i < count; i++) { if (!has(i)) { if(s.plot(i)!=='span')pen = false; continue } const px = xAt(i), py = at(top[i]); if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
           ctx.stroke()
         }
         if (s.markers) for (let i = 0; i < count; i++) { if (!has(i)) continue; ctx.beginPath(); ctx.arc(xAt(i), at(top[i]), 2.5, 0, Math.PI * 2); ctx.fill() }
@@ -375,7 +384,8 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       const xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w
       let px = 0, py = 0
       const point = (s: DrawSeries, i: number): boolean => {
-        const v = plotted(s.value(i)), xv = s.hasX ? s.x(i) : i + 1
+        const sample=s.plot(i), xs=s.hasX?s.plot(i,true):i+1
+        const v = plotted(typeof sample==='number'?sample:undefined), xv = typeof xs==='number'?xs:undefined
         if (v === undefined || xv === undefined || !X.plottable(xv)) return false
         px = xp(xv); py = at(v)
         return true
@@ -386,7 +396,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (s.line) {
           ctx.lineWidth = 2; ctx.beginPath()
           let pen = false
-          for (let i = 0; i < count; i++) { if (!point(s, i)) { pen = false; continue } if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
+          for (let i = 0; i < count; i++) { if (!point(s, i)) { const y=s.plot(i),x=s.hasX?s.plot(i,true):i+1;if(y==='gap'||x==='gap')pen=false;continue } if (!pen) { ctx.moveTo(px, py); pen = true } else ctx.lineTo(px, py) }
           ctx.stroke()
         }
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) { ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill() }
@@ -446,6 +456,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
     else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
+    paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }
 }
 let paints = 0

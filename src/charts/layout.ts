@@ -2,6 +2,7 @@
  * Placements share a pressure-evicted LRU per receiving workspace.
  * A conservative construction bound is reserved before measurement or graph construction.
  */
+import { labelFont } from './labelPaint'
 import type { ChartModel, ChartManualLayout, ChartDiagnostic, ChartTextStyle } from './model'
 import type { TextMeasure } from './format-api'
 import type { ChartDocumentContext } from './context'
@@ -153,7 +154,7 @@ export function layoutBound(model: ChartModel): number {
   for (const group of model.groups) for (const s of group.series) { series++; slots = Math.max(slots, s.values.length); text += s.name.length * 2 }
   slots = Math.min(4096, Math.max(1, slots))
   for (const c of model.categories) text += c.length * 2
-  return axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text
+  return (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily)): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')
@@ -308,10 +309,11 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
       labels.set(a.id, kept)
     }
     const labelIndices = new Map([...labels].map(([id, values]) => [id, new Set(values.map(v => v.index))]))
+    for (const label of model.preparedAxes?.dataLabels??[]) for(const run of label.runs.length?label.runs:[{text:label.text}]) width(run.text,labelFont(run,fontPx,family))
     const data = { axisBands, texts, labelIndices, graph, view, area, plot, title, legend, fontPx, labels, diagnostics }
     return { ...data, retainedBytes: retainedBytes(data, widths), width: cachedWidths(widths) }
  }
 
 onChartModelRelease(releaseChartLayouts)
 
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + model.groups.length * (512 + view.slots * 48) + view.series.length * 256
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.length * (512 + view.slots * 48) + view.series.length * 256

@@ -150,3 +150,29 @@ with the three socket suites excluded has 7,638 passing and five failing tests.
 Three failures pass isolated; the policy eviction/recreation timeout and mounted
 font-generation asset-loader assertion reproduce on unchanged base 634dfd4.
 The full-suite gate therefore remains non-green.
+
+## A2 display formats, data labels and point-state matrix
+
+A2 uses the lazy `cellFormat` display layer for prepared axis and data-label
+strings, with a chart-workspace allocation observer, a 255-unit format-code
+limit and a 256-unit output cap. Explicit formats override source formats;
+sourceLinked retains cache and resident/paged cell provenance per point. The
+mixed-source axis rule selects the first nonblank point of the first bound
+series. This rule remains **unverified against Office**.
+
+`charts-format`, `charts-labels` and `charts-matrix` are Office-shaped synthetic
+unit/native-paint checks, not Office-authored reference evidence. They cover
+format classes and epochs, inherited/point label controls, rich runs, separator,
+legend keys and leader lines, unsupported field/manual-position fallback, the
+non-radar point-state matrix, unavailable diagnostics, and line/scatter stroke
+oracles. The data-contract suite pins resident/paged source-format parity.
+
+A scratch comparison against A2 base `32d4f50` exercised 34 paints / 12 distinct
+cases. Eleven cases remain pixel-identical. The secondary-axis combination
+case changes `1,000` to `1000` under General; the narrower measured label also
+reduces its axis band and expands the plot. Both images and label traces were
+inspected. This is narrower than the deleted A1a 41-paint harness. No golden was
+re-recorded. Intentional deltas are display-formatted ticks, new data labels,
+and the specified blank/error gap/zero/span behavior. Pie bestFit uses a bounded
+small-slice outside-placement heuristic; independent Office matching of label
+placement remains pending. No acceptance checkbox is advanced by these tests.

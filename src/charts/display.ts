@@ -14,9 +14,9 @@
  *   - `plotVisOnly=0` draws everything. Saved data without a worksheet
  *     reference has no provenance and is drawn as saved.
  */
-import type { ChartModel, ChartPoints, ChartSeries } from './model'
+import type { ChartModel, ChartPoints, ChartSeries, ChartPoint } from './model'
 import { CHART_POINT_LIMIT } from './parse'
-import { hiddenAt, valueAt } from './points'
+import { hiddenAt, valueAt, pointAt } from './points'
 
 export interface DisplaySeries {
   series: ChartSeries
@@ -26,6 +26,7 @@ export interface DisplaySeries {
   x(slot: number): number | undefined
   /** The series' x role, when it has one. */
   hasX: boolean
+  point(slot: number, x?: boolean): ChartPoint | undefined
 }
 export interface DisplayView {
   /** Category-axis slots drawn (at least 1). */
@@ -66,7 +67,12 @@ export function displayView(model: ChartModel): DisplayView {
       if (visibleOnly && (hiddenAt(points.hidden, i) || (s.xValues && hiddenAt(s.xValues.hidden, i)) || hiddenAt(s.values.hidden, i))) return undefined
       return valueAt(points, i)
     }
-    return { series: s, value: slot => read(s.values, slot), x: slot => read(s.xValues, slot), hasX: Boolean(s.xValues?.length) }
+    const point = (slot:number, x=false): ChartPoint | undefined => {
+      const i=source(slot), points=x?s.xValues:s.values
+      if(i>=extent || (visibleOnly && (hiddenAt(s.values.hidden,i)||hiddenAt(s.xValues?.hidden,i))))return undefined
+      return points ? pointAt(points,i) : {state:'blank'}
+    }
+    return { point, series: s, value: slot => read(s.values, slot), x: slot => read(s.xValues, slot), hasX: Boolean(s.xValues?.length) }
   }
   const byGroup = model.groups.map(group => group.series.filter(s => !(visibleOnly && allHidden(s.values))).map(make))
   return {
