@@ -161,12 +161,38 @@ export function errorBarStatistic(kind: 'stdDev' | 'stdErr', points: ChartPoints
     const d = read(i) / scale - mean
     squares += d * d
   }
-  // Stay dimensionless (every scaled value in [-1, 1]) until the multiplier or the √n divisor is in, then rescale once:
-  // only the final amount must be representable, never an intermediate (stdErr of [-1.7e308, 1.7e308] is 1.7e308).
-  const factor = kind === 'stdDev' ? (val === 0 ? 0 : Math.sqrt(squares / (n - 1)) * val) : Math.sqrt(squares / (n - 1)) / Math.sqrt(n)
-  const amount = factor === 0 ? 0 : factor * scale, center = mean * scale
-  if (!Number.isFinite(amount) || !Number.isFinite(center)) return unrepresentable
+  // The amount is deviation × val × scale (stdDev) or deviation ÷ √n × scale (stdErr), factors of any magnitude
+  // (val 1.7e308 against a 1e-200 scale; val 1e-320 against 1e200). Each factor is split into a mantissa and a
+  // binary exponent, the mantissas multiplied (each in [0.5, 1)) and the exponents added, and the result built once:
+  // only the final amount must be representable, never an intermediate. Zero is exact; a result past the float range
+  // (or below the smallest subnormal) is refused.
+  const deviation = Math.sqrt(squares / (n - 1)), center = mean * scale
+  if (!Number.isFinite(center)) return unrepresentable
+  if (deviation === 0 || (kind === 'stdDev' && val === 0)) return kind === 'stdDev' ? { kind: 'stat', center, amount: 0, n } : { kind: 'stat', amount: 0, n }
+  const [dm, de] = frexp(deviation), [sm, se] = frexp(scale), [vm, ve] = kind === 'stdDev' ? frexp(val) : [1 / Math.sqrt(n), 0]
+  const amount = ldexp(dm * sm * vm, de + se + ve)
+  if (!Number.isFinite(amount) || amount === 0) return unrepresentable
   return kind === 'stdDev' ? { kind: 'stat', center, amount, n } : { kind: 'stat', amount, n }
+}
+
+/** 2^e for any integer e (in steps that never overflow or underflow on their own). */
+const pow2 = (e: number): number => 2 ** e
+/** x = m · 2^e with 0.5 <= |m| < 1, for a finite non-zero x (subnormals included). */
+export function frexp(x: number): [number, number] {
+  let e = Math.max(-1074, Math.min(1024, Math.floor(Math.log2(Math.abs(x))) + 1))
+  // Scale in two halves so neither power of two leaves the float range.
+  const h = Math.trunc(-e / 2)
+  let m = x * pow2(h) * pow2(-e - h)
+  while (Math.abs(m) >= 1) { m /= 2; e++ }
+  while (Math.abs(m) < 0.5) { m *= 2; e-- }
+  return [m, e]
+}
+/** m · 2^e built once, in steps of at most ±1000 so only the final value can overflow or underflow. */
+export function ldexp(m: number, e: number): number {
+  let out = m
+  while (e > 1000) { out *= pow2(1000); e -= 1000 }
+  while (e < -1000) { out *= pow2(-1000); e += 1000 }
+  return out * pow2(e)
 }
 
 /** A drawn series as both stage 1 (the display view) and the painter see it. */

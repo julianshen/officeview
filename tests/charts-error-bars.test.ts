@@ -12,7 +12,7 @@ import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart } from '../src/charts/layout'
 import { pointList, PointWriter } from '../src/charts/points'
 import { fillChartRanges, pendingLines } from '../src/charts/fill'
-import { errorBarStatistic } from '../src/charts/errorBars'
+import { errorBarStatistic, frexp, ldexp } from '../src/charts/errorBars'
 import { chartParseContext, documentChartContext } from '../src/charts/context'
 import { readChartPart } from '../src/charts/read'
 import { applyDataPrecedence } from '../src/charts/dataPrecedence'
@@ -219,6 +219,26 @@ describe('charts-error-bars (Task A6b)', () => {
     expect(edgeErr.amount / 1.7e308).toBeCloseTo(1, 12)
     expect(edgeTenth.amount / 2.4041630560342617e307).toBeCloseTo(1, 12)
     expect(edgeZero.amount).toBe(0); expect(edgeZero.center).toBe(0)
+    // Opposite scales: the product deviation × val × scale is built from mantissas and exponents, never from an
+    // intermediate that leaves the float range. [-1e-200, 1e-200] × 1.7e308: √2·1e-200·1.7e308 = 2.4041630560342615e108.
+    // [1e200, 1.00000001e200] × 1e-320 (a subnormal multiplier): (1e192/√2)·1e-320 ≈ 7.0710678e-129 (the difference
+    // of the scaled values carries ~1e-8 relative cancellation, so 7 digits are asserted).
+    const small = errorBarStatistic('stdDev', points([-1e-200, 1e-200]), 1.7e308)
+    const subnormal = errorBarStatistic('stdDev', points([1e200, 1.00000001e200]), 1e-320)
+    if (small.kind !== 'stat' || subnormal.kind !== 'stat') throw new Error('representable product refused')
+    expect(small.amount / 2.4041630560342615e108).toBeCloseTo(1, 12)
+    expect(subnormal.amount / (1e192 / Math.SQRT2 * 1e-320)).toBeCloseTo(1, 7)
+    // Through parse and stage 1 too.
+    const opposite = category('lineChart', [{ values: [-1e-200, 1e-200], errBars: bars({ valType: 'stdDev', val: '1.7e308' }) }])
+    expect(prepared(opposite)[0].amount! / 2.4041630560342615e108).toBeCloseTo(1, 12)
+    // A product below the smallest subnormal is not representable: dropped, never published as 0.
+    expect(errorBarStatistic('stdDev', points([1e-300, 2e-300]), 1e-300)).toMatchObject({ kind: 'none', reason: expect.stringMatching(/not representable/) })
+    // The split itself: frexp keeps 0.5 <= |m| < 1 (subnormals included) and ldexp rebuilds exactly.
+    for (const v of [1, -3, 1.7e308, 1e-320, 5e-324, 2 ** -1022, 0.75]) {
+      const [m, e] = frexp(v)
+      expect(Math.abs(m) >= 0.5 && Math.abs(m) < 1).toBe(true)
+      expect(ldexp(m, e)).toBe(v)
+    }
     const huge = category('lineChart', [{ values: [-1.7e308, 1.7e308], errBars: bars({ valType: 'stdDev', val: '1' }) }])
     expect(prepared(huge)).toHaveLength(0)
     expect(huge.preparedAxes!.diagnostics.find(d => d.code === 'chart-error-bars-dropped')?.reason).toMatch(/not representable/)
