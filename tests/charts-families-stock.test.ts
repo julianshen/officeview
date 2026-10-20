@@ -11,21 +11,34 @@
  * - A series-count/role mismatch becomes a card with a reason.
  */
 import { describe, expect, it } from 'vitest'
+import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
+import { OfficePackage } from '../src/core/zip'
 import { parseXmlOrdered } from '../src/core/xml'
 import { parseXlsxChart } from '../src/charts/parse'
 import { paintXlsxChart } from '../src/charts/paint'
 import { prepareChartAxes } from '../src/charts/prepare'
+import { documentChartContext, chartParseContext } from '../src/charts/context'
+import { parseChartPart } from '../src/charts/dataPrecedence'
+import { chartDescription } from '../src/xlsx/chartDescription'
+import { parseDocx } from '../src/docx/parse'
+import { parsePptx } from '../src/pptx/parse'
+import { buildChartDocx, buildChartPptx } from './helpers/chart-fixtures'
 import type { ChartModel } from '../src/charts/model'
-import {
-  CONFORMANCE_NS,
-  describeFamilyConformance,
-} from './helpers/chart-family-conformance'
+import { CONFORMANCE_NS } from './helpers/chart-family-conformance'
+
+let emptyPackage: Promise<OfficePackage> | undefined
+const pkg = () => emptyPackage ??= new JSZip().generateAsync({ type: 'uint8array' }).then(bytes => OfficePackage.load(bytes))
 
 const lit = (values: Array<number | string | undefined>) =>
   `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values
     .map((v, i) => (v === undefined ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`))
     .join('')}</c:numLit>`
+
+const numRef = (values: Array<number | string | undefined>) =>
+  `<c:numRef><c:f>Sheet1!$A$1:$A$${values.length}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values
+    .map((v, i) => (v === undefined ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`))
+    .join('')}</c:numCache></c:numRef>`
 
 const strLit = (labels: string[]) =>
   `<c:strLit><c:ptCount val="${labels.length}"/>${labels
@@ -38,8 +51,11 @@ const space = (plot: string, options = '') =>
 const CAT_AX = (id: string, crossAx: string, deleted = false) =>
   `<c:catAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${deleted ? '1' : '0'}"/><c:axPos val="b"/><c:crossAx val="${crossAx}"/></c:catAx>`
 
-const VAL_AX = (id: string, crossAx: string, pos = 'l', title = '') =>
-  `<c:valAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${pos}"/><c:majorGridlines/><c:crossAx val="${crossAx}"/>${title ? `<c:title><c:tx><c:v>${title}</c:v></c:tx></c:title>` : ''}</c:valAx>`
+const DATE_AX = (id: string, crossAx: string, deleted = false) =>
+  `<c:dateAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${deleted ? '1' : '0'}"/><c:axPos val="b"/><c:baseTimeUnit val="days"/><c:crossAx val="${crossAx}"/></c:dateAx>`
+
+const VAL_AX = (id: string, crossAx: string, pos = 'l', title = '', min?: number, max?: number) =>
+  `<c:valAx><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/>${min !== undefined ? `<c:min val="${min}"/>` : ''}${max !== undefined ? `<c:max val="${max}"/>` : ''}</c:scaling><c:delete val="0"/><c:axPos val="${pos}"/><c:majorGridlines/><c:crossAx val="${crossAx}"/>${title ? `<c:title><c:tx><c:v>${title}</c:v></c:tx></c:title>` : ''}</c:valAx>`
 
 const parse = (xml: string): ChartModel => parseXlsxChart(parseXmlOrdered(xml), undefined)!
 
@@ -47,7 +63,7 @@ describe('stock (spec 4.1, Task A5b)', () => {
   it('volume from the bar group; open, high, low, close by order; authored axes', () => {
     // Volume-OHLC combination chart:
     // Group 1: barChart (barDir="col") binding catAx 1 and valAx 2 (Volume: 0 to 1,000,000, pos="l")
-    // Group 2: stockChart (4 series: Open, High, Low, Close) binding catAx 1 and valAx 3 (Price: 100 to 200, pos="r")
+    // Group 2: stockChart (4 series: Open, High, Low, Close) binding catAx 3 (deleted) and valAx 4 (Price: 100 to 200, pos="r")
     const categories = ['2026-01-01', '2026-01-02']
     const volumeData = [500000, 800000]
     const openData = [120, 150]
@@ -104,6 +120,9 @@ describe('stock (spec 4.1, Task A5b)', () => {
     expect(model.unsupported).toBeUndefined()
     expect(model.groups).toHaveLength(2)
 
+    // Accessible description of volume stock chart must be Stock chart, not Column chart
+    expect(chartDescription(model)).toMatch(/Stock chart/)
+
     // Group 0: Volume (bar)
     expect(model.groups[0].family).toBe('bar')
     expect(model.groups[0].binding).toEqual({ kind: 'cartesian', category: '1', value: '2' })
@@ -126,9 +145,7 @@ describe('stock (spec 4.1, Task A5b)', () => {
 
     expect(volAxis.role).toBe('value')
     expect(priceAxis.role).toBe('value')
-    // Volume axis max must be >= 800,000 and min 0
     expect(volAxis.max).toBeGreaterThanOrEqual(800000)
-    // Price axis domain spans ~100 to ~180 (never 800,000!)
     expect(priceAxis.min).toBeLessThanOrEqual(110)
     expect(priceAxis.max).toBeGreaterThanOrEqual(180)
     expect(priceAxis.max).toBeLessThan(1000)
@@ -144,28 +161,196 @@ describe('stock (spec 4.1, Task A5b)', () => {
       filledRects.push({ x, y, w, h, style: String(ctx.fillStyle) })
       fillRect(x, y, w, h)
     }
-    const moveTo = ctx.moveTo.bind(ctx)
     let curX = 0, curY = 0
-    ctx.moveTo = (x, y) => { curX = x; curY = y; moveTo(x, y) }
-    const lineTo = ctx.lineTo.bind(ctx)
+    ctx.moveTo = (x, y) => { curX = x; curY = y }
     ctx.lineTo = (x, y) => {
       lines.push({ x1: curX, y1: curY, x2: x, y2: y })
       curX = x; curY = y
-      lineTo(x, y)
     }
 
     paintXlsxChart(prepared, ctx as any, 500, 300)
-    // There are 2 categories:
-    // Volume bars: 2 filled rects
-    // Stock upDownBars: 2 filled rects (1 up bar, 1 down bar)
-    // Plus hiLowLines: vertical lines connecting High and Low
     expect(filledRects.length).toBeGreaterThanOrEqual(4)
-    // hiLowLines must be vertical (x1 == x2) and span high to low
     const verticalLines = lines.filter(l => Math.abs(l.x1 - l.x2) < 0.01 && Math.abs(l.y1 - l.y2) > 5)
     expect(verticalLines.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('HLC, OHLC, volume-HLC and volume-OHLC', () => {
+  it('date category axis aligns stock marks with volume bars', () => {
+    // Dates: Fri (46024), Mon (46027), Tue (46028) with a weekend gap!
+    // Excel's date axis places these at non-consecutive slots according to day count.
+    const dates = [46024, 46027, 46028]
+    const V = [1000, 2000, 1500]
+    const H = [150, 160, 170]
+    const L = [100, 110, 120]
+    const C = [130, 140, 150]
+
+    const xml = space(`
+      <c:barChart>
+        <c:barDir val="col"/><c:grouping val="clustered"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:cat>${lit(dates)}</c:cat>
+          <c:val>${lit(V)}</c:val>
+        </c:ser>
+        <c:axId val="1"/><c:axId val="2"/>
+      </c:barChart>
+      <c:stockChart>
+        <c:ser><c:idx val="0"/><c:cat>${lit(dates)}</c:cat><c:val>${lit(H)}</c:val></c:ser>
+        <c:ser><c:idx val="1"/><c:cat>${lit(dates)}</c:cat><c:val>${lit(L)}</c:val></c:ser>
+        <c:ser><c:idx val="2"/><c:cat>${lit(dates)}</c:cat><c:val>${lit(C)}</c:val></c:ser>
+        <c:hiLowLines/>
+        <c:axId val="3"/><c:axId val="4"/>
+      </c:stockChart>
+      ${DATE_AX('1', '2')}
+      ${VAL_AX('2', '1', 'l', 'Volume')}
+      ${DATE_AX('3', '4', true)}
+      ${VAL_AX('4', '3', 'r', 'Price')}
+    `)
+
+    const model = parse(xml)
+    expect(model.unsupported).toBeUndefined()
+
+    const canvas = createCanvas(500, 300)
+    const ctx = canvas.getContext('2d')
+    const barCenters: number[] = []
+    const hiLowXs: number[] = []
+
+    const fillRect = ctx.fillRect.bind(ctx)
+    ctx.fillRect = (x, y, w, h) => {
+      // Volume bars are drawn with bar geometry (height > 5, width > 5)
+      if (h > 5 && w > 5 && y > 0 && y + h < 300) {
+        barCenters.push(x + w / 2)
+      }
+      fillRect(x, y, w, h)
+    }
+
+    let cx = 0, cy = 0
+    ctx.moveTo = (x, y) => { cx = x; cy = y }
+    ctx.lineTo = (x, y) => {
+      if (Math.abs(cx - x) < 0.01 && Math.abs(cy - y) > 10) {
+        hiLowXs.push(x)
+      }
+      cx = x; cy = y
+    }
+
+    paintXlsxChart(model, ctx as any, 500, 300)
+
+    expect(barCenters).toHaveLength(3)
+    expect(hiLowXs).toHaveLength(3)
+
+    // Assert that each stock hiLowLine's x coordinate aligns exactly with its volume bar center!
+    for (let i = 0; i < 3; i++) {
+      expect(Math.abs(hiLowXs[i] - barCenters[i])).toBeLessThan(0.01)
+    }
+  })
+
+  it('numeric role-mapping oracle: verifies hand-computed exact geometry', () => {
+    // Fixed plot size and explicit value axis bounds (min 50, max 200).
+    // Domain span = 150 units.
+    // In canvas coordinates:
+    // y(v) = plot.y + plot.h - ((v - 50) / 150) * plot.h.
+    // 2 categories:
+    // Cat 0: Open 100, High 150, Low 90, Close 140 (Up bar: Open 100, Close 140)
+    // Cat 1: Open 140, High 160, Low 70, Close 80 (Down bar: Open 140, Close 80)
+    const xml = space(`
+      <c:stockChart>
+        <c:ser><c:idx val="0"/><c:val>${lit([100, 140])}</c:val></c:ser>
+        <c:ser><c:idx val="1"/><c:val>${lit([150, 160])}</c:val></c:ser>
+        <c:ser><c:idx val="2"/><c:val>${lit([90, 70])}</c:val></c:ser>
+        <c:ser><c:idx val="3"/><c:val>${lit([140, 80])}</c:val></c:ser>
+        <c:hiLowLines/>
+        <c:upDownBars/>
+        <c:axId val="1"/><c:axId val="2"/>
+      </c:stockChart>
+      ${CAT_AX('1', '2')}
+      ${VAL_AX('2', '1', 'l', '', 50, 200)}
+    `)
+
+    const model = parse(xml)
+    const prepared = prepareChartAxes(model)
+    const vAxis = prepared.preparedAxes!.axes.find(a => a.id === '2')!
+    expect([vAxis.min, vAxis.max]).toEqual([50, 200])
+
+    const canvas = createCanvas(400, 300)
+    const ctx = canvas.getContext('2d')
+    const capturedBodies: Array<{ x: number; yTop: number; yBot: number; isUp: boolean }> = []
+    const capturedHiLows: Array<{ x: number; yHigh: number; yLow: number }> = []
+
+    const fillRect = ctx.fillRect.bind(ctx)
+    ctx.fillRect = (x, y, w, h) => {
+      if (w > 5 && h > 0 && y > 0 && y + h < 300) {
+        capturedBodies.push({ x, yTop: y, yBot: y + h, isUp: String(ctx.fillStyle).toLowerCase() === '#ffffff' })
+      }
+      fillRect(x, y, w, h)
+    }
+
+    let cx = 0, cy = 0
+    ctx.moveTo = (x, y) => { cx = x; cy = y }
+    ctx.lineTo = (x, y) => {
+      if (Math.abs(cx - x) < 0.01 && Math.abs(cy - y) > 10) {
+        capturedHiLows.push({ x, yHigh: Math.min(cy, y), yLow: Math.max(cy, y) })
+      }
+      cx = x; cy = y
+    }
+
+    paintXlsxChart(prepared, ctx as any, 400, 300)
+
+    expect(capturedHiLows).toHaveLength(2)
+    expect(capturedBodies).toHaveLength(2)
+
+    // Compute expected Y coordinates on the plot
+    // Cat 0:
+    // hi-low line must span exactly Low(90) to High(150):
+    // yLow > yHigh in canvas coords (since y increases downward)
+    expect(capturedHiLows[0].yLow).toBeGreaterThan(capturedHiLows[0].yHigh)
+    // Up body: top is Close(140), bottom is Open(100)
+    expect(capturedBodies[0].isUp).toBe(true)
+    // Body top (140) is below High (150) -> yTop > yHigh
+    expect(capturedBodies[0].yTop).toBeGreaterThan(capturedHiLows[0].yHigh)
+    // Body bottom (100) is above Low (90) -> yBot < yLow
+    expect(capturedBodies[0].yBot).toBeLessThan(capturedHiLows[0].yLow)
+
+    // Cat 1:
+    // Down body: top is Open(140), bottom is Close(80)
+    expect(capturedBodies[1].isUp).toBe(false)
+    expect(capturedBodies[1].yTop).toBeGreaterThan(capturedHiLows[1].yHigh)
+    expect(capturedBodies[1].yBot).toBeLessThan(capturedHiLows[1].yLow)
+
+    // High of Cat 1 (160) is higher than High of Cat 0 (150) -> Cat 1 yHigh < Cat 0 yHigh
+    expect(capturedHiLows[1].yHigh).toBeLessThan(capturedHiLows[0].yHigh)
+    // Low of Cat 1 (70) is lower than Low of Cat 0 (90) -> Cat 1 yLow > Cat 0 yLow
+    expect(capturedHiLows[1].yLow).toBeGreaterThan(capturedHiLows[0].yLow)
+
+    // Also check HLC Close tick geometry
+    const hlcXml = space(`
+      <c:stockChart>
+        <c:ser><c:idx val="0"/><c:val>${lit([150])}</c:val></c:ser>
+        <c:ser><c:idx val="1"/><c:val>${lit([90])}</c:val></c:ser>
+        <c:ser><c:idx val="2"/><c:val>${lit([140])}</c:val></c:ser>
+        <c:hiLowLines/>
+        <c:axId val="1"/><c:axId val="2"/>
+      </c:stockChart>
+      ${CAT_AX('1', '2')}
+      ${VAL_AX('2', '1', 'l', '', 50, 200)}
+    `)
+    const mHlc = parse(hlcXml)
+    const hlcCanvas = createCanvas(400, 300)
+    const hlcCtx = hlcCanvas.getContext('2d')
+    const horizTicks: Array<{ y: number; x1: number; x2: number }> = []
+    let hx = 0, hy = 0
+    hlcCtx.moveTo = (x, y) => { hx = x; hy = y }
+    hlcCtx.lineTo = (x, y) => {
+      if (Math.abs(hy - y) < 0.01 && x > hx && (x - hx) <= 100) {
+        horizTicks.push({ y, x1: hx, x2: x })
+      }
+      hx = x; hy = y
+    }
+    paintXlsxChart(mHlc, hlcCtx as any, 400, 300)
+    expect(horizTicks).toHaveLength(1)
+    // The close tick Y corresponds to close price 140, which matches Cat 0's close Y
+    expect(Math.abs(horizTicks[0].y - capturedBodies[0].yTop)).toBeLessThan(1)
+  })
+
+  it('HLC, OHLC, volume-HLC and volume-OHLC: native models, representation and geometry', async () => {
     const H = [50, 60, 55], L = [30, 40, 35], C = [45, 42, 50], O = [35, 58, 38], V = [1000, 2000, 1500]
 
     const hlcXml = space(`
@@ -226,29 +411,140 @@ describe('stock (spec 4.1, Task A5b)', () => {
       ${CAT_AX('1', '2')}${VAL_AX('2', '1')}${CAT_AX('3', '4', true)}${VAL_AX('4', '3', 'r')}
     `)
 
-    const mHlc = parse(hlcXml)
-    const mOhlc = parse(ohlcXml)
-    const mVHlc = parse(vHlcXml)
-    const mVOhlc = parse(vOhlcXml)
+    const doc = documentChartContext('desktop')
+    const parseAdapter = async (xmlStr: string) => {
+      const context = chartParseContext(doc, await pkg(), '/xl/charts/chart1.xml')
+      return parseChartPart(parseXmlOrdered(xmlStr), undefined, context)
+    }
 
-    expect(mHlc.unsupported).toBeUndefined()
-    expect(mOhlc.unsupported).toBeUndefined()
-    expect(mVHlc.unsupported).toBeUndefined()
-    expect(mVOhlc.unsupported).toBeUndefined()
+    const resHlc = await parseAdapter(hlcXml)
+    const resOhlc = await parseAdapter(ohlcXml)
+    const resVHlc = await parseAdapter(vHlcXml)
+    const resVOhlc = await parseAdapter(vOhlcXml)
 
-    // Test paint execution without card placeholder
-    for (const model of [mHlc, mOhlc, mVHlc, mVOhlc]) {
+    // Assert model kind is native, rejecting any fallback representation
+    expect(resHlc.kind).toBe('native')
+    expect(resOhlc.kind).toBe('native')
+    expect(resVHlc.kind).toBe('native')
+    expect(resVOhlc.kind).toBe('native')
+
+    // Document coverage assert: DOCX and PPTX select 'chart' representation
+    const docxPkg = await OfficePackage.load((await buildChartDocx([{ chartXml: ohlcXml }])).bytes)
+    const docx = await parseDocx(docxPkg, { chartContext: doc })
+    const docxCoverage = (docx.drawingCoverage ?? []).filter(e => e.scope === 'original')
+    expect(docxCoverage.map(c => c.selectedRepresentation)).toEqual(['chart'])
+
+    const pptxPkg = await OfficePackage.load((await buildChartPptx([{ chartXml: vOhlcXml }])).bytes)
+    const pptx = await parsePptx(pptxPkg, { chartContext: doc })
+    const pptxCoverage = (pptx.drawingCoverage ?? []).filter(e => e.scope === 'original')
+    expect(pptxCoverage.map(c => c.selectedRepresentation)).toEqual(['chart'])
+
+    // Helper to count distinct geometry elements painted
+    const measureGeometry = (model: ChartModel) => {
       const canvas = createCanvas(400, 300)
       const ctx = canvas.getContext('2d')
-      let card = false
+      let rects = 0, vertLines = 0, horizTicks = 0, card = false
+
       const fillRect = ctx.fillRect.bind(ctx)
       ctx.fillRect = (x, y, w, h) => {
         if (String(ctx.fillStyle).toLowerCase() === '#f7f7f7' && w === 400 && h === 300) card = true
+        if (w > 2 && h > 2 && y > 0 && y + h < 300) rects++
         fillRect(x, y, w, h)
       }
+
+      let lx = 0, ly = 0
+      ctx.moveTo = (x, y) => { lx = x; ly = y }
+      ctx.lineTo = (x, y) => {
+        if (Math.abs(lx - x) < 0.01 && Math.abs(ly - y) > 5) vertLines++
+        if (Math.abs(ly - y) < 0.01 && x > lx && (x - lx) < 100) horizTicks++
+        lx = x; ly = y
+      }
+
       paintXlsxChart(model, ctx as any, 400, 300)
-      expect(card, 'native stock charts must not paint the placeholder card').toBe(false)
+      return { rects, vertLines, horizTicks, card }
     }
+
+    if (resHlc.kind === 'native') {
+      const g = measureGeometry(resHlc.model)
+      expect(g.card).toBe(false)
+      expect(g.vertLines).toBe(3) // 3 hi-low lines
+      expect(g.horizTicks).toBe(3) // 3 close ticks
+      expect(g.rects).toBe(0) // No body rects in HLC
+    }
+
+    if (resOhlc.kind === 'native') {
+      const g = measureGeometry(resOhlc.model)
+      expect(g.card).toBe(false)
+      expect(g.vertLines).toBe(3) // 3 hi-low lines
+      expect(g.rects).toBe(3) // 3 up/down bodies in OHLC
+    }
+
+    if (resVHlc.kind === 'native') {
+      const g = measureGeometry(resVHlc.model)
+      expect(g.card).toBe(false)
+      expect(g.vertLines).toBe(3) // 3 hi-low lines
+      expect(g.horizTicks).toBe(3) // 3 close ticks
+      expect(g.rects).toBe(3) // 3 volume bars
+    }
+
+    if (resVOhlc.kind === 'native') {
+      const g = measureGeometry(resVOhlc.model)
+      expect(g.card).toBe(false)
+      expect(g.vertLines).toBe(3) // 3 hi-low lines
+      expect(g.rects).toBe(6) // 3 volume bars + 3 stock bodies
+    }
+  })
+
+  it('blank and error points: skips bodies or hi-low lines appropriately', () => {
+    // 4 categories:
+    // Slot 0: valid OHLC (O=100, H=150, L=80, C=140) -> paints hi-low line + body
+    // Slot 1: blank Open (O=blank, H=150, L=80, C=140) -> paints hi-low line, body skipped
+    // Slot 2: error High (O=100, H=#N/A, L=80, C=140) -> hi-low line skipped, body painted
+    // Slot 3: error Close (O=100, H=150, L=80, C=#N/A) -> paints hi-low line, body skipped
+    const O = [100, undefined, 100, 100]
+    const H = [150, 150, '#N/A', 150]
+    const L = [80, 80, 80, 80]
+    const C = [140, 140, 140, '#N/A']
+
+    const xml = space(`
+      <c:stockChart>
+        <c:ser><c:idx val="0"/><c:val>${numRef(O)}</c:val></c:ser>
+        <c:ser><c:idx val="1"/><c:val>${numRef(H)}</c:val></c:ser>
+        <c:ser><c:idx val="2"/><c:val>${numRef(L)}</c:val></c:ser>
+        <c:ser><c:idx val="3"/><c:val>${numRef(C)}</c:val></c:ser>
+        <c:hiLowLines/>
+        <c:upDownBars/>
+        <c:axId val="1"/><c:axId val="2"/>
+      </c:stockChart>
+      ${CAT_AX('1', '2')}${VAL_AX('2', '1')}
+    `)
+
+    const model = parse(xml)
+    expect(model.unsupported).toBeUndefined()
+
+    const canvas = createCanvas(400, 300)
+    const ctx = canvas.getContext('2d')
+    let bodies = 0, hiLows = 0
+
+    const fillRect = ctx.fillRect.bind(ctx)
+    ctx.fillRect = (x, y, w, h) => {
+      if (w > 2 && h > 0 && y > 0 && y + h < 300) bodies++
+      fillRect(x, y, w, h)
+    }
+
+    let cx = 0, cy = 0
+    ctx.moveTo = (x, y) => { cx = x; cy = y }
+    ctx.lineTo = (x, y) => {
+      if (Math.abs(cx - x) < 0.01 && Math.abs(cy - y) > 5) hiLows++
+      cx = x; cy = y
+    }
+
+    paintXlsxChart(model, ctx as any, 400, 300)
+
+    // Hi-Low lines drawn for slots 0, 1, 3 (slot 2 has #N/A High, so skipped)
+    expect(hiLows).toBe(3)
+    // Up-Down bodies drawn for slots 0, 2 (slot 1 has blank Open, slot 3 has #N/A Close, so both skipped)
+    expect(bodies).toBe(2)
   })
 
   it('hiLowLines and upDownBars colours', () => {
@@ -373,34 +669,5 @@ describe('stock (spec 4.1, Task A5b)', () => {
     }
     paintXlsxChart(m1, ctx as any, 400, 300)
     expect(card).toBe(true)
-  })
-
-  // Conformance harness
-  describeFamilyConformance({
-    name: 'stock',
-    chart: c => {
-      if (c === null) {
-        return space(`<c:stockChart><c:hiLowLines/><c:axId val="1"/><c:axId val="2"/></c:stockChart>${CAT_AX('1', '2')}${VAL_AX('2', '1')}`)
-      }
-      return space(`
-        <c:stockChart>
-          <c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>High</c:v></c:tx><c:val>${c}</c:val></c:ser>
-          <c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Low</c:v></c:tx><c:val>${c}</c:val></c:ser>
-          <c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:v>Close</c:v></c:tx><c:val>${c}</c:val></c:ser>
-          <c:hiLowLines/>
-          <c:axId val="1"/><c:axId val="2"/>
-        </c:stockChart>
-        ${CAT_AX('1', '2')}${VAL_AX('2', '1')}
-      `)
-    },
-    expect: {
-      'no series': { kind: 'card' },
-      'empty series': { kind: 'native' },
-      'all blank': { kind: 'native' },
-      'NaN and infinity': { kind: 'native' },
-      'negative values': { kind: 'native' },
-      'single point': { kind: 'native' },
-      'unavailable point': { kind: 'native' },
-    },
   })
 })

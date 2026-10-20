@@ -174,11 +174,9 @@ export interface ChartSeries {
 export interface ChartUpDownBar {
   fill?: import('./fills').ChartFillStyle
   line?: import('./style').ChartLineStyle
-  color?: string
 }
 
 export interface ChartUpDownBars {
-  gapWidth?: number
   upBars?: ChartUpDownBar
   downBars?: ChartUpDownBar
 }

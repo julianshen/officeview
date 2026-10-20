@@ -21,8 +21,8 @@ import { parseFillStyle } from '../fills'
 import type { ChartGroup, ChartUpDownBars, ChartUpDownBar } from '../model'
 import { parseLineStyle, applyLineStyle, type ChartLineStyle } from '../style'
 import { barGeometry } from '../barGeometry'
-import type { GroupAxes } from '../axes'
-import type { ChartCharge } from '../own'
+import type { GroupAxes, ResolvedAxis } from '../axes'
+import { chargeChartLine, type ChartCharge } from '../own'
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 const val = (node: XmlNode | undefined) => attrs(node).val
@@ -47,24 +47,18 @@ export function mapStockSeries<T>(series: readonly T[]): StockSeriesMapping<T> |
   return undefined
 }
 
-/** Reads stock group options (`hiLowLines`, `upDownBars`). */
+/** Reads stock group options (`hiLowLines`, `upDownBars`, `gapWidth`). */
 export function readStockOptions(
   node: XmlNode,
   theme?: ThemeContext,
   charge?: ChartCharge
 ): Pick<ChartGroup, 'hiLowLines' | 'upDownBars'> & { gapWidth?: number } {
   const lineOf = (spPr: XmlNode | undefined) => parseLineStyle(child(spPr, 'ln'), theme, charge)
-  const solid = (spPr: XmlNode | undefined): string | undefined => {
-    const fill = child(spPr, 'solidFill')
-    if (!fill) return undefined
-    const srgb = attrs(child(fill, 'srgbClr')).val
-    return srgb ?? undefined
-  }
 
   // 1. hiLowLines
   const hiLowNode = child(node, 'hiLowLines')
   const hiLowLines: ChartLineStyle | undefined = hiLowNode
-    ? lineOf(child(hiLowNode, 'spPr')) ?? { noFill: false, color: '000000', width: 1 }
+    ? lineOf(child(hiLowNode, 'spPr')) ?? (charge ? (chargeChartLine(charge), { noFill: false, color: '000000', width: 1 }) : { noFill: false, color: '000000', width: 1 })
     : undefined
 
   // 2. upDownBars
@@ -83,17 +77,16 @@ export function readStockOptions(
       const spPr = child(barNode, 'spPr')
       const fill = parseFillStyle(spPr, theme, charge)
       const line = lineOf(spPr)
-      const color = solid(spPr)
       return {
         ...(fill ? { fill } : {}),
         ...(line ? { line } : {}),
-        ...(color ? { color } : {}),
       }
     }
 
     const upBars = parseBar(child(upDownNode, 'upBars'))
     const downBars = parseBar(child(upDownNode, 'downBars'))
-    upDownBars = { gapWidth, upBars, downBars }
+    if (charge) charge(64)
+    upDownBars = { upBars, downBars }
   }
 
   return {
@@ -117,9 +110,10 @@ export interface StockPaintKit {
   admitPath(cost: number): boolean
   fillWith(ctx: CanvasRenderingContext2D, fill: ChartFillStyle | undefined, color: string, box: Box): boolean
   strokeBorder(ctx: CanvasRenderingContext2D, line: ChartLineStyle | undefined, color: string, box: Box, rect?: Box): void
-  drawMarker(ctx: CanvasRenderingContext2D, series: any, pointIndex: number, x: number, y: number, r: number): void
+  drawMarker(ctx: CanvasRenderingContext2D, series: StockSeriesLike, pointIndex: number, x: number, y: number, r: number): void
   plotted(v: number | undefined): number | undefined
   at(v: number): number
+  categoryIndex(axis: ResolvedAxis, slot: number): number
 }
 
 /** Paints a stock group on its axes. */
@@ -134,11 +128,13 @@ export function paintStock(
   if (!mapping) return
 
   const catAxis = axes.category ?? axes.x!
-  const gap = group.upDownBars?.gapWidth ?? group.gapWidth ?? 150
+  const gap = group.gapWidth ?? 150
   const geom = barGeometry({ grouping: 'standard', overlap: 0, gapWidth: gap, series: { length: 1 } }, catAxis, axes.between, kit.plot)
 
   for (let slot = 0; slot < kit.slots; slot++) {
-    const xCenter = geom.start(slot, 0) + geom.width / 2
+    const idx = kit.categoryIndex(catAxis, slot)
+    if (!Number.isFinite(idx)) continue
+    const xCenter = geom.start(idx, 0) + geom.width / 2
 
     const H = mapping.high.plot(slot)
     const L = mapping.low.plot(slot)
@@ -177,15 +173,14 @@ export function paintStock(
         const yTop = Math.min(yO, yC)
         const yBot = Math.max(yO, yC)
         const h = Math.max(1, yBot - yTop)
-        const barBox: Box = { x: geom.start(slot, 0), y: yTop, w: geom.width, h }
+        const barBox: Box = { x: geom.start(idx, 0), y: yTop, w: geom.width, h }
 
         const isUp = cVal >= oVal
         const bar = isUp ? group.upDownBars.upBars : group.upDownBars.downBars
         const defaultFill = isUp ? 'FFFFFF' : '000000'
         const defaultLineColor = '000000'
-        const fillColor = bar?.color ?? defaultFill
 
-        if (kit.fillWith(ctx, bar?.fill, fillColor, barBox)) {
+        if (kit.fillWith(ctx, bar?.fill, defaultFill, barBox)) {
           ctx.fillRect(barBox.x, barBox.y, barBox.w, barBox.h)
         }
         const lineStyle = bar?.line ?? { color: defaultLineColor, width: 1, noFill: false }

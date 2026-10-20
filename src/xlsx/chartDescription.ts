@@ -15,7 +15,7 @@ const TYPE_NAMES: Record<string, string> = { bar: 'Bar chart', col: 'Column char
 export function chartDescription(model: XlsxChartModel): string {
   const name = model.title ? `Chart: ${model.title}.` : 'Chart.'
   if (model.unsupported) return `${name} ${model.unsupported}; it is not drawn.`
-  const group = model.groups[0]
+  const group = model.groups.find(g => g.family === 'stock') ?? model.groups[0]
   const kind = group.family === 'bar' ? TYPE_NAMES[group.barDir === 'bar' ? 'bar' : 'col'] : TYPE_NAMES[group.family]
   const grouping = group.grouping === 'stacked' ? 'stacked ' : group.grouping === 'percentStacked' ? '100% stacked ' : ''
   const series = model.groups.flatMap(g => g.series)

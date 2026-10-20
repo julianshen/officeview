@@ -551,6 +551,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         drawMarker: (c, s, i, x, y, r) => drawMarker(c, s as DrawSeries, i, x, y, r),
         plotted,
         at,
+        categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
     }
   })
