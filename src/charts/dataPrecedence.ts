@@ -32,6 +32,7 @@ import { chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } f
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
+import { attachChartUserShapes } from './userShapes'
 import { requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
 
 export const CHART_DATA_UNAVAILABLE = "This chart's data is not available"
@@ -52,6 +53,8 @@ export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefi
     chart = parse(root, theme, style ? { ...context, styleParts: style.parts } : context)
     style?.release()
     if (chart && !XLSX_PART.test(context.partPath)) chart = await applyDataPrecedence(chart, root, context)
+    // The chart's drawing overlays (spec 5.11): a missing part leaves the chart native, an unadmitted one refuses it.
+    if (chart && !chart.unsupported) chart = await attachChartUserShapes(chart, root, context)
   } catch { if (chart) releaseChartModel(chart); chart = undefined } finally { style?.release() }
   if (chart && !chart.unsupported) return { kind: 'native', model: chart }
   if (chart) releaseChartModel(chart)
