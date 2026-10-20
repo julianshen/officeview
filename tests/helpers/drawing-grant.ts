@@ -19,7 +19,7 @@ export function drawingDoc(sheetIds: readonly string[] = ['s'], imageBytes = 0):
     sheet.drawings = [{
       xEmu: 80 * E, yEmu: 0, widthEmu: 80 * E, heightEmu: 20 * E,
       source: { partPath: 'd', treePath: 'twoCellAnchor[0]/graphicFrame[0]', element: 'graphicFrame', representation: 'native' },
-      content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: Array.from({ length: 1000 }, (_, i) => i + 42) }] }] } } as never,
+      content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: Array.from({ length: 1000 }, (_, i) => ({ state: 'value', v: i + 42 })) }] }] } } as never,
       ...(imageBytes ? { image: { data: new Uint8Array(imageBytes), mime: 'image/png', partPath: 'p.png' } } : {}),
     }]
     sheet.drawingAnchors = { unresolved: 0, records: [{ id: 'd', kind: 'twoCell', from: { col: 1, row: 0, colOffEmu: 0, rowOffEmu: 0 }, to: { col: 2, row: 1, colOffEmu: 0, rowOffEmu: 0 } }] }

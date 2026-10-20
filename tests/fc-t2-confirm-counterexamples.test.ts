@@ -129,7 +129,7 @@ describe('R1: no unadmitted measurement workspace', () => {
   })
 
   it('refuses a reply whose workspace the worker pool cannot admit as a sizeless quota, which main retries', async () => {
-    // 200 charts: about 41,000 objects since D0's point objects (64 per chart); 300 before.
+    // 200 charts: 39,800 chart-model objects (199 per chart since D0's point objects; 300 x 133 = 39,900 before).
     const doc = docWithCharts(200)
     // The payload fits the worker pool; its 41,000-object walk workspace does not.
     const f = await openRemote(doc, 8 * 1024 * 1024)

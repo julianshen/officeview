@@ -11,7 +11,11 @@ import { parseXmlOrdered } from '../src/core/xml'
 import { parseXlsx } from '../src/xlsx/parse'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
-import { MemoryPool } from '../src/xlsx/view/tileCache'
+import { MAIN_THREAD_BUDGETS, MemoryPool } from '../src/xlsx/view/tileCache'
+import { SourcePageStore, memoryPageBackend } from '../src/xlsx/storage/sourcePages'
+import { ViewerKernel, connectInProcess } from '../src/worker/viewerKernel'
+import { createViewerClient } from '../src/worker/viewerClient'
+import { RemoteWorkbook, openRemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { drawingFootprint } from '../src/xlsx/view/drawingPayload'
 import type { ChartModel } from '../src/charts/model'
 import type { ChartParentLedger } from '../src/charts/workspace'
@@ -339,6 +343,35 @@ describe('D0 ownership: the paged document pool is the chart workspace parent (s
     expect(workspaces).toHaveLength(1)
     expect(workspaces[0].workspace.used).toBe(0)
   })
+
+  it('the display maximum (64 series x 4,096 points) still crosses from the worker to main under the default budgets', async () => {
+    // Point objects make a chart reply larger (about 25.7 MB measured for this chart, 4.2 MB before D0):
+    // it must still arrive, through the drawing grant's measured retry, within the main-thread budget.
+    const name = (n: number) => { let out = ''; for (n++; n; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + (n - 1) % 26) + out; return out }
+    const sers = Array.from({ length: 64 }, (_, s) => `<c:ser><c:idx val="${s}"/><c:val>${ref(`Styled!$${name(s)}$1:$${name(s)}$4096`)}</c:val></c:ser>`).join('')
+    const rows = Array.from({ length: 4096 }, (_, r) => row(r + 1, Array.from({ length: 64 }, (_, c) => num(`${name(c)}${r + 1}`, r + c)).join(''))).join('')
+    const bytes = await workbook(space(`<c:lineChart>${sers}</c:lineChart>`), rows)
+    const blob = new Blob([new Uint8Array(bytes)])
+    const session = await openImportSession({ kind: 'blob', blob }, { docId: 'max', profile: 'D', store: new SourcePageStore({ docId: 'max', backend: memoryPageBackend() }) } as never)
+    expect((await session.done).kind).toBe('complete')
+    const source = createPagedWorkbookSource(session)
+    const kernel = new ViewerKernel({ parse: async () => { throw new Error('the paged source must serve this file') }, openSource: async () => source }, { yield: async () => {} })
+    const client = createViewerClient(connectInProcess(kernel)), open = await openRemoteWorkbook(client, 'max', blob, 'D')
+    if (!('layouts' in open)) throw new Error('open failed')
+    const remote = new RemoteWorkbook(client, open)
+    try {
+      remote.merges('1')
+      for (let i = 0; i < 2000 && remote.loadState('1').completeness !== 'complete'; i++) await new Promise(resolve => setTimeout(resolve, 5))
+      let state = remote.drawings('1')
+      for (let i = 0; i < 4000 && state.state !== 'ready'; i++) { await new Promise(resolve => setTimeout(resolve, 5)); state = remote.drawings('1') }
+      expect(state.state).toBe('ready')
+      const content = (state as unknown as { drawings: Array<{ content?: { kind: string; chart?: ChartModel } }> }).drawings[0].content
+      expect(content?.chart?.groups[0].series).toHaveLength(64)
+      expect(content?.chart?.groups[0].series[63].values).toHaveLength(4096)
+      expect(content?.chart?.groups[0].series[63].values[4095]).toEqual({ state: 'value', v: 4095 + 63 })
+      expect(remote.mainLedger.peakBytes).toBeLessThanOrEqual(MAIN_THREAD_BUDGETS.D)
+    } finally { await remote.close() }
+  }, 120_000)
 
   it('existing paged streaming and lease protections still hold', async () => {
     // Errors, unavailable formulas and labels in one chart: the cell workspace is admitted before any page is read,
