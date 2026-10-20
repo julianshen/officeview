@@ -23,7 +23,7 @@ import { dateUnitIndex } from './dates'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { chartFont } from './textStyle'
-import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
+import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 import { paintChartUserShapes } from './userShapes'
 
 type FamilyCss = (family: string) => string
@@ -98,7 +98,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, s: DrawSeries, sourceIndex: n
 }
 
 function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): Box {
-  const entries = legendEntries(model.source, model.view, layout.graph)
+  const entries = layout.legendEntries
   if (!model.legend || !entries.length) return area
   if (model.legendFill && fillWith(ctx, model.legendFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
   strokeBorder(ctx, model.legendLine, '000000', area, area)

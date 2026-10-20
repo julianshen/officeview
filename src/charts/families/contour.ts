@@ -82,12 +82,29 @@ export function contourBandLine(group: BandStyled, band: number): string | undef
   const line = group.bandLines?.[band]
   return line === null ? undefined : line ?? group.bandColors?.[band] ?? accent(group, band)
 }
-/** Legend entries: one per band, named by its tick interval (the value axis's tick labels), in its band colour. */
-export function contourLegendEntries(group: BandStyled & Pick<ChartGroup, 'wireframe'>, ticks: readonly number[], labels: readonly string[], format: (edge: number) => string = String): Array<{ name: string; color?: string }> {
+/** Units kept per contour legend name (the chart label limit, spec 7); a longer name is cut and diagnosed. */
+export const CONTOUR_LEGEND_NAME_LIMIT = 255
+export const CONTOUR_LEGEND_TRUNCATED = 'chart-legend-truncated'
+/**
+ * The bytes one legend entry can need while it is built and kept: its record, its name (at most the limit) and
+ * one transient endpoint cut of at most the limit, priced as UTF-16 plus 32 (`stringBytes`), plus its measured width.
+ */
+export const CONTOUR_LEGEND_ENTRY_BYTES = 64 + 2 * (CONTOUR_LEGEND_NAME_LIMIT * 2 + 32) + (64 + CONTOUR_LEGEND_NAME_LIMIT * 2)
+/**
+ * Legend entries: one per band, named by its tick interval (the value axis's tick labels), in its band colour.
+ * At most `limit` entries (the rows a legend can show) are built; each name is cut to CONTOUR_LEGEND_NAME_LIMIT
+ * units before it is concatenated, and `truncated` is called when a name was cut.
+ */
+export function contourLegendEntries(group: BandStyled & Pick<ChartGroup, 'wireframe'>, ticks: readonly number[], labels: readonly string[], format: (edge: number) => string = String, limit = Infinity, truncated?: () => void): Array<{ name: string; color?: string }> {
   const out: Array<{ name: string; color?: string }> = []
-  for (let band = 0; band < ticks.length - 1; band++) {
+  const max = CONTOUR_LEGEND_NAME_LIMIT
+  for (let band = 0; band < ticks.length - 1 && out.length < limit; band++) {
     const color = group.wireframe ? contourBandLine(group, band) : contourBandFill(group, band)
-    out.push({ name: `${labels[band] ?? format(ticks[band])}-${labels[band + 1] ?? format(ticks[band + 1])}`, ...(color ? { color } : {}) })
+    const low = labels[band] ?? format(ticks[band]), high = labels[band + 1] ?? format(ticks[band + 1])
+    let name: string
+    if (low.length + 1 + high.length <= max) name = `${low}-${high}`
+    else { truncated?.(); name = low.length >= max ? low.slice(0, max) : `${low}-${high.slice(0, max - 1 - low.length)}` }
+    out.push({ name, ...(color ? { color } : {}) })
   }
   return out
 }

@@ -267,6 +267,48 @@ describe('charts-families-contour (Task A5d)', () => {
     expect(legendSwatches).toEqual([ACCENT[0], ACCENT[1], ACCENT[2]])
   })
 
+  it('band legend names are bounded, built once for the visible rows, and admitted before they are built (re-review 2 R1)', () => {
+    // 999 bands (0..999, major 1) under a legal long number format: every tick label is 241 units, so an
+    // unbounded interval name would be 483 units. The parent ledger watches what is held when the first
+    // legend name is measured (the names are built just before that measurement).
+    const code = `&quot;${'a'.repeat(240)}&quot;0`
+    const xml = contourXml(ser(0, [0, 999]), { legend: true, valAx: `<numFmt formatCode="${code}" sourceLinked="0"/><majorUnit val="1"/>` })
+    const m = prepareChartAxes(parse(xml))
+    expect(m.preparedAxes!.axes.find(a => a.role === 'value')!.ticks).toHaveLength(1000)
+    const run = (room: number) => {
+      let held = 0, heldAtFirstName = -1
+      const parent = { reserve: (b: number) => { if (held + b > room) return false; held += b; return true }, release: (_t: string, b: number) => { held -= b } }
+      const context = documentChartContext('desktop', undefined, parent)
+      const ctx = createCanvas(W, H).getContext('2d') as any
+      const names: string[] = []
+      const measureText = ctx.measureText.bind(ctx)
+      ctx.measureText = (text: string) => { if (/^"?a{20}/.test(text) && text.includes('-')) { if (heldAtFirstName < 0) heldAtFirstName = held; names.push(text) } return measureText(text) }
+      const fillText = ctx.fillText.bind(ctx), drawn: string[] = []
+      ctx.fillText = (text: string, ...rest: unknown[]) => { drawn.push(text); fillText(text, ...rest) }
+      paintXlsxChart(m, ctx, W, H, undefined, context)
+      return { held, heldAtFirstName, names, drawn, context }
+    }
+    const roomy = run(Infinity)
+    expect(roomy.names.length).toBeGreaterThan(0)
+    // Only the rows a 160 px legend can show are built (one per 19.33 px line, plus one), never all 999.
+    const line = 10 * 96 / 72 + 6
+    expect(new Set(roomy.names).size).toBeLessThanOrEqual(Math.floor(H / line) + 1)
+    // Every name is cut to the 255-unit label limit, and the cut is diagnosed in the layout.
+    for (const name of roomy.names) expect(name.length).toBeLessThanOrEqual(255)
+    expect(roomy.names.some(name => name.length === 255)).toBe(true)
+    const layout = layoutChart(m, W, H, 1, 0, { width: (t, f) => { measureCtx.font = f; return measureCtx.measureText(t).width }, lineHeight: () => m.fontSizePt * 96 / 72 }, roomy.context)
+    expect(layout.diagnostics.some(d => d.code === 'chart-legend-truncated')).toBe(true)
+    // When the first name was measured, the held reservation already covered every built name (UTF-16 + 32 each).
+    const nameBytes = [...new Set(roomy.names)].reduce((n, name) => n + 32 + 2 * name.length, 0)
+    expect(roomy.heldAtFirstName).toBeGreaterThanOrEqual(nameBytes)
+    // The paint draws the layout's names; it does not rebuild them (drawn legend text is a subset of the built names).
+    for (const text of roomy.drawn.filter(t => /^"?a{20}/.test(t) && t.includes('-'))) expect(roomy.names).toContain(text)
+    // A tight parent that cannot hold the layout bound refuses before any legend name is built: the card is painted.
+    const tight = run(roomy.heldAtFirstName - 1)
+    expect(tight.names).toEqual([])
+    expect(tight.held).toBe(0)
+  })
+
   it('renders natively from a DOCX: native model, coverage chart, band geometry', async () => {
     const chartXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${contourXml(ser(0, [1, 3]) + ser(1, [5, 1])).replace('<chartSpace>', `<c:chartSpace xmlns:c="${C}" xmlns:a="${A}">`).replace('</chartSpace>', '</c:chartSpace>').replace(/<(\/?)(?!c:|a:)([A-Za-z]+)/g, '<$1c:$2')}`
     const doc = await parseDocx(await OfficePackage.load(buildChartDocx([{ chartXml }]).bytes), { chartContext: documentChartContext('desktop') })
