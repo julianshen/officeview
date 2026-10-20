@@ -38,6 +38,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B3 | B3 commit (`f2c8ee3`) | 38,635 | Before (`7c67e33`, rebuilt): 38,640. Histogram and Pareto (`src/charts/chartex/histogram.ts`, the stage-1 hook, the ChartEx adapter): all in the lazy `charts-*` chunk. `dist/index.js` unchanged apart from hash churn (−5 B). Bytes added by B3: 0. Running total vs B0 (38,631): +4 B |
 | After B3 fix round 1 | B3 r1 commit | 38,638 | Before (`d5eaff5`, B3 merged with `feature/chart-compat` at `e7e64f5`, rebuilt): 38,639. Leaf reason constants (`src/charts/limits.ts`), range-safe binning and override remapping (lazy `charts-*`); deferred XLSX chart fallbacks (`settleChartFallbacks` in `src/xlsx/drawing.ts`, in the worker chunks, not `dist/index.js`). `dist/index.js` unchanged apart from hash churn (−1 B). Bytes added: 0. Running total vs B0: +7 B |
 | After B3 fix round 2 | B3 r2 commit | 38,638 | Before (`0cdda65`, rebuilt): 38,638. Branch-unit fallback descriptors and post-settlement media indexing (`src/xlsx/drawing.ts`, `src/xlsx/parse.ts`, worker chunks); plain-first arithmetic and per-slot overrides (lazy `charts-*`). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 3 | B3 r3 commit | 38,638 | Before (`74670f5`): 38,638. Nested fallback-wrapper hierarchy in `src/xlsx/drawing.ts` (worker chunks). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
 
 ## Spec §8 testing and validation
 
@@ -246,6 +247,7 @@ The following rules are **unverified** ([U]/[P]). No Office-rendered reference h
   - A column whose value passes the double range is refused ("This chart's values are out of range").
 - **Refusal after the data is read (XLSX, fix rounds 1 and 2; every ChartEx family):**
   - A chart Choice is selected before the workbook fill reads its data. If the fill or stage 1 then refuses any chart in the selected branch, `settleChartFallbacks` replaces the whole branch with its `mc:Fallback`, parsed only at that point. "The whole branch" includes a shape beside the chart and a chart inside a group. This applies to the resident and the paged XLSX readers.
+  - Nested AlternateContent (fix round 3): each wrapper is a node in a hierarchy, and a drawing maps to its innermost wrapper. Settlement runs innermost first, so the first usable inner fallback wins, as it does for a chart refused at selection. An inner replacement takes the replaced objects' place in the enclosing branch, so the object count may change. An unusable inner fallback leaves the refusal to the enclosing wrapper.
   - The branch's descriptor lives until its charts are final. A paged chart that is still waiting on an importing sheet keeps its Choice, and the paged reader reads the sheet's drawings again once the sheet completes.
   - A selected fallback's pictures are indexed into the document's media (`collectXlsxImages`), so they paint.
   - The coverage becomes `fallback`/`fallback`, keeping the chart's feature (`ChartEx`), with the refusal as the reason.

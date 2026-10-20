@@ -105,6 +105,43 @@ describe('B3 review round 2', () => {
     } finally { await source.release() }
   })
 
+  it('R5: nested AlternateContent: the first usable inner fallback wins, whenever the chart is refused', async () => {
+    const MC = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+    const CX1 = 'xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1"'
+    const shape = (name: string, id: number) => SHAPE.replace('id="9" name="Beside"', `id="${id}" name="${name}"`)
+    const badPicture = '<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="31" name="BROKEN" /><xdr:cNvPicPr /></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rMissing" /></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0" /><a:ext cx="914400" cy="914400" /></a:xfrm><a:prstGeom prst="rect"><a:avLst /></a:prstGeom></xdr:spPr></xdr:pic>'
+    /** The native chart AlternateContent, its Choice extended by `beside` and its Fallback replaced by `inner`, wrapped in an
+     * outer AlternateContent whose Choice also holds `sibling` and whose Fallback is OUTER. */
+    const nest = (inner: string, beside = '', sibling = '') => (xml: string) => xml.replace(/<mc:AlternateContent[\s\S]*<\/mc:AlternateContent>/, ac => {
+      const innerAc = ac.replace(/(<\/xdr:graphicFrame>)(<\/mc:Choice>)/, `$1${beside}$2`).replace(/<mc:Fallback>[\s\S]*<\/mc:Fallback>/, `<mc:Fallback>${inner}</mc:Fallback>`)
+      return `<mc:AlternateContent ${MC}><mc:Choice ${CX1}>${innerAc}${sibling}</mc:Choice><mc:Fallback>${shape('OUTER', 40)}</mc:Fallback></mc:AlternateContent>`
+    })
+    const late = TINY, early = (xml: string) => xml.replace(/<cx:binSize val="2" ?\/>/, '<cx:binSize val="-1" />')
+    const result = async (drawing: (xml: string) => string, binSize: (xml: string) => string) => {
+      const xlsx = await parseXlsx(await OfficePackage.load(await hi2({ 'xl/drawings/drawing1.xml': drawing, 'xl/charts/chartEx1.xml': binSize })))
+      const sheet = xlsx.sheets[0]
+      return { drawings: sheet.drawings?.map(d => [d.source.name, d.source.representation]), chart: sheet.drawings?.some(d => d.content), coverage: sheet.drawingCoverage?.filter(e => e.representation === 'choice' && e.selectedRepresentation === 'chart').length }
+    }
+    const cases: Array<[string, (xml: string) => string, Array<[string, string]>]> = [
+      // codex's flattened nested wrapper: INNER (inner fallback) is selected, never OUTER.
+      ['flattened nested wrapper', nest(shape('INNER', 30)), [['INNER', 'fallback']]],
+      // The inner replacement shrinks the branch (chart + shape -> INNER); the outer branch keeps its sibling.
+      ['inner replacement shrinks the branch', nest(shape('INNER', 30), shape('BESIDE', 32), shape('SIBLING', 33)), [['INNER', 'fallback'], ['SIBLING', 'choice']]],
+      // The inner replacement grows the branch (chart -> INNER-A, INNER-B).
+      ['inner replacement grows the branch', nest(shape('INNER-A', 30) + shape('INNER-B', 34), '', shape('SIBLING', 33)), [['INNER-A', 'fallback'], ['INNER-B', 'fallback'], ['SIBLING', 'choice']]],
+      // An unusable inner fallback (a picture without its image part): the enclosing OUTER fallback answers.
+      ['unusable inner fallback', nest(badPicture), [['OUTER', 'fallback']]],
+    ]
+    for (const [name, drawing, expected] of cases) {
+      const lateResult = await result(drawing, late), earlyResult = await result(drawing, early)
+      expect(lateResult.drawings, `${name} (refused after the fill)`).toEqual(expected)
+      // The same authored representation as a chart refused at selection (binSize -1, invalid at parse).
+      expect(lateResult.drawings, `${name}: late = early`).toEqual(earlyResult.drawings)
+      expect(lateResult.chart, name).toBe(false)
+      expect(lateResult.coverage, `${name}: no native chart coverage left`).toBe(0)
+    }
+  })
+
   it('R2: ordinary arithmetic is kept where it is representable', async () => {
     // Distinct categories of very different magnitude: A = 1e308, B = 5e-324 (both sums representable).
     expect(nums(await adapt(part([1e308, 5e-324], '<cx:aggregation />', ['A', 'B'])))).toEqual([1e308, 5e-324])

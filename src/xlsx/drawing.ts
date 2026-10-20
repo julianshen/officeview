@@ -228,27 +228,34 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
 
 /**
  * A chart Choice selected while its data is still to be read (spec 6.3): the XLSX fill and stage 1 may refuse a
- * chart in it later (data-dependent binning, an unavailable point). The descriptor treats the selected branch as a
- * unit (`members`: every object the Choice produced, a grouped chart included) and holds only what re-selection
- * needs: the already-admitted Fallback subtree and the parse arguments. The Fallback is parsed then, never eagerly;
- * `placement` is the worksheet anchor's box when the branch is top-level. A descriptor lives until the branch's
- * charts are final (native, or refused and replaced); one still waiting on data (a paged chart whose referenced
- * sheet is importing) keeps it, and the paged reader re-reads that sheet's drawings when the sheet completes.
+ * chart in it later (data-dependent binning, an unavailable point). Each such AlternateContent is one wrapper:
+ * `members` are the objects its selected branch produced (the branch is the unit; a grouped chart included),
+ * `parse` re-selects its Fallback (parsed then, never eagerly), `placement` is the worksheet anchor's box when the
+ * branch is top-level. Wrappers form a hierarchy: a nested AlternateContent's wrapper has the enclosing one as its
+ * `parent`, and a drawing maps to its innermost wrapper, so the first usable inner fallback is tried before an
+ * enclosing one. A wrapper is `done` once its charts are final; one still waiting on data (a paged chart whose
+ * referenced sheet is importing) stays open, and the paged reader re-reads that sheet's drawings when it completes.
  */
-interface DeferredFallback { parse: () => Promise<XlsxDrawing[]>; members: XlsxDrawing[]; placement?: Partial<XlsxDrawing> }
-const deferredFallbacks = new WeakMap<XlsxDrawing, DeferredFallback>()
+interface FallbackWrapper { parse: () => Promise<XlsxDrawing[]>; members: XlsxDrawing[]; placement?: Partial<XlsxDrawing>; parent?: FallbackWrapper; done?: boolean }
+const innermostWrapper = new WeakMap<XlsxDrawing, FallbackWrapper>()
 type DrawingChart = Extract<NonNullable<XlsxDrawing['content']>, { kind: 'xlsxChart' }>['chart']
-/** The charts a branch drew, nested ones included, except those inside a nested branch with its own descriptor. */
-function branchCharts(members: XlsxDrawing[], own: DeferredFallback): DrawingChart[] {
-  const out: DrawingChart[] = []
-  const walk = (nodes: XlsxDrawing[]) => {
-    for (const node of nodes) {
-      const nested = deferredFallbacks.get(node)
-      if (nested && nested !== own) continue
-      if (node.content?.kind === 'xlsxChart') out.push(node.content.chart)
-      if (node.children) walk(node.children)
-    }
+const outermost = (wrapper: FallbackWrapper): FallbackWrapper => { let w = wrapper; while (w.parent) w = w.parent; return w }
+const wrapperDepth = (wrapper: FallbackWrapper): number => { let n = 0; for (let w = wrapper.parent; w; w = w.parent) n++; return n }
+/**
+ * Places `drawings` under `parent` (registration, or an inner replacement): a drawing with its own wrappers keeps
+ * them, its outermost one gaining `parent`; a drawing with none maps to `parent` directly.
+ */
+function adoptUnder(drawings: XlsxDrawing[], parent: FallbackWrapper | undefined): void {
+  for (const drawing of drawings) {
+    const own = innermostWrapper.get(drawing)
+    if (own) { const top = outermost(own); if (top !== parent) top.parent = parent }
+    else if (parent) innermostWrapper.set(drawing, parent)
   }
+}
+/** The charts a branch drew, nested ones included. */
+function branchCharts(members: XlsxDrawing[]): DrawingChart[] {
+  const out: DrawingChart[] = []
+  const walk = (nodes: XlsxDrawing[]) => { for (const node of nodes) { if (node.content?.kind === 'xlsxChart') out.push(node.content.chart); if (node.children) walk(node.children) } }
   walk(members)
   return out
 }
@@ -256,7 +263,8 @@ const chartWaiting = (chart: DrawingChart) => Boolean(chart.categoryPending || c
 
 /**
  * After the charts' data is read: every Choice branch with a chart that is now refused or unsupported gives way, as
- * a whole, to its AlternateContent fallback (spec 6.3), and its coverage says so (status and representation
+ * a whole, to its AlternateContent fallback (spec 6.3), innermost wrapper first; an inner replacement takes the
+ * replaced objects' place in the enclosing wrapper's branch. Coverage says so (status and representation
  * `fallback`, the chart's feature kept, the refusal as the reason). With no usable fallback the chart's card stays,
  * and its coverage is recomputed (never a stale native entry). `documentCoverage`/`unit`: the document-level copy of
  * this sheet's entries. Returns whether any branch was replaced (the caller re-indexes the sheet's media).
@@ -264,9 +272,7 @@ const chartWaiting = (chart: DrawingChart) => Boolean(chart.categoryPending || c
 export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: DrawingCoverageEntry[], unit = 0): Promise<boolean> {
   let replaced = false
   const recover = (drawings: XlsxDrawing[], top: boolean, replacement: XlsxDrawing[], chart: DrawingChart) => {
-    const entries = replacement.length
-      ? replacement.flatMap((object, index) => xlsxNodeCoverage(object, unit, top && index === 0 ? 'original' : 'descendant'))
-      : drawings.flatMap((object, index) => xlsxNodeCoverage(object, unit, top && index === 0 ? 'original' : 'descendant'))
+    const entries = (replacement.length ? replacement : drawings).flatMap((object, index) => xlsxNodeCoverage(object, unit, top && index === 0 ? 'original' : 'descendant'))
     // The chart's own feature: a ChartEx model (its card's feature, or its still-ChartEx group) is `ChartEx`.
     const feature = chart.feature ?? (chart.groups.some(group => group.kind === 'chartEx') ? 'ChartEx' : 'chart')
     if (replacement.length && entries[0]) Object.assign(entries[0], { feature, status: 'fallback', representation: 'fallback', reason: chart.unsupported })
@@ -282,43 +288,60 @@ export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: 
     replace(sheet.drawingCoverage, false)
     replace(documentCoverage, true)
   }
-  const visit = async (list: XlsxDrawing[], top: boolean): Promise<void> => {
-    // Nested branches settle first (their own fallback before an enclosing one).
-    for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
-    for (let i = 0; i < list.length; i++) {
-      const drawing = list[i], deferred = deferredFallbacks.get(drawing)
-      if (deferred) {
-        const members = deferred.members, n = members.length
-        const contiguous = members.every((member, k) => list[i + k] === member)
-        const charts = branchCharts(members, deferred)
-        const refused = charts.find(chart => chart.unsupported)
-        if (refused && contiguous) {
-          let replacement: XlsxDrawing[] = []
-          try { replacement = await deferred.parse() } catch { replacement = [] }
-          if (replacement.length) {
-            const carry = (drawings: XlsxDrawing[]): void => { for (const d of drawings) { if (d.image) d.chartFallback = refused; carry(d.children ?? []) } }
-            carry(replacement)
-            const placement = deferred.placement
-            if (top && placement) for (const object of replacement) {
-              Object.assign(object, placement)
-              if (object.source.element === 'contentPart') object.transformValid = true
-              if (object.group) { object.group.off = { x: placement.xEmu!, y: placement.yEmu! }; object.group.ext = { width: placement.widthEmu!, height: placement.heightEmu! } }
-            }
-            for (const member of members) deferredFallbacks.delete(member)
-            recover(members, top, replacement, refused)
-            list.splice(i, n, ...replacement)
-            i += replacement.length - 1
-            replaced = true
-            continue
-          }
+  /** Settles one wrapper whose branch sits in `list` (sets `replaced` when its branch was replaced). */
+  const settle = async (wrapper: FallbackWrapper, list: XlsxDrawing[], top: boolean): Promise<void> => {
+    const members = wrapper.members, at = list.indexOf(members[0])
+    const contiguous = at >= 0 && members.every((member, k) => list[at + k] === member)
+    const charts = branchCharts(members)
+    const refused = charts.find(chart => chart.unsupported)
+    if (refused && contiguous) {
+      let replacement: XlsxDrawing[] = []
+      try { replacement = await wrapper.parse() } catch { replacement = [] }
+      if (replacement.length) {
+        const carry = (drawings: XlsxDrawing[]): void => { for (const d of drawings) { if (d.image) d.chartFallback = refused; carry(d.children ?? []) } }
+        carry(replacement)
+        const placement = wrapper.placement
+        if (top && placement) for (const object of replacement) {
+          Object.assign(object, placement)
+          if (object.source.element === 'contentPart') object.transformValid = true
+          if (object.group) { object.group.off = { x: placement.xEmu!, y: placement.yEmu! }; object.group.ext = { width: placement.widthEmu!, height: placement.heightEmu! } }
         }
-        // Final (every chart native, or a refusal with nothing to select): the descriptor ends. Waiting: it stays.
-        if (!charts.some(chartWaiting) || refused) for (const member of members) deferredFallbacks.delete(member)
-        if (refused) { recover(members.filter(m => m.content?.kind === 'xlsxChart' && m.content.chart.unsupported), top, [], refused) }
-        i += (contiguous ? n : 1) - 1
-        continue
+        recover(members, top, replacement, refused)
+        list.splice(at, members.length, ...replacement)
+        // The enclosing wrapper's branch now holds the replacement where the replaced objects were.
+        const parent = wrapper.parent
+        if (parent) {
+          const k = parent.members.indexOf(members[0])
+          if (k >= 0) parent.members.splice(k, members.length, ...replacement)
+          if (placement && !parent.placement) parent.placement = placement
+        }
+        adoptUnder(replacement, parent)
+        wrapper.done = true
+        replaced = true
+        return
       }
-      // A chart refused after its coverage was recorded as native (no descriptor: a card stays) is stale too.
+    }
+    // Final (every chart native, or a refusal this wrapper cannot answer: the enclosing one may). Waiting: open.
+    if (!charts.some(chartWaiting) || refused) wrapper.done = true
+  }
+  const visit = async (list: XlsxDrawing[], top: boolean): Promise<void> => {
+    // Nested lists (group children) first.
+    for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
+    // Then this list's wrappers, innermost first; a replacement re-opens the scan (the list changed).
+    for (;;) {
+      const open = new Set<FallbackWrapper>()
+      for (const drawing of list) for (let w = innermostWrapper.get(drawing); w; w = w.parent) if (!w.done && w.members.includes(drawing)) open.add(w)
+      const next = [...open].sort((a, b) => wrapperDepth(b) - wrapperDepth(a))[0]
+      if (!next) break
+      const before = replaced
+      replaced = false
+      await settle(next, list, top)
+      const changed = replaced
+      replaced = before || changed
+      if (changed) for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
+    }
+    // A chart refused with no wrapper able to replace it keeps its card; a native coverage entry for it is stale.
+    for (const drawing of list) {
       const chart = drawing.content?.kind === 'xlsxChart' ? drawing.content.chart : undefined
       if (chart?.unsupported && sheet.drawingCoverage?.some(entry => entry.partPath === drawing.source.partPath && entry.treePath === drawing.source.treePath && entry.selectedRepresentation === 'chart')) recover([drawing], top, [], chart)
     }
@@ -576,8 +599,9 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
       const fallback = selected?.mode === 'choice' && !selected.unusable ? child(node, 'Fallback') : undefined
       const drawsChart = (drawings: XlsxDrawing[]): boolean => drawings.some(d => d.content?.kind === 'xlsxChart' || drawsChart(d.children ?? []))
       if (fallback && branch.length && drawsChart(branch) && !(await fallbackUnusable(pkg, owner, fallback))) {
-        const deferred: DeferredFallback = { members: [...branch], parse: () => parseObjects(pkg, owner, fallback, theme, treePath, depth, 'fallback', carrier, anchorTopLevel, selections, groupStyle) }
-        for (const member of branch) deferredFallbacks.set(member, deferred)
+        // A nested AlternateContent in this branch keeps its own wrapper, now under this one (inner first).
+        const wrapper: FallbackWrapper = { members: [...branch], parse: () => parseObjects(pkg, owner, fallback, theme, treePath, depth, 'fallback', carrier, anchorTopLevel, selections, groupStyle) }
+        adoptUnder(branch, wrapper)
       }
       out.push(...branch)
     } else if (name === 'graphic' || name === 'graphicData') {
@@ -653,8 +677,7 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
       }
       for (const [objectIndex, object] of objects.entries()) {
         Object.assign(object, placement)
-        const deferred = deferredFallbacks.get(object)
-        if (deferred) deferred.placement = placement
+        for (let wrapper = innermostWrapper.get(object); wrapper; wrapper = wrapper.parent) wrapper.placement = placement
         if (object.source.element === 'contentPart') object.transformValid = true
         if (object.group) { object.group.off = { x: placement.xEmu, y: placement.yEmu }; object.group.ext = { width: placement.widthEmu, height: placement.heightEmu } }
         ;(sheet.drawings ??= []).push(object)
