@@ -15,6 +15,7 @@ import { paintXlsxChart } from './paint'
 
 export { chartParseContext, chartParseContextFor } from './context'
 export { readChartPart, type ChartRead } from './read'
+export { parseChartPart, applyDataPrecedence } from './dataPrecedence'
 export { openEmbeddedWorkbook, resolveExternalData, type EmbeddedWorkbook, type EmbeddedWorkbookResult } from './embeddedZip'
 export * from './parse'
 export * from './fill'

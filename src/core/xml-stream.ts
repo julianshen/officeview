@@ -395,6 +395,8 @@ export class XmlTokenizer {
       count++
       k = close + 1
     }
+    // Slots of an earlier, longer tag are dropped: the arrays retain at most this one token.
+    if (names.length > count) names.length = values.length = count
     if (this.stack.length === 0) {
       if (this.rootClosed) parseError('more than one root element')
       this.rootSeen = true

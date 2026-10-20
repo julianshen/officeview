@@ -51,6 +51,8 @@ function lazyPagedChunks(): Plugin {
         '/src/components/zoomRouting.ts',
         '/src/components/paged/printDocument.ts',
         '/src/components/fileName.ts',
+        // The chart engine (DOCX/PPTX/XLSX charts), loaded by xlsx/chartLoader's dynamic import.
+        '/src/charts/index.ts',
       ]) void server.warmupRequest(url)
     },
   }

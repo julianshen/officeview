@@ -124,3 +124,72 @@ export function buildChartPptx(charts: ChartEmbedSpec[]): ChartFixture {
   ]).bytes
   return { bytes, chartPaths, embeddingPaths }
 }
+
+/** One worksheet of an embedded workbook: `data` is the inner XML of `sheetData` (see `row`/`cell`). */
+export interface EmbeddedSheetSpec {
+  name: string
+  data?: string
+  /** Inner XML of `cols`. */
+  cols?: string
+  /** A complete worksheet part, replacing the generated one. */
+  raw?: string
+}
+/** An Office-shaped synthetic embedded workbook with cells, shared strings, styles, names and epoch. */
+export interface EmbeddedWorkbookSpec {
+  sheets: EmbeddedSheetSpec[]
+  sharedStrings?: string[]
+  /** A complete sharedStrings part, replacing the generated one. */
+  sst?: string
+  definedNames?: Array<{ name: string; formula: string; localSheetIndex?: number }>
+  date1904?: boolean
+  numFmts?: Array<{ id: number; code: string }>
+  /** One `xf` per entry: its numFmtId. */
+  cellXfs?: number[]
+  /** Workbook rels Target of each sheet (default `worksheets/sheet{n}.xml`). */
+  sheetTargets?: string[]
+}
+const esc = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+/** A worksheet cell: a number, `t` typed text (`s` index, `str`, `e`, `b`), an optional formula and style. */
+export function cell(ref: string, v?: string | number, options: { t?: 's' | 'str' | 'e' | 'b' | 'n' | 'inlineStr'; f?: string; s?: number } = {}): string {
+  const body = (options.f !== undefined ? `<f>${esc(options.f)}</f>` : '') + (options.t === 'inlineStr' ? `<is><t>${esc(String(v))}</t></is>` : v !== undefined ? `<v>${esc(String(v))}</v>` : '')
+  return `<c r="${ref}"${options.t ? ` t="${options.t}"` : ''}${options.s !== undefined ? ` s="${options.s}"` : ''}>${body}</c>`
+}
+export const row = (r: number, ...cells: string[]): string => `<row r="${r}">${cells.join('')}</row>`
+export function embeddedWorkbook(spec: EmbeddedWorkbookSpec): Uint8Array {
+  const S = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  const target = (i: number) => spec.sheetTargets?.[i] ?? `worksheets/sheet${i + 1}.xml`
+  const names = spec.definedNames?.length ? `<definedNames>${spec.definedNames.map(n => `<definedName name="${esc(n.name)}"${n.localSheetIndex !== undefined ? ` localSheetId="${n.localSheetIndex}"` : ''}>${esc(n.formula)}</definedName>`).join('')}</definedNames>` : ''
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="${S}" xmlns:r="${NS_R}"><fileVersion appName="xl"/><workbookPr${spec.date1904 ? ' date1904="1"' : ''} defaultThemeVersion="166925"/><bookViews><workbookView xWindow="0" yWindow="0"/></bookViews><sheets>${spec.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${names}<calcPr calcId="191029"/></workbook>`
+  const n = spec.sheets.length
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${spec.sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${REL}/worksheet" Target="${target(i)}"/>`).join('')}<Relationship Id="rId${n + 1}" Type="${REL}/styles" Target="styles.xml"/><Relationship Id="rId${n + 2}" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/></Relationships>`
+  const numFmts = spec.numFmts?.length ? `<numFmts count="${spec.numFmts.length}">${spec.numFmts.map(f => `<numFmt numFmtId="${f.id}" formatCode="${esc(f.code)}"/>`).join('')}</numFmts>` : ''
+  const xfs = spec.cellXfs ?? [0]
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="${S}">${numFmts}<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.map(id => `<xf numFmtId="${id}" fontId="0" fillId="0" borderId="0" xfId="0"${id ? ' applyNumberFormat="1"' : ''}/>`).join('')}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`
+  const sheet = (s: EmbeddedSheetSpec) => s.raw ?? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="${S}" xmlns:r="${NS_R}"><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>${s.cols ? `<cols>${s.cols}</cols>` : ''}<sheetData>${s.data ?? ''}</sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>`
+  const strings = spec.sharedStrings ?? []
+  const sst = spec.sst ?? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="${S}" count="${strings.length}" uniqueCount="${strings.length}">${strings.map(s => `<si><t>${esc(s)}</t></si>`).join('')}</sst>`
+  const resolveSheet = (i: number) => { const t = target(i); return t.startsWith('/') ? t.slice(1) : `xl/${t}` }
+  return buildZip([
+    { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>` },
+    { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: 'xl/workbook.xml', data: workbook },
+    { name: 'xl/_rels/workbook.xml.rels', data: rels },
+    { name: 'xl/styles.xml', data: styles },
+    { name: 'xl/sharedStrings.xml', data: sst },
+    ...spec.sheets.map((s, i) => ({ name: resolveSheet(i), data: sheet(s) })),
+  ]).bytes
+}
+/** Office's default chart workbook (Sheet1: header row, categories in A, values in B), shared strings as Office writes them. */
+export function officeChartWorkbook(values: Array<number | string> = [4.3, 2.5], categories: string[] = ['A', 'B'], extra: Partial<EmbeddedWorkbookSpec> = {}): Uint8Array {
+  const strings = ['Category', 'Series 1', ...categories]
+  const rows = [row(1, cell('A1', 0, { t: 's' }), cell('B1', 1, { t: 's' }))]
+  values.forEach((v, i) => rows.push(row(i + 2, cell(`A${i + 2}`, i + 2, { t: 's' }), typeof v === 'number' ? cell(`B${i + 2}`, v) : v)))
+  return embeddedWorkbook({ sheets: [{ name: 'Sheet1', data: rows.join('') }], sharedStrings: strings, ...extra })
+}
