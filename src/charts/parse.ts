@@ -17,6 +17,8 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { readCategoryLevels } from './categories'
+import { titleRuns } from './titles'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -76,6 +78,9 @@ function capLabel(text: string, cut: { truncated: boolean }): string {
 /** Saved data of a role: its cache (numRef/strRef/multiLvlStrRef) or literal. */
 const cacheOf = (node: XmlNode | undefined) => child(child(node, 'numRef'), 'numCache') ?? child(child(node, 'strRef'), 'strCache')
   ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'lvl') ?? child(node, 'numLit') ?? child(node, 'strLit')
+/** The declared point count of a saved source; a multi-level cache declares it once, on the cache (spec 5.9). */
+const declaredCount = (node: XmlNode | undefined, cache: XmlNode | undefined) =>
+  finite(val(child(cache, 'ptCount') ?? child(child(child(node, 'multiLvlStrRef'), 'multiLvlStrCache'), 'ptCount')))
 /**
  * The saved points of a data source by `pt@idx`, sparse indices kept: a missing
  * index (or ptCount padding) is `missing` at its position, never compacted.
@@ -84,7 +89,7 @@ const cacheOf = (node: XmlNode | undefined) => child(child(node, 'numRef'), 'num
 function cachePoints<T>(node: XmlNode | undefined, read: (pt: XmlNode) => T, missing: T, cut?: { truncated: boolean }, limit = CHART_POINT_LIMIT): T[] {
   const cache = cacheOf(node)
   const out: T[] = []
-  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  const declared = declaredCount(node, cache) ?? 0
   if (cut && declared > limit) cut.truncated = true
   const count = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0))
   for (const pt of getChildren(cache, 'pt')) {
@@ -121,7 +126,7 @@ function labelBytes(node: XmlNode | undefined): number {
  * padding included), whether a declared count or an index exceeds `limit`, and whether points carry formats. */
 function cacheExtent(node: XmlNode | undefined, limit: number): { length: number; over: boolean; formats: boolean } {
   const cache = cacheOf(node)
-  const declared = finite(val(child(cache, 'ptCount'))) ?? 0
+  const declared = declaredCount(node, cache) ?? 0
   let length = Math.max(0, Math.min(limit, Number.isSafeInteger(declared) ? declared : 0)), over = declared > limit, formats = Boolean(textOf(child(cache, 'formatCode')))
   for (const pt of getChildren(cache, 'pt')) {
     const index = finite(attrs(pt).idx)
@@ -256,6 +261,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
     auto: child(node, 'auto') ? flag(child(node, 'auto'), true) : undefined,
     minorGridlines: child(node, 'minorGridlines') ? true : undefined,
     sourceLinked: numFmt.sourceLinked !== undefined ? numFmt.sourceLinked === '1' || numFmt.sourceLinked === 'true' : undefined,
+    noMultiLvlLbl: kind === 'category' && child(node, 'noMultiLvlLbl') && flag(child(node, 'noMultiLvlLbl'), true) ? true as const : undefined,
   }
   const present = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<ChartAxis>
   return {
@@ -406,6 +412,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
   const cut = { truncated: false }
   let sharedCategoryNode: XmlNode | undefined
+  let categoryLevels: ChartModel['categoryLevels']
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
   const axes: ChartAxis[] = []
   for (const [name, node] of orderedChildren(plot)) if (AXIS_KINDS[name]) {
@@ -493,6 +500,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         if (hasCache(catNode)) {
           sharedCategoryNode = catNode
           charge(labelBytes(catNode)); categories = cacheStrings(catNode, cut).map(v => capLabel(v ?? '', cut)); categoryRef = rangeOf(catNode)
+          // Outer levels of a multi-level cache (spec 5.9), charged before they are kept.
+          categoryLevels = readCategoryLevels(catNode, categories.length, charge, cut, CHART_LABEL_LIMIT)
           if (dateAxis && (child(child(catNode, 'numRef'), 'numCache') || child(catNode, 'numLit'))) categoryValues = numericCache(catNode, cacheExtent(catNode, CHART_POINT_LIMIT), charge)
         }
         else { const range = rangeOf(catNode); if (range) categoryPending = range }
@@ -578,6 +587,17 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
   if (child(chart, 'title') && !title && !autoDeleted) title = groups.flatMap(g => g.series).length === 1 && !groups[0].series[0].pending?.name ? groups[0].series[0].name : val(child(root, 'lang'))?.startsWith('zh') ? '圖表標題' : 'Chart Title'
+  // Title runs (formatting precedence: rPr, paragraph, txPr, style part, theme) and overlays; legend entries deleted.
+  const titleNode = child(chart, 'title')
+  const runs = title ? titleRuns(titleNode, title, theme, parts?.style?.title, charge) : undefined
+  const overlay = (node: XmlNode | undefined) => Boolean(child(node, 'overlay')) && flag(child(node, 'overlay'), true)
+  const deleted = new Set<number>()
+  for (const entry of getChildren(legend, 'legendEntry')) {
+    const idx = finite(val(child(entry, 'idx')))
+    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx < CHART_POINT_LIMIT) deleted.add(idx)
+  }
+  if (deleted.size) charge(64 + deleted.size * 4)
+  const legendDeleted = deleted.size ? Uint32Array.from([...deleted].sort((a, b) => a - b)) : undefined
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
   const layouts = [plot, child(chart, 'title'), legend]
@@ -586,6 +606,11 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const plotLayout = manualLayout(plot), titleLayout = manualLayout(child(chart, 'title')), legendLayout = manualLayout(legend), text = textStyle(child(root, 'txPr'))
   const model: ChartModel = {
     ...(title ? { title } : {}),
+    ...(runs ? { titleRuns: runs } : {}),
+    ...(title && overlay(titleNode) ? { titleOverlay: true as const } : {}),
+    ...(legend && overlay(legend) ? { legendOverlay: true as const } : {}),
+    ...(legendDeleted ? { legendDeleted } : {}),
+    ...(categoryLevels ? { categoryLevels } : {}),
     groups,
     axes,
     categories,

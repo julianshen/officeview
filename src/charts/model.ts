@@ -104,6 +104,8 @@ export interface ChartAxis {
   tickMarkSkip?: number
   /** `c:dispUnits`: tick values are divided by `divisor`; `label` is the unit label drawn beside the axis (spec 5.1). */
   dispUnits?: { divisor: number; unit: string; label?: string }
+  /** `c:catAx/c:noMultiLvlLbl`: a multi-level category axis shows only its innermost level (spec 5.9). */
+  noMultiLvlLbl?: true
   /** `c:dateAx` time units (spec 5.1); `auto` (`c:auto`) lets text categories fall back to a category axis. */
   baseTimeUnit?: ChartTimeUnit
   majorTimeUnit?: ChartTimeUnit
@@ -187,6 +189,17 @@ export interface ChartGroup {
   serLines?: import('./style').ChartLineStyle
 }
 
+/**
+ * One outer level of multi-level categories (spec 5.9; `multiLvlStrCache/lvl` after the first): group `k` starts at
+ * category index `starts[k]` (ascending) and spans until the next start of this level or of any level outside it.
+ */
+export interface ChartCategoryLevel { starts: Uint32Array; labels: string[] }
+/**
+ * A title run with its formatting resolved (spec 5.10: rPr, paragraph default, txPr, style part; absent: the
+ * theme default). A run whose text is `\n` separates paragraphs.
+ */
+export type ChartTextRun = import('./labels').LabelRun
+
 export interface ChartModel {
   /** Immutable, transferable stage-1 domains, ticks and label strings. */
   preparedAxes?: import('./prepare').PreparedAxes
@@ -195,6 +208,16 @@ export interface ChartModel {
   legendLayout?: ChartManualLayout
   text?: ChartTextStyle
   title?: string
+  /** The title's runs, formatting resolved (absent: one unformatted run of `title`). */
+  titleRuns?: ChartTextRun[]
+  /** `c:title/c:overlay`: the title takes no space from the plot. */
+  titleOverlay?: true
+  /** `c:legend/c:overlay`: the legend takes no space from the plot and is painted over it. */
+  legendOverlay?: true
+  /** `c:legendEntry/c:delete`: sorted legend entry indices removed (series order; a varyColors pie: point index). */
+  legendDeleted?: Uint32Array
+  /** Outer category levels, innermost first (the innermost labels are `categories`; spec 5.9). */
+  categoryLevels?: ChartCategoryLevel[]
   chartAreaFill?: import('./fills').ChartFillStyle
   chartAreaLine?: import('./style').ChartLineStyle
   plotAreaFill?: import('./fills').ChartFillStyle
