@@ -292,6 +292,9 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
+      // Bubble sizes (spec 6.4): display-only, never dates.
+      if (pending.bubbleSizes) next.bubbleSizes = fill(pending.bubbleSizes)
+      else if (series.refs?.bubbleSizes && series.bubbleSizes) next.bubbleSizes = cached(series.bubbleSizes, series.refs.bubbleSizes)
       if(pending.categories){
         const line=chartLine(pending.categories,sheetOf(pending.categories),true)
         truncated ||= line.truncated
@@ -421,7 +424,7 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
       add(chart.categoryPending, true)
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
-        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.categories, true)
+        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false, limit); add(s.pending?.categories, true)
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }
@@ -437,9 +440,9 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
     if (chart) {
       const add = (range: ChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
       add(chart.categoryPending)
-      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.name); add(s.pending?.categories) }
+      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.bubbleSizes); add(s.pending?.name); add(s.pending?.categories) }
       // Names a cached role's provenance reference uses are resolved too (never read as cells).
-      if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues) } }
+      if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues); add(s.refs?.bubbleSizes) } }
     }
     if (node.children) pendingRanges(node.children, ownerSheet, out, withNames)
   }

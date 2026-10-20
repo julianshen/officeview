@@ -18,6 +18,9 @@ import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
 import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
+import { paintBubbles } from './families/bubble'
+import { paintRadar } from './families/radar'
+import { chartFont } from './textStyle'
 import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 
 type FamilyCss = (family: string) => string
@@ -534,9 +537,31 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         }
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
       }
+    } else if (group.family === 'bubble' && axes.x) {
+      paintBubbles(ctx, group, group.series, axes.x, V, { plot, slots: count, source: model.view.source, visibleOnly: model.plotVisOnly !== false, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box) })
     }
   })
   } finally { ctx.restore() }
+}
+
+/** Radar groups (spec 4.1) on the plot area, admitted against the same path work bound as the planar families. */
+function paintRadarChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
+  const plot = layout.plot
+  if (plot.w <= 4 || plot.h <= 4) return
+  let remaining = 262144
+  const admitPath = (cost: number) => {
+    if (cost <= remaining) { remaining -= cost; return true }
+    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
+    return false
+  }
+  if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
+  const css = familyCss(model.fontFamily)
+  for (const group of model.groups) if (group.family === 'radar') paintRadar(ctx, group, group.series, layout.graph, {
+    plot, slots: model.view.slots, source: model.view.source, view: model.view, fontSizePt: model.fontSizePt, font: px => chartFont(px, css),
+    texts: layout.texts, width: layout.width, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box),
+    drawMarker: (c, s, i, x, y, r) => drawMarker(c, s as DrawSeries, i, x, y, r),
+  })
 }
 
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
@@ -597,6 +622,7 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     if (area.w <= 8 || area.h <= 8) return
     const group = model.groups[0]
     if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
+    else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
     else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
     paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
   } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }

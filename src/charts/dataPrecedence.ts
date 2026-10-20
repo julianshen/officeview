@@ -1,8 +1,8 @@
 /**
  * Per-role data precedence for DOCX/PPTX charts (spec 6.4; lazy chunk).
  *
- * Roles: series name, categories, values, x values (bubble sizes and custom
- * error amounts join when their families are read). For each role:
+ * Roles: series name, categories, values, x values, bubble sizes (custom
+ * error amounts join when their element is read). For each role:
  *
  * 1. **Saved data** (a cache or a literal, even partial) is used as read by
  *    the chart part parser: sparse indices kept, missing ones blank,
@@ -13,8 +13,8 @@
  *    external target or name, a missing sheet or name, a corrupt workbook):
  *    the role is unavailable, with a diagnostic.
  *
- * Values are required for every family, x values for scatter (when the
- * series references them): one unavailable required role makes the whole
+ * Values are required for every family, x values for scatter and bubble,
+ * bubble sizes for bubble: one unavailable required role makes the whole
  * chart unsupported ("This chart's data is not available"); a series is
  * never drawn silently missing. Categories and names are optional and fall
  * back to their defaults (1..n, "Series n"). Mixing cached and workbook
@@ -58,7 +58,8 @@ export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefi
   return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
 }
 
-type Role = 'values' | 'xValues' | 'categories' | 'name'
+type Role = 'values' | 'xValues' | 'bubbleSizes' | 'categories' | 'name'
+const NUMERIC_NAMES = { values: 'values', xValues: 'x values', bubbleSizes: 'bubble sizes' } as const
 interface Slot { group: number; series: number; role: Role }
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 
@@ -78,10 +79,11 @@ const unsupported = (model: ChartModel, diagnostics: ChartDiagnostic[]) => succe
  */
 export async function applyDataPrecedence(model: ChartModel, root: XmlNode, context: ChartParseContext): Promise<ChartModel> {
   if (model.unsupported) return model
-  // A required role (values; x values for scatter, and bubble sizes once bubble is read) with neither saved
+  // A required role (values; x values for scatter and bubble; bubble sizes for bubble) with neither saved
   // data nor a reference, cached-only charts included.
   const absent = model.groups.flatMap(group => group.series.flatMap(series => series.absent ?? []))
-  if (absent.length) return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${absent.includes('values') ? 'values' : 'x values'}: neither saved data nor a reference` }])
+  const missing = (['values', 'xValues', 'bubbleSizes'] as const).find(role => absent.includes(role))
+  if (absent.length) return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${NUMERIC_NAMES[missing ?? 'values']}: neither saved data nor a reference` }])
   if (!chartHasPending(model)) return model
   // Every role still to read, in a fixed order: the shared categories first, then each series' roles.
   const slots: Array<Slot | 'categories'> = [], requests: EmbeddedRequest[] = []
@@ -92,6 +94,7 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
     const limit = seriesLimit(series)
     if (pending.values) { slots.push({ group: g, series: s, role: 'values' }); requests.push({ range: pending.values, text: false, limit }) }
     if (pending.xValues) { slots.push({ group: g, series: s, role: 'xValues' }); requests.push({ range: pending.xValues, text: false, limit }) }
+    if (pending.bubbleSizes) { slots.push({ group: g, series: s, role: 'bubbleSizes' }); requests.push({ range: pending.bubbleSizes, text: false, limit }) }
     if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: CHART_POINT_LIMIT }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
   }))
@@ -116,7 +119,7 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
       const resolution = resolved[i]
       if ('unavailable' in resolution) {
         note(resolution.unavailable)
-        if (slot !== 'categories' && (slot.role === 'values' || slot.role === 'xValues')) required = true
+        if (slot !== 'categories' && slot.role in NUMERIC_NAMES) required = true
         return
       }
       if (slot === 'categories') categoryPending = resolution.range

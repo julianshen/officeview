@@ -55,15 +55,15 @@ describe('worksheet chart data', () => {
   })
 
   test('an unsupported chart with no fallback keeps a titled placeholder card', async () => {
-    const xml = '<chartSpace><chart><title><tx><rich><p><r><t>Radar</t></r></p></rich></tx></title><plotArea><radarChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></radarChart></plotArea></chart></chartSpace>'
+    const xml = '<chartSpace><chart><title><tx><rich><p><r><t>Future</t></r></p></rich></tx></title><plotArea><futureChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></futureChart></plotArea></chart></chartSpace>'
     const sheet = (await parseXlsx(await chartWorkbook(xml))).sheets[0]
     const content = sheet.drawings?.[0].content
     expect(content?.kind).toBe('xlsxChart')
     if (content?.kind !== 'xlsxChart') return
-    expect(content.chart).toMatchObject({ title: 'Radar', unsupported: 'Radar chart is not supported' })
+    expect(content.chart).toMatchObject({ title: 'Future', unsupported: 'This chart type is not supported' })
     expect(sheet.drawingCoverage?.find(entry => entry.element === 'graphicFrame')?.selectedRepresentation).toBe('chart-placeholder')
     const { chartDescription } = await import('../src/charts')
-    expect(chartDescription(content.chart)).toBe('Chart: Radar. Radar chart is not supported; it is not drawn.')
+    expect(chartDescription(content.chart)).toBe('Chart: Future. This chart type is not supported; it is not drawn.')
   })
 })
 
@@ -212,8 +212,8 @@ describe('chart painting', async () => {
 
   test('an unsupported chart paints its placeholder card with title and reason through the shared painter', () => {
     const { ctx, calls } = recorder()
-    const chart = parse('<chartSpace><chart><title><tx><rich><p><r><t>Radar</t></r></p></rich></tx></title><plotArea><radarChart/></plotArea></chart></chartSpace>')
+    const chart = parse('<chartSpace><chart><title><tx><rich><p><r><t>Future</t></r></p></rich></tx></title><plotArea><futureChart/></plotArea></chart></chartSpace>')
     paintDrawingContent({ kind: 'xlsxChart', chart }, ctx, 200, 120)
-    expect(calls.filter(call => call.op === 'fillText').map(call => call.args[0])).toEqual(['Radar', 'Radar chart is not supported'])
+    expect(calls.filter(call => call.op === 'fillText').map(call => call.args[0])).toEqual(['Future', 'This chart type is not supported'])
   })
 })
