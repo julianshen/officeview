@@ -277,8 +277,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       const binding = group.binding
       const valueDates = dateFormatted(binding.kind === 'cartesian' ? binding.value : binding.kind === 'xy' ? binding.y : undefined) ? toChart : undefined
       const xDates = dateFormatted(binding.kind === 'xy' || binding.kind === 'cartesian' ? binding.x : undefined) ? toChart : undefined
-      const fill = (range: ChartRange, map?: (v: number) => number | undefined): ChartPoints => {
-        const line = chartLine(range, sheetOf(range), false, limit)
+      const fill = (range: ChartRange, map?: (v: number) => number | undefined, bound = limit): ChartPoints => {
+        const line = chartLine(range, sheetOf(range), false, bound)
         // Display truncation (spec 7): an analytic series keeps every acquired point; the drawing is capped.
         truncated ||= line.truncated || line.count > CHART_POINT_LIMIT
         charge(pointBytes(line.count))
@@ -292,8 +292,8 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
       else if (series.refs?.values) next.values = cached(series.values, series.refs.values)
       if (pending.xValues) next.xValues = fill(pending.xValues, xDates)
       else if (series.refs?.xValues && series.xValues) next.xValues = cached(series.xValues, series.refs.xValues)
-      // Bubble sizes (spec 6.4): display-only, never dates.
-      if (pending.bubbleSizes) next.bubbleSizes = fill(pending.bubbleSizes)
+      // Bubble sizes (spec 6.4): display-only (never an analytic input, so the display bound), never dates.
+      if (pending.bubbleSizes) next.bubbleSizes = fill(pending.bubbleSizes, undefined, CHART_POINT_LIMIT)
       else if (series.refs?.bubbleSizes && series.bubbleSizes) next.bubbleSizes = cached(series.bubbleSizes, series.refs.bubbleSizes)
       if(pending.categories){
         const line=chartLine(pending.categories,sheetOf(pending.categories),true)
@@ -424,7 +424,7 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
       add(chart.categoryPending, true)
       for (const group of chart.groups) for (const s of group.series) {
         const limit = seriesLimit(s)
-        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false, limit); add(s.pending?.categories, true)
+        add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false); add(s.pending?.categories, true)
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }

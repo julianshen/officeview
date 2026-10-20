@@ -94,7 +94,7 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
     const limit = seriesLimit(series)
     if (pending.values) { slots.push({ group: g, series: s, role: 'values' }); requests.push({ range: pending.values, text: false, limit }) }
     if (pending.xValues) { slots.push({ group: g, series: s, role: 'xValues' }); requests.push({ range: pending.xValues, text: false, limit }) }
-    if (pending.bubbleSizes) { slots.push({ group: g, series: s, role: 'bubbleSizes' }); requests.push({ range: pending.bubbleSizes, text: false, limit }) }
+    if (pending.bubbleSizes) { slots.push({ group: g, series: s, role: 'bubbleSizes' }); requests.push({ range: pending.bubbleSizes, text: false, limit: CHART_POINT_LIMIT }) }
     if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: CHART_POINT_LIMIT }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
   }))

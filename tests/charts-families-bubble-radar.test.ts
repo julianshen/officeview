@@ -21,7 +21,7 @@ import { createChartWorkspace } from '../src/charts/workspace'
 import type { ChartModel, ChartPoint } from '../src/charts/model'
 import type { DrawingCoverageEntry } from '../src/drawing/coverage'
 import { chartDescription } from '../src/xlsx/chartDescription'
-import { buildChartDocx, buildChartPptx } from './helpers/chart-fixtures'
+import { buildChartDocx, buildChartPptx, cell, embeddedWorkbook, row } from './helpers/chart-fixtures'
 import { CLASSIC_FAMILIES, CONFORMANCE_NS, describeFamilyConformance, type ConformanceCase } from './helpers/chart-family-conformance'
 
 const lit = (values: Array<number | string | undefined>) => `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values.map((v, i) => v === undefined ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numLit>`
@@ -109,6 +109,25 @@ describe('bubble (spec 4.1)', () => {
       expect(dangling).toMatchObject({ kind: 'unsupported', reason: CHART_DATA_UNAVAILABLE })
       const ok = await parseChartPart(parseXmlOrdered(bubbleXml({ sizes: [1, 4] })), undefined, context)
       expect(ok.kind).toBe('native')
+    }
+    // DOCX/PPTX: cacheless x, y and bubbleSize references are read from the embedded workbook.
+    const ref = (f: string) => `<c:numRef><c:f>${f}</c:f></c:numRef>`
+    const embeddedXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${bubbleXml({ sizes: [1, 4], sizeNode: `<c:bubbleSize>${ref('Sheet1!$C$2:$C$3')}</c:bubbleSize>` })
+      .replace(/<c:xVal>.*?<\/c:xVal>/, `<c:xVal>${ref('Sheet1!$A$2:$A$3')}</c:xVal>`).replace(/<c:yVal>.*?<\/c:yVal>/, `<c:yVal>${ref('Sheet1!$B$2:$B$3')}</c:yVal>`)
+      .replace('</c:chart>', '</c:chart><c:externalData r:id="rId1"><c:autoUpdate val="0"/></c:externalData>')}`
+    const workbook = embeddedWorkbook({ sheets: [{ name: 'Sheet1', data: row(2, cell('A2', 1), cell('B2', 2), cell('C2', 9)) + row(3, cell('A3', 2), cell('B3', 3), cell('C3', 16)) }] })
+    for (const format of ['docx', 'pptx'] as const) {
+      const fixture = format === 'docx' ? buildChartDocx([{ chartXml: embeddedXml, workbook }]) : buildChartPptx([{ chartXml: embeddedXml, workbook }])
+      const doc = documentChartContext('desktop'), opened = await OfficePackage.load(fixture.bytes)
+      const charts = format === 'docx'
+        ? (await parseDocx(opened, { chartContext: doc })).sections.flatMap(s => s.paragraphs).flatMap(p => p.images ?? []).flatMap(i => i.drawing?.kind === 'xlsxChart' ? [i.drawing.chart] : [])
+        : (await parsePptx(opened, { chartContext: doc })).slides.flatMap(s => s.shapes).flatMap(s => s.content?.kind === 'xlsxChart' ? [s.content.chart] : [])
+      expect(charts[0].unsupported, format).toBeUndefined()
+      const embedded = charts[0].groups[0].series[0]
+      expect([embedded.xValues, embedded.values, embedded.bubbleSizes].map(p => pointList(p!).map(q => q.state === 'value' ? q.v : q.state)), format).toEqual([[1, 2], [2, 3], [9, 16]])
+      const bubbles = filled(circles(charts[0]))
+      expect(bubbles, format).toHaveLength(2)
+      expect(bubbles[1].r / bubbles[0].r, format).toBeCloseTo(4 / 3, 6)
     }
     // XLSX: a cacheless bubbleSize reference is filled from the worksheet cells like any other numeric role.
     const workspace = createChartWorkspace('desktop')
