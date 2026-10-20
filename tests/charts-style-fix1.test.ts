@@ -477,3 +477,23 @@ describe('A4a fix round 3: linear colour methods (MS-ODRAWXML 2.8.4.2)', () => {
     expect(colors('cycle', 3)).toEqual(colors('somethingNew', 3))
   })
 })
+
+describe('A4a fix round 4: linear methods select from the variation-expanded total set (MS-ODRAWXML 2.8.3.2)', () => {
+  const c = (value: string) => ({ kind: 'srgb' as const, value, transforms: [] as Array<{ name: string; value?: string }> })
+  const v = (...pairs: Array<[string, number]>) => pairs.map(([name, n]) => ({ name, value: String(n) }))
+  // Compact: two colours, a non-identity first variation and a second one (four logical colours).
+  const variations = [v(['lumMod', 20000]), v(['lumMod', 80000])]
+  const compact = (method: string) => ({ color: { method, colors: [c('FF0000'), c('00FF00')], variations } })
+  // Expanded by hand, in the total-set order (colour fastest, then variation), with no variations.
+  const expanded = (method: string) => ({ color: { method, colors: [0, 1].flatMap(k => ['FF0000', '00FF00'].map(hex => ({ ...c(hex), transforms: variations[k] }))), variations: [] } })
+  const run = (parts: ReturnType<typeof compact>, count: number) => Array.from({ length: count }, (_, index) => resolveSeriesColor({ index, count, parts }))
+  for (const method of ['withinLinear', 'acrossLinear', 'withinLinearReversed', 'acrossLinearReversed', 'cycle']) {
+    it(`${method}: the compact part equals its expanded total set (multiple cycles)`, () => {
+      expect(run(compact(method), 9)).toEqual(run(expanded(method), 9))
+    })
+  }
+  it('withinLinear uses logical slot 0 with its first variation (a dark red), never the raw first colour alone', () => {
+    const single = resolveSeriesColor({ index: 0, count: 1, parts: compact('withinLinear') })
+    expect(single).toBe(srgb('FF0000', ['lumMod', 20000]))
+  })
+})

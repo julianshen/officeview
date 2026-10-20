@@ -181,8 +181,10 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 
 - **Implemented.** Series colours (and varyColors point colours) follow spPr, then the chart style part (`cs:chartStyle` `dataPoint`/`dataPointLine`), then the colour part (`cs:colorStyle`), then `c:style`, then the theme accent cycle. The cycle uses the variation table of Office's default colour part (colors1.xml, `id="10"`) for every cycle after the sixth series.
 - **Colour part methods.** MS-ODRAWXML §2.8.4.2 fixes how colours are chosen and in what order, and the engine follows it:
-  - `withinLinear` gives every object the **first** colour;
-  - `acrossLinear` picks the colour by index modulo the list length;
+  - both methods select from the **total set**, the part's colours expanded by its variations (§2.8.3.2: colour fastest, then variation); the set is indexed, never materialized;
+  - `withinLinear` gives every object the **first** colour of the total set, which includes its first variation;
+  - `acrossLinear` picks the colour by index modulo the size of the total set;
+  - transforms apply in this order: the colour's own, then the variation, then the brightness ramp;
   - in both, brightness progresses with index/count; the `…Reversed` methods run that progression backwards;
   - `cycle`, and any unknown method (§2.8.4.1), cycles through the colours, applying the part's variations.
 

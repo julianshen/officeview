@@ -8,7 +8,7 @@
  *    part, or `auto`: the next level) with the entry's own transforms applied;
  * 2. the colour part (`cs:colorStyle`): `cycle` (and unknown methods) cycle its colour list per series, each
  *    further cycle taking the part's next `cs:variation`; `withinLinear`/`acrossLinear` (and *Reversed) select
- *    the first / modulo colour with an approximated brightness ramp (see `linearBrightness`);
+ *    the first / modulo colour of the variation-expanded total set with an approximated brightness ramp (see `linearBrightness`);
  * 3. `c:style` (1-48): the gallery column ((n-1) mod 8) picks greyscale (0), the six accents (1), or a single
  *    accent (2-7). The single-colour columns spread a shade/tint over the series in (-70%, 70%), as LibreOffice's
  *    `oox` import approximates Office 2007 (`DetailFormatterBase::getPhColor`); not verified against Office;
@@ -159,20 +159,22 @@ function linearBrightness(index: number, count: number, reversed: boolean): Tran
 
 /**
  * Level 2: the colour part's colour for `index` of `count` objects (MS-ODRAWXML 2.8.4.2): `withinLinear` takes the
- * first colour for every object, `acrossLinear` the colour modulo the list, both with the brightness ramp above
+ * first colour of the variation-expanded total set (2.8.3.2) for every object, `acrossLinear` the colour modulo
+ * that total set, both with the brightness ramp above
  * (the *Reversed methods reverse it); `cycle` and unknown methods (2.8.4.1) cycle with the part's variations.
  */
 function colorPartColor(part: ChartColorPart, index: number, count: number): ColorDefinition | undefined {
   if (!part.colors.length) return undefined
-  const n = part.colors.length
-  const linear = /^(within|across)Linear(Reversed)?$/.exec(part.method)
-  if (linear) {
-    const color = linear[1] === 'within' ? part.colors[0] : part.colors[index % n]
-    return { ...color, transforms: [...color.transforms, ...linearBrightness(index, count, Boolean(linear[2]))] }
+  const n = part.colors.length, total = n * Math.max(1, part.variations.length)
+  // Logical slot k of the variation-expanded total set (2.8.3.2; colour fastest, then variation), never materialized.
+  // Transform order: the colour's own, then the variation, then (linear methods) the brightness approximation.
+  const slot = (k: number, extra: Transform[] = []): ColorDefinition => {
+    const color = part.colors[k % n], variation = part.variations.length ? part.variations[Math.floor(k / n) % part.variations.length] : []
+    return { ...color, transforms: [...color.transforms, ...variation, ...extra] }
   }
-  const color = part.colors[index % n]
-  const variation = part.variations.length ? part.variations[Math.floor(index / n) % part.variations.length] : []
-  return { ...color, transforms: [...color.transforms, ...variation] }
+  const linear = /^(within|across)Linear(Reversed)?$/.exec(part.method)
+  if (linear) return slot(linear[1] === 'within' ? 0 : index % total, linearBrightness(index, count, Boolean(linear[2])))
+  return slot(index)
 }
 
 /** Levels 3 and 4: `c:style`, then the theme accent cycle with Office's default variations. */
