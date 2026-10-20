@@ -332,6 +332,51 @@ describe('embedded workbook reader (spec 6.4)', () => {
     expect(doc.workspace.used).toBe(0)
   })
 
+  it('re-review R2: concurrent identical uncovered waiters share one new read', async () => {
+    const fixture = buildChartDocx([{ workbook: officeChartWorkbook([4, 6]) }])
+    const pkg = await OfficePackage.load(fixture.bytes), doc = documentChartContext('desktop')
+    const context = chartParseContext(doc, pkg, fixture.chartPaths[0])
+    // The first embedded load's worksheet stream pauses after its first chunk (its read is then past joining).
+    let resume!: () => void, started!: () => void, gated = false
+    const paused = new Promise<void>(resolve => { started = resolve })
+    const real = OfficePackage.load.bind(OfficePackage)
+    const spy = vi.spyOn(OfficePackage, 'load').mockImplementation(async data => {
+      const inner = await real(data)
+      if (gated) return inner
+      gated = true
+      const entryOf = inner.entry.bind(inner)
+      inner.entry = (path: string) => {
+        const entry = entryOf(path)
+        if (!entry || path !== 'xl/worksheets/sheet1.xml') return entry
+        const stream = entry as unknown as { internalStream(type: string): { on(name: string, cb: (chunk: unknown) => void): unknown; pause(): void; resume(): void } }
+        const internal = stream.internalStream.bind(stream)
+        stream.internalStream = (type: string) => {
+          const helper = internal(type), on = helper.on.bind(helper)
+          let first = true
+          helper.on = (name, cb) => on(name, name === 'data' ? (chunk: unknown) => { cb(chunk); if (first) { first = false; helper.pause(); resume = () => helper.resume(); started() } } : cb)
+          return helper
+        }
+        return entry
+      }
+      return inner
+    })
+    try {
+      streams.names.length = 0
+      const values = { range: { sheet: 'Sheet1', r0: 1, c0: 1, r1: 2, c1: 1 }, text: false, limit: 2 }
+      const labels = { range: { sheet: 'Sheet1', r0: 1, c0: 0, r1: 2, c1: 0 }, text: true, limit: 2 }
+      const first = requestEmbeddedCells(context, 'rId1', [values])
+      await paused
+      const waiters = [requestEmbeddedCells(context, 'rId1', [labels]), requestEmbeddedCells(context, 'rId1', [labels])]
+      await new Promise(resolve => setTimeout(resolve, 20))
+      resume()
+      const results = await Promise.all([first, ...waiters])
+      expect(results.map(r => r.kind)).toEqual(['cells', 'cells', 'cells'])
+      expect(streams.names.filter(name => name === fixture.embeddingPaths[0])).toHaveLength(2)
+      for (const r of results) if (r.kind === 'cells') r.done()
+      expect(doc.workspace.used).toBe(0)
+    } finally { spy.mockRestore(); resume?.() }
+  })
+
   it('a corrupt embedding or worksheet is unavailable, never a throw', async () => {
     const corrupt = await precedence([{ chartXml: officeChartXml(), workbook: new Uint8Array([0x50, 0x4b, 3, 4, 1, 2, 3]) }])
     expect(corrupt.charts[0].unsupported).toBe("This chart's data is not available")

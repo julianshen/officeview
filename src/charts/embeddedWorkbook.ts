@@ -135,13 +135,19 @@ export async function requestEmbeddedCells(context: Pick<ChartParseContext, 'pkg
     if (!list) batches.set(facet, list = new Map())
     let consumer!: Consumer
     const mine = new Promise<EmbeddedCellsResult>(resolve => { consumer = { requests, settle: resolve } })
-    const live = list.get(target.path) ?? []
     // A read still collecting consumers is joined; otherwise every live read (in progress or completed) is asked,
-    // oldest first, to serve this request from its cells when they cover it.
-    const open = live.find(batch => !batch.frozen)
-    if (open) { open.consumers.push(consumer); return mine }
-    for (const batch of [...live]) {
-      const served = (await batch.ready)?.(requests)
+    // oldest first, to serve this request from its cells when they cover it. The list is read again after every
+    // await, so a read another waiter opened meanwhile is joined; the decision to open a new one follows the last
+    // check with no await between, so identical waiters share it.
+    const asked = new Set<Batch>()
+    for (;;) {
+      const live = list.get(target.path) ?? []
+      const open = live.find(batch => !batch.frozen)
+      if (open) { open.consumers.push(consumer); return mine }
+      const next = live.find(batch => !asked.has(batch))
+      if (!next) break
+      asked.add(next)
+      const served = (await next.ready)?.(requests)
       if (served) return served
       if (signal?.aborted) return CANCELLED()
     }
