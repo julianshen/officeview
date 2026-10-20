@@ -316,6 +316,12 @@ describe('embedded workbook reader (spec 6.4)', () => {
     const third = await requestEmbeddedCells(context, 'rId1', [{ range: { sheet: 'Sheet1', r0: 0, c0: 0, r1: 2, c1: 0 }, text: true, limit: 3 }])
     expect(third.kind).toBe('cells')
     expect(streams.names.filter(name => name === fixture.embeddingPaths[0])).toHaveLength(2)
+    // Re-review R1: every live read stays discoverable. Covered, uncovered, covered again (no done() between):
+    // the third request is served by the first read, so the embedding is read twice, not three times.
+    const fourth = await requestEmbeddedCells(context, 'rId1', [{ range: { sheet: 'Sheet1', r0: 1, c0: 1, r1: 1, c1: 1 }, text: false, limit: 1 }])
+    expect(fourth.kind).toBe('cells')
+    expect(streams.names.filter(name => name === fixture.embeddingPaths[0])).toHaveLength(2)
+    if (fourth.kind === 'cells') fourth.done()
     if (third.kind === 'cells') third.done()
     first.done(); second.done()
     expect(doc.workspace.used).toBe(0)

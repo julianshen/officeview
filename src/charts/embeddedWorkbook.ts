@@ -110,7 +110,10 @@ type Server = (requests: EmbeddedRequest[]) => EmbeddedCellsResult | undefined
 /** One embedding read: open (consumers may join) until the load completes, then reading; `ready` gives the
  * completed read's server. It stays discoverable by part path until its last consumer is done. */
 interface Batch { consumers: Consumer[]; frozen: boolean; ready: Promise<Server | undefined>; publish(server: Server | undefined): void }
-const batches = new WeakMap<object, Map<string, Batch>>()
+/** Every live read per document facet and part path (a read leaves when it fails or its last consumer is done). */
+const batches = new WeakMap<object, Map<string, Batch[]>>()
+/** A live read's entry in that table, charged with the read's data. */
+const BATCH_RECORD_BYTES = 128
 let serial = 0
 const facetOf = (workspace: ChartWorkspace): object => (workspace as Partial<ScopedChartWorkspace>).facet ?? workspace
 
@@ -132,19 +135,24 @@ export async function requestEmbeddedCells(context: Pick<ChartParseContext, 'pkg
     if (!list) batches.set(facet, list = new Map())
     let consumer!: Consumer
     const mine = new Promise<EmbeddedCellsResult>(resolve => { consumer = { requests, settle: resolve } })
-    const existing = list.get(target.path)
-    if (existing && !existing.frozen) { existing.consumers.push(consumer); return mine }
-    if (existing) {
-      // A read in progress or completed: served from its cells when they cover this request.
-      const served = (await existing.ready)?.(requests)
+    const live = list.get(target.path) ?? []
+    // A read still collecting consumers is joined; otherwise every live read (in progress or completed) is asked,
+    // oldest first, to serve this request from its cells when they cover it.
+    const open = live.find(batch => !batch.frozen)
+    if (open) { open.consumers.push(consumer); return mine }
+    for (const batch of [...live]) {
+      const served = (await batch.ready)?.(requests)
       if (served) return served
       if (signal?.aborted) return CANCELLED()
     }
     let publish!: (server: Server | undefined) => void
     const batch: Batch = { consumers: [consumer], frozen: false, ready: new Promise(resolve => { publish = resolve }), publish: server => publish(server) }
-    const owner = list
-    owner.set(target.path, batch)
-    void runBatch(batch, context, rId, target.path, () => { if (owner.get(target.path) === batch) owner.delete(target.path) })
+    const owner = list, path = target.path
+    owner.set(path, [...owner.get(path) ?? [], batch])
+    void runBatch(batch, context, rId, path, () => {
+      const rest = (owner.get(path) ?? []).filter(other => other !== batch)
+      if (rest.length) owner.set(path, rest); else owner.delete(path)
+    })
     return mine
   })()
   const outcome = await untilAbort(work, signal)
@@ -512,6 +520,7 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     for (const consumer of batch.consumers) consumer.settle(result)
   }
   try {
+    reader.charge(BATCH_RECORD_BYTES, 'data')
     const opened = await openEmbeddedWorkbook(context, rId)
     if (opened.kind !== 'workbook') { fail(opened); return }
     workbook = opened
