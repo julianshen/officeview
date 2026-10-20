@@ -4,7 +4,7 @@
  * dPt invertIfNegative, source-series alignment, plot-area order, unchanged defaults, path admission and charging.
  * Packages here are Office-shaped synthetic fixtures (tests/helpers builders), never Office evidence.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createCanvas } from 'canvas'
 import type JSZip from 'jszip'
 import { parseXmlOrdered } from '../src/core/xml'
@@ -17,7 +17,10 @@ import { PointWriter } from '../src/charts/points'
 import { resolveDrawingColor, type ColorDefinition } from '../src/drawing/style'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { ChartModel } from '../src/charts/model'
-import { chartWorkbook } from './helpers/xlsx-chart-fixture'
+import { chartWorkbook, chartWorkbookBytes } from './helpers/xlsx-chart-fixture'
+import { OfficePackage } from '../src/core/zip'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 
 const C = 'http://schemas.openxmlformats.org/drawingml/2006/chart', A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 const CS = 'http://schemas.microsoft.com/office/drawing/2012/chartStyle'
@@ -87,6 +90,21 @@ async function packagedColors(chartXml: string, styleXml: string | undefined, co
   if (content?.kind !== 'xlsxChart') throw new Error('no chart')
   return content.chart.groups.flatMap(g => g.series.map(s => s.color))
 }
+const opened: Array<{ release(): Promise<void> }> = []
+afterEach(async () => { for (const source of opened.splice(0)) await source.release() })
+/** The same workbook read resident (parseXlsx) and paged (the import session's drawing read): the chart models. */
+async function residentAndPaged(bytes: Uint8Array): Promise<[ChartModel, ChartModel]> {
+  const resident = (await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })).sheets[0].drawings?.[0].content
+  const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'A4a', profile: 'D' })
+  expect((await session.done).kind).toBe('complete')
+  const source = createPagedWorkbookSource(session)
+  opened.push(source)
+  const store = source.store('1')
+  const read = await store.readDrawings!({ stamp: store.stamp, signal: new AbortController().signal }, 'D')
+  const paged = read.drawings[0].content
+  if (resident?.kind !== 'xlsxChart' || paged?.kind !== 'xlsxChart') throw new Error('no chart')
+  return [resident.chart, paged.chart]
+}
 const four = (extra = (_i: number) => '') => [0, 1, 2, 3].map(i => ser(i, [3, 5], extra(i))).join('')
 
 describe('A4a fix round 1: colour precedence (spec 5.11)', () => {
@@ -95,6 +113,18 @@ describe('A4a fix round 1: colour precedence (spec 5.11)', () => {
     // Without a style part the colour part still decides; without either the accent cycle does.
     expect(await packagedColors(space(bars(four())), undefined)).toEqual(['FF0000', '00FF00', '800000', '008000'])
     expect(await packagedColors(space(bars(four())), undefined, null)).toEqual(['4472C4', 'ED7D31', 'A5A5A5', 'FFC000'])
+  })
+
+  it('I1: the paged XLSX read bakes the same colours from the parts as the resident parse (D0 parity)', async () => {
+    const bytes = await chartWorkbookBytes(space(bars(four())), { patch: (zip: JSZip) => {
+      zip.file('xl/charts/_rels/chart1.xml.rels', RELS)
+      zip.file('xl/charts/style1.xml', style(AUTO_PH))
+      zip.file('xl/charts/colors1.xml', COLORS)
+    } })
+    const [resident, paged] = await residentAndPaged(bytes)
+    const colors = (model: ChartModel) => model.groups.flatMap(g => g.series.map(s => s.color))
+    expect(colors(resident)).toEqual(['FF0000', '00FF00', '800000', '008000'])
+    expect(colors(paged)).toEqual(colors(resident))
   })
 
   it('I1: the chart style part wins over the colour part: an explicit colour, a styleClr index, phClr transforms; spPr wins over both', async () => {

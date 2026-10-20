@@ -124,11 +124,13 @@ async function readRelationship(pkg: OfficePackage, owner: string, rId: string, 
  * Id, Type, Target and TargetMode until it returns true. The visitor charges whatever it keeps. False when the
  * relationships part is absent.
  */
-async function scanRelationships(pkg: OfficePackage, owner: string, op: Charging, visit: (id: string | undefined, type: string | undefined, target: string | undefined, mode: string | undefined) => boolean): Promise<boolean> {
+async function scanRelationships(pkg: OfficePackage, owner: string, op: Charging, visit: (id: string | undefined, type: string | undefined, target: string | undefined, mode: string | undefined) => boolean, packageRead = false): Promise<boolean> {
   const slash = owner.lastIndexOf('/')
   const relsPath = `${slash < 0 ? '' : owner.slice(0, slash) + '/'}_rels/${owner.slice(slash + 1)}.rels`
   const entry = rawEntry(pkg, relsPath)
-  if (!entry || entry.dir) return false
+  // `packageRead`: a package without raw entries (the paged worker's) reads the part itself, admitted against its
+  // own pool and bounded by the same cap (as charts/read.ts does for chart parts).
+  if (entry?.dir || (!entry && !(packageRead && pkg.has(relsPath)))) return false
   const { workspace } = op, crossingTag = `${op.tag}:rels${CHART_CROSSING_TAG}`, chunkTag = `${op.tag}:rels${CHART_CHUNK_TAG}`
   const malformed = () => new Stop(unavailable('chart-data-rels-malformed', "The chart's relationships could not be read"))
   try {
@@ -163,19 +165,29 @@ async function scanRelationships(pkg: OfficePackage, owner: string, op: Charging
         throw malformed()
       }
     }
-    await streamEntry(entry, chunk => {
+    const feed = (chunk: Uint8Array, owned: boolean) => {
       op.live()
       if (chunk.length > CHART_CHUNK_LIMIT) throw new Stop(REFUSED())
       if (accepted + chunk.length > EMBEDDED_RELS_LIMIT) throw new Stop(failure('refused', 'chart-rels-limit', "The chart's relationships are larger than the viewer reads", EMBEDDED_RELS_LIMIT))
       accepted += chunk.length
-      // The chunk and its decoded text, released once the tokenizer has consumed them.
-      if (!workspace.reserve(3 * chunk.length, chunkTag)) throw new Stop(REFUSED())
+      // The chunk (unless the package's own pool holds it) and its decoded text, released once tokenized.
+      if (!workspace.reserve((owned ? 3 : 2) * chunk.length, chunkTag)) throw new Stop(REFUSED())
       try {
         let text: string
         try { text = decoder.decode(chunk, { stream: true }) } catch { throw malformed() }
         write(comments.strip(text))
       } finally { workspace.release(chunkTag) }
-    })
+    }
+    if (entry) await streamEntry(entry, chunk => feed(chunk, true))
+    else {
+      let bytes: Uint8Array | undefined
+      try { bytes = await pkg.bytes(relsPath, EMBEDDED_RELS_LIMIT) } catch (error) {
+        if (String((error as Error | undefined)?.message).startsWith('Part byte limit')) throw new Stop(failure('refused', 'chart-rels-limit', "The chart's relationships are larger than the viewer reads", EMBEDDED_RELS_LIMIT))
+        throw error
+      }
+      if (!bytes) return false
+      for (let at = 0; at < bytes.length; at += 16 * 1024) feed(bytes.subarray(at, at + 16 * 1024), false)
+    }
     op.live()
     let tail: string
     try { tail = decoder.decode() } catch { throw malformed() }
@@ -232,9 +244,9 @@ export async function resolveRelatedParts(context: Pick<ChartParseContext, 'pkg'
       if (!kind || !types.includes(kind) || out.has(kind) || mode === 'External' || !target) return false
       const path = internalPath(partPath, target)
       const entry = path ? rawEntry(pkg, path) : null
-      if (path && entry && !entry.dir) { op.charge(32 + 2 * path.length); out.set(kind, path) }
+      if (path && (entry ? !entry.dir : pkg.has(path))) { op.charge(32 + 2 * path.length); out.set(kind, path) }
       return out.size === types.length
-    })
+    }, true)
   } catch (error) {
     if (!(error instanceof Stop)) throw error
     out.clear()
