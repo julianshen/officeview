@@ -599,6 +599,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
+  if (groups.some(g => g.family === 'contour' && (g.series.length > 256 || g.series.some(s => (s.values?.length ?? 0) > 256)))) truncated = true
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'

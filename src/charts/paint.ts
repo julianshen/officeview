@@ -164,7 +164,7 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
  */
 function paintContour(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
   const rows = group.series.length
-  const cols = Math.max(1, model.categories.length || Math.max(...group.series.map(s => s.source.values.length), 0))
+  const cols = Math.max(1, model.categories.length || Math.max(...group.series.map(s => s.source.values.values ? Object.keys(s.source.values.values).length : 0), 0))
   if (!rows || !cols) return
   // Grid cap 256x256.
   const rCount = Math.min(rows, 256), cCount = Math.min(cols, 256)
@@ -178,7 +178,7 @@ function paintContour(ctx: CanvasRenderingContext2D, model: DrawModel, group: Dr
   for (let r = 0; r < rCount; r++) {
     const row: Array<number | undefined> = []
     for (let c = 0; c < cCount; c++) {
-      const v = (group.series[r]?.source.values as any)?.[c]
+      const v = group.series[r]?.value(c)
       row.push(v)
       if (v !== undefined && Number.isFinite(v)) { min = Math.min(min, v); max = Math.max(max, v) }
     }
@@ -199,11 +199,8 @@ function paintContour(ctx: CanvasRenderingContext2D, model: DrawModel, group: Dr
       if (z === undefined || !Number.isFinite(z)) continue
       const band = Math.max(0, Math.min(bandCount - 1, Math.floor((z - min) / (major || 1))))
       const x = box.x + c * cellW, y = box.y + r * cellH
-      ctx.fillStyle = '#' + bandColor(band)
-      ctx.fillRect(x, y, cellW, cellH)
-      if (wireframe) {
-        ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1)
-      }
+      if (!wireframe) { ctx.fillStyle = '#' + bandColor(band); ctx.fillRect(x, y, cellW, cellH) }
+      else { ctx.strokeStyle = '#000000'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cellW - 1, cellH - 1) }
     }
   }
   if (wireframe) {
