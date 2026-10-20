@@ -17,6 +17,7 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
+import { contourGridDiagnostic, contourGridOf } from './families/contour'
 import { readBubbleOptions } from './families/bubble'
 import { readRadarStyle } from './families/radar'
 
@@ -31,17 +32,34 @@ export const CHART_LABEL_LIMIT = 255
 export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
+
+/**
+ * Contour band formats (`c:bandFmts/c:bandFmt`, CT_BandFmt: a child `c:idx` and `c:spPr`), by band index: the
+ * solid fill and line colours, null for noFill. Each retained colour is charged before it is kept.
+ */
+function parseBandFormats(node: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void): { bandColors?: Array<string | null>; bandLines?: Array<string | null> } {
+  const fills: Array<string | null> = [], lines: Array<string | null> = []
+  for (const bf of getChildren(child(node, 'bandFmts'), 'bandFmt')) {
+    const idx = finite(val(child(bf, 'idx')))
+    if (idx === undefined || !Number.isInteger(idx) || idx < 0 || idx >= 256) continue
+    const spPr = child(bf, 'spPr')
+    const fill = solid(spPr, theme), line = solid(spPr, theme, true)
+    if (fill !== undefined) { chargeChartColor(charge); fills[idx] = fill }
+    if (line !== undefined) { chargeChartColor(charge); lines[idx] = line }
+  }
+  return { ...(fills.length ? { bandColors: fills } : {}), ...(lines.length ? { bandLines: lines } : {}) }
+}
 const val = (node: XmlNode | undefined) => attrs(node).val
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 
 const GROUPS: Record<string, ChartFamily> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
   pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', scatterChart: 'scatter',
-  bubbleChart: 'bubble', radarChart: 'radar',
+  bubbleChart: 'bubble', radarChart: 'radar', surfaceChart: 'contour',
 }
+/** Chart types the engine does not draw, with the card's reason (spec 4.1; surface3D: the spec's card text). */
 const UNSUPPORTED: Record<string, string> = {
-  stockChart: 'Stock chart', surfaceChart: 'Surface chart',
-  surface3DChart: 'Surface chart', ofPieChart: 'Pie-of-pie chart',
+  stockChart: 'Stock chart is not supported', surface3DChart: '3-D surface charts are shown as a placeholder', ofPieChart: 'Pie-of-pie chart is not supported',
 }
 
 const hex = hexColor
@@ -302,6 +320,11 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
       const x = values.find(horizontalPosition) ?? values[0], y = values.find(axis => axis !== x)
       return { kind: 'xy', x: x?.id ?? impliedAxis(axes, 'value', '#x'), y: y?.id ?? impliedAxis(axes, 'value', '#y') }
     }
+    if (family === 'contour') {
+      const category = axes.find(axis => axis.kind === 'category' || axis.kind === 'date')
+      const series = axes.find(axis => axis.kind === 'series')
+      return { kind: 'surface', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), series: series?.id ?? impliedAxis(axes, 'series', '#ser'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
+    }
     const category = axes.find(axis => axis.kind === 'category' || axis.kind === 'date')
     if (family === 'radar') return { kind: 'radial', value: values[0]?.id ?? impliedAxis(axes, 'value', '#val'), ...(category ? { category: category.id } : {}) }
     return { kind: 'cartesian', category: category?.id ?? impliedAxis(axes, 'category', '#cat'), value: values[0]?.id ?? impliedAxis(axes, 'value', '#val') }
@@ -311,6 +334,12 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
   if (xy) {
     const [x, y] = valueIds.length >= 2 ? xFirst(valueIds) : [ids[0], ids[1]]
     return { kind: 'xy', x: x ?? '', y: y ?? '' }
+  }
+  if (family === 'contour') {
+    const category = ids.find(id => { const kind = axisOf(id)?.kind; return kind === 'category' || kind === 'date' })
+    const series = ids.find(id => axisOf(id)?.kind === 'series')
+    const value = valueIds[0] ?? ids.find(id => id !== category && id !== series) ?? ''
+    return { kind: 'surface', category: category ?? '', series: series ?? '', value }
   }
   const category = ids.find(id => { const kind = axisOf(id)?.kind; return kind === 'category' || kind === 'date' })
   if (family === 'radar') return { kind: 'radial', value: valueIds[0] ?? ids.find(id => id !== category) ?? '', ...(category !== undefined ? { category } : {}) }
@@ -411,6 +440,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   seriesCount = Math.min(seriesCount, CHART_SERIES_LIMIT)
   const groups: ChartGroup[] = []
   let unsupported: string | undefined, truncated = false, seriesTotal = 0
+  const authoredSeries: number[] = []
   const cut = { truncated: false }
   let sharedCategoryNode: XmlNode | undefined
   let categories: string[] = [], categoryPending: ChartRange | undefined, categoryRef: ChartRange | undefined, categoryValues: ChartPoints | undefined
@@ -422,7 +452,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     axes.push(axis)
   }
   for (const [name, node] of orderedChildren(plot)) {
-    if (UNSUPPORTED[name]) { unsupported ??= `${UNSUPPORTED[name]} is not supported`; continue }
+    if (UNSUPPORTED[name]) { unsupported ??= UNSUPPORTED[name]; continue }
     const type = GROUPS[name]
     if (!type) continue
     const grouping = (val(child(node, 'grouping')) ?? (type === 'bar' ? 'clustered' : 'standard')) as ChartGroup['grouping']
@@ -560,7 +590,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         color,
         values,
         ...(seriesCategories ? {categories:seriesCategories} : {}),
-        labels: readLabels(child(ser, 'dLbls'), charge),
+        labels: type === 'contour' ? undefined : readLabels(child(ser, 'dLbls'), charge),
         ...(xValues ? { xValues } : {}),
         ...(bubbleSizes ? { bubbleSizes } : {}),
         ...(pointColors.length ? { pointColors } : {}),
@@ -582,14 +612,19 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(type === 'radar' ? { line: lineColor !== null, markers: radarStyle === 'marker' && !markerNone } : {}),
       })
     }
+    // The contour bands' default colours: the accent cycle of the document's theme (and style/colour parts), charged.
+    const bandAccents = () => Array.from({ length: 6 }, (_, index) => (chargeChartColor(charge), resolveSeriesColor({ index, count: 6, styleId, parts, theme })))
+    authoredSeries.push(getChildren(node, 'ser').length)
     groups.push({
       family: type, grouping, series, binding,
-      labels: readLabels(child(node, 'dLbls'), charge),
+      // CT_SurfaceChart and CT_SurfaceSer have no data labels.
+      labels: type === 'contour' ? undefined : readLabels(child(node, 'dLbls'), charge),
       ...(type === 'bar' ? { barDir: val(child(node, 'barDir')) === 'bar' ? 'bar' as const : 'col' as const } : {}),
       gapWidth: Math.max(0, Math.min(500, finite(val(child(node, 'gapWidth'))) ?? 150)),
       overlap: Math.max(-100, Math.min(100, finite(val(child(node, 'overlap'))) ?? (grouping === 'stacked' || grouping === 'percentStacked' ? 100 : 0))),
       ...(type === 'doughnut' ? { holeSize: Math.max(10, Math.min(90, finite(val(child(node, 'holeSize'))) ?? 50)) } : {}),
       ...(type === 'pie' || type === 'doughnut' ? { firstSliceAngle: finite(val(child(node, 'firstSliceAng'))) ?? 0 } : {}),
+      ...(type === 'contour' ? { wireframe: child(node, 'wireframe') ? flag(child(node, 'wireframe'), true) : false, ...parseBandFormats(node, theme, charge), bandAccents: bandAccents() } : {}),
       varyColors: vary,
       ...(groupSmooth !== undefined ? { smooth: groupSmooth } : {}),
       ...(type === 'bubble' ? readBubbleOptions(node) : {}),
@@ -601,6 +636,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')
+  // The contour grid bound (spec 9): rows from the authored series count, columns from the categories.
+  const contourClips = groups.flatMap((g, i) => g.family === 'contour' ? [contourGridOf({ categories }, g, authoredSeries[i])] : []).filter(grid => grid.clipped)
+  if (contourClips.length) truncated = true
   if (!groups.length) unsupported ??= 'This chart type is not supported'
   else if (!groups.some(g => g.series.length)) unsupported ??= 'This chart has no data series'
   else if (pies.length && groups.length > 1) unsupported ??= 'Combination pie charts are not supported'
@@ -644,6 +682,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
+    ...(contourClips.length ? { diagnostics: contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d }) } : {}),
   }
   return unsupported ? model : admitAxes(model, charge)
 }

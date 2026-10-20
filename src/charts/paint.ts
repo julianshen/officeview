@@ -5,7 +5,7 @@ import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
 import { createLineTracer } from './smooth'
 /**
  * Chart painter (lazy chunk): the common chart types (bar/column
- * clustered/stacked/100%, line, area, pie, doughnut, scatter). Anything else
+ * clustered/stacked/100%, line, area, pie, doughnut, scatter, contour). Anything else
  * paints the eager placeholder card. Moved from `src/xlsx/chart.ts` (A0a);
  * since A1a the cartesian families draw on the axis graph (`charts/axes.ts`).
  */
@@ -14,6 +14,7 @@ import { displayView, type DisplayView } from './display'
 import type { ChartGroup, ChartModel, ChartSeries } from './model'
 import { axisFraction, categoryFraction, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
 import { paintDataLabels } from './labelPaint'
+import { contourEdges, contourGridOf, paintContour } from './families/contour'
 import { plotPoint } from './plotPoint'
 import { ChartRefusal } from './own'
 import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
@@ -22,7 +23,7 @@ import { dateUnitIndex } from './dates'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { chartFont } from './textStyle'
-import { layoutChart, legendEntries, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
+import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle } from './layout'
 import { paintChartUserShapes } from './userShapes'
 
 type FamilyCss = (family: string) => string
@@ -97,7 +98,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, s: DrawSeries, sourceIndex: n
 }
 
 function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): Box {
-  const entries = legendEntries(model.source, model.view)
+  const entries = layout.legendEntries
   if (!model.legend || !entries.length) return area
   if (model.legendFill && fillWith(ctx, model.legendFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
   strokeBorder(ctx, model.legendLine, '000000', area, area)
@@ -110,7 +111,7 @@ function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box,
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
   entries.forEach((entry, i) => {
     if (vertical ? y + line > area.y + area.h + .5 : x + widths[i] > area.x + area.w + .5) return
-    ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw)
+    if (entry.color) { ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw) }
     ctx.fillStyle = TEXT
     if (vertical) ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2, Math.max(1, area.w - sw - gap * 3))
     else ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2)
@@ -162,7 +163,8 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
 }
 
 /**
- * The cartesian families (bar, line, area, scatter) drawn on the axis graph (spec 5.1): every group against its
+ * The cartesian families (bar, line, area, scatter) and contour groups (`families/contour.ts`: the band grid on
+ * its category and series axes) drawn on the axis graph (spec 5.1): every group against its
  * own bound axes, each value axis with its own scale (primary and secondary), crossings, orientation, display
  * units, gridlines and authored tick marks. With one value axis and no authored placement it draws exactly as
  * the engine did before A1a (the same layout arithmetic and drawing order).
@@ -290,7 +292,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       tickMarks(a, a.minorTicks, t => along(a, dateAt(t)), a.axis.minorTickMark)
       tickMarks(a, a.ticks, t => along(a, dateAt(t)), a.axis.majorTickMark)
     }
-    if (a.role === 'category') {
+    if (a.role === 'category' || a.role === 'series') {
       const authored = a.axis.tickMarkSkip ?? 1, skip = Math.max(authored, Math.ceil((between ? n + 1 : n) / 1000))
       const marks = Array.from({ length: Math.ceil((between ? n + 1 : n) / skip) }, (_, k) => k * skip)
       tickMarks(a, marks, k => along(a, between ? (a.reversed ? 1 - k / n : k / n) : categoryFraction(a, k, false)), a.axis.majorTickMark)
@@ -311,11 +313,13 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       }
       continue
     }
-    if (model.view.category(0) === undefined) continue
+    // A series axis (contour rows): the series names, one per drawn row.
+    const names = a.role === 'series' ? layout.texts.get(a.id) ?? [] : undefined
+    if (!names && model.view.category(0) === undefined) continue
     // Legacy positions (band centres) when unreversed and between; otherwise the axis fraction.
     const at = (i: number) => between && !a.reversed ? (a.orientation === 'h' ? plot.x + band * (i + 0.5) : plot.y + plot.h - band * (i + 0.5)) : along(a, categoryFraction(a, i, between))
-    for (let i = 0; i < count; i++) {
-      const c = model.view.category(i)
+    for (let i = 0; i < Math.min(names?.length ?? count, n); i++) {
+      const c = names ? names[i] : model.view.category(i)
       if (c === undefined) continue
       if (a.orientation === 'v') { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, c, place === 'r' ? anchor + 4 : anchor - 4, at(i)) }
       else { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, i, c, at(i), place === 't' ? anchor - 3 : anchor + 3) }
@@ -350,6 +354,11 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
   model.groups.forEach((group, g) => {
     const axes = graph.groups[g]
     if (!axes) return
+    if (group.family === 'contour') {
+      const grid = contourGridOf(model, model.source.groups[g])
+      paintContour(ctx, { group, grid, slots: count, ticks: contourEdges(axes.value), categoryReversed: axes.horizontal.reversed, seriesReversed: axes.vertical.reversed, plot })
+      return
+    }
     const { value: V, horizontal } = axes
     const B = axes.category ?? axes.x!
     /** The coordinate of a value on the group's value axis. */

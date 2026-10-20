@@ -183,6 +183,14 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  /** Contour: `c:wireframe` (band boundaries only). */
+  wireframe?: boolean
+  /** Contour `c:bandFmts` by band index: the fill colour (hex), null for noFill; holes take the accent cycle. */
+  bandColors?: Array<string | null>
+  /** Contour `c:bandFmts` by band index: the line colour (hex) a wireframe strokes, null for noFill. */
+  bandLines?: Array<string | null>
+  /** Contour: the document's accent cycle (hex), resolved at parse time, for bands without an authored colour. */
+  bandAccents?: string[]
   varyColors?: boolean
   smooth?: boolean
   dropLines?: import('./style').ChartLineStyle
