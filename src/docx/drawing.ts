@@ -11,7 +11,7 @@ import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { drawingPartContext, partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
 import { chartCard, prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
 import type { ContentSelection } from '../drawing/content'
-import { supportedChoiceRequirements } from '../drawing/coverage'
+import { DOCX_REQUIREMENTS, supportedChoiceRequirements } from '../drawing/coverage'
 import { paintDrawingContent } from '../drawing/content-paint'
 import type { ContentPaintAssets } from '../drawing/content'
 import { paintTextBody, createTextBodyMeasurer } from '../drawing/text-paint'
@@ -103,7 +103,7 @@ export async function loadDrawingParts(
       if (name === 'AlternateContent') {
         let selected = false
         for (const choice of getChildren(node, 'Choice')) {
-          if (!supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported) continue
+          if (!supportedChoiceRequirements(choice, DOCX_REQUIREMENTS).supported) continue
           if (orderedChildren(choice).every(([name]) => name === '#text')) { selected = true; break }
           const before = out.size
           await visit(choice, true)

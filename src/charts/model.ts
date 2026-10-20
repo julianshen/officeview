@@ -65,7 +65,11 @@ export type ChartAxisBinding =
   | { kind: 'surface'; category: string; series: string; value: string }
 
 /** Placement-only text properties (DrawingML txPr). Rotation is degrees clockwise. */
-export interface ChartTextStyle { sizePt?: number; rotation?: number; vertical?: string }
+export interface ChartTextStyle {
+  sizePt?: number; rotation?: number; vertical?: string
+  /** Run properties (ChartEx `txPr` defRPr or first run; CSS hex without `#`). */
+  color?: string; bold?: boolean; italic?: boolean
+}
 export interface ChartManualLayout {
   x?: number; y?: number; w?: number; h?: number
   xMode?: 'edge' | 'factor'; yMode?: 'edge' | 'factor'; wMode?: 'edge' | 'factor'; hMode?: 'edge' | 'factor'
@@ -113,6 +117,10 @@ export interface ChartAxis {
   auto?: boolean
   /** No axis element: the plot area had none and its groups no `c:axId`, so a primary pair is implied (A1a). */
   implicit?: true
+  /** The axis title's text style (ChartEx `axis/title/txPr`). */
+  titleText?: ChartTextStyle
+  /** ChartEx `cx:units@unit` (chartex-map §1): `percentage` means the values are fractions shown x100 %. */
+  unit?: string
 }
 export type ChartTickMark = 'cross' | 'in' | 'out' | 'none'
 export type ChartTimeUnit = 'days' | 'months' | 'years'
@@ -173,9 +181,12 @@ export interface ChartSeries {
    * its numeric roles are acquired in full up to CHART_ANALYTIC_POINT_LIMIT (spec 7),
    * and only the drawing is capped at CHART_POINT_LIMIT. `refused`: an input
    * exceeded that bound, so the analytic element is dropped (never computed from
-   * a prefix) and the series is acquired for display only.
+   * a prefix) and the series is acquired for display only. `chart`: the series is the input of an analytic
+   * ChartEx family (histogram, Pareto, box & whisker, treemap, sunburst): every role, categories included, is
+   * acquired in full up to CHART_ANALYTIC_POINT_LIMIT on every path (cache, defined name, host sheet, embedded
+   * workbook); above it, or with a required value point unavailable, the whole chart is refused.
    */
-  analytic?: true | 'refused'
+  analytic?: true | 'refused' | 'chart'
 }
 
 export interface ChartUpDownBar {
@@ -189,6 +200,8 @@ export interface ChartUpDownBars {
 }
 
 export interface ChartGroup {
+  /** The group's kind: absent for classic (`c:`) groups; `chartEx` for a ChartEx group (`ChartExGroup`). */
+  kind?: 'chartEx'
   labels?: import('./labels').LabelControls
   family: ChartFamily
   grouping: ChartGrouping
@@ -232,6 +245,63 @@ export interface ChartCategoryLevel { starts: Uint32Array; labels: string[] }
  * theme default). A run whose text is `\n` separates paragraphs.
  */
 export type ChartTextRun = import('./labels').LabelRun
+/**
+ * ChartEx (`cx:`, Office 2016+) groups, read against docs/charts/chartex-map.md (spec 4.2, 4.3). A ChartEx chart is
+ * the same `ChartModel`: its one group is a `ChartExGroup`, whose `series` carry the bound roles (values,
+ * categories, names; cached, or pending references for the workbook) and whose `chartEx` payload keeps the
+ * ID-keyed data sets (all levels) and the per-series layout properties the family painters need.
+ */
+export type ChartExLayout = 'clusteredColumn' | 'paretoLine' | 'waterfall' | 'funnel' | 'boxWhisker' | 'treemap' | 'sunburst' | 'regionMap'
+export type ChartExFamily = 'waterfall' | 'histogram' | 'pareto' | 'boxWhisker' | 'funnel' | 'treemap' | 'sunburst'
+/** One `cx:lvl` (map §2.1): points `0..ptCount-1`; a missing `pt@idx` is blank (numeric) or `undefined` (string). */
+export type ChartExLevel = { ptCount: number; name?: string; formatCode?: string } &
+  ({ kind: 'num'; points: ChartPoints } | { kind: 'str'; values: Array<string | undefined> })
+/** A `cx:numDim`/`cx:strDim`: its `@type`, its reference (`cx:f`; a defined name or a single-area range) and its levels. */
+export interface ChartExDimension { kind: 'num' | 'str'; type: string; ref?: ChartRange; dir: 'col' | 'row'; levels: ChartExLevel[] }
+/** A `cx:data` set, keyed by `@id` (resolved by value, never by position). */
+export interface ChartExData { id: number; dimensions: ChartExDimension[] }
+export interface ChartExBinning { intervalClosed: 'l' | 'r'; binSize?: number; binCount?: number; underflow?: number | 'auto'; overflow?: number | 'auto' }
+/** `cx:layoutPr` (map §4), with the map's absence defaults applied. */
+export interface ChartExLayoutProperties {
+  visibility: { connectorLines: boolean; meanLine: boolean; meanMarker: boolean; nonoutliers: boolean; outliers: boolean }
+  binning?: ChartExBinning
+  /** `cx:aggregation`: by-category columns (equal categories grouped, values summed). */
+  aggregation?: true
+  /** `cx:subtotals/cx:idx@val`: 0-based subtotal point indices. */
+  subtotals?: number[]
+  quartileMethod?: 'inclusive' | 'exclusive'
+  parentLabelLayout?: 'none' | 'banner' | 'overlapping'
+}
+/** One `cx:series` as authored (map §2.3). */
+export interface ChartExSeriesInfo {
+  layout: ChartExLayout
+  dataId?: number
+  ownerIdx?: number
+  hidden: boolean
+  formatIdx: number
+  axisIds: string[]
+  layoutPr: ChartExLayoutProperties
+}
+export interface ChartExGroup extends ChartGroup {
+  kind: 'chartEx'
+  family: ChartExFamily
+  chartEx: {
+    /** The data sets the series bind (by `dataId`). */
+    data: ChartExData[]
+    /** Parallel to the group's `series`. */
+    series: ChartExSeriesInfo[]
+    /** Pareto: the `paretoLine` series (no data of its own; bound through `ownerIdx`). */
+    paretoLine?: ChartExSeriesInfo
+    /** By-category histogram (Excel "By Category"): the column series carries `cx:aggregation`; equal categories
+     * are grouped and their values summed (map §3, §5.1). */
+    byCategory?: true
+    /** `cx:plotArea/cx:spPr` (the whole plot area; the inner `cx:plotSurface` is the model's `plotAreaFill`). */
+    plotAreaFill?: import('./fills').ChartFillStyle
+    plotAreaLine?: import('./style').ChartLineStyle
+    /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
+    gapWidth?: number
+  }
+}
 
 export interface ChartModel {
   /** Immutable, transferable stage-1 domains, ticks and label strings. */
@@ -251,6 +321,8 @@ export interface ChartModel {
   legendDeleted?: Uint32Array
   /** Outer category levels, innermost first (the innermost labels are `categories`; spec 5.9). */
   categoryLevels?: ChartCategoryLevel[]
+  /** The title's text style (ChartEx `title/txPr`). */
+  titleText?: ChartTextStyle
   chartAreaFill?: import('./fills').ChartFillStyle
   chartAreaLine?: import('./style').ChartLineStyle
   plotAreaFill?: import('./fills').ChartFillStyle
@@ -316,5 +388,5 @@ export interface ChartModel {
  */
 export type ChartResult<Model = ChartModel> =
   | { kind: 'native'; model: Model }
-  | { kind: 'unsupported'; reason: string; title?: string }
-  | { kind: 'refused'; reason: string; title?: string }
+  | { kind: 'unsupported'; reason: string; title?: string; feature?: 'ChartEx' }
+  | { kind: 'refused'; reason: string; title?: string; feature?: 'ChartEx' }

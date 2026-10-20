@@ -41,8 +41,8 @@ import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartRange } from './model'
 import { CHART_CHUNK_LIMIT, CommentStripper, streamEntry } from './read'
 import { EMBEDDED_DECLARED_LIMIT, failure, internalPath, openEmbeddedWorkbook, resolveExternalData, untilAbort, type EmbeddedFailure, type EmbeddedWorkbook } from './embeddedZip'
-import { CHART_CELL_BYTES, chartLine, linePoint, scanChartNumber, type ChartCell, type ChartCellLookup, type ChartHiddenLookup, type ChartLine } from './fill'
-import { CHART_LABEL_LIMIT, parseChartRange } from './parse'
+import { CHART_CELL_BYTES, CHART_TOO_MANY_POINTS, chartLine, lineLength, linePoint, scanChartNumber, type ChartCell, type ChartCellLookup, type ChartHiddenLookup, type ChartLine } from './fill'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, parseChartRange } from './parse'
 import { stringBytes } from './points'
 import { sourceFormat } from './format'
 import { CHART_CHUNK_TAG, CHART_CROSSING_TAG, type ChartProfile, type ChartWorkspace, type ScopedChartWorkspace } from './workspace'
@@ -81,7 +81,10 @@ class Stop extends Error { constructor(readonly result: EmbeddedFailure) { super
 class Done extends Error {}
 
 /** One role reference a chart asks for. `single`: one cell (a series name). */
-export interface EmbeddedRequest { range: ChartRange; text: boolean; limit: number; single?: boolean }
+/** `analytic`: the role is an analytic ChartEx input whose full range is required (spec 4.3, 7): a resolved range
+ * longer than CHART_ANALYTIC_POINT_LIMIT refuses the consumer with the point-limit reason, decided right after name
+ * resolution (before lines, the cell budget or any sheet is read). Never inferred from `limit`. */
+export interface EmbeddedRequest { range: ChartRange; text: boolean; limit: number; single?: boolean; analytic?: true }
 /** A request's outcome: the concrete range read, or why the role is unavailable. */
 export type EmbeddedResolution = { range: ChartRange } | { unavailable: ChartDiagnostic }
 export interface EmbeddedCells {
@@ -98,6 +101,8 @@ export interface EmbeddedCells {
   done(): void
 }
 export type EmbeddedCellsResult = EmbeddedCells | EmbeddedFailure
+/** The diagnostic code of an analytic full-range refusal (its reason is CHART_TOO_MANY_POINTS). */
+export const EMBEDDED_TOO_MANY_POINTS = 'chart-too-many-points'
 
 interface Stats { parts: Record<string, number>; cells: number; strings: number; rows: number }
 let lastStats: Stats = { parts: {}, cells: 0, strings: 0, rows: 0 }
@@ -581,8 +586,13 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     }
     const overBudget = (lines: ChartLine[]) => lines.reduce((sum, line) => sum + line.count, 0) > EMBEDDED_CELL_LIMIT
     const CELLS_REFUSED = () => failure('refused', 'embedded-cells-limit', 'This chart reads more cells than the viewer reads', EMBEDDED_CELL_LIMIT)
+    /** An analytic full-range request whose resolved range exceeds the analytic bound (checked before any line is built). */
+    const tooMany = (requests: EmbeddedRequest[], resolved: EmbeddedResolution[]) =>
+      requests.some((request, i) => { const resolution = resolved[i]; return request.analytic === true && 'range' in resolution && lineLength(resolution.range) > CHART_ANALYTIC_POINT_LIMIT })
+    const TOO_MANY = () => failure('refused', EMBEDDED_TOO_MANY_POINTS, CHART_TOO_MANY_POINTS, CHART_ANALYTIC_POINT_LIMIT)
     const outcomes = consumers.map(consumer => {
       const resolved = consumer.requests.map(request => resolve(request.range))
+      if (tooMany(consumer.requests, resolved)) return { refused: TOO_MANY() }
       const lines = linesOf(consumer.requests, resolved)
       if (overBudget(lines)) return { refused: CELLS_REFUSED() }
       for (const line of lines) {
@@ -665,7 +675,9 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     const wantedAll = (requests: EmbeddedRequest[]) => requests.every(request => !request.range.definedName || wanted.has(request.range.definedName.toUpperCase()))
     batch.publish(requests => {
       if (dead || !wantedAll(requests)) return undefined
-      const resolved = requests.map(request => resolve(request.range)), lines = linesOf(requests, resolved)
+      const resolved = requests.map(request => resolve(request.range))
+      if (tooMany(requests, resolved)) return TOO_MANY()
+      const lines = linesOf(requests, resolved)
       if (overBudget(lines)) return CELLS_REFUSED()
       for (const line of lines) {
         const plan = plans.get(line.sheet.toLowerCase())

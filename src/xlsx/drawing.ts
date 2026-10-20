@@ -5,7 +5,7 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
-import { coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
+import { XLSX_REQUIREMENTS, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
 import { attemptedMalformedRelationshipIssue, cardChart, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
@@ -199,7 +199,7 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
   const failed = new Set<(typeof diagnostics)[number]>()
   const discardFailed = () => { for (let i = diagnostics.length - 1; i >= 0; i--) if (failed.has(diagnostics[i])) diagnostics.splice(i, 1) }
   for (const choice of getChildren(alternate, 'Choice')) {
-    if (!supportedChoiceRequirements(choice, ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink']).supported) continue
+    if (!supportedChoiceRequirements(choice, XLSX_REQUIREMENTS).supported) continue
     const before = diagnostics.length
     if (await branchAvailable(pkg, owner, choice, theme, depth + 1, carrier)) { discardFailed(); return { branch: choice, mode: 'choice' } }
     for (const diagnostic of diagnostics.slice(before)) failed.add(diagnostic)
@@ -207,7 +207,7 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
   const fallback = child(alternate, 'Fallback')
   // No representation remains (no fallback, or its picture is unusable): an attempted chart Choice shows its card (spec 6.3).
   // Only the outermost selection places it, so a card never makes an enclosing Choice available.
-  const card = getChildren(alternate, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink']).supported && chartCard(choice))
+  const card = getChildren(alternate, 'Choice').find(choice => supportedChoiceRequirements(choice, XLSX_REQUIREMENTS).supported && chartCard(choice))
   const unusable = !!card && !!fallback && await fallbackUnusable(pkg, owner, fallback)
   // The actual result: nothing usable here (an unusable fallback is not a representation), so the failure propagates.
   if (!fallback || unusable) markExhausted(alternate)

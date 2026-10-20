@@ -21,6 +21,10 @@ export interface LabelOptions extends ChartNumberFormat {
   unsupported?: boolean
   /** An unsupported authored text source, distinct from unsupported placement. */
   fieldSource?: boolean
+  /** ChartEx label box and text styling (`dataLabels`/`dataLabel` `spPr` and `txPr`). */
+  fill?: import('./fills').ChartFillStyle
+  line?: import('./style').ChartLineStyle
+  text?: import('./model').ChartTextStyle
 }
 export interface LabelControls extends LabelOptions { points?: Record<number, LabelOptions> }
 export interface PreparedLabel {
