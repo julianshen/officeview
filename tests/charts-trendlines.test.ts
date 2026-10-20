@@ -11,6 +11,8 @@ import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart } from '../src/charts/layout'
 import { fitTrendline, TRENDLINE_SAMPLE_LIMIT, type ChartTrendline, type TrendlineFit } from '../src/charts/trendlines'
 import type { ChartModel } from '../src/charts/model'
+import { createChartWorkspace } from '../src/charts/workspace'
+import { preparedAxesBytes } from '../src/charts/prepare'
 import { parseXlsx } from '../src/xlsx/parse'
 import { chartWorkbook } from './helpers/xlsx-chart-fixture'
 
@@ -264,13 +266,124 @@ describe('charts-trendlines (Task A6a)', () => {
   it('worksheet-filled series keep their trendlines and fit the filled cells', async () => {
     // No cache: the values come from Styled!A1:A5 (2,4,5,4,5) at fill time; the fit runs on the filled model.
     const xml = space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + '<dispEq val="1"/><dispRSqr val="1"/>')}<val><numRef><f>Styled!$A$1:$A$5</f></numRef></val></ser>${AX}</lineChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`)
-    const sheet = (await parseXlsx(await chartWorkbook(xml, { cells: [2, 4, 5, 4, 5].map((v, i) => ({ ref: `A${i + 1}`, v })) }))).sheets[0]
+    const workbook = await parseXlsx(await chartWorkbook(xml, { cells: [2, 4, 5, 4, 5].map((v, i) => ({ ref: `A${i + 1}`, v })) }))
+    const sheet = workbook.sheets[0]
     const content = sheet.drawings?.[0].content
     expect(content?.kind).toBe('xlsxChart')
+    // Native representation (global native-success contract): coverage selects the chart, not a card or fallback.
+    expect(workbook.drawingCoverage?.find(e => e.feature === 'chart')).toMatchObject({ status: 'native', selectedRepresentation: 'chart' })
+    expect((content as { chart: ChartModel }).chart.unsupported).toBeUndefined()
     const model = (content as { chart: ChartModel }).chart
     expect(model.groups[0].series[0].trendlines?.[0].type).toBe('linear')
     close(trendsOf(model)[0].coefficients, [2.2, 0.6])
     expect(trendsOf(model)[0].label).toBe('y = 0.6x + 2.2\nR² = 0.6')
+  })
+
+  it('review I4: malformed authored parameters or types drop the trendline, never a default fit', () => {
+    const ys = [1, 4, 2, 5, 3, 6, 4, 8, 9]
+    for (const order of ['NaN', '1e999', 'garbage', '']) {
+      const model = line(ys, trend(type('poly') + `<order val="${order}"/>`))
+      expect(trendsOf(model), order).toHaveLength(0)
+      expect(codes(model), order).toContain('chart-trendline-parameter')
+    }
+    for (const body of ['<period val="x"/>', '<period val="Infinity"/>']) {
+      const model = line(ys, trend(type('movingAvg') + body))
+      expect(trendsOf(model), body).toHaveLength(0)
+      expect(codes(model), body).toContain('chart-trendline-parameter')
+    }
+    // An unknown type is not read as linear; malformed or negative forecasts and intercepts are not read as 0/absent.
+    for (const body of [type('quartic'), type('linear') + '<forward val="abc"/>', type('linear') + '<backward val="-1"/>', type('linear') + '<intercept val="1e999"/>', type('poly') + '<order val="7"/>']) {
+      const model = line(ys, trend(body))
+      expect(trendsOf(model), body).toHaveLength(0)
+      expect(codes(model), body).toContain('chart-trendline-parameter')
+    }
+    // Absent stays the default: no order is a quadratic; no type element is linear.
+    expect(trendsOf(line(ys, trend(type('poly'))))[0].coefficients).toHaveLength(3)
+    expect(trendsOf(line(ys, trend('')))[0].coefficients).toHaveLength(2)
+  })
+
+  it('review I2: automatic axes include the forecast extent; authored bounds win', () => {
+    // Category line y = 1..5, forward 10: the fit y = x reaches (15, 15). The value axis covers 15 and the category
+    // axis gains ten trailing slots, so the forecast's end is drawn inside the plot at slot 15's position.
+    const red = '<spPr><ln w="19050"><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>'
+    const forward = line([1, 2, 3, 4, 5], trend(type('linear') + '<forward val="10"/>' + red))
+    const axes = forward.preparedAxes!.axes
+    expect(axes.find(a => a.id === '2')!.max).toBeGreaterThanOrEqual(15)
+    expect(axes.find(a => a.id === '1')!.slots).toBe(15)
+    const p = paint(forward), plot = p.layout.plot
+    const t = p.strokes.find(s => s.style === '#FF0000')!.segments
+    const end = t[t.length - 1]
+    expect(end.x2).toBeCloseTo(plot.x + plot.w * 14.5 / 15, 6)
+    expect(end.y2).toBeGreaterThanOrEqual(plot.y - 1e-6)
+    // The series itself still ends at category 5.
+    expect(p.layout.view.slots).toBe(15)
+    // backward 2: two leading slots; the first data point sits in slot 3 and the forecast starts in slot 1.
+    const backward = line([1, 2, 3, 4, 5], trend(type('linear') + '<backward val="2"/>' + red))
+    expect(backward.preparedAxes!.axes.find(a => a.id === '1')!.slots).toBe(7)
+    const b = paint(backward), bt = b.strokes.find(s => s.style === '#FF0000')!.segments
+    expect(bt[0].x1).toBeCloseTo(b.layout.plot.x + b.layout.plot.w * 0.5 / 7, 6)
+    // Scatter: the x value axis covers the forecast (x 1..5, forward 10 -> 15).
+    const xy = scatter(range(5), range(5), trend(type('linear') + '<forward val="10"/>'))
+    expect(xy.preparedAxes!.axes.find(a => a.id === '1')!.max).toBeGreaterThanOrEqual(15)
+    expect(xy.preparedAxes!.axes.find(a => a.id === '2')!.max).toBeGreaterThanOrEqual(15)
+    // Authored max wins.
+    const capped = parse(space(`<lineChart><grouping val="standard"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + '<forward val="10"/>')}<val>${lit([1, 2, 3, 4, 5])}</val></ser>${AX}</lineChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/><scaling><max val="6"/></scaling></valAx>`))
+    expect(capped.preparedAxes!.axes.find(a => a.id === '2')!.max).toBe(6)
+    // Horizontal bars: the category axis is vertical; the forecast end sits in the topmost slot, inside the plot.
+    const bars = parse(space(`<barChart><barDir val="bar"/><grouping val="clustered"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + '<forward val="3"/>' + red)}<val>${lit([1, 2, 3])}</val></ser>${AX}</barChart><catAx><axId val="1"/><axPos val="l"/><crossAx val="2"/></catAx><valAx><axId val="2"/><axPos val="b"/><crossAx val="1"/></valAx>`))
+    expect(bars.preparedAxes!.axes.find(a => a.id === '1')!.slots).toBe(6)
+    const h = paint(bars), hp = h.layout.plot, hs = h.strokes.find(s => s.style === '#FF0000')!.segments
+    const top = hs[hs.length - 1]
+    expect(top.y2).toBeCloseTo(hp.y + hp.h - hp.h * 5.5 / 6, 6)
+    expect(top.x2).toBeLessThanOrEqual(hp.x + hp.w + 1e-6)
+    // Charts without a forecast keep their slots.
+    expect(line([1, 2, 3, 4, 5], trend(type('linear'))).preparedAxes!.axes.find(a => a.id === '1')!.slots).toBe(5)
+  })
+
+  it('review I3: legend entries for drawn trendlines (authored or generated names), honouring deletion', () => {
+    const withLegend = (series: string, legend = '<legend><legendPos val="r"/></legend>') => parse(`<chartSpace><chart><autoTitleDeleted val="1"/><plotArea><lineChart><grouping val="standard"/>${series}${AX}</lineChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx></plotArea>${legend}</chart></chartSpace>`)
+    const ser = (i: number, trendlines: string) => `<ser><idx val="${i}"/><order val="${i}"/><tx><v>S${i}</v></tx>${trendlines}<val>${lit([1, 3, 2, 5])}</val></ser>`
+    const model = withLegend(ser(0, trend(type('linear')) + trend(type('poly') + '<order val="2"/>') + trend('<name>My fit</name>' + type('exp'))) + ser(1, trend(type('movingAvg') + '<period val="2"/>') + trend(type('poly') + '<order val="9"/>')))
+    const p = paint(model)
+    expect(p.layout.legend.w).toBeGreaterThan(0)
+    // Excel's generated names; a refused fit (order 9) has no entry.
+    expect(p.texts).toEqual(expect.arrayContaining(['S0', 'S1', 'Linear (S0)', 'Poly. (S0)', 'My fit', '2 per. Mov. Avg. (S1)']))
+    expect(p.texts.filter(t => /\(S1\)$/.test(t))).toHaveLength(1)
+    // c:legendEntry deletion: entries index series first, then trendlines in order (2 series + 4 drawn trendlines: idx 2..5).
+    const deleted = withLegend(ser(0, trend(type('linear')) + trend(type('power'))) + ser(1, ''), '<legend><legendPos val="r"/><legendEntry><idx val="2"/><delete val="1"/></legendEntry></legend>')
+    const texts = paint(deleted).texts
+    expect(texts).not.toContain('Linear (S0)')
+    expect(texts).toContain('Power (S0)')
+  })
+
+  it('review I1: label construction is admitted before it is built; the retained label is bounded', () => {
+    // A 243-unit format with a 240-unit literal on a degree-6 equation: every formatted coefficient is ~250 units.
+    const code = `"${'x'.repeat(240)}"0`
+    const workspace = createChartWorkspace('mobile')
+    const calls: Array<{ tag: string; bytes: number }> = []
+    const reserve = workspace.reserve.bind(workspace)
+    workspace.reserve = (bytes, tag) => { calls.push({ tag, bytes }); return reserve(bytes, tag) }
+    const body = type('poly') + '<order val="6"/><dispRSqr val="1"/><dispEq val="1"/>' + `<trendlineLbl><numFmt formatCode='${code}' sourceLinked="0"/></trendlineLbl>`
+    const xs = range(12), ys = xs.map(x => 1 + x - x * x / 3 + x ** 3 / 7 - x ** 4 / 11 + x ** 5 / 13 - x ** 6 / 17)
+    const model = parseXlsxChart(parseXmlOrdered(space(`<scatterChart><scatterStyle val="lineMarker"/><ser><idx val="0"/><order val="0"/>${trend(body)}<xVal>${lit(xs)}</xVal><yVal>${lit(ys)}</yVal></ser>${AX}</scatterChart><valAx><axId val="1"/><axPos val="b"/><crossAx val="2"/></valAx><valAx><axId val="2"/><axPos val="l"/><crossAx val="1"/></valAx>`)), undefined, { workspace, profile: 'mobile', partPath: 'xl/charts/chart1.xml', pkg: undefined as never })!
+    const prepared = trendsOf(model)[0]
+    expect(prepared.label!.length).toBeLessThanOrEqual(255)
+    expect(codes(model)).toContain('chart-trendline-label-truncated')
+    // One up-front reservation on the preparation tag covers everything retained: no growth admitted afterwards.
+    const prep = calls.filter(c => /^chart-prepare#\d+$/.test(c.tag))
+    expect(prep).toHaveLength(1)
+    expect(preparedAxesBytes(model.preparedAxes)).toBeLessThanOrEqual(prep[0].bytes)
+  })
+
+  it('review M1: a label wider than the plot stays inside it (fitted, never cut)', () => {
+    const shown = '<dispRSqr val="1"/><dispEq val="1"/><trendlineLbl><numFmt formatCode="0.000000000000" sourceLinked="0"/></trendlineLbl>'
+    const model = scatter(range(5), [2, 4, 5, 4, 5], trend(type('poly') + '<order val="3"/>' + shown))
+    const p = paint(model, 160, 140), plot = p.layout.plot
+    const eq = p.placed.find(t => t.text.startsWith('y = '))!
+    expect(eq.align).toBe('right')
+    expect(eq.width).toBeGreaterThan(plot.w)
+    expect(eq.x).toBeLessThanOrEqual(plot.x + plot.w + 1e-6)
+    expect(eq.x - Math.min(eq.width, eq.max ?? Infinity)).toBeGreaterThanOrEqual(plot.x - 1e-6)
   })
 
   it('charts without trendlines carry no trendline record; stacked and pie groups draw none', () => {
@@ -302,20 +415,21 @@ describe('charts-trendlines (Task A6a)', () => {
 })
 
 const W = 400, H = 260
-function paint(model: ChartModel) {
-  const canvas = createCanvas(W, H), ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
+function paint(model: ChartModel, w = W, h = H) {
+  const canvas = createCanvas(w, h), ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
   const kind = (s: unknown) => typeof s === 'string' ? s.toUpperCase() : (s as object).constructor.name
   const segments: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
   const strokes: Array<{ style: string; width: number; dash: number[]; segments: typeof segments }> = []
   const texts: string[] = []
+  const placed: Array<{ text: string; x: number; y: number; max?: number; width: number; align: string }> = []
   let path: typeof segments = [], pen: [number, number] = [0, 0]
   const o = { moveTo: ctx.moveTo.bind(ctx), lineTo: ctx.lineTo.bind(ctx), beginPath: ctx.beginPath.bind(ctx), stroke: ctx.stroke.bind(ctx), fillText: ctx.fillText.bind(ctx) }
   ctx.beginPath = () => { path = []; o.beginPath() }
   ctx.moveTo = (x, y) => { pen = [x, y]; o.moveTo(x, y) }
   ctx.lineTo = (x, y) => { path.push({ x1: pen[0], y1: pen[1], x2: x, y2: y }); pen = [x, y]; o.lineTo(x, y) }
   ctx.stroke = (...a: []) => { strokes.push({ style: kind(ctx.strokeStyle), width: ctx.lineWidth, dash: ctx.getLineDash(), segments: path }); o.stroke(...a) }
-  ctx.fillText = (text, x, y, max) => { texts.push(text); o.fillText(text, x, y, max) }
-  paintXlsxChart(model, ctx, W, H)
-  const layout = layoutChart(model, W, H, 1, 0, { width: (text: string, css: string) => { ctx.font = css; return ctx.measureText(text).width }, lineHeight: () => model.fontSizePt * 96 / 72 })
-  return { strokes, texts, layout }
+  ctx.fillText = (text, x, y, max) => { texts.push(text); placed.push({ text, x, y, max, width: ctx.measureText(text).width, align: ctx.textAlign }); o.fillText(text, x, y, max) }
+  paintXlsxChart(model, ctx, w, h)
+  const layout = layoutChart(model, w, h, 1, 0, { width: (text: string, css: string) => { ctx.font = css; return ctx.measureText(text).width }, lineHeight: () => model.fontSizePt * 96 / 72 })
+  return { strokes, texts, placed, layout }
 }

@@ -14,6 +14,7 @@ import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { hydrateAxes } from './prepare'
 import { formatNumber } from '../xlsx/chartDescription'
 import { dateTickLabel, dateUnitIndex } from './dates'
+import { trendlineLegendEntries } from './trendlines'
 
 export interface Box { x: number; y: number; w: number; h: number }
 export interface AxisLabel { index: number; text: string; position: number; extent: number; crossExtent: number; angle: number }
@@ -58,13 +59,14 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
   if (a.role === 'date') return a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
   return Array.from({ length: view.slots }, (_, i) => view.category(i) ?? '')
 }
-export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string }> {
+export function legendEntries(model: ChartModel, view: DisplayView): Array<{ name: string; color: string; line?: true }> {
   const group = model.groups[0]
   if (group?.family === 'pie' || group?.family === 'doughnut') {
     const s = view.groupSeries(0)[0]?.series
     return s ? Array.from({ length: Math.min(view.slots, 64) }, (_, i) => ({ name: view.category(i) ?? String(view.source(i) + 1), color: s.pointColors?.[view.source(i)] ?? s.color })) : []
   }
-  return view.series.map(({ series }) => ({ name: series.name, color: series.color }))
+  // Drawn trendlines follow the series (A6a, spec 5.6/5.10).
+  return [...view.series.map(({ series }) => ({ name: series.name, color: series.color })), ...trendlineLegendEntries(model)]
 }
 interface Entry {
   contexts: Map<ChartWorkspace, Map<string, Entry>>
@@ -317,4 +319,4 @@ function buildLayout(model: ChartModel, w: number, h: number, measure: TextMeasu
 onChartModelRelease(releaseChartLayouts)
 
 /** The paint-local buffers, admitted before the paint: per group its stack and series buffers (plus the two drop-line extents, A4a). */
-export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48), 0) + view.series.length * 256 + (model.preparedAxes?.trendlines?.length ?? 0) * 1024
+export const paintWorkspaceBytes = (model: ChartModel, view: DisplayView): number => 2048 + (model.preparedAxes?.dataLabels?.length ? view.slots*64 : 0) + model.groups.reduce((sum, group) => sum + 512 + view.slots * (group.dropLines ? 64 : 48), 0) + view.series.length * 256 + (model.preparedAxes?.trendlines?.length ?? 0) * 2048

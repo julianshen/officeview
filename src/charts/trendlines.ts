@@ -25,6 +25,9 @@ import { applyLineStyle } from './style'
 import { POINT_UNAVAILABLE, POINT_VALUE, hiddenAt } from './points'
 import { CHART_TRENDLINE_BYTES, chargeChartTrendline, type ChartCharge } from './own'
 import type { ChartWorkspace } from './workspace'
+import type { DisplayForecast } from './display'
+import type { TrendlineExtent } from './axes'
+import { CHART_POINT_LIMIT } from './parse'
 
 export type TrendlineType = 'linear' | 'exp' | 'log' | 'poly' | 'power' | 'movingAvg'
 /** A parsed `c:trendline` (retained on the series; charged at parse through charts/own.ts). */
@@ -44,6 +47,10 @@ export interface ChartTrendline {
   line?: ChartLineStyle
   /** On the first record: trendlines of the series past TRENDLINE_SERIES_LIMIT (not kept). */
   overflow?: number
+  /** An authored value the reader could not accept (an unknown type): the trendline is dropped, never defaulted. */
+  invalid?: string
+  /** Its legend entry is deleted (`c:legend/c:legendEntry/c:delete`). */
+  legendDeleted?: true
 }
 /**
  * A fit. `coefficients` in x units: linear [a, b] (y = a + bx); exp [c, b] (y = c·e^(bx)); log [c, b]
@@ -89,9 +96,11 @@ const DEFAULT_LINE: ChartLineStyle = { width: 2, dash: 'sysDot', cap: 'round' }
 const TYPES: Record<string, TrendlineType> = { linear: 'linear', exp: 'exp', log: 'log', poly: 'poly', power: 'power', movingAvg: 'movingAvg' }
 const NAMES: Record<TrendlineType, string> = { linear: 'linear', exp: 'exponential', log: 'logarithmic', poly: 'polynomial', power: 'power', movingAvg: 'moving-average' }
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
+/** An authored number: undefined when the element is absent, NaN when it is present but not a finite number. */
 const num = (node: XmlNode | undefined): number | undefined => {
+  if (!node) return undefined
   const raw = attrs(node).val
-  return raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
+  return raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : NaN
 }
 const flag = (node: XmlNode | undefined) => node ? attrs(node).val !== '0' && attrs(node).val !== 'false' : undefined
 
@@ -105,7 +114,9 @@ export function readTrendlines(ser: XmlNode, lineOf: (spPr: XmlNode | undefined)
     const nameNode = child(node, 'name'), name = nameNode ? textOf(nameNode).slice(0, 255) : undefined
     chargeChartTrendline(charge, (formatCode?.length ?? 0) + (name?.length ?? 0))
     const line = lineOf(child(node, 'spPr'))
-    const record: ChartTrendline = { type: TYPES[attrs(child(node, 'trendlineType')).val ?? 'linear'] ?? 'linear' }
+    // An absent type is linear (the schema default); an unknown one is invalid, never read as linear.
+    const typeNode = child(node, 'trendlineType'), rawType = typeNode ? attrs(typeNode).val ?? '' : 'linear'
+    const record: ChartTrendline = { type: TYPES[rawType] ?? 'linear', ...(TYPES[rawType] ? {} : { invalid: `trendline type "${rawType.slice(0, 32)}"` }) }
     const set = <K extends keyof ChartTrendline>(key: K, value: ChartTrendline[K] | undefined) => { if (value !== undefined) record[key] = value }
     set('order', num(child(node, 'order'))); set('period', num(child(node, 'period')))
     set('forward', num(child(node, 'forward'))); set('backward', num(child(node, 'backward')))
@@ -120,6 +131,14 @@ export function readTrendlines(ser: XmlNode, lineOf: (spPr: XmlNode | undefined)
   return out
 }
 
+/** The first authored value that is malformed or out of its domain (order and period ranges are checked by the fit). */
+function invalidParameter(spec: ChartTrendline): string | undefined {
+  if (spec.invalid) return spec.invalid
+  for (const key of ['forward', 'backward'] as const) { const v = spec[key]; if (v !== undefined && !(Number.isFinite(v) && v >= 0)) return `${key} ${v}` }
+  if (spec.intercept !== undefined && !Number.isFinite(spec.intercept)) return `intercept ${spec.intercept}`
+  return undefined
+}
+
 /** A source of (x, y) pairs, visited in series order (any number of passes; nothing is materialised). */
 export type PairSource = (visit: (x: number, y: number) => void) => void
 const arrays = (xs: ArrayLike<number>, ys: ArrayLike<number>): PairSource => visit => {
@@ -131,6 +150,8 @@ const arrays = (xs: ArrayLike<number>, ys: ArrayLike<number>): PairSource => vis
 export function fitTrendline(spec: ChartTrendline, xs: ArrayLike<number> | PairSource, ys?: ArrayLike<number>, reserve: (bytes: number) => boolean = () => true): TrendlineResult {
   const source = typeof xs === 'function' ? xs : arrays(xs, ys ?? [])
   const type = spec.type
+  const invalid = invalidParameter(spec)
+  if (invalid) return { kind: 'none', code: 'chart-trendline-parameter', reason: `A trendline's ${invalid} is invalid: the trendline is not drawn` }
   if (type === 'movingAvg') return movingAverage(spec, source, reserve)
   let order = 1
   if (type === 'poly') {
@@ -247,42 +268,115 @@ function movingAverage(spec: ChartTrendline, source: PairSource, reserve: (bytes
 
 const sig4 = (v: number) => String(Number(v.toPrecision(4))).replace('e', 'E')
 const SUPERSCRIPT = ['', '', '²', '³', '⁴', '⁵', '⁶']
-/** The equation and R² text (spec 5.6): the authored numFmt, else 4 significant digits. */
-export function trendlineLabel(spec: ChartTrendline, fit: TrendlineFit, formatter: ChartFormatter, epoch: '1900' | '1904'): string | undefined {
-  if (fit.type === 'movingAvg') return undefined
+/** Units a trendline label keeps (CHART_LABEL_LIMIT); a longer one is cut and diagnosed. */
+export const TRENDLINE_LABEL_LIMIT = 255
+/**
+ * Scratch of one label's construction: the formatter's output (at most 256 units, admitted by the formatter
+ * itself), the label under construction (built incrementally, never past LIMIT + 1 units) and one piece.
+ */
+const TRENDLINE_LABEL_SCRATCH = 4 * (2 * 257 + 32)
+/**
+ * The equation and R² text (spec 5.6): the authored numFmt, else 4 significant digits. Built piece by piece and
+ * never past TRENDLINE_LABEL_LIMIT + 1 units; `truncated` is called when the label had to be cut.
+ */
+export function trendlineLabel(spec: ChartTrendline, fit: TrendlineFit, formatter: ChartFormatter, epoch: '1900' | '1904', truncated: () => void = () => {}): string | undefined {
+  if (fit.type === 'movingAvg' || (!spec.dispEq && !(spec.dispRSqr && fit.r2 !== undefined))) return undefined
   const code = spec.formatCode
   const format = (v: number) => code !== undefined ? formatter.format(v, code, epoch) : sig4(v)
-  const lines: string[] = []
+  let text = ''
+  const add = (piece: string) => { if (text.length <= TRENDLINE_LABEL_LIMIT) text += piece.slice(0, TRENDLINE_LABEL_LIMIT + 1 - text.length) }
   if (spec.dispEq) {
-    const terms: Array<{ c: number; suffix: string }> = []
+    add('y = ')
     const [c0, c1] = fit.coefficients
-    if (fit.type === 'linear') terms.push({ c: c1, suffix: 'x' }, { c: c0, suffix: '' })
-    else if (fit.type === 'poly') for (let j = fit.coefficients.length - 1; j >= 0; j--) terms.push({ c: fit.coefficients[j], suffix: j === 0 ? '' : j === 1 ? 'x' : `x${SUPERSCRIPT[j]}` })
-    else if (fit.type === 'log') terms.push({ c: c0, suffix: 'ln(x)' }, { c: c1, suffix: '' })
-    else if (fit.type === 'exp') terms.push({ c: c0, suffix: `e^(${format(c1)}x)` })
-    else terms.push({ c: c0, suffix: `x^${format(c1)}` })
-    let text = ''
-    for (const { c, suffix } of terms) {
+    const terms: Array<[number, () => string]> = fit.type === 'linear' ? [[c1, () => 'x'], [c0, () => '']]
+      : fit.type === 'poly' ? fit.coefficients.map((c, j) => [c, () => j === 0 ? '' : j === 1 ? 'x' : `x${SUPERSCRIPT[j]}`] as [number, () => string]).reverse()
+        : fit.type === 'log' ? [[c0, () => 'ln(x)'], [c1, () => '']]
+          : fit.type === 'exp' ? [[c0, () => `e^(${format(c1)}x)`]]
+            : [[c0, () => `x^${format(c1)}`]]
+    let first = true
+    for (const [c, suffix] of terms) {
+      if (text.length > TRENDLINE_LABEL_LIMIT) break
       if (c === 0 && terms.length > 1) continue
-      const magnitude = format(Math.abs(c))
-      // A unit coefficient on a power of x is written as Excel does, with its digits (y = 1x is not shortened).
-      if (!text) text = (c < 0 ? '-' : '') + magnitude + suffix
-      else text += (c < 0 ? ' - ' : ' + ') + magnitude + suffix
+      add(first ? (c < 0 ? '-' : '') : (c < 0 ? ' - ' : ' + '))
+      add(format(Math.abs(c)))
+      add(suffix())
+      first = false
     }
-    lines.push(`y = ${text || format(0)}`)
+    if (first) add(format(0))
   }
-  if (spec.dispRSqr && fit.r2 !== undefined) lines.push(`R² = ${format(fit.r2)}`)
-  return lines.length ? lines.join('\n') : undefined
+  if (spec.dispRSqr && fit.r2 !== undefined) { if (spec.dispEq) add('\n'); add('R² = '); add(format(fit.r2)) }
+  if (text.length > TRENDLINE_LABEL_LIMIT) { text = text.slice(0, TRENDLINE_LABEL_LIMIT); truncated() }
+  return text
 }
 
 /** Bytes a prepared trendline retains (its samples, coefficients and label), priced in charts/own.ts. */
 export const preparedTrendlineBytes = (t: PreparedTrendline): number =>
   CHART_TRENDLINE_BYTES.fit + t.samples.length * 8 + t.coefficients.length * 8 + (t.label ? t.label.length * 2 + 32 : 0)
-/** The most a model's trendlines can retain (the stage-1 bound term). */
+/** The most a model's trendlines can retain, plus one label's construction scratch (the stage-1 bound term). */
 export function trendlineBound(model: ChartModel): number {
   let count = 0
   for (const group of model.groups) for (const series of group.series) count += series.trendlines?.length ?? 0
-  return count * (CHART_TRENDLINE_BYTES.fit + TRENDLINE_SAMPLE_LIMIT * 16 + 7 * 8 + 2 * (256 * 2 + 32))
+  return count ? count * (CHART_TRENDLINE_BYTES.fit + TRENDLINE_SAMPLE_LIMIT * 16 + 7 * 8 + TRENDLINE_LABEL_LIMIT * 2 + 32) + TRENDLINE_LABEL_SCRATCH : 0
+}
+
+/**
+ * Category slots the drawn forecasts need (spec 5.6): leading slots for backward, trailing for forward, on
+ * category (not date) axes. The total stays within the display bound; past it the forecast is clipped, diagnosed.
+ */
+export function trendlineForecast(model: ChartModel, trendlines: readonly PreparedTrendline[], slots: number, diagnostics: ChartDiagnostic[]): DisplayForecast | undefined {
+  let lead = 0, trail = 0
+  for (const t of trendlines) {
+    const binding = model.groups[t.group]?.binding
+    if (binding?.kind !== 'cartesian' || binding.category === undefined || model.axes.find(a => a.id === binding.category)?.kind === 'date' || t.samples.length < 2) continue
+    lead = Math.max(lead, Math.ceil(1 - t.samples[0] - 1e-9))
+    trail = Math.max(trail, Math.ceil(t.samples[t.samples.length - 2] - slots - 1e-9))
+  }
+  const room = Math.max(0, CHART_POINT_LIMIT - slots)
+  if (lead + trail > room) {
+    diagnostics.push({ code: 'chart-trendline-extension-clamped', reason: `A trendline forecast is clipped at the ${CHART_POINT_LIMIT}-slot display bound` })
+    trail = Math.min(trail, room); lead = Math.min(lead, room - trail)
+  }
+  return lead || trail ? { lead, trail } : undefined
+}
+/** Each drawn trendline's extent in data units (automatic axes include it; spec 5.6). */
+export function trendlineExtents(trendlines: readonly PreparedTrendline[]): TrendlineExtent[] {
+  return trendlines.map(t => {
+    let y0 = Infinity, y1 = -Infinity, yPositive = Infinity
+    for (let i = 1; i < t.samples.length; i += 2) { const y = t.samples[i]; if (!Number.isFinite(y)) continue; if (y < y0) y0 = y; if (y > y1) y1 = y; if (y > 0 && y < yPositive) yPositive = y }
+    const x0 = t.samples[0], x1 = t.samples[t.samples.length - 2]
+    return Number.isFinite(y0) ? { group: t.group, x0, x1, y0, y1, ...(Number.isFinite(yPositive) ? { yPositive } : {}) } : { group: t.group, x0, x1, y0: NaN, y1: NaN }
+  }).filter(e => Number.isFinite(e.y0))
+}
+
+/** Excel's generated legend names ("Linear (Series1)", "2 per. Mov. Avg. (Series1)"). */
+const LEGEND_NAMES: Record<TrendlineType, string> = { linear: 'Linear', exp: 'Expon.', log: 'Log.', poly: 'Poly.', power: 'Power', movingAvg: 'per. Mov. Avg.' }
+/**
+ * Legend entries of the drawn trendlines (refused fits have none), after the series entries: the authored name,
+ * else Excel's generated one. An entry deleted by `c:legendEntry` is left out.
+ */
+export function trendlineLegendEntries(model: ChartModel): Array<{ name: string; color: string; line: true }> {
+  const out: Array<{ name: string; color: string; line: true }> = []
+  for (const t of model.preparedAxes?.trendlines ?? []) {
+    const series = model.groups[t.group]?.series[t.series], spec = series?.trendlines?.[t.index]
+    if (!series || !spec || spec.legendDeleted) continue
+    const generated = spec.type === 'movingAvg' ? `${spec.period ?? 2} ${LEGEND_NAMES.movingAvg}` : LEGEND_NAMES[spec.type]
+    out.push({ name: spec.name ?? `${generated} (${series.name})`, color: spec.line?.color ?? series.color, line: true })
+  }
+  return out
+}
+/**
+ * `c:legend/c:legendEntry[c:delete=1]` for trendline entries: legend entries index the series first (in plot
+ * order), then every trendline in series order (Office-unverified numbering). Marks the deleted ones in place.
+ */
+export function markTrendlineLegendDeletions(legend: XmlNode | undefined, groups: readonly ChartGroup[]): void {
+  const deleted = new Set<number>()
+  for (const entry of getChildren(legend, 'legendEntry')) {
+    const idx = num(child(entry, 'idx'))
+    if (idx !== undefined && Number.isInteger(idx) && flag(child(entry, 'delete'))) deleted.add(idx)
+  }
+  if (!deleted.size) return
+  let index = groups.reduce((n, g) => n + g.series.length, 0)
+  for (const group of groups) for (const series of group.series) for (const spec of series.trendlines ?? []) if (deleted.has(index++)) spec.legendDeleted = true
 }
 
 const stackedOrRadial = (group: ChartGroup) => group.family === 'pie' || group.family === 'doughnut' || group.grouping === 'stacked' || group.grouping === 'percentStacked'
@@ -315,7 +409,7 @@ export function prepareTrendlines(model: ChartModel, formatter: ChartFormatter, 
         if (fit.excluded) report('chart-trendline-excluded', exclusion(spec.type, fit.excluded))
         if (spec.intercept !== undefined && (spec.type === 'log' || spec.type === 'power' || spec.type === 'movingAvg')) report('chart-trendline-intercept-ignored', `A ${NAMES[spec.type]} trendline has no intercept: the authored intercept is ignored`)
         const samples = fit.averages ?? sampleFit(fit, spec, report)
-        const label = trendlineLabel(spec, fit, formatter, epoch)
+        const label = trendlineLabel(spec, fit, formatter, epoch, () => report('chart-trendline-label-truncated', `A trendline label is cut at ${TRENDLINE_LABEL_LIMIT} characters`))
         out.push({ group: g, series: s, index, coefficients: fit.coefficients, ...(fit.r2 !== undefined ? { r2: fit.r2 } : {}), excluded: fit.excluded, samples, ...(label ? { label } : {}) })
       } finally { workspace.release(tag) }
     })
@@ -374,7 +468,7 @@ function pairSource(model: ChartModel, group: ChartGroup, series: ChartSeries, v
  * not plottable, which lifts the pen); `admit` charges the path work bound per trendline. Nothing is allocated per
  * sample; the label's few strings are within the paint admission (`paintWorkspaceBytes`).
  */
-export function paintTrendlines(ctx: CanvasRenderingContext2D, model: ChartModel, group: number, project: (x: number, y: number, out: Float64Array) => boolean, admit: (cost: number) => boolean, plot: { x: number; y: number; w: number; h: number }, font: string, fontPx: number, text: string): void {
+export function paintTrendlines(ctx: CanvasRenderingContext2D, model: ChartModel, group: number, project: (x: number, y: number, out: Float64Array) => boolean, admit: (cost: number) => boolean, plot: { x: number; y: number; w: number; h: number }, font: string, fontPx: number, text: string, note?: (code: string, reason: string) => void): void {
   const prepared = model.preparedAxes?.trendlines
   if (!prepared?.length) return
   const p = new Float64Array(2)
@@ -399,16 +493,20 @@ export function paintTrendlines(ctx: CanvasRenderingContext2D, model: ChartModel
     } finally { ctx.restore() }
     if (Number.isFinite(endX)) end = [endX, endY]
     if (!t.label || !end) continue
-    // The label sits above the line's last visible point, kept inside the plot area.
+    // The label sits above the line's last visible point, inside the plot area: right-aligned so its right edge
+    // stays in the plot, and a line wider than the plot is fitted (canvas maxWidth), never cut. A line that does
+    // not fit the plot's height is omitted and diagnosed.
     ctx.save()
     try {
       ctx.font = font; ctx.fillStyle = text; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
-      const lines = t.label.split('\n'), height = fontPx * 1.2
-      const x = Math.max(plot.x + 4, Math.min(plot.x + plot.w - 4, end[0]))
-      const width = Math.max(...lines.map(l => ctx.measureText(l).width))
-      const left = Math.max(plot.x + 4 + width, x)
+      const lines = t.label.split('\n'), height = fontPx * 1.2, avail = Math.max(1, plot.w - 8)
+      const width = Math.min(avail, Math.max(...lines.map(l => ctx.measureText(l).width)))
+      const right = Math.min(plot.x + plot.w - 4, Math.max(plot.x + 4 + width, end[0]))
       let y = Math.max(plot.y + 4 + height * lines.length, Math.min(plot.y + plot.h - 4, end[1] - 6))
-      for (let i = lines.length - 1; i >= 0; i--) { ctx.fillText(lines[i], left, y); y -= height }
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (y - height < plot.y - 1e-6) { note?.('chart-trendline-label-omitted', 'A trendline label line does not fit the plot area and is omitted'); break }
+        ctx.fillText(lines[i], right, y, avail); y -= height
+      }
     } finally { ctx.restore() }
   }
 }

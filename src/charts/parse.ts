@@ -17,7 +17,7 @@ import { hexColor, parseFillStyle } from './fills'
 import { parseMarker } from './markers'
 import { parseLineStyle, resolveSeriesColor, type ChartPointOverride } from './style'
 import { chargeChartColor, chargeChartLine, chargeChartPoint } from './own'
-import { readTrendlines } from './trendlines'
+import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). */
 export const CHART_SERIES_LIMIT = 64
@@ -574,6 +574,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       ...(serLines ? { serLines } : {}),
     })
   }
+  markTrendlineLegendDeletions(legend, groups)
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut')

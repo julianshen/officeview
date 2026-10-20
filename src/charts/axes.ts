@@ -266,7 +266,9 @@ const AXIS_ROLE: Record<ChartAxis['kind'], ResolvedAxis['role']> = { category: '
  * The axis graph of a (filled) model over its display view: placement, domains, scales, ticks, crossings and
  * display units. `workbookEpoch` is precedence 2 of the chart epoch (spec 5.1).
  */
-export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission): AxisGraph {
+/** A drawn trendline's extent in data units (A6a, spec 5.6): automatic scales include it; authored bounds still win. */
+export interface TrendlineExtent { group: number; x0: number; x1: number; y0: number; y1: number; yPositive?: number }
+export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch?: ChartEpoch, admission?: AxisGraphAdmission, trendlines?: readonly TrendlineExtent[]): AxisGraph {
   if (admission && !admission.workspace.reserve(axisGraphBound(model, view?.slots ?? displaySlotsBound(model)), admission.tag)) throw new ChartRefusal()
   view ??= displayView(model)
   const diagnostics: ChartDiagnostic[] = []
@@ -346,6 +348,11 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       }
     } else for (const s of series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
     if (p.baseKind === 'x') for (const s of series) for (let i = 0; i < count; i++) { const v = s.hasX ? s.x(i) : i + 1; if (v !== undefined) see(p.base, v) }
+    for (const t of trendlines ?? []) {
+      if (t.group !== g) continue
+      if (!logOf(p.value)) { see(p.value, t.y0); see(p.value, t.y1) } else if (t.yPositive !== undefined) { see(p.value, t.yPositive); see(p.value, t.y1) }
+      if (p.baseKind === 'x' && (!logOf(p.base) || t.x0 > 0)) { see(p.base, t.x0); see(p.base, t.x1) }
+    }
   })
   for (const resolved of axes.values()) {
     if (resolved.role !== 'value') continue
