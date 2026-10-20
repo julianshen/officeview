@@ -17,10 +17,12 @@
  *   leave the drawing. A series past the bound, or with an unavailable point, or with fewer than two values draws
  *   no bars (`chart-error-bars-dropped`).
  * - A malformed, non-finite or negative authored `val` draws nothing (`chart-error-bars-parameter`), never a default.
+ * - Families: bar, line, area, scatter and bubble draw error bars (on bubbles, only where the bubble is drawn); pie,
+ *   doughnut, ofPie, radar, stock, contour and the chartex families never do (diagnosed).
  * - Stacked groups anchor each bar at its segment end. 100% stacked groups draw in the normalised space: the anchor is
  *   the stacked share, fixed and custom amounts are divided by the slot's total of |values| like the point,
  *   percentage is of the normalised value, and stdDev/stdErr run over the normalised values (an unverified
- *   approximation). Pie and doughnut groups draw none.
+ *   approximation).
  * - Automatic axes include the bar ends (through the extents `resolveAxes` takes); authored bounds still win.
  */
 import { attrs, getChildren, type XmlNode } from '../core/xml'
@@ -173,7 +175,26 @@ export interface ErrorBarSeries {
   x(slot: number): number | undefined
   hasX: boolean
 }
-const drawable = (group: ChartGroup) => group.family === 'bar' || group.family === 'line' || group.family === 'area' || group.family === 'scatter'
+/**
+ * The families that draw error bars (the schema's series with `c:errBars`): bar, line, area, scatter and bubble.
+ * Pie, doughnut, ofPie, radar, stock, contour and the chartex families never do (Office offers none): an authored
+ * set there is dropped with `chart-error-bars-dropped` naming the family.
+ */
+const drawable = (group: ChartGroup) => group.family === 'bar' || group.family === 'line' || group.family === 'area' || group.family === 'scatter' || group.family === 'bubble'
+/**
+ * Which points carry bars: every drawn point, so on a bubble group only points whose bubble is drawn (a size that
+ * is a visible value, non-zero, and positive unless `showNegBubbles`), as the bubble painter decides.
+ */
+function pointGate(model: ChartModel, group: ChartGroup): ((ds: ErrorBarSeries, i: number) => boolean) | undefined {
+  if (group.family !== 'bubble') return undefined
+  const visibleOnly = model.plotVisOnly !== false, negative = group.showNegBubbles === true
+  return (ds, i) => {
+    const sizes = ds.series.bubbleSizes
+    if (!sizes || i < 0 || i >= sizes.length || (visibleOnly && hiddenAt(sizes.hidden, i))) return false
+    const size = valueAt(sizes, i)
+    return size !== undefined && size !== 0 && (size > 0 || negative)
+  }
+}
 
 /**
  * Walks a group's bar sets, series in order, with each slot's anchor on the value axis: the point's own value, or,
@@ -208,12 +229,12 @@ function walkGroup(group: ChartGroup, list: readonly ErrorBarSeries[], slots: nu
  * Each drawn point of one set: `anchor` (on the bar's axis), each side's end (NaN: no bar on that side) and the
  * point's position on the other axis in data units (`cross`: x or the 1-based slot for y bars, the value for x bars).
  */
-function forEachPoint(spec: ChartErrorBars, prepared: PreparedErrorBars, ds: ErrorBarSeries, top: Float64Array, slots: number, source: (slot: number) => number, total: Float64Array | undefined, visit: (slot: number, cross: number, anchor: number, plus: number, minus: number) => void): void {
+function forEachPoint(spec: ChartErrorBars, prepared: PreparedErrorBars, ds: ErrorBarSeries, top: Float64Array, slots: number, source: (slot: number) => number, total: Float64Array | undefined, gate: ((ds: ErrorBarSeries, i: number) => boolean) | undefined, visit: (slot: number, cross: number, anchor: number, plus: number, minus: number) => void): void {
   const val = spec.val ?? 1
   const needPlus = spec.type !== 'minus', needMinus = spec.type !== 'plus'
   for (let slot = 0; slot < slots; slot++) {
     const raw = spec.dir === 'x' ? ds.x(slot) : ds.value(slot)
-    if (raw === undefined || (spec.dir === 'x' && ds.value(slot) === undefined)) continue
+    if (raw === undefined || (spec.dir === 'x' && ds.value(slot) === undefined) || (gate && !gate(ds, source(slot)))) continue
     // 100% stacked: amounts in data units are normalised like the point (over the slot's total of |values|).
     const norm = (a: number) => total ? (total[slot] ? a / total[slot] : 0) : a
     const own = spec.dir === 'x' ? raw : norm(raw)
@@ -300,13 +321,14 @@ export function prepareErrorBars(model: ChartModel, view: DisplayView, diagnosti
     // Extents of the drawn bars, series in order (stacked anchors need the whole group).
     const slots = view.slots
     buffers ??= [new Float64Array(slots), new Float64Array(slots), new Float64Array(slots), new Float64Array(slots)]
+    const gate = pointGate(model, group)
     walkGroup(group, view.groupSeries(g), slots, buffers, (ds, top, _order, total) => {
       const s = group.series.indexOf(ds.series)
       for (const record of accepted) {
         if (record.series !== s) continue
         const spec = ds.series.errorBars![record.index]
         let lo = Infinity, hi = -Infinity, positive = Infinity, c0 = Infinity, c1 = -Infinity
-        forEachPoint(spec, record, ds, top, slots, view.source, total, (_slot, cross, anchor, plus, minus) => {
+        forEachPoint(spec, record, ds, top, slots, view.source, total, gate, (_slot, cross, anchor, plus, minus) => {
           for (const end of [anchor, plus, minus]) if (Number.isFinite(end)) { if (end < lo) lo = end; if (end > hi) hi = end; if (end > 0 && end < positive) positive = end }
           if (Number.isFinite(cross)) { if (cross < c0) c0 = cross; if (cross > c1) c1 = cross }
         })
@@ -339,6 +361,7 @@ export function paintErrorBars(ctx: CanvasRenderingContext2D, model: ChartModel,
   const g = model.groups[group]
   if (!prepared?.some(b => b.group === group) || !g) return
   const buffers = [new Float64Array(slots), new Float64Array(slots), new Float64Array(slots), new Float64Array(slots)]
+  const gate = pointGate(model, g)
   walkGroup(g, list, slots, buffers, (ds, top, at, total) => {
     const s = g.series.indexOf(ds.series)
     for (const record of prepared) {
@@ -354,7 +377,7 @@ export function paintErrorBars(ctx: CanvasRenderingContext2D, model: ChartModel,
         if (!applyLineStyle(ctx, spec.line, plot)) continue
         ctx.beginPath()
         const line = (a0: number, a1: number, c0: number, c1: number) => { if (horizontal) { ctx.moveTo(a0, c0); ctx.lineTo(a1, c1) } else { ctx.moveTo(c0, a0); ctx.lineTo(c1, a1) } }
-        forEachPoint(spec, record, ds, top, slots, source, total, (slot, cross, anchor, plus, minus) => {
+        forEachPoint(spec, record, ds, top, slots, source, total, gate, (slot, cross, anchor, plus, minus) => {
           const c = spec.dir === 'x' ? place.value(cross) : place.across(ds, at, slot), a = along(anchor)
           if (!Number.isFinite(c) || !Number.isFinite(a)) return
           for (const end of [plus, minus]) {

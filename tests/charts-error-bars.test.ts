@@ -322,6 +322,47 @@ describe('charts-error-bars (Task A6b)', () => {
     expect(prepared(content.chart)).toHaveLength(1)
   })
 
+  it('bubble x and y error bars sit on the drawn bubbles; families without error bars are diagnosed', () => {
+    // Bubble, x axis 0..10 and y axis 0..20 (authored): px(x) = plot.x + plot.w·x/10, py(y) = plot.y + plot.h·(1 - y/20).
+    // Points (2,5), (6,10) with size 1, and (8,15) with no size (no bubble, so no bars). y bars: fixed 2, both,
+    // capped (red); x bars: fixed 1, plus only, no end cap (blue). The geometry is the scatter oracle's.
+    const bubble = parse(space(`<bubbleChart><varyColors val="0"/><ser><idx val="0"/><order val="0"/>${bars({ dir: 'y', val: '2' })}${bars({ dir: 'x', type: 'plus', val: '1', noEndCap: true, spPr: BLUE })}`
+      + `<xVal>${lit([2, 6, 8])}</xVal><yVal>${lit([5, 10, 15])}</yVal><bubbleSize>${lit([1, 1, null])}</bubbleSize><bubble3D val="0"/></ser><axId val="1"/><axId val="2"/></bubbleChart>`
+      + `<valAx><axId val="1"/>${scale(0, 10)}<axPos val="b"/><majorUnit val="2"/><crossAx val="2"/></valAx><valAx><axId val="2"/>${scale(0, 20)}<axPos val="l"/><majorUnit val="5"/><crossAx val="1"/></valAx>`))
+    expect(bubble.groups[0].family).toBe('bubble')
+    expect(prepared(bubble)).toHaveLength(2)
+    const b = paint(bubble), { plot } = b
+    const px = (x: number) => plot.x + plot.w * x / 10, py = (y: number) => plot.y + plot.h * (1 - y / 20)
+    sameSegments(b.of('#FF0000'), [
+      ...vbar(px(2), py(5), py(7)), ...vbar(px(2), py(5), py(3)),
+      ...vbar(px(6), py(10), py(12)), ...vbar(px(6), py(10), py(8)),
+    ])
+    sameSegments(b.of('#0000FF'), [...hbar(py(5), px(2), px(3), false), ...hbar(py(10), px(6), px(7), false)])
+
+    // Families that never draw error bars (spec 5.7 lists none for them; Office offers none): pie, doughnut, radar,
+    // stock and contour. Each authored set is dropped with a diagnostic naming the family; the chart still draws.
+    const errBars = bars({ val: '1' })
+    const one = (values: number[]) => `<ser><idx val="0"/><order val="0"/>${errBars}<cat>${lit(values.map((_, i) => i + 1))}</cat><val>${lit(values)}</val></ser>`
+    const many = (count: number, values: number[]) => Array.from({ length: count }, (_, k) => `<ser><idx val="${k}"/><order val="${k}"/>${errBars}<cat>${lit(values.map((_, i) => i + 1))}</cat><val>${lit(values.map(v => v + k))}</val></ser>`).join('')
+    const CAT_VAL = '<catAx><axId val="1"/><axPos val="b"/><crossAx val="2"/></catAx><valAx><axId val="2"/><axPos val="l"/><crossAx val="1"/></valAx>'
+    const families: Array<[string, string]> = [
+      ['pie', space(`<pieChart><varyColors val="1"/>${one([1, 2, 3])}<firstSliceAng val="0"/></pieChart>`)],
+      ['doughnut', space(`<doughnutChart><varyColors val="1"/>${one([1, 2, 3])}<firstSliceAng val="0"/><holeSize val="50"/></doughnutChart>`)],
+      ['radar', space(`<radarChart><radarStyle val="marker"/>${one([1, 2, 3])}${AX}</radarChart>${CAT_VAL}`)],
+      ['stock', space(`<stockChart>${many(3, [3, 4, 5])}<hiLowLines/>${AX}</stockChart>${CAT_VAL}`)],
+      ['contour', space(`<surfaceChart>${many(2, [1, 2, 3])}<axId val="1"/><axId val="2"/><axId val="3"/></surfaceChart><catAx><axId val="1"/><crossAx val="3"/></catAx><valAx><axId val="3"/><crossAx val="1"/></valAx><serAx><axId val="2"/><crossAx val="3"/></serAx>`)],
+    ]
+    for (const [family, xml] of families) {
+      const model = parse(xml)
+      expect(model.unsupported, family).toBeUndefined()
+      expect(model.groups[0].family, family).toBe(family)
+      expect(model.groups[0].series[0].errorBars, family).toHaveLength(1)
+      expect(prepared(model), family).toHaveLength(0)
+      expect(model.preparedAxes!.diagnostics.find(d => d.code === 'chart-error-bars-dropped')?.reason, family).toBe(`Error bars are not drawn on ${family} charts`)
+      expect(paint(model).of('#FF0000'), family).toHaveLength(0)
+    }
+  })
+
   it('records, custom amounts and prepared sets are charged before they are built', () => {
     // The same chart with and without one custom set (4-point plus and minus literals, a red a:ln): the model tag
     // gains exactly each record (128), each red line (112, plus 96 for its solid fill) and two 4-point roles

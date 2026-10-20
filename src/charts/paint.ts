@@ -573,6 +573,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
       }
     } else if (group.family === 'bubble' && axes.x) {
+      if (errorBars) { const X = axes.x, xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w; errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } } }
       paintBubbles(ctx, group, group.series, axes.x, V, { plot, slots: count, source: model.view.source, visibleOnly: model.plotVisOnly !== false, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box) })
     } else if (group.family === 'stock' && horizontal === B) {
       paintStock(ctx, group, group.series, axes, {
