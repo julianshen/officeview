@@ -131,10 +131,18 @@ All files are in `tests/fixtures/chartex/` (provenance in `PROVENANCE.md`).
 
 ## 1. Part skeleton
 
-`cx:chartSpace` (root, 2.24.1.2 / CT_ChartSpace 2.24.3.15) has the sequence
-`chartData` (1), `chart` (1), `spPr` (0..1), `txPr` (0..1), `clrMapOvr` (0..1),
-`fmtOvrs` (0..1), `printSettings` (0..1) and `extLst` (0..1). [S][N: all;
-chart-space `spPr` in WF2]
+`cx:chartSpace` (root, 2.24.1.2; CT_ChartSpace 2.24.3.15, GUID
+416e664f-c6f6-4ed9-914b-4eaaa20724dd) has the sequence `chartData` (1), then
+the choice `chart` | `dashboard` (1), then `spPr`, `txPr`, `clrMapOvr`,
+`fmtOvrs`, `printSettings` and `extLst` (each 0..1). Its attributes are
+`version` (default `0.0`), `featureList` (default empty) and `fallbackImg`
+(default empty; a relationship id of a fallback image). [S][N: `chart` in all
+natives; chart-space `spPr` in WF2. No native writes any of the three
+attributes.]
+
+- A `dashboard` root is **unsupported**. [U]
+- `fallbackImg` is not used, because the drawing's `mc:Fallback` is the
+  fallback path (§6.3).
 
 `cx:chart` (CT_Chart 2.24.3.13) contains `title` (0..1), `plotArea` (1),
 `legend` (0..1) and `extLst`.
@@ -153,7 +161,7 @@ stream A's adapter. Only the ChartEx-specific defaults are listed here:
 | `title@pos` | opt | `t` | side | [S] XSD default; [N: WF1, BW1…] |
 | `title@align` | opt | `ctr` | alignment along the side | [S] |
 | `title@overlay` | opt | `0` | title overlaps the plot | [S] |
-| `title/tx` | 0..1 | none: **no title text**. Excel writes the text only into `txPr` runs when the title is auto-generated [N: TM, SB, FN1 have `txPr/a:p/a:r/a:t` but no `tx`]. | title text, as `txData` (`f`?, `v`) or `rich` | [S][N: WF1 `txData/v`; FN2 `rich`] |
+| `title/tx` | 0..1 | see the resolution order below | title text, as `txData` (`f`?, `v`) or `rich` | [S][N: WF1 `txData/v`; FN2 `rich`] |
 | `legend@pos` | opt | **`r`** | side | [S] XSD default; [N: WF1 `t`, WF2 `b`] |
 | `legend@align`, `@overlay` | opt | `ctr`, `0` | | [S] |
 | `axis@id` | req | n/a | axis key that series `axisId` refers to | [S] |
@@ -166,8 +174,19 @@ stream A's adapter. Only the ChartEx-specific defaults are listed here:
 | `axis/majorGridlines`, `minorGridlines`, `tickLabels`, `majorTickMarks@type` | 0..1 | absent = not drawn. Tick marks absent = none. | presence toggles | [S][N: WF1 `majorGridlines` + `tickLabels`] |
 | `axis/numFmt@formatCode`, `@sourceLinked` | 0..1 | source format | | [S] |
 
-A **chart with no `cx:axis`** (TM, SB, FN1, FN2 has only a cat axis) draws no
-axes. [N]
+Title text resolution (when `cx:title` is present):
+
+1. Use `tx/txData/v`, or the text of `tx/rich`.
+2. Otherwise, use the concatenated `a:t` run text of `title/txPr/a:p`. Excel
+   writes auto-generated titles this way: TM shows "Treemap", SB "Sunburst"
+   and FN1 "Chartex label option test". [N: TM, SB, FN1]
+3. Otherwise, there is no title text. An empty `<cx:title … />` (BW2b) draws
+   nothing. [U]
+
+Axes:
+
+- TM and SB have no `cx:axis` element and draw no axes. [N]
+- FN1 and FN2 have only a category axis. [N]
 
 ---
 
@@ -345,8 +364,8 @@ Binning algorithm:
 
 HI2 worked example (values 12, 10, 11, 13, 15; binSize 2; underflow 11;
 overflow 14; `r`): bins `≤11` → {10, 11} = 2, `(11,13]` → {12, 13} = 2,
-`>14` → {15} = 1. Whether an empty `(13,15]` bin appears before the overflow bin
-is unconfirmed [U: oracle].
+`>14` → {15} = 1. Whether an empty `(13,14]` bin appears before the overflow
+bin is unconfirmed [U: oracle].
 
 Pre-aggregated data ("By Category"): a `clusteredColumn` series with
 `aggregation` (or with no binning) is drawn as given, one column per category
