@@ -81,26 +81,52 @@ async function chartMetadata(lease: ChartReceiverLease | undefined, source: Char
 /** The unit's chart fields of a Paintable. */
 const chartFields = (metadata: ChartPaintables | undefined, index: number): Pick<Paintable, 'charts' | 'chartTotal'> => {
   const page = metadata?.pages[index]
-  return page?.total ? { charts: page.charts, chartTotal: page.total } : {}
+  // A refused page whose record could not be charged keeps its static notice, with no total.
+  return page?.charts.length ? { charts: page.charts, ...(page.total ? { chartTotal: page.total } : {}) } : {}
 }
-type ChartShape = { content?: DrawingContent<unknown, unknown>; children?: ChartShape[]; xEmu?: number; yEmu?: number; widthEmu?: number; heightEmu?: number; group?: { chOff: { x: number; y: number }; chExt: { width: number; height: number } } }
+type ChartShape = {
+  content?: DrawingContent<unknown, unknown>; children?: ChartShape[]; xEmu?: number; yEmu?: number; widthEmu?: number; heightEmu?: number
+  rotationDeg?: number; flipH?: boolean; flipV?: boolean
+  group?: { ext: { width: number; height: number }; chOff: { x: number; y: number }; chExt: { width: number; height: number } }
+}
 function countSceneCharts(nodes: readonly ChartShape[], depth = 0): number {
   let n = 0
   if (depth > 64) return 0
   for (const node of nodes) { if (node.content?.kind === 'xlsxChart') n++; if (node.children?.length) n += countSceneCharts(node.children, depth + 1) }
   return n
 }
-/** A slide's (or sheet's) charts in z-order, each at its own box mapped through its groups' child spaces. */
-function placedSceneCharts(nodes: readonly ChartShape[], scale: number, out: import('../charts/paintables').PlacedChart[] = [], map = { ox: 0, oy: 0, sx: 1, sy: 1 }, depth = 0): import('../charts/paintables').PlacedChart[] {
+/** A 2D affine (canvas order: x' = a x + c y + e, y' = b x + d y + f). */
+type Affine = readonly [number, number, number, number, number, number]
+const multiply = (m: Affine, n: Affine): Affine => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]]
+/**
+ * A node's own transform, composed exactly as the scene painter applies it (drawing/scene-paint.ts): translate to
+ * its centre, rotate, flip, translate back by half its size; its box is then (0, 0, w, h) in that space.
+ */
+function nodeAffine(parent: Affine, node: ChartShape): Affine {
+  const x = node.xEmu ?? 0, y = node.yEmu ?? 0, w = node.widthEmu ?? 0, h = node.heightEmu ?? 0
+  const r = (node.rotationDeg ?? 0) * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r)
+  let m = multiply(parent, [1, 0, 0, 1, x + w / 2, y + h / 2])
+  if (r) m = multiply(m, [cos, sin, -sin, cos, 0, 0])
+  if (node.flipH || node.flipV) m = multiply(m, [node.flipH ? -1 : 1, 0, 0, node.flipV ? -1 : 1, 0, 0])
+  return multiply(m, [1, 0, 0, 1, -w / 2, -h / 2])
+}
+/** A slide's (or sheet's) charts in z-order, each at the page-space bounding box of its own transformed box. */
+function placedSceneCharts(nodes: readonly ChartShape[], scale: number, out: import('../charts/paintables').PlacedChart[] = [], parent: Affine = [1, 0, 0, 1, 0, 0], depth = 0): import('../charts/paintables').PlacedChart[] {
   if (depth > 64) return out
   for (const node of nodes) {
-    const x = map.ox + map.sx * (node.xEmu ?? 0), y = map.oy + map.sy * (node.yEmu ?? 0), w = map.sx * (node.widthEmu ?? 0), h = map.sy * (node.heightEmu ?? 0)
-    if (node.content?.kind === 'xlsxChart') out.push({ chart: node.content.chart, x: x * scale, y: y * scale, width: w * scale, height: h * scale })
+    const m = nodeAffine(parent, node), w = node.widthEmu ?? 0, h = node.heightEmu ?? 0
+    if (node.content?.kind === 'xlsxChart') {
+      const xs: number[] = [], ys: number[] = []
+      for (const [px, py] of [[0, 0], [w, 0], [0, h], [w, h]]) { xs.push(m[0] * px + m[2] * py + m[4]); ys.push(m[1] * px + m[3] * py + m[5]) }
+      const x0 = Math.min(...xs), y0 = Math.min(...ys)
+      out.push({ chart: node.content.chart, x: x0 * scale, y: y0 * scale, width: (Math.max(...xs) - x0) * scale, height: (Math.max(...ys) - y0) * scale })
+    }
     if (node.children?.length) {
-      // A group's children are in its child space: chOff/chExt map onto the group's own box (scene-paint.ts).
-      const g = node.group, gw = g?.chExt.width, gh = g?.chExt.height
-      const sx = g && gw && gw > 0 ? w / gw : map.sx, sy = g && gh && gh > 0 ? h / gh : map.sy
-      placedSceneCharts(node.children, scale, out, g ? { ox: x - sx * g.chOff.x, oy: y - sy * g.chOff.y, sx, sy } : map, depth + 1)
+      // A group's children are in its child space: scaled by ext/chExt and offset by chOff, as the painter does.
+      const g = node.group
+      const valid = g && g.chExt.width > 0 && g.chExt.height > 0 && [g.ext.width, g.ext.height, g.chOff.x, g.chOff.y].every(Number.isFinite)
+      const child = valid ? multiply(multiply(m, [g.ext.width / g.chExt.width, 0, 0, g.ext.height / g.chExt.height, 0, 0]), [1, 0, 0, 1, -g.chOff.x, -g.chOff.y]) : m
+      placedSceneCharts(node.children, scale, out, child, depth + 1)
     }
   }
   return out

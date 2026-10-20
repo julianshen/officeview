@@ -15,7 +15,7 @@ export function PageCharts({ pages, unit, selectable }: { pages: readonly Painta
   return (
     <div data-testid="officeview-page-charts" style={{ ...HIDDEN, ...(selectable ? {} : { userSelect: 'none', WebkitUserSelect: 'none' }) }}>
       {pages.map((page, index) => page.charts?.length ? (
-        <ul key={index} aria-label={`Charts on ${unit.toLowerCase()} ${index + 1} (${page.chartTotal ?? page.charts.length})`} data-page={index + 1}>
+        <ul key={index} aria-label={`Charts on ${unit.toLowerCase()} ${index + 1}${page.chartTotal !== undefined ? ` (${page.chartTotal})` : page.charts.some(c => !c.notice) ? ` (${page.charts.length})` : ''}`} data-page={index + 1}>
           {/* A notice (charts not listed, or descriptions refused) is a note, never presented as a chart. */}
           {page.charts.map((chart, i) => <li key={i} role={chart.notice ? 'note' : 'img'} aria-label={chart.description}>{selectable ? chart.description : null}</li>)}
         </ul>

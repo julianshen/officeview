@@ -291,10 +291,10 @@ describe('admission and complete lists (A7 review I2, I3, M1)', () => {
     expect(a.reads(), 'nothing of the refused page was built').toBe(0)
     expect(observed, 'only page 1 was collected').toHaveLength(1)
     expect(observed[0], 'its bound was charged before construction').toBeGreaterThanOrEqual(DESCRIPTION_WORK_BYTES)
-    expect(result.pages[0]).toEqual({ total: 1, charts: [expect.objectContaining({ notice: true, description: expect.stringMatching(/could not be kept in memory \(1 chart\)/) })] })
+    expect(result.pages[0]).toEqual({ total: 1, charts: [expect.objectContaining({ notice: true, description: 'Chart descriptions for this page could not be kept in memory.' })] })
     expect(result.pages[1].charts.map(c => c.description)).toEqual(['Chart: Kept. placeholder: reason.'])
     expect(result.pages[2]).toEqual({ charts: [], total: 0 })
-    expect(result.diagnostics).toEqual([expect.objectContaining({ page: 0, code: 'chart-description-refused' })])
+    expect(result.diagnostics).toEqual([expect.objectContaining({ page: 0, code: 'chart-description-refused', reason: expect.stringMatching(/\(1 chart\)/) })])
     // Reconciled to the exact retention, then refunded.
     expect(workspace.used).toBeLessThan(DESCRIPTION_WORK_BYTES)
     result.release()
@@ -302,7 +302,7 @@ describe('admission and complete lists (A7 review I2, I3, M1)', () => {
   })
 
   it('repeated charts over many pages: each page is bounded at construction, the string is retained once', async () => {
-    const { prepareChartPaintables, DESCRIPTION_WORK_BYTES } = await import('../src/charts/paintables')
+    const { prepareChartPaintables, DESCRIPTION_WORK_BYTES, RECORD_BYTES, ENTRY_BYTES, MAP_BYTES } = await import('../src/charts/paintables')
     const { createChartWorkspace } = await import('../src/charts/workspace')
     const workspace = createChartWorkspace('mobile')
     const shared = model('Masthead')
@@ -312,8 +312,10 @@ describe('admission and complete lists (A7 review I2, I3, M1)', () => {
     const retained = workspace.used
     // The construction peak never exceeds the retained set plus one page's bound.
     expect(Math.max(...peaks)).toBeLessThanOrEqual(retained + DESCRIPTION_WORK_BYTES + 64 * 4096)
-    expect(retained, 'one string, 200 small entries').toBeLessThan(2 * 'Chart: Masthead. placeholder: reason.'.length + 200 * 64 + 1)
+    // Exactly what stays live: 200 page records and entries, one description string and its map entry.
+    expect(retained).toBe(200 * (RECORD_BYTES + ENTRY_BYTES) + 2 * 'Chart: Masthead. placeholder: reason.'.length + MAP_BYTES)
     result.release()
+    expect(workspace.used).toBe(0)
   })
 
   it('65 charts on one slide: 64 described, a "1 more chart not listed" note, and the true total', async () => {
@@ -351,5 +353,83 @@ describe('admission and complete lists (A7 review I2, I3, M1)', () => {
     expect(right.x).toBeCloseTo(px(952500 + 6000000 / 2), 0)
     expect(right.width).toBeCloseTo(left.width, 3)
     pages.dispose()
+  })
+})
+
+describe('A7 review round 2 (R1, R2, R3, M1)', () => {
+  it('a fully refused workspace still exposes a readable notice per page, with a diagnostic and nothing charged', async () => {
+    const { prepareChartPaintables } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    const workspace = createChartWorkspace('mobile', { reserve: () => false, release: () => {} })
+    const chart = cardChart('reason', 'Never built')
+    const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 3, bound: () => 2, collect: () => { throw new Error('never collected') } })
+    for (const page of result.pages) expect(page.charts).toEqual([expect.objectContaining({ notice: true, description: 'Chart descriptions for this page could not be kept in memory.' })])
+    expect(result.diagnostics).toEqual([expect.objectContaining({ code: 'chart-description-refused' })])
+    expect(workspace.used).toBe(0)
+    void chart
+    // End to end: the mounted list keeps the notice (a note), labelled without a false count.
+    const { documentChartContext } = await import('../src/charts/context')
+    const docx = await parseDocx(await OfficePackage.load(buildChartDocx([{ chartXml: titled('Revenue'), workbook: officeChartWorkbook([4.3, 2.5]) }]).bytes))
+    const context = documentChartContext('mobile')
+    const pages = await getPaintables(docx, { chartContext: context })
+    // Fill the workspace after the parse so only the metadata is refused.
+    pages.dispose()
+    context.workspace.reserve(context.workspace.limit - context.workspace.used, 'full')
+    const refused = await getPaintables(docx, { chartContext: context })
+    expect(refused[0].charts).toEqual([expect.objectContaining({ notice: true })])
+    expect(refused[0].chartTotal).toBeUndefined()
+    const { PageCharts } = await import('../src/components/paged/PageCharts')
+    const view = render(<PageCharts pages={refused} unit="Page" selectable={false} />)
+    expect(view.getByRole('list', { name: 'Charts on page 1' })).toBeTruthy()
+    expect(view.getByRole('note').getAttribute('aria-label')).toBe('Chart descriptions for this page could not be kept in memory.')
+    view.unmount()
+    refused.dispose()
+  })
+
+  it('retained diagnostics and records stay charged; a refused page with room for its record keeps the true total', async () => {
+    const { prepareChartPaintables, RECORD_BYTES } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    const workspace = createChartWorkspace('mobile', { reserve: (_bytes, tag) => !tag.endsWith(':page0'), release: () => {} })
+    const result = await prepareChartPaintables({ profile: 'mobile', workspace }, { pages: 1, bound: () => 3, collect: () => [] })
+    expect(result.pages[0].total).toBe(3)
+    const reason = result.diagnostics[0].reason
+    expect(workspace.used).toBe(RECORD_BYTES + 64 + 2 * reason.length)
+    result.release()
+    expect(workspace.used).toBe(0)
+  })
+
+  it('an exception mid-construction releases everything the job admitted (first page and after a successful page)', async () => {
+    const { prepareChartPaintables } = await import('../src/charts/paintables')
+    const { createChartWorkspace } = await import('../src/charts/workspace')
+    for (const failAt of [0, 2]) {
+      const workspace = createChartWorkspace('mobile')
+      const chart = cardChart('reason', 'Kept')
+      await expect(prepareChartPaintables({ profile: 'mobile', workspace }, {
+        pages: 4, bound: () => 1,
+        collect: page => { if (page === failAt) throw new Error('layout failed'); return [{ chart, x: 0, y: 0, width: 1, height: 1 }] },
+      }), `fail at page ${failAt}`).rejects.toThrow('layout failed')
+      expect(workspace.used, `fail at page ${failAt}`).toBe(0)
+    }
+  })
+
+  it('rotated and flipped groups place each chart at its painted bounding box', async () => {
+    const JSZip = (await import('jszip')).default
+    const E = 9525
+    const build = async (xfrm: string) => {
+      const zip = await JSZip.loadAsync(buildChartPptx([{ chartXml: titled('Inner'), workbook: officeChartWorkbook([1, 2]) }]).bytes)
+      let slide = await zip.file('ppt/slides/slide1.xml')!.async('string')
+      slide = slide.replace(/<a:off x="838200" y="1825625"\/><a:ext cx="5486400" cy="3200400"\/>/, `<a:off x="0" y="0"/><a:ext cx="${100 * E}" cy="${50 * E}"/>`)
+      slide = slide.replace(/(<p:graphicFrame>.*<\/p:graphicFrame>)/, `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="90" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm${xfrm}><a:off x="${100 * E}" y="${100 * E}"/><a:ext cx="${200 * E}" cy="${100 * E}"/><a:chOff x="0" y="0"/><a:chExt cx="${200 * E}" cy="${100 * E}"/></a:xfrm></p:grpSpPr>$1</p:grpSp>`)
+      zip.file('ppt/slides/slide1.xml', slide)
+      const pages = await getPaintables(await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))))
+      const box = pages[0].charts![0]
+      pages.dispose()
+      return [box.x, box.y, box.width, box.height].map(v => Math.round(v))
+    }
+    // A 90-degree group turns its child (100..200, 100..150) about the group centre (200, 150).
+    expect(await build(' rot="5400000"')).toEqual([200, 50, 50, 100])
+    // A horizontally flipped group mirrors it about x = 200.
+    expect(await build(' flipH="1"')).toEqual([200, 100, 100, 50])
+    expect(await build('')).toEqual([100, 100, 100, 50])
   })
 })
