@@ -81,7 +81,8 @@ describe('B1 review round 2', () => {
   it('I5: one 4 MiB label budget covers every ChartEx family and series, reference-filled display categories included', () => {
     const data = Array.from({ length: 3 }, (_, i) => `<data id="${i}">${cache}<strDim type="cat"><f>Sheet1!A1:A4096</f></strDim></data>`).join('')
     const c = context()
-    const model = parseChartEx(root(data, Array.from({ length: 3 }, (_, i) => ser(i)).join('')), undefined, c)
+    // Series 2 and 3 are hidden: a funnel draws one visible series (B2; several visible are unsupported).
+    const model = parseChartEx(root(data, Array.from({ length: 3 }, (_, i) => i ? ser(i).replace('<series ', '<series hidden="1" ') : ser(i)).join('')), undefined, c)
     const filled = fillChartRanges(model, 'Sheet1', (_sheet, _row, _col, text) => ({ value: text ? 'a'.repeat(300) : 1 }), { workspace: c.workspace })
     const bytes = filled.groups.flatMap(g => g.series).reduce((n, s) => n + (s.categories ?? []).reduce((m, t) => m + (t ? t.length * 2 + 32 : 0), 0), 0)
     expect(bytes).toBeLessThanOrEqual(4 * 1024 * 1024)
@@ -90,7 +91,7 @@ describe('B1 review round 2', () => {
     // The budget is shared: cached labels and the title count before the references are filled.
     const cachedData = `<data id="0">${cache}<strDim type="cat"><lvl ptCount="7000">${Array.from({ length: 7000 }, (_, i) => `<pt idx="${i}">${'c'.repeat(255)}</pt>`).join('')}</lvl></strDim></data><data id="1">${cache}<strDim type="cat"><f>Sheet1!A1:A4096</f></strDim></data>`
     const c2 = context()
-    const mixed = parseChartEx(root(cachedData, ser(0) + ser(1)), undefined, c2)
+    const mixed = parseChartEx(root(cachedData, ser(0) + ser(1).replace('<series ', '<series hidden="1" ')), undefined, c2)
     const filled2 = fillChartRanges(mixed, 'Sheet1', (_s, _r, _c, text) => ({ value: text ? 'b'.repeat(255) : 1 }), { workspace: c2.workspace })
     const all = filled2.groups.flatMap(g => g.series).flatMap(s => s.categories ?? [])
     expect(all.reduce((n, t) => n + (t ? t.length * 2 + 32 : 0), 0)).toBeLessThanOrEqual(4 * 1024 * 1024)

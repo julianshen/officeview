@@ -29,7 +29,8 @@ import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
 import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
 import { boxWhiskerDistinctCategories, boxWhiskerSeriesHidden, boxWhiskerVisibleSeriesCount } from './chartex/boxWhisker'
-import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
+import type { ChartAxis, ChartDiagnostic, ChartExGroup, ChartGroup, ChartModel, ChartTimeUnit } from './model'
+import { WATERFALL_ERROR_POINT, waterfallExtent } from './chartex/waterfall'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
 import { contourGridOf, contourPainted } from './families/contour'
@@ -419,6 +420,11 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
           if (v !== undefined) see(p.value, v)
         }
       }
+      return
+    }
+    // Waterfall (B2): the running totals' extent (0 included), streamed; an error point is skipped and diagnosed.
+    if (group.kind === 'chartEx' && group.family === 'waterfall') {
+      waterfallExtent(group as ChartExGroup, view, g, v => see(p.value, v), () => { if (!diagnostics.some(d => d.code === WATERFALL_ERROR_POINT)) diagnostics.push({ code: WATERFALL_ERROR_POINT, reason: 'Waterfall error points draw no bar and add nothing to the running total' }) })
       return
     }
     const series = view.groupSeries(g)

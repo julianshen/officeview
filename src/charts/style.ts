@@ -47,7 +47,9 @@ type Transform = ColorDefinition['transforms'][number]
 export interface ChartColorPart { method: string; colors: ColorDefinition[]; variations: Transform[][] }
 /** One entry of a chart style part: its spPr colour (fill, or line for `dataPointLine`) and the fillRef/lnRef styleClr. */
 export interface ChartStyleEntry { color?: ColorDefinition; styleColor?: 'auto' | number }
-export interface ChartStylePart { dataPoint?: ChartStyleEntry; dataPointLine?: ChartStyleEntry }
+/** A style part's text defaults (`cs:title`: `cs:defRPr` size/bold/italic, the `cs:fontRef` or defRPr colour; spec 5.10). */
+export interface ChartStyleText { sizePt?: number; bold?: boolean; italic?: boolean; color?: ColorDefinition; /** `cs:fontRef idx` (`major`/`minor`) or a defRPr `a:latin` typeface. */ font?: string; underline?: boolean }
+export interface ChartStylePart { dataPoint?: ChartStyleEntry; dataPointLine?: ChartStyleEntry; title?: ChartStyleText }
 export interface ChartStyleParts { color?: ChartColorPart; style?: ChartStylePart }
 
 export interface SeriesColorOptions {
