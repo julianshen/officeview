@@ -357,7 +357,7 @@ describe('worksheet drawing anchors', () => {
     }
   })
 
-  test('recovers native picture fallback after an attempted unsupported (radar) chart Choice at either MC level', async () => {
+  test('recovers native picture fallback after an attempted unsupported (unknown type) chart Choice at either MC level', async () => {
     const canvas = createCanvas(1, 1)
     canvas.getContext('2d').fillStyle = '#0000FF'; canvas.getContext('2d').fillRect(0, 0, 1, 1)
     const chart = '<c:chart r:id="rChart"/>'
@@ -366,7 +366,7 @@ describe('worksheet drawing anchors', () => {
     for (const markup of [alternate(frameBody(chart), pic(702, 'rImg')), frameBody(alternate(chart, pic(702, 'rImg')))]) {
       const pkg = await fixture(absolute(markup, 0, 0, 100, 100), '', '', zip => {
         zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/hbar.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
-        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><radarChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></radarChart></plotArea></chart></chartSpace>')
+        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><futureChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></futureChart></plotArea></chart></chartSpace>')
         zip.file('xl/media/blue.png', canvas.toBuffer('image/png'))
       })
       const sheet = (await parseXlsx(pkg)).sheets[0]

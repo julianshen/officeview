@@ -489,6 +489,17 @@ describe('charts-trendlines (Task A6a)', () => {
     expect(capped.preparedAxes!.axes.find(a => a.id === '1')!.max).toBe(45017)
   })
 
+  it('merge: bubble charts draw trendlines on their x values; radar groups drop them', () => {
+    const red = '<spPr><ln w="19050"><solidFill><srgbClr val="FF0000"/></solidFill></ln></spPr>'
+    const bubble = parse(space(`<bubbleChart><varyColors val="0"/><ser><idx val="0"/><order val="0"/>${trend(type('linear') + red)}<xVal>${lit([2, 4, 6])}</xVal><yVal>${lit([1, 2, 3])}</yVal><bubbleSize>${lit([1, 1, 1])}</bubbleSize></ser>${AX}</bubbleChart><valAx><axId val="1"/><axPos val="b"/><crossAx val="2"/></valAx><valAx><axId val="2"/><axPos val="l"/><crossAx val="1"/></valAx>`))
+    expect(bubble.unsupported).toBeUndefined()
+    close(trendsOf(bubble)[0].coefficients, [0, 0.5])
+    expect(paint(bubble).strokes.filter(s => s.style === '#FF0000')).toHaveLength(1)
+    const radar = parse(space(`<radarChart><radarStyle val="marker"/><ser><idx val="0"/><order val="0"/>${trend(type('linear'))}<val>${lit([1, 2, 3])}</val></ser>${AX}</radarChart><catAx><axId val="1"/><crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx>`))
+    expect(trendsOf(radar)).toHaveLength(0)
+    expect(radar.preparedAxes!.diagnostics.find(d => d.code === 'chart-trendline-dropped')?.reason).toMatch(/radar/)
+  })
+
   it('charts without trendlines carry no trendline record; stacked and pie groups draw none', () => {
     const plain = line([1, 2, 3], '')
     expect(plain.groups[0].series[0].trendlines).toBeUndefined()

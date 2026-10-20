@@ -379,7 +379,8 @@ export function markTrendlineLegendDeletions(legend: XmlNode | undefined, groups
   for (const group of groups) for (const series of group.series) for (const spec of series.trendlines ?? []) if (deleted.has(index++)) spec.legendDeleted = true
 }
 
-const stackedOrRadial = (group: ChartGroup) => group.family === 'pie' || group.family === 'doughnut' || group.grouping === 'stacked' || group.grouping === 'percentStacked'
+/** Families Excel draws no trendline on: pie/doughnut, radar, the 2D surface (contour), and stacked groups. */
+const stackedOrRadial = (group: ChartGroup) => group.family === 'pie' || group.family === 'doughnut' || group.family === 'radar' || group.family === 'contour' || group.grouping === 'stacked' || group.grouping === 'percentStacked'
 let jobs = 0
 /**
  * Stage 1: every series' trendlines from its full analytic input. Diagnostics go to `diagnostics` (one per code
@@ -392,7 +393,7 @@ export function prepareTrendlines(model: ChartModel, formatter: ChartFormatter, 
   model.groups.forEach((group, g) => group.series.forEach((series, s) => {
     const specs = series.trendlines
     if (!specs?.length) return
-    if (stackedOrRadial(group)) { report('chart-trendline-dropped', `Trendlines are not drawn on ${group.family === 'pie' || group.family === 'doughnut' ? group.family : 'stacked'} charts`); return }
+    if (stackedOrRadial(group)) { report('chart-trendline-dropped', `Trendlines are not drawn on ${group.grouping === 'stacked' || group.grouping === 'percentStacked' ? 'stacked' : group.family} charts`); return }
     if (series.analytic !== true) { report('chart-trendline-dropped', 'A trendline series has more than 65,536 points: the trendline is dropped, never fitted to a prefix'); return }
     const source = pairSource(model, group, series, visibleOnly)
     if (!source) { report('chart-trendline-dropped', 'A trendline series has an unavailable point: the trendline is dropped'); return }

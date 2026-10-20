@@ -31,6 +31,7 @@ import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, s
 import type { ChartAxis, ChartDiagnostic, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { stringBytes, valueAt } from './points'
 import { ChartRefusal } from './own'
+import { contourGridOf, contourPainted } from './families/contour'
 import type { ChartWorkspace } from './workspace'
 
 export const CHART_AXIS_UNPLACEABLE = 'chart-axis-unplaceable'
@@ -44,6 +45,8 @@ export interface GroupPlacement {
   value: string
   horizontal: string
   vertical: string
+  /** A contour group: its category axis runs horizontally, its series axis vertically; the value axis gives the bands. */
+  surface?: boolean
 }
 
 /** The family's base axis runs vertically (horizontal bars) or horizontally (everything else). */
@@ -68,6 +71,7 @@ export function placeAxes(model: ChartModel): { ok: true; groups: Array<GroupPla
       const o = binding.x !== undefined ? 'h' : baseOrientation(group)
       placement = { base, baseKind: binding.category !== undefined ? 'category' : 'x', value: binding.value, horizontal: o === 'h' ? base : binding.value, vertical: o === 'h' ? binding.value : base }
     } else if (binding.kind === 'xy') placement = { base: binding.x, baseKind: 'x', value: binding.y, horizontal: binding.x, vertical: binding.y }
+    else if (binding.kind === 'surface') placement = { base: binding.category, baseKind: 'category', value: binding.value, horizontal: binding.category, vertical: binding.series, surface: true }
     groups.push(placement)
     if (!placement) continue
     for (const [id, o] of [[placement.horizontal, 'h'], [placement.vertical, 'v']] as const) {
@@ -76,6 +80,8 @@ export function placeAxes(model: ChartModel): { ok: true; groups: Array<GroupPla
       orientation.set(id, o)
     }
     const base = byId.get(placement.base), value = byId.get(placement.value)
+    // Three contour axes cross in pairs Office wires several ways (catAx to valAx or serAx); the top view needs none.
+    if (placement.surface) { horizontalBase = true; continue }
     if (base?.crossAx !== undefined && base.crossAx !== placement.value) return { ok: false, reason: `axis ${placement.base} crosses axis ${base.crossAx}, not ${placement.value}` }
     if (value?.crossAx !== undefined && value.crossAx !== placement.base) return { ok: false, reason: `axis ${placement.value} crosses axis ${value.crossAx}, not ${placement.base}` }
     if (placement.horizontal === placement.base) horizontalBase = true; else verticalBase = true
@@ -277,9 +283,13 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   const placements = placed.ok ? placed.groups : model.groups.map(() => undefined)
   if (!placed.ok) diagnostics.push({ code: CHART_AXIS_UNPLACEABLE, reason: placed.reason })
   const orientation = new Map<string, Orientation>(), partner = new Map<string, string>()
+  // Contour: the category and series axes cross each other (the plot's edges), whatever their crossAx names.
+  const surfaceCross = new Map<string, string>()
+  const grids = model.groups.map(group => group.family === 'contour' ? contourGridOf(model, group) : undefined)
   placements.forEach(p => {
     if (!p) return
     orientation.set(p.horizontal, 'h'); orientation.set(p.vertical, 'v')
+    if (p.surface) { surfaceCross.set(p.horizontal, p.vertical); surfaceCross.set(p.vertical, p.horizontal) }
     if (!partner.has(p.base)) partner.set(p.base, p.value)
     if (!partner.has(p.value)) partner.set(p.value, p.base)
   })
@@ -358,6 +368,15 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     }
     axes.set(axis.id, resolved)
   }
+  // Contour axes have the drawn grid's slots: its columns on the category axis, its rows on the series axis.
+  placements.forEach((p, g) => {
+    const grid = grids[g]
+    if (!p?.surface || !grid) return
+    const drawn = contourPainted(grid, view.groupSeries(g).length, count)
+    const category = axes.get(p.horizontal), series = axes.get(p.vertical)
+    if (category) category.slots = drawn.cols
+    if (series) series.slots = Math.max(1, drawn.rows)
+  })
 
   // Value domains: each value axis over the groups bound to it (stacking per group), as the engine always has.
   const lows = new Map<string, number>(), highs = new Map<string, number>(), skipped = new Map<string, number>()
@@ -369,7 +388,16 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   }
   model.groups.forEach((group, g) => {
     const p = placements[g]
+    // A radar's radial value axis takes its domain from the group's values (it has no planar placement).
+    if (group.binding.kind === 'radial') { const id = group.binding.value; for (const s of view.groupSeries(g)) for (let i = 0; i < count; i++) { const v = s.value(i); if (v !== undefined) see(id, v) } }
     if (!p) return
+    const grid = grids[g]
+    if (grid) {
+      // Contour: the value domain of the drawn grid only.
+      const drawn = contourPainted(grid, view.groupSeries(g).length, count)
+      for (const s of view.groupSeries(g).slice(0, drawn.rows)) for (let i = 0; i < drawn.cols; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
+      return
+    }
     const series = view.groupSeries(g)
     if (group.grouping === 'percentStacked') percentAxes.add(p.value)
     else if (group.grouping === 'stacked') {
@@ -413,7 +441,7 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
   })
   const betweenOf = (id: string) => groups.find(g => g?.category?.id === id)?.between ?? true
   for (const resolved of axes.values()) {
-    const crossId = resolved.axis.crossAx !== undefined && axes.has(resolved.axis.crossAx) ? resolved.axis.crossAx : partner.get(resolved.id)
+    const crossId = surfaceCross.get(resolved.id) ?? (resolved.axis.crossAx !== undefined && axes.has(resolved.axis.crossAx) ? resolved.axis.crossAx : partner.get(resolved.id))
     const cross = crossId !== undefined ? axes.get(crossId) : undefined
     if (!cross) continue
     resolved.crosses = cross.id
