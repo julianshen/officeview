@@ -82,7 +82,9 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
     const treemap = exGroup(parseChartEx(tm.root, theme, tm.context))
     expect(treemap.chartEx.data[0].dimensions.map(d => [d.kind, d.type, d.ref?.definedName, d.levels.length]))
       .toEqual([['str', 'cat', '_xlchart.v1.0', 0], ['num', 'size', '_xlchart.v1.1', 0]])
-    expect(treemap.series[0].pending).toEqual({ values: expect.objectContaining({ definedName: '_xlchart.v1.1' }), categories: expect.objectContaining({ definedName: '_xlchart.v1.0' }) })
+    // B5: a treemap's category reference is a multi-level path (every level is read), so it is pending as `levels`.
+    expect(treemap.series[0].pending).toEqual({ values: expect.objectContaining({ definedName: '_xlchart.v1.1' }), levels: expect.objectContaining({ definedName: '_xlchart.v1.0' }) })
+    expect(treemap.series[0].levelDir).toBe('col')
     tm.release()
 
     // Office-shaped synthetic: non-dense ids out of order resolve by value; missing pt@idx are blank at
@@ -112,7 +114,8 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
     const tree = exGroup(parseChartEx(withRef.root, theme, withRef.context))
     expect(tree.chartEx.data[0].dimensions[0].levels).toEqual([])
     expect(tree.series[0].categories).toBeUndefined()
-    expect(tree.series[0].pending?.categories).toEqual({ sheet: 'Sheet1', r0: 1, c0: 0, r1: 1, c1: 1 })
+    // B5: every level of the treemap's range is read (pending as `levels`, one per column).
+    expect(tree.series[0].pending?.levels).toEqual({ sheet: 'Sheet1', r0: 1, c0: 0, r1: 1, c1: 1 })
     withRef.release()
     const noRef = await syntheticPart(multi(''))
     expect(await parseChartPart(noRef.root, theme, noRef.context)).toMatchObject({ kind: 'unsupported', reason: 'multi-level cache order unconfirmed', feature: 'ChartEx' })

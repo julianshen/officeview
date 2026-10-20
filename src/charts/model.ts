@@ -172,7 +172,12 @@ export interface ChartSeries {
    * References still to be filled from worksheet cells (no saved data for that role). The custom error amounts
    * (`c:plus`/`c:minus`) are `errorPlus`/`errorMinus` for the y (value) direction, `errorPlusX`/`errorMinusX` for x.
    */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange }
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange; levels?: ChartRange }
+  /** Treemap/sunburst (chartex-map §7): the category reference is a path with one level per column (`col`) or row
+   * (`row`) of `pending.levels`, root first; every level is read (charts/chartex/hierarchy.ts). */
+  levelDir?: 'col' | 'row'
+  /** The filled category levels of a hierarchy, root first, one entry per point ('' is a blank cell). */
+  levels?: string[][]
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which
@@ -314,7 +319,8 @@ export interface ChartExGroup extends ChartGroup {
     plotAreaLine?: import('./style').ChartLineStyle
     /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
     gapWidth?: number
-    /** Waterfall: the increase, decrease and total colours (style palette entries 0, 1, 2; hex), resolved at parse. */
+    /** Waterfall: the increase, decrease and total colours (style palette entries 0, 1, 2; hex), resolved at parse.
+     * Treemap/sunburst: the colour of each root-level branch (resolved at parse, indexed modulo its length). */
     palette?: string[]
   }
 }

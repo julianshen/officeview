@@ -11,6 +11,7 @@ import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { prepareTrendlines, preparedTrendlineBytes, trendlineBound, trendlineExtents, trendlineForecast, type PreparedTrendline } from './trendlines'
 import { chartEpoch } from './dates'
+import { deriveChartHierarchy, formatHierarchyValues, hierarchyBytes, type ChartExHierarchy } from './chartex/hierarchy'
 import { errorBarBound, prepareErrorBars, preparedErrorBarBytes, type PreparedErrorBars } from './errorBars'
 
 type PreparedAxis = Omit<ResolvedAxis, 'labelValue' | 'plottable'> & { labels: string[] }
@@ -20,6 +21,8 @@ export interface PreparedAxes {
   trendlines?: PreparedTrendline[]
   /** Category slots the trendline forecasts add (the display view reads them); absent: none. */
   forecast?: DisplayForecast
+  /** Treemap/sunburst: the derived tree (chartex/hierarchy.ts; chartex-map §7). */
+  hierarchy?: ChartExHierarchy
   /** Validated error bar sets with their analytic amounts (spec 5.7); absent when the chart has none. */
   errorBars?: PreparedErrorBars[]
   axes: PreparedAxis[]
@@ -60,8 +63,13 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0) + (displayFamily(model) ? model.axes.length * displayLabelBytes(slots) : 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
   try {
+    // Treemap/sunburst (B5): the tree is derived first, its storage admitted under this stage's tag; an analytic
+    // refusal (too many nodes, an unavailable weight) refuses the chart.
+    const hierarchy = deriveChartHierarchy(model, bytes => { if (!workspace.reserve(bytes, tag)) throw new ChartRefusal() })
+    if (hierarchy && 'refused' in hierarchy) return { ...model, preparedAxes: undefined, unsupported: hierarchy.refused, refused: true }
     // Trendlines first (A6a, spec 5.6): their forecast adds category slots and their extent joins the automatic scales.
     const formatter = createChartFormatter(workspace)
+    if (hierarchy) formatHierarchyValues(model, hierarchy.tree, (v, code) => formatter.format(v, code, chartEpoch(model.epoch, model.workbookEpoch)), bytes => { if (!workspace.reserve(bytes, tag)) throw new ChartRefusal() })
     const trendDiagnostics: ChartDiagnostic[] = []
     const trendlines = model.groups.some(g => g.series.some(s => s.trendlines)) ? prepareTrendlines(model, formatter, chartEpoch(model.epoch, model.workbookEpoch), trendDiagnostics, workspace) : []
     let forecast = trendlines.length ? trendlineForecast(model, trendlines, displayView(model, NO_FORECAST).slots, trendDiagnostics) : undefined
@@ -85,9 +93,10 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, (displayFamily(model) ? view.slots : model.categories.length) + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
-    const dataLabels = prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics,view)
-    graph.diagnostics.push(...trendDiagnostics)
-    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(forecast ? { forecast } : {}), ...(errors?.bars.length ? { errorBars: errors.bars } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
+    // A hierarchy family places and draws its own node labels (chartex/treemap.ts, sunburst.ts).
+    const dataLabels = hierarchy ? [] : prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics,view)
+    graph.diagnostics.push(...trendDiagnostics, ...(hierarchy?.diagnostics ?? []))
+    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(hierarchy ? { hierarchy: hierarchy.tree } : {}), ...(forecast ? { forecast } : {}), ...(errors?.bars.length ? { errorBars: errors.bars } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
     if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()
     const retained = { workspace, tag: `${tag}:retained` }
@@ -126,5 +135,5 @@ export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
 export function preparedAxesBytes(preparedAxes: PreparedAxes | undefined): number {
   if (!preparedAxes) return 0
   const axes = preparedAxes.axes, graph = preparedAxes
-  return 256 + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + (preparedAxes.errorBars ?? []).reduce((n, b) => n + preparedErrorBarBytes(b), 0) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
+  return 256 + hierarchyBytes(preparedAxes.hierarchy) + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + (preparedAxes.errorBars ?? []).reduce((n, b) => n + preparedErrorBarBytes(b), 0) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
 }

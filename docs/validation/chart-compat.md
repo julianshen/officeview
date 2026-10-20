@@ -38,6 +38,8 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B2 | B2 commit | 38,636 | Before (`7c67e33` tree plus B2's type-only `chartEx.palette` field, rebuilt): 38,640. Waterfall and funnel families (`src/charts/chartex/waterfall.ts`, `funnel.ts`) and their hooks in axes, display, prepare, layout, labels and paint live in the lazy `charts-*` chunk; `dist/index.js` changes by hash churn only. Bytes added by B2: −4 (hash churn). Running total vs B0: +5 B. Ceiling 38,647 |
 | After B2 fix round 1 | B2 r1 commit | 38,635 | Subtotal state gate, finite funnel ratio, hidden series out of the display view, funnel label pricing: lazy `charts-*` chunk only (hash churn). Running total vs B0: +4 B |
 | After B2 merge with feature | merge commit | 38,635 | `feature/chart-compat` `cb5a0b5` merged into `chart/b2`; conflicts resolved keeping both sides (lazy `charts-*` chunk only). Running total vs B0: +4 B. Ceiling 38,647 |
+| After B5 | B5 commit | 38,639 | Before (`7c67e33`, rebuilt): 38,640. Treemap and sunburst (`src/charts/chartex/hierarchy.ts`, `hierarchyStyle.ts`, `treemap.ts`, `sunburst.ts`) and the hierarchy hooks in fill, precedence, embedded reader, stage 1, layout and paint all live in the lazy `charts-*` chunk; the two description names in the `imageAdmission` chunk. No eager source file was touched; measured −1 B (hash churn, not normalised). Bytes added by B5: 0. |
+| After B5 merge with feature | merge commit | 38,637 | `feature/chart-compat` merged into `chart/b5` (B2, A6b, A5c, A4b and the rest); conflicts resolved keeping both sides; B5 review minors (label numFmt, exclusion order) applied. Lazy `charts-*` chunk only. Before (feature ledger, B2 merge): 38,635; +2 B hash churn. Ceiling 38,647 |
 
 ## Spec §8 testing and validation
 
@@ -260,4 +262,36 @@ Rules implemented from the map but **unverified** against Office output:
   model is dropped with `chart-error-bars-dropped` (pinned in the B2 tests).
 - **Subtotal point states [P]:** a subtotal index on a hidden, blank, error or unavailable point draws no bar and
   leaves the running total unchanged; an error is diagnosed like any other waterfall point.
+## B5 treemap and sunburst: project rules and unverified behaviour (chartex-map §7)
+
+Evidence: TM and SB (Office-authored inputs; their parts carry no derived tree and their XLSX fallback is a text box,
+so no Office output confirms any rule below). Tests: `tests/charts-chartex-treemap.test.ts` (hand-computed trees,
+the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond the native inputs.
+
+- **Hierarchy levels [P]: unverified.** A multi-column category reference is one level per column (`f@dir="col"`, the
+  default; one per row for `row`), the leftmost root. Every level is read on the resident and paged XLSX paths and from
+  the DOCX/PPTX embedded workbook. More than 64 levels, or a level over 65,536 points, refuses the chart before any read.
+- **Multi-level caches [P].** Ignored; the referenced range is read; with no readable reference the chart is unsupported.
+- **Carry-forward [P]: unverified.** A blank cell inherits the current path at its level; a changed non-blank ancestor
+  clears the deeper levels, an identical one keeps them; levels below a row's deepest label are ignored (a leaf); a
+  level cleared by an ancestor change is an unnamed node `""` (diagnosed); a row with no label is excluded (diagnosed);
+  a row excluded for its weight still moves the path.
+- **Identity and aggregation [P]: unverified.** Full-path identity; duplicate paths summed; a parent is the sum of its
+  descendants; a path that is both a leaf and a prefix keeps its own weight as an unnamed child `""`.
+- **Value labels.** Node values shown by `dataLabels` use the label `numFmt` (unless source-linked; else General), formatted at stage 1.
+- **Order [P].** A row with no label at any level is excluded before its weight is read (an unavailable weight on such a row does not refuse).
+- **Weights [P].** Positive finite values only; zero, negative, blank and error weights are excluded with a diagnostic;
+  an unavailable weight refuses the chart. Error bars are never drawn (outside A6b's drawable families).
+- **Node bound.** More than 4,096 nodes (internal and unnamed nodes counted) refuses the chart with "This chart has too
+  many data points to summarize".
+- **Label budget [P].** A hierarchy label dropped past the chart's 4 MiB label budget refuses the chart (a dropped label
+  would read as a blank cell and re-parent its row); a label cut to 255 units is diagnosed and may merge two paths.
+- **parentLabelLayout: unverified.** Absent means `overlapping` (the proposed default). `none`: no parent labels;
+  `banner`: a one-line strip on top of each parent holds its label and the children fill the rest; `overlapping`: the
+  label is drawn over the children at the parent's top-left. Parent labels are drawn whatever `dataLabels` says.
+- **Layout: unverified.** Squarified treemap (descending weight, ties in source order); sunburst rings of R/levels from a
+  hole-less centre, clockwise from 12 o'clock in source order. Only area and angle proportions are oracles.
+- **Colours: unverified.** Each root-level branch takes the series colour cycle by its root ordinal (style and colour
+  parts, then theme); an authored series fill paints every node. `dataPt` overrides are not applied (row or node
+  identity unknown). Only the first visible series is drawn (a further one is diagnosed).
 

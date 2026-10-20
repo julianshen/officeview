@@ -14,6 +14,7 @@ import { chartEpoch, convertSerial, isDateFormat, type ChartEpoch } from './date
 import { CHART_CATEGORY_LEVELS, fillCategoryLevels } from './categories'
 import { ERROR_ROLES, errorRole } from './errorBars'
 import { CONTOUR_GRID_LIMIT, contourGridDiagnostic, contourGridOf } from './families/contour'
+import { levelLines, levelsOverLimit } from './chartex/hierarchy'
 
 export type ChartCellValue = string | number | boolean | null | undefined
 /**
@@ -388,6 +389,23 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
           return budgeted ? budget(text) : text.slice(0,CHART_LABEL_LIMIT)
         })})
       }
+      // A treemap/sunburst path (chartex-map §7): every level of its reference, root first, each label budgeted. A
+      // label dropped past the budget would read as a blank cell and re-parent its row, so it refuses the chart.
+      if (pending.levels) {
+        const dir = series.levelDir ?? 'col'
+        if (levelsOverLimit(pending.levels, dir)) throw new ChartAnalyticRefusal(CHART_TOO_MANY_POINTS)
+        const lines = levelLines(pending.levels, sheetOf(pending.levels), dir)
+        charge(lines.reduce((n, line) => n + 64 + line.count * 8, 0))
+        next.levels = lines.map(line => Array.from({ length: line.count }, (_, i) => {
+          const at = linePoint(line, i)
+          return label(allocation => {
+            const text = asText(lookup(line.sheet, at.row, at.col, true, allocation))
+            const kept = budget(text)
+            if (text && !kept) throw new ChartAnalyticRefusal(CHART_TOO_MANY_POINTS)
+            return kept
+          })
+        }))
+      }
       if (pending.name) {
         const name = pending.name
         const text = label(allocation => {
@@ -534,6 +552,9 @@ export function pendingLines(drawings: XlsxDrawingLike[] | undefined, ownerSheet
         const limit = seriesLimit(s)
         add(s.pending?.values, false, limit); add(s.pending?.xValues, false, limit); add(s.pending?.bubbleSizes, false); add(s.pending?.categories, true, categoryLimit(s))
         for (const role of ERROR_ROLES) add(s.pending?.[role], false)
+        // A hierarchy reads one line per level (a reference past its bounds is refused before any read).
+        const levels = s.pending?.levels, dir = s.levelDir ?? 'col'
+        if (levels && !levels.definedName && !levelsOverLimit(levels, dir)) out.push(...levelLines(levels, ownerSheet, dir))
         if (s.pending?.name) add({ ...s.pending.name, r1: s.pending.name.r0, c1: s.pending.name.c0 }, true)
       }
     }
@@ -549,7 +570,7 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
     if (chart) {
       const add = (range: ChartRange | undefined) => { if (range && (withNames || !range.definedName)) out.push({ ...range, sheet: range.sheet ?? ownerSheet }) }
       add(chart.categoryPending)
-      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.bubbleSizes); add(s.pending?.name); add(s.pending?.categories); for (const role of ERROR_ROLES) add(s.pending?.[role]) }
+      for (const group of chart.groups) for (const s of group.series) { add(s.pending?.values); add(s.pending?.xValues); add(s.pending?.bubbleSizes); add(s.pending?.name); add(s.pending?.categories); add(s.pending?.levels); for (const role of ERROR_ROLES) add(s.pending?.[role]) }
       // Names a cached role's provenance reference uses are resolved too (never read as cells).
       if (withNames) { add(chart.categoryRef); for (const group of chart.groups) for (const s of group.series) { add(s.refs?.values); add(s.refs?.xValues); add(s.refs?.bubbleSizes) } }
     }
@@ -565,7 +586,8 @@ export function pendingRanges(drawings: XlsxDrawingLike[] | undefined, ownerShee
  */
 /** Whether an analytic ChartEx series has a concrete reference longer than the analytic bound. */
 export const analyticOverLimit = (chart: ChartModel): boolean => chart.groups.some(group => group.series.some(series => series.analytic === 'chart'
-  && [series.pending?.values, series.pending?.categories].some(range => range && !range.definedName && lineLength(range) > CHART_ANALYTIC_POINT_LIMIT)))
+  && ([series.pending?.values, series.pending?.categories].some(range => range && !range.definedName && lineLength(range) > CHART_ANALYTIC_POINT_LIMIT)
+    || Boolean(series.pending?.levels && !series.pending.levels.definedName && levelsOverLimit(series.pending.levels, series.levelDir ?? 'col')))))
 export function refuseAnalyticOverLimit(drawings: XlsxDrawingLike[] | undefined): void {
   for (const node of drawings ?? []) {
     const content = node.content as { kind: string; chart?: ChartModel } | undefined
