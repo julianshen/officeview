@@ -5,7 +5,7 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
-import { XLSX_REQUIREMENTS, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
+import { XLSX_REQUIREMENTS, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage, type DrawingCoverageEntry } from '../drawing/coverage'
 import { attemptedMalformedRelationshipIssue, cardChart, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
@@ -224,6 +224,64 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
     return { branch: card, mode: 'choice', ...(unusable ? { unusable } : {}) }
   }
   return undefined
+}
+
+/**
+ * A chart Choice selected while its data is still to be read (spec 6.3): the XLSX fill and stage 1 may refuse it
+ * later (data-dependent binning, an unavailable point). Its AlternateContent's usable fallback is parsed then, never
+ * eagerly; `placement` is the worksheet anchor's box when the chart is a top-level object.
+ */
+interface DeferredFallback { parse: () => Promise<XlsxDrawing[]>; placement?: Partial<XlsxDrawing> }
+const deferredFallbacks = new WeakMap<XlsxDrawing, DeferredFallback>()
+
+/**
+ * After the charts' data is read: every Choice-selected chart that is now refused or unsupported gives way to its
+ * AlternateContent fallback (spec 6.3), and its coverage says so (status and representation `fallback`, the chart's
+ * feature kept, the refusal as the reason). With no usable fallback the chart's card stays, and its coverage is
+ * recomputed (never a stale native entry). `documentCoverage`/`unit`: the document-level copy of this sheet's
+ * entries. Every deferred fallback of the sheet is consumed.
+ */
+export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: DrawingCoverageEntry[], unit = 0): Promise<void> {
+  const visit = async (list: XlsxDrawing[], top: boolean): Promise<void> => {
+    for (let i = 0; i < list.length; i++) {
+      const drawing = list[i], deferred = deferredFallbacks.get(drawing)
+      if (deferred) deferredFallbacks.delete(drawing)
+      const chart = drawing.content?.kind === 'xlsxChart' ? drawing.content.chart : undefined
+      // A chart refused after its coverage was recorded as native (no deferred fallback: a card stays) is stale too.
+      const stale = !deferred && chart?.unsupported && sheet.drawingCoverage?.some(entry => entry.partPath === drawing.source.partPath && entry.treePath === drawing.source.treePath && entry.selectedRepresentation === 'chart')
+      if (chart?.unsupported && (deferred || stale)) {
+        let replacement: XlsxDrawing[] = []
+        if (deferred) try { replacement = await deferred.parse() } catch { replacement = [] }
+        const carry = (drawings: XlsxDrawing[]): void => { for (const d of drawings) { if (d.image) d.chartFallback = chart; carry(d.children ?? []) } }
+        carry(replacement)
+        const placement = deferred?.placement
+        if (top && placement) for (const object of replacement) {
+          Object.assign(object, placement)
+          if (object.source.element === 'contentPart') object.transformValid = true
+          if (object.group) { object.group.off = { x: placement.xEmu!, y: placement.yEmu! }; object.group.ext = { width: placement.widthEmu!, height: placement.heightEmu! } }
+        }
+        const kept = replacement.length ? replacement : [drawing]
+        if (replacement.length) { list.splice(i, 1, ...replacement); i += replacement.length - 1 }
+        // The chart's own feature: a ChartEx model (its card's feature, or its still-ChartEx group) is `ChartEx`.
+        const feature = chart.feature ?? (chart.groups.some(group => group.kind === 'chartEx') ? 'ChartEx' : 'chart')
+        const entries = kept.flatMap((object, index) => xlsxNodeCoverage(object, unit, top ? index === 0 ? 'original' : 'descendant' : 'descendant'))
+        if (replacement.length && entries[0]) Object.assign(entries[0], { feature, status: 'fallback', representation: 'fallback', reason: chart.unsupported })
+        const replace = (coverage: DrawingCoverageEntry[] | undefined, withUnit: boolean) => {
+          if (!coverage) return
+          const path = drawing.source.treePath, part = drawing.source.partPath
+          const at = coverage.findIndex(entry => entry.partPath === part && (entry.treePath === path || entry.treePath.startsWith(`${path}/`)) && (!withUnit || entry.unit === unit))
+          const rest = coverage.filter(entry => !(entry.partPath === part && (entry.treePath === path || entry.treePath.startsWith(`${path}/`)) && (!withUnit || entry.unit === unit)))
+          coverage.splice(0, coverage.length, ...rest)
+          coverage.splice(at < 0 ? coverage.length : at, 0, ...entries.map(entry => ({ ...entry, unit: withUnit ? unit : entry.unit })))
+        }
+        replace(sheet.drawingCoverage, false)
+        replace(documentCoverage, true)
+        continue
+      }
+      if (drawing.children) await visit(drawing.children, false)
+    }
+  }
+  await visit(sheet.drawings ?? [], true)
 }
 
 async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<boolean> {
@@ -470,6 +528,11 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
       if (selected?.unusable) for (const drawing of branch) if (drawing.content?.kind === 'xlsxChart') drawing.source.reason = `chart-fallback-unusable: ${drawing.content.chart.unsupported}`
       const carry = (drawings: XlsxDrawing[]): void => { for (const drawing of drawings) { if (drawing.image) drawing.chartFallback = selected!.chartFallback; carry(drawing.children ?? []) } }
       if (selected?.chartFallback) carry(branch)
+      // A selected chart Choice keeps its usable fallback for a refusal once its data is read (spec 6.3).
+      const fallback = selected?.mode === 'choice' && !selected.unusable ? child(node, 'Fallback') : undefined
+      if (fallback && branch.length === 1 && branch[0].content?.kind === 'xlsxChart' && !(await fallbackUnusable(pkg, owner, fallback))) {
+        deferredFallbacks.set(branch[0], { parse: () => parseObjects(pkg, owner, fallback, theme, treePath, depth, 'fallback', carrier, anchorTopLevel, selections, groupStyle) })
+      }
       out.push(...branch)
     } else if (name === 'graphic' || name === 'graphicData') {
       out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections, groupStyle))
@@ -544,6 +607,8 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
       }
       for (const [objectIndex, object] of objects.entries()) {
         Object.assign(object, placement)
+        const deferred = deferredFallbacks.get(object)
+        if (deferred) deferred.placement = placement
         if (object.source.element === 'contentPart') object.transformValid = true
         if (object.group) { object.group.off = { x: placement.xEmu, y: placement.yEmu }; object.group.ext = { width: placement.widthEmu, height: placement.heightEmu } }
         ;(sheet.drawings ??= []).push(object)

@@ -13,7 +13,7 @@ import type {
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
-import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
+import { parseWorksheetDrawings, collectXlsxImages, settleChartFallbacks } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
 import { frozenPaneFrom } from './frozenPane'
 import { cellDisplayText, computeMetrics } from './render'
@@ -472,6 +472,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
       // owned by) before it is built, and stays charged for the models' lifetime (D0).
       (await loadChartModule()).fillWorkbookCharts(sheets, { workspace: drawingPartContext(pkg).chart?.workspace, names: definedNames, text: (sheet, cell, allocation) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: bytes => allocation?.allocate(bytes), release: bytes => allocation?.release(bytes), retain: (targets, bytes, commit, kind) => allocation?.retain ? allocation.retain(targets, bytes, commit, kind) : commit() }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
     } catch { /* charts keep their placeholder state; the workbook stays usable */ }
+    // A chart Choice refused once its data was read gives way to its fallback (spec 6.3), coverage included.
+    for (const [unit, sheet] of sheets.entries()) await settleChartFallbacks(sheet, doc.drawingCoverage, unit)
   }
   return doc
 }

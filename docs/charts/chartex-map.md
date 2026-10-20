@@ -460,6 +460,15 @@ entirely, and Excel's rendering of that case is **unconfirmed**. [U]
 | `dataLabels/dataLabelHidden@idx` | 0..n | n/a | label for point idx is not drawn | [S] 2.24.3.23; [N: FN1 idx 4, 8] |
 | `series/valueColors`, `valueColorPositions@count` | 0..1 | count `2` | gradient for `colorVal` (region map only) | [S]; region map is unsupported, so these are ignored |
 
+**Histogram and Pareto overrides [P] (B3 fix round 1, controller ruling).** `dataPt@idx`, `dataLabel@idx` and
+`dataLabelHidden@idx` address source points, but the drawn columns are derived:
+
+- **One column per source point.** A By Category column that is exactly one source point of its series (that
+  series' categories are unique) carries that point's overrides. A Pareto sort moves them with the column.
+- **No single source point.** A binned column, or a category grouped from several points, draws no point override.
+  The overrides are dropped with the diagnostic `chart-histogram-point-overrides`.
+- No Office reference shows how Office maps these overrides.
+
 ---
 
 ## 5. Histogram and Pareto (§4.3 "Histogram", "Pareto")

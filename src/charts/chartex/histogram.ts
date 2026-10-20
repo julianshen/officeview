@@ -22,14 +22,15 @@
  * source-index meaning for bins is unconfirmed). Every retained allocation is charged before it is built; the
  * transient work (aggregation map, sort order, edges) is charged under a scratch tag released on return.
  */
-import type { ChartAxis, ChartExGroup, ChartExSeriesInfo, ChartGroup, ChartModel, ChartPoints, ChartSeries } from '../model'
+import type { ChartAxis, ChartExBinning, ChartExGroup, ChartExSeriesInfo, ChartGroup, ChartModel, ChartPoints, ChartSeries } from '../model'
+import type { ChartPointOverride } from '../style'
+import type { LabelOptions } from '../labels'
 import type { ChartWorkspace } from '../workspace'
 import { ChartRefusal, succeedChartModel } from '../own'
 import { PointWriter, POINT_UNAVAILABLE, POINT_VALUE, hiddenAt, pointBytes, stringBytes } from '../points'
 import { createChartFormatter } from '../format'
 import { chartEpoch } from '../dates'
-import { CHART_POINT_LIMIT } from '../parse'
-import { CHART_DATA_NOT_AVAILABLE } from '../fill'
+import { CHART_DATA_NOT_AVAILABLE, CHART_POINT_LIMIT } from '../limits'
 
 export const HISTOGRAM_FAMILIES: ReadonlySet<string> = new Set(['histogram', 'pareto'])
 export const HISTOGRAM_INVALID_BINNING = 'invalid binning'
@@ -43,23 +44,35 @@ const LABEL_BOUND = stringBytes(' '.repeat(2 * 256 + 4))
 
 export const isHistogramGroup = (group: ChartGroup): group is ChartExGroup => group.kind === 'chartEx' && HISTOGRAM_FAMILIES.has(group.family)
 
+/** The column series that take part in layout (map §2.3: a hidden series is hidden from layout), with their infos. */
+const visibleColumns = (group: ChartExGroup) => group.chartEx.series.flatMap((info, i) => info.hidden || !group.series[i] ? [] : [{ info, series: group.series[i] }])
+
 /** A structural reason the chart cannot be drawn (data-independent; the adapter keeps the fallback), or undefined. */
 export function histogramStructure(model: ChartModel): string | undefined {
   const group = model.groups[0]
   if (!group || !isHistogramGroup(group)) return undefined
-  const { series: infos, paretoLine, byCategory, data } = group.chartEx
-  // A Pareto sorts one owner: the column series its ownerIdx names (map §2.3, §5.2); several columns have no
-  // single order.
-  if (paretoLine && (infos.length !== 1 || infos[0].position !== paretoLine.ownerIdx)) return HISTOGRAM_UNREADABLE
+  const { paretoLine, byCategory, data } = group.chartEx
+  const infos = visibleColumns(group).map(c => c.info)
+  // A Pareto sorts one owner: the column series its ownerIdx names (document position, hidden series counted; map
+  // §2.3, §5.2). Several visible columns have no single order; a hidden owner with another visible column has none.
+  if (paretoLine && (infos.length > 1 || (infos.length === 1 && infos[0].position !== paretoLine.ownerIdx))) return HISTOGRAM_UNREADABLE
   // By Category needs the categories it groups (map §5.1 [P]).
   if (byCategory && infos.some(info => !data.find(d => d.id === info.dataId)?.dimensions.some(d => d.kind === 'str' && CATEGORY_TYPES.includes(d.type)))) return HISTOGRAM_UNREADABLE
-  // One set of bins serves every series: their binning must agree.
+  // One set of bins serves every visible series: their binning must agree.
   const key = (info: ChartExSeriesInfo) => JSON.stringify(info.layoutPr.binning ?? null)
   if (infos.some(info => key(info) !== key(infos[0]))) return HISTOGRAM_UNREADABLE
   return undefined
 }
 
-interface Derived { labels: string[]; heights: Float64Array[]; retained: number }
+/**
+ * Derived columns: labels, per-series heights and, where a column is exactly one source point of its series
+ * (By Category with that series' categories unique), the source index of each column (-1: none). `undefined`
+ * sources: the mapping is ambiguous (bins, grouped categories), so point overrides are not carried.
+ */
+interface Derived { labels: string[]; heights: Float64Array[]; sources: Array<Int32Array | undefined>; retained: number }
+/** Values whose sums or edges pass the double range (spec 5.8: never NaN or Infinity drawn as a value). */
+export const HISTOGRAM_OUT_OF_RANGE = "This chart's values are out of range"
+export const HISTOGRAM_OVERRIDES_DROPPED = 'chart-histogram-point-overrides'
 
 /**
  * Stage 1 for a histogram or Pareto model with its data in place: the derived model (plain column and line groups,
@@ -75,19 +88,22 @@ export function deriveHistogram(model: ChartModel, workspace: ChartWorkspace, ow
   const scratch = `chart-histogram#${++jobs}`
   const charge = (bytes: number) => { if (!workspace.reserve(bytes, scratch)) throw new ChartRefusal() }
   try {
-    const visible = group.series.filter((_, i) => !group.chartEx.series[i]?.hidden)
+    const columns = visibleColumns(group), visible = columns.map(c => c.series)
     const visibleOnly = model.plotVisOnly !== false
     // Analytic inputs (map §2.4): an unavailable point refuses the chart; blank and error points are excluded.
     for (const s of visible) for (let i = 0; i < s.values.length; i++) if (s.values.states[i] === POINT_UNAVAILABLE) return refuse(model, CHART_DATA_NOT_AVAILABLE)
     const take = (s: ChartSeries, i: number) => s.values.states[i] === POINT_VALUE && !(visibleOnly && hiddenAt(s.values.hidden, i))
-    const derived = group.chartEx.byCategory ? aggregate(model, visible, take, charge) : bin(model, group, visible, take, charge, workspace)
+    const derived = group.chartEx.byCategory ? aggregate(model, visible, take, charge)
+      : bin(model, group, columns[0]?.info.layoutPr.binning, visible, take, charge, workspace)
     if (typeof derived === 'string') return refuse(model, derived)
+    // A Pareto's columns are sorted by its owner even when its line is hidden; the line is drawn only when visible.
     const pareto = group.chartEx.paretoLine
     const built = pareto ? sortPareto(derived, charge) : { ...derived, cumulative: undefined }
+    if (typeof built === 'string') return refuse(model, built)
     // The derived records (groups, series, axes) and point storage, then the move of every retained byte to the owner.
     const records = RECORD_BYTES * (visible.length + 4)
     charge(records)
-    const out = assemble(model, group, visible, built, pareto, charge)
+    const out = assemble(model, group, visible, built, pareto && !pareto.hidden ? pareto : undefined, charge)
     if (ownerTag) workspace.transfer(scratch, ownerTag, built.retained + records)
     return out
   } finally { workspace.release(scratch) }
@@ -95,13 +111,21 @@ export function deriveHistogram(model: ChartModel, workspace: ChartWorkspace, ow
 let jobs = 0
 const refuse = (model: ChartModel, reason: string): ChartModel => ({ ...model, preparedAxes: undefined, unsupported: reason, refused: true })
 
+/**
+ * The power-of-two divisor that keeps a sum of `count` terms of at most `maxAbs` inside the double range
+ * (1 when it fits): dividing by a power of two is exact, so ordinary sums are unchanged.
+ */
+const sumScale = (maxAbs: number, count: number): number => maxAbs > 0 && !Number.isFinite(maxAbs * count * 2) ? 2 ** Math.ceil(Math.log2(maxAbs) + Math.log2(count) + 1 - 1023) : 1
+
 /** By Category (map §5.1): equal category texts grouped in first-occurrence order (pooled across series), values summed. */
-function aggregate(model: ChartModel, visible: ChartSeries[], take: (s: ChartSeries, i: number) => boolean, charge: (bytes: number) => void): Derived {
+function aggregate(model: ChartModel, visible: ChartSeries[], take: (s: ChartSeries, i: number) => boolean, charge: (bytes: number) => void): Derived | string {
   const index = new Map<string, number>(), labels: string[] = []
+  let maxAbs = 0, count = 0
   for (const s of visible) {
     const categories = s.categories ?? model.categories
     const n = Math.max(s.values.length, categories.length)
     for (let i = 0; i < n; i++) {
+      if (i < s.values.length && take(s, i)) { maxAbs = Math.max(maxAbs, Math.abs(s.values.values[i])); count++ }
       const text = categories[i] ?? ''
       if (index.has(text)) continue
       // A map entry (transient) and a label slot (retained; the text is the source's own string).
@@ -110,51 +134,64 @@ function aggregate(model: ChartModel, visible: ChartSeries[], take: (s: ChartSer
       labels.push(text)
     }
   }
-  charge(labels.length * 8 * visible.length)
+  // Range-safe sums: every term is divided by one power of two when the plain sum could pass the double range.
+  const scale = sumScale(maxAbs, count)
+  charge(labels.length * 12 * visible.length)
+  const sources: Array<Int32Array | undefined> = []
   const heights = visible.map(s => {
-    const sums = new Float64Array(labels.length)
+    const sums = new Float64Array(labels.length), source = new Int32Array(labels.length).fill(-1)
     const categories = s.categories ?? model.categories
-    for (let i = 0; i < s.values.length; i++) if (take(s, i)) sums[index.get(categories[i] ?? '')!] += s.values.values[i]
+    let ambiguous = false
+    for (let i = 0; i < Math.max(s.values.length, categories.length); i++) {
+      const j = index.get(categories[i] ?? '')!
+      // A column is one source point of this series only while no second point of the series joins it.
+      if (source[j] >= 0) ambiguous = true
+      else source[j] = i
+      if (i < s.values.length && take(s, i)) sums[j] += s.values.values[i] / scale
+    }
+    sources.push(ambiguous ? undefined : source)
+    for (let j = 0; j < sums.length; j++) sums[j] *= scale
     return sums
   })
-  return { labels, heights, retained: labels.length * SLOT_BYTES }
+  if (heights.some(h => h.some(v => !Number.isFinite(v)))) return HISTOGRAM_OUT_OF_RANGE
+  return { labels, heights, sources, retained: labels.length * SLOT_BYTES }
 }
 
 /** Binned (map §5.1): pooled bins over every visible series; a string is the refusal reason. */
-function bin(model: ChartModel, group: ChartExGroup, visible: ChartSeries[], take: (s: ChartSeries, i: number) => boolean,
+function bin(model: ChartModel, group: ChartExGroup, authored: ChartExBinning | undefined, visible: ChartSeries[], take: (s: ChartSeries, i: number) => boolean,
   charge: (bytes: number) => void, workspace: ChartWorkspace): Derived | string {
-  const binning = group.chartEx.series[0]?.layoutPr.binning ?? { intervalClosed: 'r' as const }
+  const binning: ChartExBinning = authored ?? { intervalClosed: 'r' }
   const right = binning.intervalClosed !== 'l'
   const U = typeof binning.underflow === 'number' ? binning.underflow : undefined
   const O = typeof binning.overflow === 'number' ? binning.overflow : undefined
   if (binning.underflow === 'auto' || binning.overflow === 'auto') return HISTOGRAM_UNREADABLE
   const under = (v: number) => U !== undefined && (right ? v <= U : v < U)
   const over = (v: number) => O !== undefined && (right ? v > O : v >= O)
-  // The inner set's extent and moments (Welford), in one pass over every sample.
-  let n = 0, mean = 0, m2 = 0, min = Infinity, max = -Infinity
+  // The inner set's extent, then its moments (Welford) on values scaled by one power of two, so a spread near the
+  // double range cannot overflow the moments.
+  let n = 0, min = Infinity, max = -Infinity
   for (const s of visible) for (let i = 0; i < s.values.length; i++) {
     if (!take(s, i)) continue
     const v = s.values.values[i]
     if (under(v) || over(v)) continue
     n++
-    const d = v - mean
-    mean += d / n
-    m2 += d * (v - mean)
     if (v < min) min = v
     if (v > max) max = v
   }
   const outer = (U !== undefined ? 1 : 0) + (O !== undefined ? 1 : 0)
-  // Range, width and inner-bin count (map §5.1 steps 3-6).
+  // Range, width and inner-bin count (map §5.1 steps 3-6). Differences that pass the double range are taken as the
+  // difference of the quotients (`span`), never as Infinity.
   let k = 0, lo = 0, h = 0, single = false
+  const span = (a: number, b: number, by: number) => { const q = (b - a) / by; return Number.isFinite(q) ? q : b / by - a / by }
   if (n > 0) {
     lo = U ?? min
     const hi = O ?? max
     if (hi === lo) { k = 1; single = true }
-    else if (binning.binCount !== undefined) { k = binning.binCount - outer; h = (hi - lo) / k }
+    else if (binning.binCount !== undefined) { k = binning.binCount - outer; h = span(lo, hi, k) }
     else {
-      h = binning.binSize ?? 3.49 * Math.sqrt(m2 / (n - 1)) * n ** (-1 / 3)
+      h = binning.binSize ?? scott(visible, take, under, over, n, Math.max(Math.abs(min), Math.abs(max)))
       if (!Number.isFinite(h) || !(h > 0)) return HISTOGRAM_INVALID_BINNING
-      k = Math.max(1, Math.ceil((hi - lo) / h))
+      k = Math.max(1, Math.ceil(span(lo, hi, h)))
     }
     if (!(k >= 1) || !Number.isFinite(k)) return HISTOGRAM_INVALID_BINNING
   }
@@ -163,11 +200,15 @@ function bin(model: ChartModel, group: ChartExGroup, visible: ChartSeries[], tak
   if (total > HISTOGRAM_BIN_LIMIT) return HISTOGRAM_INVALID_BINNING
   charge((k + 1) * SLOT_BYTES)
   const edges = new Float64Array(k + 1)
-  for (let i = 0; i <= k; i++) edges[i] = single ? lo : lo + i * h
+  // lo + i*h, halved and doubled (exact whenever the plain form neither overflows nor underflows).
+  for (let i = 0; i <= k; i++) edges[i] = single ? lo : 2 * (lo / 2 + i * (h / 2))
   if (binning.binCount !== undefined && !single && k) edges[k] = O ?? max
+  // Validated geometry: finite, strictly increasing edges (an edge lost to precision or range is invalid binning).
+  for (let i = 0; i <= k; i++) if (!Number.isFinite(edges[i]) || (!single && i && !(edges[i] > edges[i - 1]))) return HISTOGRAM_INVALID_BINNING
   const binOf = (v: number): number => {
     if (k === 1) return 0
-    let i = right ? Math.ceil((v - lo) / h) - 1 : Math.floor((v - lo) / h)
+    const q = span(lo, v, h)
+    let i = right ? Math.ceil(q) - 1 : Math.floor(q)
     i = Number.isFinite(i) ? Math.max(0, Math.min(k - 1, i)) : 0
     if (right) { while (i > 0 && v <= edges[i]) i--; while (i < k - 1 && v > edges[i + 1]) i++ }
     else { while (i > 0 && v < edges[i]) i--; while (i < k - 1 && v >= edges[i + 1]) i++ }
@@ -206,7 +247,25 @@ function bin(model: ChartModel, group: ChartExGroup, visible: ChartSeries[], tak
     push(() => `${open ? '(' : '['}${fmt(edges[i])}, ${fmt(edges[i + 1])}${close ? ']' : ')'}`)
   }
   if (O !== undefined) push(() => `${right ? '>' : '≥'}${fmt(O)}`)
-  return { labels, heights, retained: retained + labels.length * SLOT_BYTES }
+  // A bin is never one source point: overrides are not carried (map §5.1 [P]).
+  return { labels, heights, sources: visible.map(() => undefined), retained: retained + labels.length * SLOT_BYTES }
+}
+/** Scott's width `3.49 s n^(-1/3)` (sample s of the inner set), its moments on values scaled to at most 1. */
+function scott(visible: ChartSeries[], take: (s: ChartSeries, i: number) => boolean, under: (v: number) => boolean, over: (v: number) => boolean, n: number, maxAbs: number): number {
+  if (n < 2) return NaN
+  const scale = maxAbs > 0 ? 2 ** Math.min(1023, Math.ceil(Math.log2(maxAbs))) : 1
+  let count = 0, mean = 0, m2 = 0
+  for (const s of visible) for (let i = 0; i < s.values.length; i++) {
+    if (!take(s, i)) continue
+    const v = s.values.values[i]
+    if (under(v) || over(v)) continue
+    const x = v / scale
+    count++
+    const d = x - mean
+    mean += d / count
+    m2 += d * (x - mean)
+  }
+  return 3.49 * Math.sqrt(m2 / (n - 1)) * n ** (-1 / 3) * scale
 }
 /** The bin-label number format: the category axis's authored format, else the first value point's source format. */
 function labelFormat(model: ChartModel, group: ChartExGroup, visible: ChartSeries[]): string | undefined {
@@ -220,20 +279,29 @@ function labelFormat(model: ChartModel, group: ChartExGroup, visible: ChartSerie
   return undefined
 }
 
-/** Pareto (map §5.2): the owner's bars descending, ties in prior order; the cumulative fraction of the total. */
-function sortPareto(derived: Derived, charge: (bytes: number) => void): Derived & { cumulative: Float64Array } {
+/**
+ * Pareto (map §5.2): the owner's bars descending, ties in prior order (the source mapping moves with them); the
+ * cumulative fraction of the total, on bars scaled by a power of two near their largest magnitude so the total cannot overflow.
+ */
+function sortPareto(derived: Derived, charge: (bytes: number) => void): (Derived & { cumulative: Float64Array }) | string {
   const owner = derived.heights[0] ?? new Float64Array(derived.labels.length)
   const n = derived.labels.length
-  charge(n * 8 * (derived.heights.length + 2))
+  charge(n * 8 * (derived.heights.length + 2) + n * 4 * derived.sources.length)
   const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => owner[b] - owner[a] || a - b)
   const labels = order.map(i => derived.labels[i])
   const heights = derived.heights.map(h => Float64Array.from(order, i => h[i]))
+  const sources = derived.sources.map(src => src && Int32Array.from(order, i => src[i]))
+  let largest = 0
+  for (let i = 0; i < n; i++) largest = Math.max(largest, Math.abs(owner[i]))
+  // A power of two (exact division): the plain ratios are unchanged whenever the plain total is representable.
+  const unit = largest > 0 ? 2 ** Math.min(1023, Math.ceil(Math.log2(largest))) : 1
   let total = 0
-  for (let i = 0; i < n; i++) total += owner[i]
+  for (let i = 0; i < n; i++) total += owner[i] / unit
   const cumulative = new Float64Array(n)
   let running = 0
-  for (let i = 0; i < n; i++) { running += heights[0]?.[i] ?? 0; cumulative[i] = total > 0 ? running / total : 0 }
-  return { labels, heights, cumulative, retained: derived.retained }
+  for (let i = 0; i < n; i++) { running += (heights[0]?.[i] ?? 0) / unit; cumulative[i] = total > 0 ? running / total : 0 }
+  if (cumulative.some(v => !Number.isFinite(v))) return HISTOGRAM_OUT_OF_RANGE
+  return { labels, heights, sources, cumulative, retained: derived.retained }
 }
 
 const points = (values: Float64Array, built: Derived, charge: (bytes: number) => void): ChartPoints => {
@@ -244,6 +312,39 @@ const points = (values: Float64Array, built: Derived, charge: (bytes: number) =>
   return out.done()
 }
 const PARETO_CATEGORY = 'pareto-category', PARETO_PERCENT = 'pareto-percent', IMPLICIT_CATEGORY = 'histogram-category', IMPLICIT_VALUE = 'histogram-value'
+/** Whether a series carries any point-level override (fill, colour, line, point label). */
+const hasOverrides = (s: ChartSeries) => Boolean(s.dPt?.size || s.pointFills?.some(Boolean) || s.pointColors?.some(Boolean) || (s.labels?.points && Object.keys(s.labels.points).length))
+
+/**
+ * A derived series' point overrides (map §4.2): carried column by column where each column is one source point of
+ * the series (`source[j]`: its source index); otherwise none.
+ */
+function remapOverrides(s: ChartSeries, source: Int32Array | undefined, built: Derived, charge: (bytes: number) => void): Partial<ChartSeries> {
+  const { points: labelPoints, ...labels } = s.labels ?? {}
+  const out: Partial<ChartSeries> = s.labels ? { labels } : {}
+  if (!source || !hasOverrides(s)) return out
+  const dPt = new Map<number, ChartPointOverride>(), fills: ChartSeries['pointFills'] = [], colors: string[] = [], pointLabels: Record<number, LabelOptions> = {}
+  let kept = 0
+  for (let j = 0; j < source.length; j++) {
+    const i = source[j]
+    if (i < 0) continue
+    const point = s.dPt?.get(i), fill = s.pointFills?.[i], color = s.pointColors?.[i], label = labelPoints?.[i]
+    if (!point && !fill && !color && !label) continue
+    // The entry and slots are new; the override records are the parsed ones (shared, already owned).
+    charge(4 * SLOT_BYTES)
+    kept += 4 * SLOT_BYTES
+    if (point) dPt.set(j, point)
+    if (fill && j < CHART_POINT_LIMIT) fills[j] = fill
+    if (color && j < CHART_POINT_LIMIT) colors[j] = color
+    if (label) pointLabels[j] = label
+  }
+  built.retained += kept
+  if (dPt.size) out.dPt = dPt
+  if (fills.some(Boolean)) out.pointFills = fills
+  if (colors.some(Boolean)) out.pointColors = colors
+  if (Object.keys(pointLabels).length) out.labels = { ...labels, points: pointLabels }
+  return out
+}
 
 /** The derived model: a plain clustered column group (and a Pareto line group), the labels as categories. */
 function assemble(model: ChartModel, group: ChartExGroup, visible: ChartSeries[], built: Derived & { cumulative?: Float64Array }, pareto: ChartExSeriesInfo | undefined,
@@ -255,14 +356,22 @@ function assemble(model: ChartModel, group: ChartExGroup, visible: ChartSeries[]
     axes = [...axes, { id: IMPLICIT_CATEGORY, kind: 'category', deleted: false, gridlines: false, implicit: true }, { id: IMPLICIT_VALUE, kind: 'value', deleted: false, gridlines: true, implicit: true }]
     binding = { kind: 'cartesian', category: IMPLICIT_CATEGORY, value: IMPLICIT_VALUE }
   }
+  let dropped = 0
   const series: ChartSeries[] = visible.map((s, i) => {
-    const { points: _points, ...labels } = s.labels ?? {}
-    void _points
+    if (!built.sources[i] && hasOverrides(s)) dropped++
     return {
       name: s.name, color: s.color, values: points(built.heights[i], built, charge),
-      ...(s.fill ? { fill: s.fill } : {}), ...(s.lineStyle ? { lineStyle: s.lineStyle } : {}), ...(s.labels ? { labels } : {}),
+      ...(s.fill ? { fill: s.fill } : {}), ...(s.lineStyle ? { lineStyle: s.lineStyle } : {}), ...remapOverrides(s, built.sources[i], built, charge),
     }
   })
+  // Overrides that address a source point no single column draws are dropped, diagnosed once (map §4.2, §5.1 [P]).
+  const diagnostics = [...model.diagnostics ?? []]
+  if (dropped) {
+    const reason = `Point formatting and label overrides of ${dropped} histogram ${dropped === 1 ? 'series are' : 'series are'} not drawn: a binned or grouped column is not one source point`
+    charge(stringBytes(HISTOGRAM_OVERRIDES_DROPPED) + stringBytes(reason))
+    built.retained += stringBytes(HISTOGRAM_OVERRIDES_DROPPED) + stringBytes(reason)
+    diagnostics.push({ code: HISTOGRAM_OVERRIDES_DROPPED, reason })
+  }
   // Gap (map §5.1 step 9, §5.2): as authored; absent, 0 for binned columns (the histogram look) [P].
   const gapWidth = group.chartEx.gapWidth === undefined && !group.chartEx.byCategory ? 0 : group.gapWidth
   const groups: ChartGroup[] = [{ family: 'bar', barDir: 'col', grouping: 'clustered', series, binding, gapWidth, overlap: 0 }]
@@ -280,10 +389,10 @@ function assemble(model: ChartModel, group: ChartExGroup, visible: ChartSeries[]
       series: [{ name: visible[0]?.name ?? 'Pareto', color: pareto.color ?? '000000', values: points(built.cumulative, built, charge), line: true, markers: false, ...(pareto.lineStyle ? { lineStyle: pareto.lineStyle } : {}) }],
     })
   }
-  const { categoryPending: _p, categoryRef: _r, categoryHidden: _h, categoryValues: _v, preparedAxes: _a, ...rest } = model
-  void _p, void _r, void _h, void _v, void _a
+  const { categoryPending: _p, categoryRef: _r, categoryHidden: _h, categoryValues: _v, preparedAxes: _a, diagnostics: _d, ...rest } = model
+  void _p, void _r, void _h, void _v, void _a, void _d
   const truncated = model.truncated || built.labels.length > CHART_POINT_LIMIT
-  return { ...rest, groups, axes, categories: built.labels, ...(truncated ? { truncated: true } : {}) }
+  return { ...rest, groups, axes, categories: built.labels, ...(diagnostics.length ? { diagnostics } : {}), ...(truncated ? { truncated: true } : {}) }
 }
 
 /**
