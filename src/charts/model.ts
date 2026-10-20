@@ -172,6 +172,16 @@ export interface ChartSeries {
   analytic?: true | 'refused'
 }
 
+export interface ChartUpDownBar {
+  fill?: import('./fills').ChartFillStyle
+  line?: import('./style').ChartLineStyle
+}
+
+export interface ChartUpDownBars {
+  upBars?: ChartUpDownBar
+  downBars?: ChartUpDownBar
+}
+
 export interface ChartGroup {
   labels?: import('./labels').LabelControls
   family: ChartFamily
@@ -201,6 +211,9 @@ export interface ChartGroup {
   showNegBubbles?: boolean
   /** Radar (spec 4.1): `c:radarStyle`. */
   radarStyle?: 'standard' | 'marker' | 'filled'
+  /** Stock (spec 4.1): `c:hiLowLines` and `c:upDownBars`. */
+  hiLowLines?: import('./style').ChartLineStyle
+  upDownBars?: ChartUpDownBars
 }
 
 export interface ChartModel {

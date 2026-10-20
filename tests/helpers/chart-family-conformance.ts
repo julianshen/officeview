@@ -134,6 +134,11 @@ const VAL_VAL = '<c:valAx><c:axId val="1"/><c:scaling><c:orientation val="minMax
 const CAT_VAL_SER = '<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="1"/></c:valAx><c:serAx><c:axId val="3"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:serAx>'
 const ser = (inner: string) => `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx>${inner}</c:ser>`
 const categorySeries = (cache: string | null) => cache === null ? '' : ser(`<c:val>${cache}</c:val>`)
+const stockSeries = (c: string | null) => c === null ? '' : [
+  `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>High</c:v></c:tx><c:val>${c}</c:val></c:ser>`,
+  `<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Low</c:v></c:tx><c:val>${c}</c:val></c:ser>`,
+  `<c:ser><c:idx val="2"/><c:order val="2"/><c:tx><c:v>Close</c:v></c:tx><c:val>${c}</c:val></c:ser>`,
+].join('')
 
 /** The families the engine draws natively at A5a; later family tasks add theirs. */
 export const CLASSIC_FAMILIES: ConformanceFamily[] = [
@@ -149,6 +154,7 @@ export const CLASSIC_FAMILIES: ConformanceFamily[] = [
   { name: 'contour', chart: c => conformanceSpace(`<c:surfaceChart><c:wireframe val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surfaceChart>${CAT_VAL_SER}`) },
   { name: 'wireframe contour', chart: c => conformanceSpace(`<c:surfaceChart><c:wireframe val="1"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surfaceChart>${CAT_VAL_SER}`) },
   { name: 'filled radar', chart: c => conformanceSpace(`<c:radarChart><c:radarStyle val="filled"/><c:varyColors val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/></c:radarChart>${CAT_VAL}`) },
+  { name: 'stock', chart: c => conformanceSpace(`<c:stockChart>${stockSeries(c)}<c:hiLowLines/><c:axId val="1"/><c:axId val="2"/></c:stockChart>${CAT_VAL}`) },
 ]
 
 /** surface3D (spec 4.1: perspective is a non-goal): a card in every case, never a native chart. */
