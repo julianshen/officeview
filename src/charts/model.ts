@@ -42,7 +42,7 @@ export interface ChartPoints {
 }
 
 /** The data roles of a series (spec 6.4). Names and categories are strings; the rest are `ChartPoint`s. */
-export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus'
+export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus' | 'errorPlusX' | 'errorMinusX'
 
 /** Chart families of streams A and B (spec 4). */
 export type ChartFamily =
@@ -108,6 +108,8 @@ export interface ChartAxis {
   tickMarkSkip?: number
   /** `c:dispUnits`: tick values are divided by `divisor`; `label` is the unit label drawn beside the axis (spec 5.1). */
   dispUnits?: { divisor: number; unit: string; label?: string }
+  /** `c:catAx/c:noMultiLvlLbl`: a multi-level category axis shows only its innermost level (spec 5.9). */
+  noMultiLvlLbl?: true
   /** `c:dateAx` time units (spec 5.1); `auto` (`c:auto`) lets text categories fall back to a category axis. */
   baseTimeUnit?: ChartTimeUnit
   majorTimeUnit?: ChartTimeUnit
@@ -137,6 +139,8 @@ export interface ChartRange {
 
 export interface ChartSeries {
   labels?: import('./labels').LabelControls
+  /** The series index (`c:idx`; its position when absent or invalid): the key of its legend entry (spec 5.10). */
+  index?: number
   name: string
   /** CSS hex without `#`. */
   color: string
@@ -162,8 +166,13 @@ export interface ChartSeries {
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
   /** `c:trendline`s as authored (spec 5.6); fitted in stage 1 (`PreparedAxes.trendlines`). */
   trendlines?: import('./trendlines').ChartTrendline[]
-  /** References still to be filled from worksheet cells (no saved data for that role). */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; levels?: ChartRange }
+  /** `c:errBars` as authored (spec 5.7): at most one per direction; custom amounts are their own numeric roles. */
+  errorBars?: import('./errorBars').ChartErrorBars[]
+  /**
+   * References still to be filled from worksheet cells (no saved data for that role). The custom error amounts
+   * (`c:plus`/`c:minus`) are `errorPlus`/`errorMinus` for the y (value) direction, `errorPlusX`/`errorMinusX` for x.
+   */
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange; levels?: ChartRange }
   /** Treemap/sunburst (chartex-map §7): the category reference is a path with one level per column (`col`) or row
    * (`row`) of `pending.levels`, root first; every level is read (charts/chartex/hierarchy.ts). */
   levelDir?: 'col' | 'row'
@@ -213,6 +222,15 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  /** ofPie only: the secondary plot is a smaller pie or a stacked bar (`bar`). */
+  ofPieType?: 'pie' | 'bar'
+  /** ofPie only: how points split into the secondary plot; absent is the Office default `auto` at the engine. */
+  splitType?: 'auto' | 'cust' | 'percent' | 'pos' | 'val'
+  splitPos?: number
+  /** ofPie only: the secondary plot's size in percent of the primary radius (authored 5..200). */
+  secondPieSize?: number
+  /** ofPie only (`cust` split): the authored secondary-plot point indices. */
+  secondPiePt?: number[]
   /** Contour: `c:wireframe` (band boundaries only). */
   wireframe?: boolean
   /** Contour `c:bandFmts` by band index: the fill colour (hex), null for noFill; holes take the accent cycle. */
@@ -236,6 +254,16 @@ export interface ChartGroup {
   upDownBars?: ChartUpDownBars
 }
 
+/**
+ * One outer level of multi-level categories (spec 5.9; `multiLvlStrCache/lvl` after the first): group `k` starts at
+ * category index `starts[k]` (ascending) and spans until the next start of this level or of any level outside it.
+ */
+export interface ChartCategoryLevel { starts: Uint32Array; labels: string[] }
+/**
+ * A title run with its formatting resolved (spec 5.10: rPr, paragraph default, txPr, style part; absent: the
+ * theme default). A run whose text is `\n` separates paragraphs.
+ */
+export type ChartTextRun = import('./labels').LabelRun
 /**
  * ChartEx (`cx:`, Office 2016+) groups, read against docs/charts/chartex-map.md (spec 4.2, 4.3). A ChartEx chart is
  * the same `ChartModel`: its one group is a `ChartExGroup`, whose `series` carry the bound roles (values,
@@ -291,7 +319,8 @@ export interface ChartExGroup extends ChartGroup {
     plotAreaLine?: import('./style').ChartLineStyle
     /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
     gapWidth?: number
-    /** Treemap/sunburst: the colour of each root-level branch (resolved at parse, indexed modulo its length). */
+    /** Waterfall: the increase, decrease and total colours (style palette entries 0, 1, 2; hex), resolved at parse.
+     * Treemap/sunburst: the colour of each root-level branch (resolved at parse, indexed modulo its length). */
     palette?: string[]
   }
 }
@@ -304,6 +333,16 @@ export interface ChartModel {
   legendLayout?: ChartManualLayout
   text?: ChartTextStyle
   title?: string
+  /** The title's runs, formatting resolved (absent: one unformatted run of `title`). */
+  titleRuns?: ChartTextRun[]
+  /** `c:title/c:overlay`: the title takes no space from the plot. */
+  titleOverlay?: true
+  /** `c:legend/c:overlay`: the legend takes no space from the plot and is painted over it. */
+  legendOverlay?: true
+  /** `c:legendEntry/c:delete`: sorted legend entry indices removed (a series' `c:idx`; a point legend: the point index). */
+  legendDeleted?: Uint32Array
+  /** Outer category levels, innermost first (the innermost labels are `categories`; spec 5.9). */
+  categoryLevels?: ChartCategoryLevel[]
   /** The title's text style (ChartEx `title/txPr`). */
   titleText?: ChartTextStyle
   chartAreaFill?: import('./fills').ChartFillStyle
@@ -329,6 +368,8 @@ export interface ChartModel {
   categoryValues?: ChartPoints
   /** The shared category reference still to be filled from worksheet cells. */
   categoryPending?: ChartRange
+  /** `categoryPending` is a multi-level reference (`c:multiLvlStrRef`): its outer lines are outer levels (spec 5.9). */
+  categoryMultiLevel?: true
   /** The shared category reference (kept beside a cache, for provenance only). */
   categoryRef?: ChartRange
   /** Sorted category indices whose cell sits in a hidden row or column of the category reference. */

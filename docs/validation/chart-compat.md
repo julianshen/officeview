@@ -34,7 +34,12 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After A1a fix round 2 | A1a r2 commit | 38,636 | Streamed line/area/scatter construction, receiving-document chart contexts (`receiveCharts`, `PaintOptions.chartContext`/`chartProfile`, `ContentPaintAssets.chartContext`) and the finite-scale fallback: lazy `charts-*`, `office-worker` and `InteractiveSheetDoc` chunks. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes. Running total vs B0: +5 B |
 | After A1a fix round 3 | A1a r3 commit | 38,639 | The interactive sheet preparation forwards the chart context and parents the receiving chart facet to the viewer's main-thread ledger (`mainChartParent`): `InteractiveSheetDoc`, `office-worker` and `charts-*` chunks only. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes (hash churn only). Running total vs B0: +8 B |
 | After A1a fix round 4 | A1a r4 commit | 38,637 | Receiving chart contexts per (document, parent, profile), held by preparation/asset leases and carried per paint (`acquireChartContext`, `ContentPaintAssets.chartContext`): `charts-*`, `office-worker` and `InteractiveSheetDoc` chunks only. `dist/index.js` byte-identical to the `22576dd` build after normalising chunk hashes. Running total vs B0: +6 B |
+| After A4b | A4b commit | 38,640 | Before (`f04481f`, rebuilt from a clean `git archive`): 38,636. Title runs, legend overlay/legendEntry, multi-level category tiers (`src/charts/titles.ts`, `src/charts/categories.ts`, layout, paint, parse, style part) are all in the lazy `charts-*` chunk. `dist/index.js` byte-identical to the base build after normalising chunk hashes. Bytes added by A4b: 0 (hash churn only). Running total vs B0: +9 B |
+| After B2 | B2 commit | 38,636 | Before (`7c67e33` tree plus B2's type-only `chartEx.palette` field, rebuilt): 38,640. Waterfall and funnel families (`src/charts/chartex/waterfall.ts`, `funnel.ts`) and their hooks in axes, display, prepare, layout, labels and paint live in the lazy `charts-*` chunk; `dist/index.js` changes by hash churn only. Bytes added by B2: −4 (hash churn). Running total vs B0: +5 B. Ceiling 38,647 |
+| After B2 fix round 1 | B2 r1 commit | 38,635 | Subtotal state gate, finite funnel ratio, hidden series out of the display view, funnel label pricing: lazy `charts-*` chunk only (hash churn). Running total vs B0: +4 B |
+| After B2 merge with feature | merge commit | 38,635 | `feature/chart-compat` `cb5a0b5` merged into `chart/b2`; conflicts resolved keeping both sides (lazy `charts-*` chunk only). Running total vs B0: +4 B. Ceiling 38,647 |
 | After B5 | B5 commit | 38,639 | Before (`7c67e33`, rebuilt): 38,640. Treemap and sunburst (`src/charts/chartex/hierarchy.ts`, `hierarchyStyle.ts`, `treemap.ts`, `sunburst.ts`) and the hierarchy hooks in fill, precedence, embedded reader, stage 1, layout and paint all live in the lazy `charts-*` chunk; the two description names in the `imageAdmission` chunk. No eager source file was touched; measured −1 B (hash churn, not normalised). Bytes added by B5: 0. |
+| After B5 merge with feature | merge commit | 38,637 | `feature/chart-compat` merged into `chart/b5` (B2, A6b, A5c, A4b and the rest); conflicts resolved keeping both sides; B5 review minors (label numFmt, exclusion order) applied. Lazy `charts-*` chunk only. Before (feature ledger, B2 merge): 38,635; +2 B hash churn. Ceiling 38,647 |
 
 ## Spec §8 testing and validation
 
@@ -196,6 +201,67 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
 
+## A4b titles, legends and multi-level categories (spec 5.9, 5.10)
+
+- **Title content.** `title/tx/rich`, else the `title/tx/strRef` cache, else the automatic title (a single series' name, else "Chart Title"; 圖表標題 for a `zh` chart), never when `autoTitleDeleted` is set. As before A4b, the automatic title needs a `c:title` element; an uncached `strRef` title falls to the automatic title (§5.10 names the cache; no worksheet fill of title references).
+- **Run formatting.** Each attribute (size, bold, italic, colour, typeface, underline) comes from the first level that states it: run `a:rPr`, the paragraph's `a:pPr/a:defRPr`, the title's `c:txPr`, the chart style part's `cs:title` (`cs:defRPr`, its `a:latin`, and the `cs:fontRef` colour and `idx` major/minor face), then the theme defaults (the theme minor font at 1.4 x the chart size, `#595959`). Theme typefaces (`+mn-lt`, `+mj-lt`) resolve to the theme's latin faces. Run typefaces are measured and painted through the viewer's font-family mapping and are part of the placement key. Underline is drawn as a single line below the baseline (all `u` values but `none`; double/wavy styles are not distinguished). Mixed-size runs share one baseline (the tallest ascent, measured where the canvas reports it, else 0.8 of the size); a single-run line keeps the plain title's drawing. Paragraphs and `a:br` are lines; the title band grows with its lines (1.2 x line spacing, unverified) but never beyond half the chart area: lines that do not fit are omitted with `chart-title-truncated`, the first line too (the title is then not drawn, plain titles included), so the plot never loses its height to the title. At most 64 records (text runs and line breaks alike), 16 lines and 1,024 text units per title are kept, charged before they are built; a title cut by these bounds marks the chart truncated, carries `chart-title-truncated`, and its shown (painted and described) title is what the runs keep. A run-less plain title draws exactly as before.
+- **Legend.** `legendPos` r, l, t, b and tr as before; `overlay=1` keeps the legend's place but takes no space from the plot and paints it over the plot (likewise a title `overlay=1`). A point legend lists the points (categories, each with its point colour): pie and doughnut, and any chart whose single series has varyColors on (bar, line and the rest). `legendEntry/delete` removes a point entry by its point index, and otherwise a series entry by the series' `c:idx` (any unsigned index; never its document position). Combined with A6a and A5d: trendline entries follow the series (or a single varyColors series' points); a trendline's entry index is the highest series `c:idx` + 1 + its ordinal in series order (in a point legend: the point count + its ordinal), so it never shares a series or point key; a contour's band entries are deleted by band index. This numbering scheme is **unverified against Office**. Office's legend for combination charts and trendline entries is **unverified**.
+- **Multi-level categories.** Every `c:lvl` of `multiLvlStrCache` is read: the first is the innermost (the axis labels as before), each further level a tier of group labels. A group spans from its `pt@idx` to the next label of its level or of any outer level; the cache's `ptCount` now sets the category count. Each level is sized by a walk over the parsed nodes in place (no copy of the source lists), charged (with a sort workspace of one key and position per valid label for out-of-order indices), then built from valid entries only; the walk stops at the first level over the bounds and reads no level outside it. An **uncached** `multiLvlStrRef` reads its outer levels from the worksheet through the same fill (resident and paged): the reference's lines outside the innermost (columns leftward of the last for a vertical range, rows above the last for a horizontal one), a non-empty cell starting a group; only the eight outer lines the fill can keep are acquired (resident and paged), the excess reported from the full range; an outer cell without a saved value makes that level and those outside it undrawn, with `chart-category-level-unreadable`; levels over the bounds give `chart-category-levels-truncated`. Tiers are drawn beyond the innermost labels (rows below a horizontal axis, columns beside a vertical one), each label centred on its span and compressed to it, with separators at the group edges from the axis through the tier (the look is **unverified against Office**; Office also wraps long group labels). Spans follow the display view (plotVisOnly, the 4,096-point display bound). `noMultiLvlLbl=1` draws the innermost level only, pixel-identical to a single-level axis. At most 4,096 outer labels and 8 outer levels are kept; a level that does not fit is dropped with every level outside it, and a cut label or dropped level marks the chart truncated.
+- **Validation status.** Pixel identity is from a scratch hash harness (node-canvas) over the chart test files; browser evidence is Chromium only (WebKit cannot launch on the build host). No Office-rendered reference is compared.
+- **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
+
+## A6b error bars: implemented and unverified behaviour (spec 5.7)
+
+Fixtures are Office-shaped synthetic (`tests/charts-error-bars.test.ts`); none of this is matched against an Office reference yet.
+
+- **100% stacked groups.** Bars are drawn in the normalised (share) space. The anchor is the stacked share. Fixed and custom amounts are divided by the slot's total of |values|, the same normalisation as the point. A percentage is relative to the normalised value. stdDev and stdErr run over the normalised values. This is an **approximation** and is **unverified against Office**.
+- **stdErr** is s/√n, with s the n−1 sample deviation. `val` has no role. Unverified.
+- **stdDev on stacked groups** is centred on the series mean plus the point's stack offset. Unverified.
+- **Absent `val`** is 1 (the schema has no default). Unverified.
+- **Custom amounts** are signed as authored (a negative plus amount draws downward). A point missing an amount its `errBarType` needs draws no bar. Unverified.
+- **Hidden points** (plotVisOnly) leave the stdDev/stdErr computation. Unverified.
+- **Default rendering** without `a:ln` is #595959 at 1 px, with 3 px end caps either side. Unverified constants.
+- **Automatic axes** include the bar ends (100% stacked axes stay 0–100%). Unverified.
+
+## B2 waterfall and funnel (ChartEx display families)
+
+Waterfall and funnel are painted natively (`CHARTEX_PAINTED`). They are display families: at most 4,096 points are
+drawn, and the model is capped and marked `truncated` at parse (cache) or fill (reference). This was already
+implemented and tested in B1 (`charts-chartex-review.test.ts` I1).
+
+Native evidence: WF1, WF2 and FN1 (Excel) and FN2 (PowerPoint) render natively end to end. The `mc:Choice` is
+selected, and FN2's coverage is `native` / `chart`. The subtotal, override, connector-off and several-series cases
+use Office-shaped synthetic parts, which are not Office evidence.
+
+Rules implemented from the map but **unverified** against Office output:
+
+- **Subtotal height** (map §6, §12.3): a subtotal bar is drawn from 0 to the running total `acc`, not to the
+  point's own cell value. The accumulator continues from it. No native part lists a `subtotals/idx`. The data label
+  of a subtotal still shows the point's own value.
+- **Absent `connectorLines`** defaults to on (map §4.1). WF1 omits it and draws 11 connectors.
+- **Connector geometry and style:** a horizontal line at the level after bar *i*, from its far edge to the near edge
+  of bar *i+1*. It is drawn only between two adjacent drawn bars, as a thin grey line (`#7F7F7F`, 0.75 pt).
+- **Kind colours:** increase, decrease and total use style palette entries 0, 1 and 2 (accents 1-3), resolved at
+  parse. The legend shows Increase, Decrease and Total. A `dataPt` fill or colour overrides one bar. A series-level
+  `spPr` fill is not applied to the bars.
+- **Waterfall point states** (map §2.4 [P]): blank, error, unavailable and hidden points draw no bar and contribute 0.
+  An error is diagnosed (`chart-waterfall-error-point`); an unavailable point raises `chart-point-unavailable`.
+- **Ordinal category labels** (map §2.3 [P]): a waterfall or funnel with no category dimension is labelled 1..n. A
+  category role filled per series (XLSX `_xlchart` names) is used for the labels.
+- **Funnel geometry** (map §9 [U]): bars run top to bottom in source order. Each bar is centred, its width is
+  value / max of the plot width, and its thickness is band / (1 + gapWidth). Values of zero or below draw a
+  zero-width bar but keep their label. Category labels are drawn right-aligned to the left of the plot.
+- **Funnel label positions:** `ctr` (the default) is the bar centre. `inEnd`, `inBase` and `outEnd` are placed at
+  the bar ends, and `t`, `b`, `l` and `r` are offset 8 px. The waterfall default is `outEnd`.
+- **Several visible series** are unsupported, and the fallback picture is kept. For funnel this is map §9 [U]. For
+  waterfall it is a **[P] project rule**, recorded in map §6 by controller ruling at B2 review round 1: no native
+  file shows a multi-series waterfall. Hidden series never reach the display view, so they change neither the
+  slots, the geometry, the labels nor the legend.
+- **Error bars:** waterfall and funnel never draw error bars. They stay outside A6b's drawable families (the
+  ChartEx families are on its never-draw list), and the ChartEx parser reads no error bars; a set placed on such a
+  model is dropped with `chart-error-bars-dropped` (pinned in the B2 tests).
+- **Subtotal point states [P]:** a subtotal index on a hidden, blank, error or unavailable point draws no bar and
+  leaves the running total unchanged; an error is diagnosed like any other waterfall point.
 ## B5 treemap and sunburst: project rules and unverified behaviour (chartex-map §7)
 
 Evidence: TM and SB (Office-authored inputs; their parts carry no derived tree and their XLSX fallback is a text box,
@@ -212,8 +278,10 @@ the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond
   a row excluded for its weight still moves the path.
 - **Identity and aggregation [P]: unverified.** Full-path identity; duplicate paths summed; a parent is the sum of its
   descendants; a path that is both a leaf and a prefix keeps its own weight as an unnamed child `""`.
+- **Value labels.** Node values shown by `dataLabels` use the label `numFmt` (unless source-linked; else General), formatted at stage 1.
+- **Order [P].** A row with no label at any level is excluded before its weight is read (an unavailable weight on such a row does not refuse).
 - **Weights [P].** Positive finite values only; zero, negative, blank and error weights are excluded with a diagnostic;
-  an unavailable weight refuses the chart.
+  an unavailable weight refuses the chart. Error bars are never drawn (outside A6b's drawable families).
 - **Node bound.** More than 4,096 nodes (internal and unnamed nodes counted) refuses the chart with "This chart has too
   many data points to summarize".
 - **Label budget [P].** A hierarchy label dropped past the chart's 4 MiB label budget refuses the chart (a dropped label

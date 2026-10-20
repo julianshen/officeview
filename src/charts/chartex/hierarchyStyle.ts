@@ -28,7 +28,8 @@ export function nodeText(series: ChartSeries, tree: ChartExHierarchy, i: number)
   const parts: string[] = []
   if (controls.showSerName) parts.push(series.name)
   if (controls.showCatName && tree.labels[i]) parts.push(tree.labels[i])
-  if (controls.showVal) parts.push(formatNumber(tree.weight[i]))
+  // The stage-1 text in the label number format (map §4.2), else General-like grouping for an unprepared tree.
+  if (controls.showVal) parts.push(tree.values?.[i] ?? formatNumber(tree.weight[i]))
   return parts.join(controls.separator ?? ', ')
 }
 /** The treemap's parent-label layout: authored, else `overlapping` (the proposed default, unverified). */

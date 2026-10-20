@@ -50,6 +50,8 @@ export interface ChartExHierarchy {
   levels: number
   /** The sum of every root-level weight. */
   total: number
+  /** Each node's value text in the label number format (stage 1; present when the labels show values). */
+  values?: string[]
 }
 export type HierarchyResult = { tree: ChartExHierarchy; diagnostics: ChartDiagnostic[] } | { refused: string }
 
@@ -77,7 +79,7 @@ const NODE_WORK_BYTES = 320
 const NODE_BYTES = 4 + 2 + 8 + 4 + 4 + 8
 /** The retained footprint of a derived tree (its labels priced in full, though they share the level strings). */
 export const hierarchyBytes = (tree: ChartExHierarchy | undefined): number =>
-  tree ? 256 + tree.count * NODE_BYTES + tree.labels.reduce((n, label) => n + stringBytes(label), 0) : 0
+  tree ? 256 + tree.count * NODE_BYTES + tree.labels.reduce((n, label) => n + stringBytes(label), 0) + (tree.values ?? []).reduce((n, text) => n + 8 + stringBytes(text), 0) : 0
 
 interface Node { label: string; parent: number; own: number; ownSeq: number; seq: number; children?: Map<string, number> }
 const EMPTY = (): ChartExHierarchy => ({ count: 0, labels: [], parent: new Int32Array(0), depth: new Uint16Array(0), weight: new Float64Array(0), end: new Int32Array(0), branch: new Int32Array(0), levels: 0, total: 0 })
@@ -109,10 +111,11 @@ export function buildHierarchy(levels: ReadonlyArray<ReadonlyArray<string | unde
   }
   for (let r = 0; r < rows; r++) {
     const state = r < weights.length ? weights.states[r] : 0
-    if (state === POINT_UNAVAILABLE) return { refused: CHART_DATA_NOT_AVAILABLE }
+    // Map §7 order: a row with no label at any level is excluded (step 1) before its weight is looked at (step 6).
     let depth = -1
     for (let j = 0; j < depthLimit; j++) if (levels[j][r]) depth = j
     if (depth < 0) { excludedRows++; continue }
+    if (state === POINT_UNAVAILABLE) return { refused: CHART_DATA_NOT_AVAILABLE }
     for (let j = 0; j <= depth; j++) {
       const cell = levels[j][r]
       if (cell && cell !== path[j]) { path[j] = cell; for (let k = j + 1; k < depthLimit; k++) path[k] = undefined }
@@ -191,4 +194,20 @@ export function deriveChartHierarchy(model: ChartModel, charge: (bytes: number) 
     result.diagnostics.push(diagnostic)
   }
   return result
+}
+
+/**
+ * The value text of every node in the series' label number format (`dataLabels/numFmt`, unless source-linked; else
+ * General), formatted at stage 1 so the paint never formats. Only when the drawn series' labels show values.
+ */
+export function formatHierarchyValues(model: ChartModel, tree: ChartExHierarchy, format: (value: number, code: string | undefined) => string, charge: (bytes: number) => void): void {
+  const group = model.groups[0]
+  if (!isHierarchyGroup(group) || !tree.count) return
+  const visible = group.chartEx.series.findIndex(info => !info.hidden)
+  const labels = group.series[visible < 0 ? 0 : visible]?.labels
+  if (!labels?.showVal) return
+  // Each text is bounded by the formatter's 256-unit output, admitted before it is built.
+  charge(tree.count * (8 + stringBytes(' '.repeat(256))))
+  const code = labels.sourceLinked !== true ? labels.formatCode : undefined
+  tree.values = Array.from({ length: tree.count }, (_, i) => format(tree.weight[i], code))
 }

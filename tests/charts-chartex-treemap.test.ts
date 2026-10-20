@@ -26,6 +26,7 @@ import { paintXlsxChart } from '../src/charts/paint'
 import { releaseChartModel } from '../src/charts/own'
 import { PointWriter } from '../src/charts/points'
 import { createChartWorkspace } from '../src/charts/workspace'
+import { prepareChartAxes } from '../src/charts/prepare'
 import type { ChartExGroup, ChartModel, ChartPoints } from '../src/charts/model'
 import type { ChartParseContext } from '../src/charts/context'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -393,6 +394,36 @@ describe('treemap and sunburst (chartex-map §7)', () => {
       expect((s.drawings[0].content as { chart: ChartModel }).chart, range).toMatchObject({ unsupported: TOO_MANY, refused: true })
     }
   }, 120_000)
+})
+
+describe('treemap and sunburst after the feature merge (B5 review minors, A6b)', () => {
+  it('value labels use the authored label number format; a label-less row is excluded before its weight is read; no error bars', async () => {
+    // Office-shaped synthetic: values shown with numFmt "0.00" (formatted at stage 1, drawn as such).
+    const part = hierarchyPart('treemap', `${cachedLevel('cat', ['a', 'b'])}${cachedLevel('size', [3, 4.5])}`)
+      .replace('<cx:visibility seriesName="0" categoryName="1" value="0" />', '<cx:numFmt formatCode="0.00" sourceLinked="0" /><cx:visibility seriesName="0" categoryName="0" value="1" />')
+    const p = await synthetic(part)
+    const result = await parseChartExPart(p.root, theme, p.context)
+    expect(result.kind).toBe('native')
+    if (result.kind !== 'native') return
+    expect(treeOf(result.model).values).toEqual(['3.00', '4.50'])
+    expect(record(result.model).texts.map(t => t.text)).toEqual(expect.arrayContaining(['3.00', '4.50']))
+    // A6b: treemap and sunburst never draw error bars (they are outside the drawable families): dropped, diagnosed.
+    for (const family of ['treemap', 'sunburst'] as const) {
+      const bars = { dir: 'y', type: 'both', valType: 'fixedVal', val: 1, noEndCap: false } as const
+      const m: ChartModel = { ...result.model, preparedAxes: undefined, groups: result.model.groups.map(g => ({ ...g, family, series: g.series.map(s => ({ ...s, errorBars: [bars] })) })) }
+      const prepared = prepareChartAxes(m)
+      expect(prepared.preparedAxes!.errorBars ?? [], family).toHaveLength(0)
+      expect(prepared.preparedAxes!.diagnostics.map(d => d.code), family).toContain('chart-error-bars-dropped')
+      expect(prepared.preparedAxes!.hierarchy?.count, family).toBe(2)
+    }
+    releaseChartModel(result.model)
+    p.release()
+    // Map §7 order: a row with no label at any level is excluded (step 1) even when its weight is unavailable (step 6).
+    const out = build([['a'], ['']], [1, 'unavailable'])
+    if ('refused' in out) throw new Error(out.refused)
+    expect(flat(out.tree)).toEqual([['a', 0, 1]])
+    expect(out.diagnostics.map(d => d.code)).toContain('chart-hierarchy-row-excluded')
+  })
 })
 
 /** The conformance harness (spec 7), with the numeric case as the size dimension and generated category names. */
