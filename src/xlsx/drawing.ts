@@ -308,12 +308,12 @@ export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: 
         }
         recover(members, top, replacement, refused)
         list.splice(at, members.length, ...replacement)
-        // The enclosing wrapper's branch now holds the replacement where the replaced objects were.
+        // Every enclosing wrapper whose (flattened) branch held the replaced objects now holds the replacement there.
         const parent = wrapper.parent
-        if (parent) {
-          const k = parent.members.indexOf(members[0])
-          if (k >= 0) parent.members.splice(k, members.length, ...replacement)
-          if (placement && !parent.placement) parent.placement = placement
+        for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
+          const k = ancestor.members.indexOf(members[0])
+          if (k >= 0) ancestor.members.splice(k, members.length, ...replacement)
+          if (placement && !ancestor.placement) ancestor.placement = placement
         }
         adoptUnder(replacement, parent)
         wrapper.done = true
@@ -327,18 +327,24 @@ export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: 
   const visit = async (list: XlsxDrawing[], top: boolean): Promise<void> => {
     // Nested lists (group children) first.
     for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
-    // Then this list's wrappers, innermost first; a replacement re-opens the scan (the list changed).
+    // Then this list's wrappers, innermost first, each at most once in this pass: one still waiting on data stays
+    // open for a later call. A replacement re-opens the scan (the list changed) and its ancestors (their branches did).
+    const seen = new Set<FallbackWrapper>()
     for (;;) {
       const open = new Set<FallbackWrapper>()
-      for (const drawing of list) for (let w = innermostWrapper.get(drawing); w; w = w.parent) if (!w.done && w.members.includes(drawing)) open.add(w)
+      for (const drawing of list) for (let w = innermostWrapper.get(drawing); w; w = w.parent) if (!w.done && !seen.has(w) && w.members.includes(drawing)) open.add(w)
       const next = [...open].sort((a, b) => wrapperDepth(b) - wrapperDepth(a))[0]
       if (!next) break
+      seen.add(next)
       const before = replaced
       replaced = false
       await settle(next, list, top)
       const changed = replaced
       replaced = before || changed
-      if (changed) for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
+      if (changed) {
+        for (let ancestor = next.parent; ancestor; ancestor = ancestor.parent) seen.delete(ancestor)
+        for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
+      }
     }
     // A chart refused with no wrapper able to replace it keeps its card; a native coverage entry for it is stale.
     for (const drawing of list) {

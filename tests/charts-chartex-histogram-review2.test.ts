@@ -20,6 +20,8 @@ import { parseChartPart } from '../src/charts/dataPrecedence'
 import { pointList } from '../src/charts/points'
 import type { ChartModel } from '../src/charts/model'
 import { parseXlsx } from '../src/xlsx/parse'
+import { parseWorksheetDrawings, settleChartFallbacks } from '../src/xlsx/drawing'
+import type { XlsxSheet } from '../src/xlsx/types'
 import { getPaintables } from '../src/render/paint'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
@@ -160,6 +162,47 @@ describe('B3 review round 2', () => {
     const native = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(__dirname, 'fixtures', 'chartex', 'treemap', 'treemap.xlsx')))), { valuePolicy: 'cached' } as never)
     expect(native.sheets[0].drawings?.[0].content?.kind).toBe('xlsxChart')
     expect(native.sheets[0].drawingCoverage?.find(e => e.element === 'graphicFrame')).toMatchObject({ selectedRepresentation: 'chart' })
+  })
+
+  it('R6: a three-level nest with a refused outer sibling selects the OUTER fallback, late as early', async () => {
+    const MC = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+    const CX1 = 'xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1"'
+    // codex's case: INNER inside MIDDLE inside OUTER; OUTER's Choice also holds a second copy of the chart frame.
+    const triple = (xml: string) => xml.replace(/<mc:AlternateContent[\s\S]*?<\/mc:AlternateContent>/, ac => {
+      const fallback = ac.match(/<mc:Fallback>([\s\S]*?)<\/mc:Fallback>/)![1]
+      const named = (name: string) => fallback.replace(/name="[^"]*"/, `name="${name}"`)
+      const frame = ac.match(/<xdr:graphicFrame[\s\S]*?<\/xdr:graphicFrame>/)![0]
+      const inner = ac.replace(/<mc:Fallback>[\s\S]*?<\/mc:Fallback>/, `<mc:Fallback>${named('INNER')}</mc:Fallback>`)
+      const middle = `<mc:AlternateContent ${MC}><mc:Choice ${CX1}>${inner}</mc:Choice><mc:Fallback>${named('MIDDLE')}</mc:Fallback></mc:AlternateContent>`
+      return `<mc:AlternateContent ${MC}><mc:Choice ${CX1}>${middle}${frame}</mc:Choice><mc:Fallback>${named('OUTER')}</mc:Fallback></mc:AlternateContent>`
+    })
+    const run = async (binSize: (xml: string) => string) => {
+      const xlsx = await parseXlsx(await OfficePackage.load(await hi2({ 'xl/drawings/drawing1.xml': triple, 'xl/charts/chartEx1.xml': binSize })))
+      return { drawings: xlsx.sheets[0].drawings?.map(d => [d.source.name, d.source.representation]), choice: xlsx.sheets[0].drawingCoverage?.filter(e => e.representation === 'choice').length }
+    }
+    const late = await run(TINY), early = await run(xml => xml.replace(/<cx:binSize val="2" ?\/>/, '<cx:binSize val="-1" />'))
+    // OUTER's Choice holds a refused chart (the sibling frame), so the whole outer branch gives way.
+    expect(late.drawings).toEqual([['OUTER', 'fallback']])
+    expect(late.drawings).toEqual(early.drawings)
+    expect(late.choice).toBe(0)
+  })
+
+  it('R7: settlement returns promptly on a chart still waiting on data, and keeps its fallback route', async () => {
+    // HI2's chart parsed alone (no fill): its defined-name reference is still pending.
+    const pkg = await OfficePackage.load(new Uint8Array(readFileSync(HI2)))
+    const sheet = { name: 'Sheet1', rows: [], cols: [], merges: [], mergeRanges: [] } as unknown as XlsxSheet
+    await parseWorksheetDrawings(pkg, sheet, 'xl/worksheets/sheet1.xml', (await pkg.xml('xl/worksheets/sheet1.xml'))!, theme)
+    const content = sheet.drawings![0].content
+    if (content?.kind !== 'xlsxChart') throw new Error('chart')
+    expect(content.chart.groups[0].series[0].pending?.values).toBeDefined()
+    // Returns (bounded), nothing replaced: the chart is waiting, not refused.
+    const timeout = new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 2000))
+    expect(await Promise.race([settleChartFallbacks(sheet), timeout])).toBe(false)
+    expect(sheet.drawings!.map(d => d.source.representation)).toEqual(['choice'])
+    // Its route stays: refused later (as the fill would), the next settlement selects the authored fallback.
+    content.chart = { ...content.chart, unsupported: 'invalid binning', refused: true }
+    expect(await Promise.race([settleChartFallbacks(sheet), timeout])).toBe(true)
+    expect(sheet.drawings!.map(d => [d.source.element, d.source.representation])).toEqual([['sp', 'fallback']])
   })
 
   it('R2: ordinary arithmetic is kept where it is representable', async () => {
