@@ -18,12 +18,14 @@ import { createWebGL2Compositor } from '../slideshow/render/webgl2'
 import { buildRenderPlan, type PlanLayer } from '../slideshow/render/plan'
 import { rasterLayer, type RasterContext } from '../slideshow/render/raster'
 import { MASK_KINDS } from '../slideshow/render/masks'
+import { transitionDraw } from '../slideshow/render/transitions2d'
+import { CATALOGUE } from '../slideshow/catalogue'
 import { ManualClock } from '../slideshow/clock'
 import { createDiagnosticSink } from '../slideshow/diagnostics'
 import { createRng } from '../slideshow/rng'
 import type {
   Affine, CanvasFactory, ColorMatrix, Compositor, LayerBitmap, LayerDraw, LayerHandle, Lease, MaskKind, MaskState, SlideShowDiagnostic,
-  SlideShowWorkspace, SubOwner, TargetState, TerminalReserve, Tolerance, TransitionDraw,
+  SlideShowWorkspace, SubOwner, TargetState, TerminalReserve, Tolerance, TransitionDraw, TransitionSpec,
 } from '../slideshow/types'
 import type { PptxShape, PptxSlide } from '../pptx/types'
 import { frameDiff, withinTolerance } from './slideshow-parity'
@@ -112,7 +114,7 @@ function bitmap(bounds: Bounds, v: Variant): LayerBitmap {
 // ---------------------------------------------------------------------------
 interface Scene {
   name: string
-  group: 'static' | 'transform' | 'mask-layer' | 'mask-transition' | 'transition'
+  group: 'static' | 'transform' | 'mask-layer' | 'mask-transition' | 'transition' | 'transition-2d'
   tolerance: Tolerance
   layers: Array<{ bounds: Bounds; v: Variant }>
   draws(h: LayerHandle[]): LayerDraw[]
@@ -183,6 +185,30 @@ function scenes(): Scene[] {
   list.push(tr('cover-zoom', { to: [0.6, 0, 0, 0.6, 0.2, 0.25], toOpacity: 0.7 }))
   list.push(tr('fade', { toOpacity: 0.4 }))
   list.push(tr('wipe+draws-on-top', { mask: { kind: 'wipe', progress: 0.35, params: { from: 'r' } } }, 'b'))
+  // S1-15: every 2-D catalogue row (and the attribute variants with their own geometry) through
+  // transitionDraw at 0/25/50/75/100 %, compared at the row's own tolerance.
+  const specOf = (element: string, ns: string, attrs: Record<string, string> = {}): TransitionSpec =>
+    ({ element, ns: ns as TransitionSpec['ns'], attrs, durationMs: 500, advClick: true })
+  const rows = CATALOGUE.filter(r => r.kind === 'transition' && r.stage === 1)
+  const variants: Array<{ name: string; spec: TransitionSpec; tolerance: Tolerance }> = rows.map(r => ({ name: r.id, spec: specOf(r.element!, r.ns!), tolerance: r.tolerance }))
+  const tol = (element: string) => rows.find(r => r.element === element)!.tolerance
+  for (const [element, attrs] of [
+    ['cut', { thruBlk: '1' }], ['fade', { thruBlk: '1' }], ['zoom', { dir: 'in' }], ['pull', { dir: 'ld' }], ['cover', { dir: 'ru' }],
+    ['split', { orient: 'vert', dir: 'in' }], ['wipe', { dir: 'd' }], ['strips', { dir: 'rd' }], ['checker', { dir: 'vert' }],
+  ] as const) variants.push({ name: `transition:p:${element} ${JSON.stringify(attrs)}`, spec: specOf(element, 'p', attrs), tolerance: tol(element) })
+  for (const v of variants) {
+    for (const p of [0, 0.25, 0.5, 0.75, 1]) {
+      list.push({
+        name: `${v.name} @${p}`, group: 'transition-2d', tolerance: v.tolerance,
+        layers: [{ bounds: FULL, v: 'from' }, { bounds: FULL, v: 'to' }],
+        draws: () => [],
+        transition: h => {
+          const rng = createRng(17)
+          return { from: h[0], to: h[1], effect: v.spec.element, progress: p, params: transitionDraw(v.spec, p, rng, SLIDE_W / SLIDE_H), rng }
+        },
+      })
+    }
+  }
   return list
 }
 

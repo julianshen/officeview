@@ -29,7 +29,13 @@
  *   which is computed in device px over the incoming layer's device rect
  *   (its bounds under the viewport; the slide rect for a full-slide frame).
  *   The transition composites first and `draws` go on top (the watermark is a
- *   top layer no effect moves).
+ *   top layer no effect moves). S1-15: the transition is clipped to the
+ *   incoming layer's device rect with its edges rounded to device pixels
+ *   (`transitionRect`; the slide rect), so a moving frame never spills into
+ *   the letterbox. Additive params: `backdrop` (`'black'` or `'white'`) fills
+ *   that rect opaquely under both frames; `fromOnTop`
+ *   draws the incoming frame first and the outgoing one over it (the mask
+ *   still applies to the incoming frame).
  * - **Noise determinism.** A transition's `rng` is stateful; one seed is drawn
  *   from it once and every frame re-seeds from that, so a dissolve keeps its
  *   pattern. A layer mask (no rng) uses `params.seed` (default 0).
@@ -52,7 +58,7 @@ import type {
   Rng, SlideShowWorkspace, TransitionDraw,
 } from '../types'
 import { createRng } from '../rng'
-import { MASK_MAX_OPS, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskRaster } from './masks'
+import { BACKDROP_RGB, MASK_MAX_OPS, transitionRect, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskRaster } from './masks'
 
 /**
  * The largest texture side the Canvas 2D backend accepts. 8192 is the
@@ -72,7 +78,10 @@ interface Texture {
   lease: Lease
   tint?: { key: string; surface: Surface }
 }
-interface TransitionParams { mask?: MaskState; from?: Affine; to?: Affine; fromOpacity?: number; toOpacity?: number }
+interface TransitionParams {
+  mask?: MaskState; from?: Affine; to?: Affine; fromOpacity?: number; toOpacity?: number
+  fromOnTop?: boolean; backdrop?: 'black' | 'white'
+}
 
 const IDENTITY: Affine = [1, 0, 0, 1, 0, 0]
 
@@ -300,11 +309,30 @@ export function createCanvas2DCompositor(
       return { x: x0, y: y0, w: Math.max(...px) - x0, h: Math.max(...py) - y0 }
     }
     const from = lookup(tr.from, tr.effect), to = lookup(tr.to, tr.effect)
-    if (from) drawLayer(from.canvas, from.bounds, fit(from, params.from), clamp01(params.fromOpacity, 1), undefined, IDENTITY, from.bounds, 0, tr.effect)
+    const backdrop = params.backdrop === 'black' || params.backdrop === 'white' ? BACKDROP_RGB[params.backdrop] : undefined
+    const slide = to ?? from
+    if (!slide) return
+    const r = transitionRect(deviceRect(slide.bounds))
+    out.save()
+    out.setTransform(1, 0, 0, 1, 0, 0)
+    out.beginPath()
+    out.rect(r.x, r.y, r.w, r.h)
+    out.clip()
+    if (backdrop) {
+      out.globalAlpha = 1
+      out.fillStyle = `rgb(${backdrop[0]},${backdrop[1]},${backdrop[2]})`
+      out.fillRect(r.x, r.y, r.w, r.h)
+    }
+    const drawFrom = () => {
+      if (from) drawLayer(from.canvas, from.bounds, fit(from, params.from), clamp01(params.fromOpacity, 1), undefined, IDENTITY, from.bounds, 0, tr.effect)
+    }
+    if (!params.fromOnTop) drawFrom()
     if (to) {
       const seed = params.mask ? seedOf(tr.rng) : 0
       drawLayer(to.canvas, to.bounds, fit(to, params.to), clamp01(params.toOpacity, 1), params.mask, IDENTITY, deviceRect(to.bounds), seed, tr.effect)
     }
+    if (params.fromOnTop) drawFrom()
+    out.restore()
   }
 
   function drawOne(d: LayerDraw) {

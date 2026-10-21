@@ -25,7 +25,8 @@
  * - `box`, `circle`, `diamond`, `plus`: `dir` `'out' | 'in'` (default `'out'`:
  *   grows from the centre; `'in'` closes from the edges toward the centre).
  * - `wedge`: two arms sweeping from 12 o'clock both ways around the centre.
- * - `wheel`: `spokes` (default 1, at most 64), each sector sweeping clockwise from 12 o'clock.
+ * - `wheel`: `spokes` (default 1, at most 64), each sector sweeping clockwise from 12 o'clock;
+ *   `dir` `'cw' | 'ccw'` (default `'cw'`; `'ccw'` sweeps counter-clockwise, S1-15 `wheelReverse`).
  * - `checkerboard`: `dir` `'across' | 'down'` (default `'across'`), `cells`
  *   (default 8, at most 128) squares across the box; odd rows are offset by
  *   half a cell.
@@ -249,7 +250,11 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
       const r = Math.hypot(w, h) / 2 + PAD
       const step = TAU / spokes
       const ops: MaskOp[] = []
-      for (let i = 0; i < spokes; i++) ops.push({ op: 'sector', cx: w / 2, cy: h / 2, r, a0: TOP + i * step, a1: TOP + i * step + p * step })
+      const ccw = str(params, 'dir', ['cw', 'ccw'], 'cw') === 'ccw'
+      for (let i = 0; i < spokes; i++) {
+        const at = TOP + i * step
+        ops.push({ op: 'sector', cx: w / 2, cy: h / 2, r, a0: ccw ? at - p * step : at, a1: ccw ? at : at + p * step })
+      }
       return path(ops)
     }
     case 'checkerboard': {
@@ -294,6 +299,21 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
   }
   // Unreachable for a MaskKind; a caller with an unchecked string should test isMaskKind first.
   return path([rect(0, 0, w, h)])
+}
+
+/**
+ * Transition backdrops (S1-15): the colours a `backdrop` param paints, shared
+ * by both compositors (Canvas 2D `fillRect`, WebGL2 scissored `clear`).
+ */
+export const BACKDROP_RGB = Object.freeze({ black: [0, 0, 0], white: [255, 255, 255] } as const)
+/**
+ * The integer device rect a transition is clipped to and its backdrop fills:
+ * the slide's device rect with its edges rounded, so both backends cover the
+ * same pixels and no frame spills into the letterbox.
+ */
+export function transitionRect(rect: { x: number; y: number; w: number; h: number }): { x: number; y: number; w: number; h: number } {
+  const x = Math.round(rect.x), y = Math.round(rect.y)
+  return { x, y, w: Math.max(0, Math.round(rect.x + rect.w) - x), h: Math.max(0, Math.round(rect.y + rect.h) - y) }
 }
 
 /** Replay a path onto a context or `Path2D`, offset by `(dx, dy)`. The caller begins the path and fills or clips it. */

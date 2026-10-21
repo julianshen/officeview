@@ -9,7 +9,12 @@
  *   mask covers the bounds box and moves with that matrix. Transition `from`
  *   / `to` affines are in unit slide space; a transition mask is in device
  *   px over the incoming layer's device rect and does not move with `to`.
- *   The transition composites first, then `draws` on top.
+ *   The transition composites first, then `draws` on top. S1-15: the
+ *   transition is scissored to the incoming layer's device rect, edges
+ *   rounded (`transitionRect`), as Canvas 2D clips it. Additive params:
+ *   `backdrop` clears that rect to an opaque colour under both frames (a
+ *   scissored `clear`: no texture, no lease); `fromOnTop` draws the outgoing
+ *   frame over the incoming one.
  * - **Colour pipeline.** Uploads use `UNPACK_PREMULTIPLY_ALPHA_WEBGL = true`
  *   (and no colour-space conversion), blending is `ONE, ONE_MINUS_SRC_ALPHA`,
  *   and a part layer's colour matrix runs un-premultiplied in the fragment
@@ -31,7 +36,9 @@
  *   (`webgl2:mask`, 8 B/px), the noise texture (`webgl2:noise`) and the
  *   transient noise arrays (`webgl2:mask-raster`). Programs, shaders and the
  *   vertex array hold no client memory and take no lease. There is no
- *   offscreen framebuffer yet (S1-15's shader transitions add the first).
+ *   offscreen framebuffer: the 2-D transitions (S1-15) need none (their
+ *   backdrop is a scissored clear); a later shader transition that needs one
+ *   leases it first and adds it to `build`/`teardown`.
  * - **Context loss.** A lost context keeps nothing: `contextLost` drops every
  *   lease and handle. `contextRestored` recreates the program, the buffer,
  *   the vertex array and all GL state, re-leasing each, and returns `false`
@@ -44,7 +51,7 @@ import type {
   Rng, SlideShowWorkspace, TransitionDraw,
 } from '../types'
 import { createRng } from '../rng'
-import { MASK_MAX_OPS, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskPath, type MaskRaster } from './masks'
+import { BACKDROP_RGB, MASK_MAX_OPS, transitionRect, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskPath, type MaskRaster } from './masks'
 import { FRAGMENT_SHADER, UNIFORMS, VERTEX_SHADER, colorUniforms, mulAffine, quadMatrix, type UniformName } from './shaders'
 
 /** Context attributes: premultiplied output like a 2-D canvas, no MSAA, depth or stencil buffers to pay for. */
@@ -86,7 +93,10 @@ interface Resources {
 }
 interface MaskSurface { canvas: AnyCanvas; ctx: Ctx; tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
 interface NoiseSurface { tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
-interface TransitionParams { mask?: MaskState; from?: Affine; to?: Affine; fromOpacity?: number; toOpacity?: number }
+interface TransitionParams {
+  mask?: MaskState; from?: Affine; to?: Affine; fromOpacity?: number; toOpacity?: number
+  fromOnTop?: boolean; backdrop?: 'black' | 'white'
+}
 /** A ready mask: mode 1 samples at the quad's uv, mode 2 over `rect` in device px. */
 type MaskBinding = { tex: WebGLTexture; mode: 1 | 2; rect: [number, number, number, number] }
 
@@ -421,11 +431,27 @@ export function createWebGL2Compositor(
       return mulAffine(view, mulAffine(back, mulAffine(isAffine(a) ? a : IDENTITY, unit)))
     }
     const from = lookup(tr.from, tr.effect), to = lookup(tr.to, tr.effect)
-    if (from) {
+    const backdrop = params.backdrop === 'black' || params.backdrop === 'white' ? BACKDROP_RGB[params.backdrop] : undefined
+    const slide = to ?? from
+    if (!slide) return
+    const r = transitionRect(deviceRect(slide.bounds))
+    const x0 = Math.max(0, r.x), y0 = Math.max(0, r.y)
+    const x1 = Math.min(canvas.width, r.x + r.w), y1 = Math.min(canvas.height, r.y + r.h)
+    if (!(x1 > x0 && y1 > y0)) return
+    gl.enable(gl.SCISSOR_TEST)
+    // GL's window origin is the bottom-left corner.
+    gl.scissor(x0, canvas.height - y1, x1 - x0, y1 - y0)
+    if (backdrop) {
+      gl.clearColor(backdrop[0] / 255, backdrop[1] / 255, backdrop[2] / 255, 1)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+    }
+    const drawFrom = () => {
+      if (!from) return
       const alpha = clamp01(params.fromOpacity, 1)
       if (alpha > 0) drawQuad(from, fit(from, params.from), alpha, undefined, undefined)
     }
-    if (to) {
+    const drawTo = () => {
+      if (!to) return
       const alpha = clamp01(params.toOpacity, 1)
       if (alpha <= 0) return
       const m = checkedMask(params.mask, tr.effect)
@@ -437,6 +463,8 @@ export function createWebGL2Compositor(
       }
       drawQuad(to, fit(to, params.to), alpha, undefined, binding)
     }
+    if (params.fromOnTop) { drawTo(); drawFrom() } else { drawFrom(); drawTo() }
+    gl.disable(gl.SCISSOR_TEST)
   }
 
   function drawOne(d: LayerDraw) {
