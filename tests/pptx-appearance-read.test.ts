@@ -73,6 +73,21 @@ describe('readPartBounded', () => {
     expect(calls).toBe(2)
   })
 
+  it('an abort during admission of the final chunk refuses in both output modes', async () => {
+    const pkg = await OfficePackage.load(buildZip([{ name: 'h.txt', data: 'hello' }]).bytes)
+    for (const output of ['bytes', 'chunks'] as const) {
+      const controller = new AbortController()
+      let calls = 0
+      const result = await readPartBounded(pkg, 'h.txt', 1024, { output, signal: controller.signal, admit: () => { calls++; controller.abort(); return true } }).then(r => ({ r }), e => ({ e }))
+      expect(calls, output).toBe(1)
+      expect('e' in result, output).toBe(true)
+    }
+    // Aborted after the last chunk but before end: still refused.
+    const late = new AbortController()
+    const bytes = readPartBounded(pkg, 'h.txt', 1024, { signal: late.signal, admit: () => { queueMicrotask(() => late.abort()); return true } })
+    await expect(bytes).rejects.toBeDefined()
+  })
+
   it('readXmlBounded and readXmlOrderedBounded parse under the cap', async () => {
     const pkg = await OfficePackage.load(buildZip([{ name: 'p.xml', data: '<a:r><a:b/><a:c v="1"/></a:r>' }]).bytes)
     const tree = await readXmlBounded(pkg, 'p.xml', 1024)
@@ -137,6 +152,24 @@ describe('HandlePackage', () => {
   }, 30_000)
 })
 
+describe('HandlePackage.dropCache', () => {
+  it('drops reads and trees, and a read in flight never republishes into the dropped cache', async () => {
+    const { handle } = await deck()
+    const over = HandlePackage.over(handle)
+    const caches = over as unknown as { reads: Map<string, unknown>; trees: Map<string, unknown> }
+    await over.xml('ppt/presentation.xml')
+    expect([caches.reads.size, caches.trees.size]).toEqual([1, 1])
+    over.dropCache()
+    expect([caches.reads.size, caches.trees.size]).toEqual([0, 0])
+    // A tighter-cap read publishes on completion; dropped while in flight, it must not come back.
+    const inflight = over.bytes(handle.slideParts[0], 1024)
+    over.dropCache()
+    expect(await inflight).toBeDefined()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(caches.reads.size).toBe(0)
+  })
+})
+
 describe('retainedArchiveBytes', () => {
   it('retainedArchiveBytes equals the sum of compressed entry sizes of a builder deck', async () => {
     const layout = buildZip([
@@ -150,6 +183,22 @@ describe('retainedArchiveBytes', () => {
     const expected = layout.entries.reduce((n, e) => n + e.dataLength, 0)
     expect(expected).toBeGreaterThan(0)
     expect(retainedArchiveBytes(pptxPackageHandle(doc)!)).toBe(expected)
+  })
+
+  it('retainedArchiveBytes is a payload lower bound: the backing buffer can outsize it', async () => {
+    // JSZip keeps each entry's compressed bytes as a view of the whole input, so headers, the central
+    // directory and a comment stay alive too. The metric counts compressed payload only (plan formula).
+    const layout = buildZip([
+      { name: 'ppt/presentation.xml', data: PRESENTATION },
+      { name: 'ppt/_rels/presentation.xml.rels', data: RELS },
+      { name: 'ppt/slides/slide1.xml', data: SLIDE },
+    ], { comment: new Uint8Array(16 * 1024) })
+    const handle = pptxPackageHandle(await parsePptx(await OfficePackage.load(layout.bytes)))!
+    const payload = retainedArchiveBytes(handle)
+    const view = (handle.pkg.entry('ppt/slides/slide1.xml') as unknown as { _data: { compressedContent: Uint8Array } })._data.compressedContent
+    expect(payload).toBe(layout.entries.reduce((n, e) => n + e.dataLength, 0))
+    expect(view.buffer.byteLength).toBeGreaterThanOrEqual(layout.bytes.byteLength)
+    expect(view.buffer.byteLength).toBeGreaterThan(payload + 16 * 1024)
   })
 })
 

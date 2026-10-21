@@ -53,10 +53,12 @@ export function readPartBounded(source: Source, path: string, maxBytes: number, 
       signal?.throwIfAborted()
       if (length + chunk.length > maxBytes) throw new PackageError('resource-limit', `part exceeds ${maxBytes} bytes`, path)
       if (admit && !admit(chunk.length)) throw new PackageError('resource-limit', 'part read refused by its owner', path)
+      signal?.throwIfAborted()
       length += chunk.length
       chunks.push(chunk)
     }).on('error', (error: Error) => { chunks.length = 0; if (!failed) { failed = true; reject(error) } }).on('end', () => {
       if (failed) return
+      if (signal?.aborted) { chunks.length = 0; failed = true; return reject(signal.reason) }
       if (output === 'chunks') return resolve(chunks.splice(0))
       const bytes = new Uint8Array(length)
       let offset = 0
@@ -84,7 +86,8 @@ export async function readXmlOrderedBounded(source: Source, path: string, maxByt
   return text === undefined ? undefined : parseXmlOrdered(text)
 }
 
-/** The measured cost of the lease (spec 8): the compressed entry bytes the handle keeps alive. */
+/** The measured cost of the lease (spec 8): the sum of compressed entry sizes (plan formula). A lower
+ * bound: JSZip's entry views keep the whole input buffer, headers and directory included, alive. */
 export function retainedArchiveBytes(handle: PptxPackageHandle): number {
   let total = 0
   for (const path of handle.pkg.paths()) {

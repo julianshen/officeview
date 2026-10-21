@@ -1,6 +1,6 @@
 import type { XlsxChartModel } from '../xlsx/chartModel'
 import { attemptedMalformedRelationshipIssue, chartCard, isExhausted, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
-import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
+import { drawingPartContext, dropDrawingPartReads, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
 import type { OfficePackage } from '../core/zip'
@@ -1010,7 +1010,9 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     }
     shape.imageIndex = index
   })
+  // The lease keeps the archive, never parse-time reads (spec 8).
   handles.set(doc, { pkg, slideParts })
   pkg.dropCache()
+  dropDrawingPartReads(pkg)
   return doc
 }

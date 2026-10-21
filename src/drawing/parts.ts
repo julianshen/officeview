@@ -41,6 +41,16 @@ export function drawingPartContext(pkg: OfficePackage): DrawingPartContext {
   }
   return context
 }
+/** End a parse: drop the package's parse-time reads (relationship maps and trees, placements, chart context). The
+ * counters and the diagnostics list stay: the list holds the same objects the parsed document already owns. */
+export function dropDrawingPartReads(pkg: OfficePackage): void {
+  const context = contexts.get(pkg)
+  if (!context) return
+  context.relationships.clear()
+  context.relationshipNodes.clear()
+  context.placements.clear()
+  context.chart = undefined
+}
 export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId' | 'sourcePath'> & { message?: string } = {}): void {
   // A chart diagnostic carries its human reason in the message (spec 6.6); others keep the generic text.
   context.diagnostics.push({ kind, partPath, feature, ...details, message: details.message ?? `Drawing content ${kind}${feature ? `: ${feature}` : ''}` })

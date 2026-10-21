@@ -20,6 +20,8 @@ export class HandlePackage extends OfficePackage {
   private readonly reads = new Map<string, Promise<Uint8Array | undefined>>()
   private readonly trees = new Map<string, Promise<XmlNode | undefined>>()
   private total = 0
+  /** Bumped by dropCache, so a read still in flight never republishes into a dropped cache. */
+  private generation = 0
 
   private constructor(private readonly handle: PptxPackageHandle, private readonly partBytes: number) {
     super(new JSZip())
@@ -27,6 +29,14 @@ export class HandlePackage extends OfficePackage {
 
   static over(handle: PptxPackageHandle, caps: { partBytes?: number } = {}): HandlePackage {
     return new HandlePackage(handle, caps.partBytes ?? HANDLE_PART_BYTES)
+  }
+
+  /** Drop this instance's reads and trees. The instance total is kept: bytes already inflated stay counted. */
+  override dropCache(): void {
+    this.generation++
+    this.reads.clear()
+    this.trees.clear()
+    super.dropCache()
   }
 
   override has(path: string): boolean { return this.handle.pkg.has(path) }
@@ -45,8 +55,9 @@ export class HandlePackage extends OfficePackage {
         return true
       },
     })
+    const generation = this.generation
     if (cap >= this.partBytes) this.reads.set(path, read)
-    else void read.then(bytes => { if (!this.reads.has(path)) this.reads.set(path, Promise.resolve(bytes)) }, () => {})
+    else void read.then(bytes => { if (generation === this.generation && !this.reads.has(path)) this.reads.set(path, Promise.resolve(bytes)) }, () => {})
     return read
   }
 

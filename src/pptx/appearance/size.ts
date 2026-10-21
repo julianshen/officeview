@@ -1,7 +1,8 @@
 /**
  * Slide size validation for the lazy slideshow entry and the appearance enrichment (slideshow spec 7),
  * run before any allocation, projection or letterbox maths. ECMA-376 Part 1 pml.xsd
- * `ST_SlideSizeCoordinate`: xsd:int, minInclusive 914400, maxInclusive 51206400 (1 to 56 inches).
+ * `ST_SlideSizeCoordinate`: xsd:int, minInclusive 914400, maxInclusive 51206400 (1 to 56 inches). The type
+ * is confirmed by Microsoft's SlideSize.Cx reference, the facets by python-pptx; pml.xsd itself is unchecked.
  */
 export const SLIDE_EMU_MIN = 914_400
 export const SLIDE_EMU_MAX = 51_206_400
