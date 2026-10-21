@@ -1,7 +1,9 @@
 # PowerPoint slideshow mode: design
 
-Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Agent review findings are folded in as amendments.
+Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Review round 1 (Codex, agy, opencode, pi) is folded in; dispositions are in §14.
 Branch: `feature/slideshow`, from main `b8a146c`.
+
+Notation: **"to verify in the parser task"** marks a file-format claim that could not be checked against ECMA-376 / MS-PPTX text while writing this spec. The parser task checks it against the standard and the corpus, and the D4 captures where behaviour is involved. Until then the value given is the working assumption.
 
 ## 1. Intent
 
@@ -11,7 +13,7 @@ officeview shows PowerPoint decks as a scrolling stack of static slide canvases.
 - Slide **transitions** and on-slide **animations** play in PowerPoint's order and timing.
 - A **Presenter View** shows the current slide, the next build, speaker notes and a timer, on a second screen when there is one.
 
-**Who uses it.** A presenter, in their own browser, on a host page that embeds officeview. The host may also start the show from code.
+**Who uses it.** A presenter, in their own browser, on a host page that embeds officeview (often inside an iframe; §5.3). The host may also start the show from code.
 
 **What "compatible" means.** For every effect PowerPoint saves in the file:
 - Where the file format defines the effect, play it as the file defines it. This covers timing, order, easing, direction and repeat.
@@ -28,10 +30,10 @@ The only effects not reproduced are those in §2.3.
    - a **Present** control in officeview's slide toolbar (from the beginning, or from the current slide);
    - a host API call (§4.2).
 2. **Audience view**:
-   - full screen (Fullscreen API);
+   - full screen (Fullscreen API), or an in-window surface when full screen is refused (§4.1);
    - one slide at a time, letterboxed to the slide's aspect ratio;
    - PowerPoint navigation by click, keyboard and touch.
-3. **Transitions**: every `p:transition` type in ECMA-376 (PresentationML) plus the PowerPoint 2010+ extensions in the `p14`/`p15` namespaces.
+3. **Transitions**: every `p:transition` type in ECMA-376 (PresentationML) plus the PowerPoint 2010+ extensions in the `p14`/`p15` namespaces and Morph (`p159`).
    - Direction, speed or duration, advance-on-click and advance-after timing all apply.
    - Transition sound plays where the browser supports its format.
 4. **Animations**: the `p:timing` tree, covering:
@@ -46,15 +48,15 @@ The only effects not reproduced are those in §2.3.
    - current slide, next build, speaker notes, elapsed timer, slide counter and navigation controls;
    - shown on a second screen when the browser can place a window there;
    - otherwise a single-screen swap view.
-6. **Show settings** from `ppt/presProps.xml` `p:showPr`: loop until Esc, show without animation, use timings (`p:kiosk` / browse modes are recognised; §4.4). Hidden slides (`p:sld show="0"`) are skipped in the show.
+6. **Show settings** from `ppt/presProps.xml` `p:showPr` (§4.4): loop until Esc, show without animation, use timings, show type (`p:present`, `p:browse`, `p:kiosk`) and slide range (`p:sldRg`). Hidden slides (`p:sld show="0"`) are skipped in the show.
 7. **Media**: `p:video` / `p:audio` (with `a:videoFile`, `a:audioFile`, `p14:media`), played through HTML media elements when the browser can decode the format. Otherwise the poster frame is shown, with a diagnostic.
 8. **Closest effect** for every effect that cannot be matched exactly (3-D transitions, Morph, fancy text effects). Each one is listed as approximate in the validation doc.
 
 ### 2.2 Non-goals
 
 - Editing, recording timings ("Rehearse Timings"), recording narration, broadcasting to remote viewers, laser pointer, pen and highlighter annotation, subtitles, zoom (PowerPoint "Zoom" links).
-- Custom shows (`p:custShowLst`) beyond recognising them; the full deck plays. Sections only label slides.
-- Hyperlink actions to external programs. Hyperlinks to other slides (`ppaction://hlinksldjump`) and to URLs open as in the static viewer.
+- Custom shows (`p:custShowLst`, `p:showPr/p:custShow`) beyond recognising them: the full deck plays, with a diagnostic. Sections only label slides. (`p:sldRg` *is* honoured; §4.4.)
+- Hyperlink actions to external programs. Hyperlinks to other slides and to URLs are in scope (§4.3); the static viewer does not have them today.
 
 ### 2.3 Never reproduced
 
@@ -65,25 +67,29 @@ The only effects not reproduced are those in §2.3.
 
 - Effects that silently do nothing. Every unsupported or approximated effect is diagnosed and listed.
 - Breaking the existing viewer: the scrolling deck, print, zoom, find, the chrome eager budget, or host CSS isolation.
-- An eager-bundle size above the ceiling. The slideshow loads lazily, the first time the presenter starts it.
-- Janky playback. The target is 60 fps on a mid-range laptop for the corpus decks, with frame work bounded and memory budgeted (§7).
-- Popping a window without a user gesture, or trapping focus with no way out. Esc always exits.
+- An eager-bundle size above the ceiling. The slideshow loads lazily, the first time the presenter starts it (§8).
+- Janky playback. The target is in §7: p95 frame work within budget on a defined benchmark deck, with memory budgeted.
+- Popping a window without a user gesture, or trapping focus with no way out. **Esc always exits**, in every mode, including kiosk.
 
 ## 3. Current state (recon, main `b8a146c`)
 
-- **What the parser drops.** `src/pptx/parse.ts` drops `p:transition` entirely; it usually sits in `mc:AlternateContent`. It detects `p:timing` only to emit a `deferred-animation` diagnostic (`parse.ts:949`). Notes slides, media, `presProps` and hidden slides are not read.
+- **What the parser drops.** `src/pptx/parse.ts` drops `p:transition` entirely; it usually sits in `mc:AlternateContent`. It detects `p:timing` only to emit a `deferred-animation` diagnostic (`parse.ts:949`). Notes slides, media, `presProps`, hidden slides and hyperlinks (`a:hlinkClick`) are not read.
 - **Shape identity.** Each shape keeps its `cNvPr@id` at `shape.source.id`, including inside groups and `mc:Fallback` branches. That id is the target of `p:spTgt spid`. Text layout lines carry `paragraphIndex`.
 - **Painting** is `renderSlide` → `paintScene` (`src/drawing/scene-paint.ts`):
-  - a recursive painter with one `save`/`restore` per node;
+  - a recursive painter with one `save`/`restore` per node, preserving source order and hierarchical transforms;
   - no per-node transform, opacity or visibility hook;
   - no layer cache;
-  - text laid out again on every paint.
-- **Master and layout shapes that are not placeholders** (logos, decorations) are **not painted**. Only solid slide backgrounds resolve. See §11, question Q1.
-- **No host API.** `OfficeDoc`/`OfficeFile` have no ref, imperative handle or events. There is no Fullscreen API or `window.open` use.
+  - text laid out again on every paint unless a layout is supplied.
+- **Backgrounds and master art.** Only solid backgrounds resolve, including a solid theme `bgRef` (`parse.ts:326–361`); gradient, picture and pattern backgrounds paint white. **Master and layout shapes that are not placeholders** (logos, decorations) are **not painted**. Stage 0 (D2) fixes both.
+- **No host API.** `OfficeDoc`/`OfficeFile` have no ref, imperative handle or slideshow events (they do have other callback props). There is no Fullscreen API or `window.open` use.
+- **Package ownership.** `parsePptx(pkg, …)` receives an `OfficePackage` from its caller and does not keep it; `PptxDocument` (`src/pptx/types.ts:139`) has no package or source accessor. `OfficePackage` (`src/core/zip.ts`) holds the JSZip (and so the compressed archive) plus a read cache; `entry()` gives uncached access. `OfficeFile` distinguishes one-shot sources (Response, stream, Request, promise) from re-readable ones (bytes, Blob, URL).
+- **The eager bundle includes** `src/pptx/parse.ts`, `src/pptx/render.ts`, `src/drawing/scene-paint.ts` and `src/render/paint.ts`: `src/index.ts` re-exports `parsePptx`, `renderSlide` and `getPaintables`, all imported statically. Any code added to those modules is eager. `getPaintables` is already async and already loads the chart engine with `import()`, so a lazy seam there is an existing pattern. The worker path (`src/worker/workerMessages.ts`) also goes through `getPaintables`.
 - **Canvas animation.** The UI restyle spec barred canvas animation for the chrome. This design is the first to animate canvas content, so it must stay inside the slideshow surfaces and never touch the scrolling viewer.
-- **Eager budget.** The last measured eager size is 38,582 B; the project ceiling is 38,647 B and the hard limit is 38,720 B. That leaves about 65 B of headroom.
+- **Eager budget.** Main `b8a146c`, rebuilt fresh in this worktree, measures **38,584 B**. The project ceiling is **38,647 B** and the hard limit is 38,720 B, so the headroom is **63 B**. (The 38,638 B figure in one review is an older intermediate measurement from the chart-compat ledger.) The controller re-measures on main before Stage 0 and before each stage's first eager edit, and updates this line.
 - **Existing patterns to reuse:**
   - the chart workspace ledger (`src/charts/workspace.ts`, `own.ts`);
+  - the chart engine's lazy `import()` from `getPaintables`;
+  - `supportedChoiceRequirements` (`src/drawing/coverage.ts`) for namespace-aware `mc:Choice` resolution. (`DrawingCompatibility` in `parse.ts:625` is a private, drawing-specific selector and is not reused.)
   - realm-safe DOM access through `ownerDocument` / `defaultView`;
   - theme-root CSS scoping;
   - lazy-chunk warming in `vite.harness.config.ts`.
@@ -92,22 +98,30 @@ The only effects not reproduced are those in §2.3.
 
 ### 4.1 Starting and stopping
 
-- **Toolbar.** For PPTX documents, the slide toolbar gets a **Present** button (Lucide `presentation` icon). It has a split menu: "From beginning", "From current slide", "Presenter View".
+- **Toolbar.** For PPTX documents, the slide toolbar gets a **Present** button (Lucide `presentation` icon). It has a split menu: "From beginning", "From current slide", "Presenter View". Before Stage 2 lands, the "Presenter View" item and `presenterView: true` are not offered/accepted silently: the item is hidden and the option is diagnosed and treated as audience-only.
   - It is hidden when `showToolbar={false}`.
   - A new prop `allowPresent` (default `true`) hides it and makes the API refuse.
 - **Keyboard in the scrolling viewer:**
   - **F5** presents from the beginning;
   - **Shift+F5** presents from the current slide;
   - **Alt+F5** opens Presenter View.
-  - These keys apply only when focus is inside the viewer. Hosts can disable them with `presentShortcuts={false}`.
+  - These keys apply only when focus is inside the viewer. Hosts can disable them with `presentShortcuts={false}`. On macOS, F5 is often captured by the system (dictation), so these keys may never reach the page; the Present button is the reliable start (known limit in the validation doc).
+- **Start sequence (gesture rule).** Browsers allow full screen and popups only during transient user activation, and an `await` (a chunk download, a package read) can lose it. So the click or keydown handler does the privileged work **synchronously, before any `await`**:
+  1. If Presenter View is wanted: `window.open('about:blank', …)` for the presenter window. A `null` result, or a window that is already closed, means the popup was blocked.
+  2. `requestFullscreen()` on a **pre-mounted slideshow host element**: the viewer root renders it always (empty and hidden), so it exists before the chunk does. It shows a black letterbox with a busy indicator until the chunk paints.
+  3. Only then `import()` the slideshow chunk and read the show data (§6.1).
+  - A preload hint is allowed: when the pointer enters or focuses the Present button, or the split menu opens, the chunk is fetched (not executed), and where `navigator.permissions` reports `window-management` as already granted, screen details are fetched without a prompt (§5.1).
+  - **Two privileged operations from one activation** are not guaranteed: each can consume activation. Popup first, then full screen, is the order. If the full-screen request then rejects, the audience surface stays in-window with a "Click for full screen" control that retries on the next gesture. Whether both succeed in one activation is engine-dependent and is pinned by real-browser tests (§10). In Chromium with the Window Management permission granted, both are expected to succeed (to verify in the startup task).
+  - **Full screen refused** (no activation left, iframe without `allow="fullscreen"`, Permissions-Policy, unsupported): the show runs **in-window**: the host element is fixed to the viewport of the viewer's own document, letterboxed, with a dismissible notice and a diagnostic. This is a call (§12), not an error.
+  - **Popup refused**: single-screen mode (§5.1), with a diagnostic.
+  - **Failure or cancel during load** (chunk load fails, data read fails, Esc pressed, the viewer unmounts, the document changes, `allowPresent` becomes false): the provisional popup is closed, full screen is exited, the host element is hidden, and `present()` rejects (`'load-failed'` or `'cancelled'`). A notice says "Slideshow could not load. Reload to retry." for load failures; the viewer stays usable.
 - **Exit:**
   - **Esc** (or `-`) exits;
-  - so does a black **end-of-show** slide ("End of slide show, click to exit."), which matches PowerPoint;
+  - so does a black **end-of-show** slide ("End of slide show, click to exit."), which matches PowerPoint (not shown when the show loops);
   - and so does the host API (§4.2).
-  - Leaving full screen through the browser also exits.
-- **After exit**, the viewer scrolls to the last shown slide.
+  - Leaving full screen through the browser also exits; leaving an in-window show is by Esc or the exit control.
+- **After exit**, the viewer scrolls to the last shown slide, and focus returns to the element that was focused when the show started if it is still connected, else to the viewer root (§9).
 - **The first start loads the lazy slideshow chunk** (`src/slideshow/`). While it loads, the Present button shows a busy state.
-  - If the chunk fails to load, a notice says "Slideshow could not load. Reload to retry." The viewer stays usable.
 
 ### 4.2 Host API
 
@@ -120,24 +134,35 @@ interface OfficeViewerHandle {
 }
 interface SlideShowSession {
   readonly slideIndex: number          // 0-based, in deck order (hidden slides keep their index)
-  readonly buildIndex: number          // click step within the slide
+  readonly buildIndex: number          // click checkpoint within the slide (§6.2)
+  readonly surface: 'fullscreen' | 'in-window'
+  readonly presenter: 'window' | 'swap' | 'none'
   next(): void; previous(): void; goTo(slideIndex: number): void
-  exit(): void
-  readonly ended: Promise<void>        // resolves when the show exits for any reason
+  exit(): void                         // idempotent
+  readonly ended: Promise<void>        // resolves exactly once when the show exits for any reason; never rejects
 }
 ```
 
 Props for events:
 
 - `onSlideShowStart`
-- `onSlideShowEnd`
+- `onSlideShowEnd` (fires exactly once per started session, before `ended` resolves)
 - `onSlideShowSlideChange(slideIndex, buildIndex)`
+- `onSlideShowDiagnostic(diagnostic)` (deduplicated per effect and slide; §6.4)
 
-`present()` must be called from a user gesture, because browsers require one for full screen and popups. If it isn't, the promise rejects with a typed `SlideShowError` whose `code` is `'gesture-required'`. Other error codes:
+**Gesture.** `present()` must be called synchronously inside a user-gesture handler of the host, because it performs the start sequence (§4.1) before its first `await`. Where `navigator.userActivation` exists and reports no transient activation, the promise rejects with a typed `SlideShowError` whose `code` is `'gesture-required'`, and nothing is opened. Where that API is missing, the start is attempted and a full-screen refusal falls back to in-window (§4.1). Other error codes:
 
 - `'not-presentable'`: the document is not a PPTX, or `allowPresent=false`;
-- `'already-presenting'`;
-- `'load-failed'`.
+- `'already-presenting'`: this viewer instance already has a starting or running session (one session per viewer instance; two viewers on one page may each present, but only one can hold full screen at a time, as the browser enforces);
+- `'load-failed'`: the chunk or the show data could not be loaded;
+- `'cancelled'`: the start was cancelled before it finished (Esc, unmount, document change, `allowPresent` withdrawn).
+- `'invalid-slide'`: `from` is not an integer in `[0, slideCount)`. `goTo` with an invalid index is ignored with a diagnostic.
+
+Full-screen and popup refusal are not errors: the session reports them through `surface` and `presenter` and a diagnostic.
+
+**Lifecycle.** Each start gets a generation number; a late async completion from an older generation is discarded. Unmount, document replacement or `allowPresent` becoming false ends a running session (`exit` semantics, events fire once). `exit()` is idempotent; all cleanup (popup, full screen, media, Blob URLs, GPU resources, workspace reservations, listeners) runs exactly once.
+
+**Starting slide.** `'beginning'` is the first slide that is visible in the show (not hidden, inside `p:sldRg`). `'current'` and a number start on that slide **even if it is hidden** (PowerPoint does the same for "From current slide"); next and previous then skip hidden slides as usual.
 
 ### 4.3 Navigation
 
@@ -149,29 +174,47 @@ Navigation follows PowerPoint's Slide Show keys:
 | Previous build or slide | ←, ↑, PageUp, P, Backspace, swipe right, wheel up |
 | First / last slide | Home / End |
 | Go to slide n | type the number, then Enter |
-| Black / white screen | B or `.` / W or `,` (any key resumes) |
+| Black / white screen | B or `.` / W or `,` (any key except Esc resumes; Esc exits) |
 | Exit | Esc, `-` |
 | Pause / resume an automatic show | S or `+` |
 
-- **Previous** steps back one click build. It snaps the slide to the state before that build, with no reverse animation, as PowerPoint does.
+- **Precedence.** Esc is handled first and always exits. Then, in order: the number-entry buffer; black/white resume; the slideshow keys above. Keys typed while focus is in a Presenter View text control (notes, the slide-number field) go to that control, except Esc.
+- **Previous** steps back to the previous click checkpoint (§6.2). It snaps the slide to that checkpoint, with no reverse animation, as PowerPoint does.
 - **Hidden slides** are skipped by next and previous. `goTo` and number+Enter can still show them.
-- **Click triggers.** A click on a shape that has a trigger animation runs that trigger instead of advancing.
-- **Hyperlinks.** A click on a hyperlink runs it (slide jump or URL) instead of advancing.
+- **Click targets.** A click is hit-tested against the current render plan (§6.3) in authored z-order, with each target's current transform and clip. The topmost shape that has a trigger or a hyperlink receives it:
+  - a trigger runs its interactive sequence instead of advancing;
+  - a hyperlink runs instead of advancing;
+  - a shape with both runs the trigger (to verify against D4 captures; recorded in the catalogue);
+  - otherwise the click advances.
+- **Hyperlinks** are new work (the static viewer has none): the lazy reader parses `a:hlinkClick` on shapes and text runs, resolves the relationship, and allows: slide jumps (`ppaction://hlinksldjump`, `ppaction://hlinkshowjump?jump=nextslide|previousslide|firstslide|lastslide|endshow` — exact verbs to verify in the parser task); `http:`, `https:` and `mailto:` URLs, opened in a new browsing context with `noopener`. Every other scheme and action is refused with a diagnostic.
 - **Cursor.** It hides after 3 s without movement and comes back when the mouse moves.
 
 ### 4.4 Show settings and timing
 
-- **`p:showPr`.** `loop` repeats the show until Esc. `showNarration` is ignored (non-goal). `useTimings`, default true, enables automatic advance.
-- **"Browsed at kiosk".** The file sets this with `p:kiosk`. It disables click-advance and loops, with a restart after `restart` ms idle.
-- **`showAnimation="0"`** plays slides with all builds already applied.
-- **`p:transition advTm`.** The slide advances automatically after that many ms once all its animations have finished, when `useTimings` is on.
-- **`advClick="0"`.** Clicks do not advance; only the timing advances the slide.
+Defaults are the schema defaults (to verify in the parser task): `loop` false, `showNarration` false, `showAnimation` true, `useTimings` true; an absent attribute takes its default.
+
+- **Show type** (`p:showPr` child):
+  - `p:present` (or none): normal presenting.
+  - `p:browse` ("browsed by an individual", a windowed mode in PowerPoint): presented the normal way, with a diagnostic; the scrollbar setting is ignored.
+  - `p:kiosk` ("browsed at a kiosk"): user input other than Esc is disabled (clicks, navigation keys and triggers do nothing; hyperlinks and triggers stay inert), the show loops, and it restarts from its first slide **`restart` ms (default 300,000) after the most recent start or restart**, the counter resetting on every restart including automatic loop restarts. This follows the reviewers' quotation of the `restart` definition (to verify in the parser task, and against a D4 capture).
+- **`p:sldRg st end`** (1-based, inclusive; to verify in the parser task): only those slides are in the show; `'beginning'` is `st`.
+- **`loop`** repeats the show until Esc: after the last visible slide, the show continues with the first visible slide (no end-of-show slide).
+- **`showNarration`** is ignored (non-goal).
+- **`showAnimation="0"`** shows each slide in its **static state** (§6.2): exactly what the scrolling viewer paints, no effect run, no exit applied. Each slide is then a single step.
+- **`advClick="0"`** (on the arriving slide's `p:transition`): **mouse clicks** do not advance. Keyboard, API and presenter controls still advance, so a deck cannot get stuck.
+- **`advTm`** (milliseconds, on the arriving slide's transition element; it sets that slide's auto-advance time), when `useTimings` is on. The rule below is the working assumption, to verify against D4 captures:
+  - the timer starts when the slide's incoming transition ends;
+  - the slide advances when the timer has run out **and** the main sequence is not running a finite timed effect;
+  - while the main sequence still has unplayed on-click steps, the advance is deferred (one reviewer reports this from PowerPoint behaviour; unconfirmed);
+  - effects that can never finish do **not** hold the advance: indefinite repeats (`repeatCount="indefinite"` / `repeatDur="indefinite"`), interactive (trigger) sequences, and media waiting for playback or a click;
+  - a missing `advTm` means no auto-advance; `advTm="0"` means advance as soon as the conditions above allow.
+- **Pause** (S or `+`) stops the show clock (§6.2), including the auto-advance timer and kiosk restart timer; resume continues them.
 
 ### 4.5 Reduced motion
 
 When `prefers-reduced-motion: reduce` is set, my call is:
 - transitions become a short crossfade, at most 200 ms;
-- animations jump to their end states at each step, so the order of builds is kept.
+- animations jump to their end states at each click checkpoint, so the order of builds is kept.
 
 A prop `slideShowMotion: 'auto' | 'full' | 'reduced'` lets the host override this. PowerPoint itself ignores the OS setting, so this is a deliberate accessibility choice.
 
@@ -179,149 +222,238 @@ A prop `slideShowMotion: 'auto' | 'full' | 'reduced'` lets the host override thi
 
 ### 5.1 Windows
 
-- **Second window.** Presenter View opens with `window.open` from the user gesture. It is a same-origin `about:blank` popup that the slideshow writes into, with officeview's stylesheet injected under a theme root. Its controls are rendered with React portals from the opener, so there is one state owner and no messaging protocol.
-- **Placement in Chromium.** Where the Window Management API (`getScreenDetails`) is available and permitted, the audience view goes full screen on the external screen and Presenter View on the primary screen, matching PowerPoint's default. A "Swap displays" control switches them.
+- **Second window.** Presenter View opens with `window.open('about:blank')` synchronously in the start gesture (§4.1). The slideshow writes into this same-origin popup after the chunk loads, with officeview's stylesheet injected under a theme root. Its controls are rendered with React portals from the opener, so there is one state owner and no messaging protocol. Event listeners and focus handling are attached to the popup's own `document`/`window` (realm-safe, per existing patterns).
+- **Placement in Chromium.** Where the Window Management API is available and its permission is **already granted**, screen details are obtained during the preload hint (§4.1), so the click can open the popup on the primary screen (`left`/`top` features) and request full screen on the external screen (`requestFullscreen({ screen })`), matching PowerPoint's default. A "Swap displays" control switches them. Where the permission is not yet granted, the start proceeds as on other browsers, and Presenter View offers "Use both screens", which asks for the permission on that click and then places the windows (any second full-screen request uses that or a later gesture). Permission denial, an unavailable API and a single screen are each diagnosed separately from popup blocking.
 - **Other browsers.** The popup opens at a default size, and the presenter drags it to the other screen. Audience full screen is requested on the opener's screen. A one-time hint explains the drag.
-- **Single-screen mode.** It is used when the popup is blocked, there is no second screen, or `presenterView: false` is given. The audience view goes full screen in the opener. **Alt+F5** or a toolbar "Presenter View" toggle swaps that full-screen surface between the audience slide and Presenter View, like PowerPoint's single-monitor "Show Presenter View".
-- **Closing.** Closing the presenter window does not end the show; it falls back to single-screen. Exiting the show closes the presenter window.
+- **Single-screen mode.** It is used when the popup is blocked, there is no second screen, or `presenterView: false` is given. The audience view goes full screen (or in-window) in the opener. **Alt+F5** or a toolbar "Presenter View" toggle swaps that surface between the audience slide and Presenter View, like PowerPoint's single-monitor "Show Presenter View".
+- **Closing.** Closing the presenter window does not end the show; it falls back to single-screen. Exiting the show closes the presenter window, as does opener unload.
 
 ### 5.2 Presenter View contents
 
 These match PowerPoint, simplified:
 
-- **Current slide**, at its current build state. It mirrors the audience, including animation in progress, rendered at a smaller size.
-- **Next.** The slide after the next click: the next build of the current slide, or the next slide with its first state.
-- **Speaker notes** from the notes slide's body placeholder. They are shown as plain text with paragraph breaks and bullets, with A+ and A− size controls and scrolling.
+- **Current slide**, at its current state. It mirrors the audience, including animation in progress, rendered at a smaller size **from the same scheduler and render state** (§6.2); there is no second timeline.
+- **Next.** A static preview of the **settled end state of the next click checkpoint**: the next build of the current slide, or the next slide's first checkpoint. Zero-duration effects are applied; indefinite effects are shown at their first iteration's end. Computing it never advances the live scheduler, media or trigger state.
+- **Speaker notes** from the notes slide's body placeholder. They are inserted as text nodes (never as deck-supplied HTML), shown with paragraph breaks and bullets, with A+ and A− size controls and scrolling.
 - **Elapsed timer**, with pause and reset, plus the wall-clock time and "Slide n of m".
 - **Controls:** previous, next, black screen, end show, and a slide grid ("See all slides") for jumping.
-- **Accessibility.** It works by keyboard, using the same keys as §4.3 when focus is not in the notes, and has proper labels.
+- **Media** plays only on the audience surface; the presenter's mirror shows video frames muted, from the same element or a frame copy, never a second audio output.
+- **Diagnostics** for approximate, pending or refused effects are listed in a collapsible panel in Presenter View and through `onSlideShowDiagnostic`; they never appear on the audience picture unless the audience must act (for example "Click to play").
+- **Accessibility.** It works by keyboard, using the same keys as §4.3 when focus is not in a text control, and has proper labels.
+
+### 5.3 Embedding
+
+officeview usually runs inside a host page, often in an iframe. Each platform rule has a detection and a diagnosed fallback, never a silent no-op:
+
+| Need | Host requirement | When refused |
+|---|---|---|
+| Full screen | iframe `allow="fullscreen"` (and the host's Permissions-Policy) | in-window show (§4.1) |
+| Presenter window | iframe `sandbox` (if any) must include `allow-popups` | single-screen swap (§5.1) |
+| Screen placement | iframe `allow="window-management"` (cross-origin frames are refused without it) | manual drag (§5.1) |
+| Injected popup stylesheet | host CSP must allow officeview's stylesheet in the popup (the popup inherits the opener's CSP) | presenter controls unstyled but usable, with a diagnostic; validated against a CSP-hardened host page early in Stage 2 |
+
+The validation doc and the README list these host requirements.
 
 ## 6. Engine
 
-### 6.1 Data model, built at parse time
+### 6.1 Data model, read lazily at show start
 
-`parsePptx` gains a bounded, opt-in capture of slideshow data, to keep viewer parsing cheap. The data is stored as a `slideShow` sidecar on `PptxDocument`. It is lazily materialised when present, so the static-viewer cost is a cheap pointer.
+**No slideshow data is parsed in the eager `parsePptx`** (D3). `parsePptx` only attaches a **package handle** to the `PptxDocument` (§8). When a show starts, a **lazy show reader** in `src/slideshow/` reads, from that handle, the slide, layout, `presProps`, notes and media-relationship parts it needs, and builds the model below. The same reader limits apply. Parts are read with uncached, bounded reads (`entry()` plus a byte cap, the pattern of the bounded chart reader), never through the caching `OfficePackage.text()` / `bytes()`.
 
-- **`transition`** per slide: type, the `p14`/`p15` variant chosen through the existing `DrawingCompatibility` Requires logic, direction, speed or `p14:dur`, `advClick`, `advTm`, and sound reference.
-- **`timing`** per slide: the full time-node tree.
-  - Containers: `p:par`, `p:seq` (with `concurrent`, `nextAc`, `prevAc`), `p:excl`.
-  - Each `p:cTn` with `id`, `presetClass`, `presetID`, `presetSubtype`, `nodeType`, `dur`, `repeatCount`, `repeatDur`, `autoRev`, `accel`, `decel`, `fill`, `restart`, and start and end condition lists. Conditions are `delay`, `evt` (`onBegin`, `onEnd`, `onClick`, `onNext`, `onPrev`, `begin`, `end`), `tn` and `tgtEl`.
-  - Behaviours: `p:set`, `p:anim` (with `tavLst`, formulas), `p:animEffect` (with `transition` in/out and `filter`), `p:animMotion` (path, `origin`, `rAng`), `p:animRot`, `p:animScale`, `p:animClr`, `p:cmd` and `p:audio`/`p:video`.
-  - Targets: `spTgt spid` plus `txEl` with paragraph or character ranges, `bg`, `subSp`, and `oleChartEl` (chart builds are approximated by whole-chart animation; §6.5).
-  - `bldLst` (`p:bldP` `build`, `bldLvl`, `animBg`, `rev`; `p:bldGraphic`; `p:bldOleChart`).
+- **`transition`** per slide:
+  - type, direction, `spd`, `p14:dur`, `advClick`, `advTm`, and sound (`p:sndAc`: `p:stSnd` with loop, `p:endSnd`);
+  - extension variants are chosen with namespace-aware `supportedChoiceRequirements` against a **slideshow requirements table** (p14, p15, p159 and any others the catalogue names), never by literal prefix;
+  - the reader also looks at `p:transition/p:extLst/p:ext` children; an unknown extension URI is diagnosed. PowerPoint normally writes extension transitions in `mc:AlternateContent`; whether any appear in `p:extLst` is to verify in the parser task (the extension GUIDs one review quoted are not taken as fact);
+  - **`spd` without a duration** maps to a pinned table. Working values `fast` 500 ms, `med` 750 ms, `slow` 1000 ms (the values LibreOffice's importer uses, to verify in the parser task and against D4 captures; one review proposed 500/1000/2000 ms, unconfirmed);
+  - transitions are read from the slide only. A `p:transition` on a layout or master is not inherited (to verify in the parser task whether PowerPoint inherits it); its presence is diagnosed.
+- **`timing`** per slide: the time-node tree, normalised into the model of §6.2. The semantics table below is part of this spec; the parser task completes it against the standard.
+
+  | Element / attribute | Model, units and defaults |
+  |---|---|
+  | `p:par`, `p:seq` (`concurrent`, `nextAc`, `prevAc`), `p:excl` | container nodes |
+  | `p:cTn` `id`, `presetClass`, `presetID`, `presetSubtype`, `nodeType`, `grpId`, `afterEffect` | labels; `presetClass`/`presetID` never drive motion unless behaviours are missing (§6.2) |
+  | `dur`, `p:cond@delay` | milliseconds or `indefinite` |
+  | `repeatCount` | **thousandths** of an iteration (`1000` = once), or `indefinite` (to verify in the parser task) |
+  | `repeatDur` | milliseconds or `indefinite` |
+  | `accel`, `decel` | 1/1000 of a percent of the duration (`100000` = 100 %); `accel + decel ≤ 100 %` |
+  | `autoRev`, `fill` (`hold`, `remove`, `freeze`, `transition`), `restart` (`always`, `whenNotActive`, `never`), `syncBehavior`, `masterRel` | as in the standard |
+  | start / end condition lists, `p:endSync` | conditions: `delay`, `evt` (`onBegin`, `onEnd`, `onClick`, `onNext`, `onPrev`, `begin`, `end`, `onMouseOver`, `onMouseOut`, `onStopAudio`), `tn`, `tgtEl`, `rtn` |
+  | `p:iterate` (`type` `el`/`wd`/`lt`, `backwards`, `tmAbs`/`tmPct`) | iteration over elements, words or letters |
+  | `p:cBhvr`: `attrNameLst`, `additive` (`base`, `sum`, `repl`, `mult`, `none`), `accumulate`, `override`, `xfrmType`, `from`/`to`/`by`, `rctx` | property names (`ppt_x`, `ppt_y`, `ppt_w`, `ppt_h`, `r`, `style.rotation`, `style.visibility`, `style.opacity`, `fillcolor`, `fill.on`, `stroke.color`, `stroke.on`, `style.color`, … full list to verify in the parser task) and composition order |
+  | `p:set`, `p:anim` (`calcmode`, `valueType`, `tavLst` with `tm`, `fmla`, values), `p:animEffect` (`transition` in/out/none, `filter`, `prLst`, `progress`), `p:animMotion` (`path`, `origin`, `rAng`, `ptsTypes`, `from`/`to`/`by`, `rCtr`), `p:animRot` (`by`/`from`/`to` in 1/60000 °), `p:animScale` (`by`/`from`/`to` in 1/1000 %, `zoomContents`), `p:animClr` (`clrSpc`, `dir`, `by`/`from`/`to`), `p:cmd` (`type`, `cmd`), `p:audio`/`p:video` | behaviours |
+  | targets: `p:spTgt spid` plus `p:txEl` (`p:pRg`, `p:charRg`), `p:bg`, `p:subSp`, `p:oleChartEl`, `p:graphicEl`, `p:inkTgt`, `p:sldTgt`, `p:sndTgt` | target resolution against `shape.source.id` |
+  | `p:bldLst`: `p:bldP` (`build`, `bldLvl`, `animBg`, `rev`, `autoUpdateAnimBg`), `p:bldGraphic`, `p:bldOleChart`, `p:bldDgm` | build templates |
+
+  **Unknown-node policy.** An unknown element or attribute value inside a known container is dropped with a diagnostic naming it; its siblings still play. An unknown container drops its subtree with a diagnostic.
+- **Formulas** (`p:anim@formula`, `p:tav@fmla`, and values such as `#ppt_x`): evaluated by a **bounded expression interpreter**, never by `eval`, `Function` or any JavaScript evaluation. It accepts numeric literals, `+ - * / ^` and unary minus, parentheses, the variables `$`, `ppt_x`, `ppt_y`, `ppt_w`, `ppt_h`, `#`-prefixed current-value forms, `pi`, `e`, and the functions `abs acos asin atan ceil cos deg exp floor ln max min rad rand sin sqrt tan` (the exact grammar to verify in the parser task). Limits: 1 KiB per expression, 256 tokens, depth 32. `rand` uses the show's seeded generator (§10). An invalid expression is diagnosed and its behaviour dropped.
 - **`notes`** per slide: notes-body text paragraphs with bullet and level, read from the slide's `notesSlide` part. They are not painted.
-- **`hidden`** per slide (`show="0"`), and the deck-level `showPr`.
-- **`media`**: one record per media relationship. Each holds the part path, content type and byte length. The bytes are read lazily from a retained `OfficePackage` accessor, so media is not held resident by the static viewer. Each media part is bounded at 512 MiB, and the decision whether to play it is made at show time (§7).
+- **`hidden`** per slide (`show="0"`), and the deck-level `showPr` (§4.4).
+- **`links`** per shape and text run: `a:hlinkClick` with its resolved target (§4.3).
+- **`media`**: one record per media relationship: part path, content type and the **declared** uncompressed size. Bytes are read lazily at show time with a bounded, uncached reader that counts inflated bytes chunk by chunk and stops at the cap (declared sizes are untrusted). Each media part is capped at 512 MiB, and the decision whether to play it is made at show time (§7).
 
-Limits (my call):
+**Reader limits** (my call). Exceeding one drops that slide's timing (it then shows its static state, §6.2) with a diagnostic:
 
-- 2,000 time nodes per slide;
-- 64 nesting levels;
-- 10,000 conditions per slide;
-- a motion path string of at most 64 KiB.
+- 4 MiB of inflated XML per slide part, 1 MiB per notes part, 1 MiB for `presProps`;
+- 2,000 time nodes per slide; 64 nesting levels; 10,000 conditions per slide;
+- 1,000 keyframes (`p:tav`) per behaviour, 20,000 per slide;
+- a motion path string of at most 64 KiB, 10,000 path commands;
+- 64 KiB of notes text per slide;
+- 64 MiB of total show metadata for the deck (model objects, estimated), checked as slides are read.
 
-When a slide goes over a limit, its animations are dropped with a diagnostic and the slide shows its final state. Malformed nodes are dropped individually, with a diagnostic, never silently.
+Malformed nodes are dropped individually, with a diagnostic, never silently.
 
 ### 6.2 Timeline semantics
 
-A **timing engine** in the lazy chunk implements the PresentationML timing model (ECMA-376 Part 1 §19.5 and the SMIL-derived semantics). A slide's main sequence (`nodeType="mainSeq"`) is split into **click steps**:
+A **timing engine** in the lazy chunk implements the PresentationML timing model (ECMA-376 Part 1 §19.5 and its SMIL-derived semantics).
+
+**Slide states.** Four distinct states, used consistently:
+
+- **static**: what the scrolling viewer paints; no timing evaluated. Used for `showAnimation="0"`, refused (over-limit or unreadable) timing, and the no-package case (§8).
+- **initial**: the slide on entry, after the transition, before any click; entrance-effect targets are hidden, and so on.
+- **checkpoint n**: the settled state after the main sequence's n-th click step has run (defined below).
+- **live**: any moment in between, from the scheduler.
+
+**Scheduler.** The engine is an **event-driven scheduler**: a reducer over the time-node graph holding, per node, its activation time, active interval, current iteration, restart state and fill state. Its inputs are the parsed tree, the **show clock**, and an explicit **event history** (clicks on next, clicks on trigger shapes with their times, media end events). Render state at time *t* is a pure function of `(tree, event history, t)`. Both the clock and events are injected, so tests drive both.
+
+**Click steps** are navigation checkpoints layered on the scheduler, from the main sequence (`nodeType="mainSeq"`):
 
 - each `clickEffect` starts a step;
 - `withEffect` items join the current step;
-- `afterEffect` items chain after it.
+- `afterEffect` items chain after the previous item ends.
 
-**Interactive sequences** (`interactiveSeq` with `evt="onClick"` on a trigger shape) run on their trigger. The engine is a pure function of `(timing tree, step, clock)` producing per-target **render state**:
+**Interactive sequences** (`interactiveSeq`, started by `evt="onClick"` on a trigger shape) run on their trigger and are recorded in the event history; they are not click steps.
 
-- visibility, opacity, transform (translate, scale, rotate, skew), clip or mask (for wipe-like filters), colour overrides (fill, line, text);
+Output per target is **render state**:
+
+- visibility, opacity, transform (translate, scale, rotate, skew), clip or mask (for wipe-like filters), colour overrides addressed to **fill, line or text** separately;
 - motion-path offset;
 - per-paragraph or per-character overrides for builds.
 
-`fill="hold"`/`remove`/`freeze`, `restart`, `autoRev`, `accel`, `decel`, and repeat all follow the spec. **Clocks are injectable**: tests drive time explicitly, and the browser uses `requestAnimationFrame`.
+`fill`, `restart`, `autoRev`, `accel`, `decel`, repeat and `additive`/`accumulate` composition all follow the standard.
 
-- **Seeking** to any step is deterministic. Applying steps 0..n−1 instantly gives the state before step n, which is what Previous uses.
-- **Effect presets.** `presetClass`/`presetID` are only labels; the behaviours under them carry the real motion. When a file has only a preset id and its behaviour children are missing or unreadable, the engine uses a table of PowerPoint presets (§6.4) to rebuild them, marked approximate.
+**Navigation rules:**
+
+- **Next during an active effect**: the running step's effects are completed to their settled state (finite effects jump to their end; indefinite ones continue), then the next step starts.
+- **Seeking / Previous**: checkpoint n is computed by replaying the main sequence's steps 0..n−1 with every finite effect settled and **no interactive-sequence events** (trigger history is cleared on Previous and on slide re-entry, as a fresh visit). Indefinite effects are taken at their first iteration's end. This is deterministic.
+- **Revisiting a slide** starts it fresh at its initial state (or at its last checkpoint when entered by Previous from the next slide, as PowerPoint shows the fully built slide; to verify against D4 captures).
+- **Pause** stops the show clock; the scheduler sees no time pass.
+- **Hidden tab / minimised window**: the show clock is the `requestAnimationFrame` time; while the document is hidden, the clock pauses and auto-advance timers stop, and they resume on visibility.
+
+**Effect presets.** `presetClass`/`presetID` are only labels; the behaviours under them carry the real motion. When a file has only a preset id and its behaviour children are missing or unreadable, the engine uses a table of PowerPoint presets (§6.4) to rebuild them, marked approximate.
+
+**Pending-stage stand-ins (D1)** map by preset class: entrance → visible at the step, emphasis → no change, exit → hidden at the step, motion path → the path's end position at the step. Each is diagnosed.
 
 ### 6.3 Rendering
 
-All rendering happens in the lazy chunk. The scrolling viewer's `renderSlide` is unchanged.
+All rendering happens in the lazy chunk. The scrolling viewer's `renderSlide` and `paintScene` are not changed for the slideshow. The chunk builds pruned node lists (the wanted nodes plus their ancestor groups, so ancestor transforms and clips are kept) and passes them to the **unchanged** `paintScene`. If a hook in a shared, statically imported module ever proves necessary, it is eager and is paid for under D3.
 
-- **Layers.** For each slide, the slideshow builds a **static layer**: the background plus every shape that no animation targets. It also builds **per-target layers**, one per animated shape or paragraph range. These are offscreen bitmaps at the audience resolution (device pixel ratio capped at 2).
-  - Layers come from the existing scene painter: a new optional `paintScene` hook paints a filtered subset of nodes. That is an additive, lazy-only change. Text layout is computed once per layer and reused.
+- **Render plan.** For each slide, the slideshow builds an **ordered render plan** that preserves authored z-order:
+  - **static runs**: maximal contiguous runs of nodes (in paint order) that no animation targets, each rasterised into one layer;
+  - **animated targets**, interleaved between the runs in their authored position. So "static A, animated B, static C" becomes three layers, A, B and C, composited in that order.
+  - **Ownership.** If a group and one of its descendants are both animated, the group is one target and the descendant is a sub-target inside the group's layer stack (painted separately, the group's transform composed over it); the descendant is not also painted in the group's own layer. A paragraph or character range build splits its shape into a **shape-body** layer (geometry, fill, line, and the text not in any animated range) and one layer per animated range, so the shape background is painted once.
+  - **Part layers for colour.** When a colour animation addresses only fill, only line, or only text of a shape, that shape is split into fill, line and text layers so the colour transform applies to that part alone. Where splitting is not possible (picture content, effects that blend parts), the target is re-rasterised when its colour changes, at most once per frame and at most 8 targets per frame; above that, the colour steps at a coarser rate with a diagnostic.
+- **Layer size.** Layers are cropped to the target's painted bounds (plus stroke, shadow and glow padding), not full-slide bitmaps. The audience backing store is capped at device pixel ratio 2 **and** at 3840 × 2160 device pixels, and no layer exceeds the compositor's maximum texture size (WebGL2 `MAX_TEXTURE_SIZE`, queried at start); a larger layer is rasterised at reduced scale and scaled up when composited, with a diagnostic.
+- **Resize and DPR changes.** On `fullscreenchange`, resize, screen change or DPR change, the current, previous and next slides' layers are re-rasterised at the new size under the same budget rules (§7). The old layers keep painting (scaled) until the new ones are ready.
 - **Frames: GPU compositor (owner request, 2026-10-21).** Layers are rasterised once with the 2-D canvas, because text and vector rendering stay on the existing painter. Each layer is uploaded as a texture. Every frame is then composited on the GPU behind a small `Compositor` interface:
-  - textured quads with per-layer transform, opacity and z-order;
+  - textured quads with per-layer transform, opacity and z-order (from the render plan);
   - mask textures and procedural masks in the fragment shader, for wipe-like filters (wipe, split, circle, diamond, plus, wedge, wheel, barn, checkerboard, dissolve noise);
-  - colour-matrix uniforms for colour animations and emphasis (colour change, darken, lighten, desaturate, transparency, complementary), so these need no repaint;
+  - colour-matrix uniforms applied **per part layer** (above) for colour animations and emphasis (colour change, darken, lighten, desaturate, transparency, complementary);
   - motion paths and rotation as transforms.
+  - Effects that deform geometry non-linearly are not colour transforms; the catalogue marks each with its actual implementation (shader, re-raster or approximation).
+  - **Colour pipeline.** Canvas bitmaps are premultiplied; uploads use `UNPACK_PREMULTIPLY_ALPHA_WEBGL = true`, blending is `ONE, ONE_MINUS_SRC_ALPHA`, and the colour matrix is applied to un-premultiplied colour in the shader. Output is sRGB, the same as the Canvas 2D compositor, so both paths agree within tolerance.
 
   The same compositor runs every transition, including the 3-D ones and Morph, so there is one GPU path, not a separate 3-D path.
 
   - **Backends.**
-    - **WebGL2** is the required backend: every current browser supports it, and it needs no dependency.
+    - **WebGL2** is the required backend: it is supported by every current major browser, though a user or GPU blocklist can disable it, and it needs no dependency.
     - **WebGPU** is an optional backend behind the same interface. It is not required by any stage, and is added only if profiling shows a measurable gain.
-    - The **Canvas 2D** compositor is the fallback. It is used when WebGL2 is unavailable, when context creation fails, or when the context is lost and can't be restored. It uses 2-D transforms, globalAlpha, clip paths and filters, and 3-D transitions use their 2-D look-alikes. Every fallback emits a diagnostic.
-  - **Context loss.** On `webglcontextlost`, textures are re-uploaded from the retained layer bitmaps after restore. If restore fails, the show switches to the Canvas 2D compositor mid-show without stopping.
-  - **Texture budget.** Textures count against the slideshow workspace (§7). A slide whose textures would exceed it falls back to direct painting and crossfade, as §7 says.
-  - **Determinism.** Frame goldens for the GPU path are taken in Chromium with a tolerance. Unit tests target the backend-agnostic render-state output plus the Canvas 2D compositor, which is deterministic in node-canvas.
-- **Transitions** composite the outgoing and incoming slide frames:
-  - **2-D transitions** use canvas compositing: masks for wipe, split, shape, clock, comb, random bars, checkerboard and dissolve noise; transforms for push, cover, uncover, zoom and fly-through.
-  - **3-D transitions** and texture-heavy ones run on the GPU compositor (WebGL2; see Frames above). That covers vortex, shred, fracture, crush, peel off, page curl, airplane, origami, honeycomb, glitter, ripple, switch, flip, gallery, cube, doors, box, rotate, orbit, conveyor, ferris, window, prestige and curtains. Each slide frame is a texture.
-  - **When WebGL is unavailable**, each 3-D transition falls back to its listed 2-D look-alike, for example cube → push and vortex → dissolve, with a diagnostic.
-- **Morph** (`p159:morph`): objects are matched in this order:
+    - The **Canvas 2D** compositor is the fallback. It is used when WebGL2 is unavailable, when context creation fails, or when the context is lost and not restored in time. It uses 2-D transforms, `globalAlpha`, clip paths and pre-rendered masks (it does not rely on `ctx.filter`, which is not available everywhere), and 3-D transitions use their 2-D look-alikes from the catalogue. Every fallback emits a diagnostic.
+  - **Context loss.** The `webglcontextlost` handler calls `event.preventDefault()` (without it the context is never restored) and pauses compositing on the last frame. If `webglcontextrestored` arrives within **3 s**, every GPU resource is recreated (programs, buffers, vertex arrays, framebuffers, mask textures, layer textures, GL state), layer textures being re-rasterised from the scene for the current slide (and re-uploaded for neighbours as they are needed). Otherwise the show switches to the Canvas 2D compositor on a **separate, newly mounted 2-D canvas** (a canvas that has a WebGL2 context cannot get a 2-D one) and removes the WebGL canvas. Timing and navigation state live outside the renderer, so the show does not stop or jump. Restore callbacks that arrive after a backend switch or exit are ignored. Repeated loss (more than 2 in a show) switches to Canvas 2D for the rest of the show.
+  - **Texture budget.** Textures count against the slideshow workspace (§7).
+  - **Determinism.** Frame goldens for the GPU path are taken in Chromium with a per-row tolerance (§10). Unit tests target the backend-agnostic render-state output plus the Canvas 2D compositor, which is deterministic in node-canvas.
+- **Transitions** composite the outgoing and incoming slide frames on the compositor:
+  - **2-D transitions**: masks for wipe, split, the shape transitions (`circle`, `diamond`, `plus`), `wheel` (clock), `wedge`, `comb`, `randomBar`, `checker`, `strips`, `blinds`, `dissolve` and the `p14` 2-D variants; transforms for `push`, `cover`, `pull` (uncover), `zoom`, `newsflash` and fly-through. On the Canvas 2D fallback the same masks and transforms are drawn with 2-D canvas operations.
+  - **3-D transitions** and texture-heavy ones run as GPU compositor shaders. That covers vortex, shred, fracture, crush, peel off, page curl, airplane, origami, honeycomb, glitter, ripple, switch, flip, gallery, cube, doors, box, rotate, orbit, conveyor, ferris, window, prestige and curtains. Each slide frame is a texture.
+  - **When WebGL2 is unavailable**, each 3-D transition uses the 2-D look-alike named in its catalogue row (for example cube → push, vortex → dissolve), with a diagnostic. Every 3-D row names one.
+- **Morph** (`p159:morph`, `option` `byObject`/`byWord`/`byChar`): objects are matched in this order:
   1. same `cNvPr name` starting with `!!` (PowerPoint's forced pairing);
   2. same name and same kind;
-  3. same text content (by object, word or character for `option="byWord"`/`"byChar"`);
+  3. same text content (by object, word or character per `option`);
   4. same geometry preset nearby.
 
-  Matched objects interpolate position, size, rotation, fill and line colour, and opacity, plus a crossfade of rendered content where the geometry differs. Unmatched objects fade out or in.
+  Matched objects interpolate position, size, rotation, fill and line colour, and opacity, plus a crossfade of rendered content where the geometry differs. Unmatched objects fade out or in. The matching is an approximation; every Morph is listed as approximate.
+- **Watermarks and protection.** Every slideshow surface (audience, presenter mirror, next preview, slide grid) paints the document's watermark exactly as the static viewer does, as a top static layer that no effect moves, and honours the viewer's protection policy.
 
 ### 6.4 Effect catalogue
 
-The plan carries a **catalogue table**, one row per PowerPoint transition and animation preset (the presets come from `presetID` × `presetClass` × `presetSubtype`). Each row gives:
+The plan carries a **catalogue table**, one row per transition element and animation preset. Rows are named by **schema element** (ECMA-376: `blinds`, `checker`, `circle`, `comb`, `cover`, `cut`, `diamond`, `dissolve`, `fade`, `newsflash`, `plus`, `pull`, `push`, `random`, `randomBar`, `split`, `strips`, `wedge`, `wheel`, `wipe`, `zoom`; then each `p14`/`p15`/`p159` element and `p15:prstTrans` preset), with the PowerPoint UI name as a column (for example "Shape" → `circle`/`diamond`/`plus`, "Clock" → `wheel`, "Uncover" → `pull`). Animation rows come from `presetID` × `presetClass` × `presetSubtype`. Each row gives:
 
-- how the effect is implemented: as behaviours from the file, or rebuilt from the preset table;
-- its status: **exact** (file-defined), **approximate** (closest look-alike), or **never** (§2.3).
+- how the effect is implemented: behaviours from the file, rebuilt from the preset table, a shader, or a re-raster;
+- its status: **exact** (file-defined), **approximate** (closest look-alike), **pending-stage-N** (D1), or **never** (§2.3); plus **verified** or **unverified** (D4);
+- for 3-D transitions, the 2-D look-alike;
+- the frame-compare tolerance for that row (§10).
 
-The catalogue lives in the validation doc, and a test asserts that every preset id seen in the parser maps to a catalogue row.
+**Completeness** is checked against an **independently enumerated inventory** (the transition elements of the schemas, the behaviour elements, and PowerPoint's preset list), not only against what the parser happens to recognise. Fixtures with an unknown extension namespace, an unknown transition element and an unknown preset id assert that each produces a diagnostic and a stand-in.
+
+**Diagnostics** are deduplicated per effect and slide, collected per show, and surfaced as in §5.2; none is emitted per frame.
 
 ### 6.5 Best-effort items
 
 These are closest look-alikes, each with a diagnostic:
 
-- **Text by word or letter** (`p:iterate type="wd"/"lt"`): the paragraph's laid-out lines are split into word or glyph boxes, using the text-layout runs, and each box is its own layer.
+- **Text by word or letter** (`p:iterate type="wd"/"lt"`): the paragraph's laid-out lines are split into word or glyph boxes, using the text-layout runs, and each box is its own layer (counted against the layer limits in §7).
 - **Chart builds** (by series or category): the whole chart animates as one target.
-- **SmartArt builds**: animate the diagram's fallback drawing as one target.
+- **SmartArt builds** (`p:bldDgm`): animate the diagram's fallback drawing as one target.
 - **Animations on shapes that the viewer draws as a fallback picture or card** animate the picture.
 - **Media codecs** the browser can't decode (WMV, WMA and similar): the poster frame shows, and play commands are no-ops, with a diagnostic.
 
 ## 7. Performance, memory and safety
 
-- **Slideshow workspace.** A per-show workspace ledger follows the chart workspace pattern. It reserves before allocating and releases on slide change and exit.
-  - Budgets: 512 MiB desktop and 256 MiB mobile for layers, transition textures and media buffers.
-  - The engine keeps the layers for the current, previous and next slides. The rest are evicted.
-- **Over budget.** When a slide's layers would exceed the budget, the slide falls back to direct painting, with no per-layer caching, and to a crossfade transition, with a diagnostic. The show never crashes or stalls.
+- **Slideshow workspace.** A per-show workspace ledger follows the chart workspace pattern. It reserves before allocating and releases on slide change and exit. Reservations made by an allocation that completes after its slide was left (rapid navigation) are released on completion and the result discarded.
+  - Budgets: 512 MiB desktop and 256 MiB mobile.
+  - **What is charged**: every CPU-side layer bitmap and every GPU texture (each counted at width × height × 4, even when both copies exist), masks, framebuffers and transition surfaces, the presenter mirror and preview surfaces, decoded media frames held by the engine, media Blob bytes (their inflated length), and the show metadata from §6.1. Construction peaks are charged: a layer's CPU bitmap and its texture are both reserved during upload, and the CPU copy is released after upload (context restore re-rasterises instead, §6.3).
+  - **Residency**: the current, previous and next slides. The rest are evicted. Under pressure, the neighbours are evicted first, then the current slide's layers are rebuilt at reduced resolution (down to DPR 1).
+- **Fallback ladder.** When a slide still does not fit:
+  1. reduced resolution (above);
+  2. **flattened slide**: the slide is painted into a single layer per checkpoint, effects within the slide become cuts at their steps, and the transition becomes a crossfade between two full-slide frames;
+  3. **cut**: a single full-slide frame, no transition. This is the minimum admitted state; it needs one surface the size of the backing store, which is reserved when the show starts, so the show never crashes or stalls.
+
+  Each step down is diagnosed.
+- **Frame work.** Benchmark: a named corpus deck (chosen in the plan) at 1920 × 1080 CSS pixels, DPR 2, Chromium on the owner's reference laptop. Target: p95 frame work ≤ 12 ms and no dropped frame in steady animation. Limits: at most 128 composited layers per frame and at most 8 re-rasterisations per frame; above these, effects coarsen (layers merge into static runs, colour steps coarsen) with a diagnostic.
 - **Media.**
-  - Bytes go into a `Blob` URL only when the slide is shown. The URL is revoked when the slide is left.
-  - The 512 MiB per-part cap is checked against the zip entry size before inflating.
-  - Autoplay rules: the presenter's start gesture is the user gesture. Media that still can't play shows the poster with a "click to play" affordance.
-- **Frame work.** The frame work is bounded: there is a per-frame cap on composited layers. Above the cap, effects coarsen, with a diagnostic, rather than drop frames indefinitely.
-- **Hostile input.** The parse limits are in §6.1. A cycle in time-node references (`tn` conditions) is detected and the cycle is broken, with a diagnostic. Motion-path parsing is bounded.
-- **Scope of the popup.** The popup document holds no host page data beyond the deck. It is closed on exit and on opener unload.
+  - Bytes are read with the bounded uncached reader (§6.1), never the caching `OfficePackage.bytes()`, and go into a `Blob` URL only when the slide is shown. The URL is revoked when the slide is left, unless the media is still playing across slides (below).
+  - **Cross-slide sound.** A transition sound with `loop` plays until the next slide's transition sound or `p:endSnd`; audio whose `p:cMediaNode` spans slides (`numSld`, to verify in the parser task) keeps its element and URL alive for those slides. Everything else stops on slide change.
+  - **One audio output.** Media plays on the audience surface only (§5.2).
+  - **Autoplay.** Every `play()` call handles rejection. On rejection (autoplay policy) or a media error, mid-playback included, the poster stays with a "Click to play" control that calls `play()` in that click's activation. The timeline is never blocked by media: nodes waiting on the media's `onEnd` proceed when the media node's own `dur` elapses, or immediately if it has none, with a diagnostic.
+- **Hostile input.** The reader limits are in §6.1. A cycle in time-node references (`tn` conditions) is detected and the cycle is broken, with a diagnostic. Motion-path parsing and formula evaluation are bounded and never use JavaScript evaluation.
+- **Degenerate slide size.** Slide size uses the static viewer's `slideMetrics` and its clamps; a deck the static viewer refuses is `'not-presentable'`.
+- **The popup boundary.** The popup is same-origin and has an opener, so it is **not** an isolation boundary: script in it could reach the host page. The guarantee is narrower: officeview renders only deck content into it, inserts notes and labels as text (never deck-supplied HTML), and closes it on exit and on opener unload.
 
 ## 8. Eager budget and lazy boundaries
 
-- **Lazy chunk.** All slideshow code lives in `src/slideshow/` (lazy). A new `EAGER_FORBIDDEN` rule covers `src/slideshow/`, and the harness's lazy-chunk list adds it.
-- **What stays eager:**
-  - the `forwardRef` / handle plumbing in `OfficeDoc`/`OfficeFile`;
-  - a tiny loader that `import()`s the chunk;
-  - the F5 key routing.
+- **Lazy modules.** All slideshow code lives in `src/slideshow/` (lazy). Stage 0's appearance code lives in a lazy **slide appearance enrichment** module (`src/pptx/appearance/`, name to confirm in the plan). New `EAGER_FORBIDDEN` rules cover both, and the harness's lazy-chunk list adds both.
+- **Slide appearance enrichment (Stage 0).** `getPaintables`, already async, loads the enrichment module with `import()` for PPTX documents (the same seam pattern as the chart engine). The enrichment reads layouts, masters, themes and backgrounds from the package handle and attaches them to the slides before painting: background fills and master/layout non-placeholder shapes, expressed as the existing scene-node / fill types so the existing painter draws them. The worker path goes through `getPaintables` and so gets the same result. The slideshow chunk calls the same enrichment.
+  - `renderSlide` paints whatever is attached. A caller that calls `renderSlide` directly without going through `getPaintables` (hosts using the low-level API, unit tests) sees the pre-Stage-0 appearance unless it runs the enrichment first; the enrichment is exported lazily for that purpose (an async function behind `import()`), and the README says so.
+  - Painting attached artwork must not add eager painter code beyond the smallest possible branch in `render.ts` (prefer expressing everything as scene nodes and fills the painter already supports). Any such branch is measured and paid for by recovered bytes.
+- **What stays eager, and only this:**
+  - the **package handle**: `parsePptx` attaches its `OfficePackage` and the slide part paths to the `PptxDocument`;
+  - the dynamic `import()` seams (enrichment in `getPaintables`; the slideshow loader);
+  - the `forwardRef` / handle plumbing in `OfficeDoc`/`OfficeFile`, the pre-mounted slideshow host element, the synchronous start sequence (§4.1) and the F5 key routing.
 
   The Present button lives in the lazy `PagedChrome`.
-- **Measuring.** Eager growth is measured after every task. It may use only bytes recovered elsewhere, and the project ceiling stays **38,647 B**. The plan must identify a byte recovery before the first eager addition (the handle plumbing is expected to cost about 60–150 B gzip). The slideshow-data sidecar in `parsePptx` must stay off the eager path, or cost no more than its recovery; the parser is eager.
+- **The package handle (lease).**
+  - It references the same `OfficePackage` the caller passed to `parsePptx`, and lives exactly as long as the `PptxDocument` object is reachable; the viewer adds no other owner. Its cost is the compressed archive held by JSZip (about the source file size), which is charged to the document and recorded in the validation doc. The parse-time read cache is not kept alive by it: `parsePptx` drops the cache when it attaches the handle, or the handle keeps only what uncached `entry()` reads need, whichever costs fewer eager bytes.
+  - Lazy readers use only uncached, bounded reads through the handle; nothing they read is cached on the document.
+  - A `PptxDocument` without a handle (constructed or cloned by a caller, or from a reader that released its package) can still present: slides show in their static state with cut transitions, no notes, and a `'no-package'` diagnostic. When the viewer still holds a **re-readable** source (bytes, Blob, URL), `present()` reopens the package from it during the start's load step instead; a one-shot source (Response, stream, Request, promise) is never re-read, which is why a viewer that loaded from one keeps the handle.
+  - Source replacement, unmount, failed start and late completion follow the generation rule in §4.2.
+- **Measuring.** The eager size on main `b8a146c` is 38,584 B; the ceiling stays **38,647 B** (63 B headroom; §3). The controller re-measures on main and records the real headroom here before Stage 0. Eager growth is measured after every task. Recovery comes first: the first task of each stage that grows eager code is a measured byte recovery of at least the expected growth, landed before the growth. The handle and seams are expected to cost about 60–150 B gzip. The spec does not name the recovery; the plan finds it by measurement (candidates must not remove public exports).
 
 ## 9. Accessibility
 
-- **Audience surface:** an `aria-live="polite"` region announces "Slide n of m: {title}" on slide change. Each slide exposes its text content (title, then body) in an offscreen list, reusing the paged chart-description pattern, so screen-reader users can follow along. Focus moves into the show on start and returns to the Present button on exit.
-- **Presenter View:** labelled controls, notes as real text, and keyboard parity.
+- **Audience surface:** an `aria-live="polite"` region announces "Slide n of m: {title}" on slide change (announced once, from the audience surface only, not again from Presenter View). Each slide exposes its **currently visible** text (title, then body) in an offscreen list, reusing the paged chart-description pattern; text whose entrance build has not run yet is not exposed until it appears, and exited text is removed.
+- **Triggers and links by keyboard.** Each trigger shape and hyperlink on the current slide has an offscreen, focusable button in authored z-order, named from the shape's alt text, name or text ("Trigger: {name}", "Link: {text}"). Tab moves through them; Enter or Space activates them, the same as a click.
+- **Focus.** Focus moves into the show on start. On exit it returns to the element focused when the show started, if still connected, else to the viewer root (an API-started show has no Present button to return to).
+- **Presenter View:** labelled controls, notes as real text, keyboard parity, and its own focus management inside the popup document.
 - Reduced motion is covered in §4.5.
 
 ## 10. Testing and validation
@@ -332,50 +464,58 @@ These are closest look-alikes, each with a diagnostic:
     - `tdf104788` (19 animations), `tdf115394` (7 transitions);
     - `narration*`, `animation-sound-*`.
 
-    Each is pinned to a commit SHA with provenance, the same as the ChartEx fixtures.
-  - **Synthetic.** Builders make one deck per remaining catalogue row. These are labelled "Office-shaped synthetic", never presented as Office evidence.
+    Each is pinned to a LibreOffice commit SHA with provenance, the same as the ChartEx fixtures; the SHA is recorded in the validation doc and the fixture manifest when the fixtures are imported.
+  - **Synthetic.** Builders make one deck per remaining catalogue row, plus the unknown-namespace, unknown-element and unknown-preset decks (§6.4). These are labelled "Office-shaped synthetic", never presented as Office evidence.
 - **Unit tests (vitest):**
-  - parser coverage for transitions, the timing tree, notes, hidden slides, `showPr` and media;
-  - the timing engine with a fake clock (step splitting, with/after, delays, repeat, autoRev, triggers, seeking);
+  - reader coverage for transitions (both `mc:Choice` and `p:extLst` placements), the timing tree and its units, notes, hidden slides, `showPr` (defaults, kiosk, `sldRg`), hyperlinks and media metadata; every reader limit at its value and one past it;
+  - the formula interpreter (grammar, limits, rejection of anything else);
+  - the scheduler with injected clock **and** events: step splitting, with/after, delays, repeat in thousandths, autoRev, `restart` while active, parallel effects ending at different times, indefinite repeat plus Next, two different trigger histories at the same main step and time giving different render state, seeking, Previous across a trigger;
+  - auto-advance: `advClick="0"` with keyboard, missing versus zero `advTm`, pending click steps, indefinite repeats, loop and end-of-show;
+  - `showAnimation="0"` and over-limit timing with exit effects show the static state; entrance and exit on the same shape;
+  - render-plan pixel cases: static/animated/static overlap, translucent overlap, grouped child animation, shape background plus paragraph build, a same-colour fill-and-text shape whose fill alone changes (with partial transparency);
   - render-state numeric oracles at chosen times;
-  - catalogue completeness;
-  - workspace budgets.
-- **Frame goldens.** Selected transitions and animations are rendered at fixed times (0, 25, 50, 75, 100 %) through the lazy renderer, and diffed against Mac goldens. As with existing goldens, they are not run in CI. WebGL frames are compared in Chromium only, within a tolerance.
+  - catalogue completeness against the independent inventory;
+  - workspace budgets: refusal one byte below each peak, the fallback ladder, rapid navigation while allocations are in flight;
+  - a deterministic seed for random, dissolve, shred and `rand` effects.
+- **Frame goldens.** Selected transitions and animations are rendered at fixed times (0, 25, 50, 75, 100 %) through the lazy renderer, and diffed against Mac goldens with the row's tolerance. As with existing goldens, they are not run in CI. WebGL frames are compared in Chromium only.
 - **Browser tests (Playwright, Chromium):**
   - Present from the toolbar and from the API;
+  - **cold start**: a deliberately slowed chunk load still enters full screen and opens the popup, because both happen before the load; the popup is closed when the load fails;
+  - popup-then-full-screen ordering in one activation, and the "Click for full screen" retry when the second request is refused;
+  - full screen refused (iframe without `allow="fullscreen"`) → in-window show; popup refused → single-screen; screen permission denied → manual placement;
+  - `present()` without a gesture → `'gesture-required'`; exit before load; duplicate exit; two viewers; document change during a show; unmount during load;
   - full-screen enter and exit (headless full screen is emulated where needed);
-  - keyboard navigation;
-  - hidden slides;
-  - the end-of-show slide;
+  - keyboard navigation and key precedence; keyboard activation of triggers and links; an animated link; no premature text disclosure; focus restore after an API-started show;
+  - hidden slides; the end-of-show slide; loop;
   - single-screen Presenter View swap;
   - the popup Presenter View (both views stay in sync on next and previous);
-  - a blocked popup falls back;
   - reduced motion;
   - the chunk-load failure notice;
-  - media playback of a supported format.
+  - media playback of a supported format; audio spanning slides; a rejected later `play()`;
+  - forced context loss: during a transition, never restored (switch at the deadline), repeated loss, exit during restore.
 
-  The Window Management API path is tested by feature-detection mocks. Real multi-screen placement can't be automated, so it gets a manual check listed in the validation doc. All clocks are driven explicitly, as CI runs Linux on 2 CPUs.
-- **Validation doc** `docs/validation/slideshow.md`: the catalogue table with exact, approximate or never for each row; gates; the eager ledger; known limits.
+  CI runs Chromium headless with software WebGL2 (SwiftShader); browser tests assert behaviour on both the WebGL2 path and a forced Canvas 2D path, never GPU pixels. The Window Management API path is tested by feature-detection mocks. Real multi-screen placement and real transient-activation behaviour across engines can't be fully automated, so they get manual checks listed in the validation doc. All clocks are driven explicitly, as CI runs Linux on 2 CPUs.
+- **Validation doc** `docs/validation/slideshow.md`: the catalogue table with status and tolerance for each row; gates; the eager ledger; host embedding requirements (§5.3); known limits (macOS F5, `p:browse` shown as present, custom shows).
 
 ## 11. Owner decisions (2026-10-21)
 
-- **D1 Delivery: staged PRs.** Each stage in §13 is its own PR to main, merged after CI and the Codex bot review pass. Effects whose stage has not landed yet play a **diagnosed stand-in**: a crossfade for transitions, the end state for animations. The catalogue labels them `pending-stage-N`, never silently skipped. The catalogue-completeness test checks that every preset maps to a row at every stage, whatever the row's status.
-- **D2 Master and layout artwork and backgrounds: in scope, first.** Stage 0 adds them to the **shared** PPTX renderer, so the static viewer improves too. It covers:
+- **D1 Delivery: staged PRs.** Each stage in §13 is its own PR to main, merged after CI and the Codex bot review pass. Effects whose stage has not landed yet play a **diagnosed stand-in** (§6.2): a crossfade for transitions, the class-mapped end state for animations. The catalogue labels them `pending-stage-N`, never silently skipped. The catalogue-completeness test checks that every inventory entry maps to a row at every stage, whatever the row's status.
+- **D2 Master and layout artwork and backgrounds: in scope, first.** Stage 0 adds them to the **shared** PPTX rendering, so the static viewer improves too. It covers:
   - master and layout non-placeholder shapes, honouring `showMasterSp`;
-  - gradient, picture, pattern and theme `bgRef` backgrounds, with inheritance slide → layout → master.
+  - gradient, picture, pattern and theme `bgRef` backgrounds (extending today's solid `bgRef`), with inheritance slide → layout → master.
 
-  Existing goldens and print are re-checked, and any changed golden is listed and inspected individually.
+  Because the parser and painter are eager, this work runs in the lazy slide appearance enrichment that `getPaintables` loads (§8). Existing goldens and print are re-checked, and any changed golden is listed and inspected individually.
 - **D3 Eager budget: recover bytes first.** The project ceiling stays **38,647 B**. No eager growth is allowed without first recovering at least as many bytes elsewhere. **Slideshow parsing does not happen in the eager `parsePptx`**, which is my call following from D3:
-  - `PptxDocument` keeps a handle to its `OfficePackage` and slide part paths.
-  - The lazy chunk re-reads transitions, timing, notes, `showPr` and media from that package when a show starts.
-  - Where the package has been released (for example a spooled `OfficeFile` source), `present()` reopens it from the viewer's source bytes before starting.
-  - Stage 0's renderer work also lives in the lazy paint path where possible. Any eager parser growth for masters and backgrounds must be paid for by recovered bytes, and the plan lists those recoveries.
+  - `PptxDocument` keeps a handle to its `OfficePackage` and slide part paths (the lease rules are in §8).
+  - The lazy chunk reads transitions, timing, notes, `showPr`, links and media from that handle when a show starts.
+  - Where a document has no handle, `present()` reopens the package only from a re-readable source; otherwise the show plays static slides with a diagnostic (§8).
+  - Stage 0's master, layout and background work runs in the lazy enrichment module. Eager additions are limited to the package handle and the `import()` seams (plus the host plumbing in §8), each paid for by recovered bytes, and the plan lists those recoveries.
 - **D4 References: the owner will supply PowerPoint captures.** "Exact" is checked two ways:
   - numeric conformance to the file format, by tests;
   - a capture-and-compare step against owner-supplied PowerPoint reference frames or video for the corpus decks.
 
   The plan provides:
-  - a capture checklist: deck, slide, step, and timestamps at 0/25/50/75/100 % of each effect;
+  - a capture checklist: deck, slide, step, and timestamps at 0/25/50/75/100 % of each effect, plus the behavioural questions this spec leaves to captures (`spd` durations, `advTm` with pending clicks, trigger-versus-link precedence, kiosk restart, Previous into a slide);
   - a fixture layout for the captures (`tests/fixtures/slideshow-refs/`, with provenance: PowerPoint version, OS, resolution);
   - a compare tool with tolerances (a structural/pixel threshold per row, looser for approximate rows).
 
@@ -383,14 +523,19 @@ These are closest look-alikes, each with a diagnostic:
 
 ## 12. Calls made (owner can override)
 
-- Presenter View uses a same-origin popup, rendered with portals from the opener. On Chromium it is placed with the Window Management API.
+- Presenter View uses a same-origin popup, rendered with portals from the opener. On Chromium it is placed with the Window Management API when its permission is granted.
+- The start gesture opens the popup and requests full screen synchronously, before loading the chunk (§4.1).
+- When full screen is refused, the show runs in-window with a notice instead of failing (§4.1, §5.3).
 - Single-screen fallback swaps the full-screen surface (PowerPoint-style).
 - Reduced motion shortens transitions to a crossfade of at most 200 ms and jumps animations to their end state.
-- A GPU compositor for every frame and transition: WebGL2 required, WebGPU optional behind the same interface, Canvas 2D fallback (§6.3). No new runtime dependency.
-- Memory budget: 512 / 256 MiB per show. Parse limits are as in §6.1.
-- The new props are `allowPresent` and `presentShortcuts` (both default `true`) and `slideShowMotion`, plus the three event props.
+- A GPU compositor for every frame and transition: WebGL2 required, WebGPU optional behind the same interface, Canvas 2D fallback (§6.3). No new runtime dependency. Context-restore deadline 3 s.
+- Memory budget: 512 / 256 MiB per show, with the accounting and fallback ladder of §7. Reader limits are as in §6.1. Frame target and layer limits are as in §7.
+- The new props are `allowPresent` and `presentShortcuts` (both default `true`) and `slideShowMotion`, plus the four event props.
 - After exit, the viewer scrolls to the last shown slide.
-- The slideshow reads its data lazily from the retained package (D3). For PPTX the package handle is retained while the document is open. It costs memory only where the source bytes were not already resident, and in that case `present()` reopens from source.
+- The slideshow reads its data lazily from the package handle (D3, §8).
+- `p:sldRg` is honoured; custom shows and `p:browse` are recognised and diagnosed.
+- Transitions on layouts and masters are not inherited (pending verification).
+- A shape with both a trigger and a hyperlink runs the trigger (pending verification).
 
 ## 13. Delivery stages (D1)
 
@@ -398,7 +543,84 @@ Each stage is its own PR to main, with the full gate set (tsc, vitest, eager bud
 
 | Stage | Scope | Done when |
 |---|---|---|
-| **0: Slide appearance** | Master and layout non-placeholder shapes (`showMasterSp`, placeholders excluded), and backgrounds (solid, gradient, picture, pattern, `bgRef` / theme background styles), with inheritance slide → layout → master. Shared renderer, so the static viewer and print improve. | Corpus decks show their designed backgrounds and master artwork. Changed goldens are listed and inspected. |
-| **1: Core show** | Lazy `src/slideshow/` chunk; host handle and events; Present button and F5 keys; full-screen audience view; navigation (§4.3); hidden slides; end-of-show; `showPr`; reduced motion; parser for transitions, timing, notes, media metadata (lazy, D3); timing engine (§6.2); layer renderer and GPU compositor (WebGL2 with Canvas 2D fallback, §6.3); every animation behaviour (set, anim, animEffect, animMotion, animRot, animScale, animClr), builds by paragraph, triggers; all 2-D transitions. 3-D transitions, Morph and media are stand-ins. | Corpus decks present with correct build order and timing. Every catalogue row is exact, approximate, `pending-stage-N` or never. |
-| **2: Presenter View and media** | Presenter View: popup, Window Management placement, single-screen swap, notes, next, timer, slide grid. Media playback (video, audio, transition sound, media commands). Text builds by word and by letter. | Two-window and single-screen presenting works; supported media plays. |
-| **3: 3-D transitions and Morph** | 3-D transitions on the GPU compositor with 2-D look-alikes for when WebGL is unavailable, plus Morph. | No `pending-stage` rows remain; the catalogue is complete. |
+| **0: Slide appearance** | Byte recovery for the package handle and the enrichment seam. Package handle on `PptxDocument`. Lazy slide appearance enrichment loaded from `getPaintables` (§8): master and layout non-placeholder shapes (`showMasterSp`, placeholders excluded), and backgrounds (solid, gradient, picture, pattern, `bgRef` / theme background styles), with inheritance slide → layout → master. Shared rendering, so the static viewer, worker and print improve. | Corpus decks show their designed backgrounds and master artwork. Changed goldens are listed and inspected. Eager ≤ ceiling with the recovery recorded. |
+| **1: Core show** | Lazy `src/slideshow/` chunk; host handle, start sequence and events; Present button and F5 keys; full-screen and in-window audience view; navigation (§4.3) including hyperlinks and keyboard trigger access; hidden slides; end-of-show; `showPr`; reduced motion; lazy show reader for transitions, timing, notes, links, media metadata (D3); scheduler (§6.2); render plan, layer renderer and GPU compositor (WebGL2 with Canvas 2D fallback, context loss, §6.3); workspace and fallback ladder (§7); every animation behaviour (set, anim, animEffect, animMotion, animRot, animScale, animClr), builds by paragraph, triggers; all 2-D transitions. 3-D transitions, Morph and media are stand-ins; the Presenter View option is hidden and diagnosed (§4.1). | Corpus decks present with correct build order and timing. Every catalogue row is exact, approximate, `pending-stage-N` or never. |
+| **2: Presenter View and media** | Presenter View: popup, Window Management placement, single-screen swap, notes, next, timer, slide grid, diagnostics panel; CSP-hardened host check. Media playback (video, audio, transition sound, cross-slide sound, media commands). Text builds by word and by letter. | Two-window and single-screen presenting works; supported media plays. |
+| **3: 3-D transitions and Morph** | 3-D transitions as compositor shaders with their catalogued 2-D look-alikes for when WebGL2 is unavailable, plus Morph. | No `pending-stage` rows remain; the catalogue is complete. |
+
+**Stage 1 internal checkpoints.** Stage 1 is one PR (D1) but is built and reviewed as ordered checkpoints, each gated by the cross-family review: (1) start sequence, session lifecycle and navigation shell with static slides and cut transitions; (2) show reader and semantics table; (3) scheduler; (4) render plan and Canvas 2D compositor; (5) WebGL2 compositor and context loss; (6) behaviours and builds; (7) 2-D transitions; (8) workspace and fallback ladder.
+
+## 14. Review dispositions (round 1)
+
+Reviews: `spec-codex.md` (Codex), `spec-agy.md` (agy), `spec-opencode.md` (opencode), `spec-pi.md` (pi; its unnumbered bullets are given ids P1–P22 here in document order).
+
+| Finding | Disposition |
+|---|---|
+| Codex I1 (gesture survives loading; fullscreen + popup in one activation) | Accepted (§4.1 start sequence, §4.2 gesture and codes, §5.1 placement, §10 cold-start tests) |
+| Codex I2 (package/source ownership contradicts itself) | Accepted (§3 package ownership, §6.1 lazy-only, §8 lease, §11 D3) |
+| Codex I3 (one static layer loses z-order) | Accepted (§6.3 render plan and ownership, §10 pixel cases) |
+| Codex I4 (colour matrix on whole-shape texture) | Accepted (§6.3 part layers, bounded re-raster, colour pipeline; §10 same-colour test) |
+| Codex I5 (step+clock cannot represent trigger history) | Accepted (§6.2 event-driven scheduler, navigation rules; §10) |
+| Codex I6 (missing cBhvr semantics, formulas, repeatCount units, inventory) | Accepted (§6.1 semantics table, formula interpreter, unknown-node policy; §6.4 independent inventory); exact names and units marked to verify in the parser task |
+| Codex I7 (kiosk clock, input, sldRg, browse, advTm deadlock) | Accepted (§4.4); `advTm` rule stated as a working assumption to verify against D4 captures |
+| Codex I8 (no-animation / over-limit must not replay exits) | Accepted (§6.2 slide states, stand-in mapping; §4.4; §10) |
+| Codex I9 (budget peaks, bounded inputs, admissible fallback) | Accepted (§6.1 reader limits, §7 accounting, fallback ladder, frame target, uncached media reads) |
+| Codex I10 (GPU loss lifecycle) | Accepted (§6.3 context loss: preventDefault, 3 s deadline, separate 2-D canvas, full resource recreation, stale callbacks; §10) |
+| Codex I11 (session, permission, media lifecycle) | Accepted (§4.2 lifecycle, scope, invalid indices; §4.3 precedence; §5.2 one audio output; §7 cross-slide sound, per-play rejection) |
+| Codex I12 (hit targets, keyboard triggers, disclosure, focus, watermark) | Accepted (§4.3 click targets and hyperlinks; §9; §6.3 watermarks; §3 recon corrected: no PPTX hyperlinks today) |
+| Codex M1 (DrawingCompatibility is private) | Accepted (§3, §6.1: `supportedChoiceRequirements` with a slideshow requirements table) |
+| Codex M2 (stale wording) | Accepted (§3 events and `bgRef`, §6.3 single compositor wording and no shared-module hook, §11 D2) |
+| Codex M3 (preview semantics, diagnostics UI) | Accepted (§5.2 Next and diagnostics, §6.4 dedup) |
+| Codex M4 (same-origin is not isolation) | Accepted (§7 popup boundary, §5.2 notes as text) |
+| agy 1.1 (extension transitions in `p:extLst`) | Accepted in part (§6.1 reads both placements, diagnoses unknown URIs); the claim that PowerPoint commonly writes them in `p:extLst` and the quoted GUIDs are not taken as fact (to verify in the parser task) |
+| agy 1.2 (formula evaluation RCE) | Accepted (§6.1 bounded interpreter, §7) |
+| agy 1.3 (activation lost across `import()`) | Accepted (§4.1 start sequence and preload hint); new error codes rejected in favour of `surface`/`presenter` reporting, since the show still runs |
+| agy 1.4 (MAX_TEXTURE_SIZE, premultiplied alpha) | Accepted (§6.3 layer size and colour pipeline) |
+| agy 1.5 (`spd` mapping) | Accepted in part (§6.1 pinned table); the proposed 500/1000/2000 ms values are rejected as unconfirmed, working values 500/750/1000 ms to verify |
+| agy 2.1 (autoplay rejection deadlocks timeline) | Accepted (§7 autoplay) |
+| agy 2.2 (preventDefault on context loss) | Accepted (§6.3) |
+| agy 2.3 (fullscreen blocked in iframes) | Accepted (§4.1 in-window show, §5.3, §12) |
+| agy 2.4 (current slide hidden) | Accepted (§4.2 starting slide) |
+| agy 2.5 (`p:sldRg`) | Accepted (§2.2, §4.4: honoured) |
+| agy 3.1 (name byte-recovery candidates) | Rejected: the candidates are unmeasured and one (removing exports) breaks the public API; §8 instead requires a measured recovery as the first task of each growing stage |
+| agy 3.2 (layer memory at 4K) | Accepted (§6.3 cropped layers, backing-store cap; §7) |
+| agy 3.3 (headless WebGL2 in CI) | Accepted (§10: SwiftShader, both paths, no GPU pixels in CI) |
+| agy 4.2 (split Stage 1 into 1a/1b) | Rejected as a PR split (stage granularity is D1); accepted as ordered internal checkpoints (§13) |
+| opencode E1 (kiosk `restart` not idle) | Accepted (§4.4), to verify in the parser task |
+| opencode E2 (`advTm` does not wait for animations) | Accepted in part (§4.4): rewritten as a working assumption with click deferral and a no-deadlock rule; the reported PowerPoint behaviour is unconfirmed and goes to D4 captures |
+| opencode E3 (catalogue by element names) | Accepted (§6.4, §6.3 transition list) |
+| opencode E4 (`showPr` defaults) | Accepted (§4.4), to verify in the parser task |
+| opencode E5 (layout/master transitions) | Accepted (§6.1: slide-only, diagnosed, to verify) |
+| opencode G1 (iframe constraints) | Accepted (§5.3, §4.1) |
+| opencode G2 (§6.1 contradicts D3) | Accepted (§6.1 rewritten) |
+| opencode G3 (resize / DPR re-rasterisation) | Accepted (§6.3) |
+| opencode G4 (reopen can fail) | Accepted (§8 lease: re-readable sources only, else static show with diagnostic) |
+| opencode G5 (trigger vs hyperlink) | Accepted (§4.3), to verify against D4 captures |
+| opencode G6 (`p:bldDgm`) | Accepted (§6.1, §6.5) |
+| opencode R1 (eager headroom; recovery first) | Accepted (§8, §13 Stage 0) |
+| opencode R2 (Stage 1 size) | Accepted (§13 internal checkpoints) |
+| opencode R3 (popup CSP) | Accepted (§5.3, §13 Stage 2) |
+| opencode R4 (macOS F5) | Accepted (§4.1, §10 known limits) |
+| opencode R5 (exclude media from the ledger) | Rejected: media Blob bytes have a known inflated length and are charged (§7), which bounds them better than excluding them |
+| pi P1 (eager is 38,638 B, 9 B headroom) | Rejected: 38,638 B is an older intermediate measurement; main rebuilt fresh measures 38,584 B, 63 B headroom (§3, §8) |
+| pi P2 (browse mode unclear) | Accepted (§4.4 show types) |
+| pi P3 (released-package detection) | Accepted (§8 lease) |
+| pi P4 (4K layer memory) | Accepted (§6.3, §7) |
+| pi P5 (colour repaint heuristic) | Rejected: the quoted text is not in the spec; colour handling is now defined in §6.3 |
+| pi P6 (no composited-layer cap value) | Accepted (§7: 128 layers, 8 re-rasters per frame) |
+| pi P7 (LibreOffice SHA unnamed) | Accepted (§10: recorded at fixture import) |
+| pi P8 (popup failure modes beyond blocked) | Accepted (§4.1: `null` or closed window means blocked) |
+| pi P9 (reduced-motion crossfade configurable) | Rejected: `slideShowMotion` already lets the host choose, and 200 ms is a maximum |
+| pi P10 (no context-loss handling) | Rejected: already covered at review time (pi's own amendment note), now strengthened in §6.3 |
+| pi P11 (degenerate slide size) | Accepted (§7) |
+| pi P12 (media fails mid-playback) | Accepted (§7 autoplay and errors) |
+| pi P13 (present() twice rapidly) | Accepted (§4.2 generations and `'already-presenting'` while starting) |
+| pi P14 (autoplay affordance timeout) | Accepted (§7: the timeline proceeds; the control stays) |
+| pi P15 (current slide index with hidden slides) | Accepted (§4.2 starting slide) |
+| pi P16 (loop with hidden slides / end-of-show) | Accepted (§4.4 loop, §4.1) |
+| pi P17 (soften "every browser supports WebGL2") | Accepted (§6.3 backends) |
+| pi P18 (enumerate 2-D look-alikes; `ctx.filter`) | Accepted (§6.3, §6.4: every 3-D row names its look-alike; `ctx.filter` not relied on) |
+| pi P19 (texture budget at 4K) | Accepted (same as P4) |
+| pi P20 (GPU tolerance unspecified) | Accepted (§6.4 per-row tolerance, §10) |
+| pi P21 (CI WebGL flakiness) | Accepted (same as agy 3.3) |
+| pi P22 (focus in popup) | Accepted (§9 Presenter View focus) |
