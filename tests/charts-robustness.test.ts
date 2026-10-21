@@ -34,7 +34,7 @@ import { prepareChartAxes } from '../src/charts/prepare'
 import { PointWriter } from '../src/charts/points'
 import { parseChartEx } from '../src/charts/chartex/parse'
 import { CHART_WORKSPACE_LIMIT } from '../src/charts/workspace'
-import { chartDescription } from '../src/xlsx/chartDescription'
+import { chartDescription } from '../src/charts/describe'
 import type { ChartExGroup, ChartModel } from '../src/charts/model'
 import type { DrawingCoverageEntry } from '../src/drawing/coverage'
 import { buildChartDocument, chartExGallery, chartSpace, galleryHierarchyWorkbook, GALLERY_HIERARCHY, series as gallerySeries, type ChartDocFormat, type ChartDocObject } from '../src/testdata/chart-gallery'
@@ -177,7 +177,7 @@ describe('torture (a): every family plus ChartEx, model3D and OMML, per format',
       ...CLASSIC.map(family => ({ name: family.name, part: family.chart(conformanceCache(3, ['3', '1', '2'])) })),
       { name: 'surface3D', part: SURFACE3D_FAMILY.chart(conformanceCache(3, ['3', '1', '2'])) },
       ...chartExGallery(format !== 'xlsx').map(c => ({ name: c.name, part: c.part, ...(c.hierarchy && workbook ? { workbook } : {}) })),
-      // A ChartEx family the engine does not paint yet (B3 pending merge) keeps its fallback picture.
+      // A painted ChartEx family inside mc:AlternateContent (Requires cx1) satisfies the Choice: native, its fallback unused.
       { name: 'histogram', part: chartEx('clusteredColumn', '<cx:layoutPr><cx:binning intervalClosed="r"/></cx:layoutPr>'), requires: 'cx1', fallback: png() },
       // Region map is always unsupported; without a fallback it is a card with its reason.
       { name: 'region map', part: chartEx('regionMap') },
@@ -189,9 +189,9 @@ describe('torture (a): every family plus ChartEx, model3D and OMML, per format',
     let opened: Opened | undefined
     await expect((async () => { opened = await open(format, await buildChartDocument(format, objects, options), context) })()).resolves.toBeUndefined()
     const { charts, coverage } = opened!
-    const nativeNames = [...CLASSIC.map(f => f.name), 'Waterfall', 'Funnel', 'Treemap', 'Sunburst']
+    const nativeNames = [...CLASSIC.map(f => f.name), ...chartExGallery(false).map(c => c.name), 'histogram']
     // Chart contents in document order: every classic family and painted ChartEx family native; surface3D and
-    // region map are cards with their reasons; the histogram, model and equation are fallback pictures.
+    // region map are cards with their reasons; the model and equation are fallback pictures.
     const drawn = charts.filter((c): c is ChartModel => c !== undefined)
     expect(drawn).toHaveLength(nativeNames.length + 2)
     const natives = drawn.filter(c => !c.unsupported), cards = drawn.filter(c => c.unsupported)
@@ -204,8 +204,8 @@ describe('torture (a): every family plus ChartEx, model3D and OMML, per format',
     expect(coverage.filter(e => e.selectedRepresentation === 'chart')).toHaveLength(nativeNames.length)
     expect(coverage.filter(e => e.selectedRepresentation === 'chart-placeholder').map(e => e.reason)).toEqual(['unsupported-chart', 'unsupported-chart'])
     const fallbacks = coverage.filter(e => e.selectedRepresentation === 'raster-fallback')
-    expect(fallbacks).toHaveLength(3)
-    if (format === 'pptx') expect(fallbacks.map(e => [e.feature, e.status])).toEqual([['ChartEx', 'fallback'], ['model3D', 'fallback'], ['OMML', 'fallback']])
+    expect(fallbacks).toHaveLength(2)
+    if (format === 'pptx') expect(fallbacks.map(e => [e.feature, e.status])).toEqual([['model3D', 'fallback'], ['OMML', 'fallback']])
     else expect(fallbacks.every(e => e.status === 'fallback')).toBe(true)
     // Counters: what the natives retain after the parse (and after painting, their layouts too) stays far inside
     // the 64 MiB desktop facet; releasing every model and layout refunds the facet to zero.

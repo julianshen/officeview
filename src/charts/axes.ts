@@ -28,6 +28,7 @@
 import { displayView, type DisplayView } from './display'
 import { CHART_POINT_LIMIT } from './parse'
 import { CHART_TICK_LIMIT, autoBaseUnit, chartEpoch, dateTicks, dateUnitIndex, shiftDateUnits, type ChartEpoch } from './dates'
+import { boxWhiskerDistinctCategories, boxWhiskerSeriesHidden, boxWhiskerVisibleSeriesCount } from './chartex/boxWhisker'
 import type { ChartAxis, ChartDiagnostic, ChartExGroup, ChartGroup, ChartModel, ChartTimeUnit } from './model'
 import { WATERFALL_ERROR_POINT, waterfallExtent } from './chartex/waterfall'
 import { stringBytes, valueAt } from './points'
@@ -379,6 +380,18 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
     if (series) series.slots = Math.max(1, drawn.rows)
   })
 
+  // Box & whisker: category slots equal distinct categories count if present, else series count.
+  model.groups.forEach((group, g) => {
+    if (group.family !== 'boxWhisker') return
+    const p = placements[g]
+    if (!p) return
+    const category = axes.get(p.base)
+    if (category) {
+      const distinct = boxWhiskerDistinctCategories(model.categories, group)
+      category.slots = Math.min(CHART_POINT_LIMIT, distinct ? Math.max(1, distinct.length) : Math.max(1, boxWhiskerVisibleSeriesCount(group)))
+    }
+  })
+
   // Value domains: each value axis over the groups bound to it (stacking per group), as the engine always has.
   const lows = new Map<string, number>(), highs = new Map<string, number>(), skipped = new Map<string, number>()
   const percentAxes = new Set<string>()
@@ -397,6 +410,16 @@ export function resolveAxes(model: ChartModel, view?: DisplayView, workbookEpoch
       // Contour: the value domain of the drawn grid only.
       const drawn = contourPainted(grid, view.groupSeries(g).length, count)
       for (const s of view.groupSeries(g).slice(0, drawn.rows)) for (let i = 0; i < drawn.cols; i++) { const v = s.value(i); if (v !== undefined) see(p.value, v) }
+      return
+    }
+    if (group.family === 'boxWhisker') {
+      for (const [si, s] of group.series.entries()) {
+        if (boxWhiskerSeriesHidden(group, si)) continue
+        for (let i = 0; i < (s.values?.length ?? 0); i++) {
+          const v = valueAt(s.values, i)
+          if (v !== undefined) see(p.value, v)
+        }
+      }
       return
     }
     // Waterfall (B2): the running totals' extent (0 included), streamed; an error point is skipped and diagnosed.

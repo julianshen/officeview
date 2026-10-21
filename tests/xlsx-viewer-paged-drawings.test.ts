@@ -33,6 +33,8 @@ import vm from 'node:vm'
 import { xlsxEntries } from './helpers/xlsx-package'
 import { dataRows, EMU_PER_PX } from './helpers/xlsx-structure-fixtures'
 import JSZip from 'jszip'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // Counts real parses (the wrapper calls through).
 const parses = vi.hoisted(() => ({ count: 0 }))
@@ -220,6 +222,20 @@ describe('paged drawings (RENDER-02 / AC-RENDER-01)', () => {
     expect(geometry.drawingsIn(...box)!.map(node => plain(node.content))).toEqual(expected.map(node => plain(node.content)))
     // The chart's workspace charges went through the read's share, and the share ended with the read.
     expect(kernels[0].lifecycleStats().transientBytes).toBe(0)
+  })
+
+  it('a ChartEx chart refused by its paged data gives way to its mc:Fallback, as the resident sheet does (B3 round 1)', async () => {
+    // HI2 (native Office part) with binSize 0.000001: 3,000,000 bins, refused once the fill reads the cells.
+    const zip = await JSZip.loadAsync(readFileSync(join(__dirname, 'fixtures', 'chartex', 'tdf163727_histogram_underflow_overflow', 'tdf163727_histogram_underflow_overflow.xlsx')))
+    const xml = await zip.file('xl/charts/chartEx1.xml')!.async('string')
+    zip.file('xl/charts/chartEx1.xml', xml.replace(/<cx:binSize val="2" ?\/>/, '<cx:binSize val="0.000001" />'))
+    const bytes = await zip.generateAsync({ type: 'uint8array' })
+    const { geometry: object } = await resident(bytes)
+    const expected = object.drawingsIn(...box)!
+    expect(expected.map(node => [node.source.element, node.source.representation, node.content?.kind])).toEqual([['sp', 'fallback', undefined]])
+    const geometry = await settledGeometry(await openPaged(bytes))
+    const paged = geometry.drawingsIn(...box)!
+    expect(paged.map(node => [node.source.element, node.source.representation, node.content?.kind])).toEqual([['sp', 'fallback', undefined]])
   })
 
   it('carries error and unavailable point states from the paged cells exactly as the resident sheet does (D0)', async () => {

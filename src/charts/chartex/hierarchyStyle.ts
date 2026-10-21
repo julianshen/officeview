@@ -6,7 +6,7 @@
  */
 import type { ChartExGroup, ChartModel, ChartSeries } from '../model'
 import type { ChartFillStyle } from '../fills'
-import { formatNumber } from '../../xlsx/chartDescription'
+import { formatNumber } from '../describe'
 import { isHierarchyGroup, type ChartExHierarchy } from './hierarchy'
 
 export interface HierarchyDrawing { group: ChartExGroup; series: ChartSeries; tree: ChartExHierarchy }

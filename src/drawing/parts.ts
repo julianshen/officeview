@@ -41,8 +41,9 @@ export function drawingPartContext(pkg: OfficePackage): DrawingPartContext {
   }
   return context
 }
-export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId' | 'sourcePath'> = {}): void {
-  context.diagnostics.push({ kind, partPath, feature, ...details, message: `Drawing content ${kind}${feature ? `: ${feature}` : ''}` })
+export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId' | 'sourcePath'> & { message?: string } = {}): void {
+  // A chart diagnostic carries its human reason in the message (spec 6.6); others keep the generic text.
+  context.diagnostics.push({ kind, partPath, feature, ...details, message: details.message ?? `Drawing content ${kind}${feature ? `: ${feature}` : ''}` })
 }
 export function reserveDrawingNode(context: DrawingPartContext, partPath: string): boolean {
   if (context.nodes >= DOCUMENT_DRAWING_NODE_LIMIT) {

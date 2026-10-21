@@ -74,8 +74,8 @@ export function seriesLimit(series: ChartSeries): number {
 }
 /** The category acquisition bound of a series: an analytic ChartEx series pairs every value with its category. */
 export const categoryLimit = (series: ChartSeries): number => series.analytic === 'chart' ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT
-export const CHART_TOO_MANY_POINTS = 'This chart has too many data points to summarize'
-export const CHART_DATA_NOT_AVAILABLE = "This chart's data is not available"
+export { CHART_TOO_MANY_POINTS, CHART_DATA_NOT_AVAILABLE } from './limits'
+import { CHART_TOO_MANY_POINTS, CHART_DATA_NOT_AVAILABLE } from './limits'
 /** A whole-chart analytic refusal (spec 4.3, 7; chartex-map §2.4): the chart is refused with `message`. */
 export class ChartAnalyticRefusal extends ChartRefusal {}
 /** Writes the point state of one filled cell (spec 5.8); `onTruncated` hears a value the reader could not read in full.

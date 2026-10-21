@@ -203,9 +203,9 @@ describe('one lazy chart engine (spec 6.1, 6.2)', () => {
 
   it('src/charts is not in the eager graph', () => {
     const hit = (id: string) => forbiddenEager({ 'index.js': { modules: [id], imports: [], dynamicImports: [] } }, EAGER_FORBIDDEN).length > 0
-    for (const id of ['/r/src/charts/index.ts', '/r/src/charts/parse.ts', '/r/src/charts/paint.ts', '/r/src/charts/fill.ts', '/r/src/charts/model.ts', '/r/src/xlsx/chart.ts', '/r/src/xlsx/chart.ts?worker']) expect(hit(id), id).toBe(true)
+    for (const id of ['/r/src/charts/index.ts', '/r/src/charts/parse.ts', '/r/src/charts/paint.ts', '/r/src/charts/fill.ts', '/r/src/charts/model.ts', '/r/src/charts/describe.ts', '/r/src/xlsx/chart.ts', '/r/src/xlsx/chart.ts?worker']) expect(hit(id), id).toBe(true)
     // The eager loader, the types and the placeholder painter stay allowed.
-    for (const id of ['/r/src/xlsx/chartLoader.ts', '/r/src/xlsx/chartModel.ts', '/r/src/xlsx/chartDescription.ts', '/r/src/drawing/content-paint.ts']) expect(hit(id), id).toBe(false)
+    for (const id of ['/r/src/xlsx/chartLoader.ts', '/r/src/xlsx/chartModel.ts', '/r/src/drawing/content-paint.ts']) expect(hit(id), id).toBe(false)
     // The built module map (OV_MODULE_MAP=1 bun run build), when present.
     const file = join(__dirname, '..', 'dist', '.module-map.json')
     if (!existsSync(file)) return

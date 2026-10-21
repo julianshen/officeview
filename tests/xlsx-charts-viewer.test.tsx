@@ -21,7 +21,7 @@ describe('interactive viewer chart accessibility', () => {
     const future = await parseXlsx(await chartWorkbook('<chartSpace><chart><title><tx><rich><p><r><t>Future</t></r></p></rich></tx></title><plotArea><futureChart/></plotArea></chart></chartSpace>'))
     const second = render(<InteractiveSheetDoc doc={future} />)
     await waitFor(() => expect(second.getAllByRole('gridcell').length).toBeGreaterThan(0), FIRST_PAINT_WAIT)
-    expect(second.getByRole('img', { name: 'Chart: Future. This chart type is not supported; it is not drawn.' })).toBeTruthy()
+    expect(second.getByRole('img', { name: 'Chart: Future. placeholder: This chart type is not supported.' })).toBeTruthy()
     expect(second.container.textContent).toContain('Chart “Future” is shown as a placeholder: This chart type is not supported.')
   })
 })

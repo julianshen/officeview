@@ -10,21 +10,22 @@ Statuses: `pending`, `passing` (synthetic, Office-shaped), `unverified` (interim
 non-Office evidence), `matched` (Office reference compared). Synthetic builder
 fixtures are "Office-shaped synthetic" and are never reported as Office evidence.
 
-## Final gate table (C1 phase 1, `chart/c1`)
+## Final gate table (C1 phase 2, `chart/c1`)
 
-Measured on the C1 branch (base `feature/chart-compat` `10c4f1e`). A7, B3 and B4 are still in review on their own
-branches; their rows below are **pending merge** and the controller re-runs every gate after they land (C1 phase 2).
+Measured on the C1 branch after merging `feature/chart-compat` `9b5a318`, which has every feature task: A7
+accessibility, B3 histogram/Pareto, B4 box & whisker and the licence confirmation. The phase 1 figures (base `10c4f1e`:
+full 8,251/0, eager 38,639, 13 golden units, Chromium 20/20) are superseded by this table.
 
 | Gate | Command | Result |
 |---|---|---|
 | Typecheck | `bunx tsc --noEmit`; `bun run typecheck:scripts` | 0 errors (both) |
-| Focused chart tests | `bunx vitest run tests/charts- tests/chart-gallery.test.ts tests/xlsx-chart tests/golden.test.ts` | 38 files, 729 tests passed |
-| Full suite | `bunx vitest run` | 431 files: 8,251 passed, 10 skipped, 1 todo, 0 failed (no flakes this run) |
-| Eager budget | `bun run build && bun scripts/eager-budget.ts` | 38,639 B (B0 38,631; +8 B; ceiling 38,647, hard 38,720) |
+| Focused chart tests | `bunx vitest run tests/charts- tests/chart-gallery.test.ts tests/xlsx-chart tests/golden.test.ts` | 44 files, 826 tests passed |
+| Full suite, run 1 | `bunx vitest run` | @@FULL1@@ |
+| Full suite, run 2 | `bunx vitest run` | @@FULL2@@ |
+| Eager budget | `bun run build && bun scripts/eager-budget.ts` | 38,582 B (B0 38,631; −49 B; ceiling 38,647, hard 38,720) |
 | Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | ok (150 eager modules) |
-| Goldens | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts` | 13/13 units identical at threshold 0 (3 existing goldens unchanged; 10 new gallery goldens) |
-| Browser (Chromium only: WebKit cannot launch on the build host, ruling at A3b) | `IV_HARNESS_PORT=4300 bunx playwright test --config playwright.viewer.config.ts tests/browser/interactive-viewer-visual.spec.ts tests/browser/chart-embedded-data.spec.ts --project chromium` | 20/20 passed (Chromium; vite on 4300 stopped afterwards) |
-| A7 accessibility, B3 histogram/Pareto, B4 box & whisker | (their branches) | pending merge |
+| Goldens | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts` | 14/14 units identical at threshold 0 (3 pre-existing goldens unchanged; 11 gallery units) |
+| Browser (Chromium only: WebKit cannot launch on the build host, ruling at A3b) | `IV_HARNESS_PORT=4300 timeout 900 bunx playwright test --config playwright.viewer.config.ts --project chromium` (the whole browser suite) | @@PW@@ |
 
 ## Eager budget
 
@@ -81,10 +82,19 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B5 | B5 commit | 38,639 | Before (`7c67e33`, rebuilt): 38,640. Treemap and sunburst (`src/charts/chartex/hierarchy.ts`, `hierarchyStyle.ts`, `treemap.ts`, `sunburst.ts`) and the hierarchy hooks in fill, precedence, embedded reader, stage 1, layout and paint all live in the lazy `charts-*` chunk; the two description names in the `imageAdmission` chunk. No eager source file was touched; measured −1 B (hash churn, not normalised). Bytes added by B5: 0. |
 | After B5 merge with feature | merge commit | 38,637 | `feature/chart-compat` merged into `chart/b5` (B2, A6b, A5c, A4b and the rest); conflicts resolved keeping both sides; B5 review minors (label numFmt, exclusion order) applied. Lazy `charts-*` chunk only. Before (feature ledger, B2 merge): 38,635; +2 B hash churn. Ceiling 38,647 |
 | Task B5 merged (feature `10c4f1e`) | `10c4f1e` | 38,637 | Gated at merge: full 8,218/0. Running total vs B0: +6 B |
-| After A7 | `chart/a7` | pending merge | Accessibility and paged chart list (implementer reported 38,639 at `88bbdfe`); the controller records the merged figure in phase 2 |
-| After B3 | `chart/b3` | pending merge | Histogram and Pareto (implementer reported 38,635 at `f2c8ee3`); controller records the merged figure |
-| After B4 | `chart/b4` | pending merge | Box & whisker; controller records the merged figure |
-| **After C1 (phase 1)** | `chart/c1` | 38,639 | Robustness slice, gallery, README/CHANGELOG, validation doc. Source changes are all lazy (`charts-*`: stock charge name, ofPie sweep, hierarchy legend bound, XLSX external-reference diagnostic, exported family registry); `src/testdata/chart-gallery.ts` is test data, never bundled. +2 B vs the `10c4f1e` figure (hash churn). Ceiling 38,647 (B0 + 16). Running total vs B0: +8 B |
+| After A7 fix round 1 | A7 r1 commit | 38,584 | Before (`db78d06`, rebuilt): 38,637. A7's descriptions, paintables metadata and chart list live in the lazy `charts-*`, `office-worker` and `PagedChrome` chunks. Review I1 needs `OfficeDoc` to abort the chart picture wait on unmount: one `AbortController` and its `signal` passed to `getPaintables` (+25 B, measured 38,664). Recovered by condensing three verbose style comments inside `OfficeDoc`'s JSX that `dist/index.js` preserves verbatim (−80 B), with no behaviour change. Running total vs B0: −47 B |
+| After B3 | B3 commit (`f2c8ee3`) | 38,635 | Before (`7c67e33`, rebuilt): 38,640. Histogram and Pareto (`src/charts/chartex/histogram.ts`, the stage-1 hook, the ChartEx adapter): all in the lazy `charts-*` chunk. `dist/index.js` unchanged apart from hash churn (−5 B). Bytes added by B3: 0. Running total vs B0 (38,631): +4 B |
+| After B3 fix round 1 | B3 r1 commit | 38,638 | Before (`d5eaff5`, B3 merged with `feature/chart-compat` at `e7e64f5`, rebuilt): 38,639. Leaf reason constants (`src/charts/limits.ts`), range-safe binning and override remapping (lazy `charts-*`); deferred XLSX chart fallbacks (`settleChartFallbacks` in `src/xlsx/drawing.ts`, in the worker chunks, not `dist/index.js`). `dist/index.js` unchanged apart from hash churn (−1 B). Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 2 | B3 r2 commit | 38,638 | Before (`0cdda65`, rebuilt): 38,638. Branch-unit fallback descriptors and post-settlement media indexing (`src/xlsx/drawing.ts`, `src/xlsx/parse.ts`, worker chunks); plain-first arithmetic and per-slot overrides (lazy `charts-*`). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 3 | B3 r3 commit | 38,638 | Before (`74670f5`): 38,638. Nested fallback-wrapper hierarchy in `src/xlsx/drawing.ts` (worker chunks). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 merge with feature | merge commit | 38,638 | `feature/chart-compat` `5be9dd1` (B2, B5, A6b, A5c, A4b, licence) merged into `chart/b3`; conflicts resolved keeping every family and section. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 4 + merge with feature (B4) | merge commit | 38,639 | Round 4 (per-pass wrapper settlement, ancestor membership) in worker chunks; `feature/chart-compat` with B4 box & whisker merged (CHARTEX_PAINTED keeps all seven painted families). +1 B hash churn. Running total vs B0: +8 B |
+| After B3 merge with feature (A7) | merge commit | 38,582 | `feature/chart-compat` with A7 (descriptions in `src/charts/describe.ts`, which freed eager bytes) merged into `chart/b3`; B3 adds `derivedFamily` naming (lazy). Running total vs B0: −49 B |
+| After C1 phase 1 | | `chart/c1` | 38,639 | Robustness slice, gallery, README/CHANGELOG, validation doc. Source changes are all lazy (`charts-*`: stock charge name, ofPie sweep, hierarchy legend bound, XLSX external-reference diagnostic, exported family registry); `src/testdata/chart-gallery.ts` is test data, never bundled. +2 B vs the `10c4f1e` figure (hash churn). Ceiling 38,647 (B0 + 16). Running total vs B0: +8 B |
+| Task B4 merged (feature) | `5b8df48` | 38,639 | Box & whisker (`src/charts/chartex/boxWhisker.ts`, lazy). Gated at merge: full 8,243/0. Running total vs B0: +8 B |
+| Task A7 merged (feature) | `c3c72c7` | 38,581 | Accessible descriptions moved to the lazy `src/charts/describe.ts` (the old eager `chartDescription` module went away), paintables metadata, paged chart list. Gated at merge: full 8,266/0. Running total vs B0: −50 B |
+| Task B3 merged (feature `9b5a318`) | `9b5a318` | 38,582 | Histogram and Pareto, `settleChartFallbacks` late-fallback switch, `derivedFamily` descriptions. Gated at merge: full 8,316/0. Running total vs B0: −49 B |
+| **After C1 phase 2 (final)** | `chart/c1` | 38,582 | `feature/chart-compat` `9b5a318` merged; C1's phase 2 source change is the XLSX Choice-probe model release in `src/xlsx/drawing.ts` (worker-side, through the lazy chart module); gallery entries and tests are test data. `dist/index.js` equals the feature build. **Final running total vs B0: −49 B** (B0 38,631; ceiling 38,647) |
 
 ## Spec §8 testing and validation
 
@@ -95,24 +105,24 @@ rendering: **verified** or **unverified**. No owner-supplied Office reference ex
 **unverified**; none is claimed Office-matched. The ChartEx inputs in `tests/fixtures/chartex/` are Office-authored
 files (provenance and MPL-2.0 licence in their PROVENANCE.md), but no Office *output* for them is compared, so they
 are input evidence only. `Status` is the test evidence: `passing` (Office-shaped synthetic tests pass),
-`pending merge` (the evidence lives on a branch still in review), `pending` (no evidence yet).
+`pending` (no evidence yet).
 
 | ID | Case | Status | Reference | Evidence |
 |---|---|---|---|---|
-| CH-8-1 | Numeric oracles: hand-computed values for ticks, date axes (both systems), display units, number-format classes, ofPie splits, stock roles, bubble scaling, trendlines, error bars, histogram bins, Pareto, box-whisker quartiles, waterfall subtotals, treemap/sunburst aggregation | passing (histogram bins, Pareto and box-whisker quartiles: pending merge, B3/B4) | unverified | A1a (ticks, date axes in both systems, display units; Office-shaped synthetic, not Office-matched): `tests/charts-axes.test.ts` (scales, crossings, log, dispUnits, tick bound) and `tests/charts-dates.test.ts` (epoch precedence, civil-model conversion of serials 0/1/59/60/60.5/61 both ways, calendar month/year steps, unequal spacing). Default unit labels other than hundreds/thousands/millions/billions/trillions are unverified; A5c ofPie splits (`charts-families-ofpie`), A5a bubble scaling (`charts-families-bubble-radar`), A5b stock roles (C1: exact painted coordinates for HLC, OHLC, volume-HLC and volume-OHLC in `charts-families-stock`), A2 number-format classes (`charts-format`), A6a every trendline type (`charts-trendlines`), A6b error bars (`charts-error-bars`), B2 waterfall subtotals (`charts-chartex-waterfall-funnel`), B5 treemap/sunburst aggregation and squarified/angle oracles (`charts-chartex-treemap`) |
-| CH-8-2 | Unit tests: parse to model, and paint with a recording context, for every family and element | passing (B3/B4 families pending merge) | unverified | Family conformance harness (`tests/helpers/chart-family-conformance.ts`: empty, all-blank, NaN/∞, negative, single point, unavailable point, each through the adapter, stage 1, layout and paint) registered by every family suite; per-family recording-paint suites `charts-families-*`, `charts-chartex-*`, element suites `charts-axes`, `-dates`, `-format`, `-labels*`, `-style*`, `-smooth`, `-trendlines`, `-error-bars`, `-text`, `-usershapes`, `-layout` |
+| CH-8-1 | Numeric oracles: hand-computed values for ticks, date axes (both systems), display units, number-format classes, ofPie splits, stock roles, bubble scaling, trendlines, error bars, histogram bins, Pareto, box-whisker quartiles, waterfall subtotals, treemap/sunburst aggregation | passing | unverified | A1a (ticks, date axes in both systems, display units; Office-shaped synthetic, not Office-matched): `tests/charts-axes.test.ts` (scales, crossings, log, dispUnits, tick bound) and `tests/charts-dates.test.ts` (epoch precedence, civil-model conversion of serials 0/1/59/60/60.5/61 both ways, calendar month/year steps, unequal spacing). Default unit labels other than hundreds/thousands/millions/billions/trillions are unverified; A5c ofPie splits (`charts-families-ofpie`), A5a bubble scaling (`charts-families-bubble-radar`), A5b stock roles (C1: exact painted coordinates for HLC, OHLC, volume-HLC and volume-OHLC in `charts-families-stock`), A2 number-format classes (`charts-format`), A6a every trendline type (`charts-trendlines`), A6b error bars (`charts-error-bars`), B2 waterfall subtotals (`charts-chartex-waterfall-funnel`), B5 treemap/sunburst aggregation and squarified/angle oracles (`charts-chartex-treemap`), B3 histogram bins (closures, outer bins, binSize/binCount/Scott) and Pareto cumulative fractions (`charts-chartex-histogram*`), B4 box & whisker quartiles (both methods, odd and even n), whiskers and outliers (`charts-chartex-box-whisker`) |
+| CH-8-2 | Unit tests: parse to model, and paint with a recording context, for every family and element | passing | unverified | Family conformance harness (`tests/helpers/chart-family-conformance.ts`: empty, all-blank, NaN/∞, negative, single point, unavailable point, each through the adapter, stage 1, layout and paint) registered by every family suite; per-family recording-paint suites `charts-families-*`, `charts-chartex-*`, element suites `charts-axes`, `-dates`, `-format`, `-labels*`, `-style*`, `-smooth`, `-trendlines`, `-error-bars`, `-text`, `-usershapes`, `-layout` |
 | CH-8-3 | Representation tests: spec 6.3 in all three formats, including no-fallback and chunk failure | passing | unverified | A0b: `tests/charts-representation.test.ts` (Office-shaped synthetic): MC with injected unsupported/refused and surface3DChart, ChartEx with fallback, nested/alias/unknown Requires and the standalone card in all three formats; no-fallback card and broken fallback picture (all three formats); chunk failure (DOCX, PPTX) |
 | CH-8-4 | Data tests: spec 6.4 (embedded workbook, precedence, budgets, cancellation) | passing | unverified | D0 (XLSX clause only; Office-shaped synthetic): `tests/charts-data-contract.test.ts` resident vs paged point arrays (sparse caches, references, blanks, #N/A vs #DIV/0!, formulas without saved values), analytic acquisition (65,536 / refusal), plotVisOnly provenance, paged parent-ledger ownership and largeSource single workspace. The embedded workbook is a later task; A3a/A3b: `charts-embedded-zip`, `charts-embedded-workbook`, `charts-precedence` (inflated and declared caps, inventory, one read per document, cancellation, values-only reader, external links); C1: torture classes (b) and (c) in `charts-robustness` at document level in all three formats |
 | CH-8-5 | Robustness tests: extreme scales, tiny units, huge forecasts, 200 charts per document, a torture file per format, asserting allocation/work counters | passing | unverified | A1a: tiny majorUnit/minorUnit and a 0..1e300 scale stay within 1,000 ticks per axis with `chart-tick-limit` (`tests/charts-axes.test.ts`); A6a forecasts clamp (`chart-trendline-extension-clamped`); C1 `tests/charts-robustness.test.ts`: 200 charts per document per format within the 32 MiB mobile facet (11 native, 189 memory cards, peak ≤ limit, fully refunded), torture documents per format by damage class (a)–(d), layout churn, and the path (exact admission costs 1/2/3 per point), label-byte (4 MiB, 255 units) and contour-grid (64 × 256) bounds |
-| CH-8-6 | Goldens: synthetic chart gallery (one chart per family and major element), per format, recorded on the Mac | passing (histogram, Pareto, box & whisker: pending merge) | unverified | C1: `src/testdata/chart-gallery.ts`, goldens `tests/goldens/chart-gallery-{docx.0-3,pptx.0-4,xlsx.0}.png` (20 charts per format, each PNG inspected; contents listed under "C1 gallery" below); `tests/chart-gallery.test.ts` checks in CI that every gallery chart is native |
+| CH-8-6 | Goldens: synthetic chart gallery (one chart per family and major element), per format, recorded on the Mac | passing | unverified | C1: `src/testdata/chart-gallery.ts`, goldens `tests/goldens/chart-gallery-{docx.0-3,pptx.0-5,xlsx.0}.png` (23 charts per format, each PNG inspected; contents listed under "C1 gallery" below); `tests/chart-gallery.test.ts` checks in CI that every gallery chart is native |
 | CH-8-7 | Goldens: existing XLSX chart goldens pixel-identical, except listed spec 5 deltas with reasons | passing | unverified | D0: strict goldens 3/3, `tests/goldens` untouched (no golden contains a chart). Listed delta (spec 5.8 `plotVisOnly`, Office default on): a reference-filled point in a hidden row or column is no longer drawn, and a series whose every point is hidden is not drawn (`tests/charts-data-contract.test.ts` pixel check). Non-value point states still draw as gaps (the matrix is A2). A1a: the painter draws on the axis graph; every existing chart fixture repaints pixel-identically (hashes of all 41 chart paints in the chart/drawing/docx/pptx/golden suites; of 48 synthetic variant renders, all identical except the two deleted-category-axis renders, which lose the axis line row: delta 1 below). The strict golden suite contains no chart and is not independent evidence of chart parity. Listed deltas (spec 5.1): a deleted category axis no longer draws its axis line; a group on a secondary value axis is scaled by that axis; a deleted scatter x axis still draws its authored gridlines (all three apply only to charts that author them). C1: the three pre-existing goldens (`docx-report`, `xlsx-budget`, `pptx-slides`) compare identical under strict mode; no golden re-recorded. C1 deltas: a pie-of-pie secondary pie is now a full circle (it swept share fractions as radians, a ~57° fan), and (phase 1.5) the primary pie is turned so its Other slice faces the secondary plot; no pre-existing golden contains an ofPie chart |
 | CH-8-8 | References: Office-authored files and screenshots in validation/office-reference/ with producer and version, one per promised semantic case | pending | unverified | The owner supplies them; none yet |
 | CH-8-9 | References: interim python-docx/python-pptx/openpyxl + LibreOffice evidence marked unverified; Office-matched not claimed | passing | unverified | Every task section of this document marks its unverified rules; the ChartEx inputs are Office-authored LibreOffice test files (13 parts, all 8 families) with provenance; no LibreOffice render is used as a reference |
 | CH-8-10 | References: smoothing claimed matched only after reference comparison | passing (not claimed) | unverified | A4c: smoothing implemented via Catmull-Rom cubic Bézier (tension ½, end point tangents), marked approximation and unverified until Office reference comparison (including absent c:smooth default on c:ser vs group). C1 tightened the span oracle to exact control points (Catmull-Rom, tension ½) |
-| CH-8-11 | Browser: DOCX/PPTX charts render in the paged viewer | passing (Chromium only) | unverified | A3b `tests/browser/chart-embedded-data.spec.ts` (Chromium; WebKit unavailable on the host, ruling at A3b); A7's paged chart list pending merge |
-| CH-8-12 | Browser: dark mode leaves chart pixels identical to light | pending merge (A7) | unverified | |
-| CH-8-13 | Browser: the per-page chart list exposes accessible names | pending merge (A7) | unverified | |
-| CH-8-14 | Browser: CLS is 0 when a chart loads | pending merge (A7) | unverified | A7 notes a pre-existing paged-chrome CLS shift that is not chart-caused (follow-up) |
+| CH-8-11 | Browser: DOCX/PPTX charts render in the paged viewer | passing (Chromium only) | unverified | A3b `tests/browser/chart-embedded-data.spec.ts`, A7 `tests/browser/paged-charts.spec.ts` (Chromium; WebKit unavailable on the host, ruling at A3b) |
+| CH-8-12 | Browser: dark mode leaves chart pixels identical to light | passing (Chromium only) | unverified | A7 `paged-charts.spec.ts`: with `data-ov-theme=dark` active, the dark page's `toDataURL` equals the light one byte for byte |
+| CH-8-13 | Browser: the per-page chart list exposes accessible names | passing (Chromium only) | unverified | A7 `paged-charts.spec.ts` and unit tests: one `<ul aria-label="Charts on page N (k)">` per page, each chart a `role="img"` item named by its description (bounded: 120-character names, 8 series, 1,024 characters, 64 entries per page) |
+| CH-8-14 | Browser: CLS is 0 when a chart loads | passing, content only (Chromium only) | unverified | A7 `paged-charts.spec.ts`: layout shifts outside the viewer chrome sum to exactly 0 while charts load, and no page canvas, chart layer or content element is ever a shift source. Whole-load CLS is not 0: a pre-existing mount shift of the status slot (also with no charts) is excluded as chrome (follow-up outside this project) |
 
 ## Spec §5.1 compatibility policies and unverified defaults (A1a)
 
@@ -253,6 +263,62 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
 
+## B3 histogram and Pareto: implemented and unverified rules (chartex-map §5)
+
+Implemented in `src/charts/chartex/histogram.ts`. Stage 1 (`prepareChartAxes`) turns the ChartEx group into a plain clustered column group (and a line group for the Pareto), labelled with the bin or category texts. Tests are in `tests/charts-chartex-histogram.test.ts`. The native evidence is HI1, HI2, PA1 and PA2, read end to end. Every other part is Office-shaped synthetic.
+
+The following rules are **unverified** ([U]/[P]). No Office-rendered reference has been compared for any of them.
+- **Scott variant:** `h = 3.49·s·n^(−1/3)` with the sample s of the inner set. Bins start at `min` (or U), with no rounding of `h` or of the start.
+- **Automatic bins, binCount and closure `l`:** no native example exists for `binCount`, and none for automatic binning with a count. Closure `l` and its mirrored outer bins (`<U`, `≥O`) also have no native example.
+- **Degenerate inputs:**
+  - `hi = lo` gives one bin `[lo, lo]` in every mode.
+  - An empty inner set draws only the outer bins.
+  - A Scott width that cannot be computed (fewer than two inner values) while `hi > lo` is refused as "invalid binning".
+- **Bin labels:**
+  - The glyphs are `(a, b]`, `[a, b)`, `≤U`, `>O`, `<U` and `≥O`.
+  - Edges use the category axis's authored format, else the first value's source format, else General (15 significant digits). This makes long labels for Scott widths.
+  - An empty trailing inner bin is drawn (HI2 `(13, 15]`), and its upper edge is not clipped to O.
+- **Hidden cells:** under plotVisOnly, hidden source cells are excluded from the analytic input.
+- **Several column series:** a histogram pools one set of bins over every visible series, drawn clustered, and requires every series to use the same binning. A Pareto with more than one column series is unsupported.
+- **By Category:**
+  - Categories are grouped by exact text in first-occurrence order and their values summed.
+  - A category whose points are all blank or error still appears, at 0.
+  - A missing category dimension is unsupported.
+  - Controller ruling: the brief's "pre-aggregated data drawn as given" is tested as unique categories drawn as given. Duplicates are summed.
+- **Pareto:**
+  - The owner is the series `ownerIdx` names (document position).
+  - Ties keep their prior order (bin order, or the first occurrence of the category).
+  - The line passes through the band centres. An all-zero total draws a zero line.
+  - The percent axis is the paretoLine's value axis (min 0, max 1 and `0%` unless authored), placed on the right. The line's colour comes from its `formatIdx` (accent 2 by default).
+  - The line's legend name is the owner's name.
+- **Gap width:** an absent `gapWidth` is 0 for binned columns and 150 % for By Category.
+- **Per-point overrides ([P], fix rounds 1 and 2):**
+  - The rule is decided per category slot. A By Category column whose slot holds exactly one source point of its series keeps that point's `dataPt` fill, colour and line, and its `dataLabel`/`dataLabelHidden`. A Pareto sort moves them with their column.
+  - Binned columns, and slots grouped from several points, drop only the overrides addressing those points, with one `chart-histogram-point-overrides` diagnostic carrying the count.
+  - Series-level labels are always kept, so PA2's counts are drawn.
+- **Hidden series (fix round 1):**
+  - A hidden column series is out of layout: it is not drawn, not binned, and not counted by the structural checks.
+  - A hidden paretoLine draws no line, but the columns are still sorted by their owner.
+  - `ownerIdx` counts every `cx:series` in document position, hidden ones included.
+- **Range safety (fix rounds 1 and 2):**
+  - Ordinary arithmetic is used whenever it stays representable.
+  - A bin edge `lo + i·h` is halved and doubled only when the plain edge overflows, so a subnormal width keeps its value.
+  - Differences are taken from quotients only when the plain difference overflows.
+  - A By Category slot is summed again, with its own power-of-two scale, only when its plain sum overflows, so small sums in other slots are never scaled.
+  - Pareto fractions use plain running sums unless those overflow.
+  - Edges that are non-finite or not strictly increasing are refused as "invalid binning".
+  - A column whose value passes the double range is refused ("This chart's values are out of range").
+- **Refusal after the data is read (XLSX, fix rounds 1 and 2; every ChartEx family):**
+  - A chart Choice is selected before the workbook fill reads its data. If the fill or stage 1 then refuses any chart in the selected branch, `settleChartFallbacks` replaces the whole branch with its `mc:Fallback`, parsed only at that point. "The whole branch" includes a shape beside the chart and a chart inside a group. This applies to the resident and the paged XLSX readers.
+  - Nested AlternateContent (fix round 3): each wrapper is a node in a hierarchy, and a drawing maps to its innermost wrapper. Settlement runs innermost first, so the first usable inner fallback wins, as it does for a chart refused at selection. An inner replacement takes the replaced objects' place in the enclosing branch, so the object count may change. An unusable inner fallback leaves the refusal to the enclosing wrapper.
+  - Fix round 4: an inner replacement is carried into every enclosing wrapper whose flattened branch held the replaced objects, so a grandparent with a refused sibling chart still gives way as a unit. Each settlement pass handles an open wrapper at most once, so a chart still waiting on data returns promptly and keeps its route for a later call.
+  - The branch's descriptor lives until its charts are final. A paged chart that is still waiting on an importing sheet keeps its Choice, and the paged reader reads the sheet's drawings again once the sheet completes.
+  - A selected fallback's pictures are indexed into the document's media (`collectXlsxImages`), so they paint.
+  - The coverage becomes `fallback`/`fallback`, keeping the chart's feature (`ChartEx`), with the refusal as the reason.
+  - With no usable fallback, the card stays and its stale `chart` coverage entry is recomputed.
+  - DOCX/PPTX need no change: their data is read in the adapter, before selection.
+- **Accessible description (after the A7 merge):** a derived model carries `derivedFamily`, so `chartDescription` names it "Histogram chart" or "Pareto chart" (the lazy `src/charts/describe.ts`).
+
 ## A4b titles, legends and multi-level categories (spec 5.9, 5.10)
 
 - **Title content.** `title/tx/rich`, else the `title/tx/strRef` cache, else the automatic title (a single series' name, else "Chart Title"; 圖表標題 for a `zh` chart), never when `autoTitleDeleted` is set. As before A4b, the automatic title needs a `c:title` element; an uncached `strRef` title falls to the automatic title (§5.10 names the cache; no worksheet fill of title references).
@@ -347,6 +413,35 @@ the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond
   parts, then theme); an authored series fill paints every node. `dataPt` overrides are not applied (row or node
   identity unknown). Only the first visible series is drawn (a further one is diagnosed).
 
+## B4 Box & whisker (ChartEx): implemented and unverified behaviour (spec 4.3, chartex-map §8)
+
+- **Implemented.** Box & whisker marks are drawn natively per series. Points in `value` state form the sorted distribution; blank and error points are excluded; an unavailable point or points exceeding 65,536 refuse the chart. Medians, quartiles, whiskers within 1.5×IQR, outlier markers, inner points (non-outliers), mean markers (×), and connected mean lines are rendered according to the series layout properties and visibility flags.
+- **`inclusive` quartile method: unverified.** When $n$ is odd, the `inclusive` method includes the median in both halves when calculating $Q_1$ and $Q_3$, following the ST_QuartileMethod specification and `chartex-map.md` §8. This behaviour is unconfirmed against native Office ground truth because available native Office fixtures (BW1, BW2) use `exclusive`.
+- **Absence defaults for box visibility flags: unverified.** Defaults (`connectorLines: true, meanLine: false, meanMarker: true, nonoutliers: false, outliers: true`) follow `chartex-map.md` §4.1 / §8 when `visibility` is omitted (as in BW2b).
+- **1.5×IQR whisker factor: unverified.** Standard Tukey box plot factor $1.5 \times \text{IQR}$ is used to determine whisker reach and outlier classification. Microsoft documentation states that points beyond whiskers are outliers, but does not explicitly document the 1.5 multiplier.
+- **Category axis slot mapping: unverified.** When a `cat` dimension is present, boxes are clustered per distinct category with series side-by-side inside each category; when absent, one box is drawn per series along the category axis with spacing governed by `gapWidth`. Box labels default to distinct category name when present, else series name, else ordinal.
+- **Empty and missing categories: project rule, unverified.** A category dimension whose every entry is empty counts as absent (one box per series). An empty category among named ones is its own group with an empty label. A point with no category entry at all (the dimension is shorter than the values) is not drawn and is diagnosed (`chart-point-uncategorized`).
+- **Category limit: project rule.** More than 4,096 distinct categories refuse the chart (`This chart has too many data points to summarize`); a prefix is never drawn.
+- **Mean line with categories: unverified.** With a `cat` dimension the mean line joins each series' means across the categories, in the series colour; without one it joins the means of consecutive series (map §8), in the later series' colour. Each series' own `meanLine` flag decides whether it takes part. A series with no values in a category is joined across that empty slot (from its previous drawn box).
+- **Stage 1 on every path.** XLSX charts are prepared by the workbook fill; DOCX/PPTX charts are prepared by the ChartEx adapter after their data precedence. Paint reads only the prepared records and draws no box for an unprepared model.
+- **Data labels and data-point overrides: unverified.** Data labels (`cx:dataLabels`) and per-point shape properties (`cx:dataPt`) are not painted (e.g. BW2b carries `dataLabels/visibility value="1"`).
+- **Whisker end caps: unverified.** Horizontal end caps at whisker endpoints are omitted; unverified whether Office renders end caps natively.
+
+## A7 accessibility, coverage and paged chart metadata (spec 6.6)
+
+- **Descriptions.** Each chart's description names its type, title, series names and value range. A card reads `placeholder: <reason>`.
+- **Bounds.** Names are cut at 120 characters, at most 8 series are described, and each description is capped at 1,024 characters.
+- **Placement.** Descriptions travel with each page's or slide's placement in the paintables metadata. That metadata is admitted to the chart workspace before it is built, per page, and refunded with the pages.
+- **Per-page list.** It is capped at 64 entries. Above that, the list ends with an "N more charts not listed" note and is labelled with the true total; diagnostic `chart-description-limit`.
+- **Refused admission.** A page whose admission is refused gets a readable notice and diagnostic `chart-description-refused`. Later pages are unaffected.
+- **Known limitation: chart picture wait.** User-shape pictures of a model transferred from another realm are decoded before the pages are published, so that their first paint shows them. The wait is bounded and cancellable:
+  - **Deadline.** One shared 1.5 s deadline, driven by an injectable clock; tests never rely on wall time.
+  - **Cancellation.** It honours the caller's abort signal (OfficeDoc aborts on unmount or document change) and the chart context's signal.
+  - **Missed deadline.** A page whose pictures miss the deadline is published without them and gets diagnostic `chart-user-shapes-deadline`. The decode continues, its bytes stay charged until it settles, and the picture appears the next time that page is painted. Nothing triggers that repaint (zoom, resize or a document change do).
+  - **Delay to other pages.** The paint pipeline publishes all pages of a document together. A slow picture can therefore delay the first publication of every page by at most the deadline, never by more.
+- **Layout shift.** The Chromium CLS test proves zero layout shift outside the viewer chrome while charts load. It does not prove whole-load CLS. A pre-existing mount shift of the status slot (seen also in documents with no charts) is excluded as chrome-only.
+- **Fixtures.** All are Office-shaped synthetic; none is Office evidence.
+
 
 ## C1 gallery (spec 8, Goldens)
 
@@ -363,15 +458,20 @@ titled by what it shows. Every PNG was inspected on the Mac when recorded:
   (`mmm-yy`, labels thinned); column on a base-10 logarithmic axis (1–10000); column with two-level categories
   (months under 2025 / 2026); waterfall (Increase / Decrease / Total, subtotals at "Subtotal" and "End", connectors);
   funnel with centred values.
-- `chart-gallery-docx.3.png`: treemap (banner parent labels Fruit / Veg / Nuts, leaf labels with values where they
-  fit); sunburst (inner ring of groups, outer ring of items).
-- `chart-gallery-pptx.0-4.png`: the same 20 charts, four per slide, at 400 × 260 px (all category labels fit, so the
-  date axis shows every month and the waterfall every step label).
+- `chart-gallery-docx.3.png` (phase 2): histogram (four right-closed bins of width 10, labelled `[12, 22]` … `(42, 52]`,
+  counts 7, 6, 4, 1); Pareto (bars sorted descending, cumulative line on a right 0–100% axis); box & whisker (two
+  series, exclusive quartiles; Team A shows an outlier at 19); treemap (banner parent labels Fruit / Veg / Nuts, leaf
+  labels with values where they fit); sunburst (inner ring of groups, outer ring of items).
+- `chart-gallery-pptx.0-5.png`: the same 23 charts, four per slide, at 400 × 260 px (all category labels fit, so the
+  date axis shows every month and the waterfall every step label); slide 4 is waterfall, funnel, histogram, Pareto;
+  slide 5 is box & whisker, treemap, sunburst.
 - `chart-gallery-xlsx.0.png`: the hierarchy cells (A1:C9, the treemap/sunburst source through `_xlchart.v1.*` names)
-  and the 20 charts in a 3-column grid of absolute anchors.
+  and the 23 charts in a 3-column grid of absolute anchors.
 
-No gallery chart is a card or a fallback (checked in CI by `tests/chart-gallery.test.ts`). The histogram, Pareto and
-box & whisker gallery entries are added when B3 and B4 merge (pending merge).
+No gallery chart is a card or a fallback; `tests/chart-gallery.test.ts` checks that in CI and that the gallery's
+ChartEx entries are exactly the painted families (`CHARTEX_PAINTED`). Phase 2 re-recorded only the images the new
+entries changed: `chart-gallery-docx.3`, `chart-gallery-pptx.4`, `chart-gallery-pptx.5` (new) and
+`chart-gallery-xlsx.0`, each inspected; every other unit compares identical after the merge.
 
 ## C1 residual differences
 
@@ -402,6 +502,18 @@ Observed while inspecting the gallery and the torture documents; none is claimed
   ChartEx/model3D/OMML fallback reports feature `picture` (PPTX names `ChartEx`, `model3D`, `OMML`).
 - **PPTX admission order:** PPTX reads its slides' charts in its own order, so when the chart workspace fills, the
   carded charts are not a document-order suffix (DOCX and XLSX: natives first). The count is the same in all formats.
+- **Box & whisker median and mean marker are invisible on the default fill (gallery, phase 2; open):** the B4 painter
+  strokes the median line and the mean `×` in the series colour on top of the box filled with that same colour, so
+  neither shows in the gallery (whiskers and outliers do). Geometry tests pass because they read the recorded
+  coordinates. Office's colours for the median and mean marker are not confirmed, so C1 does not pick one; listed for
+  the controller.
+- **Pareto legend repeats the series name (gallery, phase 2; unverified):** the cumulative line has no name of its own
+  and the legend shows "Complaints" twice. Office's legend text for the Pareto line is unverified.
+- **XLSX Choice probe released, fixed in C1 phase 2:** an XLSX chart inside `mc:AlternateContent` was parsed twice
+  (once to decide that the Choice is available, once for the drawing) and the probe's model stayed charged to the
+  chart workspace until the finalizer ran (one extra model per such chart; the DOCX and PPTX paths were not
+  affected). `branchAvailable` now releases the probe's model at once; the torture test (a) refunds to 0 with
+  histogram, Pareto and box & whisker inside a `cx1` Choice.
 - **XLSX external references, changed in C1:** a reference into another workbook (`[1]Sheet1!…`, directly or through
   a defined name) still reads blank and is now diagnosed `chart-data-external-reference`.
 
@@ -409,8 +521,8 @@ Observed while inspecting the gallery and the torture documents; none is claimed
 
 None. All eight ChartEx families have native Office-authored parts (13 files from LibreOffice core
 `chart2/qa/extras/data`, provenance in `tests/fixtures/chartex/PROVENANCE.md`). Waterfall, funnel, treemap and sunburst
-are painted (B2, B5); histogram and Pareto (B3) and box & whisker (B4) are pending merge; region map stays
-fallback-only by decision (spec 10), never parsed for geography.
+are painted (B2, B5), histogram and Pareto (B3) and box & whisker (B4); region map stays fallback-only by decision
+(spec 10), never parsed for geography.
 
 ## Known limits
 
@@ -424,8 +536,13 @@ fallback-only by decision (spec 10), never parsed for geography.
 - **B5:** `hierarchyBytes` prices a shared label once per occurrence (conservative double pricing, accepted); `dataPt`
   overrides are not applied to treemap/sunburst nodes (node identity unknown) [U]. C1 made the hierarchy legend bound
   capacity-aware.
-- **A7 (pending merge):** one shared 1.5 s picture-decode deadline per page; the pre-existing paged-chrome CLS shift is
-  not chart-caused (follow-up outside this project).
+- **A7:** one shared 1.5 s picture-decode deadline per page (injectable clock, cancellable); the pre-existing
+  paged-chrome CLS shift is not chart-caused (follow-up outside this project); the CLS proof covers content outside
+  the viewer chrome only.
+- **B3:** the unverified rules in its section (automatic Scott bins, label notation, Pareto sort and axis defaults);
+  `underflow`/`overflow="auto"` is unsupported (fallback kept).
+- **B4:** the unverified choices in its section (inclusive quartiles, 1.5×IQR whiskers, visibility defaults, no end caps,
+  data labels and `dataPt` not painted), and the median/mean visibility gap above.
 - **Browser evidence is Chromium only:** WebKit cannot launch on the build host (CVDisplayLink; reproduces on `main`),
   ruling at A3b.
 - **Fixture licence:** the ChartEx fixtures are used under **MPL-2.0, confirmed** (PROVENANCE.md, feature branch
