@@ -7,21 +7,28 @@
 //
 // Grammar (whitespace is ASCII space, tab, CR, LF and separates tokens; it is not a token):
 //   expr    := term (('+' | '-') term)*
-//   term    := unary (('*' | '/') unary)*
-//   unary   := '-'* power
+//   term    := unary (('*' | '/' | '%') unary)*
+//   unary   := ('-' | '+')* power
 //   power   := primary ('^' unary)?           right-associative, binds tighter than unary minus
 //   primary := number | var | '#' hashName | func '(' args ')' | '(' expr ')'
-//   var     := '$' | 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h' | 'pi' | 'e'
-//   hashName:= 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h'  (read through env.current)
-//   func    := abs acos asin atan ceil cos deg exp floor ln max min rad rand sin sqrt tan
+//   var     := '$' | 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h' | 'ppt_r' | 'pi' | 'e'
+//   hashName:= 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h' | 'ppt_r'  (read through env.current)
+//   func    := abs acos asin atan ceil cos cosh deg exp floor ln max min rad rand sin sinh sqrt tan tanh
 //   number  := digits ['.' digits*] | '.' digits, then an optional exponent [eE][+-]?digits
 //
 // Decisions (the brief is silent on these; see task-S1-5-report.md for ECMA-376 differences):
-//  - Identifiers are case-sensitive and lower-case only, exactly as listed.
-//  - `-2^2` is -4 and `2^-1` is 0.5. Unary plus is not accepted.
-//  - Arity: max and min take exactly two arguments, every other function exactly one.
-//    `rand(x)` is x times one draw from the injected Rng, drawn afresh on every evaluation.
-//  - `#` forms are limited to the four ppt_* names; any other `#name` is unknown-identifier.
+//  - Identifiers (functions, variables, constants, `#` names) are case-insensitive: they are
+//    lower-cased before lookup, and env.current always receives the lower-case name.
+//  - `-2^2` is -4 and `2^-1` is 0.5. Unary plus is accepted and does nothing.
+//  - `%` is the remainder (sign of the dividend), at `*` and `/` precedence, left-associative;
+//    `x % 0` is NaN. Taken as modulo per review; not verified against the ECMA-376 text.
+//  - Arity: max and min take exactly two arguments, every other function exactly one, except
+//    `rand`: `rand()` is one draw from the injected Rng and `rand(x)` is x times one draw; a
+//    fresh draw is taken on every evaluation.
+//  - `ppt_r` (rotation, degrees) is an optional FormulaEnv field; when absent it reads as NaN.
+//  - `#` forms are limited to the five ppt_* names; any other `#name` is unknown-identifier.
+//  - A semicolon-separated formula list (`p:tav@fmla` per segment) is the caller's to split;
+//    compileFormula takes one expression and refuses `;` as syntax.
 //  - Limits: 1024 UTF-8 bytes, 256 tokens (`#ppt_x` is one token), and depth 32, where depth is
 //    the nesting of parentheses (grouping and call argument lists alike).
 //  - A non-finite literal (`1e999`) is refused as syntax. At evaluation time any non-finite
@@ -36,6 +43,8 @@ export interface FormulaEnv {
   ppt_y: number
   ppt_w: number
   ppt_h: number
+  /** Rotation in degrees. Optional so the briefed shape stays valid; absent reads as NaN. */
+  ppt_r?: number
   current: (name: string) => number
   rand: Rng
 }
@@ -51,7 +60,7 @@ type Tok =
   | { k: 'hash'; v: string }
   | { k: 'op'; v: string }
 
-type EnvVar = '$' | 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h'
+type EnvVar = '$' | 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h' | 'ppt_r'
 
 type Node =
   | { t: 'num'; v: number }
@@ -60,10 +69,10 @@ type Node =
   | { t: 'neg'; a: Node }
   | { t: 'bin'; op: string; a: Node; b: Node }
   | { t: 'call'; f: (x: number, y: number) => number; args: Node[] }
-  | { t: 'rand'; a: Node }
+  | { t: 'rand'; a: Node | undefined }
 
-const ENV_VARS: ReadonlySet<string> = new Set(['$', 'ppt_x', 'ppt_y', 'ppt_w', 'ppt_h'])
-const HASH_NAMES: ReadonlySet<string> = new Set(['ppt_x', 'ppt_y', 'ppt_w', 'ppt_h'])
+const ENV_VARS: ReadonlySet<string> = new Set(['$', 'ppt_x', 'ppt_y', 'ppt_w', 'ppt_h', 'ppt_r'])
+const HASH_NAMES: ReadonlySet<string> = new Set(['ppt_x', 'ppt_y', 'ppt_w', 'ppt_h', 'ppt_r'])
 const CONSTANTS: ReadonlyMap<string, number> = new Map([['pi', Math.PI], ['e', Math.E]])
 
 const FUNCS: ReadonlyMap<string, { arity: 1 | 2; f: (x: number, y: number) => number }> = new Map([
@@ -73,6 +82,7 @@ const FUNCS: ReadonlyMap<string, { arity: 1 | 2; f: (x: number, y: number) => nu
   ['atan', { arity: 1, f: x => Math.atan(x) }],
   ['ceil', { arity: 1, f: x => Math.ceil(x) }],
   ['cos', { arity: 1, f: x => Math.cos(x) }],
+  ['cosh', { arity: 1, f: x => Math.cosh(x) }],
   ['deg', { arity: 1, f: x => x * 180 / Math.PI }],
   ['exp', { arity: 1, f: x => Math.exp(x) }],
   ['floor', { arity: 1, f: x => Math.floor(x) }],
@@ -81,8 +91,10 @@ const FUNCS: ReadonlyMap<string, { arity: 1 | 2; f: (x: number, y: number) => nu
   ['min', { arity: 2, f: (x, y) => Math.min(x, y) }],
   ['rad', { arity: 1, f: x => x * Math.PI / 180 }],
   ['sin', { arity: 1, f: x => Math.sin(x) }],
+  ['sinh', { arity: 1, f: x => Math.sinh(x) }],
   ['sqrt', { arity: 1, f: x => Math.sqrt(x) }],
   ['tan', { arity: 1, f: x => Math.tan(x) }],
+  ['tanh', { arity: 1, f: x => Math.tanh(x) }],
 ] as const)
 
 class Refusal {
@@ -132,7 +144,7 @@ function tokenize(src: string): Tok[] {
     if (isIdStart(c)) {
       const start = i
       while (isIdChar(src[i] ?? '')) i++
-      push({ k: 'id', v: src.slice(start, i) })
+      push({ k: 'id', v: src.slice(start, i).toLowerCase() })
       continue
     }
     if (c === '$') { i++; push({ k: 'id', v: '$' }); continue }
@@ -140,10 +152,10 @@ function tokenize(src: string): Tok[] {
       const start = ++i
       while (isIdChar(src[i] ?? '') || (i === start && src[i] === '$')) i++
       if (i === start) throw new Refusal('syntax')
-      push({ k: 'hash', v: src.slice(start, i) })
+      push({ k: 'hash', v: src.slice(start, i).toLowerCase() })
       continue
     }
-    if ('+-*/^(),'.includes(c)) { i++; push({ k: 'op', v: c }); continue }
+    if ('+-*/%^(),'.includes(c)) { i++; push({ k: 'op', v: c }); continue }
     throw new Refusal('syntax')
   }
   return toks
@@ -170,7 +182,7 @@ function parse(toks: readonly Tok[]): Node {
   }
   function term(): Node {
     let a = unary()
-    while (peekOp('*') || peekOp('/')) {
+    while (peekOp('*') || peekOp('/') || peekOp('%')) {
       const op = (toks[pos++] as { v: string }).v
       a = { t: 'bin', op, a, b: unary() }
     }
@@ -178,7 +190,11 @@ function parse(toks: readonly Tok[]): Node {
   }
   function unary(): Node {
     let negs = 0
-    while (peekOp('-')) { pos++; negs++ }
+    for (;;) {
+      if (peekOp('-')) negs++
+      else if (!peekOp('+')) break
+      pos++
+    }
     const p = power()
     return negs % 2 === 1 ? { t: 'neg', a: p } : p
   }
@@ -212,10 +228,15 @@ function parse(toks: readonly Tok[]): Node {
     const fn = FUNCS.get(t.v)
     if (fn === undefined && t.v !== 'rand') throw new Refusal('unknown-identifier')
     open()
+    if (fn === undefined) { // rand() or rand(x)
+      const a = peekOp(')') ? undefined : expr()
+      close()
+      return { t: 'rand', a }
+    }
     const args = [expr()]
-    if (fn?.arity === 2) { expect(','); args.push(expr()) }
+    if (fn.arity === 2) { expect(','); args.push(expr()) }
     close()
-    return fn === undefined ? { t: 'rand', a: args[0] } : { t: 'call', f: fn.f, args }
+    return { t: 'call', f: fn.f, args }
   }
 
   const root = expr()
@@ -231,7 +252,10 @@ function evaluate(n: Node, env: FormulaEnv): number {
     case 'var': return fin(env[n.v])
     case 'cur': return fin(env.current(n.v))
     case 'neg': return fin(-evaluate(n.a, env))
-    case 'rand': return fin(evaluate(n.a, env) * fin(env.rand()))
+    case 'rand': {
+      const scale = n.a === undefined ? 1 : evaluate(n.a, env)
+      return fin(scale * fin(env.rand()))
+    }
     case 'call': return fin(n.f(evaluate(n.args[0], env), n.args.length > 1 ? evaluate(n.args[1], env) : 0))
     case 'bin': {
       const a = evaluate(n.a, env)
@@ -241,6 +265,7 @@ function evaluate(n: Node, env: FormulaEnv): number {
         case '-': return fin(a - b)
         case '*': return fin(a * b)
         case '/': return fin(a / b)
+        case '%': return fin(a % b)
         default: return fin(Math.pow(a, b))
       }
     }

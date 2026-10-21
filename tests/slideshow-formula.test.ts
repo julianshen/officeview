@@ -62,7 +62,7 @@ describe('slideshow formula interpreter', () => {
     expect(refusal('1e999')).toBe('syntax')
     // Malformed expressions.
     for (const src of ['', '   ', '1+', '*1', '(1', '1)', '()', '1 2', '2e', '2 e', 'abs', 'abs()', 'abs(1,2)', 'max(1)', 'max(1,2,3)',
-      'max(1,)', '1..2', '1.2.3', '+1', '1%2', 'a?b:c', '1,2', 'pi(1)', '$(1)', '#', '# ppt_x', '#1'])
+      'max(1,)', '1..2', '1.2.3', 'a?b:c', '1%', '%1', '1;2', '1,2', 'pi(1)', '$(1)', '#', '# ppt_x', '#1'])
       expect(refusal(src), src).not.toBeNull()
     expect(refusal('1 2')).toBe('syntax')
     expect(refusal('abs(1,2)')).toBe('syntax')
@@ -112,7 +112,11 @@ describe('slideshow formula interpreter', () => {
     // A misbehaving generator yields NaN rather than throwing.
     expect(run('rand(1)', env({ rand: () => Number.NaN }))).toBeNaN()
     expect(run('rand(1)', env({ rand: () => { throw new Error('x') } }))).toBeNaN()
-    expect(refusal('rand()')).toBe('syntax')
+    // rand() with no argument is one unscaled draw.
+    calls = 0
+    expect(run('rand() + rand()', env({ rand: rng }))).toBe(1)
+    expect(calls).toBe(2)
+    expect(refusal('rand(1,2)')).toBe('syntax')
     expect(refusal('rand')).toBe('syntax')
   })
 
@@ -142,10 +146,10 @@ describe('slideshow formula interpreter', () => {
     expect(run('1' + '^1'.repeat(127))).toBe(1)
     expect(run('-'.repeat(255) + '1')).toBe(-1)
     // Every identifier not in the list.
-    for (const id of ['x', 'y', 'ppt_r', 'cosh', 'sinh', 'tanh', 'log', 'pow', 'round', 'PI', 'E', 'Abs', 'SIN', 'ppt_X', 'ppt', '_', 'ppt_x2', 'pie', 'math', 'Math',
+    for (const id of ['x', 'y', 'log', 'pow', 'round', 'ppt', '_', 'ppt_x2', 'pie', 'math', 'Math',
       'window', 'document', 'alert', 'undefined', 'NaN', 'Infinity', 'null', 'true'])
       expect(refusal(id), id).toBe('unknown-identifier')
-    expect(refusal('cosh(1)')).toBe('unknown-identifier')
+    expect(refusal('log(1)')).toBe('unknown-identifier')
     expect(refusal('1 + foo(2)')).toBe('unknown-identifier')
   })
 
@@ -170,6 +174,48 @@ describe('slideshow formula interpreter', () => {
       } else expect(['too-long', 'too-many-tokens', 'too-deep', 'syntax', 'unknown-identifier']).toContain(r.reason)
     }
     expect(refusal(undefined as unknown as string)).toBe('syntax')
+  })
+
+  it('review fix 1: %, hyperbolics, ppt_r, case-insensitive names and unary plus', () => {
+    // % is the remainder, at * and / precedence, left-associative; the sign follows the dividend (unverified against ECMA-376).
+    expect(run('7%3')).toBe(1)
+    expect(run('-7%3')).toBe(-1)
+    expect(run('7.5%2')).toBe(1.5)
+    expect(run('1+7%3*2')).toBe(3)
+    expect(run('17%7%2')).toBe(1)
+    expect(run('2^3%3')).toBe(2)
+    expect(run('($*4)%1')).toBe(0)
+    expect(run('5%0')).toBeNaN()
+    // Hyperbolic functions.
+    expect(run('cosh(0) + sinh(0) + tanh(0)')).toBe(1)
+    expect(run('sinh(1)')).toBeCloseTo(Math.sinh(1), 12)
+    expect(run('tanh(1000)')).toBe(1)
+    expect(run('cosh(1000)')).toBeNaN()
+    // ppt_r: the environment's optional rotation, and #ppt_r through current().
+    expect(run('ppt_r', env({ ppt_r: 45 }))).toBe(45)
+    expect(run('ppt_r')).toBeNaN()
+    const asked: string[] = []
+    expect(run('#ppt_r + $*360', env({ current: n => { asked.push(n); return 10 } }))).toBe(100)
+    expect(asked).toEqual(['ppt_r'])
+    // Names are case-insensitive; current() always receives the lower-case name.
+    expect(run('PI')).toBeCloseTo(Math.PI, 12)
+    expect(run('E')).toBeCloseTo(Math.E, 12)
+    expect(run('Sin(2*Pi*$)')).toBeCloseTo(1, 12)
+    expect(run('ABS(-2) + MAX(1, 3) + Rand(2)')).toBe(6)
+    expect(run('PPT_X + Ppt_W')).toBeCloseTo(0.7, 12)
+    const seen: string[] = []
+    run('#PPT_X + #Ppt_R', env({ current: n => { seen.push(n); return 1 } }))
+    expect(seen).toEqual(['ppt_x', 'ppt_r'])
+    for (const id of ['CONSTRUCTOR', '__PROTO__', 'Constructor', 'ToString', 'Math', 'NaN', 'Infinity', 'COSHH', '#PI', '#Foo'])
+      expect(refusal(id), id).toBe('unknown-identifier')
+    // Unary plus is accepted and does nothing; it mixes with unary minus.
+    expect(run('+1')).toBe(1)
+    expect(run('2 * +3')).toBe(6)
+    expect(run('+(ppt_x)')).toBe(0.5)
+    expect(run('-+-+2')).toBe(2)
+    expect(run('+-2^2')).toBe(-4)
+    // A semicolon-separated list is the caller's to split; compileFormula refuses it.
+    expect(refusal('$;1-$')).toBe('syntax')
   })
 
   it('the module contains no eval or Function', () => {
