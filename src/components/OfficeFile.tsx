@@ -3,9 +3,10 @@
  * detects the format from [Content_Types].xml, parses it, and hands the
  * document model to <OfficeDoc>. Accepts a promise for async usage.
  */
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { forwardRef, useEffect, useRef, useState, type CSSProperties, type ReactElement, type Ref } from 'react'
 import { OfficeDoc, type OfficeDocProps } from './OfficeDoc'
-import type { ByteSource, Progress, ProtectionListener, ProtectionPolicy, WatermarkListener } from '../core/stream'
+import type { OfficeViewerHandle } from './present'
+import type { ByteSource, HttpSource, Progress, ProtectionListener, ProtectionPolicy, WatermarkListener } from '../core/stream'
 import { mergeWatermark, type WatermarkOptions } from '../core/watermark'
 import type { PackageErrorCode } from '../core/package-error'
 import { documentNotices, loadOfficeSource, type AnyDoc } from './loadOfficeSource'
@@ -171,7 +172,7 @@ export interface OfficeFileProps extends Omit<OfficeDocProps, 'document'> {
   viewerWorker?: () => ViewerWorkerPort
 }
 
-export function OfficeFile({
+export const OfficeFile = forwardRef(function OfficeFile({
   data,
   loading,
   error,
@@ -180,7 +181,7 @@ export function OfficeFile({
   watermark,
   viewerWorker,
   ...rest
-}: OfficeFileProps): ReactElement {
+}: OfficeFileProps, ref: Ref<OfficeViewerHandle>): ReactElement {
   const [progress, setProgress] = useState<Progress | undefined>(undefined)
   // Server policy, sealed at download time. Stale loads are dropped at the
   // source (useOfficeFile ignores protection events after cleanup); the tag
@@ -231,7 +232,9 @@ export function OfficeFile({
   if (state.status === 'error') return error ? error(state.message) : <div role="alert">{state.message}</div>
   const doc = (
     <OfficeDoc
+      ref={ref}
       document={state.document}
+      __presentSource={data && !oneShot(data) && !(data as HttpSource).headers ? (data as HttpSource).url ?? data as Blob : undefined}
       allowCopy={effectiveAllowCopy}
       allowPrint={effectiveAllowPrint}
       {...(effectiveWatermark ? { watermark: effectiveWatermark } : {})}
@@ -246,6 +249,6 @@ export function OfficeFile({
       {doc}
     </>
   )
-}
+})
 
 export default OfficeFile
