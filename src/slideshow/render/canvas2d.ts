@@ -9,20 +9,25 @@
  * - **Layer space.** A `LayerBitmap`'s `bounds` are in slide px; its canvas
  *   is `bounds × scale` device px (S1-12). A reduced-scale layer is drawn at
  *   its full bounds, so it scales up.
- * - **`LayerDraw`.** `state.transform` maps slide px to output device px,
- *   the view (letterbox and backing-store scale) included. `state.motion` is
- *   a further translation in output device px, applied after the transform.
- *   `state.mask` covers the layer's `bounds` box in slide px and moves with
- *   the transform. Draws composite in array order (z-order), source-over on
+ * - **Viewport.** `setViewport` gives the slide-px → device-px matrix
+ *   (letterbox offset and backing-store scale, DPR included); identity until
+ *   set. Nothing in a `TargetState` knows about it.
+ * - **`LayerDraw`.** `state.transform` and `state.motion` are in slide px
+ *   (S1-11, S1-12). A layer is drawn at
+ *   `view ∘ translate(motion) ∘ state.transform`: motion translates in slide
+ *   space after the target's own transform. `state.mask` covers the layer's
+ *   `bounds` box in slide px and moves with that matrix. Draws composite in array order (z-order), source-over on
  *   premultiplied colour (WebGL2's `ONE, ONE_MINUS_SRC_ALPHA`).
  * - **Colour.** A draw with `part` gets `state.color[part]`; a whole layer
  *   (no `part`) ignores `state.color`, because an unsplit target is
  *   re-rasterised instead (spec 6.3, part layers).
  * - **`TransitionDraw`.** `params` may carry `mask` (a `MaskState`), `from`
  *   and `to` (`Affine`s in unit slide space: the layer's bounds map to
- *   [0, 1]², the affine applies there, then [0, 1]² fills the output), and
- *   `fromOpacity` / `toOpacity` (default 1). The outgoing frame is drawn,
- *   then the incoming one through the mask, which is in output device px.
+ *   [0, 1]², the affine applies there, then [0, 1]² maps back to the bounds
+ *   and through the viewport), and `fromOpacity` / `toOpacity` (default 1).
+ *   The outgoing frame is drawn, then the incoming one through the mask,
+ *   which is computed in device px over the incoming layer's device rect
+ *   (its bounds under the viewport; the slide rect for a full-slide frame).
  *   The transition composites first and `draws` go on top (the watermark is a
  *   top layer no effect moves).
  * - **Noise determinism.** A transition's `rng` is stateful; one seed is drawn
@@ -37,14 +42,17 @@
  *   leased before they are created and released on `release`, `resize` or
  *   `dispose`. A refused lease degrades the effect (a raster mask becomes a
  *   cut at its midpoint; a recolour is skipped) with a diagnostic, never
- *   silently.
+ *   silently. A path mask over `MASK_MAX_OPS` sub-paths is likewise a
+ *   diagnosed cut (`mask-ops`).
+ * - **Diagnostics** carry the slide index from `setSlideIndex`, so the sink
+ *   deduplicates per effect and slide.
  */
 import type {
-  Affine, CanvasFactory, ColorMatrix, Compositor, DiagnosticSink, LayerBitmap, LayerDraw, LayerHandle, Lease, MaskState,
+  Affine, CanvasFactory, ColorMatrix, Compositor, CompositorViewport, DiagnosticSink, LayerBitmap, LayerDraw, LayerHandle, Lease, MaskState,
   Rng, SlideShowWorkspace, TransitionDraw,
 } from '../types'
 import { createRng } from '../rng'
-import { isMaskKind, isMaskRaster, maskPath, maskRasterBytes, tracePath, type MaskRaster } from './masks'
+import { MASK_MAX_OPS, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskRaster } from './masks'
 
 /**
  * The largest texture side the Canvas 2D backend accepts. 8192 is the
@@ -120,8 +128,11 @@ export function createCanvas2DCompositor(
   let disposed = false
   let scratch: Surface | undefined
   let mask: (Surface & { image: ImageData }) | undefined
+  let view: Affine = IDENTITY
+  let slideIndex: number | undefined
 
-  const diagnose = (code: string, effect: string, message: string) => sink?.add({ code, effect, message })
+  const diagnose = (code: string, effect: string, message: string) =>
+    sink?.add(slideIndex === undefined ? { code, effect, message } : { code, slideIndex, effect, message })
 
   /** Lease, then create; nothing is created when the lease is refused. */
   function surface(w: number, h: number, bytes: number, tag: string): Surface | undefined {
@@ -219,6 +230,9 @@ export function createCanvas2DCompositor(
       return
     }
     if (maskRasterBytes(maskState.kind, maskState.params, box.w, box.h) === 0) {
+      if (maskOpCount(maskState.kind, maskState.params, box.w, box.h) > MASK_MAX_OPS) {
+        diagnose('mask-ops', effect, `The ${maskState.kind} mask needs more than ${MASK_MAX_OPS} sub-paths at this size; it cuts at its midpoint`)
+      }
       const shape = maskPath(maskState.kind, maskState.progress, maskState.params, box.w, box.h, createRng(seed))
       if (isMaskRaster(shape) || shape.ops.length === 0) return
       out.save()
@@ -270,17 +284,26 @@ export function createCanvas2DCompositor(
 
   function drawTransition(tr: TransitionDraw) {
     const params = tr.params as TransitionParams
-    const W = canvas.width, H = canvas.height
     const fit = (t: Texture, a: unknown): Affine => {
       const b = t.bounds
       const unit: Affine = [1 / b.w, 0, 0, 1 / b.h, -b.x / b.w, -b.y / b.h]
-      return mul([W, 0, 0, H, 0, 0], mul(isAffine(a) ? a : IDENTITY, unit))
+      const back: Affine = [b.w, 0, 0, b.h, b.x, b.y]
+      return mul(view, mul(back, mul(isAffine(a) ? a : IDENTITY, unit)))
+    }
+    /** The axis-aligned device rect of a layer's bounds under the viewport. */
+    const deviceRect = (b: LayerBitmap['bounds']): LayerBitmap['bounds'] => {
+      const [a, bb, c, d, e, f] = view
+      const xs = [b.x, b.x + b.w], ys = [b.y, b.y + b.h]
+      const px: number[] = [], py: number[] = []
+      for (const x of xs) for (const y of ys) { px.push(a * x + c * y + e); py.push(bb * x + d * y + f) }
+      const x0 = Math.min(...px), y0 = Math.min(...py)
+      return { x: x0, y: y0, w: Math.max(...px) - x0, h: Math.max(...py) - y0 }
     }
     const from = lookup(tr.from, tr.effect), to = lookup(tr.to, tr.effect)
     if (from) drawLayer(from.canvas, from.bounds, fit(from, params.from), clamp01(params.fromOpacity, 1), undefined, IDENTITY, from.bounds, 0, tr.effect)
     if (to) {
       const seed = params.mask ? seedOf(tr.rng) : 0
-      drawLayer(to.canvas, to.bounds, fit(to, params.to), clamp01(params.toOpacity, 1), params.mask, IDENTITY, { x: 0, y: 0, w: W, h: H }, seed, tr.effect)
+      drawLayer(to.canvas, to.bounds, fit(to, params.to), clamp01(params.toOpacity, 1), params.mask, IDENTITY, deviceRect(to.bounds), seed, tr.effect)
     }
   }
 
@@ -298,9 +321,18 @@ export function createCanvas2DCompositor(
       else diagnose('compositor-workspace', `colour:${d.part}`, 'A colour transform did not fit the slideshow workspace; the layer keeps its colour')
     }
     const transform = isAffine(state.transform) ? state.transform : IDENTITY
-    const m = state.motion ? mul([1, 0, 0, 1, state.motion.dx, state.motion.dy], transform) : transform
+    const local = state.motion ? mul([1, 0, 0, 1, state.motion.dx, state.motion.dy], transform) : transform
+    const m = mul(view, local)
     const seed = Number(state.mask?.params.seed)
     drawLayer(source, t.bounds, m, state.opacity, state.mask, m, t.bounds, Number.isFinite(seed) ? seed : 0, effect)
+  }
+
+  function resizeOutput(widthPx: number, heightPx: number) {
+    canvas.width = Math.max(1, Math.floor(widthPx))
+    canvas.height = Math.max(1, Math.floor(heightPx))
+    // Output-sized scratch is re-leased at the new size on next use.
+    scratch?.lease.release()
+    scratch = undefined
   }
 
   function dropTexture(t: Texture) {
@@ -351,12 +383,18 @@ export function createCanvas2DCompositor(
     },
 
     resize(widthPx, heightPx) {
+      if (!disposed) resizeOutput(widthPx, heightPx)
+    },
+
+    setViewport(next: CompositorViewport) {
       if (disposed) return
-      canvas.width = Math.max(1, Math.floor(widthPx))
-      canvas.height = Math.max(1, Math.floor(heightPx))
-      // Output-sized scratch is re-leased at the new size on next use.
-      scratch?.lease.release()
-      scratch = undefined
+      view = isAffine(next.matrix) ? next.matrix : IDENTITY
+      const w = Math.max(1, Math.floor(next.deviceWidth)), h = Math.max(1, Math.floor(next.deviceHeight))
+      if (Number.isFinite(w) && Number.isFinite(h) && (w !== canvas.width || h !== canvas.height)) resizeOutput(w, h)
+    },
+
+    setSlideIndex(index) {
+      slideIndex = index
     },
 
     dispose() {

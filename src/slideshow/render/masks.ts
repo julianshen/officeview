@@ -25,18 +25,23 @@
  * - `box`, `circle`, `diamond`, `plus`: `dir` `'out' | 'in'` (default `'out'`:
  *   grows from the centre; `'in'` closes from the edges toward the centre).
  * - `wedge`: two arms sweeping from 12 o'clock both ways around the centre.
- * - `wheel`: `spokes` (default 1), each sector sweeping clockwise from 12 o'clock.
+ * - `wheel`: `spokes` (default 1, at most 64), each sector sweeping clockwise from 12 o'clock.
  * - `checkerboard`: `dir` `'across' | 'down'` (default `'across'`), `cells`
- *   (default 8) squares across the box; odd rows are offset by half a cell.
- * - `blinds`: `orient` (default `'horz'`), `count` (default 6) bands, each
- *   revealed from its top (left).
- * - `comb`: `orient` (default `'horz'`), `count` (default 8) bands revealed
- *   from alternate sides, the first from the left (top).
+ *   (default 8, at most 128) squares across the box; odd rows are offset by
+ *   half a cell.
+ * - `blinds`: `orient` (default `'horz'`), `count` (default 6, at most 256)
+ *   bands, each revealed from its top (left).
+ * - `comb`: `orient` (default `'horz'`), `count` (default 8, at most 256) bands
+ *   revealed from alternate sides, the first from the left (top).
  * - `strips`: `from` `'lu' | 'ru' | 'ld' | 'rd'` (default `'lu'`), the corner a
  *   diagonal reveal starts at.
  * - `dissolve`: `cell` (default 8) box units per square cell.
  * - `randomBar`: `orient` (default `'horz'`: horizontal bars), `bar` (default 4)
  *   box units per bar.
+ *
+ * Op counts are bounded: a path never has more than `MASK_MAX_OPS` sub-paths.
+ * A mask whose params would need more (`maskOpCount`) is a cut instead:
+ * nothing before progress 0.5, the whole box from 0.5. Callers diagnose it.
  *
  * Noise masks are monotone in progress and exact in count: a fixed shuffle
  * from `rng` ranks the cells, and progress `p` shows the first
@@ -81,6 +86,12 @@ export function isMaskRaster(m: MaskPath | MaskRaster): m is MaskRaster {
   return 'alpha' in m
 }
 
+/** The most sub-paths one mask path may hold; more degrades to a cut (bounded per-frame allocation). */
+export const MASK_MAX_OPS = 4096
+const MAX_CELLS = 128
+const MAX_BANDS = 256
+const MAX_SPOKES = 64
+
 /** Shapes that grow from the centre overshoot the box by this much, so anti-aliasing never leaks at 0 or 1. */
 const PAD = 1
 const TAU = Math.PI * 2
@@ -121,6 +132,25 @@ function rasterGrid(kind: MaskKind, params: MaskParams, w: number, h: number): {
 export function maskRasterBytes(kind: MaskKind, params: MaskParams, w: number, h: number): number {
   const g = rasterGrid(kind, params, w, h)
   return g ? g.cols * g.rows * 5 : 0
+}
+
+/** Sub-paths `maskPath` would build for a path kind at a progress strictly between 0 and 1; 0 for a noise kind. */
+export function maskOpCount(kind: MaskKind, params: MaskParams, w: number, h: number): number {
+  switch (kind) {
+    case 'dissolve': case 'randomBar': return 0
+    case 'split': case 'barn': return str(params, 'dir', ['out', 'in'], 'out') === 'out' ? 1 : 2
+    case 'box': case 'circle': case 'diamond': case 'plus': return str(params, 'dir', ['out', 'in'], 'out') === 'out' ? 1 : 2
+    case 'wheel': return int(params, 'spokes', 1, MAX_SPOKES)
+    case 'blinds': case 'comb': return int(params, 'count', kind === 'blinds' ? 6 : 8, MAX_BANDS)
+    case 'checkerboard': {
+      const across = str(params, 'dir', ['across', 'down'], 'across') === 'across'
+      const cells = int(params, 'cells', 8, MAX_CELLS)
+      const [len, breadth] = across ? [w, h] : [h, w]
+      if (!(len > 0 && breadth > 0)) return 0
+      return Math.ceil(breadth / (len / cells)) * (cells + 1)
+    }
+    default: return 1
+  }
 }
 
 /** Mirror a polygon of `[x, y, …]` points about the centre lines. */
@@ -177,6 +207,7 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
   if (grid) return noise(grid, p, rng)
   if (p <= 0) return path([])
   if (p >= 1) return path([rect(0, 0, w, h)])
+  if (maskOpCount(kind, params, w, h) > MASK_MAX_OPS) return p < 0.5 ? path([]) : path([rect(0, 0, w, h)])
 
   switch (kind) {
     case 'wipe': {
@@ -214,7 +245,7 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
       return path([{ op: 'sector', cx: w / 2, cy: h / 2, r, a0: TOP - p * Math.PI, a1: TOP + p * Math.PI }])
     }
     case 'wheel': {
-      const spokes = int(params, 'spokes', 1, 64)
+      const spokes = int(params, 'spokes', 1, MAX_SPOKES)
       const r = Math.hypot(w, h) / 2 + PAD
       const step = TAU / spokes
       const ops: MaskOp[] = []
@@ -223,7 +254,7 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
     }
     case 'checkerboard': {
       const across = str(params, 'dir', ['across', 'down'], 'across') === 'across'
-      const cells = int(params, 'cells', 8, 1024)
+      const cells = int(params, 'cells', 8, MAX_CELLS)
       const ops: MaskOp[] = []
       const [len, breadth] = across ? [w, h] : [h, w]
       const cell = len / cells
@@ -240,7 +271,7 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
     case 'blinds':
     case 'comb': {
       const horz = str(params, 'orient', ['horz', 'vert'], 'horz') === 'horz'
-      const count = int(params, 'count', kind === 'blinds' ? 6 : 8, 1024)
+      const count = int(params, 'count', kind === 'blinds' ? 6 : 8, MAX_BANDS)
       const ops: MaskOp[] = []
       const band = (horz ? h : w) / count
       for (let i = 0; i < count; i++) {

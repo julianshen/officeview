@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { createCanvas } from 'canvas'
 import { createRng } from '../src/slideshow/rng'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
-import { MASK_KINDS, isMaskRaster, maskPath, maskRasterBytes, tracePath, type MaskRaster } from '../src/slideshow/render/masks'
+import { MASK_KINDS, MASK_MAX_OPS, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, toPath2D, tracePath, type MaskRaster } from '../src/slideshow/render/masks'
 import { CANVAS2D_MAX_TEXTURE_SIZE, applyColorMatrix, createCanvas2DCompositor } from '../src/slideshow/render/canvas2d'
 import type {
   Affine, CanvasFactory, Compositor, LayerBitmap, LayerHandle, Lease, MaskKind, MaskState, SlideShowWorkspace, TargetState,
@@ -170,6 +170,50 @@ describe('mask library', () => {
     }
   })
 
+  it('toPath2D builds a Path2D from the given constructor', () => {
+    const calls: string[] = []
+    class RecordingPath2D {
+      moveTo(x: number, y: number) { calls.push(`M${x},${y}`) }
+      lineTo(x: number, y: number) { calls.push(`L${x},${y}`) }
+      arc(x: number, y: number, r: number, a0: number, a1: number, ccw?: boolean) { calls.push(`A${x},${y},${r},${a0.toFixed(3)},${a1.toFixed(3)},${ccw}`) }
+      rect(x: number, y: number, w: number, h: number) { calls.push(`R${x},${y},${w},${h}`) }
+      closePath() { calls.push('Z') }
+    }
+    const m = maskPath('wheel', 0.25, {}, 100, 100, createRng(1))
+    if (isMaskRaster(m)) throw new Error('expected a path')
+    const p = toPath2D(m, RecordingPath2D as unknown as typeof Path2D)
+    expect(p).toBeInstanceOf(RecordingPath2D)
+    const r = Math.hypot(100, 100) / 2 + 1
+    expect(calls).toEqual(['M50,50', `A50,50,${r},${(-Math.PI / 2).toFixed(3)},${0 .toFixed(3)},false`, 'Z'])
+    calls.length = 0
+    const d = maskPath('diamond', 0.5, {}, 10, 10, createRng(1))
+    toPath2D(d as never, RecordingPath2D as unknown as typeof Path2D)
+    expect(calls).toEqual(['M5,-1', 'L11,5', 'L5,11', 'L-1,5', 'Z'])
+  })
+
+  it('op counts are bounded: checkerboard cells cap at 128 and an over-budget mask degrades to a cut', () => {
+    expect(maskOpCount('checkerboard', { cells: 100000 }, 3840, 2160)).toBe(maskOpCount('checkerboard', { cells: 128 }, 3840, 2160))
+    expect(maskOpCount('checkerboard', {}, 3840, 2160)).toBeLessThanOrEqual(MASK_MAX_OPS)
+    for (const kind of MASK_KINDS) {
+      for (const params of [{}, { cells: 1e9, count: 1e9, spokes: 1e9 }] as MaskState['params'][]) {
+        const m = maskPath(kind, 0.3, params, 3840, 2160, createRng(1))
+        if (!isMaskRaster(m)) expect(m.ops.length).toBeLessThanOrEqual(MASK_MAX_OPS)
+      }
+    }
+    // 128 cells across a 3840 × 2160 box is over the op budget: the path itself is a cut.
+    const over = { cells: 128 }
+    expect(maskOpCount('checkerboard', over, 3840, 2160)).toBeGreaterThan(MASK_MAX_OPS)
+    expect(maskPath('checkerboard', 0.4, over, 3840, 2160, createRng(1))).toEqual({ fillRule: 'nonzero', ops: [] })
+    expect(maskPath('checkerboard', 0.6, over, 3840, 2160, createRng(1))).toEqual({ fillRule: 'nonzero', ops: [{ op: 'rect', x: 0, y: 0, w: 3840, h: 2160 }] })
+    // The compositor diagnoses it, with the slide index it was given.
+    const s = setup(64 * 1024 * 1024, 640, 360)
+    s.comp.setSlideIndex(4)
+    const a = s.layer('#ff0000', { x: 0, y: 0, w: 640, h: 360 })
+    s.comp.frame([{ handle: a, state: state({ mask: { kind: 'checkerboard', progress: 0.6, params: { cells: 128, dir: 'down' } } }) }])
+    expectPx(s.px(5, 5), RED)
+    expect(s.sink.list()).toEqual([expect.objectContaining({ code: 'mask-ops', slideIndex: 4, effect: 'mask:checkerboard' })])
+  })
+
   it('a path traces onto any CanvasPath-shaped target', () => {
     const calls: string[] = []
     const target = {
@@ -234,6 +278,46 @@ describe('Canvas 2D compositor', () => {
     expectPx(s.px(42, 12), GREEN); expectPx(s.px(41, 12), CLEAR); expectPx(s.px(51, 31), GREEN); expectPx(s.px(52, 31), CLEAR)
   })
 
+  it('a letterboxed DPR 2 viewport maps slide-px states, motion, masks and transitions to device pixels', () => {
+    const s = setup()
+    // A 24 × 16 slide at DPR 2, letterboxed 8 device px in from the top-left of a 64 × 48 output.
+    s.comp.setViewport({ matrix: [2, 0, 0, 2, 8, 8], deviceWidth: W, deviceHeight: H })
+    const a = s.layer('#ff0000', { x: 0, y: 0, w: 12, h: 8 }, 2)
+    // Slide rect: transform moves it to (2, 2), motion a further (4, 0) slide px → x 6–18, y 2–10 → device x 20–44, y 12–28.
+    s.comp.frame([{ handle: a, state: state({ transform: [1, 0, 0, 1, 2, 2], motion: { dx: 4, dy: 0 } }) }])
+    expectPx(s.px(20, 12), RED); expectPx(s.px(43, 27), RED)
+    expectPx(s.px(19, 12), CLEAR); expectPx(s.px(44, 12), CLEAR); expectPx(s.px(20, 11), CLEAR); expectPx(s.px(20, 28), CLEAR)
+    // Motion stays in slide space under a rotation: 90° about the origin, then motion (10, 0) slide px.
+    s.comp.frame([{ handle: a, state: state({ transform: [0, 1, -1, 0, 8, 0], motion: { dx: 10, dy: 0 } }) }])
+    // Rotated rect x 0–8, y 0–12 (slide), moved to x 10–18 → device x 28–44, y 8–32.
+    expectPx(s.px(28, 8), RED); expectPx(s.px(43, 31), RED); expectPx(s.px(27, 8), CLEAR); expectPx(s.px(44, 31), CLEAR)
+    // A layer mask moves with the view: wipe from the left at 0.5 on the unrotated layer at its home → device x 8–20, y 8–24.
+    s.comp.frame([{ handle: a, state: state({ mask: { kind: 'wipe', progress: 0.5, params: { from: 'l' } } }) }])
+    expectPx(s.px(8, 8), RED); expectPx(s.px(19, 23), RED); expectPx(s.px(20, 8), CLEAR); expectPx(s.px(7, 8), CLEAR)
+
+    // A transition mask is computed in device space over the slide's device rect (x 8–56, y 8–40).
+    const from = s.layer('#ff0000', { x: 0, y: 0, w: 24, h: 16 }, 2), to = s.layer('#0000ff', { x: 0, y: 0, w: 24, h: 16 }, 2)
+    const wipe = (progress: number) => ({ from, to, effect: 'wipe', progress, params: { mask: { kind: 'wipe' as const, progress, params: { from: 'l' } } }, rng: createRng(1) })
+    s.comp.frame([], wipe(0.5))
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const inSlide = x >= 8 && x < 56 && y >= 8 && y < 40
+      const want = !inSlide ? CLEAR : x < 32 ? BLUE : RED
+      if (!near(s.px(x, y), want, 0)) throw new Error(`pixel ${x},${y} is ${s.px(x, y)}`)
+    }
+    // Circle at 0.5: centred on the slide's device centre (32, 24), radius half of (half-diagonal + 1 px).
+    s.comp.frame([], { from, to, effect: 'circle', progress: 0.5, params: { mask: { kind: 'circle', progress: 0.5, params: {} } }, rng: createRng(1) })
+    const r = 0.5 * (Math.hypot(48, 32) / 2 + 1)
+    expectPx(s.px(32, 24), BLUE); expectPx(s.px(Math.floor(32 + r + 2), 24), RED); expectPx(s.px(Math.ceil(32 - r - 3), 24), RED)
+    // Dissolve: cells only inside the slide rect, letterbox clear; push in unit space moves by slide widths.
+    s.comp.frame([], { from, to, effect: 'dissolve', progress: 0.5, params: { mask: { kind: 'dissolve', progress: 0.5, params: {} } }, rng: createRng(1) })
+    expectPx(s.px(4, 20), CLEAR); expectPx(s.px(60, 20), CLEAR); expectPx(s.px(30, 44), CLEAR)
+    const inside = new Set<string>()
+    for (let y = 8; y < 40; y++) for (let x = 8; x < 56; x++) inside.add(s.px(x, y).join())
+    expect([...inside].sort()).toEqual([BLUE.join(), RED.join()].sort())
+    s.comp.frame([], { from, to, effect: 'push', progress: 0.5, params: { from: [1, 0, 0, 1, -0.5, 0], to: [1, 0, 0, 1, 0.5, 0] }, rng: createRng(1) })
+    expectPx(s.px(31, 20), RED); expectPx(s.px(32, 20), BLUE); expectPx(s.px(55, 20), BLUE)
+  })
+
   it('a layer mask is applied in the layer box under its transform', () => {
     const s = setup()
     const a = s.layer('#ff0000', { x: 4, y: 4, w: 20, h: 10 })
@@ -248,9 +332,10 @@ describe('Canvas 2D compositor', () => {
     expect(shown).toBe(100) // exactly half of the 10 × 5 cells of 2 × 2 px
   })
 
-  it('transition affines are in unit slide space and fit the layer to the output', () => {
+  it('transition affines are in unit slide space and fit the layer to its slide rect under the viewport', () => {
     const s = setup()
-    const from = s.layer('#ff0000', { x: 0, y: 0, w: 32, h: 24 }, 2) // a half-size slide at scale 2
+    s.comp.setViewport({ matrix: [2, 0, 0, 2, 0, 0], deviceWidth: W, deviceHeight: H })
+    const from = s.layer('#ff0000', { x: 0, y: 0, w: 32, h: 24 }, 2) // a 32 × 24 slide at DPR 2
     const to = s.layer('#0000ff', { x: 0, y: 0, w: 32, h: 24 }, 2)
     // push from the right at 0.25: from moves left by a quarter, to follows it in.
     s.comp.frame([], { from, to, effect: 'push', progress: 0.25, params: { from: [1, 0, 0, 1, -0.25, 0], to: [1, 0, 0, 1, 0.75, 0] }, rng: createRng(1) })
@@ -461,5 +546,8 @@ describe('Canvas 2D compositor', () => {
     s.comp.resize(20, 10)
     expect(s.out.width).toBe(20)
     expect(s.out.height).toBe(10)
+    // setViewport resizes the output to its device size when it differs.
+    s.comp.setViewport({ matrix: [2, 0, 0, 2, 0, 0], deviceWidth: 40, deviceHeight: 30 })
+    expect([s.out.width, s.out.height]).toEqual([40, 30])
   })
 })
