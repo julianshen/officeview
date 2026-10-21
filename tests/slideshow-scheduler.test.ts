@@ -461,6 +461,30 @@ describe('scheduler', () => {
     expect(find(sch.evaluate(early, 150), 17).state).toBe('none')
   })
 
+  it('syncbase history survives a repeating parent: earlier iterations still resolve', () => {
+    // codex R1 probe. Parent: dur 100, repeat 2. Child 3 (dur 10) is clicked at 50, so it runs [50, 60) in iteration 0.
+    // Top-level node 4 (dur 200) begins on child 3's end: [60, 260).
+    const sch = createScheduler(tree(
+      par(2, [bhv(3, { durMs: 10, fill: 'hold', start: [{ delayMs: 0, evt: 'onClick', target: { spid: 'a' } }] })], { durMs: 100, repeatCount: 2, fill: 'hold' }),
+      bhv(4, { durMs: 200, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 3 }] }),
+      // Begin references too: node 5 begins 5 ms after each begin of time-based child 6 (iterations at 0 and 100).
+      par(7, [bhv(6, { durMs: 10, fill: 'hold' })], { durMs: 100, repeatCount: 2, fill: 'hold' }),
+      bhv(5, { durMs: 50, fill: 'hold', start: [{ delayMs: 5, evt: 'onBegin', tn: 6 }] }),
+    ))
+    const ev: ShowEvent[] = [{ kind: 'trigger', spid: 'a', t: 50 }]
+    expectSeen(sch.evaluate(ev, 70), 4, 'active', 10 / 200)
+    expectSeen(sch.evaluate(ev, 150), 4, 'active', 90 / 200) // iteration 1 does not erase iteration 0's end
+    expect(find(sch.evaluate(ev, 150), 3).state).toBe('none') // ...and does not replay the click in iteration 1
+    expect(sch.endTimeOf(3, ev)).toBe(60) // its last activation was in iteration 0
+    expect(sch.endTimeOf(4, ev)).toBe(260)
+    expectSeen(sch.evaluate(ev, 260), 4, 'frozen', 1)
+
+    expectSeen(sch.evaluate([], 30), 5, 'active', 25 / 50) // began at 5
+    expectSeen(sch.evaluate([], 130), 5, 'active', 25 / 50) // restarted at 105 by iteration 1's begin
+    expect(sch.endTimeOf(5, [])).toBe(155)
+    expect(sch.endTimeOf(6, [])).toBe(110)
+  })
+
   it('a 600-node reverse reference chain resolves exactly', () => {
     // Node 100 + i begins when node 101 + i ends; node 699 begins at 0. All 1 ms: node 100 ends at 600.
     const kids: TimeNode[] = []

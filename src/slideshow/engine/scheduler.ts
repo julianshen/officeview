@@ -77,6 +77,8 @@ const MAX_DRIVE = 10_000
 const MAX_INTERVALS = 10_000
 /** Interval computations per query after which provisional results are memoised anyway. */
 const WORK_BUDGET = 1_000_000
+/** Ancestor activations and iterations kept as syncbase history per reference (the most recent). */
+const MAX_HISTORY = 1_000
 
 interface Interval {
   begin: number
@@ -847,61 +849,108 @@ class Run {
   }
 
   private refTimesOf(target: TimeNode, which: 'begin' | 'end', frame: Frame): number[] {
-    const g = this.frameFor(target, frame)
-    if (!g) return []
     const out: number[] = []
-    for (const iv of this.intervalsIn(target, g)) {
-      if (g === frame) {
-        const t = which === 'begin' ? iv.begin : iv.end
-        if (Number.isFinite(t)) out.push(t)
-        continue
+    for (const g of this.historyFor(target, frame)) {
+      for (const iv of this.intervalsIn(target, g)) {
+        if (g === frame) {
+          const t = which === 'begin' ? iv.begin : iv.end
+          if (Number.isFinite(t)) out.push(t)
+          continue
+        }
+        // Through absolute time, with both frames' full mappings. "End" is the last exit, as `endTimeOf`.
+        const abs = which === 'begin' ? toAbsFirst(g, iv.begin) : lastAbs(g, iv.begin, iv.end)
+        if (!Number.isFinite(abs)) continue
+        let l = toLocal(frame, abs)
+        if (l === undefined) {
+          const early = toLocal(frame, abs, true) // before this frame began: a negative instance (SMIL)
+          if (early !== undefined && early < 0) l = early
+        }
+        if (l !== undefined) out.push(l)
       }
-      // Through absolute time, with both frames' full mappings. "End" is the last exit, as `endTimeOf`.
-      const abs = which === 'begin' ? toAbsFirst(g, iv.begin) : lastAbs(g, iv.begin, iv.end)
-      if (!Number.isFinite(abs)) continue
-      let l = toLocal(frame, abs)
-      if (l === undefined) {
-        const early = toLocal(frame, abs, true) // before this frame began: a negative instance (SMIL)
-        if (early !== undefined && early < 0) l = early
-      }
-      if (l !== undefined) out.push(l)
     }
     return out
   }
 
   /**
-   * The frame `target` lives in, as seen from `frame`: from their lowest
-   * common ancestor's frame (in `frame`'s own chain) down to the target's
-   * parent, sampling at each level. Sharing the chain keeps both sides on
-   * one time base, and no ancestor's state is needed.
+   * Every frame `target` has lived in up to the sample, oldest first, as
+   * seen from `frame`: from their lowest common ancestor's frame (in
+   * `frame`'s own chain) down to the target's parent, taking at each level
+   * every activation and every completed repeat iteration, not only the
+   * current one. A repeat resets a container's children for replay, but
+   * what they already did stays in the syncbase history. The shared chain
+   * keeps both sides on one time base, and no ancestor's state is needed.
+   * Ancestors shared with `frame` contribute only their current iteration
+   * (SMIL: a repeat resets its own subtree's references).
    */
-  private frameFor(target: TimeNode, frame: Frame): Frame | undefined {
+  private historyFor(target: TimeNode, frame: Frame): Frame[] {
     const ancestors = new Set<TimeNode>()
     for (let p = this.ix.parent.get(target); p; p = this.ix.parent.get(p)) ancestors.add(p)
     let f: Frame | undefined = frame
     while (f && !(f.owner && ancestors.has(f.owner))) f = f.parent
-    if (!f) return undefined
+    if (!f) return []
     const path: ContainerNode[] = []
     for (let p = this.ix.parent.get(target); p && p !== f.owner; p = this.ix.parent.get(p)) path.push(p)
-    let g: Frame = f
-    for (let i = path.length - 1; i >= 0; i--) {
-      const s = this.sample(path[i], g)
-      if (!s.child) return undefined
-      g = s.child
+    let frames: Frame[] = [f]
+    for (let i = path.length - 1; i >= 0 && frames.length > 0; i--) {
+      const next: Frame[] = []
+      for (const g of frames) next.push(...this.historyChildren(path[i], g))
+      frames = next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
     }
-    return g
+    return frames
   }
 
-  /** `endTimeOf`, inside `drive`. */
+  /** Children frames of container `c` in `g`, oldest first: earlier activations and iterations, then the sampled one. */
+  private historyChildren(c: ContainerNode, g: Frame): Frame[] {
+    const current = this.sample(c, g).child
+    if (current?.unbounded) return [current]
+    const out: Frame[] = []
+    for (const iv of this.intervalsIn(c, g)) {
+      if (!(iv.begin <= g.tau)) break
+      const finiteL = Number.isFinite(iv.L) && iv.L > 0
+      let last: number
+      if (current?.link?.iv === iv) last = current.link.k - 1
+      else {
+        const done = activeElapsed(iv, iv.end)
+        last = finiteL && Number.isFinite(done) ? position(done, iv.L, true).k : 0
+      }
+      for (let k = Math.max(0, last - MAX_HISTORY + 1); k <= last; k++) {
+        out.push({
+          key: `${g.key}/${this.ivId(iv)}.${k}`,
+          parent: g,
+          owner: c,
+          link: { iv, k, ctn: c.ctn },
+          // A completed iteration reached every local time up to d.
+          tau: finiteL ? iv.d : activeElapsed(iv, iv.end),
+          frozen: true,
+          visible: false,
+          unbounded: false,
+          beganBy: k === 0 ? iv.event : undefined,
+        })
+      }
+    }
+    if (current) out.push(current)
+    return out.length > MAX_HISTORY ? out.slice(out.length - MAX_HISTORY) : out
+  }
+
+  /** `endTimeOf`, inside `drive`: the end of the last activation, in whichever ancestor iteration it happened. */
   endOf(node: TimeNode): number | 'indefinite' | undefined {
-    const f = this.currentFrame(node)
-    if (!f) return undefined
-    const ivs = this.intervalsIn(node, f)
-    const last = ivs[ivs.length - 1]
-    if (!last) return undefined
-    if (f.unbounded) return 'indefinite'
-    const end = lastAbs(f, last.begin, last.end)
-    return Number.isFinite(end) ? end : 'indefinite'
+    let frames: Frame[]
+    if (node === this.ix.root) frames = [this.rootFrame]
+    else {
+      const top = this.stateOf(this.ix.root)?.child
+      if (!top) return undefined
+      frames = this.historyFor(node, top)
+    }
+    for (let i = frames.length - 1; i >= 0; i--) {
+      const f = frames[i]
+      const ivs = this.intervalsIn(node, f)
+      const last = ivs[ivs.length - 1]
+      if (!last) continue
+      if (f.unbounded) return 'indefinite'
+      const end = lastAbs(f, last.begin, last.end)
+      return Number.isFinite(end) ? end : 'indefinite'
+    }
+    return undefined
   }
 }
 
