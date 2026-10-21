@@ -616,6 +616,33 @@ Two deliberate choices:
 Like copy/print prevention this is a deterrent, not DRM: it marks a page, it does
 not protect a secret inside it.
 
+### Slide appearance
+
+PowerPoint slide backgrounds (solid, gradient, pattern, picture and theme
+`bgRef`, inherited slide → layout → master) and the master's and layout's
+non-placeholder artwork (logos, bands, rules) are attached by a lazily loaded
+enrichment step. `<OfficeFile>`, `<OfficeDoc>`, print and the worker run it
+for you before painting.
+
+**Hosts that call `renderSlide` directly run `enrichSlideAppearance` first.**
+Without it the slides paint as before, with only the solid background colour
+and no master or layout artwork:
+
+```ts
+import { parsePptx, enrichSlideAppearance, renderSlide } from 'officeview'
+
+const doc = await parsePptx(pkg)
+await enrichSlideAppearance(doc)   // loads its code on demand; runs once per document
+// enrichment adds background and artwork pictures to doc.images, so decode them after this
+renderSlide(doc.slides[0], ctx, metrics, images)
+```
+
+`enrichSlideAppearance` needs the document `parsePptx` returned. A cloned or
+deserialised document (for example one posted from a worker) has no package
+handle, so it paints as before and records a `no-package` diagnostic in
+`doc.diagnostics`. Known limits are listed in
+[`docs/validation/slideshow.md`](docs/validation/slideshow.md).
+
 ## Current coverage
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
