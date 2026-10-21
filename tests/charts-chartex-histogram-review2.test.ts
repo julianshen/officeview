@@ -142,6 +142,26 @@ describe('B3 review round 2', () => {
     }
   })
 
+  it('merge: the late-refusal fallback seam serves every ChartEx family (treemap)', async () => {
+    // TM (native treemap) with size cell E4 a formula without a saved value (saved-values policy): an analytic
+    // family with an unavailable required point is refused once the fill reads it, so its mc:Fallback is selected.
+    const zip = await JSZip.loadAsync(readFileSync(join(__dirname, 'fixtures', 'chartex', 'treemap', 'treemap.xlsx')))
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    const edited = sheet.replace(/<c r="E4"([^>]*)><v>3<\/v><\/c>/, '<c r="E4"$1><f>1+2</f></c>')
+    expect(edited).not.toBe(sheet)
+    zip.file('xl/worksheets/sheet1.xml', edited)
+    const refused = await parseXlsx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })), { valuePolicy: 'cached' } as never)
+    const drawing = refused.sheets[0].drawings?.[0]
+    expect(drawing?.content).toBeUndefined()
+    expect(drawing?.source.representation).toBe('fallback')
+    expect(refused.sheets[0].drawingCoverage?.some(e => e.selectedRepresentation === 'chart')).toBe(false)
+    expect(refused.sheets[0].drawingCoverage?.find(e => e.scope === 'original')).toMatchObject({ feature: 'ChartEx', status: 'fallback', representation: 'fallback', reason: "This chart's data is not available" })
+    // Control: the unmodified treemap is native (its Choice selected).
+    const native = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(join(__dirname, 'fixtures', 'chartex', 'treemap', 'treemap.xlsx')))), { valuePolicy: 'cached' } as never)
+    expect(native.sheets[0].drawings?.[0].content?.kind).toBe('xlsxChart')
+    expect(native.sheets[0].drawingCoverage?.find(e => e.element === 'graphicFrame')).toMatchObject({ selectedRepresentation: 'chart' })
+  })
+
   it('R2: ordinary arithmetic is kept where it is representable', async () => {
     // Distinct categories of very different magnitude: A = 1e308, B = 5e-324 (both sums representable).
     expect(nums(await adapt(part([1e308, 5e-324], '<cx:aggregation />', ['A', 'B'])))).toEqual([1e308, 5e-324])

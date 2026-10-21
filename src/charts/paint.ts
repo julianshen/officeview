@@ -23,12 +23,19 @@ import { documentChartContext, type ChartDocumentContext } from './context'
 import { dateUnitIndex } from './dates'
 import { tierEdge } from './categories'
 import { paintTrendlines } from './trendlines'
+import { paintErrorBars, type ErrorBarPlacement } from './errorBars'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
+import { paintWaterfall, waterfallLevels } from './chartex/waterfall'
+import { FUNNEL_TEXTS, paintFunnel } from './chartex/funnel'
+import type { ChartExGroup } from './model'
 import { chartFont } from './textStyle'
 import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle, titleHeight } from './layout'
 import { paintChartUserShapes } from './userShapes'
+import { paintTreemap, type HierarchyPaintKit } from './chartex/treemap'
+import { paintSunburst } from './chartex/sunburst'
+import { isHierarchyGroup } from './chartex/hierarchy'
 
 type FamilyCss = (family: string) => string
 /**
@@ -447,6 +454,13 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
     const B = axes.category ?? axes.x!
     /** The coordinate of a value on the group's value axis. */
     const at = (v: number) => along(V, axisFraction(V, v))
+    // Waterfall (B2): floating and anchored bars on the running total, then its connectors.
+    if (group.family === 'waterfall' && group.kind === 'chartEx' && axes.category) {
+      const source = model.source.groups[g] as ChartExGroup
+      paintWaterfall(ctx, { group: source, g, view: model.view, levels: waterfallLevels(source, model.view, g), category: axes.category, between: axes.between, plot, at,
+        categoryIndex: slot => graph.categoryIndex(axes.category!, slot), admitPath, fillWith, strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect) })
+      return
+    }
     const plotted = (v: number | undefined) => v !== undefined && V.plottable(v) ? v : undefined
     const crossing = B.crossesValue ?? Math.max(V.min, Math.min(V.max, 0))
     const stacked = group.grouping === 'stacked' || group.grouping === 'percentStacked' ? (() => {
@@ -455,10 +469,15 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
       return { pos, neg, total }
     })() : undefined
     const share = (v: number, i: number) => group.grouping === 'percentStacked' && stacked ? (stacked.total[i] ? v / stacked.total[i] : 0) : v
+    // Error bars (A6b, spec 5.7): placed by the family block, stroked after its marks; no placement or stroke without them.
+    const errorBars = model.source.preparedAxes?.errorBars?.some(b => b.group === g) === true
+    const errorValue = (v: number) => along(V, axisFraction(V, v, false))
+    let errorPlace: ErrorBarPlacement | undefined
     if (group.family === 'bar' && axes.category) {
       const C = axes.category, vertical = C.orientation === 'v'
       const geometry = barGeometry(group, C, axes.between, plot)
       const width = geometry.width
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: vertical, across: (_ds, order, slot) => { const idx = graph.categoryIndex(C, slot); return Number.isFinite(idx) ? geometry.start(idx, order) + width / 2 : NaN } }
       const posBase = new Float64Array(count), negBase = new Float64Array(count)
       group.series.forEach((s, si) => {
         if (!admitPath(count * 4)) return
@@ -529,6 +548,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         return edge ? plot.x + (count > 1 ? i * plot.w / (count - 1) : plot.w / 2) : plot.x + band * (i + 0.5)
       }
       const has = (i: number) => !Number.isNaN(top[i])
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, across: (_ds, _order, slot) => xAt(slot) }
       // Drop lines (spec 5.8) span, per category, every plotted point of the group to the category axis.
       const drops = group.dropLines && !group.dropLines.noFill ? { lo: new Float64Array(count).fill(NaN), hi: new Float64Array(count).fill(NaN) } : undefined
       for (const s of group.series) {
@@ -614,6 +634,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         px = xp(xv); py = at(v)
         return true
       }
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } }
       const isScatterGap = (s: DrawSeries, i: number): boolean => {
         const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
         const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
@@ -645,6 +666,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
       }
     } else if (group.family === 'bubble' && axes.x) {
+      if (errorBars) { const X = axes.x, xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w; errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } } }
       paintBubbles(ctx, group, group.series, axes.x, V, { plot, slots: count, source: model.view.source, visibleOnly: model.plotVisOnly !== false, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box) })
     } else if (group.family === 'stock' && horizontal === B) {
       paintStock(ctx, group, group.series, axes, {
@@ -660,6 +682,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
     }
+    if (errorPlace) paintErrorBars(ctx, model.source, g, group.series.map(s => ({ series: s.source, value: s.value, x: s.x, hasX: s.hasX })), count, model.view.source, errorPlace, admitPath, plot)
     // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
     // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
     if (model.source.preparedAxes?.trendlines?.some(t => t.group === g)) {
@@ -696,6 +719,26 @@ function paintRadarChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout
     plot, slots: model.view.slots, source: model.view.source, view: model.view, fontSizePt: model.fontSizePt, font: px => chartFont(px, css),
     texts: layout.texts, width: layout.width, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box),
     drawMarker: (c, s, i, x, y, r) => drawMarker(c, s as DrawSeries, i, x, y, r),
+  })
+}
+
+/** A funnel (B2) in the plot area, with its measured category labels; admitted against the path work bound. */
+function paintFunnelChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
+  const plot = layout.plot
+  if (plot.w <= 4 || plot.h <= 4) return
+  let remaining = 262144
+  const admitPath = (cost: number) => {
+    if (cost <= remaining) { remaining -= cost; return true }
+    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
+    return false
+  }
+  if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
+  const axis = model.axes.find(a => a.kind === 'category')
+  paintFunnel(ctx, {
+    group: model.source.groups[0] as ChartExGroup, view: model.view, plot, labels: layout.texts.get(FUNNEL_TEXTS) ?? [],
+    font: chartFont((axis?.text?.sizePt ?? model.fontSizePt) * 96 / 72, familyCss(model.fontFamily)), textColor: TEXT,
+    admitPath, fillWith, strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
   })
 }
 
@@ -749,11 +792,20 @@ export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D
     const area = layout.area
     if (area.w > 8 && area.h > 8) {
       const group = model.groups[0]
+      // Treemap and sunburst (B5) draw their nodes and node labels themselves; no generic data labels.
+      if (isHierarchyGroup(source.groups[0])) {
+        const css = familyCss(source.fontFamily)
+        const kit: HierarchyPaintKit = { fillWith, strokeBorder, width: layout.width, font: px => chartFont(px, css) }
+        if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
+        if (group.family === 'treemap') paintTreemap(ctx, source, area, kit); else paintSunburst(ctx, source, area, kit)
+      } else {
       if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
       else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
+      else if (group.family === 'funnel' && group.kind === 'chartEx') paintFunnelChart(ctx, model, layout, familyCss)
       else if (group.family === 'ofPie' && group.series[0]) paintOfPie(ctx, area, group, group.series[0], slot => model.view.source(slot), model.view.slots)
       else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
       paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
+      }
     }
     if (model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
     if (model.title && model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)

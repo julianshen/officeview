@@ -20,7 +20,6 @@ import { pointList } from '../src/charts/points'
 import { chartNameResolver, resolveChartNames } from '../src/charts/fill'
 import { parseDefinedNames } from '../src/xlsx/formula/names'
 import { parseXml } from '../src/core/xml'
-import { parsePptx } from '../src/pptx/parse'
 import { parseXlsx } from '../src/xlsx/parse'
 
 const CX = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
@@ -83,7 +82,9 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
     const treemap = exGroup(parseChartEx(tm.root, theme, tm.context))
     expect(treemap.chartEx.data[0].dimensions.map(d => [d.kind, d.type, d.ref?.definedName, d.levels.length]))
       .toEqual([['str', 'cat', '_xlchart.v1.0', 0], ['num', 'size', '_xlchart.v1.1', 0]])
-    expect(treemap.series[0].pending).toEqual({ values: expect.objectContaining({ definedName: '_xlchart.v1.1' }), categories: expect.objectContaining({ definedName: '_xlchart.v1.0' }) })
+    // B5: a treemap's category reference is a multi-level path (every level is read), so it is pending as `levels`.
+    expect(treemap.series[0].pending).toEqual({ values: expect.objectContaining({ definedName: '_xlchart.v1.1' }), levels: expect.objectContaining({ definedName: '_xlchart.v1.0' }) })
+    expect(treemap.series[0].levelDir).toBe('col')
     tm.release()
 
     // Office-shaped synthetic: non-dense ids out of order resolve by value; missing pt@idx are blank at
@@ -113,7 +114,8 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
     const tree = exGroup(parseChartEx(withRef.root, theme, withRef.context))
     expect(tree.chartEx.data[0].dimensions[0].levels).toEqual([])
     expect(tree.series[0].categories).toBeUndefined()
-    expect(tree.series[0].pending?.categories).toEqual({ sheet: 'Sheet1', r0: 1, c0: 0, r1: 1, c1: 1 })
+    // B5: every level of the treemap's range is read (pending as `levels`, one per column).
+    expect(tree.series[0].pending?.levels).toEqual({ sheet: 'Sheet1', r0: 1, c0: 0, r1: 1, c1: 1 })
     withRef.release()
     const noRef = await syntheticPart(multi(''))
     expect(await parseChartPart(noRef.root, theme, noRef.context)).toMatchObject({ kind: 'unsupported', reason: 'multi-level cache order unconfirmed', feature: 'ChartEx' })
@@ -210,13 +212,13 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
   })
 
   it('region map, blocked families and unreadable parts return unsupported so the fallback picture is kept', async () => {
-    // Nothing is painted until its family task lands (B2-B5): every family not yet painted keeps its fallback.
-    const files: Array<[string, string | undefined, string]> = [
-      ['waterfall/waterfall.xlsx', undefined, 'waterfall'], ['funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml', 'funnel'], ['SimpleHistogram/SimpleHistogram.xlsx', undefined, 'histogram'],
-      ['paretoLine/paretoLine.xlsx', undefined, 'pareto'], ['boxWhisker/boxWhisker.xlsx', undefined, 'boxWhisker'], ['treemap/treemap.xlsx', undefined, 'treemap'], ['sunburst/sunburst.xlsx', undefined, 'sunburst'],
+    // A family is unsupported until its family task lands (B2-B5) and registers it as painted.
+    const files: Array<[ChartExGroup['family'], string, string?]> = [
+      ['waterfall', 'waterfall/waterfall.xlsx'], ['funnel', 'funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml'], ['histogram', 'SimpleHistogram/SimpleHistogram.xlsx'],
+      ['pareto', 'paretoLine/paretoLine.xlsx'], ['boxWhisker', 'boxWhisker/boxWhisker.xlsx'], ['treemap', 'treemap/treemap.xlsx'], ['sunburst', 'sunburst/sunburst.xlsx'],
     ]
-    for (const [file, path, family] of files) {
-      if (CHARTEX_PAINTED.has(family as never)) continue
+    for (const [family, file, path] of files) {
+      if (CHARTEX_PAINTED.has(family)) continue
       const p = await nativePart(file, path)
       // The default adapter dispatches the cx root to the ChartEx parser (never the classic one).
       const result = await parseChartPart(p.root, theme, p.context)
@@ -255,13 +257,9 @@ describe('ChartEx parser (chartex-map §§1-9)', () => {
     if (native.kind === 'native') expect(values(native.model.groups[0].series[0].values)).toEqual([4.3, 2.5, 3.5, 4.5])
     fn2.release()
 
-    // End to end: the native PPTX keeps its mc:Fallback picture; the native XLSX keeps its fallback text box.
-    const pptx = await parsePptx(await OfficePackage.load(fixture('funnel-pp1/funnel-pp1.pptx')))
-    const shapes = pptx.slides[0].shapes
-    expect(shapes.filter(s => s.content)).toEqual([])
-    expect(shapes.filter(s => s.imageIndex !== undefined)).toHaveLength(1)
-    expect(pptx.drawingCoverage?.filter(e => e.scope === 'original')[0]).toMatchObject({ status: 'fallback', representation: 'fallback', feature: 'ChartEx' })
-    for (const file of ['waterfall/waterfall.xlsx', 'regionMap/regionMap.xlsx']) {
+    // End to end: an unsupported native XLSX (region map) keeps its fallback text box. (Waterfall and funnel are
+    // painted since B2: tests/charts-chartex-waterfall-funnel.test.ts asserts their native end-to-end results.)
+    for (const file of ['regionMap/regionMap.xlsx']) {
       const xlsx = await parseXlsx(await OfficePackage.load(fixture(file)))
       const drawings = xlsx.sheets[0].drawings ?? []
       expect(drawings, file).toHaveLength(1)

@@ -41,6 +41,7 @@ import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartRange } from './model'
 import { CHART_CHUNK_LIMIT, CommentStripper, streamEntry } from './read'
 import { EMBEDDED_DECLARED_LIMIT, failure, internalPath, openEmbeddedWorkbook, resolveExternalData, untilAbort, type EmbeddedFailure, type EmbeddedWorkbook } from './embeddedZip'
+import { levelLines, levelsOverLimit } from './chartex/hierarchy'
 import { CHART_CELL_BYTES, CHART_TOO_MANY_POINTS, chartLine, lineLength, linePoint, scanChartNumber, type ChartCell, type ChartCellLookup, type ChartHiddenLookup, type ChartLine } from './fill'
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, parseChartRange } from './parse'
 import { stringBytes } from './points'
@@ -84,7 +85,8 @@ class Done extends Error {}
 /** `analytic`: the role is an analytic ChartEx input whose full range is required (spec 4.3, 7): a resolved range
  * longer than CHART_ANALYTIC_POINT_LIMIT refuses the consumer with the point-limit reason, decided right after name
  * resolution (before lines, the cell budget or any sheet is read). Never inferred from `limit`. */
-export interface EmbeddedRequest { range: ChartRange; text: boolean; limit: number; single?: boolean; analytic?: true }
+/** `levels`: a treemap/sunburst path, read as one line per level (chartex/hierarchy.ts `levelLines`). */
+export interface EmbeddedRequest { range: ChartRange; text: boolean; limit: number; single?: boolean; analytic?: true; levels?: 'col' | 'row' }
 /** A request's outcome: the concrete range read, or why the role is unavailable. */
 export type EmbeddedResolution = { range: ChartRange } | { unavailable: ChartDiagnostic }
 export interface EmbeddedCells {
@@ -580,7 +582,8 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
       resolved.forEach((resolution, i) => {
         if (!('range' in resolution)) return
         const request = requests[i], range = resolution.range
-        lines.push(request.single ? chartLine({ ...range, r1: range.r0, c1: range.c0 }, range.sheet!, true) : chartLine(range, range.sheet!, request.text, request.limit))
+        if (request.levels) lines.push(...levelLines(range, range.sheet!, request.levels))
+        else lines.push(request.single ? chartLine({ ...range, r1: range.r0, c1: range.c0 }, range.sheet!, true) : chartLine(range, range.sheet!, request.text, request.limit))
       })
       return lines
     }
@@ -588,7 +591,7 @@ async function runBatch(batch: Batch, context: Pick<ChartParseContext, 'pkg' | '
     const CELLS_REFUSED = () => failure('refused', 'embedded-cells-limit', 'This chart reads more cells than the viewer reads', EMBEDDED_CELL_LIMIT)
     /** An analytic full-range request whose resolved range exceeds the analytic bound (checked before any line is built). */
     const tooMany = (requests: EmbeddedRequest[], resolved: EmbeddedResolution[]) =>
-      requests.some((request, i) => { const resolution = resolved[i]; return request.analytic === true && 'range' in resolution && lineLength(resolution.range) > CHART_ANALYTIC_POINT_LIMIT })
+      requests.some((request, i) => { const resolution = resolved[i]; return request.analytic === true && 'range' in resolution && (request.levels ? levelsOverLimit(resolution.range, request.levels) : lineLength(resolution.range) > CHART_ANALYTIC_POINT_LIMIT) })
     const TOO_MANY = () => failure('refused', EMBEDDED_TOO_MANY_POINTS, CHART_TOO_MANY_POINTS, CHART_ANALYTIC_POINT_LIMIT)
     const outcomes = consumers.map(consumer => {
       const resolved = consumer.requests.map(request => resolve(request.range))

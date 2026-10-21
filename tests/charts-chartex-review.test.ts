@@ -190,10 +190,13 @@ describe('B1 review round 1', () => {
     const refused = parseChartEx(p.root, theme, refusing)
     expect(refused).toMatchObject({ refused: true, unsupported: 'This chart needs more memory than is available for charts', feature: 'ChartEx' })
     expect(refused.title).toBeUndefined()
-    // The adapter's unsupported result carries the admitted title (no unadmitted extraction of its own).
-    expect(await parseChartPart(p.root, theme, p.context)).toMatchObject({ kind: 'unsupported', title: 'x'.repeat(255) })
-    expect(p.context.workspace.used).toBeGreaterThan(0)
     p.release()
+    // The adapter's unsupported result carries the admitted title (no unadmitted extraction of its own). Funnel is
+    // painted since B2, so the part is made unsupported by a second visible funnel series (map §9).
+    const unsupported = await synthetic(body.replace('</cx:series>', '</cx:series><cx:series layoutId="funnel"><cx:dataId val="0" /></cx:series>'))
+    expect(await parseChartPart(unsupported.root, theme, unsupported.context)).toMatchObject({ kind: 'unsupported', title: 'x'.repeat(255) })
+    expect(unsupported.context.workspace.used).toBeGreaterThan(0)
+    unsupported.release()
   })
 
   it('I5: cached labels share the chart-wide 4 MiB budget; past it they are dropped, the chart truncated and diagnosed', async () => {
