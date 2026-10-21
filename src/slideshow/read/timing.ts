@@ -36,6 +36,7 @@ import type {
   DiagnosticSink, Iterate, Keyframe, MotionPath, Point, SetBehaviour, SlideTimingReader, TargetRef, TargetResolver, TimeNode,
   TimingTree, TransitionSpec, VideoBehaviour,
 } from '../types'
+import { parseMotionPath } from '../motion-path'
 import { compatibilityBranches } from './requirements'
 import { readTransition } from './transition'
 
@@ -803,5 +804,5 @@ export function createSlideTimingReader(options: TimingReaderOptions = {}): Slid
   }
 }
 
-/** The default reader. S1-10 builds one with S1-6's motion path parser. */
-export const readSlideTiming: SlideTimingReader = createSlideTimingReader()
+/** The default reader, with S1-6's bounded motion path parser (S1-10). */
+export const readSlideTiming: SlideTimingReader = createSlideTimingReader({ parseMotionPath })

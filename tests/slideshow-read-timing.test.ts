@@ -23,7 +23,7 @@ import { shapeResolver } from '../src/slideshow/read/resolve'
 import type {
   AnimBehaviour, AnimClrBehaviour, AnimEffectBehaviour, AnimMotionBehaviour, AnimRotBehaviour, AnimScaleBehaviour,
   AudioBehaviour, BehaviourNode, BuildTemplate, CmdBehaviour, ContainerNode, DiagnosticSink, SetBehaviour, TargetResolver,
-  TimeNode, TimingTree, VideoBehaviour,
+  TimeNode, TimingTree, VideoBehaviour, Lease, SlideShowWorkspace,
 } from '../src/slideshow/types'
 
 // ---------------------------------------------------------------------------
@@ -278,10 +278,16 @@ describe('timing tree', () => {
     // p:animEffect
     r = await readOne(`<p:animEffect transition="out" filter="wipe(down)" prLst="gradientSize: 0.1">${bhvr(6)}<p:progress><p:fltVal val="0.5"/></p:progress></p:animEffect>`)
     expect(byId(r.t, 6)).toMatchObject({ kind: 'animEffect', transition: 'out', filter: 'wipe(down)', prLst: 'gradientSize: 0.1', progress: 0.5 } satisfies Partial<AnimEffectBehaviour>)
-    // p:animMotion (no path parser injected: the path is diagnosed, the rest parses)
+    // p:animMotion (the default reader parses the path with S1-6's parser; a bare reader defers it)
     r = await readOne(`<p:animMotion origin="layout" path="M 0 0 L 0.25 0.5 E" pathEditMode="relative" rAng="2700000" ptsTypes="AA">${bhvr(6, '', ['ppt_x', 'ppt_y'])}<p:by x="10000" y="20000"/><p:from x="0" y="0"/><p:to x="25000" y="50000"/><p:rCtr x="50000" y="50000"/></p:animMotion>`)
     expect(byId(r.t, 6)).toMatchObject({ kind: 'animMotion', origin: 'layout', rAngDeg: 45, ptsTypes: 'AA', by: { x: 0.1, y: 0.2 }, from: { x: 0, y: 0 }, to: { x: 0.25, y: 0.5 }, rCtr: { x: 0.5, y: 0.5 } } satisfies Partial<AnimMotionBehaviour>)
-    expect(has(r.sink, 'motion-path-deferred')).toBe(true)
+    expect(has(r.sink, 'motion-path-deferred')).toBe(false) // the default reader carries S1-6's parser
+    expect((byId(r.t, 6) as AnimMotionBehaviour).path?.segments.map(x => x.cmd)).toEqual(['M', 'L'])
+    const bare = createSlideTimingReader()
+    const dm = await deck({ slides: [{ shapes: [shape(2)], timingXml: timingOf([click(`<p:animMotion path="M 0 0 E">${bhvr(6)}</p:animMotion>`)]) }] })
+    const bareSink = createDiagnosticSink()
+    expect((byId(tree(bare(dm.xml, 0, shapeResolver(dm.slide), bareSink)), 6) as AnimMotionBehaviour).path).toBeUndefined()
+    expect(has(bareSink, 'motion-path-deferred')).toBe(true)
     // with an injected path parser the path is set
     const withPath = createSlideTimingReader({ parseMotionPath: s => ({ ok: true, path: { segments: [{ cmd: 'M', pts: [0, 0] }], length: s.length } }) })
     const d = await deck({ slides: [{ shapes: [shape(2)], timingXml: timingOf([click(`<p:animMotion path="M 0 0 E">${bhvr(6)}</p:animMotion>`)]) }] })
@@ -584,10 +590,31 @@ describe('builds', () => {
     expect(r.builds[0]).toEqual({ spid: '5', mode: 'paragraph', ranges: [range(0, 0), range(1, 1)], animBg: true, body: 'sp:5' })
   })
 
-  // S1-7's store and S1-12's buildRenderPlan are not on this branch; the S1-10
-  // integration adds the end-to-end run. The builds above already pin the S1-12
-  // contract (inclusive st..end, body = targetKey({spid}), keys via targetKey).
-  it.todo('reader to store to planner: builds survive in ShowSlide.builds and drive buildRenderPlan')
+  it('reader to store to planner: builds survive in ShowSlide.builds and drive buildRenderPlan', async () => {
+    // Shape 5 has three paragraphs and a by-paragraph build; step 1 animates its first paragraph.
+    const textTarget = `<p:set><p:cBhvr><p:cTn id="6" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="5"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [shape(5, [0, 0, 0])], timingXml: timingOf([click(textTarget)], '<p:bldLst><p:bldP spid="5" grpId="0" build="p"/></p:bldLst>') }] })
+    const { openShowPackage, readShowIndex } = await import('../src/slideshow/read/deck')
+    const { createSlideMetadataStore } = await import('../src/slideshow/read/store')
+    const { buildRenderPlan } = await import('../src/slideshow/render/plan')
+    const handle = await openShowPackage(bytes)
+    const doc = await parsePptx(handle.pkg)
+    const sink = createDiagnosticSink()
+    const index = await readShowIndex(doc, handle, sink)
+    const workspace: SlideShowWorkspace = {
+      limit: 1 << 30, used: () => 0, reserveTerminal: () => undefined,
+      lease: (bytes, tag) => { let n = bytes; const l: Lease = { tag, get bytes() { return n }, grow: b => { n += b; return true }, shrink: b => { n -= b }, transfer: () => l, release: () => { n = 0 } }; return l },
+    }
+    const store = createSlideMetadataStore({ doc, handle, index, workspace, sink, timing: readSlideTiming, resolver: s => shapeResolver(s) })
+    const meta = await store.acquire(0)
+    const ranges = [0, 1, 2].map(i => ({ key: targetKey({ spid: '5', text: { kind: 'p', st: i, end: i } }), st: i, end: i }))
+    expect(meta.slide.builds).toEqual([{ spid: '5', mode: 'paragraph', ranges, animBg: false, body: 'sp:5' }])
+    const plan = buildRenderPlan(doc.slides[0], new Set([ranges[0].key]), new Map(), meta.slide.builds)
+    const targets = plan.layers.filter(l => l.kind === 'target')
+    expect(targets.map(l => l.kind === 'target' && [l.key, l.part])).toEqual(ranges.map(r => [r.key, 'range']))
+    meta.release()
+    store.close()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -662,12 +689,12 @@ describe.skipIf(corpusAbsent)(`corpus timing${corpusAbsent ? ' — run bun scrip
 })
 
 // ---------------------------------------------------------------------------
-// Reader -> scheduler contract (pinned snapshot of ss/s1-9's scheduler)
+// Reader -> scheduler contract (S1-9 scheduler; the navigation contract is in slideshow-steps.test.ts)
 // ---------------------------------------------------------------------------
 
 describe('reader to scheduler contract', () => {
   it('builder deck timing drives the S1-9 scheduler: next begins the click step, a trigger begins the interactive sequence', async () => {
-    const { createScheduler } = await import('./fixtures/slideshow-s1-9/scheduler')
+    const { createScheduler } = await import('../src/slideshow/engine/scheduler')
     const interactive = `<p:seq concurrent="1" nextAc="seek"><p:cTn id="20" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cond></p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst>` +
       `<p:par><p:cTn id="21" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="22" presetID="1" presetClass="entr" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
       `<p:set><p:cBhvr><p:cTn id="23" dur="1" fill="hold"/>${tgt('2')}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
