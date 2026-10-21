@@ -66,14 +66,19 @@ export function hierarchyTexts(model: ChartModel): { px: number; texts: string[]
   }
   return { px: hierarchyLabelPx(model, series), texts }
 }
-/** Stage-2 construction and retention bound of a hierarchy's measured strings and legend (layoutBound adds it). */
-export function hierarchyLayoutBytes(model: ChartModel): number {
+/**
+ * Stage-2 construction and retention bound of a hierarchy's measured strings and legend (layoutBound adds it). The
+ * legend part is priced for the entries the legend can show (`legendRows`: its capacity, at most 4,096, as
+ * `hierarchyLegend` builds them), not for every root branch (C1, B5 review minor).
+ */
+export function hierarchyLayoutBytes(model: ChartModel, legendRows = Infinity): number {
   const measured = hierarchyTexts(model)
   if (!measured) return 0
   const tree = model.preparedAxes!.hierarchy!
   let bytes = 2048
   for (const text of measured.texts) bytes += 96 + text.length * 4
-  for (let i = 0; i < tree.count; i++) if (tree.parent[i] < 0) bytes += 192 + tree.labels[i].length * 4
+  let rows = Math.min(legendRows, 4096)
+  for (let i = 0; i < tree.count && rows > 0; i++) if (tree.parent[i] < 0) { bytes += 192 + tree.labels[i].length * 4; rows-- }
   return bytes
 }
 /** Paint-local buffers of a hierarchy paint (node geometry, the sort scratch), admitted before the paint. */

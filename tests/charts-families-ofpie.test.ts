@@ -108,6 +108,10 @@ it('secondPieSize, serLines and bar-of-pie gapWidth', () => {
   expect(bar2.bar!.x).toBeGreaterThan(bar.bar!.x)
   // serLines connectors: from the Other slice's two radius points to fixed secondary targets
   const slices = ofPieSlices({ firstSliceAngle: 0 }, [10, 20, 30, 40], ofPieSplit({ splitType: 'auto' }, 4, i => [10, 20, 30, 40][i]), pie)
+  // C1 (gallery inspection): the secondary pie is a full circle of its own points (radians), the bar's segments
+  // are height fractions. Auto split of 4 points moves the last ceil(4/3) = 2 (30 and 40): 3/7 and 4/7 of 2π.
+  expect(slices.secondary.map(s => s.sweep)).toEqual([3 / 7 * Math.PI * 2, 4 / 7 * Math.PI * 2])
+  expect(slices.secondary.reduce((n, s) => n + s.sweep, 0)).toBeCloseTo(Math.PI * 2, 12)
   const lines = ofPieConnectors(pie, slices.other)
   expect(lines).toHaveLength(2)
   for (const line of lines) expect(Math.hypot(line.x1 - pie.primary.cx, line.y1 - pie.primary.cy)).toBeCloseTo(100, 6)
@@ -117,6 +121,7 @@ it('secondPieSize, serLines and bar-of-pie gapWidth', () => {
   expect(lines[1].y2).toBeCloseTo(154 + 50, 9)
   // bar targets: the bar's left edge at one quarter and three quarter of its height
   const barSlices = ofPieSlices({ firstSliceAngle: 0 }, [10, 20, 30, 40], ofPieSplit({ splitType: 'auto' }, 4, i => [10, 20, 30, 40][i]), bar)
+  expect(barSlices.secondary.map(s => [s.start, s.sweep])).toEqual([[0, 3 / 7], [3 / 7, 4 / 7]])
   const barLines = ofPieConnectors(bar, barSlices.other)
   expect(barLines[0].x2).toBe(305)
   expect(barLines[0].y2).toBe(54 + 50)

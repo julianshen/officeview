@@ -22,7 +22,7 @@ import type { ChartGroup, ChartUpDownBars, ChartUpDownBar } from '../model'
 import { parseLineStyle, applyLineStyle, type ChartLineStyle } from '../style'
 import { barGeometry } from '../barGeometry'
 import type { GroupAxes, ResolvedAxis } from '../axes'
-import { chargeChartLine, type ChartCharge } from '../own'
+import { chargeChartLine, chargeChartUpDownBars, type ChartCharge } from '../own'
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
 const val = (node: XmlNode | undefined) => attrs(node).val
@@ -83,9 +83,10 @@ export function readStockOptions(
       }
     }
 
+    // The record is admitted before anything of it is built (spec 6.4/6.5).
+    chargeChartUpDownBars(charge)
     const upBars = parseBar(child(upDownNode, 'upBars'))
     const downBars = parseBar(child(upDownNode, 'downBars'))
-    if (charge) charge(64)
     upDownBars = { upBars, downBars }
   }
 

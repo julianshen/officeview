@@ -81,13 +81,16 @@ export function releaseChartModel(model: ChartModel): void {
  * nor costs a flat estimate.
  */
 export const CHART_GRADIENT_STOP_LIMIT = 32
-export const CHART_STYLE_BYTES = Object.freeze({ fill: 96, stop: 64, line: 112, dash: 64, marker: 96, point: 160, color: 32 })
+export const CHART_STYLE_BYTES = Object.freeze({ fill: 96, stop: 64, line: 112, dash: 64, marker: 96, point: 160, color: 32, upDownBars: 64 })
 export type ChartCharge = (bytes: number) => void
 export const chargeChartFill = (charge: ChartCharge | undefined, stops = 0): void => charge?.(CHART_STYLE_BYTES.fill + Math.min(stops, CHART_GRADIENT_STOP_LIMIT) * CHART_STYLE_BYTES.stop)
 export const chargeChartLine = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.line)
 export const chargeChartMarker = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.marker)
 export const chargeChartPoint = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.point)
 export const chargeChartColor = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.color)
+/** A stock group's `c:upDownBars` record (the `{upBars, downBars}` pair and its two bar objects; their fills and
+ * lines are charged on their own), charged before the record is built (C1: replaces an unnamed post-build charge). */
+export const chargeChartUpDownBars = (charge: ChartCharge | undefined): void => charge?.(CHART_STYLE_BYTES.upDownBars)
 /**
  * Trendlines (A6a, spec 5.6): a parsed record (plus its label format and name text) is charged at parse; a prepared
  * fit retains its coefficients, at most 512 samples (x, y) and its label, priced by `preparedTrendlineBytes`.

@@ -21,7 +21,8 @@ import { CHART_HIERARCHY_LEVEL_LIMIT, CHART_HIERARCHY_NODE_LIMIT, buildHierarchy
 import { treemapLayout, treemapPaintGeometry } from '../src/charts/chartex/treemap'
 import { sunburstLayout, sunburstPaintGeometry } from '../src/charts/chartex/sunburst'
 import { fillWorkbookCharts } from '../src/charts/fill'
-import { layoutChart } from '../src/charts/layout'
+import { layoutBound, layoutChart, legendCapacity } from '../src/charts/layout'
+import { hierarchyLayoutBytes } from '../src/charts/chartex/hierarchyStyle'
 import { paintXlsxChart } from '../src/charts/paint'
 import { releaseChartModel } from '../src/charts/own'
 import { PointWriter } from '../src/charts/points'
@@ -447,3 +448,30 @@ const conformance = (layout: 'treemap' | 'sunburst') => ({
 })
 describeFamilyConformance(conformance('treemap'))
 describeFamilyConformance(conformance('sunburst'))
+
+describe('C1: the hierarchy legend bound is capacity-aware (B5 review minor)', () => {
+  it('prices only the legend rows the chart can show, not every root branch', async () => {
+    const labels = Array.from({ length: 300 }, (_, i) => `root ${i}`)
+    const body = hierarchyPart('treemap', `${cachedLevel('cat', labels)}${cachedLevel('size', labels.map(() => 1))}`).replace('</cx:plotArea></cx:chart>', '</cx:plotArea><cx:legend pos="r" align="ctr" overlay="0"/></cx:chart>')
+    const p = await synthetic(body)
+    const result = await parseChartExPart(p.root, theme, p.context)
+    if (result.kind !== 'native') throw new Error('not native')
+    const model = result.model
+    expect(model.legend).toBe('r')
+    const rootBytes = (k: number) => 192 + labels[k].length * 4
+    // Every root priced without a bound; five rows price the first five roots only.
+    const all = hierarchyLayoutBytes(model), five = hierarchyLayoutBytes(model, 5), none = hierarchyLayoutBytes(model, 0)
+    expect(all - none).toBe(labels.reduce((n, _, k) => n + rootBytes(k), 0))
+    expect(five - none).toBe([0, 1, 2, 3, 4].reduce((n, k) => n + rootBytes(k), 0))
+    // layoutBound passes the legend capacity of the placement: a 480 x 360 chart shows far fewer than 300 rows.
+    const rows = legendCapacity(model, W, H)
+    expect(rows).toBeLessThan(300)
+    expect(layoutBound(model) - layoutBound(model, W, H)).toBeGreaterThanOrEqual(all - hierarchyLayoutBytes(model, rows))
+    // The layout built under that bound shows at most `rows` entries.
+    const layout = layoutChart(model, W, H, 1, 0, { width: t => t.length * 7, lineHeight: () => 14 }, { profile: 'desktop', workspace: p.doc.workspace })
+    expect(layout.legendEntries.length).toBeLessThanOrEqual(rows)
+    expect(layout.legendEntries.length).toBeGreaterThan(0)
+    releaseChartModel(model)
+    p.release()
+  })
+})

@@ -51,11 +51,16 @@ function parseBandFormats(node: XmlNode, theme: ThemeContext | undefined, charge
 const val = (node: XmlNode | undefined) => attrs(node).val
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 
-const GROUPS: Record<string, ChartFamily> = {
+/**
+ * The engine's classic family registry: each DrawingML plot-area group element and the family it is drawn as
+ * (3-D variants are drawn flat). The README's chart family list is checked against it (tests/charts-readme.test.ts).
+ */
+export const CHART_GROUP_FAMILIES: Readonly<Record<string, ChartFamily>> = {
   barChart: 'bar', bar3DChart: 'bar', lineChart: 'line', line3DChart: 'line', areaChart: 'area', area3DChart: 'area',
   pieChart: 'pie', pie3DChart: 'pie', doughnutChart: 'doughnut', ofPieChart: 'ofPie', scatterChart: 'scatter',
   bubbleChart: 'bubble', radarChart: 'radar', surfaceChart: 'contour', stockChart: 'stock',
 }
+const GROUPS = CHART_GROUP_FAMILIES
 const OF_PIE_TYPES = ['pie', 'bar'] as const
 const OF_PIE_SPLIT_TYPES = ['auto', 'cust', 'percent', 'pos', 'val'] as const
 /** Chart types the engine does not draw, with the card's reason (spec 4.1; surface3D: the spec's card text). ofPie now draws natively. */

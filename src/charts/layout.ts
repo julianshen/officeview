@@ -245,7 +245,7 @@ export function layoutBound(model: ChartModel, w = Infinity, h = Infinity): numb
   const diagnostics = (model.preparedAxes?.diagnostics ?? []).reduce((n, d) => n + 64 + d.code.length * 2 + d.reason.length * 2, 1024)
   // Title runs and category tiers add nothing for a model without them.
   const titled = (model.titleRuns ?? []).reduce((n, r) => n + 512 + r.text.length * 4, 0)
-  return hierarchyLayoutBytes(model) + titled + tierBound(model.categoryLevels) + (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
+  return hierarchyLayoutBytes(model, model.legend ? legendCapacity(model, w, h) : 0) + titled + tierBound(model.categoryLevels) + (model.preparedAxes?.dataLabels??[]).reduce((n,l)=>n+1024+l.text.length*4+l.runs.length*256,0) + axisGraphBound(model, slots) + 4096 + series * 512 + model.axes.length * (slots * 160 + 1000 * 128) + text + diagnostics
 }
 export function layoutChart(model: ChartModel, w: number, h: number, dpr: number, fontGeneration: number, measure: TextMeasure, context?: ChartDocumentContext, family = JSON.stringify(model.fontFamily), familyCss: (family: string) => string = JSON.stringify): ChartLayout {
   if (![w, h, dpr].every(v => Number.isFinite(v) && v > 0)) throw new RangeError('Invalid chart placement')

@@ -145,7 +145,9 @@ export function ofPieSlices(group: { firstSliceAngle?: number }, values: readonl
   for (let slot = 0; slot < values.length; slot++) {
     const source = sourceOf(slot)
     if (split.secondary[slot]) {
-      const sweep = split.secondaryTotal > 0 ? values[slot] / split.secondaryTotal : 0
+      // A share of the secondary total: radians on the small pie, a height fraction on the bar.
+      const share = split.secondaryTotal > 0 ? values[slot] / split.secondaryTotal : 0
+      const sweep = layout.bar ? share : share * Math.PI * 2
       secondary.push({ slot, source, start: secondaryStart, sweep })
       secondaryStart += sweep
     } else {
