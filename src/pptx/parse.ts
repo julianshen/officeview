@@ -1,13 +1,13 @@
 import type { XlsxChartModel } from '../xlsx/chartModel'
 import { attemptedMalformedRelationshipIssue, chartCard, isExhausted, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
-import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
+import { drawingPartContext, dropDrawingPartReads, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
 import { attrs, elementChildren, getChildren, orderedChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
-import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
+import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxPackageHandle, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
 import { DRAWING_REQUIREMENTS, pptxCoverage, supportedChoiceRequirements } from '../drawing/coverage'
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
@@ -869,6 +869,10 @@ export interface ParsePptxOptions {
   /** The document's chart context; unset, the lazy chart engine creates one per parse. */
   chartContext?: ChartDocumentContext
 }
+const handles = new WeakMap<PptxDocument, PptxPackageHandle>()
+/** The document's package lease (slideshow spec 8); undefined for a constructed or cloned document. */
+export function pptxPackageHandle(doc: PptxDocument): PptxPackageHandle | undefined { return handles.get(doc) }
+
 export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = {}): Promise<PptxDocument> {
   drawingPartContext(pkg).chart = options.chartContext
   const presentation = await pkg.xml('ppt/presentation.xml')
@@ -896,6 +900,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
   const slideIds = sldIdLst ? getChildren(sldIdLst, 'sldId') : []
   // One shared selection map across slides so identical candidate pairs stay aliased.
   const imageSelections = new Map<string, ImageSelection>()
+  const slideParts: string[] = []
   for (let i = 0; i < slideIds.length; i++) {
     const a = attrs(slideIds[i])
     const rid = (a['r:id'] ?? a.id) as string
@@ -985,6 +990,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     }
     doc.drawingCoverage!.push(...pptxCoverage(slide, spTree, path, selectedBranch))
     doc.slides.push(slide)
+    slideParts.push(path)
   }
   // Recursive first-use source order, deduplicated by complete candidate pair while preserving use-specific crop.
   const imageIndices = new Map<string, number>()
@@ -1004,5 +1010,9 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     }
     shape.imageIndex = index
   })
+  // The lease keeps the archive, never parse-time reads (spec 8).
+  handles.set(doc, { pkg, slideParts })
+  pkg.dropCache()
+  dropDrawingPartReads(pkg)
   return doc
 }
