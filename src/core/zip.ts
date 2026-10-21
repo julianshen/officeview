@@ -22,6 +22,9 @@ export class OfficePackage {
     return new OfficePackage(zip)
   }
 
+  /** Drop the read cache (the PPTX package handle keeps the archive, not parse-time reads). */
+  dropCache(): void { this.cache.clear() }
+
   /** The underlying zip entry, read uncached by the lazy bounded chart reader. */
   entry(path: string): JSZip.JSZipObject | null { return this.zip.file(path) }
 
