@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest'
 import { createScheduler, type SchedulerSnapshot } from '../src/slideshow/engine/scheduler'
 import { easeProgress } from '../src/slideshow/engine/ease'
+import { ManualClock } from '../src/slideshow/clock'
+import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import type { BehaviourNode, CTn, Condition, ContainerNode, ShowEvent, TimeNode, TimingTree } from '../src/slideshow/types'
 
 // ---------------------------------------------------------------------------
@@ -395,9 +397,103 @@ describe('scheduler', () => {
     }
     expect(sch.endTimeOf(1999 + 1000, [])).toBe(2000)
     expect(sch.endTimeOf(9000 + 1999, [])).toBe(2000)
-    expect(() => sch.endTimeOf(5000, [])).not.toThrow()
+    expect(sch.endTimeOf(5000, [])).toBe(2000) // reverse document order still resolves
     expect(sch.endTimeOf(424242, [])).toBeUndefined()
     expect(sch.endTimeOf(10, [])).toBeUndefined()
+  })
+
+  // -------------------------------------------------------------------------
+  // Fix round 1 (codex review I1, I2)
+  // -------------------------------------------------------------------------
+
+  it('nested time bases agree: an eased parent maps samples, events and end times the same way', () => {
+    // Parent dur 100, accel 1: child local time = 100 * (t/100)^2 (r = 2, ease(q) = q^2).
+    const sch = createScheduler(tree(
+      par(5, [bhv(10, { durMs: 50, fill: 'hold' })], { durMs: 100, accel: 1, fill: 'hold' }),
+      par(6, [bhv(11, { durMs: 10, fill: 'hold', start: [{ delayMs: 0, evt: 'onClick', target: { spid: 'z' } }] })], { durMs: 100, accel: 1, fill: 'hold' }),
+      // A top-level node waiting on the end of a node inside the eased parent.
+      bhv(12, { durMs: 100, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 10 }] }),
+    ))
+    const end10 = 100 * Math.sqrt(0.5) // local 50 is reached at 70.7106781...
+    expect(sch.endTimeOf(10, [])).toBeCloseTo(end10, 9)
+    expectSeen(sch.evaluate([], 50), 10, 'active', 0.5) // local 25 of 50
+    expect(find(sch.evaluate([], end10 - 1e-6), 10).state).toBe('active')
+    expectSeen(sch.evaluate([], end10 + 1e-6), 10, 'frozen', 1)
+
+    // A trigger at absolute 50 begins the child at parent-local 25 (not 50).
+    const click: ShowEvent[] = [{ kind: 'trigger', spid: 'z', t: 50 }]
+    expectSeen(sch.evaluate(click, 50), 11, 'active', 0)
+    expectSeen(sch.evaluate(click, 55), 11, 'active', (100 * 0.55 * 0.55 - 25) / 10) // local 30.25
+    expect(sch.endTimeOf(11, click)).toBeCloseTo(100 * Math.sqrt(0.35), 9) // local 35 at 59.16...
+
+    // The syncbase dependent starts when node 10 really ends.
+    expect(sch.endTimeOf(12, [])).toBeCloseTo(end10 + 100, 9)
+    expectSeen(sch.evaluate([], end10 + 10), 12, 'active', 0.1)
+  })
+
+  it('nested time bases agree under excl pauses, autoRev parents and repeating parents', () => {
+    const clock = new ManualClock()
+    const sch = createScheduler(tree(
+      // The par (dur 100) is paused by node 13 over [25, 75): it ends at 150, and so does its child.
+      excl(4, [par(6, [bhv(12, { durMs: 100, fill: 'hold' })], { durMs: 100, fill: 'hold' }), bhv(13, { durMs: 50, start: [delay(25)] })], { fill: 'hold' }),
+      // autoRev parent: local = t on [0,100], 200 - t on [100,200].
+      par(7, [bhv(14, { durMs: 50, fill: 'hold' })], { durMs: 100, autoRev: true, fill: 'hold' }),
+      // Repeating parent: a trigger in iteration 1 maps to local 30 of that iteration.
+      par(9, [bhv(17, { durMs: 10, fill: 'hold', start: [{ delayMs: 0, evt: 'onClick', target: { spid: 'y' } }] })], { durMs: 100, repeatCount: 2, fill: 'hold' }),
+    ))
+    clock.advance(100)
+    expectSeen(sch.evaluate([], clock.now()), 12, 'active', 0.5)
+    expect(sch.endTimeOf(12, [])).toBe(150)
+    clock.advance(50)
+    expectSeen(sch.evaluate([], clock.now()), 12, 'frozen', 1)
+
+    expectSeen(sch.evaluate([], 75), 14, 'frozen', 1)
+    expectSeen(sch.evaluate([], 160), 14, 'active', 0.8) // the reverse half replays it: local 40
+    expectSeen(sch.evaluate([], 200), 14, 'frozen', 0)
+    expect(sch.endTimeOf(14, [])).toBe(200) // its last activation ends with the parent
+
+    const y: ShowEvent[] = [{ kind: 'trigger', spid: 'y', t: 130 }]
+    expectSeen(sch.evaluate(y, 135), 17, 'active', 0.5)
+    expect(sch.endTimeOf(17, y)).toBe(140)
+    // A trigger in iteration 0 does not carry into iteration 1.
+    const early: ShowEvent[] = [{ kind: 'trigger', spid: 'y', t: 50 }]
+    expectSeen(sch.evaluate(early, 70), 17, 'frozen', 1)
+    expect(find(sch.evaluate(early, 150), 17).state).toBe('none')
+  })
+
+  it('a 600-node reverse reference chain resolves exactly', () => {
+    // Node 100 + i begins when node 101 + i ends; node 699 begins at 0. All 1 ms: node 100 ends at 600.
+    const kids: TimeNode[] = []
+    for (let i = 0; i < 600; i++) kids.push(bhv(100 + i, { durMs: 1, fill: 'hold', start: i === 599 ? [] : [{ delayMs: 0, evt: 'onEnd', tn: 101 + i }] }))
+    const sch = createScheduler(tree(...kids))
+    expect(sch.endTimeOf(100, [])).toBe(600)
+    expect(sch.endTimeOf(400, [])).toBe(300)
+    expectSeen(sch.evaluate([], 599.5), 100, 'active', 0.5)
+    const s = sch.evaluate([], 600)
+    expect(s.ended.has(100)).toBe(true)
+    expect(s.frozen.length).toBe(600)
+  })
+
+  it('a real reference cycle is broken once, with a diagnostic, and the rest still plays', () => {
+    const sink = createDiagnosticSink()
+    let adds = 0
+    const counting = { add: (d: Parameters<typeof sink.add>[0]) => { adds++; sink.add(d) }, list: () => sink.list() }
+    const sch = createScheduler(tree(
+      // A starts at 0 or when B ends; B starts when A ends: the references form a cycle.
+      bhv(10, { durMs: 100, fill: 'hold', start: [delay(0), { delayMs: 0, evt: 'onEnd', tn: 11 }] }),
+      bhv(11, { durMs: 100, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 10 }] }),
+      bhv(12, { durMs: 100, fill: 'hold' }),
+    ), { sink: counting, slideIndex: 3 })
+    let s = sch.evaluate([], 150)
+    expectSeen(s, 10, 'frozen', 1)
+    expectSeen(s, 11, 'active', 0.5) // B still follows A's first end
+    expectSeen(s, 12, 'frozen', 1)
+    s = sch.evaluate([], 160)
+    sch.endTimeOf(10, [])
+    const cyc = sink.list().filter((d) => d.code === 'timing-cycle')
+    expect(cyc.length).toBe(1)
+    expect(cyc[0].slideIndex).toBe(3)
+    expect(adds).toBe(1) // reported once per scheduler, never per frame
   })
 
   it('evaluate is pure: same tree, events and t give deep-equal snapshots', () => {

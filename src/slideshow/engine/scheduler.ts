@@ -20,12 +20,23 @@
  * - Ended nodes show their fill (`hold`, `freeze`, `transition`; SMIL `auto`
  *   when absent) only while their parent is active or itself showing fill.
  *
- * Hostile input (spec 7): reference cycles, self references, missing ids
- * and over-deep resolution chains resolve to "never begins"; non-finite or
- * negative times are ignored. Nothing here reads a clock.
+ * One time base: a frame maps absolute show time to its local time through
+ * every ancestor (pauses, seeks, repeat iteration, accel/decel, autoRev).
+ * Sampling, event times, cross-container references and `endTimeOf` all
+ * use that same mapping (`toLocal`, `toAbsFirst`, `lastAbs`).
+ *
+ * Resolution is memoised recursion. Long acyclic reference chains never
+ * hit a depth ceiling: past `MAX_RESOLVE` nested steps the deepest pending
+ * step is deferred, resolved first from the top, and the walk retried.
+ * A real reference cycle is broken where it closes (the closing reference
+ * never fires) and diagnosed once per node; results that depended on the
+ * broken edge are not memoised, so the rest of the graph still resolves.
+ *
+ * Hostile input (spec 7): missing ids and non-finite or negative times are
+ * ignored. Nothing here reads a clock.
  */
-import type { BehaviourNode, CTn, Condition, ContainerNode, ShowEvent, TimeNode, TimingTree } from '../types'
-import { easeProgress } from './ease'
+import type { BehaviourNode, CTn, Condition, ContainerNode, DiagnosticSink, ShowEvent, TimeNode, TimingTree } from '../types'
+import { easeProgress, invertEase } from './ease'
 
 /** One behaviour's timing in a snapshot. `order` is its document (pre-order) index: the composition order. */
 export interface SchedulerEntry { readonly node: BehaviourNode; readonly progress: number; readonly iteration: number; readonly order?: number }
@@ -44,17 +55,28 @@ export interface SchedulerSnapshot {
 
 export interface Scheduler {
   evaluate(events: readonly ShowEvent[], t: number): SchedulerSnapshot
-  /** Absolute end of the node's last activation; `undefined` when it never begins or the id is unknown. */
+  /**
+   * Absolute time after which the node's last activation is never active
+   * again (in a reversing parent, the reverse replay counts); `undefined`
+   * when it never begins or the id is unknown.
+   */
   endTimeOf(nodeId: number, events: readonly ShowEvent[]): number | 'indefinite' | undefined
 }
+
+/** Optional diagnostics: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, each once per node. */
+export interface SchedulerOptions { sink?: DiagnosticSink; slideIndex?: number }
 
 const INF = Number.POSITIVE_INFINITY
 /** Tree nesting the scheduler walks (the reader enforces the same limit). */
 const MAX_DEPTH = 64
-/** Nested reference resolution; deeper chains resolve to "never begins". */
+/** Nested resolution steps before the deepest one is deferred and resolved first. */
 const MAX_RESOLVE = 256
+/** Deferral rounds per top-level query before resolution gives up (diagnosed). */
+const MAX_DRIVE = 10_000
 /** Activations per node (restart storms). */
 const MAX_INTERVALS = 10_000
+/** Interval computations per query after which provisional results are memoised anyway. */
+const WORK_BUDGET = 1_000_000
 
 interface Interval {
   begin: number
@@ -69,11 +91,20 @@ interface Interval {
   event?: ShowEvent
 }
 
+/** How a container's children frame relates to the frame the container lives in. */
+interface Link { iv: Interval; k: number; ctn: CTn }
+
 interface Frame {
-  /** The container whose children live in this frame (undefined for the root's own frame). */
+  /** Memo identity: equal keys mean the same time mapping. */
+  readonly key: string
+  /** The frame the owner lives in; undefined for the root node's own frame (local = absolute). */
+  readonly parent: Frame | undefined
+  /** The container whose children live in this frame. */
   readonly owner: ContainerNode | undefined
-  /** Absolute show time of local 0 (the owner's current iteration start). */
-  readonly origin: number
+  /** Sampled frames: the owner's interval and iteration (full mapping). */
+  readonly link?: Link
+  /** Provisional frames, used while the owner's own duration is being resolved: linear from this begin. */
+  readonly pre?: number
   /** Local sample time. */
   readonly tau: number
   /** The owner has ended at the sample: still-active children are cut. */
@@ -82,10 +113,6 @@ interface Frame {
   readonly visible: boolean
   /** The owner repeats forever and is sampled at infinity. */
   readonly unbounded: boolean
-  /** Absolute end of the owner's activation (children are clipped to it). */
-  readonly endAbs: number
-  /** Absolute begin of each ancestor's current activation. */
-  readonly ancestors: ReadonlyMap<TimeNode, number>
   readonly beganBy?: ShowEvent
 }
 
@@ -109,14 +136,17 @@ interface Group {
   frame: Frame
   kids: TimeNode[]
   raw: Map<TimeNode, Interval[]>
-  busy: Set<TimeNode>
   adjusted?: Map<TimeNode, Interval[]>
-  adjusting: boolean
   next: number
   seqBusy: boolean
   queue: Inst[]
   qi: number
 }
+
+type Report = (code: 'timing-cycle' | 'timing-forward-reference' | 'timing-too-deep', node: TimeNode) => void
+
+/** Thrown to unwind a too-deep resolution; never escapes a query. */
+const DEFER: unique symbol = Symbol('scheduler.defer')
 
 function isContainer(n: TimeNode): n is ContainerNode {
   return n.kind === 'par' || n.kind === 'seq' || n.kind === 'excl'
@@ -145,6 +175,11 @@ function waits(n: TimeNode): boolean {
   return n.ctn.start.some((c) => c.delayMs === 'indefinite' && c.evt === undefined && c.tn === undefined)
 }
 
+// ---------------------------------------------------------------------------
+// Time mapping
+// ---------------------------------------------------------------------------
+
+/** Elapsed active time of an interval at parent-local `tau` (pauses hold it, seeks jump it). */
 function activeElapsed(iv: Interval, tau: number): number {
   if (!(tau > iv.begin)) return 0
   if (tau === INF) return INF
@@ -155,6 +190,33 @@ function activeElapsed(iv: Interval, tau: number): number {
   }
   for (const sk of iv.seeks) if (tau >= sk.at) e += sk.delta
   return e > 0 ? e : 0
+}
+
+/** The earliest parent-local time at which `activeElapsed` reaches `e` (`INF` if never). */
+function elapsedInverse(iv: Interval, e: number): number {
+  if (!(e > 0)) return iv.begin
+  if (!Number.isFinite(e)) return INF
+  const marks: Array<{ at: number; until?: number; delta?: number }> = []
+  for (const [s, x] of iv.pauses) marks.push({ at: s, until: x })
+  for (const sk of iv.seeks) marks.push({ at: sk.at, delta: sk.delta })
+  marks.sort((a, b) => a.at - b.at)
+  let cur = iv.begin
+  let acc = 0
+  for (const m of marks) {
+    if (m.at > cur) {
+      if (acc + (m.at - cur) >= e) return cur + (e - acc)
+      acc += m.at - cur
+      cur = m.at
+    }
+    if (m.delta !== undefined) {
+      acc += m.delta
+      if (acc >= e) return cur
+    } else if (m.until !== undefined && m.until > cur) {
+      cur = m.until
+      if (!Number.isFinite(cur)) return INF
+    }
+  }
+  return cur + (e - acc)
 }
 
 function position(elapsed: number, L: number, ended: boolean): { k: number; p: number } {
@@ -170,6 +232,90 @@ function position(elapsed: number, L: number, ended: boolean): { k: number; p: n
   }
   return { k, p }
 }
+
+/** Children-local time for the owner's elapsed time `e` in iteration `link.k`. */
+function localFromElapsed(link: Link, e: number, lenient: boolean): number | undefined {
+  const { iv, k, ctn } = link
+  if (!Number.isFinite(iv.L)) return e
+  const w = e - k * iv.L
+  if (w < 0) return lenient ? w : undefined
+  if (w > iv.L) return lenient ? iv.d : undefined
+  if (iv.L <= 0 || iv.d <= 0) return 0
+  return easeProgress(w / iv.L, ctn.accel, ctn.decel, ctn.autoRev) * iv.d
+}
+
+/**
+ * Absolute time to frame-local time. Strict mode drops times outside the
+ * frame's current activation and iteration (events from an earlier
+ * iteration are reset, SMIL); lenient mode extrapolates times before it.
+ */
+function toLocal(frame: Frame, abs: number, lenient = false): number | undefined {
+  if (!frame.parent) return abs >= 0 || lenient ? abs : undefined
+  const pl = toLocal(frame.parent, abs, lenient)
+  if (pl === undefined) return undefined
+  if (frame.pre !== undefined) {
+    const v = pl - frame.pre
+    return v >= 0 || lenient ? v : undefined
+  }
+  const link = frame.link!
+  if (pl < link.iv.begin) return lenient ? pl - link.iv.begin : undefined
+  if (pl >= link.iv.end && !lenient) return undefined
+  return localFromElapsed(link, activeElapsed(link.iv, pl), lenient)
+}
+
+/** The first absolute time at which the frame's local time reaches `t` (`INF` if never). */
+function toAbsFirst(frame: Frame, t: number): number {
+  if (!frame.parent) return t
+  if (frame.pre !== undefined) return toAbsFirst(frame.parent, t + frame.pre)
+  const { iv, k, ctn } = frame.link!
+  let e: number
+  if (!Number.isFinite(iv.L)) e = t
+  else if (iv.L <= 0 || iv.d <= 0) e = t <= 0 ? k * iv.L : INF
+  else if (t > iv.d) e = INF
+  else {
+    const q = invertEase(Math.max(0, t) / iv.d, ctn.accel, ctn.decel)
+    e = k * iv.L + (ctn.autoRev ? q / 2 : q) * iv.L
+  }
+  const pl = elapsedInverse(iv, e)
+  if (!(pl <= iv.end)) return INF
+  return toAbsFirst(frame.parent, pl)
+}
+
+/**
+ * The absolute time at which a node active on local `[lo, hi)` stops being
+ * active for the last time in the frame's current iteration, clipped by
+ * every ancestor's end. A reversing ancestor replays its children, so the
+ * last exit is its reverse crossing of `lo`.
+ */
+function lastAbs(frame: Frame, lo: number, hi: number): number {
+  if (!frame.parent) return hi
+  if (frame.pre !== undefined) return lastAbs(frame.parent, lo + frame.pre, hi + frame.pre)
+  const { iv, k, ctn } = frame.link!
+  let elo: number
+  let ehi: number
+  if (!Number.isFinite(iv.L)) {
+    elo = lo
+    ehi = hi
+  } else if (iv.L <= 0 || iv.d <= 0) {
+    elo = k * iv.L
+    ehi = lo <= 0 && hi > 0 ? INF : k * iv.L
+  } else {
+    const base = k * iv.L
+    const unit = (v: number): number => (v > 0 ? (v < iv.d ? v / iv.d : 1) : 0)
+    const qlo = invertEase(unit(lo), ctn.accel, ctn.decel)
+    const qhi = hi >= iv.d ? undefined : invertEase(unit(hi), ctn.accel, ctn.decel)
+    if (ctn.autoRev) {
+      elo = base + (qhi === undefined ? qlo / 2 : 1 - qhi / 2) * iv.L
+      ehi = base + (lo <= 0 ? 1 : 1 - qlo / 2) * iv.L
+    } else {
+      elo = base + qlo * iv.L
+      ehi = base + (qhi === undefined ? 1 : qhi) * iv.L
+    }
+  }
+  return lastAbs(frame.parent, elapsedInverse(iv, elo), Math.min(elapsedInverse(iv, ehi), iv.end))
+}
+
+// ---------------------------------------------------------------------------
 
 function eventMatcher(c: Condition): ((e: ShowEvent) => boolean) | undefined {
   const spid = c.target && 'spid' in c.target ? c.target.spid : undefined
@@ -193,7 +339,7 @@ function eventMatcher(c: Condition): ((e: ShowEvent) => boolean) | undefined {
 }
 
 /** Excl: a child beginning while a sibling runs pauses it until the child ends. */
-function pauseSiblings(kids: readonly TimeNode[], raw: ReadonlyMap<TimeNode, Interval[]>): Map<TimeNode, Interval[]> {
+function pauseSiblings(kids: readonly TimeNode[], raw: ReadonlyMap<TimeNode, readonly Interval[]>): Map<TimeNode, Interval[]> {
   interface Slot { iv: Interval; rank: number; pausedAt?: number }
   const out = new Map<TimeNode, Interval[]>()
   const slots: Slot[] = []
@@ -249,17 +395,87 @@ function buildIndex(tree: TimingTree): Index {
   return ix
 }
 
-/** One evaluation: memo tables live for a single `(events, t)`. */
+/** One query: memo tables live for a single `(events, t)`. */
 class Run {
   readonly rootFrame: Frame
-  private readonly groups = new Map<ContainerNode, Map<number, Group>>()
+  private readonly groups = new Map<string, Group>()
   private rootIvs: Interval[] | undefined
   private readonly states = new Map<TimeNode, Sample>()
-  private readonly busyStates = new Set<TimeNode>()
+  private readonly refs = new Map<string, number[]>()
+  private readonly ivIds = new WeakMap<Interval, number>()
+  private ivIdNext = 0
+  // Resolution bookkeeping: in-progress keys with their entry depth, the
+  // shallowest in-progress step the current step leaned on, and deferral.
+  private readonly busy = new Map<unknown, number>()
   private depth = 0
+  private lowHit = INF
+  private work = 0
+  private deferred: (() => unknown) | undefined
+  private giveUp = false
 
-  constructor(private readonly ix: Index, private readonly events: readonly ShowEvent[], t: number) {
-    this.rootFrame = { owner: undefined, origin: 0, tau: t, frozen: false, visible: true, unbounded: false, endAbs: INF, ancestors: new Map() }
+  constructor(private readonly ix: Index, private readonly events: readonly ShowEvent[], t: number, private readonly report: Report) {
+    this.rootFrame = { key: 'r', parent: undefined, owner: undefined, tau: t, frozen: false, visible: true, unbounded: false }
+  }
+
+  /** Runs a top-level query, resolving deferred deep steps first until it completes. */
+  drive<T>(fn: () => T): T {
+    const jobs: Array<() => unknown> = []
+    for (let round = 0; ; round++) {
+      if (round > MAX_DRIVE) this.giveUp = true
+      try {
+        if (jobs.length > 0) {
+          jobs[jobs.length - 1]()
+          jobs.pop()
+          continue
+        }
+        return fn()
+      } catch (e) {
+        if (e !== DEFER || !this.deferred) throw e
+        jobs.push(this.deferred)
+        this.deferred = undefined
+      }
+    }
+  }
+
+  /**
+   * One memoised resolution step. A re-entered key is a reference cycle:
+   * it answers `hit()`, is diagnosed, and taints every step above it up to
+   * the cycle's entry so their provisional results are not memoised.
+   */
+  private guarded<T>(key: unknown, hit: () => T, store: (v: T) => void, fn: () => T, node: TimeNode | undefined, cycle = true): T {
+    const entered = this.busy.get(key)
+    if (entered !== undefined) {
+      if (cycle) {
+        if (entered < this.lowHit) this.lowHit = entered
+        if (node) this.report('timing-cycle', node)
+      }
+      return hit()
+    }
+    if (this.depth >= MAX_RESOLVE) {
+      if (this.giveUp) {
+        if (node) this.report('timing-too-deep', node)
+        return hit()
+      }
+      this.deferred = () => this.guarded(key, hit, store, fn, node, cycle)
+      throw DEFER
+    }
+    const mine = ++this.depth
+    const saved = this.lowHit
+    this.lowHit = INF
+    this.busy.set(key, mine)
+    try {
+      const v = fn()
+      const low = this.lowHit
+      if (low >= mine || this.work > WORK_BUDGET) store(v)
+      this.lowHit = low >= mine ? saved : Math.min(saved, low)
+      return v
+    } catch (e) {
+      this.lowHit = saved
+      throw e
+    } finally {
+      this.busy.delete(key)
+      this.depth--
+    }
   }
 
   // -- sampling ---------------------------------------------------------------
@@ -267,21 +483,22 @@ class Run {
   stateOf(node: TimeNode): Sample | undefined {
     const have = this.states.get(node)
     if (have) return have
-    if (this.busyStates.has(node) || this.depth >= MAX_RESOLVE) return undefined
-    this.busyStates.add(node)
-    this.depth++
-    const f = this.currentFrame(node)
-    const s = f ? this.sample(node, f) : IDLE
-    this.depth--
-    this.busyStates.delete(node)
-    this.states.set(node, s)
-    return s
+    return this.guarded<Sample | undefined>(node, () => undefined, (v) => { if (v) this.states.set(node, v) }, () => {
+      const f = this.currentFrame(node)
+      return f ? this.sample(node, f) : IDLE
+    }, node)
   }
 
   currentFrame(node: TimeNode): Frame | undefined {
     if (node === this.ix.root) return this.rootFrame
     const p = this.ix.parent.get(node)
     return p ? this.stateOf(p)?.child : undefined
+  }
+
+  private ivId(iv: Interval): number {
+    let id = this.ivIds.get(iv)
+    if (id === undefined) this.ivIds.set(iv, (id = this.ivIdNext++))
+    return id
   }
 
   private sample(node: TimeNode, frame: Frame): Sample {
@@ -305,18 +522,17 @@ class Run {
     if (isContainer(node)) {
       const finiteL = Number.isFinite(iv.L)
       const unbounded = frame.unbounded || (!Number.isFinite(elapsed) && finiteL && iv.L > 0)
-      const origin = frame.origin + iv.begin + (finiteL && k > 0 ? k * iv.L : 0)
-      // Children see the parent's eased (and mirrored) simple time.
+      // Children see the owner's eased (and mirrored) simple time: the same map as `localFromElapsed`.
       const tau2 = unbounded ? INF : finiteL ? (iv.d > 0 ? progress * iv.d : 0) : elapsed
       child = {
+        key: `${frame.key}/${this.ivId(iv)}.${k}`,
+        parent: frame,
         owner: node,
-        origin,
+        link: { iv, k, ctn },
         tau: tau2,
         frozen: ended,
         visible,
         unbounded,
-        endAbs: Math.min(frame.endAbs, frame.origin + iv.end),
-        ancestors: new Map(frame.ancestors).set(node, origin),
         beganBy: k === 0 ? iv.event : undefined,
       }
     }
@@ -327,41 +543,39 @@ class Run {
 
   intervalsIn(node: TimeNode, frame: Frame): readonly Interval[] {
     if (node === this.ix.root) {
-      if (!this.rootIvs) {
-        this.rootIvs = [] // cycle guard
-        this.rootIvs = this.own(node, frame, 0)
-      }
-      return this.rootIvs
+      if (this.rootIvs) return this.rootIvs
+      return this.guarded('root', () => [], (v) => { this.rootIvs = v }, () => this.own(node, frame, 0), node)
     }
     const owner = frame.owner
     if (!owner || this.ix.parent.get(node) !== owner) return []
     const g = this.group(owner, frame)
     if (owner.kind === 'seq') {
       this.seqUpTo(g, g.kids.length - 1) // a later advance can still settle an earlier step
-      return g.raw.get(node) ?? []
+      const got = g.raw.get(node)
+      if (!got) {
+        this.report('timing-forward-reference', node)
+        return []
+      }
+      return got
     }
     if (owner.kind === 'excl') return this.exclChild(g, node)
     return this.parChild(g, node)
   }
 
   private group(owner: ContainerNode, frame: Frame): Group {
-    let byOrigin = this.groups.get(owner)
-    if (!byOrigin) this.groups.set(owner, (byOrigin = new Map()))
-    let g = byOrigin.get(frame.origin)
+    let g = this.groups.get(frame.key)
     if (!g) {
       g = {
         owner,
         frame,
         kids: this.ix.kids.get(owner) ?? [],
         raw: new Map(),
-        busy: new Set(),
-        adjusting: false,
         next: 0,
         seqBusy: false,
         queue: owner.kind === 'seq' ? this.advanceQueue(owner, frame) : [],
         qi: 0,
       }
-      byOrigin.set(frame.origin, g)
+      this.groups.set(frame.key, g)
     }
     return g
   }
@@ -369,22 +583,18 @@ class Run {
   private parChild(g: Group, node: TimeNode): Interval[] {
     const have = g.raw.get(node)
     if (have) return have
-    if (g.busy.has(node)) return []
-    g.busy.add(node)
-    const ivs = this.own(node, g.frame, 0)
-    g.busy.delete(node)
-    g.raw.set(node, ivs)
-    return ivs
+    return this.guarded(`${g.frame.key}|${this.ix.order.get(node)}`, () => [], (v) => { g.raw.set(node, v) }, () => this.own(node, g.frame, 0), node)
   }
 
   private exclChild(g: Group, node: TimeNode): readonly Interval[] {
     if (g.adjusted) return g.adjusted.get(node) ?? []
-    if (g.adjusting) return this.parChild(g, node)
-    g.adjusting = true
-    for (const k of g.kids) this.parChild(g, k)
-    g.adjusted = pauseSiblings(g.kids, g.raw)
-    g.adjusting = false
-    return g.adjusted.get(node) ?? []
+    // While the group is being adjusted, siblings see each other's raw intervals.
+    const m = this.guarded<Map<TimeNode, Interval[]> | undefined>(`${g.frame.key}|excl`, () => undefined, (v) => { g.adjusted = v }, () => {
+      const raw = new Map<TimeNode, Interval[]>()
+      for (const k of g.kids) raw.set(k, this.parChild(g, k))
+      return pauseSiblings(g.kids, raw)
+    }, undefined, false)
+    return m ? m.get(node) ?? [] : this.parChild(g, node)
   }
 
   /** The events that advance a sequence: `next` for the main sequence, its trigger's clicks for an interactive one. */
@@ -397,66 +607,90 @@ class Run {
       match = (e) => e.kind === 'trigger' && spids.has(e.spid)
     } else return []
     const out: Inst[] = []
-    for (const e of this.events) if (e !== frame.beganBy && e.t >= frame.origin && match(e)) out.push({ t: e.t - frame.origin, event: e })
+    for (const e of this.events) {
+      if (e === frame.beganBy || !match(e)) continue
+      const t = toLocal(frame, e.t)
+      if (t !== undefined) out.push({ t, event: e })
+    }
     return out
   }
 
   private seqUpTo(g: Group, idx: number): void {
     if (g.seqBusy) return
     g.seqBusy = true
-    while (g.next <= idx) this.seqStep(g, g.next++)
-    g.seqBusy = false
+    try {
+      while (g.next <= idx) {
+        this.seqStep(g, g.next)
+        g.next++
+      }
+    } finally {
+      g.seqBusy = false
+    }
   }
 
+  /** One seq child; transactional, so a deferral retries it from scratch. */
   private seqStep(g: Group, j: number): void {
-    const kid = g.kids[j]
-    const prevList = j > 0 ? g.raw.get(g.kids[j - 1]) ?? [] : []
-    const prev = prevList[prevList.length - 1]
-    const base = j === 0 ? 0 : prev && Number.isFinite(prev.end) ? prev.end : undefined
-    let insts = this.startInstances(kid, g.frame, base)
-    let advanced = false
-    if (insts.length === 0 && (j === 0 || prev) && waits(kid)) {
-      const from = prev ? prev.begin : 0
-      while (g.qi < g.queue.length) {
-        const q = g.queue[g.qi++]
-        if (q.t >= from) {
-          insts = [q]
-          advanced = true
-          break
+    const qi = g.qi
+    try {
+      const kid = g.kids[j]
+      const prevList = j > 0 ? g.raw.get(g.kids[j - 1]) ?? [] : []
+      const prev = prevList[prevList.length - 1]
+      const base = j === 0 ? 0 : prev && Number.isFinite(prev.end) ? prev.end : undefined
+      let insts = this.startInstances(kid, g.frame, base)
+      let advanced = false
+      if (insts.length === 0 && (j === 0 || prev) && waits(kid)) {
+        const from = prev ? prev.begin : 0
+        while (g.qi < g.queue.length) {
+          const q = g.queue[g.qi++]
+          if (q.t >= from) {
+            insts = [q]
+            advanced = true
+            break
+          }
         }
       }
-    }
-    const ivs = this.build(kid, g.frame, insts)
-    g.raw.set(kid, ivs)
-    const first = ivs[0]
-    if (!first) return
-    const opts = g.owner.seq
-    for (let i = 0; i < j; i++) {
-      const list = g.raw.get(g.kids[i])
-      const last = list?.[list.length - 1]
-      if (!last || !(last.begin <= first.begin && first.begin < last.end)) continue
-      if (advanced && opts?.nextAc === 'seek') this.seek(g.kids[i], last, first.begin, g.frame)
-      else if (!opts?.concurrent) last.end = first.begin
+      const ivs = this.build(kid, g.frame, insts)
+      const first = ivs[0]
+      const commits: Array<() => void> = []
+      if (first) {
+        const opts = g.owner.seq
+        for (let i = 0; i < j; i++) {
+          const list = g.raw.get(g.kids[i])
+          const last = list?.[list.length - 1]
+          if (!last || !(last.begin <= first.begin && first.begin < last.end)) continue
+          if (advanced && opts?.nextAc === 'seek') {
+            const c = this.seekPlan(g.kids[i], last, first.begin, g.frame)
+            if (c) commits.push(c)
+          } else if (!opts?.concurrent) commits.push(() => { last.end = first.begin })
+        }
+      }
+      g.raw.set(kid, ivs)
+      for (const c of commits) c()
+    } catch (e) {
+      g.qi = qi
+      throw e
     }
   }
 
-  /** Settles a running step at local time `s`: finite parts jump to their end, indefinite ones keep running. */
-  private seek(node: TimeNode, iv: Interval, s: number, frame: Frame): void {
+  /** Settling a running step at local time `s`: finite parts jump to their end, indefinite ones keep running. */
+  private seekPlan(node: TimeNode, iv: Interval, s: number, frame: Frame): (() => void) | undefined {
     let settle: number
     if (Number.isFinite(iv.end)) settle = activeElapsed(iv, iv.end)
     else if (isContainer(node) && !Number.isFinite(iv.L)) {
-      const cf = this.childFrame(node, frame, iv.begin, iv.event)
+      const cf = this.preFrame(node, frame, iv.begin, iv.event)
       settle = 0
       for (const c of this.ix.kids.get(node) ?? []) {
         const l = this.intervalsIn(c, cf)
         const e = l[l.length - 1]?.end
         if (e !== undefined && Number.isFinite(e) && e > settle) settle = e
       }
-    } else return
+    } else return undefined
     const delta = settle - activeElapsed(iv, s)
-    if (!(delta > 0)) return
-    iv.seeks.push({ at: s, delta })
-    if (Number.isFinite(iv.end)) iv.end = Math.max(s, iv.end - delta)
+    if (!(delta > 0)) return undefined
+    return () => {
+      iv.seeks.push({ at: s, delta })
+      if (Number.isFinite(iv.end)) iv.end = Math.max(s, iv.end - delta)
+    }
   }
 
   private own(node: TimeNode, frame: Frame, base: number | undefined): Interval[] {
@@ -490,18 +724,19 @@ class Run {
     return out
   }
 
-  private childFrame(node: ContainerNode, frame: Frame, begin: number, event: ShowEvent | undefined): Frame {
-    const origin = frame.origin + begin
-    return { owner: node, origin, tau: INF, frozen: false, visible: false, unbounded: false, endAbs: INF, ancestors: new Map(frame.ancestors).set(node, origin), beganBy: event }
+  /** The children frame used while a container's own duration is resolved (linear in its elapsed time). */
+  private preFrame(node: ContainerNode, frame: Frame, begin: number, event: ShowEvent | undefined): Frame {
+    return { key: `${frame.key}/${this.ix.order.get(node)}p${begin}`, parent: frame, owner: node, pre: begin, tau: INF, frozen: false, visible: false, unbounded: false, beganBy: event }
   }
 
   private interval(node: TimeNode, frame: Frame, inst: Inst): Interval {
+    this.work++
     const b = inst.t
     const ctn = node.ctn
     const dur = time(ctn.durMs)
     let d: number
     if (isContainer(node) && (ctn.endSync || dur === undefined)) {
-      const cf = this.childFrame(node, frame, b, inst.event)
+      const cf = this.preFrame(node, frame, b, inst.event)
       const implicit = ctn.endSync ? this.endSync(node, ctn.endSync, cf) : this.implicitEnd(node, cf)
       d = dur === undefined ? implicit : Math.min(dur === 'indefinite' ? INF : dur, implicit)
     } else d = dur === undefined || dur === 'indefinite' ? INF : dur
@@ -516,9 +751,9 @@ class Run {
     for (const e of this.instances(ctn.end, 0, frame, node)) if (e.t > b && e.t < end) end = e.t
     if (node.kind === 'audio' || node.kind === 'video') {
       for (const e of this.events) {
-        if (e.kind !== 'mediaEnd' || e.nodeId !== ctn.id || e.t < frame.origin) continue
-        const t = e.t - frame.origin
-        if (t > b && t < end) end = t
+        if (e.kind !== 'mediaEnd' || e.nodeId !== ctn.id) continue
+        const t = toLocal(frame, e.t)
+        if (t !== undefined && t > b && t < end) end = t
       }
     }
     return { begin: b, end, d, L, pauses: [], seeks: [], event: inst.event }
@@ -581,7 +816,11 @@ class Run {
         default: {
           const match = eventMatcher(c)
           if (!match) break
-          for (const e of this.events) if (e.t >= frame.origin && match(e)) out.push({ t: e.t - frame.origin + dl, event: e })
+          for (const e of this.events) {
+            if (!match(e)) continue
+            const t = toLocal(frame, e.t)
+            if (t !== undefined) out.push({ t: t + dl, event: e })
+          }
         }
       }
     }
@@ -592,31 +831,77 @@ class Run {
   private refTimes(tn: number, which: 'begin' | 'end', frame: Frame, from: TimeNode): number[] {
     const target = this.ix.byId.get(tn)
     if (!target || target === from) return []
-    const anc = frame.ancestors.get(target)
-    if (anc !== undefined) return which === 'begin' ? [anc - frame.origin] : []
-    if (this.depth >= MAX_RESOLVE) return []
-    this.depth++
-    const out = this.refTimesOf(target, which, frame)
-    this.depth--
-    return out
+    for (let f: Frame | undefined = frame; f; f = f.parent) {
+      if (f.owner !== target) continue
+      // An ancestor: its begin is its frame's local 0; its end lies beyond its children.
+      if (which !== 'begin') return []
+      if (f === frame) return [0]
+      const l = toLocal(frame, toAbsFirst(f, 0), true)
+      return l !== undefined && Number.isFinite(l) ? [l] : []
+    }
+    // Memoised like every other step, so a deferred reference is not re-deferred on retry.
+    const key = `${frame.key}|${this.ix.order.get(target)}|${which}`
+    const have = this.refs.get(key)
+    if (have) return have
+    return this.guarded(`ref|${key}`, () => [], (v) => { this.refs.set(key, v) }, () => this.refTimesOf(target, which, frame), target)
   }
 
   private refTimesOf(target: TimeNode, which: 'begin' | 'end', frame: Frame): number[] {
-    let ivs: readonly Interval[]
-    let shift = 0
-    if (frame.owner !== undefined && this.ix.parent.get(target) === frame.owner) ivs = this.intervalsIn(target, frame)
-    else {
-      const f = this.currentFrame(target)
-      if (!f) return []
-      ivs = this.intervalsIn(target, f)
-      shift = f.origin - frame.origin
-    }
+    const g = this.frameFor(target, frame)
+    if (!g) return []
     const out: number[] = []
-    for (const iv of ivs) {
-      const t = which === 'begin' ? iv.begin : iv.end
-      if (Number.isFinite(t)) out.push(t + shift)
+    for (const iv of this.intervalsIn(target, g)) {
+      if (g === frame) {
+        const t = which === 'begin' ? iv.begin : iv.end
+        if (Number.isFinite(t)) out.push(t)
+        continue
+      }
+      // Through absolute time, with both frames' full mappings. "End" is the last exit, as `endTimeOf`.
+      const abs = which === 'begin' ? toAbsFirst(g, iv.begin) : lastAbs(g, iv.begin, iv.end)
+      if (!Number.isFinite(abs)) continue
+      let l = toLocal(frame, abs)
+      if (l === undefined) {
+        const early = toLocal(frame, abs, true) // before this frame began: a negative instance (SMIL)
+        if (early !== undefined && early < 0) l = early
+      }
+      if (l !== undefined) out.push(l)
     }
     return out
+  }
+
+  /**
+   * The frame `target` lives in, as seen from `frame`: from their lowest
+   * common ancestor's frame (in `frame`'s own chain) down to the target's
+   * parent, sampling at each level. Sharing the chain keeps both sides on
+   * one time base, and no ancestor's state is needed.
+   */
+  private frameFor(target: TimeNode, frame: Frame): Frame | undefined {
+    const ancestors = new Set<TimeNode>()
+    for (let p = this.ix.parent.get(target); p; p = this.ix.parent.get(p)) ancestors.add(p)
+    let f: Frame | undefined = frame
+    while (f && !(f.owner && ancestors.has(f.owner))) f = f.parent
+    if (!f) return undefined
+    const path: ContainerNode[] = []
+    for (let p = this.ix.parent.get(target); p && p !== f.owner; p = this.ix.parent.get(p)) path.push(p)
+    let g: Frame = f
+    for (let i = path.length - 1; i >= 0; i--) {
+      const s = this.sample(path[i], g)
+      if (!s.child) return undefined
+      g = s.child
+    }
+    return g
+  }
+
+  /** `endTimeOf`, inside `drive`. */
+  endOf(node: TimeNode): number | 'indefinite' | undefined {
+    const f = this.currentFrame(node)
+    if (!f) return undefined
+    const ivs = this.intervalsIn(node, f)
+    const last = ivs[ivs.length - 1]
+    if (!last) return undefined
+    if (f.unbounded) return 'indefinite'
+    const end = lastAbs(f, last.begin, last.end)
+    return Number.isFinite(end) ? end : 'indefinite'
   }
 }
 
@@ -625,17 +910,30 @@ function prepare(events: readonly ShowEvent[], t: number): ShowEvent[] {
   return events.filter((e) => Number.isFinite(e.t) && e.t <= t).sort((a, b) => a.t - b.t)
 }
 
-export function createScheduler(tree: TimingTree): Scheduler {
+export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}): Scheduler {
   const ix = buildIndex(tree)
+  const reported = new Set<string>()
+  const report: Report = (code, node) => {
+    const key = `${code}|${ix.order.get(node)}`
+    if (!options.sink || reported.has(key)) return
+    reported.add(key)
+    const message =
+      code === 'timing-cycle'
+        ? `time node ${node.ctn.id} is part of a reference cycle; the reference that closes it never fires`
+        : code === 'timing-forward-reference'
+          ? `time node ${node.ctn.id} is referenced before its sequence reaches it; the reference never fires`
+          : `time node ${node.ctn.id} is behind a reference chain too deep to resolve`
+    options.sink.add({ code, slideIndex: options.slideIndex, effect: `node ${node.ctn.id}`, message })
+  }
   return {
     evaluate(events, t) {
       const active: SchedulerEntry[] = []
       const frozen: SchedulerEntry[] = []
       const ended = new Set<number>()
       if (Number.isNaN(t)) return { active, frozen, ended }
-      const run = new Run(ix, prepare(events, t), t)
+      const run = new Run(ix, prepare(events, t), t, report)
       for (const node of ix.list) {
-        const s = run.stateOf(node)
+        const s = run.drive(() => run.stateOf(node))
         if (!s || s.status === 'idle') continue
         if (s.status === 'ended') ended.add(node.ctn.id)
         if (isContainer(node) || !s.visible) continue
@@ -647,15 +945,8 @@ export function createScheduler(tree: TimingTree): Scheduler {
     endTimeOf(nodeId, events) {
       const node = ix.byId.get(nodeId)
       if (!node) return undefined
-      const run = new Run(ix, prepare(events, INF), INF)
-      const f = run.currentFrame(node)
-      if (!f) return undefined
-      const ivs = run.intervalsIn(node, f)
-      const last = ivs[ivs.length - 1]
-      if (!last) return undefined
-      if (f.unbounded) return 'indefinite'
-      const end = Math.min(f.origin + last.end, f.endAbs)
-      return Number.isFinite(end) ? end : 'indefinite'
+      const run = new Run(ix, prepare(events, INF), INF, report)
+      return run.drive(() => run.endOf(node))
     },
   }
 }
