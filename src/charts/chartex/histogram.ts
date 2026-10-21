@@ -26,16 +26,16 @@ import type { ChartAxis, ChartExBinning, ChartExGroup, ChartExSeriesInfo, ChartG
 import type { ChartPointOverride } from '../style'
 import type { LabelOptions } from '../labels'
 import type { ChartWorkspace } from '../workspace'
-import { ChartRefusal, succeedChartModel } from '../own'
+import { ChartRefusal } from '../own'
 import { PointWriter, POINT_UNAVAILABLE, POINT_VALUE, hiddenAt, pointBytes, stringBytes } from '../points'
 import { createChartFormatter } from '../format'
 import { chartEpoch } from '../dates'
-import { CHART_DATA_NOT_AVAILABLE, CHART_POINT_LIMIT } from '../limits'
+import { CHART_BIN_LIMIT, CHART_DATA_NOT_AVAILABLE, CHART_INVALID_BINNING, CHART_POINT_LIMIT, CHART_UNREADABLE } from '../limits'
 
 export const HISTOGRAM_FAMILIES: ReadonlySet<string> = new Set(['histogram', 'pareto'])
-export const HISTOGRAM_INVALID_BINNING = 'invalid binning'
-export const HISTOGRAM_UNREADABLE = 'This chart could not be read'
-export const HISTOGRAM_BIN_LIMIT = 1000
+export const HISTOGRAM_INVALID_BINNING = CHART_INVALID_BINNING
+export const HISTOGRAM_UNREADABLE = CHART_UNREADABLE
+export const HISTOGRAM_BIN_LIMIT = CHART_BIN_LIMIT
 const CATEGORY_TYPES = ['cat', 'entityId']
 /** Retained record prices (a derived group, series or axis record) and a transient aggregation-map entry. */
 const RECORD_BYTES = 512, MAP_ENTRY_BYTES = 96, SLOT_BYTES = 8
@@ -428,19 +428,4 @@ function assemble(model: ChartModel, group: ChartExGroup, visible: ChartSeries[]
   void _p, void _r, void _h, void _v, void _a, void _d
   const truncated = model.truncated || built.labels.length > CHART_POINT_LIMIT
   return { ...rest, groups, axes, categories: built.labels, derivedFamily: group.family, ...(diagnostics.length ? { diagnostics } : {}), ...(truncated ? { truncated: true } : {}) }
-}
-
-/**
- * The adapter's stage 1 for a histogram or Pareto whose data is complete (cached, or read from the embedded
- * workbook): structural checks, then `prepare` (which derives). The successor takes over the model's charge; a
- * memory refusal refuses the chart.
- */
-export function prepareHistogramModel(model: ChartModel, prepare: (model: ChartModel) => ChartModel): ChartModel {
-  let next: ChartModel
-  try { next = prepare(model) } catch (error) {
-    if (!(error instanceof ChartRefusal)) throw error
-    next = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true }
-  }
-  succeedChartModel(model, next)
-  return next
 }

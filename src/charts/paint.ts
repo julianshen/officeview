@@ -223,6 +223,15 @@ function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGr
   }
 }
 
+/** One paint's path work bound (262,144 segments): a cost past what remains is refused, with `chart-path-limit`. */
+function pathAdmission(layout: ChartLayout): (cost: number) => boolean {
+  let remaining = 262144
+  return cost => {
+    if (cost <= remaining) { remaining -= cost; return true }
+    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
+    return false
+  }
+}
 /**
  * The cartesian families (bar, line, area, scatter) and contour groups (`families/contour.ts`: the band grid on
  * its category and series axes) drawn on the axis graph (spec 5.1): every group against its
@@ -236,9 +245,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
   const count = model.view.slots
   ctx.font = font(fontPx, family, familyCss)
   const used = [...graph.axes.values()].filter(a => placed.some(g => g.horizontal === a || g.vertical === a))
-  let remaining = 262144
-  const limited = () => { if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' }) }
-  const admitPath = (cost: number) => { if (cost > remaining) { limited(); return false }; remaining -= cost; return true }
+  const admitPath = pathAdmission(layout)
   const drawableAxes = new Set(used.filter(a => admitPath(16 + 4 * (a.ticks.length + a.minorTicks.length + Math.min(1000, a.slots)))))
   const valueAxes = used.filter(a => placed.some(g => g.value === a))
   const baseAxes = used.filter(a => !valueAxes.includes(a))
@@ -717,12 +724,7 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
 function paintRadarChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
   const plot = layout.plot
   if (plot.w <= 4 || plot.h <= 4) return
-  let remaining = 262144
-  const admitPath = (cost: number) => {
-    if (cost <= remaining) { remaining -= cost; return true }
-    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
-    return false
-  }
+  const admitPath = pathAdmission(layout)
   if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
   strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
   const css = familyCss(model.fontFamily)
@@ -737,12 +739,7 @@ function paintRadarChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout
 function paintFunnelChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
   const plot = layout.plot
   if (plot.w <= 4 || plot.h <= 4) return
-  let remaining = 262144
-  const admitPath = (cost: number) => {
-    if (cost <= remaining) { remaining -= cost; return true }
-    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
-    return false
-  }
+  const admitPath = pathAdmission(layout)
   if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
   strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
   const axis = model.axes.find(a => a.kind === 'category')

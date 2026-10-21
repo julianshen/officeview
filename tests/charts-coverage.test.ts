@@ -190,3 +190,53 @@ describe('chart diagnostics (spec 6.6)', () => {
     expectReason(diagnostic(mixed.diagnostics, 'chart-axis-unplaceable'), 'chart-axis-unplaceable')
   })
 })
+
+describe('a series missing a required role (final review I1, spec 6.4)', () => {
+  // The same chart XML in every format: a bar series without c:val, and a scatter series without c:xVal.
+  const NO_VAL = space(`<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>${ser(0, [2, 3])}<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Empty</c:v></c:tx></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}</c:plotArea>`)
+  const NO_X = space(`<c:plotArea><c:scatterChart><c:scatterStyle val="lineMarker"/><c:ser><c:idx val="0"/><c:order val="0"/><c:yVal>${lit([1, 2])}</c:yVal></c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/><c:axPos val="b"/><c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx></c:plotArea>`)
+
+  it('is unsupported in DOCX, PPTX and XLSX: the fallback is kept, a card only without one', async () => {
+    for (const [name, chart] of [['no c:val', NO_VAL], ['scatter without c:xVal', NO_X]] as const) for (const format of FORMATS) {
+      const card = await coverage(format, await build(format, graphicObject(format, 20, '<c:chart r:id="rC"/>'), chart))
+      expect(card, `${format} ${name}: card`).toEqual([expect.objectContaining({ id: '20', feature: 'chart', selectedRepresentation: 'chart-placeholder' })])
+      const fallback = await coverage(format, await build(format, alternate(graphicObject(format, 30, '<c:chart r:id="rC"/>'), picture(format, 31)), chart))
+      expect(fallback, `${format} ${name}: fallback`).toEqual([expect.objectContaining({ status: 'fallback', representation: 'fallback', selectedRepresentation: 'raster-fallback', feature: 'chart' })])
+    }
+  })
+
+  it('XLSX: the card carries the data-unavailable reason, never an empty native series', async () => {
+    const doc = await parseXlsx(await build('xlsx', graphicObject('xlsx', 20, '<c:chart r:id="rC"/>'), NO_VAL))
+    const content = doc.sheets[0].drawings?.[0]?.content
+    expect(content?.kind).toBe('xlsxChart')
+    const chart = content?.kind === 'xlsxChart' ? content.chart : undefined
+    expect(chart?.unsupported).toBe("This chart's data is not available")
+    expect(chart?.groups.flatMap(g => g.series) ?? []).toEqual([])
+  })
+
+  it('XLSX paged: the same chart XML selects its fallback, or a card', async () => {
+    const { openImportSession } = await import('../src/xlsx/storage/pagedImport')
+    const { createPagedWorkbookSource } = await import('../src/xlsx/view/pagedSource')
+    const bytesOf = async (body: string) => {
+      const pkg = await build('xlsx', body, NO_VAL)
+      const zip = new JSZip()
+      for (const path of pkg.paths()) zip.file(path, (await pkg.bytes(path))!)
+      zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="xml" ContentType="application/xml"/></Types>')
+      return zip.generateAsync({ type: 'uint8array' })
+    }
+    const read = async (bytes: Uint8Array) => {
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'i1-paged', profile: 'D' })
+      expect((await session.done).kind).toBe('complete')
+      const source = createPagedWorkbookSource(session)
+      try {
+        const adapter = source.store('1') as unknown as { stamp: unknown; readDrawings(request: object, profile: string): Promise<{ drawings: Array<{ source: { element: string; representation: string }; content?: { kind: string; chart?: { unsupported?: string; groups: Array<{ series: unknown[] }> } } }> }> }
+        return (await adapter.readDrawings({ stamp: adapter.stamp, signal: new AbortController().signal }, 'D')).drawings
+      } finally { await source.release() }
+    }
+    const fallback = await read(await bytesOf(alternate(graphicObject('xlsx', 30, '<c:chart r:id="rC"/>'), picture('xlsx', 31))))
+    expect(fallback.map(d => [d.source.element, d.source.representation])).toEqual([['pic', 'fallback']])
+    const card = await read(await bytesOf(graphicObject('xlsx', 20, '<c:chart r:id="rC"/>')))
+    expect(card[0]?.content?.chart?.unsupported).toBe("This chart's data is not available")
+    expect(card[0]?.content?.chart?.groups.flatMap(g => g.series) ?? []).toEqual([])
+  })
+})

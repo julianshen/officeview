@@ -272,4 +272,57 @@ describe('B3 review round 2', () => {
     // Control: the native chart draws no green picture.
     expect((await green(await variant(false))).n).toBe(0)
   }, 60_000)
+  it('final review I2: a refused chart replaced by its fallback returns its workspace charge, resident and paged', async () => {
+    const { documentChartContext } = await import('../src/charts/context')
+    const { chartModelOwner } = await import('../src/charts/own')
+    const png = createCanvas(8, 8)
+    const picture = '<mc:Fallback><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="Picture 1" /><xdr:cNvPicPr /></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rImg" /><a:stretch><a:fillRect /></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="1209675" y="47625" /><a:ext cx="4572000" cy="2743200" /></a:xfrm><a:prstGeom prst="rect"><a:avLst /></a:prstGeom></xdr:spPr></xdr:pic></mc:Fallback>'
+    const bytes = await hi2({
+      'xl/charts/chartEx1.xml': TINY,
+      'xl/drawings/drawing1.xml': xml => xml.replace(/<mc:Fallback>[\s\S]*<\/mc:Fallback>/, picture),
+      'xl/drawings/_rels/drawing1.xml.rels': xml => xml.replace('</Relationships>', '<Relationship Id="rImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>'),
+      '[Content_Types].xml': xml => xml.includes('Extension="png"') ? xml : xml.replace('<Default ', '<Default Extension="png" ContentType="image/png"/><Default '),
+    }, { 'xl/media/image1.png': new Uint8Array(png.toBuffer('image/png')) })
+    // Resident: the chart workspace holds nothing for the replaced chart; the picture carries a model-free card.
+    const context = documentChartContext('desktop')
+    const doc = await parseXlsx(await OfficePackage.load(bytes), { chartContext: context })
+    const drawing = doc.sheets[0].drawings?.[0]
+    expect(drawing?.source).toMatchObject({ element: 'pic', representation: 'fallback' })
+    expect(drawing?.chartFallback).toMatchObject({ unsupported: 'invalid binning', groups: [], feature: 'ChartEx' })
+    expect(chartModelOwner(drawing!.chartFallback!)).toBeUndefined()
+    expect(context.workspace.used).toBe(0)
+    // Control: a native chart in its Choice holds exactly its own model's charge (the branch probe's model is released).
+    const { releaseChartModel } = await import('../src/charts/own')
+    const nativeContext = documentChartContext('desktop')
+    const native = (await parseXlsx(await OfficePackage.load(await hi2({})), { chartContext: nativeContext })).sheets[0].drawings?.[0]
+    expect(native?.content?.kind).toBe('xlsxChart')
+    expect(nativeContext.workspace.used).toBeGreaterThan(0)
+    if (native?.content?.kind === 'xlsxChart') releaseChartModel(native.content.chart)
+    expect(nativeContext.workspace.used).toBe(0)
+    // Paged: the read's share and the document facet return to zero once the replaced chart is released.
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes)]) }, { docId: 'i2-paged', profile: 'D' })
+    expect((await session.done).kind).toBe('complete')
+    const source = createPagedWorkbookSource(session)
+    try {
+      const adapter = source.store('1') as unknown as { stamp: unknown; drawingState: { charts?: { workspace?: { used: number } } }; readDrawings(request: object, profile: string): Promise<{ drawings: Array<{ source: { element: string; representation: string }; chartFallback?: ChartModel }> }> }
+      const read = await adapter.readDrawings({ stamp: adapter.stamp, signal: new AbortController().signal }, 'D')
+      expect(read.drawings.map(d => [d.source.element, d.source.representation])).toEqual([['pic', 'fallback']])
+      expect(read.drawings[0].chartFallback).toMatchObject({ unsupported: 'invalid binning', groups: [] })
+      expect(adapter.drawingState.charts?.workspace?.used).toBe(0)
+    } finally { await source.release() }
+  }, 60_000)
+  it('final review M4: unavailable values refuse an analytic ChartEx chart and leave a display one unsupported, in every format', async () => {
+    // The value dimension removed: no cache and no reference.
+    const noValues = (layout: string) => part([1, 2], layout === 'clusteredColumn' ? '<cx:binning><cx:binCount val="2" /></cx:binning>' : '', ['a', 'b']).replace(/<cx:numDim[\s\S]*?<\/cx:numDim>/, '').replace('layoutId="clusteredColumn"', `layoutId="${layout}"`)
+    for (const path of ['xl/charts/chartEx1.xml', 'word/charts/chartEx1.xml', 'ppt/charts/chartEx1.xml']) for (const [layout, kind] of [['clusteredColumn', 'refused'], ['waterfall', 'unsupported'], ['funnel', 'unsupported']] as const) {
+      const zip = new JSZip()
+      zip.file(path, `<cx:chartSpace xmlns:cx="${CX}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${noValues(layout)}</cx:chartSpace>`)
+      const pkg = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+      const read = await readChartPart(pkg, path, chartParseContextFor(pkg, path))
+      if (read?.kind !== 'tree') throw new Error('read')
+      try {
+        expect(await parseChartPart(read.root, theme, chartParseContextFor(pkg, path)), `${path} ${layout}`).toMatchObject({ kind, reason: "This chart's data is not available" })
+      } finally { read.release() }
+    }
+  })
 })
