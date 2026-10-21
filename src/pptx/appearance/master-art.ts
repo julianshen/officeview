@@ -49,6 +49,30 @@ function placeholderIds(root: XmlNode | undefined): Set<string> {
   return ids
 }
 
+/** True when a drawing element's non-visual properties carry `p:nvPr/p:ph`. */
+const isPlaceholder = (node: XmlNode): boolean => NONVISUAL.some(name => getChildren(getChildren(getChildren(node, name)[0], 'nvPr')[0], 'ph').length > 0)
+
+/**
+ * The image rIds (`r:embed`, `r:link`) the part's non-placeholder elements reference, at any depth and in every
+ * AlternateContent branch, so placeholder-only and unreferenced image relationships are never read.
+ */
+function usedImageRids(root: XmlNode | undefined): Set<string> {
+  const rids = new Set<string>()
+  const pending: Array<[XmlNode, number]> = root ? [[root, 0]] : []
+  while (pending.length) {
+    const [node, depth] = pending.pop()!
+    if (depth >= MAX_DEPTH) continue
+    for (const [name, child] of orderedChildren(node)) {
+      if (name === '#text' || isPlaceholder(child)) continue
+      const a = attrs(child)
+      if (a.embed) rids.add(a.embed)
+      if (a.link) rids.add(a.link)
+      pending.push([child, depth + 1])
+    }
+  }
+  return rids
+}
+
 /** `cNvPr@id` of every `p:sp` with `useBgFill` (an xsd:boolean) in a part's shape tree, at any depth. */
 function useBgFillIds(root: XmlNode | undefined): Set<string> {
   const ids = new Set<string>()
@@ -95,11 +119,11 @@ function withoutPlaceholders(shapes: PptxShape[], ids: Set<string>): PptxShape[]
   return kept
 }
 
-/** One part's artwork: parsed whole, then placeholders and their diagnostics are filtered out. */
+/** One part's artwork: parsed whole (reading only the images kept shapes use), then placeholders and their diagnostics are filtered out. */
 async function partArtwork(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[]): Promise<PptxShape[]> {
   const issues: PptxDiagnostic[] = []
-  const parsed = await parseArtworkTree(pkg, partPath, theme, issues)
   const spTree = getChildren(getChildren(await pkg.xmlOrdered(partPath), 'cSld')[0], 'spTree')[0]
+  const parsed = await parseArtworkTree(pkg, partPath, theme, issues, usedImageRids(spTree))
   const ids = placeholderIds(spTree)
   const shapes = withoutPlaceholders(parsed, ids)
   flagUseBgFill(shapes, spTree, partPath)

@@ -62,7 +62,8 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
         const theme = slide.theme ?? (await slideTheme(pkg, path)).context
         themes.add(theme)
         const { background, diagnostics } = await resolveSlideBackground(pkg, path, theme)
-        const art = await masterArtwork(pkg, path, theme, artwork)
+        // A failed artwork read loses only the artwork: the resolved background is still assigned.
+        const art = await masterArtwork(pkg, path, theme, artwork).catch((error: unknown) => ({ master: [], layout: [], diagnostics: [unavailable('Master and layout artwork', error)] }))
         const node = backgroundNode(background, slide.widthEmu, slide.heightEmu)
         slide.underlay = [...(node ? [node] : []), ...art.master, ...art.layout]
         // useBgFill shapes on the slide itself also show the resolved background (the eager parse could only use a solid colour).
@@ -73,7 +74,7 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
         slide.diagnostics.push(...diagnostics, ...art.diagnostics)
       } catch (error) {
         slide.diagnostics ??= []
-        slide.diagnostics.push({ kind: 'appearance-unavailable', message: `Slide background and master artwork could not be resolved: ${error instanceof Error ? error.message : String(error)}` })
+        slide.diagnostics.push(unavailable('Slide background and master artwork', error))
       }
     }
   } finally {
@@ -83,6 +84,9 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
   for (const theme of themes) for (const issue of theme.issues) documentDiagnostic(doc, issue)
   indexUnderlayImages(doc)
 }
+
+const unavailable = (what: string, error: unknown): PptxDiagnostic =>
+  ({ kind: 'appearance-unavailable', message: `${what} could not be resolved: ${error instanceof Error ? error.message : String(error)}` })
 
 /** Underlay pictures join `doc.images` under parsePptx's complete-pair key, so a picture shared with slide
  * content decodes once, and each node gets the `imageIndex` the painter reads. */

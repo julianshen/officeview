@@ -247,7 +247,8 @@ function resolveTarget(partPath: string, target: string): string {
 }
 
 /** Load image parts referenced by a part's .rels file, keyed by rId. */
-async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
+/** With `used` (the lazy artwork), only those rIds are read, and a refused read leaves its rId missing instead of rejecting. */
+async function loadSlideImages(pkg: OfficePackage, partPath: string, used?: Set<string>): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
   const out = new Map<string, PptxImageRef>()
   const external = new Set<string>()
   const rels = await partRelationshipNodes(pkg, partPath)
@@ -258,10 +259,11 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ 
     const type = a.Type as string | undefined
     if (!type || !type.includes('/image') || !a.Target) continue
     if (a.TargetMode === 'External') { if (a.Id) external.add(a.Id); continue }
+    if (used && !used.has(a.Id ?? '')) continue
     const path = resolveTarget(partPath, (a.Target as string) ?? '')
     let ref = byPath.get(path)
     if (!ref) {
-      const data = await pkg.bytes(path)
+      const data = used ? await pkg.bytes(path).catch(() => undefined) : await pkg.bytes(path)
       if (!data) continue
       ref = { data, mime: sniffImageMime(data), partPath: path }
       byPath.set(path, ref)
@@ -870,13 +872,14 @@ function parseShapeTree(
  * A layout or master part's whole shape tree, placeholders included, for the lazy
  * master/layout artwork (slideshow S0-6). Images, table styles, compatibility and
  * the node budget go through the slide loop's helpers; drawing content (charts,
- * diagrams) is not prepared, so it shows as a card or is diagnosed.
+ * diagrams) is not prepared, so it shows as a card or is diagnosed. With `usedImages`, only those image rIds
+ * are read, and a refused image degrades to a missing-image diagnostic on its shape.
  */
-export async function parseArtworkTree(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[]): Promise<PptxShape[]> {
+export async function parseArtworkTree(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[], usedImages?: Set<string>): Promise<PptxShape[]> {
   const root = await pkg.xmlOrdered(partPath)
   const spTree = getChildren(getChildren(root, 'cSld')[0], 'spTree')[0]
   if (!spTree) return []
-  const { images, external } = await loadSlideImages(pkg, partPath)
+  const { images, external } = await loadSlideImages(pkg, partPath, usedImages)
   const tableStyles = await readTableStyles(pkg, themePalette(theme))
   const defaults = getChildren(await pkg.xml('ppt/presentation.xml'), 'defaultTextStyle')[0]
   const context = drawingPartContext(pkg)
