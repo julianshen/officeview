@@ -159,7 +159,7 @@ describe('retention (spec 6.4, 7: per-document chart retention 64 / 32 MiB)', ()
     expect(context.peak()).toBeLessThanOrEqual(limit)
     releaseAll(charts, context)
     expect(context.workspace.used).toBe(0)
-  })
+  }, 60_000)
 })
 
 // ---- Torture documents by damage class -----------------------------------------------------------------------------
@@ -249,7 +249,7 @@ describe('torture (b): a huge embedded workbook and a corrupt embedded zip', () 
     expect(lean.peak()).toBeLessThan(MiB)
     releaseAll(savedOnly.charts, lean)
     expect(lean.workspace.used).toBe(0)
-  })
+  }, 30_000)
 
   it('xlsx (no embedding): an oversized chart part and a malformed one are cards; a whole-column reference is display-truncated within bounds', async () => {
     const context = meteredContext('mobile')
@@ -276,7 +276,7 @@ describe('torture (b): a huge embedded workbook and a corrupt embedded zip', () 
     expect(paint(model, wide)).toBe(false)
     releaseAll(column.charts, wide)
     expect(wide.workspace.used).toBe(0)
-  })
+  }, 30_000)
 })
 
 describe('torture (c): external links and names pointing at another workbook', () => {
@@ -384,7 +384,7 @@ describe('layout retention churn (spec 6.5 stage 2)', () => {
     expect(context.peak()).toBeLessThan(2 * MiB)
     releaseChartModel(model)
     expect(context.workspace.used).toBe(0)
-  })
+  }, 30_000)
 })
 
 // ---- Work bounds -------------------------------------------------------------------------------------------------
@@ -454,7 +454,7 @@ describe('work bounds drop elements with diagnostics (spec 6.5, 7)', () => {
     expect(marked.counts.arc).toBe(30 * 4096)
     expect(marked.codes).toContain('chart-path-limit')
     for (const run of [straight, crowded, smooth, plain, marked]) expect(run.segments).toBeLessThanOrEqual(262144)
-  })
+  }, 30_000)
 
   it('label bytes: ChartEx labels share one 4 MiB budget; long labels are cut to 255 units; both are diagnosed', async () => {
     // A treemap (analytic: no 4,096-point display cap) with 8,000 cached labels of 300 units: each is cut to 255

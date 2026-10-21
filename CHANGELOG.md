@@ -52,6 +52,24 @@ print. Targets 0.5.0 (the version in package.json).
 - **Motion** for menus, dialogs, the mobile filter sheet, the sheet picker, the
   zoom readout and click feedback. Chrome only (canvases never animate), lazy
   loaded, and `prefers-reduced-motion` is honoured.
+- **Charts in Word and PowerPoint, and many more chart types everywhere.** One
+  lazily loaded chart engine now draws the charts of all three Office formats.
+  Word and PowerPoint charts are drawn natively instead of as their fallback
+  picture, with their data read from the chart's saved values or its embedded
+  workbook. New families: pie of pie and bar of pie, bubble, radar (marker,
+  line, filled), 2-D contour and wireframe contour, stock (high-low-close,
+  open-high-low-close, with volume), and the Office 2016+ waterfall, funnel,
+  treemap and sunburst. New elements: date and logarithmic axes, display units,
+  secondary axes, number formats, data labels, markers and gradients, smoothed
+  lines, trendlines, error bars, rich titles, legend options, multi-level
+  category labels, chart style and colour parts, and user shapes. 3-D surface
+  charts are a placeholder card; histogram, Pareto, box & whisker and region
+  map charts keep their fallback picture. The README's new "Charts" section
+  lists what is drawn and what is not.
+- Chart memory and work are bounded per document (64 MiB desktop, 32 MiB
+  mobile; 4,096 points and 64 series drawn; 262,144 path segments per chart).
+  Past a bound an element is dropped with a diagnostic, or the chart becomes a
+  placeholder card that says why; a chart is never left blank.
 - Dependencies: `lucide-react` (icons, replacing Unicode glyphs) and `motion`
   (pinned to `14.4.0`). Both load only in lazy chunks; the eager bundle does not
   grow. Because the pin is exact, a host that depends on a different `motion`
@@ -59,6 +77,10 @@ print. Targets 0.5.0 (the version in package.json).
 
 ### Changed
 
+- **Excel chart references into another workbook** (`[1]Sheet1!…`, directly or
+  through a defined name) still read blank, and now carry a
+  `chart-data-external-reference` diagnostic. External workbooks are never
+  fetched in any format.
 - **Fluent look** for the spreadsheet viewer, the page viewer and the shared
   shell: system font stack, 4px controls, 6px panels, soft layered shadows,
   Lucide icons, Excel-green cell selection, Fluent menus, sort/filter dialogs

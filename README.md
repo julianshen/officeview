@@ -630,6 +630,74 @@ not protect a secret inside it.
 
 **Page viewer (default)** — stacked per-page canvases, DPR-aware and hi-dpi when zoomed, pinch/drag/wheel/double-tap zoom with clamped panning, in-document text search with match navigation and highlighting, and text selection (drag, double-click for a word, triple-click for a line) with copy via `Cmd/Ctrl+C` or an on-screen button. Opt-in interactive spreadsheets use the grid behavior described above.
 
+## Charts
+
+Charts in Word, PowerPoint and Excel files are drawn by one chart engine, loaded lazily the first time a
+document contains a chart (it is not part of the main bundle). The engine reads the chart part (classic
+DrawingML `c:` charts and Office 2016+ ChartEx `cx:` charts), takes the data from the chart's saved values, the
+worksheet (Excel) or the embedded workbook (Word, PowerPoint), and paints it on the page canvas. Dark mode never
+changes chart pixels: a chart is part of the white paper.
+
+### Drawn natively
+
+Classic DrawingML families (the 3-D variants are drawn flat):
+
+| Family | Office elements |
+| --- | --- |
+| `bar` | `barChart`, `bar3DChart` (column and bar; clustered, stacked, 100% stacked) |
+| `line` | `lineChart`, `line3DChart` |
+| `area` | `areaChart`, `area3DChart` |
+| `pie` | `pieChart`, `pie3DChart` |
+| `doughnut` | `doughnutChart` |
+| `ofPie` | `ofPieChart` (pie of pie, bar of pie) |
+| `scatter` | `scatterChart` |
+| `bubble` | `bubbleChart` |
+| `radar` | `radarChart` (marker, line and filled) |
+| `contour` | `surfaceChart` (2-D contour and wireframe contour) |
+| `stock` | `stockChart` (high-low-close, open-high-low-close, with or without volume) |
+
+Office 2016+ ChartEx families:
+
+| Family | Office layout |
+| --- | --- |
+| `waterfall` | `waterfall` |
+| `funnel` | `funnel` |
+| `treemap` | `treemap` |
+| `sunburst` | `sunburst` |
+
+Chart elements: value, category, date and logarithmic axes (crossings, display units, reversed order, secondary
+axes); number formats; data labels; markers, lines, fills and gradients; smoothed lines; trendlines (linear,
+exponential, logarithmic, polynomial, power, moving average, with forecasts); error bars (fixed, percentage,
+standard deviation, standard error, custom); titles with rich text, legends and multi-level category labels;
+chart style and colour parts; and user shapes drawn over the chart.
+
+### Shown another way
+
+- `surface3DChart` (3-D surface): a placeholder card that names the chart and says why it is not drawn.
+- Region map: always its fallback picture, or a card when the file has none.
+- Histogram, Pareto and box & whisker (ChartEx): their fallback picture or a card for now; native drawing is in
+  review and lands in a later change.
+- A chart inside `mc:AlternateContent` that the engine cannot draw keeps the file's own fallback picture. A card is
+  shown only when no picture is available: a chart never becomes silent blank space.
+
+### Limits
+
+| Item | Limit | When exceeded |
+| --- | --- | --- |
+| Series / points drawn | 64 per chart / 4,096 per series | The rest is not drawn; the chart is marked truncated (its accessible description says so) |
+| Analytic inputs (trendlines, error-bar statistics, treemap and sunburst) | 65,536 points per series | The trendline or error bar is dropped, or the chart refused; never computed from a prefix |
+| Labels | 255 characters each; 4 MiB per chart | Cut or dropped, and diagnosed |
+| Chart part | 8 MiB desktop / 4 MiB mobile | The fallback picture, else a card |
+| Embedded workbook (Word, PowerPoint) | 8 MiB desktop / 4 MiB mobile inflated | The chart is refused: card |
+| Chart memory per document | 64 MiB desktop / 32 MiB mobile | Later charts become cards |
+| Drawing work | 262,144 path segments per chart | Later series are omitted, with a diagnostic |
+
+External workbook links are never fetched: a chart that needs data from another workbook draws from its saved
+values, or reads blank (Excel) or shows a card (Word, PowerPoint) when it has none.
+
+Compatibility evidence, including which behaviours are still unverified against Office, is tracked in
+[`docs/validation/chart-compat.md`](docs/validation/chart-compat.md).
+
 ## Selecting and copying
 
 In page mode, drag across text to select it; double-click selects a word, triple-click a line, and
