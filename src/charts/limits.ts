@@ -11,3 +11,6 @@ export const CHART_ANALYTIC_POINT_LIMIT = 65536
 export const CHART_LABEL_LIMIT = 255
 /** Hard cap on one fill's label storage (UTF-16 bytes). */
 export const CHART_TEXT_BYTES_LIMIT = 4 * 1024 * 1024
+/** Refusal reasons shared by the fill, the ChartEx adapter and the analytic families (spec 7, 5.8). */
+export const CHART_TOO_MANY_POINTS = 'This chart has too many data points to summarize'
+export const CHART_DATA_NOT_AVAILABLE = "This chart's data is not available"

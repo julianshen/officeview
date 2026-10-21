@@ -44,6 +44,18 @@ export const CONFORMANCE_CASES: Readonly<Record<Exclude<ConformanceCase, 'unavai
   'negative values': conformanceCache(3, ['-3', '-1', '-2']),
   'single point': conformanceCache(1, ['5']),
 }
+/** A ChartEx numeric level (`cx:lvl` content of a `cx:numDim`) of the given point texts; `undefined` leaves the index out (blank). */
+export const conformanceLevel = (count: number, points: Array<string | undefined>) =>
+  `<cx:lvl ptCount="${count}">${points.map((v, i) => v === undefined ? '' : `<cx:pt idx="${i}">${v}</cx:pt>`).join('')}</cx:lvl>`
+/** The ChartEx numeric level of each case (families with `chartEx: true`), the same points as CONFORMANCE_CASES. */
+export const CONFORMANCE_LEVELS: Readonly<Record<Exclude<ConformanceCase, 'unavailable point'>, string | null>> = {
+  'no series': null,
+  'empty series': conformanceLevel(0, []),
+  'all blank': conformanceLevel(3, [undefined, '', undefined]),
+  'NaN and infinity': conformanceLevel(4, ['NaN', 'Infinity', '-Infinity', '1e999']),
+  'negative values': conformanceLevel(3, ['-3', '-1', '-2']),
+  'single point': conformanceLevel(1, ['5']),
+}
 
 export interface ConformanceFamily {
   /** The family's name in test titles. */
@@ -61,6 +73,8 @@ export interface ConformanceFamily {
    * `unavailable point` case then marks the single-point model this returns.
    */
   parse?(xml: string, partPath: string): Promise<ChartResult>
+  /** `chart` receives each case's ChartEx level (CONFORMANCE_LEVELS) instead of a classic numeric cache (B3). */
+  chartEx?: true
 }
 
 export interface ConformanceRun { kind: 'native' | 'card'; reason?: string; diagnostics: ChartDiagnostic[]; card: boolean }
@@ -107,13 +121,13 @@ async function rootOf(xml: string, partPath: string): Promise<{ root: XmlNode; p
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
   if (name === 'unavailable point' && family.parse) {
-    const result = await family.parse(family.chart(CONFORMANCE_CASES['single point']), partPath)
+    const result = await family.parse(family.chart((family.chartEx ? CONFORMANCE_LEVELS : CONFORMANCE_CASES)['single point']), partPath)
     if (result.kind !== 'native') return { kind: 'card', reason: result.reason, diagnostics: [], card: paint(placeholderChart(result.title, result.reason)).card }
     const model = prepareChartAxes(withUnavailable(result.model))
     return { kind: 'native', diagnostics: collect(model), card: paint(model).card }
   }
   if (name === 'unavailable point') {
-    const read = await rootOf(family.chart(CONFORMANCE_CASES['single point']), partPath)
+    const read = await rootOf(family.chart((family.chartEx ? CONFORMANCE_LEVELS : CONFORMANCE_CASES)['single point']), partPath)
     const parsed = read.chartEx ? parseChartEx(read.root, undefined, chartParseContext(documentChartContext('desktop'), read.pkg, partPath)) : parseXlsxChart(read.root, undefined)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
     const model = prepareChartAxes(withUnavailable(parsed))
@@ -123,9 +137,9 @@ export async function runConformanceCase(family: ConformanceFamily, name: Confor
     return { kind: 'native', diagnostics: collect(model), card: painted.card }
   }
   const doc = documentChartContext('desktop')
-  const read = family.parse ? undefined : await rootOf(family.chart(CONFORMANCE_CASES[name]), partPath)
+  const read = family.parse ? undefined : await rootOf(family.chart((family.chartEx ? CONFORMANCE_LEVELS : CONFORMANCE_CASES)[name]), partPath)
   const context = chartParseContext(doc, read?.pkg ?? await pkg(), partPath)
-  const xml = family.chart(CONFORMANCE_CASES[name])
+  const xml = family.chart((family.chartEx ? CONFORMANCE_LEVELS : CONFORMANCE_CASES)[name])
   const result = family.parse ? await family.parse(xml, partPath) : await parseChartPart(read!.root, undefined, context)
   if (result.kind === 'native') {
     const painted = paint(result.model)

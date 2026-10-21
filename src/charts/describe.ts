@@ -31,6 +31,8 @@ export function chartTypeName(model: ChartModel): string | undefined {
   if (model.unsupported) return undefined
   const group = model.groups.find(g => g.family === 'stock') ?? model.groups[0]
   if (!group) return undefined
+  // A histogram or Pareto is drawn as plain column (and line) groups after stage 1; it keeps its own name.
+  if (model.derivedFamily) return TYPE_NAMES[model.derivedFamily] ?? 'Chart'
   return (group.family === 'bar' ? TYPE_NAMES[group.barDir === 'bar' ? 'bar' : 'col'] : TYPE_NAMES[group.family]) ?? 'Chart'
 }
 

@@ -22,7 +22,7 @@ import { isPackageError } from '../../core/package-error'
 import { attrs, getChildren, parseXml, parseXmlOrdered, type XmlNode } from '../../core/xml'
 import { DOCUMENT_DRAWING_NODE_LIMIT, drawingPartContext, resolvePartTarget } from '../../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../../drawing/style'
-import { parseWorksheetDrawings } from '../drawing'
+import { parseWorksheetDrawings, settleChartFallbacks } from '../drawing'
 import type { XlsxDrawing, XlsxSheet } from '../types'
 import { hasXlsxCharts, loadChartModule } from '../chartLoader'
 import { parseDefinedNames } from '../formula/names'
@@ -334,6 +334,9 @@ async function readPagedSheetDrawings(pkg: RangePackage, sheet: PagedDrawingShee
     }
     if (filled.uncacheable) uncacheable = true
     chartDiagnostics = filled.diagnostics ?? []
+    // A chart Choice refused once its data was read gives way to its fallback (spec 6.3).
+    await settleChartFallbacks(shell)
+    if (signal.aborted) throw aborted(signal)
   }
   const diagnostics = [...pkg.finish(), ...chartDiagnostics]
   if (context.diagnostics.some(issue => issue.kind === 'node-budget' && issue.reason === 'document-budget')) {

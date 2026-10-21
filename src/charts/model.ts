@@ -300,6 +300,11 @@ export interface ChartExSeriesInfo {
   formatIdx: number
   axisIds: string[]
   layoutPr: ChartExLayoutProperties
+  /** 0-based position among the plot area's `cx:series` (document order; what `ownerIdx` counts). */
+  position?: number
+  /** A `paretoLine` (it carries no data series): its resolved colour and authored line (map §5.2). */
+  color?: string
+  lineStyle?: import('./style').ChartLineStyle
 }
 export interface ChartExGroup extends ChartGroup {
   kind: 'chartEx'
@@ -391,6 +396,8 @@ export interface ChartModel {
   workbookEpoch?: '1904'
   /** Display points dropped by the per-chart bound. */
   truncated?: boolean
+  /** The ChartEx family a stage-1 derived model draws (histogram and Pareto become plain column and line groups; B3). */
+  derivedFamily?: ChartExFamily
   /** Diagnostics of the parse and fill (spec 6.6), e.g. `chart-axis-unplaceable`, `chart-date-unrepresentable`. */
   diagnostics?: ChartDiagnostic[]
   /** Set when the chart cannot be drawn: the reason shown on the placeholder card. */

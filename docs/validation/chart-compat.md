@@ -41,6 +41,13 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B5 | B5 commit | 38,639 | Before (`7c67e33`, rebuilt): 38,640. Treemap and sunburst (`src/charts/chartex/hierarchy.ts`, `hierarchyStyle.ts`, `treemap.ts`, `sunburst.ts`) and the hierarchy hooks in fill, precedence, embedded reader, stage 1, layout and paint all live in the lazy `charts-*` chunk; the two description names in the `imageAdmission` chunk. No eager source file was touched; measured −1 B (hash churn, not normalised). Bytes added by B5: 0. |
 | After B5 merge with feature | merge commit | 38,637 | `feature/chart-compat` merged into `chart/b5` (B2, A6b, A5c, A4b and the rest); conflicts resolved keeping both sides; B5 review minors (label numFmt, exclusion order) applied. Lazy `charts-*` chunk only. Before (feature ledger, B2 merge): 38,635; +2 B hash churn. Ceiling 38,647 |
 | After A7 fix round 1 | A7 r1 commit | 38,584 | Before (`db78d06`, rebuilt): 38,637. A7's descriptions, paintables metadata and chart list live in the lazy `charts-*`, `office-worker` and `PagedChrome` chunks. Review I1 needs `OfficeDoc` to abort the chart picture wait on unmount: one `AbortController` and its `signal` passed to `getPaintables` (+25 B, measured 38,664). Recovered by condensing three verbose style comments inside `OfficeDoc`'s JSX that `dist/index.js` preserves verbatim (−80 B), with no behaviour change. Running total vs B0: −47 B |
+| After B3 | B3 commit (`f2c8ee3`) | 38,635 | Before (`7c67e33`, rebuilt): 38,640. Histogram and Pareto (`src/charts/chartex/histogram.ts`, the stage-1 hook, the ChartEx adapter): all in the lazy `charts-*` chunk. `dist/index.js` unchanged apart from hash churn (−5 B). Bytes added by B3: 0. Running total vs B0 (38,631): +4 B |
+| After B3 fix round 1 | B3 r1 commit | 38,638 | Before (`d5eaff5`, B3 merged with `feature/chart-compat` at `e7e64f5`, rebuilt): 38,639. Leaf reason constants (`src/charts/limits.ts`), range-safe binning and override remapping (lazy `charts-*`); deferred XLSX chart fallbacks (`settleChartFallbacks` in `src/xlsx/drawing.ts`, in the worker chunks, not `dist/index.js`). `dist/index.js` unchanged apart from hash churn (−1 B). Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 2 | B3 r2 commit | 38,638 | Before (`0cdda65`, rebuilt): 38,638. Branch-unit fallback descriptors and post-settlement media indexing (`src/xlsx/drawing.ts`, `src/xlsx/parse.ts`, worker chunks); plain-first arithmetic and per-slot overrides (lazy `charts-*`). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 3 | B3 r3 commit | 38,638 | Before (`74670f5`): 38,638. Nested fallback-wrapper hierarchy in `src/xlsx/drawing.ts` (worker chunks). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 merge with feature | merge commit | 38,638 | `feature/chart-compat` `5be9dd1` (B2, B5, A6b, A5c, A4b, licence) merged into `chart/b3`; conflicts resolved keeping every family and section. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 4 + merge with feature (B4) | merge commit | 38,639 | Round 4 (per-pass wrapper settlement, ancestor membership) in worker chunks; `feature/chart-compat` with B4 box & whisker merged (CHARTEX_PAINTED keeps all seven painted families). +1 B hash churn. Running total vs B0: +8 B |
+| After B3 merge with feature (A7) | merge commit | 38,582 | `feature/chart-compat` with A7 (descriptions in `src/charts/describe.ts`, which freed eager bytes) merged into `chart/b3`; B3 adds `derivedFamily` naming (lazy). Running total vs B0: −49 B |
 
 ## Spec §8 testing and validation
 
@@ -201,6 +208,62 @@ placement remains pending. No acceptance checkbox is advanced by these tests.
 - **Inverted negative bars: unverified.** Without `c14:invertSolidFillFmt`, an inverted negative is painted white.
 - **Admission.** A style or colour part, or its relationships, that cannot be admitted refuses the chart (spec 6.4). A missing, malformed or unsupported part falls to the next precedence level.
 - **Evidence.** All fixtures are Office-shaped synthetic. None is Office evidence.
+
+## B3 histogram and Pareto: implemented and unverified rules (chartex-map §5)
+
+Implemented in `src/charts/chartex/histogram.ts`. Stage 1 (`prepareChartAxes`) turns the ChartEx group into a plain clustered column group (and a line group for the Pareto), labelled with the bin or category texts. Tests are in `tests/charts-chartex-histogram.test.ts`. The native evidence is HI1, HI2, PA1 and PA2, read end to end. Every other part is Office-shaped synthetic.
+
+The following rules are **unverified** ([U]/[P]). No Office-rendered reference has been compared for any of them.
+- **Scott variant:** `h = 3.49·s·n^(−1/3)` with the sample s of the inner set. Bins start at `min` (or U), with no rounding of `h` or of the start.
+- **Automatic bins, binCount and closure `l`:** no native example exists for `binCount`, and none for automatic binning with a count. Closure `l` and its mirrored outer bins (`<U`, `≥O`) also have no native example.
+- **Degenerate inputs:**
+  - `hi = lo` gives one bin `[lo, lo]` in every mode.
+  - An empty inner set draws only the outer bins.
+  - A Scott width that cannot be computed (fewer than two inner values) while `hi > lo` is refused as "invalid binning".
+- **Bin labels:**
+  - The glyphs are `(a, b]`, `[a, b)`, `≤U`, `>O`, `<U` and `≥O`.
+  - Edges use the category axis's authored format, else the first value's source format, else General (15 significant digits). This makes long labels for Scott widths.
+  - An empty trailing inner bin is drawn (HI2 `(13, 15]`), and its upper edge is not clipped to O.
+- **Hidden cells:** under plotVisOnly, hidden source cells are excluded from the analytic input.
+- **Several column series:** a histogram pools one set of bins over every visible series, drawn clustered, and requires every series to use the same binning. A Pareto with more than one column series is unsupported.
+- **By Category:**
+  - Categories are grouped by exact text in first-occurrence order and their values summed.
+  - A category whose points are all blank or error still appears, at 0.
+  - A missing category dimension is unsupported.
+  - Controller ruling: the brief's "pre-aggregated data drawn as given" is tested as unique categories drawn as given. Duplicates are summed.
+- **Pareto:**
+  - The owner is the series `ownerIdx` names (document position).
+  - Ties keep their prior order (bin order, or the first occurrence of the category).
+  - The line passes through the band centres. An all-zero total draws a zero line.
+  - The percent axis is the paretoLine's value axis (min 0, max 1 and `0%` unless authored), placed on the right. The line's colour comes from its `formatIdx` (accent 2 by default).
+  - The line's legend name is the owner's name.
+- **Gap width:** an absent `gapWidth` is 0 for binned columns and 150 % for By Category.
+- **Per-point overrides ([P], fix rounds 1 and 2):**
+  - The rule is decided per category slot. A By Category column whose slot holds exactly one source point of its series keeps that point's `dataPt` fill, colour and line, and its `dataLabel`/`dataLabelHidden`. A Pareto sort moves them with their column.
+  - Binned columns, and slots grouped from several points, drop only the overrides addressing those points, with one `chart-histogram-point-overrides` diagnostic carrying the count.
+  - Series-level labels are always kept, so PA2's counts are drawn.
+- **Hidden series (fix round 1):**
+  - A hidden column series is out of layout: it is not drawn, not binned, and not counted by the structural checks.
+  - A hidden paretoLine draws no line, but the columns are still sorted by their owner.
+  - `ownerIdx` counts every `cx:series` in document position, hidden ones included.
+- **Range safety (fix rounds 1 and 2):**
+  - Ordinary arithmetic is used whenever it stays representable.
+  - A bin edge `lo + i·h` is halved and doubled only when the plain edge overflows, so a subnormal width keeps its value.
+  - Differences are taken from quotients only when the plain difference overflows.
+  - A By Category slot is summed again, with its own power-of-two scale, only when its plain sum overflows, so small sums in other slots are never scaled.
+  - Pareto fractions use plain running sums unless those overflow.
+  - Edges that are non-finite or not strictly increasing are refused as "invalid binning".
+  - A column whose value passes the double range is refused ("This chart's values are out of range").
+- **Refusal after the data is read (XLSX, fix rounds 1 and 2; every ChartEx family):**
+  - A chart Choice is selected before the workbook fill reads its data. If the fill or stage 1 then refuses any chart in the selected branch, `settleChartFallbacks` replaces the whole branch with its `mc:Fallback`, parsed only at that point. "The whole branch" includes a shape beside the chart and a chart inside a group. This applies to the resident and the paged XLSX readers.
+  - Nested AlternateContent (fix round 3): each wrapper is a node in a hierarchy, and a drawing maps to its innermost wrapper. Settlement runs innermost first, so the first usable inner fallback wins, as it does for a chart refused at selection. An inner replacement takes the replaced objects' place in the enclosing branch, so the object count may change. An unusable inner fallback leaves the refusal to the enclosing wrapper.
+  - Fix round 4: an inner replacement is carried into every enclosing wrapper whose flattened branch held the replaced objects, so a grandparent with a refused sibling chart still gives way as a unit. Each settlement pass handles an open wrapper at most once, so a chart still waiting on data returns promptly and keeps its route for a later call.
+  - The branch's descriptor lives until its charts are final. A paged chart that is still waiting on an importing sheet keeps its Choice, and the paged reader reads the sheet's drawings again once the sheet completes.
+  - A selected fallback's pictures are indexed into the document's media (`collectXlsxImages`), so they paint.
+  - The coverage becomes `fallback`/`fallback`, keeping the chart's feature (`ChartEx`), with the refusal as the reason.
+  - With no usable fallback, the card stays and its stale `chart` coverage entry is recomputed.
+  - DOCX/PPTX need no change: their data is read in the adapter, before selection.
+- **Accessible description (after the A7 merge):** a derived model carries `derivedFamily`, so `chartDescription` names it "Histogram chart" or "Pareto chart" (the lazy `src/charts/describe.ts`).
 
 ## A4b titles, legends and multi-level categories (spec 5.9, 5.10)
 
