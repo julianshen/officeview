@@ -22,7 +22,9 @@ export class ManualClock implements ShowClock {
 /**
  * The production clock: show time advances by the `requestAnimationFrame`
  * timestamps of the window it is given (realm-safe; never the global
- * window), starting at 0 on the first frame. Paused frames add no time.
+ * window), starting at 0 on the first frame. Paused time adds nothing, even
+ * when no frames arrive during the pause: `resume` rebases on the window's
+ * `performance.now()`.
  * Pausing on a hidden document is wired by the session (S1-10/S1-19).
  */
 export class RafClock implements ShowClock {
@@ -34,7 +36,15 @@ export class RafClock implements ShowClock {
   get paused(): boolean { return this.stopped }
   now(): number { return this.t }
   pause(): void { this.stopped = true }
-  resume(): void { this.stopped = false }
+  /**
+   * Rebases on the window's `performance.now()` (the rAF timeline), so a pause
+   * with no frames at all (a hidden document) never counts as show time.
+   */
+  resume(): void {
+    if (!this.stopped) return
+    this.stopped = false
+    this.last = this.win.performance.now()
+  }
   dispose(): void {
     if (this.request !== undefined) this.win.cancelAnimationFrame(this.request)
     this.request = undefined
@@ -43,7 +53,8 @@ export class RafClock implements ShowClock {
     this.request = this.win.requestAnimationFrame((stamp) => {
       this.request = undefined
       if (this.last !== undefined && !this.stopped && stamp > this.last) this.t += stamp - this.last
-      this.last = stamp
+      // A frame stamped before the resume point never moves the anchor back.
+      this.last = this.last === undefined ? stamp : Math.max(this.last, stamp)
       this.schedule()
     })
   }

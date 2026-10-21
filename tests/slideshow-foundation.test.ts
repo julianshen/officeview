@@ -125,14 +125,17 @@ describe('slideshow foundation contracts', () => {
 
     // RafClock reads the rAF timestamps of the window it is given (realm-safe),
     // never the global one; it starts at 0 and stands still while paused.
+    // `wall` is that window's performance.now(), on the same timeline as rAF.
     const frames = new Map<number, (t: number) => void>()
     let nextId = 0
+    let wall = 0
     const win = {
       requestAnimationFrame: (cb: (t: number) => void) => { frames.set(++nextId, cb); return nextId },
       cancelAnimationFrame: (id: number) => { frames.delete(id) },
+      performance: { now: () => wall },
     } as unknown as Window
     const raf = new RafClock(win)
-    const tick = (t: number) => { const [id, cb] = frames.entries().next().value!; frames.delete(id); cb(t) }
+    const tick = (t: number) => { wall = t; const [id, cb] = frames.entries().next().value!; frames.delete(id); cb(t) }
     tick(1000)
     expect(raf.now()).toBe(0)
     tick(1016)
@@ -140,9 +143,42 @@ describe('slideshow foundation contracts', () => {
     raf.pause()
     tick(2000)
     expect(raf.now()).toBe(16)
-    raf.resume()
+    wall = 2005
+    raf.resume() // resumes at 2005: only 2005..2010 counts
     tick(2010)
-    expect(raf.now()).toBe(26)
+    expect(raf.now()).toBe(21)
+    // A pause with NO frames (a hidden document stops rAF): the gap never counts.
+    raf.pause()
+    wall = 5000
+    raf.resume()
+    raf.pause()
+    wall = 12_000
+    raf.resume()
+    tick(12_010)
+    expect(raf.now()).toBe(31)
+    tick(12_020)
+    expect(raf.now()).toBe(41)
+    // A resume while running is a no-op (does not rebase mid-run).
+    wall = 12_030
+    raf.resume()
+    tick(12_036)
+    expect(raf.now()).toBe(57)
+    // Repeated pause/resume: show time stays monotonic, paused spans excluded.
+    for (let i = 0; i < 3; i++) {
+      raf.pause()
+      wall += 1000
+      raf.resume()
+      tick(wall + 4)
+    }
+    expect(raf.now()).toBe(69)
+    // A frame whose stamp predates the resume point (frame began before it) adds nothing.
+    raf.pause()
+    wall += 100
+    raf.resume()
+    const resumedAt = wall
+    tick(resumedAt - 3)
+    tick(resumedAt + 5)
+    expect(raf.now()).toBe(74)
     raf.dispose()
     expect(frames.size).toBe(0)
   })
