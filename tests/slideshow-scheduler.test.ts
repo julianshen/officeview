@@ -685,4 +685,25 @@ describe('scheduler', () => {
     expect(a.evaluate([...events].reverse(), 650)).toEqual(a.evaluate(events, 650))
     expect(a.endTimeOf(3, events)).toEqual(b.endTimeOf(3, events))
   })
+
+  it('S1-10: a seek at a step\'s begin instant settles it to its end', () => {
+    // mainSeq [A waits, B waits (dur 0)]: two nexts at 100 begin A and B together; B seeks A from elapsed 0 to 1000.
+    const a = par(3, [par(4, [bhv(8, { durMs: 1000, fill: 'hold' })], { start: [delay(0)], fill: 'hold' })], { start: [WAIT], fill: 'hold' })
+    const b = par(5, [], { durMs: 0, start: [WAIT] })
+    const s = createScheduler(tree(seq(2, [a, b], { durMs: 'indefinite', nodeType: 'mainSeq' }, { concurrent: false, nextAc: 'seek', prevAc: 'none' })))
+    const events: ShowEvent[] = [{ kind: 'next', t: 100 }, { kind: 'next', t: 100 }]
+    expectSeen(s.evaluate(events, 100), 8, 'frozen', 1)
+    expectSeen(s.evaluate(events, 150), 8, 'frozen', 1)
+  })
+
+  it('S1-10: seek settles finite effects nested beside an indefinite one', () => {
+    // Step A: inner par holding a 1000 ms effect (8) and an indefinite 500 ms spin (9). B seeks A at 200: settle 1000, delta 800.
+    const a = par(3, [par(4, [bhv(8, { durMs: 1000, fill: 'hold' }), bhv(9, { durMs: 500, repeatCount: 'indefinite' })], { start: [delay(0)], fill: 'hold' })], { start: [WAIT], fill: 'hold' })
+    const b = par(5, [bhv(10, { durMs: 1000, fill: 'hold' })], { start: [WAIT], fill: 'hold' })
+    const s = createScheduler(tree(seq(2, [a, b], { durMs: 'indefinite', nodeType: 'mainSeq' }, { concurrent: false, nextAc: 'seek', prevAc: 'none' })))
+    const snap = s.evaluate([{ kind: 'next', t: 0 }, { kind: 'next', t: 200 }], 300)
+    expectSeen(snap, 8, 'frozen', 1)
+    expectSeen(snap, 9, 'active', 0.2, 2) // local 300 + 800 = 1100: turn 2 at 100/500
+    expectSeen(snap, 10, 'active', 0.1)
+  })
 })

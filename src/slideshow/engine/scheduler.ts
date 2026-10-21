@@ -204,7 +204,8 @@ function waits(n: TimeNode): boolean {
 
 /** Elapsed active time of an interval at parent-local `tau` (pauses hold it, seeks jump it). */
 function activeElapsed(iv: Interval, tau: number): number {
-  if (!(tau > iv.begin)) return 0
+  // At the begin instant a seek made there already counts (a step settled as it begins).
+  if (!(tau >= iv.begin)) return 0
   if (tau === INF) return INF
   let e = tau - iv.begin
   for (const [s, x] of iv.pauses) {
@@ -702,21 +703,35 @@ class Run {
   private seekPlan(node: TimeNode, iv: Interval, s: number, frame: Frame): (() => void) | undefined {
     let settle: number
     if (Number.isFinite(iv.end)) settle = activeElapsed(iv, iv.end)
-    else if (isContainer(node) && !Number.isFinite(iv.L)) {
-      const cf = this.preFrame(node, frame, iv.begin, iv.event)
-      settle = 0
-      for (const c of this.ix.kids.get(node) ?? []) {
-        const l = this.intervalsIn(c, cf)
-        const e = l[l.length - 1]?.end
-        if (e !== undefined && Number.isFinite(e) && e > settle) settle = e
-      }
-    } else return undefined
+    else if (isContainer(node) && !Number.isFinite(iv.L)) settle = this.finiteSettle(node, frame, iv.begin, iv.event)
+    else return undefined
     const delta = settle - activeElapsed(iv, s)
     if (!(delta > 0)) return undefined
     return () => {
       iv.seeks.push({ at: s, delta })
       if (Number.isFinite(iv.end)) iv.end = Math.max(s, iv.end - delta)
     }
+  }
+
+  /**
+   * The local time by which every finite part of a never-ending container
+   * has ended. A child that never ends either is searched the same way (its
+   * children live on its elapsed time, as its iteration is unbounded), so an
+   * indefinite effect nested in a click group does not stop its finite
+   * siblings from settling.
+   */
+  private finiteSettle(node: ContainerNode, frame: Frame, begin: number, event: ShowEvent | undefined): number {
+    const cf = this.preFrame(node, frame, begin, event)
+    let settle = 0
+    for (const c of this.ix.kids.get(node) ?? []) {
+      const l = this.intervalsIn(c, cf)
+      const last = l[l.length - 1]
+      if (!last) continue
+      let e = last.end
+      if (!Number.isFinite(e) && isContainer(c) && !Number.isFinite(last.L)) e = last.begin + this.finiteSettle(c, cf, last.begin, last.event)
+      if (Number.isFinite(e) && e > settle) settle = e
+    }
+    return settle
   }
 
   private own(node: TimeNode, frame: Frame, base: number | undefined): Interval[] {
