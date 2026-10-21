@@ -67,7 +67,8 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
         slide.underlay = [...(node ? [node] : []), ...art.master, ...art.layout]
         // useBgFill shapes on the slide itself also show the resolved background (the eager parse could only use a solid colour).
         flagUseBgFill(slide.shapes, getChildren(getChildren(await pkg.xmlOrdered(path), 'cSld')[0], 'spTree')[0], path)
-        if (node) slide.backdrop = node
+        // No background anywhere: useBgFill shapes still show the default white slide, not their authored fill.
+        slide.backdrop = node ?? backgroundNode({ kind: 'fill', fill: { kind: 'solid', color: { r: 255, g: 255, b: 255, a: 1 } } }, slide.widthEmu, slide.heightEmu)
         slide.diagnostics ??= []
         slide.diagnostics.push(...diagnostics, ...art.diagnostics)
       } catch (error) {
