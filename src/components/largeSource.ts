@@ -41,9 +41,11 @@ function settledEarly(admission: SpreadsheetAdmission): admission is Extract<Spr
   return admission.mode === 'refuse'
 }
 
-/** A discarded parse returns its charts' storage to the document's chart workspace (D0: nothing orphaned). */
-async function releaseDocumentCharts(doc: XlsxDocument): Promise<void> {
-  if (!doc.sheets.some(sheet => hasXlsxCharts(sheet.drawings))) return
+/** A discarded parse returns its charts' storage to the document's chart workspace (D0: nothing orphaned),
+ * including each sheet's retained charge (a published formatter diagnostic), which outlives a chart that gave
+ * way to its authored fallback: released whenever the package read charts, even with no chart node left. */
+async function releaseDocumentCharts(doc: XlsxDocument, pkg: OfficePackage): Promise<void> {
+  if (!drawingPartContext(pkg).chart && !doc.sheets.some(sheet => hasXlsxCharts(sheet.drawings))) return
   const charts = await loadChartModule().catch(() => undefined)
   const visit = (nodes: readonly XlsxDrawing[] | undefined): void => { for (const node of nodes ?? []) { if (node.content?.kind === 'xlsxChart') charts?.releaseChartModel(node.content.chart); visit(node.children) } }
   for (const sheet of doc.sheets) { visit(sheet.drawings); charts?.releaseChartRetained(sheet) }
@@ -55,7 +57,7 @@ async function parseWithCaps(pkg: OfficePackage, evaluation: { maxArrayCells: nu
   if (policy === 'engine') {
     doc = await parseXlsx(pkg, { evaluation })
     // Rule 5: an evaluator resource hit is never published; reopen with saved values.
-    if (evaluationHitCap(doc)) { await releaseDocumentCharts(doc); doc = undefined; capped = true }
+    if (evaluationHitCap(doc)) { await releaseDocumentCharts(doc, pkg); doc = undefined; capped = true }
     throwIfAborted(ctx.signal)
   }
   if (doc === undefined) {

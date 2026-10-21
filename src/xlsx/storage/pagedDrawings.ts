@@ -123,6 +123,8 @@ class RangePackage extends OfficePackage {
   private refusals = 0
   /** Charged working-set estimate (inflated parts, their text, parsed trees). */
   workingSet = 0
+  /** A chart fill's live scratch (its cell maps and typed arrays): part of every admission until the fill ends. */
+  private fillScratch = 0
   /** A part did not fit the document pool: the whole read is refused, never partial. */
   memoryRefused = false
   /** Drawing nodes the parse had reserved when the pool refused. */
@@ -201,13 +203,21 @@ class RangePackage extends OfficePackage {
   /** Shrinks the pool share by `cost` (a released chart allocation). */
   private refund(cost: number): void {
     this.workingSet = Math.max(0, this.workingSet - cost)
-    if (!this.memoryRefused) this.memory?.set(this.workingSet)
+    if (!this.memoryRefused) this.memory?.set(this.workingSet + this.fillScratch)
   }
+  /** Sets the chart fill's live scratch to `bytes` (its whole current total, not an increment); a refusal keeps
+   * the previous reservation. 0 releases it. */
+  reserveFillScratch(bytes: number): boolean {
+    if (this.memory && !this.memory.set(this.workingSet + bytes)) return false
+    this.fillScratch = bytes
+    return true
+  }
+  endFill(): void { this.fillScratch = 0 }
   /** Grows the pool share by `cost`; on refusal the read is refused as a whole and
    * the parse winds down: no further part reads and no further drawing nodes. */
   private admit(cost: number): boolean {
     if (this.memoryRefused) return false
-    if (!this.memory || this.memory.set(this.workingSet + cost)) { this.workingSet += cost; return true }
+    if (!this.memory || this.memory.set(this.workingSet + this.fillScratch + cost)) { this.workingSet += cost; return true }
     this.memoryRefused = true
     const context = drawingPartContext(this)
     this.nodesAtRefusal = context.nodes
@@ -326,7 +336,9 @@ async function readPagedSheetDrawings(pkg: RangePackage, sheet: PagedDrawingShee
       try { names = parseDefinedNames(await pkg.xml('xl/workbook.xml')) } catch { if (signal.aborted) throw aborted(signal) }
     }
     // The chart cell workspace is admitted against the drawing memory before any read.
-    const filled = await options.fillCharts(shell.drawings!, sheet.name, names, bytes => !options.memory || options.memory.set(pkg.workingSet + bytes), context.chart?.workspace)
+    // The fill's scratch stays in every chart-ledger admission (model storage built during the fill) until it ends.
+    let filled: Awaited<ReturnType<NonNullable<PagedDrawingOptions['fillCharts']>>>
+    try { filled = await options.fillCharts(shell.drawings!, sheet.name, names, bytes => pkg.reserveFillScratch(bytes), context.chart?.workspace) } finally { pkg.endFill() }
     if (signal.aborted) throw aborted(signal)
     if (filled.pendingSheets.length) pendingSheets = filled.pendingSheets
     if (filled.refused) {
