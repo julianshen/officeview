@@ -3,7 +3,6 @@ import { describe, it, expect } from 'vitest'
 
 async function modules() {
   const loaded = { ...await import('../src/slideshow/catalogue'), ...await import('../src/slideshow/inventory') }
-  expect(loaded).toHaveProperty('CATALOGUE')
   return loaded
 }
 
@@ -13,7 +12,7 @@ describe('slideshow catalogue', () => {
     expect(INVENTORY.transitions).toHaveLength(56) // 21 ECMA + 19 p14 + 12 p15 + morph default/3 options
     expect(INVENTORY.behaviours).toHaveLength(10)
     expect(INVENTORY.presets.filter(p => p.subtype === undefined)).toHaveLength(199)
-    expect(INVENTORY.presets.filter(p => p.subtype !== undefined)).toHaveLength(40) // two fly families x 20 source directions
+    expect(INVENTORY.presets.filter(p => p.subtype !== undefined)).toHaveLength(2040) // 102 entrance/exit families (excluding wheel) x 20 directions
     expect(new Set(CATALOGUE.map(r => r.id)).size).toBe(CATALOGUE.length)
     for (const t of INVENTORY.transitions) {
       const row = rowForTransition(t.ns, t.element, t.preset)
@@ -63,7 +62,7 @@ describe('slideshow catalogue', () => {
   it('the inventory module imports nothing from src/slideshow/read', async () => {
     await modules()
     const source = readFileSync('src/slideshow/inventory.ts', 'utf8')
-    expect(source).not.toMatch(/\bimport\s/)
+    expect(source).not.toMatch(/^\s*import\b|import\(/m)
     expect(source).toContain('2578da962608a2123d637b80499123c258829582')
     expect(source).toContain('MPL-2.0')
     const catalogue = readFileSync('src/slideshow/catalogue.ts', 'utf8')
@@ -80,7 +79,7 @@ describe('slideshow catalogue', () => {
     expect(rowForTransition('p15', 'prstTrans:fallOver')).toBeUndefined()
     expect(rowForTransition('p159', 'morph', 'byWord')?.status).toBe('pending-stage-3')
     expect(rowForPreset('entr', 2, 1)?.uiName).toContain('from-top')
-    expect(rowForPreset('entr', 2, 999999)).toBeUndefined()
+    expect(rowForPreset('entr', 2, 999999)).toBe(rowForPreset('entr', 2))
     expect(rowForPreset('unknown', 2)).toBeUndefined()
     expect(rowForPreset('entr:2', 1)).toBeUndefined()
     expect(rowForPreset('entr', 999999)).toBeUndefined()
@@ -95,4 +94,38 @@ describe('slideshow catalogue', () => {
     expect(catalogueMarkdown()).toContain('kiosk link inertness')
     expect(catalogueMarkdown()).toContain('pending D4')
   })
+})
+
+it('known preset families retain direction parameters, including zero and special mappings', async () => {
+  const { rowForPreset, presetDirection } = await modules()
+  for (const [id, subtype, direction] of [[22,8,'from-left'],[3,10,'vertical'],[16,21,'vertical-in'],[1,0,'0'],[5,5,'downward'],[5,10,'across'],[17,10,'across'],[18,3,'right-to-top'],[18,6,'right-to-bottom'],[18,9,'left-to-top'],[18,12,'left-to-bottom'],[21,8,'8']] as const) {
+    expect(rowForPreset('entr', id, subtype)).toBeDefined()
+    expect(presetDirection('entr', id, subtype)).toBe(direction)
+    expect(presetDirection('exit', id, subtype)).toBe(direction)
+  }
+  expect(rowForPreset('entr',1,0)).toBe(rowForPreset('entr',1))
+  expect(presetDirection('entr',22,999999)).toBe('999999')
+  expect(rowForPreset('entr',999999,8)).toBeUndefined()
+})
+it('inventory is duplicate-free and covers the catalogue in reverse', async () => {
+  const { INVENTORY, CATALOGUE } = await modules()
+  expect(new Set(INVENTORY.presets.map(p => JSON.stringify([p.cls,p.id,p.subtype]))).size).toBe(INVENTORY.presets.length)
+  expect(new Set(INVENTORY.transitions.map(t => JSON.stringify([t.ns,t.element,t.preset]))).size).toBe(INVENTORY.transitions.length)
+  expect(new Set(INVENTORY.behaviours).size).toBe(INVENTORY.behaviours.length)
+  for (const r of CATALOGUE) {
+    if (r.preset) expect(INVENTORY.presets.some(p => p.cls === r.preset!.cls && p.id === r.preset!.id && p.subtype === r.preset!.subtype)).toBe(true)
+    if (r.kind === 'transition') expect(INVENTORY.transitions.some(t => `transition:${t.ns}:${t.element}${t.preset === undefined ? '' : ':' + t.preset}` === r.id)).toBe(true)
+    if (r.status.startsWith('pending-stage-')) expect(r.stage).toBe(Number(r.status.at(-1)))
+  }
+})
+it('shared policy rows are frozen and codec is pending stage two', async () => {
+  const { CATALOGUE } = await modules()
+  expect(Object.isFrozen(CATALOGUE)).toBe(true)
+  for (const r of CATALOGUE) {
+    expect(Object.isFrozen(r)).toBe(true)
+    expect(Object.isFrozen(r.tolerance)).toBe(true)
+    if (r.preset) expect(Object.isFrozen(r.preset)).toBe(true)
+    if (r.lookalike === undefined) expect(Object.hasOwnProperty.call(r,'lookalike')).toBe(false)
+  }
+  expect(CATALOGUE.find(r => r.id === 'media:codec')?.status).toBe('pending-stage-2')
 })
