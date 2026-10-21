@@ -475,6 +475,30 @@ describe('paintDirect', () => {
     expect(scratch.used()).toBe(0)
   })
 
+  it('tables paint through the delegated content path identically to renderSlide, layered and direct', async () => {
+    const parsed = await parsedSlide([
+      { id: 20, off: [emu(30), emu(20)], ext: [emu(140), emu(80)], table: {
+        colWidths: [emu(70), emu(70)],
+        rows: [{ h: emu(40), cells: [{ fill: 'FFCC00', paragraphs: [{ runs: [{ text: 'A1' }] }] }, { paragraphs: [{ runs: [{ text: 'B1' }] }] }] },
+          { h: emu(40), cells: [{ paragraphs: [{ runs: [{ text: 'A2' }] }] }, { fill: '3366CC', paragraphs: [{ runs: [{ text: 'B2' }] }] }] }],
+      } },
+    ])
+    const table = parsed.shapes[0]
+    expect(table.table).toBeDefined()
+    table.source = { ...table.source!, id: '20' }
+    const slide = slideOf([rect(2, 0, 0, 60, 60, '#ff0000'), table], { theme: parsed.theme })
+    const ref = reference(slide)
+    expect(at(ref, 40, 25)).toEqual([255, 204, 0, 255])
+    expect(diff(composite(slide, buildRenderPlan(slide, new Set(), NONE, []), rasterCtx()), ref)).toBe(0)
+    // As its own layer over an opaque base: glyph edges may round by 1, the cell fills are exact.
+    const layered = composite(slide, buildRenderPlan(slide, new Set(['sp:20']), NONE, []), rasterCtx())
+    expect(maxDelta(layered, ref)).toBeLessThanOrEqual(1)
+    expect(regionDiff(layered, ref, 32, 22, 45, 30)).toBe(0)
+    const direct = createCanvas(W, H)
+    paintDirect(direct.getContext('2d') as unknown as C2D, slide, new Map([['sp:20', shown()]]), { images: [], resolveFont: f => f, scale: 1, scratch: makeWorkspace(1 << 20) })
+    expect(diff(direct, ref)).toBe(0)
+  })
+
   it('paintDirect with terminal.scratch succeeds while the parent workspace is fully reserved; a scratch overflow paints placeholders; parent used() does not grow', () => {
     const small = createCanvas(10, 10), smallCtx = small.getContext('2d')
     smallCtx.fillStyle = '#00ff00'; smallCtx.fillRect(0, 0, 10, 10)
