@@ -2651,3 +2651,39 @@ Audit totals: 140 exact normalized-name matches; 59 unresolved name matches. Hyp
   would change the frozen cross-task contract and is intentionally deferred.
 - media:codec is pending-stage-2. No Office fidelity, browser execution or
   physical-device validation is claimed by this table.
+
+## S1-8 transition and timing reader
+
+Evidence classes: **corpus** = LibreOffice `sd/qa/unit/data/pptx` files written
+by Microsoft PowerPoint (pinned in `corpus.lock.json`); **synthetic** = S1-4
+builder decks (Office-shaped, never Office evidence); **unverified** = no
+standard text or capture was checked in this task (no network access to
+ECMA-376 / [MS-PPTX] in the implementer sandbox).
+
+| Item | Reader behaviour | Evidence |
+| --- | --- | --- |
+| `spd` table | `fast` 500, `med` 750, `slow` 1000 ms; absent `spd` is `fast` | corpus: tdf115394 slides 1–3 (`slow`, `med`, none). The 750 ms vs nearest-of question is open: tdf115394/tdf150770 write `spd="med"` beside `p14:dur="700"`. **To verify (D4).** |
+| `p14:dur` | wins over `spd` | corpus: tdf115394 (250, 4250), tdf142915 (10, 0), airplane (1250), tdf156808 (800), tdf149588 (1500) |
+| `advClick`, `advTm` | boolean (default true); ms, absent = no auto-advance | corpus: tdf142915 `advClick="0" advTm="1000"` |
+| Transition sound | `p:stSnd@loop` + `p:snd@r:embed`; `p:endSnd` | corpus: tdf44223 slide 2 (`applause.wav`, rId2 in the p14 Choice) |
+| Requires selection | `mc:Choice@Requires` prefixes resolved to URIs at the Choice; p, p14, p15, p159 supported; first supported Choice, else Fallback | corpus: airplane (p15), tdf156808 (p14), tdf149588 (p159), tdf115394 slide 4 (prefix declared on the Choice); synthetic: aliased prefix, fake-URI `p14`, undeclared prefix |
+| Effect namespace | by local name in the catalogue (the shared XML layer strips prefixes; p/p14/p15/p159 transition names are disjoint) | synthetic |
+| `p:transition/p:extLst` | an `p:ext` carrying a catalogued transition element replaces the base effect; any other URI is diagnosed `transition-extension` | synthetic only. No corpus file places a transition in `p:extLst`; the extension GUIDs one review quoted are not taken as fact. **Unverified.** |
+| Effect-less `p:transition` | element `none`, namespace `p` (advance settings kept) | corpus: tdf142915, narration |
+| Layout/master transitions | not inherited; `diagnoseInheritedTransition` emits `transition-inherited` (S1-10 calls it with the layout and master parts) | **Unverified** whether PowerPoint inherits; no corpus layout carries one |
+| `repeatCount` | thousandths of an iteration (2500 = 2.5), or `indefinite` | synthetic; **unverified** against the standard text |
+| `accel`/`decel` | 1/1000 % (100000 = 1.0); sum above 1 is scaled to fit, diagnosed | corpus: tdf104788 (`decel="100000"`, `accel="100000"`) |
+| `tav@tm` | 1/1000 % as a fraction (also `n%`), or `indefinite` | corpus: tdf104788 (`0`, `100000`) |
+| Angles, scale, points | 1/60000° to degrees; 1/1000 % to fractions | corpus: tdf104788 animScale `80000` |
+| `cBhvr` attribute names | ECMA-376 §19.5.2 list as transcribed plus `ppt_*`, `r`, `xshear`, `yshear`, `scaleX`, `scaleY` (`ATTRIBUTE_NAMES` in `read/timing.ts`); others dropped with `timing-unknown-attribute-name` | corpus-observed subset: `ppt_x`, `ppt_y`, `ppt_w`, `ppt_h`, `style.visibility`, `xshear`. Full list **unverified** |
+| `cBhvr@additive` absent | `base`; `accumulate` absent `none` | **unverified** default |
+| Carried, diagnosed | `syncBehavior`, `masterRel`, `rctx` (and `xfrmType`) are on the nodes; `timing-carried` once per slide each | corpus: tdf44223 `masterRel="sameClick"` |
+| Ignored, diagnosed | `cTn@display`, `evtFilter`, `spd`, `tmFilter`, `nodePh`, `bldLvl`, bounce-end; `cMediaNode@vol`, `mute`, `numSld`, `showWhenStopped`; `animMotion@pathEditMode`; `cBhvr@from/to/by`; `bldP@uiExpand/autoUpdateAnimBg/advAuto`; `tmplLst`: `timing-ignored` | corpus: bnc591147 (`display`, `evtFilter`), narration (`vol`, `showWhenStopped`) |
+| `numSld` | not modelled (media playback across slides is out of stage 1); diagnosed | **unverified** semantics |
+| `p:subTnLst` | children appended after `childTnLst` children; diagnosed approximate under `seq`/`excl` | corpus: tdf44223 (step sound with `evt="begin" tn=5`) |
+| `p:cMediaNode` | its `cTn`/`tgtEl` form the audio/video behaviour, `attrNames` empty | corpus: tdf44223, bnc591147, narration |
+| Sequence next/prev conditions | represented by `nodeType` (main: next/previous; interactive: the start trigger); other forms `timing-ignored` | corpus: tdf104788, bnc591147 |
+| `graphicEl`, `oleChartEl` | whole graphic/chart target, `timing-approximated` | corpus: tdf104792 |
+| Missing `cTn@id` | synthetic negative id | corpus: tdf44223 sound node |
+| Reader limits | 2000 `p:cTn`, 64 time-node levels (root = 1), 10000 conditions (incl. `endSync`), 1000/20000 `p:tav`, 64 KiB `animMotion@path` → `{ refused: 'limit:<name>' }`, builds empty, transition still read | synthetic. Note: the shared XML parser caps element nesting at 100 tags (fast-xml-parser `maxNestedTags`), about 32 time-node levels, so deeper trees fail at XML parse before the reader |
+| `tn` cycles | begin/end dependency graph; closing condition replaced by one that never fires; `timing-cycle` | synthetic |
