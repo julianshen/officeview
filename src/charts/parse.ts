@@ -27,7 +27,7 @@ import { readRadarStyle } from './families/radar'
 import { readStockOptions } from './families/stock'
 
 /** Bounds: series per chart, points per series drawn (display, spec 7). Re-exported from the leaf limits module. */
-import { CHART_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_SERIES_LIMIT, CHART_ANALYTIC_POINT_LIMIT } from './limits'
+import { CHART_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_SERIES_LIMIT, CHART_ANALYTIC_POINT_LIMIT, XLSX_CHART_PART } from './limits'
 export { CHART_SERIES_LIMIT, CHART_POINT_LIMIT, CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_TEXT_BYTES_LIMIT } from './limits'
 
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
@@ -439,7 +439,7 @@ function invertFill(ser: XmlNode, theme: ThemeContext | undefined): string | und
   }
   return undefined
 }
-const XLSX_PART = /^\/?xl\//i
+const XLSX_PART = XLSX_CHART_PART
 function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void, context?: ChartParseContext): ChartModel {
   const minorFont = theme?.fonts.minor.latin ?? 'Calibri'
   const sizeRaw = finite(attrs(getChildren(child(child(root, 'txPr'), 'p'), 'pPr').map(p => child(p, 'defRPr'))[0]).sz)
@@ -692,9 +692,17 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     })
   }
   const allSeries = groups.flatMap(g => g.series), pointLegend = allSeries.length === 1 && groups.find(g => g.series.length === 1)?.varyColors
-  // Trendline entry indices never coincide with another entry's key: after the highest series c:idx, or after the
-  // points of a point legend (Office's numbering is unverified).
-  markTrendlineLegendDeletions(legend, groups, pointLegend ? Math.min(64, Math.max(categories.length, allSeries[0].values.length)) : allSeries.reduce((n, s) => Math.max(n, s.index ?? 0), -1) + 1)
+  // Deleted legend entries (c:legendEntry/c:delete), read once, bounded and charged before the set is built.
+  const deleted = new Set<number>()
+  for (const entry of getChildren(legend, 'legendEntry')) {
+    const idx = finite(val(child(entry, 'idx')))
+    // An entry index is a series c:idx (unsigned int) or a point index; the number of entries kept is bounded.
+    if (deleted.size >= CHART_POINT_LIMIT) break
+    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx <= 0xFFFFFFFF) { if (!deleted.has(idx)) { if (!deleted.size) charge(64); charge(4) } deleted.add(idx) }
+  }
+  // Trendline entry indices never coincide with another entry's key: after the highest series c:idx, or after every
+  // point key of a point legend (source indices, uncapped: only the display keeps 64; Office's numbering is unverified).
+  markTrendlineLegendDeletions(deleted, groups, pointLegend ? Math.max(categories.length, allSeries[0].values.length) : allSeries.reduce((n, s) => Math.max(n, s.index ?? 0), -1) + 1)
   // Implied axes (a plot area without axis elements) are retained like authored ones.
   for (const axis of axes) if (axis.implicit) charge(axisBytes(axis))
   const pies = groups.filter(g => g.family === 'pie' || g.family === 'doughnut' || g.family === 'ofPie')
@@ -719,14 +727,6 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     titleDiagnostics.push({ code: CHART_TITLE_TRUNCATED, reason })
   }
   const overlay = (node: XmlNode | undefined) => Boolean(child(node, 'overlay')) && flag(child(node, 'overlay'), true)
-  const deleted = new Set<number>()
-  for (const entry of getChildren(legend, 'legendEntry')) {
-    const idx = finite(val(child(entry, 'idx')))
-    // An entry index is a series c:idx (unsigned int) or a point index; the number of entries kept is bounded.
-    if (deleted.size >= CHART_POINT_LIMIT) break
-    if (child(entry, 'delete') && flag(child(entry, 'delete'), true) && idx !== undefined && Number.isInteger(idx) && idx >= 0 && idx <= 0xFFFFFFFF) deleted.add(idx)
-  }
-  if (deleted.size) charge(64 + deleted.size * 4)
   const legendDeleted = deleted.size ? Uint32Array.from([...deleted].sort((a, b) => a - b)) : undefined
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)

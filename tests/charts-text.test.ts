@@ -574,6 +574,21 @@ describe('charts-text (Task A4b fix round 3)', () => {
 describe('charts-text (A4b merged with feature: trendlines, contour, forecast)', () => {
   const trend = (body = '<trendlineType val="linear"/>') => `<trendline>${body}</trendline>`
   const legendNames = (p: ReturnType<typeof paint>) => p.texts.filter(t => t.x >= p.layout.legend.x - 1 && t.y >= p.layout.legend.y - 1 && t.y <= p.layout.legend.y + p.layout.legend.h + 1).map(t => t.text)
+  it('final review M1/M10: a point legend numbers trendlines after every point key; the deletion set is bounded', () => {
+    // 70 points (above the 64 drawn in a point legend): point keys run to 69, so the trendline is entry 70.
+    const values = Array.from({ length: 70 }, (_, i) => i + 1)
+    const model = (entries: number[]) => parse(space(`<barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="1"/><ser><idx val="0"/><order val="0"/><tx><v>S</v></tx>${trend()}<val>${lit(values)}</val></ser>${AX}</barChart>` + axes(), undefined, `<legend><legendPos val="r"/>${entries.map(i => `<legendEntry><idx val="${i}"/><delete val="1"/></legendEntry>`).join('')}</legend>`))
+    const trendDeleted = (m: ChartModel) => m.groups[0].series[0].trendlines?.[0]?.legendDeleted
+    // Index 64 deletes point 64 only, never the trendline as well.
+    const point = model([64])
+    expect([...point.legendDeleted ?? []]).toEqual([64])
+    expect(trendDeleted(point)).toBeUndefined()
+    expect(trendDeleted(model([70]))).toBe(true)
+    // A hostile legend: the deletion set keeps at most CHART_POINT_LIMIT entries, the trendline's among them.
+    const many = model([70, ...Array.from({ length: 5000 }, (_, i) => 100 + i)])
+    expect(many.legendDeleted?.length).toBe(4096)
+    expect(trendDeleted(many)).toBe(true)
+  })
   it('legend: point entries and legendEntry deletion combine with trendline entries and contour bands', () => {
     // A single varyColors series with a trendline: its points, then the trendline entry; point 1 deleted.
     const vary = (legend: string) => paint(parse(space(`<barChart><barDir val="col"/><grouping val="clustered"/><varyColors val="1"/><ser><idx val="7"/><order val="0"/><tx><v>S7</v></tx>${trend()}<cat>${strLit(['A', 'B', 'C'])}</cat><val>${lit([1, 2, 3])}</val></ser>${AX}</barChart>` + axes(), undefined, legend)))

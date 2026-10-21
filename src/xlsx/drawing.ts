@@ -13,6 +13,7 @@ import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
 import type { XlsxChartModel } from './chartModel'
+import { loadChartModule } from './chartLoader'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
@@ -298,10 +299,12 @@ export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: 
       let replacement: XlsxDrawing[] = []
       try { replacement = await wrapper.parse() } catch { replacement = [] }
       if (replacement.length) {
-        const carry = (drawings: XlsxDrawing[]): void => { for (const d of drawings) { if (d.image) d.chartFallback = refused; carry(d.children ?? []) } }
-        carry(replacement)
         // The selected fallback keeps the chart's feature, as one selected at parse does (A7 `chartChoiceFeature`).
         const original = refused.feature ?? (refused.groups.some(group => group.kind === 'chartEx') ? 'ChartEx' : 'chart')
+        // The pictures carry the chart's card (no model storage): the replaced branch's models are released below.
+        const card = cardChart(refused.unsupported!, refused.title, original === 'ChartEx' ? original : undefined)
+        const carry = (drawings: XlsxDrawing[]): void => { for (const d of drawings) { if (d.image) d.chartFallback = card; carry(d.children ?? []) } }
+        carry(replacement)
         for (const object of replacement) object.source.feature = original
         const placement = wrapper.placement
         if (top && placement) for (const object of replacement) {
@@ -311,6 +314,9 @@ export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: 
         }
         recover(members, top, replacement, refused)
         list.splice(at, members.length, ...replacement)
+        // Every chart of the replaced branch is dropped: its workspace charge is returned now (D0), never at GC.
+        const engine = await loadChartModule().catch(() => undefined)
+        for (const chart of charts) engine?.releaseChartModel(chart)
         // Every enclosing wrapper whose (flattened) branch held the replaced objects now holds the replacement there.
         const parent = wrapper.parent
         for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
@@ -371,7 +377,10 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
       continue
     }
     if (name === 'chart' || name === 'relIds' || name === 'contentPart' || name === 'wsp') {
-      if (await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))) selected = true
+      const probe = await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))
+      // The probe only decides the branch (the selected one is parsed again): a probed chart's charge is returned.
+      if (probe?.kind === 'xlsxChart') (await loadChartModule()).releaseChartModel(probe.chart)
+      if (probe) selected = true
       else failed = true
       continue
     }

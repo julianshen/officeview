@@ -44,6 +44,7 @@ import { parseLineStyle, resolveSeriesColor } from '../style'
 import { readChartStyleParts } from '../styleParts'
 import { applyDataPrecedence } from '../dataPrecedence'
 import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS, chartHasPending, chartHasRefs } from '../fill'
+import { CHART_BIN_LIMIT, CHART_INVALID_BINNING, CHART_UNREADABLE, XLSX_CHART_PART } from '../limits'
 import { prepareChartAxes } from '../prepare'
 import { displayFamilyUnsupported } from './funnel'
 import { HISTOGRAM_FAMILIES, histogramStructure } from './histogram'
@@ -52,14 +53,14 @@ import { HISTOGRAM_FAMILIES, histogramStructure } from './histogram'
 export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['waterfall', 'funnel', 'treemap', 'sunburst', 'boxWhisker', 'histogram', 'pareto'])
 export const CHARTEX_PENDING = 'ChartEx charts are not supported yet'
 export const CHARTEX_REGION_MAP = 'Region map charts are not supported'
-export const CHARTEX_UNREADABLE = 'This chart could not be read'
+export const CHARTEX_UNREADABLE = CHART_UNREADABLE
 export const CHARTEX_MULTI_LEVEL = 'multi-level cache order unconfirmed'
 export const CHARTEX_TOO_MANY = CHART_TOO_MANY_POINTS
 /** Map §5.1 step 7: every invalid authored binning refuses the chart with this reason. */
-export const CHARTEX_INVALID_BINNING = 'invalid binning'
+export const CHARTEX_INVALID_BINNING = CHART_INVALID_BINNING
 /** Map §5.1: `underflow`/`overflow="auto"` has unconfirmed semantics, so the chart is unsupported. */
 export const CHARTEX_AUTO_BINNING = 'Automatic histogram overflow and underflow bins are not supported'
-export const CHARTEX_BIN_LIMIT = 1000
+export const CHARTEX_BIN_LIMIT = CHART_BIN_LIMIT
 const ANALYTIC: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['histogram', 'pareto', 'boxWhisker', 'treemap', 'sunburst'])
 /** Treemap and sunburst: a category path of every level (chartex-map §7), coloured by root-level branch. */
 const HIERARCHY: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['treemap', 'sunburst'])
@@ -72,7 +73,7 @@ const LABEL_POSITIONS = ['bestFit', 'b', 'ctr', 'inBase', 'inEnd', 'l', 'outEnd'
 const DATA_BYTES = 64, DIMENSION_BYTES = 128, LEVEL_BYTES = 96, SERIES_BYTES = 384, SLOT_BYTES = 8, TEXT_STYLE_BYTES = 96, LABEL_RECORD_BYTES = 256
 /** The admission bound of one built label (CHART_LABEL_LIMIT + 1 units: one past the limit marks the cut). */
 const LABEL_BOUND = stringBytes(' '.repeat(CHART_LABEL_LIMIT + 1))
-const XLSX_PART = /^\/?xl\//i
+const XLSX_PART = XLSX_CHART_PART
 
 export const isChartExGroup = (group: ChartGroup): group is ChartExGroup => group.kind === 'chartEx'
 
@@ -353,9 +354,9 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
   if (admit.cut) diagnose('chart-label-truncated', `${admit.cut} ${admit.cut === 1 ? 'label was' : 'labels were'} cut to ${CHART_LABEL_LIMIT} characters`)
   if (admit.dropped) diagnose('chart-label-budget', `${admit.dropped} ${admit.dropped === 1 ? 'label was' : 'labels were'} dropped past the chart's 4 MiB label budget`)
   const truncated = admit.cut > 0 || admit.dropped > 0 || admit.capped
-  // A value role with neither saved data nor a reference: an analytic chart's data is not available (refused).
+  // A value role with neither saved data nor a reference: the chart's data is not available (an analytic one is refused).
   const unavailable = series.some(s => s.absent?.includes('values'))
-  if (unavailable && XLSX_PART.test(context.partPath)) throw new Unsupported(CHART_DATA_NOT_AVAILABLE, true)
+  if (unavailable && XLSX_PART.test(context.partPath)) throw new Unsupported(CHART_DATA_NOT_AVAILABLE, analytic)
   return {
     ...(title ? { title } : {}), groups: [group], axes, categories: series[0]?.categories ?? [],
     ...(legend && ['t', 'b', 'l', 'r'].includes(legendPos) ? { legend: legendPos as ChartModel['legend'] } : {}),
@@ -630,8 +631,9 @@ export async function parseChartExPart(root: XmlNode, theme: ThemeContext | unde
   if (model && !model.unsupported) return { kind: 'native', model }
   const title = model?.title
   if (model) releaseChartModel(model)
-  // A required point that is unavailable (no cache and no readable workbook value) refuses the chart (B1 rulings).
-  return { kind: model?.refused || model?.unsupported === CHART_DATA_NOT_AVAILABLE ? 'refused' : 'unsupported', reason: model?.unsupported ?? CHARTEX_UNREADABLE, ...(title ? { title } : {}), feature: 'ChartEx' }
+  // A required point that is unavailable (no cache and no readable workbook value) refuses an analytic chart (B1
+  // rulings): every producer sets the typed `refused` flag, never inferred from the reason text.
+  return { kind: model?.refused ? 'refused' : 'unsupported', reason: model?.unsupported ?? CHARTEX_UNREADABLE, ...(title ? { title } : {}), feature: 'ChartEx' }
 }
 /** Stage 1 (charts/prepare.ts) of an owned model: the successor takes over its charge; a refusal refuses the chart. */
 function prepareOwned(model: ChartModel): ChartModel {
