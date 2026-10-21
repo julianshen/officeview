@@ -27,6 +27,7 @@ import { paintErrorBars, type ErrorBarPlacement } from './errorBars'
 import { paintBubbles } from './families/bubble'
 import { paintRadar } from './families/radar'
 import { paintStock } from './families/stock'
+import { paintBoxWhisker } from './chartex/boxWhisker'
 import { paintWaterfall, waterfallLevels } from './chartex/waterfall'
 import { FUNNEL_TEXTS, paintFunnel } from './chartex/funnel'
 import type { ChartExGroup } from './model'
@@ -681,6 +682,16 @@ function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: 
         at,
         categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
       })
+    } else if (group.family === 'boxWhisker' && horizontal === B) {
+      // Stage-1 records only: an unprepared model draws no boxes (statistics are never computed at paint).
+      const preparedGroup = model.source.preparedAxes?.boxWhisker?.find(bg => bg.groupIndex === g)
+      paintBoxWhisker(ctx, group, model.source.groups[g].series, axes, {
+        plot,
+        admitPath,
+        fillWith,
+        strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+        at,
+      }, preparedGroup)
     }
     if (errorPlace) paintErrorBars(ctx, model.source, g, group.series.map(s => ({ series: s.source, value: s.value, x: s.x, hasX: s.hasX })), count, model.view.source, errorPlace, admitPath, plot)
     // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
