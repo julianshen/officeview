@@ -28,6 +28,9 @@
  * - **Rotation** (`newsflash`) is conformal on the slide, which needs the
  *   slide's aspect (width / height): the optional fourth argument, default
  *   16 : 9.
+ * - **Defaults** for an omitted attribute are PowerPoint's (probed
+ *   `PpEntryEffect` write-outs, S1-15 review): push, pan, cover, pull, wipe
+ *   `l`; strips `lu`; zoom `out`; flythrough `in`; wheel 4 spokes.
  * - **`random`** picks one 2-D effect and its attributes from the show's
  *   seeded `rng`, once per rng identity, so every frame of the effect draws
  *   the same pick (`randomPick`).
@@ -194,7 +197,8 @@ export function transitionDraw(spec: TransitionSpec, progress: number, rng: Rng,
 
     case 'push':
     case 'pan': {
-      const [x, y] = motion(pick(a.dir, SIDES, resolved.element === 'pan' ? 'd' : 'l'))
+      // Omitted dir is "Push Left" / "Pan Left" in PowerPoint (PpEntryEffect 3853 / 3930).
+      const [x, y] = motion(pick(a.dir, SIDES, 'l'))
       return { from: translate(x * p, y * p), to: translate(x * (p - 1), y * (p - 1)) }
     }
     case 'cover': {
@@ -226,9 +230,12 @@ export function transitionDraw(spec: TransitionSpec, progress: number, rng: Rng,
 /**
  * Reduced motion (spec 4.5): any transition becomes a crossfade of at most
  * `REDUCED_TRANSITION_MS`. The advance (`advClick`, `advTmMs`) and the sound
- * are kept: they are not motion.
+ * are kept: they are not motion. Reduced motion never adds motion (S1-15
+ * fix round 1 ruling): `cut` (with or without `thruBlk`) and `none` are
+ * already instant and come back unchanged.
  */
 export function reducedTransition(spec: TransitionSpec): TransitionSpec {
+  if (spec.element === 'none' || (spec.element === 'cut' && spec.ns === 'p')) return spec
   const { preset: _preset, ...rest } = spec
   const d = Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : REDUCED_TRANSITION_MS
   return { ...rest, element: 'fade', ns: 'p', attrs: {}, durationMs: Math.min(d, REDUCED_TRANSITION_MS) }

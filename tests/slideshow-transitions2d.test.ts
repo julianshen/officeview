@@ -272,7 +272,8 @@ describe('transitionDraw', () => {
       { ...spec('prstTrans', { prst: 'curtains' }, 'p15'), preset: 'curtains', durationMs: 2000 },
       { element: 'push', ns: 'p', attrs: { dir: 'u' }, durationMs: 150, advClick: false, advTmMs: 4000, sound: { end: true } },
     ]
-    for (const s of inputs) {
+    // cut and none are instant already and stay so (fix round 1); every real transition becomes the fade.
+    for (const s of inputs.filter(x => x.element !== 'cut' && x.element !== 'none')) {
       const r = reducedTransition(s)
       expect(r.element).toBe('fade')
       expect(r.ns).toBe('p')
@@ -328,6 +329,36 @@ describe('mask mapping details', () => {
     expect(vortex.mask?.kind).toBe('dissolve')
     expect(transitionDraw(spec('nonsense'), 0.4, createRng(1))).toEqual({ toOpacity: 0.4 })
     expect(transitionDraw({ ...spec('prstTrans', {}, 'p15'), preset: 'curtains' }, 0.4, createRng(1)).mask?.kind).toBe('split')
+  })
+})
+
+describe('S1-15 fix round 1', () => {
+  it('p14:pan without dir is PowerPoint\'s Pan Left (moves left, the incoming slide enters on the right)', () => {
+    const pan = spec('pan', {}, 'p14')
+    expect(transitionDraw(pan, 0.5, createRng(1))).toEqual(transitionDraw(spec('pan', { dir: 'l' }, 'p14'), 0.5, createRng(1)))
+    const f = canvasFrame(pan, 0.5)
+    expect(near(f.px(4, 24), RED)).toBe(true)
+    expect(near(f.px(60, 24), BLUE)).toBe(true)
+  })
+
+  it('reduced motion keeps cut and none instant and never adds motion', () => {
+    for (const s of [spec('cut'), spec('cut', { thruBlk: '1' }), spec('none')]) {
+      const r = reducedTransition(s)
+      expect(r, `${s.element} ${JSON.stringify(s.attrs)}`).toEqual(s)
+      // No intermediate crossfade frame: the effect only switches.
+      for (const p of [0.25, 0.4, 0.6, 0.75]) {
+        const d = transitionDraw(r, p, createRng(1))
+        expect([0, 1]).toContain(d.toOpacity)
+      }
+    }
+    // A real transition still becomes the short fade.
+    expect(reducedTransition(spec('push')).element).toBe('fade')
+  })
+
+  it('the p14:flash catalogue row says how it is drawn: a transform (fade through white), not a mask', () => {
+    const row = CATALOGUE.find(r => r.id === 'transition:p14:flash')!
+    expect(row.implementation).toBe('transform')
+    expect(transitionDraw(spec('flash', {}, 'p14'), 0.5, createRng(1)).mask).toBeUndefined()
   })
 })
 

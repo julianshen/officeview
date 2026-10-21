@@ -246,6 +246,7 @@ export function maskPath(kind: MaskKind, progress: number, params: MaskParams, w
       return path([{ op: 'sector', cx: w / 2, cy: h / 2, r, a0: TOP - p * Math.PI, a1: TOP + p * Math.PI }])
     }
     case 'wheel': {
+      // 1 spoke is the layer-mask (wheel animation) default; transitionDraw passes 4, PowerPoint's wheel-transition default.
       const spokes = int(params, 'spokes', 1, MAX_SPOKES)
       const r = Math.hypot(w, h) / 2 + PAD
       const step = TAU / spokes
