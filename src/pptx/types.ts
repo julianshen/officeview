@@ -1,3 +1,4 @@
+import type { OfficePackage } from '../core/zip'
 import type { EmbeddedFontFace, FontDiagnostic } from '../core/fonts/types'
 import type { ContentDiagnostic } from '../drawing/parts'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
@@ -135,6 +136,9 @@ export interface PptxSlide {
   theme?: ThemeContext
   diagnostics?: PptxDiagnostic[]
 }
+
+/** The document's package lease (slideshow spec 8): `slideParts[i]` is the part of `slides[i]`. */
+export interface PptxPackageHandle { readonly pkg: OfficePackage; readonly slideParts: readonly string[] }
 
 export interface PptxDocument {
   drawingCoverage?: DrawingCoverageEntry[]

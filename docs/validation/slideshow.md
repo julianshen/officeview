@@ -43,7 +43,11 @@ Pending.
 
 ## Known limits
 
-Pending.
+- **Slide size range (S0-4).** `validateSlideSize` accepts 914,400–51,206,400 EMU per side (1–56 in), both ends inclusive, finite and positive, with an aspect ratio of at most 1 : 20. The range is ECMA-376 Part 1 pml.xsd `ST_SlideSizeCoordinate` (`xsd:int`, `minInclusive 914400`, `maxInclusive 51206400`).
+  - Microsoft's [SlideSize.Cx reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.slidesize.cx?view=openxml-3.0.1) confirms that `p:sldSz@cx` is typed `ST_SlideSizeCoordinate`, an integer. It does not state the facets.
+  - The numbers were checked against python-pptx `oxml/simpletypes.py` `ST_SlideSizeCoordinate`, which raises outside `914400..51206400`, "(1-56 inches)".
+  - **pml.xsd itself has not been checked.**
+- **Package lease metric is a payload lower bound (S0-4).** `retainedArchiveBytes(handle)` follows the plan's formula: the sum of compressed entry sizes. JSZip keeps each entry's compressed bytes as a view into the whole input buffer, so the memory actually retained is at least the full archive, including local headers, the central directory and any comment or trailer. It can be much larger than the metric. `tests/pptx-appearance-read.test.ts` pins this with a 16 KiB comment. Corpus figures are pending, because the S0-2 fixtures are not on this branch. Parse-time read state is not retained: `parsePptx` drops the package read cache and the drawing parser's package context when it attaches the handle.
 
 ## Manual checks
 
