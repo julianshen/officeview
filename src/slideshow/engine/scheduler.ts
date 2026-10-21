@@ -70,7 +70,17 @@ export interface Scheduler {
 }
 
 /** Optional diagnostics, each once per node per scheduler: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, `timing-history-truncated`, `timing-reference-outside-window`, `timing-query-budget`, `timing-too-many-activations`. */
-export interface SchedulerOptions { sink?: DiagnosticSink; slideIndex?: number }
+export interface SchedulerOptions {
+  sink?: DiagnosticSink
+  slideIndex?: number
+  /**
+   * Additive (S1-10): the `order` reported for each behaviour. A caller that
+   * schedules a working copy of a tree (the navigation layer adds synthetic
+   * containers) passes the source tree's pre-order index here, so `order`
+   * keeps meaning "position in the source tree".
+   */
+  orderOf?: ReadonlyMap<TimeNode, number>
+}
 
 const INF = Number.POSITIVE_INFINITY
 /** Tree nesting the scheduler walks (the reader enforces the same limit). */
@@ -1079,7 +1089,7 @@ export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}
         if (!s || s.status === 'idle') continue
         if (s.status === 'ended') ended.add(node.ctn.id)
         if (isContainer(node) || !s.visible) continue
-        const entry: SchedulerEntry = { node, progress: s.progress, iteration: s.iteration, order: ix.order.get(node) }
+        const entry: SchedulerEntry = { node, progress: s.progress, iteration: s.iteration, order: options.orderOf?.get(node) ?? ix.order.get(node) }
         ;(s.status === 'active' ? active : frozen).push(entry)
       }
       return { active, frozen, ended }

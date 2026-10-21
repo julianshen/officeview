@@ -13,7 +13,7 @@ import { parseXmlOrdered } from '../src/core/xml'
 import { OfficePackage } from '../src/core/zip'
 import { parsePptx } from '../src/pptx/parse'
 import { buildPptxDeck, mainSeqXml, timingXmlOf } from '../src/testdata/ooxml-builders'
-import type { SchedulerSnapshot } from '../src/slideshow/engine/scheduler'
+import { createScheduler, type SchedulerSnapshot } from '../src/slideshow/engine/scheduler'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../src/slideshow/engine/steps'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { readSlideTiming } from '../src/slideshow/read/timing'
@@ -316,6 +316,60 @@ describe('click steps', () => {
     expect(tl.next(c2, 200)).toBe(c2)
     // A trigger's effect also lands on its end state.
     expectSeen(tl.stateAt(tl.trigger(c2, '9', 300)!, 300), 33, 'frozen', 1)
+  })
+
+  it('an auto-starting child between click groups belongs to the step before it and never swallows Next (review I1)', () => {
+    // codex's repro: main sequence [click group A (100 ms), auto behaviour X (200 ms), click group B (100 ms)].
+    // X after-previous (chains after A in the sequence) and X with-previous (begins with A) both belong to step 1.
+    const variants: Array<[string, Partial<CTn>]> = [
+      ['after-previous', { start: [at(0)] }],
+      ['with-previous', { start: [{ delayMs: 0, evt: 'onBegin', tn: 3 }] }],
+    ]
+    for (const [name, over] of variants) {
+      const tl = createSlideTimeline(tree(mainSeq([
+        group(3, [inner(4, [effect(5, 'clickEffect', [bhv(6, { durMs: 100 })])])]),
+        bhv(7, { durMs: 200, ...over }),
+        group(20, [inner(21, [effect(22, 'clickEffect', [bhv(8, { durMs: 100 })])])]),
+      ])), NORMAL)
+      expect(tl.steps, name).toBe(2)
+      const c1 = tl.next(tl.initial(), 0)
+      // Next at 50 settles step 1 (A and X) and begins B at 50.
+      const c2 = tl.next(c1, 50)
+      expect(c2.step, name).toBe(2)
+      const s = tl.stateAt(c2, 100)
+      expectSeen(s, 6, 'frozen', 1)
+      expectSeen(s, 7, 'frozen', 1)
+      expectSeen(s, 8, 'active', 0.5)
+      expect(tl.next(c2, 200), name).toBe(c2) // B done: nothing left
+      // Left alone, step 1 plays A then X; B waits for its click.
+      const live = tl.stateAt(c1, 150)
+      expectSeen(live, 8, 'none')
+      expect(find(live, 7).state).toBe('active')
+      // Checkpoints and reduced motion reach B too.
+      expectSeen(tl.stateAt(tl.checkpoint(1), 0), 7, 'frozen', 1)
+      expectSeen(tl.stateAt(tl.checkpoint(1), 0), 8, 'none')
+      expectSeen(tl.stateAt(tl.checkpoint(2), 0), 8, 'frozen', 1)
+      const r = createSlideTimeline(tree(mainSeq([
+        group(3, [inner(4, [effect(5, 'clickEffect', [bhv(6, { durMs: 100 })])])]),
+        bhv(7, { durMs: 200, ...over }),
+        group(20, [inner(21, [effect(22, 'clickEffect', [bhv(8, { durMs: 100 })])])]),
+      ])), { showAnimation: true, reducedMotion: true })
+      expectSeen(r.stateAt(r.next(r.next(r.initial(), 0), 10), 10), 8, 'frozen', 1)
+    }
+  })
+
+  it('snapshot order is the source tree pre-order index (review M1)', () => {
+    const t = spinDeck()
+    const direct = createScheduler(t).evaluate([{ kind: 'next', t: 0 }, { kind: 'next', t: 2000 }], 2100)
+    const tl = createSlideTimeline(t, NORMAL)
+    const viaTimeline = tl.stateAt(tl.next(tl.next(tl.initial(), 0), 2000), 2100)
+    const orders = (s: SchedulerSnapshot) => Object.fromEntries([...s.active, ...s.frozen].map(e => [e.node.ctn.id, e.order]))
+    expect(orders(direct)[8]).toBeDefined()
+    expect(orders(viaTimeline)).toEqual(orders(direct))
+    // Checkpoints and reduced-motion snapshots carry the same index.
+    expect(tl.stateAt(tl.checkpoint(2), 0).frozen.find(e => e.node.ctn.id === 8)?.order).toBe(orders(direct)[8])
+    const r = createSlideTimeline(t, { showAnimation: true, reducedMotion: true })
+    expect(r.stateAt(r.next(r.next(r.initial(), 0), 10), 10).frozen.find(e => e.node.ctn.id === 8)?.order).toBe(orders(direct)[8])
   })
 
   it('refuses time running backwards and non-finite times', () => {

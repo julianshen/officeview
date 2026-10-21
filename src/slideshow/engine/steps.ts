@@ -11,7 +11,12 @@
  * `delay="indefinite"` (spec 6.2: each `clickEffect` group starts a step;
  * `withEffect`/`afterEffect` items are already nested in that group by the
  * file, with their own begin delays). Other children start on their own
- * (an `onBegin` first group) and belong to the step before them.
+ * (an `onBegin` first group, or a top-level with-/after-previous item) and
+ * belong to the step before them: the working tree wraps each click group
+ * and the auto-starting children after it in one plain `seq` (chaining kept)
+ * that waits for the click, and the children before the first click group
+ * in a `seq` that starts with the slide. So no auto-starting child ever sits
+ * between a settle point and its click group, where it could swallow a Next.
  *
  * Settling (the "Next during an active effect" rule): the working tree forces
  * `nextAc="seek"` on the main sequence and puts an empty waiting `par`
@@ -21,8 +26,8 @@
  * entering step k+1 is two `next` events (settle point, then the group) and
  * Next during the last step is one (the final settle point). The scheduler's
  * own seek is therefore the only settling mechanism, and `events` stays the
- * only history. Settle points never reach a snapshot (their ids are removed
- * from `ended`).
+ * only history. Synthetic containers never reach a snapshot (their ids are
+ * removed from `ended`), and `order` stays the source tree's pre-order index.
  *
  * Checkpoint n replays steps 0..n−1 settled, with no trigger events, at the
  * time every finite effect of the initial state has ended; still-active
@@ -195,23 +200,47 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
     }
   })
   const triggerSet = new Set(triggerList)
+  /** Ids of the synthetic containers (settle points and step wrappers): never reported in `ended`. */
   const sentinels = new Set<number>()
+  /** Source pre-order index of every node, so snapshot `order` keeps meaning "position in the source tree". */
+  const orderOf = new Map<TimeNode, number>()
+  let preorder = 0
+  walk(tree.root, (n) => { orderOf.set(n, preorder++) })
   let steps = 0
   let root = tree.root
   let workMain: ContainerNode | undefined
   if (main) {
-    const point = (): ContainerNode => {
+    const synthetic = (): number => {
       const id = --minId
       sentinels.add(id)
-      return { kind: 'par', ctn: { id, durMs: 0, accel: 0, decel: 0, autoRev: false, fill: 'remove', start: [{ delayMs: 'indefinite' }], end: [] }, children: [] }
+      return id
     }
-    const children: TimeNode[] = []
+    const point = (): ContainerNode =>
+      ({ kind: 'par', ctn: { id: synthetic(), durMs: 0, accel: 0, decel: 0, autoRev: false, fill: 'remove', start: [{ delayMs: 'indefinite' }], end: [] }, children: [] })
+    const concurrent = main.seq?.concurrent ?? false
+    /** A step wrapper: a plain seq holding a click group and the children that start on their own after it, chained as before. */
+    const wrap = (kids: TimeNode[], start: CTn['start']): ContainerNode =>
+      ({ kind: 'seq', ctn: { id: synthetic(), durMs: undefined, accel: 0, decel: 0, autoRev: false, fill: 'hold', start, end: [] }, children: kids, seq: { concurrent, nextAc: 'none', prevAc: 'none' } })
+    // Segments: children that start on their own before the first click group, then each click group with the
+    // auto-starting children after it (with-previous / after-previous at the top level belong to that step).
+    const pre: TimeNode[] = []
+    const groups: TimeNode[][] = []
     for (const kid of main.children) {
       if (isClickGroup(kid)) {
-        children.push(point())
-        steps++
-      }
-      children.push(kid)
+        // The group begins with its wrapper, which waits for the click instead.
+        const head: TimeNode = { ...kid, ctn: { ...kid.ctn, start: [{ delayMs: 0 }] } } as TimeNode
+        orderOf.set(head, orderOf.get(kid)!)
+        groups.push([head])
+      } else if (groups.length > 0) groups[groups.length - 1].push(kid)
+      else pre.push(kid)
+    }
+    // [preamble?, S0, W1, S1, W2, ..., Wm, Sm]: every waiting child is next to a settle point, so no
+    // auto-starting child can sit between a settle point and the click group it leads to.
+    const children: TimeNode[] = []
+    if (pre.length > 0) children.push(wrap(pre, [{ delayMs: 0 }]))
+    for (const g of groups) {
+      children.push(point(), wrap(g, [{ delayMs: 'indefinite' }]))
+      steps++
     }
     children.push(point())
     const m = main
@@ -231,7 +260,7 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
     root = rebuild(tree.root)
   }
   const work: TimingTree = { root, build: tree.build }
-  const scheduler: Scheduler = createScheduler(work, { sink: options.sink, slideIndex: options.slideIndex })
+  const scheduler: Scheduler = createScheduler(work, { sink: options.sink, slideIndex: options.slideIndex, orderOf })
 
   /** The latest finite end under `node` for this history: a container that never ends is searched below. */
   const finiteEnd = (node: TimeNode, events: readonly ShowEvent[]): number => {
