@@ -53,6 +53,9 @@ function lazyPagedChunks(): Plugin {
         '/src/components/fileName.ts',
         // The chart engine (DOCX/PPTX/XLSX charts), loaded by xlsx/chartLoader's dynamic import.
         '/src/charts/index.ts',
+        // Slide appearance enrichment (getPaintables' dynamic import) and the slideshow chunk.
+        '/src/pptx/appearance/index.ts',
+        '/src/slideshow/index.ts',
       ]) void server.warmupRequest(url)
     },
   }
