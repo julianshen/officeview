@@ -55,7 +55,11 @@ export default defineConfig({
       output: {
         // The lazy chart engine's entry is src/charts/index.ts; name its chunk
         // charts-*.js so it never reads as (or collides with) an index chunk.
-        chunkFileNames: chunk => chunk.facadeModuleId?.replace(/\\/g, '/').endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : '[name]-[hash].js',
+        // Likewise the slide appearance enrichment (src/pptx/appearance/index.ts).
+        chunkFileNames: chunk => {
+          const facade = chunk.facadeModuleId?.replace(/\\/g, '/') ?? ''
+          return facade.endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : facade.endsWith('/src/pptx/appearance/index.ts') ? 'appearance-[hash].js' : '[name]-[hash].js'
+        },
       },
     },
   },

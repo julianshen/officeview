@@ -23,12 +23,14 @@ export class HandlePackage extends OfficePackage {
   /** Bumped by dropCache, so a read still in flight never republishes into a dropped cache. */
   private generation = 0
 
-  private constructor(private readonly handle: PptxPackageHandle, private readonly partBytes: number) {
+  private constructor(private readonly handle: PptxPackageHandle, private readonly partBytes: number, private readonly textBytes: number) {
     super(new JSZip())
   }
 
-  static over(handle: PptxPackageHandle, caps: { partBytes?: number } = {}): HandlePackage {
-    return new HandlePackage(handle, caps.partBytes ?? HANDLE_PART_BYTES)
+  /** `textBytes` (default `partBytes`) caps text and XML reads below a picture-sized `partBytes`. */
+  static over(handle: PptxPackageHandle, caps: { partBytes?: number; textBytes?: number } = {}): HandlePackage {
+    const partBytes = caps.partBytes ?? HANDLE_PART_BYTES
+    return new HandlePackage(handle, partBytes, Math.min(caps.textBytes ?? partBytes, partBytes))
   }
 
   /** Drop this instance's reads and trees. The instance total is kept: bytes already inflated stay counted. */
@@ -69,7 +71,7 @@ export class HandlePackage extends OfficePackage {
   }
 
   override async text(path: string): Promise<string | undefined> {
-    const bytes = await this.read(path)
+    const bytes = await this.limited(path, this.textBytes)
     return bytes && new TextDecoder().decode(bytes)
   }
 

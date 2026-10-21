@@ -887,6 +887,12 @@ export async function parseArtworkTree(pkg: OfficePackage, partPath: string, the
   return shapes
 }
 
+/** The complete candidate pair that identifies one `doc.images` asset (shared with the lazy appearance enrichment). */
+export function pptxImageKey(image: PptxImageRef): string {
+  const svgState = image.svg ? (image.svg.verdict.ok ? 'ok' : `rej:${(image.svg.verdict as { reason: string }).reason}`) : 'none'
+  return `${image.partPath ?? ''}\u0000${image.svg?.partPath ?? ''}\u0000${svgState}\u0000${image.hasRaster === false ? 'svg-only' : 'raster'}`
+}
+
 function walkShapes(shapes: PptxShape[], visit: (shape: PptxShape) => void): void {
   for (const shape of shapes) { visit(shape); if (shape.children) walkShapes(shape.children, visit) }
 }
@@ -1022,8 +1028,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
   const imageIndices = new Map<string, number>()
   for (const slide of doc.slides) walkShapes(slide.shapes, shape => {
     if (!shape.image) return
-    const svgState = shape.image.svg ? (shape.image.svg.verdict.ok ? 'ok' : `rej:${(shape.image.svg.verdict as { reason: string }).reason}`) : 'none'
-    const key = `${shape.image.partPath ?? ''}\u0000${shape.image.svg?.partPath ?? ''}\u0000${svgState}\u0000${shape.image.hasRaster === false ? 'svg-only' : 'raster'}`
+    const key = pptxImageKey(shape.image)
     let index = imageIndices.get(key)
     if (index === undefined) {
       index = doc.images.length
