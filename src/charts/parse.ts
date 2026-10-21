@@ -76,7 +76,8 @@ function ofPieOptions(node: XmlNode, charge: (b: number) => void): Partial<Chart
   const secondPiePt: number[] = []
   const seen = new Set<number>()
   for (const pt of getChildren(child(node, 'custSplit'), 'secondPiePt')) {
-    const idx = finite(attrs(pt).idx)
+    // CT_UnsignedInt: the source index is the element's val.
+    const idx = finite(attrs(pt).val)
     if (idx === undefined || !Number.isInteger(idx) || idx < 0 || idx >= CHART_POINT_LIMIT) continue
     if (seen.has(idx)) continue
     seen.add(idx)
@@ -323,7 +324,7 @@ function axisOf(node: XmlNode, kind: ChartAxis['kind'], index: number): ChartAxi
     ...(crossAx !== undefined ? { crossAx } : {}),
     ...present,
     gridlines: Boolean(child(node, 'majorGridlines')),
-    deleted: val(child(node, 'delete')) === '1' || val(child(node, 'delete')) === 'true',
+    deleted: bool(child(node, 'delete'), false),
     ...(title ? { title } : {}),
     ...(formatCode !== undefined ? { formatCode: formatCode.length > 255 ? 'General' : formatCode } : {}),
   }
@@ -388,6 +389,8 @@ function bindingOf(family: ChartFamily, node: XmlNode, axes: ChartAxis[]): Chart
 const statisticErrorBars = (ser: XmlNode) => getChildren(ser, 'errBars').some(bars => /^std(Dev|Err)$/.test(val(child(bars, 'errValType')) ?? ''))
 const isAnalytic = (ser: XmlNode) => Boolean(child(ser, 'trendline')) || statisticErrorBars(ser)
 const flag = (node: XmlNode | undefined, fallback: boolean) => { const v = val(node); return v === undefined ? fallback : v === '1' || v === 'true' }
+/** A CT_Boolean element: `absent` when missing; present without val it is the schema default (true). */
+const bool = (node: XmlNode | undefined, absent: boolean) => node ? flag(node, true) : absent
 const readSmooth = (el: XmlNode | undefined) => el ? flag(el, true) : undefined
 /** `c16r3:dataDisplayOptions16/c16r3:dispNaAsBlank` in the chart's extension list. */
 function dispNaAsBlank(chart: XmlNode): boolean | undefined {
@@ -448,7 +451,7 @@ const XLSX_PART = XLSX_CHART_PART
 function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeContext | undefined, charge: (bytes: number) => void, context?: ChartParseContext): ChartModel {
   const minorFont = theme?.fonts.minor.latin ?? 'Calibri'
   const sizeRaw = finite(attrs(getChildren(child(child(root, 'txPr'), 'p'), 'pPr').map(p => child(p, 'defRPr'))[0]).sz)
-  const autoDeleted = val(child(chart, 'autoTitleDeleted')) === '1'
+  const autoDeleted = bool(child(chart, 'autoTitleDeleted'), false)
   let title = titleOf(child(chart, 'title'))
   // Formatting (spec 5.4, 5.11): every retained fill, line, marker and point override is charged through
   // charts/own.ts before it is built.
@@ -501,7 +504,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     const scatterStyle = val(child(node, 'scatterStyle')) ?? 'marker'
     const radarStyle = type === 'radar' ? readRadarStyle(node) : undefined
     const xy = type === 'scatter' || type === 'bubble'
-    const vary = type === 'pie' || type === 'doughnut' || type === 'ofPie' ? val(child(node, 'varyColors')) !== '0' : val(child(node, 'varyColors')) === '1'
+    // Pies vary by default when the element is absent; every other family does not.
+    const vary = bool(child(node, 'varyColors'), type === 'pie' || type === 'doughnut' || type === 'ofPie')
     const groupSmooth = readSmooth(child(node, 'smooth')) ?? (type === 'scatter' && /smooth/i.test(scatterStyle) ? true : undefined)
     const stockOpts = type === 'stock' ? readStockOptions(node, theme, charge) : undefined
     // Drop lines (line and area) and series lines (stacked bars): an element without its own a:ln strokes 1px grey.
@@ -637,7 +641,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
       if (xy && sourceless(xNode)) absentRoles.push('xValues')
       if (type === 'bubble' && sourceless(sizeNode)) absentRoles.push('bubbleSizes')
       const markerNone = val(child(child(ser, 'marker'), 'symbol')) === 'none'
-      const groupMarker = val(child(node, 'marker'))
+      const groupMarker = bool(child(node, 'marker'), true)
       series.push({
         index,
         name: capLabel(literalName || `Series ${index + 1}`, cut),
@@ -663,7 +667,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
         ...(errors?.bars.length ? { errorBars: errors.bars } : {}),
         ...(absentRoles.length ? { absent: absentRoles } : {}),
         ...(smooth !== undefined ? { smooth } : {}),
-        ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker !== '0' } : {}),
+        ...(type === 'line' ? { line: lineColor !== null, markers: !markerNone && groupMarker } : {}),
         ...(type === 'scatter' ? { line: lineColor !== null && /line|smooth/i.test(scatterStyle), markers: !markerNone && !/^(line|smooth)$/i.test(scatterStyle) } : {}),
         ...(type === 'radar' ? { line: lineColor !== null, markers: radarStyle === 'marker' && !markerNone } : {}),
         ...(type === 'stock' ? { markers: !markerNone && Boolean(child(ser, 'marker')) } : {}),

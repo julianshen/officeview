@@ -144,10 +144,29 @@ export function paintRadar(ctx: CanvasRenderingContext2D, group: Pick<ChartGroup
     const src = s.source
     if (group.radarStyle === 'filled') {
       ctx.beginPath()
-      let any = false
-      for (let i = 0; i < n; i++) { const p = point(s, i); if (typeof p === 'string') continue; if (any) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); any = true }
-      if (!any) continue
-      ctx.closePath()
+      let any = false, gapAt = -1
+      for (let i = 0; i < n && gapAt < 0; i++) if (point(s, i) === 'gap') gapAt = i
+      if (gapAt < 0) {
+        // No gap: one polygon through every plotted point (a span joins across, as the line does).
+        for (let i = 0; i < n; i++) { const p = point(s, i); if (typeof p === 'string') continue; if (any) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); any = true }
+        if (!any) continue
+        ctx.closePath()
+      } else {
+        // A gap breaks the area: each run between gaps (walking once round from the first gap, so a run may wrap
+        // past category 0) is its own region from the centre, never joined across the gap. A one-point run has no area.
+        let first: [number, number] | undefined, open = false
+        const end = () => { if (open) { ctx.closePath(); any = true } first = undefined; open = false }
+        for (let k = 1; k <= n; k++) {
+          const p = point(s, (gapAt + k) % n)
+          if (p === 'gap') { end(); continue }
+          if (p === 'span') continue
+          if (!first) { first = p; continue }
+          if (!open) { ctx.moveTo(cx, cy); ctx.lineTo(first[0], first[1]); open = true }
+          ctx.lineTo(p[0], p[1])
+        }
+        end()
+        if (!any) continue
+      }
       if (kit.fillWith(ctx, src.fill, s.color, box)) ctx.fill()
       kit.strokeBorder(ctx, src.lineStyle, s.color, box)
       continue

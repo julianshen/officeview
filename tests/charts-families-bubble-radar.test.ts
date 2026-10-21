@@ -251,6 +251,40 @@ describe('radar cells of the point matrix (spec 5.8)', () => {
     expect(drawn('#N/A')).toEqual([['M', 'L', 'L', 'L']]) // #N/A connects across, whatever dispBlanksAs says
     expect(drawn('#DIV/0!')).toEqual([['M', 'L', 'L', 'L']])
   })
+  it('filled radar: a gap (blank under gap, or unavailable) breaks the area at the centre; a span joins across (PR #15 review 3)', () => {
+    const fills = (values: Array<number | string | undefined>, options = '') => {
+      // 'unavailable': a formula without a saved value (a model-level point state; an unconditional gap).
+      let model = parse(radarXml(values.map(v => v === 'unavailable' ? 9 : v), 'filled', options))
+      if (values.includes('unavailable')) {
+        const w = new PointWriter(values.length)
+        values.forEach((v, i) => { if (v === 'unavailable') w.unavailable(i); else w.value(i, v as number) })
+        model.groups[0].series[0].values = w.done()
+        model = prepareChartAxes({ ...model, preparedAxes: undefined })
+      }
+      return radarPaint(model).paths.filter(p => p.kind === 'fill').map(p => p.ops)
+    }
+    const full = fills([2, 4, 4, 3])[0].filter(o => o.op !== 'Z')
+    const cx = full[0].x, cy = full[3].y // A at 12 o'clock, D at 9 o'clock
+    for (const [name, values, options] of [
+      ['blank under gap', [2, undefined, 4, 3], '<c:dispBlanksAs val="gap"/>'],
+      ['unavailable', [2, 'unavailable', 4, 3], ''],
+    ] as const) {
+      const ops = fills([...values], options)
+      // One area: from the centre along C, D, A (the run after the gap, wrapping), back to the centre. A and C are
+      // never joined across the gap.
+      expect(ops.map(shape), name).toEqual([['M', 'L', 'L', 'L', 'Z']])
+      const [m, c, d, a] = ops[0]
+      expect([m.x, m.y], name).toEqual([expect.closeTo(cx, 6), expect.closeTo(cy, 6)])
+      expect(c.y, `${name}: C at 6 o'clock`).toBeGreaterThan(cy)
+      expect([d.x, d.y], name).toEqual([expect.closeTo(full[3].x, 6), expect.closeTo(full[3].y, 6)])
+      expect([a.x, a.y], name).toEqual([expect.closeTo(full[0].x, 6), expect.closeTo(full[0].y, 6)])
+    }
+    // Two gaps: two runs, each its own wedge from the centre; a single-point run has no area.
+    expect(fills([2, 3, undefined, 4, 3, undefined], '<c:dispBlanksAs val="gap"/>').map(shape)).toEqual([['M', 'L', 'L', 'Z', 'M', 'L', 'L', 'Z']])
+    expect(fills([2, undefined, 4, undefined], '<c:dispBlanksAs val="gap"/>')).toEqual([])
+    // A span (#N/A) joins across, as the line does: one polygon over the other three points.
+    expect(fills([2, '#N/A', 4, 3], '<c:dispBlanksAs val="gap"/>').map(shape)).toEqual([['M', 'L', 'L', 'Z']])
+  })
   it('radar: zero puts the point at the centre; an unavailable point is an unconditional gap with its diagnostic', () => {
     const zero = radarPaint(parse(radarXml([2, undefined, 4, 3], 'standard', '<c:dispBlanksAs val="zero"/>'))).paths[0].ops
     const centre = radarPaint(parse(radarXml([4, 4, 4, 4], 'standard'))).paths[0].ops

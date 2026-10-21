@@ -174,13 +174,13 @@ it('parses ofPie group options and stops rejecting the family; combination pies 
   expect(parseChart(`<chartSpace><chart><plotArea><ofPieChart><secondPieSize val="500"/><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`).groups[0].secondPieSize).toBe(200)
   expect(parseChart(`<chartSpace><chart><plotArea><ofPieChart><secondPieSize val="1"/><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`).groups[0].secondPieSize).toBe(5)
   // cust split indices parse
-  const cust = parseChart(`<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit><secondPiePt idx="4"/><secondPiePt idx="1"/></custSplit><ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt><pt idx="2"><v>30</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`)
+  const cust = parseChart(`<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit><secondPiePt val="4"/><secondPiePt val="1"/></custSplit><ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt><pt idx="2"><v>30</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`)
   expect(cust.groups[0].splitType).toBe('cust')
   expect(cust.groups[0].secondPiePt).toEqual([4, 1])
   // the secondPiePt set carries one entry per index (no bound inflation): duplicates deduplicate and
   // indices at or past the point limit disappear
-  const repeats = Array.from({ length: 300 }, () => '<secondPiePt idx="0"/>').join('')
-  const deduped = parseChart(`<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit>${repeats}<secondPiePt idx="5000"/></custSplit><ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`)
+  const repeats = Array.from({ length: 300 }, () => '<secondPiePt val="0"/>').join('')
+  const deduped = parseChart(`<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit>${repeats}<secondPiePt val="5000"/></custSplit><ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt></numLit></val></ser></ofPieChart></plotArea></chart></chartSpace>`)
   expect(deduped.groups[0].secondPiePt).toEqual([0])
   // combination pies keep the card rule
   expect(parseChart(`<chartSpace><chart><plotArea><pieChart><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></pieChart><barChart><ser><val><numLit><pt idx="0"><v>1</v></pt></numLit></val></ser></barChart></plotArea></chart></chartSpace>`).unsupported).toBeDefined()
@@ -390,7 +390,7 @@ it('secondPiePt charges one CHART_STYLE_BYTES.point each, per surviving entry', 
   const base = `<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/>${values}</ofPieChart></plotArea></chart></chartSpace>`
   expect(pointCharges(base), 'no custSplit leaves no secondPiePt charge').toBe(0)
   // idx 4 repeats (deduped) and 5000 is capped, so only idx 4 and 1 survive: two point charges
-  const cust = `<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit><secondPiePt idx="4"/><secondPiePt idx="1"/><secondPiePt idx="4"/><secondPiePt idx="5000"/></custSplit>${values}</ofPieChart></plotArea></chart></chartSpace>`
+  const cust = `<chartSpace><chart><plotArea><ofPieChart><splitType val="cust"/><custSplit><secondPiePt val="4"/><secondPiePt val="1"/><secondPiePt val="4"/><secondPiePt val="5000"/></custSplit>${values}</ofPieChart></plotArea></chart></chartSpace>`
   expect(pointCharges(cust)).toBe(2)
 })
 
@@ -454,3 +454,35 @@ it('ofPie is native through the DOCX and PPTX adapters, with chart coverage', as
 
 // The family conformance harness (spec 7): ofPie with no series is a card; every other case is native.
 describe('ofPie family conformance (spec 7)', () => describeFamilyConformance(OF_PIE_FAMILY))
+
+it('PR #15 review 3: secondPiePt reads its CT_UnsignedInt val (not idx); varyColors and the other flags read every boolean form', () => {
+  const values = '<ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt><pt idx="2"><v>30</v></pt></numLit></val></ser>'
+  const ofPie = (inner: string) => parseChart(`<chartSpace><chart><plotArea><ofPieChart>${inner}${values}</ofPieChart></plotArea></chart></chartSpace>`)
+  expect(ofPie('<splitType val="cust"/><custSplit><secondPiePt val="2"/><secondPiePt val="0"/></custSplit>').groups[0].secondPiePt).toEqual([2, 0])
+  // The non-schema idx spelling is not an index.
+  expect(ofPie('<splitType val="cust"/><custSplit><secondPiePt idx="2"/></custSplit>').groups[0].secondPiePt).toBeUndefined()
+  // varyColors: 0/false off, 1/true on, a present element without val is the schema default (true); absent: pies vary.
+  const vary = (inner: string, chart = 'ofPieChart') => parseChart(`<chartSpace><chart><plotArea><${chart}>${inner}${values}</${chart}></plotArea></chart></chartSpace>`).groups[0].varyColors
+  for (const chart of ['ofPieChart', 'pieChart', 'doughnutChart']) {
+    expect([vary('<varyColors val="0"/>', chart), vary('<varyColors val="false"/>', chart), vary('<varyColors val="1"/>', chart), vary('<varyColors val="true"/>', chart), vary('<varyColors/>', chart), vary('', chart)], chart)
+      .toEqual([false, false, true, true, true, true])
+  }
+  for (const chart of ['barChart', 'lineChart']) {
+    expect([vary('<varyColors val="0"/>', chart), vary('<varyColors val="false"/>', chart), vary('<varyColors val="1"/>', chart), vary('<varyColors val="true"/>', chart), vary('<varyColors/>', chart), vary('', chart)], chart)
+      .toEqual([false, false, true, true, true, false])
+  }
+})
+
+it('PR #15 review 3: the other flags this branch reads (autoTitleDeleted, line marker, axis delete) take every boolean form', () => {
+  const values = '<ser><val><numLit><pt idx="0"><v>10</v></pt><pt idx="1"><v>20</v></pt></numLit></val></ser>'
+  // An empty c:title with autoTitleDeleted on: no automatic title, whichever lexical form says so.
+  const titled = (flag: string) => parseChart(`<chartSpace><chart><title/>${flag}<plotArea><barChart>${values}</barChart></plotArea></chart></chartSpace>`).title
+  expect([titled('<autoTitleDeleted val="1"/>'), titled('<autoTitleDeleted val="true"/>'), titled('<autoTitleDeleted/>')]).toEqual([undefined, undefined, undefined])
+  expect([titled('<autoTitleDeleted val="0"/>'), titled('<autoTitleDeleted val="false"/>'), titled('')].every(t => typeof t === 'string' && t.length > 0)).toBe(true)
+  // A line group's c:marker off in either form draws no markers.
+  const markers = (flag: string) => parseChart(`<chartSpace><chart><plotArea><lineChart>${values}${flag}</lineChart></plotArea></chart></chartSpace>`).groups[0].series[0].markers
+  expect([markers('<marker val="0"/>'), markers('<marker val="false"/>'), markers('<marker val="1"/>'), markers('<marker val="true"/>'), markers('')]).toEqual([false, false, true, true, true])
+  // An axis c:delete without val is the schema default (deleted).
+  const deleted = (flag: string) => parseChart(`<chartSpace><chart><plotArea><barChart>${values}<axId val="1"/><axId val="2"/></barChart><catAx><axId val="1"/>${flag}<crossAx val="2"/></catAx><valAx><axId val="2"/><crossAx val="1"/></valAx></plotArea></chart></chartSpace>`).axes.find(a => a.id === '1')!.deleted
+  expect([deleted('<delete val="1"/>'), deleted('<delete val="true"/>'), deleted('<delete/>'), deleted('<delete val="0"/>'), deleted('<delete val="false"/>'), deleted('')]).toEqual([true, true, true, false, false, false])
+})
