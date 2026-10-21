@@ -485,6 +485,57 @@ describe('scheduler', () => {
     expect(sch.endTimeOf(6, [])).toBe(110)
   })
 
+  it('the syncbase history window is bounded; a reference past it is refused and diagnosed, never misresolved', () => {
+    // codex R2 probe: the clicked child runs [50, 60) in iteration 0 of a parent repeated 1,500 times (dur 100).
+    // The history window holds the most recent 1,000 parent iterations.
+    const sink = createDiagnosticSink()
+    const sch = createScheduler(tree(
+      par(2, [bhv(3, { durMs: 10, fill: 'hold', start: [{ delayMs: 0, evt: 'onClick', target: { spid: 'a' } }] })], { durMs: 100, repeatCount: 1500, fill: 'hold' }),
+      bhv(4, { durMs: 200_000, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 3 }] }),
+      // A time-based child activates every iteration: past the window its reference is refused too,
+      // never answered from a more recent iteration.
+      par(7, [bhv(6, { durMs: 10, fill: 'hold' })], { durMs: 100, repeatCount: 1500, fill: 'hold' }),
+      bhv(5, { durMs: 50, fill: 'hold', start: [{ delayMs: 5, evt: 'onBegin', tn: 6 }] }),
+    ), { sink, slideIndex: 2 })
+    const ev: ShowEvent[] = [{ kind: 'trigger', spid: 'a', t: 50 }]
+    // Iteration 999: 1,000 iterations, all inside the window.
+    expectSeen(sch.evaluate(ev, 99_950), 4, 'active', (99_950 - 60) / 200_000)
+    expectSeen(sch.evaluate(ev, 99_930), 5, 'active', 25 / 50) // began at 99,905
+    expect(sink.list()).toEqual([])
+    // Iteration 1,001: iteration 0 has left the window.
+    let s = sch.evaluate(ev, 100_150)
+    expect(find(s, 4).state).toBe('none')
+    expect(find(s, 5).state).toBe('none')
+    s = sch.evaluate(ev, 100_250)
+    expect(sch.endTimeOf(3, ev)).toBeUndefined() // the window holds no activation of node 3
+    expect(sch.endTimeOf(4, ev)).toBeUndefined()
+    expect(sch.endTimeOf(6, [])).toBe(149_910) // the newest activation is always inside the window
+    const codes = sink.list().map((d) => `${d.code}:${d.effect}`).sort()
+    expect(codes).toEqual([
+      'timing-history-truncated:node 3',
+      'timing-history-truncated:node 6',
+      'timing-reference-outside-window:node 4',
+      'timing-reference-outside-window:node 5',
+    ])
+    expect(sink.list().every((d) => d.slideIndex === 2)).toBe(true)
+  })
+
+  it('history construction stays inside the window for nested repeating parents', () => {
+    // codex R3: outer dur 2000 x 1500, inner dur 1 x 2000 inside it, child dur 1.
+    // Unbounded enumeration would build ~1,000 x 2,000 frames before trimming.
+    const sink = createDiagnosticSink()
+    const sch = createScheduler(tree(
+      par(2, [par(3, [bhv(4, { durMs: 1, fill: 'hold' })], { durMs: 1, repeatCount: 2000, fill: 'hold' })], { durMs: 2000, repeatCount: 1500, fill: 'hold' }),
+      bhv(5, { durMs: 10, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 4 }] }),
+    ), { sink })
+    const t0 = performance.now()
+    const s = sch.evaluate([], 2_200_500)
+    const elapsed = performance.now() - t0
+    expect(find(s, 5).state).toBe('none')
+    expect(sink.list().map((d) => d.code).sort()).toEqual(['timing-history-truncated', 'timing-reference-outside-window'])
+    expect(elapsed).toBeLessThan(5_000) // generous: a bounded window is ~1,000 frames per level
+  })
+
   it('a 600-node reverse reference chain resolves exactly', () => {
     // Node 100 + i begins when node 101 + i ends; node 699 begins at 0. All 1 ms: node 100 ends at 600.
     const kids: TimeNode[] = []

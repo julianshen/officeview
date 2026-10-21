@@ -63,7 +63,7 @@ export interface Scheduler {
   endTimeOf(nodeId: number, events: readonly ShowEvent[]): number | 'indefinite' | undefined
 }
 
-/** Optional diagnostics: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, each once per node. */
+/** Optional diagnostics, each once per node: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, `timing-history-truncated`, `timing-reference-outside-window`. */
 export interface SchedulerOptions { sink?: DiagnosticSink; slideIndex?: number }
 
 const INF = Number.POSITIVE_INFINITY
@@ -77,7 +77,11 @@ const MAX_DRIVE = 10_000
 const MAX_INTERVALS = 10_000
 /** Interval computations per query after which provisional results are memoised anyway. */
 const WORK_BUDGET = 1_000_000
-/** Ancestor activations and iterations kept as syncbase history per reference (the most recent). */
+/**
+ * Syncbase history window (project rule): per reference and per level, the
+ * most recent 1,000 ancestor activations/iterations. A reference whose target
+ * has older history is refused (never resolves) and diagnosed.
+ */
 const MAX_HISTORY = 1_000
 
 interface Interval {
@@ -145,7 +149,8 @@ interface Group {
   qi: number
 }
 
-type Report = (code: 'timing-cycle' | 'timing-forward-reference' | 'timing-too-deep', node: TimeNode) => void
+type ReportCode = 'timing-cycle' | 'timing-forward-reference' | 'timing-too-deep' | 'timing-history-truncated' | 'timing-reference-outside-window'
+type Report = (code: ReportCode, node: TimeNode) => void
 
 /** Thrown to unwind a too-deep resolution; never escapes a query. */
 const DEFER: unique symbol = Symbol('scheduler.defer')
@@ -845,12 +850,19 @@ class Run {
     const key = `${frame.key}|${this.ix.order.get(target)}|${which}`
     const have = this.refs.get(key)
     if (have) return have
-    return this.guarded(`ref|${key}`, () => [], (v) => { this.refs.set(key, v) }, () => this.refTimesOf(target, which, frame), target)
+    return this.guarded(`ref|${key}`, () => [], (v) => { this.refs.set(key, v) }, () => this.refTimesOf(target, which, frame, from), target)
   }
 
-  private refTimesOf(target: TimeNode, which: 'begin' | 'end', frame: Frame): number[] {
+  private refTimesOf(target: TimeNode, which: 'begin' | 'end', frame: Frame, from: TimeNode): number[] {
+    const { frames, truncated } = this.historyFor(target, frame)
+    if (truncated) {
+      // Part of the target's history is outside the window: refuse rather than answer from other iterations.
+      this.report('timing-history-truncated', target)
+      this.report('timing-reference-outside-window', from)
+      return []
+    }
     const out: number[] = []
-    for (const g of this.historyFor(target, frame)) {
+    for (const g of frames) {
       for (const iv of this.intervalsIn(target, g)) {
         if (g === frame) {
           const t = which === 'begin' ? iv.begin : iv.end
@@ -881,31 +893,48 @@ class Run {
    * keeps both sides on one time base, and no ancestor's state is needed.
    * Ancestors shared with `frame` contribute only their current iteration
    * (SMIL: a repeat resets its own subtree's references).
+   *
+   * History window (project rule): at most `MAX_HISTORY` frames per level,
+   * the most recent ones. Frames are generated newest first and admission
+   * stops at the cap, so no list ever grows past it; `truncated` says older
+   * frames existed.
    */
-  private historyFor(target: TimeNode, frame: Frame): Frame[] {
+  private historyFor(target: TimeNode, frame: Frame): { frames: Frame[]; truncated: boolean } {
     const ancestors = new Set<TimeNode>()
     for (let p = this.ix.parent.get(target); p; p = this.ix.parent.get(p)) ancestors.add(p)
     let f: Frame | undefined = frame
     while (f && !(f.owner && ancestors.has(f.owner))) f = f.parent
-    if (!f) return []
+    if (!f) return { frames: [], truncated: false }
     const path: ContainerNode[] = []
     for (let p = this.ix.parent.get(target); p && p !== f.owner; p = this.ix.parent.get(p)) path.push(p)
-    let frames: Frame[] = [f]
+    let frames: Frame[] = [f] // oldest first
+    let truncated = false
     for (let i = path.length - 1; i >= 0 && frames.length > 0; i--) {
-      const next: Frame[] = []
-      for (const g of frames) next.push(...this.historyChildren(path[i], g))
-      frames = next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next
+      const newest: Frame[] = []
+      fill: for (let j = frames.length - 1; j >= 0; j--) {
+        for (const child of this.childFramesNewestFirst(path[i], frames[j])) {
+          if (newest.length === MAX_HISTORY) {
+            truncated = true
+            break fill
+          }
+          newest.push(child)
+        }
+      }
+      frames = newest.reverse()
     }
-    return frames
+    return { frames, truncated }
   }
 
-  /** Children frames of container `c` in `g`, oldest first: earlier activations and iterations, then the sampled one. */
-  private historyChildren(c: ContainerNode, g: Frame): Frame[] {
+  /** Children frames of container `c` in `g`, newest first: the sampled one, then earlier iterations and activations. Lazy. */
+  private *childFramesNewestFirst(c: ContainerNode, g: Frame): Generator<Frame> {
     const current = this.sample(c, g).child
-    if (current?.unbounded) return [current]
-    const out: Frame[] = []
-    for (const iv of this.intervalsIn(c, g)) {
-      if (!(iv.begin <= g.tau)) break
+    if (current) yield current
+    if (current?.unbounded) return
+    const ivs = this.intervalsIn(c, g)
+    let j = ivs.length - 1
+    while (j >= 0 && !(ivs[j].begin <= g.tau)) j--
+    for (; j >= 0; j--) {
+      const iv = ivs[j]
       const finiteL = Number.isFinite(iv.L) && iv.L > 0
       let last: number
       if (current?.link?.iv === iv) last = current.link.k - 1
@@ -913,8 +942,8 @@ class Run {
         const done = activeElapsed(iv, iv.end)
         last = finiteL && Number.isFinite(done) ? position(done, iv.L, true).k : 0
       }
-      for (let k = Math.max(0, last - MAX_HISTORY + 1); k <= last; k++) {
-        out.push({
+      for (let k = last; k >= 0; k--) {
+        yield {
           key: `${g.key}/${this.ivId(iv)}.${k}`,
           parent: g,
           owner: c,
@@ -925,22 +954,23 @@ class Run {
           visible: false,
           unbounded: false,
           beganBy: k === 0 ? iv.event : undefined,
-        })
+        }
       }
     }
-    if (current) out.push(current)
-    return out.length > MAX_HISTORY ? out.slice(out.length - MAX_HISTORY) : out
   }
 
   /** `endTimeOf`, inside `drive`: the end of the last activation, in whichever ancestor iteration it happened. */
   endOf(node: TimeNode): number | 'indefinite' | undefined {
     let frames: Frame[]
+    let truncated = false
     if (node === this.ix.root) frames = [this.rootFrame]
     else {
       const top = this.stateOf(this.ix.root)?.child
       if (!top) return undefined
-      frames = this.historyFor(node, top)
+      ;({ frames, truncated } = this.historyFor(node, top))
     }
+    // The newest activation is always inside the window; a truncated window without one is unresolved.
+    if (truncated) this.report('timing-history-truncated', node)
     for (let i = frames.length - 1; i >= 0; i--) {
       const f = frames[i]
       const ivs = this.intervalsIn(node, f)
@@ -966,12 +996,14 @@ export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}
     const key = `${code}|${ix.order.get(node)}`
     if (!options.sink || reported.has(key)) return
     reported.add(key)
-    const message =
-      code === 'timing-cycle'
-        ? `time node ${node.ctn.id} is part of a reference cycle; the reference that closes it never fires`
-        : code === 'timing-forward-reference'
-          ? `time node ${node.ctn.id} is referenced before its sequence reaches it; the reference never fires`
-          : `time node ${node.ctn.id} is behind a reference chain too deep to resolve`
+    const id = node.ctn.id
+    const message = {
+      'timing-cycle': `time node ${id} is part of a reference cycle; the reference that closes it never fires`,
+      'timing-forward-reference': `time node ${id} is referenced before its sequence reaches it; the reference never fires`,
+      'timing-too-deep': `time node ${id} is behind a reference chain too deep to resolve`,
+      'timing-history-truncated': `time node ${id} has more than ${MAX_HISTORY} ancestor iterations of history; older ones are outside the window`,
+      'timing-reference-outside-window': `time node ${id} references history outside the ${MAX_HISTORY}-iteration window; the reference never fires`,
+    }[code]
     options.sink.add({ code, slideIndex: options.slideIndex, effect: `node ${node.ctn.id}`, message })
   }
   return {
