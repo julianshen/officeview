@@ -28,7 +28,7 @@ From the spec (values verbatim):
   - "No eager growth is allowed without first recovering at least as many bytes elsewhere." Recovery candidates "must not remove public exports". Only a fresh rebuild counts (there is 2 B of rebuild variance).
   - Measure with `bun run build && bun scripts/eager-budget.ts`.
   - Check the eager graph with `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts`.
-  - The controller re-measures on main before each stage's first eager edit. Every task records before/after/running total in the ledger (`docs/validation/slideshow.md` § Eager ledger).
+  - The controller re-measures on main before each stage's first eager edit. Every task writes its before/after/running total, and any verified values, to `.superpowers/sdd/ledger/<task-id>.md` (for example `.superpowers/sdd/ledger/S1-7.md`). Implementer tasks never edit the ledger or catalogue sections of `docs/validation/slideshow.md`; the controller merges the per-task files there in merge order. (S0-1 creates the validation doc stub and its first ledger rows.)
 - **Slideshow parsing does not happen in the eager `parsePptx`.** What stays eager, and only this:
   - the package handle;
   - the `import()` seams;
@@ -527,7 +527,7 @@ Each checkpoint is gated by its cross-family review before S1-20 integrates it.
 
 *Model:*
 - `ShowModel { index: ShowIndex; store: SlideMetadataStore }` (both defined below).
-- `ShowSlide { index: number; hidden: boolean; transition?: TransitionSpec; timing: TimingTree | { refused: string } | undefined; notes: NoteParagraph[]; links: LinkSpec[]; media: MediaRecord[] }`.
+- `ShowSlide { index: number; hidden: boolean; transition?: TransitionSpec; timing: TimingTree | { refused: string } | undefined; notes: NoteParagraph[]; links: LinkSpec[]; media: MediaRecord[]; builds: readonly BuildOwnership[] }`. `builds` is retained and charged with the rest of the slide's metadata handle.
 - `ShowSettings { loop: boolean; showAnimation: boolean; useTimings: boolean; showNarration: boolean; type: 'present' | 'browse' | 'kiosk'; kioskRestartMs: number; range?: { st: number; end: number } }`.
 - `TransitionSpec { element: string; ns: 'p' | 'p14' | 'p15' | 'p159'; preset?: string; attrs: Readonly<Record<string, string>>; durationMs: number; advClick: boolean; advTmMs?: number; sound?: { start?: { rId: string; loop: boolean }; end?: true } }`.
 
@@ -548,10 +548,17 @@ Each checkpoint is gated by its cross-family review before S1-20 integrates it.
 - `NoteParagraph { level: number; bullet?: string; text: string }`.
 - `LinkSpec { spid: string; run?: { p: number; r: number }; action: { kind: 'slide'; index: number } | { kind: 'jump'; verb: 'nextslide' | 'previousslide' | 'firstslide' | 'lastslide' | 'endshow' } | { kind: 'url'; href: string } | { kind: 'refused'; reason: string } }`.
 - `MediaRecord { rId: string; partPath: string; contentType: string; declaredBytes: number; spid?: string }`.
-- `TargetResolver { shape(spid: string): 'slide' | 'master-only' | 'missing'; paragraphs(spid: string): number; runs(spid: string, p: number): number }`, built from the parsed `PptxSlide` (its shapes after compatibility selection) and its underlay.
+- `TargetResolver { shape(spid: string): 'slide' | 'master-only' | 'missing'; paragraphs(spid: string): ReadonlyArray<{ level: number; runs: number; empty: boolean }> }`, built from the parsed `PptxSlide` (its shapes after compatibility selection) and its underlay.
 - `BuildOwnership { spid: string; mode: 'whole' | 'paragraph'; ranges: ReadonlyArray<{ key: TargetKey; st: number; end: number }>; animBg: boolean; body: TargetKey }`: the normalised per-shape build record that the render planner consumes.
+- `type SlideTimingReader = (slideXml: XmlNode, slideIndex: number, resolve: TargetResolver, sink: DiagnosticSink) => { transition?: TransitionSpec; timing: TimingTree | { refused: string } | undefined; builds: BuildOwnership[] }`.
 - `ShowIndex { slides: ReadonlyArray<{ index: number; hidden: boolean; partPath?: string }>; settings: ShowSettings; diagnostics: SlideShowDiagnostic[] }`: the cheap deck-level part of the model.
-- `SlideMetadataStore { get(index: number): Promise<ShowSlide>; peek(index: number): ShowSlide | undefined; evict(index: number): void; resident(): readonly number[] }`. Every resident `ShowSlide` (notes, links, media records, timing, builds, compiled formulas and paths) is charged to one workspace lease per slide.
+- `SlideMetadataStore { acquire(index: number, signal?: AbortSignal): Promise<MetadataHandle>; evict(index: number): void; resident(): readonly number[]; close(): void }`.
+- `MetadataHandle { readonly slide: ShowSlide; attach(bytes: number, tag: string): boolean; release(): void }`.
+  - Every `ShowSlide` (notes, links, media records, timing, builds, compiled formulas and paths) is charged to one lease per slide.
+  - Consumers (session, outgoing transition, presenter preview) hold a handle for as long as they use the slide; `release` is idempotent.
+  - `evict(i)` removes the store's cache entry, but the charge stays until the last handle is released. A later `acquire(i)` re-reads into a fresh entry.
+  - `attach` reserves growth (compiled formulas, paths, layer metadata) against both the store's 64 MiB aggregate cap and the workspace **before** the consumer allocates or publishes it; `false` means refused, with no allocation.
+  - `close()` cancels in-flight reads (their promises reject with `'cancelled'` and charge nothing) and releases the cache; outstanding handles release their charge when released.
 
 *Render state:*
 - `RenderState = ReadonlyMap<TargetKey, TargetState>`.
@@ -576,7 +583,8 @@ Each checkpoint is gated by its cross-family review before S1-20 integrates it.
 - `SlideShowWorkspace { readonly limit: number; lease(bytes: number, tag: string): Lease | undefined; reserveTerminal(outputBytes: number): TerminalReserve | undefined; used(): number }`.
 - `Lease { readonly tag: string; readonly bytes: number; grow(bytes: number): boolean; shrink(bytes: number): void; transfer(tag: string): Lease; release(): void }`. `release` is idempotent and returns the bytes exactly once; `transfer` moves ownership without a second charge.
 - `TerminalReserve { readonly outputBytes: number; readonly scratch: SubOwner; resize(outputBytes: number): boolean; release(): void }`.
-- `SubOwner { lease(bytes: number, tag: string): Lease | undefined }`: a bounded sub-owner carved from bytes already reserved. Its leases never touch the parent ledger, so terminal scratch is not charged twice.
+- `AllocationOwner { lease(bytes: number, tag: string): Lease | undefined }`: the minimal owner interface. `SlideShowWorkspace` and `SubOwner` both implement it.
+- `SubOwner extends AllocationOwner`: a bounded sub-owner carved from bytes already reserved. Its leases never touch the parent ledger, so terminal scratch is not charged twice.
 - **Allocation rule (plan review I1):** every producer receives a `Lease` or `SlideShowWorkspace` in its constructor or call and reserves **before** allocating: the readers (S1-7, S2-6) through `readPartBounded`'s `admit`; the rasteriser (S1-12) before creating a canvas; the compositors (S1-13, S1-14) before each texture, framebuffer and mask upload, holding the CPU and GPU copies together during upload; the backend manager (S1-14) before mounting the 2-D canvas and before restoring.
 
 *Catalogue row:*
@@ -729,10 +737,10 @@ Verify the grammar against ECMA-376 §19.5.4 notes and record any differences.
   - `READER_LIMITS`, a frozen object of every §6.1 value;
   - `readShowIndex(doc: PptxDocument, handle: PptxPackageHandle | undefined, sink: DiagnosticSink, signal?: AbortSignal): Promise<ShowIndex>`. It reads `presProps` and each slide's `show` attribute (a bounded read of the slide root only). With no handle, every slide is static with `no-package`.
   - `createSlideMetadataStore(args: { doc: PptxDocument; handle?: PptxPackageHandle; index: ShowIndex; workspace: SlideShowWorkspace; sink: DiagnosticSink; timing?: SlideTimingReader; resolver: (slide: PptxSlide) => TargetResolver; signal?: AbortSignal }): SlideMetadataStore`.
-    - `get(i)` reads slide part `i` **once** (bounded), parses notes, links and media, and calls the injected `timing` reader on the same parsed XML. This is the single assembly point for `ShowSlide`; S1-19 passes S1-8's `readSlideTiming`.
+    - `acquire(i)` reads slide part `i` **once** (bounded), parses notes, links and media, and calls the injected `timing` reader on the same parsed XML. This is the single assembly point for `ShowSlide`; S1-19 passes S1-8's `readSlideTiming`.
     - Everything resident (notes, links, media records, timing, builds, compiled formulas and paths) is estimated and charged to one lease per slide, `meta:<i>`, which grows as later consumers attach compiled data. The aggregate across slides is capped at 64 MiB by a store-level counter on top of the workspace.
-    - `evict(i)` releases the lease and drops every reference; a later `get(i)` re-reads.
-  - `type SlideTimingReader = (slideXml: XmlNode, slideIndex: number, resolve: TargetResolver, sink: DiagnosticSink) => { transition?: TransitionSpec; timing: TimingTree | { refused: string } | undefined; builds: BuildOwnership[] }`.
+    - It implements the S1-2 `MetadataHandle` contract: `evict(i)` drops the cache entry, the charge stays until the last handle is released, and `attach` reserves growth before allocation.
+  - it uses S1-2's `SlideTimingReader` type.
   - `openShowPackage(source: Blob | ArrayBuffer | Uint8Array | string): Promise<PptxPackageHandle>`, used for re-readable sources only.
   - it fills S1-2's `LinkSpec`, `MediaRecord` and `NoteParagraph`.
 
@@ -752,8 +760,12 @@ Rules:
   - `it('a 1 MiB presProps is read; 1 MiB + 1 is refused with defaults applied')`;
   - `it('metadata at 64 MiB is accepted; one byte more evicts a neighbour, then makes the slide static')`: through an injected estimator;
   - `it('notes, links, media and an injected timing tree that each fit but together exceed the cap are refused as one aggregate')`;
-  - `it('evict releases the lease and drops references; a revisited slide is re-read')`: a `WeakRef` to the old `ShowSlide` clears after gc, and the read spy counts two reads;
-  - `it('get reads each slide part once and hands the same XML to the timing reader')`;
+  - `it('evict with no handles releases the charge; a revisited slide is re-read')`: the read spy counts two reads;
+  - `it('evicting a slide whose handle an outgoing transition still holds keeps the charge until release; re-acquire reads a fresh entry')`;
+  - `it('a preview handle held across eviction stays valid and is charged once')`;
+  - `it('attach that would cross the 64 MiB aggregate or the workspace is refused before allocation')`;
+  - `it('close cancels an in-flight acquire without charging')`;
+  - `it('acquire reads each slide part once and hands the same XML to the timing reader')`;
   - `it('hlinkClick on shape and run resolves slide jumps, show jumps and http/https/mailto; javascript:, file: and ppaction://macro are refused')`;
   - `it('media records keep declared size and content type; no bytes are read')`;
   - `it('a 4 MiB slide part is read; 4 MiB + 1 drops that slide to static with a diagnostic')`;
@@ -772,7 +784,7 @@ Rules:
 - Produces:
   - `SLIDESHOW_REQUIREMENTS: readonly string[]` (`p14`, `p15`, `p159`, plus any others the catalogue names);
   - `SPD_MS = { fast: 500, med: 750, slow: 1000 }`;
-  - `readSlideTiming: SlideTimingReader` (signature in S1-7). Target resolution uses the injected `TargetResolver`, built from the parsed slide after compatibility selection, so an id present only in a discarded `mc:Choice` branch is unresolved;
+  - `readSlideTiming: SlideTimingReader` (type in S1-2). Target resolution uses the injected `TargetResolver`, built from the parsed slide after compatibility selection, so an id present only in a discarded `mc:Choice` branch is unresolved;
   - `expandBuilds(build: readonly BuildTemplate[], resolve: TargetResolver): BuildOwnership[]`: `bldP build="p"` with `bldLvl` gives one range key per paragraph at or above the level (deeper paragraphs join their parent); `animBg` makes the body a target;
   - `shapeResolver(slide: PptxSlide): TargetResolver` (in `read/resolve.ts`).
 
@@ -806,6 +818,8 @@ Rules:
   - `it('unresolved spid drops the behaviour, keeps the step')` (Review Focus 3);
   - `it('an spid present only in a discarded mc:Choice branch is unresolved; a master-only id is master-target')`;
   - `it('identical shapes with bldLvl 1 vs 2 and animBg 0 vs 1 expand to different BuildOwnership')`;
+  - `it('two shapes with equal paragraph and run counts but levels [0,1,0] vs [0,0,0] expand to different ranges for a top-level build')`;
+  - `it('reader to store to planner: builds survive in ShowSlide.builds and drive buildRenderPlan')`: an S1-4 deck through `readSlideTiming`, the store and `buildRenderPlan`;
   - `it('syncBehavior, masterRel, xfrmType and rctx are carried on the normalised nodes')`;
   - `it('a transition on a layout is diagnosed and not inherited')`;
   - `it('tdf104788 timing tree has six entrance steps with the file presets')`.
@@ -928,7 +942,7 @@ Rules:
   - `RasterContext { scale: number; images; resolveFont; canvas: CanvasFactory; workspace: SlideShowWorkspace; maxTextureSize: number }`;
   - it returns S1-2's `LayerBitmap`;
   - `paintDirect(ctx: CanvasRenderingContext2D, slide: PptxSlide, state: RenderState, assets: DirectAssets): void`, the terminal path, a single pass with no layers;
-  - `DirectAssets { images: ReadonlyArray<CanvasImageSource | undefined>; resolveFont: FontResolver; scale: number; scratch: SlideShowWorkspace }`. An image that does not fit the scratch allowance paints the missing-image placeholder with a diagnostic.
+  - `DirectAssets { images: ReadonlyArray<CanvasImageSource | undefined>; resolveFont: FontResolver; scale: number; scratch: AllocationOwner }`. An image that does not fit the scratch allowance paints the missing-image placeholder with a diagnostic and never borrows from another owner. The terminal path passes `terminal.scratch`; presenter work passes its own presenter lease owner (S2-4).
 
 Rules:
 - The watermark is always the top static layer.
@@ -948,6 +962,7 @@ Rules:
   - `it('paintDirect at the static state matches renderSlide pixel-for-pixel')`, on unwatermarked fixtures;
   - `it('with a watermark, an opaque shape over the watermark area still shows the watermark on top')`: the slideshow watermark oracle;
   - `it('rasterLayer leases before creating its canvas and refuses without allocating')`: a canvas-factory spy;
+  - `it('paintDirect with terminal.scratch succeeds while the parent workspace is fully reserved; a scratch overflow paints placeholders; parent used() does not grow')`;
   - `it('the watermark layer is last and no render state moves it')`.
 - [ ] Commit `feat(slideshow): z-order render plan and layer rasteriser`.
 
@@ -984,7 +999,7 @@ Rules:
 - Consumes: S1-2 `Lease`, `TerminalReserve`, the `slideshow` Playwright project; S1-12 `paintDirect`, `LayerBitmap`; S1-13 masks.
 - Produces:
   - `createWebGL2Compositor(canvas: HTMLCanvasElement, workspace: SlideShowWorkspace): Compositor | undefined`. Each texture, framebuffer and mask is leased before allocation; during upload the CPU bitmap's lease and the texture's lease are both held, and the CPU lease is released after upload. It returns `undefined` when there is no context. Uploads use `UNPACK_PREMULTIPLY_ALPHA_WEBGL=true`, blending is `ONE, ONE_MINUS_SRC_ALPHA`, and the colour matrix is applied un-premultiplied in the fragment shader;
-  - `BackendManager { readonly current: Compositor; onLoss(): void; dispose(): void }`, from `createBackendManager(host: HTMLElement, deps: { now: () => number; schedule: (cb: () => void, ms: number) => unknown; paintLive: (ctx: CanvasRenderingContext2D) => void; rebuildLayers: (c: Compositor) => Promise<void>; workspace: SlideShowWorkspace; terminal: TerminalReserve; sink: DiagnosticSink })`. The loss-time 2-D canvas is painted from `terminal` (the permanent reserve), so mounting it never needs a fresh admission. The deadline uses `deps.now`, which is `performance.now` in production.
+  - `BackendManager { readonly current: Compositor; onLoss(): void; dispose(): void }`, from `createBackendManager(host: HTMLElement, deps: { now: () => number; schedule: (cb: () => void, ms: number) => unknown; paintLive: (ctx: CanvasRenderingContext2D) => void; rebuildLayers: (c: Compositor) => Promise<void>; workspace: SlideShowWorkspace; terminal: TerminalReserve; sink: DiagnosticSink })`. The loss-time 2-D canvas is painted from `terminal` (the permanent reserve), so mounting it never needs a fresh admission; `paintLive` receives `DirectAssets` whose `scratch` is `terminal.scratch` (a compile-checked assembly test in S1-14's unit file). The deadline uses `deps.now`, which is `performance.now` in production.
 
 Context loss (round 2):
 1. The handler calls `preventDefault()`.
@@ -1308,7 +1323,7 @@ Rules:
    - the popup branch in `startPresent`: `platform.open` before `requestFullscreen`; `null` or closed means blocked;
    - `presenterView` resolution (`'auto'`);
    - Alt+F5 routing;
-   - the `window-management` preload hint (`navigator.permissions.query` then `getScreenDetails` when granted, called from the toolbar's `preload`), cached in a per-document eager slot `preparedPlacement: { popupFeatures: string; audienceScreen?: ScreenDetailed } | undefined` so the synchronous prologue can open the popup with placement features and call `requestFullscreen({ screen })` without awaiting;
+   - the `window-management` preload hint (`navigator.permissions.query` then `getScreenDetails` when granted, called from the toolbar's `preload`), cached in a per-document eager slot `preparedPlacement: { popupFeatures: string; audienceScreen?: ScreenLike } | undefined` so the synchronous prologue can open the popup with placement features and call `requestFullscreen({ screen })` without awaiting;
    - `PresentPlatform.requestFullscreen(el, options?: FullscreenOptions)`.
    Revert the stubs.
 3. Hunt ≥ `T2` with the same rules. Fall-short → escalate.
@@ -1386,7 +1401,7 @@ Rules:
   - `nextCheckpoint(model: ShowModel, order: number[], slide: number, cursor: SlideCursor): { slide: number; cursor: SlideCursor } | 'end'`;
   - `paintPreview(ctx, target, assets): void`: effect-free with respect to live playback (it never touches the live scheduler, media or trigger history), but not resource-free;
   - `mirrorFrame(source: HTMLCanvasElement, ctx): void`: a scaled copy of the audience output, using the same render state;
-  - `PresenterSurfaces { mirror: HTMLCanvasElement; preview: HTMLCanvasElement; grid(i: number): HTMLCanvasElement; resize(css, dpr): boolean; dispose(): void }`, from `createPresenterSurfaces(doc: Document, workspace: SlideShowWorkspace)`. Its leases (`presenter:*`) are separate from the terminal reserve and owned by the presenter lifecycle (S2-5 creates and disposes it). A refused lease drops to a lower DPR, then to a placeholder with a diagnostic.
+  - `PresenterSurfaces { mirror: HTMLCanvasElement; preview: HTMLCanvasElement; grid(i: number): HTMLCanvasElement; resize(css, dpr): boolean; dispose(): void }`, from `createPresenterSurfaces(doc: Document, workspace: SlideShowWorkspace)`, which also exposes `scratch: AllocationOwner` (a separately charged presenter lease) for `paintPreview`, and holds a `MetadataHandle` for the previewed slide until the preview changes or closes. Its leases (`presenter:*`) are separate from the terminal reserve and owned by the presenter lifecycle (S2-5 creates and disposes it). A refused lease drops to a lower DPR, then to a placeholder with a diagnostic.
 
 - [ ] Tests:
   - `it('next is the next build of this slide, else the next visible slide checkpoint 0, else end')`;
@@ -1657,3 +1672,16 @@ Reviews: `.superpowers/reviews/plan-codex.md`, `plan-agy.md`, `plan-opencode.md`
 | opencode M-4 (headless full screen/popup) | Fixed in part: S1-2 smoke test checks headless full screen; where unsupported, spec §10 allows emulation, so the same assertions run through an injected `PresentPlatform` and the validation doc lists them. A local-only skip was rejected because it would drop CI coverage |
 | pi (S0-3 → S1-4 implicit edge) | Fixed: noted in the S1-4 table row |
 | pi (verdict) | Approve; no change required |
+
+### Round 2
+
+agy and opencode approve; codex requests changes (R1–R3); opencode adds two notes (N-1, N-2).
+
+| Finding | Disposition |
+|---|---|
+| codex R1 (store can refund records consumers still use; no growth API) | Fixed: S1-2 `SlideMetadataStore.acquire` returns a releasable `MetadataHandle` with `attach` for budgeted growth; eviction drops the cache entry while the charge lasts until the last handle is released; `close` cancels in-flight reads; S1-7 tests for outgoing-transition and preview handles across eviction, attach refusal and cancel; S2-4 holds a handle for the previewed slide |
+| codex R2 (build expansion cannot see paragraph levels; ShowSlide lacks builds) | Fixed: `TargetResolver.paragraphs` returns levels; `ShowSlide.builds` added and charged with the handle; S1-8 equal-count/different-level test and a reader→store→planner test |
+| codex R3 (SubOwner cannot be passed to paintDirect) | Fixed: S1-2 `AllocationOwner`, implemented by the workspace and `SubOwner`; `DirectAssets.scratch: AllocationOwner`; the terminal path passes `terminal.scratch`, presenter work its own owner; S1-12 runtime test with the parent full, S1-14 compile-checked assembly |
+| codex I7 note (shared types in foundation) | Fixed: `SlideTimingReader` moves to S1-2 |
+| opencode N-1 (`ScreenDetailed` typo) | Fixed: `ScreenLike` (S2-1) |
+| opencode N-2 (ledger path not in Global Constraints) | Fixed: Global Constraints name `.superpowers/sdd/ledger/<task-id>.md` and the controller merge rule |
