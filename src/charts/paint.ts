@@ -753,10 +753,12 @@ function paintFunnelChart(ctx: CanvasRenderingContext2D, model: DrawModel, layou
 /** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
 export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify, chartContext?: ChartDocumentContext): void {
   if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
+  // A resident model works in the workspace it is charged to (its document's sublimit, under its profile); the
+  // receiving context is for ownerless (transferred) models, never a second budget beside the owner's.
   const ownerWorkspace = ownedChartWorkspace(source)
-  const workspace = chartContext?.workspace ?? ownerWorkspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
+  const workspace = ownerWorkspace ?? chartContext?.workspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
   const standalone = !chartContext && !ownerWorkspace
-  const context = chartContext ?? { profile: 'mobile' as const, workspace }
+  const context = ownerWorkspace ? { profile: chartContext?.profile ?? 'mobile', workspace } : chartContext ?? { profile: 'mobile' as const, workspace }
   const admission = { workspace, tag: `chart-paint#${++paints}` }
   let layout: ChartLayout
   let releaseLayout = () => {}

@@ -18,7 +18,7 @@
 import type { XlsxDocument, XlsxDrawing } from '../../xlsx/types'
 import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
-import { ensureChartPainter, type ChartReceiverLease } from '../../xlsx/chartLoader'
+import { ensureChartPainter, hasXlsxCharts, type ChartReceiverLease } from '../../xlsx/chartLoader'
 import { acquireFonts } from '../../core/fonts/register'
 import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
@@ -109,6 +109,8 @@ export interface SheetAssetsLease {
   imageBudgetBytes: number
   /** Pictures of this sheet refused by admission or the aggregate limit. */
   refusedImages: number
+  /** The chart chunk did not load: this sheet's charts paint as cards. */
+  chartsUnavailable?: true
   dispose: () => void
 }
 
@@ -256,6 +258,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
         decodedBytes,
         imageBudgetBytes: cache.limitBytes,
         refusedImages: refused,
+        ...(!charts && hasXlsxCharts(drawings) ? { chartsUnavailable: true as const } : {}),
         dispose: () => {
           if (released) return
           released = true

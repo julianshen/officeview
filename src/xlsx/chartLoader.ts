@@ -28,9 +28,8 @@ export type ChartReceiverLease = import('../charts/paint').ChartReceiverLease
  * receiver, the receiving chart context this preparation's paints carry (release it with the preparation). */
 export const ensureChartEngine = (contents: readonly ChartCarrier[], receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> =>
   hasXlsxCharts(contents) ? loadChartModule().then(charts => receiver ? charts.acquireChartContext(receiver) : undefined).catch(() => undefined) : Promise.resolve(undefined)
-/** Make the chart painter available before a sheet with charts is painted (and acquire its receiving context). */
-export async function ensureChartPainter(drawings: readonly XlsxDrawing[] | undefined, receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> {
-  if (!hasXlsxCharts(drawings)) return undefined
-  const charts = await loadChartModule()
-  return receiver ? charts.acquireChartContext(receiver) : undefined
-}
+/** Make the chart painter available before a sheet with charts is painted (and acquire its receiving context);
+ * a failed load leaves the charts as cards, as ensureChartEngine does (never a rejection). */
+export const ensureChartPainter = (drawings: readonly XlsxDrawing[] | undefined, receiver?: ChartReceiver): Promise<ChartReceiverLease | undefined> => ensureChartEngine(drawings ?? [], receiver)
+/** The diagnostic for charts left as cards because the chart chunk did not load (document-wide: page -1). */
+export const CHART_ENGINE_UNAVAILABLE = { page: -1, code: 'chart-engine-unavailable', reason: 'The chart engine could not be loaded' }

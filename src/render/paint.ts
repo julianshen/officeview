@@ -15,7 +15,7 @@ import { renderSlide, slideMetrics } from '../pptx/render'
 import type { DocxDocument } from '../docx/types'
 import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../drawing/content'
 import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
-import { ensureChartEngine, ensureChartPainter, loadChartModule, type ChartReceiverLease } from '../xlsx/chartLoader'
+import { CHART_ENGINE_UNAVAILABLE, ensureChartEngine, ensureChartPainter, hasXlsxCharts, loadChartModule, type ChartReceiverLease } from '../xlsx/chartLoader'
 import type { PptxDocument } from '../pptx/types'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 import type { ImageSelection } from '../core/svg'
@@ -32,7 +32,7 @@ export interface PaintableArray extends Array<Paintable> {
   /** Chart preparation diagnostics by unit (spec 6.6): missed picture deadlines, description limits/refusals. */
   chartDiagnostics?: ChartPaintables['diagnostics']
 }
-function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagnostics: FontDiagnostic[] = [], decoded: Array<CanvasImageSource | undefined> = [], charts?: ChartPaintables): PaintableArray {
+function withLease(pages: Paintable[], dispose: () => void = () => {}, fontDiagnostics: FontDiagnostic[] = [], decoded: Array<CanvasImageSource | undefined> = [], charts?: Pick<ChartPaintables, 'diagnostics'>): PaintableArray {
   let released = false
   return Object.assign(pages, { fontDiagnostics, ...(charts?.diagnostics.length ? { chartDiagnostics: charts.diagnostics } : {}), dispose: () => {
     if (released) return
@@ -406,7 +406,8 @@ export function getPaintables(
       let metadata: ChartPaintables | undefined
       try {
         const cached = collectCachedPictures(doc.sheets.flatMap(sheet => sheet.drawings ?? []))
-        charts = await ensureChartPainter(doc.sheets.flatMap(sheet => sheet.drawings ?? []), chartReceiver(doc, options))
+        const drawings = doc.sheets.flatMap(sheet => sheet.drawings ?? [])
+        charts = await ensureChartPainter(drawings, chartReceiver(doc, options))
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))
@@ -416,7 +417,7 @@ export function getPaintables(
         metadata?.release()
         return withLease(doc.sheets.map((sheet): Paintable =>
           sheetPaintable(sheet, { images: decoded, imageFor: image => decodedByObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options?.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) }, watermark),
-        ), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded, metadata)
+        ), () => { charts?.release(); lease.dispose() }, lease.diagnostics, decoded, charts || !hasXlsxCharts(drawings) ? metadata : { diagnostics: [CHART_ENGINE_UNAVAILABLE] })
       } catch (error) { releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
     })
   }
