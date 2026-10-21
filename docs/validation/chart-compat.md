@@ -451,7 +451,7 @@ the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond
 
 ## C1 gallery (spec 8, Goldens)
 
-`src/testdata/chart-gallery.ts` writes one Office-shaped synthetic document per format with the same 20 charts, each
+`src/testdata/chart-gallery.ts` writes one Office-shaped synthetic document per format with the same 23 charts, each
 titled by what it shows. Every PNG was inspected on the Mac when recorded:
 
 - `chart-gallery-docx.0.png`: clustered column with rich title runs (bold + red italic) and outside-end data labels,
