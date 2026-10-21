@@ -743,6 +743,29 @@ describe('C1 phase 2b: the median line and mean marker stay visible on a filled 
     expect(horizontal.some(seg => seg.stroke === '#ffffff')).toBe(false)
   })
 
+  it('review: skewed mean stays visible outside its box', async () => {
+    // [1..8, 100]: exclusive quartiles put the box at about 2.5..8, the mean (15) far above it, on the plot paper.
+    const { ctx, box, median, cross, color } = await paintBox(bwXml([{ values: [1, 2, 3, 4, 5, 6, 7, 8, 100] }]))
+    expect(median.stroke).toBe('#ffffff')
+    expect(cross).toHaveLength(2)
+    const centre = { x: (cross[0].x1 + cross[0].x2) / 2, y: (cross[0].y1 + cross[0].y2) / 2 }
+    expect(centre.y < box.y || centre.y > box.y + box.h, 'the mean lies outside the box').toBe(true)
+    for (const s of cross) expect(s.stroke).toBe(color)
+    // An 11 x 11 sample enclosing the whole cross holds non-white (marker) pixels.
+    const data = ctx.getImageData(Math.round(centre.x) - 5, Math.round(centre.y) - 5, 11, 11).data
+    let ink = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] < 200 || data[i + 1] < 200 || data[i + 2] < 200) ink++
+    expect(ink).toBeGreaterThan(5)
+  })
+
+  it('a mean inside its filled box is drawn in white and differs from the fill', async () => {
+    const { ctx, box, cross } = await paintBox(bwXml([{ values }]))
+    const centre = { x: (cross[0].x1 + cross[0].x2) / 2, y: (cross[0].y1 + cross[0].y2) / 2 }
+    expect(centre.y > box.y && centre.y < box.y + box.h).toBe(true)
+    for (const s of cross) expect(s.stroke).toBe('#ffffff')
+    expect(pixel(ctx, centre.x, centre.y)).not.toBe(pixel(ctx, box.x + box.w / 2, box.y + 2))
+  })
+
   it('boxMarkColor: white only when the fill is the series colour', () => {
     expect(boxMarkColor(undefined, '4472C4')).toBe('FFFFFF')
     expect(boxMarkColor({ kind: 'solid', color: '4472c4' } as never, '4472C4')).toBe('FFFFFF')

@@ -330,23 +330,33 @@ describe('torture (d): empty, NaN and infinite data, per format', () => {
   const families = CLASSIC.filter(f => ['column', 'line', 'pie', 'scatter', 'bubble', 'stock', 'contour'].includes(f.name))
   const cases = Object.keys(CONFORMANCE_CASES) as Array<keyof typeof CONFORMANCE_CASES>
 
-  it.each(FORMATS)('%s: every family and data case parses, paints natively or as a card with a reason, and refunds', async format => {
-    const objects = families.flatMap(family => cases.map(name => ({ name: `${family.name}: ${name}`, part: family.chart(CONFORMANCE_CASES[name]) })))
+  /** The pinned outcome per case: a group with no series is a card with its family's reason; every data case
+   * (empty, all blank, NaN/∞, negative, single point) is native with no diagnostics (C1 review: an exact oracle). */
+  const expected = (family: string, name: string): { card?: string; diagnostics: string[] } =>
+    name !== 'no series' ? { diagnostics: [] }
+      : { card: family === 'stock' ? 'Stock charts require 3 (high, low, close) or 4 (open, high, low, close) series, got 0' : 'This chart has no data series', diagnostics: [] }
+
+  it.each(FORMATS)('%s: every family and data case gives its pinned native/card result and diagnostics, and refunds', async format => {
+    const objects = families.flatMap(family => cases.map(name => ({ name: `${family.name}: ${name}`, family: family.name, kase: name, part: family.chart(CONFORMANCE_CASES[name]) })))
     const context = meteredContext('mobile')
-    const { charts } = await open(format, await buildChartDocument(format, objects, { columns: 6, rows: 7, width: 120, height: 90 }), context)
+    const { charts, coverage } = await open(format, await buildChartDocument(format, objects, { columns: 6, rows: 7, width: 120, height: 90 }), context)
     expect(charts).toHaveLength(objects.length)
+    expect(coverage).toHaveLength(objects.length)
     charts.forEach((chart, i) => {
-      expect(chart, objects[i].name).toBeDefined()
-      const card = paint(chart!, context, 120, 90)
-      if (chart!.unsupported) expect(chart!.unsupported, objects[i].name).toMatch(/\S/)
-      else expect(card, `${objects[i].name}: native without the card`).toBe(false)
-      for (const d of chart!.diagnostics ?? []) expect(d.code).toMatch(/^chart-[a-z0-9-]+$/)
+      const { name, family, kase } = objects[i], want = expected(family, kase)
+      expect(chart, name).toBeDefined()
+      expect(chart!.unsupported, name).toBe(want.card)
+      expect((chart!.diagnostics ?? []).map(d => d.code), name).toEqual(want.diagnostics)
+      expect(coverage[i].selectedRepresentation, name).toBe(want.card ? 'chart-placeholder' : 'chart')
+      if (want.card) expect(coverage[i].reason, name).toBe('unsupported-chart')
+      // A card paints the card; a native chart never does.
+      expect(paint(chart!, context, 120, 90), name).toBe(want.card !== undefined)
+      // No plotted value from blank, NaN or ±∞ input (1e999 overflows to ∞): every point state is non-value.
+      if (kase === 'all blank' || kase === 'NaN and infinity') for (const group of chart!.groups) for (const s of group.series) {
+        expect(s.values.length, name).toBeGreaterThan(0)
+        expect([...s.values.states].every(state => state !== 1), name).toBe(true)
+      }
     })
-    // NaN and ±∞ (and 1e999) read as blank, never as a plotted value.
-    for (const [i, chart] of charts.entries()) {
-      if (!objects[i].name.endsWith('NaN and infinity') || chart!.unsupported) continue
-      for (const group of chart!.groups) for (const s of group.series) expect([...s.values.states].every(state => state !== 1), objects[i].name).toBe(true)
-    }
     expect(context.peak()).toBeLessThan(4 * MiB)
     releaseAll(charts, context)
     expect(context.workspace.used).toBe(0)

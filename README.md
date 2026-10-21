@@ -678,8 +678,12 @@ chart style and colour parts; and user shapes drawn over the chart.
 
 - `surface3DChart` (3-D surface): a placeholder card that names the chart and says why it is not drawn.
 - Region map: always its fallback picture, or a card when the file has none.
-- A chart inside `mc:AlternateContent` that the engine cannot draw keeps the file's own fallback picture. A card is
-  shown only when no picture is available: a chart never becomes silent blank space.
+- A chart inside `mc:AlternateContent` that the engine cannot draw when the document is read (an unsupported chart,
+  unreadable data, a parse-time memory refusal) keeps the file's own fallback picture; a card is shown then only when
+  no picture is available. A chart never becomes silent blank space.
+- One limit: a chart drawn natively whose later drawing is refused for memory (a layout or paint refused while the
+  page is painted) is shown as a card, even when the file had a fallback picture, because that picture was set aside
+  when the chart was selected.
 
 ### Limits
 

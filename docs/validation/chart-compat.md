@@ -13,7 +13,7 @@ fixtures are "Office-shaped synthetic" and are never reported as Office evidence
 ## Final gate table (C1 phase 2, `chart/c1`)
 
 Measured on the C1 branch after merging `feature/chart-compat` `9b5a318`, which has every feature task: A7
-accessibility, B3 histogram/Pareto, B4 box & whisker and the licence confirmation. The phase 1 figures (base `10c4f1e`:
+accessibility, B3 histogram/Pareto, B4 box & whisker and the licence confirmation. Later commits re-ran the suite (phase 2b and the review fixes, recorded in the C1 report); this table is the phase 2 composition. The phase 1 figures (base `10c4f1e`:
 full 8,251/0, eager 38,639, 13 golden units, Chromium 20/20) are superseded by this table.
 
 | Gate | Command | Result |
@@ -90,7 +90,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B3 merge with feature | merge commit | 38,638 | `feature/chart-compat` `5be9dd1` (B2, B5, A6b, A5c, A4b, licence) merged into `chart/b3`; conflicts resolved keeping every family and section. Bytes added: 0. Running total vs B0: +7 B |
 | After B3 fix round 4 + merge with feature (B4) | merge commit | 38,639 | Round 4 (per-pass wrapper settlement, ancestor membership) in worker chunks; `feature/chart-compat` with B4 box & whisker merged (CHARTEX_PAINTED keeps all seven painted families). +1 B hash churn. Running total vs B0: +8 B |
 | After B3 merge with feature (A7) | merge commit | 38,582 | `feature/chart-compat` with A7 (descriptions in `src/charts/describe.ts`, which freed eager bytes) merged into `chart/b3`; B3 adds `derivedFamily` naming (lazy). Running total vs B0: −49 B |
-| After C1 phase 1 | | `chart/c1` | 38,639 | Robustness slice, gallery, README/CHANGELOG, validation doc. Source changes are all lazy (`charts-*`: stock charge name, ofPie sweep, hierarchy legend bound, XLSX external-reference diagnostic, exported family registry); `src/testdata/chart-gallery.ts` is test data, never bundled. +2 B vs the `10c4f1e` figure (hash churn). Ceiling 38,647 (B0 + 16). Running total vs B0: +8 B |
+| After C1 phase 1 | `chart/c1` | 38,639 | Robustness slice, gallery, README/CHANGELOG, validation doc. Source changes are all lazy (`charts-*`: stock charge name, ofPie sweep, hierarchy legend bound, XLSX external-reference diagnostic, exported family registry); `src/testdata/chart-gallery.ts` is test data, never bundled. +2 B vs the `10c4f1e` figure (hash churn). Ceiling 38,647 (B0 + 16). Running total vs B0: +8 B |
 | Task B4 merged (feature) | `5b8df48` | 38,639 | Box & whisker (`src/charts/chartex/boxWhisker.ts`, lazy). Gated at merge: full 8,243/0. Running total vs B0: +8 B |
 | Task A7 merged (feature) | `c3c72c7` | 38,581 | Accessible descriptions moved to the lazy `src/charts/describe.ts` (the old eager `chartDescription` module went away), paintables metadata, paged chart list. Gated at merge: full 8,266/0. Running total vs B0: −50 B |
 | Task B3 merged (feature `9b5a318`) | `9b5a318` | 38,582 | Histogram and Pareto, `settleChartFallbacks` late-fallback switch, `derivedFamily` descriptions. Gated at merge: full 8,316/0. Running total vs B0: −49 B |
@@ -515,9 +515,10 @@ Observed while inspecting the gallery and the torture documents; none is claimed
   shows no legend, and its legend text for the Pareto line is unverified.
 - **XLSX Choice probe released, fixed in C1 phase 2:** an XLSX chart inside `mc:AlternateContent` was parsed twice
   (once to decide that the Choice is available, once for the drawing) and the probe's model stayed charged to the
-  chart workspace until the finalizer ran (one extra model per such chart; the DOCX and PPTX paths were not
-  affected). `branchAvailable` now releases the probe's model at once; the torture test (a) refunds to 0 with
-  histogram, Pareto and box & whisker inside a `cx1` Choice.
+  chart workspace until the finalizer ran (one extra model per such chart). `branchAvailable` now releases the
+  probe's model at once; the torture test (a) refunds to 0 with histogram, Pareto and box & whisker inside a `cx1`
+  Choice. This covers this XLSX probe only: DOCX and PPTX have no such probe, but PPTX keeps the charge of an
+  unselected native branch (a separate follow-up in the known limits).
 - **XLSX external references, changed in C1:** a reference into another workbook (`[1]Sheet1!…`, directly or through
   a defined name) still reads blank and is now diagnosed `chart-data-external-reference`.
 
@@ -540,13 +541,24 @@ are painted (B2, B5), histogram and Pareto (B3) and box & whisker (B4); region m
 - **B5:** `hierarchyBytes` prices a shared label once per occurrence (conservative double pricing, accepted); `dataPt`
   overrides are not applied to treemap/sunburst nodes (node identity unknown) [U]. C1 made the hierarchy legend bound
   capacity-aware.
-- **A7:** one shared 1.5 s picture-decode deadline per page (injectable clock, cancellable); the pre-existing
+- **A7:** one 1.5 s picture-decode deadline shared by the whole preparation job, across all its pages (injectable
+  clock, cancellable; a page whose pictures miss it is published without them); the pre-existing
   paged-chrome CLS shift is not chart-caused (follow-up outside this project); the CLS proof covers content outside
   the viewer chrome only.
 - **B3:** the unverified rules in its section (automatic Scott bins, label notation, Pareto sort and axis defaults);
   `underflow`/`overflow="auto"` is unsupported (fallback kept).
 - **B4:** the unverified choices in its section (inclusive quartiles, 1.5×IQR whiskers, visibility defaults, no end caps,
   data labels and `dataPt` not painted), and the median/mean mark colour (white on a series-coloured box) above.
+- **Paint-time refusal draws a card despite a fallback picture (final review M5; follow-up):** the `mc:Fallback`
+  choice is made when the document is read. A chart selected natively whose layout or paint admission is refused
+  later, at paint time (transient, memory-driven), paints its card: its fallback picture was set aside at selection
+  and is not revisited. Spec 6.3's "a card only when no representation remains" therefore holds for selection-time
+  failures only. Fix candidate: keep the fallback picture's index on the native drawing and paint it on refusal.
+- **PPTX keeps the charge of an unselected native Choice branch until finalisation (final re-review R1; rare;
+  follow-up):** the PPTX shape walk parses a chart in both the Choice and the Fallback of an `mc:AlternateContent`
+  before selecting one; the unselected branch's model is not released explicitly and stays charged to the chart
+  workspace until the FinalizationRegistry collects it. It needs a native chart in both branches. C1's XLSX probe
+  release (residual differences above) covers the XLSX path only.
 - **Browser evidence is Chromium only:** WebKit cannot launch on the build host (CVDisplayLink; reproduces on `main`),
   ruling at A3b.
 - **Fixture licence:** the ChartEx fixtures are used under **MPL-2.0, confirmed** (PROVENANCE.md, feature branch

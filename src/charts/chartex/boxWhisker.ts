@@ -350,8 +350,9 @@ export interface BoxWhiskerGroupLike {
 }
 
 /**
- * The colour of a box's median line and mean marker. Both are drawn over the box and Office shows both, so they must
- * stay visible: when the box is filled with the series colour (no `spPr` fill: the default, or a solid fill of that
+ * The colour of a box's median line and of a mean marker centred over the box (a mean outside the quartiles is on the
+ * plot paper and keeps the series colour). Office shows both marks, so they must stay visible: when the box is filled
+ * with the series colour (no `spPr` fill: the default, or a solid fill of that
  * colour) they are drawn in white, the plot paper; on any other box fill (another solid colour, a gradient, a
  * pattern, or no fill) they keep the series colour. The exact colour Office uses is **unverified** (C1 phase 2b).
  */
@@ -484,7 +485,9 @@ export function paintBoxWhisker(
     if (box.meanMarker && kit.admitPath(4)) {
       ctx.save()
       try {
-        ctx.strokeStyle = `#${mark}`
+        // Contrast against what lies under the mark: the box's mark colour only when the cross is centred over the
+        // box; a mean outside the quartiles sits on the plot paper and keeps the series colour (C1 review).
+        ctx.strokeStyle = `#${yMean >= yTop && yMean <= yBot ? mark : color}`
         ctx.lineWidth = 1.5
         const r = 4
         ctx.beginPath()
