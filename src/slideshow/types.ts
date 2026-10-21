@@ -295,8 +295,14 @@ export type Affine = readonly [a: number, b: number, c: number, d: number, e: nu
 /** A 4×5 colour matrix, row-major (20 numbers), applied to un-premultiplied colour. */
 export type ColorMatrix = readonly number[]
 
-/** Every mask the catalogue names. Seeded from spec 6.3; S1-13 fills it in. */
-export type MaskKind = 'wipe' | 'split' | 'circle' | 'diamond' | 'plus' | 'wedge' | 'wheel' | 'barn' | 'checkerboard' | 'dissolve'
+/**
+ * Every mask the catalogue names (spec 6.3: the wipe-like filters and the 2-D
+ * transition masks). Geometry and params are in `render/masks.ts`; `dissolve`
+ * and `randomBar` are noise rasters, every other kind is a path.
+ */
+export type MaskKind =
+  | 'wipe' | 'split' | 'circle' | 'diamond' | 'plus' | 'wedge' | 'wheel' | 'barn' | 'checkerboard' | 'dissolve'
+  | 'blinds' | 'box' | 'comb' | 'randomBar' | 'strips'
 
 export interface MaskState { kind: MaskKind; progress: number; params: Readonly<Record<string, number | string>> }
 
@@ -389,6 +395,21 @@ export interface TransitionDraw {
   rng: Rng
 }
 
+/**
+ * Where the slide lands on the output (S1-13 fix round 1, controller ruling).
+ * `matrix` maps slide px to output device px (letterbox offset and
+ * backing-store scale, DPR included); `deviceWidth` × `deviceHeight` is the
+ * output backing store in device px.
+ */
+export interface CompositorViewport { matrix: Affine; deviceWidth: number; deviceHeight: number }
+
+/**
+ * `TargetState.transform` and `motion` are in slide px (the renderer knows
+ * nothing about the viewport). A draw is composited at
+ * `viewport.matrix ∘ translate(motion) ∘ state.transform`. Transition affines
+ * are in unit slide space (the layer's bounds are [0, 1]²) and transition
+ * masks are computed in device px over the slide's device rect.
+ */
 export interface Compositor {
   readonly backend: 'webgl2' | 'canvas2d'
   readonly maxTextureSize: number
@@ -396,6 +417,10 @@ export interface Compositor {
   release(handle: LayerHandle): void
   frame(draws: readonly LayerDraw[], transition?: TransitionDraw): void
   resize(widthPx: number, heightPx: number): void
+  /** Additive (S1-13 fix round 1). Resizes the output when the device size differs. Default: identity, current size. */
+  setViewport(view: CompositorViewport): void
+  /** Additive (S1-13 fix round 1): the slide that compositor diagnostics are attributed to. */
+  setSlideIndex(index: number | undefined): void
   dispose(): void
 }
 
