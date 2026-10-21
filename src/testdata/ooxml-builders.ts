@@ -182,7 +182,7 @@ export async function buildDocx(
   }
   if (hf.firstFooter) {
     zip.file('word/footer2.xml', hfPart('ftr', hf.firstFooter))
-    sectRefs += '<w:headerReference w:type="first" r:id="rIdFtrFirst"/>'
+    sectRefs += '<w:footerReference w:type="first" r:id="rIdFtrFirst"/>'
   }
   if (hf.titlePg) sectRefs += '<w:titlePg/>'
   zip.file('word/_rels/document.xml.rels',
@@ -648,14 +648,24 @@ function pptxLayoutPlaceholderXml(
 /** Per-part image relationship bookkeeping (rIds are part-local, media files are deck-global). */
 interface PptxPartRels {
   allocImage: (data: Uint8Array, name?: string) => string
-  nextPicId: () => number
+  idFor: (s: PptxShapeSpec) => number
+  nextId: () => number
   imageRelsXml: () => string
 }
 
-function pptxPart(allocGlobalMedia: (data: Uint8Array, name?: string) => string): PptxPartRels {
+function pptxPart(
+  allocGlobalMedia: (data: Uint8Array, name?: string) => string,
+  explicitIds: number[] = [],
+): PptxPartRels {
   const rels: string[] = []
   const byRef = new Map<Uint8Array, string>()
-  let pics = 0
+  const used = new Set<number>(explicitIds)
+  let counter = 1
+  function nextId(): number {
+    do { counter += 1 } while (used.has(counter))
+    used.add(counter)
+    return counter
+  }
   return {
     allocImage: (data, name) => {
       const hit = byRef.get(data)
@@ -666,14 +676,28 @@ function pptxPart(allocGlobalMedia: (data: Uint8Array, name?: string) => string)
       byRef.set(data, rid)
       return rid
     },
-    nextPicId: () => 100 + ++pics,
+    idFor: (s) => {
+      if (s.id !== undefined) {
+        used.add(s.id)
+        return s.id
+      }
+      return nextId()
+    },
+    nextId,
     imageRelsXml: () => rels.join(''),
   }
 }
 
-const PPTX_REL_DEFAULTS = {
-  rels: '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
-  xml: '<Default Extension="xml" ContentType="application/xml"/>',
+const PPTX_MEDIA_CT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  svg: 'image/svg+xml',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
 }
 
 /** Build a multi-slide deck with layouts, masters, backgrounds and a theme. */
@@ -686,7 +710,7 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   const allocGlobalMedia = (data: Uint8Array, name?: string): string => {
     const hit = mediaByRef.get(data)
     if (hit) return hit
-    const ext = name ? (name.split('.').pop() ?? 'png').toLowerCase() : 'png'
+    const ext = name && /\.[^./]+$/.test(name) ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : 'png'
     const entry = `image${mediaFiles.length + 1}.${ext}`
     mediaFiles.push({ name: entry, ext, data })
     mediaByRef.set(data, entry)
@@ -701,29 +725,29 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
 
   const spTreeOpen = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>\n    <p:grpSpPr/>'
   const deckShapeXml = (s: PptxShapeSpec, part: PptxPartRels): string => {
-    if (s.table) return pptxTableXml(s.table, s.off, s.ext, s.id ?? 200, s.name ?? 'Table')
+    if (s.table) return pptxTableXml(s.table, s.off, s.ext, part.idFor(s), s.name ?? 'Table')
     if (s.image) {
       const rid = part.allocImage(s.image.data, s.image.name)
-      return pptxPicXml(rid, s.id ?? part.nextPicId(), { srcRect: s.image.srcRect, rot: s.rot, off: s.off, ext: s.ext }, s.name)
+      return pptxPicXml(rid, part.idFor(s), { srcRect: s.image.srcRect, rot: s.rot, off: s.off, ext: s.ext }, s.name)
     }
-    if (s.placeholder) return pptxPlaceholderXml(s, s.id ?? 2, s.name ?? s.placeholder.type)
-    return pptxSpXml(s, s.id ?? 2, s.name ?? 'Shape')
+    if (s.placeholder) return pptxPlaceholderXml(s, part.idFor(s), s.name ?? s.placeholder.type)
+    return pptxSpXml(s, part.idFor(s), s.name ?? 'Shape')
   }
 
   const masterXmls = masters.map((m, mi) => {
-    const part = pptxPart(allocGlobalMedia)
+    const part = pptxPart(allocGlobalMedia, (m.shapes ?? []).map((s) => s.id).filter((v): v is number => v !== undefined))
     const bg = pptxBgXml(m.bg, part.allocImage)
     const shapes = (m.shapes ?? []).map((s) => deckShapeXml(s, part)).join('\n    ')
     const layoutIds = layoutGlobals.filter((l) => l.master === mi)
     return {
       xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:cSld>${bg}<p:spTree>
     ${spTreeOpen}
     ${shapes}
   </p:spTree></p:cSld>
   <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
-  <p:sldLayoutIdLst>${layoutIds.map((l, j) => `<p:sldLayoutId id="${2147483648 + l.number}" r:id="rId${j + 2}"/>`).join('')}</p:sldLayoutIdLst>
+  <p:sldLayoutIdLst>${layoutIds.map((l, j) => `<p:sldLayoutId id="${2147483648 + masters.length + l.number}" r:id="rId${j + 2}"/>`).join('')}</p:sldLayoutIdLst>
 </p:sldMaster>`,
       rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -734,13 +758,13 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
 
   const layoutXmls = layoutGlobals.map((l) => {
     const layoutSpec = masters[l.master].layouts[l.index]
-    const part = pptxPart(allocGlobalMedia)
+    const part = pptxPart(allocGlobalMedia, (layoutSpec.shapes ?? []).map((s) => s.id).filter((v): v is number => v !== undefined))
     const bg = pptxBgXml(layoutSpec.bg, part.allocImage)
-    const phs = (layoutSpec.placeholders ?? []).map((ph, i) => pptxLayoutPlaceholderXml(ph, i + 2)).join('\n    ')
+    const phs = (layoutSpec.placeholders ?? []).map((ph) => pptxLayoutPlaceholderXml(ph, part.nextId())).join('\n    ')
     const shapes = (layoutSpec.shapes ?? []).map((s) => deckShapeXml(s, part)).join('\n    ')
     return {
       xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"${layoutSpec.showMasterSp === false ? ' showMasterSp="0"' : ''}>
+<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"${layoutSpec.showMasterSp === false ? ' showMasterSp="0"' : ''}>
   <p:cSld>${bg}<p:spTree>
     ${spTreeOpen}
     ${phs}
@@ -755,18 +779,21 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
     }
   })
 
-  const slideXmls = slides.map((sl) => {
-    const part = pptxPart(allocGlobalMedia)
+  const slideXmls = slides.map((sl, si) => {
+    const part = pptxPart(allocGlobalMedia, sl.shapes.map((s) => s.id).filter((v): v is number => v !== undefined))
     const bg = pptxBgXml(sl.bg, part.allocImage)
     const shapes = sl.shapes.map((s) => deckShapeXml(s, part)).join('\n    ')
-    const [mi, li] = sl.layout ?? (masters.length ? [0, 0] : [0, 0])
+    const [mi, li] = sl.layout ?? [0, 0]
     const layoutNumber = masters.length ? layoutNumberOf(mi, li) : undefined
+    if (layoutNumber === undefined && (masters.length || sl.layout)) {
+      throw new Error(`buildPptxDeck: slide ${si} references layout [${mi}, ${li}] which does not exist`)
+    }
     const before = sl.extraXml?.beforeSpTree ?? ''
     const after = sl.extraXml?.afterCSld ?? ''
     return {
       xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"${sl.showMasterSp === false ? ' showMasterSp="0"' : ''}>
-  <p:cSld>${before}${bg}<p:spTree>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"${sl.showMasterSp === false ? ' showMasterSp="0"' : ''}>
+  <p:cSld>${bg}${before}<p:spTree>
     ${spTreeOpen}
     ${shapes}
   </p:spTree></p:cSld>${after}
@@ -780,8 +807,8 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   const bgFillStyleLst = spec.theme?.bgFillStyles?.join('')
     ?? '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr" alpha="50000"/></a:solidFill><a:solidFill><a:schemeClr val="phClr" alpha="20000"/></a:solidFill>'
   zip.file('ppt/theme/theme1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" name="Office Theme">
-  <p:themeElements>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
+  <a:themeElements>
     <a:clrScheme name="Office">
       <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
       <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
@@ -818,8 +845,8 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
       </a:effectStyleLst>
       <a:bgFillStyleLst>${bgFillStyleLst}</a:bgFillStyleLst>
     </a:fmtScheme>
-  </p:themeElements>
-</p:theme>`)
+  </a:themeElements>
+</a:theme>`)
 
   masterXmls.forEach((m, i) => {
     zip.file(`ppt/slideMasters/slideMaster${i + 1}.xml`, m.xml)
@@ -863,23 +890,23 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   const slideSizeXml = spec.slideSize ? `<p:sldSz cx="${spec.slideSize[0]}" cy="${spec.slideSize[1]}"/>` : '<p:sldSz cx="9144000" cy="6858000"/>'
   zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <p:sldMasterIdLst>${masters.map((_, m) => `<p:sldMasterId id="${2147483648 + m}" r:id="rId${slides.length + m + 1}"/>`).join('')}</p:sldMasterIdLst>
+  ${masters.length ? `<p:sldMasterIdLst>${masters.map((_, m) => `<p:sldMasterId id="${2147483648 + m}" r:id="rId${slides.length + m + 1}"/>`).join('')}</p:sldMasterIdLst>` : ''}
   <p:sldIdLst>${slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('')}</p:sldIdLst>
   ${slideSizeXml}
 </p:presentation>`)
 
   const imgDefaults = [...new Set(mediaFiles.map((m) => m.ext))]
-    .map((ext) => `<Default Extension="${ext}" ContentType="${ext === 'png' ? 'image/png' : `image/${ext}`}"/>`)
+    .map((ext) => `<Default Extension="${ext}" ContentType="${PPTX_MEDIA_CT[ext] ?? `image/${ext}`}"/>`)
     .join('\n  ')
   const ctRows = [
-    PPTX_REL_DEFAULTS.rels,
-    PPTX_REL_DEFAULTS.xml,
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+    '<Default Extension="xml" ContentType="application/xml"/>',
     imgDefaults,
     '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>',
     ...slides.map((_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`),
     ...layoutGlobals.map((_, i) => `<Override PartName="/ppt/slideLayouts/slideLayout${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>`),
     ...masters.map((_, m) => `<Override PartName="/ppt/slideMasters/slideMaster${m + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>`),
-    '<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.theme+xml"/>',
+    '<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>',
     spec.presProps ? '<Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/>' : '',
     styleIds.length > 0 ? '<Override PartName="/ppt/tableStyles.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml"/>' : '',
   ].filter(Boolean)

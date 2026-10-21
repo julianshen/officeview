@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { OfficePackage } from '../src/core/zip'
 import { parsePptx } from '../src/pptx/parse'
@@ -83,7 +84,6 @@ describe('buildPptx stays byte-identical', () => {
       const expected = snapshots[caseName]
       expect(actual.names).toEqual(expected.names)
       for (const [path, hash] of Object.entries(expected.hashes)) {
-        expect(`${caseName}:${path}`).toBe(`${caseName}:${path}`)
         expect(actual.hashes[path], path).toBe(hash)
       }
     }
@@ -157,6 +157,12 @@ describe('buildPptxDeck structure', () => {
       expect(slide.theme!.bgFillStyles.length).toBe(3)
       expect(slide.theme!.colors.accent1).toBeDefined()
     }
+    // the theme part is a real DrawingML theme root, the custom bg fill list is in the XML (not the canned default), and the content type matches the Office theme type
+    const themeXml = entries['ppt/theme/theme1.xml']
+    expect(themeXml).toMatch(/<a:theme /)
+    expect(themeXml).toContain('<a:themeElements>')
+    expect(themeXml).toContain('<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>')
+    expect(entries['[Content_Types].xml']).toContain('Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"')
   })
 
   it('presProps is written verbatim and linked from the presentation', async () => {
@@ -167,10 +173,10 @@ describe('buildPptxDeck structure', () => {
     const pres = entries['ppt/presentation.xml']
     const presRels = await relsOf(entries, 'ppt/presentation.xml')
     expect(presRels.some((r) => r.type.endsWith('/presProps') && r.target === 'presProps.xml')).toBe(true)
-    const ids = [...pres.matchAll(/r:id="([^"]+)"/g)].map((m) => m[1])
-    for (const id of ids) {
-      expect(pres.includes(id), `presentation.xml references ${id}`).toBe(true)
-      expect(presRels.some((r) => r.id === id)).toBe(true)
+    // every slide/master relationship id the presentation declares exists, and vice versa
+    const declared = [...(pres.match(/<p:sldMasterIdLst>(.*?)<\/p:sldMasterIdLst>/s)?.[1] ?? '').matchAll(/r:id="([^"]+)"/g)].map((m) => m[1])
+    for (const rel of presRels.filter((r) => r.type.endsWith('/slideMaster'))) {
+      expect(declared, `${rel.id} referenced from sldMasterIdLst`).toContain(rel.id)
     }
   })
 
@@ -222,6 +228,8 @@ describe('PptxBgSpec serialisation', () => {
   it('bgRef with a hex colour writes an srgbClr', async () => {
     const entries = await textEntries(await buildPptxDeck({ masters: [{ bg: { bgRef: { idx: 1003, color: '2E75B6' } }, layouts: [{ shapes: [] }] }], slides: [] }))
     expect(entries['ppt/slideMasters/slideMaster1.xml']).toContain('<p:bg><p:bgRef idx="1003"><a:srgbClr val="2E75B6"/></p:bgRef></p:bg>')
+    // the default theme fill list is the canned phClr list, distinguishable from a custom one
+    expect(entries['ppt/theme/theme1.xml']).toContain('<a:schemeClr val="phClr"')
   })
 })
 
@@ -260,6 +268,11 @@ describe('deck parse behaviour', () => {
     expect(body.heightEmu).toBe(3657600)
   })
 
+  it('rejects a slide layout reference that no master defines', async () => {
+    await expect(buildPptxDeck({ masters: [{ layouts: [] }], slides: [{ layout: [0, 0], shapes: [] }] })).rejects.toThrow()
+    await expect(buildPptxDeck({ slides: [{ layout: [0, 0], shapes: [] }] })).rejects.toThrow()
+  })
+
   it('shape id and name defaults match buildPptx and explicit ids win', async () => {
     const entries = await textEntries(await buildPptxDeck({
       masters: [{ layouts: [{ shapes: [] }] }],
@@ -268,5 +281,74 @@ describe('deck parse behaviour', () => {
     const slide = entries['ppt/slides/slide1.xml']
     expect(slide).toContain('<p:cNvPr id="2" name="Shape"/>')
     expect(slide).toContain('<p:cNvPr id="7" name="Second"/>')
+  })
+})
+
+describe('deck XML hygiene', () => {
+  const xmllintVersion = spawnSync('xmllint', ['--version'])
+  const xmllintWorks = !xmllintVersion.error && xmllintVersion.status === 0
+  const itIfXmllint = xmllintWorks ? it : it.skip
+  const png = pngBytes()
+  const lintDeck: PptxDeckSpec = {
+    slideSize: [12192000, 6858000],
+    masters: [
+      {
+        shapes: [{ prst: 'rect', off: ['0', '0'], ext: ['12192000', '274638'], fill: '1F4E79', id: 10, name: 'Band', paragraphs: [{ runs: [] }] }],
+        layouts: [
+          { placeholders: [{ type: 'title', off: ['838200', '1828800'], ext: ['7048500', '1325880'] }] },
+          { showMasterSp: false, shapes: [{ prst: 'ellipse', off: ['0', '0'], ext: ['914400', '914400'], fill: '3B6EF4' }] },
+        ],
+      },
+      { bg: { solid: '111111' }, shapes: [{ paragraphs: [{ runs: [{ text: 'default master shape' }] }] }], layouts: [{ shapes: [] }] },
+    ],
+    slides: [
+      { layout: [0, 0], bg: { picture: { data: png, tile: true } }, shapes: [{ placeholder: { type: 'title' }, paragraphs: [{ runs: [{ text: 'Welcome' }] }] }, { paragraphs: [{ runs: [{ text: 'default id' }] }] }, { id: 9, name: 'Pic', off: ['0', '0'], ext: ['1', '1'], image: { data: png } }] },
+      { layout: [0, 1], bg: { pattern: { prst: 'ltUpDiag', fg: '2E75B6', bg: 'FFFFFF' } }, shapes: [], extraXml: { beforeSpTree: '<p:custDataLst/>', afterCSld: '<p:custDataLst/>' } },
+      { layout: [1, 0], shapes: [] },
+    ],
+    theme: { bgFillStyles: ['<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>', '<a:solidFill><a:schemeClr val="accent2"/></a:solidFill>', '<a:solidFill><a:schemeClr val="accent3"/></a:solidFill>'] },
+  }
+
+  itIfXmllint('every generated part is well-formed XML with bound namespace prefixes (xmllint --noout)', async () => {
+    const buf = await buildPptxDeck(lintDeck)
+    const zip = await JSZip.loadAsync(buf)
+    for (const path of Object.keys(zip.files).filter((p) => p.endsWith('.xml'))) {
+      const content = await zip.files[path].async('text')
+      const run = spawnSync('xmllint', ['--noout', '-'], { input: content })
+      const output = `${run.stdout?.toString() ?? ''}${run.stderr?.toString() ?? ''}`
+      expect(output, path).toBe('')
+      expect(run.status, `${path}: ${output}`).toBe(0)
+    }
+  })
+
+  it('cNvPr ids are unique per part, defaulting to 2, 3, … skipping explicitly claimed ids', async () => {
+    const entries = await textEntries(await buildPptxDeck(lintDeck))
+    for (const [path, xml] of Object.entries(entries)) {
+      if (!path.endsWith('.xml') || path.includes('/_rels/') || path.startsWith('[Content_Types]')) continue
+      const ids = [...xml.matchAll(/<p:cNvPr id="([^"]+)"/g)].map((m) => m[1])
+      const dupes = ids.filter((id, i) => ids.indexOf(id) !== i)
+      expect(dupes, `duplicate cNvPr ids in ${path}: ${ids.join(',')}`).toEqual([])
+    }
+    // defaults are 2, 3, …: the unnamed slide shape after the placeholder takes 3; the master's unnamed shape (id 10 already claimed) takes 2
+    const slide1 = entries['ppt/slides/slide1.xml']
+    expect(slide1).toContain('<p:cNvPr id="2" name="title"/>')
+    expect(slide1).toContain('<p:cNvPr id="3" name="Shape"/>')
+  })
+
+  it('sldMasterId and sldLayoutId values are unique across both lists and >= 2147483648', async () => {
+    const entries = await textEntries(await buildPptxDeck(lintDeck))
+    const masterIds = [...entries['ppt/presentation.xml'].matchAll(/<p:sldMasterId id="(\d+)"/g)].map((m) => m[1])
+    const layoutIds = Object.keys(entries).filter((p) => /slideMasters\/slideMaster\d+\.xml$/.test(p)).flatMap((p) => [...entries[p].matchAll(/<p:sldLayoutId id="(\d+)"/g)].map((m) => m[1]))
+    const all = [...masterIds, ...layoutIds]
+    expect(all.length).toBeGreaterThan(0)
+    for (const id of all) expect(Number(id)).toBeGreaterThanOrEqual(2147483648)
+    expect(new Set(all).size).toBe(all.length)
+  })
+
+  it('extraXml.beforeSpTree lands between the background and the shape tree', async () => {
+    const entries = await textEntries(await buildPptxDeck(lintDeck))
+    const slide2 = entries['ppt/slides/slide2.xml']
+    expect(slide2).toContain('</p:bg><p:custDataLst/><p:spTree>')
+    expect(slide2).toContain('</p:cSld><p:custDataLst/>')
   })
 })
