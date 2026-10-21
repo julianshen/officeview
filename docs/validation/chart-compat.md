@@ -20,12 +20,12 @@ full 8,251/0, eager 38,639, 13 golden units, Chromium 20/20) are superseded by t
 |---|---|---|
 | Typecheck | `bunx tsc --noEmit`; `bun run typecheck:scripts` | 0 errors (both) |
 | Focused chart tests | `bunx vitest run tests/charts- tests/chart-gallery.test.ts tests/xlsx-chart tests/golden.test.ts` | 44 files, 826 tests passed |
-| Full suite, run 1 | `bunx vitest run` | @@FULL1@@ |
-| Full suite, run 2 | `bunx vitest run` | @@FULL2@@ |
+| Full suite, run 1 | `bunx vitest run` | 437 files: 8,349 passed, 10 skipped, 1 todo, 0 failed |
+| Full suite, run 2 | `bunx vitest run` | 437 files: 8,349 passed, 10 skipped, 1 todo, 0 failed (no flakes in either run) |
 | Eager budget | `bun run build && bun scripts/eager-budget.ts` | 38,582 B (B0 38,631; −49 B; ceiling 38,647, hard 38,720) |
 | Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | ok (150 eager modules) |
 | Goldens | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts` | 14/14 units identical at threshold 0 (3 pre-existing goldens unchanged; 11 gallery units) |
-| Browser (Chromium only: WebKit cannot launch on the build host, ruling at A3b) | `IV_HARNESS_PORT=4300 timeout 900 bunx playwright test --config playwright.viewer.config.ts --project chromium` (the whole browser suite) | @@PW@@ |
+| Browser (Chromium only: WebKit cannot launch on the build host, ruling at A3b) | `IV_HARNESS_PORT=4300 timeout 900 bunx playwright test --config playwright.viewer.config.ts --project chromium` (the whole browser suite) | 129 passed, 1 skipped, 0 failed (4.1 min; vite on 4300 stopped afterwards) |
 
 ## Eager budget
 
