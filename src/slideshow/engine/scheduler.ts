@@ -57,13 +57,19 @@ export interface Scheduler {
   evaluate(events: readonly ShowEvent[], t: number): SchedulerSnapshot
   /**
    * Absolute time after which the node's last activation is never active
-   * again (in a reversing parent, the reverse replay counts); `undefined`
-   * when it never begins or the id is unknown.
+   * again (in a reversing parent, the reverse replay counts), as seen at
+   * the end of time: it samples at `t = Infinity`, so it can disagree with
+   * `evaluate` at an earlier `t` (a node active now can still answer
+   * `undefined`). `undefined` means unresolved, not "nothing pending": the
+   * node never begins, the id is unknown, the syncbase history window holds
+   * no activation of it, its activations exceed the restart-storm bound, or
+   * the query ran out of its history budget (each of the last three is
+   * diagnosed).
    */
   endTimeOf(nodeId: number, events: readonly ShowEvent[]): number | 'indefinite' | undefined
 }
 
-/** Optional diagnostics, each once per node: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, `timing-history-truncated`, `timing-reference-outside-window`. */
+/** Optional diagnostics, each once per node per scheduler: `timing-cycle`, `timing-forward-reference`, `timing-too-deep`, `timing-history-truncated`, `timing-reference-outside-window`, `timing-query-budget`, `timing-too-many-activations`. */
 export interface SchedulerOptions { sink?: DiagnosticSink; slideIndex?: number }
 
 const INF = Number.POSITIVE_INFINITY
@@ -73,7 +79,7 @@ const MAX_DEPTH = 64
 const MAX_RESOLVE = 256
 /** Deferral rounds per top-level query before resolution gives up (diagnosed). */
 const MAX_DRIVE = 10_000
-/** Activations per node (restart storms). */
+/** Activations per node and frame (restart storms). A node with more is refused (never begins) and diagnosed. */
 const MAX_INTERVALS = 10_000
 /** Interval computations per query after which provisional results are memoised anyway. */
 const WORK_BUDGET = 1_000_000
@@ -83,6 +89,16 @@ const WORK_BUDGET = 1_000_000
  * has older history is refused (never resolves) and diagnosed.
  */
 const MAX_HISTORY = 1_000
+/**
+ * History frames one query (one `evaluate` or `endTimeOf`) may admit across
+ * all of its `historyFor` calls. The window bounds one reference; chained
+ * cousin references multiply (n + n² + n³ frames for three levels), so the
+ * query needs its own bound. A real deck admits about one frame per level
+ * per reference (a few thousand at most); reaching 100,000 takes repeating
+ * containers referenced across levels (~1.7 µs per frame, so ~0.2 s worst
+ * case). Past it, every reference not yet resolved is refused and diagnosed.
+ */
+const MAX_QUERY_HISTORY = 100_000
 
 interface Interval {
   begin: number
@@ -149,7 +165,7 @@ interface Group {
   qi: number
 }
 
-type ReportCode = 'timing-cycle' | 'timing-forward-reference' | 'timing-too-deep' | 'timing-history-truncated' | 'timing-reference-outside-window'
+type ReportCode = 'timing-cycle' | 'timing-forward-reference' | 'timing-too-deep' | 'timing-history-truncated' | 'timing-reference-outside-window' | 'timing-query-budget' | 'timing-too-many-activations'
 type Report = (code: ReportCode, node: TimeNode) => void
 
 /** Thrown to unwind a too-deep resolution; never escapes a query. */
@@ -419,6 +435,9 @@ class Run {
   private work = 0
   private deferred: (() => unknown) | undefined
   private giveUp = false
+  /** History frames admitted by this query, and whether `MAX_QUERY_HISTORY` ran out (sticky). */
+  private historyFrames = 0
+  private exhausted = false
 
   constructor(private readonly ix: Index, private readonly events: readonly ShowEvent[], t: number, private readonly report: Report) {
     this.rootFrame = { key: 'r', parent: undefined, owner: undefined, tau: t, frozen: false, visible: true, unbounded: false }
@@ -725,8 +744,12 @@ class Run {
           last.end = inst.t
         }
       }
+      if (out.length === MAX_INTERVALS) {
+        // Past the restart-storm bound: refuse the node rather than show a truncated history.
+        this.report('timing-too-many-activations', node)
+        return []
+      }
       out.push(this.interval(node, frame, inst))
-      if (out.length >= MAX_INTERVALS) break
     }
     return out
   }
@@ -782,7 +805,8 @@ class Run {
     let t: number
     if (c.tn !== undefined) {
       const ends = this.refTimes(c.tn, 'end', cf, node)
-      t = ends.length > 0 ? Math.min(...ends) : INF
+      t = INF // a loop, not a spread: a reference can return ~10^6 times
+      for (const e of ends) if (e < t) t = e
     } else if (c.rtn === 'first') {
       t = INF
       for (const k of kids) {
@@ -850,11 +874,13 @@ class Run {
     const key = `${frame.key}|${this.ix.order.get(target)}|${which}`
     const have = this.refs.get(key)
     if (have) return have
+    if (this.exhausted) return this.overBudget(from)
     return this.guarded(`ref|${key}`, () => [], (v) => { this.refs.set(key, v) }, () => this.refTimesOf(target, which, frame, from), target)
   }
 
   private refTimesOf(target: TimeNode, which: 'begin' | 'end', frame: Frame, from: TimeNode): number[] {
     const { frames, truncated } = this.historyFor(target, frame)
+    if (this.exhausted) return this.overBudget(from)
     if (truncated) {
       // Part of the target's history is outside the window: refuse rather than answer from other iterations.
       this.report('timing-history-truncated', target)
@@ -879,8 +905,16 @@ class Run {
         }
         if (l !== undefined) out.push(l)
       }
+      // The budget ran out while this reference was resolving: part of its history is unknown.
+      if (this.exhausted) return this.overBudget(from)
     }
     return out
+  }
+
+  /** A reference refused because the query's history budget is spent. */
+  private overBudget(from: TimeNode): number[] {
+    this.report('timing-query-budget', from)
+    return []
   }
 
   /**
@@ -897,9 +931,12 @@ class Run {
    * History window (project rule): at most `MAX_HISTORY` frames per level,
    * the most recent ones. Frames are generated newest first and admission
    * stops at the cap, so no list ever grows past it; `truncated` says older
-   * frames existed.
+   * frames existed. Every admission is charged to the query's
+   * `MAX_QUERY_HISTORY` budget; once it is spent, `exhausted` is set and
+   * no further history is built.
    */
   private historyFor(target: TimeNode, frame: Frame): { frames: Frame[]; truncated: boolean } {
+    if (this.exhausted) return { frames: [], truncated: false }
     const ancestors = new Set<TimeNode>()
     for (let p = this.ix.parent.get(target); p; p = this.ix.parent.get(p)) ancestors.add(p)
     let f: Frame | undefined = frame
@@ -917,6 +954,11 @@ class Run {
             truncated = true
             break fill
           }
+          if (this.historyFrames >= MAX_QUERY_HISTORY) {
+            this.exhausted = true
+            return { frames: [], truncated: false }
+          }
+          this.historyFrames++
           newest.push(child)
         }
       }
@@ -969,17 +1011,19 @@ class Run {
       if (!top) return undefined
       ;({ frames, truncated } = this.historyFor(node, top))
     }
-    // The newest activation is always inside the window; a truncated window without one is unresolved.
-    if (truncated) this.report('timing-history-truncated', node)
-    for (let i = frames.length - 1; i >= 0; i--) {
+    // The newest activation is always inside the window: only a truncated window without one is diagnosed.
+    for (let i = frames.length - 1; i >= 0 && !this.exhausted; i--) {
       const f = frames[i]
       const ivs = this.intervalsIn(node, f)
+      if (this.exhausted) break
       const last = ivs[ivs.length - 1]
       if (!last) continue
       if (f.unbounded) return 'indefinite'
       const end = lastAbs(f, last.begin, last.end)
       return Number.isFinite(end) ? end : 'indefinite'
     }
+    if (this.exhausted) this.report('timing-query-budget', node)
+    else if (truncated) this.report('timing-history-truncated', node)
     return undefined
   }
 }
@@ -1003,6 +1047,8 @@ export function createScheduler(tree: TimingTree, options: SchedulerOptions = {}
       'timing-too-deep': `time node ${id} is behind a reference chain too deep to resolve`,
       'timing-history-truncated': `time node ${id} has more than ${MAX_HISTORY} ancestor iterations of history; older ones are outside the window`,
       'timing-reference-outside-window': `time node ${id} references history outside the ${MAX_HISTORY}-iteration window; the reference never fires`,
+      'timing-query-budget': `time node ${id} references history past the per-query budget of ${MAX_QUERY_HISTORY} frames; the reference never fires`,
+      'timing-too-many-activations': `time node ${id} has more than ${MAX_INTERVALS} activations; it never begins`,
     }[code]
     options.sink.add({ code, slideIndex: options.slideIndex, effect: `node ${node.ctn.id}`, message })
   }

@@ -536,6 +536,96 @@ describe('scheduler', () => {
     expect(elapsed).toBeLessThan(5_000) // generous: a bounded window is ~1,000 frames per level
   })
 
+  it('endSync tn takes the minimum of a million in-window end times without overflowing the stack', () => {
+    // codex R5: node 5 has 1,000 start offsets (0..999 ms, dur 1, restart cuts each at the next) in each
+    // of 1,000 iterations of par 3 (dur 1,001): 10^6 end times, inside the history window. Spreading them
+    // into Math.min overflowed the stack. The earliest end is iteration 0's first activation: 1.
+    const starts: Condition[] = []
+    for (let i = 0; i < 1000; i++) starts.push(delay(i))
+    const sch = createScheduler(tree(
+      par(2, [par(3, [bhv(5, { durMs: 1, fill: 'hold', start: starts })], { durMs: 1001, repeatCount: 1000, fill: 'hold' })], { fill: 'hold', endSync: { delayMs: 0, tn: 5 } }),
+    ))
+    expect(() => sch.evaluate([], 1001 * 1000 + 5)).not.toThrow()
+    expect(sch.endTimeOf(2, [])).toBe(1)
+  })
+
+  it('chained history references share one per-query budget; past it they are refused and diagnosed', () => {
+    // codex R4 cubic probe: B(n) holds T (onEnd W) and E(n) ⊃ [W (onEnd V), G(n) ⊃ V]; node 8 at the root
+    // begins when T ends. Each level is inside the 1,000-iteration window, but the chained references
+    // admit n + n^2 + n^3 history frames in one query.
+    const build = (n: number, sink: ReturnType<typeof createDiagnosticSink>) => {
+      const dE = n + 10
+      const dB = n * dE + 10
+      const sch = createScheduler(tree(
+        par(2, [
+          bhv(3, { durMs: 1, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 5 }] }),
+          par(4, [
+            bhv(5, { durMs: 1, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 7 }] }),
+            par(6, [bhv(7, { durMs: 1, fill: 'hold' })], { durMs: 1, repeatCount: n, fill: 'hold' }),
+          ], { durMs: dE, repeatCount: n, fill: 'hold' }),
+        ], { durMs: dB, repeatCount: n, fill: 'hold' }),
+        bhv(8, { durMs: 1_000_000, fill: 'hold', restart: 'never', start: [{ delayMs: 0, evt: 'onEnd', tn: 3 }] }),
+      ), { sink, slideIndex: 4 })
+      return { sch, t: dB * n + 10 }
+    }
+    // An ordinary size (n = 10, ~1,100 frames) is unaffected. V ends at 1, so W runs [1, 2) and T runs
+    // [2, 3): node 8 begins at 3.
+    const okSink = createDiagnosticSink()
+    const ok = build(10, okSink)
+    expectSeen(ok.sch.evaluate([], ok.t), 8, 'active', (ok.t - 3) / 1_000_000)
+    expect(ok.sch.endTimeOf(8, [])).toBe(3 + 1_000_000)
+    expect(okSink.list()).toEqual([])
+
+    // n = 100 needs ~10^6 frames (seconds unbounded, effectively a hang at 1,000). The budget stops it,
+    // and the references still unresolved when it runs out are refused, never answered from part of the history.
+    const sink = createDiagnosticSink()
+    const big = build(100, sink)
+    const t0 = performance.now()
+    const s = big.sch.evaluate([], big.t)
+    expect(big.sch.endTimeOf(8, [])).toBeUndefined()
+    const elapsed = performance.now() - t0
+    expect(find(s, 8).state).toBe('none')
+    const codes = sink.list().map((d) => d.code)
+    expect(codes).toContain('timing-query-budget')
+    expect(new Set(codes)).toEqual(new Set(['timing-query-budget']))
+    expect(sink.list().some((d) => d.effect === 'node 8')).toBe(true)
+    expect(sink.list().every((d) => d.slideIndex === 4)).toBe(true)
+    // Once per node per scheduler, never per frame.
+    const before = sink.list().length
+    big.sch.evaluate([], big.t)
+    expect(sink.list().length).toBe(before)
+    expect(elapsed).toBeLessThan(3_000) // generous: the budget is 100,000 frames (~0.2 s)
+  })
+
+  it('endTimeOf does not report truncation when its answer is inside the window', () => {
+    // codex M2: the newest activation of node 6 is inside the window, so 149,910 is correct and undiagnosed.
+    const sink = createDiagnosticSink()
+    const sch = createScheduler(tree(
+      par(7, [bhv(6, { durMs: 10, fill: 'hold' })], { durMs: 100, repeatCount: 1500, fill: 'hold' }),
+    ), { sink })
+    expect(sch.endTimeOf(6, [])).toBe(149_910)
+    expect(sink.list()).toEqual([])
+  })
+
+  it('a restart storm past 10,000 activations is refused and diagnosed, never truncated silently', () => {
+    // codex M4: each start offset cuts the previous activation (restart always).
+    const offsets = (n: number): Condition[] => Array.from({ length: n }, (_, i) => delay(i))
+    const sink = createDiagnosticSink()
+    const sch = createScheduler(tree(
+      bhv(10, { durMs: 1, fill: 'hold', start: offsets(10_000) }),
+      bhv(11, { durMs: 1, fill: 'hold', start: offsets(10_001) }),
+      bhv(12, { durMs: 5, fill: 'hold', start: [{ delayMs: 0, evt: 'onEnd', tn: 11 }] }),
+    ), { sink, slideIndex: 1 })
+    const s = sch.evaluate([], 20_000)
+    expectSeen(s, 10, 'frozen', 1, 0) // 10,000 activations: inside the bound, last ends at 10,000
+    expect(sch.endTimeOf(10, [])).toBe(10_000)
+    expect(find(s, 11).state).toBe('none')
+    expect(find(s, 12).state).toBe('none') // its syncbase never begins
+    expect(sch.endTimeOf(11, [])).toBeUndefined()
+    expect(sink.list().map((d) => `${d.code}:${d.effect}`)).toEqual(['timing-too-many-activations:node 11'])
+    expect(sink.list()[0].slideIndex).toBe(1)
+  })
+
   it('a 600-node reverse reference chain resolves exactly', () => {
     // Node 100 + i begins when node 101 + i ends; node 699 begins at 0. All 1 ms: node 100 ends at 600.
     const kids: TimeNode[] = []
