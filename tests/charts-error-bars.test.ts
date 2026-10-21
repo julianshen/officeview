@@ -64,9 +64,23 @@ function paint(model: ChartModel) {
   const of = (style: string) => strokes.filter(s => s.style === style).flatMap(s => s.segments)
   return { strokes, of, plot: layout.plot }
 }
-/** Segments compared as an unordered set, to 6 decimals. */
-const key = (s: Segment) => [s.x1, s.y1, s.x2, s.y2].map(v => v.toFixed(6)).join(',')
-const sameSegments = (actual: Segment[], expected: Segment[]) => expect(actual.map(key).sort()).toEqual(expected.map(key).sort())
+/**
+ * Segments compared as an unordered set within 1e-4 px. A string key at 6 decimals is not stable across platforms:
+ * text-measured offsets such as 242.3859375 sit on a rounding boundary and differ in the last ulp between macOS and
+ * Linux canvas builds.
+ */
+const coords = (s: Segment) => [s.x1, s.y1, s.x2, s.y2]
+/** A string key for comparing two paints made in the same run (no cross-platform rounding involved). */
+const key = (s: Segment) => coords(s).map(v => v.toFixed(6)).join(',')
+const order = (a: Segment, b: Segment) => {
+  for (const [p, q] of coords(a).map((v, i) => [v, coords(b)[i]])) if (Math.abs(p - q) > 1e-3) return p - q
+  return 0
+}
+const sameSegments = (actual: Segment[], expected: Segment[]) => {
+  expect(actual).toHaveLength(expected.length)
+  const a = [...actual].sort(order), e = [...expected].sort(order)
+  a.forEach((s, i) => coords(s).forEach((v, j) => expect(v).toBeCloseTo(coords(e[i])[j], 4)))
+}
 const seg = (x1: number, y1: number, x2: number, y2: number): Segment => ({ x1, y1, x2, y2 })
 /** The engine's end cap: 3 px either side of the bar's end, across the bar. */
 const CAP = 3
