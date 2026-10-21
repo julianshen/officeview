@@ -17,6 +17,7 @@ import { parseDocx } from '../src/docx/parse'
 import { parseXlsx } from '../src/xlsx/parse'
 import { parsePptx } from '../src/pptx/parse'
 import { OfficePackage } from '../src/core/zip'
+import { chartGallery } from '../src/testdata/chart-gallery'
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'goldens')
 const THRESHOLD = 8 // per-channel AA forgiveness
@@ -71,6 +72,10 @@ const fixtures: Array<{ name: string; build: () => Promise<unknown> }> = [
   { name: 'docx-report', build: docxFixture },
   { name: 'xlsx-budget', build: xlsxFixture },
   { name: 'pptx-slides', build: pptxInspectable },
+  // The synthetic chart gallery (spec 8): every natively drawn family and major element, one document per format.
+  { name: 'chart-gallery-docx', build: async () => parseDocx(await OfficePackage.load(await chartGallery('docx'))) },
+  { name: 'chart-gallery-pptx', build: async () => parsePptx(await OfficePackage.load(await chartGallery('pptx'))) },
+  { name: 'chart-gallery-xlsx', build: async () => parseXlsx(await OfficePackage.load(await chartGallery('xlsx'))) },
 ]
 
 const strict = process.env.OFFICEVIEW_STRICT_GOLDEN === '1'
