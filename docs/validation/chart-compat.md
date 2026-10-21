@@ -502,13 +502,17 @@ Observed while inspecting the gallery and the torture documents; none is claimed
   ChartEx/model3D/OMML fallback reports feature `picture` (PPTX names `ChartEx`, `model3D`, `OMML`).
 - **PPTX admission order:** PPTX reads its slides' charts in its own order, so when the chart workspace fills, the
   carded charts are not a document-order suffix (DOCX and XLSX: natives first). The count is the same in all formats.
-- **Box & whisker median and mean marker are invisible on the default fill (gallery, phase 2; open):** the B4 painter
-  strokes the median line and the mean `×` in the series colour on top of the box filled with that same colour, so
-  neither shows in the gallery (whiskers and outliers do). Geometry tests pass because they read the recorded
-  coordinates. Office's colours for the median and mean marker are not confirmed, so C1 does not pick one; listed for
-  the controller.
-- **Pareto legend repeats the series name (gallery, phase 2; unverified):** the cumulative line has no name of its own
-  and the legend shows "Complaints" twice. Office's legend text for the Pareto line is unverified.
+- **Box & whisker median and mean marker, fixed in C1 phase 2b (controller ruling):** the B4 painter stroked the
+  median line and the mean `×` in the series colour on top of a box filled with that same colour, so neither showed
+  in the gallery. When the box fill is the series colour (no `spPr` fill, or a solid fill, which also sets the series
+  colour) both are now drawn in white, the plot paper; on any other fill (gradient, pattern, none) they keep the series
+  colour (`boxMarkColor` in `src/charts/chartex/boxWhisker.ts`; pixel and colour tests in `charts-chartex-box-whisker`).
+  Office shows both marks; its exact colour for them is **unverified**. Goldens re-recorded for this delta only:
+  `chart-gallery-docx.3`, `chart-gallery-pptx.5`, `chart-gallery-xlsx.0` (each inspected: white median line and `×`
+  inside both boxes, nothing else changed).
+- **Pareto legend repeats the series name (gallery, phase 2; unverified, no code change by ruling):** the cumulative
+  line has no name of its own, so a Pareto with a legend shows "Complaints" twice. Office's default Pareto usually
+  shows no legend, and its legend text for the Pareto line is unverified.
 - **XLSX Choice probe released, fixed in C1 phase 2:** an XLSX chart inside `mc:AlternateContent` was parsed twice
   (once to decide that the Choice is available, once for the drawing) and the probe's model stayed charged to the
   chart workspace until the finalizer ran (one extra model per such chart; the DOCX and PPTX paths were not
@@ -542,7 +546,7 @@ are painted (B2, B5), histogram and Pareto (B3) and box & whisker (B4); region m
 - **B3:** the unverified rules in its section (automatic Scott bins, label notation, Pareto sort and axis defaults);
   `underflow`/`overflow="auto"` is unsupported (fallback kept).
 - **B4:** the unverified choices in its section (inclusive quartiles, 1.5×IQR whiskers, visibility defaults, no end caps,
-  data labels and `dataPt` not painted), and the median/mean visibility gap above.
+  data labels and `dataPt` not painted), and the median/mean mark colour (white on a series-coloured box) above.
 - **Browser evidence is Chromium only:** WebKit cannot launch on the build host (CVDisplayLink; reproduces on `main`),
   ruling at A3b.
 - **Fixture licence:** the ChartEx fixtures are used under **MPL-2.0, confirmed** (PROVENANCE.md, feature branch
