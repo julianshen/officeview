@@ -1,6 +1,6 @@
 # PowerPoint slideshow mode: design
 
-Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Review rounds 1 and 2 (Codex, agy, opencode, pi) are folded in; dispositions are in §14.
+Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Review rounds 1 and 2 (Codex, agy, opencode, pi) are folded in; dispositions are in §14. **Agent review approved:** agy, opencode and pi (round 2), Codex (round 3).
 Branch: `feature/slideshow`, from main `b8a146c`.
 
 Notation: **"to verify in the parser task"** marks a file-format claim that could not be checked against ECMA-376 / MS-PPTX text while writing this spec. The parser task checks it against the standard and the corpus, and the D4 captures where behaviour is involved. Until then the value given is the working assumption.
