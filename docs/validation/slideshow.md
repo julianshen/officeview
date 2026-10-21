@@ -2687,3 +2687,4 @@ ECMA-376 / [MS-PPTX] in the implementer sandbox).
 | Missing `cTn@id` | synthetic negative id | corpus: tdf44223 sound node |
 | Reader limits | 2000 `p:cTn`, 64 time-node levels (root = 1), 10000 conditions (incl. `endSync`), 1000/20000 `p:tav`, 64 KiB `animMotion@path` → `{ refused: 'limit:<name>' }`, builds empty, transition still read | synthetic. Note: the shared XML parser caps element nesting at 100 tags (fast-xml-parser `maxNestedTags`), about 32 time-node levels, so deeper trees fail at XML parse before the reader |
 | `tn` cycles | begin/end dependency graph; closing condition replaced by one that never fires; `timing-cycle` | synthetic |
+| `p:cond` with `p:tn` and no `evt` | never fires (matches the S1-9 scheduler, ss/s1-9@9d04576 `instances()`), adds no cycle edge; `timing-syncbase-no-event` | synthetic |

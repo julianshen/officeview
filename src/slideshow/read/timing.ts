@@ -614,6 +614,10 @@ function breakCycles(ctx: Ctx): void {
     for (const [list, side] of [[ctn.start, 'b'], [ctn.end, 'e']] as const) {
       list.forEach((c, index) => {
         if (c.tn === undefined) return
+        // A tn reference without evt never fires in the S1-9 scheduler (its
+        // instances() only fires an evt-less condition that has no tn), so it
+        // adds no dependency edge; diagnosed so the inert condition is visible.
+        if (c.evt === undefined) { add(ctx, 'timing-syncbase-no-event', `tn:${id}`, `Condition on time node ${c.tn} has no evt and never fires`); return }
         if (!ctx.ids.has(c.tn)) { if (!missing.has(c.tn)) { missing.add(c.tn); add(ctx, 'timing-missing-reference', String(c.tn), `Condition references missing time node ${c.tn}`) } return }
         const which = c.evt === 'end' || c.evt === 'onEnd' ? 'e' : c.evt === 'begin' || c.evt === 'onBegin' ? 'b' : undefined
         if (which) push(`${id}:${side}`, { to: `${c.tn}:${which}`, list, index, owner: id })

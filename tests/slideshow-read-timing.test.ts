@@ -396,6 +396,22 @@ describe('timing tree', () => {
     expect(byId(t, 6)!.ctn.start).toEqual([{ delayMs: 0, evt: 'onBegin', tn: 5 }])
     expect(byId(t, 5)!.ctn.end).toEqual([{ delayMs: 0, evt: 'onEnd', tn: 6 }])
   })
+
+  it('a syncbase condition without evt never fires, as in the S1-9 scheduler, and is diagnosed (no cycle edge)', () => {
+    // S1-9 (ss/s1-9 instances(): case undefined only fires without tn) ignores
+    // a tn reference with no evt, so the two conditions below cannot form a
+    // cycle; the reader agrees and diagnoses each one instead.
+    const sink = createDiagnosticSink()
+    const xml = sld(timingXmlOf(
+      `<p:par><p:cTn id="3"><p:stCondLst><p:cond delay="0"><p:tn val="4"/></p:cond></p:stCondLst></p:cTn></p:par>` +
+      `<p:par><p:cTn id="4"><p:stCondLst><p:cond delay="0"><p:tn val="3"/></p:cond></p:stCondLst></p:cTn></p:par>`))
+    const t = tree(readSlideTiming(xml, 0, ANY, sink))
+    expect(has(sink, 'timing-syncbase-no-event', 'tn:3')).toBe(true)
+    expect(has(sink, 'timing-syncbase-no-event', 'tn:4')).toBe(true)
+    expect(codes(sink)).not.toContain('timing-cycle')
+    expect(byId(t, 3)!.ctn.start).toEqual([{ delayMs: 0, tn: 4 }])
+    expect(byId(t, 4)!.ctn.start).toEqual([{ delayMs: 0, tn: 3 }])
+  })
 })
 
 // ---------------------------------------------------------------------------
