@@ -189,9 +189,9 @@ export function createRecordingContext(
       const value = (target as Record<string | symbol, unknown>)[prop]
       return typeof value === 'function' ? value.bind(target) : value
     },
-    // assign directly to the target: the default trap would pass the proxy as
-    // the receiver, which node-canvas rejects with "Invalid argument"
     set(target, prop, value) {
+      // assign directly to the target: the default trap would pass the proxy as
+      // the receiver, which node-canvas rejects with "Invalid argument"
       ;(target as Record<string | symbol, unknown>)[prop] = value
       return true
     },
