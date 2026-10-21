@@ -608,6 +608,13 @@ Rules:
   `connectorLines` is true [D-wf].
 - Categories: the `cat` dimension if present. The XML of WF1 and WF2 has no
   `cat` dimension [N], and ordinal labels are then used [P].
+- **One visible series.** A waterfall with more than one visible series
+  (`series@hidden` absent or `0`) is **unsupported**, so the `mc:Fallback`
+  picture is kept. No native part shows a multi-series waterfall. [P: project
+  rule, controller ruling at B2 review round 1]
+- A subtotal index on a point that is hidden, blank, an error or unavailable
+  draws no bar, and the accumulator is unchanged (§2.4 applies before the
+  subtotal rule). [P]
 
 ---
 

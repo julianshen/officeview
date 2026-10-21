@@ -36,17 +36,19 @@ import type {
 import type { LabelControls, LabelOptions } from '../labels'
 import type { ChartFillStyle } from '../fills'
 import type { ChartLineStyle, ChartPointOverride } from '../style'
-import { ChartRefusal, adoptChartModel, chargeChartPoint, modelOwner, releaseChartModel } from '../own'
+import { ChartRefusal, adoptChartModel, chargeChartPoint, chartModelOwner, modelOwner, releaseChartModel, succeedChartModel } from '../own'
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_LABEL_LIMIT, CHART_POINT_LIMIT, CHART_SERIES_LIMIT, CHART_TEXT_BYTES_LIMIT, axisBytes, parseChartRange, placeholderChart, solid, textStyle } from '../parse'
 import { PointWriter, knownError, pointBytes, stringBytes } from '../points'
 import { parseFillStyle } from '../fills'
 import { parseLineStyle, resolveSeriesColor } from '../style'
 import { readChartStyleParts } from '../styleParts'
 import { applyDataPrecedence } from '../dataPrecedence'
-import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS } from '../fill'
+import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS, chartHasPending } from '../fill'
+import { prepareChartAxes } from '../prepare'
+import { displayFamilyUnsupported } from './funnel'
 
 /** Families whose painter has landed. Every other family stays `unsupported` (its fallback is kept). */
-export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>()
+export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['waterfall', 'funnel', 'treemap', 'sunburst'])
 export const CHARTEX_PENDING = 'ChartEx charts are not supported yet'
 export const CHARTEX_REGION_MAP = 'Region map charts are not supported'
 export const CHARTEX_UNREADABLE = 'This chart could not be read'
@@ -58,6 +60,10 @@ export const CHARTEX_INVALID_BINNING = 'invalid binning'
 export const CHARTEX_AUTO_BINNING = 'Automatic histogram overflow and underflow bins are not supported'
 export const CHARTEX_BIN_LIMIT = 1000
 const ANALYTIC: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['histogram', 'pareto', 'boxWhisker', 'treemap', 'sunburst'])
+/** Treemap and sunburst: a category path of every level (chartex-map §7), coloured by root-level branch. */
+const HIERARCHY: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['treemap', 'sunburst'])
+/** Root-level branch colours resolved at parse (the palette cycles past them) [U: Office's branch colouring]. */
+const HIERARCHY_PALETTE = 64
 const LAYOUTS: readonly ChartExLayout[] = ['clusteredColumn', 'paretoLine', 'waterfall', 'funnel', 'boxWhisker', 'treemap', 'sunburst', 'regionMap']
 const VALUE_TYPES = ['val', 'size', 'colorVal'], CATEGORY_TYPES = ['cat', 'entityId']
 const LABEL_POSITIONS = ['bestFit', 'b', 'ctr', 'inBase', 'inEnd', 'l', 'outEnd', 'r', 't']
@@ -294,7 +300,7 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
     const explicit = solid(spPr, theme)
     const color = explicit ?? resolveSeriesColor({ index: info.formatIdx, count: nodes.length, ...(parts ? { parts } : {}), theme })
     series.push({
-      ...seriesRoles(data, name, color, admit),
+      ...seriesRoles(data, name, color, admit, HIERARCHY.has(family)),
       ...styleOf(node, spPr, fill, line, theme, admit, analytic ? CHART_ANALYTIC_POINT_LIMIT : CHART_POINT_LIMIT),
       ...(analytic ? { analytic: 'chart' as const } : {}),
     })
@@ -305,16 +311,30 @@ function readChartEx(root: XmlNode, title: string | undefined, family: ChartExFa
     }
   })
 
+  // Waterfall and funnel draw one series: several visible ones are unsupported (map §9; B2).
+  const several = displayFamilyUnsupported(family, infos)
+  if (several) throw new Unsupported(several)
+  // Waterfall: the increase, decrease and total colours are the style palette's first three entries (map §6 [U]).
+  let palette: string[] | undefined
+  if (family === 'waterfall') {
+    charge(3 * (SLOT_BYTES + stringBytes('000000')))
+    palette = [0, 1, 2].map(index => resolveSeriesColor({ index, count: 3, ...(parts ? { parts } : {}), theme }))
+  }
   const bound = infos[0]?.axisIds ?? []
   const category = axes.find(axis => axis.kind === 'category' && bound.includes(axis.id)) ?? firstCategory
   const value = axes.find(axis => axis.kind === 'value' && bound.includes(axis.id)) ?? firstValue
   const binding: ChartAxisBinding = category && value ? { kind: 'cartesian', category: category.id, value: value.id } : { kind: 'none' }
   const plotSpPr = child(plot, 'spPr'), plotAreaFill = fill(plotSpPr), plotAreaLine = line(plotSpPr)
+  // Treemap/sunburst branches take the series colour cycle by root-level ordinal (style and colour parts, theme).
+  if (HIERARCHY.has(family)) {
+    charge(HIERARCHY_PALETTE * (SLOT_BYTES + stringBytes('000000')))
+    palette = Array.from({ length: HIERARCHY_PALETTE }, (_, index) => resolveSeriesColor({ index, count: HIERARCHY_PALETTE, ...(parts ? { parts } : {}), theme }))
+  }
   const group: ChartExGroup = {
     kind: 'chartEx', family, grouping: 'standard', series, binding, gapWidth: gapWidth !== undefined ? Math.round(gapWidth * 100) : 150, overlap: 0,
     chartEx: {
       data: [...acquired.values()], series: infos, ...(paretoLine ? { paretoLine } : {}), ...(byCategory ? { byCategory } : {}), ...(gapWidth !== undefined ? { gapWidth } : {}),
-      ...(plotAreaFill ? { plotAreaFill } : {}), ...(plotAreaLine ? { plotAreaLine } : {}),
+      ...(plotAreaFill ? { plotAreaFill } : {}), ...(plotAreaLine ? { plotAreaLine } : {}), ...(palette ? { palette } : {}),
     },
   }
   const legend = child(chart, 'legend'), legendPos = attrs(legend).pos ?? 'r'
@@ -429,8 +449,10 @@ function layoutProperties(node: XmlNode | undefined, family: ChartExFamily, char
   const subtotals = child(node, 'subtotals')
   if (subtotals) {
     const idx = getChildren(subtotals, 'idx')
-    charge(idx.length * SLOT_BYTES)
-    out.subtotals = idx.map(item => uint(valOrText(item))).filter((i): i is number => i !== undefined)
+    // The kept list plus the transient index list and set (charged up front; the transients stay charged).
+    charge(idx.length * 6 * SLOT_BYTES)
+    // Sorted and distinct, within the display bound (the waterfall walks them beside its slots).
+    out.subtotals = [...new Set(idx.map(item => uint(valOrText(item))).filter((i): i is number => i !== undefined && i < CHART_POINT_LIMIT))].sort((a, b) => a - b)
   }
   const statistics = attrs(child(node, 'statistics')).quartileMethod
   if (child(node, 'statistics')) out.quartileMethod = statistics === 'inclusive' ? 'inclusive' : 'exclusive'
@@ -545,7 +567,7 @@ const EMPTY_POINTS = (): ChartPoints => ({ length: 0, states: new Uint8Array(0),
  * reference is pending (XLSX: the workbook's defined names; DOCX/PPTX: the embedded workbook). Neither: the role is
  * absent (values) or defaulted (categories).
  */
-function seriesRoles(data: ChartExData, name: string, color: string, admit: Admission): ChartSeries {
+function seriesRoles(data: ChartExData, name: string, color: string, admit: Admission, hierarchy = false): ChartSeries {
   const value = data.dimensions.find(d => d.kind === 'num' && VALUE_TYPES.includes(d.type))
   const category = data.dimensions.find(d => d.kind === 'str' && CATEGORY_TYPES.includes(d.type))
   const out: ChartSeries = { name, color, values: EMPTY_POINTS() }
@@ -560,6 +582,10 @@ function seriesRoles(data: ChartExData, name: string, color: string, admit: Admi
     admit.charge(categoryLevel.values.length * SLOT_BYTES)
     out.categories = categoryLevel.values.map(text => text ?? '')
     if (category?.ref && !category.ref.definedName) refs.categories = category.ref
+  } else if (category?.ref && hierarchy) {
+    // A treemap/sunburst path: every level of the reference is read (one per column, or per row), root first.
+    pending.levels = category.ref
+    out.levelDir = category.dir
   } else if (category?.ref) pending.categories = category.ref
   if (Object.keys(pending).length) out.pending = pending
   if (Object.keys(refs).length) out.refs = refs
@@ -585,12 +611,25 @@ export async function parseChartExPart(root: XmlNode, theme: ThemeContext | unde
     style?.release()
     if (!model.unsupported && !paint) model = { ...placeholderAfter(model), unsupported: CHARTEX_PENDING }
     else if (!model.unsupported && !XLSX_PART.test(context.partPath)) model = await applyDataPrecedence(model, root, context)
+    // Stage 1 of a painted chart whose data is complete (its own cache, or filled from the embedded workbook); an
+    // XLSX chart with references is prepared by the workbook fill instead.
+    if (paint && !model.unsupported && !model.preparedAxes && !chartHasPending(model)) model = prepareOwned(model)
   } catch { if (model) releaseChartModel(model); model = undefined } finally { style?.release() }
   if (model && !model.unsupported) return { kind: 'native', model }
   const title = model?.title
   if (model) releaseChartModel(model)
   // A required point that is unavailable (no cache and no readable workbook value) refuses the chart (B1 rulings).
   return { kind: model?.refused || model?.unsupported === CHART_DATA_NOT_AVAILABLE ? 'refused' : 'unsupported', reason: model?.unsupported ?? CHARTEX_UNREADABLE, ...(title ? { title } : {}), feature: 'ChartEx' }
+}
+/** Stage 1 (charts/prepare.ts) of an owned model: the successor takes over its charge; a refusal refuses the chart. */
+function prepareOwned(model: ChartModel): ChartModel {
+  let next: ChartModel
+  try { next = prepareChartAxes(model, chartModelOwner(model)) } catch (error) {
+    if (!(error instanceof ChartRefusal)) throw error
+    next = { ...model, preparedAxes: undefined, unsupported: 'This chart needs more memory than is available for charts', refused: true }
+  }
+  succeedChartModel(model, next)
+  return next
 }
 /** A parsed model whose family is not painted: released here (its title is kept for the result). */
 function placeholderAfter(model: ChartModel): ChartModel {

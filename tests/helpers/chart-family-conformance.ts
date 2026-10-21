@@ -19,11 +19,14 @@ import { OfficePackage } from '../../src/core/zip'
 import { parseXmlOrdered } from '../../src/core/xml'
 import { documentChartContext, chartParseContext } from '../../src/charts/context'
 import { parseChartPart } from '../../src/charts/dataPrecedence'
+import { readChartPart } from '../../src/charts/read'
+import { parseChartEx } from '../../src/charts/chartex/parse'
+import type { XmlNode } from '../../src/core/xml'
 import { parseXlsxChart, placeholderChart } from '../../src/charts/parse'
 import { paintXlsxChart } from '../../src/charts/paint'
 import { prepareChartAxes } from '../../src/charts/prepare'
 import { PointWriter } from '../../src/charts/points'
-import type { ChartDiagnostic, ChartModel, ChartPoints } from '../../src/charts/model'
+import type { ChartDiagnostic, ChartModel, ChartPoints, ChartResult } from '../../src/charts/model'
 
 export const CONFORMANCE_NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
 
@@ -52,6 +55,12 @@ export interface ConformanceFamily {
   chart(cache: string | null): string
   /** Per case, the representation the family must give (default: either) and diagnostic codes it must emit. */
   expect?: Partial<Record<ConformanceCase, { kind?: 'native' | 'card'; diagnostics?: string[] }>>
+  /**
+   * The adapter call for this family's part (default: `parseChartPart` on the parsed tree). A family whose parts
+   * reach the adapter through another production path (ChartEx: the bounded `readChartPart`) supplies it; the
+   * `unavailable point` case then marks the single-point model this returns.
+   */
+  parse?(xml: string, partPath: string): Promise<ChartResult>
 }
 
 export interface ConformanceRun { kind: 'native' | 'card'; reason?: string; diagnostics: ChartDiagnostic[]; card: boolean }
@@ -82,18 +91,42 @@ function withUnavailable(model: ChartModel): ChartModel {
   return { ...model, preparedAxes: undefined, groups: model.groups.map(g => ({ ...g, series: g.series.map(s => ({ ...s, values: mark(s.values)!, ...(s.xValues ? { xValues: mark(s.xValues) } : {}), ...(s.bubbleSizes ? { bubbleSizes: mark(s.bubbleSizes) } : {}) })) })) }
 }
 
+const CHARTEX_NS = 'http://schemas.microsoft.com/office/drawing/2014/chartex'
+/** The part's root as the engine reads it: a ChartEx part goes through the production reader, so its root is
+ * dispatched to the ChartEx parser (B5); a classic part is parsed directly, as before. */
+async function rootOf(xml: string, partPath: string): Promise<{ root: XmlNode; pkg: OfficePackage; chartEx: boolean }> {
+  if (!xml.includes(CHARTEX_NS)) return { root: parseXmlOrdered(xml), pkg: await pkg(), chartEx: false }
+  const zip = new JSZip()
+  zip.file(partPath.replace(/^\//, ''), xml)
+  const loaded = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+  const read = await readChartPart(loaded, partPath.replace(/^\//, ''), chartParseContext(documentChartContext('desktop'), loaded, partPath))
+  if (read?.kind !== 'tree') throw new Error(`conformance: ${read ? read.reason : 'unreadable'}`)
+  return { root: read.root, pkg: loaded, chartEx: true }
+}
+
 /** Runs one case of a family through the adapter (as `partPath`), stage 1, layout and paint. */
 export async function runConformanceCase(family: ConformanceFamily, name: ConformanceCase, partPath = '/xl/charts/chart1.xml'): Promise<ConformanceRun> {
+  if (name === 'unavailable point' && family.parse) {
+    const result = await family.parse(family.chart(CONFORMANCE_CASES['single point']), partPath)
+    if (result.kind !== 'native') return { kind: 'card', reason: result.reason, diagnostics: [], card: paint(placeholderChart(result.title, result.reason)).card }
+    const model = prepareChartAxes(withUnavailable(result.model))
+    return { kind: 'native', diagnostics: collect(model), card: paint(model).card }
+  }
   if (name === 'unavailable point') {
-    const parsed = parseXlsxChart(parseXmlOrdered(family.chart(CONFORMANCE_CASES['single point'])), undefined)
+    const read = await rootOf(family.chart(CONFORMANCE_CASES['single point']), partPath)
+    const parsed = read.chartEx ? parseChartEx(read.root, undefined, chartParseContext(documentChartContext('desktop'), read.pkg, partPath)) : parseXlsxChart(read.root, undefined)
     if (!parsed || parsed.unsupported) return { kind: 'card', reason: parsed?.unsupported, diagnostics: parsed ? collect(parsed) : [], card: true }
     const model = prepareChartAxes(withUnavailable(parsed))
+    // Stage 1 may refuse the chart (an analytic family with an unavailable required point): a card with its reason.
+    if (model.unsupported) return { kind: 'card', reason: model.unsupported, diagnostics: [], card: paint(placeholderChart(model.title, model.unsupported)).card }
     const painted = paint(model)
     return { kind: 'native', diagnostics: collect(model), card: painted.card }
   }
   const doc = documentChartContext('desktop')
-  const context = chartParseContext(doc, await pkg(), partPath)
-  const result = await parseChartPart(parseXmlOrdered(family.chart(CONFORMANCE_CASES[name])), undefined, context)
+  const read = family.parse ? undefined : await rootOf(family.chart(CONFORMANCE_CASES[name]), partPath)
+  const context = chartParseContext(doc, read?.pkg ?? await pkg(), partPath)
+  const xml = family.chart(CONFORMANCE_CASES[name])
+  const result = family.parse ? await family.parse(xml, partPath) : await parseChartPart(read!.root, undefined, context)
   if (result.kind === 'native') {
     const painted = paint(result.model)
     return { kind: 'native', diagnostics: collect(result.model), card: painted.card }
@@ -162,4 +195,12 @@ export const SURFACE3D_FAMILY: ConformanceFamily = {
   name: 'surface3D',
   chart: c => conformanceSpace(`<c:surface3DChart><c:wireframe val="0"/>${categorySeries(c)}<c:axId val="1"/><c:axId val="2"/><c:axId val="3"/></c:surface3DChart>${CAT_VAL_SER}`),
   expect: { 'no series': { kind: 'card' }, 'empty series': { kind: 'card' }, 'all blank': { kind: 'card' }, 'NaN and infinity': { kind: 'card' }, 'negative values': { kind: 'card' }, 'single point': { kind: 'card' }, 'unavailable point': { kind: 'card' } },
+}
+
+/** ofPie (spec 4.1): a valid authored ofPie paints natively in every data case (blank, NaN or negative
+ * input reads as zero, so the painter just has no slices); only a missing series is a card. */
+export const OF_PIE_FAMILY: ConformanceFamily = {
+  name: 'ofPie',
+  chart: c => conformanceSpace(`<c:ofPieChart><c:varyColors val="1"/>${c === null ? '' : `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>S1</c:v></c:tx><c:val>${c}</c:val></c:ser>`}<c:firstSliceAng val="0"/></c:ofPieChart>`),
+  expect: { 'no series': { kind: 'card' }, 'empty series': { kind: 'native' }, 'all blank': { kind: 'native' }, 'NaN and infinity': { kind: 'native' }, 'negative values': { kind: 'native' }, 'single point': { kind: 'native' }, 'unavailable point': { kind: 'native' } },
 }

@@ -42,7 +42,7 @@ export interface ChartPoints {
 }
 
 /** The data roles of a series (spec 6.4). Names and categories are strings; the rest are `ChartPoint`s. */
-export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus'
+export type ChartRole = 'name' | 'categories' | 'values' | 'xValues' | 'bubbleSizes' | 'errorPlus' | 'errorMinus' | 'errorPlusX' | 'errorMinusX'
 
 /** Chart families of streams A and B (spec 4). */
 export type ChartFamily =
@@ -166,8 +166,18 @@ export interface ChartSeries {
   pointFills?: Array<import('./fills').ChartFillStyle | undefined>
   /** `c:trendline`s as authored (spec 5.6); fitted in stage 1 (`PreparedAxes.trendlines`). */
   trendlines?: import('./trendlines').ChartTrendline[]
-  /** References still to be filled from worksheet cells (no saved data for that role). */
-  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange }
+  /** `c:errBars` as authored (spec 5.7): at most one per direction; custom amounts are their own numeric roles. */
+  errorBars?: import('./errorBars').ChartErrorBars[]
+  /**
+   * References still to be filled from worksheet cells (no saved data for that role). The custom error amounts
+   * (`c:plus`/`c:minus`) are `errorPlus`/`errorMinus` for the y (value) direction, `errorPlusX`/`errorMinusX` for x.
+   */
+  pending?: { name?: ChartRange; values?: ChartRange; categories?: ChartRange; xValues?: ChartRange; bubbleSizes?: ChartRange; errorPlus?: ChartRange; errorMinus?: ChartRange; errorPlusX?: ChartRange; errorMinusX?: ChartRange; levels?: ChartRange }
+  /** Treemap/sunburst (chartex-map §7): the category reference is a path with one level per column (`col`) or row
+   * (`row`) of `pending.levels`, root first; every level is read (charts/chartex/hierarchy.ts). */
+  levelDir?: 'col' | 'row'
+  /** The filled category levels of a hierarchy, root first, one entry per point ('' is a blank cell). */
+  levels?: string[][]
   /**
    * Each role's worksheet reference, kept even when saved data (a cache) supplies
    * its values: the cache decides the values, the reference still decides which
@@ -212,6 +222,15 @@ export interface ChartGroup {
   overlap: number
   holeSize?: number
   firstSliceAngle?: number
+  /** ofPie only: the secondary plot is a smaller pie or a stacked bar (`bar`). */
+  ofPieType?: 'pie' | 'bar'
+  /** ofPie only: how points split into the secondary plot; absent is the Office default `auto` at the engine. */
+  splitType?: 'auto' | 'cust' | 'percent' | 'pos' | 'val'
+  splitPos?: number
+  /** ofPie only: the secondary plot's size in percent of the primary radius (authored 5..200). */
+  secondPieSize?: number
+  /** ofPie only (`cust` split): the authored secondary-plot point indices. */
+  secondPiePt?: number[]
   /** Contour: `c:wireframe` (band boundaries only). */
   wireframe?: boolean
   /** Contour `c:bandFmts` by band index: the fill colour (hex), null for noFill; holes take the accent cycle. */
@@ -300,6 +319,9 @@ export interface ChartExGroup extends ChartGroup {
     plotAreaLine?: import('./style').ChartLineStyle
     /** The category axis `catScaling@gapWidth` (a ratio of the bar width; absent: not authored). */
     gapWidth?: number
+    /** Waterfall: the increase, decrease and total colours (style palette entries 0, 1, 2; hex), resolved at parse.
+     * Treemap/sunburst: the colour of each root-level branch (resolved at parse, indexed modulo its length). */
+    palette?: string[]
   }
 }
 

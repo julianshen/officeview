@@ -27,11 +27,12 @@ import { attrs, getChildren, type XmlNode } from '../core/xml'
 import type { ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartModel, ChartRange, ChartResult, ChartSeries } from './model'
-import { CHART_POINT_LIMIT, parseXlsxChart } from './parse'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_POINT_LIMIT, parseXlsxChart } from './parse'
 import { CHART_TOO_MANY_POINTS, analyticOverLimit, categoryLimit, chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
 import { readChartStyleParts } from './styleParts'
+import { ERROR_ROLES, type ErrorRole } from './errorBars'
 import { attachChartUserShapes } from './userShapes'
 import { isChartExRoot } from './read'
 import { parseChartExPart } from './chartex/parse'
@@ -65,7 +66,7 @@ export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefi
   return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
 }
 
-type Role = 'values' | 'xValues' | 'bubbleSizes' | 'categories' | 'name'
+type Role = 'values' | 'xValues' | 'bubbleSizes' | 'categories' | 'name' | 'levels' | ErrorRole
 const NUMERIC_NAMES = { values: 'values', xValues: 'x values', bubbleSizes: 'bubble sizes' } as const
 interface Slot { group: number; series: number; role: Role }
 const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
@@ -106,6 +107,10 @@ export async function applyDataPrecedence(model: ChartModel, root: XmlNode, cont
     if (pending.bubbleSizes) { slots.push({ group: g, series: s, role: 'bubbleSizes' }); requests.push({ range: pending.bubbleSizes, text: false, limit: CHART_POINT_LIMIT }) }
     if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: categoryLimit(series), ...analytic }) }
     if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
+    // Custom error amounts (spec 5.7) are optional: unavailable, that side draws no bars (diagnosed), the chart stays.
+    for (const role of ERROR_ROLES) { const range = pending[role]; if (range) { slots.push({ group: g, series: s, role }); requests.push({ range, text: false, limit: CHART_POINT_LIMIT }) } }
+    // A treemap/sunburst path: every level of the reference (chartex-map §7).
+    if (pending.levels) { slots.push({ group: g, series: s, role: 'levels' }); requests.push({ range: pending.levels, text: true, limit: CHART_ANALYTIC_POINT_LIMIT, analytic: true, levels: series.levelDir ?? 'col' }) }
   }))
   // Classic: c:externalData; ChartEx: cx:chartData/cx:externalData (chartex-map §2.1).
   const rId = attrs(child(root, 'externalData') ?? child(child(root, 'chartData'), 'externalData')).id

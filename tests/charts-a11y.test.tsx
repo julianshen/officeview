@@ -12,6 +12,7 @@ import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficePackage } from '../src/core/zip'
 import { parseDocx } from '../src/docx/parse'
 import { parsePptx } from '../src/pptx/parse'
+import { parseXlsx } from '../src/xlsx/parse'
 import { getPaintables } from '../src/render/paint'
 import { chartDescription } from '../src/charts/describe'
 import { cardChart } from '../src/drawing/content'
@@ -461,5 +462,52 @@ describe('A7 review round 3 (R2: the result never grows uncharged)', () => {
     expect(workspace.used).toBe(10 * (RECORD_BYTES + ENTRY_BYTES) + 2 * 'Chart: Sparse. placeholder: reason.'.length + MAP_BYTES)
     result.release()
     expect(workspace.used).toBe(0)
+  })
+})
+
+describe('descriptions name every native family (merge with feature/chart-compat)', () => {
+  const FIXTURES = `${__dirname}/fixtures/chartex`
+  const cases: Array<[string, string, string]> = [
+    ['waterfall/waterfall.xlsx', 'xl/charts/chartEx1.xml', 'Waterfall chart'],
+    ['funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml', 'Funnel chart'],
+    ['SimpleHistogram/SimpleHistogram.xlsx', 'xl/charts/chartEx1.xml', 'Histogram chart'],
+    ['paretoLine/paretoLine.xlsx', 'xl/charts/chartEx1.xml', 'Pareto chart'],
+    ['boxWhisker/boxWhisker.xlsx', 'xl/charts/chartEx1.xml', 'Box and whisker chart'],
+    ['treemap/treemap.xlsx', 'xl/charts/chartEx1.xml', 'Treemap chart'],
+    ['sunburst/sunburst.xlsx', 'xl/charts/chartEx1.xml', 'Sunburst chart'],
+  ]
+  it('ChartEx families (Office-authored fixtures, tests/fixtures/chartex)', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { readChartPart } = await import('../src/charts/read')
+    const { chartParseContextFor } = await import('../src/charts/context')
+    const { parseChartEx } = await import('../src/charts/chartex/parse')
+    const { chartTypeName } = await import('../src/charts/describe')
+    for (const [file, path, name] of cases) {
+      const pkg = await OfficePackage.load(new Uint8Array(readFileSync(`${FIXTURES}/${file}`)))
+      const context = chartParseContextFor(pkg, path)
+      const read = await readChartPart(pkg, path, context)
+      if (read?.kind !== 'tree') throw new Error(`${file}: unreadable`)
+      const model = parseChartEx(read.root, undefined, context)
+      read.release()
+      expect(chartTypeName(model), file).toBe(name)
+      expect(chartDescription(model), file).toMatch(new RegExp(`^Chart(: [^.]*)?\\. ${name}, \\d+ series`))
+      expect(chartDescription(model), file).not.toContain('placeholder')
+    }
+  })
+  it('painted ChartEx families keep their native name through the drawing pipeline', async () => {
+    const { readFileSync } = await import('node:fs')
+    for (const [file, , name] of cases.filter(([, , n]) => ['Waterfall chart', 'Treemap chart', 'Sunburst chart'].includes(n))) {
+      const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${FIXTURES}/${file}`))))
+      const charts = doc.sheets.flatMap(s => s.drawings ?? []).flatMap(d => d.content?.kind === 'xlsxChart' ? [d.content.chart] : [])
+      expect(charts.length, file).toBeGreaterThan(0)
+      expect(charts.map(c => chartDescription(c).split(',')[0]), file).toContainEqual(expect.stringContaining(name))
+    }
+  })
+  it('classic families', () => {
+    const names: Record<string, string> = { stock: 'Stock chart', bubble: 'Bubble chart', radar: 'Radar chart', contour: 'Surface chart', ofPie: 'Pie of pie chart', scatter: 'Scatter chart', doughnut: 'Doughnut chart', area: 'Area chart' }
+    for (const [family, name] of Object.entries(names)) {
+      const model = { ...cardChart('x'), unsupported: undefined, groups: [{ family, grouping: 'standard', series: [], binding: { kind: 'none' }, gapWidth: 150, overlap: 0, hidden: false, formatIdx: 0, axisIds: [], layoutPr: {} }] } as unknown as import('../src/charts/model').ChartModel
+      expect(chartDescription(model), family).toBe(`Chart. ${name}, 0 series.`)
+    }
   })
 })
