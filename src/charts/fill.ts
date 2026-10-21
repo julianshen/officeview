@@ -116,16 +116,10 @@ const asText = (cell: ChartCell | undefined): string => cell?.text ?? rawText(ce
 export type ChartNameResolver = (name: string, scopeSheet: string) => string | undefined
 export interface ChartDefinedName { name: string; source: string; localSheetIndex?: number }
 export function chartNameResolver(names: readonly ChartDefinedName[], sheets: ReadonlyArray<{ name: string; workbookIndex?: number }>): ChartNameResolver {
-  // Indexed once, on the first lookup (M7): each role resolution is then a map read, not a scan of every name.
-  let byName: Map<string, ChartDefinedName[]> | undefined, bySheet: Map<string, { name: string; workbookIndex?: number }> | undefined
   return (name, scopeSheet) => {
-    if (!byName || !bySheet) {
-      byName = new Map(); bySheet = new Map()
-      for (const entry of names) { const key = entry.name.toUpperCase(), list = byName.get(key); if (list) list.push(entry); else byName.set(key, [entry]) }
-      for (const sheet of sheets) { const key = sheet.name.toLowerCase(); if (!bySheet.has(key)) bySheet.set(key, sheet) }
-    }
-    const scope = bySheet.get(scopeSheet.toLowerCase())
-    const candidates = byName.get(name.toUpperCase()) ?? []
+    const upper = name.toUpperCase()
+    const scope = sheets.find(sheet => sheet.name.toLowerCase() === scopeSheet.toLowerCase())
+    const candidates = names.filter(entry => entry.name.toUpperCase() === upper)
     const local = scope?.workbookIndex !== undefined ? candidates.find(entry => entry.localSheetIndex === scope.workbookIndex) : undefined
     return (local ?? candidates.find(entry => entry.localSheetIndex === undefined))?.source
   }
