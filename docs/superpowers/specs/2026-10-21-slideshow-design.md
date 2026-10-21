@@ -1,6 +1,6 @@
 # PowerPoint slideshow mode: design
 
-Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Review round 1 (Codex, agy, opencode, pi) is folded in; dispositions are in §14.
+Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Review rounds 1 and 2 (Codex, agy, opencode, pi) are folded in; dispositions are in §14.
 Branch: `feature/slideshow`, from main `b8a146c`.
 
 Notation: **"to verify in the parser task"** marks a file-format claim that could not be checked against ECMA-376 / MS-PPTX text while writing this spec. The parser task checks it against the standard and the corpus, and the D4 captures where behaviour is involved. Until then the value given is the working assumption.
@@ -85,7 +85,7 @@ The only effects not reproduced are those in §2.3.
 - **Package ownership.** `parsePptx(pkg, …)` receives an `OfficePackage` from its caller and does not keep it; `PptxDocument` (`src/pptx/types.ts:139`) has no package or source accessor. `OfficePackage` (`src/core/zip.ts`) holds the JSZip (and so the compressed archive) plus a read cache; `entry()` gives uncached access. `OfficeFile` distinguishes one-shot sources (Response, stream, Request, promise) from re-readable ones (bytes, Blob, URL).
 - **The eager bundle includes** `src/pptx/parse.ts`, `src/pptx/render.ts`, `src/drawing/scene-paint.ts` and `src/render/paint.ts`: `src/index.ts` re-exports `parsePptx`, `renderSlide` and `getPaintables`, all imported statically. Any code added to those modules is eager. `getPaintables` is already async and already loads the chart engine with `import()`, so a lazy seam there is an existing pattern. The worker path (`src/worker/workerMessages.ts`) also goes through `getPaintables`.
 - **Canvas animation.** The UI restyle spec barred canvas animation for the chrome. This design is the first to animate canvas content, so it must stay inside the slideshow surfaces and never touch the scrolling viewer.
-- **Eager budget.** Main `b8a146c`, rebuilt fresh in this worktree, measures **38,584 B**. The project ceiling is **38,647 B** and the hard limit is 38,720 B, so the headroom is **63 B**. (The 38,638 B figure in one review is an older intermediate measurement from the chart-compat ledger.) The controller re-measures on main before Stage 0 and before each stage's first eager edit, and updates this line.
+- **Eager budget.** Main `b8a146c`, rebuilt fresh in this worktree, measures **38,584 B**. The project ceiling is **38,647 B** and the hard limit is 38,720 B, so the headroom is **63 B**. (The 38,638 B figure in one review is an older intermediate measurement from the chart-compat ledger. The ledger's final 38,582 B differs from this fresh rebuild by 2 B of rebuild variance, so only a fresh measurement counts.) The controller re-measures on main before Stage 0 and before each stage's first eager edit, and updates this line.
 - **Existing patterns to reuse:**
   - the chart workspace ledger (`src/charts/workspace.ts`, `own.ts`);
   - the chart engine's lazy `import()` from `getPaintables`;
@@ -114,7 +114,7 @@ The only effects not reproduced are those in §2.3.
   - **Two privileged operations from one activation** are not guaranteed: each can consume activation. Popup first, then full screen, is the order. If the full-screen request then rejects, the audience surface stays in-window with a "Click for full screen" control that retries on the next gesture. Whether both succeed in one activation is engine-dependent and is pinned by real-browser tests (§10). In Chromium with the Window Management permission granted, both are expected to succeed (to verify in the startup task).
   - **Full screen refused** (no activation left, iframe without `allow="fullscreen"`, Permissions-Policy, unsupported): the show runs **in-window**: the host element is fixed to the viewport of the viewer's own document, letterboxed, with a dismissible notice and a diagnostic. This is a call (§12), not an error.
   - **Popup refused**: single-screen mode (§5.1), with a diagnostic.
-  - **Failure or cancel during load** (chunk load fails, data read fails, Esc pressed, the viewer unmounts, the document changes, `allowPresent` becomes false): the provisional popup is closed, full screen is exited, the host element is hidden, and `present()` rejects (`'load-failed'` or `'cancelled'`). A notice says "Slideshow could not load. Reload to retry." for load failures; the viewer stays usable.
+  - **Failure or cancel during load** (chunk load fails, data read fails, Esc pressed, the viewer unmounts, the document changes, `allowPresent` becomes false): the provisional popup is closed, full screen is exited if this start owns it (§4.2 show coordinator), the host element is hidden, the show token is released, and `present()` rejects (`'load-failed'` or `'cancelled'`). A notice says "Slideshow could not load. Reload to retry." for load failures; the viewer stays usable.
 - **Exit:**
   - **Esc** (or `-`) exits;
   - so does a black **end-of-show** slide ("End of slide show, click to exit."), which matches PowerPoint (not shown when the show loops);
@@ -153,12 +153,19 @@ Props for events:
 **Gesture.** `present()` must be called synchronously inside a user-gesture handler of the host, because it performs the start sequence (§4.1) before its first `await`. Where `navigator.userActivation` exists and reports no transient activation, the promise rejects with a typed `SlideShowError` whose `code` is `'gesture-required'`, and nothing is opened. Where that API is missing, the start is attempted and a full-screen refusal falls back to in-window (§4.1). Other error codes:
 
 - `'not-presentable'`: the document is not a PPTX, or `allowPresent=false`;
-- `'already-presenting'`: this viewer instance already has a starting or running session (one session per viewer instance; two viewers on one page may each present, but only one can hold full screen at a time, as the browser enforces);
+- `'already-presenting'`: a show is already starting or running **in the same document** (`ownerDocument`), from this viewer or another one (see "Show coordinator" below);
 - `'load-failed'`: the chunk or the show data could not be loaded;
 - `'cancelled'`: the start was cancelled before it finished (Esc, unmount, document change, `allowPresent` withdrawn).
 - `'invalid-slide'`: `from` is not an integer in `[0, slideCount)`. `goTo` with an invalid index is ignored with a diagnostic.
 
 Full-screen and popup refusal are not errors: the session reports them through `surface` and `presenter` and a diagnostic.
+
+**Show coordinator.** The browser decides which element is on top in full screen, but it does not decide which session owns full screen, and exiting full screen applies to the whole document. So a small per-`ownerDocument` coordinator, part of the eager start code, holds a single **show token**:
+- `present()` takes the token synchronously, before the start sequence (§4.1). If another viewer in the same document already holds it, `present()` rejects with `'already-presenting'` and opens nothing. One show per document, whether it runs full screen or in-window.
+- A session calls `exitFullscreen()` only while `document.fullscreenElement` is **its own** host element or a descendant of it. Failed-start cleanup follows the same rule.
+- A session reacts to `fullscreenchange` only when its own host element entered or left full screen; any other full-screen change is ignored. If its host element leaves full screen without an exit request (browser Esc, browser UI), the show exits (§4.1).
+- Keyboard routing goes only to the session that holds the token, through listeners on its host element and its popup.
+- The token is released exactly once, at the end of exit cleanup or failed-start cleanup.
 
 **Lifecycle.** Each start gets a generation number; a late async completion from an older generation is discarded. Unmount, document replacement or `allowPresent` becoming false ends a running session (`exit` semantics, events fire once). `exit()` is idempotent; all cleanup (popup, full screen, media, Blob URLs, GPU resources, workspace reservations, listeners) runs exactly once.
 
@@ -196,7 +203,7 @@ Defaults are the schema defaults (to verify in the parser task): `loop` false, `
 - **Show type** (`p:showPr` child):
   - `p:present` (or none): normal presenting.
   - `p:browse` ("browsed by an individual", a windowed mode in PowerPoint): presented the normal way, with a diagnostic; the scrollbar setting is ignored.
-  - `p:kiosk` ("browsed at a kiosk"): user input other than Esc is disabled (clicks, navigation keys and triggers do nothing; hyperlinks and triggers stay inert), the show loops, and it restarts from its first slide **`restart` ms (default 300,000) after the most recent start or restart**, the counter resetting on every restart including automatic loop restarts. This follows the reviewers' quotation of the `restart` definition (to verify in the parser task, and against a D4 capture).
+  - `p:kiosk` ("browsed at a kiosk"): user input other than Esc is disabled: clicks and navigation keys do not advance. The working assumption is that hyperlinks and triggers are inert too. The standard's "user input disabled" is ambiguous, and practitioner documentation says hyperlinks work in kiosk mode, so this is a D4 capture question (§11), the show loops, and it restarts from its first slide **`restart` ms (default 300,000) after the most recent start or restart**, the counter resetting on every restart including automatic loop restarts. This follows the reviewers' quotation of the `restart` definition (to verify in the parser task, and against a D4 capture).
 - **`p:sldRg st end`** (1-based, inclusive; to verify in the parser task): only those slides are in the show; `'beginning'` is `st`.
 - **`loop`** repeats the show until Esc: after the last visible slide, the show continues with the first visible slide (no end-of-show slide).
 - **`showNarration`** is ignored (non-goal).
@@ -368,7 +375,14 @@ All rendering happens in the lazy chunk. The scrolling viewer's `renderSlide` an
     - **WebGL2** is the required backend: it is supported by every current major browser, though a user or GPU blocklist can disable it, and it needs no dependency.
     - **WebGPU** is an optional backend behind the same interface. It is not required by any stage, and is added only if profiling shows a measurable gain.
     - The **Canvas 2D** compositor is the fallback. It is used when WebGL2 is unavailable, when context creation fails, or when the context is lost and not restored in time. It uses 2-D transforms, `globalAlpha`, clip paths and pre-rendered masks (it does not rely on `ctx.filter`, which is not available everywhere), and 3-D transitions use their 2-D look-alikes from the catalogue. Every fallback emits a diagnostic.
-  - **Context loss.** The `webglcontextlost` handler calls `event.preventDefault()` (without it the context is never restored) and pauses compositing on the last frame. If `webglcontextrestored` arrives within **3 s**, every GPU resource is recreated (programs, buffers, vertex arrays, framebuffers, mask textures, layer textures, GL state), layer textures being re-rasterised from the scene for the current slide (and re-uploaded for neighbours as they are needed). Otherwise the show switches to the Canvas 2D compositor on a **separate, newly mounted 2-D canvas** (a canvas that has a WebGL2 context cannot get a 2-D one) and removes the WebGL canvas. Timing and navigation state live outside the renderer, so the show does not stop or jump. Restore callbacks that arrive after a backend switch or exit are ignored. Repeated loss (more than 2 in a show) switches to Canvas 2D for the rest of the show.
+  - **Context loss.** A lost context keeps no usable image or resources, so nothing relies on a retained last frame. On `webglcontextlost`:
+    1. The handler calls `event.preventDefault()`. Without it the context is never restored.
+    2. In the same task, a **separate 2-D canvas** is mounted over the WebGL canvas. A canvas that has a WebGL2 context cannot get a 2-D one. The 2-D canvas paints the current live state **directly from the scene**, using the pre-admitted terminal fallback path (§7), so the audience sees the right slide at once, possibly coarser.
+    3. The show clock, the scheduler and media **keep running**. The direct painter follows them frame by frame (effects coarsen to cuts at their steps, as in ladder step 3), so there is no timeline jump when a backend takes over.
+    4. The restore deadline is **3 s** on a separate monotonic clock (`performance.now()`). It does not use the show clock, so pausing the show does not stretch it.
+    - **Restored within the deadline:** every GPU resource is recreated (programs, buffers, vertex arrays, framebuffers, mask textures, layer textures, GL state). Layer textures are re-rasterised from the scene for the current slide, and re-uploaded for neighbours as they are needed. The WebGL canvas takes over again at the first frame where its layers are ready, and the 2-D canvas is removed.
+    - **Not restored in time:** the show switches to the Canvas 2D compositor on the already-mounted 2-D canvas, builds its layers within the workspace, and removes the WebGL canvas.
+    - Restore callbacks that arrive after a backend switch or exit are ignored. Repeated loss (more than 2 in a show) switches to Canvas 2D for the rest of the show.
   - **Texture budget.** Textures count against the slideshow workspace (§7).
   - **Determinism.** Frame goldens for the GPU path are taken in Chromium with a per-row tolerance (§10). Unit tests target the backend-agnostic render-state output plus the Canvas 2D compositor, which is deterministic in node-canvas.
 - **Transitions** composite the outgoing and incoming slide frames on the compositor:
@@ -416,17 +430,34 @@ These are closest look-alikes, each with a diagnostic:
 - **Fallback ladder.** When a slide still does not fit:
   1. reduced resolution (above);
   2. **flattened slide**: the slide is painted into a single layer per checkpoint, effects within the slide become cuts at their steps, and the transition becomes a crossfade between two full-slide frames;
-  3. **cut**: a single full-slide frame, no transition. This is the minimum admitted state; it needs one surface the size of the backing store, which is reserved when the show starts, so the show never crashes or stalls.
+  3. **terminal fallback (direct Canvas 2D, cut transitions)**: all GPU resources and all cached layers are released. The current state is painted **directly** by the existing scene painter into a 2-D output canvas, with no layers, no textures and no compositor. Effects become cuts at their steps, and slide changes become cuts.
 
   Each step down is diagnosed.
+- **Permanent reserve.** The terminal fallback is admitted when the show starts, so it is available exactly when memory pressure triggers it. The reserve is taken from the workspace and is never lent to layers, textures, metadata or media. It holds:
+  - one 2-D output surface at the backing-store size (§6.3), at width × height × 4 (at most 33,177,600 B at 3840 × 2160);
+  - a **scratch allowance** for decoding and layout during a direct paint: 64 MiB desktop, 32 MiB mobile (my call). Images that do not fit the allowance are painted as the static viewer's missing-image placeholder, with a diagnostic, rather than over-allocating.
+- **When the reserve cannot be taken at start**, the backing store is lowered step by step, down to DPR 1 at the CSS size. If even that does not fit, `present()` rejects with `'load-failed'` and a `workspace` diagnostic, before anything is shown.
+- **Pressure from metadata and media.** Show metadata and media leases are charged outside the reserve. When they would cut into it, cross-slide media is stopped and released first, then neighbour slides' metadata is dropped (re-read on demand). The current slide's metadata is never dropped while it is shown.
+- **Resizing.** A larger output takes a new reserve before the old one is released. If the new reserve does not fit, the backing store stays at its old size and is scaled up to the new output, with a diagnostic. A smaller output shrinks the reserve.
 - **Frame work.** Benchmark: a named corpus deck (chosen in the plan) at 1920 × 1080 CSS pixels, DPR 2, Chromium on the owner's reference laptop. Target: p95 frame work ≤ 12 ms and no dropped frame in steady animation. Limits: at most 128 composited layers per frame and at most 8 re-rasterisations per frame; above these, effects coarsen (layers merge into static runs, colour steps coarsen) with a diagnostic.
 - **Media.**
   - Bytes are read with the bounded uncached reader (§6.1), never the caching `OfficePackage.bytes()`, and go into a `Blob` URL only when the slide is shown. The URL is revoked when the slide is left, unless the media is still playing across slides (below).
   - **Cross-slide sound.** A transition sound with `loop` plays until the next slide's transition sound or `p:endSnd`; audio whose `p:cMediaNode` spans slides (`numSld`, to verify in the parser task) keeps its element and URL alive for those slides. Everything else stops on slide change.
   - **One audio output.** Media plays on the audience surface only (§5.2).
-  - **Autoplay.** Every `play()` call handles rejection. On rejection (autoplay policy) or a media error, mid-playback included, the poster stays with a "Click to play" control that calls `play()` in that click's activation. The timeline is never blocked by media: nodes waiting on the media's `onEnd` proceed when the media node's own `dur` elapses, or immediately if it has none, with a diagnostic.
+  - **Autoplay.** Every `play()` call handles rejection. On rejection (autoplay policy) or a media error, mid-playback included, the poster stays with a "Click to play" control that calls `play()` in that click's activation. 
+  - **Media end.** When playback **succeeds**, the media node ends as the timing model says: at the clip's natural end, or earlier when the media node's own timing (explicit `dur`, clipping, repeat) ends it. Successors wait for that real end. The escape below never applies to successful playback.
+  - **Escape for failed playback only.** When playback is **refused or fails** (autoplay rejection, media error, undecodable format), the scheduler gives the media node a diagnosed **synthetic end**, so successors never deadlock:
+    - with an explicit finite `dur`, the synthetic end comes at that duration from the media node's start;
+    - with no `dur`, or an indefinite one, it comes immediately at the failure (bounded: no waiting on a clip that will not play).
+  - **Retry.** A later "Click to play" plays the media only. It does not re-arm successors, so no successor fires twice. Each node's end fires at most once per activation, whether real or synthetic.
 - **Hostile input.** The reader limits are in §6.1. A cycle in time-node references (`tn` conditions) is detected and the cycle is broken, with a diagnostic. Motion-path parsing and formula evaluation are bounded and never use JavaScript evaluation.
-- **Degenerate slide size.** Slide size uses the static viewer's `slideMetrics` and its clamps; a deck the static viewer refuses is `'not-presentable'`.
+- **Slide size validation.** Today `slideMetrics` (`src/pptx/render.ts:24`) only converts EMUs and rounds, with no clamps. `parsePptx` defaults a *missing* `sldSz` but passes other values through, and `getPaintables` uses the metrics directly, so zero, negative, non-finite or extreme sizes reach painting unchecked. The lazy slideshow entry and the lazy enrichment therefore validate `slideWidthEmu` / `slideHeightEmu` themselves, before any allocation, projection or letterbox maths. Caller-constructed documents get the same check.
+  - Both values must be finite and positive.
+  - They must fall within the schema's slide-size range, assumed to be 914,400–51,206,400 EMU (1–56 in; to verify in the parser task).
+  - The aspect ratio must be within 1 : 20.
+  - Output sizes are then computed with the §6.3 backing-store caps.
+  - A size that fails the check is `'not-presentable'` for the show, with a `slide-size` diagnostic; there is no substitute size. The enrichment skips a document with an invalid size, and that document paints as it does today, with a diagnostic.
+  - Changing the static viewer's own handling of bad sizes is out of scope.
 - **The popup boundary.** The popup is same-origin and has an opener, so it is **not** an isolation boundary: script in it could reach the host page. The guarantee is narrower: officeview renders only deck content into it, inserts notes and labels as text (never deck-supplied HTML), and closes it on exit and on opener unload.
 
 ## 8. Eager budget and lazy boundaries
@@ -438,7 +469,7 @@ These are closest look-alikes, each with a diagnostic:
 - **What stays eager, and only this:**
   - the **package handle**: `parsePptx` attaches its `OfficePackage` and the slide part paths to the `PptxDocument`;
   - the dynamic `import()` seams (enrichment in `getPaintables`; the slideshow loader);
-  - the `forwardRef` / handle plumbing in `OfficeDoc`/`OfficeFile`, the pre-mounted slideshow host element, the synchronous start sequence (§4.1) and the F5 key routing.
+  - the `forwardRef` / handle plumbing in `OfficeDoc`/`OfficeFile`, the pre-mounted slideshow host element, the per-document show coordinator (§4.2), the synchronous start sequence (§4.1) and the F5 key routing.
 
   The Present button lives in the lazy `PagedChrome`.
 - **The package handle (lease).**
@@ -492,7 +523,11 @@ These are closest look-alikes, each with a diagnostic:
   - reduced motion;
   - the chunk-load failure notice;
   - media playback of a supported format; audio spanning slides; a rejected later `play()`;
-  - forced context loss: during a transition, never restored (switch at the deadline), repeated loss, exit during restore.
+  - forced context loss: during a transition, never restored (switch at the deadline), repeated loss, exit during restore. A visibly changing animation keeps advancing on the 2-D canvas through the loss, and the frame after recovery matches the show clock;
+  - show coordinator: A's load fails after B entered full screen (B stays full screen); A exits while B is full screen; a second `present()` in the same document is rejected; browser Esc exits only the owning show;
+  - media end: a successful clip with no explicit `dur` holds its successor until the clip ends; refused playback with no `dur`, and refused indefinite media, release successors at once; a later retry does not fire successors twice;
+  - slide size: zero, negative, non-finite and extremely skewed sizes, including caller-constructed documents, are `'not-presentable'`;
+  - terminal fallback under a tight budget: the reserve is taken at start, the show reaches the direct-paint cut path without stalling, and a resize that cannot get a larger reserve keeps the old backing store.
 
   CI runs Chromium headless with software WebGL2 (SwiftShader); browser tests assert behaviour on both the WebGL2 path and a forced Canvas 2D path, never GPU pixels. The Window Management API path is tested by feature-detection mocks. Real multi-screen placement and real transient-activation behaviour across engines can't be fully automated, so they get manual checks listed in the validation doc. All clocks are driven explicitly, as CI runs Linux on 2 CPUs.
 - **Validation doc** `docs/validation/slideshow.md`: the catalogue table with status and tolerance for each row; gates; the eager ledger; host embedding requirements (§5.3); known limits (macOS F5, `p:browse` shown as present, custom shows).
@@ -515,7 +550,7 @@ These are closest look-alikes, each with a diagnostic:
   - a capture-and-compare step against owner-supplied PowerPoint reference frames or video for the corpus decks.
 
   The plan provides:
-  - a capture checklist: deck, slide, step, and timestamps at 0/25/50/75/100 % of each effect, plus the behavioural questions this spec leaves to captures (`spd` durations, `advTm` with pending clicks, trigger-versus-link precedence, kiosk restart, Previous into a slide);
+  - a capture checklist: deck, slide, step, and timestamps at 0/25/50/75/100 % of each effect, plus the behavioural questions this spec leaves to captures (`spd` durations, `advTm` with pending clicks, trigger-versus-link precedence, kiosk restart, whether hyperlinks and triggers respond in kiosk mode, Previous into a slide);
   - a fixture layout for the captures (`tests/fixtures/slideshow-refs/`, with provenance: PowerPoint version, OS, resolution);
   - a compare tool with tolerances (a structural/pixel threshold per row, looser for approximate rows).
 
@@ -529,7 +564,8 @@ These are closest look-alikes, each with a diagnostic:
 - Single-screen fallback swaps the full-screen surface (PowerPoint-style).
 - Reduced motion shortens transitions to a crossfade of at most 200 ms and jumps animations to their end state.
 - A GPU compositor for every frame and transition: WebGL2 required, WebGPU optional behind the same interface, Canvas 2D fallback (§6.3). No new runtime dependency. Context-restore deadline 3 s.
-- Memory budget: 512 / 256 MiB per show, with the accounting and fallback ladder of §7. Reader limits are as in §6.1. Frame target and layer limits are as in §7.
+- One show per document (§4.2 show coordinator); a session exits full screen only when it owns it.
+- Memory budget: 512 / 256 MiB per show, with the accounting, fallback ladder and permanent reserve of §7 (scratch allowance 64 / 32 MiB). Reader limits are as in §6.1. Frame target and layer limits are as in §7.
 - The new props are `allowPresent` and `presentShortcuts` (both default `true`) and `slideShowMotion`, plus the four event props.
 - After exit, the viewer scrolls to the last shown slide.
 - The slideshow reads its data lazily from the package handle (D3, §8).
@@ -624,3 +660,17 @@ Reviews: `spec-codex.md` (Codex), `spec-agy.md` (agy), `spec-opencode.md` (openc
 | pi P20 (GPU tolerance unspecified) | Accepted (§6.4 per-row tolerance, §10) |
 | pi P21 (CI WebGL flakiness) | Accepted (same as agy 3.3) |
 | pi P22 (focus in popup) | Accepted (§9 Presenter View focus) |
+
+### Round 2
+
+Round 2: agy, opencode and pi approve. Codex requests changes with R1–R5, all against the round-1 amendments. opencode adds two advisory minors, given ids O2-1 and O2-2 here.
+
+| Finding | Disposition |
+|---|---|
+| Codex R1 (browser full screen does not arbitrate session ownership) | Accepted (§4.2 show coordinator: one token per `ownerDocument`; a session exits full screen only when its own host is the full-screen element; unrelated `fullscreenchange` events are ignored; keyboard goes only to the token holder; §4.1 cleanup; §8; §10; §12) |
+| Codex R2 (one reserved surface does not guarantee the cut fallback) | Accepted (§7 terminal fallback is a direct Canvas 2D paint after GPU resources are released, with a permanent reserve of output surface plus scratch allowance; start-time refusal; metadata and media pressure; resize; §10) |
+| Codex R3 (context loss cannot promise a retained last frame) | Accepted (§6.3: an immediate 2-D canvas painting live from the scene; the clock and media keep running; a monotonic 3 s deadline; §10 changing-animation test) |
+| Codex R4 (scope the media-end escape to failed playback) | Accepted (§7: successful playback ends per the timing model; synthetic end only on refusal or failure, bounded for absent or indefinite `dur`; retries do not re-arm successors; §10) |
+| Codex R5 (cited slide-size clamps do not exist) | Accepted, verified in the code: `slideMetrics` (`render.ts:24`) only converts and rounds, and `parsePptx` defaults only a missing `sldSz`. §7 now requires explicit validation in the lazy entries (finite, positive, schema range to verify, aspect ≤ 1 : 20) and `'not-presentable'` otherwise; §10 |
+| opencode O2-1 (kiosk hyperlinks may work in PowerPoint) | Accepted (§4.4 states the inert-links rule as an assumption; the D4 checklist in §11 adds "do hyperlinks and triggers respond in kiosk mode?") |
+| opencode O2-2 (38,584 B fresh vs 38,582 B ledger) | Accepted (§3 notes the 2 B rebuild variance; only fresh measurements count, re-measured before Stage 0 and each stage's first eager edit) |
