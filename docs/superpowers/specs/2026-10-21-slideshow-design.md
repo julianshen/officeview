@@ -1,6 +1,6 @@
 # PowerPoint slideshow mode: design
 
-Status: draft, owner decisions D1–D4 recorded (§11); awaiting agent review.
+Status: **approved by the owner 2026-10-21** (decisions D1–D4 in §11; GPU compositor added at the owner's request). Agent review findings are folded in as amendments.
 Branch: `feature/slideshow`, from main `b8a146c`.
 
 ## 1. Intent
@@ -247,10 +247,24 @@ All rendering happens in the lazy chunk. The scrolling viewer's `renderSlide` is
 
 - **Layers.** For each slide, the slideshow builds a **static layer**: the background plus every shape that no animation targets. It also builds **per-target layers**, one per animated shape or paragraph range. These are offscreen bitmaps at the audience resolution (device pixel ratio capped at 2).
   - Layers come from the existing scene painter: a new optional `paintScene` hook paints a filtered subset of nodes. That is an additive, lazy-only change. Text layout is computed once per layer and reused.
-- **Frames.** Each frame composites the layers with their render state on a canvas, with 2-D canvas transforms, globalAlpha and clip paths. Colour animations and emphasis effects that change appearance (for example colour change, darken, desaturate, wave or teeter) repaint the affected layer when the colour changes, not every frame, when that is cheaper.
+- **Frames: GPU compositor (owner request, 2026-10-21).** Layers are rasterised once with the 2-D canvas, because text and vector rendering stay on the existing painter. Each layer is uploaded as a texture. Every frame is then composited on the GPU behind a small `Compositor` interface:
+  - textured quads with per-layer transform, opacity and z-order;
+  - mask textures and procedural masks in the fragment shader, for wipe-like filters (wipe, split, circle, diamond, plus, wedge, wheel, barn, checkerboard, dissolve noise);
+  - colour-matrix uniforms for colour animations and emphasis (colour change, darken, lighten, desaturate, transparency, complementary), so these need no repaint;
+  - motion paths and rotation as transforms.
+
+  The same compositor runs every transition, including the 3-D ones and Morph, so there is one GPU path, not a separate 3-D path.
+
+  - **Backends.**
+    - **WebGL2** is the required backend: every current browser supports it, and it needs no dependency.
+    - **WebGPU** is an optional backend behind the same interface. It is not required by any stage, and is added only if profiling shows a measurable gain.
+    - The **Canvas 2D** compositor is the fallback. It is used when WebGL2 is unavailable, when context creation fails, or when the context is lost and can't be restored. It uses 2-D transforms, globalAlpha, clip paths and filters, and 3-D transitions use their 2-D look-alikes. Every fallback emits a diagnostic.
+  - **Context loss.** On `webglcontextlost`, textures are re-uploaded from the retained layer bitmaps after restore. If restore fails, the show switches to the Canvas 2D compositor mid-show without stopping.
+  - **Texture budget.** Textures count against the slideshow workspace (§7). A slide whose textures would exceed it falls back to direct painting and crossfade, as §7 says.
+  - **Determinism.** Frame goldens for the GPU path are taken in Chromium with a tolerance. Unit tests target the backend-agnostic render-state output plus the Canvas 2D compositor, which is deterministic in node-canvas.
 - **Transitions** composite the outgoing and incoming slide frames:
   - **2-D transitions** use canvas compositing: masks for wipe, split, shape, clock, comb, random bars, checkerboard and dissolve noise; transforms for push, cover, uncover, zoom and fly-through.
-  - **3-D transitions** and texture-heavy ones use **WebGL** (WebGL 1, no dependency). That covers vortex, shred, fracture, crush, peel off, page curl, airplane, origami, honeycomb, glitter, ripple, switch, flip, gallery, cube, doors, box, rotate, orbit, conveyor, ferris, window, prestige and curtains. Each slide frame is a texture.
+  - **3-D transitions** and texture-heavy ones run on the GPU compositor (WebGL2; see Frames above). That covers vortex, shred, fracture, crush, peel off, page curl, airplane, origami, honeycomb, glitter, ripple, switch, flip, gallery, cube, doors, box, rotate, orbit, conveyor, ferris, window, prestige and curtains. Each slide frame is a texture.
   - **When WebGL is unavailable**, each 3-D transition falls back to its listed 2-D look-alike, for example cube → push and vortex → dissolve, with a diagnostic.
 - **Morph** (`p159:morph`): objects are matched in this order:
   1. same `cNvPr name` starting with `!!` (PowerPoint's forced pairing);
@@ -372,7 +386,7 @@ These are closest look-alikes, each with a diagnostic:
 - Presenter View uses a same-origin popup, rendered with portals from the opener. On Chromium it is placed with the Window Management API.
 - Single-screen fallback swaps the full-screen surface (PowerPoint-style).
 - Reduced motion shortens transitions to a crossfade of at most 200 ms and jumps animations to their end state.
-- WebGL 1 is used for 3-D transitions, with a 2-D look-alike when WebGL is unavailable. No new runtime dependency.
+- A GPU compositor for every frame and transition: WebGL2 required, WebGPU optional behind the same interface, Canvas 2D fallback (§6.3). No new runtime dependency.
 - Memory budget: 512 / 256 MiB per show. Parse limits are as in §6.1.
 - The new props are `allowPresent` and `presentShortcuts` (both default `true`) and `slideShowMotion`, plus the three event props.
 - After exit, the viewer scrolls to the last shown slide.
@@ -385,6 +399,6 @@ Each stage is its own PR to main, with the full gate set (tsc, vitest, eager bud
 | Stage | Scope | Done when |
 |---|---|---|
 | **0: Slide appearance** | Master and layout non-placeholder shapes (`showMasterSp`, placeholders excluded), and backgrounds (solid, gradient, picture, pattern, `bgRef` / theme background styles), with inheritance slide → layout → master. Shared renderer, so the static viewer and print improve. | Corpus decks show their designed backgrounds and master artwork. Changed goldens are listed and inspected. |
-| **1: Core show** | Lazy `src/slideshow/` chunk; host handle and events; Present button and F5 keys; full-screen audience view; navigation (§4.3); hidden slides; end-of-show; `showPr`; reduced motion; parser for transitions, timing, notes, media metadata (lazy, D3); timing engine (§6.2); layer renderer (§6.3); every animation behaviour (set, anim, animEffect, animMotion, animRot, animScale, animClr), builds by paragraph, triggers; all 2-D transitions. 3-D transitions, Morph and media are stand-ins. | Corpus decks present with correct build order and timing. Every catalogue row is exact, approximate, `pending-stage-N` or never. |
+| **1: Core show** | Lazy `src/slideshow/` chunk; host handle and events; Present button and F5 keys; full-screen audience view; navigation (§4.3); hidden slides; end-of-show; `showPr`; reduced motion; parser for transitions, timing, notes, media metadata (lazy, D3); timing engine (§6.2); layer renderer and GPU compositor (WebGL2 with Canvas 2D fallback, §6.3); every animation behaviour (set, anim, animEffect, animMotion, animRot, animScale, animClr), builds by paragraph, triggers; all 2-D transitions. 3-D transitions, Morph and media are stand-ins. | Corpus decks present with correct build order and timing. Every catalogue row is exact, approximate, `pending-stage-N` or never. |
 | **2: Presenter View and media** | Presenter View: popup, Window Management placement, single-screen swap, notes, next, timer, slide grid. Media playback (video, audio, transition sound, media commands). Text builds by word and by letter. | Two-window and single-screen presenting works; supported media plays. |
-| **3: 3-D transitions and Morph** | WebGL transitions with 2-D look-alikes for when WebGL is unavailable, plus Morph. | No `pending-stage` rows remain; the catalogue is complete. |
+| **3: 3-D transitions and Morph** | 3-D transitions on the GPU compositor with 2-D look-alikes for when WebGL is unavailable, plus Morph. | No `pending-stage` rows remain; the catalogue is complete. |
