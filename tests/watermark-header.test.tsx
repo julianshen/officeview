@@ -49,16 +49,16 @@ async function renderFile(props: Record<string, unknown> = {}) {
 
 describe('watermark from the X-OfficeView-Watermark response header', () => {
   test('a header watermark reaches the rendered page', async () => {
-    serveWith({ [WATERMARK_HEADER]: 'text=CONFIDENTIAL; placement=tile; opacity=0.5' })
-    const withHeader = await renderFile()
-    const headerInk = inkOf(withHeader.container)
-    expect(headerInk).toBeGreaterThan(0)
-
-    // same document, no header -> no watermark ink
+    // same document, no header -> the baseline ink
     serveWith({})
     const without = await renderFile()
     const plainInk = inkOf(without.container)
-    expect(headerInk).toBeGreaterThan(plainInk)
+    without.unmount()
+
+    // the watermark paints after the page canvas appears: wait for its ink rather than sampling once
+    serveWith({ [WATERMARK_HEADER]: 'text=CONFIDENTIAL; placement=tile; opacity=0.5' })
+    const withHeader = await renderFile()
+    await waitFor(() => expect(inkOf(withHeader.container)).toBeGreaterThan(plainInk))
   })
 
   test('a malformed header does not break the load', async () => {
