@@ -98,13 +98,13 @@ export function useOfficeFile(
     // the verification pass and the parse, and the loader releases the spool.
     const controller = new AbortController()
     setState({ status: 'loading' })
+    // onProtection: protection events from a cancelled load are dropped: the ref
+    // below always points at the latest render's callback, which would otherwise
+    // tag the old policy with the current data (see the source-tagged state
+    // in <OfficeFile>) and let a stale download overwrite the live policy.
     loadOfficeSource(source, {
       signal: controller.signal,
       onProgress: (p) => progressRef.current?.(p),
-      // protection events from a cancelled load are dropped: the ref below
-      // always points at the latest render's callback, which would otherwise
-      // tag the old policy with the current data (see the source-tagged state
-      // in <OfficeFile>) and let a stale download overwrite the live policy.
       onProtection: (p) => { if (!cancelled) protectionRef.current?.(p) },
       onWatermark: (m) => { if (!cancelled) watermarkRef.current?.(m) },
       onHeaders: (h, url) => { if (!cancelled) headersRef.current?.(h, url) },

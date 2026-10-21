@@ -466,13 +466,13 @@ class RtfParser {
       gutterTwips: s.gutterTwips,
     }
     const paragraphs = blocks.filter((b) => b.kind === 'p').map((b) => (b as { paragraph: DocxParagraph }).paragraph)
+    // pageSize: writers that set \landscape already store the page in its FINAL
+    // orientation (\paperw15840 \paperh12240), so swapping again would
+    // render portrait. Honour explicit dimensions as given; only rotate the
+    // built-in portrait default when the section never declared a size.
     return {
       margins,
       pageSize: {
-        // Writers that set \landscape already store the page in its FINAL
-        // orientation (\paperw15840 \paperh12240), so swapping again would
-        // render portrait. Honour explicit dimensions as given; only rotate the
-        // built-in portrait default when the section never declared a size.
         widthTwips: s.landscape && !s.explicitPageSize ? s.paperHeightTwips : s.paperWidthTwips,
         heightTwips: s.landscape && !s.explicitPageSize ? s.paperWidthTwips : s.paperHeightTwips,
         orientation: s.landscape ? 'landscape' : 'portrait',
@@ -521,11 +521,9 @@ class RtfParser {
     this.bufferStyleKey = ''
   }
 
-  /**
-   * The encoding label for the bytes currently being read: the active font's
-   * charset when it declares one, otherwise the document code page.
- */
   private activeEncodingLabel(): string {
+    // The encoding label for the bytes currently being read: the active font's
+    // charset when it declares one, otherwise the document code page.
     // Fall back to the \deff font when no \fN has been applied yet (or a group
     // exit restored that state), so the document's declared default charset
     // governs \'hh bytes from the very first character.
@@ -533,12 +531,10 @@ class RtfParser {
     return this.encodingLabelFor(fontIndex)
   }
 
-  /**
-   * The encoding that `\'hh` escapes in the given font decode with. Shared with
-   * marker capture so a hex bullet inside {\pntext} or {\listtext} resolves the
-   * same way as hex in ordinary body text.
-   */
   private encodingLabelFor(fontIndex: number | undefined, codePage: number = this.codePage): string {
+    // The encoding that `\'hh` escapes in the given font decode with. Shared with
+    // marker capture so a hex bullet inside {\pntext} or {\listtext} resolves the
+    // same way as hex in ordinary body text.
     if (fontIndex !== undefined) {
       const charset = this.fontCharsets[fontIndex]
       // charset 0 (ANSI) and 1 (Default) defer to \ansicpg; 2 is Symbol, whose
@@ -552,12 +548,10 @@ class RtfParser {
     return codePageLabel(codePage)
   }
 
-  /**
-   * Adopt the \deff default font unless an explicit \fN has already been seen.
-   * Called once the font table is readable, because \deff normally appears
-   * BEFORE it in the header.
-   */
   private applyDefaultFont(): void {
+    // Adopt the \deff default font unless an explicit \fN has already been seen.
+    // Called once the font table is readable, because \deff normally appears
+    // BEFORE it in the header.
     if (this.char.fontIndex !== undefined) return
     const name = this.fonts[this.defaultFontIndex]
     if (name === undefined) return
@@ -565,12 +559,10 @@ class RtfParser {
     this.char.fontFamily = name
   }
 
-  /**
-   * Decode a run of `\'hh` bytes. Multibyte encodings need the whole run so a
-   * lead byte meets its trail byte; Symbol charset bytes are glyph indices, so
-   * they go through the Symbol table (0xB7 is a bullet, not a middot).
-   */
   private static decodeHexBytes(bytes: number[], label: string): string {
+    // Decode a run of `\'hh` bytes. Multibyte encodings need the whole run so a
+    // lead byte meets its trail byte; Symbol charset bytes are glyph indices, so
+    // they go through the Symbol table (0xB7 is a bullet, not a middot).
     if (label === 'symbol') {
       let out = ''
       for (const b of bytes) out += SYMBOL_MAP[b] ?? String.fromCharCode(b)
@@ -586,8 +578,8 @@ class RtfParser {
     this.emit(RtfParser.decodeHexBytes(bytes, this.hexLabel))
   }
 
-  /** Emit a literal, flushing any buffered hex bytes first so order is kept. */
-private emitLiteral(text: string): void {
+  private emitLiteral(text: string): void {
+    // Emit a literal, flushing any buffered hex bytes first so order is kept.
     this.flushHex()
     this.emit(text)
   }
@@ -624,8 +616,8 @@ private emitLiteral(text: string): void {
     return `${c.bold ? 1 : 0}${c.italic ? 1 : 0}${c.underline ? 1 : 0}${c.strike ? 1 : 0}|${c.fontFamily ?? ''}|${c.fontSizePt}|${c.color ?? ''}|${c.highlight ?? ''}`
   }
 
-  /** End the current paragraph, routing it into a table cell or the body. */
   private flushParagraph(): void {
+    // End the current paragraph, routing it into a table cell or the body.
     this.flushHex()
     this.flushRun()
     const hadContent = this.runs.length > 0 || this.images.length > 0
@@ -740,8 +732,8 @@ private emitLiteral(text: string): void {
     // Row definitions persist: a following row may omit \trowd and \cellx.
   }
 
-  /** Parse a `{\pict ...}` destination: hex payload plus sizing control words. */
   private parsePicture(): DocxImage | undefined {
+    // Parse a `{\pict ...}` destination: hex payload plus sizing control words.
     let kind = ''
     let unsupported = false
     let picw = 0
@@ -788,13 +780,11 @@ private emitLiteral(text: string): void {
     return { data, mime: kind === 'png' ? 'image/png' : 'image/jpeg', widthEmu, heightEmu }
   }
 
-  /**
-   * Read a control word. `this.i` may point at the leading backslash or at the
-   * first letter -- both call sites exist, and normalising here keeps them from
-   * silently eating the first character (which is how an earlier version turned
-   * every `\b` into a literal "b").
-   */
   private readControlWord(): { name: string; param?: number } | null {
+    // Read a control word. `this.i` may point at the leading backslash or at the
+    // first letter -- both call sites exist, and normalising here keeps them from
+    // silently eating the first character (which is how an earlier version turned
+    // every `\b` into a literal "b").
     let p = this.i
     if (this.s[p] === '\\') p++
     const first = this.s[p]
@@ -826,15 +816,13 @@ private emitLiteral(text: string): void {
     return { name, param }
   }
 
-  /**
-   * Parse one group through its matching `}`.
-   *
-   * `this.char` / `this.para` are the single source of truth for the current
-   * state. Nested groups save and restore them rather than being handed copies:
-   * `emit` and `flushRun` also read these fields, so passing clones (as an
-   * earlier version did) formatted a copy that nothing ever looked at.
-   */
   private parseGroup(): void {
+    // Parse one group through its matching `}`.
+    //
+    // `this.char` / `this.para` are the single source of truth for the current
+    // state. Nested groups save and restore them rather than being handed copies:
+    // `emit` and `flushRun` also read these fields, so passing clones (as an
+    // earlier version did) formatted a copy that nothing ever looked at.
     if (++this.depth > MAX_GROUP_DEPTH) {
       this.depth--
       this.skipRestOfGroup()
@@ -929,12 +917,10 @@ private emitLiteral(text: string): void {
     this.depth--
   }
 
-  /**
-   * Read a group's literal text, used for `{\listtext ...}` markers. Unlike
-   * `emit`, this runs outside the paragraph's formatting, so it tracks the font
-   * itself to translate Symbol glyphs, and handles \uN plus its \ucN fallback.
-   */
   private captureGroupText(): string {
+    // Read a group's literal text, used for `{\listtext ...}` markers. Unlike
+    // `emit`, this runs outside the paragraph's formatting, so it tracks the font
+    // itself to translate Symbol glyphs, and handles \uN plus its \ucN fallback.
     let out = ''
     let depth = 1
     let skipChars = 0
@@ -1073,8 +1059,8 @@ private emitLiteral(text: string): void {
     return out.replace(/\s+$/, '').replace(/^[ \t]+/, '')
   }
 
-  /** Consume through the `}` that closes the group we are inside. */
   private skipRestOfGroup(): void {
+    // Consume through the `}` that closes the group we are inside.
     let depth = 1
     while (this.i < this.s.length && depth > 0) {
       const c = this.s[this.i]
@@ -1228,7 +1214,9 @@ private emitLiteral(text: string): void {
         else if (param < 0) para.lineSpacing = { rule: 'exact', value: -param }
         else para.lineSpacing = { rule: 'atLeast', value: param }
         return
-      case 'tx': return // absolute tab stops: the model uses \t in run text
+      case 'tx':
+        // absolute tab stops: the model uses \t in run text
+        return
 
       case 'trowd': this.rowDefs = []; this.cellDefInProgress = null; return
       case 'cellx': {

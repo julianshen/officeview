@@ -779,6 +779,9 @@ function LegacyOfficeDoc({
     focusSearchRequest,
   }
 
+  // The pages container's style: a themed backdrop (a host background prop
+  // wins); zoomed, we own the pan and the container never scrolls; with copy
+  // off there is no DOM text, so the browser's selection gesture is blocked.
   return (
     <div ref={wrapperRef} {...themeRootProps(theme, instance)} className="ov:relative ov:flex ov:flex-col ov:min-h-0"
       data-ov-print={allowPrint} onKeyDown={onKeyDown}>
@@ -805,9 +808,7 @@ function LegacyOfficeDoc({
         onCopyCapture={allowCopy ? undefined : preventNativeCopy}
         onContextMenu={allowCopy ? undefined : preventNativeCopy}
         style={{
-          // themed backdrop; a host background prop wins
           background: background ?? 'var(--ov-color-backdrop)',
-          // zoomed: we own the pan, the container never scrolls
           overflow: zoomed ? 'hidden' : 'auto',
           WebkitOverflowScrolling: 'touch',
           touchAction: zoomed ? 'none' : 'pan-y',
@@ -817,7 +818,6 @@ function LegacyOfficeDoc({
           position: 'relative',
           boxSizing: 'border-box',
           cursor: zoomed ? 'grab' : 'auto',
-          // no DOM text: block the browser's selection gesture
           WebkitUserSelect: allowCopy ? undefined : 'none',
           userSelect: allowCopy ? undefined : 'none',
           ...style,
