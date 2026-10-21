@@ -49,7 +49,7 @@ import { displayFamilyUnsupported } from './funnel'
 import { HISTOGRAM_FAMILIES, histogramStructure } from './histogram'
 
 /** Families whose painter has landed. Every other family stays `unsupported` (its fallback is kept). */
-export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['waterfall', 'funnel', 'treemap', 'sunburst', 'histogram', 'pareto'])
+export const CHARTEX_PAINTED: ReadonlySet<ChartExFamily> = new Set<ChartExFamily>(['waterfall', 'funnel', 'treemap', 'sunburst', 'boxWhisker', 'histogram', 'pareto'])
 export const CHARTEX_PENDING = 'ChartEx charts are not supported yet'
 export const CHARTEX_REGION_MAP = 'Region map charts are not supported'
 export const CHARTEX_UNREADABLE = 'This chart could not be read'

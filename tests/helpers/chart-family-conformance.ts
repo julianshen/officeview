@@ -211,6 +211,38 @@ export const SURFACE3D_FAMILY: ConformanceFamily = {
   expect: { 'no series': { kind: 'card' }, 'empty series': { kind: 'card' }, 'all blank': { kind: 'card' }, 'NaN and infinity': { kind: 'card' }, 'negative values': { kind: 'card' }, 'single point': { kind: 'card' }, 'unavailable point': { kind: 'card' } },
 }
 
+function convertCacheToLvl(c: string): string {
+  const countMatch = c.match(/<c:ptCount[^>]*val="(\d+)"/i)
+  const ptCount = countMatch ? countMatch[1] : '0'
+  const pts: string[] = []
+  const ptRegex = /<c:pt[^>]*idx="(\d+)"[^>]*>[\s\S]*?<c:v>([\s\S]*?)<\/c:v>[\s\S]*?<\/c:pt>/gi
+  let match
+  while ((match = ptRegex.exec(c)) !== null) {
+    pts.push(`<cx:pt idx="${match[1]}">${match[2].trim()}</cx:pt>`)
+  }
+  return `<cx:lvl ptCount="${ptCount}" formatCode="General">${pts.join('')}</cx:lvl>`
+}
+
+/** boxWhisker (ChartEx family, Task B4). */
+export const BOX_WHISKER_FAMILY: ConformanceFamily = {
+  name: 'boxWhisker',
+  chart: c => {
+    if (c === null) {
+      return `<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData/><cx:chart><cx:plotArea><cx:plotAreaRegion></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>`
+    }
+    return `<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chartData><cx:data id="0"><cx:numDim type="val">${convertCacheToLvl(c)}</cx:numDim></cx:data></cx:chartData><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"><cx:dataId val="0"/><cx:layoutPr><cx:visibility meanLine="0" meanMarker="1" nonoutliers="0" outliers="1"/><cx:statistics quartileMethod="exclusive"/></cx:layoutPr></cx:series></cx:plotAreaRegion><cx:axis id="0"><cx:catScaling gapWidth="1"/><cx:tickLabels/></cx:axis><cx:axis id="1"><cx:valScaling/><cx:majorGridlines/><cx:tickLabels/></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>`
+  },
+  expect: {
+    'no series': { kind: 'card' },
+    'empty series': { kind: 'native' },
+    'all blank': { kind: 'native' },
+    'NaN and infinity': { kind: 'native' },
+    'negative values': { kind: 'native' },
+    'single point': { kind: 'native' },
+    'unavailable point': { kind: 'card' },
+  },
+}
+
 /** ofPie (spec 4.1): a valid authored ofPie paints natively in every data case (blank, NaN or negative
  * input reads as zero, so the painter just has no slices); only a missing series is a card. */
 export const OF_PIE_FAMILY: ConformanceFamily = {

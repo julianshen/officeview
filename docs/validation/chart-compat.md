@@ -45,6 +45,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B3 fix round 2 | B3 r2 commit | 38,638 | Before (`0cdda65`, rebuilt): 38,638. Branch-unit fallback descriptors and post-settlement media indexing (`src/xlsx/drawing.ts`, `src/xlsx/parse.ts`, worker chunks); plain-first arithmetic and per-slot overrides (lazy `charts-*`). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
 | After B3 fix round 3 | B3 r3 commit | 38,638 | Before (`74670f5`): 38,638. Nested fallback-wrapper hierarchy in `src/xlsx/drawing.ts` (worker chunks). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
 | After B3 merge with feature | merge commit | 38,638 | `feature/chart-compat` `5be9dd1` (B2, B5, A6b, A5c, A4b, licence) merged into `chart/b3`; conflicts resolved keeping every family and section. Bytes added: 0. Running total vs B0: +7 B |
+| After B3 fix round 4 + merge with feature (B4) | merge commit | 38,639 | Round 4 (per-pass wrapper settlement, ancestor membership) in worker chunks; `feature/chart-compat` with B4 box & whisker merged (CHARTEX_PAINTED keeps all seven painted families). +1 B hash churn. Running total vs B0: +8 B |
 
 ## Spec §8 testing and validation
 
@@ -355,4 +356,18 @@ the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond
 - **Colours: unverified.** Each root-level branch takes the series colour cycle by its root ordinal (style and colour
   parts, then theme); an authored series fill paints every node. `dataPt` overrides are not applied (row or node
   identity unknown). Only the first visible series is drawn (a further one is diagnosed).
+
+## B4 Box & whisker (ChartEx): implemented and unverified behaviour (spec 4.3, chartex-map §8)
+
+- **Implemented.** Box & whisker marks are drawn natively per series. Points in `value` state form the sorted distribution; blank and error points are excluded; an unavailable point or points exceeding 65,536 refuse the chart. Medians, quartiles, whiskers within 1.5×IQR, outlier markers, inner points (non-outliers), mean markers (×), and connected mean lines are rendered according to the series layout properties and visibility flags.
+- **`inclusive` quartile method: unverified.** When $n$ is odd, the `inclusive` method includes the median in both halves when calculating $Q_1$ and $Q_3$, following the ST_QuartileMethod specification and `chartex-map.md` §8. This behaviour is unconfirmed against native Office ground truth because available native Office fixtures (BW1, BW2) use `exclusive`.
+- **Absence defaults for box visibility flags: unverified.** Defaults (`connectorLines: true, meanLine: false, meanMarker: true, nonoutliers: false, outliers: true`) follow `chartex-map.md` §4.1 / §8 when `visibility` is omitted (as in BW2b).
+- **1.5×IQR whisker factor: unverified.** Standard Tukey box plot factor $1.5 \times \text{IQR}$ is used to determine whisker reach and outlier classification. Microsoft documentation states that points beyond whiskers are outliers, but does not explicitly document the 1.5 multiplier.
+- **Category axis slot mapping: unverified.** When a `cat` dimension is present, boxes are clustered per distinct category with series side-by-side inside each category; when absent, one box is drawn per series along the category axis with spacing governed by `gapWidth`. Box labels default to distinct category name when present, else series name, else ordinal.
+- **Empty and missing categories: project rule, unverified.** A category dimension whose every entry is empty counts as absent (one box per series). An empty category among named ones is its own group with an empty label. A point with no category entry at all (the dimension is shorter than the values) is not drawn and is diagnosed (`chart-point-uncategorized`).
+- **Category limit: project rule.** More than 4,096 distinct categories refuse the chart (`This chart has too many data points to summarize`); a prefix is never drawn.
+- **Mean line with categories: unverified.** With a `cat` dimension the mean line joins each series' means across the categories, in the series colour; without one it joins the means of consecutive series (map §8), in the later series' colour. Each series' own `meanLine` flag decides whether it takes part. A series with no values in a category is joined across that empty slot (from its previous drawn box).
+- **Stage 1 on every path.** XLSX charts are prepared by the workbook fill; DOCX/PPTX charts are prepared by the ChartEx adapter after their data precedence. Paint reads only the prepared records and draws no box for an unprepared model.
+- **Data labels and data-point overrides: unverified.** Data labels (`cx:dataLabels`) and per-point shape properties (`cx:dataPt`) are not painted (e.g. BW2b carries `dataLabels/visibility value="1"`).
+- **Whisker end caps: unverified.** Horizontal end caps at whisker endpoints are omitted; unverified whether Office renders end caps natively.
 

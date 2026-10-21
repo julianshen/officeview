@@ -18,6 +18,7 @@ import { formatNumber } from '../xlsx/chartDescription'
 import { CHART_TICK_LIMIT, dateTickLabel, dateUnitIndex } from './dates'
 import { radarTexts } from './families/radar'
 import { trendlineLegendEntries } from './trendlines'
+import { boxWhiskerCategoryLabels } from './chartex/boxWhisker'
 import { hierarchyLayoutBytes, hierarchyLegend, hierarchyPaintBytes, hierarchyTexts } from './chartex/hierarchyStyle'
 import { WATERFALL_LEGEND, waterfallColor, waterfallPaintBytes, WATERFALL_KINDS } from './chartex/waterfall'
 import { FUNNEL_TEXTS, funnelSeries, funnelTexts } from './chartex/funnel'
@@ -85,6 +86,8 @@ export function axisTexts(a: ResolvedAxis, graph: AxisGraph, view: DisplayView):
   if (a.role === 'value') return a.ticks.map(t => formatNumber(a.labelValue(t), a.percent))
   if (a.role === 'date') return a.ticks.map(t => dateTickLabel(t, a.dateBase ?? 'days', graph.epoch))
   if (a.role === 'series') return seriesLabels(graph, view, a)
+  const bw = graph.groups.find(g => g?.category === a)?.group
+  if (bw?.family === 'boxWhisker') return boxWhiskerCategoryLabels(Array.from({ length: view.slots }, (_, i) => view.category(i) ?? ''), bw)
   return Array.from({ length: Math.min(a.slots, view.slots) }, (_, i) => view.category(i) ?? '')
 }
 /**

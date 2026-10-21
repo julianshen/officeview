@@ -10,7 +10,7 @@ export function formatNumber(value: number, percent = false): string {
   return `${rounded < 0 ? '-' : ''}${grouped}${frac ? '.' + frac : ''}`
 }
 
-const TYPE_NAMES: Record<string, string> = { bar: 'Bar chart', col: 'Column chart', line: 'Line chart', area: 'Area chart', pie: 'Pie chart', doughnut: 'Doughnut chart', scatter: 'Scatter chart', bubble: 'Bubble chart', radar: 'Radar chart', stock: 'Stock chart', treemap: 'Treemap chart', sunburst: 'Sunburst chart' }
+const TYPE_NAMES: Record<string, string> = { bar: 'Bar chart', col: 'Column chart', line: 'Line chart', area: 'Area chart', pie: 'Pie chart', doughnut: 'Doughnut chart', scatter: 'Scatter chart', bubble: 'Bubble chart', radar: 'Radar chart', stock: 'Stock chart', treemap: 'Treemap chart', sunburst: 'Sunburst chart', boxWhisker: 'Box & whisker chart' }
 /** Accessible description of a chart (also used for the placeholder card). */
 export function chartDescription(model: XlsxChartModel): string {
   const name = model.title ? `Chart: ${model.title}.` : 'Chart.'
