@@ -21,7 +21,7 @@ const NAME_LIMIT = 120
 const TYPE_NAMES: Record<string, string> = {
   bar: 'Bar chart', col: 'Column chart', line: 'Line chart', area: 'Area chart', pie: 'Pie chart', doughnut: 'Doughnut chart',
   ofPie: 'Pie of pie chart', scatter: 'Scatter chart', bubble: 'Bubble chart', radar: 'Radar chart', stock: 'Stock chart', contour: 'Surface chart',
-  waterfall: 'Waterfall chart', histogram: 'Histogram chart', pareto: 'Pareto chart', boxWhisker: 'Box and whisker chart', funnel: 'Funnel chart',
+  waterfall: 'Waterfall chart', histogram: 'Histogram chart', pareto: 'Pareto chart', boxWhisker: 'Box & whisker chart', funnel: 'Funnel chart',
   treemap: 'Treemap chart', sunburst: 'Sunburst chart',
 }
 const clip = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit - 1)}…` : text

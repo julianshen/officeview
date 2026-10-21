@@ -472,7 +472,7 @@ describe('descriptions name every native family (merge with feature/chart-compat
     ['funnel-pp1/funnel-pp1.pptx', 'ppt/charts/chartEx1.xml', 'Funnel chart'],
     ['SimpleHistogram/SimpleHistogram.xlsx', 'xl/charts/chartEx1.xml', 'Histogram chart'],
     ['paretoLine/paretoLine.xlsx', 'xl/charts/chartEx1.xml', 'Pareto chart'],
-    ['boxWhisker/boxWhisker.xlsx', 'xl/charts/chartEx1.xml', 'Box and whisker chart'],
+    ['boxWhisker/boxWhisker.xlsx', 'xl/charts/chartEx1.xml', 'Box & whisker chart'],
     ['treemap/treemap.xlsx', 'xl/charts/chartEx1.xml', 'Treemap chart'],
     ['sunburst/sunburst.xlsx', 'xl/charts/chartEx1.xml', 'Sunburst chart'],
   ]
@@ -496,7 +496,7 @@ describe('descriptions name every native family (merge with feature/chart-compat
   })
   it('painted ChartEx families keep their native name through the drawing pipeline', async () => {
     const { readFileSync } = await import('node:fs')
-    for (const [file, , name] of cases.filter(([, , n]) => ['Waterfall chart', 'Treemap chart', 'Sunburst chart'].includes(n))) {
+    for (const [file, , name] of cases.filter(([, , n]) => ['Waterfall chart', 'Treemap chart', 'Sunburst chart', 'Box & whisker chart'].includes(n))) {
       const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(`${FIXTURES}/${file}`))))
       const charts = doc.sheets.flatMap(s => s.drawings ?? []).flatMap(d => d.content?.kind === 'xlsxChart' ? [d.content.chart] : [])
       expect(charts.length, file).toBeGreaterThan(0)

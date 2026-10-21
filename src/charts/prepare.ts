@@ -11,6 +11,8 @@ import { ChartRefusal, onChartModelRelease } from './own'
 import { createChartWorkspace, type ChartWorkspace } from './workspace'
 import { prepareTrendlines, preparedTrendlineBytes, trendlineBound, trendlineExtents, trendlineForecast, type PreparedTrendline } from './trendlines'
 import { chartEpoch } from './dates'
+import { BOX_WHISKER_TOO_MANY_CATEGORIES, boxWhiskerCategoryLabels, prepareBoxWhisker, preparedBoxWhiskerBytes, boxWhiskerBound, type PreparedBoxWhiskerGroup } from './chartex/boxWhisker'
+import { CHART_DATA_NOT_AVAILABLE, CHART_TOO_MANY_POINTS } from './fill'
 import { deriveChartHierarchy, formatHierarchyValues, hierarchyBytes, type ChartExHierarchy } from './chartex/hierarchy'
 import { errorBarBound, prepareErrorBars, preparedErrorBarBytes, type PreparedErrorBars } from './errorBars'
 
@@ -29,6 +31,7 @@ export interface PreparedAxes {
   groups: Array<{ category?: string; x?: string; value: string; horizontal: string; vertical: string; between: boolean } | undefined>
   diagnostics: ChartDiagnostic[]
   epoch: AxisGraph['epoch']
+  boxWhisker?: PreparedBoxWhiskerGroup[]
 }
 interface PreparedOwner { workspace: ChartWorkspace; tag: string }
 const owners = new WeakMap<PreparedAxes, PreparedOwner>()
@@ -46,7 +49,11 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const { preparedAxes: _previous, ...pending } = model
     return pending
   }
+  if (model.groups.some(g => g.family === 'boxWhisker' && g.series.some(s => s.values?.states?.includes(POINT_UNAVAILABLE)))) {
+    return { ...model, unsupported: CHART_DATA_NOT_AVAILABLE, refused: true }
+  }
   const workspace = owner?.workspace ?? createChartWorkspace('mobile'), tag = `chart-prepare#${++jobs}`
+  const boxDiagnostics: ChartDiagnostic[] = []
   let slots = model.categories.length
   for (const g of model.groups) for (const s of g.series) slots = Math.max(slots, s.values.length)
   slots = Math.min(4096, Math.max(1, slots))
@@ -59,10 +66,24 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     const minor = a.minorUnit === undefined ? 0 : 1000
     return n + 2048 + ticks * 640 + minor * 16 + Math.min(slots, model.categories.length) * 32 + (a.kind === 'date' ? slots * 16 : 0) + ((a.id.length + (a.crossAx?.length ?? 0)) * 8)
   }, 0)
-  let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + errorBarBound(model, model.groups.some(g => g.series.some(s => s.trendlines)) ? 4096 : slots) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
+  let bound = 4096 + labelPreparationBound(model) + trendlineBound(model) + boxWhiskerBound(model) + errorBarBound(model, model.groups.some(g => g.series.some(s => s.trendlines)) ? 4096 : slots) + axesBound + model.groups.reduce((n, g) => n + 1024 + g.series.length * 512, 0)
     + model.axes.length * model.categories.reduce((n, s) => n + s.length * 2, 0) + (displayFamily(model) ? model.axes.length * displayLabelBytes(slots) : 0)
   if (!workspace.reserve(bound, tag)) throw new ChartRefusal()
+  // Box & whisker statistics (B4): charged through the workspace before each allocation; scratch per series is
+  // released as soon as the series is summarised, retained lists join the prepared record's charge.
+  const scratchTag = `${tag}:box-scratch`
   try {
+    let boxWhisker: PreparedBoxWhiskerGroup[] | undefined
+    if (model.groups.some(g => g.family === 'boxWhisker')) {
+      const prepared = prepareBoxWhisker(model, {
+        retain: bytes => { if (!workspace.reserve(bytes, tag)) throw new ChartRefusal(); bound += bytes },
+        scratch: bytes => { if (!workspace.reserve(bytes, scratchTag)) throw new ChartRefusal() },
+        releaseScratch: () => workspace.release(scratchTag),
+      }, boxDiagnostics)
+      // More distinct categories than the display limit refuse the chart: a prefix would misstate the statistics.
+      if (prepared === BOX_WHISKER_TOO_MANY_CATEGORIES) { const { preparedAxes: _previous, ...rest } = model; return { ...rest, unsupported: CHART_TOO_MANY_POINTS, refused: true } }
+      boxWhisker = prepared
+    }
     // Treemap/sunburst (B5): the tree is derived first, its storage admitted under this stage's tag; an analytic
     // refusal (too many nodes, an unavailable weight) refuses the chart.
     const hierarchy = deriveChartHierarchy(model, bytes => { if (!workspace.reserve(bytes, tag)) throw new ChartRefusal() })
@@ -90,13 +111,14 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
       const inputs = graph.groups.flatMap((g,i) => !g ? [] : g.category === a ? model.categoryValues ? [model.categoryValues] : [] : g.x === a ? model.groups[i].series.flatMap(s=>s.xValues?[s.xValues]:[]) : g.value === a ? model.groups[i].series.map(s=>s.values) : [])
       const code = axisFormat(a.axis,inputs) ?? (a.percent ? '0%' : a.role==='date' ? a.dateBase==='years'?'yyyy':a.dateBase==='months'?'mmm yyyy':'m/d/yyyy' : undefined)
       const { labelValue, plottable: _plottable, ...data } = a
-      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : Array.from({ length: Math.min(a.slots, view.slots, (displayFamily(model) ? view.slots : model.categories.length) + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
+      const bw = graph.groups.find(g => g?.category === a)?.group
+      const labels = a.role === 'value' ? a.ticks.map(t => formatter.format(labelValue(t), code, graph.epoch)) : a.role === 'date' ? a.ticks.map(t => formatter.format(t, code, graph.epoch)) : a.role === 'series' ? seriesLabels(graph, view, a) : bw?.family === 'boxWhisker' ? boxWhiskerCategoryLabels(model.categories, bw) : Array.from({ length: Math.min(a.slots, view.slots, (displayFamily(model) ? view.slots : model.categories.length) + (forecast?.lead ?? 0)) }, (_, i) => view.category(i) ?? '')
       return { ...data, labels }
     })
     // A hierarchy family places and draws its own node labels (chartex/treemap.ts, sunburst.ts).
     const dataLabels = hierarchy ? [] : prepareDataLabels(model,formatter,graph.epoch,graph.diagnostics,view)
-    graph.diagnostics.push(...trendDiagnostics, ...(hierarchy?.diagnostics ?? []))
-    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(hierarchy ? { hierarchy: hierarchy.tree } : {}), ...(forecast ? { forecast } : {}), ...(errors?.bars.length ? { errorBars: errors.bars } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
+    graph.diagnostics.push(...trendDiagnostics, ...(hierarchy?.diagnostics ?? []), ...boxDiagnostics)
+    const preparedAxes: PreparedAxes = { dataLabels, ...(trendlines.length ? { trendlines } : {}), ...(hierarchy ? { hierarchy: hierarchy.tree } : {}), ...(forecast ? { forecast } : {}), ...(errors?.bars.length ? { errorBars: errors.bars } : {}), ...(boxWhisker?.length ? { boxWhisker } : {}), axes, groups: graph.groups.map(g => g ? { ...(g.category ? { category: g.category.id } : {}), ...(g.x ? { x: g.x.id } : {}), value: g.value.id, horizontal: g.horizontal.id, vertical: g.vertical.id, between: g.between } : undefined), diagnostics: graph.diagnostics, epoch: graph.epoch }
     const bytes = preparedAxesBytes(preparedAxes)
     if (bytes > bound && !workspace.reserve(bytes - bound, tag)) throw new ChartRefusal()
     const retained = { workspace, tag: `${tag}:retained` }
@@ -104,7 +126,7 @@ export function prepareChartAxes(model: ChartModel, owner?: { workspace: ChartWo
     owners.set(preparedAxes, retained)
     collected.register(preparedAxes, retained, preparedAxes)
     return { ...model, preparedAxes }
-  } finally { workspace.release(tag) }
+  } finally { workspace.release(scratchTag); workspace.release(tag) }
 }
 /**
  * What `forecast` slots add to preparation: per slot and axis a category label record (a string table entry) and
@@ -135,5 +157,5 @@ export function hydrateAxes(model: ChartModel, view: DisplayView): AxisGraph {
 export function preparedAxesBytes(preparedAxes: PreparedAxes | undefined): number {
   if (!preparedAxes) return 0
   const axes = preparedAxes.axes, graph = preparedAxes
-  return 256 + hierarchyBytes(preparedAxes.hierarchy) + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + (preparedAxes.errorBars ?? []).reduce((n, b) => n + preparedErrorBarBytes(b), 0) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
+  return 256 + hierarchyBytes(preparedAxes.hierarchy) + labelBytes(preparedAxes.dataLabels??[]) + (preparedAxes.trendlines ?? []).reduce((n, t) => n + preparedTrendlineBytes(t), 0) + (preparedAxes.errorBars ?? []).reduce((n, b) => n + preparedErrorBarBytes(b), 0) + preparedBoxWhiskerBytes(preparedAxes.boxWhisker) + preparedAxes.groups.length * 128 + axes.reduce((n, a) => n + 1024 + (a.ticks.length + a.minorTicks.length) * 8 + a.labels.reduce((n, s) => n + stringBytes(s), 0), 0) + graph.diagnostics.reduce((n, d) => n + 64 + stringBytes(d.reason), 0)
 }
