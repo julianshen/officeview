@@ -139,6 +139,8 @@ export interface PptxSlide {
    * counted in coverage. Slides on the same layout and colour map share the artwork shape objects.
    */
   underlay?: PptxShape[]
+  /** The resolved background node (also `underlay[0]`), shown through `useBgFill` shapes. Set by the enrichment. */
+  backdrop?: PptxShape
   /** Resolved solid background from the slide, layout, or master. Absent means white. */
   background?: string
   theme?: ThemeContext

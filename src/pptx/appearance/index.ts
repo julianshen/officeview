@@ -10,7 +10,8 @@ import type { PptxDiagnostic, PptxDocument, PptxPackageHandle, PptxShape } from 
 import { HandlePackage, HANDLE_AGGREGATE_BYTES, HANDLE_PART_BYTES } from './handle-package'
 import { validateSlideSize } from './size'
 import { backgroundNode, resolveSlideBackground } from './background'
-import { masterArtwork, type ArtworkCache } from './master-art'
+import { flagUseBgFill, masterArtwork, type ArtworkCache } from './master-art'
+import { getChildren } from '../../core/xml'
 
 /** One run per document: later and concurrent calls share it, so enrichment happens once. */
 const runs = new WeakMap<PptxDocument, Promise<void>>()
@@ -64,6 +65,9 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
         const art = await masterArtwork(pkg, path, theme, artwork)
         const node = backgroundNode(background, slide.widthEmu, slide.heightEmu)
         slide.underlay = [...(node ? [node] : []), ...art.master, ...art.layout]
+        // useBgFill shapes on the slide itself also show the resolved background (the eager parse could only use a solid colour).
+        flagUseBgFill(slide.shapes, getChildren(getChildren(await pkg.xmlOrdered(path), 'cSld')[0], 'spTree')[0], path)
+        if (node) slide.backdrop = node
         slide.diagnostics ??= []
         slide.diagnostics.push(...diagnostics, ...art.diagnostics)
       } catch (error) {

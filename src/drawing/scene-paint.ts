@@ -1,7 +1,7 @@
 import { resolveColor } from '../core/color'
 import { emuToPx } from '../core/geometry'
 import { resolveGeometry } from './geometry'
-import { paintGeometry } from './paint'
+import { paintGeometry, tracePath } from './paint'
 import type { SceneNode } from './scene'
 import { paintChartPlaceholder } from './content-paint'
 
@@ -15,6 +15,9 @@ export interface ScenePaintOptions<Node> {
   /** Adapters retain their existing text painter; no parallel text layout here. */
   paintText?: (node: Node, ctx: CanvasRenderingContext2D, widthPx: number, heightPx: number) => void
   missingImage?: (node: Node) => void
+  /** The page background, in the coordinate space `root` names: `useBgFill` nodes show it through their filled geometry. */
+  backdrop?: readonly Node[]
+  root?: DOMMatrix
 }
 
 /** Paint source-ordered objects onto the existing caller surface and transform.
@@ -53,7 +56,19 @@ function paintNode<Node extends SceneTree<Node>>(shape: Node, ctx: CanvasRenderi
     }
     if (shape.drawingGeometry) {
       const geometry = resolveGeometry(shape.drawingGeometry, w, h)
-      paintGeometry(ctx, geometry, shape.drawingStyle ?? { issues: [] }, w, h)
+      const style = shape.drawingStyle ?? { issues: [] }
+      if (shape.useBgFill && options.backdrop && options.root) {
+        // The background shows through the shape as it lies on the page: clip here, paint it in page space.
+        ctx.save()
+        try {
+          ctx.beginPath()
+          for (const path of geometry.paths) if (path.fill !== 'none') tracePath(ctx, path.commands)
+          ctx.clip()
+          ctx.setTransform(options.root)
+          paintScene(options.backdrop, ctx, { images: options.images, missingImage: options.missingImage })
+        } finally { ctx.restore() }
+        paintGeometry(ctx, geometry, { ...style, fill: undefined }, w, h)
+      } else paintGeometry(ctx, geometry, style, w, h)
     } else {
       // Legacy handwritten models keep their existing simple geometry contract.
       const path = () => {

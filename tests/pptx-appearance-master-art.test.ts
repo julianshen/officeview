@@ -123,12 +123,13 @@ describe('masterArtwork', () => {
     expect(art.diagnostics).toEqual([])
   })
 
-  it('a shape filled with the slide background (useBgFill) is diagnosed, not silently painted with its own fill', async () => {
+  it('a shape filled with the slide background (useBgFill) is flagged for the painter, without a diagnostic', async () => {
     const sp = '<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="40" name="Bg Filled"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
       '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp>'
     const art = await open(await patchSpTree(await buildPptxDeck(deck()), MASTER, sp))
     expect(names(art.master)).toEqual(['Master Logo', 'Bg Filled'])
-    expect(art.diagnostics.filter(d => 'feature' in d && d.feature === 'useBgFill').map(d => d.message)).toEqual([`1 shape(s) in ${MASTER} fill with the slide background; their own fill paints instead`])
+    expect(art.master.map(s => s.useBgFill === true)).toEqual([false, true])
+    expect(art.diagnostics.filter(d => 'feature' in d && d.feature === 'useBgFill')).toEqual([])
   })
   
   it('a shared cache parses each part once per colour map', async () => {

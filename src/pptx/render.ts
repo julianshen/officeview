@@ -55,6 +55,7 @@ export function renderSlide(
     }
     const options: ScenePaintOptions<PptxShape> = {
       images, missingImage,
+      ...(slide.backdrop ? { backdrop: [slide.backdrop], root: ctx.getTransform() } : {}),
       paintContent(shape, context, w, h) {
         if (shape.content) paintDrawingContent(shape.content, context, w, h, {
           assets: contentAssets,

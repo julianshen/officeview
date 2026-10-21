@@ -28,7 +28,7 @@ const DECKS = [
   'lo-tdf146223.pptx', // picture background, master picture artwork
   'lo-tdf123684.pptx', // bgRef 1003 theme picture background, six master artwork nodes
   'lo-ooxtheme.pptx', // master artwork group (its layout hides it with showMasterSp="0")
-  'lo-tdf93868.pptx', // inherited master gradient background, master artwork
+  'lo-tdf93868.pptx', // inherited master gradient background, shown through a useBgFill master shape
 ]
 const present = DECKS.filter(file => existsSync(join(CORPUS_DIR, file)))
 const strict = process.env.OFFICEVIEW_STRICT_GOLDEN === '1'

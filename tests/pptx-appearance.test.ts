@@ -230,6 +230,14 @@ async function paintFirst(doc: PptxDocument, options: Parameters<typeof getPaint
     pages.dispose();
     return { pages, ctx, pixel: (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data) };
 }
+const MASTER_PART = 'ppt/slideMasters/slideMaster1.xml';
+/** Append raw XML to a part's spTree (the builder has no useBgFill or scheme-colour shapes). */
+async function patchPart(bytes: Uint8Array, part: string, xml: string): Promise<Uint8Array> {
+    const zip = await JSZip.loadAsync(bytes);
+    zip.file(part, (await zip.file(part)!.async('text')).replace('</p:spTree>', `${xml}</p:spTree>`));
+    return zip.generateAsync({ type: 'uint8array' });
+}
+const useBgFillShape = (id: number, x: number, y: number, w: number, h: number) => `<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="${id}" name="Bg Window ${id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${px(x)}" y="${px(y)}"/><a:ext cx="${px(w)}" cy="${px(h)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp>`;
 const near = (actual: number[], expected: number[], tolerance = 24) => actual.slice(0, 3).every((v, i) => Math.abs(v - expected[i]) <= tolerance);
 const allDiagnostics = (doc: PptxDocument) => [...(doc.diagnostics ?? []), ...doc.slides.flatMap(s => s.diagnostics ?? [])];
 
@@ -348,7 +356,7 @@ describe('slide appearance enrichment', () => {
         expect(near(pixel(495, 395), [255, 255, 0])).toBe(true);
         expect(allDiagnostics(doc).filter(d => d.kind === 'appearance-unavailable')).toHaveLength(1);
     });
-    it('the effective slide colour map reaches the background and artwork', async () => {
+    it('the effective slide colour map reaches a bgRef background (phClr)', async () => {
         // bgRef with phClr from a scheme colour: bg1 maps to dk1 (black) through the slide clrMapOvr
         const spec = builderDeck({
             masters: [{ bg: { bgRef: { idx: 1001, color: 'bg1' } }, layouts: [{}] }],
@@ -360,6 +368,71 @@ describe('slide appearance enrichment', () => {
         expect(bg?.drawingStyle?.fill?.kind).toBe('solid');
         const color = (bg!.drawingStyle!.fill as { color: { r: number; g: number; b: number } }).color;
         expect(color.r + color.g + color.b).toBeLessThan(120);
+    });
+    it('the effective slide colour map reaches master artwork colours (two slides, two maps)', async () => {
+        // a master shape filled with schemeClr tx1: dk1 (black) under the master map, lt1 (white) under the override
+        const box = `<p:sp><p:nvSpPr><p:cNvPr id="41" name="Scheme Box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${px(300)}" y="${px(300)}"/><a:ext cx="${px(100)}" cy="${px(100)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></p:spPr></p:sp>`;
+        const override = '<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>';
+        const bytes = await patchPart(await buildPptxDeck(builderDeck({
+            masters: [{ bg: { solid: '808080' }, layouts: [{}] }],
+            slides: [{ shapes: [] }, { shapes: [], extraXml: { afterCSld: override } }],
+        })), MASTER_PART, box);
+        const doc = await parsePptx(await OfficePackage.load(bytes));
+        const pages = await getPaintables(doc);
+        const pixelOf = (index: number) => {
+            const ctx = createCanvas(960, 720).getContext('2d');
+            pages[index].paint(ctx as unknown as CanvasRenderingContext2D);
+            return Array.from(ctx.getImageData(350, 350, 1, 1).data);
+        };
+        expect(near(pixelOf(0), [0, 0, 0], 8)).toBe(true);
+        expect(near(pixelOf(1), [255, 255, 255], 8)).toBe(true);
+        pages.dispose();
+    });
+    it('a useBgFill shape in a shared master shows each slide\'s own background', async () => {
+        const bytes = await patchPart(await buildPptxDeck(builderDeck({
+            masters: [{ shapes: [], layouts: [{}] }],
+            slides: [{ bg: { solid: 'FF0000' }, shapes: [] }, { bg: { solid: '0000FF' }, shapes: [] }],
+        })), MASTER_PART, `<p:sp><p:nvSpPr><p:cNvPr id="40" name="Under"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="6858000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></p:spPr></p:sp>` + useBgFillShape(42, 50, 50, 300, 300));
+        const doc = await parsePptx(await OfficePackage.load(bytes));
+        const pages = await getPaintables(doc);
+        const at = (index: number, x: number, y: number) => {
+            const ctx = createCanvas(960, 720).getContext('2d');
+            pages[index].paint(ctx as unknown as CanvasRenderingContext2D);
+            return Array.from(ctx.getImageData(x, y, 1, 1).data);
+        };
+        // inside the useBgFill shape: the slide's background, through the master's green rectangle
+        expect(near(at(0, 100, 100), [255, 0, 0], 8)).toBe(true);
+        expect(near(at(1, 100, 100), [0, 0, 255], 8)).toBe(true);
+        // outside it: the master's green rectangle
+        expect(near(at(0, 600, 600), [0, 255, 0], 8)).toBe(true);
+        pages.dispose();
+    });
+    it('a useBgFill shape takes a gradient background in slide coordinates', async () => {
+        // a full-slide white master rectangle (lo-tdf93868's shape) hides the gradient except through the slide's useBgFill shape
+        const bytes = await patchPart(await patchPart(await buildPptxDeck(builderDeck({
+            masters: [{ bg: { gradient: { angle: 0, stops: [[0, 'FF0000'], [100000, '0000FF']] } }, shapes: [{ id: 10, name: 'White', fill: 'FFFFFF', off: ['0', '0'], ext: ['9144000', '6858000'] }], layouts: [{}] }],
+            slides: [{ shapes: [] }],
+        })), MASTER_PART, ''), 'ppt/slides/slide1.xml', useBgFillShape(43, 760, 100, 160, 200));
+        const { pixel } = await paintFirst(await parsePptx(await OfficePackage.load(bytes)));
+        expect(pixel(100, 360)).toEqual([255, 255, 255, 255]);
+        // slide-coordinate gradient: at x=770 the slide gradient is ~80% of the way to blue, not the shape's red start
+        const left = pixel(770, 200), right = pixel(910, 200);
+        expect(near(left, [Math.round(255 * (1 - 770 / 960)), 0, Math.round(255 * 770 / 960)], 24), `left ${left}`).toBe(true);
+        expect(near(right, [Math.round(255 * (1 - 910 / 960)), 0, Math.round(255 * 910 / 960)], 24), `right ${right}`).toBe(true);
+    });
+    it('a useBgFill shape takes a picture background in slide coordinates', async () => {
+        const c = createCanvas(20, 10), x = c.getContext('2d');
+        x.fillStyle = '#FF0000'; x.fillRect(0, 0, 10, 10);
+        x.fillStyle = '#00FF00'; x.fillRect(10, 0, 10, 10);
+        const halves = new Uint8Array(c.toBuffer('image/png'));
+        const bytes = await patchPart(await buildPptxDeck(builderDeck({
+            masters: [{ bg: { picture: { data: halves } }, shapes: [{ id: 10, name: 'White', fill: 'FFFFFF', off: ['0', '0'], ext: ['9144000', '6858000'] }], layouts: [{}] }],
+            slides: [{ shapes: [] }],
+        })), 'ppt/slides/slide1.xml', useBgFillShape(44, 100, 100, 200, 100) + useBgFillShape(45, 660, 100, 200, 100));
+        const { pixel } = await paintFirst(await parsePptx(await OfficePackage.load(bytes)));
+        expect(near(pixel(200, 150), [255, 0, 0], 8)).toBe(true);
+        expect(near(pixel(760, 150), [0, 255, 0], 8)).toBe(true);
+        expect(pixel(480, 400)).toEqual([255, 255, 255, 255]);
     });
     it('a master shared by several slides is parsed once per run (one node-budget charge)', async () => {
         const slide = { shapes: [{ id: 3, name: 'Box', fill: 'FFFF00', off: [px(400), px(300)] as [string, string], ext: [px(100), px(100)] as [string, string] }] };

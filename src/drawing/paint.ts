@@ -245,6 +245,10 @@ function validPath(commands: ResolvedCommand[]): boolean {
 }
 function drawPath(ctx: CanvasRenderingContext2D, commands: ResolvedCommand[]): void {
   ctx.beginPath()
+  tracePath(ctx, commands)
+}
+/** Append a resolved path to the current canvas path (clip regions are built from several). */
+export function tracePath(ctx: CanvasRenderingContext2D, commands: ResolvedCommand[]): void {
   for (const command of commands) {
     switch (command[0]) {
       case 'moveTo': ctx.moveTo(command[1], command[2]); break
