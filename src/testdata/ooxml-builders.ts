@@ -659,6 +659,9 @@ function pptxPart(
 ): PptxPartRels {
   const rels: string[] = []
   const byRef = new Map<Uint8Array, string>()
+  if (new Set(explicitIds).size !== explicitIds.length) {
+    throw new Error('buildPptxDeck: two shapes in one part claim the same explicit cNvPr id')
+  }
   const used = new Set<number>(explicitIds)
   let counter = 1
   function nextId(): number {

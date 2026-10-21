@@ -321,6 +321,36 @@ describe('deck XML hygiene', () => {
     }
   })
 
+  // Unconditional, namespace-aware counterpart of the xmllint check: runs wherever vitest runs.
+  it('every part parses as application/xml and resolves every namespace prefix (DOMParser)', async () => {
+    const buf = await buildPptxDeck(lintDeck)
+    const zip = await JSZip.loadAsync(buf)
+    const parts = Object.keys(zip.files).filter((p) => p.endsWith('.xml') || p.endsWith('.rels'))
+    expect(parts.length).toBeGreaterThan(0)
+    for (const path of parts) {
+      const content = await zip.files[path].async('text')
+      const dom = new DOMParser().parseFromString(content, 'application/xml')
+      // an XML parser reports failure by inserting a parsererror element
+      expect(dom.getElementsByTagName('parsererror').length, `parsererror in ${path}`).toBe(0)
+      const nodes: Element[] = [dom.documentElement]
+      while (nodes.length > 0) {
+        const el = nodes.pop()!
+        for (const child of Array.from(el.children)) nodes.push(child)
+        const prefixes: string[] = []
+        const tagColon = el.tagName.indexOf(':')
+        if (tagColon > 0) prefixes.push(el.tagName.slice(0, tagColon))
+        for (const attr of Array.from(el.attributes)) {
+          if (attr.name.startsWith('xmlns')) continue
+          const colon = attr.name.indexOf(':')
+          if (colon > 0) prefixes.push(attr.name.slice(0, colon))
+        }
+        for (const prefix of prefixes) {
+          expect(el.lookupNamespaceURI(prefix), `${path}: undeclared namespace prefix ${prefix} on <${el.tagName}>`).toBeTruthy()
+        }
+      }
+    }
+  })
+
   it('cNvPr ids are unique per part, defaulting to 2, 3, … skipping explicitly claimed ids', async () => {
     const entries = await textEntries(await buildPptxDeck(lintDeck))
     for (const [path, xml] of Object.entries(entries)) {
@@ -350,5 +380,12 @@ describe('deck XML hygiene', () => {
     const slide2 = entries['ppt/slides/slide2.xml']
     expect(slide2).toContain('</p:bg><p:custDataLst/><p:spTree>')
     expect(slide2).toContain('</p:cSld><p:custDataLst/>')
+  })
+
+  it('rejects two shapes in one part claiming the same explicit cNvPr id', async () => {
+    await expect(buildPptxDeck({
+      masters: [{ layouts: [{ shapes: [] }] }],
+      slides: [{ layout: [0, 0], shapes: [{ id: 5, off: ['0', '0'], ext: ['1', '1'] }, { id: 5, off: ['0', '0'], ext: ['1', '1'] }] }],
+    })).rejects.toThrow('two shapes in one part claim the same explicit cNvPr id')
   })
 })
