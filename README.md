@@ -664,6 +664,9 @@ Office 2016+ ChartEx families:
 | `funnel` | `funnel` |
 | `treemap` | `treemap` |
 | `sunburst` | `sunburst` |
+| `histogram` | `clusteredColumn` with binning |
+| `pareto` | `clusteredColumn` with a `paretoLine` series |
+| `boxWhisker` | `boxWhisker` |
 
 Chart elements: value, category, date and logarithmic axes (crossings, display units, reversed order, secondary
 axes); number formats; data labels; markers, lines, fills and gradients; smoothed lines; trendlines (linear,
@@ -675,8 +678,6 @@ chart style and colour parts; and user shapes drawn over the chart.
 
 - `surface3DChart` (3-D surface): a placeholder card that names the chart and says why it is not drawn.
 - Region map: always its fallback picture, or a card when the file has none.
-- Histogram, Pareto and box & whisker (ChartEx): their fallback picture or a card for now; native drawing is in
-  review and lands in a later change.
 - A chart inside `mc:AlternateContent` that the engine cannot draw keeps the file's own fallback picture. A card is
   shown only when no picture is available: a chart never becomes silent blank space.
 
@@ -685,7 +686,7 @@ chart style and colour parts; and user shapes drawn over the chart.
 | Item | Limit | When exceeded |
 | --- | --- | --- |
 | Series / points drawn | 64 per chart / 4,096 per series | The rest is not drawn; the chart is marked truncated (its accessible description says so) |
-| Analytic inputs (trendlines, error-bar statistics, treemap and sunburst) | 65,536 points per series | The trendline or error bar is dropped, or the chart refused; never computed from a prefix |
+| Analytic inputs (trendlines, error-bar statistics, histogram, Pareto, box & whisker, treemap and sunburst) | 65,536 points per series | The trendline or error bar is dropped, or the chart refused; never computed from a prefix |
 | Labels | 255 characters each; 4 MiB per chart | Cut or dropped, and diagnosed |
 | Chart part | 8 MiB desktop / 4 MiB mobile | The fallback picture, else a card |
 | Embedded workbook (Word, PowerPoint) | 8 MiB desktop / 4 MiB mobile inflated | The chart is refused: card |

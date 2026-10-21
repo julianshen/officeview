@@ -13,6 +13,7 @@ import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
 import type { XlsxChartModel } from './chartModel'
+import { loadChartModule } from './chartLoader'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
@@ -371,8 +372,12 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
       continue
     }
     if (name === 'chart' || name === 'relIds' || name === 'contentPart' || name === 'wsp') {
-      if (await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))) selected = true
+      const probe = await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))
+      if (probe) selected = true
       else failed = true
+      // The probe only decides availability; the selected branch is parsed again for the drawing. Its chart model's
+      // workspace charge is refunded now, not left to the finalizer (C1: one model per chart stays charged).
+      if (probe?.kind === 'xlsxChart' && !probe.chart.unsupported) (await loadChartModule()).releaseChartModel(probe.chart)
       continue
     }
     if (name === 'graphicFrame' || name === 'graphic' || name === 'graphicData') {

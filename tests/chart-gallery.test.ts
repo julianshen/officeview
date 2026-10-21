@@ -17,7 +17,7 @@ import type { ChartModel } from '../src/charts/model'
 
 describe('chart gallery documents (spec 8)', () => {
   it('covers every painted ChartEx family', () => {
-    expect(new Set(chartExGallery(false).map(c => c.name.toLowerCase()))).toEqual(CHARTEX_PAINTED)
+    expect(new Set(chartExGallery(false).map(c => c.family))).toEqual(CHARTEX_PAINTED)
   })
   it.each(['docx', 'pptx', 'xlsx'] as ChartDocFormat[])('%s: every gallery chart is native (no card, no fallback)', async format => {
     const pkg = await OfficePackage.load(await chartGallery(format)), context = documentChartContext('desktop')

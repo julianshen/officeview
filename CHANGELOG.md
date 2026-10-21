@@ -59,12 +59,13 @@ print. Targets 0.5.0 (the version in package.json).
   workbook. New families: pie of pie and bar of pie, bubble, radar (marker,
   line, filled), 2-D contour and wireframe contour, stock (high-low-close,
   open-high-low-close, with volume), and the Office 2016+ waterfall, funnel,
-  treemap and sunburst. New elements: date and logarithmic axes, display units,
+  histogram, Pareto, box & whisker, treemap and sunburst. New elements: date and logarithmic axes, display units,
   secondary axes, number formats, data labels, markers and gradients, smoothed
   lines, trendlines, error bars, rich titles, legend options, multi-level
   category labels, chart style and colour parts, and user shapes. 3-D surface
-  charts are a placeholder card; histogram, Pareto, box & whisker and region
-  map charts keep their fallback picture. The README's new "Charts" section
+  charts are a placeholder card; region map charts keep their fallback
+  picture. Each chart has an accessible description, and the page viewer lists
+  every page's charts by name. The README's new "Charts" section
   lists what is drawn and what is not.
 - Chart memory and work are bounded per document (64 MiB desktop, 32 MiB
   mobile; 4,096 points and 64 series drawn; 262,144 path segments per chart).
