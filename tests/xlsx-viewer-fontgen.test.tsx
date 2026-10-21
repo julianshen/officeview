@@ -16,6 +16,7 @@ import { LayoutCache } from '../src/xlsx/view/textLayout'
 import type { CellPlacement, ViewportPlan } from '../src/xlsx/view/viewport'
 import type { SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
 import { xlsxBytes } from './helpers/xlsx-package'
+import { FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 import { prepareSheetAssets } from '../src/components/xlsx/sheetAssets'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
@@ -140,11 +141,14 @@ it('mounted paged viewport adopts worker overflow proofs after the first font le
   const seams = { assetLoader, onFrame: f.onFrame } as object
   const ui = render(<OfficeFile data={overflowData()} interactiveSheets viewerWorker={() => h.port} {...seams} />)
   try {
-    await waitFor(() => expect(assetLoader).toHaveBeenCalled())
-    await waitFor(() => expect(f.last()?.identity.fontGen).toBe(0))
+    // The mount's first frame waits on the lazy viewer chunk, the in-process worker handshake and the first paint
+    // (tests/helpers/viewer-timing.ts): a cold start, not behaviour, so it takes the first-paint wait. This was the
+    // assertion that failed under load, also on the base branch (C1 flake hardening).
+    await waitFor(() => expect(assetLoader).toHaveBeenCalled(), FIRST_PAINT_WAIT)
+    await waitFor(() => expect(f.last()?.identity.fontGen).toBe(0), FIRST_PAINT_WAIT)
     expect(audit.requests).toHaveLength(0)
     await act(async () => { ready.resolve(); await ready.promise })
-    await waitFor(() => expect(f.last()?.identity.fontGen).toBe(1))
+    await waitFor(() => expect(f.last()?.identity.fontGen).toBe(1), FIRST_PAINT_WAIT)
     h.hold(c => c.kind === 'read' && c.query.op === 'rows')
     const before = planner.mock.calls.length
     go(ui, 'A1000')
@@ -184,7 +188,7 @@ it('mounted paged viewport adopts worker overflow proofs after the first font le
   } finally {
     h.release(); ui.unmount()
   }
-}, 12000)
+}, 30_000)
 
 it('a real font lease change rejects held old-font plans before adopting new-font replies', async () => {
   const h = workerHarness(), f = frames(), audit = observe(h), next = deferred()
@@ -195,7 +199,7 @@ it('a real font lease change rejects held old-font plans before adopting new-fon
   const data = coldData(), factory = () => h.port, seams = { assetLoader, onFrame: f.onFrame } as object
   const ui = render(<OfficeFile data={data} interactiveSheets viewerWorker={factory} {...seams} />)
   try {
-    await waitFor(() => expect(f.last()?.identity.fontGen).toBe(1))
+    await waitFor(() => expect(f.last()?.identity.fontGen).toBe(1), FIRST_PAINT_WAIT)
     h.hold(c => c.kind === 'viewport' || c.kind === 'read' && c.query.op === 'rows')
     go(ui, 'A1000')
     await waitFor(() => expect(h.held.some(x => x.command.kind === 'viewport' && x.out.kind === 'complete')).toBe(true))
@@ -224,4 +228,4 @@ it('a real font lease change rejects held old-font plans before adopting new-fon
     act(() => h.release())
     await waitFor(() => expect(f.last()?.pendingTiles).toBe(0))
   } finally { h.release(); ui.unmount() }
-}, 12000)
+}, 30_000)
