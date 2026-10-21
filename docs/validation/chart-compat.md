@@ -27,6 +27,12 @@ full 8,251/0, eager 38,639, 13 golden units, Chromium 20/20) are superseded by t
 | Goldens | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts` | 14/14 units identical at threshold 0 (3 pre-existing goldens unchanged; 11 gallery units) |
 | Browser (Chromium only: WebKit cannot launch on the build host, ruling at A3b) | `IV_HARNESS_PORT=4300 timeout 900 bunx playwright test --config playwright.viewer.config.ts --project chromium` (the whole browser suite) | 129 passed, 1 skipped, 0 failed (4.1 min; vite on 4300 stopped afterwards) |
 
+**Final composition (`chart/c1` after merging `feature/chart-compat` `10cab04`, which includes chart/final-fix):**
+tsc and typecheck:scripts 0 errors; full vitest 437 files, 8,360 passed, 10 skipped, 1 todo, 0 failed; eager 38,582 B
+(B0 − 49 B), eager graph ok (150 modules); strict goldens 14/14 identical; Chromium browser suite 129 passed, 1 skipped,
+0 failed. The XLSX Choice-probe release is the single release in `branchAvailable` (final-fix and C1 had fixed the same
+leak; the merge keeps one).
+
 ## Eager budget
 
 Measured with `bun run build && bun scripts/eager-budget.ts`: the gzip of
