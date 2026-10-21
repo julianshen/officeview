@@ -135,13 +135,18 @@ export const ofPieOtherIndex = (pointCount: number): number => Math.max(Math.min
  * `sourceOf(slot)` maps it to (for dPt, pointColors and cust matching); the
  * Other slice carries -1 for both.
  */
-export function ofPieSlices(group: { firstSliceAngle?: number }, values: readonly number[], split: OfPieSplit, layout: OfPieLayout, sourceOf: (i: number) => number = i => i): OfPieSlices {
-  const base = ((group.firstSliceAngle ?? 0) - 90) * Math.PI / 180
+export function ofPieSlices(_group: { firstSliceAngle?: number }, values: readonly number[], split: OfPieSplit, layout: OfPieLayout, sourceOf: (i: number) => number = i => i): OfPieSlices {
+  // Office orients an ofPie itself and ignores firstSliceAng (C1 phase 1.5, visual review): the primary pie is turned
+  // so the composite Other slice is centred on 3 o'clock (angle 0), facing the secondary plot on the right, and the
+  // series lines leave its top and bottom edges without crossing the pie. The primary points run clockwise before it.
+  // The secondary pie starts at 12 o'clock [U: Office's secondary orientation is unconfirmed].
   const primary: OfPieSlice[] = []
   const secondary: OfPieSlice[] = []
   const total = split.primaryTotal + split.secondaryTotal
-  let start = base, secondaryStart = base
-  if (layout.bar) secondaryStart = 0 // the bar's fractions have no base angle: the first secondary point sits at the top
+  const otherSweep = total > 0 ? split.secondaryTotal / total * Math.PI * 2 : 0
+  let primarySweep = 0
+  for (let slot = 0; slot < values.length; slot++) if (!split.secondary[slot] && total > 0) primarySweep += values[slot] / total * Math.PI * 2
+  let start = -otherSweep / 2 - primarySweep, secondaryStart = layout.bar ? 0 : -Math.PI / 2 // the bar's fractions have no base angle: the first secondary point sits at the top
   for (let slot = 0; slot < values.length; slot++) {
     const source = sourceOf(slot)
     if (split.secondary[slot]) {
@@ -156,7 +161,7 @@ export function ofPieSlices(group: { firstSliceAngle?: number }, values: readonl
       start += sweep
     }
   }
-  const other = { slot: -1, source: -1, start, sweep: total > 0 ? split.secondaryTotal / total * Math.PI * 2 : 0 }
+  const other = { slot: -1, source: -1, start, sweep: otherSweep }
   return { primary, other, secondary }
 }
 
