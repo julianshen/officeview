@@ -426,6 +426,11 @@ function fillModel(model: ChartModel, ownerSheet: string, lookup: ChartCellLooku
   const diagnostics = model.diagnostics ? [...model.diagnostics] : []
   for (const d of levelDiagnostics) { charge(stringBytes(d.code) + stringBytes(d.reason)); diagnostics.push(d) }
   const note = (code: string, reason: string) => { charge(stringBytes(code) + stringBytes(reason)); diagnostics.push({ code, reason }) }
+  // A reference into another workbook (`[1]Sheet1!…`, directly or through a defined name) is never opened: its
+  // cells read as blank (spec 6.4 for DOCX/PPTX; the same rule for XLSX), diagnosed once with the role count (C1).
+  let external = model.categoryPending?.sheet?.startsWith('[') ? 1 : 0
+  for (const group of model.groups) for (const s of group.series) for (const range of Object.values(s.pending ?? {})) if ((range as ChartRange | undefined)?.sheet?.startsWith('[')) external++
+  if (external) note('chart-data-external-reference', `${external} chart data ${external === 1 ? 'reference refers' : 'references refer'} to another workbook, which the viewer does not open: shown blank`)
   if (labelsCut) { truncated = true; note('chart-label-truncated', `${labelsCut} ${labelsCut === 1 ? 'label was' : 'labels were'} cut to ${CHART_LABEL_LIMIT} characters`) }
   if (labelsDropped) { truncated = true; note('chart-label-budget', `${labelsDropped} ${labelsDropped === 1 ? 'label was' : 'labels were'} dropped past the chart's 4 MiB label budget`) }
   if (unrepresentable) {

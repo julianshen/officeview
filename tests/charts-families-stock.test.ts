@@ -14,7 +14,10 @@ import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
 import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
-import { parseXmlOrdered } from '../src/core/xml'
+import { getChildren, parseXmlOrdered } from '../src/core/xml'
+import { layoutChart } from '../src/charts/layout'
+import { readStockOptions } from '../src/charts/families/stock'
+import { CHART_STYLE_BYTES, ChartRefusal } from '../src/charts/own'
 import { parseXlsxChart } from '../src/charts/parse'
 import { paintXlsxChart } from '../src/charts/paint'
 import { prepareChartAxes } from '../src/charts/prepare'
@@ -669,5 +672,76 @@ describe('stock (spec 4.1, Task A5b)', () => {
     }
     paintXlsxChart(m1, ctx as any, 400, 300)
     expect(card).toBe(true)
+  })
+})
+
+describe('C1: exact-coordinate stock role oracle and the up/down bar charge (A5b parked items)', () => {
+  const W = 480, H = 320
+  const measureCtx = createCanvas(10, 10).getContext('2d')
+  const plotOf = (model: ChartModel) => layoutChart(model, W, H, 1, 0, { width: (t, f) => { measureCtx.font = f; return measureCtx.measureText(t).width }, lineHeight: () => model.fontSizePt * 96 / 72 }, undefined, JSON.stringify(model.fontFamily)).plot
+  /** Paints on a recording canvas: every stroked segment (with its stroke colour) and every filled rectangle. */
+  function record(model: ChartModel) {
+    const ctx = createCanvas(W, H).getContext('2d')
+    const segments: Array<{ x1: number; y1: number; x2: number; y2: number; color: string }> = [], rects: Array<{ x: number; y: number; w: number; h: number; color: string }> = []
+    let pen: [number, number] = [0, 0]
+    const moveTo = ctx.moveTo.bind(ctx), lineTo = ctx.lineTo.bind(ctx), fillRect = ctx.fillRect.bind(ctx)
+    ctx.moveTo = (x, y) => { pen = [x, y]; moveTo(x, y) }
+    ctx.lineTo = (x, y) => { segments.push({ x1: pen[0], y1: pen[1], x2: x, y2: y, color: String(ctx.strokeStyle).toLowerCase() }); pen = [x, y]; lineTo(x, y) }
+    ctx.fillRect = (x, y, w, h) => { rects.push({ x, y, w, h, color: String(ctx.fillStyle).toLowerCase() }); fillRect(x, y, w, h) }
+    paintXlsxChart(model, ctx as any, W, H)
+    return { segments, rects }
+  }
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6
+  // Three categories, explicit price axis 0..100 (and volume axis 0..3000 in the volume charts), so every coordinate
+  // is hand-computable: band = plot.w / 3, centre x = plot.x + (i + 0.5) band, price y(v) = plot.y + plot.h (1 - v / 100);
+  // gapWidth 150: a bar is band / 2.5 wide, centred in its band.
+  const O = [20, 70, 40], Hi = [60, 80, 90], L = [10, 30, 35], C = [50, 40, 80], V = [1500, 3000, 600]
+  const stockSeries = (withOpen: boolean) => (withOpen ? [O, Hi, L, C] : [Hi, L, C]).map((v, i) => `<c:ser><c:idx val="${i + 1}"/><c:order val="${i + 1}"/><c:val>${lit(v)}</c:val></c:ser>`).join('')
+  const volume = `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:spPr><a:solidFill><a:srgbClr val="00B050"/></a:solidFill></c:spPr><c:val>${lit(V)}</c:val></c:ser><c:gapWidth val="150"/><c:axId val="1"/><c:axId val="2"/></c:barChart>`
+  const xml = (withOpen: boolean, withVolume: boolean) => space(withVolume
+    ? `${volume}<c:stockChart>${stockSeries(withOpen)}<c:hiLowLines/>${withOpen ? '<c:upDownBars><c:gapWidth val="150"/><c:upBars/><c:downBars/></c:upDownBars>' : ''}<c:axId val="3"/><c:axId val="4"/></c:stockChart>${CAT_AX('1', '2')}${VAL_AX('2', '1', 'l', '', 0, 3000)}${CAT_AX('3', '4', true)}${VAL_AX('4', '3', 'r', '', 0, 100).replace('<c:crossAx val="3"/>', '<c:crossAx val="3"/><c:crosses val="max"/>')}`
+    : `<c:stockChart>${stockSeries(withOpen)}<c:hiLowLines/>${withOpen ? '<c:upDownBars><c:gapWidth val="150"/><c:upBars/><c:downBars/></c:upDownBars>' : ''}<c:axId val="1"/><c:axId val="2"/></c:stockChart>${CAT_AX('1', '2')}${VAL_AX('2', '1', 'l', '', 0, 100)}`)
+
+  it.each([['HLC', false, false], ['OHLC', true, false], ['volume-HLC', false, true], ['volume-OHLC', true, true]] as const)('%s: painted coordinates equal the hand-computed role geometry', (_name, withOpen, withVolume) => {
+    const model = prepareChartAxes(parse(xml(withOpen, withVolume)))
+    expect(model.unsupported).toBeUndefined()
+    const plot = plotOf(model), band = plot.w / 3, width = band / 2.5
+    const x = (i: number) => plot.x + (i + 0.5) * band
+    const y = (v: number) => plot.y + plot.h * (1 - v / 100)
+    const { segments, rects } = record(model)
+    for (let i = 0; i < 3; i++) {
+      // High-low line: Low to High at the category centre.
+      expect(segments.some(s => near(s.x1, x(i)) && near(s.x2, x(i)) && near(s.y1, y(L[i])) && near(s.y2, y(Hi[i]))), `hi-low ${i}`).toBe(true)
+      if (withOpen) {
+        // Up/down bar between Open and Close: white when Close >= Open, black otherwise.
+        const top = Math.min(y(O[i]), y(C[i])), bottom = Math.max(y(O[i]), y(C[i]))
+        const up = C[i] >= O[i]
+        expect(rects.some(r => near(r.x, x(i) - width / 2) && near(r.w, width) && near(r.y, top) && near(r.h, bottom - top) && r.color === (up ? '#ffffff' : '#000000')), `body ${i}`).toBe(true)
+      } else {
+        // HLC: the close tick runs right from the centre, half a bar wide, at Close.
+        expect(segments.some(s => near(s.x1, x(i)) && near(s.y1, y(C[i])) && near(s.x2, x(i) + width / 2) && near(s.y2, y(C[i]))), `close ${i}`).toBe(true)
+      }
+      if (withVolume) {
+        // Volume on its own axis (0..3000), one clustered series: the bar fills its band's middle 1/2.5.
+        const top = plot.y + plot.h * (1 - V[i] / 3000)
+        expect(rects.some(r => r.color === '#00b050' && near(r.x, x(i) - width / 2) && near(r.w, width) && near(r.y, top) && near(r.y + r.h, plot.y + plot.h)), `volume ${i}`).toBe(true)
+      }
+    }
+    // No up/down bodies without an Open series.
+    if (!withOpen) expect(rects.filter(r => r.color === '#000000' || r.color === '#ffffff').filter(r => r.w === width)).toHaveLength(0)
+  })
+
+  it('the up/down bar record is charged by name before either bar is built', () => {
+    const node = parseXmlOrdered(`<c:stockChart ${CONFORMANCE_NS}><c:upDownBars><c:gapWidth val="150"/><c:upBars><c:spPr><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></c:spPr></c:upBars><c:downBars/></c:upDownBars></c:stockChart>`)
+    const root = getChildren(node, 'stockChart')[0] ?? node
+    const charges: number[] = []
+    const options = readStockOptions(root, undefined, bytes => { charges.push(bytes) })
+    expect(options.upDownBars?.upBars?.fill).toBeDefined()
+    expect(charges[0]).toBe(CHART_STYLE_BYTES.upDownBars)
+    expect(charges.slice(1)).toContain(CHART_STYLE_BYTES.fill)
+    // A refusal at the record's charge builds nothing: no bar fill is ever priced.
+    const refused: number[] = []
+    expect(() => readStockOptions(root, undefined, bytes => { refused.push(bytes); throw new ChartRefusal() })).toThrow(ChartRefusal)
+    expect(refused).toEqual([CHART_STYLE_BYTES.upDownBars])
   })
 })

@@ -350,6 +350,18 @@ export interface BoxWhiskerGroupLike {
 }
 
 /**
+ * The colour of a box's median line and of a mean marker centred over the box (a mean outside the quartiles is on the
+ * plot paper and keeps the series colour). Office shows both marks, so they must stay visible: when the box is filled
+ * with the series colour (no `spPr` fill: the default, or a solid fill of that
+ * colour) they are drawn in white, the plot paper; on any other box fill (another solid colour, a gradient, a
+ * pattern, or no fill) they keep the series colour. The exact colour Office uses is **unverified** (C1 phase 2b).
+ */
+export function boxMarkColor(fill: ChartFillStyle | undefined, color: string): string {
+  const fillColor = fill === undefined ? color : fill.kind === 'solid' ? fill.color : undefined
+  return fillColor !== undefined && fillColor.toLowerCase() === color.toLowerCase() ? 'FFFFFF' : color
+}
+
+/**
  * Paints a Box & Whisker group from its stage-1 records. `seriesList` is the model's own series list (indexed by
  * `PreparedBox.seriesIndex`). Without a prepared record nothing is drawn: statistics are never computed at paint.
  */
@@ -413,7 +425,8 @@ export function paintBoxWhisker(
       kit.strokeBorder(ctx, src?.lineStyle, color, boxRect, boxRect)
     }
 
-    // 3. Median line
+    // 3. Median line (drawn over the box: in the contrasting mark colour when the box is filled with the series colour)
+    const mark = boxMarkColor(src?.fill, color)
     const yMedian = kit.at(stats.median)
     if (kit.admitPath(2)) {
       ctx.save()
@@ -421,6 +434,7 @@ export function paintBoxWhisker(
         ctx.strokeStyle = `#${color}`
         ctx.lineWidth = 1
         applyLineStyle(ctx, src?.lineStyle, kit.plot)
+        if (mark !== color) ctx.strokeStyle = `#${mark}`
         ctx.beginPath()
         ctx.moveTo(xStart, yMedian)
         ctx.lineTo(xStart + W, yMedian)
@@ -471,7 +485,9 @@ export function paintBoxWhisker(
     if (box.meanMarker && kit.admitPath(4)) {
       ctx.save()
       try {
-        ctx.strokeStyle = `#${color}`
+        // Contrast against what lies under the mark: the box's mark colour only when the cross is centred over the
+        // box; a mean outside the quartiles sits on the plot paper and keeps the series colour (C1 review).
+        ctx.strokeStyle = `#${yMean >= yTop && yMean <= yBot ? mark : color}`
         ctx.lineWidth = 1.5
         const r = 4
         ctx.beginPath()

@@ -531,18 +531,41 @@ describe('charts-smooth (Task A4c)', () => {
     const paintCtx = paintCanvas.getContext('2d')
     const captured: Array<{ cp1x: number; cp1y: number; cp2x: number; cp2y: number; x: number; y: number }> = []
     const isRed = () => paintCtx.strokeStyle === '#ff0000'
+    const starts: Array<{ x: number; y: number }> = []
+    const moveTo = paintCtx.moveTo.bind(paintCtx)
+    paintCtx.moveTo = (x, y) => { if (isRed()) starts.push({ x, y }); moveTo(x, y) }
     paintCtx.bezierCurveTo = (cp1x, cp1y, cp2x, cp2y, x, y) => {
       if (isRed()) captured.push({ cp1x, cp1y, cp2x, cp2y, x, y })
     }
 
     paintXlsxChart(model, paintCtx as any, 400, 300)
-    // There are 4 points connected by 3 Bézier segments across the span
+    // There are 4 points connected by 3 Bézier segments across the span: one run, one moveTo.
     expect(captured).toHaveLength(3)
+    expect(starts).toHaveLength(1)
+    const P = [starts[0], ...captured.map(c => ({ x: c.x, y: c.y }))]
 
-    // Segment 1 bridges across the blank (from slot 1 to slot 3).
-    // The arrival point must be exactly slot 3's coordinate, and its tangent uses slot 0 and slot 4!
-    const bridgeSegment = captured[1]
-    expect(bridgeSegment.x).toBeGreaterThan(captured[0].x)
+    // C1 (A4c N1): exact. Slots sit at equal steps on the category axis, so P2 (slot 3) is two steps from P1
+    // (slot 1) and P3 one step from P2; values map linearly, so y offsets from P0 scale as 10 : 5 : 20.
+    const step = P[1].x - P[0].x
+    expect(step).toBeGreaterThan(0)
+    expect(P[2].x - P[1].x).toBeCloseTo(2 * step, 9)
+    expect(P[3].x - P[2].x).toBeCloseTo(step, 9)
+    const unit = (P[1].y - P[0].y) / 10
+    expect(unit).toBeLessThan(0)
+    expect(P[2].y - P[0].y).toBeCloseTo(5 * unit, 9)
+    expect(P[3].y - P[0].y).toBeCloseTo(20 * unit, 9)
+    // Catmull-Rom (tension 1/2) control points: segment i from P[i] to P[i+1] has
+    // cp1 = P[i] + (P[i+1] - P[i-1]) / 6 and cp2 = P[i+1] - (P[i+2] - P[i]) / 6, an end point its own neighbour.
+    const at = (i: number) => P[Math.max(0, Math.min(P.length - 1, i))]
+    captured.forEach((c, i) => {
+      expect(c.cp1x, `segment ${i} cp1x`).toBeCloseTo(at(i).x + (at(i + 1).x - at(i - 1).x) / 6, 9)
+      expect(c.cp1y, `segment ${i} cp1y`).toBeCloseTo(at(i).y + (at(i + 1).y - at(i - 1).y) / 6, 9)
+      expect(c.cp2x, `segment ${i} cp2x`).toBeCloseTo(at(i + 1).x - (at(i + 2).x - at(i).x) / 6, 9)
+      expect(c.cp2y, `segment ${i} cp2y`).toBeCloseTo(at(i + 1).y - (at(i + 2).y - at(i).y) / 6, 9)
+    })
+    // The bridge (slot 1 to slot 3) takes its tangents from slot 0 and slot 4, across the blank.
+    expect(captured[1].cp1x).toBeCloseTo(P[1].x + (P[2].x - P[0].x) / 6, 9)
+    expect(captured[1].cp2y).toBeCloseTo(P[2].y - (P[3].y - P[1].y) / 6, 9)
   })
 
   it('smoothed stacked lines accumulate base values', () => {

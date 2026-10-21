@@ -379,6 +379,7 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
     if (name === 'chart' || name === 'relIds' || name === 'contentPart' || name === 'wsp') {
       const probe = await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))
       // The probe only decides the branch (the selected one is parsed again): a probed chart's charge is returned.
+      // One release per probe model (final-fix and C1 fixed the same leak; this is the single remaining release).
       if (probe?.kind === 'xlsxChart') (await loadChartModule()).releaseChartModel(probe.chart)
       if (probe) selected = true
       else failed = true

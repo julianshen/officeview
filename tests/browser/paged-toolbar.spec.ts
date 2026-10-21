@@ -591,11 +591,16 @@ test('host --ov-color-find override reaches the paged highlights without replaci
   const canvas=region(page).locator('canvas').first()
   await canvas.evaluate(c=>c.setAttribute('data-palette-original',''))
   await page.getByRole('searchbox',{name:'Search document'}).fill('Line')
+  // C1 flake hardening: wait for the search to have matches (a DOM signal) before overriding the colour, so the
+  // poll below only waits for the palette repaint, not for search indexing as well. Under load the two together
+  // overran the 15 s poll. The repaint itself is driven by a MutationObserver on the theme root's style, so once
+  // matches exist the pixel appears on the next frame; the poll still allows the suite's slowest observed frame.
+  await expect(page.getByRole('button',{name:'Next match'})).toBeEnabled()
   await page.locator('[data-ov-theme-root]').evaluate(el=>(el as HTMLElement).style.setProperty('--ov-color-find','#1234ff'))
   await expect.poll(()=>canvas.evaluate(node=>{
     const c=node as HTMLCanvasElement,d=c.getContext('2d')!.getImageData(0,0,c.width,c.height).data
     for(let i=0;i<d.length;i+=4) if(d[i]===18&&d[i+1]===52&&d[i+2]===255&&d[i+3]===255) return true
     return false
-  })).toBe(true)
+  }),{timeout:30_000}).toBe(true)
   await expect(canvas).toHaveAttribute('data-palette-original','')
 })

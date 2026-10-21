@@ -200,7 +200,12 @@ describe('mounted print lifecycle', () => {
     vi.spyOn(printLoader, 'load').mockImplementation(() => new Promise(r => {release = r}))
     const doc = docxModel(['one'])
     const view = render(<OfficeDoc document={doc} />, {container:root})
-    fireEvent.click(await view.findByRole('button', {name:'Print'}))
+    const button = await view.findByRole('button', {name:'Print'})
+    // Print starts only once the pages exist (beginPrint returns early with none). The toolbar can render before
+    // the (mocked, async) paintables arrive; on a loaded CI runner a click in that window was a no-op and
+    // "load" was never called. Wait for the pages' readout instead of racing it (C1 flake hardening).
+    await waitFor(() => expect(view.getByRole('toolbar').textContent).toContain('/ 3'))
+    fireEvent.click(button)
     await waitFor(() => expect(printLoader.load).toHaveBeenCalled())
     if (reason === 'permission') view.rerender(<OfficeDoc document={doc} allowPrint={false} />)
     else if (reason === 'source') view.rerender(<OfficeDoc document={docxModel(['replacement'])} />)

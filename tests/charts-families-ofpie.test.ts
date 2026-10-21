@@ -108,6 +108,35 @@ it('secondPieSize, serLines and bar-of-pie gapWidth', () => {
   expect(bar2.bar!.x).toBeGreaterThan(bar.bar!.x)
   // serLines connectors: from the Other slice's two radius points to fixed secondary targets
   const slices = ofPieSlices({ firstSliceAngle: 0 }, [10, 20, 30, 40], ofPieSplit({ splitType: 'auto' }, 4, i => [10, 20, 30, 40][i]), pie)
+  // C1 (gallery inspection): the secondary pie is a full circle of its own points (radians), the bar's segments
+  // are height fractions. Auto split of 4 points moves the last ceil(4/3) = 2 (30 and 40): 3/7 and 4/7 of 2π.
+  expect(slices.secondary.map(s => s.sweep)).toEqual([3 / 7 * Math.PI * 2, 4 / 7 * Math.PI * 2])
+  expect(slices.secondary.reduce((n, s) => n + s.sweep, 0)).toBeCloseTo(Math.PI * 2, 12)
+  // C1 phase 1.5 (visual review): Office ignores firstSliceAng for ofPie and centres the composite Other slice on
+  // 3 o'clock (angle 0), facing the secondary plot; the primary points run clockwise before it and close the circle.
+  // Other = 70 of 100 (the auto split moves 30 and 40): sweep 0.7 × 2π, from −0.35 × 2π to +0.35 × 2π.
+  const turned = ofPieSlices({ firstSliceAngle: 120 }, [10, 20, 30, 40], ofPieSplit({ splitType: 'auto' }, 4, i => [10, 20, 30, 40][i]), pie)
+  expect(turned).toEqual(slices)
+  expect(slices.other.start).toBeCloseTo(-0.35 * Math.PI * 2, 12)
+  expect(slices.other.start + slices.other.sweep / 2).toBeCloseTo(0, 12)
+  expect(slices.primary.map(s => s.sweep)).toEqual([0.1 * Math.PI * 2, 0.2 * Math.PI * 2])
+  expect(slices.primary[0].start + slices.primary[0].sweep + slices.primary[1].sweep).toBeCloseTo(slices.other.start, 12)
+  expect(slices.primary[0].start + Math.PI * 2).toBeCloseTo(slices.other.start + slices.other.sweep, 12)
+  // The secondary pie starts at 12 o'clock.
+  expect(slices.secondary[0].start).toBeCloseTo(-Math.PI / 2, 12)
+  // A typical split (Other = 30 %: the auto split of [40, 30, 20, 10] moves 20 and 10): the series lines leave the
+  // Other slice's top and bottom rim points (±54°), both facing the secondary plot, and never cross the primary
+  // disk: every point of each segment is at least r1 from the primary centre.
+  const facing = ofPieSlices({ firstSliceAngle: 200 }, [40, 30, 20, 10], ofPieSplit({ splitType: 'auto' }, 4, i => [40, 30, 20, 10][i]), pie)
+  const facingLines = ofPieConnectors(pie, facing.other)
+  expect(facing.other.start).toBeCloseTo(-0.15 * Math.PI * 2, 12)
+  expect(facingLines[0].x1).toBeCloseTo(pie.primary.cx + pie.primary.r * Math.cos(-0.15 * Math.PI * 2), 9)
+  expect(facingLines[0].y1).toBeLessThan(pie.primary.cy)
+  expect(facingLines[1].y1).toBeGreaterThan(pie.primary.cy)
+  for (const line of facingLines) for (let t = 0; t <= 1; t += 1 / 64) {
+    const x = line.x1 + (line.x2 - line.x1) * t, y = line.y1 + (line.y2 - line.y1) * t
+    expect(Math.hypot(x - pie.primary.cx, y - pie.primary.cy)).toBeGreaterThanOrEqual(pie.primary.r - 1e-9)
+  }
   const lines = ofPieConnectors(pie, slices.other)
   expect(lines).toHaveLength(2)
   for (const line of lines) expect(Math.hypot(line.x1 - pie.primary.cx, line.y1 - pie.primary.cy)).toBeCloseTo(100, 6)
@@ -117,6 +146,7 @@ it('secondPieSize, serLines and bar-of-pie gapWidth', () => {
   expect(lines[1].y2).toBeCloseTo(154 + 50, 9)
   // bar targets: the bar's left edge at one quarter and three quarter of its height
   const barSlices = ofPieSlices({ firstSliceAngle: 0 }, [10, 20, 30, 40], ofPieSplit({ splitType: 'auto' }, 4, i => [10, 20, 30, 40][i]), bar)
+  expect(barSlices.secondary.map(s => [s.start, s.sweep])).toEqual([[0, 3 / 7], [3 / 7, 4 / 7]])
   const barLines = ofPieConnectors(bar, barSlices.other)
   expect(barLines[0].x2).toBe(305)
   expect(barLines[0].y2).toBe(54 + 50)
@@ -330,10 +360,12 @@ it('explosion: each shifted slice moves along its mid angle; the farthest slice 
   expect(left[0].arcs![0].x).toBeCloseTo(cx1, 6)
   expect(left[0].arcs![0].y).toBeCloseTo(CY, 6)
   expect(left[0].arcs![0].a1 - left[0].arcs![0].a0).toBeCloseTo(0.1 * R, 9) // 10 of the 100
-  // the Other slice (sweep 0.7R starting at +0.05R) carries the dPt explosion: offset r1·50 % along its mid angle
+  // the Other slice (sweep 0.7R, centred on 3 o'clock since C1 phase 1.5) carries the dPt explosion: offset r1·50 %
+  // along its mid angle, 0, towards the secondary plot
   const otherArc = left[2].arcs![0]
   expect(otherArc.a1 - otherArc.a0).toBeCloseTo(0.7 * R, 9)
-  const otherMid = 0.05 * R + 0.35 * R
+  expect(otherArc.a0).toBeCloseTo(-0.35 * R, 9)
+  const otherMid = 0
   expect(otherArc.x).toBeCloseTo(cx1 + (shrunk / 2) * Math.cos(otherMid), 6)
   expect(otherArc.y).toBeCloseTo(CY + (shrunk / 2) * Math.sin(otherMid), 6)
 })

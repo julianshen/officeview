@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { createCanvas } from 'canvas'
-import { computeBoxWhiskerStats } from '../src/charts/chartex/boxWhisker'
+import { boxMarkColor, computeBoxWhiskerStats } from '../src/charts/chartex/boxWhisker'
 import type { ChartModel } from '../src/charts/model'
 import { parseChartEx } from '../src/charts/chartex/parse'
 import { paintXlsxChart } from '../src/charts/paint'
@@ -687,4 +687,90 @@ describe('box & whisker (ChartEx, Task B4)', () => {
   })
 
   describeFamilyConformance(BOX_WHISKER_FAMILY)
+})
+
+describe('C1 phase 2b: the median line and mean marker stay visible on a filled box', () => {
+  const pixel = (ctx: { getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray } }, x: number, y: number) => [...ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data].slice(0, 3).join(',')
+  /** Paints on a real canvas; returns it, the series-coloured box rect, the median segment and the mean cross centre. */
+  async function paintBox(xml: string) {
+    const model = await nativeModel(xml)
+    const w = 400, h = 300, ctx = createCanvas(w, h).getContext('2d')
+    const rects: Array<{ x: number; y: number; w: number; h: number; fill: string }> = [], segments: Segment[] = []
+    const fillRect = ctx.fillRect.bind(ctx), moveTo = ctx.moveTo.bind(ctx), lineTo = ctx.lineTo.bind(ctx)
+    ctx.fillRect = (x, y, rw, rh) => { if (!(rw === w && rh === h)) rects.push({ x, y, w: rw, h: rh, fill: String(ctx.fillStyle).toLowerCase() }); fillRect(x, y, rw, rh) }
+    let lx = 0, ly = 0
+    ctx.moveTo = (x, y) => { lx = x; ly = y; moveTo(x, y) }
+    ctx.lineTo = (x, y) => { segments.push({ x1: lx, y1: ly, x2: x, y2: y, stroke: String(ctx.strokeStyle).toLowerCase() }); lx = x; ly = y; lineTo(x, y) }
+    paintXlsxChart(model, ctx as unknown as CanvasRenderingContext2D, w, h)
+    const color = `#${model.groups[0].series[0].color.toLowerCase()}`
+    const box = rects.filter(r => r.h > 10 && r.w > 10).sort((a, b) => a.w * a.h - b.w * b.h)[0]
+    const median = segments.find(s => Math.abs(s.y1 - s.y2) < 1e-9 && s.y1 > box.y + 1 && s.y1 < box.y + box.h - 1 && Math.abs(s.x1 - box.x) < 1e-6 && Math.abs(s.x2 - (box.x + box.w)) < 1e-6)!
+    const cross = segments.filter(s => Math.abs(Math.abs(s.x2 - s.x1) - 8) < 1e-6 && Math.abs(Math.abs(s.y2 - s.y1) - 8) < 1e-6)
+    return { ctx, box, median, cross, color, model }
+  }
+  // Nine values, exclusive quartiles: median 5, mean 6.2 (both inside the box), 20 an outlier.
+  const values = [1, 2, 3, 4, 5, 6, 7, 8, 20]
+
+  it('default fill (the series colour): median and mean are drawn in white and differ from the box pixels', async () => {
+    const { ctx, box, median, cross, color } = await paintBox(bwXml([{ values }]))
+    expect(box.fill).toBe(color)
+    expect(median, 'the median segment spans the box').toBeDefined()
+    expect(median.stroke).toBe('#ffffff')
+    expect(cross).toHaveLength(2)
+    for (const s of cross) expect(s.stroke).toBe('#ffffff')
+    // Pixels: the median line (1 px, at its y) and the cross centre differ from the box fill a few pixels away.
+    const cx = box.x + box.w / 2
+    const fillPixel = pixel(ctx, cx, box.y + 2)
+    // A 1 px line at y covers the pixel rows around y (both, antialiased, when y is an integer): one of them differs.
+    const rows = [Math.floor(median.y1 - 0.5), Math.floor(median.y1)].map(y => pixel(ctx, box.x + box.w / 4, y))
+    expect(rows.some(p => p !== fillPixel), `median rows ${rows} vs fill ${fillPixel}`).toBe(true)
+    const centre = { x: (cross[0].x1 + cross[0].x2) / 2, y: (cross[0].y1 + cross[0].y2) / 2 }
+    expect(pixel(ctx, centre.x, centre.y)).not.toBe(fillPixel)
+  })
+
+  it('an explicit solid fill is the series colour too (white marks); an unfilled box keeps the series colour', async () => {
+    // A ChartEx series spPr solid fill also sets the series colour, so the marks contrast with it in white.
+    const solid = await paintBox(bwXml([{ values }]).replace('<cx:dataId val="0"/>', '<cx:spPr><a:solidFill><a:srgbClr val="FFC000"/></a:solidFill></cx:spPr><cx:dataId val="0"/>'))
+    expect(solid.color).toBe('#ffc000')
+    expect(solid.median.stroke).toBe('#ffffff')
+    // noFill: nothing under the marks, so they keep the series colour.
+    const model = await nativeModel(bwXml([{ values }]).replace('<cx:dataId val="0"/>', '<cx:spPr><a:noFill/></cx:spPr><cx:dataId val="0"/>'))
+    const color = `#${model.groups[0].series[0].color.toLowerCase()}`
+    const { segments } = record(model)
+    const horizontal = segments.filter(seg => Math.abs(seg.y1 - seg.y2) < 1e-9 && seg.x2 - seg.x1 > 10)
+    expect(horizontal.length).toBeGreaterThan(0)
+    expect(horizontal.some(seg => seg.stroke === color)).toBe(true)
+    expect(horizontal.some(seg => seg.stroke === '#ffffff')).toBe(false)
+  })
+
+  it('review: skewed mean stays visible outside its box', async () => {
+    // [1..8, 100]: exclusive quartiles put the box at about 2.5..8, the mean (15) far above it, on the plot paper.
+    const { ctx, box, median, cross, color } = await paintBox(bwXml([{ values: [1, 2, 3, 4, 5, 6, 7, 8, 100] }]))
+    expect(median.stroke).toBe('#ffffff')
+    expect(cross).toHaveLength(2)
+    const centre = { x: (cross[0].x1 + cross[0].x2) / 2, y: (cross[0].y1 + cross[0].y2) / 2 }
+    expect(centre.y < box.y || centre.y > box.y + box.h, 'the mean lies outside the box').toBe(true)
+    for (const s of cross) expect(s.stroke).toBe(color)
+    // An 11 x 11 sample enclosing the whole cross holds non-white (marker) pixels.
+    const data = ctx.getImageData(Math.round(centre.x) - 5, Math.round(centre.y) - 5, 11, 11).data
+    let ink = 0
+    for (let i = 0; i < data.length; i += 4) if (data[i] < 200 || data[i + 1] < 200 || data[i + 2] < 200) ink++
+    expect(ink).toBeGreaterThan(5)
+  })
+
+  it('a mean inside its filled box is drawn in white and differs from the fill', async () => {
+    const { ctx, box, cross } = await paintBox(bwXml([{ values }]))
+    const centre = { x: (cross[0].x1 + cross[0].x2) / 2, y: (cross[0].y1 + cross[0].y2) / 2 }
+    expect(centre.y > box.y && centre.y < box.y + box.h).toBe(true)
+    for (const s of cross) expect(s.stroke).toBe('#ffffff')
+    expect(pixel(ctx, centre.x, centre.y)).not.toBe(pixel(ctx, box.x + box.w / 2, box.y + 2))
+  })
+
+  it('boxMarkColor: white only when the fill is the series colour', () => {
+    expect(boxMarkColor(undefined, '4472C4')).toBe('FFFFFF')
+    expect(boxMarkColor({ kind: 'solid', color: '4472c4' } as never, '4472C4')).toBe('FFFFFF')
+    expect(boxMarkColor({ kind: 'solid', color: 'FFC000' } as never, '4472C4')).toBe('4472C4')
+    expect(boxMarkColor({ kind: 'none' } as never, '4472C4')).toBe('4472C4')
+    expect(boxMarkColor({ kind: 'gradient', stops: [] } as never, '4472C4')).toBe('4472C4')
+  })
 })
