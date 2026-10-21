@@ -20,7 +20,7 @@ import { prepareChartAxes } from '../src/charts/prepare'
 import { createChartWorkspace } from '../src/charts/workspace'
 import type { ChartModel, ChartPoint } from '../src/charts/model'
 import type { DrawingCoverageEntry } from '../src/drawing/coverage'
-import { chartDescription } from '../src/xlsx/chartDescription'
+import { chartDescription } from '../src/charts/describe'
 import { buildChartDocx, buildChartPptx, cell, embeddedWorkbook, row } from './helpers/chart-fixtures'
 import { CLASSIC_FAMILIES, CONFORMANCE_NS, describeFamilyConformance, type ConformanceCase } from './helpers/chart-family-conformance'
 

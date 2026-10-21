@@ -63,7 +63,7 @@ describe('worksheet chart data', () => {
     expect(content.chart).toMatchObject({ title: 'Future', unsupported: 'This chart type is not supported' })
     expect(sheet.drawingCoverage?.find(entry => entry.element === 'graphicFrame')?.selectedRepresentation).toBe('chart-placeholder')
     const { chartDescription } = await import('../src/charts')
-    expect(chartDescription(content.chart)).toBe('Chart: Future. This chart type is not supported; it is not drawn.')
+    expect(chartDescription(content.chart)).toBe('Chart: Future. placeholder: This chart type is not supported.')
   })
 })
 

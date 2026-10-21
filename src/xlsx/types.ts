@@ -16,7 +16,7 @@ import type {
 } from './formula/types'
 import type { DeclaredSheetFilters } from './view/declaredFilters'
 
-export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean }
+export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean; /** An authored fallback's original feature (spec 6.6). */ feature?: 'chart' | 'ChartEx' }
 export interface XlsxDrawing extends SceneNode<PptxTextBody, SceneImage> {
   source: XlsxDrawingSource
   children?: XlsxDrawing[]

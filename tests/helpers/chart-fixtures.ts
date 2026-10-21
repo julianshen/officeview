@@ -82,20 +82,35 @@ const contentTypes = (main: string, chartOverrides: string) => `<?xml version="1
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="xlsx" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/>${main}${chartOverrides}</Types>`
 const chartOverride = (path: string) => `<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`
 
+/** Layout options: the last `headerCharts` charts sit in the default header; `paragraphs` filler paragraphs follow the body charts. */
+export interface ChartDocxOptions { headerCharts?: number; paragraphs?: number }
 /** A DOCX with one inline chart per spec. */
-export function buildChartDocx(charts: ChartEmbedSpec[]): ChartFixture {
+export function buildChartDocx(charts: ChartEmbedSpec[], options: ChartDocxOptions = {}): ChartFixture {
   const { entries, chartPaths, embeddingPaths } = chartEntries('word', charts)
-  const inline = (i: number) => `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="${i + 1}" name="Chart ${i + 1}"/><a:graphic><a:graphicData uri="${NS_C}"><c:chart r:id="rChart${i + 1}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+  const headerFrom = charts.length - (options.headerCharts ?? 0)
+  const filler = Array.from({ length: options.paragraphs ?? 0 }, (_, i) => `<w:p><w:r><w:t>Filler paragraph ${i + 1} of the chart document, long enough to take a line of its own.</w:t></w:r></w:p>`).join('')
+  const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+  const inline = (i: number) => inlineChart(i)
+  const inlineChart = (i: number, cx = 5486400, cy = 3200400) => `<w:p><w:r><w:drawing><wp:inline><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${i + 1}" name="Chart ${i + 1}"/><a:graphic><a:graphicData uri="${NS_C}"><c:chart r:id="rChart${i + 1}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+  const header = headerFrom < charts.length ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr ${W_NS} xmlns:a="${NS_A}" xmlns:c="${NS_C}" xmlns:r="${NS_R}">${charts.slice(headerFrom).map((_, k) => inlineChart(headerFrom + k, 1828800, 914400)).join('')}</w:hdr>` : undefined
   const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="${NS_A}" xmlns:c="${NS_C}" xmlns:r="${NS_R}"><w:body>${charts.map((_, i) => inline(i)).join('')}<w:sectPr/></w:body></w:document>`
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="${NS_A}" xmlns:c="${NS_C}" xmlns:r="${NS_R}"><w:body>${charts.slice(0, headerFrom).map((_, i) => inline(i)).join('')}${filler}<w:sectPr>${header ? '<w:headerReference w:type="default" r:id="rHeader1"/>' : ''}</w:sectPr></w:body></w:document>`
+  const chartRels = (from: number, to: number) => chartPaths.slice(from, to).map((p, k) => `<Relationship Id="rChart${from + k + 1}" Type="${CHART_REL}" Target="${p.slice('word/'.length)}"/>`).join('')
   const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${chartPaths.map((p, i) => `<Relationship Id="rChart${i + 1}" Type="${CHART_REL}" Target="${p.slice('word/'.length)}"/>`).join('')}</Relationships>`
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${chartRels(0, headerFrom)}${header ? `<Relationship Id="rHeader1" Type="${REL}/header" Target="header1.xml"/>` : ''}</Relationships>`
+  const headerEntries: BuildEntry[] = header ? [
+    { name: 'word/header1.xml', data: header },
+    { name: 'word/_rels/header1.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${chartRels(headerFrom, charts.length)}</Relationships>` },
+  ] : []
   const bytes = buildZip([
     { name: '[Content_Types].xml', data: contentTypes('<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>', chartPaths.map(chartOverride).join('')) },
     { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="word/document.xml"/></Relationships>` },
     { name: 'word/document.xml', data: document },
     { name: 'word/_rels/document.xml.rels', data: rels },
+    ...headerEntries,
     ...entries,
   ]).bytes
   return { bytes, chartPaths, embeddingPaths }

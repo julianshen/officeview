@@ -40,6 +40,7 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B2 merge with feature | merge commit | 38,635 | `feature/chart-compat` `cb5a0b5` merged into `chart/b2`; conflicts resolved keeping both sides (lazy `charts-*` chunk only). Running total vs B0: +4 B. Ceiling 38,647 |
 | After B5 | B5 commit | 38,639 | Before (`7c67e33`, rebuilt): 38,640. Treemap and sunburst (`src/charts/chartex/hierarchy.ts`, `hierarchyStyle.ts`, `treemap.ts`, `sunburst.ts`) and the hierarchy hooks in fill, precedence, embedded reader, stage 1, layout and paint all live in the lazy `charts-*` chunk; the two description names in the `imageAdmission` chunk. No eager source file was touched; measured −1 B (hash churn, not normalised). Bytes added by B5: 0. |
 | After B5 merge with feature | merge commit | 38,637 | `feature/chart-compat` merged into `chart/b5` (B2, A6b, A5c, A4b and the rest); conflicts resolved keeping both sides; B5 review minors (label numFmt, exclusion order) applied. Lazy `charts-*` chunk only. Before (feature ledger, B2 merge): 38,635; +2 B hash churn. Ceiling 38,647 |
+| After A7 fix round 1 | A7 r1 commit | 38,584 | Before (`db78d06`, rebuilt): 38,637. A7's descriptions, paintables metadata and chart list live in the lazy `charts-*`, `office-worker` and `PagedChrome` chunks. Review I1 needs `OfficeDoc` to abort the chart picture wait on unmount: one `AbortController` and its `signal` passed to `getPaintables` (+25 B, measured 38,664). Recovered by condensing three verbose style comments inside `OfficeDoc`'s JSX that `dist/index.js` preserves verbatim (−80 B), with no behaviour change. Running total vs B0: −47 B |
 
 ## Spec §8 testing and validation
 
@@ -309,3 +310,17 @@ the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond
 - **Data labels and data-point overrides: unverified.** Data labels (`cx:dataLabels`) and per-point shape properties (`cx:dataPt`) are not painted (e.g. BW2b carries `dataLabels/visibility value="1"`).
 - **Whisker end caps: unverified.** Horizontal end caps at whisker endpoints are omitted; unverified whether Office renders end caps natively.
 
+## A7 accessibility, coverage and paged chart metadata (spec 6.6)
+
+- **Descriptions.** Each chart's description names its type, title, series names and value range. A card reads `placeholder: <reason>`.
+- **Bounds.** Names are cut at 120 characters, at most 8 series are described, and each description is capped at 1,024 characters.
+- **Placement.** Descriptions travel with each page's or slide's placement in the paintables metadata. That metadata is admitted to the chart workspace before it is built, per page, and refunded with the pages.
+- **Per-page list.** It is capped at 64 entries. Above that, the list ends with an "N more charts not listed" note and is labelled with the true total; diagnostic `chart-description-limit`.
+- **Refused admission.** A page whose admission is refused gets a readable notice and diagnostic `chart-description-refused`. Later pages are unaffected.
+- **Known limitation: chart picture wait.** User-shape pictures of a model transferred from another realm are decoded before the pages are published, so that their first paint shows them. The wait is bounded and cancellable:
+  - **Deadline.** One shared 1.5 s deadline, driven by an injectable clock; tests never rely on wall time.
+  - **Cancellation.** It honours the caller's abort signal (OfficeDoc aborts on unmount or document change) and the chart context's signal.
+  - **Missed deadline.** A page whose pictures miss the deadline is published without them and gets diagnostic `chart-user-shapes-deadline`. The decode continues, its bytes stay charged until it settles, and the picture appears the next time that page is painted. Nothing triggers that repaint (zoom, resize or a document change do).
+  - **Delay to other pages.** The paint pipeline publishes all pages of a document together. A slow picture can therefore delay the first publication of every page by at most the deadline, never by more.
+- **Layout shift.** The Chromium CLS test proves zero layout shift outside the viewer chrome while charts load. It does not prove whole-load CLS. A pre-existing mount shift of the status slot (seen also in documents with no charts) is excluded as chrome-only.
+- **Fixtures.** All are Office-shaped synthetic; none is Office evidence.

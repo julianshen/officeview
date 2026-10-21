@@ -656,7 +656,7 @@ class DrawingCompatibility {
       if (name === 'graphicData') {
         const uri = attrs(child).uri?.toLowerCase() ?? ''
         if (uri.includes('model3d')) return 'model3D'
-        if (['chart', 'relIds', 'contentPart', 'wsp'].some(tag => getChildren(child, tag).length) && !this.contents.has(child)) return uri.includes('chartex') ? 'ChartEx' : 'drawing-content'
+        if (['chart', 'relIds', 'contentPart', 'wsp'].some(tag => getChildren(child, tag).length) && !this.contents.has(child)) return uri.includes('chartex') ? 'ChartEx' : getChildren(child, 'chart').length ? 'chart' : 'drawing-content'
       }
       if (name === 'contentPart') { if (!this.contents.has(child) && !this.contents.has(node)) return 'drawing-content'; continue }
       const feature = this.unsupportedFeature(child, depth + 1)
