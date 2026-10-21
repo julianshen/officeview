@@ -1,8 +1,8 @@
 /** Lazy background resolution. Office-shaped sources are not Office visual evidence. */
-import type JSZip from 'jszip'
+import { HandlePackage, HANDLE_AGGREGATE_BYTES } from './handle-package'
 import type { OfficePackage } from '../../core/zip'
 import { PackageError } from '../../core/package-error'
-import { attrs, getChild, getChildren, parseXmlOrdered, type XmlNode } from '../../core/xml'
+import { attrs, getChild, getChildren, orderedChildren, parseXmlOrdered, type XmlNode } from '../../core/xml'
 import { sniffImageMime } from '../../core/images'
 import { resolvePartTarget } from '../../drawing/parts'
 import { parseDrawingColor, parseFillDefinition, resolveDrawingColor, resolveFill, type DrawingIssue, type DrawingFill, type ThemeContext } from '../../drawing/style'
@@ -15,51 +15,13 @@ export type SlideBackground =
   | { kind: 'picture'; image: PptxImageRef; tile?: { sx: number; sy: number; tx: number; ty: number; algn?: string; flip?: string }; stretch?: SceneRectFractions }
 
 const PART_BYTES = 4 * 1024 * 1024
-const IMAGE_BYTES = 32 * 1024 * 1024
-
-/** Uncached entry read; stop inflation at the crossing chunk, not after materialisation.
- * Kept private until S0-4's shared reader lands on this branch. */
-async function read(pkg: OfficePackage, path: string, cap: number): Promise<Uint8Array | undefined> {
-  const entry = pkg.entry(path)
-  if (!entry || entry.dir) return undefined
-  return new Promise((resolve, reject) => {
-    const stream = (entry as unknown as { internalStream(type: 'uint8array'): JSZip.JSZipStreamHelper<Uint8Array> }).internalStream('uint8array')
-    type Worker = { previous?: Worker; push: (...args: unknown[]) => unknown; end: () => unknown; error: (error: Error) => unknown }
-    const last = (stream as unknown as { _worker: Worker })._worker
-    let first = last
-    while (first.previous) first = first.previous
-    const chunks: Uint8Array[] = []
-    let total = 0, failed = false
-    const fail = (error: unknown) => {
-      chunks.length = 0
-      if (failed) return
-      failed = true
-      reject(error)
-      last.error(error instanceof Error ? error : new Error(String(error)))
-    }
-    const push = first.push.bind(first), end = first.end.bind(first)
-    first.push = (...args) => { try { return push(...args) } catch (error) { fail(error) } }
-    first.end = () => { try { return end() } catch (error) { fail(error) } }
-    stream.on('data', chunk => {
-      if (failed) return
-      if (total + chunk.length > cap) throw new PackageError('resource-limit', `Background part exceeds ${cap} bytes`, path)
-      total += chunk.length
-      chunks.push(chunk)
-    }).on('error', fail).on('end', () => {
-      if (failed) return
-      const out = new Uint8Array(total)
-      let offset = 0
-      for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length }
-      chunks.length = 0
-      resolve(out)
-    }).resume()
-  })
+// Pictures share S0-4's 32 MiB enrichment budget; this is not the 512 MiB slideshow media cap.
+const IMAGE_BYTES = HANDLE_AGGREGATE_BYTES
+async function xml(pkg: HandlePackage, path: string): Promise<XmlNode | undefined> {
+  const text = await pkg.boundedText(path, PART_BYTES)
+  return text === undefined ? undefined : parseXmlOrdered(text)
 }
-async function xml(pkg: OfficePackage, path: string): Promise<XmlNode | undefined> {
-  const bytes = await read(pkg, path, PART_BYTES)
-  return bytes ? parseXmlOrdered(new TextDecoder().decode(bytes)) : undefined
-}
-async function relationships(pkg: OfficePackage, owner: string): Promise<XmlNode[]> {
+async function relationships(pkg: HandlePackage, owner: string): Promise<XmlNode[]> {
   const slash = owner.lastIndexOf('/')
   return getChildren(await xml(pkg, `${owner.slice(0, slash + 1)}_rels/${owner.slice(slash + 1)}.rels`), 'Relationship')
 }
@@ -70,54 +32,109 @@ const fractionRect = (node: XmlNode | undefined): SceneRectFractions => {
   return { l: value('l'), t: value('t'), r: value('r'), b: value('b') }
 }
 
-export async function resolveSlideBackground(pkg: OfficePackage, slidePath: string, theme: ThemeContext): Promise<{ background: SlideBackground; diagnostics: PptxDiagnostic[] }> {
-  const diagnostics: PptxDiagnostic[] = []
-  let owner = slidePath
+async function related(pkg: HandlePackage, owner: string, type: string): Promise<string | undefined> {
+  const rel = (await relationships(pkg, owner)).find(r => attrs(r).Type?.endsWith('/' + type) && attrs(r).TargetMode !== 'External')
+  return rel && attrs(rel).Target ? resolvePartTarget(owner, attrs(rel).Target) : undefined
+}
+
+/** Find the theme's own package path, never resolve its image rIds through the slide. */
+async function themePart(pkg: HandlePackage, slidePath: string): Promise<string | undefined> {
+  let owner: string | undefined = slidePath
   for (const next of ['slideLayout', 'slideMaster', undefined]) {
-    const root = await xml(pkg, owner)
-    const bg = getChild(getChild(root, 'cSld'), 'bg')
-    if (bg) {
-      const properties = getChild(bg, 'bgPr')
-      const blipFill = getChild(properties, 'blipFill')
-      if (blipFill) {
-        const id = attrs(getChild(blipFill, 'blip'))['r:embed'] ?? attrs(getChild(blipFill, 'blip')).embed
-        const rel = (await relationships(pkg, owner)).find(r => attrs(r).Id === id)
-        const a = attrs(rel)
-        const path = a.Target && a.TargetMode !== 'External' && a.Type?.endsWith('/image') ? resolvePartTarget(owner, a.Target) : undefined
-        const data = path ? await read(pkg, path, IMAGE_BYTES) : undefined
-        if (!data) {
-          diagnostics.push({ kind: 'missing-image', message: `Background picture is missing or external: ${id ?? '(no embed)'}`, feature: 'blipFill' })
-          return { background: none(), diagnostics }
+    const theme = await related(pkg, owner, 'theme')
+    if (theme) return theme
+    owner = next ? await related(pkg, owner, next) : undefined
+    if (!owner) break
+  }
+  return undefined
+}
+
+async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: XmlNode, diagnostics: PptxDiagnostic[]): Promise<SlideBackground> {
+  const blip = getChild(blipFill, 'blip')
+  // The existing painter cannot apply these transforms; preserve the picture with a visible diagnostic.
+  for (const [name] of orderedChildren(blip)) {
+    if (name !== '#text') diagnostics.push({ kind: 'unsupported-fill', message: `Background picture effect ${name} is not applied`, feature: name })
+  }
+  const id = attrs(blip)['r:embed'] ?? attrs(blip).embed
+  const rel = (await relationships(pkg, owner)).find(r => attrs(r).Id === id)
+  const a = attrs(rel)
+  const path = a.Target && a.TargetMode !== 'External' && a.Type?.endsWith('/image') ? resolvePartTarget(owner, a.Target) : undefined
+  let data: Uint8Array | undefined
+  try { data = path ? await pkg.bytes(path, IMAGE_BYTES) : undefined }
+  catch (error) {
+    if (!isLimit(error)) throw error
+    diagnostics.push({ kind: 'missing-image', message: 'Background picture refused by the part or enrichment byte budget', feature: 'resource-limit' })
+    return none()
+  }
+  if (!data) {
+    diagnostics.push({ kind: 'missing-image', message: `Background picture is missing or external: ${id ?? '(no embed)'}`, feature: 'blipFill' })
+    return none()
+  }
+  const crop = getChild(blipFill, 'srcRect')
+  const image: PptxImageRef = { data, partPath: path, mime: sniffImageMime(data), ...(crop ? { srcRect: fractionRect(crop) } : {}) }
+  const tile = getChild(blipFill, 'tile')
+  if (tile) {
+    const a = attrs(tile)
+    const n = (key: string, fallback: number) => a[key] !== undefined && Number.isFinite(Number(a[key])) ? Number(a[key]) : fallback
+    diagnostics.push({ kind: 'unsupported-fill', message: 'Picture background tiling is retained as metadata; the existing painter stretches the picture', feature: 'tile' })
+    return { kind: 'picture', image, tile: { sx: n('sx', 100000) / 100000, sy: n('sy', 100000) / 100000, tx: n('tx', 0), ty: n('ty', 0), ...(a.algn ? { algn: a.algn } : {}), ...(a.flip ? { flip: a.flip } : {}) } }
+  }
+  return { kind: 'picture', image, stretch: fractionRect(getChild(getChild(blipFill, 'stretch'), 'fillRect')) }
+}
+
+function fillBackground(properties: XmlNode, theme: ThemeContext, diagnostics: PptxDiagnostic[]): SlideBackground {
+  const issues: DrawingIssue[] = []
+  const fill = resolveFill(parseFillDefinition(properties, issues), theme, undefined, issues)
+  // Background nodes are never rotated, so no compensation is required.
+  diagnostics.push(...issues.filter(issue => !(issue.kind === 'unsupported-gradient' && issue.feature === 'rotWithShape')))
+  return fill ? { kind: 'fill', fill } : none()
+}
+const isLimit = (error: unknown) => error instanceof PackageError && error.code === 'resource-limit' || error instanceof Error && error.message.startsWith('Part byte limit exceeded')
+
+/** Caller supplies the slide's effective colour map, including clrMapOvr. Reuse one HandlePackage
+ * across an enrichment run to share its aggregate. Plain packages get a bounded view for this call.
+ * Resource refusals degrade to none with diagnostics; unexpected errors still reject. */
+export async function resolveSlideBackground(pkg: OfficePackage, slidePath: string, theme: ThemeContext): Promise<{ background: SlideBackground; diagnostics: PptxDiagnostic[] }> {
+  const reader = pkg instanceof HandlePackage ? pkg : HandlePackage.over({ pkg, slideParts: [slidePath] }, { partBytes: IMAGE_BYTES })
+  const diagnostics: PptxDiagnostic[] = []
+  try {
+    let owner = slidePath
+    for (const next of ['slideLayout', 'slideMaster', undefined]) {
+      const bg = getChild(getChild(await xml(reader, owner), 'cSld'), 'bg')
+      if (bg) {
+        const properties = getChild(bg, 'bgPr')
+        if (properties) {
+          const picture = getChild(properties, 'blipFill')
+          return { background: picture ? await pictureBackground(reader, owner, picture, diagnostics) : fillBackground(properties, theme, diagnostics), diagnostics }
         }
-        const image: PptxImageRef = { data, partPath: path, mime: sniffImageMime(data), srcRect: fractionRect(getChild(blipFill, 'srcRect')) }
-        const tile = getChild(blipFill, 'tile')
-        if (tile) {
-          const a = attrs(tile)
-          const n = (key: string, fallback: number) => a[key] !== undefined && Number.isFinite(Number(a[key])) ? Number(a[key]) : fallback
-          diagnostics.push({ kind: 'unsupported-fill', message: 'Picture background tiling is retained as metadata; the existing painter stretches the picture', feature: 'tile' })
-          return { background: { kind: 'picture', image, tile: { sx: n('sx', 100000) / 100000, sy: n('sy', 100000) / 100000, tx: n('tx', 0), ty: n('ty', 0), ...(a.algn ? { algn: a.algn } : {}), ...(a.flip ? { flip: a.flip } : {}) } }, diagnostics }
-        }
-        return { background: { kind: 'picture', image, stretch: fractionRect(getChild(getChild(blipFill, 'stretch'), 'fillRect')) }, diagnostics }
-      }
-      const issues: DrawingIssue[] = []
-      let fill: DrawingFill | undefined
-      if (properties) fill = resolveFill(parseFillDefinition(properties, issues), theme, undefined, issues)
-      else {
-        const ref = getChild(bg, 'bgRef')
-        const index = Number(attrs(ref).idx)
+        const ref = getChild(bg, 'bgRef'), index = Number(attrs(ref).idx)
         if (index === 0 || index === 1000) return { background: none(), diagnostics }
-        // ECMA-376 20.1.4.1 style matrix: 1-based fills; 1001-based background fills.
-        const definition = Number.isInteger(index) && index >= 1 && index < 1000 ? theme.fillStyles[index - 1] : Number.isInteger(index) && index >= 1001 ? theme.bgFillStyles[index - 1001] : undefined
+        const valid = Number.isInteger(index) && index > 0
+        const definition = valid && index < 1000 ? theme.fillStyles[index - 1] : valid && index >= 1001 ? theme.bgFillStyles[index - 1001] : undefined
+        // ThemeContext retains slots for blipFill but cannot represent its image. Recover raw XML.
+        if (definition?.kind === 'none') {
+          const path = await themePart(reader, slidePath)
+          if (path) {
+            const format = getChild(getChild(await xml(reader, path), 'themeElements'), 'fmtScheme')
+            const list = getChild(format, index >= 1001 ? 'bgFillStyleLst' : 'fillStyleLst')
+            const slot = orderedChildren(list).filter(([name]) => name !== '#text')[index >= 1001 ? index - 1001 : index - 1]
+            if (slot?.[0] === 'blipFill') return { background: await pictureBackground(reader, path, slot[1], diagnostics), diagnostics }
+            if (!slot || slot[0] !== 'noFill') diagnostics.push({ kind: 'unsupported-fill', message: 'Theme background style is not representable', feature: 'bgRef' })
+          } else diagnostics.push({ kind: 'missing-theme-style', message: 'Theme background source is unavailable', feature: 'bgRef' })
+        }
+        const issues: DrawingIssue[] = []
         if (!definition) diagnostics.push({ kind: 'missing-theme-style', message: `Background style ${attrs(ref).idx ?? '(missing)'} is unavailable`, feature: 'bgRef' })
-        fill = resolveFill(definition, theme, resolveDrawingColor(parseDrawingColor(ref), theme, undefined, issues), issues)
+        const fill = resolveFill(definition, theme, resolveDrawingColor(parseDrawingColor(ref), theme, undefined, issues), issues)
+        diagnostics.push(...issues.filter(issue => !(issue.kind === 'unsupported-gradient' && issue.feature === 'rotWithShape')))
+        return { background: fill ? { kind: 'fill', fill } : none(), diagnostics }
       }
-      diagnostics.push(...issues)
-      return { background: fill ? { kind: 'fill', fill } : none(), diagnostics }
+      const path = next ? await related(reader, owner, next) : undefined
+      if (!path) break
+      owner = path
     }
-    if (!next) break
-    const rel = (await relationships(pkg, owner)).find(r => attrs(r).Type?.endsWith('/' + next) && attrs(r).TargetMode !== 'External')
-    if (!rel || !attrs(rel).Target) break
-    owner = resolvePartTarget(owner, attrs(rel).Target)
+  } catch (error) {
+    if (!isLimit(error)) throw error
+    diagnostics.push({ kind: 'unsupported-fill', message: 'Background metadata refused by the part or enrichment byte budget', feature: 'resource-limit' })
   }
   return { background: none(), diagnostics }
 }

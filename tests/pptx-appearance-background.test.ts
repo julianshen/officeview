@@ -77,7 +77,7 @@ it('uncached reads refuse oversized XML and do not call materialising package AP
   source.text = source.bytes = source.xml = source.xmlOrdered = (() => { throw new Error('cached API used') }) as never
   expect((await resolveSlideBackground(source, slide, theme())).background).toEqual(solid(18, 52, 86))
   const oversized = await pkg({ slides: [{ shapes: [] }] }, async zip => { zip.file(slide, '<p:sld>' + ' '.repeat(4 * 1024 * 1024) + '</p:sld>') })
-  await expect(resolveSlideBackground(oversized, slide, theme())).rejects.toMatchObject({ code: 'resource-limit' })
+  expect(await resolveSlideBackground(oversized, slide, theme())).toMatchObject({ background: { kind: 'none' }, diagnostics: [expect.objectContaining({ feature: 'resource-limit' })] })
 })
 it('inherited pictures resolve relative to their owner and explicit noFill stops inheritance', async () => {
   const data = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
@@ -87,4 +87,64 @@ it('inherited pictures resolve relative to their owner and explicit noFill stops
   expect(result.background).toMatchObject({ kind: 'picture', image: { data, partPath: 'ppt/media/image1.png' } })
   const noFill = await pkg(spec, async zip => { zip.file(slide, (await zip.file(slide)!.async('string')).replace('<p:cSld>', '<p:cSld><p:bg><p:bgPr><a:noFill/></p:bgPr></p:bg>')) })
   expect((await resolveSlideBackground(noFill, slide, theme())).background).toEqual({ kind: 'fill', fill: { kind: 'none' } })
+})
+it('theme blipFill resolves against the theme part and diagnoses duotone', async () => {
+  const source = await pkg({ masters: [{ layouts: [{}], bg: { bgRef: { idx: 1001, color: 'FF0000' } } }], slides: [{ shapes: [], layout: [0, 0] }], theme: { bgFillStyles: ['<a:blipFill><a:blip r:embed="themeImage"><a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FFFFFF"/></a:duotone></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill>'] } }, async zip => {
+    zip.file('ppt/theme/_rels/theme1.xml.rels', '<Relationships><Relationship Id="themeImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/theme-only.png"/></Relationships>')
+    zip.file('ppt/media/theme-only.png', new Uint8Array([137, 80, 78, 71]))
+  })
+  const t = parseThemeContext(await source.xmlOrdered('ppt/theme/theme1.xml'))
+  const result = await resolveSlideBackground(source, slide, t)
+  expect(result.background).toMatchObject({ kind: 'picture', image: { partPath: 'ppt/media/theme-only.png' } })
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ kind: 'unsupported-fill', feature: 'duotone' }))
+})
+it('lo-tdf123684 resolves its theme picture background', async ctx => {
+  const { existsSync, readFileSync } = await import('node:fs')
+  const path = 'corpus/lo-tdf123684.pptx'
+  if (!existsSync(path)) { ctx.skip('run bun scripts/fetch-corpus.ts'); return }
+  const source = await OfficePackage.load(readFileSync(path))
+  const t = parseThemeContext(await source.xmlOrdered('ppt/theme/theme1.xml'))
+  const result = await resolveSlideBackground(source, slide, t)
+  expect(result.background).toMatchObject({ kind: 'picture', image: { data: expect.any(Uint8Array) } })
+  if (result.background.kind === 'picture') expect(result.background.image.data.length).toBeGreaterThan(0)
+})
+it('picture reads share the HandlePackage aggregate and refuse with a diagnostic', async () => {
+  const { HandlePackage, HANDLE_AGGREGATE_BYTES } = await import('../src/pptx/appearance/handle-package')
+  const source = await pkg({ slides: [{ shapes: [], bg: { picture: { data: new Uint8Array(128 * 1024) } } }] }, async zip => {
+    zip.file('pressure.bin', new Uint8Array(HANDLE_AGGREGATE_BYTES - 65536))
+  })
+  const over = HandlePackage.over({ pkg: source, slideParts: [slide] }, { partBytes: HANDLE_AGGREGATE_BYTES })
+  await over.bytes('pressure.bin')
+  const result = await resolveSlideBackground(over, slide, theme())
+  expect(result.background).toEqual({ kind: 'none' })
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ kind: 'missing-image', feature: 'resource-limit' }))
+})
+it('nonrotating background gradients do not report a rotation compensation warning', async () => {
+  const source = await pkg({ slides: [{ shapes: [], bg: { gradient: { angle: 45, stops: [[0, 'FF0000'], [100000, '0000FF']] } } }] }, async zip => {
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace('<a:gradFill>', '<a:gradFill rotWithShape="0">'))
+  })
+  expect((await resolveSlideBackground(source, slide, theme())).diagnostics).toEqual([])
+})
+it('diagnoses unavailable bgRef, unsupported path gradients and external pictures', async () => {
+  const missing = await pkg({ slides: [{ shapes: [], bg: { bgRef: { idx: 1007, color: '123456' } } }] })
+  expect((await resolveSlideBackground(missing, slide, theme())).diagnostics).toContainEqual(expect.objectContaining({ kind: 'missing-theme-style' }))
+  const path = await pkg({ slides: [{ shapes: [], bg: { gradient: { angle: 0, stops: [[0, 'FF0000'], [100000, '0000FF']] } } }] }, async zip => {
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace(/<a:lin[^>]*\/>/, '<a:path path="rect"/>'))
+  })
+  expect((await resolveSlideBackground(path, slide, theme())).diagnostics).toContainEqual(expect.objectContaining({ kind: 'unsupported-gradient' }))
+  const external = await pkg({ slides: [{ shapes: [], bg: { picture: { data: new Uint8Array([1]) } } }] }, async zip => {
+    const rels = 'ppt/slides/_rels/slide1.xml.rels'
+    zip.file(rels, (await zip.file(rels)!.async('string')).replace('Target="../media/', 'TargetMode="External" Target="https://example.invalid/'))
+  })
+  expect(await resolveSlideBackground(external, slide, theme())).toMatchObject({ background: { kind: 'none' }, diagnostics: [expect.objectContaining({ kind: 'missing-image' })] })
+})
+it('uses the caller effective colour map for an inherited background', async () => {
+  const source = await pkg({ masters: [{ layouts: [{}], bg: { bgRef: { idx: 1001, color: 'bg1' } } }], slides: [{ shapes: [], layout: [0, 0] }], theme: { bgFillStyles: ['<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'] } })
+  const t = parseThemeContext(await source.xmlOrdered('ppt/theme/theme1.xml'), { bg1: 'accent1' })
+  t.colors.accent1 = { kind: 'srgb', value: '123456', transforms: [] }
+  expect((await resolveSlideBackground(source, slide, t)).background).toEqual(solid(18, 52, 86))
+})
+it('refuses a picture beyond the 32 MiB enrichment ceiling without losing diagnostics', async () => {
+  const source = await pkg({ slides: [{ shapes: [], bg: { picture: { data: new Uint8Array(32 * 1024 * 1024 + 1) } } }] })
+  expect(await resolveSlideBackground(source, slide, theme())).toMatchObject({ background: { kind: 'none' }, diagnostics: [expect.objectContaining({ kind: 'missing-image', feature: 'resource-limit' })] })
 })
