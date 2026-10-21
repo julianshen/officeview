@@ -381,7 +381,7 @@ interface TableStyleEntry {
 }
 
 /** Table scheme colors come from this slide's master theme, not theme1 by name. */
-async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ context: ThemeContext; palette: Map<string, string> }> {
+export async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ context: ThemeContext; palette: Map<string, string> }> {
   const mappings: Record<string, string> = {}
   let mappingSelected = false
   let path: string | undefined = slidePath
@@ -411,12 +411,17 @@ async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ cont
     path = next?.rel ? resolveTarget(path, attrs(next.rel).Target) : undefined
   }
   const context = parseThemeContext(themeRoot, mappings)
+  return { context, palette: themePalette(context) }
+}
+
+/** Table-style colours keyed by scheme name and colour-map alias, without '#'. */
+function themePalette(context: ThemeContext): Map<string, string> {
   const palette = new Map(Object.entries(context.palette).map(([key, value]) => [key, value.replace(/^#/, '')]))
   for (const [alias, key] of Object.entries(context.colorMap)) {
     const color = context.palette[key]
     if (color) palette.set(alias, color.replace(/^#/, ''))
   }
-  return { context, palette }
+  return palette
 }
 
 function tableColor(node: XmlNode | undefined, theme: Map<string, string>): string | undefined {
@@ -858,6 +863,27 @@ function parseShapeTree(
     if (shape.transformValid === false) shape.diagnostics.push({ kind: 'invalid-transform', message: 'Malformed shape/group transform; painting skipped', source })
     shapes.push(shape)
   }
+  return shapes
+}
+
+/**
+ * A layout or master part's whole shape tree, placeholders included, for the lazy
+ * master/layout artwork (slideshow S0-6). Images, table styles, compatibility and
+ * the node budget go through the slide loop's helpers; drawing content (charts,
+ * diagrams) is not prepared, so it shows as a card or is diagnosed.
+ */
+export async function parseArtworkTree(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[]): Promise<PptxShape[]> {
+  const root = await pkg.xmlOrdered(partPath)
+  const spTree = getChildren(getChildren(root, 'cSld')[0], 'spTree')[0]
+  if (!spTree) return []
+  const { images, external } = await loadSlideImages(pkg, partPath)
+  const tableStyles = await readTableStyles(pkg, themePalette(theme))
+  const defaults = getChildren(await pkg.xml('ppt/presentation.xml'), 'defaultTextStyle')[0]
+  const context = drawingPartContext(pkg)
+  const start = context.diagnostics.length
+  const compatibility = new DrawingCompatibility(new Map(), rid => images.has(rid), () => contentDiagnostic(context, 'unsupported-content', partPath, 'chart', { reason: 'chart-fallback-unusable' }))
+  const shapes = parseShapeTree(pkg, new Map(), spTree, partPath, images, theme, tableStyles, diagnostics, compatibility, 'spTree', undefined, 0, defaults, 0, undefined, { external, selections: new Map() })
+  diagnostics.push(...context.diagnostics.slice(start))
   return shapes
 }
 
