@@ -52,6 +52,8 @@ export { parseXlsx } from './xlsx/parse'
 export { computeMetrics, renderSheet, formatValue } from './xlsx/render'
 export { parsePptx } from './pptx/parse'
 export { slideMetrics, renderSlide } from './pptx/render'
+/** Lazy slide backgrounds and master/layout artwork for direct `renderSlide` callers (getPaintables runs it itself). */
+export const enrichSlideAppearance = (doc: import('./pptx/types').PptxDocument): Promise<void> => import('./pptx/appearance').then(m => m.enrichSlideAppearance(doc))
 
 // Types
 export type { DocxDocument, DocxParagraph, DocxSection, DocxTextRun } from './docx/types'

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import JSZip from 'jszip';
 import { createCanvas, loadImage } from 'canvas';
 import { OfficePackage } from '../src/core/zip';
@@ -6,6 +6,12 @@ import { parsePptx } from '../src/pptx/parse';
 import { renderSlide } from '../src/pptx/render';
 import { parseXmlOrdered } from '../src/core/xml';
 import { resolveDrawingStyle, parseThemeContext } from '../src/drawing/style';
+import { getPaintables } from '../src/render/paint';
+import { buildTextIndex } from '../src/core/search';
+import { handleWorkerRequest } from '../src/worker/office-worker';
+import { buildPptxDeck, type PptxDeckSpec } from '../src/testdata/ooxml-builders';
+import { enrichSlideAppearance } from '../src/index';
+import type { PptxDocument } from '../src/pptx/types';
 const emu = (n: number) => n * 9525;
 const xfrm = (x = 0, y = 0, w = 100, h = 80) => `<a:xfrm><a:off x="${emu(x)}" y="${emu(y)}"/><a:ext cx="${emu(w)}" cy="${emu(h)}"/></a:xfrm>`;
 const solid = (hex: string, alpha?: number) => `<a:solidFill><a:srgbClr val="${hex}">${alpha === undefined ? '' : `<a:alpha val="${alpha}"/>`}</a:srgbClr></a:solidFill>`;
@@ -186,5 +192,196 @@ describe('PPTX native appearance corrections', () => {
     test('visible direct border replaces the style border', async () => {
         const result = await render(await fixture(table([cell(`<a:lnR w="38100">${solid('FF0000')}</a:lnR>`) + cell()]), styleParts));
         expect(result.pixel(50, 20)).toEqual([255, 0, 0, 255]);
+    });
+});
+
+/* Slide appearance enrichment (slideshow S0-7). Office-shaped synthetic decks from buildPptxDeck, not Office evidence. */
+const pngOf = (rgb: string, size = 4) => {
+    const c = createCanvas(size, size), x = c.getContext('2d');
+    x.fillStyle = `#${rgb}`;
+    x.fillRect(0, 0, size, size);
+    return new Uint8Array(c.toBuffer('image/png'));
+};
+const LOGO = pngOf('00FF00');
+const PHOTO = pngOf('0000FF');
+// 9144000 x 6858000 EMU = 960 x 720 px; 9525 EMU per px.
+const px = (n: number) => String(n * 9525);
+function builderDeck(extra: Partial<PptxDeckSpec> = {}): PptxDeckSpec {
+    return {
+        masters: [{
+            bg: { gradient: { angle: 0, stops: [[0, 'FF0000'], [100000, '0000FF']] } },
+            shapes: [
+                { id: 10, name: 'Master Logo', image: { data: LOGO, name: 'logo.png' }, off: [px(20), px(20)], ext: [px(100), px(100)] },
+                { id: 11, name: 'Master Note', fill: 'FFFFFF', off: [px(400), px(600)], ext: [px(300), px(60)], paragraphs: [{ runs: [{ text: 'MasterOnlyText', sz: '2000' }] }] },
+                { id: 12, name: 'Master Title', placeholder: { type: 'title' }, off: [px(0), px(0)], ext: [px(960), px(100)] },
+            ],
+            layouts: [{ shapes: [{ id: 20, name: 'Layout Band', fill: '336699', off: [px(0), px(690)], ext: [px(960), px(30)] }] }],
+        }],
+        slides: [{ shapes: [{ id: 3, name: 'Slide Box', fill: 'FFFF00', off: [px(400), px(300)], ext: [px(100), px(100)], paragraphs: [{ runs: [{ text: 'SlideText', sz: '1200' }] }] }] }],
+        ...extra,
+    };
+}
+const parseDeck = async (spec: PptxDeckSpec) => parsePptx(await OfficePackage.load(await buildPptxDeck(spec)));
+async function paintFirst(doc: PptxDocument, options: Parameters<typeof getPaintables>[1] = {}) {
+    const pages = await getPaintables(doc, options);
+    const page = pages[0];
+    const canvas = createCanvas(page.spec.widthPx, page.spec.heightPx), ctx = canvas.getContext('2d');
+    page.paint(ctx as unknown as CanvasRenderingContext2D);
+    pages.dispose();
+    return { pages, ctx, pixel: (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data) };
+}
+const near = (actual: number[], expected: number[], tolerance = 24) => actual.slice(0, 3).every((v, i) => Math.abs(v - expected[i]) <= tolerance);
+const allDiagnostics = (doc: PptxDocument) => [...(doc.diagnostics ?? []), ...doc.slides.flatMap(s => s.diagnostics ?? [])];
+
+describe('slide appearance enrichment', () => {
+    it('getPaintables paints a gradient background and a master logo for a builder deck', async () => {
+        const { pixel } = await paintFirst(await parseDeck(builderDeck()));
+        // linear gradient at 0 degrees: red on the left edge, blue on the right
+        expect(near(pixel(2, 360), [255, 0, 0], 40)).toBe(true);
+        expect(near(pixel(957, 360), [0, 0, 255], 40)).toBe(true);
+        expect(near(pixel(480, 200), [128, 0, 128], 40)).toBe(true);
+        // master logo picture, layout band, slide box on top
+        expect(near(pixel(70, 70), [0, 255, 0])).toBe(true);
+        expect(near(pixel(480, 705), [0x33, 0x66, 0x99])).toBe(true);
+        expect(near(pixel(495, 395), [255, 255, 0])).toBe(true);
+    });
+    it('enrichment is idempotent across two getPaintables calls', async () => {
+        const doc = await parseDeck(builderDeck());
+        await paintFirst(doc);
+        const underlay = doc.slides[0].underlay;
+        const images = doc.images.length;
+        expect(underlay?.length).toBe(4); // background, master logo, master note, layout band
+        await paintFirst(doc);
+        expect(doc.slides[0].underlay).toBe(underlay);
+        expect(doc.slides[0].underlay?.length).toBe(4);
+        expect(doc.images.length).toBe(images);
+        // concurrent first calls share one run
+        const fresh = await parseDeck(builderDeck());
+        await Promise.all([enrichSlideAppearance(fresh), enrichSlideAppearance(fresh)]);
+        expect(fresh.slides[0].underlay?.length).toBe(4);
+        expect(fresh.images.length).toBe(images);
+    });
+    it('underlay pictures get an image index and are decoded', async () => {
+        const doc = await parseDeck(builderDeck({ slides: [{ shapes: [{ id: 3, name: 'Slide Logo', image: { data: LOGO, name: 'logo.png' }, off: [px(600), px(100)], ext: [px(50), px(50)] }] }] }));
+        expect(doc.images).toHaveLength(1);
+        await enrichSlideAppearance(doc);
+        const logo = doc.slides[0].underlay!.find(s => s.source?.name === 'Master Logo')!;
+        // the same media part shared by the slide and the master deduplicates to one asset
+        expect(logo.imageIndex).toBe(0);
+        expect(doc.images).toHaveLength(1);
+        const decoded: string[] = [];
+        await paintFirst(doc, { decodeImage: async (bytes, mime) => { decoded.push(mime ?? ''); return loadImage(Buffer.from(bytes)) as never; } });
+        expect(decoded).toHaveLength(1);
+    });
+    it('the watermark paints over an opaque picture background', async () => {
+        const doc = await parseDeck(builderDeck({ masters: [{ bg: { picture: { data: PHOTO } }, layouts: [{}] }] }));
+        const plain = await paintFirst(doc);
+        expect(near(plain.pixel(200, 200), [0, 0, 255])).toBe(true);
+        const marked = await paintFirst(doc, { watermark: { text: 'DRAFT', color: '#FF0000', opacity: 1, fontSizePt: 60 } });
+        const data = marked.ctx.getImageData(0, 0, 960, 720).data;
+        let redOverPicture = 0, redOverBox = 0;
+        for (let y = 0; y < 720; y++) for (let x = 0; x < 960; x++) {
+            const i = (y * 960 + x) * 4;
+            if (data[i] > 200 && data[i + 1] < 60 && data[i + 2] < 60) {
+                if (x >= 402 && x < 498 && y >= 302 && y < 398) redOverBox++;
+                else redOverPicture++;
+            }
+        }
+        expect(redOverPicture).toBeGreaterThan(500);
+        // the slide's own shapes still paint over the watermark
+        expect(redOverBox).toBe(0);
+    });
+    it('renderSlide without enrichment paints the pre-Stage-0 appearance; after enrichSlideAppearance it paints the underlay', async () => {
+        const doc = await parseDeck(builderDeck());
+        const draw = () => {
+            const ctx = createCanvas(960, 720).getContext('2d');
+            renderSlide(doc.slides[0], ctx as unknown as CanvasRenderingContext2D);
+            return (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data);
+        };
+        const before = draw();
+        expect(before(2, 360)).toEqual([255, 255, 255, 255]);
+        expect(before(480, 705)).toEqual([255, 255, 255, 255]);
+        expect(doc.slides[0].underlay).toBeUndefined();
+        await enrichSlideAppearance(doc);
+        const after = draw();
+        expect(near(after(2, 360), [255, 0, 0], 40)).toBe(true);
+        expect(near(after(480, 705), [0x33, 0x66, 0x99])).toBe(true);
+        // the solid approximation is unchanged for callers that read it
+        expect(doc.slides[0].background).toBe(undefined);
+    });
+    it('the worker path (handleWorkerRequest) returns the enriched slide', async () => {
+        const source = await buildPptxDeck(builderDeck());
+        const env = {
+            async createCanvas(w: number, h: number) { return createCanvas(w, h); },
+            async toBitmap(canvas: unknown) { return canvas as ImageBitmap; },
+            async parse(_format: 'pptx', bytes: Uint8Array) { return parsePptx(await OfficePackage.load(bytes)); },
+            async paintables(doc: never, options: never) { return getPaintables(doc, options); },
+        };
+        const res = await handleWorkerRequest({ id: 7, kind: 'render-slide', format: 'pptx', source: source.slice().buffer as ArrayBuffer, index: 0 }, env as never);
+        expect(res.ok).toBe(true);
+        if (!res.ok) return;
+        const ctx = (res.bitmap as unknown as ReturnType<typeof createCanvas>).getContext('2d');
+        expect(near(Array.from(ctx.getImageData(2, 360, 1, 1).data), [255, 0, 0], 40)).toBe(true);
+        expect(near(Array.from(ctx.getImageData(70, 70, 1, 1).data), [0, 255, 0])).toBe(true);
+    });
+    it('a cloned document without a package handle paints as before, with a no-package diagnostic', async () => {
+        const clone = structuredClone(await parseDeck(builderDeck()));
+        const { pixel } = await paintFirst(clone);
+        expect(pixel(2, 360)).toEqual([255, 255, 255, 255]);
+        expect(clone.slides[0].underlay).toBeUndefined();
+        await paintFirst(clone);
+        expect(allDiagnostics(clone).filter(d => d.kind === 'no-package')).toHaveLength(1);
+    });
+    it('an invalid slide size skips enrichment with a slide-size diagnostic', async () => {
+        const doc = await parseDeck(builderDeck({ slideSize: [9144000, 100] }));
+        await enrichSlideAppearance(doc);
+        expect(doc.slides[0].underlay).toBeUndefined();
+        expect(allDiagnostics(doc).filter(d => d.kind === 'slide-size')).toHaveLength(1);
+        await enrichSlideAppearance(doc);
+        expect(allDiagnostics(doc).filter(d => d.kind === 'slide-size')).toHaveLength(1);
+    });
+    it('an appearance chunk failure still returns pages', async () => {
+        const doc = await parseDeck(builderDeck());
+        const { pages, pixel } = await paintFirst(doc, { __appearanceLoader: () => Promise.reject(new Error('chunk load failed')) });
+        expect(pages).toHaveLength(1);
+        expect(pixel(2, 360)).toEqual([255, 255, 255, 255]);
+        expect(near(pixel(495, 395), [255, 255, 0])).toBe(true);
+        expect(allDiagnostics(doc).filter(d => d.kind === 'appearance-unavailable')).toHaveLength(1);
+    });
+    it('the effective slide colour map reaches the background and artwork', async () => {
+        // bgRef with phClr from a scheme colour: bg1 maps to dk1 (black) through the slide clrMapOvr
+        const spec = builderDeck({
+            masters: [{ bg: { bgRef: { idx: 1001, color: 'bg1' } }, layouts: [{}] }],
+            slides: [{ shapes: [], extraXml: { afterCSld: '<p:clrMapOvr><a:overrideClrMapping bg1="dk1" tx1="lt1" bg2="dk2" tx2="lt2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr>' } }],
+        });
+        const doc = await parseDeck(spec);
+        await enrichSlideAppearance(doc);
+        const bg = doc.slides[0].underlay?.[0];
+        expect(bg?.drawingStyle?.fill?.kind).toBe('solid');
+        const color = (bg!.drawingStyle!.fill as { color: { r: number; g: number; b: number } }).color;
+        expect(color.r + color.g + color.b).toBeLessThan(120);
+    });
+    it('a master shared by several slides is parsed once per run (one node-budget charge)', async () => {
+        const slide = { shapes: [{ id: 3, name: 'Box', fill: 'FFFF00', off: [px(400), px(300)] as [string, string], ext: [px(100), px(100)] as [string, string] }] };
+        const doc = await parseDeck(builderDeck({ slides: [slide, slide, slide] }));
+        await enrichSlideAppearance(doc);
+        const logos = doc.slides.map(s => s.underlay!.find(n => n.source?.name === 'Master Logo'));
+        expect(logos[0]).toBeDefined();
+        expect(logos[1]).toBe(logos[0]);
+        expect(logos[2]).toBe(logos[0]);
+        // each slide still gets its own underlay list and background node
+        expect(doc.slides[1].underlay).not.toBe(doc.slides[0].underlay);
+        expect(doc.images.filter(i => i.partPath === logos[0]!.image!.partPath)).toHaveLength(1);
+    });
+    it('text search and coverage ignore underlay shapes', async () => {
+        const doc = await parseDeck(builderDeck());
+        const pages = await getPaintables(doc);
+        expect(doc.slides[0].underlay?.some(s => s.textBody?.paragraphs.some(p => p.runs.some(r => r.text === 'MasterOnlyText')))).toBe(true);
+        const index = await buildTextIndex(pages);
+        const text = index.pages[0].lines.map(line => line.text).join(' ');
+        expect(text).toContain('SlideText');
+        expect(text).not.toContain('MasterOnlyText');
+        expect(doc.drawingCoverage?.every(entry => entry.partPath === 'ppt/slides/slide1.xml')).toBe(true);
+        pages.dispose();
     });
 });

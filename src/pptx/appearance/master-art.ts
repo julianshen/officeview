@@ -49,6 +49,22 @@ function placeholderIds(root: XmlNode | undefined): Set<string> {
   return ids
 }
 
+/** Shapes filled with the slide background (`p:sp@useBgFill`): not applied yet, so diagnosed (spec: never silent). */
+function useBgFillDiagnostic(root: XmlNode | undefined, partPath: string, diagnostics: PptxDiagnostic[]): void {
+  let count = 0
+  const pending: Array<[XmlNode, number]> = root ? [[root, 0]] : []
+  while (pending.length) {
+    const [node, depth] = pending.pop()!
+    if (depth >= MAX_DEPTH) continue
+    for (const [name, child] of orderedChildren(node)) {
+      if (name === '#text') continue
+      if (name === 'sp' && ['1', 'true'].includes(attrs(child).useBgFill ?? '')) count++
+      pending.push([child, depth + 1])
+    }
+  }
+  if (count) diagnostics.push({ kind: 'unsupported-fill', feature: 'useBgFill', message: `${count} shape(s) in ${partPath} fill with the slide background; their own fill paints instead` })
+}
+
 function withoutPlaceholders(shapes: PptxShape[], ids: Set<string>): PptxShape[] {
   const kept: PptxShape[] = []
   for (const shape of shapes) {
@@ -63,8 +79,10 @@ function withoutPlaceholders(shapes: PptxShape[], ids: Set<string>): PptxShape[]
 async function partArtwork(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[]): Promise<PptxShape[]> {
   const issues: PptxDiagnostic[] = []
   const parsed = await parseArtworkTree(pkg, partPath, theme, issues)
-  const ids = placeholderIds(getChildren(getChildren(await pkg.xmlOrdered(partPath), 'cSld')[0], 'spTree')[0])
+  const spTree = getChildren(getChildren(await pkg.xmlOrdered(partPath), 'cSld')[0], 'spTree')[0]
+  const ids = placeholderIds(spTree)
   const shapes = withoutPlaceholders(parsed, ids)
+  useBgFillDiagnostic(spTree, partPath, diagnostics)
   diagnostics.push(...issues.filter(issue => !(issue.source?.partPath === partPath && issue.source.id !== undefined && ids.has(issue.source.id))))
   // As the slide loop does: geometry and style issues of each kept shape.
   const walk = (list: PptxShape[]) => {
@@ -79,19 +97,39 @@ async function partArtwork(pkg: OfficePackage, partPath: string, theme: ThemeCon
   return shapes
 }
 
+/** One enrichment run's parsed parts, keyed by part and effective colour map, so a master shared by many slides
+ * is parsed (and charged to the run's node budget) once. Slides sharing an entry share its shape objects. */
+export type ArtworkCache = Map<string, Promise<{ shapes: PptxShape[]; diagnostics: PptxDiagnostic[] }>>
+
+async function cachedArtwork(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[], cache?: ArtworkCache): Promise<PptxShape[]> {
+  if (!cache) return partArtwork(pkg, partPath, theme, diagnostics)
+  const key = `${partPath}\u0000${JSON.stringify(theme.colorMap)}`
+  let entry = cache.get(key)
+  if (!entry) {
+    const own: PptxDiagnostic[] = []
+    entry = partArtwork(pkg, partPath, theme, own).then(shapes => ({ shapes, diagnostics: own }))
+    cache.set(key, entry)
+  }
+  const { shapes, diagnostics: own } = await entry
+  diagnostics.push(...own)
+  return shapes
+}
+
 /**
  * The slide's master and layout non-placeholder shapes, in paint order (master below layout).
  * Slide `showMasterSp="0"` drops both; layout `showMasterSp="0"` drops the master's only.
  * Shapes keep their layout/master `source.partPath`, so their ids never collide with slide ids.
  */
-export async function masterArtwork(pkg: OfficePackage, slidePath: string, theme: ThemeContext): Promise<MasterArtwork> {
+export async function masterArtwork(pkg: OfficePackage, slidePath: string, theme: ThemeContext, cache?: ArtworkCache): Promise<MasterArtwork> {
   const diagnostics: PptxDiagnostic[] = []
   const art: MasterArtwork = { master: [], layout: [], diagnostics }
-  if (hidesMaster(await pkg.xmlOrdered(slidePath))) return art
+  const slide = await pkg.xmlOrdered(slidePath)
+  useBgFillDiagnostic(getChildren(getChildren(slide, 'cSld')[0], 'spTree')[0], slidePath, diagnostics)
+  if (hidesMaster(slide)) return art
   const layoutPath = await related(pkg, slidePath, 'slideLayout')
   // A slide without a layout may still link its master directly.
   const masterPath = await related(pkg, layoutPath ?? slidePath, 'slideMaster')
-  if (masterPath && !(layoutPath && hidesMaster(await pkg.xmlOrdered(layoutPath)))) art.master = await partArtwork(pkg, masterPath, theme, diagnostics)
-  if (layoutPath) art.layout = await partArtwork(pkg, layoutPath, theme, diagnostics)
+  if (masterPath && !(layoutPath && hidesMaster(await pkg.xmlOrdered(layoutPath)))) art.master = await cachedArtwork(pkg, masterPath, theme, diagnostics, cache)
+  if (layoutPath) art.layout = await cachedArtwork(pkg, layoutPath, theme, diagnostics, cache)
   return art
 }
