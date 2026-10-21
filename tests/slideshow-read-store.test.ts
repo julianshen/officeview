@@ -208,9 +208,9 @@ it('media records keep declared size and content type; no bytes are read', async
     h.release();
     q.store.close();
 });
-it.skipIf(!existsSync('corpus/tdf104788.pptx'))('tdf104788 reads 6 notes bodies and showNarration=1', async () => {
+it.skipIf(!existsSync('corpus/lo-tdf104788.pptx'))('tdf104788 reads 6 notes bodies and showNarration=1', async () => {
     const { readFileSync } = await import('node:fs');
-    const handle = await openShowPackage(new Uint8Array(readFileSync('corpus/tdf104788.pptx')));
+    const handle = await openShowPackage(new Uint8Array(readFileSync('corpus/lo-tdf104788.pptx')));
     const sink = createDiagnosticSink(), w = workspace();
     const doc: PptxDocument = { slideWidthEmu: 9144000, slideHeightEmu: 6858000, images: [], slides: handle.slideParts.map((_, index) => ({ index, widthEmu: 9144000, heightEmu: 6858000, shapes: [] })) };
     const index = await readShowIndex(doc, handle, sink);
