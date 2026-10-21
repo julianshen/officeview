@@ -8,6 +8,7 @@
  *   bun scripts/fetch-corpus.ts --check  # verify only, fetch nothing
  *
  * Sources (see LICENSE notes per entry):
+ *   LibreOffice/core          MPL-2.0 — slideshow decks (fetched, not vendored)
  *   apache/poi               Apache-2.0 — 130 docx / 366 xlsx / 95 pptx fixtures,
  *                             many of them real Excel/Word bug repros plus
  *                             minimized fuzzer cases (robustness probes)
@@ -56,6 +57,14 @@ const pypptx = (name: string, probe: string): CorpusEntry => ({
   probe,
 })
 
+const lo = (file: string, commit: string, probe: string): CorpusEntry => ({
+  name: `lo-${file}`,
+  url: `https://raw.githubusercontent.com/LibreOffice/core/${commit}/sd/qa/unit/data/pptx/${file}`,
+  source: 'LibreOffice/core',
+  license: 'MPL-2.0 (LibreOffice test data; see docs/validation/slideshow-corpus.md)',
+  probe,
+})
+
 export const CORPUS: CorpusEntry[] = [
   // ---- DOCX ----
   poi('document/Bug66263-table.docx', 'tables in a real Word-produced file'),
@@ -92,6 +101,24 @@ export const CORPUS: CorpusEntry[] = [
   pypptx('test_slides.pptx', 'multi-slide deck'),
   pypptx('missing_rels_item.pptx', 'dangling relationship (robustness)'),
   pypptx('no-core-props.pptx', 'missing core properties (robustness)'),
+  // ---- LibreOffice slideshow ----
+  lo('tdf104788.pptx', '319a6fb33c22156e83cebaf3447d7432beca8fb3', 'six slides and six notes bodies; showNarration=1; entrance presets 10/34/37/42/47/58; animEffect, animScale and bldP'),
+  lo('tdf115394.pptx', 'a8a3e6a7fee5ac23bc2155b9391ead9402211147', 'fade; speed-only and explicit durations 250/4250'),
+  lo('tdf142915.pptx', 'f8ddaaf0f5e1fb61e0d4404ea28757bc652ae4be', 'advClick=0 advTm=1000; durations 0/10'),
+  lo('tdf44223.pptx', '8a1321362a0229a25869e4e3d0422a5a51c5b5be', 'split with sound; paragraph background build; entrance preset 2'),
+  lo('bnc591147.pptx', 'a3ef3b658dea9b59ded319f2f092e73e4deaad24', 'interactive click sequence and media commands; AVI and MP3 media with picture poster'),
+  lo('connector-shape-animations.pptx', '8359e9974a5a43b094a7eecb73070b26fcb4df5a', 'preset 22 targets connectors'),
+  lo('tdf104792-smart-art-animation.pptx', '7c354d1bf1ca29a5ae9ee9d6f18dd68b90530043', 'SmartArt bldDgm'),
+  lo('narration.pptx', '56f26399df894d05f24874a3cdc90694158e03bc', 'audio, p14 media, M4A and transition'),
+  lo('airplane-transition.pptx', '2c6eb9d95930a33318bcec785edf735aeb8adced', 'p15 airplane transition'),
+  lo('tdf156808.pptx', '40641b868b20c73e694770c2c7ea71e232514fa1', 'p14 flythrough'),
+  lo('tdf149588_transparentSolidFill.pptx', '0cc9aaae5dc6655490513e8e4a93967f6248e23c', 'p159 morph'),
+  lo('tdf105739.pptx', '319a6fb33c22156e83cebaf3447d7432beca8fb3', 'slide gradient background'),
+  lo('tdf146223.pptx', '4574a1ea408c2ac30042dca32d02207ec7add4da', 'slide and master picture backgrounds; master picture artwork'),
+  lo('tdf123684.pptx', '943a534ac7cb3df513583e226c986dafd8ba246b', 'master bgRef 1003 and six non-placeholder artwork nodes'),
+  lo('ooxtheme.pptx', 'cd08835d1bd9274412c7326db32fb3752bc94fb3', 'ten non-placeholder master artwork nodes'),
+  lo('tdf93868.pptx', 'f3d1ac75c4b7fa63022e54a9cbff46ba99535076', 'master gradient background and two non-placeholder shapes'),
+
 ]
 
 const CORPUS_DIR = join(import.meta.dir, '..', 'corpus')
@@ -163,6 +190,6 @@ writeFileSync(LOCK, `${JSON.stringify(lock, null, 2)}\n`)
 
 console.log(`\ncorpus: ${verified} verified, ${downloaded} newly downloaded, ${failures.length} failed`)
 for (const f of failures) console.log(`  FAILED ${f}`)
-console.log(`\nSources: apache/poi (Apache-2.0), python-openxml/python-docx (MIT), scanny/python-pptx (MIT)`)
+console.log(`\nSources: LibreOffice/core (MPL-2.0), apache/poi (Apache-2.0), python-openxml/python-docx (MIT), scanny/python-pptx (MIT)`)
 console.log(`Files live in corpus/ (gitignored); manifest is embedded in this script, hashes in corpus/corpus.lock.json`)
 process.exit(failures.length > 0 ? 1 : 0)
