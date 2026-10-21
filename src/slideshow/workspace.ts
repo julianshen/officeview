@@ -27,7 +27,8 @@ export interface Backing { w: number; h: number; dpr: number }
 
 const validBytes = (bytes: number) => Number.isFinite(bytes) && bytes >= 0
 
-interface Pool { used: number; limit: number; closed: boolean }
+/** `onRelease` runs after bytes come back (a shrink or a release), so an owner can settle what it still holds. */
+interface Pool { used: number; limit: number; closed: boolean; onRelease?: () => void }
 
 function poolLease(pool: Pool, bytes: number, tag: string): Lease | undefined {
   if (pool.closed || !validBytes(bytes) || pool.used + bytes > pool.limit) return undefined
@@ -52,6 +53,7 @@ function makeLease(pool: Pool, bytes: number, tag: string): Lease {
       const n = Math.min(less, held)
       pool.used -= n
       held -= n
+      if (n) pool.onRelease?.()
     },
     transfer(next) {
       if (!live) throw new Error(`slideshow workspace: released lease ${tag} cannot transfer`)
@@ -63,6 +65,7 @@ function makeLease(pool: Pool, bytes: number, tag: string): Lease {
       live = false
       pool.used -= held
       held = 0
+      pool.onRelease?.()
     },
   }
 }
@@ -74,15 +77,37 @@ export interface ClosableSubOwner extends SubOwner {
   close(): void
 }
 
-/** A bounded sub-owner carved from bytes already reserved elsewhere: its leases never reach a parent ledger. */
-export function createSubOwner(capacity: number): ClosableSubOwner {
-  const pool: Pool = { used: 0, limit: validBytes(capacity) ? capacity : 0, closed: false }
+/**
+ * A bounded sub-owner carved from bytes already reserved elsewhere: its leases never reach a parent ledger.
+ * `onRelease` runs whenever one of its leases gives bytes back, so the parent can refund exactly what is no
+ * longer held once the sub-owner is closed (a charge is refunded only when its last holder releases it).
+ */
+export function createSubOwner(capacity: number, onRelease?: () => void): ClosableSubOwner {
+  const pool: Pool = { used: 0, limit: validBytes(capacity) ? capacity : 0, closed: false, onRelease }
   return {
     lease: (bytes, tag) => poolLease(pool, bytes, tag),
     setCapacity(bytes) { if (validBytes(bytes)) pool.limit = bytes },
     used: () => pool.used,
     close() { pool.closed = true },
   }
+}
+
+/** A pending output replacement: the new surface is charged next to the old one until `commit` releases the old. */
+export interface ResizeTicket {
+  readonly outputBytes: number
+  /** The new surface has replaced the old one: the old output is refunded. */
+  commit(): void
+  /** The replacement was abandoned: the new output is refunded. */
+  abort(): void
+}
+
+/**
+ * The workspace's terminal reserve. `resize` (the S1-2 contract) admits the old + new peak and swaps at once,
+ * for a caller that replaces the surface within the same task; `beginResize` keeps both charged until the
+ * caller commits the swap. Every replacement, smaller or equal included, admits the peak.
+ */
+export interface SlideShowTerminalReserve extends TerminalReserve {
+  beginResize(outputBytes: number): ResizeTicket | undefined
 }
 
 export interface SlideShowLimits {
@@ -101,32 +126,62 @@ export function createSlideShowWorkspace(profile: SlideShowProfile, limits: Slid
   return {
     limit,
     lease: (bytes, tag) => poolLease(pool, bytes, tag),
-    reserveTerminal(outputBytes) {
-      if (!validBytes(outputBytes)) return undefined
+    reserveTerminal(outputBytes): SlideShowTerminalReserve | undefined {
+      if (!validBytes(outputBytes) || pool.used + outputBytes + scratchBytes > pool.limit) return undefined
       // Internal to the reserve: no caller can reach these bytes through `lease`.
-      const base = poolLease(pool, outputBytes + scratchBytes, 'terminal')
-      if (!base) return undefined
-      const scratch = createSubOwner(scratchBytes)
-      let out = outputBytes
+      let output = poolLease(pool, outputBytes, 'terminal:output')!
+      const scratchLease = poolLease(pool, scratchBytes, 'terminal:scratch')!
       let live = true
-      const reserve: TerminalReserve = {
-        get outputBytes() { return out },
+      let pending: ResizeTicket | undefined
+      // After release the scratch charge follows its outstanding leases down, and is gone with the last one.
+      const settleScratch = () => {
+        if (live) return
+        const extra = scratchLease.bytes - scratch.used()
+        if (extra > 0) scratchLease.shrink(extra)
+        if (scratch.used() === 0) scratchLease.release()
+      }
+      const scratch = createSubOwner(scratchBytes, settleScratch)
+      const reserve: SlideShowTerminalReserve = {
+        get outputBytes() { return output.bytes },
         scratch,
+        beginResize(next) {
+          if (!live || pending || !validBytes(next)) return undefined
+          // The new surface is charged before the old one is released: old + new must fit at the peak.
+          const incoming = poolLease(pool, next, 'terminal:output')
+          if (!incoming) return undefined
+          let open = true
+          const ticket: ResizeTicket = {
+            outputBytes: next,
+            commit() {
+              if (!open) return
+              open = false
+              pending = undefined
+              output.release()
+              output = incoming
+            },
+            abort() {
+              if (!open) return
+              open = false
+              pending = undefined
+              incoming.release()
+            },
+          }
+          pending = ticket
+          return ticket
+        },
         resize(next) {
-          if (!live || !validBytes(next)) return false
-          if (next > out) {
-            // The new surface is taken before the old one is released: old + new must fit at the peak.
-            if (!base.grow(next)) return false
-            base.shrink(out)
-          } else base.shrink(out - next)
-          out = next
+          const ticket = reserve.beginResize(next)
+          if (!ticket) return false
+          ticket.commit()
           return true
         },
         release() {
           if (!live) return
+          pending?.abort()
           live = false
+          output.release()
           scratch.close()
-          base.release()
+          settleScratch()
         },
       }
       return reserve

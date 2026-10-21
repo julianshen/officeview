@@ -14,7 +14,7 @@
  * reserve taken at show start, which is never lent.
  */
 import type { AllocationOwner, DiagnosticSink, Lease, MetadataHandle, SlideMetadataStore, SlideShowWorkspace, TerminalReserve } from './types'
-import { backingFor, createSubOwner, surfaceBytes, type Backing, type ClosableSubOwner } from './workspace'
+import { backingFor, createSubOwner, surfaceBytes, type Backing, type ClosableSubOwner, type ResizeTicket, type SlideShowTerminalReserve } from './workspace'
 
 export type LadderLevel = 'full' | 'reduced' | 'flattened' | 'terminal'
 const LADDER: readonly LadderLevel[] = ['full', 'reduced', 'flattened', 'terminal']
@@ -26,8 +26,14 @@ export interface Residency {
   evict(slide: number): void
   /** Stops cross-slide media, then drops every neighbour's metadata and layers; never the current slide's. */
   onPressure(): void
-  /** A larger output takes its reserve before the old is released; if it cannot, the old backing store is kept. */
+  /**
+   * Every new output takes its reserve before the old is released (old + new at the peak, smaller included);
+   * if it cannot, the old backing store is kept with a diagnostic. On `'resized'` both stay charged until
+   * `commitResize`; a resize while one is pending keeps the old store.
+   */
   resize(css: { w: number; h: number }, dpr: number): 'resized' | 'kept-old'
+  /** The new output surface has replaced the old one: the old output is refunded. */
+  commitResize(): void
   /** Moves the window to `slide - 1 .. slide + 1`, evicting everything outside it. */
   show(slide: number): void
   /** The slides currently holding (or acquiring) residency, ascending. */
@@ -57,9 +63,22 @@ interface Entry {
   acquiring?: Promise<MetadataHandle>
   handle?: MetadataHandle
   lease?: Lease
-  owner?: ClosableSubOwner
-  building: number
+  /** The rung the slide's layers are built at now; retired generations settle on their own. */
+  gen?: Generation
   dead: boolean
+}
+
+/**
+ * One rung's reservation for one slide: a workspace lease and the sub-owner its layers allocate from. A rung
+ * change makes a new generation; the old one is retired, and its charge follows its live allocations down,
+ * refunded only when the last holder (an in-flight build or an outstanding layer lease) lets go.
+ */
+interface Generation {
+  level: Exclude<LadderLevel, 'terminal'>
+  lease: Lease
+  owner: ClosableSubOwner
+  builds: number
+  retired: boolean
 }
 
 const cancelled = () => new Error('cancelled')
@@ -85,21 +104,42 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
   const price = (slide: number, level: Exclude<LadderLevel, 'terminal'>) => (deps.cost ? deps.cost(slide, level, backing) : defaultCost(level, backing))
   const inWindow = (slide: number) => current !== undefined && Math.abs(slide - current) <= 1
 
-  const releaseLayers = (entry: Entry) => {
-    entry.owner?.close()
-    entry.owner = undefined
-    entry.lease?.release()
-    entry.lease = undefined
+  let pendingResize: ResizeTicket | undefined
+
+  /** A retired generation keeps exactly what is still held: everything while a build runs, then its live leases. */
+  const settle = (g: Generation) => {
+    if (!g.retired || g.builds > 0) return
+    const live = g.owner.used()
+    const extra = g.lease.bytes - live
+    if (extra > 0) g.lease.shrink(extra)
+    if (live === 0) g.lease.release()
   }
-  /** Ends an entry: metadata and layers go now, unless a build is still allocating (then on its completion). */
+  const retire = (g: Generation) => {
+    if (g.retired) return
+    g.retired = true
+    g.owner.close()
+    settle(g)
+  }
+  const idle = (g: Generation) => g.builds === 0 && g.owner.used() === 0
+  const newGeneration = (slide: number, level: Generation['level'], bytes: number): Generation | undefined => {
+    const lease = ws.lease(bytes, `slide:${slide}:${level}`)
+    if (!lease) return undefined
+    const g: Generation = { level, lease, owner: undefined!, builds: 0, retired: false }
+    g.owner = createSubOwner(bytes, () => settle(g))
+    return g
+  }
+  const releaseLayers = (entry: Entry) => {
+    if (entry.gen) retire(entry.gen)
+    entry.gen = undefined
+  }
+  /** Ends an entry: metadata goes now; layers are retired and refunded as their holders let go. */
   const drop = (entry: Entry) => {
     entry.dead = true
     if (entries.get(entry.slide) === entry) entries.delete(entry.slide)
     entry.abort.abort()
     entry.handle?.release()
     entry.handle = undefined
-    if (entry.building === 0) releaseLayers(entry)
-    else entry.owner?.close()
+    releaseLayers(entry)
     store.evict(entry.slide)
   }
 
@@ -115,18 +155,23 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
     return freed
   }
 
-  const tryLease = (entry: Entry, bytes: number): boolean => {
-    if (!entry.lease) {
-      const lease = ws.lease(bytes, `slide:${entry.slide}:layers`)
-      if (!lease) return false
-      entry.lease = lease
-      entry.owner = createSubOwner(bytes)
+  const tryRung = (entry: Entry, rung: Generation['level'], bytes: number): boolean => {
+    const old = entry.gen
+    if (old && old.level === rung) {
+      // Same rung: grow in place if needed; never shrink under live allocations.
+      const held = old.lease.bytes
+      if (bytes > held) {
+        if (!old.lease.grow(bytes - held)) return false
+        old.owner.setCapacity(bytes)
+      }
       return true
     }
-    const held = entry.lease.bytes
-    if (bytes > held && !entry.lease.grow(bytes - held)) return false
-    if (bytes < held) entry.lease.shrink(held - bytes)
-    entry.owner!.setCapacity(bytes)
+    // An idle old rung holds nothing live: refund it first, so the change needs no peak.
+    if (old && idle(old)) releaseLayers(entry)
+    const next = newGeneration(entry.slide, rung, bytes)
+    if (!next) return false
+    releaseLayers(entry)
+    entry.gen = next
     return true
   }
 
@@ -142,7 +187,7 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
       }
       const bytes = price(entry.slide, rung)
       for (;;) {
-        if (tryLease(entry, bytes)) return rung
+        if (tryRung(entry, rung, bytes)) return rung
         if (relief === 0) { relief = 1; if (deps.stopCrossSlideMedia) { deps.stopCrossSlideMedia(); continue } }
         if (relief === 1) { relief = 2; if (evictNeighbours(entry.slide)) continue }
         break
@@ -168,7 +213,7 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
       if (!inWindow(slide)) throw cancelled()
       let entry = entries.get(slide)
       if (!entry) {
-        entry = { slide, abort: new AbortController(), building: 0, dead: false }
+        entry = { slide, abort: new AbortController(), dead: false }
         entries.set(slide, entry)
       }
       const mine = entry
@@ -189,22 +234,23 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
         else mine.handle = handle
       }
       const got = fit(mine, level)
-      if (got === 'terminal' || !deps.build || !mine.owner) return got
-      mine.building++
+      const g = mine.gen
+      if (got === 'terminal' || !deps.build || !g) return got
+      g.builds++
       try {
-        await deps.build(slide, got, mine.owner)
+        await deps.build(slide, got, g.owner)
       } finally {
-        mine.building--
-        // The build finished after its slide was left: its reservation is released now.
-        if (mine.dead && mine.building === 0) releaseLayers(mine)
+        g.builds--
+        // Superseded or left while building: what the build no longer holds is refunded now.
+        settle(g)
       }
-      if (mine.dead) throw cancelled()
+      if (mine.dead || mine.gen !== g) throw cancelled()
       return got
     },
     evict(slide) {
       const entry = entries.get(slide)
       if (!entry) { if (slide !== current) store.evict(slide); return }
-      if (slide === current) { if (entry.building === 0) releaseLayers(entry); return }
+      if (slide === current) { releaseLayers(entry); return }
       drop(entry)
     },
     onPressure() {
@@ -216,20 +262,33 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
         sink?.add({ code: 'resize-kept-old', message: 'the new output size is not presentable; the old backing store is kept' })
         return 'kept-old'
       }
-      const next = backingFor(css, dpr)
-      if (!terminal.resize(surfaceBytes(next.w, next.h))) {
-        sink?.add({ code: 'resize-kept-old', message: 'the workspace cannot hold a larger reserve; the old backing store is kept and scaled up' })
-        return 'kept-old'
+      const keep = () => {
+        sink?.add({ code: 'resize-kept-old', message: 'the workspace cannot hold the new reserve next to the old one; the old backing store is kept and scaled' })
+        return 'kept-old' as const
       }
+      if (pendingResize) return keep()
+      const next = backingFor(css, dpr)
+      const bytes = surfaceBytes(next.w, next.h)
+      const begin = (terminal as Partial<SlideShowTerminalReserve>).beginResize
+      if (begin) {
+        const ticket = begin.call(terminal, bytes)
+        if (!ticket) return keep()
+        pendingResize = ticket
+      } else if (!terminal.resize(bytes)) return keep()
       backing = next
       return 'resized'
+    },
+    commitResize() {
+      const ticket = pendingResize
+      pendingResize = undefined
+      ticket?.commit()
     },
     show(slide) {
       current = slide
       for (const entry of [...entries.values()]) if (!inWindow(entry.slide)) drop(entry)
     },
     resident: () => [...entries.keys()].sort((a, b) => a - b),
-    owner: slide => entries.get(slide)?.owner,
+    owner: slide => entries.get(slide)?.gen?.owner,
     dispose() {
       for (const entry of [...entries.values()]) drop(entry)
     },

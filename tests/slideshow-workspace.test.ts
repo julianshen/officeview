@@ -10,7 +10,7 @@ import {
 } from '../src/slideshow/workspace'
 import { createResidency, type LadderLevel } from '../src/slideshow/residency'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
-import type { AllocationOwner, DiagnosticSink, MetadataHandle, ShowSlide, SlideMetadataStore, SlideShowDiagnostic } from '../src/slideshow/types'
+import type { AllocationOwner, DiagnosticSink, Lease, MetadataHandle, ShowSlide, SlideMetadataStore, SlideShowDiagnostic } from '../src/slideshow/types'
 
 const MiB = 1024 * 1024
 
@@ -125,7 +125,8 @@ describe('slideshow workspace (spec 7)', () => {
     expect(ws.used()).toBe(10_000)
     expect(terminal.scratch.lease(1, 'decode:2')).toBeUndefined()
     decode.release()
-    expect(terminal.scratch.lease(1000, 'decode:3')).toBeDefined()
+    const decode3 = terminal.scratch.lease(1000, 'decode:3')!
+    expect(decode3).toBeDefined()
     // A second reserve cannot be squeezed out of leased bytes either.
     expect(ws.reserveTerminal(0)).toBeUndefined()
     // Lease contract (S1-2): release once, transfer without a second charge.
@@ -143,9 +144,12 @@ describe('slideshow workspace (spec 7)', () => {
     expect(ws.used()).toBe(5000)
     expect(ws.lease(-1, 'bad')).toBeUndefined()
     expect(ws.lease(Number.NaN, 'bad')).toBeUndefined()
-    // Releasing the reserve refunds output and scratch together and closes the scratch owner.
+    // Releasing the reserve refunds the output and closes the scratch owner; scratch
+    // stays charged until its last lease is released.
     terminal.release()
     terminal.release()
+    expect(ws.used()).toBe(1000)
+    decode3.release()
     expect(ws.used()).toBe(0)
     expect(terminal.scratch.lease(1, 'late')).toBeUndefined()
     expect(terminal.resize(10)).toBe(false)
@@ -209,6 +213,11 @@ describe('slideshow workspace (spec 7)', () => {
     expect(full.level).toBe('full')
     expect(full.sink.list()).toEqual([])
     expect(full.ws.used()).toBe(1100)
+    const bitmap = full.residency.owner(2)!.lease(1000, 'bitmap')!
+    expect(bitmap.bytes).toBe(1000)
+    expect(full.ws.used()).toBe(1100) // carved from the slide's reservation, never a second charge
+    expect(full.residency.owner(2)!.lease(1, 'over')).toBeUndefined()
+    bitmap.release()
 
     const reduced = await run(700)
     expect(reduced.level).toBe('reduced')
@@ -227,7 +236,7 @@ describe('slideshow workspace (spec 7)', () => {
     expect(terminal.ws.used()).toBe(100)
     expect(terminal.residency.owner(2)).toBeUndefined()
 
-    // Re-ensuring a fitted slide at a lower level shrinks its lease in place.
+    // Re-ensuring an idle fitted slide at a lower level replaces its reservation without a peak.
     expect(await full.residency.ensure(2, 'flattened')).toBe('flattened')
     expect(full.ws.used()).toBe(400)
   })
@@ -294,9 +303,10 @@ describe('slideshow workspace (spec 7)', () => {
     const ws2 = createSlideShowWorkspace('desktop', { limit: 10_000, scratch: 0 })
     const gate = deferred()
     const builds: Array<{ slide: number; owner: AllocationOwner }> = []
+    const bitmaps: Lease[] = []
     const residency2 = createResidency(ws2, store2, ws2.reserveTerminal(0)!, {
       cost: () => 1000,
-      build: async (slide, _level, owner) => { builds.push({ slide, owner }); owner.lease(400, `layer:${slide}`); await gate.promise },
+      build: async (slide, _level, owner) => { builds.push({ slide, owner }); bitmaps.push(owner.lease(400, `layer:${slide}`)!); await gate.promise },
     })
     residency2.show(3)
     const building = residency2.ensure(4, 'full')
@@ -307,6 +317,9 @@ describe('slideshow workspace (spec 7)', () => {
     expect(ws2.used()).toBe(1000) // still allocating: still charged
     gate.resolve()
     await expect(building).rejects.toThrow('cancelled')
+    // Settled: the unused part is refunded; the bitmap's bytes go with the bitmap.
+    expect(ws2.used()).toBe(400)
+    bitmaps[0]!.release()
     expect(ws2.used()).toBe(0)
     expect(store2.live.get(4)).toBe(0)
     // The stale build's owner refuses anything further.
@@ -344,12 +357,17 @@ describe('slideshow workspace (spec 7)', () => {
 
     const room = setup(41_000 + 48_400)
     expect(room.residency.resize({ w: 110, h: 110 }, 1)).toBe('resized')
-    expect(room.terminal.outputBytes).toBe(48_400)
     expect(room.residency.backing).toEqual({ w: 110, h: 110, dpr: 1 })
+    // Old and new are both held until the new surface replaces the old one.
+    expect(room.ws.used()).toBe(41_000 + 48_400)
+    room.residency.commitResize()
+    expect(room.terminal.outputBytes).toBe(48_400)
     expect(room.ws.used()).toBe(49_400)
     expect(room.sink.list()).toEqual([])
-    // A smaller output shrinks the reserve.
+    // A smaller output shrinks the reserve, after the same peak.
     expect(room.residency.resize({ w: 50, h: 50 }, 1)).toBe('resized')
+    expect(room.ws.used()).toBe(49_400 + 10_000)
+    room.residency.commitResize()
     expect(room.terminal.outputBytes).toBe(10_000)
     expect(room.ws.used()).toBe(11_000)
   })
@@ -394,6 +412,122 @@ describe('slideshow workspace (spec 7)', () => {
     expect(await residency3.ensure(6, 'full')).toBe('terminal')
     expect(sink3.list()).toEqual([])
     expect(residency3.resident()).toEqual([5, 6])
+  })
+
+  it('a rung change keeps the old rung charged until its last layer is released (review I1)', async () => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 2000, scratch: 0 })
+    const cost: Record<Exclude<LadderLevel, 'terminal'>, number> = { full: 1000, reduced: 100, flattened: 50 }
+    const held: Lease[] = []
+    const residency = createResidency(ws, fakeStore(), ws.reserveTerminal(0)!, {
+      cost: (_slide, level) => cost[level],
+      build: async (_slide, level, owner) => { const l = owner.lease(cost[level], `bitmap:${level}`); if (l) held.push(l) },
+    })
+    residency.show(0)
+    expect(await residency.ensure(0, 'full')).toBe('full')
+    expect(ws.used()).toBe(1000)
+    expect(await residency.ensure(0, 'reduced')).toBe('reduced')
+    // The reduced builder got its own owner; the full bitmap is still live and still charged.
+    expect(held.map(l => l.bytes)).toEqual([1000, 100])
+    expect(ws.used()).toBe(1100)
+    expect(ws.lease(901, 'probe')).toBeUndefined()
+    held[0]!.release()
+    expect(ws.used()).toBe(100)
+    // An idle rung (nothing allocated from it) is replaced without a peak.
+    const idle = createSlideShowWorkspace('desktop', { limit: 1000, scratch: 0 })
+    const r2 = createResidency(idle, fakeStore(), idle.reserveTerminal(0)!, { cost: (_s, level) => cost[level] })
+    r2.show(0)
+    await r2.ensure(0, 'full')
+    expect(await r2.ensure(0, 'reduced')).toBe('reduced')
+    expect(idle.used()).toBe(100)
+  })
+
+  it('the terminal rung during an active build keeps the build charged until it settles (review I1)', async () => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 2000, scratch: 0 })
+    const gate = deferred()
+    let bitmap: Lease | undefined
+    const residency = createResidency(ws, fakeStore(), ws.reserveTerminal(0)!, {
+      cost: () => 1000,
+      build: async (_slide, _level, owner) => { bitmap = owner.lease(1000, 'bitmap'); await gate.promise },
+    })
+    residency.show(0)
+    const building = residency.ensure(0, 'full')
+    await flush()
+    expect(bitmap!.bytes).toBe(1000)
+    expect(await residency.ensure(0, 'terminal')).toBe('terminal')
+    expect(residency.owner(0)).toBeUndefined()
+    expect(ws.used()).toBe(1000)
+    expect(ws.lease(1001, 'probe')).toBeUndefined()
+    gate.resolve()
+    await expect(building).rejects.toThrow('cancelled')
+    expect(ws.used()).toBe(1000)
+    bitmap!.release()
+    expect(ws.used()).toBe(0)
+    // Evicting the current slide's layers mid-build is held the same way.
+    const gate2 = deferred()
+    let bitmap2: Lease | undefined
+    const r2 = createResidency(ws, fakeStore(), ws.reserveTerminal(0)!, {
+      cost: () => 600,
+      build: async (_slide, _level, owner) => { bitmap2 = owner.lease(200, 'bitmap'); await gate2.promise },
+    })
+    r2.show(1)
+    const b2 = r2.ensure(1, 'full')
+    await flush()
+    r2.evict(1)
+    expect(ws.used()).toBe(600)
+    gate2.resolve()
+    await expect(b2).rejects.toThrow('cancelled')
+    expect(ws.used()).toBe(200)
+    bitmap2!.release()
+    expect(ws.used()).toBe(0)
+  })
+
+  it('every resize reserves old plus new until the swap commits (review I2)', () => {
+    // 100x100 output (40000 B) + 1000 B scratch fills the workspace exactly.
+    const tight = createSlideShowWorkspace('desktop', { limit: 41_000, scratch: 1000 })
+    const admitted = admitShow(tight, { w: 100, h: 100 }, 1)
+    if (!admitted.ok) throw new Error('not admitted')
+    const sink = createDiagnosticSink()
+    const residency = createResidency(tight, fakeStore(), admitted.terminal, { sink, backing: admitted.backing })
+    expect(residency.resize({ w: 50, h: 50 }, 1)).toBe('kept-old') // smaller still needs old + new
+    expect(residency.resize({ w: 200, h: 50 }, 1)).toBe('kept-old') // equal bytes, new dimensions
+    expect(admitted.terminal.resize(10_000)).toBe(false)
+    expect(admitted.terminal.resize(40_000)).toBe(false)
+    expect(admitted.terminal.outputBytes).toBe(40_000)
+    expect(tight.used()).toBe(41_000)
+    expect(codes(sink)).toEqual(['resize-kept-old'])
+
+    const roomy = createSlideShowWorkspace('desktop', { limit: 51_000, scratch: 1000 })
+    const a2 = admitShow(roomy, { w: 100, h: 100 }, 1)
+    if (!a2.ok) throw new Error('not admitted')
+    const r2 = createResidency(roomy, fakeStore(), a2.terminal, { backing: a2.backing })
+    expect(r2.resize({ w: 50, h: 50 }, 1)).toBe('resized')
+    expect(roomy.used()).toBe(51_000)
+    // While a swap is pending, another resize keeps the old store rather than stacking reserves.
+    expect(r2.resize({ w: 60, h: 60 }, 1)).toBe('kept-old')
+    r2.commitResize()
+    expect(roomy.used()).toBe(11_000)
+    expect(a2.terminal.outputBytes).toBe(10_000)
+    // Releasing the reserve mid-swap refunds both surfaces.
+    expect(r2.resize({ w: 100, h: 100 }, 1)).toBe('resized')
+    expect(roomy.used()).toBe(51_000)
+    a2.terminal.release()
+    expect(roomy.used()).toBe(0)
+  })
+
+  it('releasing the terminal reserve keeps scratch charged until its last lease is released (review I3)', () => {
+    const ws = createSlideShowWorkspace('desktop', { limit: 2000, scratch: 1000 })
+    const terminal = ws.reserveTerminal(500)!
+    expect(ws.used()).toBe(1500)
+    const decode = terminal.scratch.lease(600, 'decode')!
+    terminal.release()
+    expect(ws.used()).toBe(600)
+    expect(ws.lease(1401, 'probe')).toBeUndefined()
+    expect(terminal.scratch.lease(1, 'late')).toBeUndefined()
+    decode.shrink(200)
+    expect(ws.used()).toBe(400)
+    decode.release()
+    expect(ws.used()).toBe(0)
+    expect(ws.lease(2000, 'all')).toBeDefined()
   })
 
   it('129 layers or 9 re-rasters in a frame coarsen with a diagnostic', () => {
