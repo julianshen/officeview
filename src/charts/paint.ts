@@ -1,0 +1,892 @@
+import { barGeometry } from './barGeometry'
+import { applyFillStyle, type ChartFillStyle } from './fills'
+import { MARKER_AUTO_CYCLE, paintMarker } from './markers'
+import { applyLineStyle, lineHasColor, type ChartLineStyle } from './style'
+import { paintOfPie } from './families/ofPie'
+import { createLineTracer } from './smooth'
+/**
+ * Chart painter (lazy chunk): the common chart types (bar/column
+ * clustered/stacked/100%, line, area, pie, doughnut, scatter, contour). Anything else
+ * paints the eager placeholder card. Moved from `src/xlsx/chart.ts` (A0a);
+ * since A1a the cartesian families draw on the axis graph (`charts/axes.ts`).
+ */
+import { paintChartPlaceholder } from '../drawing/content-paint'
+import { displayView, type DisplayView } from './display'
+import type { ChartGroup, ChartModel, ChartSeries } from './model'
+import { axisFraction, categoryFraction, type AxisGraph, type GroupAxes, type ResolvedAxis } from './axes'
+import { paintDataLabels } from './labelPaint'
+import { contourEdges, contourGridOf, paintContour } from './families/contour'
+import { plotPoint } from './plotPoint'
+import { ChartRefusal } from './own'
+import { createChartWorkspace, type ChartParentLedger, type ChartProfile, type ChartWorkspace } from './workspace'
+import { documentChartContext, type ChartDocumentContext } from './context'
+import { dateUnitIndex } from './dates'
+import { tierEdge } from './categories'
+import { paintTrendlines } from './trendlines'
+import { paintErrorBars, type ErrorBarPlacement } from './errorBars'
+import { paintBubbles } from './families/bubble'
+import { paintRadar } from './families/radar'
+import { paintStock } from './families/stock'
+import { paintBoxWhisker } from './chartex/boxWhisker'
+import { paintWaterfall, waterfallLevels } from './chartex/waterfall'
+import { FUNNEL_TEXTS, paintFunnel } from './chartex/funnel'
+import type { ChartExGroup } from './model'
+import { chartFont } from './textStyle'
+import { layoutChart, labelPlace, axisSide, ownedChartWorkspace, reserveChartLayoutWorkspace, invalidateChartFonts, holdChartLayout, paintWorkspaceBytes, releaseWorkspaceLayouts, type ChartLayout, textAngle, titleHeight } from './layout'
+import { paintChartUserShapes } from './userShapes'
+import { paintTreemap, type HierarchyPaintKit } from './chartex/treemap'
+import { paintSunburst } from './chartex/sunburst'
+import { isHierarchyGroup } from './chartex/hierarchy'
+
+type FamilyCss = (family: string) => string
+/**
+ * What the painter draws: the display view (plotVisOnly per role, points
+ * capped), read slot by slot from the compact storage; no per-point array is
+ * copied. Every non-value state (blank, error, unavailable) is a gap here, as
+ * before D0; the per-family point matrix (spec 5.8) is A2's.
+ */
+interface DrawSeries extends Pick<ChartSeries, 'name' | 'color' | 'pointColors' | 'line' | 'markers' | 'smooth'> {
+  /** The model series drawn (its formatting: fill, line, marker, dPt overrides) and its position in its group. */
+  source: ChartSeries
+  order: number
+  value(slot: number): number | undefined
+  x(slot: number): number | undefined
+  hasX: boolean
+  plot(slot:number, x?:boolean): number|'gap'|'span'
+}
+interface DrawGroup extends Omit<ChartGroup, 'series'> { series: DrawSeries[] }
+interface DrawModel extends Omit<ChartModel, 'groups'> { groups: DrawGroup[]; view: DisplayView; source: ChartModel }
+function drawModel(model: ChartModel, view = displayView(model)): DrawModel {
+  return {
+    ...model,
+    view,
+    source: model,
+    groups: model.groups.map((group, g) => ({ ...group, series: view.groupSeries(g).map(({ series: s, value, x, hasX, point }): DrawSeries => ({ source: s, order: Math.max(0, group.series.indexOf(s)), name: s.name, color: s.color, pointColors: s.pointColors, line: s.line, markers: s.markers, smooth: s.smooth, value, x, hasX, plot:(slot,x)=>{ const p=point(slot,x);return p ? plotPoint(p,group.family,group.grouping,model.dispBlanksAs,model.dispNaAsBlank) : 'gap' } })) })),
+  }
+}
+const font = (sizePx: number, family: string, familyCss: FamilyCss, bold = false) => `${bold ? 'bold ' : ''}${sizePx}px ${familyCss(family)}`
+const TEXT = '#595959', GRID = '#D9D9D9'
+
+interface Box { x: number; y: number; w: number; h: number }
+/** Points to CSS px (marker sizes are points). */
+const PT = 96 / 72
+
+/** Fills `box`'s path or rect with an authored fill; false for noFill (nothing painted). */
+function fillWith(ctx: CanvasRenderingContext2D, fill: ChartFillStyle | undefined, color: string, box: Box): boolean {
+  // An authored fill keeps its alpha (applyFillStyle); an unauthored colour is opaque.
+  if (fill) return applyFillStyle(ctx, fill, box)
+  ctx.fillStyle = `#${color}`
+  return true
+}
+/** Strokes the current path with an authored border (only one that carries a colour or width). */
+function strokeBorder(ctx: CanvasRenderingContext2D, line: ChartLineStyle | undefined, color: string, box: Box, rect?: Box): void {
+  if (!line || line.noFill || !(lineHasColor(line) || line.width !== undefined)) return
+  ctx.save()
+  try {
+    ctx.strokeStyle = `#${color}`; ctx.lineWidth = PT * 0.75
+    if (applyLineStyle(ctx, line, box)) { if (rect) ctx.strokeRect(rect.x, rect.y, rect.w, rect.h); else ctx.stroke() }
+  } finally { ctx.restore() }
+}
+/**
+ * One marker (spec 5.4). A series without an authored marker keeps the engine's default (a filled circle of
+ * `legacyRadius` px, as before A4a); an authored one takes its symbol (`auto`: the series cycle), its size in
+ * points and its spPr fill and border, a dPt marker overriding the series' field by field.
+ */
+function drawMarker(ctx: CanvasRenderingContext2D, s: DrawSeries, sourceIndex: number, x: number, y: number, legacyRadius: number): void {
+  const override = s.source.dPt?.get(sourceIndex)?.marker
+  const m = override ? { ...s.source.markerStyle, ...override } : s.source.markerStyle
+  if (!m) { ctx.fillStyle = `#${s.color}`; ctx.beginPath(); ctx.arc(x, y, legacyRadius, 0, Math.PI * 2); ctx.fill(); return }
+  const symbol = m.symbol === 'auto' ? MARKER_AUTO_CYCLE[s.order % MARKER_AUTO_CYCLE.length] : m.symbol ?? 'circle'
+  if (symbol === 'none') return
+  const size = m.size !== undefined ? m.size * PT : legacyRadius * 2
+  const box = { x: x - size / 2, y: y - size / 2, w: size, h: size }
+  ctx.save()
+  try {
+    ctx.strokeStyle = `#${s.color}`; ctx.lineWidth = PT * 0.75
+    const filled = m.fill ? fillWith(ctx, m.fill, s.color, box) : (ctx.fillStyle = `#${s.color}`, true)
+    const stroked = Boolean(m.line && !m.line.noFill && (lineHasColor(m.line) || m.line.width !== undefined)) && applyLineStyle(ctx, m.line, box)
+    paintMarker(ctx, x, y, symbol, size, filled, stroked)
+  } finally { ctx.restore() }
+}
+
+function paintLegend(ctx: CanvasRenderingContext2D, model: DrawModel, area: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): Box {
+  const entries = layout.legendEntries
+  if (!model.legend || !entries.length) return area
+  if (model.legendFill && fillWith(ctx, model.legendFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
+  strokeBorder(ctx, model.legendLine, '000000', area, area)
+  ctx.font = font(fontPx, family, familyCss)
+  const sw = fontPx * 0.7, gap = 6
+  const widths = entries.map(e => layout.width(e.name, font(fontPx, family, familyCss)) + sw + gap * 2)
+  const line = fontPx + 6
+  const vertical = model.legend === 'r' || model.legend === 'l' || model.legend === 'tr'
+  let x = area.x, y = area.y
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
+  entries.forEach((entry, i) => {
+    if (vertical ? y + line > area.y + area.h + .5 : x + widths[i] > area.x + area.w + .5) return
+    // A trendline's key is a short line in its colour (A6a); a series keeps its swatch; a colourless band has none.
+    if (entry.color && entry.line) { ctx.strokeStyle = ctx.fillStyle = `#${entry.color}`; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x + gap, y + line / 2); ctx.lineTo(x + gap + sw, y + line / 2); ctx.stroke() }
+    else if (entry.color) { ctx.fillStyle = `#${entry.color}`; ctx.fillRect(x + gap, y + (line - sw) / 2, sw, sw) }
+    ctx.fillStyle = TEXT
+    if (vertical) ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2, Math.max(1, area.w - sw - gap * 3))
+    else ctx.fillText(entry.name, x + gap * 2 + sw, y + line / 2)
+    if (vertical) y += line; else x += widths[i]
+  })
+  return area
+}
+
+/**
+ * The chart title (spec 5.10): a plain title is one centred line (compressed to the box); a title with runs is drawn
+ * line by line, each run in its resolved font and colour, every line centred as a whole and compressed to fit.
+ */
+function paintTitle(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, fontPx: number, familyCss: FamilyCss): void {
+  const box = layout.title
+  if (model.titleFill && fillWith(ctx, model.titleFill, 'FFFFFF', box)) ctx.fillRect(box.x, box.y, box.w, box.h)
+  strokeBorder(ctx, model.titleLine, '000000', box, box)
+  const titlePx = Math.min(96, fontPx * 1.4), cx = box.x + box.w / 2
+  ctx.textBaseline = 'top'
+  const lines = layout.titleLines
+  if (!lines) {
+    ctx.font = font(titlePx, model.fontFamily, familyCss)
+    ctx.fillStyle = TEXT; ctx.textAlign = 'center'
+    ctx.fillText(model.title!, cx, box.y, box.w)
+    return
+  }
+  let y = box.y
+  /** An underline below the baseline, in the run's colour, about a sixteenth of its size thick. */
+  const underline = (x: number, baseline: number, width: number, px: number, color: string) => {
+    ctx.fillStyle = color
+    ctx.fillRect(x, baseline + Math.max(1, px / 12), width, Math.max(1, px / 16))
+  }
+  lines.forEach((line, i) => {
+    if (line.runs.length === 1) {
+      // A single run keeps the plain title's centred, compressed drawing (from the line top).
+      const { run, font: css, width, px } = line.runs[0]
+      ctx.font = css; ctx.fillStyle = run.color ?? TEXT; ctx.textAlign = 'center'; ctx.textBaseline = 'top'
+      ctx.fillText(run.text, cx, y, box.w)
+      const shown = Math.min(width, box.w)
+      if (run.underline) underline(cx - shown / 2, y + line.ascent, shown, px, run.color ?? TEXT)
+    } else if (line.runs.length) {
+      // Mixed runs sit on one shared baseline (the tallest ascent below the line top), centred as a whole.
+      const scale = line.width > box.w ? box.w / line.width : 1, baseline = y + line.ascent
+      let x = cx - line.width * scale / 2
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
+      for (const { run, font: css, width, px } of line.runs) {
+        ctx.font = css; ctx.fillStyle = run.color ?? TEXT
+        if (scale < 1) ctx.fillText(run.text, x, baseline, Math.max(1, width * scale)); else ctx.fillText(run.text, x, baseline)
+        if (run.underline) underline(x, baseline, width * scale, px, run.color ?? TEXT)
+        x += width * scale
+      }
+    }
+    y += titleHeight([line]) * (i < lines.length - 1 ? 1.2 : 1)
+  })
+}
+
+function paintPie(ctx: CanvasRenderingContext2D, model: DrawModel, group: DrawGroup, box: Box): void {
+  const series = group.series[0]
+  if (!series) return
+  const src = series.source
+  const values: number[] = []
+  for (let slot = 0; slot < model.view.slots; slot++) { const v = series.value(slot); values.push(v !== undefined && v > 0 ? v : 0) }
+  const total = values.reduce((a, b) => a + b, 0)
+  if (!(total > 0)) return
+  // Explosion (percent of the radius, series then dPt): the radius shrinks so the farthest slice stays in the box.
+  const explosionOf = (i: number) => src.dPt?.get(model.view.source(i))?.explosion ?? src.explosion ?? 0
+  let farthest = 0
+  values.forEach((value, i) => { if (value) farthest = Math.max(farthest, explosionOf(i)) })
+  const full = Math.max(1, Math.min(box.w, box.h) / 2 - 4), r = full / (1 + farthest / 100), cx = box.x + box.w / 2, cy = box.y + box.h / 2
+  const hole = group.family === 'doughnut' ? r * (group.holeSize ?? 50) / 100 : 0
+  let angle = ((group.firstSliceAngle ?? 0) - 90) * Math.PI / 180
+  values.forEach((value, i) => {
+    if (!value) return
+    const sweep = value / total * Math.PI * 2, srcIdx = model.view.source(i), point = src.dPt?.get(srcIdx)
+    const offset = explosionOf(i) / 100 * r, mid = angle + sweep / 2
+    const sx = cx + offset * Math.cos(mid), sy = cy + offset * Math.sin(mid)
+    ctx.beginPath()
+    if (farthest && hole) { ctx.arc(sx, sy, r, angle, angle + sweep); ctx.arc(sx, sy, hole, angle + sweep, angle, true) }
+    else { ctx.moveTo(sx, sy); ctx.arc(sx, sy, r, angle, angle + sweep) }
+    ctx.closePath()
+    const sliceBox = { x: sx - r, y: sy - r, w: r * 2, h: r * 2 }
+    // dPt fill, else the varyColors (or dPt) colour, else the series fill and colour.
+    const fill = point?.fill ?? (series.pointColors?.[srcIdx] ? undefined : src.fill)
+    if (fillWith(ctx, fill, series.pointColors?.[srcIdx] ?? series.color, sliceBox)) ctx.fill()
+    const border = point?.line ?? src.lineStyle
+    if (border) strokeBorder(ctx, border, 'FFFFFF', sliceBox)
+    else { ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1; ctx.stroke() }
+    angle += sweep
+  })
+  // Unexploded doughnuts keep the engine's white hole; exploded rings are drawn as ring segments (transparent hole).
+  if (hole && !farthest) {
+    ctx.beginPath()
+    ctx.arc(cx, cy, hole, 0, Math.PI * 2)
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fill()
+  }
+}
+
+/** One paint's path work bound (262,144 segments): a cost past what remains is refused, with `chart-path-limit`. */
+function pathAdmission(layout: ChartLayout): (cost: number) => boolean {
+  let remaining = 262144
+  return cost => {
+    if (cost <= remaining) { remaining -= cost; return true }
+    if (!layout.diagnostics.some(d => d.code === 'chart-path-limit')) layout.diagnostics.push({ code: 'chart-path-limit', reason: 'Later chart elements omitted at the 262,144 path-segment work bound' })
+    return false
+  }
+}
+/**
+ * The cartesian families (bar, line, area, scatter) and contour groups (`families/contour.ts`: the band grid on
+ * its category and series axes) drawn on the axis graph (spec 5.1): every group against its
+ * own bound axes, each value axis with its own scale (primary and secondary), crossings, orientation, display
+ * units, gridlines and authored tick marks. With one value axis and no authored placement it draws exactly as
+ * the engine did before A1a (the same layout arithmetic and drawing order).
+ */
+function paintCartesian(ctx: CanvasRenderingContext2D, model: DrawModel, graph: AxisGraph, box: Box, fontPx: number, family: string, familyCss: FamilyCss, layout: ChartLayout): void {
+  const placed = graph.groups.filter((g): g is GroupAxes => Boolean(g))
+  if (!placed.length) return
+  const count = model.view.slots
+  ctx.font = font(fontPx, family, familyCss)
+  const used = [...graph.axes.values()].filter(a => placed.some(g => g.horizontal === a || g.vertical === a))
+  const admitPath = pathAdmission(layout)
+  const drawableAxes = new Set(used.filter(a => admitPath(16 + 4 * (a.ticks.length + a.minorTicks.length + Math.min(1000, a.slots)))))
+  const valueAxes = used.filter(a => placed.some(g => g.value === a))
+  const baseAxes = used.filter(a => !valueAxes.includes(a))
+  /** Category labels sit between ticks unless the plot authored crossBetween=midCat (legacy: band centres). */
+  const labelsBetween = (a: ResolvedAxis) => { const g = placed.find(p => p.category === a); return !(g && (g.value.axis.crossBetween ?? a.axis.crossBetween) === 'midCat') }
+  const shown = (a: ResolvedAxis) => !a.deleted && a.axis.tickLblPos !== 'none'
+  const sideOf = (a: ResolvedAxis) => axisSide(a, graph)
+  const dateLabels = (a: ResolvedAxis) => layout.texts.get(a.id)!
+  const labelBand = (a: ResolvedAxis) => layout.axisBands.get(a.id) ?? 0
+  const plot = layout.plot
+  if (plot.w <= 4 || plot.h <= 4) return
+  /** A coordinate along an axis's direction (x for horizontal axes, y for vertical ones) at fraction f. */
+  const along = (a: ResolvedAxis, f: number) => a.orientation === 'h' ? plot.x + f * plot.w : plot.y + plot.h - f * plot.h
+  /** The coordinate of an axis's line across the plot (its crossing on the axis it crosses). */
+  const across = (a: ResolvedAxis) => a.orientation === 'h' ? plot.y + plot.h - a.crossesFraction * plot.h : plot.x + a.crossesFraction * plot.w
+  const labelAnchor = (a: ResolvedAxis): number => {
+    const place = labelPlace(a, graph)
+    if (a.orientation === 'h') return place === 'near' ? plot.y + plot.h : place === 'far' ? plot.y : across(a)
+    return place === 'near' ? plot.x : place === 'far' ? plot.x + plot.w : across(a)
+  }
+  const label = (a: ResolvedAxis, index: number, text: string, x: number, y: number, maxWidth?: number) => {
+    if (!layout.labelIndices.get(a.id)?.has(index)) return
+    const angle = textAngle(a.axis.text ?? model.text)
+    ctx.font = font((a.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72, family, familyCss)
+    if (!angle) { if (maxWidth === undefined) ctx.fillText(text, x, y); else ctx.fillText(text, x, y, maxWidth) }
+    else {
+      const box = layout.labels.get(a.id)!.find(l => l.index === index)!
+      if (a.orientation === 'h') y += (ctx.textBaseline === 'bottom' ? -1 : 1) * box.crossExtent / 2
+      else x += (ctx.textAlign === 'right' ? -1 : 1) * box.crossExtent / 2
+      ctx.save(); try { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.translate(x, y); ctx.rotate(angle); ctx.fillText(text, 0, 0) } finally { ctx.restore() }
+    }
+    ctx.font = font(fontPx, family, familyCss)
+  }
+  const tickMarks = (a: ResolvedAxis, values: readonly number[], position: (v: number) => number, mark: string | undefined) => {
+    if (!mark || mark === 'none' || a.deleted) return
+    const line = across(a), side = sideOf(a), outward = side === 'l' || side === 'b' ? 1 : -1
+    // Outward and inward extents of the mark from the axis line.
+    const from = mark === 'in' ? 0 : 4, to = mark === 'out' ? 0 : -4
+    ctx.strokeStyle = '#BFBFBF'
+    ctx.beginPath()
+    for (const v of values) {
+      const p = Math.round(position(v)) + 0.5
+      if (a.orientation === 'h') { ctx.moveTo(p, line + from * outward); ctx.lineTo(p, line + to * outward) }
+      else { ctx.moveTo(line - from * outward, p); ctx.lineTo(line - to * outward, p) }
+    }
+    ctx.stroke()
+  }
+  const gridline = (a: ResolvedAxis, f: number) => {
+    ctx.beginPath()
+    if (a.orientation === 'h') { const gx = Math.round(plot.x + f * plot.w) + 0.5; ctx.moveTo(gx, plot.y); ctx.lineTo(gx, plot.y + plot.h) }
+    else { const gy = Math.round(plot.y + plot.h - f * plot.h) + 0.5; ctx.moveTo(plot.x, gy); ctx.lineTo(plot.x + plot.w, gy) }
+    ctx.stroke()
+  }
+
+  // The plot-area fill and border (spec 5.4) sit under the gridlines and axes.
+  if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
+  // Value axes: gridlines (and the scale's lower bound) and tick labels.
+  ctx.lineWidth = 1
+  for (const a of valueAxes) {
+    if (!drawableAxes.has(a)) continue
+    if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, axisFraction(a, t)) }
+    for (const [i, t] of a.ticks.entries()) {
+      const f = axisFraction(a, t)
+      ctx.strokeStyle = GRID
+      if (a.axis.gridlines || t === a.min) gridline(a, f)
+      if (!shown(a)) continue
+      ctx.fillStyle = TEXT
+      const anchor = labelAnchor(a), right = sideOf(a) === 'r', top = sideOf(a) === 't'
+      // An authored outward tick mark pushes the labels clear of it.
+      const pad = a.axis.majorTickMark === 'out' || a.axis.majorTickMark === 'cross' ? 4 : 0
+      if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = top ? 'bottom' : 'top'; label(a, i, layout.texts.get(a.id)![i], plot.x + f * plot.w, top ? anchor - 3 - pad : anchor + 3 + pad) }
+      else { ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, layout.texts.get(a.id)![i], right ? anchor + 4 + pad : anchor - 4 - pad, plot.y + plot.h - f * plot.h) }
+    }
+    tickMarks(a, a.minorTicks, t => along(a, axisFraction(a, t)), a.axis.minorTickMark)
+    tickMarks(a, a.ticks, t => along(a, axisFraction(a, t)), a.axis.majorTickMark)
+  }
+  // Category, date and x axes: the axis line at its crossing, then labels.
+  for (const a of baseAxes) {
+    if (!drawableAxes.has(a)) continue
+    if (a.role === 'value') {
+      // An x value axis (scatter): minor gridlines, then labels and gridlines per tick as before, then tick marks.
+      const xAt = (t: number) => plot.x + axisFraction(a, t, false) * plot.w
+      if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, axisFraction(a, t, false)) }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top'
+      for (const [i, t] of a.ticks.entries()) {
+        const px = plot.x + axisFraction(a, t, false) * plot.w
+        if (shown(a)) { ctx.fillStyle = TEXT; label(a, i, layout.texts.get(a.id)![i], px, labelAnchor(a) + 3) }
+        if (a.axis.gridlines) { ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, plot.y); ctx.lineTo(Math.round(px) + 0.5, plot.y + plot.h); ctx.stroke() }
+      }
+      tickMarks(a, a.minorTicks, xAt, a.axis.minorTickMark)
+      tickMarks(a, a.ticks, xAt, a.axis.majorTickMark)
+      continue
+    }
+    const n = a.slots
+    const between = labelsBetween(a)
+    const len = a.orientation === 'h' ? plot.w : plot.h
+    const band = len / n
+    if (!a.deleted) {
+      ctx.strokeStyle = '#BFBFBF'
+      ctx.beginPath()
+      const line = Math.round(across(a)) + 0.5
+      if (a.orientation === 'h') { ctx.moveTo(plot.x, line); ctx.lineTo(plot.x + plot.w, line) }
+      else { ctx.moveTo(line, plot.y); ctx.lineTo(line, plot.y + plot.h) }
+      ctx.stroke()
+    }
+    // Date axes: gridlines and tick marks at the calendar ticks (major and minor), drawn whether or not labels are.
+    const dateAt = (t: number) => categoryFraction(a, dateUnitIndex(t, a.dateBase!, graph.epoch) - a.dateStart!, between)
+    if (a.role === 'date') {
+      if (a.axis.minorGridlines) { ctx.strokeStyle = '#F2F2F2'; for (const t of a.minorTicks) gridline(a, dateAt(t)) }
+      if (a.axis.gridlines) { ctx.strokeStyle = GRID; for (const t of a.ticks) gridline(a, dateAt(t)) }
+      tickMarks(a, a.minorTicks, t => along(a, dateAt(t)), a.axis.minorTickMark)
+      tickMarks(a, a.ticks, t => along(a, dateAt(t)), a.axis.majorTickMark)
+    }
+    if (a.role === 'category' || a.role === 'series') {
+      const authored = a.axis.tickMarkSkip ?? 1, skip = Math.max(authored, Math.ceil((between ? n + 1 : n) / 1000))
+      const marks = Array.from({ length: Math.ceil((between ? n + 1 : n) / skip) }, (_, k) => k * skip)
+      tickMarks(a, marks, k => along(a, between ? (a.reversed ? 1 - k / n : k / n) : categoryFraction(a, k, false)), a.axis.majorTickMark)
+    }
+    if (!shown(a)) continue
+    const anchor = labelAnchor(a), place = sideOf(a)
+    ctx.fillStyle = TEXT
+    if (a.role === 'date') {
+      // Date axes: labels at the major ticks (calendar steps), thinned in screen order (whatever the axis direction)
+      // so they never overlap: a label is kept when its extent clears the last kept one.
+      const texts = dateLabels(a)
+      const items = a.ticks.map((t, k) => ({ k, p: along(a, dateAt(t)) }))
+      items.sort((p, q) => p.p - q.p)
+      for (const { k, p } of items) {
+        if (!layout.labelIndices.get(a.id)?.has(k)) continue
+        if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, k, texts[k], p, place === 't' ? anchor - 3 : anchor + 3) }
+        else { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, k, texts[k], place === 'r' ? anchor + 4 : anchor - 4, p) }
+      }
+      continue
+    }
+    // A series axis (contour rows): the series names, one per drawn row.
+    const names = a.role === 'series' ? layout.texts.get(a.id) ?? [] : undefined
+    if (!names && model.view.category(0) === undefined) continue
+    // Legacy positions (band centres) when unreversed and between; otherwise the axis fraction.
+    const at = (i: number) => between && !a.reversed ? (a.orientation === 'h' ? plot.x + band * (i + 0.5) : plot.y + plot.h - band * (i + 0.5)) : along(a, categoryFraction(a, i, between))
+    for (let i = 0; i < Math.min(names?.length ?? count, n); i++) {
+      const c = names ? names[i] : model.view.category(i)
+      if (c === undefined) continue
+      if (a.orientation === 'v') { ctx.textAlign = place === 'r' ? 'left' : 'right'; ctx.textBaseline = 'middle'; label(a, i, c, place === 'r' ? anchor + 4 : anchor - 4, at(i)) }
+      else { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; label(a, i, c, at(i), place === 't' ? anchor - 3 : anchor + 3) }
+    }
+    // Multi-level categories (spec 5.9): each outer tier beyond the innermost labels, group labels centred on their
+    // spans (compressed to fit) and separators at the group edges from the axis through the tier.
+    const tiers = layout.tiers.get(a.id)
+    if (tiers?.length) {
+      const outward = place === 'b' || place === 'r' ? 1 : -1, edge = (k: number) => along(a, tierEdge(k, n, between, a.reversed))
+      ctx.save()
+      try {
+        ctx.font = font((a.axis.text?.sizePt ?? model.fontSizePt) * 96 / 72, family, familyCss)
+        ctx.strokeStyle = '#BFBFBF'; ctx.lineWidth = 1
+        let offset = labelBand(a)
+        for (const tier of tiers) {
+          ctx.fillStyle = TEXT
+          for (const g of tier.groups) {
+            const e0 = edge(g.start), e1 = edge(g.end), centre = (e0 + e1) / 2
+            if (a.orientation === 'h') { ctx.textAlign = 'center'; ctx.textBaseline = place === 't' ? 'bottom' : 'top'; ctx.fillText(g.text, centre, anchor + outward * (offset + 3), Math.max(1, Math.abs(e1 - e0) - 4)) }
+            else { ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g.text, anchor + outward * (offset + tier.size / 2), centre, Math.max(1, tier.size - 4)) }
+          }
+          // Separators at each group's edges (a shared edge once), from the axis through this tier.
+          const end = anchor + outward * (offset + tier.size)
+          const separator = (k: number) => {
+            const p = Math.round(edge(k)) + 0.5
+            if (a.orientation === 'h') { ctx.moveTo(p, anchor); ctx.lineTo(p, end) } else { ctx.moveTo(anchor, p); ctx.lineTo(end, p) }
+          }
+          ctx.beginPath()
+          let last = -1
+          for (const g of tier.groups) { if (g.start !== last) separator(g.start); separator(g.end); last = g.end }
+          ctx.stroke()
+          offset += tier.size
+        }
+      } finally { ctx.restore() }
+    }
+
+  }
+  // Axis titles and display-unit labels. Every save is balanced in finally, so a throw never leaks state (spec 6.5 containment).
+  ctx.fillStyle = TEXT
+  const rotated = (text: string, right: boolean) => { ctx.save(); try { ctx.translate(right ? box.x + box.w - fontPx : box.x + fontPx, plot.y + plot.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(text, 0, 0) } finally { ctx.restore() } }
+  const titled = [...baseAxes, ...valueAxes]
+  for (const a of titled) {
+    if (!a.axis.title) continue
+    const side = sideOf(a)
+    ctx.textAlign = 'center'; ctx.textBaseline = side === 'r' || side === 't' ? 'top' : 'bottom'
+    if (a.orientation === 'v') rotated(a.axis.title, side === 'r')
+    else ctx.fillText(a.axis.title, plot.x + plot.w / 2, side === 't' ? box.y : box.y + box.h)
+  }
+  for (const a of valueAxes) {
+    const unit = a.display?.label
+    if (!unit || a.deleted) continue
+    const side = sideOf(a)
+    if (a.orientation === 'v') {
+      ctx.save()
+      try { ctx.textAlign = 'center'; ctx.textBaseline = side === 'r' ? 'top' : 'bottom'; ctx.translate(side === 'r' ? labelAnchor(a) + labelBand(a) : labelAnchor(a) - labelBand(a), plot.y + plot.h / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(unit, 0, 0) } finally { ctx.restore() }
+    } else { ctx.textAlign = 'right'; ctx.textBaseline = side === 't' ? 'bottom' : 'top'; ctx.fillText(unit, plot.x + plot.w, side === 't' ? labelAnchor(a) - labelBand(a) - 3 : labelAnchor(a) + labelBand(a) + 3) }
+  }
+
+  ctx.save()
+  try {
+  ctx.beginPath(); ctx.rect(plot.x, plot.y, plot.w, plot.h); ctx.clip()
+  const barGroups = model.groups.filter(g => g.family === 'bar')
+  model.groups.forEach((group, g) => {
+    const axes = graph.groups[g]
+    if (!axes) return
+    if (group.family === 'contour') {
+      const grid = contourGridOf(model, model.source.groups[g])
+      paintContour(ctx, { group, grid, slots: count, ticks: contourEdges(axes.value), categoryReversed: axes.horizontal.reversed, seriesReversed: axes.vertical.reversed, plot })
+      return
+    }
+    const { value: V, horizontal } = axes
+    const B = axes.category ?? axes.x!
+    /** The coordinate of a value on the group's value axis. */
+    const at = (v: number) => along(V, axisFraction(V, v))
+    // Waterfall (B2): floating and anchored bars on the running total, then its connectors.
+    if (group.family === 'waterfall' && group.kind === 'chartEx' && axes.category) {
+      const source = model.source.groups[g] as ChartExGroup
+      paintWaterfall(ctx, { group: source, g, view: model.view, levels: waterfallLevels(source, model.view, g), category: axes.category, between: axes.between, plot, at,
+        categoryIndex: slot => graph.categoryIndex(axes.category!, slot), admitPath, fillWith, strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect) })
+      return
+    }
+    const plotted = (v: number | undefined) => v !== undefined && V.plottable(v) ? v : undefined
+    const crossing = B.crossesValue ?? Math.max(V.min, Math.min(V.max, 0))
+    const stacked = group.grouping === 'stacked' || group.grouping === 'percentStacked' ? (() => {
+      const pos = new Float64Array(count), neg = new Float64Array(count), total = new Float64Array(count)
+      for (const s of group.series) for (let i = 0; i < count; i++) { const v = s.value(i); if (v === undefined) continue; if (v >= 0) pos[i] += v; else neg[i] += v; total[i] += Math.abs(v) }
+      return { pos, neg, total }
+    })() : undefined
+    const share = (v: number, i: number) => group.grouping === 'percentStacked' && stacked ? (stacked.total[i] ? v / stacked.total[i] : 0) : v
+    // Error bars (A6b, spec 5.7): placed by the family block, stroked after its marks; no placement or stroke without them.
+    const errorBars = model.source.preparedAxes?.errorBars?.some(b => b.group === g) === true
+    const errorValue = (v: number) => along(V, axisFraction(V, v, false))
+    let errorPlace: ErrorBarPlacement | undefined
+    if (group.family === 'bar' && axes.category) {
+      const C = axes.category, vertical = C.orientation === 'v'
+      const geometry = barGeometry(group, C, axes.between, plot)
+      const width = geometry.width
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: vertical, across: (_ds, order, slot) => { const idx = graph.categoryIndex(C, slot); return Number.isFinite(idx) ? geometry.start(idx, order) + width / 2 : NaN } }
+      const posBase = new Float64Array(count), negBase = new Float64Array(count)
+      group.series.forEach((s, si) => {
+        if (!admitPath(count * 4)) return
+        const src = s.source
+        for (let i = 0; i < count; i++) {
+          const sample = s.plot(i), raw = plotted(typeof sample==='number'?sample:undefined)
+          if (raw === undefined) continue
+          const idx = graph.categoryIndex(C, i)
+          if (!Number.isFinite(idx)) continue
+          const v = share(raw, i)
+          let from = crossing, to = v
+          if (stacked) { const base = v >= 0 ? posBase : negBase; from = base[i]; to = base[i] + v; base[i] = to }
+          const categoryStart = geometry.start(idx, si)
+          const a = at(from), b = at(to)
+          const srcIdx = model.view.source(i), point = src.dPt?.get(srcIdx)
+          const bar = vertical ? { x: Math.min(a, b), y: categoryStart, w: Math.abs(b - a), h: width } : { x: categoryStart, y: Math.min(a, b), w: width, h: Math.abs(b - a) }
+          // A negative point inverts when its dPt says so, else when its series does (spec 5.8): Office fills it with
+          // the c14 invertSolidFillFmt colour, else white.
+          const inverted = v < 0 && (point?.invertIfNegative ?? src.invertIfNegative) === true
+          // The point colour (dPt, or varyColors in a lone single-series bar group, as before A4a), else the series fill.
+          const color = s.pointColors?.[srcIdx]
+          const pointColor = color && (point?.color || (barGroups.length === 1 && group.series.length === 1)) ? color : undefined
+          const fill = inverted ? undefined : point?.fill ?? (pointColor ? undefined : src.fill)
+          if (fillWith(ctx, fill, inverted ? src.invertColor ?? 'FFFFFF' : pointColor ?? s.color, bar)) ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
+          strokeBorder(ctx, point?.line ?? src.lineStyle, s.color, bar, bar)
+        }
+      })
+      // Series lines (stacked bars, spec 5.8): from each series' segment end in one category to the same series'
+      // in the next, across the gap between the two bars; admitted against the path work bound.
+      const lines = group.serLines
+      if (lines && !lines.noFill && stacked && count > 1 && group.series.length && admitPath((count - 1) * group.series.length * 2)) {
+        ctx.save()
+        try {
+          ctx.strokeStyle = GRID; ctx.lineWidth = 1
+          if (applyLineStyle(ctx, lines, plot)) {
+            ctx.beginPath()
+            const valueAt = (s: DrawSeries, i: number) => { const sample = s.plot(i), raw = plotted(typeof sample === 'number' ? sample : undefined); return raw === undefined ? 0 : share(raw, i) }
+            for (let i = 0; i + 1 < count; i++) {
+              const p = graph.categoryIndex(C, i), q = graph.categoryIndex(C, i + 1)
+              if (!Number.isFinite(p) || !Number.isFinite(q)) continue
+              const sp = geometry.start(p, 0), sq = geometry.start(q, 0)
+              // The facing edges of the two bars along the category direction.
+              const from = sq > sp ? sp + width : sp, to = sq > sp ? sq : sq + width
+              // Running positive and negative stacks of both categories, as the bars stack them (no per-slot storage).
+              let pos1 = 0, neg1 = 0, pos2 = 0, neg2 = 0
+              for (const s of group.series) {
+                const v1 = valueAt(s, i), v2 = valueAt(s, i + 1)
+                const e1 = v1 >= 0 ? (pos1 += v1) : (neg1 += v1), e2 = v2 >= 0 ? (pos2 += v2) : (neg2 += v2)
+                const y1 = at(e1), y2 = at(e2)
+                if (vertical) { ctx.moveTo(y1, from); ctx.lineTo(y2, to) } else { ctx.moveTo(from, y1); ctx.lineTo(to, y2) }
+              }
+            }
+            ctx.stroke()
+          }
+        } finally { ctx.restore() }
+      }
+    } else if ((group.family === 'line' || group.family === 'area') && horizontal === B) {
+      // Streamed per series over three reused per-slot buffers (the running stack base, this series' bottom and
+      // top; NaN marks no point), so the construction does not grow with the series count. Each series is drawn
+      // as soon as it is computed, in the same order as before.
+      const base = new Float64Array(count), bottom = new Float64Array(count), top = new Float64Array(count)
+      const edge = !axes.between
+      const band = plot.w / count
+      const xAt = (i: number) => {
+        const idx = axes.category ? graph.categoryIndex(B, i) : i
+        if (!axes.category) return plot.x + axisFraction(B, i + 1, false) * plot.w
+        if (B.role === 'date' || B.reversed) return along(B, categoryFraction(B, idx, axes.between))
+        return edge ? plot.x + (count > 1 ? i * plot.w / (count - 1) : plot.w / 2) : plot.x + band * (i + 0.5)
+      }
+      const has = (i: number) => !Number.isNaN(top[i])
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, across: (_ds, _order, slot) => xAt(slot) }
+      // Drop lines (spec 5.8) span, per category, every plotted point of the group to the category axis.
+      const drops = group.dropLines && !group.dropLines.noFill ? { lo: new Float64Array(count).fill(NaN), hi: new Float64Array(count).fill(NaN) } : undefined
+      for (const s of group.series) {
+        const lineCost = (s.smooth ?? group.smooth) ? 3 : 1
+        if (!admitPath(count * (group.family === 'area' ? 2 : s.markers ? 1 + lineCost : lineCost) + 1)) continue
+        const src = s.source
+        bottom.set(base)
+        for (let i = 0; i < count; i++) {
+          const sample = s.plot(i), raw = plotted(typeof sample==='number'?sample:undefined)
+          if (raw === undefined) { top[i] = stacked && group.family === 'area' ? base[i] : NaN; continue }
+          if (!Number.isFinite(xAt(i))) { top[i] = NaN; continue }
+          const v = share(raw, i)
+          if (stacked) { base[i] += v; top[i] = base[i] } else top[i] = v
+        }
+        if (drops) for (let i = 0; i < count; i++) if (has(i)) { drops.lo[i] = Number.isNaN(drops.lo[i]) ? top[i] : Math.min(drops.lo[i], top[i]); drops.hi[i] = Number.isNaN(drops.hi[i]) ? top[i] : Math.max(drops.hi[i], top[i]) }
+        ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
+        if (group.family === 'area') {
+          ctx.beginPath()
+          let any = false
+          for(let start=0;start<count;){
+            if(!has(start)){start++;continue}
+            let end=start
+            while(end+1<count&&has(end+1))end++
+            ctx.moveTo(xAt(start),at(top[start]));any=true
+            for(let i=start+1;i<=end;i++)ctx.lineTo(xAt(i),at(top[i]))
+            for(let i=end;i>=start;i--)ctx.lineTo(xAt(i),at(stacked?bottom[i]:crossing))
+            ctx.closePath();start=end+1
+          }
+          if(!any)continue
+          ctx.globalAlpha = stacked ? 1 : 0.85
+          if (fillWith(ctx, src.fill, s.color, plot)) ctx.fill()
+          ctx.globalAlpha = 1
+          strokeBorder(ctx, src.lineStyle, s.color, plot)
+          continue
+        }
+        if (s.line !== false) {
+          // The engine's series stroke (2.25 px, round joins, the series colour); an authored a:ln replaces only what it states.
+          ctx.save()
+          try {
+            ctx.lineWidth = 2.25; ctx.lineJoin = 'round'
+            if (applyLineStyle(ctx, src.lineStyle, plot)) {
+              ctx.beginPath()
+              const tracer = createLineTracer(ctx, Boolean(s.smooth ?? group.smooth))
+              for (let i = 0; i < count; i++) {
+                if (!has(i)) {
+                  if (s.plot(i) !== 'span') tracer.break()
+                  continue
+                }
+                tracer.push(xAt(i), at(top[i]))
+              }
+              tracer.end()
+              ctx.stroke()
+            }
+          } finally { ctx.restore() }
+        }
+        if (s.markers) for (let i = 0; i < count; i++) { if (!has(i)) continue; drawMarker(ctx, s, model.view.source(i), xAt(i), at(top[i]), 2.5) }
+      }
+      if (drops && admitPath(count * 2 + 1)) {
+        ctx.save()
+        try {
+          ctx.strokeStyle = GRID; ctx.lineWidth = 1
+          if (applyLineStyle(ctx, group.dropLines, plot)) {
+            const axis = at(crossing)
+            ctx.beginPath()
+            for (let i = 0; i < count; i++) {
+              if (Number.isNaN(drops.hi[i])) continue
+              const px = xAt(i), y1 = Math.min(at(drops.hi[i]), axis), y2 = Math.max(at(drops.lo[i]), axis)
+              ctx.moveTo(px, y1); ctx.lineTo(px, y2)
+            }
+            ctx.stroke()
+          }
+        } finally { ctx.restore() }
+      }
+    } else if (group.family === 'scatter' && axes.x) {
+      // Points are recomputed for each pass (line, markers) rather than kept: nothing per point outlives the pass.
+      const X = axes.x
+      const xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w
+      let px = 0, py = 0
+      const point = (s: DrawSeries, i: number): boolean => {
+        const sample=s.plot(i), xs=s.hasX?s.plot(i,true):i+1
+        const v = plotted(typeof sample==='number'?sample:undefined), xv = typeof xs==='number'?xs:undefined
+        if (v === undefined || xv === undefined || !X.plottable(xv)) return false
+        px = xp(xv); py = at(v)
+        return true
+      }
+      if (errorBars) errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } }
+      const isScatterGap = (s: DrawSeries, i: number): boolean => {
+        const y = s.plot(i), x = s.hasX ? s.plot(i, true) : i + 1
+        const rejectedNumber = (typeof y === 'number' && !V.plottable(y)) || (typeof x === 'number' && !X.plottable(x))
+        return rejectedNumber || y === 'gap' || x === 'gap' || (y !== 'span' && x !== 'span')
+      }
+      for (const s of group.series) {
+        const lineCost = (s.smooth ?? group.smooth) ? 3 : 1
+        if (!admitPath(count * (s.markers !== false ? 1 + lineCost : lineCost) + 1)) continue
+        ctx.strokeStyle = ctx.fillStyle = `#${s.color}`
+        if (s.line) {
+          ctx.save()
+          try {
+            ctx.lineWidth = 2
+            if (applyLineStyle(ctx, s.source.lineStyle, plot)) {
+              ctx.beginPath()
+              const tracer = createLineTracer(ctx, Boolean(s.smooth ?? group.smooth))
+              for (let i = 0; i < count; i++) {
+                if (!point(s, i)) {
+                  if (isScatterGap(s, i)) tracer.break()
+                  continue
+                }
+                tracer.push(px, py)
+              }
+              tracer.end()
+              ctx.stroke()
+            }
+          } finally { ctx.restore() }
+        }
+        if (s.markers !== false) for (let i = 0; i < count; i++) if (point(s, i)) drawMarker(ctx, s, model.view.source(i), px, py, 3)
+      }
+    } else if (group.family === 'bubble' && axes.x) {
+      if (errorBars) { const X = axes.x, xp = (v: number) => plot.x + axisFraction(X, v, false) * plot.w; errorPlace = { value: errorValue, valueHorizontal: false, x: xp, across: (ds, _order, slot) => { const xv = ds.hasX ? ds.x(slot) : slot + 1; return xv !== undefined && X.plottable(xv) ? xp(xv) : NaN } } }
+      paintBubbles(ctx, group, group.series, axes.x, V, { plot, slots: count, source: model.view.source, visibleOnly: model.plotVisOnly !== false, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box) })
+    } else if (group.family === 'stock' && horizontal === B) {
+      paintStock(ctx, group, group.series, axes, {
+        plot,
+        slots: count,
+        source: model.view.source,
+        admitPath,
+        fillWith,
+        strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+        drawMarker: (c, s, i, x, y, r) => drawMarker(c, s as DrawSeries, i, x, y, r),
+        plotted,
+        at,
+        categoryIndex: (axis, slot) => axes.category ? graph.categoryIndex(axis, slot) : slot,
+      })
+    } else if (group.family === 'boxWhisker' && horizontal === B) {
+      // Stage-1 records only: an unprepared model draws no boxes (statistics are never computed at paint).
+      const preparedGroup = model.source.preparedAxes?.boxWhisker?.find(bg => bg.groupIndex === g)
+      paintBoxWhisker(ctx, group, model.source.groups[g].series, axes, {
+        plot,
+        admitPath,
+        fillWith,
+        strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+        at,
+      }, preparedGroup)
+    }
+    if (errorPlace) paintErrorBars(ctx, model.source, g, group.series.map(s => ({ series: s.source, value: s.value, x: s.x, hasX: s.hasX })), count, model.view.source, errorPlace, admitPath, plot)
+    // Trendlines (spec 5.6): stage-1 samples in data units, unclamped onto this group's axes; x is the series' x
+    // value (scatter), the x value axis, or the 1-based category position (a date axis interpolates its slots).
+    if (model.source.preparedAxes?.trendlines?.some(t => t.group === g)) {
+      const value = (y: number) => along(V, axisFraction(V, y, false))
+      const base = (x: number): number => {
+        if (group.family === 'scatter' || !axes.category) return plot.x + axisFraction(B, x, false) * plot.w
+        // Forecast slots lead the data (preparedAxes.forecast): position x sits in slot x - 1 + lead.
+        const C = axes.category, slot = x - 1
+        if (C.role !== 'date') return along(C, categoryFraction(C, slot + (model.source.preparedAxes?.forecast?.lead ?? 0), axes.between))
+        const i0 = Math.max(0, Math.min(Math.floor(slot), count - 2)), at0 = graph.categoryIndex(C, i0)
+        const idx = count > 1 ? at0 + (slot - i0) * (graph.categoryIndex(C, i0 + 1) - at0) : at0
+        return along(C, categoryFraction(C, idx, axes.between))
+      }
+      paintTrendlines(ctx, model.source, g, (x, y, out) => { const b = base(x), v = value(y); const xFirst = group.family === 'scatter' || horizontal === B; out[0] = xFirst ? b : v; out[1] = xFirst ? v : b; return true }, admitPath, plot, font(fontPx, family, familyCss), fontPx, TEXT, (code, reason) => { if (!layout.diagnostics.some(d => d.code === code)) layout.diagnostics.push({ code, reason }) })
+    }
+  })
+  } finally { ctx.restore() }
+}
+
+/** Radar groups (spec 4.1) on the plot area, admitted against the same path work bound as the planar families. */
+function paintRadarChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
+  const plot = layout.plot
+  if (plot.w <= 4 || plot.h <= 4) return
+  const admitPath = pathAdmission(layout)
+  if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
+  const css = familyCss(model.fontFamily)
+  for (const group of model.groups) if (group.family === 'radar') paintRadar(ctx, group, group.series, layout.graph, {
+    plot, slots: model.view.slots, source: model.view.source, view: model.view, fontSizePt: model.fontSizePt, font: px => chartFont(px, css),
+    texts: layout.texts, width: layout.width, admitPath, fillWith, strokeBorder: (c, line, color, box) => strokeBorder(c, line, color, box),
+    drawMarker: (c, s, i, x, y, r) => drawMarker(c, s as DrawSeries, i, x, y, r),
+  })
+}
+
+/** A funnel (B2) in the plot area, with its measured category labels; admitted against the path work bound. */
+function paintFunnelChart(ctx: CanvasRenderingContext2D, model: DrawModel, layout: ChartLayout, familyCss: FamilyCss): void {
+  const plot = layout.plot
+  if (plot.w <= 4 || plot.h <= 4) return
+  const admitPath = pathAdmission(layout)
+  if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', plot)) ctx.fillRect(plot.x, plot.y, plot.w, plot.h)
+  strokeBorder(ctx, model.plotAreaLine, '000000', plot, plot)
+  const axis = model.axes.find(a => a.kind === 'category')
+  paintFunnel(ctx, {
+    group: model.source.groups[0] as ChartExGroup, view: model.view, plot, labels: layout.texts.get(FUNNEL_TEXTS) ?? [],
+    font: chartFont((axis?.text?.sizePt ?? model.fontSizePt) * 96 / 72, familyCss(model.fontFamily)), textColor: TEXT,
+    admitPath, fillWith, strokeBorder: (c, line, color, box, rect) => strokeBorder(c, line, color, box, rect),
+  })
+}
+
+/** Paint a chart into a w×h box at the origin of `ctx` (worksheet CSS px). */
+export function paintXlsxChart(source: ChartModel, ctx: CanvasRenderingContext2D, w: number, h: number, familyCss: FamilyCss = JSON.stringify, chartContext?: ChartDocumentContext): void {
+  if (source.unsupported || !source.groups.length) { paintChartPlaceholder(source, ctx, w, h, familyCss); return }
+  // A resident model works in the workspace it is charged to (its document's sublimit, under its profile); the
+  // receiving context is for ownerless (transferred) models, never a second budget beside the owner's.
+  const ownerWorkspace = ownedChartWorkspace(source)
+  const workspace = ownerWorkspace ?? chartContext?.workspace ?? createChartWorkspace(CHART_STANDALONE_PAINT_PROFILE)
+  const standalone = !chartContext && !ownerWorkspace
+  const context = ownerWorkspace ? { profile: chartContext?.profile ?? 'mobile', workspace } : chartContext ?? { profile: 'mobile' as const, workspace }
+  const admission = { workspace, tag: `chart-paint#${++paints}` }
+  let layout: ChartLayout
+  let releaseLayout = () => {}
+  try {
+    const physicalDpr = ctx.canvas?.ownerDocument?.defaultView?.devicePixelRatio ?? globalThis.devicePixelRatio
+    const dpr = Number.isFinite(physicalDpr) && physicalDpr > 0 ? physicalDpr : 1
+    layout = layoutChart(source, w, h, dpr, fontGeneration(ctx), {
+      width: (text, css) => { const previous = ctx.font; try { ctx.font = css; return ctx.measureText(text).width } finally { ctx.font = previous } },
+      lineHeight: () => source.fontSizePt * 96 / 72,
+      // The em ascent where the canvas reports it (fontBoundingBoxAscent; node-canvas emHeightAscent).
+      ascent: css => { const previous = ctx.font; try { ctx.font = css; const m = ctx.measureText('') as TextMetrics & { emHeightAscent?: number }; const a = m.fontBoundingBoxAscent ?? m.emHeightAscent; return Number.isFinite(a) && a! > 0 ? a! : Number.NaN } finally { ctx.font = previous } },
+    }, context, familyCss(source.fontFamily), familyCss)
+    releaseLayout = holdChartLayout(layout)
+    const paintBytes = paintWorkspaceBytes(source, layout.view)
+    if (!reserveChartLayoutWorkspace(workspace, paintBytes, admission.tag)) throw new ChartRefusal()
+  } catch (error) {
+    workspace.release(admission.tag)
+    releaseLayout()
+    if (standalone) releaseWorkspaceLayouts(workspace)
+    if (!(error instanceof ChartRefusal)) throw error
+    paintChartPlaceholder({ ...source, unsupported: 'This chart needs more memory than is available for charts' }, ctx, w, h, familyCss)
+    return
+  }
+  const model = drawModel(source, layout.view), graph = layout.graph
+  ctx.save()
+  try {
+    ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
+    // The chart area (spec 5.4): chartSpace/spPr (noFill: transparent), else the c:style default, else white.
+    // Paper rule: the viewer's theme never reaches these pixels.
+    const whole = { x: 0, y: 0, w, h }
+    if (fillWith(ctx, model.chartAreaFill, model.chartAreaDefault ?? 'FFFFFF', whole)) ctx.fillRect(0, 0, w, h)
+    if (!model.chartAreaLine) { ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, w - 1, h - 1) }
+    else if (!model.chartAreaLine.noFill) {
+      ctx.save()
+      try { ctx.strokeStyle = GRID; ctx.lineWidth = 1; applyLineStyle(ctx, model.chartAreaLine, whole); ctx.strokeRect(0.5, 0.5, w - 1, h - 1) } finally { ctx.restore() }
+    }
+    const fontPx = model.fontSizePt * 96 / 72
+    // An overlaid title or legend (spec 5.10) takes no space and is painted over the plot, after it.
+    if (model.title && !model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)
+    if (!model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
+    const area = layout.area
+    if (area.w > 8 && area.h > 8) {
+      const group = model.groups[0]
+      // Treemap and sunburst (B5) draw their nodes and node labels themselves; no generic data labels.
+      if (isHierarchyGroup(source.groups[0])) {
+        const css = familyCss(source.fontFamily)
+        const kit: HierarchyPaintKit = { fillWith, strokeBorder, width: layout.width, font: px => chartFont(px, css) }
+        if (model.plotAreaFill && fillWith(ctx, model.plotAreaFill, 'FFFFFF', area)) ctx.fillRect(area.x, area.y, area.w, area.h)
+        if (group.family === 'treemap') paintTreemap(ctx, source, area, kit); else paintSunburst(ctx, source, area, kit)
+      } else {
+      if (group.family === 'pie' || group.family === 'doughnut') paintPie(ctx, model, group, area)
+      else if (group.family === 'radar') paintRadarChart(ctx, model, layout, familyCss)
+      else if (group.family === 'funnel' && group.kind === 'chartEx') paintFunnelChart(ctx, model, layout, familyCss)
+      else if (group.family === 'ofPie' && group.series[0]) paintOfPie(ctx, area, group, group.series[0], slot => model.view.source(slot), model.view.slots)
+      else if (graph) paintCartesian(ctx, model, graph, area, fontPx, model.fontFamily, familyCss, layout)
+      paintDataLabels(source,ctx,layout,familyCss(source.fontFamily))
+      }
+    }
+    if (model.legendOverlay) paintLegend(ctx, model, layout.legend, fontPx, model.fontFamily, familyCss, layout)
+    if (model.title && model.titleOverlay && !layout.titleOmitted) paintTitle(ctx, model, layout, fontPx, familyCss)
+    // User shapes (A4c) sit over everything the chart draws.
+    paintChartUserShapes(source, ctx, w, h, workspace, !standalone)
+  } finally { ctx.restore(); admission.workspace.release(admission.tag); releaseLayout(); if (standalone) releaseWorkspaceLayouts(workspace) }
+}
+let paints = 0
+/**
+ * The profile of the bounded per-call workspace a synchronous paint uses when the model has no owner, no chart
+ * context is passed and no receiving document was associated (a headless `renderPages`/`renderSlide` of a
+ * transferred model): a fresh 32 MiB (mobile-limit) chart workspace per call, released with the paint.
+ * (The receiving preparation's context, when there is one, is passed per paint instead.)
+ */
+export const CHART_STANDALONE_PAINT_PROFILE: ChartProfile = 'mobile'
+/** What the receiving side knows: its document, the viewer profile, its live parent budget, or a context it already holds. */
+export interface ChartReceiver { owner: object; profile?: ChartProfile; context?: ChartDocumentContext; parent?: ChartParentLedger }
+/** A receiving context held by one preparation or asset lease; `release` ends the hold (idempotent). */
+export interface ChartReceiverLease { context: ChartDocumentContext; release(): void }
+interface Held { context: ChartDocumentContext; refs: number }
+const workspaceLeases = new WeakMap<ChartWorkspace, number>()
+function holdLayouts(workspace: ChartWorkspace): () => void {
+  workspaceLeases.set(workspace, (workspaceLeases.get(workspace) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return; released = true
+    const n = (workspaceLeases.get(workspace) ?? 1) - 1
+    if (n) workspaceLeases.set(workspace, n)
+    else { workspaceLeases.delete(workspace); releaseWorkspaceLayouts(workspace) }
+  }
+}
+/** Receiving contexts per document, then per parent ledger (null: none), then per profile. */
+const documents = new WeakMap<object, Map<ChartParentLedger | null, Map<ChartProfile, Held>>>()
+/**
+ * The receiving side of a transfer (spec 6.4): the chart context a preparation (or asset lease) paints its
+ * transferred models with, carried per paint (`ContentPaintAssets.chartContext`). A supplied context is used as is.
+ * Otherwise there is one context per (document, parent ledger, profile): profile-sized (mobile: 32 MiB) and parented
+ * to that live budget, shared by the leases that hold it and dropped when the last one is released. A later parent
+ * or profile never reuses an earlier receiver's context, and simultaneous receivers keep their own.
+ */
+export function acquireChartContext(receiver: ChartReceiver): ChartReceiverLease {
+  if (receiver.context) return { context: receiver.context, release: holdLayouts(receiver.context.workspace) }
+  const profile = receiver.profile ?? 'desktop', parent = receiver.parent ?? null
+  let byParent = documents.get(receiver.owner)
+  if (!byParent) documents.set(receiver.owner, byParent = new Map())
+  let byProfile = byParent.get(parent)
+  if (!byProfile) byParent.set(parent, byProfile = new Map())
+  let held = byProfile.get(profile)
+  if (!held) byProfile.set(profile, held = { context: documentChartContext(profile, undefined, receiver.parent), refs: 0 })
+  held.refs++
+  const entry = held, releaseLayouts = holdLayouts(held.context.workspace)
+  let released = false
+  return {
+    context: entry.context,
+    release: () => {
+      if (released) return
+      released = true
+      releaseLayouts()
+      if (--entry.refs > 0) return
+      byProfile!.delete(profile)
+      if (!byProfile!.size) byParent!.delete(parent)
+    },
+  }
+}
+
+// FontFaceSet is realm-local. Embedded-font aliases also participate in the layout key.
+const fontSets = new WeakMap<FontFaceSet, { generation: number }>()
+function fontGeneration(ctx: CanvasRenderingContext2D): number {
+  const fonts = ctx.canvas?.ownerDocument?.fonts ?? (globalThis as { fonts?: FontFaceSet }).fonts
+  if (!fonts) return 0
+  let state = fontSets.get(fonts)
+  if (!state) { state = { generation: 0 }; const current = state; fonts.addEventListener('loadingdone', () => { current.generation++; invalidateChartFonts() }); fontSets.set(fonts, state) }
+  return state.generation
+}

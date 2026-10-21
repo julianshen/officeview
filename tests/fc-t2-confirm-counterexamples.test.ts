@@ -4,7 +4,7 @@
 // main never walks a granted drawings reply; the worker walk admits its
 // workspace in chunks, without a fixed object cap.
 import { describe, expect, it, vi } from 'vitest'
-import { parseXlsxChart } from '../src/xlsx/chart'
+import { parseXlsxChart } from '../src/charts'
 import { parseXmlOrdered } from '../src/core/xml'
 import * as bytes from '../src/xlsx/view/payloadBytes'
 import { ViewerKernel, connectInProcess } from '../src/worker/viewerKernel'
@@ -129,7 +129,8 @@ describe('R1: no unadmitted measurement workspace', () => {
   })
 
   it('refuses a reply whose workspace the worker pool cannot admit as a sizeless quota, which main retries', async () => {
-    const doc = docWithCharts(300)
+    // 200 charts: 39,800 chart-model objects (199 per chart since D0's point objects; 300 x 133 = 39,900 before).
+    const doc = docWithCharts(200)
     // The payload fits the worker pool; its 41,000-object walk workspace does not.
     const f = await openRemote(doc, 8 * 1024 * 1024)
     const posted: WorkerReply[] = []

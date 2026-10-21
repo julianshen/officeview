@@ -275,13 +275,14 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     // Warm-up: the same gestures three times, so first-use module/JIT state and
     // the bounded tile/layout caches are full before the measured window.
+    // The warm-up gestures are cold first gestures (module, JIT and cache fill), so they take the first-paint wait.
     for (let round = 0; round < 3; round++) {
       go(ui, 'XFD1048576')
       await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy(), FIRST_PAINT_WAIT)
       go(ui, 'A1048576')
-      await waitFor(() => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS))
+      await waitFor(() => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS), FIRST_PAINT_WAIT)
       go(ui, 'A1')
-      await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     }
     const ledger = await measure(async () => {
       go(ui, 'XFD1048576')
@@ -303,7 +304,13 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     // Exact identity at the last coordinate: 2^34 - 1, not a 32-bit alias.
     go(ui, 'XFD1048576')
     await waitFor(() => expect(activeId(ui)).toBe(2 ** 34 - 1))
-  }, 15_000) // ~2.6 s alone (three warm-up rounds); was 4.5-5 s with formatted stacks, over 5 s under suite load
+  }, 60_000)
+  // Timing-only budget, documented (C1 flake hardening): this test asserts allocation bounds, never time, but its
+  // run time is pure CPU work (real React renders of the grid in jsdom: three warm-up rounds of three Go To gestures,
+  // then the measured window), with no timer or clock to drive. It takes ~2.6 s alone on the Mac and timed out at
+  // 15 s under full-suite load (10.7 s observed); a 2-CPU Linux runner is about 2x slower again. 60 s keeps a wide
+  // margin while still failing on a viewer that never paints. The measured-window waits stay at the default: by then
+  // every module and cache is warm.
 
   it('cell IDs across the 2^31 and 2^32 boundaries stay exact end to end (no bitwise packing)', FIRST_PAINT_TEST, async () => {
     const doc = await objectDoc(BOUNDARIES)

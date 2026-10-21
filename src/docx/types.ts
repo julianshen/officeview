@@ -90,6 +90,8 @@ export interface DocxImage {
   pathHint?: string
   /** Parse/decode selection record shared with the drawing coverage entry. */
   imageSelection?: ImageSelection
+  /** Set on a picture selected as a chart's fallback: the chart's card, painted if the picture fails to decode. */
+  chartFallback?: import('../xlsx/chartModel').XlsxChartModel
 }
 
 /** Compatibility aliases: Word owns its paragraph/text layout. */

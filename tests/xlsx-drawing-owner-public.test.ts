@@ -32,6 +32,8 @@ async function harness(options: { empty?: boolean; image?: boolean; late?: boole
     group: { off: { x: 80 * E, y: 0 }, ext: { width: 80 * E, height: 20 * E }, chOff: { x: 0, y: 0 }, chExt: { width: 80 * E, height: 20 * E } },
     children: [{ xEmu: 0, yEmu: 0, widthEmu: 80 * E, heightEmu: 20 * E,
       source: { partPath: 'd', treePath: 'twoCellAnchor[0]/grpSp[0]/graphicFrame[0]', element: 'graphicFrame', representation: 'native' },
+      // A transport-opaque payload (never painted): its byte size calibrates the main-pressure tests, so it keeps
+      // its pre-D0 number array rather than the point objects (which would move it past the 64 KiB headroom).
       content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: Array.from({ length: 1000 }, (_, i) => i + 42) }] }] } } as never,
       ...(options.image ? { image: { data: new Uint8Array(imageBytes), mime: 'image/png', partPath: 'p.png' } } : {}),
     }],

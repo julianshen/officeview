@@ -1,7 +1,8 @@
 import { describe, test, expect, vi } from 'vitest'
+import { list, pts } from './helpers/chart-points'
 import { chartWorkbookBytes, chartWorkbook } from './helpers/xlsx-chart-fixture'
 import { parseXlsx } from '../src/xlsx/parse'
-import { parseXlsxChart, fillWorkbookCharts } from '../src/xlsx/chart'
+import { parseXlsxChart, fillWorkbookCharts } from '../src/charts'
 import { parseXmlOrdered } from '../src/core/xml'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { MemoryPool } from '../src/xlsx/view/tileCache'
@@ -32,11 +33,11 @@ describe('independent review counterexamples', () => {
   const bytes=await chartWorkbookBytes(xml('Styled!A1:GJH5000'),{cells:[{ref:'GJH1',v:42},{ref:'GJH2',v:84}]})
   const resident=await parseXlsx(await chartWorkbook(xml('Styled!A1:GJH5000'),{cells:[{ref:'GJH1',v:42},{ref:'GJH2',v:84}]}))
   const expected=chartOf(resident.sheets[0].drawings!).groups[0].series[0].values
-  expect(expected.slice(0,2)).toEqual([42,84])
+  expect(list(expected).slice(0,2)).toEqual(pts(42,84))
   const {source,adapter}=await paged(bytes)
   try {
    const result=await adapter.readDrawings({stamp:adapter.stamp,signal:new AbortController().signal},'D')
-   expect(chartOf(result.drawings).groups[0].series[0].values.slice(0,2)).toEqual([42,84])
+   expect(list(chartOf(result.drawings).groups[0].series[0].values).slice(0,2)).toEqual(pts(42,84))
   } finally { await source.release() }
  })
  test('malformed series index is contained as a placeholder instead of aborting XLSX parsing',async()=>{
@@ -47,7 +48,7 @@ describe('independent review counterexamples', () => {
   const sheets=[{name:'Styled',rows:Array.from({length:10000},(_,r)=>({index:r,cells:[{row:r,col:0,value:r}]})),drawings:[{content:{kind:'xlsxChart',chart:model}}]}]
   const text=vi.fn((_:unknown,cell:any)=>String(cell.value))
   fillWorkbookCharts(sheets,{text})
-  expect(sheets[0].drawings[0].content.chart.groups[0].series[0].values).toEqual([0])
+  expect(list(sheets[0].drawings[0].content.chart.groups[0].series[0].values)).toEqual(pts(0))
   console.log('resident formatting calls',text.mock.calls.length,'output point count',1)
   expect(text.mock.calls.length).toBeLessThanOrEqual(1)
  })
@@ -62,7 +63,7 @@ test('uncached chart follows the resident formula engine value',async()=>{
  const doc=await parseXlsx(pkg)
  const formula=doc.sheets[0].rows.flatMap(r=>r.cells).find(c=>c.col===1)!
  expect(formula.value).toBe(7)
- expect(chartOf(doc.sheets[0].drawings!).groups[0].series[0].values).toEqual([7])
+ expect(list(chartOf(doc.sheets[0].drawings!).groups[0].series[0].values)).toEqual(pts(7))
 })
 
 
@@ -84,6 +85,6 @@ test('cross-sheet chart waits for referenced sheet and never caches incomplete d
   console.log('cross-sheet first incomplete values',chartOf(first.drawings).groups[0].series[0].values)
   data.importedThroughRow=savedRow; data.state='complete'
   const second=await adapter.readDrawings({stamp:adapter.stamp,signal:new AbortController().signal},'D')
-  expect(chartOf(second.drawings).groups[0].series[0].values).toEqual([42,84])
+  expect(list(chartOf(second.drawings).groups[0].series[0].values)).toEqual(pts(42,84))
  } finally {await source.release();pool.close()}
 })

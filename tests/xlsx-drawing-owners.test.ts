@@ -19,7 +19,7 @@ function payload(): SheetDrawings {
     xEmu: 80 * E, yEmu: 0, widthEmu: 80 * E, heightEmu: 20 * E,
     source: { partPath: 'd', treePath: 'twoCellAnchor[0]/sp[0]', element: 'sp', representation: 'native' },
     group: { off: { x: 80 * E, y: 0 }, ext: { width: 80 * E, height: 20 * E }, chOff: { x: 0, y: 0 }, chExt: { width: 80 * E, height: 20 * E } },
-    children: [], content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: [42, 84] }] }] } } as never,
+    children: [], content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: [{ state: 'value', v: 42 }, { state: 'value', v: 84 }] }] }] } } as never,
     image: { data: new Uint8Array(1024), mime: 'image/png' },
   }] }
 }

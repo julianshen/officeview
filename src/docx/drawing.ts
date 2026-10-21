@@ -8,10 +8,10 @@ import { withFallbackFonts } from '../core/fonts/fallback'
 import type { FontResolver } from '../core/fonts/register'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
-import { partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
-import { prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
+import { drawingPartContext, partRelationshipNodes, resolvePartTarget as target } from '../drawing/parts'
+import { chartCard, prepareCompatibleDrawingContent, reserveDrawingContent } from '../drawing/content'
 import type { ContentSelection } from '../drawing/content'
-import { supportedChoiceRequirements } from '../drawing/coverage'
+import { DOCX_REQUIREMENTS, supportedChoiceRequirements } from '../drawing/coverage'
 import { paintDrawingContent } from '../drawing/content-paint'
 import type { ContentPaintAssets } from '../drawing/content'
 import { paintTextBody, createTextBodyMeasurer } from '../drawing/text-paint'
@@ -23,6 +23,8 @@ const preparedSelections = new WeakMap<Map<XmlNode, DocxImage>, WeakMap<XmlNode,
 export function wordDrawingSelections(drawings: Map<XmlNode, DocxImage> | undefined, drawing: XmlNode): ContentSelection[] {
   return drawings ? preparedSelections.get(drawings)?.get(drawing) ?? [] : []
 }
+/** Cards of attempted chart drawings inside a Choice (spec 6.3), placed only when no representation remains. */
+export const choiceCards = new WeakMap<XmlNode, DocxImage>()
 export async function loadDrawingParts(
   pkg: OfficePackage,
   root: XmlNode,
@@ -73,18 +75,20 @@ export async function loadDrawingParts(
     if (!drawingTheme.colors[name] && /^[\da-f]{6}$/i.test(value))
       drawingTheme.colors[name] = { kind: 'srgb', value, transforms: [] }
   }
-  const load = async (drawing: XmlNode): Promise<void> => {
+  const load = async (drawing: XmlNode, inChoice: boolean): Promise<void> => {
     const wp = child(drawing, 'inline') ?? child(drawing, 'anchor')
     if (!wp) return
-    const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
+    const compatible = await prepareCompatibleDrawingContent(pkg, wp, part, theme, drawingTheme, { chartContext: drawingPartContext(pkg).chart, parseParagraph, parseDiagramText: (node, shape) => parseTextBody(node, drawingTheme, undefined, textFontDefaults(child(shape, 'style'), drawingTheme)) })
     if (compatible?.selections.length) selections.set(drawing, compatible.selections)
-    const vector = compatible?.content
-    if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) {
-      const extent = attrs(child(wp, 'extent'))
-      const reference = attrs(compatible?.reference)
-      out.set(drawing, { data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: vector,
-        referenceId: reference.id ?? reference.dm })
-    }
+    // A standalone chart nothing could draw becomes its card. Inside a Choice it never satisfies it (spec 6.3):
+    // the paragraph walk places it only when no representation remains (`choiceCards`).
+    const card = compatible ? undefined : chartCard(wp)
+    const vector = compatible?.content ?? (inChoice ? undefined : card)
+    const extent = attrs(child(wp, 'extent'))
+    const reference = attrs(compatible?.reference ?? child(child(child(wp, 'graphic'), 'graphicData'), 'chart'))
+    const entry = (content: DocxDrawing): DocxImage => ({ data: new Uint8Array(), widthEmu: num(extent.cx), heightEmu: num(extent.cy), drawing: content, referenceId: reference.id ?? reference.dm })
+    if (vector && (!reserve || reserveDrawingContent(pkg, vector, part))) out.set(drawing, entry(vector))
+    else if (card && inChoice) choiceCards.set(drawing, entry(card))
   }
   const hasSelectedBlank = (parent: XmlNode | undefined, depth = 0): boolean => {
     if (!parent || depth >= 128) return false
@@ -94,23 +98,23 @@ export async function loadDrawingParts(
     }
     return false
   }
-  const visit = async (parent: XmlNode): Promise<void> => {
+  const visit = async (parent: XmlNode, inChoice = false): Promise<void> => {
     for (const [name, node] of orderedChildren(parent)) {
       if (name === 'AlternateContent') {
         let selected = false
         for (const choice of getChildren(node, 'Choice')) {
-          if (!supportedChoiceRequirements(choice, ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic']).supported) continue
+          if (!supportedChoiceRequirements(choice, DOCX_REQUIREMENTS).supported) continue
           if (orderedChildren(choice).every(([name]) => name === '#text')) { selected = true; break }
           const before = out.size
-          await visit(choice)
+          await visit(choice, true)
           if (out.size > before || hasSelectedBlank(choice)) { selected = true; break }
         }
         if (!selected) {
           const fallback = child(node, 'Fallback')
-          if (fallback) await visit(fallback)
+          if (fallback) await visit(fallback, inChoice)
         }
-      } else if (name === 'drawing') await load(node)
-      else if (name !== '#text') await visit(node)
+      } else if (name === 'drawing') await load(node, inChoice)
+      else if (name !== '#text') await visit(node, inChoice)
     }
   }
   await visit(root)

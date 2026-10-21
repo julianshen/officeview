@@ -1,0 +1,177 @@
+/**
+ * Per-role data precedence for DOCX/PPTX charts (spec 6.4; lazy chunk).
+ *
+ * Roles: series name, categories, values, x values, bubble sizes (custom
+ * error amounts join when their element is read). For each role:
+ *
+ * 1. **Saved data** (a cache or a literal, even partial) is used as read by
+ *    the chart part parser: sparse indices kept, missing ones blank,
+ *    `ptCount=0` a present, empty role. Saved data is never overridden.
+ * 2. **No saved data, a reference**: the role is read from the chart's
+ *    embedded workbook (`c:externalData`, charts/embeddedWorkbook.ts).
+ * 3. **Neither**, or a reference that cannot be read (no embedding, an
+ *    external target or name, a missing sheet or name, a corrupt workbook):
+ *    the role is unavailable, with a diagnostic.
+ *
+ * Values are required for every family, x values for scatter and bubble,
+ * bubble sizes for bubble: one unavailable required role makes the whole
+ * chart unsupported ("This chart's data is not available"); a series is
+ * never drawn silently missing. Categories and names are optional and fall
+ * back to their defaults (1..n, "Series n"). Mixing cached and workbook
+ * roles is allowed. A budget breach refuses the chart.
+ *
+ * A chart whose roles all have saved data never opens the embedding. XLSX
+ * charts keep their own fill path (the containing workbook's cells).
+ */
+import { attrs, getChildren, type XmlNode } from '../core/xml'
+import type { ThemeContext } from '../drawing/style'
+import type { ChartParseContext } from './context'
+import type { ChartDiagnostic, ChartModel, ChartRange, ChartResult, ChartSeries } from './model'
+import { CHART_ANALYTIC_POINT_LIMIT, CHART_POINT_LIMIT, parseXlsxChart } from './parse'
+import { CHART_DATA_NOT_AVAILABLE, XLSX_CHART_PART } from './limits'
+import { CHART_TOO_MANY_POINTS, analyticOverLimit, categoryLimit, chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
+import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
+import { stringBytes } from './points'
+import { readChartStyleParts } from './styleParts'
+import { ERROR_ROLES, type ErrorRole } from './errorBars'
+import { attachChartUserShapes } from './userShapes'
+import { isChartExRoot } from './read'
+import { parseChartExPart } from './chartex/parse'
+import { EMBEDDED_TOO_MANY_POINTS, requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
+
+/** The one reason text (limits.ts), under the name the precedence path has always exported. */
+export const CHART_DATA_UNAVAILABLE = CHART_DATA_NOT_AVAILABLE
+const XLSX_PART = XLSX_CHART_PART
+
+/**
+ * The chart part adapter for every format (spec 6.2, 6.3): reads the model, applies DOCX/PPTX data
+ * precedence, and shapes the representation. `parse` is the module's parser (passed by the caller so a
+ * test's module-level substitute is honoured). A discarded model returns its storage to the workspace.
+ */
+export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefined, context: ChartParseContext, parse: typeof parseXlsxChart = parseXlsxChart): Promise<ChartResult> {
+  // Dispatch on the part's real root namespace (spec 6.2): a ChartEx part never reaches the classic parser.
+  if (isChartExRoot(root)) return parseChartExPart(root, theme, context)
+  let chart: ChartModel | undefined
+  // The style and colour parts (spec 5.11) are read first: the parse bakes the series colours from them.
+  const style = await readChartStyleParts(context)
+  // An authored style or colour part that cannot be admitted refuses the chart (spec 6.4), never default colours.
+  if (style === 'refused') return { kind: 'refused', reason: 'This chart needs more memory than is available for charts' }
+  try {
+    chart = parse(root, theme, style ? { ...context, styleParts: style.parts } : context)
+    style?.release()
+    // A series without a required role is unsupported in every format, XLSX included (spec 6.4).
+    if (chart) chart = refuseAbsentRoles(chart)
+    if (chart && !XLSX_PART.test(context.partPath)) chart = await applyDataPrecedence(chart, root, context)
+    // The chart's drawing overlays (spec 5.11): a missing part leaves the chart native, an unadmitted one refuses it.
+    if (chart && !chart.unsupported) chart = await attachChartUserShapes(chart, root, context)
+  } catch { if (chart) releaseChartModel(chart); chart = undefined } finally { style?.release() }
+  if (chart && !chart.unsupported) return { kind: 'native', model: chart }
+  if (chart) releaseChartModel(chart)
+  return { kind: chart?.refused ? 'refused' : 'unsupported', reason: chart?.unsupported ?? 'This chart could not be read', ...(chart?.title ? { title: chart.title } : {}) }
+}
+
+type Role = 'values' | 'xValues' | 'bubbleSizes' | 'categories' | 'name' | 'levels' | ErrorRole
+const NUMERIC_NAMES = { values: 'values', xValues: 'x values', bubbleSizes: 'bubble sizes' } as const
+interface Slot { group: number; series: number; role: Role }
+const child = (node: XmlNode | undefined, name: string) => getChildren(node, name)[0]
+
+/** Successor model: takes over the old one's charge; its new diagnostics are admitted (dropped if refused). */
+function successor(model: ChartModel, patch: Partial<ChartModel>, diagnostics: ChartDiagnostic[] = []): ChartModel {
+  const owner = chartModelOwner(model)
+  const admitted = diagnostics.filter(d => !owner || owner.workspace.reserve(stringBytes(d.code) + stringBytes(d.reason), owner.tag))
+  const next: ChartModel = { ...model, ...patch, ...(admitted.length ? { diagnostics: [...model.diagnostics ?? [], ...admitted] } : {}) }
+  succeedChartModel(model, next)
+  return next
+}
+const unsupported = (model: ChartModel, diagnostics: ChartDiagnostic[], refused = false) => successor(model, { unsupported: CHART_DATA_UNAVAILABLE, preparedAxes: undefined, ...(refused ? { refused } : {}) }, diagnostics)
+/**
+ * A required role (values; x values for scatter and bubble; bubble sizes for bubble) with neither saved data nor a
+ * reference, cached-only charts included: the chart is unsupported in every format (spec 6.4), so a fallback is kept.
+ * An analytic ChartEx chart (B1 rulings) is refused instead, as the XLSX ChartEx parse refuses it.
+ */
+export function refuseAbsentRoles(model: ChartModel): ChartModel {
+  if (model.unsupported) return model
+  const absent = model.groups.flatMap(group => group.series.flatMap(series => series.absent ?? []))
+  if (!absent.length) return model
+  const missing = (['values', 'xValues', 'bubbleSizes'] as const).find(role => absent.includes(role))
+  const analytic = model.groups.some(group => group.series.some(series => series.analytic === 'chart'))
+  return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${NUMERIC_NAMES[missing ?? 'values']}: neither saved data nor a reference` }], analytic)
+}
+
+/**
+ * Applies the precedence to a parsed DOCX/PPTX chart model (returns the successor model; never throws).
+ * The embedded workbook is opened only when some role has a reference and no saved data.
+ */
+export async function applyDataPrecedence(model: ChartModel, root: XmlNode, context: ChartParseContext): Promise<ChartModel> {
+  model = refuseAbsentRoles(model)
+  if (model.unsupported || !chartHasPending(model)) return model
+  // An analytic ChartEx reference over the analytic bound is refused before the embedding is opened or admitted.
+  if (analyticOverLimit(model)) return successor(model, { unsupported: CHART_TOO_MANY_POINTS, refused: true, preparedAxes: undefined })
+  // Every role still to read, in a fixed order: the shared categories first, then each series' roles.
+  const slots: Array<Slot | 'categories'> = [], requests: EmbeddedRequest[] = []
+  if (model.categoryPending) { slots.push('categories'); requests.push({ range: model.categoryPending, text: true, limit: CHART_POINT_LIMIT }) }
+  model.groups.forEach((group, g) => group.series.forEach((series, s) => {
+    const pending = series.pending
+    if (!pending) return
+    const limit = seriesLimit(series), analytic = series.analytic === 'chart' ? { analytic: true as const } : {}
+    if (pending.values) { slots.push({ group: g, series: s, role: 'values' }); requests.push({ range: pending.values, text: false, limit, ...analytic }) }
+    if (pending.xValues) { slots.push({ group: g, series: s, role: 'xValues' }); requests.push({ range: pending.xValues, text: false, limit }) }
+    if (pending.bubbleSizes) { slots.push({ group: g, series: s, role: 'bubbleSizes' }); requests.push({ range: pending.bubbleSizes, text: false, limit: CHART_POINT_LIMIT }) }
+    if (pending.categories) { slots.push({ group: g, series: s, role: 'categories' }); requests.push({ range: pending.categories, text: true, limit: categoryLimit(series), ...analytic }) }
+    if (pending.name) { slots.push({ group: g, series: s, role: 'name' }); requests.push({ range: pending.name, text: true, limit: 1, single: true }) }
+    // Custom error amounts (spec 5.7) are optional: unavailable, that side draws no bars (diagnosed), the chart stays.
+    for (const role of ERROR_ROLES) { const range = pending[role]; if (range) { slots.push({ group: g, series: s, role }); requests.push({ range, text: false, limit: CHART_POINT_LIMIT }) } }
+    // A treemap/sunburst path: every level of the reference (chartex-map §7).
+    if (pending.levels) { slots.push({ group: g, series: s, role: 'levels' }); requests.push({ range: pending.levels, text: true, limit: CHART_ANALYTIC_POINT_LIMIT, analytic: true, levels: series.levelDir ?? 'col' }) }
+  }))
+  // Classic: c:externalData; ChartEx: cx:chartData/cx:externalData (chartex-map §2.1).
+  const rId = attrs(child(root, 'externalData') ?? child(child(root, 'chartData'), 'externalData')).id
+  let result: EmbeddedCellsResult
+  try {
+    result = rId ? await requestEmbeddedCells(context, rId, requests) : { kind: 'unavailable', diagnostic: { code: 'chart-data-missing', reason: 'The chart has no embedded workbook' } }
+  } catch { result = { kind: 'unavailable', diagnostic: { code: 'chart-data-corrupt', reason: "The chart's embedded workbook could not be read" } } }
+  // The typed analytic refusal keeps its point-limit reason; any other refusal is a memory refusal.
+  if (result.kind === 'refused') return successor(model, { unsupported: result.diagnostic.code === EMBEDDED_TOO_MANY_POINTS ? CHART_TOO_MANY_POINTS : 'This chart needs more memory than is available for charts', refused: true, preparedAxes: undefined }, [result.diagnostic])
+  if (result.kind === 'cancelled') return successor(model, { unsupported: 'Reading the chart data was cancelled', preparedAxes: undefined }, [result.diagnostic])
+  const cells = result.kind === 'cells' ? result : undefined
+  try {
+    const resolved: EmbeddedResolution[] = cells ? cells.resolved : requests.map(() => ({ unavailable: (result as Exclude<EmbeddedCellsResult, { kind: 'cells' }>).diagnostic }))
+    const diagnostics: ChartDiagnostic[] = []
+    const seen = new Set<string>()
+    const note = (d: ChartDiagnostic) => { const id = `${d.code}\n${d.reason}`; if (!seen.has(id)) { seen.add(id); diagnostics.push(d) } }
+    let required = false
+    // Concrete ranges replace the pending references; an unavailable role is dropped (its default stays).
+    let categoryPending: ChartRange | undefined
+    const pendings = model.groups.map(group => group.series.map(() => ({} as NonNullable<ChartSeries['pending']>)))
+    slots.forEach((slot, i) => {
+      const resolution = resolved[i]
+      if ('unavailable' in resolution) {
+        note(resolution.unavailable)
+        if (slot !== 'categories' && slot.role in NUMERIC_NAMES) required = true
+        return
+      }
+      if (slot === 'categories') categoryPending = resolution.range
+      else pendings[slot.group][slot.series][slot.role] = resolution.range
+    })
+    if (required) return unsupported(model, diagnostics)
+    const groups = model.groups.map((group, g) => ({ ...group, series: group.series.map((series, s) => {
+      if (!series.pending) return series
+      const { pending: _old, ...rest } = series
+      void _old
+      const pending = pendings[g][s]
+      return Object.keys(pending).length ? { ...rest, pending } : rest
+    }) }))
+    const epoch = cells?.epoch
+    const next = successor(model, { groups, categoryPending, ...(epoch === '1904' ? { workbookEpoch: '1904' as const } : {}) }, diagnostics)
+    if (!cells || !chartHasPending(next)) return next
+    // Formula cells without a saved value are unavailable points, diagnosed once per chart.
+    let unsaved = 0
+    const lookup: ChartCellLookup = (sheet, row, col, text, allocation) => {
+      const cell = cells.lookup(sheet, row, col, text, allocation)
+      if (cell?.unavailable) unsaved++
+      return cell
+    }
+    const filled = fillChartRanges(next, cells.ownerSheet, lookup, { hidden: cells.hidden, workspace: context.workspace, epoch: cells.epoch })
+    return unsaved && !filled.unsupported ? successor(filled, {}, [{ code: 'chart-formula-unsaved', reason: `${unsaved} formula ${unsaved === 1 ? 'cell has' : 'cells have'} no saved value` }]) : filled
+  } finally { cells?.done() }
+}

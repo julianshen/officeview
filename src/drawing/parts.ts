@@ -1,5 +1,6 @@
 /** Package-scoped drawing traversal state. Cached source XML is theme-independent. */
 import { attrs, getChildren, orderedChildren, type XmlNode } from '../core/xml'
+import type { ChartDocumentContext } from '../charts/context'
 import type { OfficePackage } from '../core/zip'
 
 export const CONTENT_REFERENCE_DEPTH = 32
@@ -28,6 +29,8 @@ export interface DrawingPartContext {
   relationships: Map<string, Promise<Map<string, { path?: string; external: boolean; type?: string }>>>
   relationshipNodes: Map<string, Promise<XmlNode[]>>
   placements: Set<string>
+  /** The document chart context (charts/context.ts), set once per parse. */
+  chart?: ChartDocumentContext
 }
 const contexts = new WeakMap<OfficePackage, DrawingPartContext>()
 export function drawingPartContext(pkg: OfficePackage): DrawingPartContext {
@@ -38,8 +41,9 @@ export function drawingPartContext(pkg: OfficePackage): DrawingPartContext {
   }
   return context
 }
-export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId' | 'sourcePath'> = {}): void {
-  context.diagnostics.push({ kind, partPath, feature, ...details, message: `Drawing content ${kind}${feature ? `: ${feature}` : ''}` })
+export function contentDiagnostic(context: DrawingPartContext, kind: ContentDiagnostic['kind'], partPath: string, feature?: string, details: Pick<ContentDiagnostic, 'identity' | 'reason' | 'limit' | 'ownerPartPath' | 'sourceReferenceId' | 'sourcePath'> & { message?: string } = {}): void {
+  // A chart diagnostic carries its human reason in the message (spec 6.6); others keep the generic text.
+  context.diagnostics.push({ kind, partPath, feature, ...details, message: details.message ?? `Drawing content ${kind}${feature ? `: ${feature}` : ''}` })
 }
 export function reserveDrawingNode(context: DrawingPartContext, partPath: string): boolean {
   if (context.nodes >= DOCUMENT_DRAWING_NODE_LIMIT) {

@@ -59,7 +59,7 @@ import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
-import { SheetImageCache, imageBudgetFor, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import { SheetImageCache, imageBudgetFor, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -396,6 +396,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string } | null>(null)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
+  // Transferred chart models are charged to this viewer's live main-thread budget (spec 6.4), like its drawings.
+  const chartParent = useMemo(() => mainChartParent(mainLedger, MAIN_THREAD_BUDGETS[budgetProfile]), [mainLedger, budgetProfile])
   // One image budget shared by every lease of this viewer (overlapping swaps included).
   const imageCache = useRef<SheetImageCache | null>(null)
   const imageCacheFor = () => {
@@ -412,14 +414,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!activeSheetId) return
     let cancelled = false
     const sheetIndex = sheetIds.indexOf(activeSheetId)
-    void loadAssets(activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor() }).then(next => {
+    void loadAssets(activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId })
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, chartParent])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -1770,7 +1772,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

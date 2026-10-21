@@ -213,8 +213,11 @@ describe('main receiving grant', () => {
     const f = await remoteFixture({ empty: true })
     try {
       f.pressure(64 * 1024)
+      // The baseline is taken quiescent (no reply in flight), so the comparison sees only this read's grant.
+      await f.settle()
       const before = f.ledger.snapshot()
       await until(() => f.remote.drawings('s').state !== 'waiting' && f.remote.drawings('s').state !== 'loading')
+      await f.settle()
       expect(f.remote.drawings('s').state).toBe('ready')
       const after = f.ledger.snapshot()
       expect(after.byPool.replies).toBe(before.byPool.replies)

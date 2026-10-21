@@ -18,13 +18,15 @@
 import type { XlsxDocument, XlsxDrawing } from '../../xlsx/types'
 import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
-import { ensureChartPainter } from '../../xlsx/chartLoader'
+import { ensureChartPainter, hasXlsxCharts, type ChartReceiverLease } from '../../xlsx/chartLoader'
 import { acquireFonts } from '../../core/fonts/register'
 import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
 import { releaseDecodedImage, type ImageCandidates, type ImageDecodeFn } from '../../core/images'
 import { looksLikeSvg } from '../../core/svg'
-import { collectCachedPictures, decodeImageAssets, sheetPaintable, type Paintable, type PaintableArray, type PaintOptions } from '../../render/paint'
+import { chartReceiver, collectCachedPictures, decodeImageAssets, sheetPaintable, type Paintable, type PaintableArray, type PaintOptions } from '../../render/paint'
+import type { MainMemoryLedger } from '../../xlsx/view/mainLedger'
+import type { ChartParentLedger } from '../../charts/workspace'
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import { IMAGE_PROBE_BYTES, imageLimitsFor, probeImageHeader, type ImageLimits } from '../../xlsx/storage/imageAdmission'
 
@@ -84,6 +86,20 @@ export interface SheetAssetsOptions extends PaintOptions {
   profile?: ProfileId
   /** Shared by every lease of one viewer; a private cache is created otherwise. */
   imageCache?: SheetImageCache
+  /** The document whose chart context receives transferred models (default `doc`; a viewer passes its own document
+   * so successive composed sheet documents share one chart facet). */
+  chartOwner?: object
+}
+/**
+ * The viewer's live main-thread ledger as a chart parent budget (spec 6.4): chart paint charges are admitted against
+ * the same hard main budget as the viewer's drawings and recorded under `drawings`/`charts`, refunded on release.
+ */
+export function mainChartParent(ledger: Pick<MainMemoryLedger, 'bytes' | 'set'>, budgetBytes: number): ChartParentLedger {
+  let held = 0
+  return {
+    reserve: bytes => { if (ledger.bytes + bytes > budgetBytes) return false; held += bytes; ledger.set('drawings', 'charts', held); return true },
+    release: (_tag, bytes) => { held = Math.max(0, held - bytes); ledger.set('drawings', 'charts', held) },
+  }
 }
 export interface SheetAssetsLease {
   assets: RenderSheetAssets
@@ -93,6 +109,8 @@ export interface SheetAssetsLease {
   imageBudgetBytes: number
   /** Pictures of this sheet refused by admission or the aggregate limit. */
   refusedImages: number
+  /** The chart chunk did not load: this sheet's charts paint as cards. */
+  chartsUnavailable?: true
   dispose: () => void
 }
 
@@ -207,14 +225,18 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
   const cache = options.imageCache ?? new SheetImageCache(imageBudgetFor(profile))
   return acquireFonts(doc, options.registerFont).then(async lease => {
     const held: ImageCandidates[] = []
-    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset) }
+    // This lease's receiving chart context (per document, parent and profile), carried by its assets, released with it.
+    let charts: ChartReceiverLease | undefined
+    const releaseHeld = () => { for (const asset of held.splice(0)) cache.release(asset); charts?.release() }
     try {
       const sheet = doc.sheets[options.sheetIndex ?? 0]
       const indexed = doc.images ?? []
       const drawings = sheet?.drawings ?? []
       const wanted = [...imageIndexes(drawings)].filter(index => index >= 0 && index < indexed.length).sort((a, b) => a - b)
       const cached = collectCachedPictures(drawings)
-      await ensureChartPainter(drawings)
+      // The receiving document's chart budget for transferred models (spec 6.4): a supplied context as is; else one
+      // per viewer document, sized by the viewer profile and parented to the viewer's live ledger (chartParent).
+      charts = await ensureChartPainter(drawings, chartReceiver(options.chartOwner ?? doc, { chartProfile: profile === 'M' ? 'mobile' : 'desktop', ...options }))
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {
@@ -231,11 +253,12 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       await Promise.all(cached.map(async image => { byObject.set(image, await take(image)) }))
       let released = false
       return {
-        assets: { images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts) },
+        assets: { images, imageFor: image => byObject.get(image), resolveFont: withFallbackFonts(lease.resolve, options.fallbackFonts), ...(charts ? { chartContext: charts.context } : {}) },
         fontDiagnostics: lease.diagnostics,
         decodedBytes,
         imageBudgetBytes: cache.limitBytes,
         refusedImages: refused,
+        ...(!charts && hasXlsxCharts(drawings) ? { chartsUnavailable: true as const } : {}),
         dispose: () => {
           if (released) return
           released = true

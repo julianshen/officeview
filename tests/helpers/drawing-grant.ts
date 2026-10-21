@@ -19,7 +19,7 @@ export function drawingDoc(sheetIds: readonly string[] = ['s'], imageBytes = 0):
     sheet.drawings = [{
       xEmu: 80 * E, yEmu: 0, widthEmu: 80 * E, heightEmu: 20 * E,
       source: { partPath: 'd', treePath: 'twoCellAnchor[0]/graphicFrame[0]', element: 'graphicFrame', representation: 'native' },
-      content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: Array.from({ length: 1000 }, (_, i) => i + 42) }] }] } } as never,
+      content: { kind: 'xlsxChart', chart: { groups: [{ series: [{ values: Array.from({ length: 1000 }, (_, i) => ({ state: 'value', v: i + 42 })) }] }] } } as never,
       ...(imageBytes ? { image: { data: new Uint8Array(imageBytes), mime: 'image/png', partPath: 'p.png' } } : {}),
     }]
     sheet.drawingAnchors = { unresolved: 0, records: [{ id: 'd', kind: 'twoCell', from: { col: 1, row: 0, colOffEmu: 0, rowOffEmu: 0 }, to: { col: 2, row: 1, colOffEmu: 0, rowOffEmu: 0 } }] }
@@ -70,10 +70,16 @@ export async function remoteFixture(options: { sheets?: string[]; imageBytes?: n
   expect((await client.send({ kind: 'open', requestId: client.nextRequestId(), docId: 'r', source: { kind: 'object', document: doc }, profile: 'D' })).kind).toBe('complete')
   const session = kernel.session('r')!
   const remote = new RemoteWorkbook(client, { docId: 'r', valuePolicy: source.valuePolicy, sheets: source.sheets, diagnostics: [], formatting: source.formatting?.(), layouts: new Map(sheets.map(id => [id, session.layout(id)])) })
+  // Load every sheet to completion before the test starts, driven by the in-process kernel's idle signal rather
+  // than a wall-clock budget: on a slow CI runner a fixed 200 x 2 ms wait could end with a load reply still in flight,
+  // whose reply-pool charge then leaked into a test's "before" snapshot (C1 flake hardening).
   for (const id of sheets) {
     remote.merges(id)
-    for (let i = 0; i < 200 && remote.loadState(id).completeness !== 'complete'; i++) await new Promise(r => setTimeout(r, 2))
+    for (let i = 0; i < 1000 && remote.loadState(id).completeness !== 'complete'; i++) { await inner.idle(); await new Promise(r => setTimeout(r, 0)) }
+    expect(remote.loadState(id).completeness, `fixture sheet ${id} loaded`).toBe('complete')
   }
+  await inner.idle()
+  for (let i = 0; i < 20; i++) await Promise.resolve()
   const ledger = remote.mainLedger, cap = MAIN_THREAD_BUDGETS.D
   const command = (requestId: string, sheetId = sheets[0]): CommandOf<'read'> => ({ kind: 'read', requestId, owner: remote.identity(sheetId), query: { op: 'drawings' } })
   const drawingsSent = () => sent.filter(m => (m as { kind?: string; query?: { op?: string } }).query?.op === 'drawings') as CommandOf<'read'>[]

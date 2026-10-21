@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { parseXlsx } from '../src/xlsx/parse'
 import { paintDrawingContent } from '../src/drawing/content-paint'
 import { CACHED_COLUMN, addDefinedNames, addNumberFormat, chartWorkbook, emu, openpyxlFrame } from './helpers/xlsx-chart-fixture'
+import { list, pts } from './helpers/chart-points'
 
 describe('worksheet chart frames', () => {
   test('an anchored chart frame with an empty xfrm takes its anchor box (openpyxl)', async () => {
@@ -47,22 +48,22 @@ describe('worksheet chart data', () => {
     if (content?.kind !== 'xlsxChart') return
     expect(content.chart.title).toBe('Bar chart')
     expect(content.chart.categories).toEqual(['Q1', 'Q2', 'Q3', 'Q4', 'Q5'])
-    expect(content.chart.groups[0].series[0].values).toEqual([10, 20, 30, 40, 50])
+    expect(list(content.chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30, 40, 50))
     expect(content.chart.groups[0].series[0].pending).toBeUndefined()
     expect(content.chart.categoryPending).toBeUndefined()
     expect(sheet.drawingCoverage?.find(entry => entry.element === 'graphicFrame')).toMatchObject({ feature: 'chart', selectedRepresentation: 'chart', status: 'native' })
   })
 
   test('an unsupported chart with no fallback keeps a titled placeholder card', async () => {
-    const xml = '<chartSpace><chart><title><tx><rich><p><r><t>Radar</t></r></p></rich></tx></title><plotArea><radarChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></radarChart></plotArea></chart></chartSpace>'
+    const xml = '<chartSpace><chart><title><tx><rich><p><r><t>Future</t></r></p></rich></tx></title><plotArea><futureChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></futureChart></plotArea></chart></chartSpace>'
     const sheet = (await parseXlsx(await chartWorkbook(xml))).sheets[0]
     const content = sheet.drawings?.[0].content
     expect(content?.kind).toBe('xlsxChart')
     if (content?.kind !== 'xlsxChart') return
-    expect(content.chart).toMatchObject({ title: 'Radar', unsupported: 'Radar chart is not supported' })
+    expect(content.chart).toMatchObject({ title: 'Future', unsupported: 'This chart type is not supported' })
     expect(sheet.drawingCoverage?.find(entry => entry.element === 'graphicFrame')?.selectedRepresentation).toBe('chart-placeholder')
-    const { chartDescription } = await import('../src/xlsx/chart')
-    expect(chartDescription(content.chart)).toBe('Chart: Radar. Radar chart is not supported; it is not drawn.')
+    const { chartDescription } = await import('../src/charts')
+    expect(chartDescription(content.chart)).toBe('Chart: Future. placeholder: This chart type is not supported.')
   })
 })
 
@@ -83,16 +84,16 @@ describe('chart references: formats, defined names, unreadable areas', () => {
     // 0.00 (built-in 2) on whole numbers keeps its decimals.
     const fixed = await chartOf(uncached('Styled!$K$20:$K$22', 'Styled!$L$20:$L$22'), '', [0, 1, 2].flatMap(i => [{ ref: `K${20 + i}`, v: 45292 + 31 * i, style: 2 }, { ref: `L${20 + i}`, v: i }]))
     expect(fixed.categories).toEqual(['45292.00', '45323.00', '45354.00'])
-    expect(chart.groups[0].series[0].values).toEqual([10, 20, 30])
+    expect(list(chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30))
   })
 
   test('series read through workbook and sheet-scoped defined names', async () => {
     const chart = await chartOf(uncached('Cats', 'Sales'), '<definedName name="Sales">Styled!$L$20:$L$22</definedName><definedName name="Cats" localSheetId="0">Styled!$K$20:$K$22</definedName><definedName name="Cats">Styled!$A$1:$A$1</definedName>')
     expect(chart.unsupported).toBeUndefined()
-    expect(chart.groups[0].series[0].values).toEqual([10, 20, 30])
+    expect(list(chart.groups[0].series[0].values)).toEqual(pts(10, 20, 30))
     expect(chart.categories).toEqual(['1,234.50', '2,469.00', '3,703.50'])
     const qualified = await chartOf(uncached('Styled!Cats', "'Styled'!Sales"), '<definedName name="Sales">Styled!$L$20:$L$22</definedName><definedName name="Cats" localSheetId="0">Styled!$K$20:$K$22</definedName>')
-    expect(qualified.groups[0].series[0].values).toEqual([10, 20, 30])
+    expect(list(qualified.groups[0].series[0].values)).toEqual(pts(10, 20, 30))
   })
 
   test('an undefined name, a multi-area name and a multi-area reference show a placeholder, never an empty chart', async () => {
@@ -107,7 +108,7 @@ describe('chart references: formats, defined names, unreadable areas', () => {
 })
 
 describe('chart parser', async () => {
-  const { parseXlsxChart, parseChartRange, chartDescription, fillChartRanges } = await import('../src/xlsx/chart')
+  const { parseXlsxChart, parseChartRange, chartDescription, fillChartRanges } = await import('../src/charts')
   const { parseXmlOrdered } = await import('../src/core/xml')
   const parse = (xml: string) => parseXlsxChart(parseXmlOrdered(xml), undefined)!
 
@@ -122,26 +123,27 @@ describe('chart parser', async () => {
 
   test('stacked horizontal bars, 100% stacked area, line markers, pie colours, doughnut hole and scatter x values', () => {
     const bar = parse(space(`<barChart><barDir val="bar"/><grouping val="stacked"/><overlap val="100"/>${ser(0, [1, 2])}${ser(1, [3, 4])}</barChart>`))
-    expect(bar.groups[0]).toMatchObject({ type: 'bar', barDir: 'bar', grouping: 'stacked', overlap: 100 })
+    expect(bar.groups[0]).toMatchObject({ family: 'bar', barDir: 'bar', grouping: 'stacked', overlap: 100 })
     expect(bar.groups[0].series.map(s => s.color)).toEqual(['4472C4', 'ED7D31'])
     expect(bar.categories).toEqual(['C1', 'C2'])
     expect(bar.legend).toBe('b')
     const area = parse(space(`<areaChart><grouping val="percentStacked"/>${ser(0, [1, 2])}</areaChart>`))
-    expect(area.groups[0]).toMatchObject({ type: 'area', grouping: 'percentStacked' })
+    expect(area.groups[0]).toMatchObject({ family: 'area', grouping: 'percentStacked' })
     const line = parse(space(`<lineChart><grouping val="standard"/>${ser(0, [1, 2], '<marker><symbol val="none"/></marker>')}${ser(1, [3, 1], '<spPr><a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></spPr>')}<marker val="1"/></lineChart>`))
     expect(line.groups[0].series.map(s => [s.markers, s.color])).toEqual([[false, '4472C4'], [true, 'FF0000']])
     const pie = parse(space(`<pieChart><varyColors val="1"/>${ser(0, [1, 2, 3])}<firstSliceAng val="90"/></pieChart>`))
-    expect(pie.groups[0]).toMatchObject({ type: 'pie', firstSliceAngle: 90 })
+    expect(pie.groups[0]).toMatchObject({ family: 'pie', firstSliceAngle: 90 })
     expect(pie.groups[0].series[0].pointColors).toEqual(['4472C4', 'ED7D31', 'A5A5A5'])
     const doughnut = parse(space(`<doughnutChart>${ser(0, [1, 2])}<holeSize val="60"/></doughnutChart>`))
-    expect(doughnut.groups[0]).toMatchObject({ type: 'doughnut', holeSize: 60 })
+    expect(doughnut.groups[0]).toMatchObject({ family: 'doughnut', holeSize: 60 })
     const scatter = parse(space('<scatterChart><scatterStyle val="lineMarker"/><ser><idx val="0"/><xVal><numLit><pt idx="0"><v>1</v></pt><pt idx="1"><v>4</v></pt></numLit></xVal><yVal><numLit><pt idx="0"><v>2</v></pt><pt idx="1"><v>3</v></pt></numLit></yVal></ser></scatterChart>'))
-    expect(scatter.groups[0].series[0]).toMatchObject({ xValues: [1, 4], values: [2, 3], line: true, markers: true })
+    expect(scatter.groups[0].series[0]).toMatchObject({ line: true, markers: true })
+    expect([list(scatter.groups[0].series[0].xValues), list(scatter.groups[0].series[0].values)]).toEqual([pts(1, 4), pts(2, 3)])
   })
 
   test('bar and line together share the axes; a pie combination is a placeholder', () => {
     const combo = parse(space(`<barChart><barDir val="col"/>${ser(0, [1, 2])}</barChart><lineChart>${ser(1, [2, 1])}</lineChart>`))
-    expect(combo.groups.map(g => g.type)).toEqual(['bar', 'line'])
+    expect(combo.groups.map(g => g.family)).toEqual(['bar', 'line'])
     expect(combo.unsupported).toBeUndefined()
     expect(parse(space(`<barChart>${ser(0, [1])}</barChart><pieChart>${ser(1, [1])}</pieChart>`)).unsupported).toBe('Combination pie charts are not supported')
   })
@@ -157,7 +159,8 @@ describe('chart parser', async () => {
     const cells: Record<string, unknown> = { 'Owner|0|1': 'Revenue', 'Owner|1|0': 'Jan', 'Owner|2|0': 'Feb', 'Owner|3|0': 'Mar', 'Data|1|1': 5, 'Data|2|1': 'x', 'Data|3|1': 7 }
     const filled = fillChartRanges(model, 'Owner', (sheet, r, c) => { const value = cells[`${sheet}|${r}|${c}`] as string | number | undefined; return value === undefined ? undefined : { value } })
     expect(filled.categories).toEqual(['Jan', 'Feb', 'Mar'])
-    expect(filled.groups[0].series[0]).toMatchObject({ name: 'Revenue', values: [5, undefined, 7] })
+    expect(filled.groups[0].series[0]).toMatchObject({ name: 'Revenue' })
+    expect(list(filled.groups[0].series[0].values)).toEqual(pts(5, undefined, 7))
     expect(chartDescription(filled)).toBe('Chart. Line chart, 1 series; 3 categories (Jan, Feb, Mar); Revenue: 5, 7.')
     const long = parse('<chartSpace><chart><plotArea><barChart><ser><val><numRef><f>A1:A10000</f></numRef></val></ser></barChart></plotArea></chart></chartSpace>')
     const bounded = fillChartRanges(long, 'S', () => ({ value: 1 }))
@@ -167,7 +170,7 @@ describe('chart parser', async () => {
 })
 
 describe('chart painting', async () => {
-  const { parseXlsxChart, paintXlsxChart } = await import('../src/xlsx/chart')
+  const { parseXlsxChart, paintXlsxChart } = await import('../src/charts')
   const { paintDrawingContent } = await import('../src/drawing/content-paint')
   const { parseXmlOrdered } = await import('../src/core/xml')
   const parse = (xml: string) => parseXlsxChart(parseXmlOrdered(xml), undefined)!
@@ -209,8 +212,8 @@ describe('chart painting', async () => {
 
   test('an unsupported chart paints its placeholder card with title and reason through the shared painter', () => {
     const { ctx, calls } = recorder()
-    const chart = parse('<chartSpace><chart><title><tx><rich><p><r><t>Radar</t></r></p></rich></tx></title><plotArea><radarChart/></plotArea></chart></chartSpace>')
+    const chart = parse('<chartSpace><chart><title><tx><rich><p><r><t>Future</t></r></p></rich></tx></title><plotArea><futureChart/></plotArea></chart></chartSpace>')
     paintDrawingContent({ kind: 'xlsxChart', chart }, ctx, 200, 120)
-    expect(calls.filter(call => call.op === 'fillText').map(call => call.args[0])).toEqual(['Radar', 'Radar chart is not supported'])
+    expect(calls.filter(call => call.op === 'fillText').map(call => call.args[0])).toEqual(['Future', 'This chart type is not supported'])
   })
 })

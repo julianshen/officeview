@@ -357,7 +357,7 @@ describe('worksheet drawing anchors', () => {
     }
   })
 
-  test('recovers native picture fallback after an attempted unsupported (radar) chart Choice at either MC level', async () => {
+  test('recovers native picture fallback after an attempted unsupported (unknown type) chart Choice at either MC level', async () => {
     const canvas = createCanvas(1, 1)
     canvas.getContext('2d').fillStyle = '#0000FF'; canvas.getContext('2d').fillRect(0, 0, 1, 1)
     const chart = '<c:chart r:id="rChart"/>'
@@ -366,7 +366,7 @@ describe('worksheet drawing anchors', () => {
     for (const markup of [alternate(frameBody(chart), pic(702, 'rImg')), frameBody(alternate(chart, pic(702, 'rImg')))]) {
       const pkg = await fixture(absolute(markup, 0, 0, 100, 100), '', '', zip => {
         zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/hbar.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
-        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><radarChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></radarChart></plotArea></chart></chartSpace>')
+        zip.file('xl/charts/hbar.xml', '<chartSpace><chart><plotArea><futureChart><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></futureChart></plotArea></chart></chartSpace>')
         zip.file('xl/media/blue.png', canvas.toBuffer('image/png'))
       })
       const sheet = (await parseXlsx(pkg)).sheets[0]
@@ -509,13 +509,16 @@ describe('worksheet drawing anchors', () => {
   test('MC preflight preserves the selected graphicData carrier URI when assessing a chart', async () => {
     const alt = (choice: string) => `<mc:AlternateContent><mc:Choice Requires="a">${choice}</mc:Choice><mc:Fallback>${pic(1602, 'rImg')}</mc:Fallback></mc:AlternateContent>`
     const supported = frame(1601, 'rChart')
-    const unsupported = supported.replace('http://schemas.openxmlformats.org/drawingml/2006/chart', 'http://schemas.microsoft.com/office/drawing/2014/chartex')
+    // B1: a chartex frame follows the chart path and dispatches on its part's root namespace; this one names an
+    // unreadable ChartEx part (no series), so the fallback is selected.
+    const unsupported = supported.replace('http://schemas.openxmlformats.org/drawingml/2006/chart', 'http://schemas.microsoft.com/office/drawing/2014/chartex').replace('r:id="rChart"', 'r:id="rEx"')
     const wrapped = unsupported.replace('<a:graphicData ', '<mc:AlternateContent><mc:Choice Requires="a"><a:graphicData ').replace('</a:graphicData>', '</a:graphicData></mc:Choice></mc:AlternateContent>')
-    const empty = unsupported.replace('<c:chart r:id="rChart"/>', '')
+    const empty = unsupported.replace('<c:chart r:id="rEx"/>', '')
     for (const [choice, id, imageCount] of [[supported, '1601', 0], [unsupported, '1602', 1], [wrapped, '1602', 1], [empty, '1601', 0]] as const) {
       const pkg = await fixture(absolute(alt(choice), 0, 0, 90, 50), '', '', zip => {
-        zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/column.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
+        zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/column.xml"/><Relationship Id="rEx" Target="../charts/chartEx1.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
         zip.file('xl/charts/column.xml', '<chartSpace><chart><plotArea><barChart><barDir val="col"/><ser><val><numLit><pt idx="0"><v>2</v></pt></numLit></val></ser></barChart></plotArea></chart></chartSpace>')
+        zip.file('xl/charts/chartEx1.xml', '<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chartData/><cx:chart><cx:plotArea/></cx:chart></cx:chartSpace>')
         zip.file('xl/media/blue.png', createCanvas(1, 1).toBuffer('image/png'))
       })
       const doc = await parseXlsx(pkg)
@@ -523,7 +526,7 @@ describe('worksheet drawing anchors', () => {
       expect(doc.images, choice).toHaveLength(imageCount)
       if (id === '1601' && choice === supported) expect(doc.sheets[0].drawings?.[0].content?.kind).toBe('xlsxChart')
     }
-    const nested = unsupported.replace('<c:chart r:id="rChart"/>', `<mc:AlternateContent><mc:Choice Requires="a"><c:chart r:id="rChart"/></mc:Choice><mc:Fallback>${pic(1603, 'rImg')}</mc:Fallback></mc:AlternateContent>`)
+    const nested = unsupported.replace('<c:chart r:id="rEx"/>', `<mc:AlternateContent><mc:Choice Requires="a"><c:chart r:id="rChart"/></mc:Choice><mc:Fallback>${pic(1603, 'rImg')}</mc:Fallback></mc:AlternateContent>`)
     const nestedPkg = await fixture(absolute(nested, 0, 0, 90, 50), '', '', zip => {
       zip.file('xl/drawings/_rels/drawing7.xml.rels', '<Relationships><Relationship Id="rChart" Target="../charts/column.xml"/><Relationship Id="rImg" Target="../media/blue.png"/></Relationships>')
       zip.file('xl/charts/column.xml', '<chartSpace><chart><plotArea><barChart><barDir val="col"/></barChart></plotArea></chart></chartSpace>')

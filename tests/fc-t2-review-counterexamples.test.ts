@@ -24,8 +24,8 @@ describe('finding 1: the transport gate measures exactly, never by extrapolation
   it('refuses a real chart whose 4,194,304-unit title alone exceeds a 6 MiB grant', async () => {
     const doc = drawingDoc(['s'])
     const title = '界'.repeat(4 * MiB)
-    const series = Array.from({ length: 64 }, (_, s) => ({ name: String(s), color: '4472C4', values: Array.from({ length: 4096 }, (_, i) => i), line: true, markers: false }))
-    doc.sheets[0].drawings![0].content = { kind: 'xlsxChart', chart: { title, groups: [{ type: 'line', grouping: 'standard', series, gapWidth: 150, overlap: 0 }], categories: [], categoryAxis: { gridlines: false, deleted: false }, valueAxis: { gridlines: true, deleted: false }, fontFamily: 'Calibri', fontSizePt: 10 } } as never
+    const series = Array.from({ length: 64 }, (_, s) => ({ name: String(s), color: '4472C4', values: Array.from({ length: 4096 }, (_, i) => ({ state: 'value', v: i })), line: true, markers: false }))
+    doc.sheets[0].drawings![0].content = { kind: 'xlsxChart', chart: { title, groups: [{ family: 'line', grouping: 'standard', series, binding: { kind: 'cartesian', category: '1', value: '2' }, gapWidth: 150, overlap: 0 }], axes: [{ id: '1', kind: 'category', gridlines: false, deleted: false }, { id: '2', kind: 'value', gridlines: true, deleted: false }], categories: [], fontFamily: 'Calibri', fontSizePt: 10 } } as never
     const f = await kernelOver(doc)
     const posted: WorkerReply[] = []
     try {

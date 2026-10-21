@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it, vi } from 'vitest'
 import { drawingFootprint } from '../src/xlsx/view/drawingPayload'
-import { fillChartRanges, parseXlsxChart } from '../src/xlsx/chart'
+import { fillChartRanges, parseXlsxChart } from '../src/charts'
 import { parseXmlOrdered } from '../src/core/xml'
 import { WorkerViewportPlans } from '../src/components/xlsx/workerViewport'
 import { paneLogicalBoxes } from '../src/xlsx/view/frozenPanes'

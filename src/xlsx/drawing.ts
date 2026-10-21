@@ -5,15 +5,16 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
-import { coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage } from '../drawing/coverage'
-import { attemptedMalformedRelationshipIssue, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
+import { XLSX_REQUIREMENTS, chartChoiceFeature, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage, type DrawingCoverageEntry } from '../drawing/coverage'
+import { attemptedMalformedRelationshipIssue, cardChart, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
 import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
-import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
+import type { XlsxChartModel } from './chartModel'
 import { loadChartModule } from './chartLoader'
+import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
 function vmlNodeToXlsx(node: VmlNode, owner: string): XlsxDrawing | undefined {
   if (node.kind === 'shape') {
@@ -151,16 +152,10 @@ const child = (node: XmlNode | undefined, name: string) => getChildren(node, nam
 const finite = (raw: string | undefined): number | undefined => raw !== undefined && raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : undefined
 const bool = (raw: string | undefined) => raw === '1' || raw === 'true'
 const contentTheme = (theme: ThemeContext) => ({ colors: new Map(Object.entries(theme.palette).map(([key, value]) => [key, value.replace(/^#/, '')])), fonts: new Map([['minorHAnsi', theme.fonts.minor.latin ?? 'Calibri']]) })
-const contentAdapters = (theme: ThemeContext) => ({ parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0],
-  // Worksheet charts use the lazy chart chunk; an unsupported type reads as
-  // absent here so compatibility fallbacks still win (a placeholder follows).
-  parseChart: async (root: XmlNode) => {
-    const charts = await loadChartModule()
-    // A malformed chart part never fails the workbook: it reads as unsupported (placeholder/fallback).
-    let chart: ReturnType<typeof charts.parseXlsxChart>
-    try { chart = charts.parseXlsxChart(root, theme) } catch { chart = undefined }
-    return chart && !chart.unsupported ? { kind: 'xlsxChart' as const, chart } : undefined
-  } })
+// Worksheet charts use the shared default parseChart (drawing/content.ts, the lazy
+// chart engine); an unsupported type is not content, so compatibility fallbacks
+// still win (a placeholder follows).
+const contentAdapters = (theme: ThemeContext, pkg: OfficePackage) => ({ chartContext: drawingPartContext(pkg).chart, parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0] })
 
 /** Whether a graphic frame names a chart part (directly or inside a compatibility branch). */
 function referencesChart(node: XmlNode, depth = 0): boolean {
@@ -172,21 +167,31 @@ function referencesChart(node: XmlNode, depth = 0): boolean {
   return false
 }
 
-/** The card shown for a chart frame nothing could draw: title and reason, never blank. */
-async function chartPlaceholder(pkg: OfficePackage, owner: string, rid: string | undefined, theme: ThemeContext): Promise<XlsxDrawing['content']> {
-  const charts = await loadChartModule()
-  let root: XmlNode | undefined
-  try {
-    const path = rid ? await referencedPart(pkg, owner, rid) : undefined
-    root = path ? await pkg.xmlOrdered(path) : undefined
-  } catch { root = undefined }
-  let parsed: ReturnType<typeof charts.parseXlsxChart>
-  try { parsed = root ? charts.parseXlsxChart(root, theme) : undefined } catch { return { kind: 'xlsxChart', chart: charts.placeholderChart(undefined, 'This chart could not be read') } }
-  return { kind: 'xlsxChart', chart: parsed?.unsupported ? parsed : charts.placeholderChart(parsed?.title, parsed ? 'This chart could not be drawn' : 'Chart data could not be read') }
+/** The card shown for a chart frame nothing could draw (spec 6.3): the attempted chart's own card
+ * (reason and title), else an unreadable-chart card. The chart part is never read again here. */
+function chartPlaceholder(node: XmlNode, prepared: XlsxDrawing['content']): XlsxDrawing['content'] {
+  return chartCard(node) ?? { kind: 'xlsxChart', chart: cardChart(prepared ? 'This chart could not be drawn' : 'Chart data could not be read', prepared?.kind === 'xlsxChart' ? prepared.chart.title : undefined) }
+}
+
+/** A fallback with nothing usable (spec 6.3): every object is a picture without a usable image part
+ * (missing, external or absent), or a group of only such objects. Any shape, text, frame or nested
+ * alternative keeps the fallback. */
+async function fallbackUnusable(pkg: OfficePackage, owner: string, fallback: XmlNode): Promise<boolean> {
+  const rels = await partRelationships(pkg, owner)
+  const unusable = (node: XmlNode, depth: number): boolean => {
+    const items = orderedChildren(node).filter(([name]) => name !== '#text' && name !== 'nvGrpSpPr' && name !== 'grpSpPr')
+    return items.length > 0 && depth < 16 && items.every(([name, item]) => {
+      if (name === 'grpSp') return unusable(item, depth + 1)
+      if (name !== 'pic') return false
+      const rel = rels.get(attrs(child(child(item, 'blipFill'), 'blip')).embed)
+      return !rel?.path || rel.external || !pkg.has(rel.path)
+    })
+  }
+  return unusable(fallback, 0)
 }
 
 /** Decide MC branches from their selected descendants only. Empty supported Choices are valid. */
-async function selectedAlternative(pkg: OfficePackage, owner: string, alternate: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<{ branch: XmlNode; mode: 'choice' | 'fallback' } | undefined> {
+async function selectedAlternative(pkg: OfficePackage, owner: string, alternate: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<{ branch: XmlNode; mode: 'choice' | 'fallback'; unusable?: boolean; chartFallback?: XlsxChartModel } | undefined> {
   if (depth >= MAX_COMPATIBILITY_DEPTH) {
     contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'AlternateContent', { identity: owner, reason: 'compatibility-depth', limit: MAX_COMPATIBILITY_DEPTH })
     return undefined
@@ -195,14 +200,169 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
   const failed = new Set<(typeof diagnostics)[number]>()
   const discardFailed = () => { for (let i = diagnostics.length - 1; i >= 0; i--) if (failed.has(diagnostics[i])) diagnostics.splice(i, 1) }
   for (const choice of getChildren(alternate, 'Choice')) {
-    if (!supportedChoiceRequirements(choice, ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink']).supported) continue
+    if (!supportedChoiceRequirements(choice, XLSX_REQUIREMENTS).supported) continue
     const before = diagnostics.length
     if (await branchAvailable(pkg, owner, choice, theme, depth + 1, carrier)) { discardFailed(); return { branch: choice, mode: 'choice' } }
     for (const diagnostic of diagnostics.slice(before)) failed.add(diagnostic)
   }
   const fallback = child(alternate, 'Fallback')
-  if (fallback && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)) { discardFailed(); return { branch: fallback, mode: 'fallback' } }
+  // No representation remains (no fallback, or its picture is unusable): an attempted chart Choice shows its card (spec 6.3).
+  // Only the outermost selection places it, so a card never makes an enclosing Choice available.
+  const card = getChildren(alternate, 'Choice').find(choice => supportedChoiceRequirements(choice, XLSX_REQUIREMENTS).supported && chartCard(choice))
+  const unusable = !!card && !!fallback && await fallbackUnusable(pkg, owner, fallback)
+  // The actual result: nothing usable here (an unusable fallback is not a representation), so the failure propagates.
+  if (!fallback || unusable) markExhausted(alternate)
+  const available = !!fallback && !unusable && await branchAvailable(pkg, owner, fallback, theme, depth + 1, carrier)
+  // The fallback's actual resolution failed (an unsupported chart, a nested exhausted wrapper): nothing usable here.
+  if (fallback && !unusable && !available) markExhausted(alternate)
+  if (available) {
+    discardFailed()
+    // The chart's card travels with its selected fallback pictures, painted if one fails to decode.
+    return { branch: fallback, mode: 'fallback', ...(card ? { chartFallback: chartCard(card)!.chart } : {}) }
+  }
+  if (card && depth === 0) {
+    if (unusable) contentDiagnostic(drawingPartContext(pkg), 'unsupported-content', owner, 'chart', { reason: 'chart-fallback-unusable', message: `chart-fallback-unusable: ${chartCard(card)?.chart.unsupported ?? 'the fallback picture cannot be used'}` })
+    return { branch: card, mode: 'choice', ...(unusable ? { unusable } : {}) }
+  }
   return undefined
+}
+
+/**
+ * A chart Choice selected while its data is still to be read (spec 6.3): the XLSX fill and stage 1 may refuse a
+ * chart in it later (data-dependent binning, an unavailable point). Each such AlternateContent is one wrapper:
+ * `members` are the objects its selected branch produced (the branch is the unit; a grouped chart included),
+ * `parse` re-selects its Fallback (parsed then, never eagerly), `placement` is the worksheet anchor's box when the
+ * branch is top-level. Wrappers form a hierarchy: a nested AlternateContent's wrapper has the enclosing one as its
+ * `parent`, and a drawing maps to its innermost wrapper, so the first usable inner fallback is tried before an
+ * enclosing one. A wrapper is `done` once its charts are final; one still waiting on data (a paged chart whose
+ * referenced sheet is importing) stays open, and the paged reader re-reads that sheet's drawings when it completes.
+ */
+interface FallbackWrapper { parse: () => Promise<XlsxDrawing[]>; members: XlsxDrawing[]; placement?: Partial<XlsxDrawing>; parent?: FallbackWrapper; done?: boolean }
+const innermostWrapper = new WeakMap<XlsxDrawing, FallbackWrapper>()
+type DrawingChart = Extract<NonNullable<XlsxDrawing['content']>, { kind: 'xlsxChart' }>['chart']
+const outermost = (wrapper: FallbackWrapper): FallbackWrapper => { let w = wrapper; while (w.parent) w = w.parent; return w }
+const wrapperDepth = (wrapper: FallbackWrapper): number => { let n = 0; for (let w = wrapper.parent; w; w = w.parent) n++; return n }
+/**
+ * Places `drawings` under `parent` (registration, or an inner replacement): a drawing with its own wrappers keeps
+ * them, its outermost one gaining `parent`; a drawing with none maps to `parent` directly.
+ */
+function adoptUnder(drawings: XlsxDrawing[], parent: FallbackWrapper | undefined): void {
+  for (const drawing of drawings) {
+    const own = innermostWrapper.get(drawing)
+    if (own) { const top = outermost(own); if (top !== parent) top.parent = parent }
+    else if (parent) innermostWrapper.set(drawing, parent)
+  }
+}
+/** The charts a branch drew, nested ones included. */
+function branchCharts(members: XlsxDrawing[]): DrawingChart[] {
+  const out: DrawingChart[] = []
+  const walk = (nodes: XlsxDrawing[]) => { for (const node of nodes) { if (node.content?.kind === 'xlsxChart') out.push(node.content.chart); if (node.children) walk(node.children) } }
+  walk(members)
+  return out
+}
+const chartWaiting = (chart: DrawingChart) => Boolean(chart.categoryPending || chart.groups.some(group => group.series.some(series => series.pending)))
+
+/**
+ * After the charts' data is read: every Choice branch with a chart that is now refused or unsupported gives way, as
+ * a whole, to its AlternateContent fallback (spec 6.3), innermost wrapper first; an inner replacement takes the
+ * replaced objects' place in the enclosing wrapper's branch. Coverage says so (status and representation
+ * `fallback`, the chart's feature kept, the refusal as the reason). With no usable fallback the chart's card stays,
+ * and its coverage is recomputed (never a stale native entry). `documentCoverage`/`unit`: the document-level copy of
+ * this sheet's entries. Returns whether any branch was replaced (the caller re-indexes the sheet's media).
+ */
+export async function settleChartFallbacks(sheet: XlsxSheet, documentCoverage?: DrawingCoverageEntry[], unit = 0): Promise<boolean> {
+  let replaced = false
+  const recover = (drawings: XlsxDrawing[], top: boolean, replacement: XlsxDrawing[], chart: DrawingChart) => {
+    const entries = (replacement.length ? replacement : drawings).flatMap((object, index) => xlsxNodeCoverage(object, unit, top && index === 0 ? 'original' : 'descendant'))
+    // The chart's own feature: a ChartEx model (its card's feature, or its still-ChartEx group) is `ChartEx`.
+    const feature = chart.feature ?? (chart.groups.some(group => group.kind === 'chartEx') ? 'ChartEx' : 'chart')
+    if (replacement.length && entries[0]) Object.assign(entries[0], { feature, status: 'fallback', representation: 'fallback', reason: chart.unsupported })
+    const covers = (entry: DrawingCoverageEntry) => drawings.some(d => entry.partPath === d.source.partPath && (entry.treePath === d.source.treePath || entry.treePath.startsWith(`${d.source.treePath}/`)))
+    const replace = (coverage: DrawingCoverageEntry[] | undefined, withUnit: boolean) => {
+      if (!coverage) return
+      const mine = (entry: DrawingCoverageEntry) => covers(entry) && (!withUnit || entry.unit === unit)
+      const at = coverage.findIndex(mine)
+      const rest = coverage.filter(entry => !mine(entry))
+      coverage.splice(0, coverage.length, ...rest)
+      coverage.splice(at < 0 ? coverage.length : at, 0, ...entries.map(entry => ({ ...entry, unit: withUnit ? unit : entry.unit })))
+    }
+    replace(sheet.drawingCoverage, false)
+    replace(documentCoverage, true)
+  }
+  /** Settles one wrapper whose branch sits in `list` (sets `replaced` when its branch was replaced). */
+  const settle = async (wrapper: FallbackWrapper, list: XlsxDrawing[], top: boolean): Promise<void> => {
+    const members = wrapper.members, at = list.indexOf(members[0])
+    const contiguous = at >= 0 && members.every((member, k) => list[at + k] === member)
+    const charts = branchCharts(members)
+    const refused = charts.find(chart => chart.unsupported)
+    if (refused && contiguous) {
+      let replacement: XlsxDrawing[] = []
+      try { replacement = await wrapper.parse() } catch { replacement = [] }
+      if (replacement.length) {
+        // The selected fallback keeps the chart's feature, as one selected at parse does (A7 `chartChoiceFeature`).
+        const original = refused.feature ?? (refused.groups.some(group => group.kind === 'chartEx') ? 'ChartEx' : 'chart')
+        // The pictures carry the chart's card (no model storage): the replaced branch's models are released below.
+        const card = cardChart(refused.unsupported!, refused.title, original === 'ChartEx' ? original : undefined)
+        const carry = (drawings: XlsxDrawing[]): void => { for (const d of drawings) { if (d.image) d.chartFallback = card; carry(d.children ?? []) } }
+        carry(replacement)
+        for (const object of replacement) object.source.feature = original
+        const placement = wrapper.placement
+        if (top && placement) for (const object of replacement) {
+          Object.assign(object, placement)
+          if (object.source.element === 'contentPart') object.transformValid = true
+          if (object.group) { object.group.off = { x: placement.xEmu!, y: placement.yEmu! }; object.group.ext = { width: placement.widthEmu!, height: placement.heightEmu! } }
+        }
+        recover(members, top, replacement, refused)
+        list.splice(at, members.length, ...replacement)
+        // Every chart of the replaced branch is dropped: its workspace charge is returned now (D0), never at GC.
+        const engine = await loadChartModule().catch(() => undefined)
+        for (const chart of charts) engine?.releaseChartModel(chart)
+        // Every enclosing wrapper whose (flattened) branch held the replaced objects now holds the replacement there.
+        const parent = wrapper.parent
+        for (let ancestor = parent; ancestor; ancestor = ancestor.parent) {
+          const k = ancestor.members.indexOf(members[0])
+          if (k >= 0) ancestor.members.splice(k, members.length, ...replacement)
+          if (placement && !ancestor.placement) ancestor.placement = placement
+        }
+        adoptUnder(replacement, parent)
+        wrapper.done = true
+        replaced = true
+        return
+      }
+    }
+    // Final (every chart native, or a refusal this wrapper cannot answer: the enclosing one may). Waiting: open.
+    if (!charts.some(chartWaiting) || refused) wrapper.done = true
+  }
+  const visit = async (list: XlsxDrawing[], top: boolean): Promise<void> => {
+    // Nested lists (group children) first.
+    for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
+    // Then this list's wrappers, innermost first, each at most once in this pass: one still waiting on data stays
+    // open for a later call. A replacement re-opens the scan (the list changed) and its ancestors (their branches did).
+    const seen = new Set<FallbackWrapper>()
+    for (;;) {
+      const open = new Set<FallbackWrapper>()
+      for (const drawing of list) for (let w = innermostWrapper.get(drawing); w; w = w.parent) if (!w.done && !seen.has(w) && w.members.includes(drawing)) open.add(w)
+      const next = [...open].sort((a, b) => wrapperDepth(b) - wrapperDepth(a))[0]
+      if (!next) break
+      seen.add(next)
+      const before = replaced
+      replaced = false
+      await settle(next, list, top)
+      const changed = replaced
+      replaced = before || changed
+      if (changed) {
+        for (let ancestor = next.parent; ancestor; ancestor = ancestor.parent) seen.delete(ancestor)
+        for (const drawing of list) if (drawing.children) await visit(drawing.children, false)
+      }
+    }
+    // A chart refused with no wrapper able to replace it keeps its card; a native coverage entry for it is stale.
+    for (const drawing of list) {
+      const chart = drawing.content?.kind === 'xlsxChart' ? drawing.content.chart : undefined
+      if (chart?.unsupported && sheet.drawingCoverage?.some(entry => entry.partPath === drawing.source.partPath && entry.treePath === drawing.source.treePath && entry.selectedRepresentation === 'chart')) recover([drawing], top, [], chart)
+    }
+  }
+  await visit(sheet.drawings ?? [], true)
+  return replaced
 }
 
 async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode, theme: ThemeContext, depth: number, carrier?: XmlNode): Promise<boolean> {
@@ -217,7 +377,11 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
       continue
     }
     if (name === 'chart' || name === 'relIds' || name === 'contentPart' || name === 'wsp') {
-      if (await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme))) selected = true
+      const probe = await prepareDrawingContent(pkg, { ...(carrier ? { '@attrs': attrs(carrier) } : {}), [name]: descendant }, owner, contentTheme(theme), theme, contentAdapters(theme, pkg))
+      // The probe only decides the branch (the selected one is parsed again): a probed chart's charge is returned.
+      // One release per probe model (final-fix and C1 fixed the same leak; this is the single remaining release).
+      if (probe?.kind === 'xlsxChart') (await loadChartModule()).releaseChartModel(probe.chart)
+      if (probe) selected = true
       else failed = true
       continue
     }
@@ -401,7 +565,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
     await imageFor(pkg, owner, node, result, selections)
   } else if (name === 'pic') await imageFor(pkg, owner, node, result, selections)
   else if (name === 'graphicFrame' || name === 'contentPart') {
-    const palette = contentTheme(theme), adapters = contentAdapters(theme)
+    const palette = contentTheme(theme), adapters = contentAdapters(theme, pkg)
     const graphic = child(child(node, 'graphic'), 'graphicData')
     const carrier = name === 'contentPart' ? { ...(parentCarrier ? { '@attrs': attrs(parentCarrier) } : {}), contentPart: node } : graphic
     if (carrier || name === 'graphicFrame') {
@@ -428,7 +592,7 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
       }
       // A chart nothing could draw (unsupported type, no usable fallback) keeps a card.
       if (!result.content && !result.children?.length && !result.source.emptySelection && name === 'graphicFrame' && referencesChart(node)) {
-        result.content = await chartPlaceholder(pkg, owner, result.source.referenceId, theme)
+        result.content = chartPlaceholder(node, prepared)
       }
     }
   }
@@ -444,7 +608,23 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
     const treePath = `${path}/${name}[${index++}]`
     if (name === 'AlternateContent') {
       const selected = await selectedAlternative(pkg, owner, node, theme, 0, carrier)
-      if (selected) out.push(...await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections, groupStyle))
+      const branch = selected ? await parseObjects(pkg, owner, selected.branch, theme, treePath, depth, selected.mode, carrier, anchorTopLevel, selections, groupStyle) : []
+      // The card replaces an unusable fallback picture and records why, beside its own reason.
+      if (selected?.unusable) for (const drawing of branch) if (drawing.content?.kind === 'xlsxChart') drawing.source.reason = `chart-fallback-unusable: ${drawing.content.chart.unsupported}`
+      const carry = (drawings: XlsxDrawing[]): void => { for (const drawing of drawings) { if (drawing.image) drawing.chartFallback = selected!.chartFallback; carry(drawing.children ?? []) } }
+      if (selected?.chartFallback) carry(branch)
+      const original = selected?.mode === 'fallback' ? chartChoiceFeature(node) : undefined
+      if (original) for (const drawing of branch) drawing.source.feature = original
+      // A selected chart Choice keeps its usable fallback for a refusal once its data is read (spec 6.3).
+      // The whole branch is the unit: every object it produced gives way together.
+      const fallback = selected?.mode === 'choice' && !selected.unusable ? child(node, 'Fallback') : undefined
+      const drawsChart = (drawings: XlsxDrawing[]): boolean => drawings.some(d => d.content?.kind === 'xlsxChart' || drawsChart(d.children ?? []))
+      if (fallback && branch.length && drawsChart(branch) && !(await fallbackUnusable(pkg, owner, fallback))) {
+        // A nested AlternateContent in this branch keeps its own wrapper, now under this one (inner first).
+        const wrapper: FallbackWrapper = { members: [...branch], parse: () => parseObjects(pkg, owner, fallback, theme, treePath, depth, 'fallback', carrier, anchorTopLevel, selections, groupStyle) }
+        adoptUnder(branch, wrapper)
+      }
+      out.push(...branch)
     } else if (name === 'graphic' || name === 'graphicData') {
       out.push(...await parseObjects(pkg, owner, node, theme, treePath, depth, representation, name === 'graphicData' ? node : carrier, anchorTopLevel, selections, groupStyle))
     } else if (['sp', 'cxnSp', 'pic', 'grpSp', 'graphicFrame', 'contentPart'].includes(name)) {
@@ -518,6 +698,7 @@ export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxShee
       }
       for (const [objectIndex, object] of objects.entries()) {
         Object.assign(object, placement)
+        for (let wrapper = innermostWrapper.get(object); wrapper; wrapper = wrapper.parent) wrapper.placement = placement
         if (object.source.element === 'contentPart') object.transformValid = true
         if (object.group) { object.group.off = { x: placement.xEmu, y: placement.yEmu }; object.group.ext = { width: placement.widthEmu, height: placement.heightEmu } }
         ;(sheet.drawings ??= []).push(object)

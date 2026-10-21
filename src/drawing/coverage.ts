@@ -10,7 +10,7 @@ export interface DrawingCoverageEntry {
   feature: string
   status: 'native' | 'fallback' | 'unsupported' | 'malformed'
   /** Actual payload consumed by this static renderer, independent of MC branch. */
-  selectedRepresentation: 'native-shape' | 'picture' | 'raster-fallback' | 'cached-diagram' | 'column-chart' | 'chart' | 'chart-placeholder' | 'inkml' | 'textbox' | 'table' | 'group' | 'text-only' | 'blank' | 'none' | 'unverified'
+  selectedRepresentation: 'native-shape' | 'picture' | 'raster-fallback' | 'cached-diagram' | 'chart' | 'chart-placeholder' | 'inkml' | 'textbox' | 'table' | 'group' | 'text-only' | 'blank' | 'none' | 'unverified'
   representation: 'native' | 'choice' | 'fallback'
   reason?: string
   /** Why the retained paint assessment is inconclusive; source failure remains in reason. */
@@ -34,12 +34,31 @@ export interface DrawingCoverageDocument { drawingCoverage?: DrawingCoverageEntr
  * (cacheless SmartArt synthesized from dataModel text) reuse the existing
  * text-only status instead of claiming a cached diagram rendering.
  */
-/** Coverage feature of a content kind (worksheet charts report as charts). */
-const featureOfKind = (kind: string | undefined) => kind === 'xlsxChart' ? 'chart' : kind
+/** The coverage feature of a content kind: the `xlsxChart` runtime tag reports `chart` in every format. */
+/** The original feature of an AlternateContent whose Choice holds a chart: `ChartEx` or `chart` (spec 6.6). */
+export function chartChoiceFeature(node: XmlNode): 'chart' | 'ChartEx' | undefined {
+  for (const choice of getChildren(node, 'Choice')) {
+    const data = findGraphicData(choice)
+    if (!data) continue
+    if ((attrs(data).uri ?? '').toLowerCase().includes('chartex')) return 'ChartEx'
+    if (getChildren(data, 'chart').length) return 'chart'
+  }
+  return undefined
+}
+function findGraphicData(node: XmlNode, depth = 0): XmlNode | undefined {
+  for (const [name, child] of orderedChildren(node)) {
+    if (name === 'graphicData') return child
+    if (name === '#text' || depth > 8) continue
+    const found = findGraphicData(child, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
+export const featureOfKind = (content: DrawingContent<unknown, unknown> | undefined) => content?.kind === 'xlsxChart' ? content.chart.feature ?? 'chart' : content?.kind
 export function contentRepresentation<Paragraph, Text>(content: DrawingContent<Paragraph, Text>): DrawingCoverageEntry['selectedRepresentation'] {
   if (content.kind === 'diagram' && content.textOnly) return 'text-only'
   const kind = content.kind
-  return kind === 'diagram' ? 'cached-diagram' : kind === 'chart' ? 'column-chart' : kind === 'xlsxChart' ? (content.chart.unsupported ? 'chart-placeholder' : 'chart') : kind === 'ink' ? 'inkml' : kind === 'textbox' ? 'textbox' : 'none'
+  return kind === 'diagram' ? 'cached-diagram' : kind === 'xlsxChart' ? (content.chart.unsupported ? 'chart-placeholder' : 'chart') : kind === 'ink' ? 'inkml' : kind === 'textbox' ? 'textbox' : 'none'
 }
 
 import { attrs, getChildren, namespaceUri, orderedChildren, type XmlNode } from '../core/xml'
@@ -72,6 +91,10 @@ const knownNamespaceUris: Record<string, string> = {
   dgm: 'http://schemas.openxmlformats.org/drawingml/2006/diagram',
   dsp: 'http://schemas.microsoft.com/office/drawing/2008/diagram',
   ink: 'http://www.w3.org/2003/InkML',
+  cx: 'http://schemas.microsoft.com/office/drawing/2014/chartex',
+  cx1: 'http://schemas.microsoft.com/office/drawing/2015/9/8/chartex',
+  cx2: 'http://schemas.microsoft.com/office/drawing/2015/10/21/chartex',
+  cx4: 'http://schemas.microsoft.com/office/drawing/2016/5/10/chartex',
   xdr: 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
   w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
   wp: 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
@@ -82,6 +105,10 @@ const knownNamespaceUris: Record<string, string> = {
   wpc: 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
 }
 
+/** Each consumer's understood mc:Choice requirements; ChartEx Choices (matched by URI: the 2014 part namespace and the 2015/9/8, 2015/10/21 and 2016/5/10 Requires namespaces of the native fixtures) are attempted through the lazy chart engine (spec 6.2). */
+export const DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink', 'cx', 'cx1', 'cx2', 'cx4']
+export const XLSX_REQUIREMENTS = ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink', 'cx', 'cx1', 'cx2', 'cx4']
+export const DOCX_REQUIREMENTS = ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic', 'cx', 'cx1', 'cx2', 'cx4']
 /** MC Requires identifies namespace URIs, not the lexical prefix spelling. */
 export function supportedChoiceRequirements(choice: XmlNode, supported: readonly string[]): { supported: boolean; unknown?: string } {
   const allowedUris = new Set(supported.map(prefix => knownNamespaceUris[prefix]).filter(Boolean))
@@ -402,7 +429,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
     const source = shape?.source
     const chosen = name === 'AlternateContent' ? selectedBranch?.(node) : undefined
     const attempted = name === 'AlternateContent' && !chosen
-      ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'p', 'c', 'dgm', 'dsp', 'ink']).supported) ?? getChildren(node, 'Choice')[0]
+      ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).supported) ?? getChildren(node, 'Choice')[0]
       : undefined
     const own = name === 'AlternateContent' ? firstIdentity(chosen ?? attempted) : identity(node)
     let nested: { branch: XmlNode; representation: 'choice' | 'fallback' } | undefined
@@ -423,7 +450,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
     const selectedFeature = selectedPayload ? sourceFeature(selectedPayload[1], selectedPayload[0]) : originalFeature
     let feature = source?.representation === 'fallback'
       ? (['ChartEx', 'OMML', 'model3D'].includes(originalFeature) ? originalFeature : source.feature ?? originalFeature)
-      : shape ? featureOfKind(shape.content?.kind) ?? sourceFeature(undefined, source?.element ?? name) : selectedFeature
+      : shape ? featureOfKind(shape.content) ?? sourceFeature(undefined, source?.element ?? name) : selectedFeature
     let status: DrawingCoverageEntry['status'] = source?.representation === 'fallback' ? 'fallback' : shape ? 'native' : 'unsupported'
     let reason = source?.reason
     if (name === 'AlternateContent' && !shape) {
@@ -467,7 +494,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
       if (name === 'grpSp') walk(node, path, scope === 'diagnostic' ? 'diagnostic' : 'descendant', depth + 1, inheritedRepresentation)
       if (name === 'AlternateContent') {
         const chosen = selectedBranch?.(node)
-        const attempted = !chosen ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, ['a', 'p', 'c', 'dgm', 'dsp', 'ink']).supported) ?? getChildren(node, 'Choice')[0] : undefined
+        const attempted = !chosen ? getChildren(node, 'Choice').find(choice => supportedChoiceRequirements(choice, DRAWING_REQUIREMENTS).supported) ?? getChildren(node, 'Choice')[0] : undefined
         const branch = chosen ?? attempted
         if (branch) walk(branch, `${path}/${chosen ? getChildren(node, 'Fallback').includes(chosen) ? 'fallback' : 'choice' : 'attempted'}`, chosen ? 'descendant' : 'diagnostic', depth + 1,
           chosen ? getChildren(node, 'Fallback').includes(chosen) ? 'fallback' : 'choice' : inheritedRepresentation)
@@ -511,7 +538,9 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
           affected.reason = content.reason ?? issue.message
           affected.limit = content.limit
         }
-        if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody)) &&
+        // A chart card selected inside a compatibility wrapper is that wrapper's drawn representation.
+        if (!allShapes.some(shape => shape.source?.treePath === affected.treePath && (shape.content || shape.image || shape.table || shape.textBody) ||
+          shape.content?.kind === 'xlsxChart' && shape.source?.treePath.startsWith(`${affected.treePath}/`)) &&
           !retainedGeometryAt(affected)) affected.selectedRepresentation = 'none'
         if (affected.scope === 'original' && (issue.kind === 'missing-part' || issue.kind === 'malformed-part')) {
           for (const entry of entries) if (entry.scope === 'diagnostic' && entry.treePath.startsWith(`${affected.treePath}/`) && entry.referenceId === content.identity) {
@@ -541,7 +570,7 @@ export function pptxCoverage(slide: PptxSlide, spTree: XmlNode | undefined, part
 export function xlsxNodeCoverage(node: XlsxDrawing, unit: number, scope: DrawingCoverageEntry['scope']): DrawingCoverageEntry[] {
   const source = node.source
   const issue = node.drawingGeometry ? resolveGeometry(node.drawingGeometry, node.widthEmu / 9525, node.heightEmu / 9525).issues[0] : undefined
-  const feature = issue ? 'geometry' : featureOfKind(node.content?.kind) ?? (source.emptySelection ? 'empty-choice' : source.element === 'pic' ? 'picture' : source.element === 'grpSp' ? 'group' : source.element === 'contentPart' ? 'ink' : source.element === 'graphicFrame' ? 'graphicData' : 'shape')
+  const feature = issue ? 'geometry' : featureOfKind(node.content) ?? source.feature ?? (source.emptySelection ? 'empty-choice' : source.element === 'pic' ? 'picture' : source.element === 'grpSp' ? 'group' : source.element === 'contentPart' ? 'ink' : source.element === 'graphicFrame' ? 'graphicData' : 'shape')
   const status: DrawingCoverageEntry['status'] = issue ? issue.kind === 'unknown-preset' ? 'unsupported' : 'malformed' : node.transformValid === false ? 'malformed' : (source.element === 'graphicFrame' || source.element === 'contentPart') && !node.content && !node.children?.length && !source.emptySelection ? 'unsupported' : source.element === 'pic' && !node.image ? 'malformed' : source.representation === 'fallback' ? 'fallback' : 'native'
   const reason = issue ? `${issue.kind}: ${issue.message}` : node.transformValid === false ? 'invalid-transform' : source.emptySelection ? 'Supported empty Choice selected' : status === 'malformed' && source.element === 'pic' ? 'missing image part or relationship' : status === 'unsupported' ? 'unsupported graphicData payload' : source.reason
   const selectedRepresentation: DrawingCoverageEntry['selectedRepresentation'] = node.content ? contentRepresentation(node.content)

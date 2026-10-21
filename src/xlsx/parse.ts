@@ -1,5 +1,6 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
+import type { ChartDocumentContext } from '../charts/context'
 import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type {
@@ -12,11 +13,11 @@ import type {
 import { parseDefinedNames } from './formula/names'
 import { parseTableMetadata, isTablePartSource } from './formula/tables'
 import { collectDeclaredTable, createDeclaredBudget, declaredSheetBuilder, hasDeclaredFiltering, parseDeclaredContainer, type DeclaredSheetFilters } from './view/declaredFilters'
-import { parseWorksheetDrawings, collectXlsxImages } from './drawing'
+import { parseWorksheetDrawings, collectXlsxImages, settleChartFallbacks } from './drawing'
 import { hasXlsxCharts, loadChartModule } from './chartLoader'
 import { frozenPaneFrom } from './frozenPane'
 import { cellDisplayText, computeMetrics } from './render'
-import { resolvePartTarget } from '../drawing/parts'
+import { drawingPartContext, resolvePartTarget } from '../drawing/parts'
 import { parseThemeContext, type ThemeContext } from '../drawing/style'
 import { evaluateWorkbookFormulas, markSavedValuesOnly, type WorkbookEvaluationOptions } from './formula/workbook'
 import { initializeSavedSpills } from './formula/saved-spills'
@@ -169,6 +170,8 @@ export interface ParseXlsxOptions {
   /** 'cached' shows saved values only: no load-time evaluation, so a formula
    * without a cached value stays unavailable (hasCachedValue false). Default 'engine'. */
   valuePolicy?: 'engine' | 'cached'
+  /** The document's chart context (F0); unset, the lazy chart chunk creates one per parse. */
+  chartContext?: ChartDocumentContext
 }
 
 /** The workbook default (Normal style, font 0) maximum digit width. */
@@ -230,6 +233,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     try { const text=await pkg.text(metadataPath);if(text)dynamicIndices=dynamicMetadataIndices(text) }
     catch { /* Unverified optional metadata never upgrades a fixed array. */ }
   }
+  drawingPartContext(pkg).chart = options.chartContext
   let theme: ThemeContext = parseThemeContext()
   let themeParsed = false
   if (themePath) {
@@ -464,8 +468,15 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     // Under the cached policy an uncached formula has no value (view/values isValueUnavailable).
     const cached = options.valuePolicy === 'cached'
     try {
-      (await loadChartModule()).fillWorkbookCharts(sheets, { names: definedNames, text: (sheet, cell) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: () => {}, release: () => {} }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
+      // The fill's new storage is admitted to the document's chart workspace (the one its parsed models are
+      // owned by) before it is built, and stays charged for the models' lifetime (D0).
+      (await loadChartModule()).fillWorkbookCharts(sheets, { workspace: drawingPartContext(pkg).chart?.workspace, names: definedNames, text: (sheet, cell, allocation) => cellDisplayText(sheet, cell as XlsxCell, { maxOutput: CHART_LABEL_OUTPUT, allocate: bytes => allocation?.allocate(bytes), release: bytes => allocation?.release(bytes), retain: (targets, bytes, commit, kind) => allocation?.retain ? allocation.retain(targets, bytes, commit, kind) : commit() }), available: cell => !(cached && ((cell as XlsxCell).formula !== undefined || (cell as XlsxCell).sharedFormula !== undefined) && (cell as XlsxCell).hasCachedValue !== true) })
     } catch { /* charts keep their placeholder state; the workbook stays usable */ }
+    // A chart Choice refused once its data was read gives way to its fallback (spec 6.3), coverage included.
+    let replaced = false
+    for (const [unit, sheet] of sheets.entries()) if (await settleChartFallbacks(sheet, doc.drawingCoverage, unit)) replaced = true
+    // A selected fallback's pictures join the document's media (each picture paints through its index).
+    if (replaced) doc.images = collectXlsxImages(sheets)
   }
   return doc
 }

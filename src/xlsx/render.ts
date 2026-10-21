@@ -440,6 +440,8 @@ export interface RenderSheetAssets {
   images?: ReadonlyArray<CanvasImageSource | undefined>
   resolveFont?: (family: string) => string
   imageFor?: ContentPaintAssets['imageFor']
+  /** The receiving chart context this sheet's paints charge (spec 6.4). */
+  chartContext?: ContentPaintAssets['chartContext']
 }
 
 export function renderPrintPage(
