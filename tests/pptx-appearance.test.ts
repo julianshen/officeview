@@ -434,6 +434,31 @@ describe('slide appearance enrichment', () => {
         expect(near(pixel(760, 150), [0, 255, 0], 8)).toBe(true);
         expect(pixel(480, 400)).toEqual([255, 255, 255, 255]);
     });
+    it('useBgFill wins over an authored picture fill: the picture never paints, inside or outside the outline', async () => {
+        // the slide's picture shape creates the image relationship (rIdImg1) the useBgFill ellipse also names
+        const bytes = await patchPart(await buildPptxDeck(builderDeck({
+            masters: [{ shapes: [], layouts: [{}] }],
+            slides: [{ bg: { solid: 'FF0000' }, shapes: [{ id: 3, name: 'Blue Pic', image: { data: PHOTO, name: 'blue.png' }, off: [px(900), px(680)], ext: [px(20), px(20)] }] }],
+        })), 'ppt/slides/slide1.xml', `<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="46" name="Bg Ellipse"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${px(100)}" y="${px(100)}"/><a:ext cx="${px(200)}" cy="${px(200)}"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="rIdImg1"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:spPr></p:sp>`);
+        const doc = await parsePptx(await OfficePackage.load(bytes));
+        const { pixel } = await paintFirst(doc);
+        expect(doc.slides[0].shapes.find(s => s.source?.name === 'Bg Ellipse')?.imageIndex).toBeDefined();
+        expect(near(pixel(910, 690), [0, 0, 255], 8)).toBe(true); // the unrelated picture still paints
+        expect(near(pixel(200, 200), [255, 0, 0], 8), `centre ${pixel(200, 200)}`).toBe(true);
+        expect(near(pixel(105, 105), [255, 0, 0], 8), `outside the ellipse ${pixel(105, 105)}`).toBe(true);
+    });
+    it('a useBgFill shape keeps its authored fill shadow', async () => {
+        const shadowed = `<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="47" name="Shadowed"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${px(100)}" y="${px(100)}"/><a:ext cx="${px(100)}" cy="${px(100)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="0" dist="${px(20)}" dir="0" algn="tl" rotWithShape="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></p:spPr></p:sp>`;
+        const bytes = await patchPart(await buildPptxDeck(builderDeck({
+            masters: [{ shapes: [], layouts: [{}] }],
+            slides: [{ bg: { gradient: { angle: 0, stops: [[0, 'FF0000'], [100000, 'FF0000']] } }, shapes: [] }],
+        })), 'ppt/slides/slide1.xml', shadowed);
+        const { pixel } = await paintFirst(await parsePptx(await OfficePackage.load(bytes)));
+        // the shadow, offset 20 px right, shows beside the shape; the shape itself shows the background
+        expect(near(pixel(210, 150), [0, 0, 0], 8), `shadow ${pixel(210, 150)}`).toBe(true);
+        expect(near(pixel(150, 150), [255, 0, 0], 8), `inside ${pixel(150, 150)}`).toBe(true);
+        expect(near(pixel(195, 150), [255, 0, 0], 8), `inside, over the shadow ${pixel(195, 150)}`).toBe(true);
+    });
     it('a master shared by several slides is parsed once per run (one node-budget charge)', async () => {
         const slide = { shapes: [{ id: 3, name: 'Box', fill: 'FFFF00', off: [px(400), px(300)] as [string, string], ext: [px(100), px(100)] as [string, string] }] };
         const doc = await parseDeck(builderDeck({ slides: [slide, slide, slide] }));

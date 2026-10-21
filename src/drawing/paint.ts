@@ -342,7 +342,8 @@ function setupLine(ctx: CanvasRenderingContext2D, line: DrawingLine, issues: Dra
 }
 
 /** Does not alter the caller's Canvas drawing state. Returns painting diagnostics. */
-export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedGeometry | ResolvedPath[], style: DrawingStyle, width: number, height: number): DrawingIssue[] {
+/** `only: 'shadow'` paints just the shadow pass (a background-filled shape casts its shadow, then shows the background). */
+export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedGeometry | ResolvedPath[], style: DrawingStyle, width: number, height: number, only?: 'shadow'): DrawingIssue[] {
   const issues: DrawingIssue[] = []
   if (![width, height].every(n => Number.isFinite(n) && n >= 0)) return [{ kind: 'invalid-paint', message: 'Invalid drawing extents' }]
   const paths = Array.isArray(geometry) ? geometry : geometry.paths
@@ -424,6 +425,7 @@ export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedG
       }
     }
   }
+    if (only === 'shadow') return issues
     for (const [pathIndex, path] of paths.entries()) {
       if (!validPath(path.commands)) { issues.push({ kind: 'invalid-paint', message: 'Invalid geometry path', pathIndex }); continue }
       const bounds = paintBounds(path, style.line)
