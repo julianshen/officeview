@@ -2,7 +2,7 @@
 import type { ReactElement } from 'react'
 import type { XlsxDrawing } from '../../xlsx/types'
 import type { XlsxChartModel } from '../../xlsx/chartModel'
-import { chartDescription } from '../../xlsx/chartDescription'
+import { chartDescription } from '../../charts/describe'
 
 /** Charts of a drawing tree, in drawing order (bounded by the drawing node budget). */
 export function sheetCharts(drawings: readonly XlsxDrawing[] | undefined, out: XlsxChartModel[] = []): XlsxChartModel[] {

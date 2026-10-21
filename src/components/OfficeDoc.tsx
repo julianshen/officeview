@@ -285,17 +285,19 @@ function LegacyOfficeDoc({
   useEffect(() => {
     let cancelled = false
     let lease: PaintableArray | undefined
+    const abort = new AbortController()
     ownerRef.current = owner
     setPages([])
     commit(IDENTITY)
     pending.current = 0
-    getPaintables(document, { ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) }).then(p => {
+    getPaintables(document, { signal: abort.signal, ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}) }).then(p => {
       if (cancelled) { p.dispose(); return }
       lease = p
       setPages(p)
     })
     return () => {
       cancelled = true
+      abort.abort()
       lease?.dispose()
       if (ownerRef.current === owner) ownerRef.current = null
     }
@@ -803,10 +805,9 @@ function LegacyOfficeDoc({
         onCopyCapture={allowCopy ? undefined : preventNativeCopy}
         onContextMenu={allowCopy ? undefined : preventNativeCopy}
         style={{
-          // the themed backdrop; a host background prop overrides the token
+          // themed backdrop; a host background prop wins
           background: background ?? 'var(--ov-color-backdrop)',
-          // at fit we let the browser do momentum scrolling; when zoomed we
-          // own the pan and must not scroll the container
+          // zoomed: we own the pan, the container never scrolls
           overflow: zoomed ? 'hidden' : 'auto',
           WebkitOverflowScrolling: 'touch',
           touchAction: zoomed ? 'none' : 'pan-y',
@@ -816,8 +817,7 @@ function LegacyOfficeDoc({
           position: 'relative',
           boxSizing: 'border-box',
           cursor: zoomed ? 'grab' : 'auto',
-          // there is no DOM text to select, but block the browser's own
-          // selection gesture so drag-selecting the page chrome is not possible
+          // no DOM text: block the browser's selection gesture
           WebkitUserSelect: allowCopy ? undefined : 'none',
           userSelect: allowCopy ? undefined : 'none',
           ...style,

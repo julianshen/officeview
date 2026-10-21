@@ -40,12 +40,14 @@ figure in this table was measured this way; a Node-run gzip may differ by a few 
 | After B2 merge with feature | merge commit | 38,635 | `feature/chart-compat` `cb5a0b5` merged into `chart/b2`; conflicts resolved keeping both sides (lazy `charts-*` chunk only). Running total vs B0: +4 B. Ceiling 38,647 |
 | After B5 | B5 commit | 38,639 | Before (`7c67e33`, rebuilt): 38,640. Treemap and sunburst (`src/charts/chartex/hierarchy.ts`, `hierarchyStyle.ts`, `treemap.ts`, `sunburst.ts`) and the hierarchy hooks in fill, precedence, embedded reader, stage 1, layout and paint all live in the lazy `charts-*` chunk; the two description names in the `imageAdmission` chunk. No eager source file was touched; measured −1 B (hash churn, not normalised). Bytes added by B5: 0. |
 | After B5 merge with feature | merge commit | 38,637 | `feature/chart-compat` merged into `chart/b5` (B2, A6b, A5c, A4b and the rest); conflicts resolved keeping both sides; B5 review minors (label numFmt, exclusion order) applied. Lazy `charts-*` chunk only. Before (feature ledger, B2 merge): 38,635; +2 B hash churn. Ceiling 38,647 |
+| After A7 fix round 1 | A7 r1 commit | 38,584 | Before (`db78d06`, rebuilt): 38,637. A7's descriptions, paintables metadata and chart list live in the lazy `charts-*`, `office-worker` and `PagedChrome` chunks. Review I1 needs `OfficeDoc` to abort the chart picture wait on unmount: one `AbortController` and its `signal` passed to `getPaintables` (+25 B, measured 38,664). Recovered by condensing three verbose style comments inside `OfficeDoc`'s JSX that `dist/index.js` preserves verbatim (−80 B), with no behaviour change. Running total vs B0: −47 B |
 | After B3 | B3 commit (`f2c8ee3`) | 38,635 | Before (`7c67e33`, rebuilt): 38,640. Histogram and Pareto (`src/charts/chartex/histogram.ts`, the stage-1 hook, the ChartEx adapter): all in the lazy `charts-*` chunk. `dist/index.js` unchanged apart from hash churn (−5 B). Bytes added by B3: 0. Running total vs B0 (38,631): +4 B |
 | After B3 fix round 1 | B3 r1 commit | 38,638 | Before (`d5eaff5`, B3 merged with `feature/chart-compat` at `e7e64f5`, rebuilt): 38,639. Leaf reason constants (`src/charts/limits.ts`), range-safe binning and override remapping (lazy `charts-*`); deferred XLSX chart fallbacks (`settleChartFallbacks` in `src/xlsx/drawing.ts`, in the worker chunks, not `dist/index.js`). `dist/index.js` unchanged apart from hash churn (−1 B). Bytes added: 0. Running total vs B0: +7 B |
 | After B3 fix round 2 | B3 r2 commit | 38,638 | Before (`0cdda65`, rebuilt): 38,638. Branch-unit fallback descriptors and post-settlement media indexing (`src/xlsx/drawing.ts`, `src/xlsx/parse.ts`, worker chunks); plain-first arithmetic and per-slot overrides (lazy `charts-*`). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
 | After B3 fix round 3 | B3 r3 commit | 38,638 | Before (`74670f5`): 38,638. Nested fallback-wrapper hierarchy in `src/xlsx/drawing.ts` (worker chunks). `dist/index.js` unchanged. Bytes added: 0. Running total vs B0: +7 B |
 | After B3 merge with feature | merge commit | 38,638 | `feature/chart-compat` `5be9dd1` (B2, B5, A6b, A5c, A4b, licence) merged into `chart/b3`; conflicts resolved keeping every family and section. Bytes added: 0. Running total vs B0: +7 B |
 | After B3 fix round 4 + merge with feature (B4) | merge commit | 38,639 | Round 4 (per-pass wrapper settlement, ancestor membership) in worker chunks; `feature/chart-compat` with B4 box & whisker merged (CHARTEX_PAINTED keeps all seven painted families). +1 B hash churn. Running total vs B0: +8 B |
+| After B3 merge with feature (A7) | merge commit | 38,582 | `feature/chart-compat` with A7 (descriptions in `src/charts/describe.ts`, which freed eager bytes) merged into `chart/b3`; B3 adds `derivedFamily` naming (lazy). Running total vs B0: −49 B |
 
 ## Spec §8 testing and validation
 
@@ -261,7 +263,7 @@ The following rules are **unverified** ([U]/[P]). No Office-rendered reference h
   - The coverage becomes `fallback`/`fallback`, keeping the chart's feature (`ChartEx`), with the refusal as the reason.
   - With no usable fallback, the card stays and its stale `chart` coverage entry is recomputed.
   - DOCX/PPTX need no change: their data is read in the adapter, before selection.
-- **Accessible description:** the derived groups describe as "Column chart" (no histogram/Pareto name, which would cost eager bytes).
+- **Accessible description (after the A7 merge):** a derived model carries `derivedFamily`, so `chartDescription` names it "Histogram chart" or "Pareto chart" (the lazy `src/charts/describe.ts`).
 
 ## A4b titles, legends and multi-level categories (spec 5.9, 5.10)
 
@@ -371,3 +373,17 @@ the Bruls squarified oracle, sunburst angles) are Office-shaped synthetic beyond
 - **Data labels and data-point overrides: unverified.** Data labels (`cx:dataLabels`) and per-point shape properties (`cx:dataPt`) are not painted (e.g. BW2b carries `dataLabels/visibility value="1"`).
 - **Whisker end caps: unverified.** Horizontal end caps at whisker endpoints are omitted; unverified whether Office renders end caps natively.
 
+## A7 accessibility, coverage and paged chart metadata (spec 6.6)
+
+- **Descriptions.** Each chart's description names its type, title, series names and value range. A card reads `placeholder: <reason>`.
+- **Bounds.** Names are cut at 120 characters, at most 8 series are described, and each description is capped at 1,024 characters.
+- **Placement.** Descriptions travel with each page's or slide's placement in the paintables metadata. That metadata is admitted to the chart workspace before it is built, per page, and refunded with the pages.
+- **Per-page list.** It is capped at 64 entries. Above that, the list ends with an "N more charts not listed" note and is labelled with the true total; diagnostic `chart-description-limit`.
+- **Refused admission.** A page whose admission is refused gets a readable notice and diagnostic `chart-description-refused`. Later pages are unaffected.
+- **Known limitation: chart picture wait.** User-shape pictures of a model transferred from another realm are decoded before the pages are published, so that their first paint shows them. The wait is bounded and cancellable:
+  - **Deadline.** One shared 1.5 s deadline, driven by an injectable clock; tests never rely on wall time.
+  - **Cancellation.** It honours the caller's abort signal (OfficeDoc aborts on unmount or document change) and the chart context's signal.
+  - **Missed deadline.** A page whose pictures miss the deadline is published without them and gets diagnostic `chart-user-shapes-deadline`. The decode continues, its bytes stay charged until it settles, and the picture appears the next time that page is painted. Nothing triggers that repaint (zoom, resize or a document change do).
+  - **Delay to other pages.** The paint pipeline publishes all pages of a document together. A slow picture can therefore delay the first publication of every page by at most the deadline, never by more.
+- **Layout shift.** The Chromium CLS test proves zero layout shift outside the viewer chrome while charts load. It does not prove whole-load CLS. A pre-existing mount shift of the status slot (seen also in documents with no charts) is excluded as chrome-only.
+- **Fixtures.** All are Office-shaped synthetic; none is Office evidence.

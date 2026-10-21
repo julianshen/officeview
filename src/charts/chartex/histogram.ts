@@ -427,7 +427,7 @@ function assemble(model: ChartModel, group: ChartExGroup, visible: ChartSeries[]
   const { categoryPending: _p, categoryRef: _r, categoryHidden: _h, categoryValues: _v, preparedAxes: _a, diagnostics: _d, ...rest } = model
   void _p, void _r, void _h, void _v, void _a, void _d
   const truncated = model.truncated || built.labels.length > CHART_POINT_LIMIT
-  return { ...rest, groups, axes, categories: built.labels, ...(diagnostics.length ? { diagnostics } : {}), ...(truncated ? { truncated: true } : {}) }
+  return { ...rest, groups, axes, categories: built.labels, derivedFamily: group.family, ...(diagnostics.length ? { diagnostics } : {}), ...(truncated ? { truncated: true } : {}) }
 }
 
 /**

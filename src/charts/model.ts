@@ -396,6 +396,8 @@ export interface ChartModel {
   workbookEpoch?: '1904'
   /** Display points dropped by the per-chart bound. */
   truncated?: boolean
+  /** The ChartEx family a stage-1 derived model draws (histogram and Pareto become plain column and line groups; B3). */
+  derivedFamily?: ChartExFamily
   /** Diagnostics of the parse and fill (spec 6.6), e.g. `chart-axis-unplaceable`, `chart-date-unrepresentable`. */
   diagnostics?: ChartDiagnostic[]
   /** Set when the chart cannot be drawn: the reason shown on the placeholder card. */

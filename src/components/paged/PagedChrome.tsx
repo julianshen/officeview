@@ -20,6 +20,7 @@ import { Icon } from '../Icon'
 import { PAGE_PADDING_PX, PAGED_STATUS_HEIGHT } from './metrics'
 import { PagedStatus, type PagedKind } from './PagedStatus'
 import { PagedToolbar } from './PagedToolbar'
+import { PageCharts } from './PageCharts'
 import { usePageTracking, type PagedLayout } from './usePageTracking'
 import { useWordCount } from './useWordCount'
 
@@ -130,8 +131,10 @@ export default function PagedChrome(p: PagedChromeProps): ReactElement {
   const request = search && p.focusSearchRequest > (honoured.get(containerRef) ?? 0) ? p.focusSearchRequest : 0
   useEffect(() => { honoured.set(containerRef, Math.max(honoured.get(containerRef) ?? 0, p.focusSearchRequest)) }, [p.focusSearchRequest, containerRef])
 
+  const kind = kindOf(p.document)
   return <>
     {p.showToolbar && <VisibleChrome {...p} focusSearchRequest={request} beginPrint={beginPrint} />}
+    <PageCharts pages={p.pages} unit={kind === 'slides' ? 'Slide' : kind === 'document' ? 'Page' : 'Sheet'} selectable={!!p.copy} />
     <div data-ov-print-notice="" data-officeview-chrome=""
       style={{ position: 'absolute', bottom: (p.showToolbar ? PAGED_STATUS_HEIGHT : 0) + 8, left: 8, right: 8, zIndex: 10, pointerEvents: notice ? 'auto' : 'none' }}
       className={notice ? 'ov:flex ov:items-center ov:gap-2 ov:p-2 ov:bg-chrome ov:text-text ov:border ov:border-border ov:rounded-control' : undefined}>

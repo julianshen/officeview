@@ -20,6 +20,7 @@ import { CHARTEX_PAINTED, parseChartEx } from '../src/charts/chartex/parse'
 import { fillWorkbookCharts } from '../src/charts/fill'
 import { releaseChartModel } from '../src/charts/own'
 import { paintXlsxChart } from '../src/charts/paint'
+import { chartDescription } from '../src/charts/describe'
 import { pointList } from '../src/charts/points'
 import type { ChartModel, ChartResult } from '../src/charts/model'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -136,6 +137,8 @@ describe('histogram and Pareto (chartex-map §5)', () => {
     const hi1 = await nativeXlsx('SimpleHistogram/SimpleHistogram.xlsx')
     expect(bars(hi1)).toEqual({ labels: [`[10, ${general(10 + h1)}]`, `(${general(10 + h1)}, ${general(10 + 2 * h1)}]`], counts: [4, 1] })
     expect(paintedBars(hi1, hi1.groups[0].series[0].color)).toHaveLength(2)
+    // A7 descriptions name the family, not the derived column group.
+    expect(chartDescription(hi1)).toMatch(/^Chart: [^.]*\. Histogram chart, 1 series/)
 
     // binCount 4 over 1..10 (no outer bins): h = 9/4 = 2.25, edges 1, 3.25, 5.5, 7.75, 10.
     const ten = Array.from({ length: 10 }, (_, i) => i + 1)
@@ -260,6 +263,7 @@ describe('histogram and Pareto (chartex-map §5)', () => {
     expect(bars(pa1)).toEqual({ labels: [`[1, ${general(1 + h)}]`, `(${general(1 + h)}, ${general(1 + 2 * h)}]`], counts: [6, 4] })
     expect(nums(pa1.groups[1].series[0].values)).toEqual([0.6, 1])
     expect(pa1.preparedAxes?.axes.find(a => a.id === '2')).toMatchObject({ side: 'r', min: 0, max: 1 })
+    expect(chartDescription(pa1)).toMatch(/^Chart: ParetoLine\. Pareto chart, 2 series/)
 
     // PA2 (native): 3,5,7,6,9,6,8,4,5,3,1,4, automatic, axis kinds swapped (valScaling on 0, catScaling on 1).
     // Scott: mean 61/12, sum of squares 56.9167, h = 3.49 * sqrt(56.9167 / 11) * 12^(-1/3) = 3.46754, k = ceil(8 / h) = 3:

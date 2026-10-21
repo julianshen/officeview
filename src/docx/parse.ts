@@ -10,7 +10,7 @@ import { applyParagraphDefaults, authoredCategories, issueCategory, paragraphRun
 import { choiceCards, loadDrawingParts, wordDrawingSelections } from './drawing'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { attemptedMalformedRelationshipIssue, isExhausted, malformedRelationshipAttempt, markExhausted, reserveDrawingContent } from '../drawing/content'
-import { DOCX_REQUIREMENTS, contentRepresentation, coverageIssueMatchesEntry, featureOfKind, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
+import { DOCX_REQUIREMENTS, contentRepresentation, coverageIssueMatchesEntry, featureOfKind, chartChoiceFeature, supportedChoiceRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { DOCUMENT_DRAWING_NODE_LIMIT, contentDiagnostic, drawingPartContext, partRelationshipNodes, reserveDrawingNode, resolvePartTarget } from '../drawing/parts'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { DocxBlock, DocxComment, DocxDocument, DocxDrawing, DocxDrawingShape, DocxFloating, DocxImage, DocxNote, DocxParagraph, DocxSection, DocxTable, DocxTableCell, DocxTableCellMargins, DocxTableBorders, DocxTableRow, DocxTextRun, ParagraphAlign } from './types'
@@ -500,7 +500,7 @@ export function parseParagraph(
       for (const drawing of cards(choice)) {
         const card = choiceCards.get(drawing)!
         context.drawings.set(drawing, card)
-        if (fallback && context.pkg) contentDiagnostic(drawingPartContext(context.pkg), 'unsupported-content', context.partPath ?? 'word/document.xml', 'chart', { identity: card.referenceId, reason: 'chart-fallback-unusable' })
+        if (fallback && context.pkg) contentDiagnostic(drawingPartContext(context.pkg), 'unsupported-content', context.partPath ?? 'word/document.xml', 'chart', { identity: card.referenceId, reason: 'chart-fallback-unusable', message: `chart-fallback-unusable: ${card.drawing?.kind === 'xlsxChart' ? card.drawing.chart.unsupported ?? 'the fallback picture cannot be used' : 'the fallback picture cannot be used'}` })
       }
       const prior = context.representation
       context.representation = 'choice'
@@ -579,7 +579,7 @@ export function parseParagraph(
       if (fallback) markUnselected(fallback)
       const docPr = attrs(getChildren(wp, 'docPr')[0])
       context?.drawingCoverage?.push({ partPath: context.partPath ?? 'word/document.xml', treePath: drawing ? context.drawingPaths?.get(drawing) ?? `drawing[${context.drawingCoverage.length}]` : `drawing[${context.drawingCoverage.length}]`, element: 'drawing', id: docPr.id, name: docPr.name,
-        feature: 'picture', status: 'fallback', selectedRepresentation: 'raster-fallback', representation: 'fallback', reason: 'Selected compatibility fallback image', scope: 'original' })
+        feature: chartChoiceFeature(node) ?? 'picture', status: 'fallback', selectedRepresentation: 'raster-fallback', representation: 'fallback', reason: 'Selected compatibility fallback image', scope: 'original' })
     } else {
       const prior = context?.representation, before = inline.length, audited = context?.drawingCoverage?.length ?? 0, images = paragraph.images.length
       if (fallback) {
@@ -590,6 +590,9 @@ export function parseParagraph(
         markUnselected(fallback)
         const card = chartFallback()
         if (card) for (const image of paragraph.images.slice(images)) if (!image.drawing) image.chartFallback = card
+        // An authored fallback for a chart keeps the chart's original feature (spec 6.6).
+        const original = chartChoiceFeature(node)
+        if (original) for (const entry of context?.drawingCoverage?.slice(audited) ?? []) if (entry.scope === 'original' && entry.representation === 'fallback') entry.feature = original
       }
       else {
         // The actual result: nothing usable here (no fallback, or it drew nothing), so the failure propagates.
