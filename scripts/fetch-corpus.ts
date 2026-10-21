@@ -118,7 +118,6 @@ export const CORPUS: CorpusEntry[] = [
   lo('tdf123684.pptx', '943a534ac7cb3df513583e226c986dafd8ba246b', 'master bgRef 1003 and six non-placeholder artwork nodes'),
   lo('ooxtheme.pptx', 'cd08835d1bd9274412c7326db32fb3752bc94fb3', 'ten non-placeholder master artwork nodes'),
   lo('tdf93868.pptx', 'f3d1ac75c4b7fa63022e54a9cbff46ba99535076', 'master gradient background and two non-placeholder shapes'),
-
 ]
 
 const CORPUS_DIR = join(import.meta.dir, '..', 'corpus')

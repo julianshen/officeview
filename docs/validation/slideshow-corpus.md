@@ -6,12 +6,12 @@ These unmodified PPTX files are untrusted test data for slideshow and slide-appe
 
 - Source: LibreOffice core, `sd/qa/unit/data/pptx`, at <https://github.com/LibreOffice/core>. Each file below is pinned to a full commit and Git blob SHA, never a moving branch.
 - **Licence: MPL-2.0.** LibreOffice publishes its test data under MPL-2.0. These decks are fetched on demand, not redistributed or vendored in this repository. Several docProps creators are third parties, suggesting bug-report attachments; this is why the repository does not vendor the decks. Terms: <https://mozilla.org/MPL/2.0/>.
-- Creator metadata is not a copyright clearance or proof of authorship. This task used controller-prepared bytes and pins without network access; origins of individual attachments were not independently investigated.
+- Creator metadata is not a copyright clearance or proof of authorship. The controller subsequently network-verified the fetched bytes and upstream pins; origins of individual attachments were not independently investigated.
 - Run `bun scripts/fetch-corpus.ts` to fetch `corpus/lo-<file>`. Run `bun scripts/fetch-corpus.ts --check` to verify SHA-256 against `corpus/corpus.lock.json`. The corpus directory is gitignored.
 
 ## Screening and reproducibility
 
-1. The controller retrieved the last LibreOffice commit touching each path and its blob at that commit. Those pins were supplied in `S0-2-pins.tsv`.
+1. The controller retrieved the last LibreOffice commit touching each path and its blob at that commit. The immutable commit and blob pins are recorded in the table below.
 2. Independently recomputed each local Git blob SHA (`SHA1("blob " + byteLength + NUL + bytes)`) and matched it to the supplied upstream blob. Copies are byte-identical to the prepared source.
 3. Read `docProps/app.xml` and required Application to contain Microsoft, matching the supplied producer exactly.
 4. Parsed XML by namespace, separately scanning slide, notes, master and other parts. The test has independent per-file assertions for every fetch-entry probe, including attributes and target relationships. It requires the complete 16-file set so an empty fetch list cannot pass.
