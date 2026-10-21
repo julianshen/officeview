@@ -28,6 +28,7 @@ import type { ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
 import type { ChartDiagnostic, ChartModel, ChartRange, ChartResult, ChartSeries } from './model'
 import { CHART_ANALYTIC_POINT_LIMIT, CHART_POINT_LIMIT, parseXlsxChart } from './parse'
+import { CHART_DATA_NOT_AVAILABLE, XLSX_CHART_PART } from './limits'
 import { CHART_TOO_MANY_POINTS, analyticOverLimit, categoryLimit, chartHasPending, fillChartRanges, seriesLimit, type ChartCellLookup } from './fill'
 import { chartModelOwner, releaseChartModel, succeedChartModel } from './own'
 import { stringBytes } from './points'
@@ -38,8 +39,9 @@ import { isChartExRoot } from './read'
 import { parseChartExPart } from './chartex/parse'
 import { EMBEDDED_TOO_MANY_POINTS, requestEmbeddedCells, type EmbeddedCellsResult, type EmbeddedRequest, type EmbeddedResolution } from './embeddedWorkbook'
 
-export const CHART_DATA_UNAVAILABLE = "This chart's data is not available"
-const XLSX_PART = /^\/?xl\//i
+/** The one reason text (limits.ts), under the name the precedence path has always exported. */
+export const CHART_DATA_UNAVAILABLE = CHART_DATA_NOT_AVAILABLE
+const XLSX_PART = XLSX_CHART_PART
 
 /**
  * The chart part adapter for every format (spec 6.2, 6.3): reads the model, applies DOCX/PPTX data
@@ -57,6 +59,8 @@ export async function parseChartPart(root: XmlNode, theme: ThemeContext | undefi
   try {
     chart = parse(root, theme, style ? { ...context, styleParts: style.parts } : context)
     style?.release()
+    // A series without a required role is unsupported in every format, XLSX included (spec 6.4).
+    if (chart) chart = refuseAbsentRoles(chart)
     if (chart && !XLSX_PART.test(context.partPath)) chart = await applyDataPrecedence(chart, root, context)
     // The chart's drawing overlays (spec 5.11): a missing part leaves the chart native, an unadmitted one refuses it.
     if (chart && !chart.unsupported) chart = await attachChartUserShapes(chart, root, context)
@@ -79,20 +83,28 @@ function successor(model: ChartModel, patch: Partial<ChartModel>, diagnostics: C
   succeedChartModel(model, next)
   return next
 }
-const unsupported = (model: ChartModel, diagnostics: ChartDiagnostic[]) => successor(model, { unsupported: CHART_DATA_UNAVAILABLE, preparedAxes: undefined }, diagnostics)
+const unsupported = (model: ChartModel, diagnostics: ChartDiagnostic[], refused = false) => successor(model, { unsupported: CHART_DATA_UNAVAILABLE, preparedAxes: undefined, ...(refused ? { refused } : {}) }, diagnostics)
+/**
+ * A required role (values; x values for scatter and bubble; bubble sizes for bubble) with neither saved data nor a
+ * reference, cached-only charts included: the chart is unsupported in every format (spec 6.4), so a fallback is kept.
+ * An analytic ChartEx chart (B1 rulings) is refused instead, as the XLSX ChartEx parse refuses it.
+ */
+export function refuseAbsentRoles(model: ChartModel): ChartModel {
+  if (model.unsupported) return model
+  const absent = model.groups.flatMap(group => group.series.flatMap(series => series.absent ?? []))
+  if (!absent.length) return model
+  const missing = (['values', 'xValues', 'bubbleSizes'] as const).find(role => absent.includes(role))
+  const analytic = model.groups.some(group => group.series.some(series => series.analytic === 'chart'))
+  return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${NUMERIC_NAMES[missing ?? 'values']}: neither saved data nor a reference` }], analytic)
+}
 
 /**
  * Applies the precedence to a parsed DOCX/PPTX chart model (returns the successor model; never throws).
  * The embedded workbook is opened only when some role has a reference and no saved data.
  */
 export async function applyDataPrecedence(model: ChartModel, root: XmlNode, context: ChartParseContext): Promise<ChartModel> {
-  if (model.unsupported) return model
-  // A required role (values; x values for scatter and bubble; bubble sizes for bubble) with neither saved
-  // data nor a reference, cached-only charts included.
-  const absent = model.groups.flatMap(group => group.series.flatMap(series => series.absent ?? []))
-  const missing = (['values', 'xValues', 'bubbleSizes'] as const).find(role => absent.includes(role))
-  if (absent.length) return unsupported(model, [{ code: 'chart-data-unavailable', reason: `A series has no ${NUMERIC_NAMES[missing ?? 'values']}: neither saved data nor a reference` }])
-  if (!chartHasPending(model)) return model
+  model = refuseAbsentRoles(model)
+  if (model.unsupported || !chartHasPending(model)) return model
   // An analytic ChartEx reference over the analytic bound is refused before the embedding is opened or admitted.
   if (analyticOverLimit(model)) return successor(model, { unsupported: CHART_TOO_MANY_POINTS, refused: true, preparedAxes: undefined })
   // Every role still to read, in a fixed order: the shared categories first, then each series' roles.

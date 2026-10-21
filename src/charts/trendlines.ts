@@ -365,16 +365,11 @@ export function trendlineLegendEntries(model: ChartModel): Array<{ name: string;
   return out
 }
 /**
- * `c:legend/c:legendEntry[c:delete=1]` for trendline entries, numbered in series order after `entriesBefore` (the
+ * `deleted` (the chart's bounded, charged `c:legendEntry[c:delete=1]` set, read once by the parser) for trendline entries, numbered in series order after `entriesBefore` (the
  * highest series c:idx + 1, or a point legend's point count), so a trendline never shares a series or point key
  * (Office-unverified numbering). Marks the deleted ones in place.
  */
-export function markTrendlineLegendDeletions(legend: XmlNode | undefined, groups: readonly ChartGroup[], entriesBefore?: number): void {
-  const deleted = new Set<number>()
-  for (const entry of getChildren(legend, 'legendEntry')) {
-    const idx = num(child(entry, 'idx'))
-    if (idx !== undefined && Number.isInteger(idx) && flag(child(entry, 'delete'))) deleted.add(idx)
-  }
+export function markTrendlineLegendDeletions(deleted: ReadonlySet<number>, groups: readonly ChartGroup[], entriesBefore?: number): void {
   if (!deleted.size) return
   // `entriesBefore`: a point legend's point entries (A4b); otherwise one entry per series.
   let index = entriesBefore ?? groups.reduce((n, g) => n + g.series.length, 0)
