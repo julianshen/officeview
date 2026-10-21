@@ -10,8 +10,12 @@
  * Projects: chromium always; webkit only when its engine is actually
  * installed. WebKit here is Playwright emulation and results are labeled
  * `webkit-playwright` — never Safari or physical-device evidence (spec §12.2).
+ *
+ * `slideshow` (slideshow plan S1-2): Chromium with SwiftShader WebGL2, running
+ * only tests/browser/slideshow-*.spec.ts. The viewer projects ignore those
+ * specs, so their own test set is unchanged. CI runs `--project slideshow`.
  */
-import { defineConfig, devices } from '@playwright/test'
+import { defineConfig, devices, type Project } from '@playwright/test'
 import { existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -38,14 +42,23 @@ function engineInstalled(prefix: string): boolean {
   }
 }
 
-const projects = [
-  { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+const SLIDESHOW_SPECS = /slideshow-.*\.spec\.ts/
+const projects: Project[] = [
+  { name: 'chromium', testIgnore: SLIDESHOW_SPECS, use: { ...devices['Desktop Chrome'] } },
 ]
 if (engineInstalled('webkit-')) {
-  projects.push({ name: 'webkit', use: { ...devices['Desktop Safari'] } })
+  projects.push({ name: 'webkit', testIgnore: SLIDESHOW_SPECS, use: { ...devices['Desktop Safari'] } })
 } else {
   console.warn('[playwright.viewer.config] WebKit is not installed (bunx playwright install webkit): running chromium only')
 }
+projects.push({
+  name: 'slideshow',
+  testMatch: SLIDESHOW_SPECS,
+  use: {
+    ...devices['Desktop Chrome'],
+    launchOptions: { args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
+  },
+})
 
 export default defineConfig({
   testDir: 'tests/browser',
