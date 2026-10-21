@@ -67,12 +67,13 @@ describe('eager import graph', () => {
     for (const id of ['/r/src/pptx/parse.ts', '/r/src/pptx/render.ts', '/r/src/render/paint.ts']) expect(hit(id), id).toBe(false)
   })
 
-  it('src/slideshow and src/pptx/appearance are not in the eager graph', () => {
-    // The built module map (OV_MODULE_MAP=1 bun run build), when present.
-    const file = join(__dirname, '..', 'dist', '.module-map.json')
-    if (!existsSync(file)) return
-    const map = JSON.parse(readFileSync(file, 'utf8')) as ModuleMap
-    if (!map['index.js']) return
+  // The built module map (OV_MODULE_MAP=1 bun run build) is optional; the post-build check-eager gate always runs.
+  const moduleMapFile = join(__dirname, '..', 'dist', '.module-map.json')
+  it.skipIf(!existsSync(moduleMapFile))('src/slideshow and src/pptx/appearance are not in the eager graph (skipped: no dist/.module-map.json)', () => {
+    // A present map must parse and must have the entry chunk.
+    const map = JSON.parse(readFileSync(moduleMapFile, 'utf8')) as ModuleMap
+    expect(map['index.js'], 'dist/.module-map.json has no index.js entry chunk').toBeDefined()
+    expect(Array.isArray(map['index.js'].modules)).toBe(true)
     const eager = [...eagerModules(map)].map(id => id.replace(/\\/g, '/'))
     expect(eager.filter(id => /src\/slideshow\/|src\/pptx\/appearance\//.test(id))).toEqual([])
     expect(forbiddenEager(map, EAGER_FORBIDDEN)).toEqual([])
