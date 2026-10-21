@@ -295,8 +295,14 @@ export type Affine = readonly [a: number, b: number, c: number, d: number, e: nu
 /** A 4×5 colour matrix, row-major (20 numbers), applied to un-premultiplied colour. */
 export type ColorMatrix = readonly number[]
 
-/** Every mask the catalogue names. Seeded from spec 6.3; S1-13 fills it in. */
-export type MaskKind = 'wipe' | 'split' | 'circle' | 'diamond' | 'plus' | 'wedge' | 'wheel' | 'barn' | 'checkerboard' | 'dissolve'
+/**
+ * Every mask the catalogue names (spec 6.3: the wipe-like filters and the 2-D
+ * transition masks). Geometry and params are in `render/masks.ts`; `dissolve`
+ * and `randomBar` are noise rasters, every other kind is a path.
+ */
+export type MaskKind =
+  | 'wipe' | 'split' | 'circle' | 'diamond' | 'plus' | 'wedge' | 'wheel' | 'barn' | 'checkerboard' | 'dissolve'
+  | 'blinds' | 'box' | 'comb' | 'randomBar' | 'strips'
 
 export interface MaskState { kind: MaskKind; progress: number; params: Readonly<Record<string, number | string>> }
 
