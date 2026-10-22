@@ -18,6 +18,8 @@ export interface MoreItem {
   /** Set for a toggle (menuitemcheckbox). */
   checked?: boolean
   disabled?: boolean
+  /** The action moved focus itself (a show start): keep the trigger's focus. */
+  takeFocus?: boolean
 }
 
 const ITEM = [
@@ -30,7 +32,7 @@ export function MoreMenu({ items, buttonClass }: { items: readonly MoreItem[]; b
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement | null>(null)
   const menu = useRef<HTMLDivElement | null>(null)
-  const close = () => { setOpen(false); button.current?.focus() }
+  const close = (refocus = true) => { setOpen(false); refocus && button.current?.focus() }
   const entries = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
 
   useEffect(() => {
@@ -91,7 +93,7 @@ export function MoreMenu({ items, buttonClass }: { items: readonly MoreItem[]; b
               // aria-disabled, not disabled: the item stays reachable by arrows
               aria-disabled={item.disabled || undefined}
               tabIndex={-1}
-              onClick={() => { if (item.disabled) return; item.onSelect(); close() }}
+              onClick={() => { if (item.disabled) return; item.onSelect(); close(!item.takeFocus) }}
               className={ITEM}
             >
               {item.icon}

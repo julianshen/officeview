@@ -58,6 +58,9 @@ export interface PagedChromeProps {
   copy?: { state: 'idle' | 'done' | 'failed'; enabled: boolean; onCopy(): void }
   /** Print is offered only when allowed. */
   allowPrint: boolean
+  /** Present offer, already gated to allowed slides documents. Everything
+   * about its offer (busy, preload hint) is the toolbar's own lazy business. */
+  present?: { start(from: 'beginning' | 'current'): void }
   pages: readonly Paintable[]
   owner: object
   showToolbar: boolean
@@ -205,6 +208,7 @@ function VisibleChrome(p: PagedChromeProps & { beginPrint(): void }): ReactEleme
         {...(p.copy ? { onCopy: p.copy.onCopy, copyEnabled: p.copy.enabled } : {})}
         copyState={p.copy?.state ?? 'idle'}
         {...(p.allowPrint ? { onPrint: beginPrint } : {})}
+        present={p.present}
         compact={p.compact}
         showSearch={!!search}
         showZoom={p.showZoom}
