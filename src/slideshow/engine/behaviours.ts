@@ -820,7 +820,8 @@ const finiteMs = (v: number | 'indefinite' | undefined): number | undefined => t
  * apply per item; an iterated container with a finite `dur` is extended by
  * its largest delay. So the scheduler sees the true length and successors
  * (`afterEffect`, `onEnd`) wait for the last item. A whole-shape target also
- * keeps its own key as an item at delay 0, for the body layer.
+ * keeps its own key as an item for the body layer: at delay 0, or under an
+ * exit effect at the last item's delay.
  *
  * `tmPct` is a fraction of the iterated container's duration: its finite
  * `dur`, else its longest behaviour's. Targets without boxes and behaviours
@@ -830,7 +831,7 @@ export function expandIterations(tree: TimingTree, splits: ReadonlyMap<TargetKey
   const { sink, slideIndex } = options
   const diag = (code: string, effect: string, message: string): void => { sink?.add({ code, slideIndex, effect, message }) }
   const srcOrder = new Map<TimeNode, number>()
-  interface Plan { node: BehaviourNode; owner?: ContainerNode; effect: string; keys: readonly TargetKey[]; whole?: TargetKey; delays: number[]; entrance: boolean }
+  interface Plan { node: BehaviourNode; owner?: ContainerNode; effect: string; keys: readonly TargetKey[]; whole?: TargetKey; delays: number[]; entrance: boolean; exit: boolean }
   const plans: Plan[] = []
   const containerDur = new Map<ContainerNode, number | undefined>()
   const longest = (n: TimeNode, depth: number): number | undefined => {
@@ -883,7 +884,7 @@ export function expandIterations(tree: TimingTree, splits: ReadonlyMap<TargetKey
       diag('text-build-unsplit', effect, `Text by ${unit} on ${key}: tmPct needs a finite effect duration; the items start together`)
     }
     fanned += cost
-    plans.push({ node: n, owner, effect, keys, whole, delays: iterateDelays(it, keys.length, base ?? 0), entrance: here === 'entr' })
+    plans.push({ node: n, owner, effect, keys, whole, delays: iterateDelays(it, keys.length, base ?? 0), entrance: here === 'entr', exit: here === 'exit' })
   }
   walk(tree.root, undefined, undefined, 0)
   const unchanged = (): IteratedTiming => ({ tree, orderOf: options.orderOf ?? srcOrder, fan: new Map(), items: new Map() })
@@ -923,7 +924,8 @@ export function expandIterations(tree: TimingTree, splits: ReadonlyMap<TargetKey
     c.ctn.decel = 0
     c.ctn.autoRev = false
     const list = p.keys.map((key, i) => ({ key, delayMs: p.delays[i] }))
-    if (p.whole) list.unshift({ key: p.whole, delayMs: 0 })
+    // The body appears with the first item and, under an exit, leaves with the last.
+    if (p.whole) list.unshift({ key: p.whole, delayMs: p.exit ? last : 0 })
     fan.set(c, { items: list, spanMs: span, totalMs: span + last, accel: src.accel, decel: src.decel, autoRev: src.autoRev, entrance: p.entrance })
     items.set(targetKey(p.node.target), [...p.keys])
     if (p.owner) extend.set(p.owner, Math.max(extend.get(p.owner) ?? 0, last))

@@ -285,3 +285,64 @@ describe('S2-8 text builds by word and by letter', () => {
     expect(state.get('sp:6')?.opacity).toBeCloseTo(1)
   })
 })
+
+describe('S2-8 fix round 1', () => {
+  it('I1: unspaced CJK splits into words with Intl.Segmenter; punctuation stays with its word', () => {
+    const cjk = textShape(5, [['我们是学生']])
+    const boxes = splitTextBoxes(cjk, layoutOf(cjk, fixedMeasure()), 'wd', { measure: fixedMeasure() })
+    expect(boxes.length).toBeGreaterThan(1)
+    // The boxes partition the five characters in order.
+    const ranges = boxes.map(b => b.key.split('/c:')[1].split('-').map(Number))
+    expect(ranges[0][0]).toBe(0)
+    expect(ranges[ranges.length - 1][1]).toBe(4)
+    for (let i = 1; i < ranges.length; i++) expect(ranges[i][0]).toBe(ranges[i - 1][1] + 1)
+    // Western text keeps its punctuation: "(Hello," and "world)" are two words.
+    const west = textShape(6, [['(Hello, world)']])
+    expect(splitTextBoxes(west, layoutOf(west, fixedMeasure()), 'wd', { measure: fixedMeasure() }).map(b => b.key)).toEqual(['sp:6/c:0-6', 'sp:6/c:8-13'])
+  })
+
+  it('I1: without Intl.Segmenter, CJK falls back to one box per character, diagnosed', () => {
+    const real = (Intl as unknown as { Segmenter?: unknown }).Segmenter
+    ;(Intl as unknown as { Segmenter?: unknown }).Segmenter = undefined
+    try {
+      const cjk = textShape(5, [['我们 ok']])
+      const sink = createDiagnosticSink()
+      const boxes = splitTextBoxes(cjk, layoutOf(cjk, fixedMeasure()), 'wd', { measure: fixedMeasure(), sink })
+      expect(boxes.map(b => b.key)).toEqual(['sp:5/c:0-0', 'sp:5/c:1-1', 'sp:5/c:3-4'])
+      expect(sink.list().map(d => d.code)).toEqual(['text-build-cjk-chars'])
+    } finally {
+      ;(Intl as unknown as { Segmenter?: unknown }).Segmenter = real
+    }
+  })
+
+  it('I2: textBoxBases rotates each box about the shape pivot', () => {
+    const shape: PptxShape = { ...textShape(5, [['x']], 100, 50), rotationDeg: 90 }
+    const bases = textBoxBases(shape, [{ key: 'k', box: { x: 0, y: 0, w: 10, h: 10 }, paragraph: 0 }])
+    const g = bases.get('k')!
+    // Box centre (5, 5) is (−45, −20) from the pivot (50, 25); rotated 90° it is (20, −45).
+    expect(g.x).toBeCloseTo(65)
+    expect(g.y).toBeCloseTo(-25)
+    expect([g.w, g.h, g.rot]).toEqual([10, 10, 90])
+  })
+
+  it('I3: under an exit effect the shape body follows the last item', () => {
+    const T: TargetRef = { spid: '5' }
+    const exit = par(10, [fadeIn(12, T, 1000)], { presetClass: 'exit', presetId: 10, fill: 'hold', iterate: { type: 'wd', backwards: false, tmAbsMs: 100 } })
+    const x = expandIterations(tree(exit), new Map([['sp:5', ['sp:5/c:0-1', 'sp:5/c:3-4', 'sp:5/c:6-7']]]))
+    expect([...x.fan.values()][0].items).toEqual([
+      { key: 'sp:5', delayMs: 200 }, { key: 'sp:5/c:0-1', delayMs: 0 }, { key: 'sp:5/c:3-4', delayMs: 100 }, { key: 'sp:5/c:6-7', delayMs: 200 },
+    ])
+    const entr = expandIterations(tree(effect(10, { type: 'wd', backwards: false, tmAbsMs: 100 }, [fadeIn(12, T, 1000)])), new Map([['sp:5', ['sp:5/c:0-1', 'sp:5/c:3-4']]]))
+    expect([...entr.fan.values()][0].items[0]).toEqual({ key: 'sp:5', delayMs: 0 })
+  })
+
+  it('M1: RTL lines give their boxes in reading order', () => {
+    // A bidi layout places the first Hebrew word on the right.
+    const shape = textShape(5, [['שלום עולם']], 200, 50)
+    const seg = (text: string, x: number, st: number) => ({ text, x, width: text.length * 10, style: { fontSizePt: 12 }, sourceStart: st, sourceEnd: st + text.length, runIndex: 0, sourceRuns: [], graphemeBoundaries: Array.from({ length: text.length }, (_, i) => st + i) })
+    const layout = { height: 20, lines: [{ paragraphIndex: 0, x: 0, y: 0, baseline: 16, height: 20, segments: [seg('עולם', 0, 5), seg(' ', 40, 4), seg('שלום', 50, 0)] }] }
+    const boxes = splitTextBoxes(shape, layout as never, 'wd')
+    expect(boxes.map(b => b.key)).toEqual(['sp:5/c:0-3', 'sp:5/c:5-8'])
+    expect(boxes.map(b => [b.box.x, b.box.x + b.box.w])).toEqual([[45, 200], [0, 45]])
+  })
+})

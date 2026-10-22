@@ -10,12 +10,14 @@
  */
 import type { ContentPaintAssets } from '../../drawing/content'
 import type { ScenePaintOptions } from '../../drawing/scene-paint'
-import { layoutTextBody } from '../../drawing/text-layout'
+import { layoutTextBody, type MeasureText, type TextLayout } from '../../drawing/text-layout'
 import { createTextBodyMeasurer, paintTextBody } from '../../drawing/text-paint'
 import type { FontResolver } from '../../core/fonts/register'
 import { emuToPx } from '../../core/geometry'
 import { renderSlide } from '../../pptx/render'
 import type { PptxShape, PptxSlide } from '../../pptx/types'
+import type { TargetKey } from '../types'
+import { boxesFor, type TextItem } from './text-split'
 
 /** Stage 0 (S0-7) adds `PptxSlide.underlay`; read it structurally until then. */
 export function underlayOf(slide: PptxSlide): readonly PptxShape[] {
@@ -36,10 +38,16 @@ export const textFilter = new WeakMap<PptxShape, (paragraph: number) => boolean>
 
 /**
  * Text clips for planner-made word and letter clones (S2-8): a clone listed
- * here paints its text only inside this rect (shape-local px, the layout's
- * coordinates), and its painted bounds are cut to it.
+ * here paints its text only inside the boxes of item `key` among `items`,
+ * placed by `boxesFor` on the layout it paints with (so the clip follows the
+ * painted glyphs), and its painted bounds are cut to them.
  */
-export const textClip = new WeakMap<PptxShape, { x: number; y: number; w: number; h: number }>()
+export const textClip = new WeakMap<PptxShape, { items: readonly TextItem[]; key: TargetKey }>()
+
+/** The clip rects of a clone on `layout` (shape-local px). */
+function clipRects(shape: PptxShape, layout: TextLayout, clip: { items: readonly TextItem[]; key: TargetKey }, measure: MeasureText): Array<{ x: number; y: number; w: number; h: number }> {
+  return boxesFor(shape, layout, clip.items, measure).filter(b => b.key === clip.key).map(b => b.box)
+}
 
 const TRANSPARENT = 'rgba(0,0,0,0)'
 const PX_TO_EMU = 914400 / 96
@@ -83,18 +91,21 @@ export function sceneOptions(slide: PptxSlide, assets: SceneAssets): ScenePaintO
       if (!body) return
       const keep = textFilter.get(shape)
       const clip = textClip.get(shape)
-      if (clip) {
-        ctx.save()
-        ctx.beginPath()
-        ctx.rect(clip.x, clip.y, clip.w, clip.h)
-        ctx.clip()
-      }
+      if (!keep && !clip) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme); return }
+      const measure = createTextBodyMeasurer(ctx, resolveFont)
+      const layout = layoutTextBody(body, w, h, measure, slide.theme)
+      const kept = { ...layout, lines: keep ? layout.lines.filter(line => keep(line.paragraphIndex)) : layout.lines }
+      if (!clip) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: kept }); return }
+      const rects = clipRects(shape, layout, clip, measure)
+      if (rects.length === 0) return
+      ctx.save()
       try {
-        if (!keep) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme); return }
-        const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx, resolveFont), slide.theme)
-        paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: { ...layout, lines: layout.lines.filter(line => keep(line.paragraphIndex)) } })
+        ctx.beginPath()
+        for (const r of rects) ctx.rect(r.x, r.y, r.w, r.h)
+        ctx.clip()
+        paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: kept })
       } finally {
-        if (clip) ctx.restore()
+        ctx.restore()
       }
     },
   }
@@ -178,14 +189,19 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
     }
     const body = shape.textBody
     if (!body || body.paragraphs.length === 0) return
-    const clip = textClip.get(shape)
-    if (!measure || (body.direction && body.direction !== 'horz') || body.textWarp) {
-      if (clip) add(m, Math.max(0, clip.x), Math.max(0, clip.y), Math.min(w, clip.x + clip.w), Math.min(h, clip.y + clip.h))
-      else add(m, 0, 0, w, h)
-      return
-    }
+    if (!measure || (body.direction && body.direction !== 'horz') || body.textWarp) { add(m, 0, 0, w, h); return }
     const keep = textFilter.get(shape)
-    const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(measure, resolveFont), slide.theme)
+    const measurer = createTextBodyMeasurer(measure, resolveFont)
+    const layout = layoutTextBody(body, w, h, measurer, slide.theme)
+    const clipped = textClip.get(shape)
+    let clip: { x: number; y: number; w: number; h: number } | undefined
+    if (clipped) {
+      // The bounding box of the item's boxes (a word broken across lines has several).
+      const rects = clipRects(shape, layout, clipped, measurer)
+      if (rects.length === 0) return
+      const x0 = Math.min(...rects.map(r => r.x)), y0 = Math.min(...rects.map(r => r.y))
+      clip = { x: x0, y: y0, w: Math.max(...rects.map(r => r.x + r.w)) - x0, h: Math.max(...rects.map(r => r.y + r.h)) - y0 }
+    }
     for (const line of layout.lines) {
       if (keep && !keep(line.paragraphIndex)) continue
       let l = Math.min(0, line.x), r = w, slack = 0

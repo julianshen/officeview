@@ -10,7 +10,7 @@ import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { targetKey } from '../target'
 import type { BuildOwnership, TargetKey } from '../types'
 import { textClip, textFilter, underlayOf } from './scene'
-import type { TextBox } from './text-split'
+import type { TextItem } from './text-split'
 
 export type ColourPart = 'fill' | 'line' | 'text'
 
@@ -63,13 +63,18 @@ function filtered(shape: PptxShape, keep: (paragraph: number) => boolean): PptxS
   textFilter.set(shape, keep)
   return shape
 }
-/** One text-only clone per word or letter box (S2-8): its paragraph, clipped to the box. */
-function boxLeaves(node: PptxShape, path: PptxShape[], boxes: readonly TextBox[]): Leaf[] {
-  return boxes.map(b => {
-    const clone = filtered(textPart(node), i => i === b.paragraph)
-    textClip.set(clone, b.box)
-    return { path, node: clone, own: { key: b.key, part: 'range' as const } }
-  })
+/** One text-only clone per word or letter item (S2-8): its paragraph, clipped to the item's boxes at paint time. */
+function boxLeaves(node: PptxShape, path: PptxShape[], items: readonly TextItem[]): Leaf[] {
+  const seen = new Set<TargetKey>()
+  const out: Leaf[] = []
+  for (const item of items) {
+    if (seen.has(item.key)) continue
+    seen.add(item.key)
+    const clone = filtered(textPart(node), i => i === item.paragraph)
+    textClip.set(clone, { items, key: item.key })
+    out.push({ path, node: clone, own: { key: item.key, part: 'range' as const } })
+  }
+  return out
 }
 
 /**
@@ -81,17 +86,19 @@ function boxLeaves(node: PptxShape, path: PptxShape[], boxes: readonly TextBox[]
  * the body is static and joins the surrounding static run.
  *
  * `splits` (S2-8, text by word or letter) maps an iterated target, a shape
- * key or a paragraph-range key, to its boxes from `splitTextBoxes`. A split
- * shape gives a body layer (geometry, fill, line, and text in no box; keyed
- * by the shape when it is animated) and one text layer per box, in reading
- * order. A split range replaces that range's single layer with its boxes.
+ * key or a paragraph-range key, to its items (`textItems`, or the boxes of
+ * `splitTextBoxes`). A split shape gives a body layer (geometry, fill, line,
+ * and text in no item; keyed by the shape when it is animated) and one text
+ * layer per item, in reading order, clipped at paint time to the item's
+ * boxes on the painted layout. A split range replaces that range's single
+ * layer with its items.
  */
 export function buildRenderPlan(
   slide: PptxSlide,
   animated: ReadonlySet<TargetKey>,
   colourParts: ReadonlyMap<TargetKey, ReadonlySet<ColourPart>>,
   builds: readonly BuildOwnership[],
-  splits?: ReadonlyMap<TargetKey, readonly TextBox[]>,
+  splits?: ReadonlyMap<TargetKey, readonly TextItem[]>,
 ): RenderPlan {
   const paragraphBuilds = new Map<string, BuildOwnership>()
   for (const b of builds) if (b.mode === 'paragraph' && b.ranges.length > 0) paragraphBuilds.set(b.spid, b)

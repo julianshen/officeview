@@ -447,7 +447,11 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (!live()) return
       const options = { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink, slideIndex: i }
       try {
-        v.timeline = createSlideTimeline(timing, options)
+        // Text by word or letter (S2-8): the stage's fanned-out working copy, charged to the slide's metadata.
+        const handle = v.handle
+        const text = timing && !('refused' in timing) && handle && v.meta && stage?.textTiming
+          ? stage.textTiming(i, v.meta, (bytes, tag) => handle.attach(bytes, tag)) : undefined
+        v.timeline = createSlideTimeline(text?.tree ?? timing, text ? { ...options, orderOf: text.orderOf } : options)
       } catch (e) {
         // A bound the navigation layer refuses (spec: refuse and diagnose, never a wrong answer): the slide is static.
         sink.add({ code: 'slide-refused', slideIndex: i, message: `Slide timing refused (${e instanceof Error ? e.message : String(e)}); the slide is static` })

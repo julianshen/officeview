@@ -55,10 +55,11 @@ import { imageIndices, paintedBounds, slideSize, underlayOf } from '../render/sc
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
+import { textBases, textTimingFor, type TextTiming } from './text-builds'
 import { targetKey } from '../target'
 import type {
   Affine, AllocationOwner, CanvasFactory, Compositor, CompositorViewport, DiagnosticSink, LayerDraw, LayerHandle, Lease, MetadataHandle,
-  RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TransitionSpec,
+  RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TimingTree, TransitionSpec,
 } from '../types'
 import { createFrameLimits, LAYER_LIMIT, RERASTER_LIMIT, surfaceBytes, type Backing } from '../workspace'
 import { apply, groupChildMatrix, invert, mul, nodeMatrix, stateMatrix } from './hit-test'
@@ -116,6 +117,14 @@ export interface Stage {
    * overlay and the "Click to play" button; `undefined` without layout.
    */
   mediaBox?(spid: string): { left: number; top: number; width: number; height: number } | undefined
+  /**
+   * Additive (S2-8): the timing to schedule for slide `index` when it builds
+   * text by word or letter: a working copy fanned out over the items, with
+   * the source pre-order `orderOf` for `createSlideTimeline`. `charge`
+   * reserves its bytes (the slide's metadata handle). `undefined`: schedule
+   * the slide's own timing.
+   */
+  textTiming?(index: number, meta: ShowSlide, charge: (bytes: number, tag: string) => boolean): { tree: TimingTree; orderOf: ReadonlyMap<TimeNode, number> } | undefined
   resize(css: { w: number; h: number }, dpr: number): void
   readonly level: LadderLevel | undefined
   readonly backend: string
@@ -594,6 +603,9 @@ export function createStage(deps: StageDeps): Stage {
       }
       if (p.dead) return undefined
       if (got === 'terminal') { releaseBuilt(p.built); p.built = undefined }
+      if ((got === 'terminal' || got === 'flattened') && textTimings.get(p.meta)?.splits.size) {
+        sink.add({ code: 'text-build-whole', slideIndex: p.index, effect: got, message: `Text by word or letter: at the ${got} rung the split shapes paint whole, appearing with their first item` })
+      }
       p.level = got
       return got
     })
@@ -613,19 +625,62 @@ export function createStage(deps: StageDeps): Stage {
   // Slides
   // -------------------------------------------------------------------
 
+  /** Text builds per slide metadata (S2-8): one working copy per `ShowSlide`, shared by the timeline and the plan. */
+  const textTimings = new WeakMap<ShowSlide, TextTiming | null>()
+  function textTimingOf(index: number, meta: ShowSlide, charge: ((bytes: number, tag: string) => boolean) | undefined): TextTiming | undefined {
+    const have = textTimings.get(meta)
+    if (have !== undefined) return have ?? undefined
+    const timing = meta.timing
+    const slide = deps.doc.slides[index]
+    if (!timing || 'refused' in timing || !slide) { textTimings.set(meta, null); return undefined }
+    // Layers the items may take: the layer bound less what the slide plans without them (and a margin per split).
+    const t = timingTargets(meta)
+    const plain = buildRenderPlan(slide, t.animated, new Map(), meta.builds).layers.length
+    const tt = textTimingFor(slide, timing, { sink, slideIndex: index, charge: charge ?? (() => false), layers: LAYER_LIMIT - plain - 4 })
+    textTimings.set(meta, tt ?? null)
+    return tt
+  }
+
+  /** Timing targets of the scheduled tree, with every text item hidden and entered as its iterated target is. */
+  function targetsOf(meta: ShowSlide, tt: TextTiming | undefined) {
+    const t = timingTargets(tt ? { ...meta, timing: tt.tree } : meta)
+    if (tt) {
+      for (const [target, keys] of tt.items) {
+        for (const k of keys) {
+          t.animated.add(k)
+          if (t.hidden.has(target)) {
+            t.hidden.add(k)
+            t.entrances.set(k, t.entrances.get(target) ?? new Set())
+          }
+        }
+      }
+    }
+    return t
+  }
+
   function prepare(index: number, meta: ShowSlide, handle?: MetadataHandle): Prepared {
     const have = prepared.get(index)
     if (have && !have.dead) {
       if (handle && !have.handle) have.handle = handle
       else handle?.release()
+      if (have.meta !== meta) {
+        // Another metadata object for the same slide (a re-read): its text timing is the one now scheduled.
+        const tt = textTimingOf(index, meta, have.handle ? (b, t) => have.handle!.attach(b, t) : undefined)
+        if (tt || textTimings.get(have.meta)) {
+          const t = targetsOf(meta, tt)
+          have.hidden = t.hidden
+          have.entrances = t.entrances
+        }
+      }
       have.meta = meta
       return have
     }
     const slide = deps.doc.slides[index]
-    const { animated, colour, hidden, entrances } = timingTargets(meta)
+    const tt = textTimingOf(index, meta, handle ? (b, t) => handle.attach(b, t) : undefined)
+    const { animated, colour, hidden, entrances } = targetsOf(meta, tt)
     // Any colour animation splits its shape into fill, line and text layers (a two-part set forces the split).
     const parts = new Map<TargetKey, ReadonlySet<ColourPart>>([...colour].map(k => [k, new Set<ColourPart>(['fill', 'line'])]))
-    const plan = buildRenderPlan(slide, animated, parts, meta.builds)
+    const plan = buildRenderPlan(slide, animated, parts, meta.builds, tt?.splits)
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
       index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, entrances, images,
@@ -666,7 +721,18 @@ export function createStage(deps: StageDeps): Stage {
       if (!img || p.dead) { releaseDecodedImage(img); held?.release(); return }
       images[i] = img
       if (held) p.imageLeases.push(held)
-    })]).then(() => {})
+    })]).then(() => {
+      // Item geometry (S2-8) needs the real fonts: laid out once they are in, on a charged measuring context.
+      if (!tt || tt.splits.size === 0 || p.dead) return
+      const l = workspace.lease(4, `text-bases:${index}`)
+      if (!l) { sink.add({ code: 'text-build-refused', slideIndex: index, message: 'Text by word or letter: no room to measure the text; the items move as their shape does' }); return }
+      try {
+        const ctx = factory(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D | null
+        if (ctx) for (const [k, g] of textBases(slide, tt.splits, p.base, ctx, resolveFont)) p.base.set(k, g)
+      } finally {
+        l.release()
+      }
+    })
     prepared.set(index, p)
     return p
   }
@@ -693,9 +759,12 @@ export function createStage(deps: StageDeps): Stage {
   function stateOf(p: Prepared, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined): RenderState {
     if (!cursor || !timeline || cursor.mode === 'static') return EMPTY_STATE
     const snapshot = timeline.stateAt(cursor, Math.max(0, slideT))
-    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), sink, slidePx(p))
+    const fan = textTimings.get(p.meta)?.fan
+    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), sink, slidePx(p), fan)
     const state = new Map<TargetKey, TargetState>()
-    for (const [k, v] of raw) state.set(k, relativeTo(v, p.base.get(k)))
+    // Text items without their own geometry share their shape's.
+    const baseOf = (k: TargetKey) => p.base.get(k) ?? (k.includes('/') ? p.base.get(k.slice(0, k.indexOf('/'))) : undefined)
+    for (const [k, v] of raw) state.set(k, relativeTo(v, baseOf(k)))
     if (p.hidden.size) {
       // Hidden until one of its own entrance behaviours has begun (an earlier-listed emphasis does not count).
       const entered = new Set<TargetKey>()
@@ -703,6 +772,8 @@ export function createStage(deps: StageDeps): Stage {
         if (!('spid' in e.node.target)) continue
         const key = targetKey(e.node.target)
         if (p.entrances.get(key)?.has(e.node)) entered.add(key)
+        // A fanned behaviour enters all its items; renderStateAt hides those whose turn has not come.
+        for (const item of fan?.get(e.node)?.items ?? []) if (p.entrances.get(item.key)?.has(e.node)) entered.add(item.key)
       }
       for (const k of p.hidden) if (!entered.has(k)) state.set(k, HIDDEN)
     }
@@ -852,6 +923,11 @@ export function createStage(deps: StageDeps): Stage {
       current = undefined
       timelineOf = undefined
       origin = Number.POSITIVE_INFINITY
+    },
+
+    textTiming(index, meta, charge) {
+      const tt = textTimingOf(index, meta, charge)
+      return tt && tt.fan.size > 0 ? { tree: tt.tree, orderOf: tt.orderOf } : undefined
     },
 
     async enter(model, t, neighbours) {
