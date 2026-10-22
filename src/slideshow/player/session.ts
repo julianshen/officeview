@@ -49,6 +49,9 @@ import { createStage, type Stage, type StageDeps } from './stage'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from './surface'
 import { adoptPresenterWindow, type PresenterWindow } from '../presenter/window'
 import { mountPresenterControls, type PresenterControls } from '../presenter/controls'
+import { openMediaLease } from '../media/lease'
+import { createMediaPlayer, type MediaController, type MediaPlayer } from '../media/player'
+import { createTransitionSound, type TransitionSoundController } from '../media/sounds'
 
 export type ShowInput =
   | { kind: 'next' | 'previous' | 'first' | 'last' | 'exit' | 'black' | 'white' | 'pause' }
@@ -169,6 +172,8 @@ interface Visit {
   timeline?: SlideTimeline
   cursor?: SlideCursor
   advance?: AutoAdvance
+  /** S2-7: the slide's media, following its timeline. */
+  media?: MediaController
   /** Step inputs typed while the slide's metadata loads. */
   queue: Array<'next' | 'previous'>
 }
@@ -237,12 +242,18 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let presenter: SlideShowSession['presenter'] = start.popup === undefined ? 'none' : 'swap'
   let presenterWindow: PresenterWindow | undefined
   let controls: PresenterControls | undefined
+  let player: MediaPlayer | undefined
+  let sounds: TransitionSoundController | undefined
   const listeners = new AbortController()
   const release = () => {
     listeners.abort()
     controls?.dispose()
     presenterWindow?.close()
     stopFrames?.()
+    // Media lets go of its URLs before the leases (and the workspace) go.
+    visit?.media?.leave()
+    sounds?.dispose()
+    player?.dispose()
     visit?.handle?.release()
     stage?.dispose()
     store?.close()
@@ -351,6 +362,9 @@ export async function createSession(start: ShowStart): Promise<SessionController
   const ended = new Promise<void>((resolve) => { resolveEnded = resolve })
 
   const syncClock = () => {
+    // A stopped show clock pauses media too, so a clip's end stays on the slide's timeline (S2-7).
+    player?.setPaused(paused || hiddenDoc)
+    sounds?.setPaused(paused || hiddenDoc)
     if (!clock) return
     if (paused || hiddenDoc) clock.pause()
     else clock.resume()
@@ -394,6 +408,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   /** Shows deck slide `i` (a cut, or a transition once its model is in) and loads its click steps. Resolves when the slide is drawable. */
   function enter(i: number | 'end', at: Visit['at'] = 'initial'): Promise<void> {
+    const left = visit
+    if (left) {
+      // Everything but cross-slide media (numSld) and a looping transition sound stops here (spec 7).
+      left.media?.leave()
+      sounds?.stopAt(left.index)
+    }
     visit?.handle?.release()
     visit = undefined
     stage?.leave()
@@ -435,6 +455,11 @@ export async function createSession(start: ShowStart): Promise<SessionController
       }
       v.meta ??= staticSlide(i)
       v.advance = createAutoAdvance(v.meta, index.settings, v.timeline)
+      if (player) {
+        const media = v.media = player.enter(v.meta, () => Math.max(0, slideTime()))
+        media.onEnd((id, synthetic, t) => mediaEnded(v, id, synthetic, t))
+      }
+      sounds?.start(i)
       v.cursor = at === 'last' ? v.timeline.checkpoint(v.timeline.steps) : v.timeline.initial()
       const neighbours = [previousVisible(order, i), nextVisible(order, i)].filter((n): n is number => n !== undefined)
       return stage!.enter({ index: i, slide: v.meta, timeline: v.timeline, cursor: v.cursor }, clock!.now(), neighbours)
@@ -447,6 +472,14 @@ export async function createSession(start: ShowStart): Promise<SessionController
         q === 'next' ? next() : previous()
       }
     })
+  }
+
+  /** A media node's end, real or synthetic, joins the slide's history (spec 7); never earlier than its last event. */
+  function mediaEnded(v: Visit, id: number, synthetic: boolean, t: number): void {
+    if (visit !== v || exited || !v.cursor || !v.timeline) return
+    const last = v.cursor.mode === 'checkpoint' ? 0 : v.cursor.events[v.cursor.events.length - 1]?.t ?? 0
+    v.cursor = v.timeline.mediaEnd(v.cursor, id, Math.max(t, last), synthetic)
+    updateA11y()
   }
 
   /** The next visible slide, the loop (a kiosk restart counts as one), or the end of the show. */
@@ -570,6 +603,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
       // An automatic advance is a Next (never gated by advClick or kiosk; the show plays on its own).
       next()
     }
+    // Media follows the slide's timeline (S2-7); a checkpoint entry records what has begun without playing it.
+    const m = visit
+    if (m && m.media?.wants && m.cursor && m.timeline && slide === m.index) {
+      const st = slideTime()
+      if (st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
+    }
     const w = visit
     stage.frame(w && slide === w.index ? w.cursor : undefined, clock.now())
     updateA11y()
@@ -651,6 +690,17 @@ export async function createSession(start: ShowStart): Promise<SessionController
       ...(watermark ? { watermark } : {}),
       ...(sessionDeps.backend ? { force: sessionDeps.backend } : {}),
     })
+    // S2-7: one media player per show, on the audience surface only (spec 5.2); leases are charged to the show's workspace.
+    const ws = workspace
+    player = createMediaPlayer({
+      root: surface.root,
+      sink,
+      open: (rec, s) => (handle && win ? openMediaLease(handle, rec, ws, win, s) : Promise.resolve({ refused: 'no-package' })),
+      box: (spid) => stage?.mediaBox?.(spid),
+      relieve: () => sounds?.release() ?? false,
+    })
+    const mp = player
+    sounds = createTransitionSound({ root: surface.root, sink, slide: (i) => (visit?.index === i ? visit.meta : undefined), open: (rec, s) => mp.open(rec, s) })
     cursorHider = createCursorHider(surface.root, sessionDeps.timer(win))
     const on = { signal: listeners.signal }
     const gestures = createGestureState(() => clock!.now())
@@ -694,6 +744,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (exited || !stage) return
       const w = host.clientWidth || win?.innerWidth || 0, h = host.clientHeight || win?.innerHeight || 0
       if (w > 0 && h > 0) stage.resize({ w, h }, win?.devicePixelRatio ?? 1)
+      player?.layout()
     }
     win?.addEventListener('resize', resized, on)
     owner.addEventListener('fullscreenchange', resized, on)

@@ -110,6 +110,12 @@ export interface Stage {
   readonly plan: RenderPlan | undefined
   /** Client px → slide px of the shown slide. */
   toSlide(clientX: number, clientY: number): { x: number; y: number } | undefined
+  /**
+   * Additive (S2-7): shape `spid`'s base box on the shown slide in CSS px
+   * relative to the surface root (letterbox included), for the video
+   * overlay and the "Click to play" button; `undefined` without layout.
+   */
+  mediaBox?(spid: string): { left: number; top: number; width: number; height: number } | undefined
   resize(css: { w: number; h: number }, dpr: number): void
   readonly level: LadderLevel | undefined
   readonly backend: string
@@ -980,6 +986,19 @@ export function createStage(deps: StageDeps): Stage {
       if (!inv) return undefined
       const [x, y] = apply(inv, dx, dy)
       return { x, y }
+    },
+
+    mediaBox(spid) {
+      const p = current
+      const g = p?.base.get(targetKey({ spid }))
+      if (!p || !g) return undefined
+      const r = root.getBoundingClientRect()
+      if (!(r.width > 0 && r.height > 0)) return undefined
+      // Slide px → device px (the viewport) → CSS px of the letterboxed canvas (object-fit: contain), as toSlide inverts.
+      const k = Math.min(r.width / backing.w, r.height / backing.h)
+      const m = viewport(p).matrix
+      const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
+      return { left: ox + (m[0] * g.x + m[4]) * k, top: oy + (m[3] * g.y + m[5]) * k, width: m[0] * g.w * k, height: m[3] * g.h * k }
     },
 
     resize(css, dpr) {
