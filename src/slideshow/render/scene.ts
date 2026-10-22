@@ -34,6 +34,13 @@ export function slideSize(slide: PptxSlide): { w: number; h: number } {
  */
 export const textFilter = new WeakMap<PptxShape, (paragraph: number) => boolean>()
 
+/**
+ * Text clips for planner-made word and letter clones (S2-8): a clone listed
+ * here paints its text only inside this rect (shape-local px, the layout's
+ * coordinates), and its painted bounds are cut to it.
+ */
+export const textClip = new WeakMap<PptxShape, { x: number; y: number; w: number; h: number }>()
+
 const TRANSPARENT = 'rgba(0,0,0,0)'
 const PX_TO_EMU = 914400 / 96
 
@@ -75,9 +82,20 @@ export function sceneOptions(slide: PptxSlide, assets: SceneAssets): ScenePaintO
       const body = shape.textBody
       if (!body) return
       const keep = textFilter.get(shape)
-      if (!keep) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme); return }
-      const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx, resolveFont), slide.theme)
-      paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: { ...layout, lines: layout.lines.filter(line => keep(line.paragraphIndex)) } })
+      const clip = textClip.get(shape)
+      if (clip) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(clip.x, clip.y, clip.w, clip.h)
+        ctx.clip()
+      }
+      try {
+        if (!keep) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme); return }
+        const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx, resolveFont), slide.theme)
+        paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: { ...layout, lines: layout.lines.filter(line => keep(line.paragraphIndex)) } })
+      } finally {
+        if (clip) ctx.restore()
+      }
     },
   }
 }
@@ -160,7 +178,12 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
     }
     const body = shape.textBody
     if (!body || body.paragraphs.length === 0) return
-    if (!measure || (body.direction && body.direction !== 'horz') || body.textWarp) { add(m, 0, 0, w, h); return }
+    const clip = textClip.get(shape)
+    if (!measure || (body.direction && body.direction !== 'horz') || body.textWarp) {
+      if (clip) add(m, Math.max(0, clip.x), Math.max(0, clip.y), Math.min(w, clip.x + clip.w), Math.min(h, clip.y + clip.h))
+      else add(m, 0, 0, w, h)
+      return
+    }
     const keep = textFilter.get(shape)
     const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(measure, resolveFont), slide.theme)
     for (const line of layout.lines) {
@@ -173,7 +196,16 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
         const shadow = sh ? Math.min(Math.abs(sh.offsetX) || 0, 200) + Math.min(Math.abs(sh.offsetY) || 0, 200) + Math.min(Math.max(0, sh.blurPx || 0), 100) * 2 : 0
         slack = Math.max(slack, size / 2 + shadow + Math.min(s.style.textOutline?.widthPx ?? 0, 100))
       }
-      add(m, l - slack, line.y - slack, r + slack, line.y + line.height + slack)
+      let t = line.y - slack, b = line.y + line.height + slack
+      if (clip) {
+        // A word or letter clone paints only inside its clip.
+        l = Math.max(l - slack, clip.x); r = Math.min(r + slack, clip.x + clip.w)
+        t = Math.max(t, clip.y); b = Math.min(b, clip.y + clip.h)
+        if (!(r > l && b > t)) continue
+        add(m, l, t, r, b)
+        continue
+      }
+      add(m, l - slack, t, r + slack, b)
     }
   }
   walk(nodes, [1, 0, 0, 1, 0, 0])
