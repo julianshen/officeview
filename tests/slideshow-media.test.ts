@@ -493,6 +493,13 @@ describe('media supporting rules (S2-7)', () => {
     expect(el.pause).toHaveBeenCalledTimes(1)
     r.player.setPaused(false)
     expect(el.play).toHaveBeenCalledTimes(2)
+    // A resume the browser refuses (a hidden tab made visible, no fresh gesture) is diagnosed and offers Click to play.
+    r.player.setPaused(true)
+    r.playWith.result = () => Promise.reject(new DOMException('no', 'NotAllowedError'))
+    r.player.setPaused(false)
+    await flush()
+    expect(codes(r.sink)).toContain('media-autoplay')
+    expect(r.root.querySelector('button[data-officeview-show-play]')?.textContent).toBe('Click to play')
   })
 
   it('a node that ends by its own timing stops its element; a slide left mid-read releases the late lease', async () => {

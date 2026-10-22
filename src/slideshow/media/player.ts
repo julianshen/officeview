@@ -98,6 +98,9 @@ interface Live {
   lease: MediaLease
   /** Meant to be playing (a paused show clock pauses the element but keeps this). */
   playing: boolean
+  slide: number
+  /** A refused play(): the owning controller's failure path, or a diagnostic once the media is carried past its slide. */
+  onReject?: (e: unknown) => void
 }
 
 interface NodeState {
@@ -183,6 +186,11 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
     if (live.lease.spans > 1) {
       live.lease.leave()
       carried.add(live)
+      live.onReject = (e) => {
+        live.playing = false
+        if ((e as { name?: unknown } | undefined)?.name === 'AbortError') return
+        deps.sink.add({ code: 'media-autoplay', slideIndex: live.slide, effect: live.spid, message: `The browser refused to resume this ${live.kind} (${String((e as { name?: unknown } | undefined)?.name ?? e)}); the show continues` })
+      }
     } else teardown(live, false)
   }
 
@@ -321,7 +329,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
 
     function attach(st: NodeState, el: HTMLMediaElement, lease: MediaLease): void {
       const n = st.node
-      const live: Live = { spid: st.spid, kind: n.kind, el, lease, playing: false }
+      const live: Live = { spid: st.spid, kind: n.kind, el, lease, playing: false, slide: slide.index }
+      live.onReject = (e) => rejected(st, live, e)
       el.setAttribute('data-officeview-show-media', n.kind)
       el.setAttribute('data-officeview-show-media-spid', st.spid)
       el.preload = 'auto'
@@ -582,10 +591,12 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       for (const live of all()) {
         if (!live.playing) continue
         if (p) { live.el.pause(); continue }
+        // A resume without a fresh gesture can be refused: the same failure path as any play() (diagnosed, "Click to play").
+        const refused = (e: unknown) => { if (live.onReject) live.onReject(e); else live.playing = false }
         try {
           const r = live.el.play() as Promise<void> | undefined
-          if (r && typeof r.then === 'function') r.then(undefined, () => { live.playing = false })
-        } catch { live.playing = false }
+          if (r && typeof r.then === 'function') r.then(undefined, refused)
+        } catch (e) { refused(e) }
       }
     },
     drawFrame(spid, ctx, x, y, w, h) {
