@@ -12,7 +12,10 @@
  * Query: viewers=2 (two viewers, buttons #present-a, #present-b and
  * #present-both; the key "b", caught in the capture phase, presents viewer B
  * while A's show covers the page); frame=cross (this page inside a
- * cross-origin iframe without allow="fullscreen").
+ * cross-origin iframe without allow="fullscreen"); deck=nav (five slides,
+ * the third hidden) or deck=loop (three slides, the second hidden, looping)
+ * for the S1-19 navigation spec, which reads `onSlideShowSlideChange` from
+ * the log as `a:change:<slide>:<build>`.
  *
  * No-gesture calls: Playwright's evaluate runs with a user gesture, and an
  * activation reaches ancestors and same-origin descendants only. So the
@@ -28,7 +31,7 @@ import type { OfficeViewerHandle, PresentOptions, SlideShowSession } from '../co
 import { OfficePackage } from '../core/zip'
 import { parsePptx } from '../pptx/parse'
 import type { PptxDocument } from '../pptx/types'
-import { buildPptx } from '../testdata/ooxml-builders'
+import { buildPptx, buildPptxDeck } from '../testdata/ooxml-builders'
 import '../styles/officeview.css'
 
 export interface SlideshowStart {
@@ -68,6 +71,16 @@ if (params.get('frame') === 'cross') {
 }
 
 async function deck(text: string): Promise<PptxDocument> {
+  const kind = params.get('deck')
+  if (kind === 'nav' || kind === 'loop') {
+    const hidden = kind === 'nav' ? 2 : 1
+    const slides = Array.from({ length: kind === 'nav' ? 5 : 3 }, (_, i) => ({
+      hidden: i === hidden,
+      shapes: [{ off: ['914400', '914400'] as [string, string], ext: ['7315200', '1828800'] as [string, string], fill: '336699', paragraphs: [{ runs: [{ text: `${text} ${i + 1}`, sz: '4400' }] }] }],
+    }))
+    const presProps = kind === 'loop' ? '<p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:showPr loop="1"><p:present/></p:showPr></p:presentationPr>' : undefined
+    return parsePptx(await OfficePackage.load(await buildPptxDeck({ slides, presProps })))
+  }
   const bytes = await buildPptx([{ off: ['914400', '914400'], ext: ['7315200', '1828800'], fill: '336699', paragraphs: [{ runs: [{ text, sz: '4400' }] }] }])
   return parsePptx(await OfficePackage.load(bytes))
 }
@@ -109,6 +122,7 @@ async function boot(): Promise<void> {
               onSlideShowStart={() => log.push(`${n}:onStart`)}
               onSlideShowEnd={() => log.push(`${n}:onEnd`)}
               onSlideShowDiagnostic={(d) => log.push(`${n}:diag:${d.code}`)}
+              onSlideShowSlideChange={params.has('deck') ? (i, b) => log.push(`${n}:change:${i}:${b}`) : undefined}
             />
           </div>
         ))}
