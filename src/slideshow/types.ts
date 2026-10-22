@@ -167,8 +167,16 @@ export interface AnimClrBehaviour extends BehaviourBase {
   to?: string
 }
 export interface CmdBehaviour extends BehaviourBase { kind: 'cmd'; cmdType: 'evt' | 'call' | 'verb'; cmd: string }
-export interface AudioBehaviour extends BehaviourBase { kind: 'audio'; isNarration?: boolean }
-export interface VideoBehaviour extends BehaviourBase { kind: 'video'; fullScrn?: boolean }
+/** Additive (S2-7): what `p:cMediaNode` carries for playback. */
+interface MediaNodeFields {
+  /** `numSld`: how many slides the media plays across (cross-slide sound, spec 7). */
+  numSld?: number
+  /** `vol`, 0–1 (the reader converts 1/1000 %). */
+  volume?: number
+  muted?: boolean
+}
+export interface AudioBehaviour extends BehaviourBase, MediaNodeFields { kind: 'audio'; isNarration?: boolean }
+export interface VideoBehaviour extends BehaviourBase, MediaNodeFields { kind: 'video'; fullScrn?: boolean }
 
 export type BehaviourNode =
   | SetBehaviour

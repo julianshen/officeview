@@ -808,7 +808,8 @@ class Run {
       for (const e of this.events) {
         if (e.kind !== 'mediaEnd' || e.nodeId !== ctn.id) continue
         const t = toLocal(frame, e.t)
-        if (t !== undefined && t > b && t < end) end = t
+        // At the begin instant too (S2-7): a refusal found as the node begins is the spec 7 immediate escape.
+        if (t !== undefined && t >= b && t < end) end = t
       }
     }
     return { begin: b, end, d, L, pauses: [], seeks: [], event: inst.event }

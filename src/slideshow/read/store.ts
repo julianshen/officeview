@@ -319,7 +319,7 @@ export function createSlideMetadataStore(args: Args): SlideMetadataStore {
             timing: notesRefused ? { refused: 'notes-limit' } : timing?.timing,
             notes: paragraphs,
             links: readLinks(source.node, rels, handle.slideParts, i, sink),
-            media: readMedia(rels, types?.node, handle.pkg, i, sink),
+            media: readMedia(rels, types?.node, handle.pkg, i, sink, source.node),
             // Builds belong to the timing they build for.
             builds: notesRefused ? [] : timing?.builds ?? [],
           }
