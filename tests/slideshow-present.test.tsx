@@ -462,6 +462,11 @@ describe('OfficeDoc host handle', () => {
     loads[2].resolve({ ...slideshow, runShow } as typeof slideshow)
     await flush()
     expect(starts.map((s) => [s.from, s.presenterView])).toEqual([['beginning', undefined], ['current', undefined], ['beginning', true]])
+    // Ctrl+F5 and Cmd+F5 stay the browser's (hard reload), Shift and Alt included (review M3)
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }, { ctrlKey: true, shiftKey: true }, { metaKey: true, altKey: true }]) {
+      expect(fireEvent.keyDown(m.region(), { key: 'F5', ...mod })).toBe(true)
+    }
+    expect(loads).toHaveLength(3)
     // outside the viewer
     fireEvent.keyDown(document.body, { key: 'F5' })
     expect(loads).toHaveLength(3)

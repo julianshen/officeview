@@ -17,7 +17,7 @@ import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { ManualClock } from '../src/slideshow/clock'
 import type { Stage } from '../src/slideshow/player/stage'
 import * as slideshow from '../src/slideshow'
-import { preparedPlacement, showLoader, startPresent, SlideShowError, type PresentPlatform, type ShowStart, type SlideShowCallbacks } from '../src/components/present'
+import { acquireShowToken, defaultPlatform, preparedPlacement, showLoader, startPresent, SlideShowError, type PresentPlatform, type ShowStart, type SlideShowCallbacks } from '../src/components/present'
 import { buildPptxDeck } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
 import { parsePptx, pptxPackageHandle } from '../src/pptx/parse'
@@ -171,6 +171,19 @@ describe('presenter popup: the synchronous start', () => {
     expect(log.filter((l) => l.startsWith('requestFullscreen'))).toHaveLength(4)
   })
 
+  it('a throwing platform open is a blocked popup: the start goes on and the show token is released at its end (review M4)', async () => {
+    const host = freshHost()
+    const p = platform(log, null)
+    p.open = () => { log.push('open:throws'); throw new Error('no popups here') }
+    const run = startPresent({ doc: PPTX, host, opts: { presenterView: true }, platform: p, generation: 1, callbacks: callbacks(), allow: true, motion: 'auto' })
+    expect(log).toEqual(['open:throws', 'requestFullscreen', 'import'])
+    host.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(await run.then(() => 'resolved', (x: SlideShowError) => x.code)).toBe('cancelled')
+    const token = acquireShowToken(host)
+    expect(token).toBeDefined()
+    token!.release()
+  })
+
   it('the opener unloading during load closes the provisional popup', async () => {
     const host = document.createElement('div')
     document.body.append(host)
@@ -206,6 +219,46 @@ describe('presenter popup: the synchronous start', () => {
     host2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(await run2.then(() => 'resolved', (x: SlideShowError) => x.code)).toBe('cancelled')
     expect(popup2.closed).toBe(true)
+  })
+})
+
+describe('defaultPlatform.screenDetails (review I1)', () => {
+  const nav = navigator as Navigator & { permissions?: Permissions }
+  const win = window as Window & { getScreenDetails?: () => Promise<unknown> }
+  let saved: PropertyDescriptor | undefined
+  beforeEach(() => { saved = Object.getOwnPropertyDescriptor(nav, 'permissions') })
+  afterEach(() => {
+    if (saved) Object.defineProperty(nav, 'permissions', saved)
+    else delete (nav as { permissions?: unknown }).permissions
+    delete win.getScreenDetails
+  })
+  const permissions = (query: () => unknown) => Object.defineProperty(nav, 'permissions', { value: { query }, configurable: true })
+
+  it('resolves undefined, never rejects, where Window Management is missing, unknown, not granted or failing', async () => {
+    Object.defineProperty(nav, 'permissions', { value: undefined, configurable: true })
+    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    // Firefox and Safari: the permission name is not a PermissionName (a synchronous or asynchronous TypeError).
+    permissions(() => { throw new TypeError("'window-management' is not a valid enum value") })
+    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    permissions(() => Promise.reject(new TypeError('unknown permission')))
+    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    permissions(() => Promise.resolve({ state: 'prompt' }))
+    win.getScreenDetails = vi.fn()
+    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    expect(win.getScreenDetails).not.toHaveBeenCalled()
+    // Granted, but the API itself is missing or fails.
+    permissions(() => Promise.resolve({ state: 'granted' }))
+    delete win.getScreenDetails
+    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    win.getScreenDetails = () => Promise.reject(new Error('NotAllowedError'))
+    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+  })
+
+  it('returns the screen details when the permission is already granted', async () => {
+    const details = { screens: [{ availWidth: 1, availHeight: 1 }] }
+    permissions(() => Promise.resolve({ state: 'granted' }))
+    win.getScreenDetails = () => Promise.resolve(details)
+    await expect(defaultPlatform.screenDetails!()).resolves.toBe(details)
   })
 })
 
@@ -305,6 +358,29 @@ describe('presenter popup: the session', () => {
     pdoc.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     expect(r.log).toContain('onEnd')
     expect(popup.closed).toBe(true)
+  })
+
+  it('keys typed or scrolled in the speaker notes stay there, except Esc (review I2)', async () => {
+    const popup = fakePopup()
+    const r = await show(await notesDeck(), popup)
+    const notes = popup.document.querySelector<HTMLElement>('[data-officeview-presenter-notes]')!
+    const key = (target: Element, k: string) => {
+      const e = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })
+      target.dispatchEvent(e)
+      return e.defaultPrevented
+    }
+    for (const k of ['ArrowDown', 'ArrowRight', 'PageDown', ' ', 'Enter', 'n', 'b']) expect(key(notes, k)).toBe(false)
+    // A paragraph inside the notes counts as the notes.
+    expect(key(notes.querySelector('p')!, 'ArrowUp')).toBe(false)
+    await flush()
+    expect(r.s.slideIndex).toBe(0)
+    expect(r.s.state.screen).toBe('slide')
+    // Outside the notes the audience keys still apply.
+    key(popup.document.body, 'ArrowRight')
+    await flush()
+    expect(r.s.slideIndex).toBe(1)
+    key(notes, 'Escape')
+    expect(r.log).toContain('onEnd')
   })
 
   it('a popup that cannot be adopted is closed and the show runs single-screen (best effort)', async () => {
