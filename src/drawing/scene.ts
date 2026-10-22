@@ -59,4 +59,6 @@ export interface SceneNode<Text = unknown, Image extends SceneImage = SceneImage
   /** Set on a picture selected as a chart's fallback: the chart's card, painted if the picture fails to decode. */
   chartFallback?: import('../xlsx/chartModel').XlsxChartModel
   textBody?: Text
+  /** Filled with the page background (PPTX `p:sp@useBgFill`) when the painter is given one (`ScenePaintOptions.backdrop`). */
+  useBgFill?: boolean
 }

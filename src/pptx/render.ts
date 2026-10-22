@@ -12,9 +12,10 @@ import { resolveColor } from '../core/color'
 import { paintTextBody } from './text-paint'
 import { applyTableTextDefaults } from './text-layout'
 export { layoutTextBody, resolveTextFamily } from './text-layout'
-import { paintScene } from '../drawing/scene-paint'
+import { paintScene, type ScenePaintOptions } from '../drawing/scene-paint'
 import type { DrawingFill, DrawingLine, ThemeContext } from '../drawing/style'
 import { paintGeometry } from '../drawing/paint'
+import { RECORD_TEXT, type TextRecordingContext } from '../core/text-recording'
 
 export interface SlideMetrics {
   widthPx: number
@@ -43,8 +44,6 @@ export function renderSlide(
     const m = metrics ?? { widthPx: Math.round(emuToPx(slide.widthEmu)), heightPx: Math.round(emuToPx(slide.heightEmu)) }
     ctx.fillStyle = slide.background ?? '#ffffff'
     ctx.fillRect(0, 0, m.widthPx, m.heightPx)
-    // after the fill so it is not erased, before the shapes so it sits under them
-    if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx, background: slide.background }, watermark)
     const missingImage = (shape: PptxShape): void => {
       const message = 'Embedded image could not be decoded; static representation is unavailable'
       if (shape.diagnostics?.some(issue => issue.kind === 'missing-image' && issue.message === message)) return
@@ -54,8 +53,9 @@ export function renderSlide(
       slide.diagnostics ??= []
       slide.diagnostics.push(issue)
     }
-    paintScene(slide.shapes, ctx, {
+    const options: ScenePaintOptions<PptxShape> = {
       images, missingImage,
+      ...(slide.backdrop ? { backdrop: [slide.backdrop], root: ctx.getTransform() } : {}),
       paintContent(shape, context, w, h) {
         if (shape.content) paintDrawingContent(shape.content, context, w, h, {
           assets: contentAssets,
@@ -76,7 +76,13 @@ export function renderSlide(
       paintText(shape, context, w, h) {
         if (shape.textBody) paintTextBody(shape.textBody, context, 0, 0, w, h, resolveFont, slide.theme)
       },
-    })
+    }
+    // Inherited background and master/layout artwork (set by the lazy enrichment). The text index's recording
+    // context skips it: that text belongs to the master, not the slide (search and copy cover slide content).
+    if (!(ctx as TextRecordingContext)[RECORD_TEXT]) paintScene(slide.underlay ?? [], ctx, options)
+    // above inherited art, below the slide's own shapes
+    if (watermark) paintWatermark(ctx, { widthPx: m.widthPx, heightPx: m.heightPx, background: slide.background }, watermark)
+    paintScene(slide.shapes, ctx, options)
   } finally { ctx.restore() }
 }
 
