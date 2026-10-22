@@ -670,10 +670,13 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (e.target !== host && (e.target as Element | null)?.closest?.('button, input, textarea, select')) return
       keyInput(e)
     }, on)
-    /** Keys in the presenter window (spec 5.2): Esc always exits; a focused button keeps Enter and Space, a text control keeps its keys. */
+    /**
+     * Keys in the presenter window (spec 4.3, 5.2): Esc always exits; a text control, an editable region
+     * or the scrolling speaker notes keep every other key; a focused button keeps Enter and Space.
+     */
     const presenterKey = (e: KeyboardEvent) => {
       const t = e.target as Element | null
-      if (e.key !== 'Escape' && (t?.closest?.('input, textarea, select, [contenteditable]') || ((e.key === 'Enter' || e.key === ' ') && t?.closest?.('button')))) return
+      if (e.key !== 'Escape' && (t?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-officeview-presenter-notes]') || ((e.key === 'Enter' || e.key === ' ') && t?.closest?.('button')))) return
       keyInput(e)
     }
     const gesture = (e: Event) => {

@@ -597,7 +597,8 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     // F5, Shift+F5 from the current slide, Alt+F5 Presenter View (spec 4.1).
-    if (e.key == 'F5' && presentShortcuts && allowPresent && 'slides' in document) {
+    // Ctrl/Cmd+F5 stays the browser's hard reload.
+    if (e.key == 'F5' && presentShortcuts && allowPresent && !(e.ctrlKey || e.metaKey) && 'slides' in document) {
       e.preventDefault()
       return onPresent(e.shiftKey ? 'current' : 'beginning', e.altKey || undefined)
     }

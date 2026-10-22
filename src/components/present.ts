@@ -69,13 +69,21 @@ export interface PresentPlatform {
 }
 
 // async: a missing or throwing requestFullscreen becomes a rejection (in-window).
+// screenDetails never rejects: a missing API or permission name (Firefox, Safari)
+// resolves undefined. It reads the global navigator/window on purpose: the
+// signature takes no window, and its only caller is the opener's own toolbar
+// preload, in this realm. A host in another realm injects its own platform.
 export const defaultPlatform: PresentPlatform = {
   hasActivation: (w) => (w.navigator as { userActivation?: { isActive: boolean } }).userActivation?.isActive,
   requestFullscreen: async (el, o) => el.requestFullscreen(o),
   exitFullscreen: (d) => d.exitFullscreen(),
   fullscreenElement: (d) => d.fullscreenElement,
   open: (w, u, f) => w.open(u, '_blank', f),
-  screenDetails: async () => (await navigator.permissions.query({ name: 'window-management' as PermissionName })).state == 'granted' ? (window as unknown as { getScreenDetails(): Promise<ScreenDetails> }).getScreenDetails() : undefined,
+  screenDetails: async () => {
+    try {
+      return (await navigator.permissions.query({ name: 'window-management' as PermissionName })).state == 'granted' ? await (window as unknown as { getScreenDetails(): Promise<ScreenDetails> }).getScreenDetails() : undefined
+    } catch {}
+  },
 }
 
 /**
@@ -188,7 +196,11 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   // 'auto' wants it only with a prepared audience screen (window-management already
   // granted), so a plain start never spends its activation on a popup (controller ruling).
   const pv = opts.presenterView ?? 'auto', placed = preparedPlacement.get(d), screen = placed?.audienceScreen
-  const popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
+  // A throwing open is a blocked popup, so the token is never held by a dead start.
+  let popup: Window | null | undefined = null
+  try {
+    popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
+  } catch {}
   let done: unknown, handed: unknown, entered: unknown, pending: unknown = 1
   const ac = new AbortController(), signal = ac.signal
   const end = () => ac.abort()
@@ -208,7 +220,7 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   }
   req.signal?.addEventListener('abort', end, { signal })
   // The opener unloading (even during load) takes the provisional popup with it.
-  popup && w?.addEventListener('pagehide', () => popup.close(), { signal })
+  popup && w?.addEventListener('pagehide', () => popup!.close(), { signal })
   d.addEventListener('fullscreenchange', () => {
     const el = P.fullscreenElement(d)
     el ? token.owns(el) && (entered = 1) : entered && end()
