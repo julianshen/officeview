@@ -310,7 +310,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   const present = (opts?: PresentOptions) => {
     setNotice('')
     const run = startPresent({
-      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, signal: epoch.current!.signal,
+      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, watermark, signal: epoch.current!.signal,
       callbacks: { onStart: onSlideShowStart, onEnd: onSlideShowEnd, onSlideChange: onSlideShowSlideChange, onDiagnostic: onSlideShowDiagnostic },
     })
     run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
