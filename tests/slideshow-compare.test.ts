@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CATALOGUE } from '../src/slideshow/catalogue'
 import {
   CAPTURE_PCTS, TOLERANCE_APPROX, TOLERANCE_EXACT, compareFrames, frameKey, parseProvenance, parseRefName,
-  readCompareRecords, readRefs, refFileName, rowStatus, writeCompareRecord, type CompareRecord,
+  readCompareRecords, readRefs, refFileName, rowStatus, runCompareCli, writeCompareRecord, type CompareRecord,
 } from '../scripts/slideshow-compare'
 import { BEHAVIOURAL_QUESTIONS } from '../scripts/slideshow-capture-questions'
 
@@ -224,4 +224,34 @@ describe('capture checklist', () => {
       expect(checklist.slice(start, checklist.indexOf(PLAN_END(deck))).trim(), deck).toBe(renderPlan(plan).trim())
     }
   })
+})
+
+describe.skipIf(!existsSync('corpus/lo-tdf146223.pptx'))('compare CLI (S1-22)', () => {
+  it('renders the checklist frames through the engine, compares the ones with references and writes records', async () => {
+    // tdf146223: two 4:3 slides with picture backgrounds, each fading in (spd slow, 1000 ms); slide 1 fades from black.
+    const dir = tempDir()
+    const out = join(dir, 'ours'), refs = join(dir, 'refs'), records = join(dir, 'records.json')
+    const args = ['tdf146223', '--refs', refs, '--records', records]
+    // No references yet: every checklist frame is rendered (and saved with --out) and listed as unverified; exit 0.
+    expect(await runCompareCli([...args, '--out', out])).toBe(0)
+    const ours = (f: string) => readFileSync(join(out, 'tdf146223', f))
+    for (const slide of [1, 2]) for (const pct of [0, 25, 50, 75, 100]) expect(ours(`${slide}-0-${pct}.png`).subarray(1, 4).toString()).toBe('PNG')
+    expect(ours('1-0-50.png').equals(ours('1-0-100.png'))).toBe(false)
+    // Our own frames as references (provenance at the rendered 1280 × 960) pass with the row's tolerance.
+    deckDir(refs, 'tdf146223', [], { ...PROVENANCE, resolution: [1280, 960] })
+    writeFileSync(join(refs, 'tdf146223', '1-0-50.png'), ours('1-0-50.png'))
+    writeFileSync(join(refs, 'tdf146223', '2-0-100.png'), ours('2-0-100.png'))
+    expect(await runCompareCli([...args, '--write'])).toBe(0)
+    expect(readCompareRecords(records).map(r => [r.row, r.slide, r.step, r.pct, r.pass])).toEqual([
+      ['transition:p:fade', 1, 0, 50, true], ['transition:p:fade', 2, 0, 100, true],
+    ])
+    // A reference that differs (slide 1's settled frame given for its 50 % frame) fails: exit 1, and the record says so.
+    writeFileSync(join(refs, 'tdf146223', '1-0-50.png'), ours('1-0-100.png'))
+    expect(await runCompareCli([...args, '--write', '--rows', 'transition:p:fade'])).toBe(1)
+    expect(readCompareRecords(records).find(r => r.slide === 1)?.pass).toBe(false)
+    expect(readCompareRecords(records)).toHaveLength(2)
+    // Usage errors exit 2.
+    expect(await runCompareCli([])).toBe(2)
+    expect(await runCompareCli(['tdf146223', '--bogus'])).toBe(2)
+  }, 60_000)
 })

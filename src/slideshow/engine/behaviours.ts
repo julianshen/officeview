@@ -4,7 +4,9 @@
 //
 // Reading rules settled here (documented in the task report):
 //  - Formula env values are fractions: ppt_x/y/w/h are fractions of the slide
-//    (ECMA-376 §19.5.4), ppt_r is degrees, `$` = the behaviour's eased local
+//    (ECMA-376 §19.5.4), ppt_x/ppt_y the target's CENTRE (S1-22: as
+//    LibreOffice reads X/Y, so "from (0-#ppt_w/2)" starts just off the left
+//    edge and "1+#ppt_h/2" just below the slide), ppt_r is degrees, `$` = the behaviour's eased local
 //    progress. Raw anim numbers (from/by/to, tav values, set `to`) are
 //    fractions; animRot carries degrees, animScale factors, animMotion
 //    slide-fraction offsets.
@@ -317,8 +319,12 @@ function evalBehaviour(
       }
       return reads
     }
+    case 'audio': case 'video': case 'cmd':
+      // Media is Stage 2 (spec 13): a silent timed no-op; a video keeps showing its poster picture.
+      unsupported(node, node.kind, sink, 'media-stand-in')
+      return fail()
     default:
-      unsupported(node, node.kind, sink)
+      unsupported(node, (node as BehaviourNode).kind, sink)
       return fail()
   }
 }
@@ -473,6 +479,7 @@ function effectState(node: AnimEffectBehaviour, progress: number, sink: Diagnost
     if (!Number.isInteger(spokes) || spokes < 1 || spokes > 64) return ramp(true)
     return { mask: { kind: 'wheel', progress: p, params: { spokes } } }
   }
+  if (name === 'blinds') return { mask: { kind: 'blinds', progress: p, params: { orient: /vert/i.test(arg) ? 'vert' : 'horz' } } }
   if (name === 'barn') return { mask: { kind: 'barn', progress: p, params: { orient: /vert/i.test(arg) ? 'vert' : 'horz', dir: /^in/i.test(arg) ? 'in' : 'out' } } }
   if (name === 'randombar') return { mask: { kind: 'randomBar', progress: p, params: { orient: /vert/i.test(arg) ? 'vert' : 'horz' } } }
   if (name === 'strips') {
@@ -540,15 +547,21 @@ function unsupported(node: BehaviourNode, name: string, sink: DiagnosticSink, co
   if (!set) warned.set(node, set = new Set())
   if (!set.has(name)) {
     set.add(name)
-    const label = code === 'behaviour-unsupported' ? `Attr ${name} has no render mapping; dropped` : `Effect filter ${JSON.stringify(name)} is not in the mask catalogue; rendering as a fade`
+    const label = code === 'behaviour-unsupported' ? `Attr ${name} has no render mapping; dropped`
+      : code === 'media-stand-in' ? `Media ${name} is pending Stage 2: a silent timed no-op${name === 'video' ? ' (the poster picture shows)' : ''}`
+        : `Effect filter ${JSON.stringify(name)} is not in the mask catalogue; rendering as a fade`
     sink.add({ code, effect: `behaviour ${node.ctn.id}`, message: label })
   }
 }
 
+/** The target's centre as a fraction of the slide: what ppt_x / ppt_y read and write. */
+const centreX = (geo: BaseGeometry, slide: Slide) => (geo.x + geo.w / 2) / slide.w
+const centreY = (geo: BaseGeometry, slide: Slide) => (geo.y + geo.h / 2) / slide.h
+
 function trackBase(name: string, geo: BaseGeometry, slide: Slide): number {
   switch (name) {
-    case 'ppt_x': return geo.x / slide.w
-    case 'ppt_y': return geo.y / slide.h
+    case 'ppt_x': return centreX(geo, slide)
+    case 'ppt_y': return centreY(geo, slide)
     case 'ppt_w': return geo.w / slide.w
     case 'ppt_h': return geo.h / slide.h
     case 'angle': return geo.rot
@@ -561,15 +574,15 @@ function trackBase(name: string, geo: BaseGeometry, slide: Slide): number {
 function envOf(progress: number, geo: BaseGeometry, slide: Slide, rng: Rng): FormulaEnv {
   return {
     $: progress,
-    ppt_x: geo.x / slide.w,
-    ppt_y: geo.y / slide.h,
+    ppt_x: centreX(geo, slide),
+    ppt_y: centreY(geo, slide),
     ppt_w: geo.w / slide.w,
     ppt_h: geo.h / slide.h,
     ppt_r: geo.rot,
     current: (name: string) => {
       switch (name) {
-        case 'ppt_x': case 'x': return geo.x / slide.w
-        case 'ppt_y': case 'y': return geo.y / slide.h
+        case 'ppt_x': case 'x': return centreX(geo, slide)
+        case 'ppt_y': case 'y': return centreY(geo, slide)
         case 'ppt_w': case 'w': return geo.w / slide.w
         case 'ppt_h': case 'h': return geo.h / slide.h
         case 'ppt_r': case 'r': return geo.rot
@@ -697,16 +710,16 @@ function finalize(acc: Accumulated, geo: BaseGeometry | undefined, slide: Slide)
   const scaledH = acc.tracks.get('ppt_h')?.set === true
   const factorX = acc.tracks.get('scale:x')?.set === true ? Math.max(1e-6, acc.tracks.get('scale:x')!.own) : 1
   const factorY = acc.tracks.get('scale:y')?.set === true ? Math.max(1e-6, acc.tracks.get('scale:y')!.own) : 1
-  const x = acc.tracks.get('ppt_x')?.own ?? g.x / slide.w
-  const y = acc.tracks.get('ppt_y')?.own ?? g.y / slide.h
+  const x = acc.tracks.get('ppt_x')?.own ?? centreX(g, slide)
+  const y = acc.tracks.get('ppt_y')?.own ?? centreY(g, slide)
   const w = acc.tracks.get('ppt_w')?.own ?? g.w / slide.w
   const h = acc.tracks.get('ppt_h')?.own ?? g.h / slide.h
   const sx = (scaledW ? Math.max(1e-6, (w * slide.w) / Math.max(1e-6, g.w)) : 1) * factorX
   const sy = (scaledH ? Math.max(1e-6, (h * slide.h) / Math.max(1e-6, g.h)) : 1) * factorY
   const angle = acc.tracks.get('angle')?.own ?? g.rot
-  const dx = movedX ? x * slide.w - g.x : 0
-  const dy = movedY ? y * slide.h - g.y : 0
   const cx = g.x + g.w / 2, cy = g.y + g.h / 2
+  const dx = movedX ? x * slide.w - cx : 0
+  const dy = movedY ? y * slide.h - cy : 0
   const scale: Affine = [sx, 0, 0, sy, cx * (1 - sx), cy * (1 - sy)]
   const a = (angle * Math.PI) / 180
   const c = Math.cos(a), s = Math.sin(a)

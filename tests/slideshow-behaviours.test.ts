@@ -68,6 +68,8 @@ const SLIDE = { w: 960, h: 720 }
 const rng: Rng = () => 0.5
 const geo = (over: Partial<BaseGeometry> = {}): BaseGeometry => ({ x: 0, y: 108, w: 48, h: 36, rot: 0, ...over })
 const bases = (g: BaseGeometry, ref: TargetRef = T2) => new Map([[targetKey(ref), g]])
+/** ppt_x / ppt_y are the target's centre (S1-22): an absolute ppt_x value v puts the centre at v·W, v·W − (x + w/2) from the base. */
+const HALF_W = geo().w / 2
 
 /** Runs a hand-built tree to time `at` and renders the state of T2. */
 function run(children: TimeNode[], at: number, opts: {
@@ -227,10 +229,10 @@ describe('behaviour evaluation', () => {
   it('accumulate=always with repeat 3 holds the accumulated value after the end', () => {
     const { base: frozenAlways } = run([par(20, [bhv(11, 'anim', { target: T2, attrNames: ['ppt_x'], calcmode: 'lin', keys: [k(0, '0'), k(1, '0.25')], accumulate: 'always' }, { durMs: 1000, repeatCount: 3, fill: 'hold' })], { durMs: 3000, fill: 'hold' })], 3000)
     // Three iterations of +0.25 of one slide width each.
-    expect(frozenAlways?.motion?.dx).toBeCloseTo(0.75 * SLIDE.w)
+    expect(frozenAlways?.motion?.dx).toBeCloseTo(0.75 * SLIDE.w - HALF_W)
     // Without accumulation the frozen value is the single-iteration end.
     const { base: frozenOnce } = run([par(20, [bhv(11, 'anim', { target: T2, attrNames: ['ppt_x'], calcmode: 'lin', keys: [k(0, '0'), k(1, '0.25')] }, { durMs: 1000, repeatCount: 3, fill: 'hold' })], { durMs: 3000, fill: 'hold' })], 3000)
-    expect(frozenOnce?.motion?.dx).toBeCloseTo(0.25 * SLIDE.w)
+    expect(frozenOnce?.motion?.dx).toBeCloseTo(0.25 * SLIDE.w - HALF_W)
   })
 
   it('a preset with missing behaviours is rebuilt and diagnosed approximate', () => {
@@ -397,7 +399,7 @@ describe('S1-11 review fixes (round 1)', () => {
     expect(f?.motion?.dy).toBeCloseTo(0.5 * SLIDE.h) // between 0 and 1 slide heights
     // from/to with no tavLst.
     const ft = bhv(11, 'anim', { attrNames: ['ppt_x'], keys: [], from: '0', to: '0.5' }, { durMs: 1000, fill: 'hold' })
-    expect(run([par(20, [ft], { durMs: 1000, fill: 'hold' })], 500).base?.motion?.dx).toBeCloseTo(0.25 * SLIDE.w)
+    expect(run([par(20, [ft], { durMs: 1000, fill: 'hold' })], 500).base?.motion?.dx).toBeCloseTo(0.25 * SLIDE.w - HALF_W)
     // by-only is relative to the underlying value: base x = 96 px (0.1) plus 0.25 * 0.5.
     const by = bhv(11, 'anim', { attrNames: ['ppt_x'], keys: [], by: '0.25' }, { durMs: 1000, fill: 'hold' })
     expect(run([par(20, [by], { durMs: 1000, fill: 'hold' })], 500, { basis: geo({ x: 96 }) }).base?.motion?.dx).toBeCloseTo(0.125 * SLIDE.w)
@@ -413,7 +415,16 @@ describe('S1-11 review fixes (round 1)', () => {
     const motion = bhv(11, 'animMotion', { from: { x: 0, y: 0 }, to: { x: 0.5, y: 0 } as Point }, { durMs: 1000, fill: 'hold' })
     const shift = bhv(12, 'set', { attrNames: ['ppt_x'], to: '0.1' }, { durMs: 1000, fill: 'hold' })
     const s = run([par(20, [motion, shift], { durMs: 1000, fill: 'hold' })], 1000).base
-    expect(s?.motion?.dx).toBeCloseTo(0.5 * SLIDE.w + 0.1 * SLIDE.w)
+    expect(s?.motion?.dx).toBeCloseTo(0.5 * SLIDE.w + 0.1 * SLIDE.w - HALF_W)
+  })
+
+  it('S1-22: the blinds filter (tdf93868 entr 3) draws the blinds mask in its orientation, not a fade', () => {
+    const blinds = (arg: string) => run([par(20, [bhv(11, 'animEffect', { filter: `blinds(${arg})` }, { durMs: 1000, fill: 'hold' })], { durMs: 1000, fill: 'hold' })], 500)
+    const h = blinds('horizontal')
+    expect(h.base?.mask).toEqual({ kind: 'blinds', progress: 0.5, params: { orient: 'horz' } })
+    expect(h.base?.opacity).toBe(1)
+    expect(h.sink.list().filter(d => d.code === 'anim-effect-unknown-filter')).toEqual([])
+    expect(blinds('vertical').base?.mask).toEqual({ kind: 'blinds', progress: 0.5, params: { orient: 'vert' } })
   })
 
   it('bounds: a wheel spoke count beyond the mask limit refuses the mask and diagnoses, never clamps silently', () => {

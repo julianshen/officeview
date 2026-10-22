@@ -37,7 +37,7 @@ import { shapeResolver } from '../read/resolve'
 import { createSlideMetadataStore } from '../read/store'
 import { readSlideTiming } from '../read/timing'
 import { diagnoseInheritedTransition } from '../read/transition'
-import type { DiagnosticSink, LinkSpec, MetadataHandle, ShowClock, ShowIndex, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../types'
+import type { DiagnosticSink, LinkSpec, MetadataHandle, RenderState, ShowClock, ShowIndex, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../types'
 import { admitShow, createSlideShowWorkspace, type SlideShowProfile } from '../workspace'
 import { createShowA11y, showTargets, slideTitle, visibleText, type ShowA11y, type ShowTarget } from './a11y'
 import { createCursorHider, type CursorHider, type CursorTimer } from './cursor'
@@ -365,14 +365,15 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   /** The visible text list and the trigger/link buttons for what is on screen now. */
   let a11yKey = ''
-  function updateA11y(force = false): void {
+  function updateA11y(force = false, drawn?: RenderState): void {
     if (!a11y || !stage) return
     const v = visit
     if (slide === 'end' || !v || !v.cursor || screen !== 'slide') {
       if (force || a11yKey !== '') { a11yKey = ''; a11y.setText([]); a11y.setTargets([]) }
       return
     }
-    const state = stage.stateAt(v.cursor, clock!.now())
+    // A frame passes the state it just drew for this cursor (S1-22: one state per frame); other callers compute it.
+    const state = drawn ?? stage.stateAt(v.cursor, clock!.now())
     let key = `${v.index}:${v.cursor.step}:`
     for (const [k, s] of state) if (!s.visible || !(s.opacity > 0)) key += `${k},`
     if (!force && key === a11yKey) return
@@ -561,8 +562,9 @@ export async function createSession(start: ShowStart): Promise<SessionController
       next()
     }
     const w = visit
-    stage.frame(w && slide === w.index ? w.cursor : undefined, clock.now())
-    updateA11y()
+    const cursor = w && slide === w.index ? w.cursor : undefined
+    const drawn = stage.frame(cursor, clock.now())
+    updateA11y(false, cursor ? drawn : undefined)
   }
 
   /** Audience input, in the spec 4.3 precedence: Esc, then kiosk, the number buffer, black/white resume, the table. */
