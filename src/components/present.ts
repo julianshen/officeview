@@ -10,6 +10,7 @@
 import type { OfficeDocSource } from './OfficeDoc'
 import type { PptxDocument, PptxPackageHandle } from '../pptx/types'
 import type { SlideShowDiagnostic } from '../slideshow/types'
+import type { WatermarkOptions } from '../core/watermark'
 import { pptxPackageHandle } from '../pptx/parse'
 
 export type { SlideShowDiagnostic }
@@ -122,6 +123,7 @@ export interface ShowStart {
   from: 'beginning' | 'current' | number
   presenterView?: boolean | 'auto'
   motion: SlideShowMotion
+  watermark?: WatermarkOptions
   callbacks: SlideShowCallbacks
   /** Aborted when the show must end: Esc, browser full-screen exit, unmount, document change, allowPresent=false. */
   signal: AbortSignal
@@ -142,6 +144,7 @@ export interface PresentRequest {
   callbacks: Partial<SlideShowCallbacks>
   allow: boolean
   motion: SlideShowMotion
+  watermark?: WatermarkOptions
   /** The viewer's document epoch: aborting it cancels the start or ends the show. */
   signal?: AbortSignal
 }
@@ -198,7 +201,7 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
       if (signal.aborted) return
       handed = 1
       return m.runShow({
-        ...req, ...opts, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), token, fullscreen, retryFullscreen, from, signal, isCurrent: () => !signal.aborted, cleanup,
+        ...req, ...opts, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), token, fullscreen, retryFullscreen, from, signal, cleanup,
         callbacks: { ...m.viewerCallbacks(host, back), ...req.callbacks },
       })
     }),
