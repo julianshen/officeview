@@ -236,7 +236,11 @@ export interface PaintOptions {
   chartClock?: import('../charts/paintables').ChartClock
   /** @internal */
   chartDeadlineMs?: number
+  /** @internal The slide appearance chunk's loader (tests inject a failure). */
+  __appearanceLoader?: () => Promise<{ enrichSlideAppearance: (doc: PptxDocument) => Promise<void> }>
 }
+/** The lazy slide appearance enrichment (slideshow spec 8): backgrounds and master/layout artwork. */
+const loadAppearance = () => import('../pptx/appearance')
 
 /** Byte equality for shared-asset decode reuse (length pre-checked by callers). */
 function bytesEqual(a: Uint8Array | undefined, b: Uint8Array | undefined): boolean {
@@ -421,17 +425,22 @@ export function getPaintables(
       } catch (error) { releaseDecoded(decoded); metadata?.release(); charts?.release(); lease.dispose(); throw error }
     })
   }
-  return acquireFonts(doc, options?.registerFont).then(async lease => {
+  // A failed appearance chunk leaves the pre-Stage-0 appearance, diagnosed, never a failed paint.
+  return (options?.__appearanceLoader ?? loadAppearance)().then(m => m.enrichSlideAppearance(doc)).catch(() => {
+    doc.diagnostics ??= []
+    if (!doc.diagnostics.some(d => d.kind === 'appearance-unavailable')) doc.diagnostics.push({ kind: 'appearance-unavailable', message: 'Slide backgrounds and master artwork could not be loaded; slides paint without them' })
+  }).then(() => acquireFonts(doc, options?.registerFont)).then(async lease => {
     let decoded: Array<CanvasImageSource | undefined> = []
     let charts: ChartReceiverLease | undefined
     let metadata: ChartPaintables | undefined
     try {
       const sm = slideMetrics(doc)
-      const cached = collectCachedPictures(doc.slides.flatMap(slide => slide.shapes))
+      const scenes = doc.slides.flatMap(slide => [...(slide.underlay ?? []), ...slide.shapes])
+      const cached = collectCachedPictures(scenes)
       charts = await ensureChartEngine(doc.slides.flatMap(slide => slide.shapes), chartReceiver(doc, options))
       decoded = await decodeImageAssets([...doc.images, ...cached], options?.decodeImage)
       const decodedByObject = new Map(cached.map((image, index) => [image, decoded[doc.images.length + index]]))
-      recordChartFallbacks([doc.drawingCoverage], failedSceneFallbacks(doc.slides.flatMap(slide => slide.shapes), decoded))
+      recordChartFallbacks([doc.drawingCoverage], failedSceneFallbacks(scenes, decoded))
       metadata = await chartMetadata(charts, sceneSource(doc.slides.map(slide => slide.shapes), unit => sm.widthPx / (doc.slides[unit].widthEmu || 1)), options)
       return withLease(doc.slides.map((slide, index) => ({
         spec: { widthPx: sm.widthPx, heightPx: sm.heightPx },

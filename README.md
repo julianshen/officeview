@@ -616,13 +616,40 @@ Two deliberate choices:
 Like copy/print prevention this is a deterrent, not DRM: it marks a page, it does
 not protect a secret inside it.
 
+### Slide appearance
+
+PowerPoint slide backgrounds (solid, gradient, pattern, picture and theme
+`bgRef`, inherited slide → layout → master) and the master's and layout's
+non-placeholder artwork (logos, bands, rules) are attached by a lazily loaded
+enrichment step. `<OfficeFile>`, `<OfficeDoc>`, print and the worker run it
+for you before painting.
+
+**Hosts that call `renderSlide` directly run `enrichSlideAppearance` first.**
+Without it the slides paint as before, with only the solid background colour
+and no master or layout artwork:
+
+```ts
+import { parsePptx, enrichSlideAppearance, renderSlide } from 'officeview'
+
+const doc = await parsePptx(pkg)
+await enrichSlideAppearance(doc)   // loads its code on demand; runs once per document
+// enrichment adds background and artwork pictures to doc.images, so decode them after this
+renderSlide(doc.slides[0], ctx, metrics, images)
+```
+
+`enrichSlideAppearance` needs the document `parsePptx` returned. A cloned or
+deserialised document (for example one posted from a worker) has no package
+handle, so it paints as before and records a `no-package` diagnostic in
+`doc.diagnostics`. Known limits are listed in
+[`docs/validation/slideshow.md`](docs/validation/slideshow.md).
+
 ## Current coverage
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
 
 **Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out.
 
-**PowerPoint (.pptx)** — slides, shapes (rect/roundRect/ellipse) with fills, outlines and rotation, text bodies (runs with color/bold/italic/typeface, alignment, insets, vertical anchor, wrapping), embedded pictures with `a:srcRect` cropping, and tables (`a:tbl` grid, `gridSpan`/`rowSpan`/merges, cell fills, banding and first-row styling resolved from `tableStyles.xml`).
+**PowerPoint (.pptx)** — slides, shapes (rect/roundRect/ellipse) with fills, outlines and rotation, text bodies (runs with color/bold/italic/typeface, alignment, insets, vertical anchor, wrapping), embedded pictures with `a:srcRect` cropping, and tables (`a:tbl` grid, `gridSpan`/`rowSpan`/merges, cell fills, banding and first-row styling resolved from `tableStyles.xml`). Slide backgrounds (solid, gradient, pattern, picture and theme `bgRef`, inherited slide → layout → master) and the master's and layout's non-placeholder artwork (logos, bands, honouring `showMasterSp`) are attached by a lazily loaded enrichment step that `getPaintables` (and so `<OfficeDoc>`, print and the worker) runs before painting. A host that calls the low-level `renderSlide` directly sees the slides without them unless it first awaits `enrichSlideAppearance(doc)`, which is exported for that purpose and loads its code on demand.
 
 **Writer (.odt)** — paragraphs and runs (bold/italic/underline/strike/size/color/background), alignment, indents, spacing, line spacing, headings with outline levels and outline numbering, lists (bullets, decimal/alpha/roman with `display-levels`, continue/start control) with hanging indents, tables (spans, covered cells, shading, borders, per-row heights, `vertical-align`, repeating header rows), inline and floating/anchored images (wrap modes, `behindDoc`, z-order), page layouts and master pages with headers/footers, and live page-number/page-count fields. Rendered through the same layout engine as Word, so search, selection and zoom work unchanged. Known gaps: text boxes and vector shapes, change tracking and annotations (accepted/ignored), multi-column text, nested tables, and per-cell padding beyond the table default.
 
@@ -773,6 +800,10 @@ bun scripts/golden.ts compare <file.docx> --name my-doc
 bun scripts/golden-corpus.ts record                          # real corpus files
 bun scripts/golden-corpus.ts compare
 ```
+
+The slideshow corpus decks (`lo-*.pptx`) are covered by `tests/golden-appearance.test.ts` instead, with goldens in
+`tests/goldens/appearance/` (run it with `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden-appearance.test.ts`;
+delete a PNG to re-record it).
 
 Goldens depend on the host's font rasterizer, so they are deterministic per machine.
 

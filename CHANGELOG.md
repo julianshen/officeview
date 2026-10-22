@@ -75,6 +75,19 @@ print. Targets 0.5.0 (the version in package.json).
   (pinned to `14.4.0`). Both load only in lazy chunks; the eager bundle does not
   grow. Because the pin is exact, a host that depends on a different `motion`
   version ships two copies.
+- **PowerPoint slide backgrounds and master/layout artwork.** Slides now show
+  their designed background: solid, gradient, pattern, picture or theme
+  background style (`bgRef`), inherited from the slide, then its layout, then
+  its master. They also show the master's and layout's non-placeholder artwork
+  (logos, bands, rules and pictures), honouring `showMasterSp`. Shapes marked
+  "use slide background fill" show the slide's resolved background. This works
+  in the viewer, in print and in the worker. The code loads lazily, the first
+  time a PowerPoint document is painted, so the eager bundle does not grow. Hosts that call `renderSlide`
+  directly use the new `enrichSlideAppearance(doc)` export first (see the
+  README's "Slide appearance"). Limits: tiled picture backgrounds are
+  stretched, picture effects are not applied, charts and diagrams on a master
+  show as cards, and master and layout text is painted but cannot be searched
+  or copied.
 
 ### Changed
 
