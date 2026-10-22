@@ -208,6 +208,15 @@ test.describe('WebGL2 ↔ Canvas 2D parity', () => {
       expect(results.filter(r => !r.ok).map(r => `${r.name} (meanAbs ${r.meanAbs.toFixed(4)}, rowMax ${r.rowMax.toFixed(4)}, ${r.diagnostics.join(' | ')})`)).toEqual([])
     })
   }
+  // S1-15: every 2-D catalogue row through transitionDraw, at the row's tolerance.
+  test('every 2-D transition row agrees on WebGL2 and Canvas 2D at 0/25/50/75/100 %', async ({ page }) => {
+    const results = await page.evaluate(() => window.__slideshowGpu!.parity('transition-2d'))
+    // 26 stage-1 rows plus 9 attribute variants, five progress points each.
+    expect(results).toHaveLength((26 + 9) * 5)
+    const worst = [...results].sort((a, b) => b.rowMax - a.rowMax).slice(0, 5)
+    for (const r of worst) console.log(`[slideshow-gpu] transition-2d worst ${r.name}: meanAbs ${r.meanAbs.toFixed(4)} rowMax ${r.rowMax.toFixed(4)}`)
+    expect(results.filter(r => !r.ok).map(r => `${r.name} (meanAbs ${r.meanAbs.toFixed(4)}, rowMax ${r.rowMax.toFixed(4)}, ${r.diagnostics.join(' | ')})`)).toEqual([])
+  })
   test('the mask groups cover every mask kind', async ({ page }) => {
     const layer = (await page.evaluate(() => window.__slideshowGpu!.parity('mask-layer'))).map(r => r.name)
     const transition = (await page.evaluate(() => window.__slideshowGpu!.parity('mask-transition'))).map(r => r.name)

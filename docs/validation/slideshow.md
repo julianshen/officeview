@@ -73,7 +73,7 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | transition:p14:glitter | glitter | stand-in | pending-stage-3 | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
 | transition:p14:warp | warp (D4 classification unverified) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
 | transition:p14:flythrough | flythrough | transform | exact | 1 | no | — | 0.02 | 0.1 |
-| transition:p14:flash | flash (D4 classification unverified) | mask | exact | 1 | no | — | 0.02 | 0.1 |
+| transition:p14:flash | flash (D4 classification unverified) | transform | exact | 1 | no | — | 0.02 | 0.1 |
 | transition:p14:shred | shred | stand-in | pending-stage-3 | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
 | transition:p14:reveal | reveal (D4 classification unverified) | transform | exact | 1 | no | — | 0.02 | 0.1 |
 | transition:p14:wheelReverse | wheelReverse (D4 classification unverified) | mask | exact | 1 | no | — | 0.02 | 0.1 |

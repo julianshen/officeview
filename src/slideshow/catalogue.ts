@@ -64,7 +64,7 @@ export const CATALOGUE: readonly CatalogueRow[] = Object.freeze([
   transition('p14', 'glitter', 'glitter', 'stand-in', 'transition:p:dissolve'),
   transition('p14', 'warp', 'warp (D4 classification unverified)', 'stand-in', 'transition:p:fade'),
   transition('p14', 'flythrough', 'flythrough', 'transform'),
-  transition('p14', 'flash', 'flash (D4 classification unverified)', 'mask'),
+  transition('p14', 'flash', 'flash (D4 classification unverified)', 'transform'),
   transition('p14', 'shred', 'shred', 'stand-in', 'transition:p:dissolve'),
   transition('p14', 'reveal', 'reveal (D4 classification unverified)', 'transform'),
   transition('p14', 'wheelReverse', 'wheelReverse (D4 classification unverified)', 'mask'),
