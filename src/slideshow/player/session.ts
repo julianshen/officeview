@@ -549,8 +549,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
       }, { signal: done.signal })
       void start.fullscreen.then((outcome) => { if (outcome === 'refused') done.abort() })
     }
-    cb.onEnd?.()
-    resolveEnded()
+    // A throwing host callback still settles `ended` (PR #18 review 2); the error reaches the caller.
+    try { cb.onEnd?.() } finally { resolveEnded() }
   }
 
   /** One frame: the kiosk restart, auto-advance, then the stage draws (spec 4.4; every timer is show-clock time). */

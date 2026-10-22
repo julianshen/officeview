@@ -613,4 +613,15 @@ describe('exit, focus and events', () => {
     expect(r.log.filter((l) => l === 'onEnd')).toHaveLength(1)
     expect(r.cleanup).toHaveBeenCalledTimes(1)
   })
+
+  it('PR #18 review 2: ended settles even when the host\'s end callback throws', async () => {
+    const { doc } = await deck({ slides: [{ shapes: [] }] })
+    const r = await show(doc, {}, { onEnd: () => { throw new Error('host onSlideShowEnd failed') } })
+    expect(() => r.s.exit()).toThrow('host onSlideShowEnd failed')
+    let settled = false
+    void r.s.ended.then(() => { settled = true })
+    await flush()
+    expect(settled).toBe(true)
+    expect(r.cleanup).toHaveBeenCalledTimes(1)
+  })
 })

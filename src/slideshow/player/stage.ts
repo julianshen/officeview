@@ -42,7 +42,7 @@
  *   painting (their slide-px bounds scale with the viewport).
  */
 import { acquireFonts, type FontLease } from '../../core/fonts/register'
-import { decodeImageAsset, releaseDecodedImage } from '../../core/images'
+import { decodeImage, decodeImageAsset, releaseDecodedImage, type ImageDecodeFn } from '../../core/images'
 import type { WatermarkOptions } from '../../core/watermark'
 import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { renderStateAt, type BaseGeometry } from '../engine/behaviours'
@@ -51,6 +51,7 @@ import { createBackendManager, createLivePainter, type BackendManager } from '..
 import { paintDirect } from '../render/direct'
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
 import { rasterLayer } from '../render/raster'
+import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
 import { imageIndices, paintedBounds, slideSize, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
@@ -644,37 +645,68 @@ export function createStage(deps: StageDeps): Stage {
     }
     const used = [...new Set(imageIndices([...underlayOf(slide), ...(slide.shapes ?? [])]))]
     const assets = (deps.doc as { images?: Array<unknown> }).images
-    // Decoded bitmaps are charged to the workspace for as long as the slide holds them (S1-20 review I1):
-    // leased before decoding from the header's dimensions, or right after decoding from the decoder's report.
+    // Decoded bitmaps are charged to the workspace for as long as the slide holds them (S1-20 review I1), and
+    // every charge is taken before its decoder allocates (PR #18 review 2): the representation decodeImageAsset
+    // selects is sized first. A raster is sized from its header; an SVG is drawn at the size it is painted at
+    // (the full rung's device px), whatever its declared intrinsic size. A raster whose header gives no size is
+    // not decoded.
     const refuse = (i: number, w: number, h: number) => sink.add({
       code: 'image-workspace', slideIndex: index, effect: `image:${i}`,
       message: `Image ${i} (${w}×${h} px decoded) does not fit the slideshow workspace; painted as the missing-image placeholder`,
     })
+    const nodes = [...underlayOf(slide), ...(slide.shapes ?? [])]
     p.ready = Promise.all([lease(), ...used.map(async (i) => {
-      const asset = assets?.[i] as { data?: Uint8Array; svg?: { verdict?: { ok?: boolean } } } | undefined
+      const asset = assets?.[i] as object | undefined
       if (!asset) return
       const tag = `image:${index}:${i}`
-      // Size the representation that will be decoded: an accepted SVG candidate wins over the raster bytes
-      // (core/images `decodeImageAsset`), and its size is only known once decoded. A raster header is sniffed.
-      const known = asset.svg?.verdict?.ok ? undefined : asset.data ? imageSize(asset.data) : undefined
       let held: Lease | undefined
-      if (known) {
-        held = workspace.lease(surfaceBytes(known.w, known.h), tag)
-        if (!held) { refuse(i, known.w, known.h); return }
+      let refused: { w: number; h: number } | 'unsized' | undefined
+      const take = (w: number, h: number) => {
+        held = workspace.lease(surfaceBytes(w, h), tag)
+        if (!held) refused = { w, h }
+        return !!held
       }
-      const img = await decodeImageAsset(asset as never).catch(() => undefined)
+      const unhold = () => { held?.release(); held = undefined }
+      // One call per representation tried (an accepted SVG, then its raster fallback): reserve, then decode.
+      const decode: ImageDecodeFn = async (bytes, mime) => {
+        unhold()
+        if (mime === 'image/svg+xml') {
+          const drawn = imageDrawSize(nodes, i)
+          const v = viewport(p)
+          const cap = 2 * Math.max(backing.w, backing.h)
+          const w = Math.max(1, Math.min(cap, Math.ceil((drawn?.w ?? slidePx(p).w) * v.scale)))
+          const h = Math.max(1, Math.min(cap, Math.ceil((drawn?.h ?? slidePx(p).h) * v.scale)))
+          if (!take(w, h)) return undefined
+          const canvas = await rasteriseSvg(bytes, w, h, factory)
+          if (!canvas) unhold()
+          return canvas
+        }
+        const known = imageSize(bytes)
+        if (!known) { refused = 'unsized'; return undefined }
+        if (!take(known.w, known.h)) return undefined
+        const img = await decodeImage(bytes, mime).catch(() => undefined)
+        if (!img) unhold()
+        return img
+      }
+      const img = await decodeImageAsset(asset as never, decode).catch(() => undefined)
       if (img) {
         // Always reconcile with the decoded dimensions before keeping the bitmap: grow (or trim) the charge,
-        // or close the bitmap and refuse when the workspace cannot hold it.
+        // or close the bitmap and refuse when the workspace cannot hold it (a header that understated its size).
         const d = img as { width?: number; height?: number }
         const w = Number(d.width) || 1, h = Number(d.height) || 1
         const bytes = surfaceBytes(w, h)
-        if (!held) held = workspace.lease(bytes, tag)
-        else if (bytes > held.bytes && !held.grow(bytes - held.bytes)) { held.release(); held = undefined }
-        else if (bytes < held.bytes) held.shrink(held.bytes - bytes)
+        const l = held as Lease | undefined
+        if (!l) held = workspace.lease(bytes, tag)
+        else if (bytes > l.bytes && !l.grow(bytes - l.bytes)) unhold()
+        else if (bytes < l.bytes) l.shrink(l.bytes - bytes)
         if (!held) { releaseDecodedImage(img); refuse(i, w, h); return }
+      } else {
+        unhold()
+        if (refused === 'unsized') sink.add({ code: 'image-workspace', slideIndex: index, effect: `image:${i}`, message: `Image ${i} has no readable size to reserve before decoding; painted as the missing-image placeholder` })
+        else if (refused) refuse(i, refused.w, refused.h)
+        return
       }
-      if (!img || p.dead) { releaseDecodedImage(img); held?.release(); return }
+      if (p.dead) { releaseDecodedImage(img); unhold(); return }
       images[i] = img
       if (held) p.imageLeases.push(held)
     })]).then(() => {})
