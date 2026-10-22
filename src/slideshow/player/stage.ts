@@ -634,20 +634,27 @@ export function createStage(deps: StageDeps): Stage {
       message: `Image ${i} (${w}×${h} px decoded) does not fit the slideshow workspace; painted as the missing-image placeholder`,
     })
     p.ready = Promise.all([lease(), ...used.map(async (i) => {
-      const asset = assets?.[i] as { data?: Uint8Array } | undefined
+      const asset = assets?.[i] as { data?: Uint8Array; svg?: { verdict?: { ok?: boolean } } } | undefined
       if (!asset) return
       const tag = `image:${index}:${i}`
-      const known = asset.data ? imageSize(asset.data) : undefined
+      // Size the representation that will be decoded: an accepted SVG candidate wins over the raster bytes
+      // (core/images `decodeImageAsset`), and its size is only known once decoded. A raster header is sniffed.
+      const known = asset.svg?.verdict?.ok ? undefined : asset.data ? imageSize(asset.data) : undefined
       let held: Lease | undefined
       if (known) {
         held = workspace.lease(surfaceBytes(known.w, known.h), tag)
         if (!held) { refuse(i, known.w, known.h); return }
       }
       const img = await decodeImageAsset(asset as never).catch(() => undefined)
-      if (img && !held) {
+      if (img) {
+        // Always reconcile with the decoded dimensions before keeping the bitmap: grow (or trim) the charge,
+        // or close the bitmap and refuse when the workspace cannot hold it.
         const d = img as { width?: number; height?: number }
         const w = Number(d.width) || 1, h = Number(d.height) || 1
-        held = workspace.lease(surfaceBytes(w, h), tag)
+        const bytes = surfaceBytes(w, h)
+        if (!held) held = workspace.lease(bytes, tag)
+        else if (bytes > held.bytes && !held.grow(bytes - held.bytes)) { held.release(); held = undefined }
+        else if (bytes < held.bytes) held.shrink(held.bytes - bytes)
         if (!held) { releaseDecodedImage(img); refuse(i, w, h); return }
       }
       if (!img || p.dead) { releaseDecodedImage(img); held?.release(); return }
