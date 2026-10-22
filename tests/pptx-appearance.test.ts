@@ -457,6 +457,15 @@ describe('slide appearance enrichment', () => {
         expect(near(pixel(910, 690), [0, 0, 255], 8)).toBe(true); // the unrelated picture still paints
         expect(near(pixel(200, 200), [255, 255, 255], 8), `centre ${pixel(200, 200)}`).toBe(true);
     });
+    it('a slide picture background with transparent pixels shows white, not the solid inherited from its master', async () => {
+        const clear = new Uint8Array(createCanvas(4, 4).toBuffer('image/png'));
+        const bytes = await buildPptxDeck(builderDeck({
+            masters: [{ bg: { solid: 'FF0000' }, shapes: [], layouts: [{}] }],
+            slides: [{ bg: { picture: { data: clear } }, shapes: [] }],
+        }));
+        const { pixel } = await paintFirst(await parsePptx(await OfficePackage.load(bytes)));
+        expect(near(pixel(480, 360), [255, 255, 255], 8), `centre ${pixel(480, 360)}`).toBe(true);
+    });
     it('a useBgFill shape keeps its authored fill shadow', async () => {
         const shadowed = `<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="47" name="Shadowed"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${px(100)}" y="${px(100)}"/><a:ext cx="${px(100)}" cy="${px(100)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="0" dist="${px(20)}" dir="0" algn="tl" rotWithShape="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></p:spPr></p:sp>`;
         const bytes = await patchPart(await buildPptxDeck(builderDeck({

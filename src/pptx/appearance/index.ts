@@ -69,9 +69,10 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
         // useBgFill shapes on the slide itself also show the resolved background (the eager parse could only use a solid colour).
         flagUseBgFill(slide.shapes, getChildren(getChildren(await pkg.xmlOrdered(path), 'cSld')[0], 'spTree')[0], path)
         // No background anywhere: useBgFill shapes still show the default white slide, not their authored fill.
-        // An explicit noFill paints nothing either, and clears the solid the eager parse inherited from the layout or master.
+        // An explicit noFill paints nothing either. Only a resolved solid keeps the eager solid: any other background
+        // (none, gradient, pattern, picture) stops inheritance, so the solid the eager parse inherited must not show through.
         const painted = node?.drawingStyle?.fill?.kind === 'none' ? undefined : node
-        if (!painted) delete slide.background
+        if (painted?.drawingStyle?.fill?.kind !== 'solid') delete slide.background
         slide.backdrop = painted ?? backgroundNode({ kind: 'fill', fill: { kind: 'solid', color: { r: 255, g: 255, b: 255, a: 1 } } }, slide.widthEmu, slide.heightEmu)
         slide.diagnostics ??= []
         slide.diagnostics.push(...diagnostics, ...art.diagnostics)
