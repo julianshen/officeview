@@ -3,7 +3,7 @@
  *
  * - **Prepared (already granted).** The preload hint (`prepareScreens`, called
  *   by the toolbar after the chunk loads) reads screen details without a
- *   prompt and stores the plan in S2-2's eager `preparedPlacement` slot
+ *   prompt (`grantedScreenDetails`) and stores the plan in S2-2's eager `preparedPlacement` slot
  *   (src/components/present.ts). The synchronous start then opens the popup
  *   on the presenter's screen and requests full screen on the audience
  *   screen; `'auto'` opens the popup only when that slot holds a plan.
@@ -18,7 +18,7 @@
  * behind the audience. Denial, a missing API, a single screen and other
  * failures are diagnosed separately, never as `popup-blocked`.
  */
-import { defaultPlatform, preparedPlacement, type PresentFullscreenOptions, type ScreenDetails, type ScreenLike } from '../../components/present'
+import { preparedPlacement, type PresentFullscreenOptions, type ScreenDetails, type ScreenLike } from '../../components/present'
 import type { DiagnosticSink, SlideShowDiagnostic } from '../types'
 
 export type { ScreenDetails, ScreenLike }
@@ -87,12 +87,27 @@ export function preparePlacement(doc: Document, details: ScreenDetails | undefin
 }
 
 /**
- * The preload hint: details only where the permission is already granted
- * (S2-2's `screenDetails`, which never prompts). Never rejects.
+ * Screen details only where the window-management permission is already
+ * granted, so it never prompts; undefined otherwise (not granted, no API, no
+ * permission name as in Firefox and Safari). Realm-safe: it reads `win`'s
+ * own navigator. Never rejects.
  */
-export function prepareScreens(doc: Document, screenDetails: (() => Promise<ScreenDetails | undefined>) | undefined = defaultPlatform.screenDetails): Promise<void> {
+export function grantedScreenDetails(win: Window | null | undefined): Promise<ScreenDetails | undefined> {
   return Promise.resolve()
-    .then(() => screenDetails?.())
+    .then(() => win!.navigator.permissions.query({ name: 'window-management' as PermissionName }))
+    .then((p) => p.state == 'granted' ? (win as unknown as { getScreenDetails(): Promise<ScreenDetails> }).getScreenDetails() : undefined)
+    .catch(() => undefined)
+}
+
+/**
+ * The preload hint (spec 4.1): prepares the placement from already-granted
+ * details of `doc`'s window, or clears it. Never rejects. (It does not go
+ * through the eager `defaultPlatform.screenDetails`, so the eager entry
+ * exports nothing more for it.)
+ */
+export function prepareScreens(doc: Document, screenDetails: () => Promise<ScreenDetails | undefined> = () => grantedScreenDetails(doc.defaultView)): Promise<void> {
+  return Promise.resolve()
+    .then(() => screenDetails())
     .then((d) => preparePlacement(doc, d), () => preparePlacement(doc, undefined))
 }
 

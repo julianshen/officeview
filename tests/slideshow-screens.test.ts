@@ -11,6 +11,7 @@ import {
   applyPlacement,
   createDragHint,
   diagnosePlacement,
+  grantedScreenDetails,
   DRAG_HINT_STORAGE_KEY,
   planPlacement,
   preparePlacement,
@@ -134,6 +135,27 @@ describe('Slideshow Screen Placement (Task S2-3)', () => {
     const later = target('entered')
     expect(await applyPlacement(later.t, plan.presenterScreen, plan.audienceScreen)).toBe('placed')
     expect(later.popup.moveTo).toHaveBeenCalledWith(0, 0)
+  })
+
+  it('the preload hint reads granted details from the document\'s own window and never prompts', async () => {
+    const getScreenDetails = vi.fn(() => Promise.resolve(TWO))
+    const win = (state: string | Error) => ({
+      navigator: { permissions: { query: vi.fn(() => state instanceof Error ? Promise.reject(state) : Promise.resolve({ state })) } },
+      getScreenDetails,
+    }) as unknown as Window
+    expect(await grantedScreenDetails(win('granted'))).toBe(TWO)
+    expect(await grantedScreenDetails(win('prompt'))).toBeUndefined()
+    expect(await grantedScreenDetails(win('denied'))).toBeUndefined()
+    expect(getScreenDetails).toHaveBeenCalledTimes(1)
+    // Firefox/Safari: unknown permission name rejects; no navigator.permissions at all; no window.
+    expect(await grantedScreenDetails(win(new TypeError('bad name')))).toBeUndefined()
+    expect(await grantedScreenDetails({ navigator: {} } as unknown as Window)).toBeUndefined()
+    expect(await grantedScreenDetails(null)).toBeUndefined()
+    // prepareScreens defaults to the document's own window (realm-safe).
+    const doc = document.implementation.createHTMLDocument('popup-realm')
+    Object.defineProperty(doc, 'defaultView', { value: win('granted') })
+    await prepareScreens(doc)
+    expect(preparedPlacement.get(doc)?.audienceScreen).toBe(EXTERNAL)
   })
 
   it('denied, missing API and single screen are three distinct diagnostics, none is popup-blocked', async () => {
