@@ -91,6 +91,12 @@ export interface SlideTimelineOptions {
   /** Passed to the scheduler, so its refusals are diagnosed. */
   sink?: DiagnosticSink
   slideIndex?: number
+  /**
+   * Additive (S2-8): when `tree` is a working copy (text builds fan out by
+   * word or letter), its nodes' source pre-order indices, so snapshot
+   * `order` keeps meaning "position in the source tree".
+   */
+  orderOf?: ReadonlyMap<TimeNode, number>
 }
 
 const INF = Number.POSITIVE_INFINITY
@@ -213,7 +219,7 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
   /** Source pre-order index of every node, so snapshot `order` keeps meaning "position in the source tree". */
   const orderOf = new Map<TimeNode, number>()
   let preorder = 0
-  walk(tree.root, (n) => { orderOf.set(n, preorder++) })
+  walk(tree.root, (n) => { const i = preorder++; orderOf.set(n, options.orderOf?.get(n) ?? i) })
   let steps = 0
   let root = tree.root
   let workMain: ContainerNode | undefined

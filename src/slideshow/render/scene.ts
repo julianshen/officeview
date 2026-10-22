@@ -10,12 +10,14 @@
  */
 import type { ContentPaintAssets } from '../../drawing/content'
 import type { ScenePaintOptions } from '../../drawing/scene-paint'
-import { layoutTextBody } from '../../drawing/text-layout'
+import { layoutTextBody, type MeasureText, type TextLayout } from '../../drawing/text-layout'
 import { createTextBodyMeasurer, paintTextBody } from '../../drawing/text-paint'
 import type { FontResolver } from '../../core/fonts/register'
 import { emuToPx } from '../../core/geometry'
 import { renderSlide } from '../../pptx/render'
 import type { PptxShape, PptxSlide } from '../../pptx/types'
+import type { TargetKey } from '../types'
+import { boxesFor, type TextItem } from './text-split'
 
 /** Stage 0 (S0-7) adds `PptxSlide.underlay`; read it structurally until then. */
 export function underlayOf(slide: PptxSlide): readonly PptxShape[] {
@@ -33,6 +35,19 @@ export function slideSize(slide: PptxSlide): { w: number; h: number } {
  * the whole body, so kept lines stay exactly where they were.
  */
 export const textFilter = new WeakMap<PptxShape, (paragraph: number) => boolean>()
+
+/**
+ * Text clips for planner-made word and letter clones (S2-8): a clone listed
+ * here paints its text only inside the boxes of item `key` among `items`,
+ * placed by `boxesFor` on the layout it paints with (so the clip follows the
+ * painted glyphs), and its painted bounds are cut to them.
+ */
+export const textClip = new WeakMap<PptxShape, { items: readonly TextItem[]; key: TargetKey }>()
+
+/** The clip rects of a clone on `layout` (shape-local px). */
+function clipRects(shape: PptxShape, layout: TextLayout, clip: { items: readonly TextItem[]; key: TargetKey }, measure: MeasureText): Array<{ x: number; y: number; w: number; h: number }> {
+  return boxesFor(shape, layout, clip.items, measure).filter(b => b.key === clip.key).map(b => b.box)
+}
 
 const TRANSPARENT = 'rgba(0,0,0,0)'
 const PX_TO_EMU = 914400 / 96
@@ -75,9 +90,23 @@ export function sceneOptions(slide: PptxSlide, assets: SceneAssets): ScenePaintO
       const body = shape.textBody
       if (!body) return
       const keep = textFilter.get(shape)
-      if (!keep) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme); return }
-      const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx, resolveFont), slide.theme)
-      paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: { ...layout, lines: layout.lines.filter(line => keep(line.paragraphIndex)) } })
+      const clip = textClip.get(shape)
+      if (!keep && !clip) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme); return }
+      const measure = createTextBodyMeasurer(ctx, resolveFont)
+      const layout = layoutTextBody(body, w, h, measure, slide.theme)
+      const kept = { ...layout, lines: keep ? layout.lines.filter(line => keep(line.paragraphIndex)) : layout.lines }
+      if (!clip) { paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: kept }); return }
+      const rects = clipRects(shape, layout, clip, measure)
+      if (rects.length === 0) return
+      ctx.save()
+      try {
+        ctx.beginPath()
+        for (const r of rects) ctx.rect(r.x, r.y, r.w, r.h)
+        ctx.clip()
+        paintTextBody(body, ctx, 0, 0, w, h, resolveFont, slide.theme, { layout: kept })
+      } finally {
+        ctx.restore()
+      }
     },
   }
 }
@@ -162,7 +191,17 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
     if (!body || body.paragraphs.length === 0) return
     if (!measure || (body.direction && body.direction !== 'horz') || body.textWarp) { add(m, 0, 0, w, h); return }
     const keep = textFilter.get(shape)
-    const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(measure, resolveFont), slide.theme)
+    const measurer = createTextBodyMeasurer(measure, resolveFont)
+    const layout = layoutTextBody(body, w, h, measurer, slide.theme)
+    const clipped = textClip.get(shape)
+    let clip: { x: number; y: number; w: number; h: number } | undefined
+    if (clipped) {
+      // The bounding box of the item's boxes (a word broken across lines has several).
+      const rects = clipRects(shape, layout, clipped, measurer)
+      if (rects.length === 0) return
+      const x0 = Math.min(...rects.map(r => r.x)), y0 = Math.min(...rects.map(r => r.y))
+      clip = { x: x0, y: y0, w: Math.max(...rects.map(r => r.x + r.w)) - x0, h: Math.max(...rects.map(r => r.y + r.h)) - y0 }
+    }
     for (const line of layout.lines) {
       if (keep && !keep(line.paragraphIndex)) continue
       let l = Math.min(0, line.x), r = w, slack = 0
@@ -173,7 +212,16 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
         const shadow = sh ? Math.min(Math.abs(sh.offsetX) || 0, 200) + Math.min(Math.abs(sh.offsetY) || 0, 200) + Math.min(Math.max(0, sh.blurPx || 0), 100) * 2 : 0
         slack = Math.max(slack, size / 2 + shadow + Math.min(s.style.textOutline?.widthPx ?? 0, 100))
       }
-      add(m, l - slack, line.y - slack, r + slack, line.y + line.height + slack)
+      let t = line.y - slack, b = line.y + line.height + slack
+      if (clip) {
+        // A word or letter clone paints only inside its clip.
+        l = Math.max(l - slack, clip.x); r = Math.min(r + slack, clip.x + clip.w)
+        t = Math.max(t, clip.y); b = Math.min(b, clip.y + clip.h)
+        if (!(r > l && b > t)) continue
+        add(m, l, t, r, b)
+        continue
+      }
+      add(m, l - slack, t, r + slack, b)
     }
   }
   walk(nodes, [1, 0, 0, 1, 0, 0])

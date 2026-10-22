@@ -9,7 +9,8 @@
 import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { targetKey } from '../target'
 import type { BuildOwnership, TargetKey } from '../types'
-import { textFilter, underlayOf } from './scene'
+import { textClip, textFilter, underlayOf } from './scene'
+import type { TextItem } from './text-split'
 
 export type ColourPart = 'fill' | 'line' | 'text'
 
@@ -62,6 +63,19 @@ function filtered(shape: PptxShape, keep: (paragraph: number) => boolean): PptxS
   textFilter.set(shape, keep)
   return shape
 }
+/** One text-only clone per word or letter item (S2-8): its paragraph, clipped to the item's boxes at paint time. */
+function boxLeaves(node: PptxShape, path: PptxShape[], items: readonly TextItem[]): Leaf[] {
+  const seen = new Set<TargetKey>()
+  const out: Leaf[] = []
+  for (const item of items) {
+    if (seen.has(item.key)) continue
+    seen.add(item.key)
+    const clone = filtered(textPart(node), i => i === item.paragraph)
+    textClip.set(clone, { items, key: item.key })
+    out.push({ path, node: clone, own: { key: item.key, part: 'range' as const } })
+  }
+  return out
+}
 
 /**
  * `colourParts` splits a shape into fill, line and text layers when a colour
@@ -70,12 +84,21 @@ function filtered(shape: PptxShape, keep: (paragraph: number) => boolean): PptxS
  * line, and text outside every range) and one text layer per range; range
  * `st..end` are inclusive paragraph indices (as `p:pRg`). With `animBg` off
  * the body is static and joins the surrounding static run.
+ *
+ * `splits` (S2-8, text by word or letter) maps an iterated target, a shape
+ * key or a paragraph-range key, to its items (`textItems`, or the boxes of
+ * `splitTextBoxes`). A split shape gives a body layer (geometry, fill, line,
+ * and text in no item; keyed by the shape when it is animated) and one text
+ * layer per item, in reading order, clipped at paint time to the item's
+ * boxes on the painted layout. A split range replaces that range's single
+ * layer with its items.
  */
 export function buildRenderPlan(
   slide: PptxSlide,
   animated: ReadonlySet<TargetKey>,
   colourParts: ReadonlyMap<TargetKey, ReadonlySet<ColourPart>>,
   builds: readonly BuildOwnership[],
+  splits?: ReadonlyMap<TargetKey, readonly TextItem[]>,
 ): RenderPlan {
   const paragraphBuilds = new Map<string, BuildOwnership>()
   for (const b of builds) if (b.mode === 'paragraph' && b.ranges.length > 0) paragraphBuilds.set(b.spid, b)
@@ -91,11 +114,22 @@ export function buildRenderPlan(
       if (node.group) { flatten(node.children ?? [], [...path, node], fixed); continue }
       if (fixed) { leaves.push({ path, node, fixed: true }); continue }
       const key = shapeKey(node)
+      const whole = key !== undefined ? splits?.get(key) : undefined
+      if (key !== undefined && whole && whole.length > 0) {
+        const boxed = new Set(whole.map(b => b.paragraph))
+        leaves.push({ path, node: filtered({ ...node }, i => !boxed.has(i)), own: animated.has(key) ? { key, part: 'body' } : undefined })
+        leaves.push(...boxLeaves(node, path, whole))
+        continue
+      }
       const build = node.source?.id !== undefined ? paragraphBuilds.get(node.source.id) : undefined
       if (build) {
         const inRange = (i: number): boolean => build.ranges.some(r => i >= r.st && i <= r.end)
         leaves.push({ path, node: filtered({ ...node }, i => !inRange(i)), own: build.animBg || animated.has(build.body) ? { key: build.body, part: 'body' } : undefined })
-        for (const r of build.ranges) leaves.push({ path, node: filtered(textPart(node), i => i >= r.st && i <= r.end), own: { key: r.key, part: 'range' } })
+        for (const r of build.ranges) {
+          const boxes = splits?.get(r.key)
+          if (boxes && boxes.length > 0) leaves.push(...boxLeaves(node, path, boxes))
+          else leaves.push({ path, node: filtered(textPart(node), i => i >= r.st && i <= r.end), own: { key: r.key, part: 'range' } })
+        }
         continue
       }
       const parts = key !== undefined ? colourParts.get(key) : undefined
