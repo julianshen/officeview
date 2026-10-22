@@ -52,6 +52,8 @@ describe('watermark from the X-OfficeView-Watermark response header', () => {
     // same document, no header -> the baseline ink
     serveWith({})
     const without = await renderFile()
+    // the canvas can appear before the page paints: wait for the document's own ink first
+    await waitFor(() => expect(inkOf(without.container)).toBeGreaterThan(0))
     const plainInk = inkOf(without.container)
     without.unmount()
 
