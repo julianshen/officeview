@@ -35,6 +35,9 @@
  * iframe with `sandbox="allow-scripts allow-same-origin"` and no
  * allow="fullscreen" (both refused); slideshow-csp.html runs this module
  * under a strict Content Security Policy.
+ * S2-3 (slideshow-presenter.spec.ts, screen placement): toolbar=1 shows the
+ * viewer toolbar, whose Present button runs the preload hint (it prepares
+ * already-granted screen placement).
  * Excluded from the library build (tsconfig.build.json excludes src/debug).
  */
 import { createRef, useState, type JSX } from 'react'
@@ -192,7 +195,7 @@ async function boot(): Promise<void> {
             <OfficeDoc
               ref={refs[n]}
               document={docs[doc]}
-              showToolbar={false}
+              showToolbar={params.get('toolbar') === '1'}
               slideShowMotion={(params.get('motion') as 'reduced' | 'full' | null) ?? undefined}
               onSlideShowStart={() => log.push(`${n}:onStart`)}
               onSlideShowEnd={() => log.push(`${n}:onEnd`)}
