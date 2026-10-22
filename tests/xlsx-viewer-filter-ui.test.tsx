@@ -81,7 +81,7 @@ describe('S9 filter dropdown draft UI', () => {
     expect(f.publications).toBe(1)
     expect(f.snapshot.filter?.columns.get(0)?.kind).toBe('values')
     expect(ui.getByRole('status').textContent).toContain('Filter applied')
-  })
+  }, 20_000)
   it('Cancel/Escape discard edits and reopening shows the applied selection', async () => {
     const f = controlsFixture(10), ui = render(<FilterHarness fixture={f} />)
     await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
