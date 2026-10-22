@@ -146,28 +146,80 @@ function isContainer(n: TimeNode): n is Extract<TimeNode, { children: TimeNode[]
 
 const COLOUR_ATTR = new Set(['fillcolor', 'stroke.color', 'style.color'])
 
-/** Animated targets, colour-animated targets, and the targets whose first behaviour is an entrance. */
-export function timingTargets(slide: ShowSlide): { animated: Set<TargetKey>; colour: Set<TargetKey>; hidden: Set<TargetKey> } {
+/**
+ * Decoded pixel size from a PNG, GIF, JPEG or WebP header (S1-20 review I1: the decode is charged before it
+ * happens). `undefined` for anything else (SVG, unknown, truncated): the caller charges the decoder's report.
+ */
+export function imageSize(b: Uint8Array): { w: number; h: number } | undefined {
+  const u16 = (o: number, le = false) => le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1]
+  const u32 = (o: number) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0
+  const ok = (w: number, h: number) => (w > 0 && h > 0 ? { w, h } : undefined)
+  if (b.length >= 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return ok(u32(16), u32(20))
+  if (b.length >= 10 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return ok(u16(6, true), u16(8, true))
+  if (b.length >= 30 && b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57 && b[9] === 0x45) {
+    const kind = String.fromCharCode(b[12], b[13], b[14], b[15])
+    if (kind === 'VP8 ') return ok(u16(26, true) & 0x3fff, u16(28, true) & 0x3fff)
+    if (kind === 'VP8L') return ok(1 + (((b[22] & 0x3f) << 8) | b[21]), 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6)))
+    if (kind === 'VP8X') return ok(1 + (b[24] | (b[25] << 8) | (b[26] << 16)), 1 + (b[27] | (b[28] << 8) | (b[29] << 16)))
+    return undefined
+  }
+  if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    // Walk the segments to the first start-of-frame (SOF0..SOF15 except DHT, JPG and DAC); bounded by the byte length.
+    let o = 2
+    while (o + 9 < b.length) {
+      if (b[o] !== 0xff) return undefined
+      const m = b[o + 1]
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return ok(u16(o + 7), u16(o + 5))
+      o += 2 + u16(o + 2)
+    }
+  }
+  return undefined
+}
+
+/**
+ * Animated targets, colour-animated targets, and the initially hidden ones with their entrance behaviours.
+ *
+ * Initial hiding (spec 6.2 "initial"; S1-20 review I2): a target with any behaviour under an entrance preset is
+ * hidden until one of those entrance behaviours begins, unless a non-entrance behaviour on it runs before its
+ * first entrance in time. "Before in time" is read at click-step granularity: a non-entrance behaviour in a
+ * strictly earlier main-sequence step (or before the first click) reveals the target from the start, the way
+ * PowerPoint shows a shape whose first effect is an emphasis. Behaviours in the same step run concurrently, and
+ * interactive sequences run only when triggered, so neither reveals the target before its entrance.
+ */
+export function timingTargets(slide: ShowSlide): {
+  animated: Set<TargetKey>; colour: Set<TargetKey>; hidden: Set<TargetKey>; entrances: Map<TargetKey, Set<TimeNode>>
+} {
   const animated = new Set<TargetKey>(), colour = new Set<TargetKey>(), hidden = new Set<TargetKey>()
+  const entrances = new Map<TargetKey, Set<TimeNode>>()
   const timing = slide.timing
-  if (!timing || 'refused' in timing) return { animated, colour, hidden }
-  const seen = new Set<TargetKey>()
-  const walk = (n: TimeNode, cls: string | undefined, depth: number): void => {
+  if (!timing || 'refused' in timing) return { animated, colour, hidden, entrances }
+  const firstEntrance = new Map<TargetKey, number>()
+  const firstOther = new Map<TargetKey, number>()
+  const walk = (n: TimeNode, cls: string | undefined, step: number, depth: number): void => {
     if (depth > 128) return
     const here = n.ctn.presetClass ?? cls
-    if (isContainer(n)) { for (const c of n.children) walk(c, here, depth + 1); return }
+    if (isContainer(n)) {
+      // The main sequence's children are its steps, in order; everything off it (interactive) is "never before".
+      const main = n.kind === 'seq' && n.ctn.nodeType === 'mainSeq'
+      n.children.forEach((c, i) => walk(c, here, main ? i : n.ctn.nodeType === 'interactiveSeq' ? Infinity : step, depth + 1))
+      return
+    }
     if (!('spid' in n.target)) return
     const key = targetKey(n.target)
     animated.add(key)
     if (n.kind === 'animClr' || n.attrNames.some(a => COLOUR_ATTR.has(a))) colour.add(key)
-    if (!seen.has(key)) {
-      seen.add(key)
-      if (here === 'entr') hidden.add(key)
+    const first = here === 'entr' ? firstEntrance : firstOther
+    first.set(key, Math.min(first.get(key) ?? Infinity, step))
+    if (here === 'entr') {
+      let set = entrances.get(key)
+      if (!set) entrances.set(key, set = new Set())
+      set.add(n)
     }
   }
-  walk(timing.root, undefined, 0)
-  for (const b of slide.builds) if (b.mode === 'paragraph') for (const r of b.ranges) if (animated.has(r.key)) animated.add(r.key)
-  return { animated, colour, hidden }
+  walk(timing.root, undefined, Infinity, 0)
+  for (const [key, at] of firstEntrance) if (!((firstOther.get(key) ?? Infinity) < at)) hidden.add(key)
+  for (const key of [...entrances.keys()]) if (!hidden.has(key)) entrances.delete(key)
+  return { animated, colour, hidden, entrances }
 }
 
 /** Base geometry (slide px, group transforms composed) per shape key, groups included; ranges and parts share their shape's. */
@@ -264,7 +316,11 @@ interface Prepared {
   layers: PlanLayer[]
   base: Map<TargetKey, BaseGeometry>
   hidden: Set<TargetKey>
+  /** The entrance behaviours of each hidden target: it shows once one of them has begun. */
+  entrances: Map<TargetKey, Set<TimeNode>>
   images: Array<CanvasImageSource | undefined>
+  /** The workspace charge of every decoded image above (released with them). */
+  imageLeases: Lease[]
   ready: Promise<void>
   /** The stage's own metadata reference (neighbours); the shown slide's is the session's. */
   handle?: MetadataHandle
@@ -315,6 +371,8 @@ export function createStage(deps: StageDeps): Stage {
   let lastDirect = ''
   let rngs = new Map<number, Rng>()
   let liveState: RenderState = EMPTY_STATE
+  /** Whether any slide has been entered yet (the first one transitions from black). */
+  let shownBefore = false
   let kinds: string[] = []
 
   // -------------------------------------------------------------------
@@ -558,22 +616,43 @@ export function createStage(deps: StageDeps): Stage {
       return have
     }
     const slide = deps.doc.slides[index]
-    const { animated, colour, hidden } = timingTargets(meta)
+    const { animated, colour, hidden, entrances } = timingTargets(meta)
     // Any colour animation splits its shape into fill, line and text layers (a two-part set forces the split).
     const parts = new Map<TargetKey, ReadonlySet<ColourPart>>([...colour].map(k => [k, new Set<ColourPart>(['fill', 'line'])]))
     const plan = buildRenderPlan(slide, animated, parts, meta.builds)
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
-      index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, images,
-      ready: Promise.resolve(), handle, chain: Promise.resolve(), dead: false,
+      index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, entrances, images,
+      ready: Promise.resolve(), handle, chain: Promise.resolve(), dead: false, imageLeases: [],
     }
     const used = [...new Set(imageIndices([...underlayOf(slide), ...(slide.shapes ?? [])]))]
     const assets = (deps.doc as { images?: Array<unknown> }).images
+    // Decoded bitmaps are charged to the workspace for as long as the slide holds them (S1-20 review I1):
+    // leased before decoding from the header's dimensions, or right after decoding from the decoder's report.
+    const refuse = (i: number, w: number, h: number) => sink.add({
+      code: 'image-workspace', slideIndex: index, effect: `image:${i}`,
+      message: `Image ${i} (${w}×${h} px decoded) does not fit the slideshow workspace; painted as the missing-image placeholder`,
+    })
     p.ready = Promise.all([lease(), ...used.map(async (i) => {
-      const asset = assets?.[i]
-      const img = asset ? await decodeImageAsset(asset as never).catch(() => undefined) : undefined
-      if (p.dead) releaseDecodedImage(img)
-      else images[i] = img
+      const asset = assets?.[i] as { data?: Uint8Array } | undefined
+      if (!asset) return
+      const tag = `image:${index}:${i}`
+      const known = asset.data ? imageSize(asset.data) : undefined
+      let held: Lease | undefined
+      if (known) {
+        held = workspace.lease(surfaceBytes(known.w, known.h), tag)
+        if (!held) { refuse(i, known.w, known.h); return }
+      }
+      const img = await decodeImageAsset(asset as never).catch(() => undefined)
+      if (img && !held) {
+        const d = img as { width?: number; height?: number }
+        const w = Number(d.width) || 1, h = Number(d.height) || 1
+        held = workspace.lease(surfaceBytes(w, h), tag)
+        if (!held) { releaseDecodedImage(img); refuse(i, w, h); return }
+      }
+      if (!img || p.dead) { releaseDecodedImage(img); held?.release(); return }
+      images[i] = img
+      if (held) p.imageLeases.push(held)
     })]).then(() => {})
     prepared.set(index, p)
     return p
@@ -588,6 +667,7 @@ export function createStage(deps: StageDeps): Stage {
     rngs.delete(p.index)
     p.handle?.release()
     for (const img of new Set(p.images)) releaseDecodedImage(img)
+    for (const l of p.imageLeases.splice(0)) l.release()
     if (prepared.get(p.index) === p) prepared.delete(p.index)
   }
 
@@ -604,10 +684,14 @@ export function createStage(deps: StageDeps): Stage {
     const state = new Map<TargetKey, TargetState>()
     for (const [k, v] of raw) state.set(k, relativeTo(v, p.base.get(k)))
     if (p.hidden.size) {
-      const touched = new Set<TargetKey>()
-      for (const e of snapshot.active) if ('spid' in e.node.target) touched.add(targetKey(e.node.target))
-      for (const e of snapshot.frozen) if ('spid' in e.node.target) touched.add(targetKey(e.node.target))
-      for (const k of p.hidden) if (!touched.has(k)) state.set(k, HIDDEN)
+      // Hidden until one of its own entrance behaviours has begun (an earlier-listed emphasis does not count).
+      const entered = new Set<TargetKey>()
+      for (const e of [...snapshot.active, ...snapshot.frozen]) {
+        if (!('spid' in e.node.target)) continue
+        const key = targetKey(e.node.target)
+        if (p.entrances.get(key)?.has(e.node)) entered.add(key)
+      }
+      for (const k of p.hidden) if (!entered.has(k)) state.set(k, HIDDEN)
     }
     return state
   }
@@ -661,6 +745,22 @@ export function createStage(deps: StageDeps): Stage {
       l.release()
       throw e
     }
+    const up = compositor().upload({ canvas, bounds: { x: 0, y: 0, w: cw / scale, h: ch / scale }, scale, bytes: cw * ch * 4 }, l)
+    if ('refused' in up) { l.release(); return undefined }
+    return { handle: up, epoch }
+  }
+
+  /** A black full-slide frame (the first slide's transition source), charged to the workspace. */
+  function blackFrame(p: Prepared, scale: number): Frame | undefined {
+    const { w, h } = slidePx(p)
+    const cw = Math.max(1, Math.ceil(w * scale)), ch = Math.max(1, Math.ceil(h * scale))
+    const l = workspace.lease(surfaceBytes(cw, ch), 'transition:black')
+    if (!l) return undefined
+    const canvas = factory(cw, ch) as HTMLCanvasElement
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { l.release(); return undefined }
+    ctx.fillStyle = '#000'
+    ctx.fillRect(0, 0, cw, ch)
     const up = compositor().upload({ canvas, bounds: { x: 0, y: 0, w: cw / scale, h: ch / scale }, scale, bytes: cw * ch * 4 }, l)
     if ('refused' in up) { l.release(); return undefined }
     return { handle: up, epoch }
@@ -763,6 +863,13 @@ export function createStage(deps: StageDeps): Stage {
       if (drawn?.approximated && spec) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: spec.element, message: `Transition ${spec.ns}:${spec.element} is drawn as its 2-D look-alike ${drawn.spec.element}` })
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       const start = t
+      // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
+      if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost') {
+        const s = viewport(p).scale
+        outgoing = blackFrame(p, level === 'full' ? s : s / Math.max(1, backing.dpr))
+        if (!outgoing) sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The black source frame did not fit the slideshow workspace; the first slide is a cut' })
+      }
+      shownBefore = true
       if (spec && duration > 0 && outgoing && level !== 'terminal' && manager.state !== 'lost') {
         const owner = owners.get(p.index) ?? workspace
         const s = viewport(p).scale
@@ -880,7 +987,8 @@ export function createStage(deps: StageDeps): Stage {
       lastDirect = ''
       compositor().setViewport(viewport(current))
       residency.commitResize()
-      if (before.w === backing.w && before.h === backing.h) return
+      // A DPR-only change keeps the pixel size but moves the reduced rung's layer scale (S1-20 review M2).
+      if (before.w === backing.w && before.h === backing.h && before.dpr === backing.dpr) return
       // Current, previous and next re-rasterise at the new size; the old layers paint scaled meanwhile.
       for (const p of [...prepared.values()].sort((a, b) => (a === current ? -1 : b === current ? 1 : 0))) {
         if (p.level && p.level !== 'terminal') void ensure(p, p.level)

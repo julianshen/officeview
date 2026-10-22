@@ -10,6 +10,7 @@
  * "Office-shaped synthetic".
  */
 import { readFileSync } from 'node:fs'
+import { createCanvas } from 'canvas'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runShow } from '../src/slideshow'
 import { RESTORE_LISTENER_MS, sessionDeps, type SessionController } from '../src/slideshow/player/session'
@@ -664,6 +665,95 @@ describe('slide time', () => {
     expect(r.s.cursor!.events.every(e => Number.isFinite(e.t))).toBe(true)
     expect(r.s.stage!.slideTime(clock.now())).toBeGreaterThanOrEqual(0)
     r.s.exit()
+  })
+})
+
+describe('S1-20 review fixes (round 1)', () => {
+  /** Records every workspace lease (tag, bytes) and whether it is still held. */
+  function recordingWorkspace(limit?: number) {
+    const leases: Array<{ tag: string; bytes: number; live: boolean }> = []
+    vi.spyOn(sessionDeps, 'workspace').mockImplementation((profile) => {
+      const ws = createSlideShowWorkspace(profile, limit !== undefined ? { limit, scratch: 8 * 2 ** 20 } : {})
+      const lease = ws.lease.bind(ws)
+      ws.lease = (bytes, tag) => {
+        const l = lease(bytes, tag)
+        if (!l) return l
+        const row = { tag, bytes, live: true }
+        leases.push(row)
+        const release = l.release.bind(l)
+        l.release = () => { row.live = false; release() }
+        return l
+      }
+      return ws
+    })
+    return leases
+  }
+  const png = (w: number, h: number) => new Uint8Array(createCanvas(w, h).toBuffer('image/png'))
+
+  it('I1: decoded slide images are charged to the workspace for their lifetime; one that does not fit is a diagnosed missing image', async () => {
+    const leases = recordingWorkspace()
+    const doc = await deck({ slides: [{ shapes: [{ ...at(2, 0, 0, 480, 360), image: { data: png(1500, 1000) } }] }] })
+    const r = await show(doc)
+    const image = leases.filter(l => l.tag.startsWith('image:'))
+    expect(image).toEqual([{ tag: 'image:0:0', bytes: 1500 * 1000 * 4, live: true }])
+    r.s.exit()
+    expect(image[0].live).toBe(false)
+    vi.restoreAllMocks()
+    // a workspace with room for the reserve, metadata and little else: the image is refused before decoding
+    const tight = recordingWorkspace(1024 * 768 * 4 + 8 * 2 ** 20 + 2 ** 20)
+    const t = await show(doc)
+    expect(tight.filter(l => l.tag.startsWith('image:'))).toEqual([])
+    expect(t.log).toContain('diag:image-workspace')
+    t.s.exit()
+  })
+
+  it('I2: a concurrent emphasis listed before the entrance does not reveal the target early', async () => {
+    // codex's case: one click step holds an emphasis on shape 2 listed BEFORE its (delayed) entrance.
+    const emph = `<p:par><p:cTn id="30" presetID="8" presetClass="emph" presetSubtype="0" fill="hold" grpId="0" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+      `<p:animRot by="1200000"><p:cBhvr><p:cTn id="31" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="2"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot></p:childTnLst></p:cTn></p:par>`
+    const late = effect(12, 2, 'entr').replace('<p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set>', '<p:cond delay="500"/></p:stCondLst><p:childTnLst><p:set>')
+    const doc = await deck({
+      slides: [{
+        shapes: [at(2, 0, 0, 200, 100, 'Spins in'), at(3, 0, 200, 200, 100, 'Spins first')],
+        // Shape 3: an emphasis in an EARLIER step than its entrance: shown from the start (it was revealed before).
+        timingXml: timingXmlOf(mainSeqXml([
+          step(40, emph.replace(/spid="2"/, 'spid="3"').replace('id="30"', 'id="42"').replace('id="31"', 'id="43"')),
+          step(10, emph + late),
+          step(50, effect(52, 3, 'entr')),
+        ])),
+      }],
+    })
+    const r = await show(doc)
+    expect(visible(stateNow(r), 'sp:2')).toBe(false)
+    expect(r.text()).toEqual(['Spins first'])
+    expect(visible(stateNow(r), 'sp:3')).toBe(true)
+    await r.key('ArrowRight')
+    await r.key('ArrowRight')
+    // the step has begun and the emphasis runs, but the entrance waits 500 ms: still hidden
+    await r.tick(100)
+    expect(visible(stateNow(r), 'sp:2')).toBe(false)
+    expect(r.text()).not.toContain('Spins in')
+    await r.tick(500)
+    expect(visible(stateNow(r), 'sp:2')).toBe(true)
+    expect(r.text()).toContain('Spins in')
+    r.s.exit()
+  })
+
+  it('M1: the first slide plays its transition from black; under reduced motion it is the short crossfade', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 0, 0, 200, 100, 'A')], transition: { xml: '<p:transition spd="slow"><p:wipe dir="r"/></p:transition>' } }] })
+    const r = await show(doc)
+    expect(r.s.stage!.transition).toEqual({ effect: 'wipe', duration: 1000 })
+    expect(r.s.stage!.slideTime(clock.now())).toBe(-1000)
+    await r.tick(1000)
+    expect(r.s.stage!.transition).toBeUndefined()
+    r.s.exit()
+    const reduced = await show(doc, { motion: 'reduced' })
+    expect(reduced.s.stage!.transition).toEqual({ effect: 'fade', duration: REDUCED_TRANSITION_MS })
+    reduced.s.exit()
+    // a first slide without a transition is a cut
+    const cut = await show(await deck({ slides: [{ shapes: [] }] }))
+    expect(cut.s.stage!.transition).toBeUndefined()
+    cut.s.exit()
   })
 })
 
