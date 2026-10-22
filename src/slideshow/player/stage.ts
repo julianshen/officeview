@@ -156,8 +156,9 @@ function isContainer(n: TimeNode): n is Extract<TimeNode, { children: TimeNode[]
 const COLOUR_ATTR = new Set(['fillcolor', 'stroke.color', 'style.color'])
 
 /**
- * Decoded pixel size from a PNG, GIF, JPEG or WebP header (S1-20 review I1: the decode is charged before it
- * happens). `undefined` for anything else (SVG, unknown, truncated): the caller charges the decoder's report.
+ * Decoded pixel size from a PNG, GIF, JPEG, WebP, BMP or TIFF header (S1-20 review I1, PR #18 review 2: the
+ * decode is charged before it happens). `undefined` for anything else (SVG, unknown, truncated): the caller
+ * does not decode it.
  */
 export function imageSize(b: Uint8Array): { w: number; h: number } | undefined {
   const u16 = (o: number, le = false) => le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1]
@@ -171,6 +172,33 @@ export function imageSize(b: Uint8Array): { w: number; h: number } | undefined {
     if (kind === 'VP8L') return ok(1 + (((b[22] & 0x3f) << 8) | b[21]), 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6)))
     if (kind === 'VP8X') return ok(1 + (b[24] | (b[25] << 8) | (b[26] << 16)), 1 + (b[27] | (b[28] << 8) | (b[29] << 16)))
     return undefined
+  }
+  // BMP: BITMAPCOREHEADER (12 bytes) has 16-bit sizes at 18 and 20; the others have int32 at 18 and 22,
+  // the height negative for a top-down bitmap.
+  if (b.length >= 26 && b[0] === 0x42 && b[1] === 0x4d) {
+    const i32 = (o: number) => b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)
+    const header = i32(14)
+    if (header === 12) return ok(u16(18, true), u16(20, true))
+    if (header >= 40) return ok(Math.abs(i32(18)), Math.abs(i32(22)))
+    return undefined
+  }
+  // TIFF: ImageWidth (256) and ImageLength (257) in IFD0, SHORT or LONG.
+  if (b.length >= 8 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 42 && b[3] === 0) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 42))) {
+    const le = b[0] === 0x49
+    const t16 = (o: number) => u16(o, le)
+    const t32 = (o: number) => (le ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0 : u32(o))
+    const ifd = t32(4)
+    if (ifd + 2 > b.length) return undefined
+    let w = 0, h = 0
+    for (let k = 0, n = t16(ifd); k < n; k++) {
+      const e = ifd + 2 + k * 12
+      if (e + 12 > b.length) break
+      const tag = t16(e), type = t16(e + 2)
+      const value = type === 3 ? t16(e + 8) : type === 4 ? t32(e + 8) : 0
+      if (tag === 256) w = value
+      else if (tag === 257) h = value
+    }
+    return ok(w, h)
   }
   if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
     // Walk the segments to the first start-of-frame (SOF0..SOF15 except DHT, JPG and DAC); bounded by the byte length.
