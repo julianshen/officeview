@@ -103,6 +103,22 @@ function fakeHandle(sizes: number[], between?: () => void): PptxPackageHandle {
   return { pkg: { entry: () => ({ internalStream: () => stream }) } as unknown as OfficePackage, slideParts: [] } as unknown as PptxPackageHandle
 }
 
+/** Flips bytes inside one local entry's deflated stream, so the inflate itself fails (a CRC check would never be reached). */
+function corruptDeflate(zipBytes: Uint8Array, name: string, flips = 50): Uint8Array {
+  const out = zipBytes.slice(), view = new DataView(out.buffer), bytes = new TextEncoder().encode(name)
+  const matches = (at: number) => bytes.every((b, i) => out[at + i] === b)
+  for (let i = 0; i + 30 < out.length; i++) {
+    if (view.getUint32(i, true) !== 0x04034b50 || view.getUint16(i + 8, true) !== 8) continue
+    if (view.getUint16(i + 26, true) !== bytes.length || !matches(i + 30)) continue
+    const size = view.getUint32(i + 18, true)
+    if (size === 0) throw new Error('the entry uses a data descriptor; corrupt the real region instead')
+    const start = i + 30 + view.getUint16(i + 26, true) + view.getUint16(i + 28, true)
+    for (let k = 0; k < flips; k++) out[start + (k * 797) % (size - 1)] ^= 0xff
+    return out
+  }
+  throw new Error(`${name}: deflated local header not found`)
+}
+
 describe('bounded media reads and leases', () => {
   it('reads with the inflated counter; an over-cap declaration is refused unread', async () => {
     // The charge is the inflated length, not the declaration.
@@ -152,12 +168,12 @@ describe('bounded media reads and leases', () => {
     expect(hostile).not.toHaveProperty('refused')
     expect(win.URL.createObjectURL.mock.calls[0]![0]!.type).toBe('')
     ;(hostile as { release(): void }).release()
-    // The honest declarations pass through unchanged.
-    for (const type of ['video/mp4', 'audio/mpeg']) {
+    // The honest declarations pass through unchanged, in any case.
+    for (const type of ['video/mp4', 'audio/mpeg', 'Video/MP4']) {
       const w2 = openWindow()
       const ok = await openMediaLease(handle, { ...rec, contentType: type }, createSlideShowWorkspace('desktop', { limit: 1024 * 1024 }), w2)
       expect(ok).not.toHaveProperty('refused')
-      expect(w2.URL.createObjectURL.mock.calls[0]![0]!.type).toBe(type)
+      expect(w2.URL.createObjectURL.mock.calls[0]![0]!.type.toLowerCase()).toBe(type.toLowerCase())
       ;(ok as { release(): void }).release()
     }
   })
@@ -303,8 +319,11 @@ describe('bounded media reads and leases', () => {
     retain(1)
     leave()
     expect(lease.spans).toBe(0)
-    // Strict-mode modules make a getter-only write a loud error.
+    // Strict-mode modules make getter-only writes loud: spans, url and bytes
+    // are all read-only from the caller's side.
     expect(() => { lease.spans = 99 }).toThrow(TypeError)
+    expect(() => { (lease as unknown as { url: string }).url = 'blob:fake' }).toThrow(TypeError)
+    expect(() => { (lease as unknown as { bytes: number }).bytes = 0 }).toThrow(TypeError)
     expect(lease.spans).toBe(0)
     release()
     expect(w.used()).toBe(0)
@@ -425,6 +444,23 @@ describe('bounded media reads and leases', () => {
     const rec = await mediaRec(handle)
     const w = createSlideShowWorkspace('desktop', { limit: 1024 * 1024 })
     expect(await openMediaLease(handle, { ...rec, partPath: 'ppt/media/nope.mp4' }, w, win)).toEqual({ refused: 'media-missing' })
+    expect(w.used()).toBe(0)
+  })
+
+  it('a corrupt deflate stream is a refusal, not a rejection', async () => {
+    // The deck's parts are STORED: rewrite the media part deflated and flip
+    // bytes inside its compressed stream, so the inflate itself fails.
+    const data = random(64 * 1024)
+    const { default: JSZip } = await import('jszip')
+    const zip = await JSZip.loadAsync(await buildPptxDeck({ slides: [{ shapes: [{ id: 2, off: ['0', '0'], ext: ['1000', '1000'] }], media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data }] }] }))
+    zip.file('ppt/media/showMedia1.mp4', data)
+    const deflated = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+    const handle = await openShowPackage(corruptDeflate(deflated, 'ppt/media/showMedia1.mp4'))
+    const rec = await mediaRec(handle)
+    const w = createSlideShowWorkspace('desktop', { limit: 1024 * 1024 })
+    const win = openWindow()
+    expect(await openMediaLease(handle, rec, w, win)).toEqual({ refused: 'media-refused' })
+    expect(win.URL.createObjectURL).not.toHaveBeenCalled()
     expect(w.used()).toBe(0)
   })
 

@@ -64,7 +64,9 @@ export async function openMediaLease(
     // ledger while `new Blob(chunks)` runs; the chunk charge leaves right after.
     if (!lease.grow(read.inflated)) { lease.release(); return { refused: 'resource-limit' } }
     // A hostile content type cannot make the Blob a renderable document type.
-    const type = /^(?:audio|video)\//.test(rec.contentType) ? rec.contentType : ''
+    // A hostile declaration cannot make the Blob a renderable document type;
+    // the Blob spec lowercases types anyway, so case is not a hazard.
+    const type = /^(?:audio|video)\//i.test(rec.contentType) ? rec.contentType : ''
     let blob: Blob
     try {
       blob = new Blob(read.chunks as unknown as BlobPart[], { type })
@@ -84,8 +86,8 @@ export async function openMediaLease(
     let spans = 0
     let revoked = false
     const out: MediaLease = {
-      url: objectUrl,
-      bytes: blob.size,
+      get url() { return objectUrl },
+      get bytes() { return blob.size },
       get spans() { return spans },
       retain(slides) {
         if (slides === Infinity) { spans = Infinity; return }
@@ -112,10 +114,9 @@ export async function openMediaLease(
     lease.release()
     throwIfAborted(signal)
     if ((e as { mediaLimit?: unknown })?.mediaLimit === true) return { refused: 'media-limit' }
-    if (isPackageError(e)) {
-      if (e.code === 'resource-limit') return { refused: 'resource-limit' }
-      return { refused: 'media-refused' }
-    }
-    throw e
+    if (isPackageError(e) && e.code === 'resource-limit') return { refused: 'resource-limit' }
+    // Damaged or hostile input - a corrupt deflate stream reports as a plain
+    // Error - is a diagnosed refusal, never a rejection racing a slide change.
+    return { refused: 'media-refused' }
   }
 }
