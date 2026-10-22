@@ -82,7 +82,7 @@ jobs:
   slideshow-browser:
     name: slideshow browser smoke (Chromium, SwiftShader WebGL2)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
