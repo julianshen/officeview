@@ -222,6 +222,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
     }
   }
   if (!start.isCurrent()) throw new SlideShowError('cancelled')
+  // Spec 8: the show runs the slide appearance enrichment itself (backgrounds, master and layout artwork), so a
+  // show started before any viewer painted the document looks the same. Idempotent: a viewer that already ran it
+  // shares the same run. A failure only costs the inherited appearance; the enrichment diagnoses it on the document.
+  // Through import(), as getPaintables loads it, so the enrichment stays its own chunk.
+  await import('../../pptx/appearance').then((m) => m.enrichSlideAppearance(doc)).catch(() => undefined)
+  if (!start.isCurrent()) throw new SlideShowError('cancelled')
 
   let workspace: SlideShowWorkspace | undefined
   let terminal: TerminalReserve | undefined

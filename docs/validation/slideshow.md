@@ -2837,7 +2837,23 @@ ECMA-376 / [MS-PPTX] in the implementer sandbox).
 
 Result: the GPU run meets the target (p95 ≤ 12 ms, no dropped frame), with every step's p95 between 0.5 and 0.8 ms (submit) and between 2.2 and 2.7 ms (readback). SwiftShader rasterises 3840 × 2160 on the CPU, so it draws only 15–20 frames per second and its readback p95 of 65.8 ms misses the target. That run is recorded as a miss, but it is not the spec 7 benchmark, which names the reference laptop's Chromium.
 
-**Escalation: slide transitions at the benchmark size are cuts.** On WebGL2 at 3840 × 2160, the outgoing frame of a slide transition is refused (`transition-workspace`: "The outgoing frame did not fit the slideshow workspace; the slide change is a cut"). After two resident slides of tdf44223, the workspace holds 489,330,720 of 536,870,912 B. Each resident rung prices padded bounds × 1.25, plus the largest layer, plus two transition frames. The outgoing frame is then charged to the workspace again, with a 66 MB peak while it is uploaded. This affects both the split and the fade decks, on the GPU and on SwiftShader. In one SwiftShader run the split still played, because the neighbour's prefetch had not finished yet. The transition plays at DPR 1. It also plays at DPR 2 when the workspace is 1 GiB (`budget=wide`, a profiling-only harness option).
+**Fixed in S1-22 fix round 1 (the paragraph below describes the state before it): slide transitions at the benchmark size were cuts.** On WebGL2 at 3840 × 2160, the outgoing frame of a slide transition is refused (`transition-workspace`: "The outgoing frame did not fit the slideshow workspace; the slide change is a cut"). After two resident slides of tdf44223, the workspace holds 489,330,720 of 536,870,912 B. Each resident rung prices padded bounds × 1.25, plus the largest layer, plus two transition frames. The outgoing frame is then charged to the workspace again, with a 66 MB peak while it is uploaded. This affects both the split and the fade decks, on the GPU and on SwiftShader. In one SwiftShader run the split still played, because the neighbour's prefetch had not finished yet. The transition plays at DPR 1. It also plays at DPR 2 when the workspace is 1 GiB (`budget=wide`, a profiling-only harness option).
+
+**After fix round 1.** The outgoing frame now comes from the transition allowance the outgoing slide's rung already priced. That slide's own incoming frame was released when its transition ended. A retired rung keeps its charge until the frame's lease is released, so a goTo that drops the slide while its frame is still drawn stays accounted. The black frame for the first slide, and any slide without an open rung, still lease from the workspace, and are refused with a diagnostic when they don't fit. Re-run on the M4 Pro at 1920 × 1080, DPR 2, with the product 512 MiB budget:
+
+| Test | Mode | p50 / **p95** ms | Dropped |
+|---|---|---|---|
+| tdf104788 slide 6, all steps | submit | 0.30 / **0.30** | 0 |
+| tdf104788 slide 6, all steps | readback | 1.90 / **2.00** | 0 |
+| tdf44223 slide 2 split transition (plays) | submit | 0.10 / **0.20** | 0 |
+| tdf44223 slide 2 split transition (plays) | readback | 1.80 / **2.40** | 0 |
+| tdf115394 slide 5 fade transition (plays) | submit | 0.10 / **0.20** | 0 |
+| tdf115394 slide 5 fade transition (plays) | readback | 1.60 / **1.80** | 0 |
+
+The jsdom tests in `tests/slideshow-fix-s1-22.test.ts` cover the budget:
+- a split transition plays at 3840 × 2160 on the 512 MiB desktop budget, less the WebGL2 drawing-buffer lease;
+- a split transition plays on the 256 MiB mobile budget at its largest output (1619 × 2160 after the cap);
+- a refused black frame is still a diagnosed cut.
 
 **Transition mask re-upload (the S1-14 question).** tdf44223 slide 2 `split` (a mask, re-traced and re-uploaded every frame) against tdf115394 slide 5 `fade` (a transform):
 

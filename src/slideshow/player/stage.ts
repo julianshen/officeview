@@ -845,9 +845,14 @@ export function createStage(deps: StageDeps): Stage {
       releaseFrame(outgoing)
       outgoing = undefined
       if (p && p.level && p.level !== 'terminal' && !disposed) {
-        // The outgoing frame, charged to the workspace (not a slide's rung: the slide may be evicted next).
+        // The outgoing frame comes from the transition allowance the slide's rung already priced (its own
+        // incoming frame was released when its transition ended), so it is never charged twice (S1-22 fix 1).
+        // An eviction while it is drawn is safe: a retired rung keeps its charge until its last lease goes.
+        // Only a slide without an open rung falls back to the workspace.
         const s = viewport(p).scale
-        const f = flatten(p, liveState, workspace, p.level === 'full' ? s : s / Math.max(1, backing.dpr), 'transition:from')
+        const scale = p.level === 'full' ? s : s / Math.max(1, backing.dpr)
+        const own = owners.get(p.index)
+        const f = (own && flatten(p, liveState, own, scale, 'transition:from')) || flatten(p, liveState, workspace, scale, 'transition:from')
         if (f) outgoing = f
         else sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The outgoing frame did not fit the slideshow workspace; the slide change is a cut' })
       }
