@@ -133,37 +133,48 @@ export function maskShows(mask: MaskState, box: { x: number; y: number; w: numbe
 
 const spidOf = (shape: PptxShape): string | undefined => shape.source?.id
 
-/** The topmost interactive node under (x, y) in `nodes`, walking in reverse paint order. */
-function hitNodes(nodes: readonly PptxShape[], parent: Affine, x: number, y: number, interactive: ReadonlySet<string>, owner?: string): string | undefined {
+/**
+ * Decides what a click on `leaf` at its local point (u, v) (its box is `w` × `h`) means for the interactive
+ * shape `spid` (the leaf itself or a group around it): a target, or `undefined` to let the click through to
+ * the shapes below (a text box whose links are on runs the point misses).
+ */
+export type HitAccept<R> = (spid: string, leaf: PptxShape, u: number, v: number, w: number, h: number) => R | undefined
+
+/** The topmost accepted node under (x, y) in `nodes`, walking in reverse paint order. */
+function hitNodes<R>(nodes: readonly PptxShape[], parent: Affine, x: number, y: number, accept: HitAccept<R>, owners: readonly string[] = []): R | undefined {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const shape = nodes[i]
     const local = nodeMatrix(shape, parent)
     if (!local) continue
     const id = spidOf(shape)
-    // A trigger or link on a group belongs to every leaf inside it (the innermost interactive node wins).
-    const mine = id !== undefined && interactive.has(id) ? id : owner
+    // A trigger or link on a group belongs to every leaf inside it (the innermost accepted node wins).
+    const mine = id !== undefined ? [id, ...owners] : owners
     if (shape.group) {
       const child = groupChildMatrix(shape, local.m)
-      const hit = child && hitNodes(shape.children ?? [], child, x, y, interactive, mine)
-      if (hit) return hit
+      const hit = child && hitNodes(shape.children ?? [], child, x, y, accept, mine)
+      if (hit !== undefined) return hit
       continue
     }
-    if (mine === undefined) continue
+    if (mine.length === 0) continue
     const inv = invert(local.m)
     if (!inv) continue
     const [u, v] = apply(inv, x, y)
-    if (u >= 0 && v >= 0 && u <= local.w && v <= local.h) return mine
+    if (!(u >= 0 && v >= 0 && u <= local.w && v <= local.h)) continue
+    for (const spid of mine) {
+      const hit = accept(spid, shape, u, v, local.w, local.h)
+      if (hit !== undefined) return hit
+    }
   }
   return undefined
 }
 
-function hitLayers(layers: readonly PlanLayer[], state: RenderState, parent: Affine, x: number, y: number, interactive: ReadonlySet<string>): string | undefined {
+function hitLayers<R>(layers: readonly PlanLayer[], state: RenderState, parent: Affine, x: number, y: number, accept: HitAccept<R>): R | undefined {
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i]
     if (layer.kind === 'watermark') continue
     if (layer.kind === 'static') {
-      const hit = hitNodes(layer.nodes, parent, x, y, interactive)
-      if (hit) return hit
+      const hit = hitNodes(layer.nodes, parent, x, y, accept)
+      if (hit !== undefined) return hit
       continue
     }
     const s = state.get(layer.key)
@@ -177,10 +188,19 @@ function hitLayers(layers: readonly PlanLayer[], state: RenderState, parent: Aff
       const [lx, ly] = apply(inv, x, y)
       if (!maskShows(s.mask, box, lx, ly)) continue
     }
-    const hit = layer.sub ? hitLayers(layer.sub, state, m, x, y, interactive) : hitNodes(layer.nodes, m, x, y, interactive)
-    if (hit) return hit
+    const hit = layer.sub ? hitLayers(layer.sub, state, m, x, y, accept) : hitNodes(layer.nodes, m, x, y, accept)
+    if (hit !== undefined) return hit
   }
   return undefined
+}
+
+/**
+ * The topmost target at slide-px point (x, y) that `accept` takes (PR #18 review 3: it sees the leaf and the
+ * local point, so a text box can resolve the linked run under it), or `undefined` (the click advances).
+ */
+export function hitTarget<R>(plan: RenderPlan, state: RenderState, x: number, y: number, accept: HitAccept<R>): R | undefined {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined
+  return hitLayers(plan.layers, state, IDENTITY, x, y, accept)
 }
 
 /**
@@ -189,6 +209,6 @@ function hitLayers(layers: readonly PlanLayer[], state: RenderState, parent: Aff
  * slide's trigger shapes and hyperlinked shapes.
  */
 export function hitTest(plan: RenderPlan, state: RenderState, x: number, y: number, interactive: ReadonlySet<string>): string | undefined {
-  if (interactive.size === 0 || !Number.isFinite(x) || !Number.isFinite(y)) return undefined
-  return hitLayers(plan.layers, state, IDENTITY, x, y, interactive)
+  if (interactive.size === 0) return undefined
+  return hitTarget(plan, state, x, y, (spid) => (interactive.has(spid) ? spid : undefined))
 }

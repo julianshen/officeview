@@ -41,7 +41,7 @@ import type { DiagnosticSink, LinkSpec, MetadataHandle, RenderState, ShowClock, 
 import { admitShow, createSlideShowWorkspace, type SlideShowProfile } from '../workspace'
 import { createShowA11y, showTargets, slideTitle, visibleText, type ShowA11y, type ShowTarget } from './a11y'
 import { createCursorHider, type CursorHider, type CursorTimer } from './cursor'
-import { hitTest } from './hit-test'
+import { hitTarget } from './hit-test'
 import { createGestureState, gestureToInput, keyToInput, MODIFIER_KEYS } from './keys'
 import { runLink } from './links'
 import { nextVisible, previousVisible, visibleOrder } from './order'
@@ -85,7 +85,7 @@ export interface SessionController extends SlideShowSession {
   /** Runs one frame now (the frame driver calls it every animation frame; tests call it directly). */
   tick(): void
   /** Activates a trigger or link the way a click on its shape does (the accessibility buttons use it). */
-  activate(target: { spid: string; kind: 'trigger' | 'link' }): void
+  activate(target: { spid: string; kind: 'trigger' | 'link'; run?: { p: number; r: number } }): void
   readonly state: SessionState
   /** @internal The engine, for tests and the debug harness. */
   readonly stage: Stage | undefined
@@ -439,8 +439,11 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (!live() || !v.cursor) return
       if (at === 'last') report()
       updateA11y(true)
-      for (const q of v.queue.splice(0)) {
-        if (visit !== v || exited) break
+      // Replay the inputs typed while it loaded. One that changes the slide hands the rest to the new visit,
+      // which replays them once it is ready in turn (PR #18 review 3); explicit navigation (goTo) supersedes them.
+      const rest = v.queue.splice(0)
+      for (let q = rest.shift(); q && !exited; q = rest.shift()) {
+        if (visit && visit !== v && !visit.cursor) { visit.queue.push(q, ...rest); break }
         q === 'next' ? next() : previous()
       }
     })
@@ -491,7 +494,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   const last = () => { if (order.length) void enter(order[order.length - 1]) }
 
   /** A trigger runs its interactive sequence; a link runs its action (spec 4.3). Neither is a click advance. */
-  function activate(target: { spid: string; kind: 'trigger' | 'link' }): void {
+  function activate(target: { spid: string; kind: 'trigger' | 'link'; run?: { p: number; r: number } }): void {
     if (exited || !started || kiosk) return
     const v = visit
     if (!v || !v.cursor || !v.timeline || slide !== v.index) return
@@ -500,7 +503,10 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (after) { v.cursor = after; updateA11y() }
       return
     }
-    const link = v.meta?.links.find((l: LinkSpec) => l.spid === target.spid)
+    // The link on the run named, else the shape's own; a target naming no run falls back to the first link.
+    const links = (v.meta?.links ?? []).filter((l: LinkSpec) => l.spid === target.spid)
+    const run = target.run
+    const link = run ? links.find((l) => l.run?.p === run.p && l.run.r === run.r) : links.find((l) => !l.run) ?? links[0]
     if (link && win) runLink(link, { goTo, next, previous, first, last, exit }, win, { sink, slideIndex: v.index, open: start.platform.open })
   }
 
@@ -511,13 +517,25 @@ export async function createSession(start: ShowStart): Promise<SessionController
       const at = stage.toSlide(clientX, clientY)
       const triggers = v.timeline.triggers()
       const links = v.meta?.links ?? []
-      const interactive = new Set<string>([...triggers, ...links.map((l) => l.spid)])
-      const spid = at && interactive.size ? hitTest(stage.plan, stage.stateAt(v.cursor, clock!.now()), at.x, at.y, interactive) : undefined
-      if (spid !== undefined) {
-        // A trigger beats a link on the same shape (pending D4; recorded in the catalogue).
-        activate({ spid, kind: triggers.includes(spid) ? 'trigger' : 'link' })
-        return
+      const st = stage
+      // A trigger beats a link on the same shape (pending D4; recorded in the catalogue). A link on text runs
+      // is taken only over the laid-out run it is on (PR #18 review 3); elsewhere the shape's own link, if any,
+      // else the click passes to the shapes below. Text that cannot be located keeps the first run's link.
+      const accept = (spid: string, leaf: PptxShape, lx: number, ly: number, w: number, h: number): Parameters<typeof activate>[0] | undefined => {
+        if (triggers.includes(spid)) return { spid, kind: 'trigger' }
+        const mine = links.filter((l) => l.spid === spid)
+        if (!mine.length) return undefined
+        const own = mine.some((l) => !l.run)
+        const runs = mine.filter((l) => l.run)
+        if (runs.length && leaf.source?.id === spid) {
+          const run = st.runAt(leaf, lx, ly, w, h)
+          if (run && runs.some((l) => l.run!.p === run.p && l.run!.r === run.r)) return { spid, kind: 'link', run }
+          if (run === undefined && !own) return { spid, kind: 'link', run: runs[0].run }
+        }
+        return own ? { spid, kind: 'link' } : undefined
       }
+      const target = at && (triggers.length || links.length) ? hitTarget(st.plan!, st.stateAt(v.cursor, clock!.now()), at.x, at.y, accept) : undefined
+      if (target) { activate(target); return }
       // advClick="0": mouse clicks never advance; keyboard, API and presenter next still do (spec 4.4).
       if (v.advance && !v.advance.clickAdvances) return
     }

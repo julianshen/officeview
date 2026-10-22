@@ -2658,7 +2658,7 @@ The README's "Slideshow" section documents these for hosts.
   - **3-D and morph transitions are Stage 3.** Each `pending-stage-3` row plays the 2-D look-alike its catalogue row names, diagnosed.
   - **Unmapped attributes.** `xshear` (tdf104788's "breaks" entrance) has no render mapping; it is diagnosed and the rest of the effect plays.
   - **Graphic and chart builds** (`graphicEl`, `oleChartEl` targets, SmartArt) animate the whole graphic or chart, diagnosed `timing-approximated`.
-  - **Run hyperlinks** activate at shape granularity: the first link on a shape. A shape with both a trigger and a link runs the trigger (pending D4, Q-trigger-link).
+  - **Run hyperlinks** activate per run (PR #18 review 3): a click is resolved against the laid-out run boxes, so each linked run runs its own link, and a click on the box's unlinked text falls through (to a shape link, else the advance). Vertical and warped text cannot be located and keep the first run's link. The accessibility layer offers one button per linked run. A shape with both a trigger and a link runs the trigger (pending D4, Q-trigger-link).
   - **First-slide entry from black** plays the first slide's transition; a slide with no open rung leases its black frame from the workspace and is a diagnosed cut if it does not fit.
   - **4K residency.** At 3840 × 2160 on the 512 MiB desktop budget, two resident slides and one transition fit; a third resident slide (previous, current and next) steps down a rung with a `ladder-*` diagnostic.
   - **Start latency.** The show runs the appearance enrichment in its start path, so presenting a document the viewer has not painted yet waits for it (longer for large decks).

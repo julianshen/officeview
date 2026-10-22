@@ -65,7 +65,7 @@ let painted: number[]
 /** S1-20: the engine seam. A recording stage stands in for it here (the engine has its own suite). */
 const recordingStage = (): Stage => ({
   leave() {}, async enter(m) { painted.push(m.index) }, slideTime: (t) => t, frame: () => undefined, stateAt: () => new Map(),
-  plan: undefined, toSlide: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
+  plan: undefined, toSlide: () => undefined, runAt: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
 })
 let clock: ManualClock
 beforeEach(() => {

@@ -44,6 +44,8 @@
 import { acquireFonts, type FontLease } from '../../core/fonts/register'
 import { decodeImage, decodeImageAsset, releaseDecodedImage, type ImageDecodeFn } from '../../core/images'
 import type { WatermarkOptions } from '../../core/watermark'
+import { layoutTextBody } from '../../drawing/text-layout'
+import { createTextBodyMeasurer } from '../../drawing/text-paint'
 import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { renderStateAt, type BaseGeometry } from '../engine/behaviours'
 import type { SlideCursor, SlideTimeline } from '../engine/steps'
@@ -119,6 +121,12 @@ export interface Stage {
   readonly plan: RenderPlan | undefined
   /** Client px → slide px of the shown slide. */
   toSlide(clientX: number, clientY: number): { x: number; y: number } | undefined
+  /**
+   * The text run (paragraph, run index) laid out at local px (u, v) of `shape`, whose box is `w` × `h`
+   * (PR #18 review 3: hyperlinks on runs). `null` when no run is there; `undefined` when the text cannot be
+   * located (vertical or warped text).
+   */
+  runAt(shape: PptxShape, u: number, v: number, w: number, h: number): { p: number; r: number } | null | undefined
   resize(css: { w: number; h: number }, dpr: number): void
   readonly level: LadderLevel | undefined
   readonly backend: string
@@ -413,6 +421,8 @@ export function createStage(deps: StageDeps): Stage {
   /** Whether any slide has been entered yet (the first one transitions from black). */
   let shownBefore = false
   let kinds: string[] = []
+  /** A 1 × 1 canvas whose context measures text for `runAt`. */
+  let measurer: ReturnType<CanvasFactory> | undefined
 
   // -------------------------------------------------------------------
   // Viewport
@@ -1072,6 +1082,23 @@ export function createStage(deps: StageDeps): Stage {
       if (!inv) return undefined
       const [x, y] = apply(inv, dx, dy)
       return { x, y }
+    },
+
+    runAt(shape, u, v, w, h) {
+      const body = shape.textBody
+      if (!body || body.paragraphs.length === 0) return null
+      if ((body.direction && body.direction !== 'horz') || body.textWarp) return undefined
+      const ctx = (measurer ??= factory(1, 1)).getContext('2d')
+      if (!ctx) return undefined
+      const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx as CanvasRenderingContext2D, resolveFont), current?.slide.theme)
+      for (const line of layout.lines) {
+        if (v < line.y || v > line.y + line.height) continue
+        for (const seg of line.segments) {
+          if (seg.transform || u < seg.x || u > seg.x + seg.width) continue
+          return { p: line.paragraphIndex, r: seg.runIndex }
+        }
+      }
+      return null
     },
 
     resize(css, dpr) {

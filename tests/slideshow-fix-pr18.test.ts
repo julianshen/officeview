@@ -32,11 +32,30 @@ vi.mock('../src/slideshow/residency', async (importOriginal) => {
   }
 })
 
+/** Slide metadata reads for `metaGate.slide` wait on `metaGate.open` (a slow slide to load). */
+const metaGate: { slide?: number; open?: Promise<void> } = {}
+vi.mock('../src/slideshow/read/store', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/slideshow/read/store')>()
+  return {
+    ...real,
+    createSlideMetadataStore: (...args: Parameters<typeof real.createSlideMetadataStore>) => {
+      const store = real.createSlideMetadataStore(...args)
+      const acquire = store.acquire.bind(store)
+      store.acquire = async (i, signal) => {
+        if (i === metaGate.slide && metaGate.open) await metaGate.open
+        return acquire(i, signal)
+      }
+      return store
+    },
+  }
+})
+
 let seams: ShowSeams | undefined
 afterEach(() => {
   seams?.restore()
   seams = undefined
   gate.open = gate.release = undefined
+  metaGate.slide = metaGate.open = undefined
   document.body.replaceChildren()
 })
 
@@ -105,5 +124,27 @@ it('P2: a Canvas 2D show composites on the reserved output canvas and mounts no 
     await r.tick(100)
     const px2 = output.getContext('2d')!.getImageData(output.width >> 1, output.height >> 1, 1, 1).data
     expect([...px2.slice(0, 3)]).toEqual([0xFF, 0xEE, 0xDD])
+  } finally { r.exit() }
+})
+
+it('PR #18 review 3: navigation queued on a loading slide survives the slide change it causes', async () => {
+  seams = installShowSeams({ width: 1280, height: 720 })
+  const doc = await loadDeck(await buildPptxDeck({
+    slideSize: [W, H],
+    slides: [{ shapes: [box(2, 'DDEEFF')] }, { shapes: [box(2, 'FFEEDD')] }, { shapes: [box(2, 'EEFFDD')] }, { shapes: [box(2, 'DDDDDD')] }],
+  }))
+  let release!: () => void
+  metaGate.slide = 1
+  metaGate.open = new Promise<void>((resolve) => { release = resolve })
+  const r = await startShow(doc, { seams, size: { width: 1280, height: 720 } })
+  try {
+    await r.tick(100)
+    // Three fast Next presses: the first enters slide 1 (still loading), the other two queue there.
+    r.s.next(); r.s.next(); r.s.next()
+    expect(r.s.slideIndex).toBe(1)
+    release()
+    await r.tick(0)
+    await r.tick(0)
+    expect(r.s.slideIndex).toBe(3)
   } finally { r.exit() }
 })

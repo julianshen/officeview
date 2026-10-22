@@ -252,6 +252,34 @@ describe('click targets', () => {
 })
 
 describe('hyperlinks', () => {
+  it('PR #18 review 3: each linked run in a text box activates its own link; unlinked text advances', async () => {
+    // One left-aligned paragraph, two 40 pt runs: "AAAA" links to /a, "BBBB" to /b; the box is far wider than the text.
+    const doc = await deck({
+      slides: [{
+        shapes: [at(2, 0, 0, 900, 96, undefined, { paragraphs: [{ runs: [{ text: 'AAAA', sz: '4000' }, { text: 'BBBB', sz: '4000' }] }] })],
+        links: [
+          { shapeId: 2, target: 'https://example.com/a', external: true, onRun: 0 },
+          { shapeId: 2, target: 'https://example.com/b', external: true, onRun: 1 },
+        ],
+      }, { shapes: [] }],
+    })
+    const r = await show(doc)
+    // The text starts after the 9.6 px left inset; each run is roughly 100 px wide at 40 pt.
+    await r.click(40, 40)
+    await r.click(170, 40)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/a', 'https://example.com/b'])
+    expect(r.s.slideIndex).toBe(0)
+    // The accessibility layer offers one button per linked run, each running its own link.
+    const buttons = r.buttons()
+    expect(buttons.map(b => b.textContent)).toEqual(['Link: AAAA', 'Link: BBBB'])
+    buttons[1].click()
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/a', 'https://example.com/b', 'https://example.com/b'])
+    // Text-box area with no linked run under it is not a link: the click advances.
+    await r.click(700, 40)
+    expect(r.s.slideIndex).toBe(1)
+    r.s.exit()
+  })
+
   it('hyperlink slide jump, endshow and url with noopener; refused schemes diagnose', async () => {
     const shapes = [at(2, 0, 0, 96, 96, 'Jump'), at(3, 100, 0, 96, 96, 'End'), at(4, 200, 0, 96, 96, 'Web'), at(5, 300, 0, 96, 96, 'Script')]
     const doc = await deck({

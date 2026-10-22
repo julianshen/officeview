@@ -18,7 +18,8 @@ import { underlayOf } from '../render/scene'
 import { targetKey } from '../target'
 import type { BuildOwnership, LinkSpec, RenderState, TargetKey } from '../types'
 
-export interface ShowTarget { spid: string; kind: 'trigger' | 'link'; label: string }
+/** `run`: the linked text run a link target is on (PR #18 review 3: each linked run is its own target). */
+export interface ShowTarget { spid: string; kind: 'trigger' | 'link'; label: string; run?: { p: number; r: number } }
 
 export interface ShowA11y {
   /** Sets the live region's text when it differs from the last announcement. */
@@ -32,6 +33,9 @@ export interface ShowA11y {
 }
 
 const HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0'
+
+/** A target's stable id (its button's `data-target`): kind and spid, plus the run for a run link. */
+const idOf = (t: ShowTarget) => `${t.kind}:${t.spid}${t.run ? `:${t.run.p}:${t.run.r}` : ''}`
 
 export function createShowA11y(root: HTMLElement, options: { selectable: boolean; activate(target: ShowTarget): void }): ShowA11y {
   const doc = root.ownerDocument
@@ -68,7 +72,7 @@ export function createShowA11y(root: HTMLElement, options: { selectable: boolean
       }))
     },
     setTargets(next) {
-      if (same(next, shown, (a, b) => a.spid === b.spid && a.kind === b.kind && a.label === b.label)) return
+      if (same(next, shown, (a, b) => idOf(a) === idOf(b) && a.label === b.label)) return
       shown = [...next]
       // Keep focus on the same target across a rebuild (a trigger that re-renders its list).
       const focused = doc.activeElement && targets.contains(doc.activeElement) ? (doc.activeElement as HTMLElement).dataset.target : undefined
@@ -76,7 +80,7 @@ export function createShowA11y(root: HTMLElement, options: { selectable: boolean
         const b = doc.createElement('button')
         b.type = 'button'
         b.textContent = `${t.kind === 'trigger' ? 'Trigger' : 'Link'}: ${t.label}`
-        b.dataset.target = `${t.kind}:${t.spid}`
+        b.dataset.target = idOf(t)
         b.addEventListener('click', (e) => { e.stopPropagation(); options.activate(t) })
         b.addEventListener('keydown', (e) => {
           if (e.key !== 'Enter' && e.key !== ' ') return
@@ -161,8 +165,13 @@ export function visibleText(slide: PptxSlide, state: RenderState, builds: readon
 /** Trigger and link targets in authored z-order (paint order), visible ones only; a trigger wins over a link on the same shape. */
 export function showTargets(slide: PptxSlide, state: RenderState, triggers: readonly string[], links: readonly LinkSpec[]): ShowTarget[] {
   const trig = new Set(triggers)
-  const linked = new Map<string, LinkSpec>()
-  for (const l of links) if (!linked.has(l.spid)) linked.set(l.spid, l)
+  const linked = new Map<string, LinkSpec[]>()
+  for (const l of links) {
+    const list = linked.get(l.spid) ?? []
+    // One target per shape link and per linked run (a run with two hlinkClicks is one target).
+    if (!list.some((k) => k.run?.p === l.run?.p && k.run?.r === l.run?.r)) list.push(l)
+    linked.set(l.spid, list)
+  }
   const out: ShowTarget[] = []
   const walk = (nodes: readonly PptxShape[]) => {
     for (const n of nodes) {
@@ -172,7 +181,7 @@ export function showTargets(slide: PptxSlide, state: RenderState, triggers: read
         const name = n.source?.name?.trim()
         const text = shapeText(n).replace(/\s+/g, ' ').trim()
         if (trig.has(spid)) out.push({ spid, kind: 'trigger', label: name || text || `shape ${spid}` })
-        else out.push({ spid, kind: 'link', label: linkText(n, linked.get(spid)!) || text || name || `shape ${spid}` })
+        else for (const l of linked.get(spid)!) out.push({ spid, kind: 'link', label: linkText(n, l) || text || name || `shape ${spid}`, ...(l.run ? { run: l.run } : {}) })
       }
       if (n.group) walk(n.children ?? [])
     }

@@ -134,6 +134,19 @@ describe('startPresent: the synchronous prologue', () => {
     expect(await codeOf(run)).toBe('cancelled')
   })
 
+  it('PR #18 review 3: the ref reaches an interactive-sheets viewer; its present() rejects not-presentable', async () => {
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const { buildXlsx } = await import('../src/testdata/ooxml-builders')
+    const book = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }] }])))
+    const ref = createRef<OfficeViewerHandle>()
+    const ui = render(<OfficeDoc ref={ref} document={book} interactiveSheets />)
+    expect(ref.current).toBeTruthy()
+    expect(await codeOf(ref.current!.present())).toBe('not-presentable')
+    ui.unmount()
+    expect(ref.current).toBeNull()
+  })
+
   it('not-presentable for DOCX and for allowPresent=false; invalid-slide for 1.5, -1 and slideCount', async () => {
     const host = freshHost()
     const p = fakePlatform(log)
