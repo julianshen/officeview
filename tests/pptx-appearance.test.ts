@@ -466,6 +466,15 @@ describe('slide appearance enrichment', () => {
         const { pixel } = await paintFirst(await parsePptx(await OfficePackage.load(bytes)));
         expect(near(pixel(480, 360), [255, 255, 255], 8), `centre ${pixel(480, 360)}`).toBe(true);
     });
+    it('a translucent solid slide background composites over white instead of painting opaquely', async () => {
+        const bytes = await buildPptxDeck(builderDeck({ masters: [{ shapes: [], layouts: [{}] }], slides: [{ bg: { solid: 'FF0000' }, shapes: [] }] }));
+        const zip = await JSZip.loadAsync(bytes);
+        const slideXml = await zip.file('ppt/slides/slide1.xml')!.async('text');
+        expect(slideXml).toContain('<a:srgbClr val="FF0000"/>');
+        zip.file('ppt/slides/slide1.xml', slideXml.replace('<a:srgbClr val="FF0000"/>', '<a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr>'));
+        const { pixel } = await paintFirst(await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))));
+        expect(near(pixel(480, 360), [255, 128, 128], 12), `centre ${pixel(480, 360)}`).toBe(true);
+    });
     it('a useBgFill shape keeps its authored fill shadow', async () => {
         const shadowed = `<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="47" name="Shadowed"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${px(100)}" y="${px(100)}"/><a:ext cx="${px(100)}" cy="${px(100)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="0" dist="${px(20)}" dir="0" algn="tl" rotWithShape="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></p:spPr></p:sp>`;
         const bytes = await patchPart(await buildPptxDeck(builderDeck({
