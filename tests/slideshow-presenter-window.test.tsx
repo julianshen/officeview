@@ -284,6 +284,17 @@ describe('presenter popup: the session', () => {
     expect(popup.closed).toBe(true)
   })
 
+  it('a popup that cannot be adopted is closed and the show runs single-screen (best effort)', async () => {
+    const popup = fakePopup()
+    Object.defineProperty(popup, 'document', { get() { throw new Error('denied') } })
+    const r = await show(await notesDeck(), popup)
+    expect(r.log).toContain('diag:presenter-window-failed')
+    expect(r.log).toContain('onStart')
+    expect(r.s.presenter).toBe('swap')
+    expect(popup.closed).toBe(true)
+    r.s.exit()
+  })
+
   it('a refused presenter stylesheet is diagnosed once and the controls stay usable', async () => {
     const style = document.createElement('style')
     style.textContent = '[data-ov-theme-root] { color: red }'

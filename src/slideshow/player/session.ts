@@ -710,19 +710,29 @@ export async function createSession(start: ShowStart): Promise<SessionController
     if (popup === null || popup?.closed) {
       sink.add({ code: 'popup-blocked', message: 'The presenter window was blocked; presenting single-screen.' })
     } else if (popup) {
-      const pw = presenterWindow = adoptPresenterWindow(popup, win ?? popup.opener, sink)
-      const theme = host.parentElement?.getAttribute('data-ov-theme')
-      if (theme) pw.root.setAttribute('data-ov-theme', theme)
-      controls = mountPresenterControls(pw, { next: () => session.next(), previous: () => session.previous(), exit, key: presenterKey })
-      presenter = 'window'
-      // Closing the presenter window never ends the show: single-screen from here.
-      pw.onClosed(() => {
+      // Best effort (owner ruling): a popup that cannot be adopted is closed and the show runs single-screen.
+      try {
+        const pw = presenterWindow = adoptPresenterWindow(popup, win ?? popup.opener, sink)
+        const theme = host.parentElement?.getAttribute('data-ov-theme')
+        if (theme) pw.root.setAttribute('data-ov-theme', theme)
+        controls = mountPresenterControls(pw, { next: () => session.next(), previous: () => session.previous(), exit, key: presenterKey })
+        presenter = 'window'
+        // Closing the presenter window never ends the show: single-screen from here.
+        pw.onClosed(() => {
+          controls?.dispose()
+          controls = undefined
+          presenterWindow = undefined
+          if (!exited) presenter = 'swap'
+        })
+        syncPresenter()
+      } catch (e) {
         controls?.dispose()
         controls = undefined
         presenterWindow = undefined
-        if (!exited) presenter = 'swap'
-      })
-      syncPresenter()
+        popup.close()
+        presenter = 'swap'
+        sink.add({ code: 'presenter-window-failed', message: `The presenter window could not be set up (${e instanceof Error ? e.message : String(e)}); presenting single-screen.` })
+      }
     }
     signal.addEventListener('abort', exit, on)
     started = true
