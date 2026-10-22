@@ -50,7 +50,10 @@ export function viewerCallbacks(host: HTMLElement, back: Element | null): Pick<S
   }
 }
 
-/** The lazy start's handoff (spec 4.1, 4.2): the session controller and audience surface (player/session.ts). */
-export function runShow(start: ShowStart): Promise<SessionController> {
-  return createSession(start)
+/**
+ * The lazy start's handoff (spec 4.1, 4.2): the session controller and audience surface (player/session.ts).
+ * `isCurrent` defaults to "the start's signal has not been aborted" (kept out of the eager start: S1-20 byte recovery).
+ */
+export function runShow(start: Omit<ShowStart, 'isCurrent'> & Partial<Pick<ShowStart, 'isCurrent'>>): Promise<SessionController> {
+  return createSession({ isCurrent: () => !start.signal.aborted, ...start })
 }

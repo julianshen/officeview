@@ -152,6 +152,19 @@ describe('HandlePackage', () => {
   }, 30_000)
 })
 
+describe('HandlePackage textBytes', () => {
+  it('textBytes caps text and XML reads below a picture-sized partBytes (S0-7 enrichment reader)', async () => {
+    const { handle } = await deck({ 'ppt/media/big.bin': 'z'.repeat(5 * MiB), 'ppt/big.xml': '<a>' + 'x'.repeat(5 * MiB) + '</a>' })
+    const reader = HandlePackage.over(handle, { partBytes: HANDLE_AGGREGATE_BYTES, textBytes: HANDLE_PART_BYTES })
+    expect((await reader.bytes('ppt/media/big.bin'))!.length).toBe(5 * MiB)
+    await expect(reader.text('ppt/big.xml')).rejects.toSatisfy(limitError)
+    await expect(reader.xmlOrdered('ppt/big.xml')).rejects.toSatisfy(limitError)
+    // a part already read whole as bytes is still refused as text
+    await expect(reader.text('ppt/media/big.bin')).rejects.toSatisfy(limitError)
+    expect(await reader.text('ppt/presentation.xml')).toBe(PRESENTATION)
+  }, 30_000)
+})
+
 describe('HandlePackage.dropCache', () => {
   it('drops reads and trees, and a read in flight never republishes into the dropped cache', async () => {
     const { handle } = await deck()

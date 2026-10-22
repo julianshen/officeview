@@ -1,19 +1,20 @@
 /**
- * Slideshow Task S2-3: Presenter View Window Management placement in Chromium
- * (the `slideshow` Playwright project).
+ * Slideshow plan S2-2: the Presenter View popup lifecycle in Chromium (the
+ * `slideshow` Playwright project), driven through src/debug/slideshow-start.tsx
+ * (`presenter=1`, `frame=sandbox`) and the CSP-hardened
+ * src/debug/slideshow-csp.html.
  *
- * Feature-detection mocks exercise multi-screen placement, permission prompts,
- * fallbacks, diagnostics, screen swapping, and the one-time drag hint.
- *
- * Written for the controller to run against the slideshow harness.
+ * Asserts behaviour only (popups, full-screen element, diagnostics, slide
+ * changes), never pixels or timings. Waits poll observable state.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Frame, type Page } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 import { checkIdentity, gitIdentity } from '../../scripts/harness/identity'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const BASE = `http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`
 const PAGE = '/src/debug/slideshow-start.html'
+const CSP_PAGE = '/src/debug/slideshow-csp.html'
 
 const errors: string[] = []
 
@@ -24,215 +25,137 @@ test.beforeAll(async () => {
   expect(checkIdentity(body, { commit: gitIdentity(ROOT).commit, root: ROOT }), 'harness server identity').toBeNull()
 })
 
-test.beforeEach(({ page }) => {
-  errors.length = 0
-  page.on('pageerror', (e) => errors.push(e.message))
-})
+test.describe('S2-2 presenter window lifecycle', () => {
+  test.beforeEach(({ page }) => {
+    errors.length = 0
+    page.on('pageerror', (e) => errors.push(e.message))
+  })
+  test.afterEach(() => {
+    expect(errors).toEqual([])
+  })
 
-test.afterEach(() => {
-  expect(errors).toEqual([])
-})
-
-/** Injects Window Management API mocks with custom screens and permission state into the page. */
-async function mockWindowManagement(
-  page: Page,
-  options: {
-    screens?: Array<{ isPrimary?: boolean; left?: number; top?: number; width?: number; height?: number }>
-    permission?: 'granted' | 'prompt' | 'denied'
-    missingApi?: boolean
+  async function open(page: Page, path: string): Promise<void> {
+    await page.goto(path)
+    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
+    await expect(page.locator('[data-officeview-show]').first()).toBeAttached()
   }
-): Promise<void> {
-  await page.addInitScript((opts) => {
-    if (opts.missingApi) {
-      delete (window as any).getScreenDetails
-      return
+  const log = (page: Page | Frame) => page.evaluate(() => [...window.__slideshowStart!.log])
+  const fullscreen = (page: Page | Frame) => page.evaluate(() => window.__slideshowStart!.fullscreenElement())
+  const presenter = (page: Page) => page.evaluate(() => window.__slideshowStart!.sessions.a?.presenter)
+
+  /** Clicks Present with Presenter View and returns the popup. */
+  async function startWithPopup(page: Page): Promise<Page> {
+    const popupEvent = page.waitForEvent('popup')
+    await page.click('#present-a')
+    const popup = await popupEvent
+    await expect.poll(() => log(page)).toContain('a:started')
+    await expect(popup.locator('[data-officeview-presenter-view]')).toBeVisible()
+    return popup
+  }
+
+  test('popup-then-full-screen in one activation; a refused full screen shows Click for full screen and retries on the next click', async ({ page }) => {
+    await open(page, `${PAGE}?presenter=1&deck=nav`)
+    const popup = await startWithPopup(page)
+    expect(await presenter(page)).toBe('window')
+    expect(await popup.evaluate(() => location.href)).toBe('about:blank')
+    // Engine-dependent (spec 4.1): the popup consumed or kept the activation. Either outcome is legal; a refusal must offer the retry.
+    await expect.poll(async () => (await log(page)).some((l) => l === 'a:diag:fullscreen-refused') || (await fullscreen(page)) === 'a').toBe(true)
+    const refused = (await log(page)).includes('a:diag:fullscreen-refused')
+    test.info().annotations.push({ type: 'engine', description: refused ? 'Chromium: window.open consumed the activation; full screen refused, retry offered' : 'Chromium: popup and full screen both succeeded in one activation' })
+    if (refused) {
+      expect(await page.evaluate(() => window.__slideshowStart!.sessions.a!.surface)).toBe('in-window')
+      const retry = page.locator('[data-officeview-show-notice] button', { hasText: 'Click for full screen' })
+      await expect(retry).toBeVisible()
+      await retry.click()
+      await expect.poll(() => fullscreen(page)).toBe('a')
+      await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a!.surface)).toBe('fullscreen')
     }
-
-    const screens = opts.screens ?? [
-      { isPrimary: true, left: 0, top: 0, width: 1920, height: 1080 },
-      { isPrimary: false, left: 1920, top: 0, width: 2560, height: 1440 },
-    ]
-
-    const screenDetails = {
-      screens,
-      currentScreen: screens[0],
-    }
-
-    ;(window as any).__mockScreenDetails = screenDetails
-    ;(window as any).__screenRequests = []
-
-    // Mock window.getScreenDetails
-    ;(window as any).getScreenDetails = async () => {
-      ;(window as any).__screenRequests.push('getScreenDetails')
-      if (opts.permission === 'denied') {
-        const err = new Error('Permission denied')
-        err.name = 'NotAllowedError'
-        throw err
-      }
-      return screenDetails
-    }
-
-    // Mock Element.prototype.requestFullscreen to record options
-    const origRequestFullscreen = Element.prototype.requestFullscreen
-    Element.prototype.requestFullscreen = async function (options?: FullscreenOptions) {
-      ;(window as any).__lastFullscreenOptions = options
-      return origRequestFullscreen?.call(this, options)
-    }
-  }, options)
-}
-
-test.describe('Presenter View: Window Management placement', () => {
-  test('granted with two screens: popup on primary, audience requestFullscreen({screen}) on the external screen', async ({ page }) => {
-    await mockWindowManagement(page, {
-      screens: [
-        { isPrimary: true, left: 0, top: 0, width: 1920, height: 1080 },
-        { isPrimary: false, left: 1920, top: 0, width: 2560, height: 1440 },
-      ],
-      permission: 'granted',
-    })
-
-    await page.goto(PAGE)
-    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
-
-    const result = await page.evaluate(async () => {
-      const screens = await (window as any).getScreenDetails?.()
-      const { planPlacement } = await import('../../src/slideshow/presenter/screens')
-      return planPlacement(screens)
-    })
-
-    expect(result.manual).toBeFalsy()
-    if (!result.manual) {
-      expect(result.audienceScreen).toMatchObject({ isPrimary: false, left: 1920 })
-      expect(result.popupFeatures).toContain('left=0')
-      expect(result.popupFeatures).toContain('width=1920')
-    }
+    // The popup survives the full-screen change; exit closes it.
+    expect(popup.isClosed()).toBe(false)
+    await page.evaluate(() => window.__slideshowStart!.sessions.a!.exit())
+    await expect.poll(() => popup.isClosed()).toBe(true)
+    await expect.poll(() => fullscreen(page)).toBeNull()
   })
 
-  test('not yet granted: start proceeds and Use both screens asks on click', async ({ page }) => {
-    await mockWindowManagement(page, {
-      permission: 'prompt',
-    })
-
-    await page.goto(PAGE)
-    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
-
-    const initialPlan = await page.evaluate(async () => {
-      const { planPlacement } = await import('../../src/slideshow/presenter/screens')
-      return planPlacement(undefined)
-    })
-    expect(initialPlan.manual).toBe(true)
-
-    // Simulate user clicking "Use both screens"
-    const clickedResult = await page.evaluate(async () => {
-      const { useBothScreens, planPlacement } = await import('../../src/slideshow/presenter/screens')
-      const details = await useBothScreens(window)
-      return planPlacement(details)
-    })
-
-    expect(clickedResult.manual).toBeFalsy()
-    if (!clickedResult.manual) {
-      expect(clickedResult.audienceScreen).toBeDefined()
-    }
+  test('iframe refusing both fullscreen and popups runs in-window single-screen', async ({ page, context }) => {
+    await page.goto(`${PAGE}?frame=sandbox&presenter=1`)
+    const frameEl = page.locator('iframe[title="viewer frame"]')
+    await expect(frameEl).toBeAttached()
+    expect(await frameEl.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin')
+    expect(await frameEl.getAttribute('allow')).toBeNull()
+    const inner = (await (await frameEl.elementHandle())!.contentFrame())!
+    await inner.waitForFunction(() => window.__slideshowStart?.ready === true)
+    expect(await inner.evaluate(() => location.origin)).not.toBe(await page.evaluate(() => location.origin))
+    const pages = context.pages().length
+    await inner.click('#present-a')
+    // The promise resolved (never rejected), with two separate diagnostics.
+    await expect.poll(() => log(inner)).toEqual(expect.arrayContaining(['a:started', 'a:diag:fullscreen-refused', 'a:diag:popup-blocked']))
+    expect((await log(inner)).some((l) => l.startsWith('a:rejected'))).toBe(false)
+    expect(await inner.evaluate(() => {
+      const s = window.__slideshowStart!.sessions.a!
+      return { surface: s.surface, presenter: s.presenter }
+    })).toEqual({ surface: 'in-window', presenter: 'swap' })
+    expect(context.pages().length).toBe(pages)
+    await inner.locator('[data-viewer=a] [data-officeview-show]').press('Escape')
+    await expect.poll(() => log(inner)).toContain('a:ended')
   })
 
-  test('denied, missing API and single screen are three distinct diagnostics, none is popup-blocked', async ({ page }) => {
-    await page.goto(PAGE)
-    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
+  test('CSP-hardened host: presenter controls render and work; the styles diagnostic appears when blocked', async ({ page }) => {
+    // Allowed: officeview's stylesheet is a same-origin link, so the popup's copy loads under the inherited policy.
+    await open(page, `${CSP_PAGE}?presenter=1&deck=nav`)
+    expect(await page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content'))).toContain("style-src 'self'")
+    let popup = await startWithPopup(page)
+    await expect.poll(() => popup.evaluate(() => [...document.styleSheets].some((s) => (s.href ?? '').endsWith('/src/styles/officeview.css') && s.cssRules.length > 0))).toBe(true)
+    await popup.click('button[aria-label="Next slide"]')
+    await expect.poll(() => log(page)).toContain('a:change:1:0')
+    await expect(popup.locator('[data-officeview-presenter-status]')).toHaveText('Slide 2 of 5')
+    expect(await log(page)).not.toContain('a:diag:presenter-styles-blocked')
+    // Esc in the popup exits the show, which closes the popup under the key press.
+    await popup.keyboard.press('Escape').catch(() => {})
+    await expect.poll(() => log(page)).toContain('a:ended')
+    await expect.poll(() => popup.isClosed()).toBe(true)
 
-    const diagnostics = await page.evaluate(async () => {
-      const { planPlacement, diagnosePlacement } = await import('../../src/slideshow/presenter/screens')
-      const { createDiagnosticSink } = await import('../../src/slideshow/diagnostics')
-      const sink = createDiagnosticSink()
-
-      const p1 = planPlacement(undefined, 'permission-denied')
-      diagnosePlacement(p1, sink)
-
-      const p2 = planPlacement(undefined, 'api-missing')
-      diagnosePlacement(p2, sink)
-
-      const p3 = planPlacement({ screens: [{ isPrimary: true }] as any })
-      diagnosePlacement(p3, sink)
-
-      return sink.list()
-    })
-
-    expect(diagnostics).toHaveLength(3)
-    const codes = diagnostics.map((d: any) => d.code)
-    expect(codes).toEqual(['permission-denied', 'api-missing', 'single-screen'])
-    expect(codes).not.toContain('popup-blocked')
+    // Blocked: stylesheets need the host's nonce, which officeview never replays into the popup.
+    await open(page, `${CSP_PAGE}?presenter=1&deck=nav&styles=nonce`)
+    expect(await page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content'))).toContain("style-src 'nonce-ovcsp'")
+    // The host page itself is styled (its own link carries the nonce).
+    expect(await page.evaluate(() => [...document.styleSheets].some((s) => (s.href ?? '').endsWith('/src/styles/officeview.css')))).toBe(true)
+    popup = await startWithPopup(page)
+    await expect.poll(() => log(page)).toContain('a:diag:presenter-styles-blocked')
+    expect((await log(page)).filter((l) => l === 'a:diag:presenter-styles-blocked')).toHaveLength(1)
+    // Unstyled but usable.
+    await popup.click('button[aria-label="Next slide"]')
+    await expect.poll(() => log(page)).toContain('a:change:1:0')
+    await popup.click('button[aria-label="End show"]').catch(() => {})
+    await expect.poll(() => log(page)).toContain('a:ended')
+    await expect.poll(() => popup.isClosed()).toBe(true)
   })
 
-  test('swap displays exchanges the screens', async ({ page }) => {
-    await page.goto(PAGE)
-    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
-
-    const swapped = await page.evaluate(async () => {
-      const { swapDisplays } = await import('../../src/slideshow/presenter/screens')
-      const screenA = { isPrimary: true, left: 0, top: 0, width: 1920, height: 1080 }
-      const screenB = { isPrimary: false, left: 1920, top: 0, width: 2560, height: 1440 }
-
-      let movedTo: any = null
-      let resizedTo: any = null
-      let requestedScreen: any = null
-
-      const session = {
-        screens: {
-          presenter: screenA,
-          audience: screenB,
-        },
-        presenterWindow: {
-          moveTo: (x: number, y: number) => { movedTo = { x, y } },
-          resizeTo: (w: number, h: number) => { resizedTo = { w, h } },
-        },
-        retryFullscreen: async (opts: any) => { requestedScreen = opts?.screen },
-      }
-
-      swapDisplays(session as any)
-
-      return {
-        presenter: session.screens.presenter,
-        audience: session.screens.audience,
-        movedTo,
-        resizedTo,
-        requestedScreen,
-      }
-    })
-
-    expect(swapped.presenter).toMatchObject({ left: 1920 })
-    expect(swapped.audience).toMatchObject({ left: 0 })
-    expect(swapped.movedTo).toEqual({ x: 1920, y: 0 })
-    expect(swapped.resizedTo).toEqual({ w: 2560, h: 1440 })
-    expect(swapped.requestedScreen).toMatchObject({ left: 0 })
-  })
-
-  test('other browsers show the one-time drag hint', async ({ page }) => {
-    await page.goto(PAGE)
-    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
-
-    const hintBehavior = await page.evaluate(async () => {
-      const { createDragHint, shouldShowDragHint, markDragHintDismissed, DRAG_HINT_STORAGE_KEY } =
-        await import('../../src/slideshow/presenter/screens')
-
-      sessionStorage.removeItem(DRAG_HINT_STORAGE_KEY)
-      const firstShowable = shouldShowDragHint(sessionStorage)
-      const el = createDragHint(document, { storage: sessionStorage })
-      const hasAttr = el?.hasAttribute('data-officeview-drag-hint')
-
-      markDragHintDismissed(sessionStorage)
-      const secondShowable = shouldShowDragHint(sessionStorage)
-      const secondEl = createDragHint(document, { storage: sessionStorage })
-
-      return {
-        firstShowable,
-        hasAttr,
-        secondShowable,
-        secondCreated: !!secondEl,
-      }
-    })
-
-    expect(hintBehavior.firstShowable).toBe(true)
-    expect(hintBehavior.hasAttr).toBe(true)
-    expect(hintBehavior.secondShowable).toBe(false)
-    expect(hintBehavior.secondCreated).toBe(false)
+  test('both views stay in sync on next and previous', async ({ page }) => {
+    await open(page, `${PAGE}?presenter=1&deck=nav`)
+    const popup = await startWithPopup(page)
+    const status = popup.locator('[data-officeview-presenter-status]')
+    await expect(status).toHaveText('Slide 1 of 5')
+    // Audience input moves the presenter view.
+    await page.locator('[data-viewer=a] [data-officeview-show]').press('ArrowRight')
+    await expect.poll(() => log(page)).toContain('a:change:1:0')
+    await expect(status).toHaveText('Slide 2 of 5')
+    // Presenter controls and keys move the audience (the hidden third slide is skipped).
+    await popup.click('button[aria-label="Next slide"]')
+    await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a!.slideIndex)).toBe(3)
+    await expect(status).toHaveText('Slide 4 of 5')
+    await popup.locator('[data-officeview-presenter-view]').press('ArrowLeft')
+    await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a!.slideIndex)).toBe(1)
+    await popup.click('button[aria-label="Previous slide"]')
+    await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a!.slideIndex)).toBe(0)
+    await expect(status).toHaveText('Slide 1 of 5')
+    // Closing the presenter window keeps the show, single-screen.
+    await popup.close()
+    await expect.poll(() => presenter(page)).toBe('swap')
+    expect(await log(page)).not.toContain('a:ended')
+    await page.locator('[data-viewer=a] [data-officeview-show]').press('ArrowRight')
+    await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a!.slideIndex)).toBe(1)
+    await page.evaluate(() => window.__slideshowStart!.sessions.a!.exit())
+    await expect.poll(() => log(page)).toContain('a:ended')
   })
 })

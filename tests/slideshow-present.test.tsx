@@ -314,15 +314,16 @@ describe('startPresent: the synchronous prologue', () => {
     expect(acquireShowToken(host)).toBeDefined()
   })
 
-  it('presenterView true before stage 2 is diagnosed and audience-only', async () => {
+  it('presenterView true opens the popup in the gesture; a blocked popup is single-screen (Stage 2, S2-2)', async () => {
     const host = freshHost()
     const p = fakePlatform(log)
     const run = start(host, p, { opts: { presenterView: true } })
+    expect(log.slice(0, 2)).toEqual(['open', 'requestFullscreen:visible'])
     loads[0].resolve(slideshow)
     const s = await run
-    expect(log).toContain('diag:presenter-view-unavailable')
-    expect(log).not.toContain('open')
-    expect(s.presenter).toBe('none')
+    expect(log).toContain('diag:popup-blocked')
+    expect(log).not.toContain('diag:presenter-view-unavailable')
+    expect(s.presenter).toBe('swap')
     s.exit(); await s.ended
   })
 
@@ -456,18 +457,21 @@ describe('OfficeDoc host handle', () => {
     loads[1].resolve({ ...slideshow, runShow } as typeof slideshow)
     await flush()
     expect(starts.map((s) => s.from)).toEqual(['beginning', 'current'])
-    // Alt+F5 is Presenter View (stage 2): not routed here
-    expect(fireEvent.keyDown(m.region(), { key: 'F5', altKey: true })).toBe(true)
+    // Alt+F5 is Presenter View (S2-2): from the beginning, with presenterView
+    expect(fireEvent.keyDown(m.region(), { key: 'F5', altKey: true })).toBe(false)
+    loads[2].resolve({ ...slideshow, runShow } as typeof slideshow)
+    await flush()
+    expect(starts.map((s) => [s.from, s.presenterView])).toEqual([['beginning', undefined], ['current', undefined], ['beginning', true]])
     // outside the viewer
     fireEvent.keyDown(document.body, { key: 'F5' })
-    expect(loads).toHaveLength(2)
+    expect(loads).toHaveLength(3)
     // disabled
     m.ui.rerender(<OfficeDoc ref={m.ref} document={PPTX} presentShortcuts={false} __presentPlatform={m.platform} />)
     expect(fireEvent.keyDown(m.region(), { key: 'F5' })).toBe(true)
     // a DOCX never routes F5
     m.ui.rerender(<OfficeDoc ref={m.ref} document={DOCX} __presentPlatform={m.platform} />)
     expect(fireEvent.keyDown(m.region(), { key: 'F5' })).toBe(true)
-    expect(loads).toHaveLength(2)
+    expect(loads).toHaveLength(3)
   })
 
   it('restores focus to the start element and scrolls to the last slide on exit', async () => {
@@ -529,5 +533,19 @@ describe('OfficeFile source', () => {
     expect(starts.map((s) => s.source)).toEqual(sources.map((s) => (s.keep ? s.data : undefined)))
     // the parsed document carries its package handle
     expect(starts.every((s) => s.handle && s.handle.slideParts.length === 1)).toBe(true)
+  })
+
+  it('the viewer watermark reaches runShow (S1-20: every slideshow surface paints it)', async () => {
+    const bytes = await buildPptx([])
+    const starts: ShowStart[] = []
+    const runShow = vi.fn(async (st: ShowStart) => { starts.push(st); st.cleanup(); return {} as never })
+    const ref = createRef<OfficeViewerHandle>()
+    const ui = render(<OfficeFile ref={ref} data={bytes} watermark={{ text: 'DRAFT' }} __presentPlatform={fakePlatform(log)} />)
+    await waitFor(() => expect(ref.current).toBeTruthy())
+    const run = ref.current!.present()
+    loads[loads.length - 1].resolve({ ...slideshow, runShow } as typeof slideshow)
+    await run
+    ui.unmount()
+    expect(starts[0].watermark).toMatchObject({ text: 'DRAFT' })
   })
 })

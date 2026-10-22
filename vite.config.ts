@@ -47,7 +47,12 @@ export default defineConfig({
       cssFileName: 'style',
     },
     rollupOptions: {
-      external: ['react', 'react-dom'],
+      // React is a peer dependency: keep it and its subpath entries
+      // (react/jsx-runtime, react/jsx-dev-runtime, react-dom/*) out of the
+      // bundle. A bare 'react' string does not match 'react/jsx-runtime', which
+      // used to inline React's CJS JSX runtime (production AND development
+      // builds, picked at run time by process.env.NODE_ENV).
+      external: [/^react(?:-dom)?(?:\/.*)?$/],
       // The lazy large-source chunk imports shared code from the index entry;
       // allowing the entry to gain internal exports keeps it one eager file
       // instead of a facade plus a shared chunk.
@@ -55,7 +60,11 @@ export default defineConfig({
       output: {
         // The lazy chart engine's entry is src/charts/index.ts; name its chunk
         // charts-*.js so it never reads as (or collides with) an index chunk.
-        chunkFileNames: chunk => chunk.facadeModuleId?.replace(/\\/g, '/').endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : '[name]-[hash].js',
+        // Likewise the slide appearance enrichment (src/pptx/appearance/index.ts).
+        chunkFileNames: chunk => {
+          const facade = chunk.facadeModuleId?.replace(/\\/g, '/') ?? ''
+          return facade.endsWith('/src/charts/index.ts') ? 'charts-[hash].js' : facade.endsWith('/src/pptx/appearance/index.ts') ? 'appearance-[hash].js' : '[name]-[hash].js'
+        },
       },
     },
   },

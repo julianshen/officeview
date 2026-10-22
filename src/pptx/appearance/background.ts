@@ -5,6 +5,7 @@ import { PackageError } from '../../core/package-error'
 import { attrs, getChild, getChildren, orderedChildren, parseXmlOrdered, type XmlNode } from '../../core/xml'
 import { sniffImageMime } from '../../core/images'
 import { resolvePartTarget } from '../../drawing/parts'
+import { parseGeometry } from '../../drawing/geometry'
 import { parseDrawingColor, parseFillDefinition, resolveDrawingColor, resolveFill, type DrawingIssue, type DrawingFill, type ThemeContext } from '../../drawing/style'
 import type { SceneRectFractions } from '../../drawing/scene'
 import type { PptxDiagnostic, PptxImageRef, PptxShape } from '../types'
@@ -141,7 +142,8 @@ export async function resolveSlideBackground(pkg: OfficePackage, slidePath: stri
 
 export function backgroundNode(bg: SlideBackground, widthEmu: number, heightEmu: number): PptxShape | undefined {
   if (bg.kind === 'none') return undefined
-  const node: PptxShape = { xEmu: 0, yEmu: 0, widthEmu, heightEmu, geometry: 'rect', drawingGeometry: { preset: 'rect', adjustments: [], guides: [], paths: [] } }
+  // The catalogue's rect (an empty path list would paint nothing).
+  const node: PptxShape = { xEmu: 0, yEmu: 0, widthEmu, heightEmu, geometry: 'rect', drawingGeometry: parseGeometry(undefined) }
   if (bg.kind === 'fill') node.drawingStyle = { fill: bg.fill, issues: [] }
   else node.image = { ...bg.image, ...(bg.stretch ? { fillRect: bg.stretch } : {}) }
   return node

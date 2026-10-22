@@ -16,6 +16,8 @@ import { firstSlide, sessionDeps, type SessionController } from '../src/slidesho
 import { createGestureState, gestureToInput, keyToInput } from '../src/slideshow/player/keys'
 import { visibleOrder } from '../src/slideshow/player/order'
 import { ManualClock } from '../src/slideshow/clock'
+import type { Stage } from '../src/slideshow/player/stage'
+import { createSlideShowWorkspace } from '../src/slideshow/workspace'
 import { SlideShowError, type ShowStart, type SlideShowCallbacks } from '../src/components/present'
 import { buildPptxDeck, mainSeqXml, timingXmlOf, type PptxDeckSpec, type PptxShapeSpec } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
@@ -60,12 +62,18 @@ interface Rig {
 }
 
 let painted: number[]
+/** S1-20: the engine seam. A recording stage stands in for it here (the engine has its own suite). */
+const recordingStage = (): Stage => ({
+  leave() {}, async enter(m) { painted.push(m.index) }, slideTime: (t) => t, frame() {}, stateAt: () => new Map(),
+  plan: undefined, toSlide: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
+})
 let clock: ManualClock
 beforeEach(() => {
   painted = []
   clock = new ManualClock()
   vi.spyOn(sessionDeps, 'clock').mockImplementation(() => clock)
-  vi.spyOn(sessionDeps, 'painter').mockImplementation(() => ({ paint: async (_canvas, i) => { painted.push(i) }, dispose() {} }))
+  vi.spyOn(sessionDeps, 'stage').mockImplementation(() => recordingStage())
+  vi.spyOn(sessionDeps, 'frames').mockImplementation(() => () => {})
 })
 afterEach(() => {
   vi.restoreAllMocks()
@@ -519,7 +527,9 @@ describe('model assembly and the static surface', () => {
   })
 
   it('the static painter paints the slide letterboxed into the output canvas (terminal path)', async () => {
-    ;(sessionDeps.painter as unknown as MockInstance).mockRestore()
+    // S1-20: the engine's terminal rung, reached with a workspace that holds the permanent reserve and little else.
+    ;(sessionDeps.stage as unknown as MockInstance).mockRestore()
+    vi.spyOn(sessionDeps, 'workspace').mockImplementation(() => createSlideShowWorkspace('desktop', { limit: 1024 * 768 * 4 + 8 * 2 ** 20 + 4096, scratch: 8 * 2 ** 20 }))
     const { doc } = await deck({ slides: [{ shapes: [{ off: ['914400', '914400'], ext: ['7315200', '1828800'], fill: '336699' }] }, { shapes: [{ off: ['0', '0'], ext: ['9144000', '6858000'], fill: 'CC3300' }] }] })
     const r = await show(doc)
     const canvas = r.host.querySelector<HTMLCanvasElement>('[data-officeview-show-canvas]')!
@@ -532,6 +542,7 @@ describe('model assembly and the static surface', () => {
     expect(at(480, 600)).toEqual([255, 255, 255, 255])
     // a cut to the next slide repaints it
     await press(r, 'ArrowRight')
+    r.s.tick()
     expect(at(480, 600)).toEqual([0xcc, 0x33, 0x00, 255])
     expect(r.log).not.toContain('diag:paint-failed')
     r.s.exit()
