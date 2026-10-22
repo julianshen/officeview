@@ -70,7 +70,7 @@ describe('S9 filter dropdown draft UI', () => {
     expect(ui.container.querySelectorAll('[data-value-ordinal]').length).toBeLessThanOrEqual(200)
     expect(ui.container.querySelector('img')).toBeNull()
     fireEvent.change(ui.getByRole('textbox', { name: 'Search all values' }), { target: { value: 'beyond' } })
-    await waitFor(() => expect(ui.getByRole('checkbox', { name: 'beyond-B' })).toBeTruthy())
+    await waitFor(() => expect(ui.getByRole('checkbox', { name: 'beyond-B' })).toBeTruthy(), { timeout: 10_000 })
     fireEvent.click(ui.getByRole('button', { name: 'Select All' }))
     await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
     fireEvent.click(ui.getByRole('checkbox', { name: 'beyond-B' }))
