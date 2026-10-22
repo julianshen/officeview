@@ -572,6 +572,22 @@ test('print cleanup without afterprint: React unmount removes the frame', async 
   await expect(page.locator('[data-officeview-print-frame]')).toHaveCount(0)
 })
 
+test('Present button starts the show from the current slide (browser)', async ({page}) => {
+  await open(page, 'Deck.pptx')
+  const bar = toolbar(page)
+  await bar.getByRole('button', { name: 'Present options' }).waitFor()
+  // move to slide 2, then present from there
+  await bar.getByLabel('Next slide').click()
+  await expect(statusLine(page)).toContainText('Slide 2 of 3')
+  await bar.getByRole('button', { name: 'Present', exact: true }).click()
+  // the show surface lands on the current slide, not on slide 1
+  await expect(page.locator('[data-officeview-show]')).toBeVisible()
+  await expect(page.locator('[data-officeview-show-surface]')).toHaveText('Slide 2 of 3')
+  await page.keyboard.press('Escape')
+  // the show exits and the host hides again
+  await expect(page.locator('[data-officeview-show]')).toBeHidden()
+})
+
 test('dark: paged page pixels are white and the backdrop is dark', async ({page}) => {
   await open(page,'Report.docx',{query:{theme:'dark'}})
   await expect(region(page)).toHaveCSS('background-color','rgb(22, 21, 20)')

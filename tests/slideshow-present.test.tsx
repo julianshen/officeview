@@ -94,9 +94,16 @@ let log: Log
 beforeEach(() => {
   log = []
   loads = []
+  // showLoader.load wraps a dynamic import, which shares one inflight
+  // resolution per specifier: a second call while it is still loading joins
+  // the first promise (the Present busy-clear does exactly that).
+  let inflight: Deferred<typeof slideshow> | undefined
   vi.spyOn(showLoader, 'load').mockImplementation(() => {
     log.push('import')
+    if (inflight) return inflight.promise
     const d = deferred<typeof slideshow>()
+    inflight = d
+    void d.promise.catch(() => {}).finally(() => { inflight = undefined })
     loads.push(d)
     return d.promise
   })

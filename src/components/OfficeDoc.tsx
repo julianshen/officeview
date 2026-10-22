@@ -32,7 +32,7 @@ import type { ZoomContext, ZoomOutcome } from './zoomRouting'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
 import { themeRootProps, type ThemeMode } from './theme'
-import { defaultPlatform, startPresent, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type ReexportableSource, type SlideShowDiagnostic, type SlideShowMotion } from './present'
+import { defaultPlatform, showLoader, startPresent, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type ReexportableSource, type SlideShowDiagnostic, type SlideShowMotion } from './present'
 import {
   distance,
   MAX_ZOOM,
@@ -302,6 +302,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   const epoch = useRef<AbortController>(null)
   const gen = useRef(0)
   const [notice, setNotice] = useState('')
+  const [presentBusy, setPresentBusy] = useState(false)
   useLayoutEffect(() => {
     const c = epoch.current = new AbortController()
     gen.current++
@@ -316,8 +317,14 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
     run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
     return run
   }
-  // S1-18's Present button calls this.
-  const onPresent = (from: 'beginning' | 'current') => void present({ from }).catch(() => {})
+  // The Present button and F5 both start here: busy while the slideshow
+  // module is being fetched for a start (showLoader.load is memoized), and
+  // cleared when it settles or a new document epoch begins.
+  const onPresent = (from: 'beginning' | 'current') => {
+    setPresentBusy(true)
+    void present({ from }).catch(() => {})
+    void showLoader.load().catch(() => {}).finally(() => setPresentBusy(false))
+  }
   useImperativeHandle(ref, () => ({ present }))
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
@@ -826,6 +833,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
     search: showSearch ? { inputRef, query, onQuery: setQuery, matches, active, setActive, indexing } : null,
     copy: allowCopy ? { state: copied, enabled: !!selection && !isEmptyRange(selection), onCopy: () => void doCopy() } : undefined,
     allowPrint,
+    present: allowPresent && 'slides' in document ? { busy: presentBusy, start: onPresent, preload: () => void showLoader.load() } : undefined,
     pages,
     owner,
     showToolbar,

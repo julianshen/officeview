@@ -5,12 +5,12 @@
  * name, Find collapsed to an icon button, and Fit/Copy/Print in a More menu.
  * Presentational: all document state arrives as props (see PagedChrome).
  */
-import { useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { Ban, Check, ChevronLeft, ChevronRight, Copy, Minus, MoveHorizontal, Plus, Printer, Search } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { Ban, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loader2, Minus, MoveHorizontal, Plus, Presentation, Printer, Search } from 'lucide-react'
 import { Icon } from '../Icon'
 import { MoreMenu, type MoreItem } from './MoreMenu'
 import { m } from 'motion/react'
-import { Presence, Tick, tick, useMotionProps } from '../motion/presets'
+import { Pop, Presence, popover, Tick, tick, useMotionProps } from '../motion/presets'
 import { PAGED_TOOLBAR_HEIGHT } from './metrics'
 import type { PagedKind } from './PagedStatus'
 
@@ -39,6 +39,8 @@ export interface PagedToolbarProps {
   copyState: 'idle' | 'done' | 'failed'
   /** Omitted when printing is not allowed. */
   onPrint?: () => void
+  /** Present offer (slides only): busy while the slideshow chunk loads. */
+  present?: { busy: boolean; start(from: 'beginning' | 'current'): void; preload(): void }
   compact: boolean
   showSearch: boolean
   showZoom: boolean
@@ -62,7 +64,123 @@ const divider = (compact: boolean) => (compact ? null : <span className={DIVIDER
 const isInput = (t: unknown): t is HTMLInputElement => (t as Element | null)?.tagName === 'INPUT'
 
 /** Where focus goes when the layout crosses the compact threshold. */
-const COUNTERPART: Record<string, string> = { fit: 'more', copy: 'more', print: 'more', more: 'fit', find: 'search' }
+const COUNTERPART: Record<string, string> = { fit: 'more', copy: 'more', print: 'more', more: 'fit', find: 'search', 'present-more': 'present' }
+/** The compact More menu carries the two From items (the split arrow does not fit). */
+export const presentationItems = (present: NonNullable<PagedToolbarProps['present']>): MoreItem[] => [
+  { key: 'present-beginning', label: 'From beginning', icon: <Icon icon={Presentation} name="presentation" />, onSelect: () => present.start('beginning') },
+  { key: 'present-current', label: 'From current slide', icon: <Icon icon={Presentation} name="presentation" />, onSelect: () => present.start('current') },
+]
+
+const MENU_ITEM = [
+  'ov:flex ov:w-full ov:items-center ov:gap-2 ov:py-0 ov:px-3 ov:min-h-11 ov:text-left ov:text-base ov:text-text ov:bg-transparent ov:border-0 ov:cursor-pointer',
+  'ov:hover:bg-hover ov:focus-visible:bg-hover ov:focus-visible:outline-2 ov:focus-visible:outline-solid ov:focus-visible:-outline-offset-2 ov:focus-visible:outline-accent',
+].join(' ')
+
+/** The Present split control (spec §4.1): the main button starts from the
+ * current slide; the menu offers From beginning and From current slide
+ * (Presenter View exists only from stage 2 on) with the More-menu keyboard
+ * contract: opens on the first item, Arrow/Home/End move, Escape and Tab
+ * and outside clicks close it and return focus. Compact has the main button
+ * only (the From items live in the More menu there; the split does not fit). */
+function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; buttonClass: string; compact: boolean; preload(): void }): ReactElement {
+  const [open, setOpen] = useState(false)
+  const button = useRef<HTMLButtonElement | null>(null)
+  const menu = useRef<HTMLDivElement | null>(null)
+  const close = () => { setOpen(false); button.current?.focus() }
+  const entries = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
+
+  useEffect(() => {
+    if (!open) return
+    entries()[0]?.focus()
+    const outside = (e: Event) => {
+      const t = e.target as Node
+      if (!menu.current?.contains(t) && !button.current?.contains(t)) close()
+    }
+    const doc = button.current?.ownerDocument ?? document
+    doc.addEventListener('pointerdown', outside, true)
+    return () => doc.removeEventListener('pointerdown', outside, true)
+  }, [open])
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const list = entries()
+    const i = list.indexOf(menu.current?.ownerDocument.activeElement as HTMLElement)
+    const go = (n: number) => { e.preventDefault(); list[(n + list.length) % list.length]?.focus() }
+    if (e.key === 'ArrowDown') go(i + 1)
+    else if (e.key === 'ArrowUp') go(i - 1)
+    else if (e.key === 'Home') go(0)
+    else if (e.key === 'End') go(list.length - 1)
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() }
+    else if (e.key === 'Tab') setOpen(false)
+  }
+
+  const item = (label: string, from: 'beginning' | 'current') => (
+    <button
+      key={from}
+      type="button"
+      role="menuitem"
+      tabIndex={-1}
+      onClick={() => { p.present.start(from); close() }}
+      className={MENU_ITEM}
+    >
+      <Icon icon={Presentation} name="presentation" />
+      {label}
+    </button>
+  )
+
+  return (
+    <div className="ov:relative ov:flex ov:shrink-0">
+      <button
+        type="button"
+        data-ov-control="present"
+        data-testid="officeview-present"
+        aria-label="Present"
+        title="Present"
+        aria-busy={p.present.busy || undefined}
+        onPointerEnter={p.preload}
+        onFocus={p.preload}
+        onClick={() => p.present.start('current')}
+        className={p.buttonClass}
+      >
+        {p.present.busy
+          ? <Icon icon={Loader2} name="loader" className="ov:motion-safe:animate-spin" />
+          : <Icon icon={Presentation} name="presentation" />}
+      </button>
+      {!p.compact && (
+        <>
+          <button
+            ref={button}
+            type="button"
+            aria-label="Present options"
+            title="Present options"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            data-ov-control="present-more"
+            onPointerEnter={p.preload}
+            onFocus={p.preload}
+            onClick={() => { p.preload(); setOpen((o) => !o) }}
+            className={p.buttonClass}
+          >
+            <Icon icon={ChevronDown} name="chevron-down" />
+          </button>
+          <Presence>{open && (
+            <Pop
+              key="present-menu"
+              v={popover}
+              ref={menu}
+              role="menu"
+              aria-label="Present options"
+              onKeyDown={onKeyDown}
+              className="ov:absolute ov:left-0 ov:top-full ov:mt-1 ov:z-10 ov:min-w-44 ov:py-1 ov:bg-surface ov:text-text ov:border ov:border-border ov:rounded-panel ov:shadow-popover"
+            >
+              {item('From beginning', 'beginning')}
+              {item('From current slide', 'current')}
+            </Pop>
+          )}</Presence>
+        </>
+      )}
+    </div>
+  )
+}
 
 export function PagedToolbar(p: PagedToolbarProps): ReactElement {
   const { compact, kind } = p
@@ -75,6 +193,10 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
   const copied = useMotionProps(tick)
   const unit = kind === 'slides' ? 'slide' : 'page'
   const findOpen = p.showSearch && (!compact || expanded)
+  // Preload hint (spec §5.3): hover, focus and opening the menu all point at
+  // the same memoized load, so a single hint per toolbar suffices.
+  const preloaded = useRef(false)
+  const preload = () => { if (preloaded.current) return; preloaded.current = true; p.present?.preload() }
 
   const control = (key: string): HTMLElement | null =>
     root.current?.querySelector<HTMLElement>(key === 'search' ? 'input[type=search]' : `[data-ov-control="${key}"]`) ?? null
@@ -139,7 +261,10 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
 
   const fitIcon = <Icon icon={MoveHorizontal} name="fit-width" />
   const copyIcon = p.copyState === 'done' ? <Icon icon={Check} name="check" /> : p.copyState === 'failed' ? <Icon icon={Ban} name="ban" /> : <Icon icon={Copy} name="copy" />
+  const present = p.present && kind === 'slides' ? p.present : undefined
   const more: MoreItem[] = [
+    // Present (compact only: the split arrows do not fit at 375px)
+    ...(present && compact ? presentationItems(present) : []),
     // Fit belongs to the zoom group: hidden with it (showZoomControls={false})
     ...(p.showZoom ? [{ key: 'fit', label: 'Fit to width', icon: fitIcon, onSelect: p.onFit, checked: p.fitActive }] : []),
     ...(p.onCopy ? [{ key: 'copy', label: 'Copy selection', icon: copyIcon, onSelect: p.onCopy, disabled: !p.copyEnabled }] : []),
@@ -170,6 +295,7 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
       {!compact && p.title && (
         <span data-testid="officeview-title" title={p.title} className="ov:min-w-0 ov:shrink ov:truncate ov:font-[600] ov:px-1">{p.title}</span>
       )}
+      {present && <PresentMenu present={present} buttonClass={btn} compact={compact} preload={preload} />}
       <span className="ov:flex-1" />
       {!(compact && findOpen) && (
         <div className="ov:flex ov:items-center ov:gap-0 ov:shrink-0">
@@ -181,7 +307,9 @@ export function PagedToolbar(p: PagedToolbarProps): ReactElement {
           <button type="button" data-ov-control="next" aria-label={`Next ${unit}`} disabled={p.current >= p.total} onClick={p.onNext} className={btn}><Icon icon={ChevronRight} name="chevron-right" /></button>
         </div>
       )}
-      {p.showZoom && !(compact && findOpen) && (
+      {/* Zoom gets hidden on compact whenever space is tight — with Find open
+          (group-hiding precedent), here also when the Present button takes a slot. */}
+      {p.showZoom && !(compact && (findOpen || present)) && (
         <>
           {divider(compact)}
           <div data-testid="officeview-zoom-controls" className="ov:flex ov:items-center ov:gap-0 ov:shrink-0">
