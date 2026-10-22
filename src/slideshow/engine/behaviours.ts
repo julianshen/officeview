@@ -137,7 +137,22 @@ function slotOf(node: object, id: string): Slot {
   return found
 }
 
-const formulaish = (src: string): boolean => src.includes('#') || /\$|[a-zA-Z(]/.test(src)
+const HEX = /^#[0-9a-fA-F]{3,8}$/
+
+/** Bare words the formula grammar reads as constants rather than literal text. */
+const FORMULA_WORDS: ReadonlySet<string> = new Set(['pi', 'e'])
+
+/**
+ * Literal text, never compiled: hex colours, `kind:value` colour choices
+ * (`schemeClr:accent1`, `hslClr:…`) and bare words (`visible`, `hidden`,
+ * `true`). Underscored names (`ppt_x`, `no_such_name`) are formula
+ * identifiers, so a typo still refuses and diagnoses.
+ */
+function isLiteral(text: string): boolean {
+  if (HEX.test(text)) return true
+  if (/^[a-z][a-z0-9]*:/i.test(text)) return true
+  return /^[a-z][a-z-]*$/i.test(text) && !FORMULA_WORDS.has(text.toLowerCase())
+}
 
 class Once {
   private fired = false
@@ -172,24 +187,31 @@ function evalSlot(
   return v
 }
 
-const HEX = /^#[0-9a-fA-F]{3,8}$/
-
-/** A raw string: a formula (`#ppt_x-1`, `$+0.2`), a plain number, or text. */
+/**
+ * A raw value: literal text, a plain number, or a formula (`#ppt_x-1`,
+ * `$+0.2`). A formula that refuses or evaluates non-finite returns undefined
+ * (already diagnosed) so the caller drops the behaviour; its text never leaks
+ * through as a value.
+ */
 function readValue(
   node: object, id: string, src: string | number | undefined, env: FormulaEnv,
   sink: DiagnosticSink, effect: string, once: Once,
 ): number | string | undefined {
   if (src === undefined) return undefined
-  const text = typeof src === 'number' ? String(src) : src.trim()
+  if (typeof src === 'number') return Number.isFinite(src) ? src : undefined
+  const text = src.trim()
   if (text === '') return undefined
-  if (text.startsWith('#') && !HEX.test(text)) return evalSlot(node, id, text.slice(1), env, sink, effect, once)
-  if (formulaish(text)) {
-    const v = evalSlot(node, id, text, env, sink, effect, once)
-    if (v !== undefined) return v
-    const trimmed = text.replace(/[#]/g, '')
-    return Number.isFinite(Number(trimmed)) ? Number(trimmed) : text
-  }
-  return Number.isFinite(Number(text)) ? Number(text) : text
+  if (isLiteral(text)) return text
+  const n = Number(text)
+  if (Number.isFinite(n)) return n
+  return evalSlot(node, id, text, env, sink, effect, once)
+}
+
+/** Segment `i` of a `;`-separated per-attribute list (segment 0 when there are fewer). */
+function segment(src: string | undefined, i: number): string | undefined {
+  if (src === undefined) return undefined
+  const parts = src.split(';')
+  return parts[i] ?? parts[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +226,8 @@ interface Reads {
   /** Track name → candidate value; ppt_* fractions, angle degrees, scale factors, motion px, strings, matrices. */
   edits: Map<string, number | string | ColorMatrix>
   colors: Map<Channel, ColorMatrix>
+  /** Set when the read is relative by definition (`by` animations): composes as `sum`. */
+  additive?: 'sum'
   mask?: MaskState
   opacityCap?: number
   failed?: true
@@ -227,10 +251,9 @@ function evalBehaviour(
     case 'set': {
       const set = node as SetBehaviour
       if (set.to === undefined) return fail()
-      const segs = String(set.to).split(';')
       const values: (number | string)[] = []
       for (let i = 0; i < set.attrNames.length; i++) {
-        const src = segs[i] ?? segs[0]
+        const src = typeof set.to === 'number' ? set.to : segment(String(set.to), i)
         const v = readValue(node, `set:${i}`, src, env, sink, effect, once)
         if (v === undefined) {
           if (once.next()) sink.add({ code: 'behaviour-invalid-formula', effect, message: `set to ${JSON.stringify(src)} is unreadable; behaviour dropped` })
@@ -242,19 +265,28 @@ function evalBehaviour(
       return reads
     }
     case 'anim': {
-      const value = tavValue(node, env, progress, sink, effect, once)
-      if (value === undefined || (typeof value === 'number' && !Number.isFinite(value))) return fail()
-      if (typeof value !== 'number' && !/^(visible|hidden)$/.test(String(value))) {
-        unsupported(node, String(node.attrNames[0]), sink)
-        return fail()
+      // Each attribute reads its own segment of `;` lists (S1-5: split before compiling).
+      for (let i = 0; i < node.attrNames.length; i++) {
+        const name = String(node.attrNames[i])
+        const read = node.keys.length > 0
+          ? { value: tavValue(node, i, env, progress, sink, effect, once) }
+          : endpointValue(node, i, name, env, progress, geo, slide, sink, effect, once)
+        const value = read.value
+        if (value === undefined || (typeof value === 'number' && !Number.isFinite(value))) return fail()
+        if (typeof value !== 'number' && !/^(visible|hidden)$/.test(value)) {
+          unsupported(node, name, sink)
+          return fail()
+        }
+        if (read.sum) reads.additive = 'sum'
+        edit(name, value)
       }
-      node.attrNames.forEach(n => edit(n, value as number | string))
       return reads
     }
     case 'animRot': {
-      const v = rotValue(node, geo, progress)
-      if (v === undefined || !Number.isFinite(v)) return fail()
-      edit('angle', v)
+      const v = rotValue(node, progress)
+      if (v === undefined || !Number.isFinite(v.angle)) return fail()
+      if (v.relative) reads.additive = 'sum'
+      edit('angle', v.angle)
       return reads
     }
     case 'animScale': {
@@ -294,12 +326,13 @@ function evalBehaviour(
 // -- anim (tav keys) ---------------------------------------------------------
 
 function tavValue(
-  node: AnimBehaviour, env: FormulaEnv, progress: number,
+  node: AnimBehaviour, attr: number, env: FormulaEnv, progress: number,
   sink: DiagnosticSink, effect: string, once: Once,
 ): number | string | undefined {
   const keys = node.keys.map(x => ({
     tm: x.tm === 'indefinite' ? 1 : Math.min(1, Math.max(0, Number(x.tm))),
-    value: x.value, ...(x.fmla ? { fmla: x.fmla } : {}),
+    value: typeof x.value === 'string' ? segment(x.value, attr) : x.value,
+    ...(x.fmla ? { fmla: segment(x.fmla, attr) } : {}),
   }))
   if (keys.length === 0) return undefined
   keys.sort((a, b) => a.tm - b.tm)
@@ -308,8 +341,8 @@ function tavValue(
   const snap = (i: number): number | string | undefined => {
     const key = keys[i]
     const at = { ...env, $: key.tm }
-    if (key.fmla !== undefined) return evalSlot(node, `key:${i}`, key.fmla, at, sink, effect, once)
-    return readValue(node, `key:${i}`, key.value, at, sink, effect, once)
+    if (key.fmla !== undefined) return evalSlot(node, `key:${i}:${attr}`, key.fmla.trim(), at, sink, effect, once)
+    return readValue(node, `key:${i}:${attr}`, key.value, at, sink, effect, once)
   }
   if (node.calcmode === 'discrete') {
     let pick = 0
@@ -336,13 +369,46 @@ function tavValue(
   return snap(keys.length - 1)
 }
 
-function rotValue(node: AnimRotBehaviour, geo: BaseGeometry, p: number): number | undefined {
+/**
+ * `p:anim` without a `p:tavLst` (SMIL from/to/by): from→to interpolates;
+ * from+by runs from→from+by; by alone is relative (composes as `sum` onto
+ * the underlying value); to alone starts from the underlying value. Values
+ * that cannot interpolate (text) step at the midpoint, or hold `to` alone.
+ */
+function endpointValue(
+  node: AnimBehaviour, attr: number, name: string, env: FormulaEnv, progress: number,
+  geo: BaseGeometry, slide: Slide, sink: DiagnosticSink, effect: string, once: Once,
+): { value: number | string | undefined; sum?: true } {
+  const read = (which: 'from' | 'to' | 'by'): number | string | undefined | null => {
+    const src = segment(node[which], attr)
+    if (src === undefined) return null
+    return readValue(node, `${which}:${attr}`, src, env, sink, effect, once)
+  }
+  const from = read('from'), to = read('to'), by = read('by')
+  if (from === undefined || to === undefined || by === undefined) return { value: undefined }
+  const discrete = node.calcmode === 'discrete'
+  const mix = (a: number | string, b: number | string): number | string =>
+    typeof a === 'number' && typeof b === 'number' && !discrete ? a + (b - a) * progress : progress < 0.5 ? a : b
+  if (from !== null && to !== null) return { value: mix(from, to) }
+  if (by !== null && typeof by !== 'number') return { value: undefined }
+  if (from !== null && by !== null) return typeof from === 'number' ? { value: mix(from, from + by) } : { value: undefined }
+  if (by !== null) return { value: discrete ? (progress < 0.5 ? 0 : by) : by * progress, sum: true }
+  if (to !== null) {
+    const under = typeof to === 'number' ? trackBase(name, geo, slide) : NaN
+    return { value: Number.isFinite(under) ? mix(under, to) : to }
+  }
+  return { value: from ?? undefined }
+}
+
+/** from/to are absolute degrees; `by` is relative (composes as `sum` onto the underlying rotation). */
+function rotValue(node: AnimRotBehaviour, p: number): { angle: number; relative: boolean } | undefined {
   if (node.to !== undefined || node.from !== undefined) {
     const a = node.from ?? 0
     const b = node.to ?? a
-    return a + (b - a) * p
+    return { angle: a + (b - a) * p, relative: false }
   }
-  return geo.rot + (node.by ?? 0) * p
+  if (node.by === undefined) return undefined
+  return { angle: node.by * p, relative: true }
 }
 
 function scaleValue(node: AnimScaleBehaviour, p: number): { x: number; y: number } {
@@ -401,11 +467,17 @@ function effectState(node: AnimEffectBehaviour, progress: number, sink: Diagnost
     const from = ({ fromleft: 'l', fromright: 'r', fromtop: 't', frombottom: 'b' })[arg.toLowerCase()]
     return { mask: { kind: 'wipe', progress: p, params: { from: from ?? 'l' } } }
   }
-  if (name === 'wheel') return { mask: { kind: 'wheel', progress: p, params: { spokes: Math.min(8, Math.max(1, Math.round(Number(arg) || 1))) } } }
+  if (name === 'wheel') {
+    // The mask library bounds spokes at 64; a count outside 1..64 refuses the mask (diagnosed, rendered as a fade).
+    const spokes = arg === '' ? 1 : Number(arg)
+    if (!Number.isInteger(spokes) || spokes < 1 || spokes > 64) return ramp(true)
+    return { mask: { kind: 'wheel', progress: p, params: { spokes } } }
+  }
   if (name === 'barn') return { mask: { kind: 'barn', progress: p, params: { orient: /vert/i.test(arg) ? 'vert' : 'horz', dir: /^in/i.test(arg) ? 'in' : 'out' } } }
   if (name === 'randombar') return { mask: { kind: 'randomBar', progress: p, params: { orient: /vert/i.test(arg) ? 'vert' : 'horz' } } }
   if (name === 'strips') {
-    const from = ({ downleft: 'rd', downright: 'lu', upleft: 'ld', upright: 'ru' })[arg.toLowerCase()]
+    // Like wipe, the argument names the motion direction; the reveal starts at the opposite corner.
+    const from = ({ downleft: 'ru', downright: 'lu', upleft: 'rd', upright: 'ld' })[arg.toLowerCase()]
     if (!from) return ramp(true)
     return { mask: { kind: 'strips', progress: p, params: { from } } }
   }
@@ -547,6 +619,7 @@ export function renderStateAt(
     const env = envOf(progress, geo, slide, rng)
     const reads = evalBehaviour(node, env, progress, slide, geo, sink)
     if (reads.failed) continue
+    const additive = reads.additive ?? node.additive
     let acc = out.get(key) ?? { visible: true, opacity: 1, tracks: new Map(), color: {}, opacityCap: 1 } as Accumulated
     out.set(key, acc)
     for (const [name, value] of reads.edits) {
@@ -558,8 +631,8 @@ export function renderStateAt(
         const step: Track = { own: prior, base: 0, set: acc.motion !== undefined }
         const span = node.accumulate === 'always' ? motionSpan(node, axis, geo, slide, rng) : 0
         acc.motion = axis === 'dx'
-          ? { dx: compose(step, px, node.additive, iteration, span, node.accumulate).own, dy: acc.motion?.dy ?? 0 }
-          : { dx: acc.motion?.dx ?? 0, dy: compose(step, px, node.additive, iteration, span, node.accumulate).own }
+          ? { dx: compose(step, px, additive, iteration, span, node.accumulate).own, dy: acc.motion?.dy ?? 0 }
+          : { dx: acc.motion?.dx ?? 0, dy: compose(step, px, additive, iteration, span, node.accumulate).own }
         continue
       }
       if (name === 'style.visibility') {
@@ -567,7 +640,7 @@ export function renderStateAt(
         continue
       }
       if (typeof value === 'number' && name === 'style.opacity') {
-        acc.opacity = compose({ own: acc.opacity, base: 1, set: true }, Math.min(1, Math.max(0, value)), node.additive, iteration, 0, node.accumulate).own
+        acc.opacity = compose({ own: acc.opacity, base: 1, set: true }, Math.min(1, Math.max(0, value)), additive, iteration, 0, node.accumulate).own
         continue
       }
       if (!/^(ppt_[xywh]|angle|scale:[xy])$/.test(name)) {
@@ -586,7 +659,7 @@ export function renderStateAt(
         const v1 = readTrackValue(node, 1, geo, slide, name, rng)
         if (v0 !== undefined && v1 !== undefined) span = v1 - v0
       }
-      acc.tracks.set(name, compose(step, value, node.additive, iteration, span, node.accumulate))
+      acc.tracks.set(name, compose(step, value, additive, iteration, span, node.accumulate))
     }
     if (reads.mask) acc.mask = reads.mask
     if (reads.opacityCap !== undefined) acc.opacityCap = Math.min(acc.opacityCap, reads.opacityCap)
@@ -639,7 +712,10 @@ function finalize(acc: Accumulated, geo: BaseGeometry | undefined, slide: Slide)
   const c = Math.cos(a), s = Math.sin(a)
   const rotAbout: Affine = [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy]
   const transform = mulAffine(scale, rotAbout)
-  const motion = acc.motion ?? (movedX || movedY ? { dx, dy } : undefined)
+  // animMotion translates on top of the ppt_x/ppt_y position: the offsets add.
+  const motion = acc.motion
+    ? { dx: acc.motion.dx + dx, dy: acc.motion.dy + dy }
+    : movedX || movedY ? { dx, dy } : undefined
   const colour = acc.color.fill || acc.color.line || acc.color.text ? acc.color : undefined
   return {
     visible: acc.visible,

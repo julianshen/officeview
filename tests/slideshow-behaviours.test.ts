@@ -311,3 +311,118 @@ describe('behaviour evaluation', () => {
     expect(sink.list().filter(d => d.code === 'behaviour-invalid-formula')).toHaveLength(0)
   })
 })
+
+describe('S1-11 review fixes (round 1)', () => {
+  it('C1: exit preset 1 (disappear) rebuilds to hidden, entrance 1 (appear) to visible', () => {
+    const sink = createDiagnosticSink()
+    const exit = rebuildFromPreset(ctn(10, { presetClass: 'exit', presetId: 1 }), T2, sink)
+    expect(exit).toHaveLength(1)
+    expect(exit?.[0]).toMatchObject({ kind: 'set', attrNames: ['style.visibility'], to: 'hidden' })
+    const entr = rebuildFromPreset(ctn(11, { presetClass: 'entr', presetId: 1 }), T2, sink)
+    expect(entr?.[0]).toMatchObject({ kind: 'set', to: 'visible' })
+    // Rendered: the disappear stand-in leaves the shape invisible.
+    const node = exit![0]
+    const state = run([par(20, [{ ...node, ctn: ctn(12, { durMs: 1, fill: 'hold' }) } as BehaviourNode], { durMs: 1, fill: 'hold' })], 1).base
+    expect(state?.visible).toBe(false)
+  })
+
+  it('I2: animRot by with additive sum adds the base rotation once', () => {
+    const spin = bhv(11, 'animRot', { by: 90, additive: 'sum' }, { durMs: 1000, fill: 'hold' })
+    const wrap = par(20, [spin], { durMs: 1000, fill: 'hold' })
+    const half = run([wrap], 500, { basis: geo({ rot: 20 }) }).base
+    expect(half?.transform[0]).toBeCloseTo(Math.cos((65 * Math.PI) / 180)) // 0.4226
+    expect(half?.transform[1]).toBeCloseTo(Math.sin((65 * Math.PI) / 180)) // 0.9063
+    const end = run([wrap], 1000, { basis: geo({ rot: 20 }) }).base
+    expect(end?.transform[0]).toBeCloseTo(Math.cos((110 * Math.PI) / 180))
+    // A second by-rotation in document order stacks on the first: 20 + 90 + 30 = 140 at the end.
+    const more = bhv(12, 'animRot', { by: 30 }, { durMs: 1000, fill: 'hold' })
+    const stacked = run([par(20, [spin, more], { durMs: 1000, fill: 'hold' })], 1000, { basis: geo({ rot: 20 }) }).base
+    expect(stacked?.transform[0]).toBeCloseTo(Math.cos((140 * Math.PI) / 180))
+  })
+
+  it('I3: strips arguments name the motion direction; the reveal starts at the opposite corner', () => {
+    const corner = (arg: string): unknown => {
+      const s = bhv(11, 'animEffect', { filter: `strips(${arg})` }, { durMs: 1000, fill: 'hold' })
+      return run([par(20, [s], { durMs: 1000, fill: 'hold' })], 500).base?.mask?.params.from
+    }
+    expect(corner('downLeft')).toBe('ru')
+    expect(corner('downRight')).toBe('lu')
+    expect(corner('upLeft')).toBe('rd')
+    expect(corner('upRight')).toBe('ld')
+  })
+
+  it('I3: wipe preset subtypes follow the catalogue names (1 from-top, 2 from-right, 4 from-bottom, 8 from-left)', () => {
+    const revealEdge = (subtype: number): unknown => {
+      const nodes = rebuildFromPreset(ctn(10, { presetClass: 'entr', presetId: 22, presetSubtype: subtype }), T2) ?? []
+      const timed = nodes.map(n => ({ ...n, ctn: ctn(11, { durMs: 1000, fill: 'hold' }) }) as BehaviourNode)
+      return run([par(20, timed, { durMs: 1000, fill: 'hold' })], 500).base?.mask?.params.from
+    }
+    expect(revealEdge(1)).toBe('t')
+    expect(revealEdge(2)).toBe('r')
+    expect(revealEdge(4)).toBe('b')
+    expect(revealEdge(8)).toBe('l')
+  })
+
+  it('I4: literal strings such as visible and hidden are not formulas', () => {
+    const hide = bhv(11, 'set', { to: 'hidden' }, { durMs: 1000, fill: 'hold' })
+    const hidden = run([par(20, [hide], { durMs: 1000, fill: 'hold' })], 500)
+    expect(hidden.base?.visible).toBe(false)
+    expect(hidden.sink.list()).toHaveLength(0)
+    const show = bhv(11, 'set', { to: 'visible' }, { durMs: 1000, fill: 'hold' })
+    const shown = run([par(20, [show], { durMs: 1000, fill: 'hold' })], 500)
+    expect(shown.base?.visible).toBe(true)
+    expect(shown.sink.list()).toHaveLength(0)
+  })
+
+  it('I5: a refused or NaN formula drops the behaviour instead of leaking its text', () => {
+    for (const to of ['sqrt(-1)', 'nosuch(1)']) {
+      const bad = bhv(11, 'set', { to, attrNames: ['style.visibility'] }, { durMs: 1000, fill: 'hold' })
+      const r = run([par(20, [bad], { durMs: 1000, fill: 'hold' })], 500)
+      expect(r.base).toBeUndefined()
+      expect(r.sink.list().filter(d => d.code === 'behaviour-invalid-formula')).toHaveLength(1)
+      expect(r.sink.list().filter(d => d.code === 'behaviour-unsupported')).toHaveLength(0)
+    }
+  })
+
+  it('I6: anim splits ; lists per attribute and synthesises keys from from/to/by without a tavLst', () => {
+    const pair = bhv(11, 'anim', { attrNames: ['ppt_x', 'ppt_y'], keys: [k(0, '#ppt_x-1;#ppt_y+0.5'), k(1, '#ppt_x;#ppt_y')] }, { durMs: 1000, fill: 'hold' })
+    const p = run([par(20, [pair], { durMs: 1000, fill: 'hold' })], 500)
+    expect(p.base?.motion?.dx).toBeCloseTo(-480)
+    expect(p.base?.motion?.dy).toBeCloseTo(0.25 * SLIDE.h)
+    expect(p.sink.list().filter(d => d.code === 'behaviour-invalid-formula')).toHaveLength(0)
+    // fmla lists split the same way.
+    const fm = bhv(11, 'anim', { attrNames: ['ppt_x', 'ppt_y'], keys: [{ tm: 0, value: '', fmla: '#ppt_x+$;#ppt_y' }, { tm: 1, value: '', fmla: '#ppt_x+$;#ppt_y+$' }] }, { durMs: 1000, fill: 'hold' })
+    const f = run([par(20, [fm], { durMs: 1000, fill: 'hold' })], 500).base
+    expect(f?.motion?.dx).toBeCloseTo(0.5 * SLIDE.w) // between 0 and 1 slide widths
+    expect(f?.motion?.dy).toBeCloseTo(0.5 * SLIDE.h) // between 0 and 1 slide heights
+    // from/to with no tavLst.
+    const ft = bhv(11, 'anim', { attrNames: ['ppt_x'], keys: [], from: '0', to: '0.5' }, { durMs: 1000, fill: 'hold' })
+    expect(run([par(20, [ft], { durMs: 1000, fill: 'hold' })], 500).base?.motion?.dx).toBeCloseTo(0.25 * SLIDE.w)
+    // by-only is relative to the underlying value: base x = 96 px (0.1) plus 0.25 * 0.5.
+    const by = bhv(11, 'anim', { attrNames: ['ppt_x'], keys: [], by: '0.25' }, { durMs: 1000, fill: 'hold' })
+    expect(run([par(20, [by], { durMs: 1000, fill: 'hold' })], 500, { basis: geo({ x: 96 }) }).base?.motion?.dx).toBeCloseTo(0.125 * SLIDE.w)
+    // to-only starts from the underlying value: opacity 1 -> 0 is 0.5 halfway.
+    const to = bhv(11, 'anim', { attrNames: ['style.opacity'], keys: [], to: '0' }, { durMs: 1000, fill: 'hold' })
+    expect(run([par(20, [to], { durMs: 1000, fill: 'hold' })], 500).base?.opacity).toBeCloseTo(0.5)
+    // from + by with a formula: #ppt_x-1 then +1 slide.
+    const fb = bhv(11, 'anim', { attrNames: ['ppt_x'], keys: [], from: '#ppt_x-1', by: '1' }, { durMs: 1000, fill: 'hold' })
+    expect(run([par(20, [fb], { durMs: 1000, fill: 'hold' })], 500).base?.motion?.dx).toBeCloseTo(-480)
+  })
+
+  it('M7: animMotion and a ppt_x track on one target add their offsets', () => {
+    const motion = bhv(11, 'animMotion', { from: { x: 0, y: 0 }, to: { x: 0.5, y: 0 } as Point }, { durMs: 1000, fill: 'hold' })
+    const shift = bhv(12, 'set', { attrNames: ['ppt_x'], to: '0.1' }, { durMs: 1000, fill: 'hold' })
+    const s = run([par(20, [motion, shift], { durMs: 1000, fill: 'hold' })], 1000).base
+    expect(s?.motion?.dx).toBeCloseTo(0.5 * SLIDE.w + 0.1 * SLIDE.w)
+  })
+
+  it('bounds: a wheel spoke count beyond the mask limit refuses the mask and diagnoses, never clamps silently', () => {
+    const wheel = (arg: string) => run([par(20, [bhv(11, 'animEffect', { filter: `wheel(${arg})` }, { durMs: 1000, fill: 'hold' })], { durMs: 1000, fill: 'hold' })], 500)
+    expect(wheel('8').base?.mask?.params.spokes).toBe(8)
+    expect(wheel('16').base?.mask?.params.spokes).toBe(16)
+    const over = wheel('65')
+    expect(over.base?.mask).toBeUndefined()
+    expect(over.base?.opacity).toBeCloseTo(0.5)
+    expect(over.sink.list().some(d => d.code === 'anim-effect-unknown-filter')).toBe(true)
+  })
+})

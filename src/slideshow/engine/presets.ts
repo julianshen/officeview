@@ -9,7 +9,11 @@ import type { AnimEffectBehaviour, BehaviourNode, CTn, DiagnosticSink, SetBehavi
 
 type SubTypeMap = Readonly<Record<string, string>>
 
-/** Class-level stand-in nodes. `none` emits no state (documented for the report). */
+/**
+ * Class-level stand-in nodes. `none` emits no state. `path-end` also emits
+ * none here: a bare preset CTn carries no path, so there is no end position to
+ * compute; the caller's `preset-approximate` diagnosis says so.
+ */
 function classStandIn(cls: string, ctn: CTn, target: TargetRef): BehaviourNode[] {
   const kind = standInFor(cls)
   if (kind === 'visible')
@@ -23,8 +27,14 @@ function classStandIn(cls: string, ctn: CTn, target: TargetRef): BehaviourNode[]
   return []
 }
 
-/** maskKind the filter arg mapping for the wipe presets; subtype → direction. */
-const WIPE_SIDES: SubTypeMap = { '8': 'right', '2': 'left', '1': 'up', '4': 'down' }
+/**
+ * Wipe preset subtype → `wipe(dir)` filter argument. The catalogue names the
+ * subtypes by the edge the reveal starts at (1 from-top, 2 from-right,
+ * 4 from-bottom, 8 from-left) and the filter argument names the motion
+ * direction (behaviours.ts), so from-top is `wipe(down)`. D4 capture question:
+ * the motion-direction reading of `wipe(dir)` has no primary animEffect capture.
+ */
+const WIPE_SIDES: SubTypeMap = { '8': 'right', '2': 'left', '1': 'down', '4': 'up' }
 
 export function rebuildFromPreset(ctn: CTn, target: TargetRef, sink?: DiagnosticSink): BehaviourNode[] | undefined {
   const cls = ctn.presetClass
@@ -66,8 +76,9 @@ export function rebuildFromPreset(ctn: CTn, target: TargetRef, sink?: Diagnostic
           return [node]
         }
         if (known !== undefined && id === 1) {
-          const node: SetBehaviour = { kind: 'set', ctn, target, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: 'visible' }
-          approx('appear preset rebuilt as a plain visibility set')
+          // Preset 1 is appear under entr and disappear under exit.
+          const node: SetBehaviour = { kind: 'set', ctn, target, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: cls === 'exit' ? 'hidden' : 'visible' }
+          approx(cls === 'exit' ? 'disappear preset rebuilt as a plain hidden visibility set' : 'appear preset rebuilt as a plain visibility set')
           return [node]
         }
         approx('preset id has no keep-alike table; using the class stand-in')
@@ -76,7 +87,9 @@ export function rebuildFromPreset(ctn: CTn, target: TargetRef, sink?: Diagnostic
       case 'emph':
       case 'path':
       default:
-        diagnose('preset-approximate', `preset ${cls}:${id}`, `no preset table for ${cls}${id === undefined ? '' : `:${id}`}; using the class stand-in`)
+        diagnose('preset-approximate', `preset ${cls}:${id}`, cls === 'path'
+          ? `no preset table for ${cls}${id === undefined ? '' : `:${id}`} and no path to take an end position from; the shape stays at its base position`
+          : `no preset table for ${cls}${id === undefined ? '' : `:${id}`}; using the class stand-in`)
         return classStandIn(cls, ctn, target)
     }
   } catch {
