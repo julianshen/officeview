@@ -27,7 +27,7 @@ function documentDiagnostic(doc: PptxDocument, diagnostic: PptxDiagnostic): void
  * Enrich every slide of a parsed document with its inherited appearance. Idempotent. A document without a
  * package handle (constructed, cloned or posted from another realm) or with an invalid slide size is left
  * unchanged with a `no-package` or `slide-size` diagnostic, and a later call (after a reopen) may still enrich it.
- * `slide.background` stays the solid approximation; new pictures are appended to `doc.images`.
+ * `slide.background` stays the solid approximation (cleared when the resolved background paints nothing); new pictures are appended to `doc.images`.
  */
 export function enrichSlideAppearance(doc: PptxDocument): Promise<void> {
   const existing = runs.get(doc)
@@ -69,7 +69,10 @@ async function enrich(doc: PptxDocument, handle: PptxPackageHandle): Promise<voi
         // useBgFill shapes on the slide itself also show the resolved background (the eager parse could only use a solid colour).
         flagUseBgFill(slide.shapes, getChildren(getChildren(await pkg.xmlOrdered(path), 'cSld')[0], 'spTree')[0], path)
         // No background anywhere: useBgFill shapes still show the default white slide, not their authored fill.
-        slide.backdrop = node ?? backgroundNode({ kind: 'fill', fill: { kind: 'solid', color: { r: 255, g: 255, b: 255, a: 1 } } }, slide.widthEmu, slide.heightEmu)
+        // An explicit noFill paints nothing either, and clears the solid the eager parse inherited from the layout or master.
+        const painted = node?.drawingStyle?.fill?.kind === 'none' ? undefined : node
+        if (!painted) delete slide.background
+        slide.backdrop = painted ?? backgroundNode({ kind: 'fill', fill: { kind: 'solid', color: { r: 255, g: 255, b: 255, a: 1 } } }, slide.widthEmu, slide.heightEmu)
         slide.diagnostics ??= []
         slide.diagnostics.push(...diagnostics, ...art.diagnostics)
       } catch (error) {

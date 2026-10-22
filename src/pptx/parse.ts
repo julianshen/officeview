@@ -890,6 +890,12 @@ export async function parseArtworkTree(pkg: OfficePackage, partPath: string, the
   return shapes
 }
 
+/** The branch the parser's compatibility rules select for an `AlternateContent` (as `parseArtworkTree` does), or undefined when none remains. */
+export function alternateBranchSelector(): (alternate: XmlNode) => XmlNode | undefined {
+  const compatibility = new DrawingCompatibility(new Map())
+  return alternate => compatibility.selectRepresentation(alternate)?.node
+}
+
 /** The complete candidate pair that identifies one `doc.images` asset (shared with the lazy appearance enrichment). */
 export function pptxImageKey(image: PptxImageRef): string {
   const svgState = image.svg ? (image.svg.verdict.ok ? 'ok' : `rej:${(image.svg.verdict as { reason: string }).reason}`) : 'none'

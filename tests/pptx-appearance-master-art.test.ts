@@ -209,3 +209,48 @@ describe('artwork image reads (PR #16 review)', () => {
     expect(slide.diagnostics).toContainEqual(expect.objectContaining({ kind: 'appearance-unavailable' }))
   })
 })
+
+describe('PR #16 review: background and artwork selection', () => {
+  it('an explicit noFill background clears the solid the eager parse inherited from the layout', async () => {
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { enrichSlideAppearance } = await import('../src/pptx/appearance')
+    const spec = deck()
+    spec.masters![0].layouts[0].bg = { solid: '336699' }
+    const zip = await JSZip.loadAsync(await buildPptxDeck(spec))
+    const slidePart = await zip.file(SLIDE)!.async('text')
+    expect(slidePart).not.toContain('<p:bg>')
+    zip.file(SLIDE, slidePart.replace('<p:cSld>', '<p:cSld><p:bg><p:bgPr><a:noFill/><a:effectLst/></p:bgPr></p:bg>'))
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    expect(doc.slides[0].background).toBeDefined() // the eager approximation inherits the layout colour
+    await enrichSlideAppearance(doc)
+    const slide = doc.slides[0]
+    expect(slide.backdrop).toMatchObject({ drawingStyle: { fill: { kind: 'solid', color: { r: 255, g: 255, b: 255 } } } })
+    expect(slide.background).toBeUndefined() // absent means white, as the backdrop paints
+  })
+
+  it('artwork image rids follow the compatibility choice, not the discarded branch', async () => {
+    const LAYOUT_RELS = 'ppt/slideLayouts/_rels/slideLayout1.xml.rels'
+    const rel = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${target}"/>`
+    const picture = (id: number, rid: string) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Pic ${rid}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${rid}"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm></p:spPr></p:pic>`
+    const zip = await JSZip.loadAsync(await buildPptxDeck(deck()))
+    const rels = await zip.file(LAYOUT_RELS)!.async('text')
+    // The Choice (selected: Requires="a" is understood) holds the small picture; the unselected Fallback holds the large one.
+    zip.file(LAYOUT_RELS, rels.replace('</Relationships>', `${rel('rIdBig', 'big.png')}${rel('rIdSmall', 'small.png')}</Relationships>`))
+    zip.file('ppt/media/big.png', new Uint8Array(192 * 1024))
+    zip.file('ppt/media/small.png', new Uint8Array(128 * 1024))
+    const layout = await zip.file(LAYOUT)!.async('text')
+    const alt = `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="a">${picture(50, 'rIdSmall')}</mc:Choice><mc:Fallback>${picture(51, 'rIdBig')}</mc:Fallback></mc:AlternateContent>`
+    zip.file(LAYOUT, layout.replace('</p:spTree>', `${alt}</p:spTree>`))
+    const { HandlePackage, HANDLE_AGGREGATE_BYTES } = await import('../src/pptx/appearance/handle-package')
+    // 256 KiB of the aggregate remains: the discarded 192 KiB picture, if charged first, leaves too little for the selected 128 KiB one.
+    zip.file('pressure.bin', new Uint8Array(HANDLE_AGGREGATE_BYTES - 256 * 1024))
+    const source = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+    const over = HandlePackage.over({ pkg: source, slideParts: [SLIDE] }, { partBytes: HANDLE_AGGREGATE_BYTES })
+    await over.bytes('pressure.bin')
+    const theme = (await slideTheme(over, SLIDE)).context
+    const art = await masterArtwork(over, SLIDE, theme)
+    const selected = art.layout.find(shape => shape.source?.id === '50')
+    expect(selected?.image).toBeDefined()
+    expect(art.diagnostics.filter(issue => issue.kind === 'missing-image')).toEqual([])
+  })
+})

@@ -9,7 +9,7 @@ import { partRelationshipNodes, resolvePartTarget } from '../../drawing/parts'
 import { emuToPx } from '../../core/geometry'
 import { resolveGeometry } from '../../drawing/geometry'
 import type { ThemeContext } from '../../drawing/style'
-import { parseArtworkTree } from '../parse'
+import { alternateBranchSelector, parseArtworkTree } from '../parse'
 import type { PptxDiagnostic, PptxShape } from '../types'
 
 export interface MasterArtwork { master: PptxShape[]; layout: PptxShape[]; diagnostics: PptxDiagnostic[] }
@@ -53,10 +53,12 @@ function placeholderIds(root: XmlNode | undefined): Set<string> {
 const isPlaceholder = (node: XmlNode): boolean => NONVISUAL.some(name => getChildren(getChildren(getChildren(node, name)[0], 'nvPr')[0], 'ph').length > 0)
 
 /**
- * The image rIds (`r:embed`, `r:link`) the part's non-placeholder elements reference, at any depth and in every
- * AlternateContent branch, so placeholder-only and unreferenced image relationships are never read.
+ * The image rIds (`r:embed`, `r:link`) the part's non-placeholder elements reference, at any depth and only in the
+ * AlternateContent branch the parser's compatibility rules select, so placeholder-only, unreferenced and
+ * discarded-branch image relationships are never read or charged to the byte budget.
  */
 function usedImageRids(root: XmlNode | undefined): Set<string> {
+  const select = alternateBranchSelector()
   const rids = new Set<string>()
   const pending: Array<[XmlNode, number]> = root ? [[root, 0]] : []
   while (pending.length) {
@@ -64,6 +66,11 @@ function usedImageRids(root: XmlNode | undefined): Set<string> {
     if (depth >= MAX_DEPTH) continue
     for (const [name, child] of orderedChildren(node)) {
       if (name === '#text' || isPlaceholder(child)) continue
+      if (name === 'AlternateContent') {
+        const branch = select(child)
+        if (branch) pending.push([branch, depth + 2])
+        continue
+      }
       const a = attrs(child)
       if (a.embed) rids.add(a.embed)
       if (a.link) rids.add(a.link)
