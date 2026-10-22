@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, within, type RenderResult } from '@testing-library/react'
 import { docxModel, mockViewerLayout, type FakePage } from './helpers/paged-viewer'
-import { showLoader } from '../src/components/present'
+import { showLoader, type PresentPlatform } from '../src/components/present'
+
+/** jsdom platform: activation granted and the full-screen request resolves, so
+ * a start reaches the synchronous focus handoff (the chunk stays gated). */
+const platform: PresentPlatform = {
+  hasActivation: () => true,
+  requestFullscreen: () => Promise.resolve(),
+  exitFullscreen: () => Promise.resolve(),
+  fullscreenElement: () => null,
+  open: () => null,
+}
 
 // Synthetic pages when `h.pages` is set; the real painter otherwise.
 const h = vi.hoisted(() => ({ pages: null as FakePage[] | null }))
@@ -113,6 +123,45 @@ describe('paged Present button', () => {
       release({})
       await waitFor(() => expect(main.getAttribute('aria-busy')).toBeNull())
       expect(main.querySelector('svg[data-icon="loader"]')).toBeNull()
+    } finally {
+      load.mockRestore()
+    }
+  })
+
+  it('starting from a menu item puts focus on the show host', async () => {
+    const load = vi.spyOn(showLoader, 'load').mockImplementation(() => new Promise(() => {}) as never)
+    try {
+      const ui = await mount({ document: PPTX, __presentPlatform: platform })
+      const bar = await toolbar(ui)
+      fireEvent.click(within(bar).getByLabelText('Present options'))
+      fireEvent.click(ui.getByRole('menuitem', { name: 'From current slide' }))
+      const host = ui.container.querySelector('[data-officeview-show]') as HTMLElement
+      // the host holds focus (Esc and the show keys must reach it); the menu
+      // closed and the split button did not steal the focus back
+      expect(ui.queryByRole('menu')).toBeNull()
+      expect(document.activeElement).toBe(host)
+    } finally {
+      load.mockRestore()
+    }
+  })
+
+  it('compact: Present lives in More, and the zoom group stays', async () => {
+    size.width = 375
+    const load = vi.spyOn(showLoader, 'load').mockImplementation(() => new Promise(() => {}) as never)
+    try {
+      const ui = await mount({ document: PPTX, __presentPlatform: platform })
+      const bar = await toolbar(ui)
+      // the compact toolbar keeps its groups; Presentation is a More item
+      expect(within(bar).queryByLabelText('Present')).toBeNull()
+      expect(within(bar).queryByLabelText('Present options')).toBeNull()
+      expect(within(bar).getByRole('button', { name: 'Zoom out' })).toBeTruthy()
+      fireEvent.click(within(bar).getByLabelText('More options'))
+      const items = [...ui.getByRole('menu').querySelectorAll<HTMLElement>('[role^=menuitem]')]
+      expect(items.map((i) => i.textContent)).toEqual(['From beginning', 'From current slide', 'Fit to width', 'Copy selection', 'Print'])
+      fireEvent.click(ui.getByRole('menuitem', { name: 'From current slide' }))
+      const host = ui.container.querySelector('[data-officeview-show]') as HTMLElement
+      expect(document.activeElement).toBe(host)
+      expect(ui.queryByRole('menu')).toBeNull()
     } finally {
       load.mockRestore()
     }

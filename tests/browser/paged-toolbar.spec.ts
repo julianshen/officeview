@@ -588,6 +588,20 @@ test('Present button starts the show from the current slide (browser)', async ({
   await expect(page.locator('[data-officeview-show]')).toBeHidden()
 })
 
+test('Present from a menu item hands focus to the show and Esc exits (browser)', async ({page}) => {
+  await open(page, 'Deck.pptx')
+  const bar = toolbar(page)
+  await bar.getByRole('button', { name: 'Present options' }).click()
+  await page.getByRole('menuitem', { name: 'From beginning' }).click()
+  await expect(page.locator('[data-officeview-show]')).toBeVisible()
+  await expect(page.locator('[data-officeview-show-surface]')).toHaveText('Slide 1 of 3')
+  // the host holds focus, so Esc and the show keys reach it (in-window shows
+  // included); the toolbar must not steal it back
+  await expect.poll(() => page.evaluate(() => document.activeElement?.hasAttribute('data-officeview-show') ?? false)).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-officeview-show]')).toBeHidden()
+})
+
 test('dark: paged page pixels are white and the backdrop is dark', async ({page}) => {
   await open(page,'Report.docx',{query:{theme:'dark'}})
   await expect(region(page)).toHaveCSS('background-color','rgb(22, 21, 20)')

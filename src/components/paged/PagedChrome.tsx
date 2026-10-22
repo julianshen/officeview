@@ -58,8 +58,9 @@ export interface PagedChromeProps {
   copy?: { state: 'idle' | 'done' | 'failed'; enabled: boolean; onCopy(): void }
   /** Print is offered only when allowed. */
   allowPrint: boolean
-  /** Present offer, already gated to allowed slides documents. */
-  present?: { busy: boolean; start(from: 'beginning' | 'current'): void; preload(): void }
+  /** Present offer, already gated to allowed slides documents. Everything
+   * about its offer (busy, preload hint) is the toolbar's own lazy business. */
+  present?: { start(from: 'beginning' | 'current'): void }
   pages: readonly Paintable[]
   owner: object
   showToolbar: boolean
