@@ -642,6 +642,31 @@ describe('output, residency and protection', () => {
   })
 })
 
+describe('slide time', () => {
+  it('while a slide is still loading its slide time is -Infinity: frames and inputs evaluate at 0, never at Infinity', async () => {
+    const seen: number[] = []
+    const real = sessionDeps.stage
+    vi.spyOn(sessionDeps, 'stage').mockImplementation((d) => {
+      const st = real(d)
+      const enter = st.enter.bind(st)
+      // The synchronous part of enter has run when it first awaits (images, fonts, residency): sample then.
+      st.enter = (m, t, n) => { const done = enter(m, t, n); seen.push(st.slideTime(t + 5)); return done }
+      return st
+    })
+    const doc = await deck({
+      slides: [{ shapes: [at(2, 0, 0, 96, 96, 'A')] },
+        { shapes: [at(2, 0, 0, 96, 96, 'B')], timingXml: timingXmlOf(mainSeqXml([step(10, effect(12, 2, 'entr'))])) }],
+    })
+    const r = await show(doc)
+    await r.key('ArrowRight')
+    await r.key('ArrowRight')
+    expect(seen).toEqual([Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY])
+    expect(r.s.cursor!.events.every(e => Number.isFinite(e.t))).toBe(true)
+    expect(r.s.stage!.slideTime(clock.now())).toBeGreaterThanOrEqual(0)
+    r.s.exit()
+  })
+})
+
 describe('S1-19 carry-overs', () => {
   it('the post-exit focus restore listener goes after its timeout', async () => {
     const add = vi.spyOn(document, 'addEventListener')

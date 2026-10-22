@@ -309,7 +309,7 @@ export function createStage(deps: StageDeps): Stage {
 
   const prepared = new Map<number, Prepared>()
   let current: Prepared | undefined
-  let origin = Number.NEGATIVE_INFINITY
+  let origin = Number.POSITIVE_INFINITY
   let outgoing: Frame | undefined
   let running: Running | undefined
   let lastDirect = ''
@@ -738,7 +738,7 @@ export function createStage(deps: StageDeps): Stage {
       }
       current = undefined
       timelineOf = undefined
-      origin = Number.NEGATIVE_INFINITY
+      origin = Number.POSITIVE_INFINITY
     },
 
     async enter(model, t, neighbours) {
