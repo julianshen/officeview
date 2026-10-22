@@ -3,10 +3,13 @@
  * unverified until a stage-close task supplies a compare record. This module does
  * not rebuild behaviours or render effects: later engine tasks consume its rows.
  */
-import type { CatalogueRow } from './types'
+import type { CatalogueRow, Tolerance } from './types'
 export const LANDED_STAGE = 1
-const exact = { meanAbs: 0.02, rowMax: 0.10 }
-const approximate = { meanAbs: 0.08, rowMax: 0.30 }
+/** Frame-compare tolerances (fractions of 255): plan defaults for exact and approximate rows. */
+export const TOLERANCE_EXACT: Readonly<Tolerance> = Object.freeze({ meanAbs: 0.02, rowMax: 0.10 })
+export const TOLERANCE_APPROX: Readonly<Tolerance> = Object.freeze({ meanAbs: 0.08, rowMax: 0.30 })
+const exact = TOLERANCE_EXACT
+const approximate = TOLERANCE_APPROX
 function row(data: Omit<CatalogueRow, 'verified' | 'tolerance'>): CatalogueRow {
   return Object.freeze({ ...data, ...(data.preset ? { preset: Object.freeze({ ...data.preset }) } : {}), verified: false, tolerance: Object.freeze({ ...(data.status === 'exact' ? exact : approximate) }) })
 }
