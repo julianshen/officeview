@@ -316,7 +316,8 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
     run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
     return run
   }
-  // S1-18's Present button calls this.
+  // The Present button and F5 both start here. Everything about its offer
+  // (preload hint, busy state) lives in the lazy toolbar; see PagedToolbar.
   const onPresent = (from: 'beginning' | 'current') => void present({ from }).catch(() => {})
   useImperativeHandle(ref, () => ({ present }))
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
@@ -826,6 +827,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
     search: showSearch ? { inputRef, query, onQuery: setQuery, matches, active, setActive, indexing } : null,
     copy: allowCopy ? { state: copied, enabled: !!selection && !isEmptyRange(selection), onCopy: () => void doCopy() } : undefined,
     allowPrint,
+    present: allowPresent && 'slides' in document ? { start: onPresent } : undefined,
     pages,
     owner,
     showToolbar,
