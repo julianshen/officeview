@@ -163,8 +163,9 @@ test('terminal fallback under a tight budget reaches direct-paint cuts without s
       await page.keyboard.press('ArrowRight')
       expect((await session(page)).slide).toBe(want)
     }).toPass({ timeout: 5000 })
+    // each slide settles on the terminal rung (its ensure runs right after the cut) and changes are cuts
+    await expect.poll(async () => (await session(page)).level).toBe('terminal')
     expect((await session(page)).transition).toBeUndefined()
-    expect((await session(page)).level).toBe('terminal')
   }
   await page.keyboard.press('Escape')
   await expect.poll(() => log(page)).toContain('a:ended')
