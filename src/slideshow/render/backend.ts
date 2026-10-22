@@ -4,17 +4,19 @@
  *
  * `createBackendManager` mounts a WebGL2 canvas in `host` and composites on
  * it. Without WebGL2 (or with `force: 'canvas2d'`) it starts on the Canvas 2D
- * compositor instead, with a diagnostic. `current` is one stable
+ * compositor instead, with a diagnostic, on `deps.output`. `current` is one stable
  * `Compositor` that delegates to whichever backend is active, remembers the
  * last viewport and slide index, and replays them onto a new backend.
  *
  * On `webglcontextlost`:
  * 1. the handler calls `preventDefault()` (without it the context is never
  *    restored);
- * 2. in the same task, `onLoss` mounts a separate 2-D canvas over the WebGL
- *    one. It is the terminal reserve's output surface, sized to fit
- *    `terminal.outputBytes` (scaled down by CSS if the backing store grew),
- *    so mounting it needs no admission. While the context is lost every
+ * 2. in the same task, `onLoss` hides the WebGL canvas and paints on
+ *    `deps.output`, the terminal reserve's output canvas, which the
+ *    permanent reserve already pays for, so it needs no admission and no
+ *    second full-size canvas exists (PR #18 review P2). A 2-D context
+ *    cannot share the WebGL canvas, but the output is a canvas of its own.
+ *    While the context is lost every
  *    `current.frame()` paints live state on it through `deps.paintLive`,
  *    under the viewport (slide px in, as from `createLivePainter`). The show
  *    clock and media are not touched, so they keep running;
@@ -24,7 +26,7 @@
  *    re-rasterises and re-uploads, and WebGL2 takes over when that resolves.
  *    A refused lease or failed rebuild drops to Canvas 2D with a diagnostic;
  * 4. not restored by the deadline: the Canvas 2D compositor takes over on the
- *    mounted 2-D canvas once `rebuildLayers` has built its layers, and the
+ *    output canvas once `rebuildLayers` has built its layers, and the
  *    WebGL canvas is removed at once;
  * 5. a loss beyond `MAX_CONTEXT_LOSSES` pins Canvas 2D for the rest of the
  *    show;
@@ -61,6 +63,12 @@ export interface BackendDeps {
   rebuildLayers: (c: Compositor) => Promise<void>
   workspace: SlideShowWorkspace
   terminal: TerminalReserve
+  /**
+   * The terminal reserve's output canvas (2-D only, never given a WebGL context). The Canvas 2D compositor and
+   * the loss-time painter draw on it, so the fallback holds no surface of its own. Its owner sizes it; the
+   * manager never resizes it.
+   */
+  output: HTMLCanvasElement
   sink: DiagnosticSink
   /** Additive to the brief: start on Canvas 2D without trying WebGL2 (tests, user setting). */
   force?: 'canvas2d'
@@ -141,29 +149,28 @@ export function createBackendManager(host: HTMLElement, deps: BackendDeps): Back
     return { w: 300, h: 150 }
   }
 
-  /** Size the live canvas to the device size, scaled down to fit the terminal's output surface. */
+  /** Scale the device size down to fit the output canvas (its owner sizes it to the backing store). */
   function fitLive() {
     if (!live) return
     const { w, h } = deviceSize()
-    const k = Math.min(1, Math.sqrt(deps.terminal.outputBytes / Math.max(1, w * h * 4)))
-    const cw = Math.max(1, Math.floor(w * k)), ch = Math.max(1, Math.floor(h * k))
-    if (live.canvas.width !== cw) live.canvas.width = cw
-    if (live.canvas.height !== ch) live.canvas.height = ch
-    live.k = k
+    live.k = Math.min(1, live.canvas.width / Math.max(1, w), live.canvas.height / Math.max(1, h))
   }
 
+  /** Composite on the output canvas: nothing is created or admitted (PR #18 review P2). */
   function mountLive() {
     if (live) return
-    const canvas = doc.createElement('canvas')
-    style(canvas, 'canvas2d')
-    live = { canvas, ctx: null, k: 1 }
+    const canvas = deps.output
+    canvas.dataset.slideshowBackend = 'canvas2d'
+    live = { canvas, ctx: canvas.getContext('2d'), k: 1 }
     fitLive()
-    live.ctx = canvas.getContext('2d')
-    host.appendChild(canvas)
+    // A lost WebGL canvas stacks over the output: hide it while live state paints beneath.
+    if (glCanvas) glCanvas.style.visibility = 'hidden'
   }
 
   function unmountLive() {
-    live?.canvas.remove()
+    if (!live) return
+    delete live.canvas.dataset.slideshowBackend
+    if (glCanvas) glCanvas.style.visibility = ''
     live = undefined
   }
 

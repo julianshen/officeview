@@ -161,8 +161,9 @@ export async function startShow(doc: PptxDocument, opts: ShowOptions): Promise<S
     text: () => [...host.querySelectorAll('[data-officeview-show-text] li')].map(li => li.textContent || li.getAttribute('aria-label') || ''),
     frameCanvas() {
       if (s.stage?.level === 'terminal') return host.querySelector<HTMLCanvasElement>('[data-officeview-show-canvas]') ?? undefined
-      const list = [...host.querySelectorAll<HTMLCanvasElement>('[data-officeview-show-stage] canvas[data-slideshow-backend]')]
-      return list[list.length - 1]
+      // Canvas 2D composites on the output canvas (PR #18 review P2); WebGL2 on its own canvas in the stage.
+      return host.querySelector<HTMLCanvasElement>('canvas[data-slideshow-backend="canvas2d"]')
+        ?? host.querySelector<HTMLCanvasElement>('[data-officeview-show-stage] canvas[data-slideshow-backend="webgl2"]') ?? undefined
     },
     exit() { s.exit() },
   }

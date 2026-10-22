@@ -81,6 +81,11 @@ export interface StageDeps {
   force?: 'canvas2d'
   /** Monotonic ms (`performance.now`) for the context-restore deadline. */
   now(): number
+  /**
+   * The show clock. `enter` reads it once the slide is drawable, so a transition starts when its incoming
+   * frame can be drawn, not when the change was requested (PR #18 review P1). Absent, `enter`'s `t` is used.
+   */
+  showNow?(): number
   schedule(cb: () => void, ms: number): unknown
   /** The slide's metadata through the session (so the target resolver sees its underlay). */
   metadata(index: number): Promise<MetadataHandle>
@@ -99,7 +104,10 @@ export interface StageModel {
 export interface Stage {
   /** The shown slide is being left: its current frame becomes the outgoing transition frame. */
   leave(): void
-  /** Shows `model`; resolves once it is drawable and its transition (if any) has started. */
+  /**
+   * Shows `model`; resolves once it is drawable and its transition (if any) has started. `t` is the show time
+   * of the request; the transition starts at the show clock's reading once the slide is prepared.
+   */
   enter(model: StageModel, t: number, neighbours: readonly number[]): Promise<void>
   /** Show time minus the moment the slide's timeline began (its transition's end); `-Infinity` before. */
   slideTime(t: number): number
@@ -401,6 +409,8 @@ export function createStage(deps: StageDeps): Stage {
   // -------------------------------------------------------------------
 
   const manager: BackendManager = createBackendManager(container, {
+    // The Canvas 2D fallback composites on the terminal output, which the permanent reserve pays for (PR #18 review P2).
+    output,
     now: deps.now,
     schedule: deps.schedule,
     paintLive: createLivePainter(terminal, () => current && {
@@ -886,7 +896,9 @@ export function createStage(deps: StageDeps): Stage {
       if (sound?.start) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound', message: 'The transition sound is pending Stage 2: the transition plays silently' })
       if (sound?.end) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound-end', message: 'Stopping sounds at the transition is pending Stage 2: nothing plays to stop' })
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
-      const start = t
+      // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
+      // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).
+      const start = deps.showNow ? Math.max(t, deps.showNow()) : t
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
       if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost') {
         const s = viewport(p).scale
@@ -942,6 +954,8 @@ export function createStage(deps: StageDeps): Stage {
       }
       if (level === 'terminal') { container.hidden = true; paintTerminal(p, state); return state }
       container.hidden = false
+      // The Canvas 2D compositor may draw on the output: a later terminal paint must not skip as unchanged.
+      lastDirect = ''
       // Re-rasterisation work (resize, backend switch), bounded per frame: current first, then neighbours.
       let budget = RERASTER_LIMIT
       budget -= drain(p, budget)

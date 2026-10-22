@@ -643,7 +643,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     const watermark = start.watermark
     stage = sessionDeps.stage({
       doc, root: surface.root, output: surface.canvas, workspace, terminal, backing: admitted.backing, store, sink,
-      reduced: motion, now: () => sessionDeps.now(win),
+      reduced: motion, now: () => sessionDeps.now(win), showNow: () => clock!.now(),
       schedule: (fn, ms) => sessionDeps.timer(win).set(fn, ms),
       metadata: (i) => acquire(i),
       ...(watermark ? { watermark } : {}),
