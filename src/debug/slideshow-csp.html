@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      Slideshow plan S2-2 (spec 5.3): a CSP-hardened host. Scripts need the
+      page nonce (the harness server stamps it on this page's own script tags);
+      styles come only from this origin, so officeview's stylesheet is linked,
+      never inlined. The presenter popup inherits this policy. ?styles=nonce
+      makes the server require a nonce on stylesheets too: the host's own link
+      carries it, the popup's copy does not, so the presenter window's styles
+      are refused (presenter-styles-blocked) while its controls keep working.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self' 'nonce-ovcsp'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'self'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slideshow CSP harness</title>
+    <link rel="stylesheet" href="/src/styles/officeview.css" />
+    <link rel="stylesheet" href="/src/debug/slideshow-csp.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./slideshow-start.tsx"></script>
+  </body>
+</html>

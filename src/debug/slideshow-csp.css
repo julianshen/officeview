@@ -1,0 +1,4 @@
+/* The layout slideshow-start.html inlines; linked here because the CSP harness allows no inline styles. */
+html, body { margin: 0; height: 100%; }
+#root { height: 100%; display: flex; flex-direction: column; }
+.viewer { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }

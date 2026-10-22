@@ -29,6 +29,12 @@
  * spec asks the cross-origin inner frame to present through postMessage
  * (which carries no activation); the result comes back the same way and is
  * kept in the outer page's `window.__slideshowFrame`.
+ *
+ * S2-2 (slideshow-presenter.spec.ts): presenter=1 makes the Present buttons
+ * ask for Presenter View; frame=sandbox embeds this page in a cross-origin
+ * iframe with `sandbox="allow-scripts allow-same-origin"` and no
+ * allow="fullscreen" (both refused); slideshow-csp.html runs this module
+ * under a strict Content Security Policy.
  * Excluded from the library build (tsconfig.build.json excludes src/debug).
  */
 import { createRef, useState, type JSX } from 'react'
@@ -56,7 +62,20 @@ export interface SlideshowFrame { ready: boolean; results: Array<{ result: strin
 declare global { interface Window { __slideshowStart?: SlideshowStart; __slideshowFrame?: SlideshowFrame } }
 
 const params = new URLSearchParams(location.search)
-if (params.get('frame') === 'cross') {
+if (params.get('frame') === 'sandbox') {
+  // Cross-origin (the other loopback name) with no allow attribute, so full screen is refused; the sandbox has no allow-popups.
+  const inner = new URL(location.href)
+  inner.hostname = inner.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
+  inner.searchParams.delete('frame')
+  const frame = document.createElement('iframe')
+  frame.src = inner.href
+  frame.title = 'viewer frame'
+  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin')
+  frame.style.width = '100%'
+  frame.style.height = '100%'
+  frame.style.border = '0'
+  document.getElementById('root')!.append(frame)
+} else if (params.get('frame') === 'cross') {
   // Same page on the other loopback name: a different origin, and no allow attribute.
   const inner = new URL(location.href)
   inner.hostname = inner.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
@@ -145,6 +164,7 @@ async function boot(): Promise<void> {
   const sessions: SlideshowStart['sessions'] = {}
   const docs = [await deck('First deck'), await deck('Second deck')]
   const two = params.get('viewers') === '2'
+  const presenter: PresentOptions | undefined = params.get('presenter') === '1' ? { presenterView: true } : undefined
   const names = two ? (['a', 'b'] as const) : (['a'] as const)
 
   const start = (which: 'a' | 'b', opts?: PresentOptions): Promise<string> =>
@@ -164,7 +184,7 @@ async function boot(): Promise<void> {
     return (
       <>
         <div>
-          {names.map((n) => <button key={n} id={`present-${n}`} type="button" onClick={() => void start(n)}>Present {n}</button>)}
+          {names.map((n) => <button key={n} id={`present-${n}`} type="button" onClick={() => void start(n, presenter)}>Present {n}</button>)}
           {two && <button id="present-both" type="button" onClick={() => { void start('a'); void start('b') }}>Present both</button>}
         </div>
         {names.map((n) => (

@@ -51,22 +51,47 @@ export interface OfficeViewerHandle {
   present(opts?: PresentOptions): Promise<SlideShowSession>
 }
 
+/** Window Management (spec 5.1), not yet in the TypeScript DOM lib. */
+export interface ScreenLike { availLeft?: number; availTop?: number; availWidth: number; availHeight: number; left?: number; top?: number; width?: number; height?: number; isPrimary?: boolean; label?: string }
+export interface ScreenDetails { readonly screens: readonly ScreenLike[]; readonly currentScreen?: ScreenLike }
+export type PresentFullscreenOptions = FullscreenOptions & { screen?: ScreenLike }
+/** What the preload hint prepared for the synchronous start: popup placement features and the audience screen. */
+export interface PreparedPlacement { popupFeatures: string; audienceScreen?: ScreenLike }
+
 export interface PresentPlatform {
   hasActivation(win: Window): boolean | undefined
-  requestFullscreen(el: Element): Promise<void>
+  requestFullscreen(el: Element, options?: PresentFullscreenOptions): Promise<void>
   exitFullscreen(doc: Document): Promise<void>
   fullscreenElement(doc: Document): Element | null
   open(win: Window, url: string, features: string): Window | null
+  /** Screen details only where the window-management permission is already granted (no prompt); else undefined. */
+  screenDetails?(): Promise<ScreenDetails | undefined>
 }
 
 // async: a missing or throwing requestFullscreen becomes a rejection (in-window).
+// screenDetails never rejects: a missing API or permission name (Firefox, Safari)
+// resolves undefined. It reads the global navigator/window on purpose: the
+// signature takes no window, and its only caller is the opener's own toolbar
+// preload, in this realm. A host in another realm injects its own platform.
 export const defaultPlatform: PresentPlatform = {
   hasActivation: (w) => (w.navigator as { userActivation?: { isActive: boolean } }).userActivation?.isActive,
-  requestFullscreen: async (el) => el.requestFullscreen(),
+  requestFullscreen: async (el, o) => el.requestFullscreen(o),
   exitFullscreen: (d) => d.exitFullscreen(),
   fullscreenElement: (d) => d.fullscreenElement,
   open: (w, u, f) => w.open(u, '_blank', f),
+  screenDetails: async () => {
+    try {
+      return (await navigator.permissions.query({ name: 'window-management' as PermissionName })).state == 'granted' ? await (window as unknown as { getScreenDetails(): Promise<ScreenDetails> }).getScreenDetails() : undefined
+    } catch {}
+  },
 }
+
+/**
+ * Per document: the placement the preload hint prepared (spec 5.1; S2-3
+ * fills it), so the synchronous start can open the popup on the presenter's
+ * screen and request full screen on the audience screen without awaiting.
+ */
+export const preparedPlacement = new WeakMap<Document, PreparedPlacement>()
 
 export interface ShowToken {
   release(): void
@@ -118,8 +143,10 @@ export interface ShowStart {
   platform: PresentPlatform
   /** The synchronous request's outcome, so a late refusal reaches the session. */
   fullscreen: Promise<'entered' | 'refused'>
-  /** Only from a new user gesture ("Click for full screen"). */
-  retryFullscreen(): Promise<'entered' | 'refused'>
+  /** Only from a new user gesture ("Click for full screen"); defaults to the prepared audience screen. */
+  retryFullscreen(options?: PresentFullscreenOptions): Promise<'entered' | 'refused'>
+  /** The provisional presenter window opened in the gesture: undefined when not wanted, null (or closed) when blocked. */
+  popup?: Window | null
   from: 'beginning' | 'current' | number
   presenterView?: boolean | 'auto'
   motion: SlideShowMotion
@@ -159,12 +186,21 @@ export const showLoader = { load: () => import('../slideshow') }
 export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   const { doc, host, opts = {}, platform: P } = req
   const from = opts.from ?? 'beginning'
-  const d = host.ownerDocument
+  const d = host.ownerDocument, w = d.defaultView!
   const code: SlideShowErrorCode | 0 = !req.allow || !('slides' in doc) ? 'not-presentable'
     : typeof from == 'number' && !doc.slides[from] ? 'invalid-slide'
-    : P.hasActivation(d.defaultView!) === false ? 'gesture-required' : 0
+    : P.hasActivation(w) === false ? 'gesture-required' : 0
   const token = code ? 0 : acquireShowToken(host)
   if (!token) return Promise.reject(new SlideShowError(code || 'already-presenting'))
+  // Spec 4.1: the presenter popup first, then full screen, in the same gesture.
+  // 'auto' wants it only with a prepared audience screen (window-management already
+  // granted), so a plain start never spends its activation on a popup (controller ruling).
+  const pv = opts.presenterView ?? 'auto', placed = preparedPlacement.get(d), screen = placed?.audienceScreen
+  // A throwing open is a blocked popup, so the token is never held by a dead start.
+  let popup: Window | null | undefined = null
+  try {
+    popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
+  } catch {}
   let done: unknown, handed: unknown, entered: unknown, pending: unknown = 1
   const ac = new AbortController(), signal = ac.signal
   const end = () => ac.abort()
@@ -177,11 +213,14 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
     if (done) return
     done = 1
     end()
+    popup?.close()
     pending ? fullscreen.then(exit) : exit()
     host.style.visibility = 'hidden'
     token.release()
   }
   req.signal?.addEventListener('abort', end, { signal })
+  // The opener unloading (even during load) takes the provisional popup with it.
+  popup && w?.addEventListener('pagehide', () => popup!.close(), { signal })
   d.addEventListener('fullscreenchange', () => {
     const el = P.fullscreenElement(d)
     el ? token.owns(el) && (entered = 1) : entered && end()
@@ -192,7 +231,7 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   }
   host.style.visibility = 'visible'
   const back = d.activeElement
-  const retryFullscreen = () => P.requestFullscreen(host).then(() => 'entered' as const, () => 'refused' as const)
+  const retryFullscreen = (o = screen && { screen }) => P.requestFullscreen(host, o).then(() => 'entered' as const, () => 'refused' as const)
   const fullscreen = retryFullscreen().finally(() => pending = 0)
   host.focus()
   return Promise.race([
@@ -201,7 +240,7 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
       if (signal.aborted) return
       handed = 1
       return m.runShow({
-        ...req, ...opts, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), token, fullscreen, retryFullscreen, from, signal, cleanup,
+        ...req, ...opts, doc: doc as PptxDocument, handle: pptxPackageHandle(doc as PptxDocument), token, fullscreen, retryFullscreen, from, signal, cleanup, popup,
         callbacks: { ...m.viewerCallbacks(host, back), ...req.callbacks },
       })
     }),

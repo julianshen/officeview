@@ -47,6 +47,8 @@ import { runLink } from './links'
 import { nextVisible, previousVisible, visibleOrder } from './order'
 import { createStage, type Stage, type StageDeps } from './stage'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from './surface'
+import { adoptPresenterWindow, type PresenterWindow } from '../presenter/window'
+import { mountPresenterControls, type PresenterControls } from '../presenter/controls'
 
 export type ShowInput =
   | { kind: 'next' | 'previous' | 'first' | 'last' | 'exit' | 'black' | 'white' | 'pause' }
@@ -171,6 +173,8 @@ interface Visit {
   queue: Array<'next' | 'previous'>
 }
 
+const NO_NOTES: ShowSlide['notes'] = []
+
 /** A slide with no readable metadata: static, no links, no transition. */
 const staticSlide = (index: number): ShowSlide => ({ index, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] })
 
@@ -207,9 +211,6 @@ export async function createSession(start: ShowStart): Promise<SessionController
     sink.add({ code: 'slide-size', message: `${bad}; the deck cannot be presented` })
     throw new SlideShowError('not-presentable', bad)
   }
-  if (start.presenterView === true) {
-    sink.add({ code: 'presenter-view-unavailable', message: 'Presenter View is not available yet; presenting audience only.' })
-  }
 
   // Spec 8: a handle-less document reopens a re-readable source; otherwise its slides are static ('no-package').
   let handle = start.handle
@@ -232,9 +233,15 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let cursorHider: CursorHider | undefined
   let stopFrames: (() => void) | undefined
   let clock: SessionClock | undefined
+  /** Spec 5.1: 'window' with the popup adopted; 'swap' (single-screen) when it was wanted but blocked or closed; 'none' when not wanted. */
+  let presenter: SlideShowSession['presenter'] = start.popup === undefined ? 'none' : 'swap'
+  let presenterWindow: PresenterWindow | undefined
+  let controls: PresenterControls | undefined
   const listeners = new AbortController()
   const release = () => {
     listeners.abort()
+    controls?.dispose()
+    presenterWindow?.close()
     stopFrames?.()
     visit?.handle?.release()
     stage?.dispose()
@@ -349,6 +356,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     else clock.resume()
   }
   const render = () => surface?.show({ slide, count, screen })
+  /** The presenter window follows the same state (one owner, spec 5.1); it keeps its own change keys. */
+  const syncPresenter = () => controls?.sync({ slide, count, notes: visit?.meta?.notes ?? NO_NOTES })
   const report = () => {
     if (started && !exited && visit?.cursor && slide === visit.index) cb.onSlideChange?.(visit.index, visit.cursor.step)
   }
@@ -366,6 +375,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   /** The visible text list and the trigger/link buttons for what is on screen now. */
   let a11yKey = ''
   function updateA11y(force = false): void {
+    syncPresenter()
     if (!a11y || !stage) return
     const v = visit
     if (slide === 'end' || !v || !v.cursor || screen !== 'slide') {
@@ -604,7 +614,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     get slideIndex() { return lastShown },
     get buildIndex() { return visit?.cursor?.step ?? 0 },
     get surface() { return surfaceKind },
-    get presenter() { return 'none' as const },
+    get presenter() { return presenter },
     get state(): SessionState {
       return { slide, build: visit?.cursor?.step ?? 0, screen, buffer, paused, clockPaused: paused || hiddenDoc, kiosk, loop, order, exited }
     },
@@ -644,9 +654,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     cursorHider = createCursorHider(surface.root, sessionDeps.timer(win))
     const on = { signal: listeners.signal }
     const gestures = createGestureState(() => clock!.now())
-    host.addEventListener('keydown', (e) => {
-      // A focused control (the full-screen notice's buttons, the accessibility buttons) keeps its own keys; Esc still exits through the start.
-      if (e.target !== host && (e.target as Element | null)?.closest?.('button, input, textarea, select')) return
+    const keyInput = (e: KeyboardEvent) => {
       const input = keyToInput(e, buffer)
       if (input) {
         e.preventDefault()
@@ -656,7 +664,21 @@ export async function createSession(start: ShowStart): Promise<SessionController
         e.preventDefault()
         dispatch({ kind: screen })
       }
+    }
+    host.addEventListener('keydown', (e) => {
+      // A focused control (the full-screen notice's buttons, the accessibility buttons) keeps its own keys; Esc still exits through the start.
+      if (e.target !== host && (e.target as Element | null)?.closest?.('button, input, textarea, select')) return
+      keyInput(e)
     }, on)
+    /**
+     * Keys in the presenter window (spec 4.3, 5.2): Esc always exits; a text control, an editable region
+     * or the scrolling speaker notes keep every other key; a focused button keeps Enter and Space.
+     */
+    const presenterKey = (e: KeyboardEvent) => {
+      const t = e.target as Element | null
+      if (e.key !== 'Escape' && (t?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-officeview-presenter-notes]') || ((e.key === 'Enter' || e.key === ' ') && t?.closest?.('button')))) return
+      keyInput(e)
+    }
     const gesture = (e: Event) => {
       const input = gestureToInput(e as WheelEvent | TouchEvent, gestures)
       if (e.type === 'wheel' && e.cancelable) e.preventDefault()
@@ -686,6 +708,35 @@ export async function createSession(start: ShowStart): Promise<SessionController
     // Every start-time diagnostic reaches the host before onStart.
     await enter(firstShown)
     if (!start.isCurrent()) throw new SlideShowError('cancelled')
+    // Spec 5.1: adopt the popup the gesture opened; blocked (null) or already closed is single-screen.
+    const popup = start.popup
+    if (popup === null || popup?.closed) {
+      sink.add({ code: 'popup-blocked', message: 'The presenter window was blocked; presenting single-screen.' })
+    } else if (popup) {
+      // Best effort (owner ruling): a popup that cannot be adopted is closed and the show runs single-screen.
+      try {
+        const pw = presenterWindow = adoptPresenterWindow(popup, win ?? popup.opener, sink)
+        const theme = host.parentElement?.getAttribute('data-ov-theme')
+        if (theme) pw.root.setAttribute('data-ov-theme', theme)
+        controls = mountPresenterControls(pw, { next: () => session.next(), previous: () => session.previous(), exit, key: presenterKey })
+        presenter = 'window'
+        // Closing the presenter window never ends the show: single-screen from here.
+        pw.onClosed(() => {
+          controls?.dispose()
+          controls = undefined
+          presenterWindow = undefined
+          if (!exited) presenter = 'swap'
+        })
+        syncPresenter()
+      } catch (e) {
+        controls?.dispose()
+        controls = undefined
+        presenterWindow = undefined
+        popup.close()
+        presenter = 'swap'
+        sink.add({ code: 'presenter-window-failed', message: `The presenter window could not be set up (${e instanceof Error ? e.message : String(e)}); presenting single-screen.` })
+      }
+    }
     signal.addEventListener('abort', exit, on)
     started = true
     kioskTimer = createKioskTimer(index.settings, clock.now(), sink)
