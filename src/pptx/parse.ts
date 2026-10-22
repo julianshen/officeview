@@ -247,7 +247,8 @@ function resolveTarget(partPath: string, target: string): string {
 }
 
 /** Load image parts referenced by a part's .rels file, keyed by rId. */
-async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
+/** With `used` (the lazy artwork), only those rIds are read, and a refused read leaves its rId missing instead of rejecting. */
+async function loadSlideImages(pkg: OfficePackage, partPath: string, used?: Set<string>): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
   const out = new Map<string, PptxImageRef>()
   const external = new Set<string>()
   const rels = await partRelationshipNodes(pkg, partPath)
@@ -258,10 +259,11 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ 
     const type = a.Type as string | undefined
     if (!type || !type.includes('/image') || !a.Target) continue
     if (a.TargetMode === 'External') { if (a.Id) external.add(a.Id); continue }
+    if (used && !used.has(a.Id ?? '')) continue
     const path = resolveTarget(partPath, (a.Target as string) ?? '')
     let ref = byPath.get(path)
     if (!ref) {
-      const data = await pkg.bytes(path)
+      const data = used ? await pkg.bytes(path).catch(() => undefined) : await pkg.bytes(path)
       if (!data) continue
       ref = { data, mime: sniffImageMime(data), partPath: path }
       byPath.set(path, ref)
@@ -870,13 +872,14 @@ function parseShapeTree(
  * A layout or master part's whole shape tree, placeholders included, for the lazy
  * master/layout artwork (slideshow S0-6). Images, table styles, compatibility and
  * the node budget go through the slide loop's helpers; drawing content (charts,
- * diagrams) is not prepared, so it shows as a card or is diagnosed.
+ * diagrams) is not prepared, so it shows as a card or is diagnosed. With `usedImages`, only those image rIds
+ * are read, and a refused image degrades to a missing-image diagnostic on its shape.
  */
-export async function parseArtworkTree(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[]): Promise<PptxShape[]> {
+export async function parseArtworkTree(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[], usedImages?: Set<string>): Promise<PptxShape[]> {
   const root = await pkg.xmlOrdered(partPath)
   const spTree = getChildren(getChildren(root, 'cSld')[0], 'spTree')[0]
   if (!spTree) return []
-  const { images, external } = await loadSlideImages(pkg, partPath)
+  const { images, external } = await loadSlideImages(pkg, partPath, usedImages)
   const tableStyles = await readTableStyles(pkg, themePalette(theme))
   const defaults = getChildren(await pkg.xml('ppt/presentation.xml'), 'defaultTextStyle')[0]
   const context = drawingPartContext(pkg)
@@ -885,6 +888,18 @@ export async function parseArtworkTree(pkg: OfficePackage, partPath: string, the
   const shapes = parseShapeTree(pkg, new Map(), spTree, partPath, images, theme, tableStyles, diagnostics, compatibility, 'spTree', undefined, 0, defaults, 0, undefined, { external, selections: new Map() })
   diagnostics.push(...context.diagnostics.slice(start))
   return shapes
+}
+
+/** The branch the parser's compatibility rules select for an `AlternateContent` (as `parseArtworkTree` does), or undefined when none remains. */
+export function alternateBranchSelector(): (alternate: XmlNode) => XmlNode | undefined {
+  const compatibility = new DrawingCompatibility(new Map())
+  return alternate => compatibility.selectRepresentation(alternate)?.node
+}
+
+/** The complete candidate pair that identifies one `doc.images` asset (shared with the lazy appearance enrichment). */
+export function pptxImageKey(image: PptxImageRef): string {
+  const svgState = image.svg ? (image.svg.verdict.ok ? 'ok' : `rej:${(image.svg.verdict as { reason: string }).reason}`) : 'none'
+  return `${image.partPath ?? ''}\u0000${image.svg?.partPath ?? ''}\u0000${svgState}\u0000${image.hasRaster === false ? 'svg-only' : 'raster'}`
 }
 
 function walkShapes(shapes: PptxShape[], visit: (shape: PptxShape) => void): void {
@@ -1022,8 +1037,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
   const imageIndices = new Map<string, number>()
   for (const slide of doc.slides) walkShapes(slide.shapes, shape => {
     if (!shape.image) return
-    const svgState = shape.image.svg ? (shape.image.svg.verdict.ok ? 'ok' : `rej:${(shape.image.svg.verdict as { reason: string }).reason}`) : 'none'
-    const key = `${shape.image.partPath ?? ''}\u0000${shape.image.svg?.partPath ?? ''}\u0000${svgState}\u0000${shape.image.hasRaster === false ? 'svg-only' : 'raster'}`
+    const key = pptxImageKey(shape.image)
     let index = imageIndices.get(key)
     if (index === undefined) {
       index = doc.images.length

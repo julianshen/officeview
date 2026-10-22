@@ -1,7 +1,7 @@
 import { resolveColor } from '../core/color'
 import { emuToPx } from '../core/geometry'
 import { resolveGeometry } from './geometry'
-import { paintGeometry } from './paint'
+import { paintGeometry, tracePath } from './paint'
 import type { SceneNode } from './scene'
 import { paintChartPlaceholder } from './content-paint'
 
@@ -15,6 +15,9 @@ export interface ScenePaintOptions<Node> {
   /** Adapters retain their existing text painter; no parallel text layout here. */
   paintText?: (node: Node, ctx: CanvasRenderingContext2D, widthPx: number, heightPx: number) => void
   missingImage?: (node: Node) => void
+  /** The page background, in the coordinate space `root` names: `useBgFill` nodes show it through their filled geometry. */
+  backdrop?: readonly Node[]
+  root?: DOMMatrix
 }
 
 /** Paint source-ordered objects onto the existing caller surface and transform.
@@ -51,9 +54,25 @@ function paintNode<Node extends SceneTree<Node>>(shape: Node, ctx: CanvasRenderi
       paintScene<Node>(shape.children ?? [], ctx, options)
       return
     }
+    // useBgFill (ECMA-376 p:sp@useBgFill) is the shape's fill: it replaces an authored solid, gradient or picture fill.
+    const backdropped = !!(shape.useBgFill && shape.drawingGeometry && options.backdrop && options.root)
     if (shape.drawingGeometry) {
       const geometry = resolveGeometry(shape.drawingGeometry, w, h)
-      paintGeometry(ctx, geometry, shape.drawingStyle ?? { issues: [] }, w, h)
+      const style = shape.drawingStyle ?? { issues: [] }
+      if (backdropped) {
+        // The shape's silhouette casts its authored shadow (an opaque stand-in fill; only the shadow pass paints).
+        if (style.shadow) paintGeometry(ctx, geometry, { issues: [], shadow: style.shadow, line: style.line, fill: { kind: 'solid', color: { r: 0, g: 0, b: 0, a: 1 } } }, w, h, 'shadow')
+        // The background shows through the shape as it lies on the page: clip here, paint it in page space.
+        ctx.save()
+        try {
+          ctx.beginPath()
+          for (const path of geometry.paths) if (path.fill !== 'none') tracePath(ctx, path.commands)
+          ctx.clip()
+          ctx.setTransform(options.root!)
+          paintScene(options.backdrop!, ctx, { images: options.images, missingImage: options.missingImage })
+        } finally { ctx.restore() }
+        paintGeometry(ctx, geometry, { ...style, fill: undefined, shadow: undefined }, w, h)
+      } else paintGeometry(ctx, geometry, style, w, h)
     } else {
       // Legacy handwritten models keep their existing simple geometry contract.
       const path = () => {
@@ -66,7 +85,7 @@ function paintNode<Node extends SceneTree<Node>>(shape: Node, ctx: CanvasRenderi
       if (shape.line) { path(); ctx.strokeStyle = resolveColor(shape.line.color); ctx.lineWidth = Math.max(1, emuToPx(shape.line.widthEmu ?? 12700)); ctx.stroke() }
     }
     options.paintContent?.(shape, ctx, w, h)
-    if (options.images && shape.imageIndex !== undefined) {
+    if (options.images && shape.imageIndex !== undefined && !backdropped) {
       const img = options.images[shape.imageIndex]
       if (img) {
         const opacity = shape.image?.opacity ?? 1
