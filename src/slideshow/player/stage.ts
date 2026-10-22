@@ -103,8 +103,8 @@ export interface Stage {
   enter(model: StageModel, t: number, neighbours: readonly number[]): Promise<void>
   /** Show time minus the moment the slide's timeline began (its transition's end); `-Infinity` before. */
   slideTime(t: number): number
-  /** Draws one frame of the shown slide at show time `t`. */
-  frame(cursor: SlideCursor | undefined, t: number): void
+  /** Draws one frame of the shown slide at show time `t`; returns the render state it drew (undefined between slides). */
+  frame(cursor: SlideCursor | undefined, t: number): RenderState | undefined
   /** The shown slide's render state at `cursor`/`t` (hit tests, accessibility). */
   stateAt(cursor: SlideCursor | undefined, t: number): RenderState
   readonly plan: RenderPlan | undefined
@@ -318,6 +318,8 @@ interface Prepared {
   hidden: Set<TargetKey>
   /** The entrance behaviours of each hidden target: it shows once one of them has begun. */
   entrances: Map<TargetKey, Set<TimeNode>>
+  /** The show's sink, scoped to this slide: behaviour diagnostics carry no slide of their own (S1-22). */
+  sink: DiagnosticSink
   images: Array<CanvasImageSource | undefined>
   /** The workspace charge of every decoded image above (released with them). */
   imageLeases: Lease[]
@@ -379,7 +381,11 @@ export function createStage(deps: StageDeps): Stage {
   // Viewport
   // -------------------------------------------------------------------
 
-  const slidePx = (p: Prepared | undefined) => slideSize(p?.slide ?? deps.doc.slides[0])
+  const slidePx = (p: Prepared | undefined) => {
+    const slide = p?.slide ?? deps.doc.slides[0]
+    // A deck without slides shows only the end-of-show slide: any valid size will do for its empty viewport.
+    return slide ? slideSize(slide) : { w: 960, h: 540 }
+  }
   function viewport(p: Prepared | undefined): CompositorViewport & { scale: number } {
     const { w, h } = slidePx(p)
     const s = Math.min(backing.w / w, backing.h / h)
@@ -623,6 +629,7 @@ export function createStage(deps: StageDeps): Stage {
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
       index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, entrances, images,
+      sink: { add: (d) => sink.add(d.slideIndex === undefined ? { ...d, slideIndex: index } : d), list: () => sink.list() },
       ready: Promise.resolve(), handle, chain: Promise.resolve(), dead: false, imageLeases: [],
     }
     const used = [...new Set(imageIndices([...underlayOf(slide), ...(slide.shapes ?? [])]))]
@@ -687,7 +694,7 @@ export function createStage(deps: StageDeps): Stage {
   function stateOf(p: Prepared, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined): RenderState {
     if (!cursor || !timeline || cursor.mode === 'static') return EMPTY_STATE
     const snapshot = timeline.stateAt(cursor, Math.max(0, slideT))
-    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), sink, slidePx(p))
+    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), p.sink, slidePx(p))
     const state = new Map<TargetKey, TargetState>()
     for (const [k, v] of raw) state.set(k, relativeTo(v, p.base.get(k)))
     if (p.hidden.size) {
@@ -818,7 +825,8 @@ export function createStage(deps: StageDeps): Stage {
     get level() { return current?.level },
     get backend() { return manager.state },
     get backingStore() { return backing },
-    get transition() { return running && { effect: running.spec.element, duration: running.duration } },
+    // What is drawn: a catalogued stand-in reports its 2-D look-alike (S1-22); `random` draws its pick per rng.
+    get transition() { return running && { effect: running.spec.element === 'random' ? 'random' : resolveTransition2D(running.spec).spec.element, duration: running.duration } },
     inspect() {
       return {
         current: current?.index,
@@ -837,9 +845,14 @@ export function createStage(deps: StageDeps): Stage {
       releaseFrame(outgoing)
       outgoing = undefined
       if (p && p.level && p.level !== 'terminal' && !disposed) {
-        // The outgoing frame, charged to the workspace (not a slide's rung: the slide may be evicted next).
+        // The outgoing frame comes from the transition allowance the slide's rung already priced (its own
+        // incoming frame was released when its transition ended), so it is never charged twice (S1-22 fix 1).
+        // An eviction while it is drawn is safe: a retired rung keeps its charge until its last lease goes.
+        // Only a slide without an open rung falls back to the workspace.
         const s = viewport(p).scale
-        const f = flatten(p, liveState, workspace, p.level === 'full' ? s : s / Math.max(1, backing.dpr), 'transition:from')
+        const scale = p.level === 'full' ? s : s / Math.max(1, backing.dpr)
+        const own = owners.get(p.index)
+        const f = (own && flatten(p, liveState, own, scale, 'transition:from')) || flatten(p, liveState, workspace, scale, 'transition:from')
         if (f) outgoing = f
         else sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The outgoing frame did not fit the slideshow workspace; the slide change is a cut' })
       }
@@ -868,6 +881,10 @@ export function createStage(deps: StageDeps): Stage {
       if (spec && deps.reduced) spec = reducedTransition(spec)
       const drawn = spec ? resolveTransition2D(spec) : undefined
       if (drawn?.approximated && spec) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: spec.element, message: `Transition ${spec.ns}:${spec.element} is drawn as its 2-D look-alike ${drawn.spec.element}` })
+      // Sounds are Stage 2 (spec 13): the transition plays silently, diagnosed once for the slide.
+      const sound = model.slide.transition?.sound
+      if (sound?.start) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound', message: 'The transition sound is pending Stage 2: the transition plays silently' })
+      if (sound?.end) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound-end', message: 'Stopping sounds at the transition is pending Stage 2: nothing plays to stop' })
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       const start = t
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
@@ -921,9 +938,9 @@ export function createStage(deps: StageDeps): Stage {
       const level = p.level
       if (level === undefined) {
         if (outgoing && outgoing.epoch === epoch) compositor().frame([{ handle: outgoing.handle, state: PLAIN }])
-        return
+        return state
       }
-      if (level === 'terminal') { container.hidden = true; paintTerminal(p, state); return }
+      if (level === 'terminal') { container.hidden = true; paintTerminal(p, state); return state }
       container.hidden = false
       // Re-rasterisation work (resize, backend switch), bounded per frame: current first, then neighbours.
       let budget = RERASTER_LIMIT
@@ -941,7 +958,7 @@ export function createStage(deps: StageDeps): Stage {
             from: running.from?.handle ?? running.to.handle, to: running.to.handle,
             effect: running.spec.element, progress, params, rng: running.rng,
           })
-          return
+          return state
         }
         releaseFrame(running.from)
         releaseFrame(running.to)
@@ -960,11 +977,12 @@ export function createStage(deps: StageDeps): Stage {
         }
         const flat = p.built?.flat
         c.frame(flat ? [{ handle: flat.handle, state: PLAIN }] : [])
-        return
+        return state
       }
       const list = draws(p, state)
       limits.check(p.index, { layers: list.length, reRasters: RERASTER_LIMIT - budget })
       c.frame(list)
+      return state
     },
 
     toSlide(clientX, clientY) {

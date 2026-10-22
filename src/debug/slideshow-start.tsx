@@ -22,7 +22,15 @@
  * metadata but no layers, so the ladder reaches the terminal rung) and
  * motion=reduced|full (`slideShowMotion`). The force and budget seams are
  * set through a dynamic import of the session module, so other decks never
- * load the chunk early.
+ * load the chunk early. S1-22 (slideshow-corpus.spec.ts, slideshow-perf.spec.ts):
+ * deck=corpus&name=<deck> loads a corpus deck from /__corpus/lo-<deck>.pptx,
+ * which the spec serves with page.route (the decks are never committed and
+ * the locked-down server cannot read corpus/); bench=1 wraps the frame
+ * driver to record each frame's work (`performance.now()` around the
+ * session's tick, plus a 1-px readback of the WebGL2 canvas with sync=1, so
+ * the GPU's work is included) and the rAF timestamps, in
+ * `window.__slideshowStart.bench`; budget=wide gives the show a 1 GiB
+ * workspace (profiling a transition at a size the 512 MiB budget refuses).
  *
  * No-gesture calls: Playwright's evaluate runs with a user gesture, and an
  * activation reaches ancestors and same-origin descendants only. So the
@@ -41,9 +49,26 @@ import type { PptxDocument } from '../pptx/types'
 import { buildPptx, buildPptxDeck } from '../testdata/ooxml-builders'
 import '../styles/officeview.css'
 
+/** S1-22 frame-work samples (bench=1). */
+export interface SlideshowBench {
+  /** Per frame: ms of work in the session's tick (with sync=1, through a 1-px GPU readback). */
+  work: number[]
+  /** Per frame: the rAF timestamp. */
+  stamps: number[]
+  /** Clears both lists. */
+  reset(): void
+  /** UNMASKED_RENDERER_WEBGL of a probe WebGL2 context (which GPU or software rasteriser ran). */
+  renderer: string
+  /** The show workspace's bytes in use and its limit, now. */
+  workspace(): { used: number; limit: number } | undefined
+}
+
 export interface SlideshowStart {
   ready: boolean
+  bench?: SlideshowBench
   log: string[]
+  /** Every show diagnostic, in full (the log keeps only codes). */
+  diagnostics: Array<{ viewer: string; code: string; slideIndex?: number; effect?: string; message: string }>
   /** The last session per viewer. */
   sessions: Record<string, SlideShowSession | undefined>
   /** present() with no user gesture. */
@@ -116,6 +141,13 @@ async function playDeck(): Promise<PptxDocument> {
 async function deck(text: string): Promise<PptxDocument> {
   const kind = params.get('deck')
   if (kind === 'play') return playDeck()
+  if (kind === 'corpus') {
+    const name = params.get('name') ?? ''
+    if (!/^[\w.-]+$/.test(name)) throw new Error(`deck=corpus needs a deck name (got ${JSON.stringify(name)})`)
+    const res = await fetch(`/__corpus/lo-${name}.pptx`)
+    if (!res.ok) throw new Error(`corpus deck ${name}: HTTP ${res.status}`)
+    return parsePptx(await OfficePackage.load(new Uint8Array(await res.arrayBuffer())))
+  }
   if (kind === 'nav' || kind === 'loop') {
     const hidden = kind === 'nav' ? 2 : 1
     const slides = Array.from({ length: kind === 'nav' ? 5 : 3 }, (_, i) => ({
@@ -129,10 +161,21 @@ async function deck(text: string): Promise<PptxDocument> {
   return parsePptx(await OfficePackage.load(bytes))
 }
 
+function rendererName(): string {
+  const gl = document.createElement('canvas').getContext('webgl2')
+  if (!gl) return 'no webgl2'
+  const info = gl.getExtension('WEBGL_debug_renderer_info')
+  const name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER))
+  gl.getExtension('WEBGL_lose_context')?.loseContext()
+  return name
+}
+
 async function boot(): Promise<void> {
   if (params.has('force') || params.has('budget')) {
     const [{ sessionDeps }, { createSlideShowWorkspace }] = await Promise.all([import('../slideshow/player/session'), import('../slideshow/workspace')])
     if (params.get('force') === 'canvas2d') sessionDeps.backend = 'canvas2d'
+    // budget=wide (S1-22 profiling only): a 1 GiB workspace, so a 3840 × 2160 transition is not refused.
+    if (params.get('budget') === 'wide') sessionDeps.workspace = (profile) => createSlideShowWorkspace(profile, { limit: 2 ** 30 })
     if (params.get('budget') === 'tight') {
       sessionDeps.workspace = (profile) => {
         const out = Math.ceil(innerWidth * Math.min(2, devicePixelRatio)) * Math.ceil(innerHeight * Math.min(2, devicePixelRatio)) * 4
@@ -140,7 +183,43 @@ async function boot(): Promise<void> {
       }
     }
   }
+  let bench: SlideshowBench | undefined
+  if (params.get('bench') === '1') {
+    const { sessionDeps } = await import('../slideshow/player/session')
+    const sync = params.get('sync') === '1'
+    let ws: { used(): number; limit: number } | undefined
+    const b: SlideshowBench = {
+      work: [], stamps: [], reset() { b.work.length = 0; b.stamps.length = 0 }, renderer: rendererName(),
+      workspace: () => ws && { used: ws.used(), limit: ws.limit },
+    }
+    const makeWorkspace = sessionDeps.workspace
+    sessionDeps.workspace = (profile) => (ws = makeWorkspace(profile))
+    const pixel = new Uint8Array(4)
+    // The production driver, with the tick timed: the work a frame does before the browser composites it.
+    sessionDeps.frames = (win, frame) => {
+      if (!win) return () => {}
+      let on = true
+      let id = 0
+      const loop = (stamp: number) => {
+        if (!on) return
+        const t0 = win.performance.now()
+        frame()
+        if (sync) {
+          const c = win.document.querySelector<HTMLCanvasElement>('canvas[data-slideshow-backend="webgl2"]')
+          const gl = c?.getContext('webgl2')
+          gl?.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel)
+        }
+        b.work.push(win.performance.now() - t0)
+        b.stamps.push(stamp)
+        id = win.requestAnimationFrame(loop)
+      }
+      id = win.requestAnimationFrame(loop)
+      return () => { on = false; win.cancelAnimationFrame(id) }
+    }
+    bench = b
+  }
   const log: string[] = []
+  const diagnostics: SlideshowStart['diagnostics'] = []
   const refs = { a: createRef<OfficeViewerHandle>(), b: createRef<OfficeViewerHandle>() }
   const sessions: SlideshowStart['sessions'] = {}
   const docs = [await deck('First deck'), await deck('Second deck')]
@@ -176,7 +255,7 @@ async function boot(): Promise<void> {
               slideShowMotion={(params.get('motion') as 'reduced' | 'full' | null) ?? undefined}
               onSlideShowStart={() => log.push(`${n}:onStart`)}
               onSlideShowEnd={() => log.push(`${n}:onEnd`)}
-              onSlideShowDiagnostic={(d) => log.push(`${n}:diag:${d.code}`)}
+              onSlideShowDiagnostic={(d) => { log.push(`${n}:diag:${d.code}`); diagnostics.push({ viewer: n, ...d }) }}
               onSlideShowSlideChange={params.has('deck') ? (i, b) => log.push(`${n}:change:${i}:${b}`) : undefined}
             />
           </div>
@@ -199,7 +278,9 @@ async function boot(): Promise<void> {
   createRoot(document.getElementById('root')!).render(<App />)
   window.__slideshowStart = {
     ready: true,
+    ...(bench ? { bench } : {}),
     log,
+    diagnostics,
     sessions,
     present: (which = 'a', opts) => start(which, opts),
     unmount: () => setMounted(false),

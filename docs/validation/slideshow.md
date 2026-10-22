@@ -2821,3 +2821,77 @@ ECMA-376 / [MS-PPTX] in the implementer sandbox).
 | Reader limits | 2000 `p:cTn`, 64 time-node levels (root = 1), 10000 conditions (incl. `endSync`), 1000/20000 `p:tav`, 64 KiB `animMotion@path` → `{ refused: 'limit:<name>' }`, builds empty, transition still read | synthetic. Note: the shared XML parser caps element nesting at 100 tags (fast-xml-parser `maxNestedTags`), about 32 time-node levels, so deeper trees fail at XML parse before the reader |
 | `tn` cycles | begin/end dependency graph; closing condition replaced by one that never fires; `timing-cycle` | synthetic |
 | `p:cond` with `p:tn` and no `evt` | never fires (matches the S1-9 scheduler, ss/s1-9@9d04576 `instances()`), adds no cycle edge; `timing-syncbase-no-event` | synthetic |
+
+## S1-22 corpus conformance and frame benchmark
+
+### Frame benchmark (spec 7)
+
+`tests/browser/slideshow-perf.spec.ts`, run with `OV_SLIDESHOW_BENCH=1` (never in CI). Deck tdf104788, slide 6, all six click steps, each measured from its click until it settles, at 1920 × 1080 CSS px, DPR 2 (backing store 3840 × 2160, asserted), Chromium (Playwright 1.64 bundle), on the owner's reference laptop (Apple M4 Pro, macOS). Frame work is `performance.now()` around the session's tick. "Submit" is JavaScript plus WebGL2 command submission. "Readback" adds a 1-px `readPixels` after the tick, so the GPU's work is counted too. A dropped frame is a rAF gap above 1.5 × the run's median gap.
+
+| Renderer | Mode | Frames | p50 ms | **p95 ms** | max ms | Dropped | rAF gap |
+|---|---|---|---|---|---|---|---|
+| ANGLE Metal, Apple M4 Pro (`OV_SLIDESHOW_GPU=1`) | submit | 446 | 0.50 | **0.70** | 1.40 | 0 | 16.7 ms |
+| ANGLE Metal, Apple M4 Pro (`OV_SLIDESHOW_GPU=1`) | readback | 446 | 2.10 | **2.50** | 3.20 | 0 | 16.7 ms |
+| SwiftShader (the CI rasteriser, on the same Mac) | submit | 109 | 0.30 | **0.40** | 0.60 | 3 | 50–67 ms |
+| SwiftShader (the CI rasteriser, on the same Mac) | readback | 193 | 60.2 | **65.8** | 97.4 | 1 | 50–67 ms |
+
+Result: the GPU run meets the target (p95 ≤ 12 ms, no dropped frame), with every step's p95 between 0.5 and 0.8 ms (submit) and between 2.2 and 2.7 ms (readback). SwiftShader rasterises 3840 × 2160 on the CPU, so it draws only 15–20 frames per second and its readback p95 of 65.8 ms misses the target. That run is recorded as a miss, but it is not the spec 7 benchmark, which names the reference laptop's Chromium.
+
+**Fixed in S1-22 fix round 1 (the paragraph below describes the state before it): slide transitions at the benchmark size were cuts.** On WebGL2 at 3840 × 2160, the outgoing frame of a slide transition is refused (`transition-workspace`: "The outgoing frame did not fit the slideshow workspace; the slide change is a cut"). After two resident slides of tdf44223, the workspace holds 489,330,720 of 536,870,912 B. Each resident rung prices padded bounds × 1.25, plus the largest layer, plus two transition frames. The outgoing frame is then charged to the workspace again, with a 66 MB peak while it is uploaded. This affects both the split and the fade decks, on the GPU and on SwiftShader. In one SwiftShader run the split still played, because the neighbour's prefetch had not finished yet. The transition plays at DPR 1. It also plays at DPR 2 when the workspace is 1 GiB (`budget=wide`, a profiling-only harness option).
+
+**After fix round 1.** The outgoing frame now comes from the transition allowance the outgoing slide's rung already priced. That slide's own incoming frame was released when its transition ended. A retired rung keeps its charge until the frame's lease is released, so a goTo that drops the slide while its frame is still drawn stays accounted. The black frame for the first slide, and any slide without an open rung, still lease from the workspace, and are refused with a diagnostic when they don't fit. Re-run on the M4 Pro at 1920 × 1080, DPR 2, with the product 512 MiB budget:
+
+| Test | Mode | p50 / **p95** ms | Dropped |
+|---|---|---|---|
+| tdf104788 slide 6, all steps | submit | 0.30 / **0.30** | 0 |
+| tdf104788 slide 6, all steps | readback | 1.90 / **2.00** | 0 |
+| tdf44223 slide 2 split transition (plays) | submit | 0.10 / **0.20** | 0 |
+| tdf44223 slide 2 split transition (plays) | readback | 1.80 / **2.40** | 0 |
+| tdf115394 slide 5 fade transition (plays) | submit | 0.10 / **0.20** | 0 |
+| tdf115394 slide 5 fade transition (plays) | readback | 1.60 / **1.80** | 0 |
+
+The jsdom tests in `tests/slideshow-fix-s1-22.test.ts` cover the budget:
+- a split transition plays at 3840 × 2160 on the 512 MiB desktop budget, less the WebGL2 drawing-buffer lease;
+- a split transition plays on the 256 MiB mobile budget at its largest output (1619 × 2160 after the cap);
+- a refused black frame is still a diagnosed cut.
+
+**Transition mask re-upload (the S1-14 question).** tdf44223 slide 2 `split` (a mask, re-traced and re-uploaded every frame) against tdf115394 slide 5 `fade` (a transform):
+
+| Renderer | Backing store | Mode | split p50 / p95 ms | fade p50 / p95 ms |
+|---|---|---|---|---|
+| ANGLE Metal, M4 Pro | 1920 × 1080 (DPR 1) | submit | 0.20 / 0.50 | 0.20 / 0.30 |
+| ANGLE Metal, M4 Pro | 1920 × 1080 (DPR 1) | readback | 1.80 / 2.00 | 1.00 / 1.40 |
+| ANGLE Metal, M4 Pro | 3840 × 2160 (1 GiB workspace) | submit | 0.10 / 0.30 | 0.10 / 0.20 |
+| ANGLE Metal, M4 Pro | 3840 × 2160 (1 GiB workspace) | readback | 3.50 / 3.80 | 1.60 / 1.90 |
+| SwiftShader | 1920 × 1080 (DPR 1) | readback | 23.9 / 49.0 | 18.7 / 20.9 |
+| SwiftShader | 3840 × 2160 (1 GiB workspace) | readback | 62.1 / 168.6 | 29.7 / 76.9 |
+
+The re-upload is deferred to the GPU process, so it does not appear in submit time. On the M4 Pro it adds about 1.9 ms per frame at 4K (readback p50 3.5 against 1.6 ms), well inside 12 ms. Procedural GLSL masks are not needed for the GPU target. On SwiftShader the mask roughly doubles the frame cost.
+
+### CI
+
+The slideshow job now fetches the corpus. `tests/browser/slideshow-corpus.spec.ts` presents all 16 LibreOffice decks and plays them to the end-of-show slide, once on WebGL2 (a hard failure if WebGL2 is not the backend) and once on forced Canvas 2D. It also runs the benchmark recorder on WebGL2 for tdf104788's six steps, with no thresholds. In CI a missing corpus fails the spec instead of skipping it. `tests/slideshow-corpus.test.ts` runs in the check job, which fetches the corpus before vitest.
+
+### Corpus coverage (owner rule)
+
+Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-through of each deck (every step, every trigger), classified from the timing tree and the diagnostics of that run. **native**: drawn as the file says. **closest**: the closest equivalent plays, with a diagnostic (a 2-D look-alike, a stage-2 media stand-in, a dropped attribute, a whole-graphic build). **refused**: nothing of it plays. Totals: 19 native, 11 closest, 0 refused.
+
+| Deck | Native | Closest | Refused | Items (slide: what → coverage, note) |
+|---|---|---|---|---|
+| airplane-transition | 0 | 1 | 0 | 1: p15:prstTrans:airplane → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
+| bnc591147 | 0 | 3 | 0 | 1: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed)<br>1: mediacall 2 → **closest** (pending-stage-2 stand-in (cmd togglePause), diagnosed)<br>2: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed) |
+| connector-shape-animations | 2 | 0 | 0 | 1: entr 22/1 wipe: from-top → **native** (file behaviours)<br>1: entr 22/1 wipe: from-top → **native** (file behaviours) |
+| narration | 0 | 1 | 0 | 1: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed) |
+| ooxtheme | 0 | 0 | 0 | no transitions or effects |
+| tdf104788 | 5 | 1 | 0 | 6: entr 37 rise-up → **native** (file behaviours)<br>6: entr 34 breaks → **closest** (xshear dropped)<br>6: entr 58 fold → **native** (file behaviours)<br>6: entr 47 descend → **native** (file behaviours)<br>6: entr 42 ascend → **native** (file behaviours)<br>6: entr 10 fade-in → **native** (file behaviours) |
+| tdf104792-smart-art-animation | 0 | 2 | 0 | 1: entr 10 fade-in → **closest** (graphic build animates the whole graphic)<br>1: entr 10 fade-in → **closest** (graphic build animates the whole graphic) |
+| tdf105739 | 0 | 0 | 0 | no transitions or effects |
+| tdf115394 | 5 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (750 ms))<br>3: p:fade → **native** (exact (500 ms))<br>4: p:fade → **native** (exact (250 ms))<br>5: p:fade → **native** (exact (4250 ms)) |
+| tdf123684 | 0 | 0 | 0 | no transitions or effects |
+| tdf142915 | 0 | 0 | 0 | no transitions or effects |
+| tdf146223 | 2 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (1000 ms)) |
+| tdf149588_transparentSolidFill | 0 | 1 | 0 | 1: p159:morph → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
+| tdf156808 | 1 | 0 | 0 | 1: p14:flythrough → **native** (exact (800 ms)) |
+| tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (pending-stage-2 stand-in (audio), diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (pending-stage-2 stand-in: silent, diagnosed) |
+| tdf93868 | 2 | 0 | 0 | 1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours)<br>1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours) |
+

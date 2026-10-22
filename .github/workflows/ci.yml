@@ -111,6 +111,13 @@ jobs:
       - name: Install Playwright Chromium and its system dependencies
         run: bunx playwright install --with-deps chromium
 
+      # Slideshow plan S1-22: slideshow-corpus.spec.ts presents every LibreOffice
+      # corpus deck on the WebGL2 (SwiftShader) and forced Canvas 2D paths and
+      # checks that the frame-benchmark recorder runs on WebGL2. In CI a missing
+      # corpus fails that spec rather than skipping it.
+      - name: Fetch the real-file corpus
+        run: bun scripts/fetch-corpus.ts
+
       - name: Slideshow Playwright project
         env:
           IV_HARNESS_PORT: '4311'
