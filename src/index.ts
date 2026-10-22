@@ -10,6 +10,8 @@ export { OfficeDoc, default as OfficeDocDefault } from './components/OfficeDoc'
 export { OfficeFile, useOfficeFile, loadOfficeFile } from './components/OfficeFile'
 export type { OfficeFileProps } from './components/OfficeFile'
 export type { OfficeDocProps, OfficeDocSource } from './components/OfficeDoc'
+export { SlideShowError } from './components/present'
+export type { OfficeViewerHandle, SlideShowSession, SlideShowErrorCode, SlideShowDiagnostic } from './components/present'
 
 // Low-level access
 export { OfficePackage } from './core/zip'

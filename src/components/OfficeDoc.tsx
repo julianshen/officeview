@@ -7,7 +7,7 @@ import type { CanvasColors } from './canvasColors'
  *  - IntersectionObserver-based lazy rendering (only visible pages paint)
  *  - touch scrolling is native (overflow scroll), no custom gesture code needed
  */
-import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { forwardRef, lazy, Suspense, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type Ref } from 'react'
 import { getPaintables, type PageSpec, type Paintable, type PaintableArray } from '../render/paint'
 import type { WatermarkOptions } from '../core/watermark'
 import type { FallbackFontsOptions } from '../core/fonts/fallback'
@@ -32,6 +32,7 @@ import type { ZoomContext, ZoomOutcome } from './zoomRouting'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
 import { themeRootProps, type ThemeMode } from './theme'
+import { defaultPlatform, startPresent, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type ReexportableSource, type SlideShowDiagnostic, type SlideShowMotion } from './present'
 import {
   distance,
   MAX_ZOOM,
@@ -125,6 +126,21 @@ export interface OfficeDocProps {
   showToolbar?: boolean
   /** File name shown in the toolbar; <OfficeFile> derives one when unset. */
   title?: string
+  /** Allow presenting a PPTX as a slideshow (default true); false hides Present and makes `present()` refuse. */
+  allowPresent?: boolean
+  /** F5 / Shift+F5 start the show while focus is inside the viewer (default true). */
+  presentShortcuts?: boolean
+  /** Slideshow motion (default 'auto': follows prefers-reduced-motion). */
+  slideShowMotion?: SlideShowMotion
+  onSlideShowStart?: () => void
+  /** Fires exactly once per started show, before `session.ended` resolves. */
+  onSlideShowEnd?: () => void
+  onSlideShowSlideChange?: (slideIndex: number, buildIndex: number) => void
+  onSlideShowDiagnostic?: (diagnostic: SlideShowDiagnostic) => void
+  /** @internal */
+  __presentPlatform?: PresentPlatform
+  /** @internal The re-readable source <OfficeFile> loaded from. */
+  __presentSource?: ReexportableSource
 }
 
 /** Cap the effective device scale so a 6x zoom can't allocate absurd canvases. */
@@ -252,7 +268,7 @@ function PageCanvas({
   )
 }
 
-function LegacyOfficeDoc({
+const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   document,
   background,
   pageGapPx = 16,
@@ -267,8 +283,42 @@ function LegacyOfficeDoc({
   theme,
   showToolbar = true,
   title,
-}: OfficeDocProps): ReactElement {
+  allowPresent = true,
+  presentShortcuts = true,
+  slideShowMotion = 'auto',
+  onSlideShowStart,
+  onSlideShowEnd,
+  onSlideShowSlideChange,
+  onSlideShowDiagnostic,
+  __presentPlatform = defaultPlatform,
+  __presentSource,
+}: OfficeDocProps, ref: Ref<OfficeViewerHandle>): ReactElement {
   const instance = useId()
+  // The slideshow host (spec 4.1): always mounted, empty and hidden, so full
+  // screen can be requested on it synchronously inside the gesture. A start
+  // belongs to the document epoch: unmount, a new document or allowPresent
+  // withdrawn aborts it (cancel during load, exit once running).
+  const hostRef = useRef<HTMLDivElement>(null)
+  const epoch = useRef<AbortController>(null)
+  const gen = useRef(0)
+  const [notice, setNotice] = useState('')
+  useLayoutEffect(() => {
+    const c = epoch.current = new AbortController()
+    gen.current++
+    return () => c.abort()
+  }, [document, allowPresent])
+  const present = (opts?: PresentOptions) => {
+    setNotice('')
+    const run = startPresent({
+      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, signal: epoch.current!.signal,
+      callbacks: { onStart: onSlideShowStart, onEnd: onSlideShowEnd, onSlideChange: onSlideShowSlideChange, onDiagnostic: onSlideShowDiagnostic },
+    })
+    run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
+    return run
+  }
+  // S1-18's Present button calls this.
+  const onPresent = (from: 'beginning' | 'current') => void present({ from }).catch(() => {})
+  useImperativeHandle(ref, () => ({ present }))
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
   // The watermark is painted into the page bitmap, so changing it has to repaint.
@@ -545,6 +595,10 @@ function LegacyOfficeDoc({
   const toggleFit = () => routed((m) => apply(m.toggleFit(zoomContext())))
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key == 'F5' && presentShortcuts && allowPresent && !e.altKey && 'slides' in document) {
+      e.preventDefault()
+      return onPresent(e.shiftKey ? 'current' : 'beginning')
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault()
       if (allowPrint) requestPrint({ owner })
@@ -848,10 +902,12 @@ function LegacyOfficeDoc({
           ))}
         </div>
       </div>
+      {notice && <div role="alert" data-officeview-notice="">{notice}</div>}
       {showToolbar && <div ref={setStatusSlot} data-testid="officeview-status-slot" className={SLOT} style={{ height: PAGED_STATUS_HEIGHT }} />}
+      <div ref={hostRef} data-officeview-show="" tabIndex={-1} style={{ visibility: 'hidden' }} />
     </div>
   )
-}
+})
 
 // A chunk that fails to load (a redeploy removed it, a CSP blocks it) warns
 // once and degrades inside the viewer rather than unmounting the host.
@@ -880,7 +936,7 @@ const route = (fn: (m: Router) => void) => { if (router) fn(router); else void l
 const SLOT = 'ov:shrink-0 ov:bg-chrome'
 const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 
-export function OfficeDoc(props: OfficeDocProps): ReactElement {
+export const OfficeDoc = forwardRef(function OfficeDoc(props: OfficeDocProps, ref: Ref<OfficeViewerHandle>): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
   // A worker-backed (paged) shell document carries its source (S5.4) and has no
   // rows on the main thread: only the interactive viewer can show it.
@@ -892,7 +948,7 @@ export function OfficeDoc(props: OfficeDocProps): ReactElement {
       </Suspense>
     )
   }
-  return <LegacyOfficeDoc document={document} {...rest} />
-}
+  return <LegacyOfficeDoc ref={ref} document={document} {...rest} />
+})
 
 export default OfficeDoc
