@@ -94,10 +94,15 @@ function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; bu
   const close = () => { setOpen(false); button.current?.focus() }
   const entries = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
 
-  // Preload hint (spec §5.3): one fetch per control; the catch keeps an
-  // offline hover from surfacing an unhandled rejection.
-  const preloaded = useRef(false)
-  const preload = () => { if (preloaded.current) return; preloaded.current = true; void showLoader.load().catch(() => {}) }
+  // Preload hint (spec §4.1, §5.3): one fetch per control; the catch keeps an
+  // offline hover from surfacing an unhandled rejection. Every hint also
+  // re-reads already-granted screen details into the viewer document's
+  // prepared placement (S2-3), so an unplugged screen does not linger.
+  const chunk = useRef<ReturnType<typeof showLoader.load>>(null)
+  const preload = (e: { currentTarget: Element }) => {
+    const d = e.currentTarget.ownerDocument
+    void (chunk.current ??= showLoader.load()).then((m) => m.prepareScreens(d)).catch(() => {})
+  }
   // Busy while the show module is being fetched for a start (all show state
   // stays south of the lazy seam); the settle clears it — an already-loaded
   // module joins the same inflight resolution.
@@ -175,7 +180,7 @@ function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; bu
         data-ov-control="present-more"
         onPointerEnter={preload}
         onFocus={preload}
-        onClick={() => { preload(); setOpen((o) => !o) }}
+        onClick={(e) => { preload(e); setOpen((o) => !o) }}
         className={p.buttonClass}
       >
         <Icon icon={ChevronDown} name="chevron-down" />

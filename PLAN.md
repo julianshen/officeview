@@ -1,15 +1,3 @@
-# Slideshow Task S2-3: Window Management placement for Presenter View
-
-## Task S2-3 Plan & Tests
-- [x] Test 1: granted with two screens: popup on primary, audience requestFullscreen({screen}) on the external screen
-- [x] Test 2: not yet granted: start proceeds and Use both screens asks on click
-- [x] Test 3: denied, missing API and single screen are three distinct diagnostics, none is popup-blocked
-- [x] Test 4: swap displays exchanges the screens
-- [x] Test 5: other browsers show the one-time drag hint
-- [x] Test 6: preparePlacement stores computed plan in injected setter slot
-
----
-
 # PLAN: WordArt Compatibility in OfficeView
 
 ## Interactive spreadsheet viewer status

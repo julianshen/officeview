@@ -109,6 +109,26 @@ describe('paged Present button', () => {
     }
   })
 
+  it('the preload hint prepares screen placement on every hover and focus, loading the chunk once (S2-3)', async () => {
+    const prepareScreens = vi.fn(() => Promise.resolve())
+    const load = vi.spyOn(showLoader, 'load').mockImplementation(() => Promise.resolve({ prepareScreens }) as never)
+    try {
+      const ui = await mount({ document: PPTX })
+      const bar = await toolbar(ui)
+      const main = within(bar).getByLabelText('Present')
+      const more = within(bar).getByLabelText('Present options')
+      fireEvent.pointerEnter(main)
+      fireEvent.focus(more)
+      fireEvent.click(more)
+      await waitFor(() => expect(prepareScreens).toHaveBeenCalledTimes(3))
+      // Keyed by the viewer's document: the synchronous start reads the slot for host.ownerDocument.
+      expect(prepareScreens.mock.calls.every((c) => (c as unknown[])[0] === main.ownerDocument)).toBe(true)
+      expect(load).toHaveBeenCalledTimes(1)
+    } finally {
+      load.mockRestore()
+    }
+  })
+
   it('busy state while the chunk loads', async () => {
     let release!: (m: unknown) => void
     const chunk = new Promise((resolve) => { release = resolve })

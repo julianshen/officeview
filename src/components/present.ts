@@ -52,7 +52,7 @@ export interface OfficeViewerHandle {
 }
 
 /** Window Management (spec 5.1), not yet in the TypeScript DOM lib. */
-export interface ScreenLike { availLeft?: number; availTop?: number; availWidth: number; availHeight: number; left?: number; top?: number; width?: number; height?: number; isPrimary?: boolean; label?: string }
+export interface ScreenLike { availLeft?: number; availTop?: number; availWidth: number; availHeight: number; left?: number; top?: number; width?: number; height?: number; isPrimary?: boolean; isInternal?: boolean; label?: string }
 export interface ScreenDetails { readonly screens: readonly ScreenLike[]; readonly currentScreen?: ScreenLike }
 export type PresentFullscreenOptions = FullscreenOptions & { screen?: ScreenLike }
 /** What the preload hint prepared for the synchronous start: popup placement features and the audience screen. */
