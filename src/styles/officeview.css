@@ -295,6 +295,20 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+/* The engine's compositor canvases (slideshow S1-20) sit over the terminal
+ * output canvas and under the black/white screen and the end-of-show slide;
+ * every surface canvas letterboxes to the backing store's aspect. The cursor
+ * hides after 3 s without movement. */
+[data-ov-theme-root] [data-officeview-show-stage] {
+  position: absolute;
+  inset: 0;
+}
+[data-ov-theme-root] [data-officeview-show-stage] canvas {
+  object-fit: contain;
+}
+[data-ov-theme-root] [data-officeview-show-surface][data-officeview-show-cursor="hidden"] {
+  cursor: none;
+}
 
 /* Utilities come last in source order, so they follow the base. source("..")
  * limits class detection to src/ (docs and tests quote ov: class names). */
@@ -305,6 +319,10 @@
  * Like the rest of the chrome, this rule ships in the required style.css. */
 @media print {
   [data-ov-theme-root][data-ov-instance][data-ov-print="false"] {
+    display: none !important;
+  }
+  /* allowPrint=false: no slideshow surface prints, wherever it is mounted (slideshow S1-20). */
+  [data-ov-theme-root] [data-officeview-show-surface][data-ov-print="false"] {
     display: none !important;
   }
 }

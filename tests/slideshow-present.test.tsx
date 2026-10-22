@@ -530,4 +530,18 @@ describe('OfficeFile source', () => {
     // the parsed document carries its package handle
     expect(starts.every((s) => s.handle && s.handle.slideParts.length === 1)).toBe(true)
   })
+
+  it('the viewer watermark reaches runShow (S1-20: every slideshow surface paints it)', async () => {
+    const bytes = await buildPptx([])
+    const starts: ShowStart[] = []
+    const runShow = vi.fn(async (st: ShowStart) => { starts.push(st); st.cleanup(); return {} as never })
+    const ref = createRef<OfficeViewerHandle>()
+    const ui = render(<OfficeFile ref={ref} data={bytes} watermark={{ text: 'DRAFT' }} __presentPlatform={fakePlatform(log)} />)
+    await waitFor(() => expect(ref.current).toBeTruthy())
+    const run = ref.current!.present()
+    loads[loads.length - 1].resolve({ ...slideshow, runShow } as typeof slideshow)
+    await run
+    ui.unmount()
+    expect(starts[0].watermark).toMatchObject({ text: 'DRAFT' })
+  })
 })
