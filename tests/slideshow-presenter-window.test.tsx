@@ -154,15 +154,38 @@ describe('presenter popup: the synchronous start', () => {
     host2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await run2.catch(() => {})
 
-    // presenterView: false, and 'auto' with no known second screen, open nothing (owner: single-screen).
+    // presenterView: false, 'auto' with no prepared screen, and 'auto' on an extended display without a
+    // prepared screen (permission not granted) open nothing: a plain start goes straight to full screen.
     log.length = 0
-    for (const presenterView of [false, 'auto'] as const) {
-      const h = freshHost()
+    for (const [presenterView, ext] of [[false, false], ['auto', false], ['auto', true], [undefined, true]] as const) {
+      Object.defineProperty(window.screen, 'isExtended', { value: ext, configurable: true })
+      const h = document.createElement('div')
+      document.body.append(h)
       const r = startPresent({ doc: PPTX, host: h, opts: { presenterView }, platform: platform(log, fakePopup()), generation: 1, callbacks: callbacks(), allow: true, motion: 'auto' })
       h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
       await r.catch(() => {})
+      h.remove()
     }
+    delete (window.screen as { isExtended?: boolean }).isExtended
     expect(log.filter((l) => l.startsWith('open'))).toEqual([])
+    expect(log.filter((l) => l.startsWith('requestFullscreen'))).toHaveLength(4)
+  })
+
+  it('the opener unloading during load closes the provisional popup', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const popup = fakePopup()
+    const run = startPresent({ doc: PPTX, host, opts: { presenterView: true }, platform: platform(log, popup), generation: 1, callbacks: callbacks(), allow: true, motion: 'auto' })
+    expect(popup.closed).toBe(false)
+    window.dispatchEvent(new Event('pagehide'))
+    expect(popup.closed).toBe(true)
+    host.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(await run.then(() => 'resolved', (x: SlideShowError) => x.code)).toBe('cancelled')
+    // The listener goes with the start: a later pagehide no longer reaches the popup.
+    const calls = popup.closeCalls
+    window.dispatchEvent(new Event('pagehide'))
+    expect(popup.closeCalls).toBe(calls)
+    host.remove()
   })
 
   it('a failed load closes the provisional popup', async () => {

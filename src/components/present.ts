@@ -185,9 +185,10 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   const token = code ? 0 : acquireShowToken(host)
   if (!token) return Promise.reject(new SlideShowError(code || 'already-presenting'))
   // Spec 4.1: the presenter popup first, then full screen, in the same gesture.
-  // 'auto' wants it only with a known second screen (owner: else single-screen).
+  // 'auto' wants it only with a prepared audience screen (window-management already
+  // granted), so a plain start never spends its activation on a popup (controller ruling).
   const pv = opts.presenterView ?? 'auto', placed = preparedPlacement.get(d), screen = placed?.audienceScreen
-  const popup = pv === true || pv == 'auto' && (screen || (w?.screen as { isExtended?: boolean } | undefined)?.isExtended) ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
+  const popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
   let done: unknown, handed: unknown, entered: unknown, pending: unknown = 1
   const ac = new AbortController(), signal = ac.signal
   const end = () => ac.abort()
@@ -206,6 +207,8 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
     token.release()
   }
   req.signal?.addEventListener('abort', end, { signal })
+  // The opener unloading (even during load) takes the provisional popup with it.
+  popup && w?.addEventListener('pagehide', () => popup.close(), { signal })
   d.addEventListener('fullscreenchange', () => {
     const el = P.fullscreenElement(d)
     el ? token.owns(el) && (entered = 1) : entered && end()
