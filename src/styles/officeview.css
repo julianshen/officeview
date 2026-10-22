@@ -309,6 +309,32 @@
 [data-ov-theme-root] [data-officeview-show-surface][data-officeview-show-cursor="hidden"] {
   cursor: none;
 }
+/* Media (slideshow S2-7): video plays in an overlay at its shape's box over
+ * the compositor; clicks pass through to the slide except on the "Click to
+ * play" button, which sits over the poster when the browser refused play(). */
+[data-ov-theme-root] [data-officeview-show-media-layer] {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+[data-ov-theme-root] [data-officeview-show-media="video"] {
+  position: absolute;
+  object-fit: fill;
+}
+[data-ov-theme-root] [data-officeview-show-play] {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  padding: 8px 16px;
+  border: 1px solid #fff;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font: 16px/1.4 system-ui, sans-serif;
+  cursor: pointer;
+}
 
 /* Utilities come last in source order, so they follow the base. source("..")
  * limits class detection to src/ (docs and tests quote ov: class names). */
