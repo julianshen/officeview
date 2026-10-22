@@ -28,7 +28,9 @@ vi.mock('../src/render/paint', async (importOriginal) => {
 })
 vi.mock('../src/components/paged/PagedChrome', () => ({ default: () => null }))
 
-const PPTX = { slides: [{}, {}, {}], widthEmu: 9144000, heightEmu: 6858000 } as unknown as PptxDocument
+// A caller-constructed deck: S1-19 validates slideWidthEmu/slideHeightEmu (spec 7), so the sizes are the real fields.
+const slideOf = (index: number) => ({ index, widthEmu: 9144000, heightEmu: 6858000, shapes: [] })
+const PPTX = { slides: [slideOf(0), slideOf(1), slideOf(2)], slideWidthEmu: 9144000, slideHeightEmu: 6858000, images: [] } as unknown as PptxDocument
 const DOCX = docxModel(['not a deck'])
 
 interface Deferred<T> { promise: Promise<T>; resolve(v: T): void; reject(e: unknown): void }
