@@ -131,6 +131,8 @@ async function record(only: string | undefined, threshold: number): Promise<numb
   mkdirSync(GOLDEN_CORPUS_DIR, { recursive: true })
   const files = readdirSync(CORPUS_DIR)
     .filter(isOfficeCorpusFile)
+    // Slideshow appearance goldens belong to S0-7's dedicated golden test.
+    .filter((f) => !f.startsWith('lo-'))
     .filter((f) => (only ? f.includes(only) : true))
     .sort()
 
@@ -209,7 +211,7 @@ async function record(only: string | undefined, threshold: number): Promise<numb
     for (const g of readdirSync(GOLDEN_CORPUS_DIR).filter((f) => f.endsWith('.png'))) {
       const m = g.match(/^(.*)\.(\d+)\.png$/)
       if (!m) continue
-      if (!seen.has(m[1])) {
+      if (!m[1].startsWith('lo-') && !seen.has(m[1])) {
         unlinkSync(join(GOLDEN_CORPUS_DIR, g))
         console.log(`removed orphan ${g}`)
         recorded++
@@ -228,6 +230,8 @@ async function compare(only: string | undefined, threshold: number, maxRatio: nu
   }
   const files = readdirSync(CORPUS_DIR)
     .filter(isOfficeCorpusFile)
+    // Slideshow appearance goldens belong to S0-7's dedicated golden test.
+    .filter((f) => !f.startsWith('lo-'))
     .filter((f) => (only ? f.includes(only) : true))
     .sort()
 

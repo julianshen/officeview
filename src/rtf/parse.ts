@@ -454,8 +454,6 @@ class RtfParser {
     }
   }
 
-  // ---- output plumbing -------------------------------------------------
-
   private finalizeSection(blocks: DocxBlock[]): DocxSection {
     const s = this.section
     const margins: DocxPageMargins = {
@@ -660,8 +658,6 @@ private emitLiteral(text: string): void {
     void isListPara
   }
 
-  // ---- tables ----------------------------------------------------------
-
   private ensureTable(): DocxTable {
     if (!this.openTable) {
       this.openTable = {
@@ -744,8 +740,6 @@ private emitLiteral(text: string): void {
     // Row definitions persist: a following row may omit \trowd and \cellx.
   }
 
-  // ---- pictures --------------------------------------------------------
-
   /** Parse a `{\pict ...}` destination: hex payload plus sizing control words. */
   private parsePicture(): DocxImage | undefined {
     let kind = ''
@@ -793,8 +787,6 @@ private emitLiteral(text: string): void {
     const heightEmu = goalH > 0 ? goalH * EMU_PER_TWIP : Math.round((pich || 100) * EMU_PER_PX)
     return { data, mime: kind === 'png' ? 'image/png' : 'image/jpeg', widthEmu, heightEmu }
   }
-
-  // ---- tokenizer -------------------------------------------------------
 
   /**
    * Read a control word. `this.i` may point at the leading backslash or at the
@@ -1156,7 +1148,6 @@ private emitLiteral(text: string): void {
     // nested group ending in hex lost its style when the group exited.
     this.flushHex()
     switch (name) {
-      // ---- character formatting ----
       case 'b': char.bold = param !== 0; return
       case 'i': char.italic = param !== 0; return
       case 'ul': char.underline = param !== 0; return
@@ -1214,7 +1205,6 @@ private emitLiteral(text: string): void {
         return
       }
 
-      // ---- paragraph structure ----
       case 'par': this.flushHex(); this.flushParagraph(); return
       case 'line':
         this.flushHex()
@@ -1240,7 +1230,6 @@ private emitLiteral(text: string): void {
         return
       case 'tx': return // absolute tab stops: the model uses \t in run text
 
-      // ---- tables ----
       case 'trowd': this.rowDefs = []; this.cellDefInProgress = null; return
       case 'cellx': {
         const def = this.cellDef()
@@ -1263,7 +1252,6 @@ private emitLiteral(text: string): void {
       case 'clbrdrb': this.cellDef().borders.bottom = borderStyle(param); return
       case 'clbrdrr': this.cellDef().borders.right = borderStyle(param); return
 
-      // ---- lists ----
       case 'pntext': para.isListPara = true; return
       case 'ilvl': para.listLevel = param ?? 0; return
       case 'ls':
@@ -1272,7 +1260,6 @@ private emitLiteral(text: string): void {
         if (param !== undefined && param !== 0) this.para.isListPara = true
         return
 
-      // ---- section / page setup ----
       case 'sectd': this.section = defaultSection(); return
       case 'sect':
         this.flushParagraph()
@@ -1300,7 +1287,6 @@ private emitLiteral(text: string): void {
       case 'landscape':
       case 'lndscpsxn': this.section.landscape = true; return
 
-      // ---- literal characters ----
       case 'tab': this.emitLiteral('\t'); return
       case 'emdash': this.emitLiteral('\u2014'); return
       case 'endash': this.emitLiteral('\u2013'); return
@@ -1316,8 +1302,6 @@ private emitLiteral(text: string): void {
         return
     }
   }
-
-  // ---- destination tables ---------------------------------------------
 
   private parseFontTable(): void {
     let index = 0

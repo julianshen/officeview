@@ -51,6 +51,8 @@ const corpusAvailable = existsSync(join(CORPUS_DIR, PROBE_FIXTURE))
 function corpusFiles(): string[] {
   return readdirSync(CORPUS_DIR)
     .filter(isOfficeCorpusFile)
+    // Slideshow appearance goldens belong to S0-7's dedicated golden test.
+    .filter((f) => !f.startsWith('lo-'))
     .filter((f) => !EXPECTED_REJECTS.some((n) => f.includes(n)))
     .sort()
 }

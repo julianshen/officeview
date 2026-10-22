@@ -1,0 +1,256 @@
+/* Master and layout artwork (slideshow S0-6). Office-shaped synthetic decks from buildPptxDeck. */
+import { describe, it, expect } from 'vitest'
+import JSZip from 'jszip'
+import { OfficePackage } from '../src/core/zip'
+import { slideTheme } from '../src/pptx/parse'
+import { masterArtwork } from '../src/pptx/appearance/master-art'
+import { buildPptxDeck, type PptxDeckSpec } from '../src/testdata/ooxml-builders'
+import type { PptxShape } from '../src/pptx/types'
+
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+const pngBytes = () => Uint8Array.from(atob(PNG), (c) => c.charCodeAt(0))
+
+const SLIDE = 'ppt/slides/slide1.xml'
+const MASTER = 'ppt/slideMasters/slideMaster1.xml'
+const LAYOUT = 'ppt/slideLayouts/slideLayout1.xml'
+
+function deck(options: { slideShowMasterSp?: boolean; layoutShowMasterSp?: boolean } = {}): PptxDeckSpec {
+  return {
+    masters: [{
+      shapes: [
+        { id: 10, name: 'Master Logo', image: { data: pngBytes(), name: 'logo.png' }, off: ['100000', '100000'], ext: ['500000', '500000'] },
+        { id: 11, name: 'Master Title', placeholder: { type: 'title' }, off: ['0', '0'], ext: ['9144000', '1000000'] },
+        { id: 12, name: 'Master Body', placeholder: { type: 'body', idx: 1 }, off: ['0', '1000000'], ext: ['9144000', '5000000'] },
+      ],
+      layouts: [{
+        showMasterSp: options.layoutShowMasterSp,
+        placeholders: [{ type: 'title', off: ['0', '0'], ext: ['9144000', '1000000'] }],
+        shapes: [{ id: 20, name: 'Layout Band', fill: '336699', off: ['0', '6000000'], ext: ['9144000', '858000'] }],
+      }],
+    }],
+    slides: [{
+      showMasterSp: options.slideShowMasterSp,
+      shapes: [
+        { id: 2, name: 'Slide Title', placeholder: { type: 'title' }, paragraphs: [{ runs: [{ text: 'Hello' }] }] },
+        { id: 3, name: 'Slide Box', fill: 'FF0000', off: ['1000000', '2000000'], ext: ['1000000', '1000000'] },
+      ],
+    }],
+  }
+}
+
+async function open(bytes: Uint8Array) {
+  const pkg = await OfficePackage.load(bytes)
+  const theme = (await slideTheme(pkg, SLIDE)).context
+  return masterArtwork(pkg, SLIDE, theme)
+}
+
+/** Insert raw XML at the end of a part's spTree. */
+async function patchSpTree(bytes: Uint8Array, part: string, xml: string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(bytes)
+  const text = await zip.file(part)!.async('text')
+  zip.file(part, text.replace('</p:spTree>', `${xml}</p:spTree>`))
+  return zip.generateAsync({ type: 'uint8array' })
+}
+
+function names(shapes: PptxShape[]): string[] {
+  const out: string[] = []
+  const walk = (list: PptxShape[]) => { for (const s of list) { out.push(s.source?.name ?? '?'); if (s.children) walk(s.children) } }
+  walk(shapes)
+  return out
+}
+
+describe('masterArtwork', () => {
+  it('master logo and layout band are returned; title and body placeholders are not', async () => {
+    const art = await open(await buildPptxDeck(deck()))
+    expect(names(art.master)).toEqual(['Master Logo'])
+    expect(names(art.layout)).toEqual(['Layout Band'])
+    const logo = art.master[0]
+    // the picture goes through the slide image loader, resolved against the master part
+    expect(logo.image?.partPath).toBe('ppt/media/image1.png')
+    expect(logo.image?.data.byteLength).toBe(pngBytes().byteLength)
+    expect(art.layout[0].drawingStyle?.fill).toMatchObject({ kind: 'solid' })
+    expect(art.layout[0].yEmu).toBe(6000000)
+  })
+
+  it('slide showMasterSp=0 drops both; layout showMasterSp=0 drops master only', async () => {
+    const slideOff = await open(await buildPptxDeck(deck({ slideShowMasterSp: false })))
+    expect(slideOff.master).toEqual([])
+    expect(slideOff.layout).toEqual([])
+    const layoutOff = await open(await buildPptxDeck(deck({ layoutShowMasterSp: false })))
+    expect(layoutOff.master).toEqual([])
+    expect(names(layoutOff.layout)).toEqual(['Layout Band'])
+    // "false" is an xsd:boolean spelling too
+    const bytes = await buildPptxDeck(deck())
+    const zip = await JSZip.loadAsync(bytes)
+    const xml = await zip.file(LAYOUT)!.async('text')
+    zip.file(LAYOUT, xml.replace('<p:sldLayout ', '<p:sldLayout showMasterSp="false" '))
+    const spelled = await open(await zip.generateAsync({ type: 'uint8array' }))
+    expect(spelled.master).toEqual([])
+    expect(names(spelled.layout)).toEqual(['Layout Band'])
+  })
+
+  it('a placeholder nested in a group is excluded', async () => {
+    const group = '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="30" name="Art Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>' +
+      '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/><a:chOff x="0" y="0"/><a:chExt cx="1000000" cy="1000000"/></a:xfrm></p:grpSpPr>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="31" name="Nested Placeholder"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="2"/></p:nvPr></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="500000" cy="500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>' +
+      '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>' +
+      '<p:sp><p:nvSpPr><p:cNvPr id="32" name="Nested Art"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="500000" y="500000"/><a:ext cx="500000" cy="500000"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>' +
+      '<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></p:spPr></p:sp>' +
+      // a picture placeholder (nvPicPr/nvPr/ph) in the group: pics are not marked by the parser, so the filter must catch it
+      '<p:pic><p:nvPicPr><p:cNvPr id="33" name="Nested Picture Placeholder"/><p:cNvPicPr/><p:nvPr><p:ph type="pic" idx="3"/></p:nvPr></p:nvPicPr>' +
+      '<p:blipFill><a:blip r:embed="rIdImg1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>' +
+      '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>' +
+      '</p:grpSp>' +
+      // a top-level picture placeholder and a graphicFrame placeholder
+      '<p:pic><p:nvPicPr><p:cNvPr id="34" name="Picture Placeholder"/><p:cNvPicPr/><p:nvPr><p:ph type="pic" idx="4"/></p:nvPr></p:nvPicPr>' +
+      '<p:blipFill><a:blip r:embed="rIdImg1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>' +
+      '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>' +
+      '<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="35" name="Table Placeholder"/><p:cNvGraphicFramePr/><p:nvPr><p:ph idx="5"/></p:nvPr></p:nvGraphicFramePr>' +
+      '<p:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></p:xfrm>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="1000000"/></a:tblGrid>' +
+      '<a:tr h="500000"><a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>'
+    const art = await open(await patchSpTree(await buildPptxDeck(deck()), MASTER, group))
+    expect(names(art.master)).toEqual(['Master Logo', 'Art Group', 'Nested Art'])
+    expect(art.master[1].children?.map(s => s.source?.id)).toEqual(['32'])
+  })
+
+  it('artwork source.partPath names the layout or master part', async () => {
+    const art = await open(await buildPptxDeck(deck()))
+    expect(art.master.map(s => s.source?.partPath)).toEqual([MASTER])
+    expect(art.layout.map(s => s.source?.partPath)).toEqual([LAYOUT])
+    expect(art.diagnostics).toEqual([])
+  })
+
+  it('a shape filled with the slide background (useBgFill) is flagged for the painter, without a diagnostic', async () => {
+    const sp = '<p:sp useBgFill="1"><p:nvSpPr><p:cNvPr id="40" name="Bg Filled"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>' +
+      '<p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp>'
+    const art = await open(await patchSpTree(await buildPptxDeck(deck()), MASTER, sp))
+    expect(names(art.master)).toEqual(['Master Logo', 'Bg Filled'])
+    expect(art.master.map(s => s.useBgFill === true)).toEqual([false, true])
+    expect(art.diagnostics.filter(d => 'feature' in d && d.feature === 'useBgFill')).toEqual([])
+  })
+  
+  it('a shared cache parses each part once per colour map', async () => {
+    const pkg = await OfficePackage.load(await buildPptxDeck(deck()))
+    const theme = (await slideTheme(pkg, SLIDE)).context
+    const cache = new Map()
+    const first = await masterArtwork(pkg, SLIDE, theme, cache)
+    const second = await masterArtwork(pkg, SLIDE, theme, cache)
+    expect(cache.size).toBe(2)
+    expect(second.master[0]).toBe(first.master[0])
+    expect(second.layout[0]).toBe(first.layout[0])
+    const remapped = await masterArtwork(pkg, SLIDE, { ...theme, colorMap: { ...theme.colorMap, bg1: 'dk1' } }, cache)
+    expect(remapped.master[0]).not.toBe(first.master[0])
+    expect(cache.size).toBe(4)
+  })
+})
+
+describe('artwork image reads (PR #16 review)', () => {
+  const LAYOUT_RELS = 'ppt/slideLayouts/_rels/slideLayout1.xml.rels'
+  /** Add an image relationship to the layout that no retained shape uses: unreferenced, only on a placeholder, or both. */
+  async function withLayoutImage(bytes: Uint8Array, data: Uint8Array, placeholderXml = ''): Promise<Uint8Array> {
+    const zip = await JSZip.loadAsync(bytes)
+    const rels = await zip.file(LAYOUT_RELS)!.async('text')
+    zip.file(LAYOUT_RELS, rels.replace('</Relationships>', '<Relationship Id="rIdUnused" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/unused.png"/></Relationships>'))
+    zip.file('ppt/media/unused.png', data)
+    if (placeholderXml) {
+      const part = await zip.file(LAYOUT)!.async('text')
+      zip.file(LAYOUT, part.replace('</p:spTree>', `${placeholderXml}</p:spTree>`))
+    }
+    return zip.generateAsync({ type: 'uint8array' })
+  }
+  /** A HandlePackage whose aggregate has only 64 KiB left, so a 128 KiB picture is refused. */
+  async function pressured(bytes: Uint8Array) {
+    const { HandlePackage, HANDLE_AGGREGATE_BYTES } = await import('../src/pptx/appearance/handle-package')
+    const zip = await JSZip.loadAsync(bytes)
+    zip.file('pressure.bin', new Uint8Array(HANDLE_AGGREGATE_BYTES - 65536))
+    const source = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+    const over = HandlePackage.over({ pkg: source, slideParts: [SLIDE] }, { partBytes: HANDLE_AGGREGATE_BYTES })
+    await over.bytes('pressure.bin')
+    return over
+  }
+  const phPic = '<p:pic><p:nvPicPr><p:cNvPr id="40" name="Pic Placeholder"/><p:cNvPicPr/><p:nvPr><p:ph type="pic" idx="9"/></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rIdUnused"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm></p:spPr></p:pic>'
+
+  it.each([['unreferenced', ''], ['placeholder-only', phPic]])('a refused %s layout image does not drop the artwork', async (_label, xml) => {
+    const over = await pressured(await withLayoutImage(await buildPptxDeck(deck()), new Uint8Array(128 * 1024), xml))
+    const theme = (await slideTheme(over, SLIDE)).context
+    const art = await masterArtwork(over, SLIDE, theme)
+    expect(names(art.master)).toEqual(['Master Logo'])
+    expect(art.master[0].image).toBeDefined()
+    expect(names(art.layout)).toEqual(['Layout Band'])
+  })
+
+  it('a refused image a retained shape uses degrades to a missing-image diagnostic', async () => {
+    const big = deck()
+    big.masters![0].shapes![0].image = { data: new Uint8Array(128 * 1024), name: 'logo.png' }
+    const over = await pressured(await buildPptxDeck(big))
+    const theme = (await slideTheme(over, SLIDE)).context
+    const art = await masterArtwork(over, SLIDE, theme)
+    expect(names(art.layout)).toEqual(['Layout Band'])
+    expect(art.diagnostics).toContainEqual(expect.objectContaining({ kind: 'missing-image', source: expect.objectContaining({ partPath: MASTER, id: '10' }) }))
+  })
+
+  it('a failing artwork read keeps the slide background', async () => {
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { enrichSlideAppearance } = await import('../src/pptx/appearance')
+    const spec = deck()
+    spec.slides[0].bg = { solid: '00FF00' }
+    const zip = await JSZip.loadAsync(await buildPptxDeck(spec))
+    // A layout part over the 4 MiB XML cap: the artwork read is refused, the slide's own background is not.
+    const layout = await zip.file(LAYOUT)!.async('text')
+    zip.file(LAYOUT, layout.replace('</p:sldLayout>', `<!--${' '.repeat(4 * 1024 * 1024)}--></p:sldLayout>`))
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })))
+    await enrichSlideAppearance(doc)
+    const slide = doc.slides[0]
+    expect(slide.underlay).toEqual([expect.objectContaining({ drawingStyle: expect.objectContaining({ fill: { kind: 'solid', color: expect.objectContaining({ r: 0, g: 255, b: 0 }) } }) })])
+    expect(slide.backdrop).toBeDefined()
+    expect(slide.diagnostics).toContainEqual(expect.objectContaining({ kind: 'appearance-unavailable' }))
+  })
+})
+
+describe('PR #16 review: background and artwork selection', () => {
+  it('an explicit noFill background clears the solid the eager parse inherited from the layout', async () => {
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { enrichSlideAppearance } = await import('../src/pptx/appearance')
+    const spec = deck()
+    spec.masters![0].layouts[0].bg = { solid: '336699' }
+    const zip = await JSZip.loadAsync(await buildPptxDeck(spec))
+    const slidePart = await zip.file(SLIDE)!.async('text')
+    expect(slidePart).not.toContain('<p:bg>')
+    zip.file(SLIDE, slidePart.replace('<p:cSld>', '<p:cSld><p:bg><p:bgPr><a:noFill/><a:effectLst/></p:bgPr></p:bg>'))
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    expect(doc.slides[0].background).toBeDefined() // the eager approximation inherits the layout colour
+    await enrichSlideAppearance(doc)
+    const slide = doc.slides[0]
+    expect(slide.backdrop).toMatchObject({ drawingStyle: { fill: { kind: 'solid', color: { r: 255, g: 255, b: 255 } } } })
+    expect(slide.background).toBeUndefined() // absent means white, as the backdrop paints
+  })
+
+  it('artwork image rids follow the compatibility choice, not the discarded branch', async () => {
+    const LAYOUT_RELS = 'ppt/slideLayouts/_rels/slideLayout1.xml.rels'
+    const rel = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${target}"/>`
+    const picture = (id: number, rid: string) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="Pic ${rid}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${rid}"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm></p:spPr></p:pic>`
+    const zip = await JSZip.loadAsync(await buildPptxDeck(deck()))
+    const rels = await zip.file(LAYOUT_RELS)!.async('text')
+    // The Choice (selected: Requires="a" is understood) holds the small picture; the unselected Fallback holds the large one.
+    zip.file(LAYOUT_RELS, rels.replace('</Relationships>', `${rel('rIdBig', 'big.png')}${rel('rIdSmall', 'small.png')}</Relationships>`))
+    zip.file('ppt/media/big.png', new Uint8Array(192 * 1024))
+    zip.file('ppt/media/small.png', new Uint8Array(128 * 1024))
+    const layout = await zip.file(LAYOUT)!.async('text')
+    const alt = `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="a">${picture(50, 'rIdSmall')}</mc:Choice><mc:Fallback>${picture(51, 'rIdBig')}</mc:Fallback></mc:AlternateContent>`
+    zip.file(LAYOUT, layout.replace('</p:spTree>', `${alt}</p:spTree>`))
+    const { HandlePackage, HANDLE_AGGREGATE_BYTES } = await import('../src/pptx/appearance/handle-package')
+    // 256 KiB of the aggregate remains: the discarded 192 KiB picture, if charged first, leaves too little for the selected 128 KiB one.
+    zip.file('pressure.bin', new Uint8Array(HANDLE_AGGREGATE_BYTES - 256 * 1024))
+    const source = await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' }))
+    const over = HandlePackage.over({ pkg: source, slideParts: [SLIDE] }, { partBytes: HANDLE_AGGREGATE_BYTES })
+    await over.bytes('pressure.bin')
+    const theme = (await slideTheme(over, SLIDE)).context
+    const art = await masterArtwork(over, SLIDE, theme)
+    const selected = art.layout.find(shape => shape.source?.id === '50')
+    expect(selected?.image).toBeDefined()
+    expect(art.diagnostics.filter(issue => issue.kind === 'missing-image')).toEqual([])
+  })
+})

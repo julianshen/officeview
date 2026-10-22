@@ -1,3 +1,4 @@
+import type { OfficePackage } from '../core/zip'
 import type { EmbeddedFontFace, FontDiagnostic } from '../core/fonts/types'
 import type { ContentDiagnostic } from '../drawing/parts'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
@@ -45,6 +46,8 @@ export interface PptxSource {
 
 export type PptxDiagnostic = (GeometryIssue | DrawingIssue | ContentDiagnostic | {
   kind: 'invalid-transform' | 'missing-representation' | 'fallback-representation' | 'missing-image' | 'unsupported-object' | 'deferred-animation' | 'unsupported-text-alignment' | 'unsupported-text-appearance' | 'unsupported-text-warp'
+    // Slide appearance enrichment (slideshow spec 7 and 8): skipped, or its lazy chunk did not load.
+    | 'slide-size' | 'no-package' | 'appearance-unavailable'
   message: string
   feature?: string
 }) & { source?: PptxSource }
@@ -130,11 +133,22 @@ export interface PptxSlide {
   widthEmu: number
   heightEmu: number
   shapes: PptxShape[]
+  /**
+   * Inherited appearance painted under `shapes` (slideshow spec 8, D2): the resolved background, then the master's
+   * and the layout's non-placeholder artwork. Set only by the lazy `enrichSlideAppearance`; never searched or
+   * counted in coverage. Slides on the same layout and colour map share the artwork shape objects.
+   */
+  underlay?: PptxShape[]
+  /** The resolved background node (also `underlay[0]`), shown through `useBgFill` shapes. Set by the enrichment. */
+  backdrop?: PptxShape
   /** Resolved solid background from the slide, layout, or master. Absent means white. */
   background?: string
   theme?: ThemeContext
   diagnostics?: PptxDiagnostic[]
 }
+
+/** The document's package lease (slideshow spec 8): `slideParts[i]` is the part of `slides[i]`. */
+export interface PptxPackageHandle { readonly pkg: OfficePackage; readonly slideParts: readonly string[] }
 
 export interface PptxDocument {
   drawingCoverage?: DrawingCoverageEntry[]
@@ -143,6 +157,8 @@ export interface PptxDocument {
   slideWidthEmu: number
   slideHeightEmu: number
   slides: PptxSlide[]
-  /** Unique images across all slides, in first-use order (matches shape.imageIndex). */
+  /** Unique images across all slides, in first-use order (matches shape.imageIndex). Enrichment appends underlay images. */
   images: PptxImageRef[]
+  /** Document-level diagnostics: enrichment skips and failures, and theme issues (each once per document). */
+  diagnostics?: PptxDiagnostic[]
 }

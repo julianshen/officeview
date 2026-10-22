@@ -1,13 +1,13 @@
 import type { XlsxChartModel } from '../xlsx/chartModel'
 import { attemptedMalformedRelationshipIssue, chartCard, isExhausted, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent, type DrawingContent } from '../drawing/content'
-import { drawingPartContext, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
+import { drawingPartContext, dropDrawingPartReads, partRelationshipNodes, reserveDrawingNode, DRAWING_GROUP_DEPTH, contentDiagnostic, type ContentDiagnostic } from '../drawing/parts'
 import { parseEmbeddedFonts } from '../core/fonts/parts'
 /** Parse PPTX parts (presentation.xml, slides/slideN.xml) into PptxDocument. */
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
 import { attrs, elementChildren, getChildren, orderedChildren, parseXmlOrdered, textOf, type XmlNode } from '../core/xml'
 import { hexRgbToCss } from '../core/color'
-import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
+import type { PptxDiagnostic, PptxDocument, PptxImageRef, PptxPackageHandle, PptxShape, PptxSlide, PptxSource, PptxTable, PptxTableBorders, PptxTableCell, PptxTableRow, PptxTextBody, PptxParagraph } from './types'
 import { DRAWING_REQUIREMENTS, pptxCoverage, supportedChoiceRequirements } from '../drawing/coverage'
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
@@ -247,7 +247,8 @@ function resolveTarget(partPath: string, target: string): string {
 }
 
 /** Load image parts referenced by a part's .rels file, keyed by rId. */
-async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
+/** With `used` (the lazy artwork), only those rIds are read, and a refused read leaves its rId missing instead of rejecting. */
+async function loadSlideImages(pkg: OfficePackage, partPath: string, used?: Set<string>): Promise<{ images: Map<string, PptxImageRef>; external: Set<string> }> {
   const out = new Map<string, PptxImageRef>()
   const external = new Set<string>()
   const rels = await partRelationshipNodes(pkg, partPath)
@@ -258,10 +259,11 @@ async function loadSlideImages(pkg: OfficePackage, partPath: string): Promise<{ 
     const type = a.Type as string | undefined
     if (!type || !type.includes('/image') || !a.Target) continue
     if (a.TargetMode === 'External') { if (a.Id) external.add(a.Id); continue }
+    if (used && !used.has(a.Id ?? '')) continue
     const path = resolveTarget(partPath, (a.Target as string) ?? '')
     let ref = byPath.get(path)
     if (!ref) {
-      const data = await pkg.bytes(path)
+      const data = used ? await pkg.bytes(path).catch(() => undefined) : await pkg.bytes(path)
       if (!data) continue
       ref = { data, mime: sniffImageMime(data), partPath: path }
       byPath.set(path, ref)
@@ -381,7 +383,7 @@ interface TableStyleEntry {
 }
 
 /** Table scheme colors come from this slide's master theme, not theme1 by name. */
-async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ context: ThemeContext; palette: Map<string, string> }> {
+export async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ context: ThemeContext; palette: Map<string, string> }> {
   const mappings: Record<string, string> = {}
   let mappingSelected = false
   let path: string | undefined = slidePath
@@ -411,12 +413,17 @@ async function slideTheme(pkg: OfficePackage, slidePath: string): Promise<{ cont
     path = next?.rel ? resolveTarget(path, attrs(next.rel).Target) : undefined
   }
   const context = parseThemeContext(themeRoot, mappings)
+  return { context, palette: themePalette(context) }
+}
+
+/** Table-style colours keyed by scheme name and colour-map alias, without '#'. */
+function themePalette(context: ThemeContext): Map<string, string> {
   const palette = new Map(Object.entries(context.palette).map(([key, value]) => [key, value.replace(/^#/, '')]))
   for (const [alias, key] of Object.entries(context.colorMap)) {
     const color = context.palette[key]
     if (color) palette.set(alias, color.replace(/^#/, ''))
   }
-  return { context, palette }
+  return palette
 }
 
 function tableColor(node: XmlNode | undefined, theme: Map<string, string>): string | undefined {
@@ -861,6 +868,40 @@ function parseShapeTree(
   return shapes
 }
 
+/**
+ * A layout or master part's whole shape tree, placeholders included, for the lazy
+ * master/layout artwork (slideshow S0-6). Images, table styles, compatibility and
+ * the node budget go through the slide loop's helpers; drawing content (charts,
+ * diagrams) is not prepared, so it shows as a card or is diagnosed. With `usedImages`, only those image rIds
+ * are read, and a refused image degrades to a missing-image diagnostic on its shape.
+ */
+export async function parseArtworkTree(pkg: OfficePackage, partPath: string, theme: ThemeContext, diagnostics: PptxDiagnostic[], usedImages?: Set<string>): Promise<PptxShape[]> {
+  const root = await pkg.xmlOrdered(partPath)
+  const spTree = getChildren(getChildren(root, 'cSld')[0], 'spTree')[0]
+  if (!spTree) return []
+  const { images, external } = await loadSlideImages(pkg, partPath, usedImages)
+  const tableStyles = await readTableStyles(pkg, themePalette(theme))
+  const defaults = getChildren(await pkg.xml('ppt/presentation.xml'), 'defaultTextStyle')[0]
+  const context = drawingPartContext(pkg)
+  const start = context.diagnostics.length
+  const compatibility = new DrawingCompatibility(new Map(), rid => images.has(rid), () => contentDiagnostic(context, 'unsupported-content', partPath, 'chart', { reason: 'chart-fallback-unusable' }))
+  const shapes = parseShapeTree(pkg, new Map(), spTree, partPath, images, theme, tableStyles, diagnostics, compatibility, 'spTree', undefined, 0, defaults, 0, undefined, { external, selections: new Map() })
+  diagnostics.push(...context.diagnostics.slice(start))
+  return shapes
+}
+
+/** The branch the parser's compatibility rules select for an `AlternateContent` (as `parseArtworkTree` does), or undefined when none remains. */
+export function alternateBranchSelector(): (alternate: XmlNode) => XmlNode | undefined {
+  const compatibility = new DrawingCompatibility(new Map())
+  return alternate => compatibility.selectRepresentation(alternate)?.node
+}
+
+/** The complete candidate pair that identifies one `doc.images` asset (shared with the lazy appearance enrichment). */
+export function pptxImageKey(image: PptxImageRef): string {
+  const svgState = image.svg ? (image.svg.verdict.ok ? 'ok' : `rej:${(image.svg.verdict as { reason: string }).reason}`) : 'none'
+  return `${image.partPath ?? ''}\u0000${image.svg?.partPath ?? ''}\u0000${svgState}\u0000${image.hasRaster === false ? 'svg-only' : 'raster'}`
+}
+
 function walkShapes(shapes: PptxShape[], visit: (shape: PptxShape) => void): void {
   for (const shape of shapes) { visit(shape); if (shape.children) walkShapes(shape.children, visit) }
 }
@@ -869,6 +910,10 @@ export interface ParsePptxOptions {
   /** The document's chart context; unset, the lazy chart engine creates one per parse. */
   chartContext?: ChartDocumentContext
 }
+const handles = new WeakMap<PptxDocument, PptxPackageHandle>()
+/** The document's package lease (slideshow spec 8); undefined for a constructed or cloned document. */
+export function pptxPackageHandle(doc: PptxDocument): PptxPackageHandle | undefined { return handles.get(doc) }
+
 export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = {}): Promise<PptxDocument> {
   drawingPartContext(pkg).chart = options.chartContext
   const presentation = await pkg.xml('ppt/presentation.xml')
@@ -896,6 +941,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
   const slideIds = sldIdLst ? getChildren(sldIdLst, 'sldId') : []
   // One shared selection map across slides so identical candidate pairs stay aliased.
   const imageSelections = new Map<string, ImageSelection>()
+  const slideParts: string[] = []
   for (let i = 0; i < slideIds.length; i++) {
     const a = attrs(slideIds[i])
     const rid = (a['r:id'] ?? a.id) as string
@@ -985,13 +1031,13 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     }
     doc.drawingCoverage!.push(...pptxCoverage(slide, spTree, path, selectedBranch))
     doc.slides.push(slide)
+    slideParts.push(path)
   }
   // Recursive first-use source order, deduplicated by complete candidate pair while preserving use-specific crop.
   const imageIndices = new Map<string, number>()
   for (const slide of doc.slides) walkShapes(slide.shapes, shape => {
     if (!shape.image) return
-    const svgState = shape.image.svg ? (shape.image.svg.verdict.ok ? 'ok' : `rej:${(shape.image.svg.verdict as { reason: string }).reason}`) : 'none'
-    const key = `${shape.image.partPath ?? ''}\u0000${shape.image.svg?.partPath ?? ''}\u0000${svgState}\u0000${shape.image.hasRaster === false ? 'svg-only' : 'raster'}`
+    const key = pptxImageKey(shape.image)
     let index = imageIndices.get(key)
     if (index === undefined) {
       index = doc.images.length
@@ -1004,5 +1050,9 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     }
     shape.imageIndex = index
   })
+  // The lease keeps the archive, never parse-time reads (spec 8).
+  handles.set(doc, { pkg, slideParts })
+  pkg.dropCache()
+  dropDrawingPartReads(pkg)
   return doc
 }

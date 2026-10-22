@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { eagerModules, forbiddenEager, EAGER_FORBIDDEN, type ModuleMap } from './helpers/eager-graph'
 
 const MOTION = '/node_modules/motion/dist/es/index.mjs'
@@ -50,5 +52,30 @@ describe('eager import graph', () => {
       '/r/src/components/OfficeDoc.tsx',
       '/r/src/components/xlsx/viewerControlsClient.ts',
     ]) expect(hit(id), id).toBe(false)
+  })
+
+  it('EAGER_FORBIDDEN rejects a synthetic module id under each new directory', () => {
+    const hit = (id: string) => forbiddenEager({ 'index.js': { modules: [id], imports: [], dynamicImports: [] } }, EAGER_FORBIDDEN).length > 0
+    for (const id of [
+      '/r/src/slideshow/index.ts',
+      '/r/src/slideshow/engine/scheduler.ts',
+      '/r/src/pptx/appearance/index.ts',
+      '/r/src/pptx/appearance/read.ts?worker',
+      'C:\\r\\src\\slideshow\\index.ts',
+    ]) expect(hit(id), id).toBe(true)
+    // The eager PPTX parser and painter stay allowed.
+    for (const id of ['/r/src/pptx/parse.ts', '/r/src/pptx/render.ts', '/r/src/render/paint.ts']) expect(hit(id), id).toBe(false)
+  })
+
+  // The built module map (OV_MODULE_MAP=1 bun run build) is optional; the post-build check-eager gate always runs.
+  const moduleMapFile = join(__dirname, '..', 'dist', '.module-map.json')
+  it.skipIf(!existsSync(moduleMapFile))('src/slideshow and src/pptx/appearance are not in the eager graph (skipped: no dist/.module-map.json)', () => {
+    // A present map must parse and must have the entry chunk.
+    const map = JSON.parse(readFileSync(moduleMapFile, 'utf8')) as ModuleMap
+    expect(map['index.js'], 'dist/.module-map.json has no index.js entry chunk').toBeDefined()
+    expect(Array.isArray(map['index.js'].modules)).toBe(true)
+    const eager = [...eagerModules(map)].map(id => id.replace(/\\/g, '/'))
+    expect(eager.filter(id => /src\/slideshow\/|src\/pptx\/appearance\//.test(id))).toEqual([])
+    expect(forbiddenEager(map, EAGER_FORBIDDEN)).toEqual([])
   })
 })
