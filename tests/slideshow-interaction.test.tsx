@@ -686,6 +686,22 @@ describe('output, residency and protection', () => {
     plain.s.exit()
   })
 
+  it('PR #18 review 8: copy protection follows the start\'s allowCopy, not the region\'s CSS (a consumer userSelect cannot expose text)', async () => {
+    // The consumer's style overrode the region's user-select: the policy still says no copy.
+    const root = document.createElement('div')
+    const region = document.createElement('div')
+    region.setAttribute('data-officeview-root', '')
+    region.style.userSelect = 'text'
+    root.append(region)
+    document.body.append(root)
+    const doc = await deck({ slides: [{ shapes: [at(2, 0, 0, 200, 50, 'Secret')] }] })
+    const r = await show(doc, { host: hostIn(root), allowCopy: false })
+    const li = r.host.querySelector('[data-officeview-show-text] li')!
+    expect(li.textContent).toBe('')
+    expect(li.getAttribute('aria-label')).toBe('Secret')
+    r.s.exit()
+  })
+
   it('allowCopy=false keeps the offscreen text readable but not selectable; allowPrint=false keeps slideshow surfaces out of print', async () => {
     // The viewer's theme root as OfficeDoc renders it with allowCopy={false} allowPrint={false}.
     const root = document.createElement('div')
@@ -697,7 +713,7 @@ describe('output, residency and protection', () => {
     root.append(region)
     document.body.append(root)
     const doc = await deck({ slides: [{ shapes: [at(2, 0, 0, 200, 50, 'Secret')] }] })
-    const r = await show(doc, { host: hostIn(root) })
+    const r = await show(doc, { host: hostIn(root), allowCopy: false })
     const list = r.host.querySelector<HTMLElement>('[data-officeview-show-text]')!
     const item = list.querySelector('li')!
     expect(item.getAttribute('aria-label')).toBe('Secret')

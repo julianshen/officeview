@@ -310,7 +310,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   const present = (opts?: PresentOptions) => {
     setNotice('')
     const run = startPresent({
-      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, watermark, signal: epoch.current!.signal,
+      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, watermark, allowCopy, signal: epoch.current!.signal,
       callbacks: { onStart: onSlideShowStart, onEnd: onSlideShowEnd, onSlideChange: onSlideShowSlideChange, onDiagnostic: onSlideShowDiagnostic },
     })
     run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
@@ -596,7 +596,8 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   const toggleFit = () => routed((m) => apply(m.toggleFit(zoomContext())))
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key == 'F5' && presentShortcuts && allowPresent && !e.altKey && 'slides' in document) {
+    // Ctrl/Cmd+F5 stays the browser's hard reload.
+    if (e.key == 'F5' && presentShortcuts && allowPresent && !e.altKey && !(e.ctrlKey || e.metaKey) && 'slides' in document) {
       e.preventDefault()
       return onPresent(e.shiftKey ? 'current' : 'beginning')
     }

@@ -307,6 +307,25 @@ describe('order, hidden slides and loop', () => {
     r.s.exit()
   })
 
+  it('PR #18 review 8: removing the full-screen notice (Dismiss, or a retry that enters) returns focus to the show host', async () => {
+    const { doc } = await deck({ slides: [{ shapes: [] }, { shapes: [] }] })
+    for (const which of ['Dismiss', 'Click for full screen']) {
+      const r = await show(doc, { fullscreen: Promise.resolve('refused'), retryFullscreen: async () => 'entered' })
+      await flush()
+      const button = [...r.host.querySelectorAll<HTMLButtonElement>('[data-officeview-show-notice] button')].find(b => b.textContent === which)!
+      button.focus()
+      button.click()
+      await flush()
+      expect(r.host.querySelector('[data-officeview-show-notice]')).toBeNull()
+      expect(document.activeElement).toBe(r.host)
+      // Keys reach the show again.
+      r.key('ArrowRight')
+      await flush()
+      expect(r.s.slideIndex).toBe(1)
+      r.s.exit()
+    }
+  })
+
   it('a deck with every slide hidden opens on end-of-show', async () => {
     const { doc } = await deck({ slides: [{ shapes: [], hidden: true }, { shapes: [], hidden: true }] })
     const r = await show(doc)

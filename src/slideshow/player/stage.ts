@@ -331,6 +331,9 @@ function rasterLayers(plan: RenderPlan, watermark: boolean): PlanLayer[] {
   return out
 }
 
+/** Slide time far past every finite effect: the settled state a flattened frame shows (PR #18 review 8). */
+const SETTLED_MS = 1e9
+
 function stateKey(state: RenderState): string {
   let s = ''
   for (const [k, v] of state) s += `${k}:${v.visible ? 1 : 0}:${v.opacity.toFixed(3)}:${v.transform.map(n => n.toFixed(2)).join(',')}:${v.motion ? `${v.motion.dx.toFixed(1)},${v.motion.dy.toFixed(1)}` : ''};`
@@ -350,7 +353,8 @@ interface Built {
   /** Layers to (re)rasterise at `scale` (resize, a backend switch). */
   pending: PlanLayer[]
   /** Flattened rung: the current checkpoint's full-slide frame. */
-  flat?: { key: string; handle: LayerHandle }
+  /** `cursor`: the cursor the frame was settled for (it is re-checked only when the cursor changes). */
+  flat?: { key: string; handle: LayerHandle; cursor?: SlideCursor }
 }
 
 interface Prepared {
@@ -1052,15 +1056,20 @@ export function createStage(deps: StageDeps): Stage {
         running = undefined
       }
       if (level === 'flattened') {
-        const key = `${cursor?.step ?? 0}|${stateKey(state)}`
+        // Checkpoint granularity (the checkpoint-cut fallback; PR #18 review 8): the frame shows the settled state
+        // the cursor is heading to, and is re-rasterised only when that changes, never per animation frame.
         const b = p.built
         const owner = owners.get(p.index)
-        if (b && owner && b.epoch === epoch && b.flat?.key !== key) {
-          // Effects are cuts at their steps: the frame changes only when the settled state does.
-          if (b.flat) { c.release(b.flat.handle); b.flat = undefined }
-          const f = flatten(p, state, owner, b.scale, 'flattened')
-          if (f) b.flat = { key, handle: f.handle }
-          else void stepDown(p)
+        if (b && owner && b.epoch === epoch && (b.flat?.cursor !== cursor || !b.flat)) {
+          const settled = stateOf(p, cursor, SETTLED_MS, timelineOf)
+          const key = `${cursor?.step ?? 0}|${stateKey(settled)}`
+          if (b.flat?.key === key) b.flat.cursor = cursor
+          else {
+            if (b.flat) { c.release(b.flat.handle); b.flat = undefined }
+            const f = flatten(p, settled, owner, b.scale, 'flattened')
+            if (f) b.flat = { key, handle: f.handle, cursor }
+            else void stepDown(p)
+          }
         }
         const flat = p.built?.flat
         c.frame(flat ? [{ handle: flat.handle, state: PLAIN }] : [])

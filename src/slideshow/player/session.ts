@@ -174,11 +174,12 @@ interface Visit {
 /** A slide with no readable metadata: static, no links, no transition. */
 const staticSlide = (index: number): ShowSlide => ({ index, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] })
 
-/** The viewer's protection policy as the theme root carries it (spec 6.3): no eager plumbing needed. */
-function protection(host: HTMLElement): { copy: boolean; print: boolean } {
-  const root = host.parentElement
-  const region = root?.querySelector<HTMLElement>(':scope > [data-officeview-root]')
-  return { copy: region?.style.userSelect !== 'none', print: root?.getAttribute('data-ov-print') !== 'false' }
+/**
+ * The viewer's protection policy (spec 6.3). Copy comes from the start's `allowCopy`, never from CSS a consumer
+ * style can override (PR #18 review 8); print from the theme root's `data-ov-print`.
+ */
+function protection(start: ShowStart): { copy: boolean; print: boolean } {
+  return { copy: start.allowCopy !== false, print: start.host.parentElement?.getAttribute('data-ov-print') !== 'false' }
 }
 
 export async function createSession(start: ShowStart): Promise<SessionController> {
@@ -653,7 +654,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let surfaceKind: 'fullscreen' | 'in-window' = 'in-window'
   try {
     clock = sessionDeps.clock(win)
-    const policy = protection(host)
+    const policy = protection(start)
     surface = createAudienceSurface(host, admitted.backing, (e) => dispatch({ kind: 'click', x: e.clientX, y: e.clientY }))
     // allowPrint=false keeps every slideshow surface out of print (spec 6.3 protection policy).
     if (!policy.print) surface.root.setAttribute('data-ov-print', 'false')
@@ -730,6 +731,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     surfaceKind = 'in-window'
     sink.add({ code: 'fullscreen-refused', message: 'Full screen was refused; the show runs in the window.' })
     const notice = owner.createElement('div')
+    // Removing the notice takes its focused button away: focus returns to the host, so its keys (Esc) keep working (PR #18 review 8).
+    const close = () => { notice.remove(); if (!exited) host.focus() }
     notice.setAttribute('role', 'status')
     notice.setAttribute('data-officeview-show-notice', '')
     notice.textContent = 'Full screen is not available here; presenting in the window. '
@@ -737,12 +740,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
     retry.type = 'button'
     retry.textContent = 'Click for full screen'
     retry.onclick = () => {
-      void start.retryFullscreen().then((r) => { if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; notice.remove() } })
+      void start.retryFullscreen().then((r) => { if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; close() } })
     }
     const dismiss = owner.createElement('button')
     dismiss.type = 'button'
     dismiss.textContent = 'Dismiss'
-    dismiss.onclick = () => notice.remove()
+    dismiss.onclick = close
     notice.append(retry, dismiss)
     host.append(notice)
   })

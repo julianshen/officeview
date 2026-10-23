@@ -479,6 +479,16 @@ describe('OfficeDoc host handle', () => {
     }
   })
 
+  it('PR #18 review 8: the viewer hands its allowCopy policy to the show, whatever the consumer style says', async () => {
+    const starts: ShowStart[] = []
+    const runShow = vi.fn(async (st: ShowStart) => { starts.push(st); st.cleanup(); return {} as never })
+    const m = mountDoc({ allowCopy: false, style: { userSelect: 'text' } })
+    fireEvent.keyDown(m.region(), { key: 'F5' })
+    loads[0].resolve({ ...slideshow, runShow } as typeof slideshow)
+    await flush()
+    expect(starts[0].allowCopy).toBe(false)
+  })
+
   it('F5 and Shift+F5 inside the viewer start the show; presentShortcuts=false disables them; outside focus is ignored', async () => {
     const starts: ShowStart[] = []
     const runShow = vi.fn(async (st: ShowStart) => { starts.push(st); st.cleanup(); return {} as never })
@@ -493,6 +503,11 @@ describe('OfficeDoc host handle', () => {
     expect(starts.map((s) => s.from)).toEqual(['beginning', 'current'])
     // Alt+F5 is Presenter View (stage 2): not routed here
     expect(fireEvent.keyDown(m.region(), { key: 'F5', altKey: true })).toBe(true)
+    // PR #18 review 8: Ctrl/Cmd+F5 stays the browser's hard reload, with or without Shift
+    expect(fireEvent.keyDown(m.region(), { key: 'F5', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(m.region(), { key: 'F5', metaKey: true })).toBe(true)
+    expect(fireEvent.keyDown(m.region(), { key: 'F5', ctrlKey: true, shiftKey: true })).toBe(true)
+    expect(loads).toHaveLength(2)
     // outside the viewer
     fireEvent.keyDown(document.body, { key: 'F5' })
     expect(loads).toHaveLength(2)

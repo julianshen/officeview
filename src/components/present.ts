@@ -124,6 +124,8 @@ export interface ShowStart {
   presenterView?: boolean | 'auto'
   motion: SlideShowMotion
   watermark?: WatermarkOptions
+  /** The viewer's copy policy (PR #18 review 8): false keeps slide text out of the selectable offscreen list. */
+  allowCopy?: boolean
   callbacks: SlideShowCallbacks
   /** Aborted when the show must end: Esc, browser full-screen exit, unmount, document change, allowPresent=false. */
   signal: AbortSignal
@@ -145,6 +147,7 @@ export interface PresentRequest {
   allow: boolean
   motion: SlideShowMotion
   watermark?: WatermarkOptions
+  allowCopy?: boolean
   /** The viewer's document epoch: aborting it cancels the start or ends the show. */
   signal?: AbortSignal
 }
