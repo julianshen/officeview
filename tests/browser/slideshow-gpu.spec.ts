@@ -101,7 +101,8 @@ test('forced context loss during a transition keeps a changing animation advanci
 
   await loseAndWait(page)
   const lost = await probe(page)
-  expect(lost.canvases).toEqual(['webgl2', 'canvas2d'])
+  // The output canvas under the hidden lost WebGL canvas (PR #18 review P2: no second 2-D canvas).
+  expect(lost.canvases).toEqual(['canvas2d', 'webgl2'])
   // The clock keeps running; the 2-D canvas follows it frame by frame.
   const seen: number[] = []
   for (let i = 0; i < 3; i++) {

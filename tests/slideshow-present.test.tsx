@@ -134,6 +134,41 @@ describe('startPresent: the synchronous prologue', () => {
     expect(await codeOf(run)).toBe('cancelled')
   })
 
+  it('PR #18 review 3: the ref reaches an interactive-sheets viewer; its present() rejects not-presentable', async () => {
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parseXlsx } = await import('../src/xlsx/parse')
+    const { buildXlsx } = await import('../src/testdata/ooxml-builders')
+    const book = await parseXlsx(await OfficePackage.load(await buildXlsx([{ name: 'S', rows: [{ r: 1, cells: [{ ref: 'A1', v: 1 }] }] }])))
+    const ref = createRef<OfficeViewerHandle>()
+    const ui = render(<OfficeDoc ref={ref} document={book} interactiveSheets />)
+    expect(ref.current).toBeTruthy()
+    expect(await codeOf(ref.current!.present())).toBe('not-presentable')
+    ui.unmount()
+    expect(ref.current).toBeNull()
+  })
+
+  it('PR #18 review 4: a full-screen retry that succeeds after the show ended leaves full screen again', async () => {
+    const host = freshHost()
+    // The first request is refused (the notice offers a retry); the retry is still pending when the show ends.
+    const p = fakePlatform(log, { fs: 'defer' })
+    let starts = 0
+    const real = p.requestFullscreen
+    p.requestFullscreen = (el) => (starts++ === 0 ? Promise.reject(new Error('denied')) : real(el))
+    let handed!: ShowStart
+    const run = start(host, p)
+    loads[0].resolve({ ...slideshow, runShow: async (s: ShowStart) => { handed = s; return {} as never } } as typeof slideshow)
+    await run
+    expect(await handed.fullscreen).toBe('refused')
+    const retry = handed.retryFullscreen()
+    handed.cleanup()
+    expect(log).not.toContain('exitFullscreen')
+    p.settle!.enter()
+    expect(await retry).toBe('entered')
+    await flush()
+    expect(log).toContain('exitFullscreen')
+    expect(p.fs).toBeNull()
+  })
+
   it('not-presentable for DOCX and for allowPresent=false; invalid-slide for 1.5, -1 and slideCount', async () => {
     const host = freshHost()
     const p = fakePlatform(log)
@@ -443,6 +478,16 @@ describe('OfficeDoc host handle', () => {
       expect(onEnd).toHaveBeenCalledTimes(1)
       cleanup()
     }
+  })
+
+  it('PR #18 review 8: the viewer hands its allowCopy policy to the show, whatever the consumer style says', async () => {
+    const starts: ShowStart[] = []
+    const runShow = vi.fn(async (st: ShowStart) => { starts.push(st); st.cleanup(); return {} as never })
+    const m = mountDoc({ allowCopy: false, style: { userSelect: 'text' } })
+    fireEvent.keyDown(m.region(), { key: 'F5' })
+    loads[0].resolve({ ...slideshow, runShow } as typeof slideshow)
+    await flush()
+    expect(starts[0].allowCopy).toBe(false)
   })
 
   it('F5 and Shift+F5 inside the viewer start the show; presentShortcuts=false disables them; outside focus is ignored', async () => {

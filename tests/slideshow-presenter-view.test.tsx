@@ -64,8 +64,8 @@ async function deck(opts: { hidden?: number; kiosk?: boolean } = {}): Promise<Pp
 }
 
 const recordingStage = (): Stage => ({
-  leave() {}, async enter() {}, slideTime: (t) => t, frame() {}, stateAt: () => new Map(),
-  plan: undefined, toSlide: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
+  leave() {}, async enter() {}, slideTime: (t) => t, frame: () => undefined, stateAt: () => new Map(),
+  plan: undefined, toSlide: () => undefined, runAt: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
 })
 
 let now = 0
@@ -113,6 +113,8 @@ async function show(doc: PptxDocument, popup: Window | null | undefined, o: Show
     retryFullscreen: o.retry ?? (async () => 'entered'),
     from: 'beginning', motion: 'auto', presenterView: popup === undefined ? undefined : true, popup,
     ...(o.watermark ? { watermark: o.watermark } : {}),
+    // The copy policy reaches the show as the start's allowCopy (PR #18 review 8), not the region's CSS.
+    ...(o.protect?.copy === false ? { allowCopy: false } : {}),
     callbacks: {
       onStart: () => log.push('onStart'),
       onEnd: () => log.push('onEnd'),

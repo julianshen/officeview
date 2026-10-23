@@ -282,6 +282,50 @@ describe('slideshow workspace (spec 7)', () => {
     expect(store.live.get(6)).toBe(0)
   })
 
+  it('PR #18 review 6: the window is the slide and the visible neighbours the stage supplies (hidden slides skipped)', async () => {
+    const store = fakeStore()
+    const ws = createSlideShowWorkspace('desktop', { limit: 10_000, scratch: 0 })
+    const terminal = ws.reserveTerminal(0)!
+    const residency = createResidency(ws, store, terminal, { cost: () => 500 })
+    // Slides 4 and 6 are hidden: 5's previous and next visible slides are 3 and 7.
+    residency.show(5, [3, 7])
+    for (const i of [3, 5, 7]) expect(await residency.ensure(i, 'full')).toBe('full')
+    await expect(residency.ensure(4, 'full')).rejects.toThrow('cancelled')
+    expect(residency.resident()).toEqual([3, 5, 7])
+    residency.show(7, [5, 9])
+    expect(residency.resident()).toEqual([5, 7])
+    residency.dispose()
+  })
+
+  it('PR #18 review 6: evicting a neighbour under pressure tears down its stage-side layers before admission retries', async () => {
+    const store = fakeStore()
+    const ws = createSlideShowWorkspace('desktop', { limit: 1500, scratch: 0 })
+    const terminal = ws.reserveTerminal(0)!
+    const sink = createDiagnosticSink()
+    const sizes = new Map<number, number>([[5, 500], [6, 1000]])
+    const held = new Map<number, { release(): void }>()
+    const torn: number[] = []
+    const residency = createResidency(ws, store, terminal, {
+      sink, cost: slide => sizes.get(slide)!,
+      // The stage's uploaded layers: leased from the slide's rung and live until the stage lets go.
+      build: async (slide, _level, owner) => { held.set(slide, owner.lease(sizes.get(slide)!, `layers:${slide}`)!) },
+      teardown: (slide) => { torn.push(slide); held.get(slide)?.release(); held.delete(slide) },
+    })
+    residency.show(5)
+    expect(await residency.ensure(5, 'full')).toBe('full')
+    expect(await residency.ensure(6, 'full')).toBe('full')
+    expect(ws.used()).toBe(1500)
+    // The current slide grows: only evicting neighbour 6, layers and all, makes room at the full rung.
+    sizes.set(5, 1500)
+    expect(await residency.ensure(5, 'full')).toBe('full')
+    expect(torn).toEqual([6])
+    expect(sink.list()).toEqual([])
+    expect(residency.resident()).toEqual([5])
+    // Never for the current slide, even at dispose.
+    residency.dispose()
+    expect(torn).toEqual([6])
+  })
+
   it('rapid navigation: an allocation completing after its slide was left is released and discarded', async () => {
     // (a) The metadata read completes after the slide was left.
     const store = fakeStore({ deferred: true })

@@ -32,7 +32,7 @@ jobs:
   check:
     name: typecheck, test, build, corpus
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -82,7 +82,7 @@ jobs:
   slideshow-browser:
     name: slideshow browser smoke (Chromium, SwiftShader WebGL2)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -110,6 +110,13 @@ jobs:
 
       - name: Install Playwright Chromium and its system dependencies
         run: bunx playwright install --with-deps chromium
+
+      # Slideshow plan S1-22: slideshow-corpus.spec.ts presents every LibreOffice
+      # corpus deck on the WebGL2 (SwiftShader) and forced Canvas 2D paths and
+      # checks that the frame-benchmark recorder runs on WebGL2. In CI a missing
+      # corpus fails that spec rather than skipping it.
+      - name: Fetch the real-file corpus
+        run: bun scripts/fetch-corpus.ts
 
       - name: Slideshow Playwright project
         env:

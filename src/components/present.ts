@@ -151,6 +151,8 @@ export interface ShowStart {
   presenterView?: boolean | 'auto'
   motion: SlideShowMotion
   watermark?: WatermarkOptions
+  /** The viewer's copy policy (PR #18 review 8): false keeps slide text out of the selectable offscreen list. */
+  allowCopy?: boolean
   callbacks: SlideShowCallbacks
   /** Aborted when the show must end: Esc, browser full-screen exit, unmount, document change, allowPresent=false. */
   signal: AbortSignal
@@ -172,6 +174,7 @@ export interface PresentRequest {
   allow: boolean
   motion: SlideShowMotion
   watermark?: WatermarkOptions
+  allowCopy?: boolean
   /** The viewer's document epoch: aborting it cancels the start or ends the show. */
   signal?: AbortSignal
 }
@@ -201,20 +204,20 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   try {
     popup = pv === true || pv == 'auto' && screen ? P.open(w, 'about:blank', placed?.popupFeatures ?? 'popup') : undefined
   } catch {}
-  let done: unknown, handed: unknown, entered: unknown, pending: unknown = 1
+  let done: unknown, handed: unknown, entered: unknown
   const ac = new AbortController(), signal = ac.signal
   const end = () => ac.abort()
   const exit = () => {
     token.owns(P.fullscreenElement(d)) && P.exitFullscreen(d).catch(end)
   }
-  // A start can fail before the browser has entered full screen: then the
-  // exit waits for the synchronous request to settle.
+  // A start can fail before the browser has entered full screen: a request
+  // still in flight exits when it settles (`retryFullscreen`).
   const cleanup = () => {
     if (done) return
     done = 1
     end()
     popup?.close()
-    pending ? fullscreen.then(exit) : exit()
+    exit()
     host.style.visibility = 'hidden'
     token.release()
   }
@@ -231,8 +234,9 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   }
   host.style.visibility = 'visible'
   const back = d.activeElement
-  const retryFullscreen = (o = screen && { screen }) => P.requestFullscreen(host, o).then(() => 'entered' as const, () => 'refused' as const)
-  const fullscreen = retryFullscreen().finally(() => pending = 0)
+  // A request (the first or a retry) that succeeds after the show ended leaves full screen at once.
+  const retryFullscreen = (o = screen && { screen }) => P.requestFullscreen(host, o).then(() => (done && exit(), 'entered' as const), () => 'refused' as const)
+  const fullscreen = retryFullscreen()
   host.focus()
   return Promise.race([
     new Promise<never>((_, no) => signal.addEventListener('abort', () => handed || no(new SlideShowError('cancelled')))),

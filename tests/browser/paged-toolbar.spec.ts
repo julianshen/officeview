@@ -582,7 +582,10 @@ test('Present button starts the show from the current slide (browser)', async ({
   await bar.getByRole('button', { name: 'Present', exact: true }).click()
   // the show surface lands on the current slide, not on slide 1
   await expect(page.locator('[data-officeview-show]')).toBeVisible()
-  await expect(page.locator('[data-officeview-show-surface]')).toHaveText('Slide 2 of 3')
+  // the live region announces the slide (S1-20 added the end-of-show screen and
+  // the hidden slide text to the surface, so the surface's own text is longer)
+  await expect(page.locator('[data-officeview-show-surface]')).toHaveAttribute('data-slide', '1')
+  await expect(page.locator('[data-officeview-show-live]')).toHaveText('Slide 2 of 3')
   await page.keyboard.press('Escape')
   // the show exits and the host hides again
   await expect(page.locator('[data-officeview-show]')).toBeHidden()
@@ -594,7 +597,10 @@ test('Present from a menu item hands focus to the show and Esc exits (browser)',
   await bar.getByRole('button', { name: 'Present options' }).click()
   await page.getByRole('menuitem', { name: 'From beginning' }).click()
   await expect(page.locator('[data-officeview-show]')).toBeVisible()
-  await expect(page.locator('[data-officeview-show-surface]')).toHaveText('Slide 1 of 3')
+  // the live region announces the slide (S1-20 added the end-of-show screen and
+  // the hidden slide text to the surface, so the surface's own text is longer)
+  await expect(page.locator('[data-officeview-show-surface]')).toHaveAttribute('data-slide', '0')
+  await expect(page.locator('[data-officeview-show-live]')).toHaveText('Slide 1 of 3')
   // the host holds focus, so Esc and the show keys reach it (in-window shows
   // included); the toolbar must not steal it back
   await expect.poll(() => page.evaluate(() => document.activeElement?.hasAttribute('data-officeview-show') ?? false)).toBe(true)

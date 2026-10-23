@@ -643,6 +643,143 @@ handle, so it paints as before and records a `no-package` diagnostic in
 `doc.diagnostics`. Known limits are listed in
 [`docs/validation/slideshow.md`](docs/validation/slideshow.md).
 
+### Slideshow
+
+PowerPoint documents can be presented as a full-screen slideshow, with their
+transitions, animations, timings and click triggers. The show engine is a
+lazily loaded chunk (`src/slideshow/`); it is fetched the first time a show
+starts (or when the pointer reaches the Present button), so the eager bundle
+carries only the start code. It draws with WebGL2 and falls back to Canvas 2D.
+
+**Starting a show.**
+
+- The PowerPoint toolbar has a **Present** button. The button starts from the
+  current slide; its menu offers "From beginning" and "From current slide".
+  It is hidden with `showToolbar={false}` or `allowPresent={false}`.
+- With focus inside the viewer, **F5** presents from the beginning and
+  **Shift+F5** from the current slide. `presentShortcuts={false}` turns the
+  keys off.
+- Hosts can start a show themselves through the viewer's `ref` (below).
+
+**Keys during the show** (PowerPoint's Slide Show keys):
+
+| Action | Input |
+|---|---|
+| Next build or slide | click, Space, Enter, →, ↓, PageDown, N, swipe left, wheel down |
+| Previous build or slide | ←, ↑, PageUp, P, Backspace, swipe right, wheel up |
+| First / last slide | Home / End |
+| Go to slide n | type the number, then Enter |
+| Black / white screen | B or `.` / W or `,` (any key except Esc resumes) |
+| Pause / resume an automatic show | S or `+` |
+| Exit | Esc or `-` |
+
+Esc always exits, in every mode, including kiosk shows. Previous snaps to the
+previous click checkpoint without playing anything backwards. Hidden slides
+are skipped by next and previous; go-to-slide can still show them. Clicking a
+shape with a trigger runs its interactive animation, and clicking a shape with
+a hyperlink follows it (slide jumps, and `http:`, `https:` and `mailto:` links
+in a new tab); other clicks advance. The show ends on a black "End of slide
+show, click to exit." slide, unless it loops. After the show, the viewer
+scrolls to the last slide shown and focus returns to where it was.
+
+**Host API.** `OfficeDoc` and `OfficeFile` accept a `ref` that exposes an
+`OfficeViewerHandle`:
+
+```tsx
+import { useRef } from 'react'
+import { OfficeFile, SlideShowError, type OfficeViewerHandle } from 'officeview'
+
+const viewer = useRef<OfficeViewerHandle>(null)
+
+<button onClick={() => {
+  // Call present() synchronously inside the click handler: no await before it.
+  viewer.current?.present({ from: 'beginning' })
+    .then((session) => session.ended)
+    .catch((e) => { if (e instanceof SlideShowError) console.warn(e.code) })
+}}>Present</button>
+<OfficeFile ref={viewer} data={fileBytes} />
+```
+
+- `present(opts?)` takes `from` (`'beginning'`, the default; `'current'`; or a
+  0-based slide index, which may be a hidden slide) and `presenterView`. It
+  resolves to a `SlideShowSession` with `slideIndex`, `buildIndex`,
+  `surface` (`'fullscreen'` or `'in-window'`), `presenter`, `next()`,
+  `previous()`, `goTo(slideIndex)`, `exit()` (idempotent) and `ended`, a
+  promise that resolves exactly once when the show exits for any reason and
+  never rejects.
+- **Gesture rule.** Browsers allow full screen only during a user gesture, and
+  an `await` can lose it. So call `present()` **synchronously** inside the
+  host's click or key handler: it requests full screen before its first
+  `await`. Where the browser reports no user activation
+  (`navigator.userActivation`), it rejects with `'gesture-required'` and opens
+  nothing.
+- **One show per page document.** A second `present()` in the same document,
+  from any viewer, rejects with `'already-presenting'`.
+- **Full screen refused is not an error.** The show then runs in the window,
+  over the viewer's page, with a notice and a "Click for full screen" control;
+  `session.surface` is `'in-window'`.
+- Unmounting the viewer, replacing its document or setting
+  `allowPresent={false}` ends a running show.
+
+`present()` rejects with a `SlideShowError` whose `code` is one of:
+
+| Code | When |
+|---|---|
+| `gesture-required` | the browser reports no user activation for the call |
+| `not-presentable` | the document is not a PowerPoint deck, or `allowPresent` is false |
+| `already-presenting` | a show is already starting or running in the same page document |
+| `load-failed` | the slideshow chunk or the show data could not be loaded ("Slideshow could not load. Reload to retry.") |
+| `cancelled` | the start was cancelled before it finished: Esc, unmount, document change, `allowPresent` withdrawn |
+| `invalid-slide` | `from` is not an integer slide index in range |
+
+**Props.** `OfficeFile` passes all of them through to `OfficeDoc`.
+
+| Prop | Type | Default | What it does |
+|---|---|---|---|
+| `allowPresent` | `boolean` | `true` | `false` hides Present and makes `present()` reject with `not-presentable` |
+| `presentShortcuts` | `boolean` | `true` | F5 / Shift+F5 start a show while focus is inside the viewer |
+| `slideShowMotion` | `'auto' \| 'full' \| 'reduced'` | `'auto'` | `'auto'` follows `prefers-reduced-motion`; `'reduced'` turns transitions into a crossfade of at most 200 ms and jumps each build to its end state |
+| `onSlideShowStart` | `() => void` | | the show has started |
+| `onSlideShowEnd` | `() => void` | | fires exactly once per started show, before `session.ended` resolves |
+| `onSlideShowSlideChange` | `(slideIndex: number, buildIndex: number) => void` | | the slide or the click checkpoint changed |
+| `onSlideShowDiagnostic` | `(diagnostic: SlideShowDiagnostic) => void` | | an effect was approximated, replaced by a stand-in or refused; deduplicated per effect and slide, never per frame |
+
+Reduced motion never adds motion: a cut stays a cut. PowerPoint itself ignores
+the operating-system setting; following it is a deliberate accessibility
+choice that `slideShowMotion="full"` overrides.
+
+**Embedding.** In an iframe, full screen needs the host's permission:
+
+| Need | Host requirement | When refused |
+|---|---|---|
+| Full screen | iframe `allow="fullscreen"` (and the host page's Permissions-Policy) | the show runs in the window, with a notice and a diagnostic |
+
+Presenter View (a second window) arrives in a later release. It will add the
+iframe `sandbox` `allow-popups`, `allow="window-management"` and a host CSP
+that allows officeview's stylesheet in the popup.
+
+**Known limits.**
+
+- **macOS often captures F5** (dictation), so the key may never reach the
+  page. The Present button, or a host button calling `present()`, is the
+  reliable start.
+- **"Browsed by an individual" (`p:browse`) shows** are presented the normal
+  way (full screen), with a diagnostic.
+- **Custom shows** (`p:custShow`) play the whole deck, with a diagnostic.
+- **Kiosk shows** block clicks, keys, triggers and hyperlinks (Esc still
+  exits) and restart after their `restart` time; the host API still
+  navigates.
+- **Presenter View, speaker notes, audio and video** are not in this release:
+  `presenterView: true` is diagnosed and the show is audience only, and audio
+  and video effects play as diagnosed stand-ins (a silent timed step, or the
+  video's poster frame).
+- **3-D and morph transitions** (vortex, prism, airplane, morph and others)
+  play a catalogued 2-D look-alike, diagnosed.
+- No effect is silently skipped: everything approximated, replaced or refused
+  reaches `onSlideShowDiagnostic`. The full effect catalogue, the validation
+  record and the remaining limits are in
+  [`docs/validation/slideshow.md`](docs/validation/slideshow.md).
+
 ## Current coverage
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.

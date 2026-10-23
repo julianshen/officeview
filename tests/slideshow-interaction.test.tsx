@@ -252,6 +252,108 @@ describe('click targets', () => {
 })
 
 describe('hyperlinks', () => {
+  it('PR #18 review 7: a master shape sharing a slide shape\'s id is neither a link target nor hidden from the text list', async () => {
+    // Master shape 5 ("Master", top left) and slide shape 5 ("Slide", far right) share an id: ids are per part.
+    // The slide shape links out and enters on the first click.
+    const doc = await deck({
+      masters: [{ shapes: [at(5, 0, 0, 200, 100, 'Master')], layouts: [{ shapes: [] }] }],
+      slides: [{
+        layout: [0, 0],
+        shapes: [at(5, 600, 400, 200, 100, 'Slide')],
+        timingXml: timingXmlOf(mainSeqXml([step(10, effect(12, 5, 'entr'))])),
+        links: [{ shapeId: 5, target: 'https://example.com/slide', external: true }],
+      }, { shapes: [] }],
+    })
+    const r = await show(doc)
+    // The slide shape has not entered; the master text is on screen and listed.
+    expect(r.text()).toEqual(['Master'])
+    // A click on the master shape is no link: it advances (the slide shape enters).
+    await r.click(50, 50)
+    expect(r.opened).toEqual([])
+    expect(r.s.buildIndex).toBe(1)
+    await r.tick(10)
+    expect(r.text()).toEqual(['Master', 'Slide'])
+    // The slide shape's own link still works.
+    await r.click(700, 450)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/slide'])
+    r.s.exit()
+  })
+
+  it('PR #18 review 6: a run link in a paragraph its build has not revealed is neither hit nor offered to assistive tech', async () => {
+    // Paragraph 0 "Always" shows from the start; paragraph 1 "Later" (linked) enters on the first click (a by-paragraph build).
+    const reveal = `<p:set><p:cBhvr><p:cTn id="12" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"><p:txEl><p:pRg st="1" end="1"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    const click = `<p:par><p:cTn id="10" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${reveal}</p:childTnLst></p:cTn></p:par>`
+    const timing = timingXmlOf(mainSeqXml([step(20, click)])).replace('</p:tnLst></p:timing>', '</p:tnLst><p:bldLst><p:bldP spid="2" grpId="0" build="p"/></p:bldLst></p:timing>')
+    const doc = await deck({
+      slides: [{
+        shapes: [at(2, 0, 0, 900, 200, undefined, { paragraphs: [{ runs: [{ text: 'Always', sz: '4000' }] }, { runs: [{ text: 'Later', sz: '4000' }] }] })],
+        timingXml: timing,
+        links: [{ shapeId: 2, target: 'https://example.com/later', external: true, onRun: 1 }],
+      }, { shapes: [] }],
+    })
+    const r = await show(doc)
+    expect(r.text()).toEqual(['Always'])
+    expect(r.buttons()).toEqual([])
+    // Where "Later" will be: not yet a link, so the click advances the build.
+    await r.click(40, 100)
+    expect(r.opened).toEqual([])
+    expect(r.s.buildIndex).toBe(1)
+    await r.tick(10)
+    expect(r.buttons().map(b => b.textContent)).toEqual(['Link: Later'])
+    await r.click(40, 100)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/later'])
+    r.s.exit()
+  })
+
+  it('PR #18 review 5: links follow the AlternateContent branch the drawing parser renders (an unsupported Choice falls back)', async () => {
+    const { default: JSZip } = await import('jszip')
+    // A 96 px square: the Choice (unknown Requires) holds shape 60 linked to /choice; the Fallback holds shape 61 linked to /fallback.
+    const sp = (id: number, href: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Alt ${id}"><a:hlinkClick r:id="${href}"/></p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="336699"/></a:solidFill></p:spPr></p:sp>`
+    const alt = `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:v="urn:unknown-vendor" Requires="v">${sp(60, 'rIdAltC')}</mc:Choice><mc:Fallback>${sp(61, 'rIdAltF')}</mc:Fallback></mc:AlternateContent>`
+    const rel = (id: string, href: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${href}" TargetMode="External"/>`
+    const zip = await JSZip.loadAsync(await buildPptxDeck({ slides: [{ shapes: [] }, { shapes: [] }] }))
+    const slide = 'ppt/slides/slide1.xml', rels = 'ppt/slides/_rels/slide1.xml.rels'
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace('</p:spTree>', `${alt}</p:spTree>`))
+    zip.file(rels, (await zip.file(rels)!.async('string')).replace('</Relationships>', `${rel('rIdAltC', 'https://example.com/choice')}${rel('rIdAltF', 'https://example.com/fallback')}</Relationships>`))
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    // The drawing parser rendered the Fallback.
+    expect(doc.slides[0].shapes.map(sh => sh.source?.id)).toEqual(['61'])
+    const r = await show(doc)
+    await r.click(48, 48)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/fallback'])
+    expect(r.s.slideIndex).toBe(0)
+    expect(r.buttons().map(b => b.textContent)).toEqual(['Link: Alt 61'])
+    r.s.exit()
+  })
+
+  it('PR #18 review 3: each linked run in a text box activates its own link; unlinked text advances', async () => {
+    // One left-aligned paragraph, two 40 pt runs: "AAAA" links to /a, "BBBB" to /b; the box is far wider than the text.
+    const doc = await deck({
+      slides: [{
+        shapes: [at(2, 0, 0, 900, 96, undefined, { paragraphs: [{ runs: [{ text: 'AAAA', sz: '4000' }, { text: 'BBBB', sz: '4000' }] }] })],
+        links: [
+          { shapeId: 2, target: 'https://example.com/a', external: true, onRun: 0 },
+          { shapeId: 2, target: 'https://example.com/b', external: true, onRun: 1 },
+        ],
+      }, { shapes: [] }],
+    })
+    const r = await show(doc)
+    // The text starts after the 9.6 px left inset; each run is roughly 100 px wide at 40 pt.
+    await r.click(40, 40)
+    await r.click(170, 40)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/a', 'https://example.com/b'])
+    expect(r.s.slideIndex).toBe(0)
+    // The accessibility layer offers one button per linked run, each running its own link.
+    const buttons = r.buttons()
+    expect(buttons.map(b => b.textContent)).toEqual(['Link: AAAA', 'Link: BBBB'])
+    buttons[1].click()
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/a', 'https://example.com/b', 'https://example.com/b'])
+    // Text-box area with no linked run under it is not a link: the click advances.
+    await r.click(700, 40)
+    expect(r.s.slideIndex).toBe(1)
+    r.s.exit()
+  })
+
   it('hyperlink slide jump, endshow and url with noopener; refused schemes diagnose', async () => {
     const shapes = [at(2, 0, 0, 96, 96, 'Jump'), at(3, 100, 0, 96, 96, 'End'), at(4, 200, 0, 96, 96, 'Web'), at(5, 300, 0, 96, 96, 'Script')]
     const doc = await deck({
@@ -584,6 +686,22 @@ describe('output, residency and protection', () => {
     plain.s.exit()
   })
 
+  it('PR #18 review 8: copy protection follows the start\'s allowCopy, not the region\'s CSS (a consumer userSelect cannot expose text)', async () => {
+    // The consumer's style overrode the region's user-select: the policy still says no copy.
+    const root = document.createElement('div')
+    const region = document.createElement('div')
+    region.setAttribute('data-officeview-root', '')
+    region.style.userSelect = 'text'
+    root.append(region)
+    document.body.append(root)
+    const doc = await deck({ slides: [{ shapes: [at(2, 0, 0, 200, 50, 'Secret')] }] })
+    const r = await show(doc, { host: hostIn(root), allowCopy: false })
+    const li = r.host.querySelector('[data-officeview-show-text] li')!
+    expect(li.textContent).toBe('')
+    expect(li.getAttribute('aria-label')).toBe('Secret')
+    r.s.exit()
+  })
+
   it('allowCopy=false keeps the offscreen text readable but not selectable; allowPrint=false keeps slideshow surfaces out of print', async () => {
     // The viewer's theme root as OfficeDoc renders it with allowCopy={false} allowPrint={false}.
     const root = document.createElement('div')
@@ -595,7 +713,7 @@ describe('output, residency and protection', () => {
     root.append(region)
     document.body.append(root)
     const doc = await deck({ slides: [{ shapes: [at(2, 0, 0, 200, 50, 'Secret')] }] })
-    const r = await show(doc, { host: hostIn(root) })
+    const r = await show(doc, { host: hostIn(root), allowCopy: false })
     const list = r.host.querySelector<HTMLElement>('[data-officeview-show-text]')!
     const item = list.querySelector('li')!
     expect(item.getAttribute('aria-label')).toBe('Secret')

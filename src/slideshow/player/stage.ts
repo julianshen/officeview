@@ -45,8 +45,10 @@
  *   painting (their slide-px bounds scale with the viewport).
  */
 import { acquireFonts, type FontLease } from '../../core/fonts/register'
-import { decodeImageAsset, releaseDecodedImage } from '../../core/images'
+import { decodeImage, decodeImageAsset, releaseDecodedImage, type ImageDecodeFn } from '../../core/images'
 import type { WatermarkOptions } from '../../core/watermark'
+import { layoutTextBody } from '../../drawing/text-layout'
+import { createTextBodyMeasurer } from '../../drawing/text-paint'
 import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { renderStateAt, type BaseGeometry } from '../engine/behaviours'
 import type { SlideCursor, SlideTimeline } from '../engine/steps'
@@ -54,7 +56,8 @@ import { createBackendManager, createLivePainter, type BackendManager } from '..
 import { paintDirect } from '../render/direct'
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
 import { rasterLayer } from '../render/raster'
-import { imageIndices, paintedBounds, slideSize, underlayOf } from '../render/scene'
+import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
+import { imageIndices, paintedBounds, slideSize, textFilter, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { dispatchTransition, transition3DDraw } from '../render/three/framework'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
@@ -86,6 +89,11 @@ export interface StageDeps {
   force?: 'canvas2d'
   /** Monotonic ms (`performance.now`) for the context-restore deadline. */
   now(): number
+  /**
+   * The show clock. `enter` reads it once the slide is drawable, so a transition starts when its incoming
+   * frame can be drawn, not when the change was requested (PR #18 review P1). Absent, `enter`'s `t` is used.
+   */
+  showNow?(): number
   schedule(cb: () => void, ms: number): unknown
   /** The slide's metadata through the session (so the target resolver sees its underlay). */
   metadata(index: number): Promise<MetadataHandle>
@@ -104,12 +112,15 @@ export interface StageModel {
 export interface Stage {
   /** The shown slide is being left: its current frame becomes the outgoing transition frame. */
   leave(): void
-  /** Shows `model`; resolves once it is drawable and its transition (if any) has started. */
+  /**
+   * Shows `model`; resolves once it is drawable and its transition (if any) has started. `t` is the show time
+   * of the request; the transition starts at the show clock's reading once the slide is prepared.
+   */
   enter(model: StageModel, t: number, neighbours: readonly number[]): Promise<void>
   /** Show time minus the moment the slide's timeline began (its transition's end); `-Infinity` before. */
   slideTime(t: number): number
-  /** Draws one frame of the shown slide at show time `t`. */
-  frame(cursor: SlideCursor | undefined, t: number): void
+  /** Draws one frame of the shown slide at show time `t`; returns the render state it drew (undefined between slides). */
+  frame(cursor: SlideCursor | undefined, t: number): RenderState | undefined
   /** The shown slide's render state at `cursor`/`t` (hit tests, accessibility). */
   stateAt(cursor: SlideCursor | undefined, t: number): RenderState
   readonly plan: RenderPlan | undefined
@@ -138,6 +149,12 @@ export interface Stage {
    * any other slide.
    */
   previewOf?(index: number, cursor: SlideCursor | undefined, timeline: SlideTimeline | undefined): StagePreview | undefined
+  /**
+   * The text run (paragraph, run index) laid out at local px (u, v) of `shape`, whose box is `w` × `h`
+   * (PR #18 review 3: hyperlinks on runs). `null` when no run is there; `undefined` when the text cannot be
+   * located (vertical or warped text).
+   */
+  runAt(shape: PptxShape, u: number, v: number, w: number, h: number): { p: number; r: number } | null | undefined
   resize(css: { w: number; h: number }, dpr: number): void
   readonly level: LadderLevel | undefined
   readonly backend: string
@@ -184,8 +201,9 @@ function isContainer(n: TimeNode): n is Extract<TimeNode, { children: TimeNode[]
 const COLOUR_ATTR = new Set(['fillcolor', 'stroke.color', 'style.color'])
 
 /**
- * Decoded pixel size from a PNG, GIF, JPEG or WebP header (S1-20 review I1: the decode is charged before it
- * happens). `undefined` for anything else (SVG, unknown, truncated): the caller charges the decoder's report.
+ * Decoded pixel size from a PNG, GIF, JPEG, WebP, BMP or TIFF header (S1-20 review I1, PR #18 review 2: the
+ * decode is charged before it happens). `undefined` for anything else (SVG, unknown, truncated): the caller
+ * does not decode it.
  */
 export function imageSize(b: Uint8Array): { w: number; h: number } | undefined {
   const u16 = (o: number, le = false) => le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1]
@@ -199,6 +217,33 @@ export function imageSize(b: Uint8Array): { w: number; h: number } | undefined {
     if (kind === 'VP8L') return ok(1 + (((b[22] & 0x3f) << 8) | b[21]), 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6)))
     if (kind === 'VP8X') return ok(1 + (b[24] | (b[25] << 8) | (b[26] << 16)), 1 + (b[27] | (b[28] << 8) | (b[29] << 16)))
     return undefined
+  }
+  // BMP: BITMAPCOREHEADER (12 bytes) has 16-bit sizes at 18 and 20; the others have int32 at 18 and 22,
+  // the height negative for a top-down bitmap.
+  if (b.length >= 26 && b[0] === 0x42 && b[1] === 0x4d) {
+    const i32 = (o: number) => b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)
+    const header = i32(14)
+    if (header === 12) return ok(u16(18, true), u16(20, true))
+    if (header >= 40) return ok(Math.abs(i32(18)), Math.abs(i32(22)))
+    return undefined
+  }
+  // TIFF: ImageWidth (256) and ImageLength (257) in IFD0, SHORT or LONG.
+  if (b.length >= 8 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 42 && b[3] === 0) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 42))) {
+    const le = b[0] === 0x49
+    const t16 = (o: number) => u16(o, le)
+    const t32 = (o: number) => (le ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0 : u32(o))
+    const ifd = t32(4)
+    if (ifd + 2 > b.length) return undefined
+    let w = 0, h = 0
+    for (let k = 0, n = t16(ifd); k < n; k++) {
+      const e = ifd + 2 + k * 12
+      if (e + 12 > b.length) break
+      const tag = t16(e), type = t16(e + 2)
+      const value = type === 3 ? t16(e + 8) : type === 4 ? t32(e + 8) : 0
+      if (tag === 256) w = value
+      else if (tag === 257) h = value
+    }
+    return ok(w, h)
   }
   if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
     // Walk the segments to the first start-of-frame (SOF0..SOF15 except DHT, JPG and DAC); bounded by the byte length.
@@ -323,6 +368,9 @@ function rasterLayers(plan: RenderPlan, watermark: boolean): PlanLayer[] {
   return out
 }
 
+/** Slide time far past every finite effect: the settled state a flattened frame shows (PR #18 review 8). */
+const SETTLED_MS = 1e9
+
 function stateKey(state: RenderState): string {
   let s = ''
   for (const [k, v] of state) s += `${k}:${v.visible ? 1 : 0}:${v.opacity.toFixed(3)}:${v.transform.map(n => n.toFixed(2)).join(',')}:${v.motion ? `${v.motion.dx.toFixed(1)},${v.motion.dy.toFixed(1)}` : ''};`
@@ -342,7 +390,8 @@ interface Built {
   /** Layers to (re)rasterise at `scale` (resize, a backend switch). */
   pending: PlanLayer[]
   /** Flattened rung: the current checkpoint's full-slide frame. */
-  flat?: { key: string; handle: LayerHandle }
+  /** `cursor`: the cursor the frame was settled for (it is re-checked only when the cursor changes). */
+  flat?: { key: string; handle: LayerHandle; cursor?: SlideCursor }
 }
 
 interface Prepared {
@@ -355,6 +404,8 @@ interface Prepared {
   hidden: Set<TargetKey>
   /** The entrance behaviours of each hidden target: it shows once one of them has begun. */
   entrances: Map<TargetKey, Set<TimeNode>>
+  /** The show's sink, scoped to this slide: behaviour diagnostics carry no slide of their own (S1-22). */
+  sink: DiagnosticSink
   images: Array<CanvasImageSource | undefined>
   /** The workspace charge of every decoded image above (released with them). */
   imageLeases: Lease[]
@@ -413,12 +464,18 @@ export function createStage(deps: StageDeps): Stage {
   /** Whether any slide has been entered yet (the first one transitions from black). */
   let shownBefore = false
   let kinds: string[] = []
+  /** A 1 × 1 canvas whose context measures text for `runAt`. */
+  let measurer: ReturnType<CanvasFactory> | undefined
 
   // -------------------------------------------------------------------
   // Viewport
   // -------------------------------------------------------------------
 
-  const slidePx = (p: Prepared | undefined) => slideSize(p?.slide ?? deps.doc.slides[0])
+  const slidePx = (p: Prepared | undefined) => {
+    const slide = p?.slide ?? deps.doc.slides[0]
+    // A deck without slides shows only the end-of-show slide: any valid size will do for its empty viewport.
+    return slide ? slideSize(slide) : { w: 960, h: 540 }
+  }
   function viewport(p: Prepared | undefined): CompositorViewport & { scale: number } {
     const { w, h } = slidePx(p)
     const s = Math.min(backing.w / w, backing.h / h)
@@ -434,6 +491,8 @@ export function createStage(deps: StageDeps): Stage {
   // -------------------------------------------------------------------
 
   const manager: BackendManager = createBackendManager(container, {
+    // The Canvas 2D fallback composites on the terminal output, which the permanent reserve pays for (PR #18 review P2).
+    output,
     now: deps.now,
     schedule: deps.schedule,
     paintLive: createLivePainter(terminal, () => current && {
@@ -505,6 +564,8 @@ export function createStage(deps: StageDeps): Stage {
     backing,
     cost: (slide, level) => price(slide, level),
     build: async (slide, level, owner) => build(slide, level, owner),
+    // An evicted neighbour's uploaded layers and image leases go with it (PR #18 review 6).
+    teardown: (slide) => { const p = prepared.get(slide); if (p && p !== current) drop(p) },
   })
 
   /** Rasterises one layer through `owner` and uploads it to `c`. `undefined`: nothing to draw (empty, or deferred while lost). */
@@ -708,41 +769,73 @@ export function createStage(deps: StageDeps): Stage {
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
       index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, entrances, images,
+      sink: { add: (d) => sink.add(d.slideIndex === undefined ? { ...d, slideIndex: index } : d), list: () => sink.list() },
       ready: Promise.resolve(), handle, chain: Promise.resolve(), dead: false, imageLeases: [],
     }
     const used = [...new Set(imageIndices([...underlayOf(slide), ...(slide.shapes ?? [])]))]
     const assets = (deps.doc as { images?: Array<unknown> }).images
-    // Decoded bitmaps are charged to the workspace for as long as the slide holds them (S1-20 review I1):
-    // leased before decoding from the header's dimensions, or right after decoding from the decoder's report.
+    // Decoded bitmaps are charged to the workspace for as long as the slide holds them (S1-20 review I1), and
+    // every charge is taken before its decoder allocates (PR #18 review 2): the representation decodeImageAsset
+    // selects is sized first. A raster is sized from its header; an SVG is drawn at the size it is painted at
+    // (the full rung's device px), whatever its declared intrinsic size. A raster whose header gives no size is
+    // not decoded.
     const refuse = (i: number, w: number, h: number) => sink.add({
       code: 'image-workspace', slideIndex: index, effect: `image:${i}`,
       message: `Image ${i} (${w}×${h} px decoded) does not fit the slideshow workspace; painted as the missing-image placeholder`,
     })
+    const nodes = [...underlayOf(slide), ...(slide.shapes ?? [])]
     p.ready = Promise.all([lease(), ...used.map(async (i) => {
-      const asset = assets?.[i] as { data?: Uint8Array; svg?: { verdict?: { ok?: boolean } } } | undefined
+      const asset = assets?.[i] as object | undefined
       if (!asset) return
       const tag = `image:${index}:${i}`
-      // Size the representation that will be decoded: an accepted SVG candidate wins over the raster bytes
-      // (core/images `decodeImageAsset`), and its size is only known once decoded. A raster header is sniffed.
-      const known = asset.svg?.verdict?.ok ? undefined : asset.data ? imageSize(asset.data) : undefined
       let held: Lease | undefined
-      if (known) {
-        held = workspace.lease(surfaceBytes(known.w, known.h), tag)
-        if (!held) { refuse(i, known.w, known.h); return }
+      let refused: { w: number; h: number } | 'unsized' | undefined
+      const take = (w: number, h: number) => {
+        held = workspace.lease(surfaceBytes(w, h), tag)
+        if (!held) refused = { w, h }
+        return !!held
       }
-      const img = await decodeImageAsset(asset as never).catch(() => undefined)
+      const unhold = () => { held?.release(); held = undefined }
+      // One call per representation tried (an accepted SVG, then its raster fallback): reserve, then decode.
+      const decode: ImageDecodeFn = async (bytes, mime) => {
+        unhold()
+        if (mime === 'image/svg+xml') {
+          const drawn = imageDrawSize(nodes, i)
+          const v = viewport(p)
+          const cap = 2 * Math.max(backing.w, backing.h)
+          const w = Math.max(1, Math.min(cap, Math.ceil((drawn?.w ?? slidePx(p).w) * v.scale)))
+          const h = Math.max(1, Math.min(cap, Math.ceil((drawn?.h ?? slidePx(p).h) * v.scale)))
+          if (!take(w, h)) return undefined
+          const canvas = await rasteriseSvg(bytes, w, h, factory)
+          if (!canvas) unhold()
+          return canvas
+        }
+        const known = imageSize(bytes)
+        if (!known) { refused = 'unsized'; return undefined }
+        if (!take(known.w, known.h)) return undefined
+        const img = await decodeImage(bytes, mime).catch(() => undefined)
+        if (!img) unhold()
+        return img
+      }
+      const img = await decodeImageAsset(asset as never, decode).catch(() => undefined)
       if (img) {
         // Always reconcile with the decoded dimensions before keeping the bitmap: grow (or trim) the charge,
-        // or close the bitmap and refuse when the workspace cannot hold it.
+        // or close the bitmap and refuse when the workspace cannot hold it (a header that understated its size).
         const d = img as { width?: number; height?: number }
         const w = Number(d.width) || 1, h = Number(d.height) || 1
         const bytes = surfaceBytes(w, h)
-        if (!held) held = workspace.lease(bytes, tag)
-        else if (bytes > held.bytes && !held.grow(bytes - held.bytes)) { held.release(); held = undefined }
-        else if (bytes < held.bytes) held.shrink(held.bytes - bytes)
+        const l = held as Lease | undefined
+        if (!l) held = workspace.lease(bytes, tag)
+        else if (bytes > l.bytes && !l.grow(bytes - l.bytes)) unhold()
+        else if (bytes < l.bytes) l.shrink(l.bytes - bytes)
         if (!held) { releaseDecodedImage(img); refuse(i, w, h); return }
+      } else {
+        unhold()
+        if (refused === 'unsized') sink.add({ code: 'image-workspace', slideIndex: index, effect: `image:${i}`, message: `Image ${i} has no readable size to reserve before decoding; painted as the missing-image placeholder` })
+        else if (refused) refuse(i, refused.w, refused.h)
+        return
       }
-      if (!img || p.dead) { releaseDecodedImage(img); held?.release(); return }
+      if (p.dead) { releaseDecodedImage(img); unhold(); return }
       images[i] = img
       if (held) p.imageLeases.push(held)
     })]).then(() => {
@@ -784,7 +877,7 @@ export function createStage(deps: StageDeps): Stage {
     if (!cursor || !timeline || cursor.mode === 'static') return EMPTY_STATE
     const snapshot = timeline.stateAt(cursor, Math.max(0, slideT))
     const fan = textTimings.get(p.meta)?.fan
-    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), sink, slidePx(p), fan)
+    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), p.sink, slidePx(p), fan)
     const state = new Map<TargetKey, TargetState>()
     // Text items without their own geometry share their shape's.
     const baseOf = (k: TargetKey) => p.base.get(k) ?? (k.includes('/') ? p.base.get(k.slice(0, k.indexOf('/'))) : undefined)
@@ -919,7 +1012,8 @@ export function createStage(deps: StageDeps): Stage {
     get level() { return current?.level },
     get backend() { return manager.state },
     get backingStore() { return backing },
-    get transition() { return running && { effect: running.spec.element, duration: running.duration } },
+    // What is drawn: a catalogued stand-in reports its 2-D look-alike (S1-22); `random` draws its pick per rng.
+    get transition() { return running && { effect: running.spec.element === 'random' ? 'random' : resolveTransition2D(running.spec).spec.element, duration: running.duration } },
     inspect() {
       return {
         current: current?.index,
@@ -938,9 +1032,14 @@ export function createStage(deps: StageDeps): Stage {
       releaseFrame(outgoing)
       outgoing = undefined
       if (p && p.level && p.level !== 'terminal' && !disposed) {
-        // The outgoing frame, charged to the workspace (not a slide's rung: the slide may be evicted next).
+        // The outgoing frame comes from the transition allowance the slide's rung already priced (its own
+        // incoming frame was released when its transition ended), so it is never charged twice (S1-22 fix 1).
+        // An eviction while it is drawn is safe: a retired rung keeps its charge until its last lease goes.
+        // Only a slide without an open rung falls back to the workspace.
         const s = viewport(p).scale
-        const f = flatten(p, liveState, workspace, p.level === 'full' ? s : s / Math.max(1, backing.dpr), 'transition:from')
+        const scale = p.level === 'full' ? s : s / Math.max(1, backing.dpr)
+        const own = owners.get(p.index)
+        const f = (own && flatten(p, liveState, own, scale, 'transition:from')) || flatten(p, liveState, workspace, scale, 'transition:from')
         if (f) outgoing = f
         else sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The outgoing frame did not fit the slideshow workspace; the slide change is a cut' })
       }
@@ -959,8 +1058,9 @@ export function createStage(deps: StageDeps): Stage {
       const p = prepare(model.index, model.slide)
       current = p
       timelineOf = model.timeline
-      residency.show(model.index)
-      for (const other of [...prepared.values()]) if (other !== p && Math.abs(other.index - p.index) > 1 && !neighbours.includes(other.index)) drop(other)
+      // The window is the slide and its visible neighbours, which hidden slides can put further than ±1 (PR #18 review 6).
+      residency.show(model.index, neighbours)
+      for (const other of [...prepared.values()]) if (other !== p && !neighbours.includes(other.index)) drop(other)
       compositor().setSlideIndex(model.index)
       compositor().setViewport(viewport(p))
       await p.ready
@@ -975,8 +1075,14 @@ export function createStage(deps: StageDeps): Stage {
       const drawn = spec ? resolveTransition2D(spec) : undefined
       // S3-1: a registered 3-D row on WebGL2 runs its shader; otherwise its 2-D look-alike, diagnosed (after reduced motion, so it never adds motion).
       const route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike'
+      // Sounds are Stage 2 (spec 13): the transition plays silently, diagnosed once for the slide.
+      const sound = model.slide.transition?.sound
+      if (sound?.start) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound', message: 'The transition sound is pending Stage 2: the transition plays silently' })
+      if (sound?.end) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound-end', message: 'Stopping sounds at the transition is pending Stage 2: nothing plays to stop' })
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
-      const start = t
+      // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
+      // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).
+      const start = deps.showNow ? Math.max(t, deps.showNow()) : t
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
       if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost') {
         const s = viewport(p).scale
@@ -1035,10 +1141,12 @@ export function createStage(deps: StageDeps): Stage {
       const level = p.level
       if (level === undefined) {
         if (outgoing && outgoing.epoch === epoch) compositor().frame([{ handle: outgoing.handle, state: PLAIN }])
-        return
+        return state
       }
-      if (level === 'terminal') { container.hidden = true; paintTerminal(p, state); return }
+      if (level === 'terminal') { container.hidden = true; paintTerminal(p, state); return state }
       container.hidden = false
+      // The Canvas 2D compositor may draw on the output: a later terminal paint must not skip as unchanged.
+      lastDirect = ''
       // Re-rasterisation work (resize, backend switch), bounded per frame: current first, then neighbours.
       let budget = RERASTER_LIMIT
       budget -= drain(p, budget)
@@ -1056,30 +1164,36 @@ export function createStage(deps: StageDeps): Stage {
             from: running.from?.handle ?? running.to.handle, to: running.to.handle,
             effect: running.spec.element, progress, params, rng: running.rng,
           })
-          return
+          return state
         }
         releaseFrame(running.from)
         releaseFrame(running.to)
         running = undefined
       }
       if (level === 'flattened') {
-        const key = `${cursor?.step ?? 0}|${stateKey(state)}`
+        // Checkpoint granularity (the checkpoint-cut fallback; PR #18 review 8): the frame shows the settled state
+        // the cursor is heading to, and is re-rasterised only when that changes, never per animation frame.
         const b = p.built
         const owner = owners.get(p.index)
-        if (b && owner && b.epoch === epoch && b.flat?.key !== key) {
-          // Effects are cuts at their steps: the frame changes only when the settled state does.
-          if (b.flat) { c.release(b.flat.handle); b.flat = undefined }
-          const f = flatten(p, state, owner, b.scale, 'flattened')
-          if (f) b.flat = { key, handle: f.handle }
-          else void stepDown(p)
+        if (b && owner && b.epoch === epoch && (b.flat?.cursor !== cursor || !b.flat)) {
+          const settled = stateOf(p, cursor, SETTLED_MS, timelineOf)
+          const key = `${cursor?.step ?? 0}|${stateKey(settled)}`
+          if (b.flat?.key === key) b.flat.cursor = cursor
+          else {
+            if (b.flat) { c.release(b.flat.handle); b.flat = undefined }
+            const f = flatten(p, settled, owner, b.scale, 'flattened')
+            if (f) b.flat = { key, handle: f.handle, cursor }
+            else void stepDown(p)
+          }
         }
         const flat = p.built?.flat
         c.frame(flat ? [{ handle: flat.handle, state: PLAIN }] : [])
-        return
+        return state
       }
       const list = draws(p, state)
       limits.check(p.index, { layers: list.length, reRasters: RERASTER_LIMIT - budget })
       c.frame(list)
+      return state
     },
 
     toSlide(clientX, clientY) {
@@ -1110,6 +1224,25 @@ export function createStage(deps: StageDeps): Stage {
       return { left: ox + (m[0] * g.x + m[4]) * k, top: oy + (m[3] * g.y + m[5]) * k, width: m[0] * g.w * k, height: m[3] * g.h * k }
     },
 
+    runAt(shape, u, v, w, h) {
+      const body = shape.textBody
+      if (!body || body.paragraphs.length === 0) return null
+      if ((body.direction && body.direction !== 'horz') || body.textWarp) return undefined
+      const ctx = (measurer ??= factory(1, 1)).getContext('2d')
+      if (!ctx) return undefined
+      const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx as CanvasRenderingContext2D, resolveFont), current?.slide.theme)
+      // A paragraph-build clone paints only its paragraphs (as rasterisation does): runs elsewhere are not on it (PR #18 review 6).
+      const keep = textFilter.get(shape)
+      for (const line of layout.lines) {
+        if ((keep && !keep(line.paragraphIndex)) || v < line.y || v > line.y + line.height) continue
+        for (const seg of line.segments) {
+          if (seg.transform || u < seg.x || u > seg.x + seg.width) continue
+          return { p: line.paragraphIndex, r: seg.runIndex }
+        }
+      }
+      return null
+    },
+
     resize(css, dpr) {
       if (disposed) return
       const before = backing
@@ -1120,7 +1253,17 @@ export function createStage(deps: StageDeps): Stage {
       output.width = backing.w
       output.height = backing.h
       lastDirect = ''
-      compositor().setViewport(viewport(current))
+      // The compositor's output is part of the transaction: when it keeps its old size (WebGL2 under pressure),
+      // the old backing store, layer scale and viewport stay and the new reserve is refunded (PR #18 review 4).
+      if (compositor().setViewport(viewport(current)) === false) {
+        residency.abortResize()
+        backing = residency.backing
+        output.width = backing.w
+        output.height = backing.h
+        compositor().setViewport(viewport(current))
+        sink.add({ code: 'resize-kept-old', message: 'the compositor could not take the new output size; the old backing store is kept and scaled' })
+        return
+      }
       residency.commitResize()
       // A DPR-only change keeps the pixel size but moves the reduced rung's layer scale (S1-20 review M2).
       if (before.w === backing.w && before.h === backing.h && before.dpr === backing.dpr) return
