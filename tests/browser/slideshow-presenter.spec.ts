@@ -395,9 +395,9 @@ test.describe('S2-3 screen placement', () => {
     }
     let popup = await startPopup()
     expect((await wm(page)).opens).toEqual(['popup'])
-    // The opener's module shows the hint in the popup's document (another realm).
-    expect(await page.evaluate(() => !!window.__screens!.showDragHint(window.__wm!.popups.at(-1)!.document))).toBe(true)
+    // S2-5: Presenter View shows the hint itself, in the popup's document (another realm), from the opener's module.
     const hintEl = popup.locator('[data-officeview-drag-hint]')
+    await expect(hintEl).toHaveCount(1)
     await expect(hintEl).toContainText('Drag this presenter window to your other display')
     await popup.click('[data-officeview-drag-hint] button')
     await expect(hintEl).toHaveCount(0)
@@ -405,10 +405,93 @@ test.describe('S2-3 screen placement', () => {
     await expect.poll(() => popup.isClosed()).toBe(true)
     // One-time: the dismissal outlives the popup.
     popup = await startPopup()
-    expect(await page.evaluate(() => window.__screens!.showDragHint(window.__wm!.popups.at(-1)!.document) === undefined)).toBe(true)
+    await expect(popup.locator('[data-officeview-presenter-controls]')).toBeVisible()
     await expect(popup.locator('[data-officeview-drag-hint]')).toHaveCount(0)
+    expect(await page.evaluate(() => window.__screens!.showDragHint(window.__wm!.popups.at(-1)!.document) === undefined)).toBe(true)
     expect(await page.evaluate(() => localStorage.getItem('officeview:drag-hint-dismissed'))).toBe('1')
     await exit(page)
     await page.evaluate(() => localStorage.removeItem('officeview:drag-hint-dismissed'))
+  })
+})
+
+test.describe('S2-5 presenter view', () => {
+  test.beforeEach(({ page }) => {
+    errors.length = 0
+    page.on('pageerror', (e) => errors.push(e.message))
+  })
+  test.afterEach(() => {
+    expect(errors).toEqual([])
+  })
+
+  for (const [name, extra] of [['single-screen Presenter View swap', ''], ['single-screen Presenter View swap (forced Canvas 2D)', '&force=canvas2d']] as const) {
+    test(name, async ({ page }) => {
+      await page.goto(`${PAGE}?deck=nav${extra}`)
+      await page.waitForFunction(() => window.__slideshowStart?.ready === true)
+      const log = () => page.evaluate(() => [...window.__slideshowStart!.log])
+      const session = () => page.evaluate(() => ({ presenter: window.__slideshowStart!.sessions.a?.presenter, slide: window.__slideshowStart!.sessions.a?.slideIndex }))
+      const show = page.locator('[data-viewer="a"] [data-officeview-show]')
+      const view = show.locator('[data-officeview-presenter-view]')
+      const surface = show.locator(':scope > [data-officeview-show-surface]')
+      // A plain Present: no popup, the audience on the single screen.
+      let popups = 0
+      page.on('popup', () => { popups++ })
+      await page.click('#present-a')
+      await expect.poll(log).toContain('a:started')
+      expect((await session()).presenter).toBe('none')
+      await expect(view).toHaveCount(0)
+      // Alt+F5 swaps the same surface to Presenter View.
+      await page.keyboard.press('Alt+F5')
+      await expect(view).toBeVisible()
+      await expect(view).toHaveAttribute('data-host', 'swap')
+      await expect(surface).toBeHidden()
+      expect((await session()).presenter).toBe('swap')
+      await expect(view.locator('[data-officeview-presenter-status]')).toHaveText('Slide 1 of 5')
+      await expect(view.locator('[data-officeview-presenter-current] canvas')).toHaveCount(1)
+      await expect(view.locator('[data-officeview-presenter-next]')).toHaveAttribute('aria-label', 'Next: slide 2')
+      // The presenter controls drive the show; the slide keys still work on the swapped surface.
+      await view.locator('button[aria-label="Next slide"]').click()
+      await expect.poll(async () => (await session()).slide).toBe(1)
+      await expect(view.locator('[data-officeview-presenter-status]')).toHaveText('Slide 2 of 5')
+      await page.keyboard.press('ArrowRight')
+      // Next skips the hidden third slide.
+      await expect.poll(async () => (await session()).slide).toBe(3)
+      // The grid jumps to the hidden slide.
+      await view.locator('button[aria-label="See all slides"]').click()
+      await view.locator('[data-officeview-presenter-grid] button[aria-label="Slide 3 (hidden)"]').click()
+      await expect.poll(async () => (await session()).slide).toBe(2)
+      await expect(view.locator('[data-officeview-presenter-grid]')).toHaveCount(0)
+      // The toggle swaps back to the audience; Alt+F5 forth again.
+      await view.locator('button[aria-label="Show audience view"]').click()
+      await expect(view).toHaveCount(0)
+      await expect(surface).toBeVisible()
+      await page.keyboard.press('Alt+F5')
+      await expect(view).toBeVisible()
+      // Esc exits from Presenter View too, and nothing ever opened a window.
+      await page.keyboard.press('Escape')
+      await expect.poll(log).toContain('a:ended')
+      expect(popups).toBe(0)
+    })
+  }
+
+  test('Presenter View in the popup: current, next, notes, timer and the grid', async ({ page }) => {
+    await page.goto(`${PAGE}?presenter=1&deck=nav`)
+    await page.waitForFunction(() => window.__slideshowStart?.ready === true)
+    const popupEvent = page.waitForEvent('popup')
+    await page.click('#present-a')
+    const popup = await popupEvent
+    const view = popup.locator('[data-officeview-presenter-view]')
+    await expect(view).toBeVisible()
+    await expect(view).toHaveAttribute('data-host', 'window')
+    await expect(view.locator('[data-officeview-presenter-current] canvas')).toHaveCount(1)
+    await expect(view.locator('[data-officeview-presenter-next]')).toHaveAttribute('aria-label', 'Next: slide 2')
+    await expect(view.locator('[data-officeview-presenter-elapsed]')).toHaveText(/^\d+:\d\d:\d\d$/)
+    await expect(view.locator('[data-officeview-presenter-notes]')).toBeVisible()
+    await view.locator('button[aria-label="See all slides"]').click()
+    await expect(view.locator('[data-officeview-presenter-grid] button[data-slide]')).toHaveCount(5)
+    await view.locator('[data-officeview-presenter-grid] button[data-slide="4"]').click()
+    await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a?.slideIndex)).toBe(4)
+    await expect(view.locator('[data-officeview-presenter-next]')).toHaveAttribute('aria-label', 'Next: end of slide show')
+    await view.locator('button[aria-label="End show"]').click()
+    await expect.poll(() => popup.isClosed()).toBe(true)
   })
 })

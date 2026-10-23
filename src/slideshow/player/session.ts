@@ -19,7 +19,7 @@
  * Working assumptions (pending D4): Previous from slide n+1 enters slide n
  * at its last checkpoint; Next enters a slide at its initial state.
  */
-import { SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
+import { preparedPlacement, SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
 import { emuToPx } from '../../core/geometry'
 import { attrs } from '../../core/xml'
 import { throwIfAborted } from '../../core/package-error'
@@ -48,7 +48,9 @@ import { nextVisible, previousVisible, visibleOrder } from './order'
 import { createStage, type Stage, type StageDeps } from './stage'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from './surface'
 import { adoptPresenterWindow, type PresenterWindow } from '../presenter/window'
-import { mountPresenterControls, type PresenterControls } from '../presenter/controls'
+import { mountPresenterView, type PresenterSource } from '../presenter/PresenterView'
+import { createPresenterPlacement, type PresenterPlacement } from '../presenter/placement'
+import { createElapsedTimer, type ElapsedTimer } from '../presenter/timer'
 import { openMediaLease } from '../media/lease'
 import { createMediaPlayer, type MediaController, type MediaPlayer } from '../media/player'
 import { createTransitionSound, type TransitionSoundController } from '../media/sounds'
@@ -96,6 +98,8 @@ export interface SessionController extends SlideShowSession {
   readonly stage: Stage | undefined
   /** @internal The shown slide's cursor. */
   readonly cursor: SlideCursor | undefined
+  /** @internal What Presenter View reads and drives (S2-5). */
+  readonly presenterSource: PresenterSource
 }
 
 /** A show clock the session can stop and start (pause, hidden document). */
@@ -133,6 +137,8 @@ export const sessionDeps = {
   }),
   /** Monotonic ms for the context-restore deadline. */
   now: (win: Window | null): number => (win?.performance ?? globalThis.performance).now(),
+  /** Epoch ms for Presenter View's wall clock (S2-5). */
+  wall: (): number => Date.now(),
   workspace: (profile: SlideShowProfile): SlideShowWorkspace => createSlideShowWorkspace(profile),
 }
 
@@ -241,13 +247,20 @@ export async function createSession(start: ShowStart): Promise<SessionController
   /** Spec 5.1: 'window' with the popup adopted; 'swap' (single-screen) when it was wanted but blocked or closed; 'none' when not wanted. */
   let presenter: SlideShowSession['presenter'] = start.popup === undefined ? 'none' : 'swap'
   let presenterWindow: PresenterWindow | undefined
-  let controls: PresenterControls | undefined
+  /** Presenter View in the popup, and the single-screen swap's view over the audience surface. */
+  let view: { dispose(): void } | undefined
+  let swapped: { dispose(): void } | undefined
+  let placement: PresenterPlacement | undefined
   let player: MediaPlayer | undefined
   let sounds: TransitionSoundController | undefined
   const listeners = new AbortController()
   const release = () => {
     listeners.abort()
-    controls?.dispose()
+    view?.dispose()
+    swapped?.dispose()
+    placement?.dispose()
+    viewSubs.clear()
+    frameSubs.clear()
     presenterWindow?.close()
     stopFrames?.()
     // Media lets go of its URLs before the leases (and the workspace) go.
@@ -370,8 +383,27 @@ export async function createSession(start: ShowStart): Promise<SessionController
     else clock.resume()
   }
   const render = () => surface?.show({ slide, count, screen })
-  /** The presenter window follows the same state (one owner, spec 5.1); it keeps its own change keys. */
-  const syncPresenter = () => controls?.sync({ slide, count, notes: visit?.meta?.notes ?? NO_NOTES })
+  /**
+   * Presenter View follows the same state (one owner, spec 5.1): subscribers
+   * are told when anything it shows changes — never per frame otherwise.
+   */
+  const viewSubs = new Set<() => void>()
+  const frameSubs = new Set<() => void>()
+  let viewVersion = 0
+  let viewKey = ''
+  let timer: ElapsedTimer | undefined
+  const syncPresenter = (force = false) => {
+    if (!viewSubs.size) return
+    const v = visit
+    const t = sessionDeps.now(win)
+    const busy = v?.timeline && v.cursor && stage ? v.timeline.busyUntil(v.cursor) > Math.max(0, slideTime()) : false
+    const key = [slide, v?.cursor?.step ?? -1, v?.meta ? 1 : 0, busy, screen, paused, presenter, swapped ? 1 : 0, sink.list().length,
+      timer ? Math.floor(timer.elapsed(t) / 1000) : 0, timer?.paused, Math.floor(sessionDeps.wall() / 60000)].join('|')
+    if (!force && key === viewKey) return
+    viewKey = key
+    viewVersion++
+    for (const cb of [...viewSubs]) cb()
+  }
   const report = () => {
     if (started && !exited && visit?.cursor && slide === visit.index) cb.onSlideChange?.(visit.index, visit.cursor.step)
   }
@@ -615,7 +647,38 @@ export async function createSession(start: ShowStart): Promise<SessionController
     }
     const w = visit
     stage.frame(w && slide === w.index ? w.cursor : undefined, clock.now())
+    // Presenter View copies the frame now, before the browser presents (and may clear) a WebGL canvas.
+    afterFrame()
     updateA11y()
+  }
+
+  function afterFrame(): void {
+    for (const f of frameSubs) {
+      try { f() } catch (e) {
+        frameSubs.delete(f)
+        sink.add({ code: 'presenter-paint', message: `Presenter View stopped mirroring the audience (${e instanceof Error ? e.message : String(e)})` })
+      }
+    }
+  }
+
+  /** Single-screen (spec 5.1): Alt+F5 or the toggle swaps the surface between the audience and Presenter View. */
+  function toggleView(): void {
+    if (exited || !started || presenter === 'window' || !surface || !win) return
+    presenter = 'swap'
+    if (swapped) {
+      swapped.dispose()
+      swapped = undefined
+      surface.root.hidden = false
+      host.focus()
+    } else {
+      const box = owner.createElement('div')
+      box.setAttribute('data-officeview-presenter-swap', '')
+      host.append(box)
+      const mounted = mountPresenterView(box, { session, host: 'swap', doc: owner })
+      swapped = { dispose: () => { mounted.dispose(); box.remove() } }
+      surface.root.hidden = true
+    }
+    syncPresenter(true)
   }
 
   /** Audience input, in the spec 4.3 precedence: Esc, then kiosk, the number buffer, black/white resume, the table. */
@@ -671,6 +734,57 @@ export async function createSession(start: ShowStart): Promise<SessionController
     tick,
     activate,
     ended,
+    get presenterSource() { return source },
+  }
+
+  /** The audience frame on screen: the compositor's canvas, or the terminal output when the stage is hidden. */
+  const audienceFrame = (): HTMLCanvasElement | undefined => {
+    const box = surface?.root.querySelector<HTMLElement>('[data-officeview-show-stage]')
+    const shown = box && !box.hidden ? [...box.querySelectorAll<HTMLCanvasElement>('canvas[data-slideshow-backend]')].pop() : undefined
+    return shown ?? surface?.canvas
+  }
+  let policy = { copy: true, print: true }
+  let presenterKey: (e: KeyboardEvent) => void = () => {}
+  let warnedImages = false
+  let model: { index: ShowIndex; store: NonNullable<typeof store> } | undefined
+  const source: PresenterSource = {
+    subscribe(cb) {
+      viewSubs.add(cb)
+      return () => { viewSubs.delete(cb) }
+    },
+    get version() { return viewVersion },
+    deck: doc,
+    notes: () => visit?.meta?.notes ?? NO_NOTES,
+    diagnostics: () => sink.list(),
+    sink,
+    get timer() { return timer ??= createElapsedTimer(sessionDeps.now(win)) },
+    now: () => sessionDeps.now(win),
+    wall: () => sessionDeps.wall(),
+    slideTime: () => Math.max(0, slideTime()),
+    get model() { return store ? (model ??= { index, store }) : undefined },
+    get previewOptions() { return { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink } },
+    get workspace() { return workspace! },
+    ...(start.watermark ? { watermark: start.watermark } : {}),
+    get protection() { return policy },
+    audienceFrame,
+    onFrame(cb) {
+      frameSubs.add(cb)
+      return () => { frameSubs.delete(cb) }
+    },
+    previewOf(i, cursor, timeline) {
+      const p = stage?.previewOf?.(i, cursor, timeline)
+      if (p) return p
+      // Best effort: a slide the stage does not hold paints its static state without decoded pictures.
+      if (!warnedImages && doc.images?.length) {
+        warnedImages = true
+        sink.add({ code: 'presenter-thumbnail-approximate', message: 'Presenter View paints slides away from the current one without their pictures; the audience is unaffected' })
+      }
+      return { slide: doc.slides[i]!, state: new Map(), images: [], resolveFont: (f: string) => f, builds: [] }
+    },
+    key: (e) => presenterKey(e),
+    toggleView,
+    get placement() { return placement },
+    touch: () => syncPresenter(true),
   }
 
   // ---------------------------------------------------------------------
@@ -680,7 +794,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let surfaceKind: 'fullscreen' | 'in-window' = 'in-window'
   try {
     clock = sessionDeps.clock(win)
-    const policy = protection(host)
+    policy = protection(host)
     surface = createAudienceSurface(host, admitted.backing, (e) => dispatch({ kind: 'click', x: e.clientX, y: e.clientY }))
     // allowPrint=false keeps every slideshow surface out of print (spec 6.3 protection policy).
     if (!policy.print) surface.root.setAttribute('data-ov-print', 'false')
@@ -719,7 +833,17 @@ export async function createSession(start: ShowStart): Promise<SessionController
         dispatch({ kind: screen })
       }
     }
+    /** Alt+F5 (spec 5.1): the single-screen swap, from any focus; Ctrl or Cmd with it stays the browser's. */
+    const swapKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F5' || !e.altKey || e.ctrlKey || e.metaKey) return false
+      e.preventDefault()
+      toggleView()
+      return true
+    }
     host.addEventListener('keydown', (e) => {
+      // The swapped-in Presenter View keeps the popup's rule (its buttons keep only Enter and Space).
+      if ((e.target as Element | null)?.closest?.('[data-officeview-presenter-view]')) { presenterKey(e); return }
+      if (swapKey(e)) return
       // A focused control (the full-screen notice's buttons, the accessibility buttons) keeps its own keys; Esc still exits through the start.
       if (e.target !== host && (e.target as Element | null)?.closest?.('button, input, textarea, select')) return
       keyInput(e)
@@ -728,12 +852,15 @@ export async function createSession(start: ShowStart): Promise<SessionController
      * Keys in the presenter window (spec 4.3, 5.2): Esc always exits; a text control, an editable region
      * or the scrolling speaker notes keep every other key; a focused button keeps Enter and Space.
      */
-    const presenterKey = (e: KeyboardEvent) => {
+    presenterKey = (e: KeyboardEvent) => {
+      if (swapKey(e)) return
       const t = e.target as Element | null
       if (e.key !== 'Escape' && (t?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-officeview-presenter-notes]') || ((e.key === 'Enter' || e.key === ' ') && t?.closest?.('button')))) return
       keyInput(e)
     }
     const gesture = (e: Event) => {
+      // The swapped-in Presenter View scrolls its own notes and grid: wheel and swipe there are not show input.
+      if ((e.target as Element | null)?.closest?.('[data-officeview-presenter-view]')) return
       const input = gestureToInput(e as WheelEvent | TouchEvent, gestures)
       if (e.type === 'wheel' && e.cancelable) e.preventDefault()
       if (input) dispatch(input)
@@ -763,6 +890,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     // Every start-time diagnostic reaches the host before onStart.
     await enter(firstShown)
     if (!start.isCurrent()) throw new SlideShowError('cancelled')
+    // Presenter View's elapsed timer counts from the first slide (spec 5.2), on the injected monotonic clock.
+    timer = createElapsedTimer(sessionDeps.now(win))
     // Spec 5.1: adopt the popup the gesture opened; blocked (null) or already closed is single-screen.
     const popup = start.popup
     if (popup === null || popup?.closed) {
@@ -770,22 +899,32 @@ export async function createSession(start: ShowStart): Promise<SessionController
     } else if (popup) {
       // Best effort (owner ruling): a popup that cannot be adopted is closed and the show runs single-screen.
       try {
-        const pw = presenterWindow = adoptPresenterWindow(popup, win ?? popup.opener, sink)
+        const opener = win ?? popup.opener
+        const pw = presenterWindow = adoptPresenterWindow(popup, opener, sink)
         const theme = host.parentElement?.getAttribute('data-ov-theme')
         if (theme) pw.root.setAttribute('data-ov-theme', theme)
-        controls = mountPresenterControls(pw, { next: () => session.next(), previous: () => session.previous(), exit, key: presenterKey })
+        // allowPrint=false keeps the presenter window out of print too (spec 6.3).
+        if (!policy.print) pw.root.setAttribute('data-ov-print', 'false')
+        placement = createPresenterPlacement({
+          popup, opener, host, retryFullscreen: start.retryFullscreen, fullscreen: start.fullscreen,
+          prepared: preparedPlacement.get(owner), sink, changed: () => syncPresenter(true),
+        })
         presenter = 'window'
+        view = mountPresenterView(pw.root, { session, host: 'window', doc: pw.doc })
         // Closing the presenter window never ends the show: single-screen from here.
         pw.onClosed(() => {
-          controls?.dispose()
-          controls = undefined
+          view?.dispose()
+          view = undefined
+          placement?.dispose()
+          placement = undefined
           presenterWindow = undefined
-          if (!exited) presenter = 'swap'
+          if (!exited) { presenter = 'swap'; syncPresenter(true) }
         })
-        syncPresenter()
       } catch (e) {
-        controls?.dispose()
-        controls = undefined
+        view?.dispose()
+        view = undefined
+        placement?.dispose()
+        placement = undefined
         presenterWindow = undefined
         popup.close()
         presenter = 'swap'
@@ -794,6 +933,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     }
     signal.addEventListener('abort', exit, on)
     started = true
+    // Presenter View was asked for but there is one screen (blocked, or the window could not be set up): it starts swapped in.
+    if (presenter === 'swap') toggleView()
     kioskTimer = createKioskTimer(index.settings, clock.now(), sink)
     stage.frame(visit?.cursor, clock.now())
     stopFrames = sessionDeps.frames(win, tick)
