@@ -252,6 +252,27 @@ describe('click targets', () => {
 })
 
 describe('hyperlinks', () => {
+  it('PR #18 review 5: links follow the AlternateContent branch the drawing parser renders (an unsupported Choice falls back)', async () => {
+    const { default: JSZip } = await import('jszip')
+    // A 96 px square: the Choice (unknown Requires) holds shape 60 linked to /choice; the Fallback holds shape 61 linked to /fallback.
+    const sp = (id: number, href: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Alt ${id}"><a:hlinkClick r:id="${href}"/></p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="336699"/></a:solidFill></p:spPr></p:sp>`
+    const alt = `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:v="urn:unknown-vendor" Requires="v">${sp(60, 'rIdAltC')}</mc:Choice><mc:Fallback>${sp(61, 'rIdAltF')}</mc:Fallback></mc:AlternateContent>`
+    const rel = (id: string, href: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${href}" TargetMode="External"/>`
+    const zip = await JSZip.loadAsync(await buildPptxDeck({ slides: [{ shapes: [] }, { shapes: [] }] }))
+    const slide = 'ppt/slides/slide1.xml', rels = 'ppt/slides/_rels/slide1.xml.rels'
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace('</p:spTree>', `${alt}</p:spTree>`))
+    zip.file(rels, (await zip.file(rels)!.async('string')).replace('</Relationships>', `${rel('rIdAltC', 'https://example.com/choice')}${rel('rIdAltF', 'https://example.com/fallback')}</Relationships>`))
+    const doc = await parsePptx(await OfficePackage.load(await zip.generateAsync({ type: 'uint8array' })))
+    // The drawing parser rendered the Fallback.
+    expect(doc.slides[0].shapes.map(sh => sh.source?.id)).toEqual(['61'])
+    const r = await show(doc)
+    await r.click(48, 48)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/fallback'])
+    expect(r.s.slideIndex).toBe(0)
+    expect(r.buttons().map(b => b.textContent)).toEqual(['Link: Alt 61'])
+    r.s.exit()
+  })
+
   it('PR #18 review 3: each linked run in a text box activates its own link; unlinked text advances', async () => {
     // One left-aligned paragraph, two 40 pt runs: "AAAA" links to /a, "BBBB" to /b; the box is far wider than the text.
     const doc = await deck({
