@@ -57,8 +57,6 @@ export const DIAGNOSTIC_CODES: Readonly<Record<string, DiagnosticClass>> = Objec
   // Behaviours
   'preset-approximate': 'approximate', 'behaviour-unsupported': 'approximate', 'behaviour-invalid-formula': 'refused',
   'anim-effect-unknown-filter': 'approximate', 'anim-clr-unreadable': 'approximate',
-  // Only media the S2-7 player does not follow: an effect sound (p:audio on a p:sndTgt) is a silent timed no-op.
-  'media-stand-in': 'stand-in',
   // Rendering, memory and GPU
   'ladder-reduced': 'resource', 'ladder-flattened': 'resource', 'ladder-terminal': 'resource', 'layer-limit': 'resource',
   'reraster-limit': 'resource', 'layer-workspace': 'resource', 'layer-scale': 'resource', 'image-workspace': 'resource',

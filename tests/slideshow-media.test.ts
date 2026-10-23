@@ -77,6 +77,8 @@ interface Rig {
   canPlay: { value: CanPlayTypeResult }
   openWith: { result: (r: MediaRecord) => MediaLeaseResult }
   now: { t: number }
+  /** `stopTransitionSound` calls (S2-10): true = only a looping one. */
+  transitionStops: boolean[]
 }
 
 interface FakeLease extends MediaLease { released: boolean; leaves: number; rec: MediaRecord }
@@ -103,9 +105,11 @@ function rig(doc: Document = document): Rig {
   const canPlay = { value: 'maybe' as CanPlayTypeResult }
   const openWith = { result: (r: MediaRecord): MediaLeaseResult => { const l = fakeLease(r); leases.push(l); return l } }
   const now = { t: 0 }
+  const transitionStops: boolean[] = []
   const player = createMediaPlayer({
     root,
     sink,
+    stopTransitionSound: (onlyLooping) => { transitionStops.push(onlyLooping); return false },
     open: async (r) => { opens.push(r); return openWith.result(r) },
     create: (kind) => {
       const el = doc.createElement(kind) as Fake
@@ -117,7 +121,7 @@ function rig(doc: Document = document): Rig {
       return el
     },
   })
-  return { player, root, sink, elements, leases, opens, playWith, canPlay, openWith, now }
+  return { player, root, sink, elements, leases, opens, playWith, canPlay, openWith, now, transitionStops }
 }
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
@@ -551,5 +555,160 @@ describe('media supporting rules (S2-7)', () => {
     const records = readMedia(rels, types, handle.pkg, 0, createDiagnosticSink(), slideXml)
     expect(records.map((m) => [m.spid, m.contentType])).toEqual(expect.arrayContaining([['2', 'video/mp4'], ['3', 'audio/wav']]))
     expect(records.every((m) => m.spid !== undefined)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Task S2-10: effect sounds (p:audio on a p:sndTgt, in an effect's subTnLst)
+// ---------------------------------------------------------------------------
+
+/** An effect sound as PowerPoint writes it: `p:audio` on a `p:sndTgt`, begun with its effect (`evt="begin"` on the effect's node). */
+function effectSound(id: number, snd: string, effectId: number, over: CtnOver = {}): AudioBehaviour {
+  return { kind: 'audio', ctn: ctn(id, { start: [{ delayMs: 0, evt: 'begin', tn: effectId }], ...over }), target: { snd }, attrNames: [], additive: 'base', accumulate: 'none' } as AudioBehaviour
+}
+/** The fly-in's visible set on shape 4 (the effect the sound belongs to). */
+const flyIn = (id: number): BehaviourNode => ({
+  kind: 'set', ctn: ctn(id, { durMs: 1, fill: 'hold', start: [at(0)] }), target: { spid: '4' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: 'visible',
+})
+/** The sound's media record: a relationship of the slide, on no shape. */
+const soundRec = (rId = 'rId2', contentType = 'audio/wav'): MediaRecord => ({ rId, partPath: `ppt/media/${rId}.wav`, contentType, declaredBytes: 10 })
+
+describe('effect sounds (S2-10)', () => {
+  it('an effect with a sndTgt plays its sound at the effect\'s begin', async () => {
+    const r = rig()
+    // group(3) is par 3 (the click) > par 4 (the effect); the sound begins with node 4 (tdf44223's `evt="begin" tn=5`).
+    const timing = tree(mainSeq([group(3, [flyIn(10), effectSound(-1, 'rId2', 4), successor(11, -1)])]))
+    const d = drive(r, slideOf(timing, [soundRec()]))
+    d.sync(0)
+    // Nothing plays before the effect's click.
+    expect(r.elements).toHaveLength(0)
+    expect(d.ctl.wants).toBe(true)
+    d.next(100)
+    await flush()
+    expect(r.opens.map((m) => m.rId)).toEqual(['rId2'])
+    expect(r.elements).toHaveLength(1)
+    const el = r.elements[0]
+    expect(el.tagName).toBe('AUDIO')
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.src).toBe('blob:ppt/media/rId2.wav')
+    expect(el.hidden).toBe(true)
+    expect(el.ownerDocument).toBe(r.root.ownerDocument)
+    expect(d.state(-1, 200)).toBe('active')
+    // Its real end releases whatever waits on it.
+    r.now.t = 1500
+    el.dispatchEvent(new Event('ended'))
+    expect(d.ends).toEqual([[-1, false, 1500]])
+    expect(d.state(11, 1600)).toBe('active')
+    expect(codes(r.sink)).toEqual([])
+    // Everything but numSld media stops on slide change: the element lets go of its URL, then the lease goes.
+    d.ctl.leave()
+    expect(el.getAttribute('src')).toBeNull()
+    expect(r.leases[0].released).toBe(true)
+  })
+
+  it('a refused effect sound is diagnosed, offers no Click to play, and the show continues', async () => {
+    const r = rig()
+    r.playWith.result = () => Promise.reject(new DOMException('no', 'NotAllowedError'))
+    const timing = tree(mainSeq([group(3, [flyIn(10), effectSound(-1, 'rId2', 4), successor(11, -1)])]))
+    const d = drive(r, slideOf(timing, [soundRec()]))
+    d.next(0)
+    r.now.t = 30
+    await flush()
+    expect(codes(r.sink)).toEqual(['media-autoplay'])
+    expect(r.sink.list()[0].effect).toBe('behaviour -1')
+    // There is no poster to click: the transition-sound convention.
+    expect(r.root.querySelector('[data-officeview-show-play]')).toBeNull()
+    expect(d.ends).toEqual([[-1, true, 30]])
+    expect(d.state(11, 30)).toBe('active')
+    // An undecodable sound reads nothing.
+    const r2 = rig()
+    r2.canPlay.value = ''
+    const d2 = drive(r2, slideOf(timing, [soundRec('rId2', 'audio/x-ms-wma')]))
+    d2.next(0)
+    await flush()
+    expect(r2.opens).toEqual([])
+    expect(codes(r2.sink)).toEqual(['media-codec'])
+    expect(d2.ends).toEqual([[-1, true, 0]])
+  })
+
+  it('a looping effect sound loops until a stop-previous-sound command', async () => {
+    const r = rig()
+    // "Loop until next sound" is repeatCount="indefinite"; "Stop previous sound" is p:cmd type="evt" cmd="onstopaudio".
+    const stopSound: CmdBehaviour = { ...cmd(30, '0', 'onstopaudio', 'evt'), target: { sld: true } }
+    const timing = tree(mainSeq([
+      group(3, [flyIn(10), effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' })]),
+      group(5, [flyIn(20), stopSound]),
+    ]))
+    const d = drive(r, slideOf(timing, [soundRec()]))
+    d.next(0)
+    await flush()
+    const el = r.elements[0]
+    expect(el.loop).toBe(true)
+    expect(el.play).toHaveBeenCalledTimes(1)
+    d.sync(5000)
+    expect(el.pause).not.toHaveBeenCalled()
+    d.next(6000)
+    expect(el.pause).toHaveBeenCalled()
+    expect(d.ends).toEqual([[-1, false, 6000]])
+    // The effect sound stopped only a looping transition sound; "Stop previous sound" stops any.
+    expect(r.transitionStops).toEqual([true, false])
+    expect(codes(r.sink)).toEqual([])
+  })
+
+  it('the next effect sound stops a looping one ("loop until next sound")', async () => {
+    const r = rig()
+    const timing = tree(mainSeq([
+      group(3, [flyIn(10), effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' })]),
+      group(5, [flyIn(20), effectSound(-2, 'rId3', 6)]),
+    ]))
+    const d = drive(r, slideOf(timing, [soundRec('rId2'), soundRec('rId3')]))
+    d.next(0)
+    await flush()
+    const looping = r.elements[0]
+    d.next(4000)
+    await flush()
+    expect(looping.pause).toHaveBeenCalled()
+    expect(d.ends).toEqual([[-1, false, 4000]])
+    expect(r.elements).toHaveLength(2)
+    expect(r.elements[1].play).toHaveBeenCalledTimes(1)
+    expect(r.elements[1].loop).toBe(false)
+  })
+
+  it('an effect sound stops a looping transition sound only; Stop previous sound stops any', async () => {
+    const r = rig()
+    const tr = (rId: string, loop: boolean) => ({ element: 'fade', ns: 'p' as const, attrs: {}, durationMs: 0, advClick: true, sound: { start: { rId, loop } } })
+    const slides = [slideOf(undefined, [rec('a', 'audio/wav', 'rIdS1')], 0, tr('rIdS1', false)), slideOf(undefined, [rec('b', 'audio/wav', 'rIdS2')], 1, tr('rIdS2', true))]
+    const sounds = createTransitionSound({ root: r.root, sink: r.sink, slide: (i) => slides[i], open: async (m) => r.openWith.result(m), create: (k) => {
+      const el = r.root.ownerDocument.createElement(k) as Fake
+      el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+      r.elements.push(el)
+      return el
+    } })
+    sounds.start(0)
+    await flush()
+    // A sound that does not loop is left alone by the next effect sound...
+    expect(sounds.release(true)).toBe(false)
+    expect(r.leases[0].released).toBe(false)
+    // ...and stopped by "Stop previous sound".
+    expect(sounds.release(false)).toBe(true)
+    expect(r.leases[0].released).toBe(true)
+    sounds.start(1)
+    await flush()
+    expect(sounds.release(true)).toBe(true)
+    expect(r.elements[1].pause).toHaveBeenCalled()
+    expect(r.leases[1].released).toBe(true)
+  })
+
+  it('a built-in sound or a sound with no part is diagnosed, never silent', async () => {
+    const r = rig()
+    const timing = tree(mainSeq([group(3, [flyIn(10), effectSound(-1, 'builtIn:wind.wav', 4), successor(11, -1)])]))
+    const d = drive(r, slideOf(timing, []))
+    d.next(0)
+    await flush()
+    expect(r.elements).toHaveLength(0)
+    expect(codes(r.sink)).toEqual(['media-missing'])
+    expect(r.sink.list()[0].message).toContain('wind.wav')
+    expect(d.ends).toEqual([[-1, true, 0]])
+    expect(d.state(11, 0)).toBe('active')
   })
 })

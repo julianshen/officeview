@@ -321,10 +321,8 @@ function evalBehaviour(
       return reads
     }
     case 'audio': case 'video': case 'cmd':
-      // Media has no render edits. The session's media player (S2-7) follows shape media and commands on the
-      // timeline, plays them and diagnoses any refusal itself. Media on no shape (an effect sound's `p:sndTgt`)
-      // is not followed by the player, so it stays a silent timed no-op, diagnosed here.
-      if (node.kind !== 'cmd' && !('spid' in node.target)) unsupported(node, node.kind, sink, 'media-stand-in')
+      // Media has no render edits. The session's media player follows shape media, effect sounds (`p:sndTgt`,
+      // S2-10) and commands on the timeline, plays them and diagnoses any refusal itself.
       return fail()
     default:
       unsupported(node, (node as BehaviourNode).kind, sink)
@@ -551,8 +549,7 @@ function unsupported(node: BehaviourNode, name: string, sink: DiagnosticSink, co
   if (!set.has(name)) {
     set.add(name)
     const label = code === 'behaviour-unsupported' ? `Attr ${name} has no render mapping; dropped`
-      : code === 'media-stand-in' ? `Media ${name} on no shape (an effect sound) is not played: a silent timed no-op`
-        : `Effect filter ${JSON.stringify(name)} is not in the mask catalogue; rendering as a fade`
+      : `Effect filter ${JSON.stringify(name)} is not in the mask catalogue; rendering as a fade`
     sink.add({ code, effect: `behaviour ${node.ctn.id}`, message: label })
   }
 }

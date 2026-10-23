@@ -123,15 +123,17 @@ print. Targets 0.5.0 (the version in package.json).
   stays full screen on one screen. If the window is blocked, Presenter View
   runs inside the viewer and Alt+F5 switches it with the audience picture
   (`session.presenter` is `'window'`, `'swap'` or `'none'`). Audio, video,
-  PowerPoint's media commands, sound across slides and transition sounds now
-  play where the browser decodes the format; an undecodable clip keeps its
+  PowerPoint's media commands, sound across slides, transition sounds and
+  sounds attached to animations (loop until next sound, stop previous sound)
+  now play where the browser decodes the format; an undecodable clip keeps its
   poster and a refused autoplay offers "Click to play". Text builds by word
-  and by letter animate each word or letter. Embedding: a sandboxed iframe
-  needs `allow-popups` for the presenter window and
-  `allow="window-management"` for two-screen placement, and a host CSP must
-  allow officeview's stylesheet URL (the presenter window inherits it). The
-  eager bundle stays under its ceiling (35,937 B). Limits: sounds attached to
-  animations are not played (diagnosed), video plays in an overlay that shape
+  and by letter animate each word or letter. Embedding: an iframe needs
+  `allow="window-management"` for two-screen placement, and a sandboxed one
+  needs `allow-popups` for the presenter window (the README's example no longer
+  combines `allow-scripts` with `allow-same-origin`, which lets a same-origin
+  frame remove its own sandbox), and a host CSP must allow officeview's
+  stylesheet URL (the presenter window inherits it). The eager bundle stays
+  under its ceiling (35,937 B). Limits: video plays in an overlay that shape
   effects do not move, and some Presenter View thumbnails show no pictures.
 
 ### Changed

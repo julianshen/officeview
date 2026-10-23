@@ -301,7 +301,7 @@ Controller rulings recorded in the progress ledger during Stage 2.
 - **An indefinite `p:audio` started by `cmd playFrom` never begins on the timeline** (S2-7 I1), accepted for Stage 2. PowerPoint chains successors on the command's own `dur`, which the scheduler ends on time, so decks PowerPoint writes play correctly; only an `onEnd` successor of such a media node never fires. Listed under Known limits.
 - **Text builds by word and letter landed dormant, then wired** (S2-8): the first round was not wired into the stage, and the controller held the merge until the fix round wired it in after S2-7 (CJK word split, rotated boxes, exit body timing, RTL reading order).
 - **Diagnostic classes and the presenter panel** (S2-9). The Stage 2 codes keep the classes the `main` merge provisioned (`DIAGNOSTIC_CODES`); they fit the class definitions as written. The presenter panel's groups are derived from the class: `refused` → Refused, `approximate` and `stand-in` → Approximate, `info` → Other notes. Only a `resource` code (platform or memory pressure) is placed by presentation, in `PANEL_KIND` (`src/slideshow/presenter/diagnostics.tsx`): Refused when the thing did not happen (no popup, no styles, a clip not decoded), Approximate when it happened reduced (a smaller presenter surface, a text build painted whole), Pending when a click or retry can still start it (`media-autoplay`, `preview-prime`). A test checks that every other entry agrees with its class. The unused `presenter-view-unavailable` code was dropped.
-- **Effect sounds stay a stand-in** (S2-9). The S2-7 player follows shape media and commands only. A `p:audio` on a `p:sndTgt` (a sound attached to an animation, for example tdf44223's fly-in "wind.wav") is a silent timed no-op, diagnosed `media-stand-in`, with its own catalogue row `sound:effect`. Implementing it needs decisions S2-7 did not make (retry without a poster, the one-audio-output rule, pressure order); it is a follow-up for the controller.
+- **Effect sounds play with their animation** (S2-10, closing the gap S2-9 found). A `p:audio` on a `p:sndTgt` (a sound attached to an animation, usually in the effect's `subTnLst`, begun with the effect; for example tdf44223's fly-in "wind.wav") is followed by the media player like shape audio. The decisions S2-9 left open: **no "Click to play"** after a refusal, because there is no poster (the transition-sound convention: diagnosed, the effect runs silent, and the timeline gets the same synthetic end); **one audio output**, because the element is a hidden `<audio>` in the audience document, created by the same player; **pressure order** unchanged, because the lease goes through the player's `open` (cross-slide media, then the looping transition sound, then one retry). "Loop until next sound" is `repeatCount="indefinite"`, and it stops when the next effect sound starts. "Stop previous sound" (`p:cmd type="evt" cmd="onstopaudio"`) stops every audio of the slide and the transition sound. `p:stSnd`/`p:endSnd` are transition elements only (S2-7); timing has no such element. A built-in sound named without a part is `media-missing`. The `media-stand-in` code is retired; `sound:effect` is file / exact.
 
 ### Project rules (adopted in Stage 1)
 
@@ -2631,7 +2631,7 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | build:word | Text build by word (p:iterate type="wd") | mask | approximate | 2 | no | per-word layers clipped to word boxes | 0.08 | 0.3 |
 | build:letter | Text build by letter (p:iterate type="lt") | mask | approximate | 2 | no | per-letter layers clipped to letter boxes | 0.08 | 0.3 |
 | sound:transition | Transition / cross-slide sound | file | exact | 2 | no | — | 0.02 | 0.1 |
-| sound:effect | Effect sound (p:audio on a p:sndTgt) | stand-in | approximate | 2 | no | silent timed no-op | 0.08 | 0.3 |
+| sound:effect | Effect sound (p:audio on a p:sndTgt) | file | exact | 2 | no | — | 0.02 | 0.1 |
 | build:chart | Chart build (whole chart) | transform | approximate | 1 | no | — | 0.08 | 0.3 |
 | build:smartart | SmartArt build (fallback drawing) | transform | approximate | 1 | no | — | 0.08 | 0.3 |
 | build:fallback | Fallback picture / card animation | transform | approximate | 1 | no | — | 0.08 | 0.3 |
@@ -2765,7 +2765,6 @@ The README's "Slideshow" section documents these for hosts, including the Stage 
 - **Slideshow (Stage 2).** Known limits of Presenter View and media as landed:
   - **An indefinite `p:audio` started by `cmd playFrom` never begins on the timeline** (S2-7 I1, accepted). PowerPoint writes a main-sequence `p:cmd playFrom` plus a root-level `p:audio` or `p:video` with `delay="indefinite"`. The player plays the clip, but the scheduler never begins the media node, so its real end is ignored and an `onEnd` successor of that node never fires. Successors that chain on the command's own `dur` (what PowerPoint writes) run on time.
   - **Video is a DOM overlay.** A video plays in a positioned `<video>` above every slide layer at its shape's box. Effects on the shape (motion, scale, fades) move only the poster underneath, diagnosed `media-overlay`; full-screen video plays at the shape's box (`media-fullscreen`).
-  - **Effect sounds are not played.** A sound attached to an animation (`p:audio` on a `p:sndTgt`, usually in the effect's `subTnLst`) is a silent timed no-op, diagnosed `media-stand-in` (catalogue `sound:effect`). Transition sounds and shape media do play.
   - **Thumbnails are best effort for pictures** (S2-5). Only the shown slide and the stage's prepared neighbours paint with decoded images in Presenter View's Next pane and the slide grid; other grid thumbnails show the slide without its pictures, diagnosed once as `presenter-thumbnail-approximate`. Fonts fall back to the family name there.
   - **A text-build preview may fall back to the next slide** (S2-5, S2-8). The preview timeline has no word or letter fan, so for a slide with a build by word or letter, Next may show the slide advance, or the build at paragraph granularity.
   - **Word and letter boxes clip** (S2-8). Each item is the shape's text clipped to its box, so italic overhang and text shadow are cut at box edges. The body follows the first item under an entrance and the last under an exit; `repeatCount` repeats the whole staggered span; `charRg`'s inclusive end is a working choice (D4).
@@ -2904,7 +2903,6 @@ motion-direction convention (S1-11; partly Q-wipe-direction).
 
 Stage 2 follow-ups (known, not blocking the Stage 2 PR):
 
-- **Effect sounds** (`p:audio` on a `p:sndTgt`) are a diagnosed stand-in; playing them needs a controller ruling and a task (retry without a poster, one audio output, pressure order). Corpus example: tdf44223 slide 1.
 - **Command-started media never begins on the timeline** (S2-7 I1): a play command beginning its media node would need a new scheduler input.
 - **Per-frame cost.** A slide with media evaluates `timeline.stateAt` once more per frame (S2-7), on top of S1-20's `updateA11y` double compute; text-build layers run `boxesFor` per item at paint time, bounded but uncached (S2-8).
 - **Media activation heuristics** (S2-7): a media node whose whole activation falls between two frames with `fill="remove"` is missed; a node restarted while active is not a new activation; a synthetic end's begin time is estimated from linear progress.
@@ -2925,14 +2923,16 @@ What Stage 2 delivers, and where its evidence is. Builder decks are
 | Presenter View UI (S2-5) | Current, Next, notes (A+/A−), elapsed timer and clock, Previous / Next / End / Black / See all slides / Go to slide, Swap displays, the effect-notes panel; the single-screen swap (Alt+F5) | `tests/slideshow-presenter-view.test.tsx`; browser "S2-5 presenter view" |
 | Media reader and leases (S2-6) | bounded uncached reads of up to 512 MiB per part into a Blob URL, charged chunk by chunk, refused mid-inflate | `tests/slideshow-media-read.test.ts` |
 | Media playback (S2-7) | shape audio and video on the timeline, `p:cmd` call verbs, cross-slide `numSld`, transition sounds (`p:stSnd`, loop, `p:endSnd`), "Click to play" after a refusal, a synthetic end on failure | `tests/slideshow-media.test.ts`; `tests/browser/slideshow-media.spec.ts` |
+| Effect sounds (S2-10) | `p:audio` on a `p:sndTgt` plays when its effect begins; loop until the next sound; "Stop previous sound" (`onstopaudio`); a refusal is diagnosed with no "Click to play" | `tests/slideshow-media.test.ts` "effect sounds (S2-10)"; corpus tdf44223 slide 1 (`tests/slideshow-corpus.test.ts`) |
 | Text builds by word and letter (S2-8) | `p:iterate type="wd"`/`"lt"` as per-item layers clipped to word or letter boxes, staggered by `tmAbs`/`tmPct` | `tests/slideshow-text-builds.test.ts`, `tests/slideshow-text-builds-live.test.tsx` |
 
 Catalogue rows flipped by S2-9 (no `pending-stage-2` row remains; `LANDED_STAGE` = 2):
 `behaviour:p:audio` and `sound:transition` file / exact; `behaviour:p:video`
 (overlay) and `behaviour:p:cmd` (call verbs) file / approximate; `build:word` and
 `build:letter` (the `p:iterate` wd / lt rows) mask / approximate; `media:codec`
-an approximate stand-in; and a new `sound:effect` row, an approximate stand-in
-(silent timed no-op). Every row stays `verified: no`.
+an approximate stand-in; and a new `sound:effect` row, which S2-10 flipped from an
+approximate stand-in (silent timed no-op) to file / exact when effect sounds
+landed. Every row stays `verified: no`.
 
 ### Stage 2 diagnostic codes
 
@@ -2945,11 +2945,10 @@ checks this table against both.
 | `media-autoplay` | resource | Pending | the browser refused `play()` (no gesture, or a resume after a hidden tab); "Click to play" is offered |
 | `media-codec` | resource | Refused | `canPlayType` refused the part's content type, or the element reported an undecodable source; the poster stays |
 | `media-error` | resource | Refused | the media element raised `error` while playing |
-| `media-missing` | refused | Refused | a media node or transition sound has no media part |
+| `media-missing` | refused | Refused | a media node, effect sound or transition sound has no media part (including a built-in sound named without one) |
 | `media-command` | refused | Refused | a `p:cmd` that is not a supported `call` verb, or that targets no media node |
 | `media-overlay` | approximate | Approximate | a video plays in its DOM overlay; effects on its shape do not move the picture |
 | `media-fullscreen` | approximate | Approximate | a full-screen video plays at its shape's box |
-| `media-stand-in` | stand-in | Approximate | media on no shape (an effect sound's `p:sndTgt`): a silent timed no-op |
 | `text-build-approximate` | approximate | Approximate | every word or letter build: each box is its own layer (the closest look-alike) |
 | `text-build-unsplit` | approximate | Approximate | no word or letter boxes, or no finite duration to stagger: the effect plays on the whole target (or, for `tmPct`, the items start together) |
 | `text-build-coarsened` | approximate | Approximate | more items than the layer budget allows: the text builds by paragraph instead |
@@ -3256,6 +3255,7 @@ ECMA-376 / [MS-PPTX] in the implementer sandbox).
 | `p14:dur` | wins over `spd` | corpus: tdf115394 (250, 4250), tdf142915 (10, 0), airplane (1250), tdf156808 (800), tdf149588 (1500) |
 | `advClick`, `advTm` | boolean (default true); ms, absent = no auto-advance | corpus: tdf142915 `advClick="0" advTm="1000"` |
 | Transition sound | `p:stSnd@loop` + `p:snd@r:embed`; `p:endSnd` | corpus: tdf44223 slide 2 (`applause.wav`, rId2 in the p14 Choice) |
+| Effect sound | `p:audio/p:cMediaNode` on `p:sndTgt@r:embed` in the effect's `p:subTnLst`, begun `evt="begin"` on the effect node; its `cTn` has no `id` (the reader gives it a synthetic one) | corpus: tdf44223 slide 1 (`wind.wav`, rId2, endCond `onStopAudio` on `p:sldTgt`) |
 | Requires selection | `mc:Choice@Requires` prefixes resolved to URIs at the Choice; p, p14, p15, p159 supported; first supported Choice, else Fallback | corpus: airplane (p15), tdf156808 (p14), tdf149588 (p159), tdf115394 slide 4 (prefix declared on the Choice); synthetic: aliased prefix, fake-URI `p14`, undeclared prefix |
 | Effect namespace | by local name in the catalogue (the shared XML layer strips prefixes; p/p14/p15/p159 transition names are disjoint) | synthetic |
 | `p:transition/p:extLst` | an `p:ext` carrying a catalogued transition element replaces the base effect; any other URI is diagnosed `transition-extension` | synthetic only. No corpus file places a transition in `p:extLst`; the extension GUIDs one review quoted are not taken as fact. **Unverified.** |
@@ -3333,7 +3333,7 @@ The slideshow job now fetches the corpus. `tests/browser/slideshow-corpus.spec.t
 
 Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-through of each deck (every step, every trigger), classified from the timing tree and the diagnostics of that run. **native**: drawn as the file says. **closest**: the closest equivalent plays, with a diagnostic (a 2-D look-alike, media the run could not play, a dropped attribute, a whole-graphic build). **refused**: nothing of it plays. Totals: 19 native, 11 closest, 0 refused.
 
-Regenerated by S2-9 after the media rows landed. The run is jsdom, which decodes no media (`canPlayType` is `''`), so every shape clip and transition sound the corpus plays is reported here as `media-codec`, closest, diagnosed: that is the jsdom outcome, not a browser's. Real playback is browser evidence: `tests/browser/slideshow-media.spec.ts` plays narration.pptx's m4a in Chromium (`media:playing:6`). tdf44223's fly-in sound is an effect sound on a `p:sndTgt`, which the player does not follow (`media-stand-in`).
+Regenerated by S2-9 after the media rows landed, and by S2-10 when effect sounds landed (totals unchanged). The run is jsdom, which decodes no media (`canPlayType` is `''`), so every shape clip, effect sound and transition sound the corpus plays is reported here as `media-codec`, closest, diagnosed: that is the jsdom outcome, not a browser's. Real playback is browser evidence: `tests/browser/slideshow-media.spec.ts` plays narration.pptx's m4a in Chromium (`media:playing:6`). tdf44223's fly-in sound is an effect sound on a `p:sndTgt`; S2-10's corpus test plays it with a WAV-capable stand-in decoder (the file's own part, through the lease, at the effect's begin).
 
 | Deck | Native | Closest | Refused | Items (slide: what → coverage, note) |
 |---|---|---|---|---|
@@ -3351,6 +3351,6 @@ Regenerated by S2-9 after the media rows landed. The run is jsdom, which decodes
 | tdf146223 | 2 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (1000 ms)) |
 | tdf149588_transparentSolidFill | 0 | 1 | 0 | 1: p159:morph → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
 | tdf156808 | 1 | 0 | 0 | 1: p14:flythrough → **native** (exact (800 ms)) |
-| tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (audio on no shape (effect sound): silent timed no-op, diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (not played in this run: silent (media-codec), diagnosed) |
+| tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (audio effect sound: not played in this run (media-codec; the effect runs silent), diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (not played in this run: silent (media-codec), diagnosed) |
 | tdf93868 | 2 | 0 | 0 | 1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours)<br>1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours) |
 

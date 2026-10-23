@@ -2343,7 +2343,7 @@ export const CATALOGUE: readonly CatalogueRow[] = Object.freeze([
   row({ id: 'build:word', kind: 'behaviour', uiName: 'Text build by word (p:iterate type="wd")', implementation: 'mask', status: 'approximate', stage: 2, lookalike: 'per-word layers clipped to word boxes' }),
   row({ id: 'build:letter', kind: 'behaviour', uiName: 'Text build by letter (p:iterate type="lt")', implementation: 'mask', status: 'approximate', stage: 2, lookalike: 'per-letter layers clipped to letter boxes' }),
   row({ id: 'sound:transition', kind: 'behaviour', uiName: 'Transition / cross-slide sound', implementation: 'file', status: 'exact', stage: 2 }),
-  row({ id: 'sound:effect', kind: 'behaviour', uiName: 'Effect sound (p:audio on a p:sndTgt)', implementation: 'stand-in', status: 'approximate', stage: 2, lookalike: 'silent timed no-op' }),
+  row({ id: 'sound:effect', kind: 'behaviour', uiName: 'Effect sound (p:audio on a p:sndTgt)', implementation: 'file', status: 'exact', stage: 2 }),
   row({ id: 'build:chart', kind: 'behaviour', uiName: 'Chart build (whole chart)', implementation: 'transform', status: 'approximate', stage: 1 }),
   row({ id: 'build:smartart', kind: 'behaviour', uiName: 'SmartArt build (fallback drawing)', implementation: 'transform', status: 'approximate', stage: 1 }),
   row({ id: 'build:fallback', kind: 'behaviour', uiName: 'Fallback picture / card animation', implementation: 'transform', status: 'approximate', stage: 1 }),

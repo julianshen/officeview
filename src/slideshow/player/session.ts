@@ -854,6 +854,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       open: (rec, s) => (handle && win ? openMediaLease(handle, rec, ws, win, s) : Promise.resolve({ refused: 'no-package' })),
       box: (spid) => stage?.mediaBox?.(spid),
       relieve: () => sounds?.release() ?? false,
+      stopTransitionSound: (onlyLooping) => sounds?.release(onlyLooping) ?? false,
     })
     const mp = player
     sounds = createTransitionSound({ root: surface.root, sink, slide: (i) => (visit?.index === i ? visit.meta : undefined), open: (rec, s) => mp.open(rec, s) })

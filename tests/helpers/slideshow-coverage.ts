@@ -133,14 +133,16 @@ export async function deckCoverage(bytes: Uint8Array, doc: PptxDocument, diagnos
       const visual = all.filter(b => !MEDIA.has(b.kind))
       const diagOf = (b: BehaviourNode) => diagnostics.filter(d => d.slideIndex === i && d.effect === `behaviour ${b.ctn.id}`)
       if (media.length) {
-        // Shape media and commands are played by S2-7's media player, which diagnoses on the target shape's spid
-        // (media-codec, media-refused, media-missing, media-error, media-autoplay, media-command). Media on no shape
-        // (an effect sound's p:sndTgt) is not followed by the player: behaviours.ts diagnoses it as media-stand-in.
+        // Shape media, effect sounds and commands are played by the media player (S2-7, S2-10), which diagnoses
+        // on the target shape's spid, or on `behaviour <id>` for an effect sound (p:sndTgt: no shape)
+        // (media-codec, media-refused, media-missing, media-error, media-autoplay, media-command).
         const parts = media.map(b => {
           const label = b.kind === 'cmd' ? `cmd ${(b as { cmd?: string }).cmd ?? ''}`.trim() : b.kind
           if (!('spid' in b.target)) {
-            const told = diagOf(b).some(d => d.code === 'media-stand-in')
-            return { closest: true, row: 'sound:effect', note: `${label} on no shape (effect sound): silent timed no-op${told ? ', diagnosed' : ', NOT diagnosed (not reached?)'}` }
+            const codes = [...new Set(diagOf(b).filter(d => d.code.startsWith('media-')).map(d => d.code))]
+            return codes.length
+              ? { closest: true, row: 'sound:effect', note: `${label} effect sound: not played in this run (${codes.join(', ')}; the effect runs silent), diagnosed` }
+              : { closest: false, row: 'sound:effect', note: `${label} effect sound: plays with its effect (S2-10)` }
           }
           const spid = b.target.spid
           const codes = [...new Set(diagnostics.filter(d => d.slideIndex === i && d.code.startsWith('media-') && (d.effect === spid || d.effect === String(b.ctn.id))).map(d => d.code))]

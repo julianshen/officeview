@@ -35,8 +35,11 @@ export interface TransitionSoundDeps {
 
 export interface TransitionSoundController extends TransitionSound {
   setPaused(paused: boolean): void
-  /** Stops the sound now (workspace pressure); true when one was playing. */
-  release(): boolean
+  /**
+   * Stops the sound now; true when one was playing. Workspace pressure and "Stop previous sound" stop any;
+   * `onlyLooping` (an effect sound starting: "loop until next sound") stops only a looping one (S2-10).
+   */
+  release(onlyLooping?: boolean): boolean
   dispose(): void
 }
 
@@ -142,7 +145,10 @@ export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoun
       if (on) p.el.pause()
       else play(p)
     },
-    release: stop,
+    release(onlyLooping = false) {
+      if (onlyLooping && !playing?.loop) return false
+      return stop()
+    },
     dispose() { stop() },
   }
 }

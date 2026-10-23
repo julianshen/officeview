@@ -95,8 +95,9 @@ describe('slideshow catalogue', () => {
     expect(CATALOGUE.find(r => r.id === 'behaviour:p:audio')).toMatchObject({ status: 'exact', stage: 2, implementation: 'file' })
     for (const name of ['cmd','video']) expect(CATALOGUE.find(r => r.id === `behaviour:p:${name}`)).toMatchObject({ status: 'approximate', stage: 2, implementation: 'file' })
     expect(CATALOGUE.find(r => r.id === 'sound:transition')).toMatchObject({ status: 'exact', stage: 2, implementation: 'file' })
-    // An effect sound (p:sndTgt) is not followed by the player: a diagnosed stand-in (media-stand-in).
-    expect(CATALOGUE.find(r => r.id === 'sound:effect')).toMatchObject({ status: 'approximate', stage: 2, implementation: 'stand-in', lookalike: 'silent timed no-op' })
+    // S2-10: an effect sound (p:audio on a p:sndTgt) plays with its effect, like a transition sound.
+    expect(CATALOGUE.find(r => r.id === 'sound:effect')).toMatchObject({ status: 'exact', stage: 2, implementation: 'file' })
+    expect(CATALOGUE.find(r => r.id === 'sound:effect')?.lookalike).toBeUndefined()
     // S2-8: text builds by word and letter (p:iterate wd / lt) are clipped per-item layers.
     for (const id of ['build:word','build:letter']) expect(CATALOGUE.find(r => r.id === id)).toMatchObject({ status: 'approximate', stage: 2, implementation: 'mask' })
     expect(catalogueMarkdown()).toContain('trigger beats hyperlink')
@@ -152,9 +153,10 @@ it('the validation doc lists every Stage 2 diagnostic code with its catalogue cl
     expect(DIAGNOSTIC_CODES[name], name).toBe(cls)
     expect(PANEL[diagnosticKind({ code: name, message: '' })], name).toBe(panel)
   }
-  // The Stage 2 block of the catalogue (media playback onwards) plus the effect-sound stand-in.
+  // The Stage 2 block of the catalogue (media playback onwards). S2-10 retired media-stand-in: effect sounds play.
   const keys = Object.keys(DIAGNOSTIC_CODES)
-  const stage2 = [...keys.slice(keys.indexOf('media-autoplay')), 'media-stand-in']
+  expect(keys).not.toContain('media-stand-in')
+  const stage2 = keys.slice(keys.indexOf('media-autoplay'))
   expect(stage2.filter(c => !listed.has(c))).toEqual([])
   expect(rows.length).toBe(listed.size)
 })

@@ -757,10 +757,11 @@ const viewer = useRef<OfficeViewerHandle>(null)
 
 **Audio and video.** Audio and video on slides play on the show's timeline
 (including PowerPoint's play, pause, resume, stop and toggle-pause commands
-and sound across slides), and transition sounds play, wherever the browser
-decodes the format. A clip the browser cannot decode keeps its poster picture,
+and sound across slides), and transition sounds and sounds attached to
+animations play, wherever the browser decodes the format. A clip the browser cannot decode keeps its poster picture,
 diagnosed; one the browser refuses to start (autoplay) shows a "Click to
-play" button and the show continues. Video plays in an overlay at its shape's
+play" button and the show continues (a refused sound has no poster, so it is
+only diagnosed). Video plays in an overlay at its shape's
 position. Media is read lazily, at most 512 MiB per file.
 
 `present()` rejects with a `SlideShowError` whose `code` is one of:
@@ -800,9 +801,30 @@ choice that `slideShowMotion="full"` overrides.
 | Presenter View styles | a CSP whose `style-src` allows officeview's stylesheet URL (the presenter window inherits the page's CSP; host nonces are not copied into it) | Presenter View works with browser default styles (`presenter-styles-blocked`) |
 
 For example:
-`<iframe src="…" allow="fullscreen; window-management" sandbox="allow-scripts allow-same-origin allow-popups">`.
+`<iframe src="…" allow="fullscreen; window-management">`.
 Link officeview's stylesheet (`officeview/style.css`) rather than inlining it,
 so a host CSP of `style-src 'self'` covers the presenter window too.
+
+officeview does not need a `sandbox`. If you add one, use
+`sandbox="allow-scripts allow-popups"` and leave out `allow-same-origin`.
+
+> **Warning.** Never combine `allow-scripts` with `allow-same-origin` for a
+> framed page served from the embedding page's own origin. That page can then
+> reach its parent and remove its own `sandbox` attribute, so the sandbox
+> protects nothing.
+
+Without `allow-same-origin`, the frame has an opaque origin:
+
+- its requests carry `Origin: null`, so the framed page's module scripts and
+  the deck it fetches must be served with CORS headers that allow them (a
+  linked stylesheet applies without CORS);
+- browser storage is unavailable, so officeview does not remember that the
+  presenter dismissed the two-screen drag hint.
+
+If the framed page must keep its own origin, serve it from a different origin
+than the embedding page (for example another subdomain). Then
+`allow-scripts allow-same-origin allow-popups` still sandboxes it, because a
+cross-origin frame cannot reach its parent's `<iframe>` element.
 
 **Known limits.**
 
@@ -815,8 +837,7 @@ so a host CSP of `style-src 'self'` covers the presenter window too.
 - **Kiosk shows** block clicks, keys, triggers and hyperlinks (Esc still
   exits) and restart after their `restart` time; the host API still
   navigates.
-- **Media limits.** A sound attached to an animation (an "effect sound") is
-  not played (diagnosed). An indefinite clip started by a play command never
+- **Media limits.** An indefinite clip started by a play command never
   ends its media node on the timeline, so an effect waiting on that clip's end
   does not run (effects timed after the command, as PowerPoint writes them,
   do). Video sits in an overlay that effects on its shape do not move. TIFF

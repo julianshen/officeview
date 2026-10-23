@@ -170,9 +170,11 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     expect(mid.visible).toBe(true)
     expect(mid.motion!.dy).toBeCloseTo(((1 + h / 2) + (yc - (1 + h / 2)) * 0.5 - yc) * H, 6)
     expect(mid.motion!.dx).toBeCloseTo(0, 9)
-    // The fly-in's sound (p:audio on a p:sndTgt, in the effect's subTnLst) is on no shape: the media player does not
-    // follow it, so it is a silent timed no-op, diagnosed on its slide (S2-9; catalogue row sound:effect).
-    expect(r.diagnostics.some(d => d.code === 'media-stand-in' && d.slideIndex === 0)).toBe(true)
+    // The fly-in's sound (p:audio on a p:sndTgt, in the effect's subTnLst) reaches the media player with the effect
+    // (S2-10; catalogue row sound:effect). jsdom decodes no audio (canPlayType is ''), so here it runs silent with
+    // media-codec on the effect's behaviour, diagnosed; the next test plays it.
+    expect(r.diagnostics.some(d => d.code === 'media-codec' && d.slideIndex === 0 && d.effect?.startsWith('behaviour ') && d.message.includes('audio/x-wav'))).toBe(true)
+    expect(codes(r, 0).filter(c => c.startsWith('media-stand-in'))).toEqual([])
     await r.tick(250)
     expectSettled(r.state().get('sp:4'))
     // Slide 2 splits in (orient vert, spd slow, p14:dur 1500): native, not a look-alike.
@@ -194,6 +196,44 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     await r.tick(750)
     expect(r.s.stage!.transition).toBeUndefined()
     r.exit()
+  })
+
+  it('tdf44223 fly-in plays its wind.wav effect sound when the effect begins (S2-10)', async () => {
+    // A browser that decodes WAV: canPlayType and play() stand in for the decoder; the bytes are the file's own part,
+    // read through the S2-6 lease (a Blob URL), so the record, lease and timing paths are the real ones.
+    const proto = HTMLMediaElement.prototype as unknown as { canPlayType: unknown; play: unknown; pause: unknown; load: unknown }
+    const saved = { canPlayType: proto.canPlayType, play: proto.play, pause: proto.pause, load: proto.load }
+    const U = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
+    const savedUrl = { createObjectURL: U.createObjectURL, revokeObjectURL: U.revokeObjectURL }
+    const played: string[] = []
+    const blobs: Blob[] = []
+    proto.canPlayType = function () { return 'maybe' }
+    proto.play = function (this: HTMLMediaElement) { played.push(this.getAttribute('data-officeview-show-effect-sound') ?? 'other'); return Promise.resolve() }
+    proto.pause = function () {}
+    proto.load = function () {}
+    U.createObjectURL = (b: Blob) => { blobs.push(b); return `blob:effect-${blobs.length}` }
+    U.revokeObjectURL = () => {}
+    try {
+      const { rig: r } = await show('tdf44223')
+      await r.tick(0)
+      // Nothing plays before the click that begins the fly-in.
+      expect(played).toEqual([])
+      r.s.next()
+      for (let i = 0; i < 5; i++) await r.tick(16)
+      const el = document.querySelector<HTMLAudioElement>('audio[data-officeview-show-effect-sound]')
+      expect(el).not.toBeNull()
+      expect(el!.hidden).toBe(true)
+      expect(el!.getAttribute('src')).toMatch(/^blob:effect-/)
+      expect(played.filter(p => p !== 'other')).toHaveLength(1)
+      // The Blob is the file's audio1.wav (27.4 KiB is audio2, the transition's applause), as audio.
+      const part = await (await JSZip.loadAsync(bytesOf('tdf44223'))).file('ppt/media/audio1.wav')!.async('uint8array')
+      expect(blobs.map(b => b.size)).toContain(part.length)
+      expect(codes(r, 0).filter(c => c.startsWith('media-'))).toEqual([])
+      r.exit()
+    } finally {
+      Object.assign(proto, saved)
+      Object.assign(U, savedUrl)
+    }
   })
 
   it('tdf142915 auto-advances after 1000 ms and ignores clicks', async () => {
