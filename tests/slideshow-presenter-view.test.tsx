@@ -724,3 +724,78 @@ describe('Presenter View (S2-5)', () => {
     })
   })
 })
+
+describe('PR #19 review 2', () => {
+  it('the stage\'s mediaFrameBox is mediaBox as a fraction of the frame (the real stage, letterboxed)', async () => {
+    vi.restoreAllMocks()
+    const { installShowSeams, loadDeck, startShow } = await import('./helpers/slideshow-show-rig')
+    // 4:3 slide on a 16:9 window: pillarboxed, so the CSS box and the frame fraction differ by the letterbox.
+    const seams = installShowSeams({ width: 1280, height: 720 })
+    try {
+      const shape = { id: 2, prst: 'rect', off: ['914400', '457200'] as [string, string], ext: ['2743200', '1371600'] as [string, string] }
+      const doc = await loadDeck(await buildPptxDeck({ slides: [{ shapes: [shape] }] }))
+      const r = await startShow(doc, { seams, size: { width: 1280, height: 720 } })
+      const st = r.s.stage!
+      const css = st.mediaBox!('2')!
+      const f = st.mediaFrameBox!('2')!
+      // 9144000 × 6858000 EMU: the shape sits at (1/10, 1/15) of the slide, 3/10 × 1/5 of it.
+      const k = Math.min(1280 / 4, 720 / 3) // CSS px per slide quarter-width unit
+      const sw = 4 * k, sh = 3 * k, ox = (1280 - sw) / 2, oy = (720 - sh) / 2
+      expect(css.left).toBeCloseTo(ox + 0.1 * sw, 3)
+      expect(css.top).toBeCloseTo(oy + sh / 15, 3)
+      // The frame is the slide's backing: the fraction of the frame that the CSS box covers inside the letterbox.
+      const frame = r.frameCanvas()!
+      const fk = Math.min(1280 / frame.width, 720 / frame.height)
+      const fx = (1280 - frame.width * fk) / 2, fy = (720 - frame.height * fk) / 2
+      expect(f.x).toBeCloseTo((css.left - fx) / (frame.width * fk), 4)
+      expect(f.y).toBeCloseTo((css.top - fy) / (frame.height * fk), 4)
+      expect(f.w).toBeCloseTo(css.width / (frame.width * fk), 4)
+      expect(f.h).toBeCloseTo(css.height / (frame.height * fk), 4)
+      r.exit()
+    } finally {
+      seams.restore()
+    }
+  })
+
+  it('the presenter mirror composites the playing video frame over the audience frame', async () => {
+    // A video on shape 2 that starts with the slide; the stage places it in the middle quarter of the frame.
+    const video = '<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cMediaNode></p:video>'
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [box], media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array(64).fill(7) }], timingXml: `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${video}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>` }, { shapes: [box] }] })
+    const doc = await parsePptx(await OfficePackage.load(bytes))
+    vi.spyOn(sessionDeps, 'stage').mockImplementation(() => ({ ...recordingStage(), mediaBox: () => ({ left: 10, top: 10, width: 20, height: 20 }), mediaFrameBox: () => ({ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }) }))
+    // A browser that decodes the clip (jsdom decodes nothing): the bytes still come through the lease as a Blob URL.
+    const proto = HTMLMediaElement.prototype as unknown as Record<string, unknown>
+    const saved = { canPlayType: proto.canPlayType, play: proto.play, pause: proto.pause, load: proto.load }
+    const U = URL as unknown as Record<string, unknown>
+    const savedUrl = { createObjectURL: U.createObjectURL, revokeObjectURL: U.revokeObjectURL }
+    Object.assign(proto, { canPlayType: () => 'maybe', play: () => Promise.resolve(), pause() {}, load() {} })
+    Object.assign(U, { createObjectURL: () => 'blob:mirror-video', revokeObjectURL() {} })
+    try {
+      const popup = fakePopup()
+      const r = await show(doc, popup)
+      await step(r.s)
+      await step(r.s)
+      const el = r.host.querySelector<HTMLVideoElement>('video[data-officeview-show-media]')
+      expect(el?.getAttribute('src')).toBe('blob:mirror-video')
+      const mirror = q<HTMLCanvasElement>(popup.document, '[data-officeview-presenter-current] canvas')
+      const audience = r.host.querySelector<HTMLCanvasElement>('[data-officeview-show-canvas]')!
+      const ctx = mirror.getContext('2d')!
+      const draws = vi.spyOn(ctx, 'drawImage')
+      await step(r.s)
+      const frames = draws.mock.calls.filter((c) => c[0] === el)
+      expect(frames.length).toBeGreaterThan(0)
+      // The video's box in the audience frame, mapped through the mirror's fit.
+      const s = Math.min(mirror.width / audience.width, mirror.height / audience.height)
+      const dx = (mirror.width - audience.width * s) / 2, dy = (mirror.height - audience.height * s) / 2
+      const [, x, y, w, h] = frames[0] as unknown as [unknown, number, number, number, number]
+      expect(x).toBeCloseTo(dx + 0.25 * audience.width * s, 6)
+      expect(y).toBeCloseTo(dy + 0.25 * audience.height * s, 6)
+      expect(w).toBeCloseTo(0.5 * audience.width * s, 6)
+      expect(h).toBeCloseTo(0.5 * audience.height * s, 6)
+      r.s.exit()
+    } finally {
+      Object.assign(proto, saved)
+      Object.assign(U, savedUrl)
+    }
+  })
+})

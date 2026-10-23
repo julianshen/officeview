@@ -710,3 +710,32 @@ describe('presenter surfaces', () => {
     expect(booms).toBe(1)
   })
 })
+
+describe('PR #19 review 2', () => {
+  it('primePreview schedules the expanded text timing the session schedules (by word / by letter), with its order', async () => {
+    // The slide's own timing has one click; the text fan-out (as stage.textTiming would answer) has two.
+    const d = await deck(timingXmlOf(mainSeqXml([click(3, '2')])))
+    const { model } = await modelOf(d, testWorkspace())
+    const fanned = await modelOf(await deck(timingXmlOf(mainSeqXml([click(3, '2'), click(10, '3')]))), testWorkspace())
+    const h2 = await fanned.store.acquire(0)
+    const tree = h2.slide.timing as import('../src/slideshow/types').TimingTree
+    const orderOf = new Map<import('../src/slideshow/types').TimeNode, number>()
+    const calls: Array<[number, unknown, boolean]> = []
+    const textTiming = vi.fn((index: number, meta: unknown, charge: (bytes: number, tag: string) => boolean) => {
+      calls.push([index, meta, charge(16, 'test:text-timing')])
+      return { tree, orderOf }
+    })
+    expect(await primePreview(model, 0, { ...NORMAL, textTiming })).toBe(true)
+    expect(textTiming).toHaveBeenCalledTimes(1)
+    // The slide's metadata, charged to the preview's own handle.
+    expect(calls[0]![0]).toBe(0)
+    expect(calls[0]![1]).toBe(previewHandle(model, 0)!.slide)
+    expect(calls[0]![2]).toBe(true)
+    expect(previewTimeline(model, 0)!.steps).toBe(2)
+    // No fan-out: the slide's own timing.
+    const plain = await modelOf(d, testWorkspace())
+    expect(await primePreview(plain.model, 0, { ...NORMAL, textTiming: () => undefined })).toBe(true)
+    expect(previewTimeline(plain.model, 0)!.steps).toBe(1)
+    h2.release()
+  })
+})

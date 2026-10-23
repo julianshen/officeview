@@ -51,6 +51,7 @@ import { adoptPresenterWindow, type PresenterWindow } from '../presenter/window'
 import { mountPresenterView, type PresenterSource } from '../presenter/PresenterView'
 import { createPresenterPlacement, type PresenterPlacement } from '../presenter/placement'
 import { createElapsedTimer, type ElapsedTimer } from '../presenter/timer'
+import type { PreviewOptions } from '../presenter/preview'
 import { openMediaLease } from '../media/lease'
 import { createMediaPlayer, type MediaController, type MediaPlayer } from '../media/player'
 import { createTransitionSound, type TransitionSoundController } from '../media/sounds'
@@ -503,12 +504,14 @@ export async function createSession(start: ShowStart): Promise<SessionController
         const media = v.media = player.enter(v.meta, () => Math.max(0, slideTime()))
         media.onEnd((id, synthetic, t) => mediaEnded(v, id, synthetic, t))
       }
-      sounds?.start(i)
       v.cursor = at === 'last' ? v.timeline.checkpoint(v.timeline.steps) : v.timeline.initial()
       const neighbours = [previousVisible(order, i), nextVisible(order, i)].filter((n): n is number => n !== undefined)
       return stage!.enter({ index: i, slide: v.meta, timeline: v.timeline, cursor: v.cursor }, clock!.now(), neighbours)
     }).then(() => {
       if (!live() || !v.cursor) return
+      // The transition sound starts with the transition: the stage has just set its start, now that the incoming
+      // frame can be drawn (PR #18 review P1's showNow start; PR #19 review 2).
+      sounds?.start(i)
       if (at === 'last') report()
       updateA11y(true)
       // Replay the inputs typed while it loaded. One that changes the slide hands the rest to the new visit,
@@ -799,11 +802,23 @@ export async function createSession(start: ShowStart): Promise<SessionController
     wall: () => sessionDeps.wall(),
     slideTime: () => Math.max(0, slideTime()),
     get model() { return store ? (model ??= { index, store }) : undefined },
-    get previewOptions() { return { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink } },
+    get previewOptions() {
+      // The preview schedules the same expanded text timing as the live slide (PR #19 review 2).
+      const textTiming: PreviewOptions['textTiming'] = (i, meta, charge) => stage?.textTiming?.(i, meta, charge)
+      return { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink, textTiming }
+    },
     get workspace() { return workspace! },
     ...(start.watermark ? { watermark: start.watermark } : {}),
     get protection() { return policy },
     audienceFrame,
+    drawMedia(ctx, dest) {
+      // Video plays in a DOM overlay, so the audience canvas lacks it: copy each frame from the one element (spec 5.2).
+      if (!player || !stage?.mediaFrameBox) return
+      for (const spid of player.videos()) {
+        const b = stage.mediaFrameBox(spid)
+        if (b) player.drawFrame(spid, ctx, dest.x + b.x * dest.w, dest.y + b.y * dest.h, b.w * dest.w, b.h * dest.h)
+      }
+    },
     onFrame(cb) {
       frameSubs.add(cb)
       return () => { frameSubs.delete(cb) }

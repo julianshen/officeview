@@ -98,6 +98,8 @@ export interface MediaPlayer {
   /** Opens a lease with the pressure rule: on a workspace refusal, cross-slide media goes first, then one retry. */
   open(rec: MediaRecord, signal: AbortSignal): Promise<MediaLeaseResult>
   setPaused(paused: boolean): void
+  /** The shapes whose video has an element now (the shown slide's and carried ones): what the presenter mirror composites. */
+  videos(): string[]
   /** The presenter mirror: copies the current frame of the playing video on `spid` (no second element, no audio). */
   drawFrame(spid: string, ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): boolean
   /** Stops and releases media carried from earlier slides; true when anything was released. */
@@ -661,6 +663,9 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
           if (r && typeof r.then === 'function') r.then(undefined, refused)
         } catch (e) { refused(e) }
       }
+    },
+    videos() {
+      return [...new Set(all().filter((l) => l.kind === 'video' && !l.el.hidden).map((l) => l.spid))]
     },
     drawFrame(spid, ctx, x, y, w, h) {
       const live = all().find((l) => l.spid === spid && l.kind === 'video')

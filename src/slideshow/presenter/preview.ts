@@ -43,12 +43,19 @@ import { isPackageError } from '../../core/package-error'
 import { nextVisible } from '../player/order'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline, type SlideTimelineOptions } from '../engine/steps'
 import type { PptxSlide } from '../../pptx/types'
-import type { AllocationOwner, DiagnosticSink, Lease, MetadataHandle, RenderState, ShowEvent, ShowModel, SlideMetadataStore, SlideShowWorkspace } from '../types'
+import type { AllocationOwner, DiagnosticSink, Lease, MetadataHandle, RenderState, ShowEvent, ShowModel, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TimeNode, TimingTree } from '../types'
 import { backingFor, surfaceBytes, type Backing } from '../workspace'
 import { paintDirect, type DirectAssets } from '../render/direct'
 import { slideSize } from '../render/scene'
 
-export interface PreviewOptions extends SlideTimelineOptions {}
+export interface PreviewOptions extends SlideTimelineOptions {
+  /**
+   * The stage's expanded text timing for slide `index` (S2-8 `Stage.textTiming`): by-word and by-letter builds
+   * fanned out over their items, with the source pre-order. The preview schedules the same tree and order as the
+   * live session, so Next shows the build the click will play (PR #19 review 2). `undefined`: the slide's own timing.
+   */
+  textTiming?(index: number, meta: ShowSlide, charge: (bytes: number, tag: string) => boolean): { tree: TimingTree; orderOf: ReadonlyMap<TimeNode, number> } | undefined
+}
 
 export interface PreviewPosition {
   slide: number
@@ -124,7 +131,11 @@ async function prime(model: ShowModel, slide: number, options: PreviewOptions, g
   }
   // A refused timing tree arrives as `{ refused: string }` and createSlideTimeline
   // answers the static timeline for it; building never throws (S1-10).
-  const timeline = createSlideTimeline(h.slide.timing, { ...options, slideIndex: slide })
+  // Text by word or letter: the expanded tree and order the session schedules, charged to this hold's handle.
+  const { textTiming, ...timelineOptions } = options
+  const timing = h.slide.timing
+  const text = timing && !('refused' in timing) && textTiming ? textTiming(slide, h.slide, (bytes, tag) => h.attach(bytes, tag)) : undefined
+  const timeline = createSlideTimeline(text?.tree ?? timing, { ...timelineOptions, slideIndex: slide, ...(text ? { orderOf: text.orderOf } : {}) })
   const held = heldByStore.get(store)
   if (held?.has(slide)) { h.release(); return true } // a concurrent prime stored one first
   if ((holdGeneration.get(store) ?? 0) !== gen) {
@@ -260,23 +271,20 @@ export function paintPreview(ctx: CanvasRenderingContext2D, target: PreviewTarge
  * after the source's aspect changes; smoothing stays on at high quality for
  * the downscale.
  */
-export function mirrorFrame(source: HTMLCanvasElement, ctx: CanvasRenderingContext2D): void {
+export function mirrorFrame(source: HTMLCanvasElement, ctx: CanvasRenderingContext2D): { x: number; y: number; w: number; h: number } | undefined {
   const backing = { w: ctx.canvas.width, h: ctx.canvas.height }
-  if (!source.width || !source.height || !backing.w || !backing.h) return
+  if (!source.width || !source.height || !backing.w || !backing.h) return undefined
   const scale = Math.min(backing.w / source.width, backing.h / source.height)
+  const dest = { x: (backing.w - source.width * scale) / 2, y: (backing.h - source.height * scale) / 2, w: source.width * scale, h: source.height * scale }
   ctx.save()
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, backing.w, backing.h)
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(
-    source,
-    (backing.w - source.width * scale) / 2,
-    (backing.h - source.height * scale) / 2,
-    source.width * scale,
-    source.height * scale,
-  )
+  ctx.drawImage(source, dest.x, dest.y, dest.w, dest.h)
   ctx.restore()
+  // Where the frame landed: video overlays are composited into this rectangle (PR #19 review 2).
+  return dest
 }
 
 // ---------------------------------------------------------------------------

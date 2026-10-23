@@ -69,6 +69,11 @@ export interface PresenterSource {
   audienceFrame(): HTMLCanvasElement | undefined
   /** Runs after every drawn frame; returns the unsubscribe. */
   onFrame(cb: () => void): () => void
+  /**
+   * Composites the playing videos (DOM overlays on the audience, not in its canvas) into the mirror, where the
+   * audience frame landed (`dest`, the mirror's px). Additive (PR #19 review 2).
+   */
+  drawMedia?(ctx: CanvasRenderingContext2D, dest: { x: number; y: number; w: number; h: number }): void
   /** Paint inputs for slide `index` (the stage's, or a static stand-in). */
   previewOf(index: number, cursor?: SlideCursor, timeline?: SlideTimeline): StagePreview
   /** The presenter key rule (spec 4.3): text controls and the notes keep their keys, Esc exits. */
@@ -183,7 +188,8 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
         return
       }
       const source = src.audienceFrame()
-      if (source) mirrorFrame(source, ctx)
+      const dest = source ? mirrorFrame(source, ctx) : undefined
+      if (dest) src.drawMedia?.(ctx, dest)
     }
     paint()
     return src.onFrame(paint)

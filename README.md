@@ -843,8 +843,7 @@ cross-origin frame cannot reach its parent's `<iframe>` element.
   do). Video sits in an overlay that effects on its shape do not move. TIFF
   pictures do not paint in Chrome or Firefox.
 - **Presenter View limits.** Grid thumbnails other than the current and next
-  slides show no pictures; for a build by word or letter, the Next pane may
-  show the next slide instead; words and letters built one at a time are
+  slides show no pictures; words and letters built one at a time are
   clipped to their boxes, so italic overhang and text shadow are cut. There
   is no pen, laser pointer or highlighter.
 - **3-D and morph transitions** (vortex, prism, airplane, morph and others)

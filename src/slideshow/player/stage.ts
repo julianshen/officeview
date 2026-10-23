@@ -129,6 +129,11 @@ export interface Stage {
    */
   mediaBox?(spid: string): { left: number; top: number; width: number; height: number } | undefined
   /**
+   * Additive (PR #19 review 2): the same box as a fraction of the audience frame's backing (0–1 on each axis),
+   * where the presenter mirror composites the video frame over its copy of the frame.
+   */
+  mediaFrameBox?(spid: string): { x: number; y: number; w: number; h: number } | undefined
+  /**
    * Additive (S2-8): the timing to schedule for slide `index` when it builds
    * text by word or letter: a working copy fanned out over the items, with
    * the source pre-order `orderOf` for `createSlideTimeline`. `charge`
@@ -1211,6 +1216,15 @@ export function createStage(deps: StageDeps): Stage {
       const m = viewport(p).matrix
       const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
       return { left: ox + (m[0] * g.x + m[4]) * k, top: oy + (m[3] * g.y + m[5]) * k, width: m[0] * g.w * k, height: m[3] * g.h * k }
+    },
+
+    mediaFrameBox(spid) {
+      const p = current
+      const g = p?.base.get(targetKey({ spid }))
+      if (!p || !g || !(backing.w > 0 && backing.h > 0)) return undefined
+      // Slide px → device px of the backing (the viewport), as mediaBox maps before its CSS step.
+      const m = viewport(p).matrix
+      return { x: (m[0] * g.x + m[4]) / backing.w, y: (m[3] * g.y + m[5]) / backing.h, w: m[0] * g.w / backing.w, h: m[3] * g.h / backing.h }
     },
 
     runAt(shape, u, v, w, h) {
