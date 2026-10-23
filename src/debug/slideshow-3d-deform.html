@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slideshow deform harness</title>
+  </head>
+  <body style="margin: 0; background: #000">
+    <!--
+      Slideshow plan S3-4: the deformation 3-D transitions on the real WebGL2
+      compositor, driven by tests/browser/slideshow-3d-deform.spec.ts through
+      window.__slideshowDeform. Nothing here reads wall time except the
+      informal perf probe, which the spec never asserts on.
+    -->
+    <div id="strip" style="display: inline-block; line-height: 0; background: #000"></div>
+    <script type="module" src="./slideshow-3d-deform.ts"></script>
+  </body>
+</html>
