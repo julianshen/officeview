@@ -858,3 +858,25 @@ describe('PR #19 resize follow-up', () => {
     expect(el.hidden).toBe(false)
   })
 })
+
+describe('PR #19 review 5', () => {
+  it('a play() rejection that arrives after the timeline stopped the node is ignored', async () => {
+    const r = rig()
+    let reject!: (e: unknown) => void
+    r.playWith.result = () => new Promise<void>((_, rej) => { reject = rej })
+    // A video with its own 500 ms dur: the scheduler ends it, and the controller pauses the element.
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('video', 10, '7', { durMs: 500 })])])), [rec('7')]))
+    d.next(0)
+    await flush()
+    expect(r.elements[0].play).toHaveBeenCalledTimes(1)
+    d.sync(600)
+    expect(d.state(10, 600)).not.toBe('active')
+    expect(r.elements[0].pause).toHaveBeenCalled()
+    // The browser's answer to the old play() lands now: nothing to diagnose, nothing to offer.
+    reject(new DOMException('no', 'NotAllowedError'))
+    await flush()
+    expect(codes(r.sink)).toEqual(['media-overlay'])
+    expect(r.root.querySelector('[data-officeview-show-play]')).toBeNull()
+    expect(d.ends).toEqual([])
+  })
+})

@@ -226,7 +226,8 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   host.style.visibility = 'visible'
   const back = d.activeElement
   // A request (the first or a retry) that succeeds after the show ended leaves full screen at once.
-  const retryFullscreen = (o = screen && { screen }) => P.requestFullscreen(host, o).then(() => (done && exit(), 'entered' as const), () => 'refused' as const)
+  // The prepared audience screen only with Presenter View's window: audience-only stays on this screen.
+  const retryFullscreen = (o = popup ? { screen } : void 0) => P.requestFullscreen(host, o).then(() => (done && exit(), 'entered' as const), () => 'refused' as const)
   const fullscreen = retryFullscreen()
   host.focus()
   return Promise.race([

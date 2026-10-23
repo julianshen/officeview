@@ -172,6 +172,22 @@ describe('presenter popup: the synchronous start', () => {
     expect(log.filter((l) => l.startsWith('requestFullscreen'))).toHaveLength(4)
   })
 
+  it('PR #19 review 5: the prepared audience screen is used only when Presenter View starts', async () => {
+    const audienceScreen = { availWidth: 1920, availHeight: 1080, label: 'external' }
+    for (const presenterView of [false, true] as const) {
+      log.length = 0
+      const h = freshHost()
+      preparedPlacement.set(h.ownerDocument, { popupFeatures: 'popup,left=0,top=0,width=800,height=600', audienceScreen })
+      const r = startPresent({ doc: PPTX, host: h, opts: { presenterView }, platform: platform(log, fakePopup()), generation: 1, callbacks: callbacks(), allow: true, motion: 'auto' })
+      h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await r.catch(() => {})
+      // Audience only: full screen stays on the viewer's own screen; Presenter View: the audience goes to the prepared one.
+      expect(log.filter((l) => l.startsWith('open') || l.startsWith('requestFullscreen'))).toEqual(presenterView
+        ? ['open:about:blank:popup,left=0,top=0,width=800,height=600', 'requestFullscreen:external']
+        : ['requestFullscreen'])
+    }
+  })
+
   it('a throwing platform open is a blocked popup: the start goes on and the show token is released at its end (review M4)', async () => {
     const host = freshHost()
     const p = platform(log, null)

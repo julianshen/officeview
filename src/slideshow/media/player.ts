@@ -366,6 +366,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       // A play() interrupted by our own pause() or a new source is not a failure.
       if (name === 'AbortError') return
       live.playing = false
+      // The timeline paused or ended the node before the browser answered: a late refusal changes nothing (PR #19 review 5).
+      if (!st.want) return
       if (name === 'NotSupportedError') { st.unplayable = true; fail(st, 'media-codec', `The browser cannot decode this ${what(st)} (${st.rec?.contentType}); ${stays(st)}`, false); return }
       fail(st, 'media-autoplay', st.sound !== undefined
         ? `The browser refused to play this effect sound (${String(name ?? e)}); the effect runs silent and the show continues`
