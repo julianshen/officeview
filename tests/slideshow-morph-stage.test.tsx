@@ -12,6 +12,13 @@ vi.mock('../src/slideshow/morph/render', async (importOriginal) => {
   return { ...real, morphFrame: vi.fn(real.morphFrame) }
 })
 
+/** A hook run inside the Morph's build (its matching): the round-2 clock test advances the show clock there. */
+const morphHooks: { duringMatch?: () => void } = {}
+vi.mock('../src/slideshow/morph/match', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/slideshow/morph/match')>()
+  return { ...real, matchMorph: (...args: Parameters<typeof real.matchMorph>) => { morphHooks.duringMatch?.(); return real.matchMorph(...args) } }
+})
+
 import { runShow } from '../src/slideshow'
 import { sessionDeps, type SessionController } from '../src/slideshow/player/session'
 import { ManualClock } from '../src/slideshow/clock'
@@ -31,6 +38,14 @@ const title = (id: number, x: number, y: number, text: string): PptxShapeSpec =>
 const morphOf = (option: 'byObject' | 'byWord' | 'byChar') => ({ xml: `<p:transition spd="slow" p14:dur="1200"><p159:morph xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" option="${option}"/></p:transition>` })
 const MORPH = morphOf('byObject')
 
+/** A click step whose entrance (appear) shows `spid` at once. */
+const enterStep = (id: number, spid: number) =>
+  `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:set><p:cBhvr><p:cTn id="${id + 3}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
+  `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+
 /** A click step whose exit effect hides `spid` at once. */
 const exitStep = (id: number, spid: number) =>
   `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
@@ -45,6 +60,7 @@ async function deck(spec: PptxDeckSpec): Promise<PptxDocument> {
 
 let clock: ManualClock
 beforeEach(() => {
+  morphHooks.duringMatch = undefined
   clock = new ManualClock()
   vi.mocked(morphFrame).mockClear()
   vi.spyOn(sessionDeps, 'clock').mockImplementation(() => clock)
@@ -387,6 +403,56 @@ describe('S3-6 morph through the session and stage', () => {
       expect(kinds.some(k => k.startsWith('morph:pair:sp:3/'))).toBe(false)
       const m = lastMorph()!
       expect(keyed(m.spec.pairs, 'sp:3').some(i => i.from && i.to)).toBe(true)
+      r.s.exit()
+    })
+  })
+
+  describe('PR #20 review 2', () => {
+    it('the Morph clock starts after its build: show time spent building does not eat the transition', async () => {
+      const doc = await deck({
+        slides: [
+          { shapes: [square(80, 60), title(3, 240, 300, 'Morph me')] },
+          { shapes: [square(700, 380), title(3, 240, 80, 'Morph me')], transition: MORPH },
+        ],
+      })
+      const r = await show(doc)
+      // The build takes 1 s of show time (matching, layout, rasterising).
+      morphHooks.duringMatch = () => clock.advance(1000)
+      await r.key('ArrowRight')
+      morphHooks.duringMatch = undefined
+      expect(r.s.state.slide).toBe(1)
+      // The first morph frame is at the start of the transition, not 1 s into it.
+      const first = vi.mocked(morphFrame).mock.calls[0]
+      expect(first).toBeDefined()
+      expect(first![1]).toBeLessThan(0.05)
+      // It runs its full 1.2 s from there: still running at 1.1 s, done (and the slide's timeline on) after.
+      await r.tick(1100)
+      expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
+      expect(lastMorph()!.progress).toBeGreaterThan(0.85)
+      await r.tick(200)
+      expect(r.s.stage!.transition).toBeUndefined()
+      r.s.exit()
+    })
+
+    it('a matched word whose incoming box has not entered yet is not shown before its box enters', async () => {
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, 'Alpha Beta')] },
+          { shapes: [title(3, 140, 400, 'Beta Alpha')], transition: morphOf('byWord'), timingXml: timingXmlOf(mainSeqXml([enterStep(10, 3)])) },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.state.slide).toBe(1)
+      expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
+      const m = lastMorph()!
+      expect(m).toBeDefined()
+      // Nothing of the incoming box draws (no pair, no fade-in of its words or body); the outgoing words fade out.
+      expect(m.spec.pairs.some(i => i.to?.key?.startsWith('sp:3'))).toBe(false)
+      const kinds = r.s.stage!.inspect().lastDraws
+      expect(kinds.some(k => k.startsWith('morph:in:sp:3') || k.startsWith('morph:pair:sp:3'))).toBe(false)
+      expect(kinds.some(k => k.startsWith('morph:out:sp:3'))).toBe(true)
       r.s.exit()
     })
   })

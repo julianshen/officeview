@@ -44,7 +44,8 @@
  *   then shrinks it by the CPU copy's `bytes`: on success the lease belongs to
  *   the compositor and charges only the texture, and the caller drops
  *   `layer.canvas`. A refusal leaves the lease untouched and creates nothing.
- *   Scratch, mask and recolour surfaces, and the buffers behind them, are
+ *   Scratch, mask, recolour and Morph-sum (`canvas2d:morph-sum`, PR #20
+ *   review 2) surfaces, and the buffers behind them, are
  *   leased before they are created and released on `release`, `resize` or
  *   `dispose`. A refused lease degrades the effect (a raster mask becomes a
  *   cut at its midpoint; a recolour is skipped) with a diagnostic, never
@@ -136,6 +137,8 @@ export function createCanvas2DCompositor(
   let nextId = 1
   let disposed = false
   let scratch: Surface | undefined
+  /** The Morph pair sum target (output-sized, `canvas2d:morph-sum`), reused across pairs and frames. */
+  let sum: Surface | undefined
   let mask: (Surface & { image: ImageData }) | undefined
   let view: Affine = IDENTITY
   let slideIndex: number | undefined
@@ -339,12 +342,12 @@ export function createCanvas2DCompositor(
     out.restore()
   }
 
-  function drawOne(d: LayerDraw) {
+  /** A draw's source (recoloured when its part asks), bounds and device matrix; undefined when it draws nothing. */
+  function resolveDraw(d: LayerDraw, effect: string): { t: Texture; source: AnyCanvas; m: Affine } | undefined {
     const { state } = d
-    if (!state.visible || !(state.opacity > 0)) return
-    const effect = state.mask ? `mask:${state.mask.kind}` : 'layer'
+    if (!state.visible || !(state.opacity > 0)) return undefined
     const t = lookup(d.handle, effect)
-    if (!t) return
+    if (!t) return undefined
     let source: AnyCanvas = t.canvas
     const matrix = d.part ? state.color?.[d.part] : undefined
     if (matrix && matrix.length >= 20) {
@@ -354,7 +357,81 @@ export function createCanvas2DCompositor(
     }
     const transform = isAffine(state.transform) ? state.transform : IDENTITY
     const local = state.motion ? mul([1, 0, 0, 1, state.motion.dx, state.motion.dy], transform) : transform
-    const m = mul(view, local)
+    return { t, source, m: mul(view, local) }
+  }
+
+  function sumSurface(): Surface | undefined {
+    const w = canvas.width, h = canvas.height
+    if (sum && sum.w === w && sum.h === h) return sum
+    sum?.lease.release()
+    sum = surface(w, h, w * h * 4, 'canvas2d:morph-sum')
+    return sum
+  }
+
+  /** The integer device rect covering `bounds` under `m`, clipped to the output; undefined when empty. */
+  function coverRect(parts: ReadonlyArray<{ bounds: LayerBitmap['bounds']; m: Affine }>): LayerBitmap['bounds'] | undefined {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const { bounds: b, m } of parts) {
+      for (const x of [b.x, b.x + b.w]) for (const y of [b.y, b.y + b.h]) {
+        const px = m[0] * x + m[2] * y + m[4], py = m[1] * x + m[3] * y + m[5]
+        x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py)
+      }
+    }
+    const l = Math.max(0, Math.floor(x0)), t = Math.max(0, Math.floor(y0))
+    const r = Math.min(canvas.width, Math.ceil(x1)), b = Math.min(canvas.height, Math.ceil(y1))
+    return r > l && b > t ? { x: l, y: t, w: r - l, h: b - t } : undefined
+  }
+
+  /**
+   * A Morph pair summed alpha-correctly (`LayerDraw.sum`, PR #20 review 2):
+   * both sides are added ('lighter') at their weights into the sum surface
+   * over the device rect they cover, then that rect composites source-over.
+   * A masked side, or a refused surface (diagnosed once), holds the
+   * outgoing side under instead.
+   */
+  function drawSum(d: LayerDraw, s: NonNullable<LayerDraw['sum']>) {
+    const held = () => {
+      drawOne({ handle: d.handle, state: { ...d.state, opacity: s.heldOpacity }, ...(d.part ? { part: d.part } : {}) })
+      drawOne(s.with)
+    }
+    if (d.state.mask || s.with.state.mask) return held()
+    const a = resolveDraw(d, 'layer'), b = resolveDraw(s.with, 'layer')
+    if (!a || !b) return held()
+    const r = coverRect([{ bounds: a.t.bounds, m: a.m }, { bounds: b.t.bounds, m: b.m }])
+    if (!r) return
+    const surf = sumSurface()
+    if (!surf) {
+      diagnose('compositor-workspace', 'morph-blend', 'The Morph blend surface did not fit the slideshow workspace; matched shapes hold the outgoing side under (a translucent pair can pop on its last frame)')
+      return held()
+    }
+    const c = surf.ctx
+    c.save()
+    c.setTransform(1, 0, 0, 1, 0, 0)
+    c.globalAlpha = 1
+    c.globalCompositeOperation = 'source-over'
+    c.clearRect(r.x, r.y, r.w, r.h)
+    c.beginPath()
+    c.rect(r.x, r.y, r.w, r.h)
+    c.clip()
+    c.globalCompositeOperation = 'lighter'
+    for (const [x, state] of [[a, d.state], [b, s.with.state]] as const) {
+      c.globalAlpha = clamp01(state.opacity, 1)
+      place(c, x.m)
+      c.drawImage(x.source as CanvasImageSource, x.t.bounds.x, x.t.bounds.y, x.t.bounds.w, x.t.bounds.h)
+    }
+    c.restore()
+    out.globalAlpha = 1
+    out.setTransform(1, 0, 0, 1, 0, 0)
+    out.drawImage(surf.canvas as CanvasImageSource, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h)
+  }
+
+  function drawOne(d: LayerDraw) {
+    if (d.sum) return drawSum(d, d.sum)
+    const { state } = d
+    const effect = state.mask ? `mask:${state.mask.kind}` : 'layer'
+    const resolved = resolveDraw(d, effect)
+    if (!resolved) return
+    const { t, source, m } = resolved
     const seed = Number(state.mask?.params.seed)
     // A mask covers the layer's bounds, or the box it names (a split text item under its shape's mask).
     const box = state.mask && isBox(state.maskBox) ? state.maskBox : t.bounds
@@ -369,6 +446,8 @@ export function createCanvas2DCompositor(
     // Output-sized scratch is re-leased at the new size on next use.
     scratch?.lease.release()
     scratch = undefined
+    sum?.lease.release()
+    sum = undefined
   }
 
   function dropTexture(t: Texture) {
@@ -440,8 +519,10 @@ export function createCanvas2DCompositor(
       textures.clear()
       scratch?.lease.release()
       mask?.lease.release()
+      sum?.lease.release()
       scratch = undefined
       mask = undefined
+      sum = undefined
     },
   }
 }

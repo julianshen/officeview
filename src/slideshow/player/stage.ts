@@ -1092,8 +1092,8 @@ export function createStage(deps: StageDeps): Stage {
    * Unit pairs (`byWord`/`byChar`, PR #20 review): each paired container
    * that owns a matched unit is split into its word or letter items (the
    * text-build planner's `splits`, Morph-only), laid out for their own base
-   * boxes. A matched unit then morphs on its own path (held under, the
-   * content being equal); an unmatched unit fades while moving with its
+   * boxes. A matched unit then morphs on its own path (summed alpha-correctly
+   * with its partner, the content being equal); an unmatched unit fades while moving with its
    * container; the container's body (geometry, fill, line, text in no item)
    * pairs as any object does. A shape an animation already splits keeps its
    * own layers (its units move with it). When the split slides would pass
@@ -1233,7 +1233,7 @@ export function createStage(deps: StageDeps): Stage {
       handle: e.draw.handle, geometry: geometry ?? (e.root ? baseOf(q, e.root) : undefined) ?? box(q), state: e.draw.state,
       ...(e.draw.part ? { part: e.draw.part } : {}), ...(e.root ? { key: e.root } : {}),
     })
-    // Matched units of split containers pair like objects (held under: their content is equal).
+    // Matched units of split containers pair like same-outline objects (summed: their content is equal).
     for (const m of unitPairs) {
       const fc = containerOf(m.from), tc = containerOf(m.to)
       if (fc === undefined || tc === undefined || !fromUnits.has(fc) || !toUnits.has(tc) || pairOf.has(m.to)) continue
@@ -1417,9 +1417,6 @@ export function createStage(deps: StageDeps): Stage {
       // S3-1: a registered 3-D row on WebGL2 runs its shader; otherwise its 2-D look-alike, diagnosed (after reduced motion, so it never adds motion).
       let route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike' as ReturnType<typeof dispatchTransition>
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
-      // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
-      // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).
-      const start = deps.showNow ? Math.max(t, deps.showNow()) : t
       // The transition sound is played (and any refusal diagnosed) by the session's transition-sound controller (S2-7).
       // S3-6: a Morph (either backend) composites its own matched layers at the
       // full rung; otherwise the fade look-alike plays, diagnosed with why.
@@ -1435,6 +1432,10 @@ export function createStage(deps: StageDeps): Stage {
           sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: 'morph-fallback', message: `Morph could not run (${why}); the fade look-alike plays` })
         } else morphRun = why
       }
+      // Preparation (image decoding, layer construction, a Morph's own build) took show time: the transition,
+      // and the slide's timeline after it, start now that the incoming frame can be drawn (PR #18 review P1;
+      // PR #20 review 2: after the Morph build, which lays out and rasterises its layers synchronously).
+      const start = deps.showNow ? Math.max(t, deps.showNow()) : t
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
       if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost' && !morphRun) {
         const s = viewport(p).scale

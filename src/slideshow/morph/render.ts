@@ -7,11 +7,15 @@
  * matched object through the linearly interpolated box (position, size,
  * rotation on the shortest path), and blends the two sides:
  *
- * - `under` (same outline): the outgoing side holds at its full weight under
- *   the incoming side drawn at `progress`. Where they overlap the colour is
- *   exactly `(1 - p) * from + p * to` (fill, line and opacity interpolate
- *   linearly) and an opaque shape never dips in opacity. The stage uses it
+ * - `under` (same outline): the two sides are summed alpha-correctly
+ *   (`LayerDraw.sum`, PR #20 review 2): the outgoing side at `1 - p` and the
+ *   incoming at `p`, added in premultiplied colour and alpha on the
+ *   backend's scratch target, then composited source-over. The pair is
+ *   exactly `(1 - p) * from + p * to` in colour and alpha, so a translucent
+ *   pair keeps its opacity and an opaque one never dips. The stage uses it
  *   for the backgrounds and for matched shapes whose outline is the same.
+ *   Without the scratch the outgoing side holds at full weight under the
+ *   incoming one (`heldOpacity`): exact for opaque shapes.
  * - otherwise the sides crossfade (`1 - p` / `p`): changed content (text,
  *   a different outline or picture) blends rather than snaps.
  *
@@ -126,8 +130,13 @@ export function morphFrame(pairs: MorphFrameSpec, progress: number, compositor: 
     if (path) {
       // The matched pair moves together into the interpolated box.
       const g = interpGeometry(path.from, path.to, p)
-      const a = item.from && sideDraw(item.from, g, item.under && item.to ? (p < 1 ? 1 : 0) : 1 - p)
+      const a = item.from && sideDraw(item.from, g, 1 - p)
       const b = item.to && sideDraw(item.to, g, p)
+      if (item.under && a && b) {
+        // Summed alpha-correctly; the held weight is the backend's fallback.
+        out.push({ ...a, sum: { with: b, heldOpacity: item.from!.state?.opacity ?? 1 } })
+        continue
+      }
       if (a) out.push(a)
       if (b) out.push(b)
     } else {

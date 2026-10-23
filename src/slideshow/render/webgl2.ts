@@ -35,9 +35,12 @@
  *   CPU copy, which the caller drops), the mask canvas plus its texture
  *   (`webgl2:mask`, 8 B/px), the noise texture (`webgl2:noise`) and the
  *   transient noise arrays (`webgl2:mask-raster`). Programs, shaders and the
- *   vertex array hold no client memory and take no lease. There is no
- *   offscreen framebuffer: the 2-D transitions (S1-15) need none (their
- *   backdrop is a scissored clear), and neither do the 3-D ones (S3-1).
+ *   vertex array hold no client memory and take no lease. The 2-D
+ *   transitions (S1-15) need no offscreen framebuffer (their backdrop is a
+ *   scissored clear), and neither do the 3-D ones (S3-1). The one offscreen
+ *   target is the Morph pair sum (PR #20 review 2, `webgl2:morph-sum`,
+ *   w × h × 4): leased before it is created, reused across pairs and
+ *   frames, dropped on resize, context loss and dispose.
  * - **3-D transitions (S3-1).** Params carrying `three` (framework.ts) are
  *   drawn by the registered `Transition3D` strictly between the ends (at 0
  *   and 1 the flat outgoing / incoming frame): the slide rect is scissored
@@ -107,6 +110,8 @@ interface Resources {
 }
 interface MaskSurface { canvas: AnyCanvas; ctx: Ctx; tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
 interface NoiseSurface { tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
+/** The Morph pair sum target (PR #20 review 2): an output-sized texture behind a framebuffer. */
+interface SumTarget { fbo: WebGLFramebuffer; tex: WebGLTexture; lease: Lease; w: number; h: number }
 interface TransitionParams {
   mask?: MaskState; from?: Affine; to?: Affine; fromOpacity?: number; toOpacity?: number
   fromOnTop?: boolean; backdrop?: 'black' | 'white'
@@ -147,6 +152,7 @@ export function createWebGL2Compositor(
   let res: Resources | undefined
   let mask: MaskSurface | undefined
   let noise: NoiseSurface | undefined
+  let sum: SumTarget | undefined
   let maxTextureSize = 0
   let view: Affine = IDENTITY
   let slideIndex: number | undefined
@@ -233,6 +239,7 @@ export function createWebGL2Compositor(
     textures.clear()
     if (mask) { if (deleteObjects) gl.deleteTexture(mask.tex); mask.lease.release(); mask = undefined }
     if (noise) { if (deleteObjects) gl.deleteTexture(noise.tex); noise.lease.release(); noise = undefined }
+    dropSum(deleteObjects)
     if (res) {
       res.three.dispose(deleteObjects)
       if (deleteObjects) {
@@ -245,6 +252,34 @@ export function createWebGL2Compositor(
       res.quad.release()
       res = undefined
     }
+  }
+
+  function dropSum(deleteObjects: boolean) {
+    if (!sum) return
+    if (deleteObjects) { gl.deleteFramebuffer(sum.fbo); gl.deleteTexture(sum.tex) }
+    sum.lease.release()
+    sum = undefined
+  }
+
+  /** The output-sized sum target, leased before it is created (`webgl2:morph-sum`); undefined when refused. */
+  function sumTarget(): SumTarget | undefined {
+    const w = canvas.width, h = canvas.height
+    if (sum && sum.w === w && sum.h === h) return sum
+    dropSum(true)
+    const lease = workspace.lease(w * h * 4, 'webgl2:morph-sum')
+    if (!lease) return undefined
+    gl.activeTexture(gl.TEXTURE0)
+    const tex = newTexture(gl.NEAREST)
+    const fbo = tex ? gl.createFramebuffer() : null
+    if (!tex || !fbo) { if (tex) gl.deleteTexture(tex); lease.release(); return undefined }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    if (!ok) { gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); lease.release(); return undefined }
+    sum = { fbo, tex, lease, w, h }
+    return sum
   }
 
   function newTexture(filter: number): WebGLTexture | null {
@@ -545,17 +580,79 @@ export function createWebGL2Compositor(
     return { x: w < 0 ? x + w : x, y: h < 0 ? y + h : y, w: Math.abs(w), h: Math.abs(h) }
   }
 
-  function drawOne(d: LayerDraw) {
+  /** An unmasked draw's texture, tint and device matrix; undefined when it draws nothing. */
+  function resolveDraw(d: LayerDraw, effect: string): { t: Texture; tint: ColorMatrix | undefined; m: Affine } | undefined {
     const { state } = d
-    if (!state.visible || !(state.opacity > 0)) return
-    const effect = state.mask ? `mask:${state.mask.kind}` : 'layer'
+    if (!state.visible || !(state.opacity > 0)) return undefined
     const t = lookup(d.handle, effect)
-    if (!t) return
+    if (!t) return undefined
     const matrix = d.part ? state.color?.[d.part] : undefined
     const tint = matrix && matrix.length >= 20 ? matrix : undefined
     const transform = isAffine(state.transform) ? state.transform : IDENTITY
     const local = state.motion ? mulAffine([1, 0, 0, 1, state.motion.dx, state.motion.dy], transform) : transform
-    const m = mulAffine(view, local)
+    return { t, tint, m: mulAffine(view, local) }
+  }
+
+  /** The integer device rect covering the parts, clipped to the output; undefined when empty. */
+  function coverRect(parts: ReadonlyArray<{ bounds: Bounds; m: Affine }>): Bounds | undefined {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const { bounds: b, m } of parts) {
+      for (const x of [b.x, b.x + b.w]) for (const y of [b.y, b.y + b.h]) {
+        const px = m[0] * x + m[2] * y + m[4], py = m[1] * x + m[3] * y + m[5]
+        x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py)
+      }
+    }
+    const l = Math.max(0, Math.floor(x0)), t = Math.max(0, Math.floor(y0))
+    const r = Math.min(canvas.width, Math.ceil(x1)), b = Math.min(canvas.height, Math.ceil(y1))
+    return r > l && b > t ? { x: l, y: t, w: r - l, h: b - t } : undefined
+  }
+
+  /**
+   * A Morph pair summed alpha-correctly (`LayerDraw.sum`, PR #20 review 2),
+   * as the Canvas 2D backend does: both sides drawn additively
+   * (`ONE, ONE`) at their weights into the sum target, scissored to the
+   * device rect they cover, then that rect composites source-over
+   * (`ONE, ONE_MINUS_SRC_ALPHA`). A masked side, or a refused target
+   * (diagnosed once), holds the outgoing side under instead.
+   */
+  function drawSum(d: LayerDraw, s: NonNullable<LayerDraw['sum']>) {
+    const held = () => {
+      drawOne({ handle: d.handle, state: { ...d.state, opacity: s.heldOpacity }, ...(d.part ? { part: d.part } : {}) })
+      drawOne(s.with)
+    }
+    if (d.state.mask || s.with.state.mask) return held()
+    const a = resolveDraw(d, 'layer'), b = resolveDraw(s.with, 'layer')
+    if (!a || !b) return held()
+    const r = coverRect([{ bounds: a.t.bounds, m: a.m }, { bounds: b.t.bounds, m: b.m }])
+    if (!r) return
+    const target = sumTarget()
+    if (!target) {
+      diagnose('compositor-workspace', 'morph-blend', 'The Morph blend surface did not fit the slideshow workspace; matched shapes hold the outgoing side under (a translucent pair can pop on its last frame)')
+      return held()
+    }
+    const H = canvas.height
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo)
+    gl.enable(gl.SCISSOR_TEST)
+    gl.scissor(r.x, H - r.y - r.h, r.w, r.h)
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.blendFunc(gl.ONE, gl.ONE)
+    drawQuad(a.t, a.m, clamp01(d.state.opacity, 1), a.tint, undefined)
+    drawQuad(b.t, b.m, clamp01(s.with.state.opacity, 1), b.tint, undefined)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+    // The target's rows run bottom-up (GL): the quad samples it flipped onto the output rect.
+    drawQuad({ tex: target.tex, bounds: { x: 0, y: H, w: canvas.width, h: -H }, lease: target.lease, w: target.w, h: target.h }, IDENTITY, 1, undefined, undefined)
+    gl.disable(gl.SCISSOR_TEST)
+  }
+
+  function drawOne(d: LayerDraw) {
+    if (d.sum) return drawSum(d, d.sum)
+    const { state } = d
+    const effect = state.mask ? `mask:${state.mask.kind}` : 'layer'
+    const resolved = resolveDraw(d, effect)
+    if (!resolved) return
+    const { t, tint, m } = resolved
     let binding: MaskBinding | undefined
     const ms = checkedMask(state.mask, effect)
     if (ms) {
@@ -596,6 +693,8 @@ export function createWebGL2Compositor(
     }
     canvas.width = w
     canvas.height = h
+    // The output-sized Morph sum target is re-leased at the new size on next use.
+    dropSum(!lost && !gl.isContextLost())
     return true
   }
 

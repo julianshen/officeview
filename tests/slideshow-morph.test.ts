@@ -64,8 +64,10 @@ describe('morphFrame', () => {
       pairs: [{ from: { handle: { id: 1 }, geometry: g0, state: plain() }, to: { handle: { id: 2 }, geometry: g1, state: plain() }, under: true }],
     }
     morphFrame(spec, 0.5, comp)
-    const list = comp.draws[0]!
-    expect(list).toHaveLength(2)
+    // Same outline: one summed draw (PR #20 review 2), the outgoing side carrying the incoming one.
+    const frame = comp.draws[0]!
+    expect(frame).toHaveLength(1)
+    const list = [frame[0]!, frame[0]!.sum!.with]
     expect(list.map(d => d.handle.id)).toEqual([1, 2])
     // The interpolated box at 0.5: linear position and size, shortest-path rotation.
     const mid = geometry(110, 30, 150, 75, 50)
@@ -90,14 +92,15 @@ describe('morphFrame', () => {
     }
     expectMap(list[0]!, g0)
     expectMap(list[1]!, g1)
-    // Same outline: the outgoing side holds at full weight under the incoming at 0.5.
-    expect(list[0]!.state.opacity).toBeCloseTo(1, 9)
+    // Same outline: the sides sum at 1 - p and p (alpha-correct); the held fallback weight is the full one.
+    expect(list[0]!.state.opacity).toBeCloseTo(0.5, 9)
     expect(list[1]!.state.opacity).toBeCloseTo(0.5, 9)
+    expect(frame[0]!.sum!.heldOpacity).toBeCloseTo(1, 9)
 
     // Colour, on real pixels (Canvas 2D): a blue square at g0 matched to a red
     // one at g1 paints the 50/50 colour at the interpolated box's centre,
     // fully opaque (no dip to the background).
-    const ws = { limit: 1 << 30, used: () => 0, reserveTerminal: () => undefined }
+    const ws = { limit: 1 << 30, used: () => 0, reserveTerminal: () => undefined, lease: (n: number) => lease(n) }
     const out = createCanvas(DEV_W * 3, DEV_H * 3)
     const c2 = createCanvas2DCompositor(out as never, createCanvas as never, ws as never, createDiagnosticSink())
     c2.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: DEV_W * 3, deviceHeight: DEV_H * 3 })
@@ -200,7 +203,7 @@ describe('morphFrame', () => {
   })
 
   it('canvas2d morph renders without a GPU', () => {
-    const ws = { limit: 1 << 30, used: () => 0, reserveTerminal: () => undefined }
+    const ws = { limit: 1 << 30, used: () => 0, reserveTerminal: () => undefined, lease: (n: number) => lease(n) }
     const leaseOf = (n: number): Lease => {
       let live = true
       return {
@@ -243,5 +246,67 @@ describe('morphFrame', () => {
       const want = [64, 160, 208].map((f, i) => ((1 - p) * f + p * [208, 96, 64][i]!) / 255)
       for (let i = 0; i < 3; i++) expect(Math.abs(got[i]! - want[i]!)).toBeLessThan(2 / 255)
     }
+  })
+
+  describe('PR #20 review 2: a same-outline pair blends alpha-correctly', () => {
+    const ws = { limit: 1 << 30, used: () => 0, reserveTerminal: () => undefined, lease: (n: number) => lease(n) }
+    const g = geometry(50, 30, 60, 30)
+    function setup(alpha: number) {
+      const out = createCanvas(DEV_W, DEV_H)
+      const sink = createDiagnosticSink()
+      const comp = createCanvas2DCompositor(out as never, createCanvas as never, ws as never, sink)
+      comp.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: DEV_W, deviceHeight: DEV_H })
+      const upload = (rgb: string): LayerHandle => {
+        const c = createCanvas(60, 30)
+        const x = c.getContext('2d')
+        x.fillStyle = rgb
+        x.globalAlpha = alpha
+        x.fillRect(0, 0, 60, 30)
+        const r = comp.upload({ canvas: c as never, bounds: g, scale: 1, bytes: 60 * 30 * 4 }, lease(60 * 30 * 4))
+        if ('refused' in r) throw new Error(r.refused)
+        return r
+      }
+      const centreAlpha = () => (out as unknown as HTMLCanvasElement).getContext('2d')!.getImageData(DEV_W / 2, DEV_H / 2, 1, 1).data[3]!
+      return { comp, sink, upload, centreAlpha }
+    }
+
+    it('two identical 50 %-opaque shapes (authored transparency) stay at 50 % alpha through the morph', () => {
+      const { comp, upload, centreAlpha } = setup(0.5)
+      const fh = upload('rgb(40,120,200)'), th = upload('rgb(40,120,200)')
+      for (const p of [0.25, 0.5, 0.9]) {
+        morphFrame({ pairs: [{ from: { handle: fh, geometry: g, state: plain() }, to: { handle: th, geometry: g, state: plain() }, under: true }] }, p, comp)
+        expect(Math.abs(centreAlpha() - 128), `p=${p}`).toBeLessThanOrEqual(2)
+      }
+    })
+
+    it('the same through TargetState opacity (opaque bitmaps at 50 %)', () => {
+      const { comp, upload, centreAlpha } = setup(1)
+      const fh = upload('rgb(40,120,200)'), th = upload('rgb(40,120,200)')
+      const half = (): TargetState => ({ ...plain(), opacity: 0.5 })
+      for (const p of [0.25, 0.5, 0.9]) {
+        morphFrame({ pairs: [{ from: { handle: fh, geometry: g, state: half() }, to: { handle: th, geometry: g, state: half() }, under: true }] }, p, comp)
+        expect(Math.abs(centreAlpha() - 128), `p=${p}`).toBeLessThanOrEqual(2)
+      }
+    })
+
+    it('when the blend surface is refused the pair holds the outgoing side under, diagnosed once', () => {
+      const out = createCanvas(DEV_W, DEV_H)
+      const sink = createDiagnosticSink()
+      const refusing = { ...ws, lease: (n: number, tag: string) => tag.includes('morph-sum') ? undefined : lease(n) }
+      const comp = createCanvas2DCompositor(out as never, createCanvas as never, refusing as never, sink)
+      comp.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: DEV_W, deviceHeight: DEV_H })
+      const c = createCanvas(60, 30)
+      const x = c.getContext('2d')
+      x.fillStyle = 'rgb(40,120,200)'
+      x.fillRect(0, 0, 60, 30)
+      const up = () => { const r = comp.upload({ canvas: c as never, bounds: g, scale: 1, bytes: 60 * 30 * 4 }, lease(60 * 30 * 4)); if ('refused' in r) throw new Error(r.refused); return r }
+      const fh = up(), th = up()
+      for (const p of [0.25, 0.5]) {
+        morphFrame({ pairs: [{ from: { handle: fh, geometry: g, state: plain() }, to: { handle: th, geometry: g, state: plain() }, under: true }] }, p, comp)
+        // Opaque: never dips.
+        expect((out as unknown as HTMLCanvasElement).getContext('2d')!.getImageData(DEV_W / 2, DEV_H / 2, 1, 1).data[3]).toBe(255)
+      }
+      expect(sink.list().filter(d => d.code === 'compositor-workspace' && d.effect === 'morph-blend')).toHaveLength(1)
+    })
   })
 })

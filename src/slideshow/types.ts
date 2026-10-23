@@ -403,7 +403,21 @@ export interface LayerBitmap {
 /** Opaque. */
 export interface LayerHandle { readonly id: number }
 
-export interface LayerDraw { handle: LayerHandle; state: TargetState; part?: 'fill' | 'line' | 'text' }
+export interface LayerDraw {
+  handle: LayerHandle
+  state: TargetState
+  part?: 'fill' | 'line' | 'text'
+  /**
+   * Additive (PR #20 review 2): a Morph pair blended alpha-correctly. This
+   * draw (the outgoing side at weight 1 − p) and `with` (the incoming side
+   * at weight p) are summed in premultiplied colour and alpha on a scratch
+   * target, and the sum composites source-over: the pair is exactly
+   * `(1 − p)·from + p·to`, and an opaque pair never dips. When the scratch
+   * is refused (or a side is masked) the backend draws this layer at
+   * `heldOpacity` and `with` over it (the outgoing side held under).
+   */
+  sum?: { with: LayerDraw; heldOpacity: number }
+}
 
 export interface TransitionDraw {
   from: LayerHandle

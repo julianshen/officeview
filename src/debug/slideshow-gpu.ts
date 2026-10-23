@@ -37,6 +37,7 @@ import { frameDiff, withinTolerance } from './slideshow-parity'
 import { createSampleTransition3D } from './slideshow-3d-sample'
 import { registerTransition3D } from '../slideshow/render/three/registry'
 import { dispatchTransition, transition3DDraw } from '../slideshow/render/three/framework'
+import { morphFrame } from '../slideshow/morph/render'
 
 // ---------------------------------------------------------------------------
 // Workspace ledger (S1-16 owns the real one)
@@ -599,6 +600,55 @@ const three = {
   },
 }
 
+/**
+ * PR #20 review 2: a same-outline Morph pair of two identical translucent
+ * shapes (authored 50 % alpha, then opaque bitmaps at 50 % state opacity),
+ * at p = 0.25, 0.5 and 0.9, on a transparent output: the alpha inside the
+ * shape (device 28,16; the top band) and below it (device 28,50), raw.
+ */
+function morphSum(backend: 'webgl2' | 'canvas2d') {
+  const ws = makeWorkspace(256 * 1024 * 1024)
+  const sink = createDiagnosticSink()
+  const out = factory(DEV_W, DEV_H) as HTMLCanvasElement
+  const comp: Compositor | undefined = backend === 'webgl2' ? createWebGL2Compositor(out, ws, { sink }) : createCanvas2DCompositor(out, factory, ws, sink)
+  if (!comp) throw new Error(`no ${backend} compositor`)
+  const results: Array<{ authored: number; opacity: number; p: number; inside: number; below: number }> = []
+  try {
+    comp.setViewport({ matrix: VIEW, deviceWidth: DEV_W, deviceHeight: DEV_H })
+    const bounds = { x: 4, y: 2, w: 20, h: 8 }
+    const g = { ...bounds, rot: 0 }
+    const up = (alpha: number): LayerHandle => {
+      const c = factory(bounds.w * SCALE, bounds.h * SCALE) as HTMLCanvasElement
+      const x = c.getContext('2d')!
+      x.globalAlpha = alpha
+      x.fillStyle = 'rgb(40,120,200)'
+      x.fillRect(0, 0, c.width, c.height)
+      const bytes = c.width * c.height * 4
+      const r = comp.upload({ canvas: c, bounds, scale: SCALE, bytes }, ws.lease(bytes, 'layer')!)
+      if ('refused' in r) throw new Error(`upload refused: ${r.refused}`)
+      return r
+    }
+    for (const [authored, opacity] of [[0.5, 1], [1, 0.5]] as const) {
+      const fh = up(authored), th = up(authored)
+      const state = (): TargetState => ({ visible: true, opacity, transform: I })
+      for (const p of [0.25, 0.5, 0.9]) {
+        morphFrame({ pairs: [{ from: { handle: fh, geometry: g, state: state() }, to: { handle: th, geometry: g, state: state() }, under: true }] }, p, comp)
+        const r = factory(DEV_W, DEV_H) as HTMLCanvasElement
+        const ctx = r.getContext('2d', { willReadFrequently: true })!
+        ctx.drawImage(out, 0, 0)
+        const a = (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3]!
+        results.push({ authored, opacity, p, inside: a(28, 16), below: a(28, 50) })
+      }
+      comp.release(fh)
+      comp.release(th)
+    }
+    return { results, diagnostics: sink.list().map(d => `${d.code}:${d.effect}`) }
+  } finally {
+    comp.dispose()
+    if (ws.used() !== 0) throw new Error(`${backend} leaked ${ws.used()} bytes`)
+  }
+}
+
 declare global {
   interface Window { __slideshowGpu?: typeof api }
 }
@@ -606,6 +656,7 @@ const api = {
   groups: () => [...new Set(scenes().map(s => s.group))],
   parity: (group: Scene['group']) => scenes().filter(s => s.group === group).map(compare),
   flippedControl,
+  morphSum,
   staticSlide() {
     const animated = new Set(['sp:3'])
     const gl = renderSlideOn('webgl2', STATIC_SLIDE, animated)
