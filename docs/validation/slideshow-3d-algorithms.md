@@ -1,8 +1,10 @@
 # Slideshow 3-D transition algorithms (S3-1)
 
-Status: **proposal for codex review**, before S3-2 to S3-4 are dispatched. Each of the 26 catalogued 3-D rows has one entry below. An entry gives the row's mesh, motion, camera and timing curve, its seeded parameters, and a numeric oracle at 50 %. Every row is a **closest look-alike** (spec §1, §6.3). PowerPoint does not publish its 3-D rendering, so no row here is claimed to match Office. Each row stays `approximate` in the catalogue. Rows marked "D4 unverified" also have an unverified classification in the catalogue.
+Status: **implemented** (written as the S3-1 proposal before S3-2 to S3-4 were dispatched; reviewed by agy, and kept in step with the code by S3-2 to S3-4 and S3-7). Each of the 26 catalogued 3-D rows has one entry below. An entry gives the row's mesh, motion, camera and timing curve, its seeded parameters, and a numeric oracle at 50 %. Every row is a **closest look-alike** (spec §1, §6.3). PowerPoint does not publish its 3-D rendering, so no row here is claimed to match Office. Each row stays `approximate` in the catalogue. Rows marked "D4 unverified" also have an unverified classification in the catalogue.
 
 The executable reference is `scripts/slideshow-3d-oracles.ts`, which uses the framework's own maths (`src/slideshow/render/three/mesh.ts`). Every formula below is a function in that script, under the name given. `bun scripts/slideshow-3d-oracles.ts` regenerates the oracle table at the end of this document. If this document and the script disagree, the script wins, and the disagreement is a review finding. The script models only what the oracles measure. Terms that no oracle depends on are specified here only: drape's ripple and sway, curtains' folds, honeycomb's hexagon mask, glitter's sparkle mask, peelOff's colours and shadow, the fold back colours, shred `in`, warp `out` and the `invX`/`invY` mirrors.
+
+**Stage 3 close (S3-7).** Every row below is implemented and wired: `src/slideshow/render/three/index.ts` (`registerTransitions3D`) registers the three groups, and the show's backend manager calls it before it creates a WebGL2 compositor. Each row is `approximate` in the catalogue at the default approximate tolerance (mean abs 0.08, row max 0.30) and is verified only from compare records; none exists yet, because the owner's PowerPoint captures (D4) have not arrived. drape, wind, fallOver, warp and airplane are look-alikes awaiting owner PowerPoint capture (D4) for their motion as well as their classification. The shader path emits no diagnostic of its own when it draws (by design, S3-1 M1): `transition-approximate` is said only when the look-alike draws, and `transition-shader-fallback` only when the shader could not draw a frame.
 
 `flash`, `reveal` and `pan` are not on this sheet: S1-15 draws them as 2-D transitions (`exact` rows). The four Morph rows are S3-5/S3-6.
 
@@ -85,6 +87,15 @@ The template is `fold` in the script. It is used by pageCurlSingle, pageCurlDoub
 - **Ends.** At p = 0, L = 0, so the whole frame is `from`. At p = 1, L = D, so the whole page is `to`.
 
 ## S3-2: geometric rows (`three/geometric.ts`, `registerGeometric3D()`)
+
+### Face shading and the doors back-face pass (S3-2 M1)
+
+These apply to every geometric row; the per-row entries below give only the motion.
+
+- **Shading.** Each piece is drawn with the standard program's `shade`, which multiplies rgb only (premultiplied, so alpha and coverage are unchanged). A piece whose model turns its normal by φ from the viewer axis is shaded by `0.7 + 0.3 |cos φ|` (`shadeOf`: `0.7 + 0.3 min(1, |m[10]|)`, `m[10]` being the z component of the turned normal). It is 1 at rest, so progress 0 and 1 stay exact, and it falls to 0.7 when the piece is edge-on. No light position, specular term or ambient colour is modelled; this is a look-alike of a face turning away from a light behind the viewer.
+- **Culling.** Front faces are counter-clockwise, as the grid is built. Every piece is drawn with `CULL_FACE` on and `cullFace(BACK)`, so prism's hidden cube side and flip's other frame are never drawn from behind.
+- **Two-sided pieces (doors and window).** A half has `sides: 'both'`. After its front pass the same quad is drawn again with `cullFace(FRONT)`, so only its back (the half seen past edge-on) is drawn, with the same texture (mirrored, as paper seen from behind) and `shade · BACK_SHADE` (`BACK_SHADE` = 0.55). Exactly one of the two passes covers a pixel, so a half never double-blends. gallery, switch, conveyor and ferris never turn far enough to face away and draw one pass.
+- **Order.** Pieces are drawn back to front by the world z of each piece's centre (`byDepth`; the drawing buffer has no depth), stable on ties, with premultiplied `ONE, ONE_MINUS_SRC_ALPHA` blending.
 
 ### `transition:p14:prism`: Cube / Box / Rotate / Orbit (D4 unverified variants)
 
@@ -326,8 +337,9 @@ The template is `fold` in the script. It is used by pageCurlSingle, pageCurlDoub
 - **Seeded parameters:** none.
 - **Oracle:** `to` = 0.5 and back = 0.3291 (the mirror image of pageCurlSingle).
 
-### `transition:p15:prstTrans:airplane`
+### `transition:p15:prstTrans:airplane` (D4 unverified)
 
+- **Status:** a diagonal paper-dart look-alike (the S3-4 fix round 1 model, replacing a flat fold that did not read as a plane), awaiting owner PowerPoint capture (D4). **Clean-room:** the panel cut, the fold angles (π/4 dihedral, 0.9π wing fold) and the flight constants of G (0.9a sideways, −2.4 down, −3 deep, the 0.3 / 0.5 / 0.6 bank, yaw and pitch, the 0.4 shrink) were chosen by eye for a paper dart leaving the frame. No PowerPoint frame, binary or other implementation was consulted.
 - **Attributes:** `invX`, which flies the dart away to the left.
 - **Look-alike:** fade.
 - **Panels** (`AIRPLANE_TRIS`). The slide is cut into four rigid triangles along two diagonal creases, from the top corners to the nose N at the bottom centre (uv (½, 1)), and the vertical spine from the top centre to N:

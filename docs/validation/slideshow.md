@@ -6,7 +6,7 @@ Validation record for the PowerPoint slideshow project (spec
 later tasks fill in their sections. The controller merges the per-task ledger files
 (`.superpowers/sdd/ledger/<task-id>.md`) into the Eager ledger and Catalogue sections
 in merge order; implementer tasks do not edit those two sections, except S1-3's explicitly assigned initial
-generated catalogue. Stage-closing tasks (S0-8 for Stage 0, S1-23 for Stage 1, S2-9 for Stage 2) do the merge.
+generated catalogue. Stage-closing tasks (S0-8 for Stage 0, S1-23 for Stage 1, S2-9 for Stage 2, S3-7 for Stage 3) do the merge.
 
 Synthetic builder decks are "Office-shaped synthetic" and are never reported as
 Office evidence.
@@ -81,6 +81,29 @@ the diagnostic-table test. Every gate below ran on the final source and test tre
 | WebGL2 in CI | the `slideshow-browser` job | observed on PR #18 (Stage 1): CI created WebGL2 on SwiftShader. The Stage 2 PR's run is the next check. |
 
 The corpus (`bun scripts/fetch-corpus.ts`, `--check` clean) was present for every run.
+
+### Stage 3 close (S3-7, on `feature/slideshow-s3` `87f0b6c`)
+
+Run by S3-7 on the Mac build host, on the tree that S3-1 to S3-6 and the Stage 2
+merge (PR #19, `33621e7`) produced, plus this task's commits: the 3-D wiring and
+grid cache (`90f8a0e`), the Morph cross-object fix (`1617e59`), the morph
+transition-report test (`c3387d6`), the Stage 3 row flips and diagnostic codes
+(`9074b30`), and this documentation with the Stage 3 diagnostic-table test.
+
+| Gate | Command | Result |
+|---|---|---|
+| Typecheck | `npx tsc --noEmit -p .` | exit 0, no errors |
+| Script typecheck | `bun run typecheck:scripts` | exit 0 |
+| Goldens, strict | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts tests/golden-corpus.test.ts tests/golden-appearance.test.ts tests/slideshow-goldens.test.ts` | 4 files, 81 passed (the 76 of Stage 2 plus the 5 Morph goldens); no golden written or changed (`git status` clean for `tests/goldens/`) |
+| Full Vitest | `npx vitest run` (corpus fetched) | 496 files passed; 9,259 passed, 3 skipped, 1 todo, 0 failed (5.2 min). Before this task: 2 failed (the two carry-9 corpus tests), 9,246 passed |
+| Eager budget, fresh rebuild | `rm -rf dist && bun run build && bun scripts/eager-budget.ts` | **35,935 B** (ceiling 38,647 B; 2,712 B headroom). `87f0b6c` rebuilt fresh on the same host: 35,934 B (35,936 B at the Stage 2 merge); the difference is the lazy chunk's hashed name in the `import()` seam |
+| Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | eager graph ok, 144 eager modules |
+| Playwright, `slideshow` project (SwiftShader WebGL2) | `IV_HARNESS_PORT=4471 bunx playwright test --config playwright.viewer.config.ts --project=slideshow` | 77 passed, 21 skipped (the opt-in `slideshow-perf.spec.ts` benchmark and the opt-in or Mac-golden 3-D GPU frame checks), 0 failed (3.2 min); includes the 3-D group specs, `slideshow-morph.spec.ts` on WebGL2 and Canvas 2D, and `slideshow-corpus.spec.ts` playing airplane-transition (now its shader) on WebGL2; port 4471 free afterwards |
+
+The corpus (`bun scripts/fetch-corpus.ts`, 16 `lo-` decks) was present for every
+run. Before this task, two corpus tests failed on `feature/slideshow-s3` once the
+corpus was fetched (uncatalogued Stage 3 diagnostic codes, and the airplane/Morph
+test still asserting the `pending-stage-3` stand-ins); both pass now (carry item 9).
 
 ## Eager ledger
 
@@ -204,6 +227,47 @@ Summary:
 
 The per-task files `.superpowers/sdd/ledger/S2-*.md` hold the full rows. S2-4 wrote none.
 
+### Stage 3 (merged by S3-7)
+
+Same metric and rules. `feature/slideshow-s3` branched from `feature/slideshow-s2`
+at `7cadf3a` (36,003 B) and later merged the Stage 2 work as it landed on `main`.
+As before, a row's "Before" is that task's own base.
+
+| Task | Item | Before | After | Delta | Running total |
+|---|---|---|---|---|---|
+| — | Fork point: `feature/slideshow-s2` `7cadf3a`, fresh rebuild | | 36,003 | | 36,003 |
+| S3-5 | Morph object matching (`morph/match.ts`, lazy, imported by its test only); fix round 1 | 36,003 | 36,003 | 0 | 36,003 |
+| S3-1 | 3-D framework (`three/{framework,mesh,registry}.ts`, lazy; `webgl2.ts`, `backend.ts`, `stage.ts` lazy edits) | 36,003 | 36,002 | −1 (variance) | 36,002 |
+| S3-2 | Geometric rows (`three/geometric.ts`, lazy, not yet imported) | 36,002 | 36,002 | 0 | 36,002 |
+| S3-3 | Tile and particle rows (`three/particles.ts`, lazy, not yet imported) | 36,002 | 36,002 | 0 | 36,002 |
+| S3-4 | Deformation rows (`three/deform.ts`, lazy, not yet imported); fix round 1 | 36,002 | 36,002 | 0 | 36,002 |
+| S3-6 | Morph rendering (`morph/render.ts`, stage route; lazy); fix rounds 1–2 | 36,002 | 36,001 | −1 (variance) | 36,001 |
+| — | Merge the Stage 2 PR (#19, `33621e7`: S2-9's −87 B recovery and the PR review fixes) and S3-6 (`87f0b6c`) | 36,001 | 35,936 | −65 | 35,936 |
+| S3-7 | Stage close: `three/index.ts` wires the three groups into the lazy chunk (called from `backend.ts`), the grid cache, the matcher fix, the catalogue flips and new diagnostic codes; tests and docs. Fresh rebuilds: 35,934 on `87f0b6c`, 35,935 after | 35,934 | 35,935 | +1 (variance; hashed chunk name) | **35,935** |
+
+Summary:
+
+- **Stage 3 is entirely lazy: 0 B of eager growth.** Every Stage 3 task measured 0 B or −1 B of rebuild variance. The eager size is unchanged from the Stage 2 merge (35,936 B there, 35,934–35,935 B on fresh rebuilds here).
+- **Final 35,935 B against the 38,647 B ceiling: 2,712 B of headroom** (hard limit 38,720 B).
+- **`check-eager`**: 144 eager modules, graph ok. Nothing under `src/slideshow/` (including `render/three/` and `morph/`) is eager.
+
+### Static closure (Stage 3)
+
+Stage 3 close (S3-7, fresh build of this tree, same method; `node:zlib` `gzipSync` default):
+
+| Chunk | Stage 2 final (`011d252` + S2-9) | `87f0b6c` (S3-7 base) | Stage 3 final (this tree) | Delta vs base |
+|---|---|---|---|---|
+| `index.js` (gated; `eager-budget.ts` reads 35,935) | 35,937 | 35,932 | 35,933 | +1 |
+| `office-worker-*.js` | 356,015 | 356,015 | 356,015 | 0 |
+| `importSession-*.js` | 1,159 | 1,159 | 1,159 | 0 |
+| Slideshow chunk `index-*.js` (lazy, not in the closure) | 114,426 | 124,639 | 133,776 | +9,137 |
+| `appearance-*.js` (lazy) | 3,104 | 3,104 | 3,104 | 0 |
+| `master-art-*.js` (lazy) | 3,200 | 3,200 | 3,200 | 0 |
+
+The slideshow chunk grows by the 3-D framework and Morph (S3-1, S3-5, S3-6: up to
+`87f0b6c`) and, in S3-7, by the three shader groups, which nothing in the library
+imported before `three/index.ts` wired them (they were tree-shaken until then).
+
 ### Static closure (information only; tracked, not gated)
 
 Each chunk gzipped separately with `node:zlib` `gzipSync` at default settings, on fresh builds.
@@ -302,6 +366,18 @@ Controller rulings recorded in the progress ledger during Stage 2.
 - **Text builds by word and letter landed dormant, then wired** (S2-8): the first round was not wired into the stage, and the controller held the merge until the fix round wired it in after S2-7 (CJK word split, rotated boxes, exit body timing, RTL reading order).
 - **Diagnostic classes and the presenter panel** (S2-9). The Stage 2 codes keep the classes the `main` merge provisioned (`DIAGNOSTIC_CODES`); they fit the class definitions as written. The presenter panel's groups are derived from the class: `refused` → Refused, `approximate` and `stand-in` → Approximate, `info` → Other notes. Only a `resource` code (platform or memory pressure) is placed by presentation, in `PANEL_KIND` (`src/slideshow/presenter/diagnostics.tsx`): Refused when the thing did not happen (no popup, no styles, a clip not decoded), Approximate when it happened reduced (a smaller presenter surface, a text build painted whole), Pending when a click or retry can still start it (`media-autoplay`, `preview-prime`). A test checks that every other entry agrees with its class. The unused `presenter-view-unavailable` code was dropped.
 - **Effect sounds play with their animation** (S2-10, closing the gap S2-9 found). A `p:audio` on a `p:sndTgt` (a sound attached to an animation, usually in the effect's `subTnLst`, begun with the effect; for example tdf44223's fly-in "wind.wav") is followed by the media player like shape audio. The decisions S2-9 left open: **no "Click to play"** after a refusal, because there is no poster (the transition-sound convention: diagnosed, the effect runs silent, and the timeline gets the same synthetic end); **one audio output**, because the element is a hidden `<audio>` in the audience document, created by the same player; **pressure order** unchanged, because the lease goes through the player's `open` (cross-slide media, then the looping transition sound, then one retry). "Loop until next sound" is `repeatCount="indefinite"`, and it stops when the next effect sound starts. "Stop previous sound" (`p:cmd type="evt" cmd="onstopaudio"`) stops every audio of the slide and the transition sound. `p:stSnd`/`p:endSnd` are transition elements only (S2-7); timing has no such element. A built-in sound named without a part is `media-missing`. The `media-stand-in` code is retired; `sound:effect` is file / exact.
+
+### Stage 3 decisions
+
+Controller rulings recorded in the progress ledger during Stage 3.
+
+- **Every 3-D and Morph row is `approximate`, verified only from compare records** (S3-7). The owner's D4 PowerPoint captures have not arrived, so no row claims `exact` and every row stays `verified: no`. Each row's tolerance is the default approximate one (mean abs 0.08, row max 0.30). The rows are `shader` rows and keep their 2-D look-alike (the row Canvas 2D draws, and WebGL2 draws when a shader cannot). The four Morph rows are `shader` too, as the plan's checklist says, although Morph is a composited route on both backends (`morphFrame`), not a GPU shader.
+- **The shader path emits no diagnostic of its own when it draws** (S3-1 M1, recorded, no change). A 3-D row that plays as its shader is the row as catalogued (approximate); `transition-approximate` is said only when its 2-D look-alike draws instead, and `transition-shader-fallback` only when the shader could not draw a frame.
+- **Group registration is wired once, by the backend** (S3-7). `three/index.ts` (`registerTransitions3D`) calls `registerGeometric3D`, `registerParticle3D` and `registerDeform3D`; `createBackendManager` calls it before it creates any WebGL2 compositor. It is a function, not a module side effect, so the group tests can reset the registry and register one group.
+- **The grid cache holds every group** (S3-3 agy I1, S3-7). The 26 rows use 9 distinct grids (1×1, 32×18, 8×18, 64×36, 24×1, 24×14, 12×7, 16×9, 20×11), one more than the old `MAX_CACHED_GRIDS` of 8, so a show playing them all evicted and rebuilt. It is now 12. Each grid is still leased (`webgl2:mesh`) against the workspace on first use, so the extra bytes are only the grids a show actually plays: 291,308 B with every grid cached, at most 76 B (the 1×1 grid) more than the old cap could hold at once.
+- **The S3-2 sheet was wrong about airplane; the closest effect wins** (S3-4 I1). The sheet's flat fold did not read as a paper plane. S3-4's fix round replaced it with a diagonal paper dart before merge, rather than deferring; the sheet now matches the code. Its flight constants are clean-room.
+- **Morph cross-object pairing uses position** (S3-5 N3, S3-7). Remaining text-bearing objects pair as containers with the nearest object that shares unit content, falling back down the list when it is taken; units then pair only within their container pair. S3-6's first round replaced content pairing with nearest-box-only pairing (`e134f62`), which broke spec rule 3 (text that moves across the slide faded); that was reverted, and this rewrite keeps rule 3 while stopping units from scattering. The cost: a box whose words split across two boxes on the next slide pairs with the nearer one, and the other's words fade in.
+- **Morph limits accepted for Stage 3** (S3-6 rulings): listed under "Morph approximations" below.
 
 ### Project rules (adopted in Stage 1)
 
@@ -2773,6 +2849,12 @@ The README's "Slideshow" section documents these for hosts, including the Stage 
   - **Autoplay.** A refused `play()` (no gesture, or a resume after a hidden tab) leaves the poster with a "Click to play" button and `media-autoplay`; the show continues.
   - **Real two-screen placement, popup blocking, a strict-CSP host and a real autoplay refusal** are covered by automation proxies only; the owner checks are under Manual checks.
 
+- **Slideshow (Stage 3).** Known limits of the 3-D transitions and Morph as landed:
+  - **Every 3-D transition is a look-alike.** PowerPoint does not publish its 3-D rendering; the motions are the algorithm sheet's (`docs/validation/slideshow-3d-algorithms.md`), and no PowerPoint capture has been compared (D4 pending). drape, wind, fallOver, warp and airplane are the least certain (their motion, and for the first four their classification).
+  - **Canvas 2D has no 3-D path.** Without WebGL2 (or after a context loss pins Canvas 2D) each 3-D row draws its 2-D look-alike, diagnosed `transition-approximate`.
+  - **No depth buffer.** The 3-D path orders its draws back to front (painter's order, per piece, not per pixel), because a depth buffer would cost a full surface at 4K.
+  - **Morph approximations** are listed in the Stage 3 section below.
+
 ## Manual checks
 
 Two checks need a person at a real browser, because automation cannot produce them:
@@ -2899,7 +2981,7 @@ motion-direction convention (S1-11; partly Q-wipe-direction).
 - **SVG pictures have no browser test.** jsdom cannot rasterise SVG, so the image-charge test (`tests/slideshow-image-charge.test.tsx`) uses a stand-in decoder that mirrors core's preference. The production path through `decodeSvgImage` runs only in a browser, and no browser spec presents a slide with an SVG picture yet.
 - **tdf142915's `useTimings` flip is engine evidence only.** The deck as filed has `useTimings="0"` and does not auto-advance. The conformance test's second half plays an in-memory copy with `useTimings="1"` (auto-advance at 1000 ms, clicks ignored); that proves the engine's `advTm`/`advClick` handling, not anything about PowerPoint's playback of tdf142915. The committed corpus file is never modified.
 - **Per-frame cost.** `updateA11y()` recomputes the render state each tick after `frame()` has computed the same state; sharing it would halve the scheduler work per frame (well inside budget today).
-- **`stage.transition` reports the drawn element** (for example `fade` for airplane and morph) since S1-22; Stage 2 readers (S2-4 preview, S2-5 presenter) should expect that.
+- **`stage.transition` reports the drawn element** since S1-22: the 2-D look-alike's name when a look-alike draws (for example `fade` for airplane on Canvas 2D), the row's own element when its 3-D shader draws (`c85a9e3`), and `morph` while a Morph runs (`87f0b6c`, pinned by a test in S3-7). Stage 2 readers (S2-4 preview, S2-5 presenter) should expect that.
 
 Stage 2 follow-ups (known, not blocking the Stage 2 PR):
 
@@ -2908,6 +2990,13 @@ Stage 2 follow-ups (known, not blocking the Stage 2 PR):
 - **Media activation heuristics** (S2-7): a media node whose whole activation falls between two frames with `fill="remove"` is missed; a node restarted while active is not a new activation; a synthetic end's begin time is estimated from linear progress.
 - **Presenter controls not built** (S2-5): white screen and pause from Presenter View (W and S work by key). Pen, laser and highlighter are spec non-goals.
 - **The Presenter View diagnostic panel** reads uncatalogued codes from their wording; every catalogued code now follows its class (S2-9).
+
+Stage 3 follow-ups (known, not blocking the Stage 3 PR):
+
+- **D4 captures.** When the owner's PowerPoint captures arrive, `bun scripts/slideshow-compare.ts` compares each 3-D and Morph row against them; a row that passes its tolerance can then be marked verified. Until then every row is `verified: no`.
+- **A rapid Next-Next can capture a stale outgoing state for Morph** (S3-6, pre-existing): the outgoing side is the slide as last left, and a second Next during the slide's preparation can morph from the state before the first.
+- **A semi-transparent same-outline Morph pair pops on the last frame** (S3-6, accepted for Stage 3).
+- **The Morph corpus deck has one slide.** tdf149588's only slide carries the Morph, so the corpus run shows the first-slide fallback; the morph route itself is shown by the synthetic decks (`tests/slideshow-morph-stage.test.tsx`, `tests/browser/slideshow-morph.spec.ts`). A two-slide Office-authored Morph deck would be better evidence.
 
 ## Stage 2: Presenter View and media
 
@@ -2967,6 +3056,98 @@ checks this table against both.
 | `placement-single-screen` | info | Other notes | only one screen is available |
 | `placement-failed` | resource | Refused | screen details failed (for example a frame without `allow="window-management"`) |
 | `placement-fullscreen-refused` | resource | Refused | full screen on the chosen audience screen was refused |
+
+## Stage 3: 3-D transitions and Morph
+
+What Stage 3 delivers. Every row below is `approximate` at the tolerance shown and
+**verified only from compare records**: none exists yet, because the owner's D4
+PowerPoint captures have not arrived, so every row is `verified: no` and none is
+claimed `exact`. Builder decks are "Office-shaped synthetic", never Office evidence.
+
+### Final catalogue
+
+The catalogue is complete: `LANDED_STAGE` = 3 and no row is `pending-stage-*`
+(`tests/slideshow-catalogue.test.ts` "no pending-stage rows remain"). Every row is
+`exact` (tolerance mean abs 0.02, row max 0.10), `approximate` (0.08 / 0.30) or
+`never`; the generated table is under "Catalogue" above. S3-7 flipped the 30
+Stage 3 rows (14 p14, 12 p15 `prstTrans`, 4 Morph) from `pending-stage-3` to
+`approximate` with implementation `shader`, each keeping its look-alike.
+
+### 3-D look-alikes
+
+Each 3-D row draws its shader on WebGL2 (registered by `three/index.ts`) and its
+catalogued 2-D look-alike on Canvas 2D, or for a frame its shader cannot draw
+(`transition-shader-fallback`). The motions are on the algorithm sheet
+(`docs/validation/slideshow-3d-algorithms.md`, with numeric oracles); browser
+evidence is `tests/browser/slideshow-3d-geometric.spec.ts`,
+`slideshow-3d-particles.spec.ts` and `slideshow-3d-deform.spec.ts` (SwiftShader
+WebGL2; each spec says what it measures), and `slideshow-corpus.spec.ts` plays
+airplane-transition on WebGL2.
+
+| Row | Group | Look-alike | Tolerance (mean abs / row max) | D4 |
+|---|---|---|---|---|
+| transition:p14:vortex | S3-3 tile / particle | dissolve | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:switch | S3-2 geometric | push | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:flip | S3-2 geometric | push | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:ripple | S3-3 tile / particle | dissolve | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:honeycomb | S3-3 tile / particle | checker | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:prism | S3-2 geometric | push | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:doors | S3-2 geometric | split | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:window | S3-2 geometric | split | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:ferris | S3-2 geometric | push | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:gallery | S3-2 geometric | push | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:conveyor | S3-2 geometric | push | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:glitter | S3-3 tile / particle | dissolve | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p14:warp | S3-4 deformation | fade | 0.08 / 0.3 | **look-alike, awaiting owner PowerPoint capture (D4)**; its classification is D4-unverified too |
+| transition:p14:shred | S3-3 tile / particle | dissolve | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:fallOver | S3-4 deformation | fade | 0.08 / 0.3 | **look-alike, awaiting owner PowerPoint capture (D4)**; its classification is D4-unverified too |
+| transition:p15:prstTrans:drape | S3-4 deformation | fade | 0.08 / 0.3 | **look-alike, awaiting owner PowerPoint capture (D4)**; its classification is D4-unverified too |
+| transition:p15:prstTrans:curtains | S3-4 deformation | split | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:wind | S3-4 deformation | fade | 0.08 / 0.3 | **look-alike, awaiting owner PowerPoint capture (D4)**; its classification is D4-unverified too |
+| transition:p15:prstTrans:prestige | S3-4 deformation | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:fracture | S3-3 tile / particle | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:crush | S3-3 tile / particle | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:peelOff | S3-4 deformation | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:pageCurlDouble | S3-4 deformation | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:pageCurlSingle | S3-4 deformation | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+| transition:p15:prstTrans:airplane | S3-4 deformation | fade | 0.08 / 0.3 | **look-alike, awaiting owner PowerPoint capture (D4)**: a diagonal paper dart (S3-4 fix round 1) with clean-room flight constants |
+| transition:p15:prstTrans:origami | S3-4 deformation | fade | 0.08 / 0.3 | awaiting D4 (no capture compared) |
+
+### Morph approximations
+
+The four Morph rows (`transition:p159:morph`, `:byObject`, `:byWord`, `:byChar`,
+look-alike fade, tolerance 0.08 / 0.30, awaiting D4) take the composited Morph route
+on both backends (S3-5 matching, S3-6 rendering): matched objects interpolate
+position, size, rotation and colour; unmatched objects fade out and in. Matching:
+`!!` names, then the same name and kind, then text (whole objects under byObject;
+word or character units under byWord and byChar, with the nearest content-sharing
+object as partner), then the same preset geometry within a quarter of the slide
+diagonal. Evidence: `tests/slideshow-morph-match.test.ts`, `tests/slideshow-morph.test.ts`,
+`tests/slideshow-morph-stage.test.tsx`, the five `morph.*.png` goldens, and
+`tests/browser/slideshow-morph.spec.ts` (WebGL2 and Canvas 2D).
+
+Accepted limits (S3-6 rulings):
+
+- **A same-outline pair with a semi-transparent incoming fill pops on the last frame**: it snaps to its final look when the morph ends instead of settling smoothly.
+- **Pairs that differ in geometry, picture, group, table or chart crossfade**, and the crossfade can dip up to 25 % at mid-morph.
+- **On a tight workspace the morph is refused**: it falls back to the fade look-alike and emits `transition-approximate` with effect `morph-fallback` and the reason. The same fallback covers a first slide (it enters from black, as PowerPoint does), an outgoing slide that is not resident, a lower ladder rung, a lost compositor and the layer bound.
+- **A rapid Next-Next can capture a stale outgoing state** (pre-existing; a follow-up).
+- **Word and character Morph pairs move with their containing shape**: a unit is not interpolated on its own path.
+- **Cross-object pairing** (byWord and byChar) pairs each remaining text object with its nearest content-sharing partner; a box whose words split across two boxes keeps only the nearer one (Stage 3 decisions).
+
+### Stage 3 diagnostic codes
+
+Each Stage 3 code, its catalogue class (`DIAGNOSTIC_CODES`) and the group Presenter
+View's effect-notes panel puts it in (`diagnosticKind`). `tests/slideshow-catalogue.test.ts`
+checks this table against both. `morph-fallback` is not a code: it is the `effect` of
+a `transition-approximate` when a Morph cannot run.
+
+| Code | Class | Panel | Emitted when |
+|---|---|---|---|
+| `transition-shader-fallback` | resource | Approximate | a 3-D shader could not draw a frame (its grid did not fit the workspace, its program did not compile, the context was lost, or no shader is registered), so the row's 2-D look-alike drew it |
+| `morph-refused` | refused | Refused | a slide has more than 256 objects (`MORPH_MAX_OBJECTS`): no object pairs, every object fades |
+| `morph-units-coarsened` | approximate | Approximate | text units passed 2,048 pairs (`MORPH_MAX_UNIT_PAIRS`) while decomposing name-matched pairs: later pairs match as whole objects |
+| `morph-unit-bound` | approximate | Approximate | the cross-object stage reached the unit cap: its objects still pair, and their remaining units fade |
 
 ## S1-3 inventory provenance and name audit
 
@@ -3333,11 +3514,11 @@ The slideshow job now fetches the corpus. `tests/browser/slideshow-corpus.spec.t
 
 Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-through of each deck (every step, every trigger), classified from the timing tree and the diagnostics of that run. **native**: drawn as the file says. **closest**: the closest equivalent plays, with a diagnostic (a 2-D look-alike, media the run could not play, a dropped attribute, a whole-graphic build). **refused**: nothing of it plays. Totals: 19 native, 11 closest, 0 refused.
 
-Regenerated by S2-9 after the media rows landed, and by S2-10 when effect sounds landed (totals unchanged). The run is jsdom, which decodes no media (`canPlayType` is `''`), so every shape clip, effect sound and transition sound the corpus plays is reported here as `media-codec`, closest, diagnosed: that is the jsdom outcome, not a browser's. Real playback is browser evidence: `tests/browser/slideshow-media.spec.ts` plays narration.pptx's m4a in Chromium (`media:playing:6`). tdf44223's fly-in sound is an effect sound on a `p:sndTgt`; S2-10's corpus test plays it with a WAV-capable stand-in decoder (the file's own part, through the lease, at the effect's begin).
+Regenerated by S2-9 after the media rows landed, by S2-10 when effect sounds landed, and by S3-7 after the Stage 3 rows landed (totals unchanged: the airplane and Morph items stay **closest**, because this run is Canvas 2D, where airplane draws its fade look-alike, and tdf149588's only slide carries its Morph, so it enters from black with the fade). The run is jsdom, which decodes no media (`canPlayType` is `''`), so every shape clip, effect sound and transition sound the corpus plays is reported here as `media-codec`, closest, diagnosed: that is the jsdom outcome, not a browser's. Real playback is browser evidence: `tests/browser/slideshow-media.spec.ts` plays narration.pptx's m4a in Chromium (`media:playing:6`). tdf44223's fly-in sound is an effect sound on a `p:sndTgt`; S2-10's corpus test plays it with a WAV-capable stand-in decoder (the file's own part, through the lease, at the effect's begin).
 
 | Deck | Native | Closest | Refused | Items (slide: what → coverage, note) |
 |---|---|---|---|---|
-| airplane-transition | 0 | 1 | 0 | 1: p15:prstTrans:airplane → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
+| airplane-transition | 0 | 1 | 0 | 1: p15:prstTrans:airplane → **closest** (approximate: 3-D shader on WebGL2; this run (Canvas 2D) draws the 2-D look-alike fade, diagnosed) |
 | bnc591147 | 0 | 3 | 0 | 1: mediacall 1 → **closest** (cmd playFrom(0.0): not played in this run (media-codec; the poster stays), diagnosed)<br>1: mediacall 2 → **closest** (cmd togglePause: not played in this run (media-codec; the poster stays), diagnosed)<br>2: mediacall 1 → **closest** (cmd playFrom(0.0): not played in this run (media-codec; the poster stays), diagnosed) |
 | connector-shape-animations | 2 | 0 | 0 | 1: entr 22/1 wipe: from-top → **native** (file behaviours)<br>1: entr 22/1 wipe: from-top → **native** (file behaviours) |
 | narration | 0 | 1 | 0 | 1: mediacall 1 → **closest** (cmd playFrom(0.0): not played in this run (media-codec; the poster stays), diagnosed) |
@@ -3349,7 +3530,7 @@ Regenerated by S2-9 after the media rows landed, and by S2-10 when effect sounds
 | tdf123684 | 0 | 0 | 0 | no transitions or effects |
 | tdf142915 | 0 | 0 | 0 | no transitions or effects |
 | tdf146223 | 2 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (1000 ms)) |
-| tdf149588_transparentSolidFill | 0 | 1 | 0 | 1: p159:morph → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
+| tdf149588_transparentSolidFill | 0 | 1 | 0 | 1: p159:morph → **closest** (approximate: Morph route, fell back to the 2-D look-alike fade (the first slide enters from black), diagnosed) |
 | tdf156808 | 1 | 0 | 0 | 1: p14:flythrough → **native** (exact (800 ms)) |
 | tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (audio effect sound: not played in this run (media-codec; the effect runs silent), diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (not played in this run: silent (media-codec), diagnosed) |
 | tdf93868 | 2 | 0 | 0 | 1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours)<br>1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours) |

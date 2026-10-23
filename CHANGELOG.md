@@ -108,8 +108,8 @@ print. Targets 0.5.0 (the version in package.json).
   `allow="fullscreen"`) the show runs in the window. The show draws with
   WebGL2 and falls back to Canvas 2D, within a bounded memory workspace
   (512 MiB desktop, 256 MiB mobile). Its code is a lazy chunk; the eager
-  bundle ends smaller than before. Limits: 3-D and morph transitions play a
-  2-D look-alike, custom shows play the whole deck, and macOS may capture F5.
+  bundle ends smaller than before. Limits: custom shows play the whole deck,
+  and macOS may capture F5.
   Every approximated or refused effect is reported through
   `onSlideShowDiagnostic`. See the README's "Slideshow" section.
 - **Slideshow Presenter View, audio and video.** `present({ presenterView })`
@@ -135,6 +135,21 @@ print. Targets 0.5.0 (the version in package.json).
   stylesheet URL (the presenter window inherits it). The eager bundle stays
   under its ceiling (35,937 B). Limits: video plays in an overlay that shape
   effects do not move, and some Presenter View thumbnails show no pictures.
+- **Slideshow 3-D transitions and Morph.** The 26 3-D transitions (vortex,
+  switch, flip, ripple, honeycomb, prism, doors, window, ferris, gallery,
+  conveyor, glitter, warp, shred and the prstTrans presets fall over, drape,
+  curtains, wind, prestige, fracture, crush, peel off, page curl single and
+  double, airplane and origami) draw as WebGL2 shaders; on Canvas 2D, or when
+  a shader cannot draw, they play their 2-D look-alike, diagnosed. Morph (by
+  object, word and character) pairs the objects two slides share and
+  interpolates their position, size, rotation and colour on both backends,
+  fading the rest. No catalogue row is pending any more: every effect except
+  the never-supported ones (macros, OLE) plays as itself or its closest
+  look-alike. The 3-D and Morph rows are
+  approximations, not verified against PowerPoint captures. Limits: objects
+  that differ in geometry, picture, group, table or chart crossfade; a Morph
+  on the first slide, or under memory pressure, fades. The eager bundle is
+  unchanged (35,935 B); the shaders and Morph are in the lazy slideshow chunk.
 
 ### Changed
 

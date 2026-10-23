@@ -174,3 +174,23 @@ it('the validation doc lists every Stage 2 diagnostic code with its catalogue cl
   expect(stage2.filter(c => !listed.has(c))).toEqual([])
   expect(rows.length).toBe(listed.size)
 })
+it('the validation doc lists every Stage 3 diagnostic code with its catalogue class and panel group (S3-7)', async () => {
+  const { DIAGNOSTIC_CODES } = await import('../src/slideshow/diagnostics')
+  const { diagnosticKind } = await import('../src/slideshow/presenter/diagnostics')
+  const doc = readFileSync('docs/validation/slideshow.md', 'utf8')
+  const section = doc.split('### Stage 3 diagnostic codes\n')[1]?.split('\n## ')[0] ?? ''
+  const rows = section.split('\n').filter(l => /^\| `/.test(l)).map(l => l.split('|').slice(1, -1).map(c => c.trim()))
+  const PANEL = { refused: 'Refused', approximate: 'Approximate', pending: 'Pending', other: 'Other notes' } as const
+  const listed = rows.map(([code, cls, panel]) => {
+    const name = code.replace(/`/g, '')
+    expect(DIAGNOSTIC_CODES[name], name).toBe(cls)
+    expect(PANEL[diagnosticKind({ code: name, message: '' })], name).toBe(panel)
+    return name
+  })
+  // The Stage 3 block of the catalogue: transition-shader-fallback onwards, each listed once.
+  const keys = Object.keys(DIAGNOSTIC_CODES)
+  expect(listed).toEqual(keys.slice(keys.indexOf('transition-shader-fallback')))
+  expect(listed).toEqual(['transition-shader-fallback', 'morph-refused', 'morph-units-coarsened', 'morph-unit-bound'])
+  // morph-fallback is an effect of transition-approximate, not a code.
+  expect(keys).not.toContain('morph-fallback')
+})
