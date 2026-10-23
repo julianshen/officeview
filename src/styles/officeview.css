@@ -534,6 +534,15 @@
   height: 90px;
   background: #000;
 }
+[data-ov-theme-root] [data-officeview-presenter-thumb][data-unheld]::after {
+  content: "No thumbnail";
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #a19f9d;
+  font-size: 12px;
+}
 [data-ov-theme-root] [data-officeview-presenter-thumb] canvas {
   display: block;
   width: 100%;
@@ -575,7 +584,8 @@
     display: none !important;
   }
   /* allowPrint=false: the presenter window prints nothing either (slideshow S2-5). */
-  [data-ov-theme-root][data-officeview-presenter][data-ov-print="false"] {
+  [data-ov-theme-root][data-officeview-presenter][data-ov-print="false"],
+  [data-ov-theme-root] [data-officeview-presenter-swap][data-ov-print="false"] {
     display: none !important;
   }
 }

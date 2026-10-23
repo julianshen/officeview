@@ -16,8 +16,27 @@ const KINDS: ReadonlyArray<[DiagnosticKind, RegExp, string]> = [
   ['other', /(?:)/, 'Other notes'],
 ]
 
-/** The panel group of a diagnostic, read from its code (and effect). */
+/** Codes whose group is known; the catalogue rows land in S2-9. Others are read from their wording. */
+const KNOWN: Readonly<Record<string, DiagnosticKind>> = {
+  'presenter-paint': 'refused',
+  'presenter-thumbnail-approximate': 'approximate',
+  'presenter-styles-blocked': 'refused',
+  'presenter-window-failed': 'refused',
+  'presenter-surface': 'approximate',
+  'preview-prime': 'pending',
+  'popup-blocked': 'refused',
+  'fullscreen-refused': 'refused',
+  'placement-permission-denied': 'refused',
+  'placement-api-missing': 'refused',
+  'placement-single-screen': 'other',
+  'placement-failed': 'refused',
+  'placement-fullscreen-refused': 'refused',
+}
+
+/** The panel group of a diagnostic: an explicit code first, else read from its code (and effect). */
 export function diagnosticKind(d: SlideShowDiagnostic): DiagnosticKind {
+  const known = KNOWN[d.code]
+  if (known) return known
   const s = `${d.code} ${d.effect ?? ''}`
   return KINDS.find(([, re]) => re.test(s))![0]
 }

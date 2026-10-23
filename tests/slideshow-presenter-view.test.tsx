@@ -27,6 +27,7 @@ import { createElapsedTimer, formatElapsed, formatWallClock } from '../src/slide
 import { NotesPane, NOTES_SIZES, NOTES_DEFAULT } from '../src/slideshow/presenter/notes'
 import { SlideGrid, GRID_CELL, gridWindow } from '../src/slideshow/presenter/grid'
 import { diagnosticKind } from '../src/slideshow/presenter/diagnostics'
+import { previewTimeline } from '../src/slideshow/presenter/preview'
 
 type FakePopup = Window & { closeCalls: number }
 function fakePopup(): FakePopup {
@@ -49,8 +50,10 @@ function fakePopup(): FakePopup {
 
 const box = { id: 2, prst: 'rect', off: ['0', '0'] as [string, string], ext: ['914400', '914400'] as [string, string] }
 const SCRIPT = 'Say <script>window.__pwned = 1</script> & <b>bold</b>'
-async function deck(opts: { hidden?: number } = {}): Promise<PptxDocument> {
+const KIOSK = '<p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:showPr><p:kiosk/></p:showPr></p:presentationPr>'
+async function deck(opts: { hidden?: number; kiosk?: boolean } = {}): Promise<PptxDocument> {
   const bytes = await buildPptxDeck({
+    ...(opts.kiosk ? { presProps: KIOSK } : {}),
     slides: [
       { shapes: [box], notes: [[SCRIPT], ['Second paragraph']] },
       { shapes: [box], hidden: opts.hidden === 1 },
@@ -572,5 +575,129 @@ describe('Presenter View (S2-5)', () => {
     expect(p3.document.querySelector('[data-officeview-drag-hint]')).not.toBeNull()
     expect(button(p3.document, 'Use both screens')).toBeNull()
     h.s.exit()
+  })
+
+  describe('fix round 1', () => {
+    it('I1: in kiosk, presenter input reaches the show; audience input stays blocked', async () => {
+      const popup = fakePopup()
+      const r = await show(await deck({ kiosk: true }), popup)
+      expect(r.s.state.kiosk).toBe(true)
+      const pdoc = popup.document
+      // Audience keys on the host do nothing in kiosk.
+      key(r.host, 'ArrowRight')
+      key(r.host, 'b')
+      await flush()
+      expect(r.s.slideIndex).toBe(0)
+      expect(r.s.state.screen).toBe('slide')
+      // The presenter's Black screen button and keys work.
+      button(pdoc, 'Black screen').click()
+      await step(r.s)
+      expect(r.s.state.screen).toBe('black')
+      key(pdoc.body, 'w')
+      await flush()
+      expect(r.s.state.screen).toBe('slide')
+      key(pdoc.body, 'w')
+      await flush()
+      expect(r.s.state.screen).toBe('white')
+      key(pdoc.body, 'ArrowRight')
+      await flush()
+      expect(r.s.state.screen).toBe('slide')
+      key(pdoc.body, 'ArrowRight')
+      await flush()
+      expect(r.s.slideIndex).toBe(1)
+      r.s.exit()
+
+      // The swapped-in view is presenter input too.
+      const b = await show(await deck({ kiosk: true }), null)
+      key(q(b.host, '[data-officeview-presenter-view]'), 'ArrowRight')
+      await flush()
+      expect(b.s.slideIndex).toBe(1)
+      b.s.exit()
+    })
+
+    it('I2: allowPrint=false keeps the single-screen swap view (and its notes) out of print', async () => {
+      const r = await show(await deck(), null, { protect: { print: false } })
+      const box = q(r.host, '[data-officeview-presenter-swap]')
+      expect(box.getAttribute('data-ov-print')).toBe('false')
+      expect(box.querySelector('[data-officeview-presenter-notes]')).not.toBeNull()
+      const css = readFileSync('src/styles/officeview.css', 'utf8')
+      expect(css).toMatch(/@media print[\s\S]*\[data-ov-theme-root\] \[data-officeview-presenter-swap\]\[data-ov-print="false"\][\s\S]*display: none !important/)
+      r.s.exit()
+      const u = await show(await deck(), null)
+      expect(q(u.host, '[data-officeview-presenter-swap]').getAttribute('data-ov-print')).toBeNull()
+      u.s.exit()
+    })
+
+    it('M1: the preview hands its holds back when the show reaches its end', async () => {
+      const popup = fakePopup()
+      const r = await show(await deck(), popup)
+      const model = r.s.presenterSource.model!
+      r.s.goTo(2)
+      await step(r.s)
+      await flush()
+      expect(previewTimeline(model, 2)).toBeDefined()
+      r.s.next()
+      await step(r.s)
+      await flush()
+      expect(r.s.state.slide).toBe('end')
+      expect(previewTimeline(model, 2)).toBeUndefined()
+      r.s.exit()
+    })
+
+    it('M2: Next repaints when the stage decodes its pictures after the first paint', async () => {
+      const images: Array<CanvasImageSource | undefined> = []
+      const calls: number[] = []
+      vi.mocked(sessionDeps.stage).mockImplementation((deps) => ({
+        ...recordingStage(),
+        previewOf: (i: number) => { calls.push(i); return { slide: deps.doc.slides[i]!, state: new Map(), images, resolveFont: (f: string) => f, builds: [] } },
+      }))
+      const popup = fakePopup()
+      const r = await show(await deck(), popup)
+      await step(r.s)
+      const before = calls.filter((i) => i === 1).length
+      expect(before).toBeGreaterThan(0)
+      await step(r.s)
+      expect(calls.filter((i) => i === 1).length).toBe(before)
+      // A picture arrives: the next frame repaints Next once.
+      images[0] = document.createElement('canvas')
+      await step(r.s)
+      await step(r.s)
+      expect(calls.filter((i) => i === 1).length).toBe(before + 1)
+      r.s.exit()
+    })
+
+    it('M3: a window with more visible cells than the cap leases the visible ones first and marks the rest', () => {
+      // 12 columns x 6 visible rows = 72 visible cells: the window starts at the first visible cell.
+      expect(gridWindow({ top: GRID_CELL.h * 10, width: GRID_CELL.w * 12, height: GRID_CELL.h * 6 }, 300)).toEqual([120, 168])
+      // A small box still keeps a row of margin either side.
+      expect(gridWindow({ top: GRID_CELL.h * 10, width: GRID_CELL.w * 2, height: GRID_CELL.h * 2 }, 300)).toEqual([18, 26])
+      const el = document.createElement('div')
+      document.body.append(el)
+      const root = renderInto(el, <SlideGrid count={60} current={0} hidden={() => false} thumb={() => { const c = document.createElement('canvas'); c.width = 320; c.height = 180; return c }} release={() => true} paint={() => {}} onJump={() => {}} />)
+      const cells = [...el.querySelectorAll('[data-officeview-presenter-thumb]')]
+      expect(cells.filter((c) => c.querySelector('canvas')).length).toBe(48)
+      expect(cells[50]!.hasAttribute('data-unheld')).toBe(true)
+      expect(cells[10]!.hasAttribute('data-unheld')).toBe(false)
+      root.unmount()
+    })
+
+    it('M4: the presenter codes are classified explicitly', () => {
+      expect(diagnosticKind({ code: 'presenter-paint', message: '' })).toBe('refused')
+      expect(diagnosticKind({ code: 'presenter-thumbnail-approximate', message: '' })).toBe('approximate')
+      expect(diagnosticKind({ code: 'presenter-styles-blocked', message: '' })).toBe('refused')
+      expect(diagnosticKind({ code: 'placement-fullscreen-refused', message: '' })).toBe('refused')
+    })
+
+    it('M5: swapping back hands focus to a focusable host', async () => {
+      const r = await show(await deck(), undefined)
+      r.host.removeAttribute('tabindex')
+      key(r.host, 'F5', { altKey: true })
+      await flush()
+      key(r.host, 'F5', { altKey: true })
+      await flush()
+      expect(r.host.getAttribute('tabindex')).toBe('-1')
+      expect(document.activeElement).toBe(r.host)
+      r.s.exit()
+    })
   })
 })

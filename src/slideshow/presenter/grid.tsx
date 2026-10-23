@@ -24,8 +24,12 @@ export const GRID_WINDOW_MAX = 48
 export function gridWindow(box: { top: number; width: number; height: number }, count: number): [number, number] {
   if (!(box.height > 0)) return [0, Math.min(count, GRID_WINDOW_MAX)]
   const cols = Math.max(1, Math.floor(box.width / GRID_CELL.w))
-  const start = Math.max(0, Math.floor(box.top / GRID_CELL.h) - 1) * cols
-  const rows = Math.ceil(box.height / GRID_CELL.h) + 2
+  const first = Math.floor(box.top / GRID_CELL.h)
+  const visible = Math.ceil(box.height / GRID_CELL.h) * cols
+  // The visible cells come first; a row of margin either side only while the cap still holds them all.
+  const margin = visible + 2 * cols <= GRID_WINDOW_MAX ? 1 : 0
+  const start = Math.max(0, first - margin) * cols
+  const rows = Math.ceil(box.height / GRID_CELL.h) + 2 * margin
   return [Math.min(start, count), Math.min(count, start + Math.min(GRID_WINDOW_MAX, rows * cols))]
 }
 
@@ -113,6 +117,8 @@ export function SlideGrid(p: SlideGridProps): ReactElement {
         >
           <span
             data-officeview-presenter-thumb=""
+            // Beyond the 48-thumbnail window (a very large grid pane): the cell says so instead of staying blank.
+            data-unheld={i < range[0] || i >= range[1] ? '' : undefined}
             ref={(el) => {
               if (el) {
                 slots.current.set(i, el)

@@ -669,10 +669,14 @@ export async function createSession(start: ShowStart): Promise<SessionController
       swapped.dispose()
       swapped = undefined
       surface.root.hidden = false
+      // The audience gets focus back: an API host may not be focusable yet.
+      if (!host.hasAttribute('tabindex')) host.tabIndex = -1
       host.focus()
     } else {
       const box = owner.createElement('div')
       box.setAttribute('data-officeview-presenter-swap', '')
+      // allowPrint=false: the swapped-in view and its notes stay out of print too (spec 6.3).
+      if (!policy.print) box.setAttribute('data-ov-print', 'false')
       host.append(box)
       const mounted = mountPresenterView(box, { session, host: 'swap', doc: owner })
       swapped = { dispose: () => { mounted.dispose(); box.remove() } }
@@ -682,11 +686,17 @@ export async function createSession(start: ShowStart): Promise<SessionController
   }
 
   /** Audience input, in the spec 4.3 precedence: Esc, then kiosk, the number buffer, black/white resume, the table. */
-  function dispatch(input: ShowInput): void {
+  function dispatch(input: ShowInput): void { run(input, false) }
+
+  /**
+   * Input, audience or presenter (controller ruling C6): kiosk disables the
+   * audience's input only; Presenter View's controls and keys still drive the show.
+   */
+  function run(input: ShowInput, presenterInput: boolean): void {
     if (exited || !started) return
     if (input.kind === 'exit') { exit(); return }
     // Kiosk: user input other than Esc is disabled (spec 4.4), triggers and links included (pending D4).
-    if (kiosk) return
+    if (kiosk && !presenterInput) return
     if (input.kind === 'digit') { buffer += String(input.d); return }
     let target: ShowInput = input
     if (input.kind === 'enter' && buffer) target = { kind: 'goto', index: Number(buffer) - 1 }
@@ -782,6 +792,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       return { slide: doc.slides[i]!, state: new Map(), images: [], resolveFont: (f: string) => f, builds: [] }
     },
     key: (e) => presenterKey(e),
+    input: (i) => run(i, true),
     toggleView,
     get placement() { return placement },
     touch: () => syncPresenter(true),
@@ -822,15 +833,15 @@ export async function createSession(start: ShowStart): Promise<SessionController
     cursorHider = createCursorHider(surface.root, sessionDeps.timer(win))
     const on = { signal: listeners.signal }
     const gestures = createGestureState(() => clock!.now())
-    const keyInput = (e: KeyboardEvent) => {
+    const keyInput = (e: KeyboardEvent, presenterInput = false) => {
       const input = keyToInput(e, buffer)
       if (input) {
         e.preventDefault()
-        dispatch(input)
+        run(input, presenterInput)
       } else if (screen !== 'slide' && !MODIFIER_KEYS.has(e.key) && e.key !== 'Tab') {
         // "Any key except Esc resumes" (spec 4.3), including keys outside the table.
         e.preventDefault()
-        dispatch({ kind: screen })
+        run({ kind: screen }, presenterInput)
       }
     }
     /** Alt+F5 (spec 5.1): the single-screen swap, from any focus; Ctrl or Cmd with it stays the browser's. */
@@ -856,7 +867,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (swapKey(e)) return
       const t = e.target as Element | null
       if (e.key !== 'Escape' && (t?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-officeview-presenter-notes]') || ((e.key === 'Enter' || e.key === ' ') && t?.closest?.('button')))) return
-      keyInput(e)
+      keyInput(e, true)
     }
     const gesture = (e: Event) => {
       // The swapped-in Presenter View scrolls its own notes and grid: wheel and swipe there are not show input.

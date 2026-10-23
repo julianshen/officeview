@@ -32,7 +32,7 @@ import { flushSync } from 'react-dom'
 import type { WatermarkOptions } from '../../core/watermark'
 import type { PptxDocument } from '../../pptx/types'
 import type { SlideCursor, SlideTimeline } from '../engine/steps'
-import type { SessionController } from '../player/session'
+import type { SessionController, ShowInput } from '../player/session'
 import type { StagePreview } from '../player/stage'
 import { nextVisible } from '../player/order'
 import type { DiagnosticSink, NoteParagraph, ShowModel, SlideShowDiagnostic, SlideShowWorkspace } from '../types'
@@ -73,6 +73,8 @@ export interface PresenterSource {
   previewOf(index: number, cursor?: SlideCursor, timeline?: SlideTimeline): StagePreview
   /** The presenter key rule (spec 4.3): text controls and the notes keep their keys, Esc exits. */
   key(e: KeyboardEvent): void
+  /** Presenter input: the show's input table, never gated by kiosk (controller ruling C6). */
+  input(i: ShowInput): void
   /** Single-screen: swaps the full-screen surface between the audience and Presenter View. */
   toggleView(): void
   readonly placement: PresenterPlacement | undefined
@@ -87,6 +89,9 @@ export interface PresenterViewProps {
 }
 
 const sr = 'data-officeview-presenter-sr'
+
+/** Decoded pictures in a slide's (sparse, filled-as-decoded) image list. */
+const countReady = (images: ReadonlyArray<unknown>) => { let n = 0; for (const i of images) if (i) n++; return n }
 
 export function PresenterView({ session, host, doc }: PresenterViewProps): ReactElement {
   const src = session.presenterSource
@@ -150,8 +155,9 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
 
   const paintSlide = (canvas: HTMLCanvasElement, index: number, cursor?: SlideCursor, timeline?: SlideTimeline) => {
     const ctx = canvas.width > 0 ? canvas.getContext('2d') : null
-    if (!ctx || !surfaces) return
+    if (!ctx || !surfaces) return undefined
     const p = src.previewOf(index, cursor, timeline)
+    const result = { images: p.images, ready: countReady(p.images) }
     try {
       paintPreview(ctx, { slide: p.slide, state: p.state, backing: { w: canvas.width, h: canvas.height } }, {
         images: p.images, resolveFont: p.resolveFont, builds: p.builds, scale: 1, scratch: surfaces.scratch, sink: src.sink,
@@ -160,6 +166,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
     } catch (e) {
       src.sink.add({ code: 'presenter-paint', slideIndex: index, message: `Presenter View could not paint slide ${index + 1} (${e instanceof Error ? e.message : String(e)})` })
     }
+    return result
   }
 
   // Current: the audience frame, copied after every drawn frame.
@@ -184,9 +191,12 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
 
   // Next: prime the shown and the next slide's timing; hand back what the preview left.
   const after = slide === 'end' ? undefined : nextVisible(st.order, slide) ?? (st.loop ? st.order[0] : undefined)
+  // A refused prime is retried on the next change (the per-second tick included), once the workspace may have room.
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
-    if (!model || slide === 'end') return
-    const want = new Set([slide, ...(after === undefined ? [] : [after])])
+    if (!model) return
+    // At the end of the show nothing is wanted: every hold goes back.
+    const want = new Set(slide === 'end' ? [] : [slide, ...(after === undefined ? [] : [after])])
     for (const i of held.current) {
       if (want.has(i)) continue
       releasePreview(model, i)
@@ -195,9 +205,10 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
     for (const i of want) {
       if (held.current.has(i)) continue
       held.current.add(i)
-      primePreview(model, i, { ...src.previewOptions, slideIndex: i }).then((ok) => { if (ok) setPrimed((n) => n + 1) }, () => {})
+      const forget = () => { if (held.current.delete(i)) setRetry((n) => n + 1) }
+      primePreview(model, i, { ...src.previewOptions, slideIndex: i }).then((ok) => { if (ok) setPrimed((n) => n + 1); else forget() }, forget)
     }
-  }, [model, slide, after])
+  }, [model, slide, after, retry > 0 && src.version])
 
   let pos: PreviewPosition | 'end' = 'end'
   if (slide !== 'end' && model) {
@@ -209,10 +220,19 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
     }
   }
   const posKey = pos === 'end' ? 'end' : `${pos.slide}:${pos.cursor.step}:${pos.cursor.mode}`
-  useLayoutEffect(() => {
+  /** What Next was last painted with: the stage decodes a neighbour's pictures after its metadata, so they can arrive late. */
+  const painted = useRef<{ images: ReadonlyArray<unknown>; ready: number } | undefined>(undefined)
+  const paintNext = () => {
     if (!surfaces || pos === 'end' || !model) return
-    paintSlide(surfaces.preview, pos.slide, pos.cursor, previewTimeline(model, pos.slide))
-  }, [posKey, surfaces, primed, epoch])
+    painted.current = paintSlide(surfaces.preview, pos.slide, pos.cursor, previewTimeline(model, pos.slide))
+  }
+  const paintNextRef = useRef(paintNext)
+  paintNextRef.current = paintNext
+  useLayoutEffect(paintNext, [posKey, surfaces, primed, epoch])
+  useEffect(() => src.onFrame(() => {
+    const p = painted.current
+    if (p && countReady(p.images) !== p.ready) paintNextRef.current()
+  }), [])
 
   // The grid gives focus back to the control that opened it.
   useEffect(() => {
@@ -266,7 +286,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
       <div data-officeview-presenter-controls="" role="toolbar" aria-label="Slide controls">
         <button type="button" aria-label="Previous slide" onClick={() => session.previous()}>Previous</button>
         <button type="button" aria-label="Next slide" onClick={() => session.next()}>Next</button>
-        <button type="button" aria-label="Black screen" aria-pressed={st.screen === 'black'} onClick={() => session.dispatch({ kind: 'black' })}>Black screen</button>
+        <button type="button" aria-label="Black screen" aria-pressed={st.screen === 'black'} onClick={() => src.input({ kind: 'black' })}>Black screen</button>
         <button type="button" ref={allButton} aria-label="See all slides" aria-expanded={gridOpen} onClick={() => setGridOpen((o) => !o)}>See all slides</button>
         <input type="text" inputMode="numeric" aria-label="Go to slide" placeholder="Slide #" size={5} onKeyDown={goField} />
         {placement?.canSwap && <button type="button" aria-label="Swap displays" aria-busy={placement.busy || undefined} onClick={() => placement.swap()}>Swap displays</button>}
@@ -281,7 +301,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
           hidden={(i) => !!src.model?.index.slides[i]?.hidden}
           thumb={(i) => surfaces.grid(i)}
           release={(i) => surfaces.releaseGrid(i)}
-          paint={(i, c) => paintSlide(c, i)}
+          paint={(i, c) => { paintSlide(c, i) }}
           onJump={(i) => { setGridOpen(false); session.goTo(i) }}
           onClose={() => setGridOpen(false)}
         />
