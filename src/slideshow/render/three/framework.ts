@@ -37,8 +37,23 @@ export interface Shader3DRef {
   attrs: Readonly<Record<string, string>>
 }
 
-/** Which path draws `spec` on `compositor`; diagnoses an approximated look-alike into `sink`. */
-export function dispatchTransition(spec: TransitionSpec, compositor: Compositor, sink?: DiagnosticSink, slideIndex?: number): 'shader' | 'lookalike' {
+/** Which path draws `spec` on `compositor`; diagnoses an approximated look-alike into `sink`.
+ * A `p159:morph` row on WebGL2 dispatches to `'morph'`: the composited
+ * object-interpolation path (`morphFrame`), itself always approximate and
+ * diagnosed here; Canvas 2D keeps the catalogued fade look-alike (diagnosed). */
+export function dispatchTransition(spec: TransitionSpec, compositor: Compositor, sink?: DiagnosticSink, slideIndex?: number): 'shader' | 'morph' | 'lookalike' {
+  if (spec.ns === 'p159' && spec.element === 'morph') {
+    if (compositor.backend === 'webgl2') {
+      const name = `${spec.ns}:${spec.element}${spec.preset ? ' ' + spec.preset : ''}`
+      sink?.add({
+        code: 'transition-approximate',
+        ...(slideIndex !== undefined ? { slideIndex } : {}),
+        effect: 'morph',
+        message: `Transition ${name} plays as an approximation: matched objects interpolate, content crossfades`,
+      })
+      return 'morph'
+    }
+  }
   const t = transition3DFor(spec)
   let reason = 'WebGL2 is not available'
   if (t) {

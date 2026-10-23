@@ -57,6 +57,8 @@ import { rasterLayer } from '../render/raster'
 import { imageIndices, paintedBounds, slideSize, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { dispatchTransition, transition3DDraw } from '../render/three/framework'
+import { matchMorph, type MorphOption } from '../morph/match'
+import { morphFrame, type MorphFrameItem, type MorphFrameSpec, type MorphLayerFrame } from '../morph/render'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
 import { textBases, textTimingFor, type TextTiming } from './text-builds'
@@ -375,10 +377,13 @@ interface Running {
   /** S3-1: dispatched to its registered 3-D shader (`transition3DDraw` params), else `transitionDraw`. */
   three: boolean
   from?: Frame
-  to: Frame
+  /** The flattened incoming frame; the morph route frames layers directly (S3-6) and needs none. */
+  to?: Frame
   start: number
   duration: number
   rng: Rng
+  /** S3-6: a `p159:morph` on WebGL2 composites matched frames (`morphFrame`) instead of the flat look-alike. */
+  morph?: MorphFrameSpec
 }
 
 export function createStage(deps: StageDeps): Stage {
@@ -804,21 +809,30 @@ export function createStage(deps: StageDeps): Stage {
     return state
   }
 
+  /** One entry in `draws()`: the layer draw plus its plan kind and target key. */
+  interface DrawEntry { draw: LayerDraw; kind: string; key?: TargetKey }
+
   function draws(p: Prepared, state: RenderState): LayerDraw[] {
+    const entries = drawEntries(p, state)
+    kinds = entries.map(e => e.kind)
+    return entries.map(e => e.draw)
+  }
+
+  /** Every layer draw of `p` at `state`, in paint order (S3-6 draws keyed entries too: the morph snapshot pairs by target key). */
+  function drawEntries(p: Prepared, state: RenderState): DrawEntry[] {
     const b = p.built
     if (!b || b.epoch !== epoch) return []
-    const out: LayerDraw[] = []
-    kinds = []
+    const out: DrawEntry[] = []
     const walk = (layers: readonly PlanLayer[], parent: TargetState | undefined) => {
       for (const l of layers) {
         if (l.kind === 'watermark') {
           const h = b.handles.get(l)
-          if (h) { out.push({ handle: h, state: PLAIN }); kinds.push('watermark') }
+          if (h) out.push({ draw: { handle: h, state: PLAIN }, kind: 'watermark' })
           continue
         }
         if (l.kind === 'static') {
           const h = b.handles.get(l)
-          if (h) { out.push({ handle: h, state: compose(parent, undefined) }); kinds.push('static') }
+          if (h) out.push({ draw: { handle: h, state: compose(parent, undefined) }, kind: 'static' })
           continue
         }
         const own = state.get(l.key)
@@ -828,8 +842,7 @@ export function createStage(deps: StageDeps): Stage {
         const h = b.handles.get(l)
         if (!h) continue
         const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : undefined
-        out.push({ handle: h, state: s, ...(part ? { part } : {}) })
-        kinds.push(`target:${l.key}${l.part ? `:${l.part}` : ''}`)
+        out.push({ draw: { handle: h, state: s, ...(part ? { part } : {}) }, kind: `target:${l.key}${l.part ? `:${l.part}` : ''}`, key: l.key })
       }
     }
     walk(p.plan.layers, undefined)
@@ -875,6 +888,85 @@ export function createStage(deps: StageDeps): Stage {
   }
 
   const releaseFrame = (f: Frame | undefined) => { if (f && f.epoch === epoch) compositor().release(f.handle) }
+
+  // -------------------------------------------------------------------
+  // Morph (S3-6)
+  // -------------------------------------------------------------------
+
+  /** The most composite items one morph frame builds (matched pairs draw two sides). */
+  const MORPH_MAX_FRAME_ITEMS = 256
+
+  /** The catalogue's Morph option from `p160 morph`'s `option` attribute. */
+  function morphOptionOf(spec: TransitionSpec): MorphOption {
+    const o = spec.attrs.option
+    return o === 'byWord' || o === 'byChar' ? o : 'byObject'
+  }
+
+  /** Frames one drawn entry for `morphFrame`: its layer handle, its box (the
+   * slide's box for entries whose bitmap has no keyed geometry: a fade keeps
+   * its own transform, so the approximation stays inside the frame) and its
+   * engine state. */
+  function morphSideOf(p: Prepared, e: DrawEntry, key: TargetKey | undefined): MorphLayerFrame {
+    const g = key ? p.base.get(key) : undefined
+    const { w, h } = slidePx(p)
+    return { handle: e.draw.handle, geometry: g ?? { x: 0, y: 0, w, h, rot: 0 }, state: e.draw.state, ...(e.draw.part ? { part: e.draw.part } : {}) }
+  }
+
+  /** The morph frame's snapshot: matched pairs, fades and statics from the
+   * two slides' plan layers with the flat state frozen at the switch, and
+   * the incoming slide's watermark on top. Over the item bound the file
+   * plays the fade look-alike instead (diagnosed by the caller). */
+  function morphSnapshot(from: Prepared, p: Prepared, live: RenderState, spec: TransitionSpec): MorphFrameSpec | undefined {
+    const match = matchMorph(from.slide, p.slide, morphOptionOf(spec), sink)
+    if (!match.pairs.length && !match.fadeOut.length && !match.fadeIn.length) return undefined
+    const fe = drawEntries(from, EMPTY_STATE)
+    const te = drawEntries(p, live)
+    const keyed = (entries: DrawEntry[]): Map<TargetKey, DrawEntry[]> => {
+      const map = new Map<TargetKey, DrawEntry[]>()
+      for (const e of entries) if (e.key) {
+        const q = map.get(e.key)
+        if (q) q.push(e)
+        else map.set(e.key, [e])
+      }
+      return map
+    }
+    const fromByKey = keyed(fe)
+    const toByKey = keyed(te)
+    const items: MorphFrameItem[] = []
+    const usedFrom = new Set<TargetKey>()
+    const usedTo = new Set<TargetKey>()
+    for (const m of match.pairs) {
+      const fs = fromByKey.get(m.from)
+      const ts = toByKey.get(m.to)
+      if (!fs || !ts) continue
+      usedFrom.add(m.from)
+      usedTo.add(m.to)
+      // Layers of one key (split parts, sub-layers) pair in reading order; a lone extra layer fades at its own box.
+      const n = Math.max(fs.length, ts.length)
+      for (let i = 0; i < n; i++) {
+        const f = i < fs.length ? morphSideOf(from, fs[i]!, m.from) : undefined
+        const t = i < ts.length ? morphSideOf(p, ts[i]!, m.to) : undefined
+        if (f || t) items.push({ ...(f ? { from: f } : {}), ...(t ? { to: t } : {}) })
+      }
+    }
+    // Unmatched objects fade; F entries outside both lists (coarsened
+    // leftovers) too, so nothing vanishes.
+    for (const [key, entries] of fromByKey) {
+      if (usedFrom.has(key)) continue
+      for (const e of entries) items.push({ from: morphSideOf(from, e, key) })
+    }
+    for (const [key, entries] of toByKey) {
+      if (usedTo.has(key)) continue
+      for (const e of entries) items.push({ to: morphSideOf(p, e, key) })
+    }
+    // Backgrounds and other static layers crossfade; the outgoing watermark
+    // never draws: the incoming slide's watermark draws unchanged on top.
+    for (const e of fe) if (e.kind === 'static') items.push({ from: morphSideOf(from, e, undefined) })
+    for (const e of te) if (e.kind === 'static') items.push({ to: morphSideOf(p, e, undefined) })
+    const over = te.filter(e => e.kind === 'watermark').map(e => e.draw)
+    if (items.length > MORPH_MAX_FRAME_ITEMS) return undefined
+    return { pairs: items, ...(over.length ? { over } : {}) }
+  }
 
   // -------------------------------------------------------------------
   // Painting
@@ -957,6 +1049,9 @@ export function createStage(deps: StageDeps): Stage {
     async enter(model, t, neighbours) {
       if (disposed) return
       const p = prepare(model.index, model.slide)
+      // The outgoing slide's Prepared ( adjacency kept: the drop loop below
+      // keeps neighbours) is the morph snapshot's other side (S3-6).
+      const out = current
       current = p
       timelineOf = model.timeline
       residency.show(model.index)
@@ -974,17 +1069,35 @@ export function createStage(deps: StageDeps): Stage {
       if (spec && deps.reduced) spec = reducedTransition(spec)
       const drawn = spec ? resolveTransition2D(spec) : undefined
       // S3-1: a registered 3-D row on WebGL2 runs its shader; otherwise its 2-D look-alike, diagnosed (after reduced motion, so it never adds motion).
-      const route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike'
+      let route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike' as ReturnType<typeof dispatchTransition>
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       const start = t
+      // S3-6: a morph on WebGL2 (full rung) composites matched layers, and
+      // falls back to the fade look-alike (diagnosed) everywhere else: no
+      // WebGL2, a flattened/terminal rung, a missing outgoing slide, or a
+      // snapshot that fails the bound.
+      let morphInput: MorphFrameSpec | undefined
+      if (route === 'morph') {
+        const snapshot = out && out.level === 'full' && out.built?.epoch === epoch && level === 'full' && duration > 0
+          ? morphSnapshot(out, p, liveState, spec!) : undefined
+        if (snapshot) morphInput = snapshot
+        else {
+          route = 'lookalike'
+          sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: 'morph', message: 'Morph could not interleave the matched layers; the fade look-alike plays' })
+        }
+      }
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
-      if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost') {
+      if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost' && !morphInput) {
         const s = viewport(p).scale
         outgoing = blackFrame(p, level === 'full' ? s : s / Math.max(1, backing.dpr))
         if (!outgoing) sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The black source frame did not fit the slideshow workspace; the first slide is a cut' })
       }
       shownBefore = true
-      if (spec && duration > 0 && outgoing && level !== 'terminal' && manager.state !== 'lost') {
+      if (morphInput) {
+        running = { spec: spec!, three: false, start, duration, rng: createRng((deps.seed ?? 0x5eed) ^ (p.index * 2654435761)), morph: morphInput }
+        releaseFrame(outgoing)
+        outgoing = undefined
+      } else if (spec && duration > 0 && outgoing && level !== 'terminal' && manager.state !== 'lost') {
         const owner = owners.get(p.index) ?? workspace
         const s = viewport(p).scale
         const to = flatten(p, liveState, owner, level === 'full' ? s : s / Math.max(1, backing.dpr), 'transition:to')
@@ -1046,7 +1159,14 @@ export function createStage(deps: StageDeps): Stage {
       const c = compositor()
       if (running) {
         const progress = running.duration > 0 ? (t - running.start) / running.duration : 1
-        if (progress < 1 && running.to.epoch === epoch && (!running.from || running.from.epoch === epoch)) {
+        if (running.morph) {
+          // S3-6: matched layers composited by `morphFrame`; the flat frames
+          // only draw at the ends (and after the transition at all).
+          if (progress < 1) {
+            morphFrame(running.morph, progress, c)
+            return
+          }
+        } else if (progress < 1 && running.to && running.to.epoch === epoch && (!running.from || running.from.epoch === epoch)) {
           // transitionDraw first (a random pick draws from the rng), then frame with the same rng.
           const aspect = slidePx(p).w / slidePx(p).h
           const params = running.three ? transition3DDraw(running.spec, progress, running.rng, aspect) : transitionDraw(running.spec, progress, running.rng, aspect)

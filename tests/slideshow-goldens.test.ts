@@ -16,6 +16,8 @@ import { existsSync, mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { createCanvas } from 'canvas'
+import type { Canvas } from 'canvas'
+import { morphFrame, type MorphFrameSpec } from '../src/slideshow/morph/render'
 import { rowForTransition } from '../src/slideshow/catalogue'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { createRng } from '../src/slideshow/rng'
@@ -24,6 +26,7 @@ import { transitionDraw } from '../src/slideshow/render/transitions2d'
 import { frameDiff, withinTolerance } from '../src/debug/slideshow-parity'
 import { loadPng, savePng } from '../src/test/pixel-diff'
 import type { CanvasFactory, LayerHandle, Lease, SlideShowWorkspace, TransitionSpec } from '../src/slideshow/types'
+import type { BaseGeometry } from '../src/slideshow/engine/behaviours'
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'goldens', 'slideshow')
 const strict = process.env.OFFICEVIEW_STRICT_GOLDEN === '1'
@@ -122,5 +125,66 @@ describe.skipIf(process.platform !== 'darwin')('slideshow transition frame golde
         expect(withinTolerance(d, tolerance), `${c.name} @${pct}: meanAbs ${d.meanAbs.toFixed(4)}, rowMax ${d.rowMax.toFixed(4)}`).toBe(true)
       })
     }
+  }
+})
+
+/** S3-6: the morph's composited frame — a matched pair whose content interpolates into the moving box, an unmatched square fading in place. */
+const geometry = (x: number, y: number, w: number, h: number, rot = 0): BaseGeometry => ({ x, y, w, h, rot })
+function renderMorph(progress: number): Uint8ClampedArray {
+  const ws = workspace()
+  const out = createCanvas(DEV_W, DEV_H)
+  const sink = createDiagnosticSink()
+  const comp = createCanvas2DCompositor(out as unknown as HTMLCanvasElement, factory, ws, sink)
+  comp.setViewport({ matrix: VIEW, deviceWidth: DEV_W, deviceHeight: DEV_H })
+  const upload = (kind: 'from' | 'to'): LayerHandle => {
+    const r = comp.upload({ canvas: slideFrame(kind) as unknown as HTMLCanvasElement, bounds: { x: 0, y: 0, w: SLIDE_W, h: SLIDE_H }, scale: 1, bytes: SLIDE_W * SLIDE_H * 4 }, ws.lease(SLIDE_W * SLIDE_H * 4, 'layer')!)
+    if ('refused' in r) throw new Error(r.refused)
+    return r
+  }
+  const square = createCanvas(24, 16)
+  const sx = square.getContext('2d') as unknown as { fillStyle: string; fillRect: (x: number, y: number, w: number, h: number) => void }
+  sx.fillStyle = '#2060ff'
+  sx.fillRect(0, 0, 24, 16)
+  const upload2 = (canvas: HTMLCanvasElement, w: number, h: number): LayerHandle => {
+    const r = comp.upload({ canvas, bounds: { x: 0, y: 0, w, h }, scale: 1, bytes: w * h * 4 }, ws.lease(w * h * 4, 'layer')!)
+    if ('refused' in r) throw new Error(r.refused)
+    return r
+  }
+  const spec: MorphFrameSpec = {
+    pairs: [
+      { from: { handle: upload('from'), geometry: geometry(0, 0, SLIDE_W, SLIDE_H) }, to: { handle: upload('to'), geometry: geometry(8, 4, SLIDE_W - 16, SLIDE_H - 8) } },
+      { from: { handle: upload2(square as unknown as HTMLCanvasElement, 24, 16), geometry: geometry(20, 60, 24, 16) } },
+    ],
+    over: [{ handle: upload2(square as unknown as HTMLCanvasElement, 24, 16), state: { visible: true, opacity: 1, transform: [1, 0, 0, 1, 0, 0] } }],
+  }
+  morphFrame(spec, progress, comp)
+  expect(sink.list()).toEqual([])
+  // Over an opaque backdrop, so the PNG holds no premultiplied alpha.
+  const flat = createCanvas(DEV_W, DEV_H)
+  const fx = flat.getContext('2d') as unknown as { fillStyle: string; fillRect: (x: number, y: number, w: number, h: number) => void; drawImage: (c: Canvas, x: number, y: number) => void; getImageData: (x: number, y: number, w: number, h: number) => ImageData }
+  fx.fillStyle = '#202020'
+  fx.fillRect(0, 0, DEV_W, DEV_H)
+  fx.drawImage(out, 0, 0)
+  comp.dispose()
+  return fx.getImageData(0, 0, DEV_W, DEV_H).data
+}
+
+describe.skipIf(process.platform !== 'darwin')('slideshow morph frame goldens (Mac)', () => {
+  for (const pct of PROGRESS) {
+    it(`morph at ${pct} %`, async () => {
+      const pixels = renderMorph(pct / 100)
+      const path = join(GOLDEN_DIR, `morph.${pct}.png`)
+      if (!existsSync(path)) {
+        if (strict) throw new Error(`missing golden ${path} (strict mode); record it first`)
+        mkdirSync(GOLDEN_DIR, { recursive: true })
+        await savePng({ width: DEV_W, height: DEV_H, data: pixels }, path)
+        return
+      }
+      const golden = await loadPng(path)
+      expect([golden.width, golden.height]).toEqual([DEV_W, DEV_H])
+      const tolerance = rowForTransition('p159', 'morph')!.tolerance
+      const d = frameDiff(pixels, golden.data, DEV_W, DEV_H)
+      expect(withinTolerance(d, tolerance), `morph @${pct}: meanAbs ${d.meanAbs.toFixed(4)}, rowMax ${d.rowMax.toFixed(4)}`).toBe(true)
+    })
   }
 })
