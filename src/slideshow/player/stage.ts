@@ -37,7 +37,10 @@
  *   effect). Reduced motion uses `reducedTransition` (never adds motion).
  *   S3-1: `dispatchTransition` sends a registered 3-D row on WebGL2 to its
  *   shader (`transition3DDraw` params); anything else draws `transitionDraw`,
- *   an approximated row diagnosed once.
+ *   an approximated row diagnosed once. S3-6: a Morph (either backend)
+ *   re-plans both slides with every object keyed, rasterises those layers
+ *   for itself (workspace-charged, released when it ends) and composites
+ *   them with `morphFrame`: the outgoing side is the slide as it was left.
  * - **Resize and DPR.** A new output takes its reserve before the old is
  *   released (`residency.resize`); the output and the viewport swap, then
  *   `commitResize`. Current, previous and next are re-rasterised layer by
@@ -57,9 +60,12 @@ import { paintDirect } from '../render/direct'
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
 import { rasterLayer } from '../render/raster'
 import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
+import type { TextItem } from '../render/text-split'
 import { imageIndices, paintedBounds, slideSize, textFilter, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { dispatchTransition, transition3DDraw } from '../render/three/framework'
+import { matchMorph, type MorphOption } from '../morph/match'
+import { morphFrame, type MorphFrameItem, type MorphFrameSpec, type MorphLayerFrame } from '../morph/render'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
 import { textBases, textTimingFor, type TextTiming } from './text-builds'
@@ -407,6 +413,10 @@ interface Prepared {
   meta: ShowSlide
   plan: RenderPlan
   layers: PlanLayer[]
+  /** The plan's inputs (S3-6: a Morph re-plans the slide with every object keyed). */
+  animated: ReadonlySet<TargetKey>
+  parts: ReadonlyMap<TargetKey, ReadonlySet<ColourPart>>
+  splits?: ReadonlyMap<TargetKey, readonly TextItem[]>
   base: Map<TargetKey, BaseGeometry>
   hidden: Set<TargetKey>
   /** The entrance behaviours of each hidden target: it shows once one of them has begun. */
@@ -433,11 +443,26 @@ interface Running {
   /** S3-1: dispatched to its registered 3-D shader (`transition3DDraw` params), else `transitionDraw`. */
   three: boolean
   from?: Frame
-  to: Frame
+  /** The flattened incoming frame; the morph route frames layers directly (S3-6) and needs none. */
+  to?: Frame
   start: number
   duration: number
   rng: Rng
+  /** S3-6: a `p159:morph` composites its own matched layers (`morphFrame`) instead of the flat look-alike. */
+  morph?: MorphRun
 }
+
+/** A running Morph's frame spec and the layers it rasterised for itself (charged to the workspace, released when it ends). */
+interface MorphRun {
+  spec: MorphFrameSpec
+  handles: LayerHandle[]
+  epoch: number
+  /** `inspect().lastDraws` while the morph draws. */
+  kinds: string[]
+}
+
+/** The outgoing slide as it was left (S3-6: the Morph's other side). */
+interface Left { p: Prepared; state: RenderState }
 
 export function createStage(deps: StageDeps): Stage {
   const { root, output, workspace, terminal, sink, store } = deps
@@ -473,6 +498,8 @@ export function createStage(deps: StageDeps): Stage {
   let kinds: string[] = []
   /** A 1 × 1 canvas whose context measures text for `runAt`. */
   let measurer: ReturnType<CanvasFactory> | undefined
+  /** The slide last left and its state then: a Morph's outgoing side (S3-6), consumed by the next `enter`. */
+  let left: Left | undefined
 
   // -------------------------------------------------------------------
   // Viewport
@@ -775,7 +802,8 @@ export function createStage(deps: StageDeps): Stage {
     const plan = buildRenderPlan(slide, animated, parts, meta.builds, tt?.splits)
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
-      index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, entrances, images,
+      index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), animated, parts, ...(tt?.splits ? { splits: tt.splits } : {}),
+      base: baseGeometry(slide), hidden, entrances, images,
       sink: { add: (d) => sink.add(d.slideIndex === undefined ? { ...d, slideIndex: index } : d), list: () => sink.list() },
       ready: Promise.resolve(), handle, chain: Promise.resolve(), dead: false, imageLeases: [],
     }
@@ -904,36 +932,44 @@ export function createStage(deps: StageDeps): Stage {
     return state
   }
 
+  /** One entry in `draws()`: the layer draw, its plan kind, its target key and its top-level object. */
+  interface DrawEntry { draw: LayerDraw; kind: string; key?: TargetKey; root?: TargetKey; background?: boolean }
+
   function draws(p: Prepared, state: RenderState): LayerDraw[] {
     const b = p.built
-    if (!b || b.epoch !== epoch) return []
-    const out: LayerDraw[] = []
-    kinds = []
-    const walk = (layers: readonly PlanLayer[], parent: TargetState | undefined) => {
+    if (!b || b.epoch !== epoch) { kinds = []; return [] }
+    const entries = entriesOf(p.plan.layers, b.handles, state)
+    kinds = entries.map(e => e.kind)
+    return entries.map(e => e.draw)
+  }
+
+  /** Every layer draw of `layers` at `state`, in paint order; invisible targets are left out. */
+  function entriesOf(layers: readonly PlanLayer[], handles: ReadonlyMap<PlanLayer, LayerHandle>, state: RenderState): DrawEntry[] {
+    const out: DrawEntry[] = []
+    const walk = (layers: readonly PlanLayer[], parent: TargetState | undefined, root: TargetKey | undefined) => {
       for (const l of layers) {
         if (l.kind === 'watermark') {
-          const h = b.handles.get(l)
-          if (h) { out.push({ handle: h, state: PLAIN }); kinds.push('watermark') }
+          const h = handles.get(l)
+          if (h) out.push({ draw: { handle: h, state: PLAIN }, kind: 'watermark' })
           continue
         }
         if (l.kind === 'static') {
-          const h = b.handles.get(l)
-          if (h) { out.push({ handle: h, state: compose(parent, undefined) }); kinds.push('static') }
+          const h = handles.get(l)
+          if (h) out.push({ draw: { handle: h, state: compose(parent, undefined) }, kind: 'static', ...(root ? { root } : {}), ...(l.background ? { background: true } : {}) })
           continue
         }
         const own = state.get(l.key)
         const s = compose(parent, own)
         if (!s.visible) continue
-        if (l.sub) { walk(l.sub, s); continue }
-        const h = b.handles.get(l)
+        if (l.sub) { walk(l.sub, s, root ?? l.key); continue }
+        const h = handles.get(l)
         if (!h) continue
         // A text range (a word, letter or paragraph clone) is text only: its colour is the text channel's.
         const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : l.part === 'range' && s.color?.text ? 'text' : undefined
-        out.push({ handle: h, state: s, ...(part ? { part } : {}) })
-        kinds.push(`target:${l.key}${l.part ? `:${l.part}` : ''}`)
+        out.push({ draw: { handle: h, state: s, ...(part ? { part } : {}) }, kind: `target:${l.key}${l.part ? `:${l.part}` : ''}`, key: l.key, root: root ?? l.key })
       }
     }
-    walk(p.plan.layers, undefined)
+    walk(layers, undefined, undefined)
     return out
   }
 
@@ -976,6 +1012,169 @@ export function createStage(deps: StageDeps): Stage {
   }
 
   const releaseFrame = (f: Frame | undefined) => { if (f && f.epoch === epoch) compositor().release(f.handle) }
+
+  // -------------------------------------------------------------------
+  // Morph (S3-6)
+  // -------------------------------------------------------------------
+
+  /**
+   * The most layers one Morph rasterises for itself: two slides, each within
+   * the per-slide layer bound (`LAYER_LIMIT`). The matcher's own bound
+   * (`MORPH_MAX_OBJECTS` objects per slide) is wider, and a pair whose text
+   * changes splits into fill, line and text layers, so a slide inside the
+   * matcher's bound can still exceed this one: then the fade look-alike
+   * plays, diagnosed (`morph-fallback`).
+   */
+  const MORPH_MAX_LAYERS = 2 * LAYER_LIMIT
+
+  /** The catalogue's Morph option from `p159:morph`'s `option` attribute. */
+  function morphOptionOf(spec: TransitionSpec): MorphOption {
+    const o = spec.attrs.option
+    return o === 'byWord' || o === 'byChar' ? o : 'byObject'
+  }
+
+  /** The slide's top-level objects by key: what the matcher pairs (first occurrence of a duplicate id). */
+  function topShapes(slide: PptxSlide): Map<TargetKey, PptxShape> {
+    const out = new Map<TargetKey, PptxShape>()
+    for (const shape of slide.shapes) {
+      const k = shapeKey(shape)
+      if (k !== undefined && !out.has(k)) out.set(k, shape)
+    }
+    return out
+  }
+
+  const flatText = (shape: PptxShape): string => (shape.textBody?.paragraphs ?? []).map(p => p.runs.map(r => r.text ?? '').join('')).join('\n')
+
+  /**
+   * How a matched pair blends: `under` (the same outline and content: the
+   * outgoing side holds under the incoming one, so colour interpolates and
+   * an opaque shape never dips), `split` (the same outline, changed text:
+   * fill and line blend `under`, the text crossfades) or `cross` (the
+   * outline, picture or kind differs: the content crossfades).
+   */
+  function blendOf(a: PptxShape, b: PptxShape): 'under' | 'split' | 'cross' {
+    const plain = (s: PptxShape) => !s.group && !s.children?.length && !s.table && !s.content && !s.chartFallback
+    if (!plain(a) || !plain(b)) return 'cross'
+    if (a.geometry !== b.geometry || (a.presetName ?? '') !== (b.presetName ?? '') || (a.geometry === 'other' && !a.presetName)) return 'cross'
+    if (a.imageIndex !== b.imageIndex) return 'cross'
+    return flatText(a) === flatText(b) ? 'under' : 'split'
+  }
+
+  const releaseMorph = (m: MorphRun) => {
+    if (m.epoch === epoch) for (const h of m.handles) compositor().release(h)
+    m.handles = []
+  }
+
+  /**
+   * The Morph's own layers and frame spec. Both slides are re-planned with
+   * every top-level object keyed (animated or not), rasterised at the full
+   * rung through the workspace (released when the morph ends), and drawn at
+   * their states: the outgoing slide as it was left, the incoming at its
+   * initial state. Items go in z order: the backgrounds (outgoing under
+   * incoming), the outgoing objects that fade out, then the incoming
+   * slide's layers in its own order (matched pairs at the incoming object's
+   * z, fade-ins), and the incoming watermark on top. Unit pairs
+   * (`byWord`/`byChar`) morph with their containers' layers.
+   */
+  function morphBuild(from: Left, p: Prepared, live: RenderState, spec: TransitionSpec, c: Compositor): MorphRun | string {
+    const match = matchMorph(from.p.slide, p.slide, morphOptionOf(spec), sink)
+    const fromShapes = topShapes(from.p.slide)
+    const toShapes = topShapes(p.slide)
+    const pairOf = new Map<TargetKey, TargetKey>()
+    const blend = new Map<TargetKey, 'under' | 'split' | 'cross'>()
+    const fromSplit = new Set<TargetKey>()
+    const toSplit = new Set<TargetKey>()
+    for (const m of match.pairs) {
+      const a = fromShapes.get(m.from), b = toShapes.get(m.to)
+      if (!a || !b || pairOf.has(m.to)) continue
+      pairOf.set(m.to, m.from)
+      const how = blendOf(a, b)
+      blend.set(m.to, how)
+      if (how === 'split') { fromSplit.add(m.from); toSplit.add(m.to) }
+    }
+    const planOf = (q: Prepared, shapes: Map<TargetKey, PptxShape>, split: Set<TargetKey>): RenderPlan => {
+      const parts = new Map(q.parts)
+      for (const k of split) if (!parts.has(k)) parts.set(k, new Set<ColourPart>(['fill', 'line']))
+      return buildRenderPlan(q.slide, new Set([...q.animated, ...shapes.keys()]), parts, q.meta.builds, q.splits)
+    }
+    const fromPlan = planOf(from.p, fromShapes, fromSplit)
+    const toPlan = planOf(p, toShapes, toSplit)
+    // The outgoing watermark never draws: the incoming one draws unchanged on top.
+    const fromLayers = rasterLayers(fromPlan, false)
+    const toLayers = rasterLayers(toPlan, !!deps.watermark)
+    if (fromLayers.length + toLayers.length > MORPH_MAX_LAYERS) return `${fromLayers.length + toLayers.length} layers exceed the ${MORPH_MAX_LAYERS} layer bound`
+    const scale = layerScale('full', p)
+    const handles: LayerHandle[] = []
+    const raster = (q: Prepared, layers: readonly PlanLayer[]) => {
+      const map = new Map<PlanLayer, LayerHandle>()
+      for (const l of layers) {
+        const h = rasterOne(q, l, scale, workspace, c)
+        if (h) { map.set(l, h); handles.push(h) }
+      }
+      return map
+    }
+    let fh: Map<PlanLayer, LayerHandle>, th: Map<PlanLayer, LayerHandle>
+    try {
+      fh = raster(from.p, fromLayers)
+      th = raster(p, toLayers)
+    } catch (e) {
+      for (const h of handles) c.release(h)
+      if (e instanceof Pressure) return 'its layers do not fit the slideshow workspace'
+      throw e
+    }
+    const fe = entriesOf(fromPlan.layers, fh, from.state)
+    const te = entriesOf(toPlan.layers, th, live)
+    const box = (q: Prepared): BaseGeometry => ({ x: 0, y: 0, ...slidePx(q), rot: 0 })
+    const side = (q: Prepared, e: DrawEntry): MorphLayerFrame => ({
+      handle: e.draw.handle, geometry: (e.root ? q.base.get(e.root) : undefined) ?? box(q), state: e.draw.state,
+      ...(e.draw.part ? { part: e.draw.part } : {}), ...(e.root ? { key: e.root } : {}),
+    })
+    // Pairs whose two objects both draw (an exited or not-yet-entered object fades instead).
+    const fromRoots = new Set(fe.flatMap(e => e.root ? [e.root] : []))
+    const toRoots = new Set(te.flatMap(e => e.root ? [e.root] : []))
+    for (const [t, f] of [...pairOf]) if (!toRoots.has(t) || !fromRoots.has(f)) pairOf.delete(t)
+    const pairedFrom = new Set(pairOf.values())
+    const items: MorphFrameItem[] = []
+    const kindsOut: string[] = []
+    const push = (item: MorphFrameItem, kind: string) => { items.push(item); kindsOut.push(kind) }
+    const fbg = fe.find(e => e.background), tbg = te.find(e => e.background)
+    if (fbg || tbg) push({ ...(fbg ? { from: side(from.p, fbg) } : {}), ...(tbg ? { to: side(p, tbg) } : {}), under: true, background: true }, 'morph:background')
+    for (const e of fe) {
+      if (e.background || e.kind === 'watermark' || (e.root && pairedFrom.has(e.root))) continue
+      push({ from: side(from.p, e) }, `morph:out:${e.root ?? 'static'}`)
+    }
+    const done = new Set<TargetKey>()
+    for (const e of te) {
+      if (e.background || e.kind === 'watermark') continue
+      const f = e.root ? pairOf.get(e.root) : undefined
+      if (!e.root || f === undefined) { push({ to: side(p, e) }, `morph:in:${e.root ?? 'static'}`); continue }
+      if (done.has(e.root)) continue
+      done.add(e.root)
+      const t = e.root
+      const ts = te.filter(x => x.root === t), fs = fe.filter(x => x.root === f)
+      const fg = from.p.base.get(f) ?? box(from.p), tg = p.base.get(t) ?? box(p)
+      const how = blend.get(t)
+      const pairUp = (a: DrawEntry | undefined, b: DrawEntry | undefined, under: boolean) => {
+        if (!a && !b) return
+        push({
+          ...(a ? { from: side(from.p, a) } : {}), ...(b ? { to: side(p, b) } : {}),
+          ...(under ? { under: true } : {}), path: { from: fg, to: tg },
+        }, `morph:pair:${t}`)
+      }
+      if (how === 'split') {
+        for (const part of ['fill', 'line', 'text'] as const) pairUp(fs.find(x => x.draw.part === part), ts.find(x => x.draw.part === part), part !== 'text')
+        // Layers of other kinds (none expected) cross over too.
+        const rest = (xs: DrawEntry[]) => xs.filter(x => !x.draw.part)
+        const rf = rest(fs), rt = rest(ts)
+        for (let i = 0; i < Math.max(rf.length, rt.length); i++) pairUp(rf[i], rt[i], false)
+      } else {
+        // Layers of one object (sub-layers, text-build items) pair in reading order.
+        for (let i = 0; i < Math.max(fs.length, ts.length); i++) pairUp(fs[i], ts[i], how === 'under')
+      }
+    }
+    const over = te.filter(e => e.kind === 'watermark').map(e => e.draw)
+    return { spec: { pairs: items, ...(over.length ? { over } : {}) }, handles, epoch, kinds: kindsOut }
+  }
 
   // -------------------------------------------------------------------
   // Painting
@@ -1021,7 +1220,7 @@ export function createStage(deps: StageDeps): Stage {
     get backend() { return manager.state },
     get backingStore() { return backing },
     // What is drawn: a catalogued stand-in reports its 2-D look-alike (S1-22); `random` draws its pick per rng.
-    get transition() { return running && { effect: running.three || running.spec.element === 'random' ? running.spec.element : resolveTransition2D(running.spec).spec.element, duration: running.duration } },
+    get transition() { return running && { effect: running.three || running.morph || running.spec.element === 'random' ? running.spec.element : resolveTransition2D(running.spec).spec.element, duration: running.duration } },
     inspect() {
       return {
         current: current?.index,
@@ -1035,8 +1234,10 @@ export function createStage(deps: StageDeps): Stage {
 
     leave() {
       const p = current
-      running && (releaseFrame(running.from), releaseFrame(running.to))
+      running && (releaseFrame(running.from), releaseFrame(running.to), running.morph && releaseMorph(running.morph))
       running = undefined
+      // A Morph into the next slide starts from this one as it looks now (exited shapes hidden).
+      left = p && !disposed ? { p, state: liveState } : undefined
       releaseFrame(outgoing)
       outgoing = undefined
       if (p && p.level && p.level !== 'terminal' && !disposed) {
@@ -1064,6 +1265,10 @@ export function createStage(deps: StageDeps): Stage {
     async enter(model, t, neighbours) {
       if (disposed) return
       const p = prepare(model.index, model.slide)
+      // The slide just left is a Morph's other side (S3-6); the drop loop below
+      // may still evict it (not adjacent), and then the morph falls back.
+      const out = left
+      left = undefined
       current = p
       timelineOf = model.timeline
       // The window is the slide and its visible neighbours, which hidden slides can put further than ±1 (PR #18 review 6).
@@ -1082,20 +1287,38 @@ export function createStage(deps: StageDeps): Stage {
       if (spec && deps.reduced) spec = reducedTransition(spec)
       const drawn = spec ? resolveTransition2D(spec) : undefined
       // S3-1: a registered 3-D row on WebGL2 runs its shader; otherwise its 2-D look-alike, diagnosed (after reduced motion, so it never adds motion).
-      const route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike'
-      // The transition sound is played (and any refusal diagnosed) by the session's transition-sound controller (S2-7).
+      let route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike' as ReturnType<typeof dispatchTransition>
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
       // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).
       const start = deps.showNow ? Math.max(t, deps.showNow()) : t
+      // The transition sound is played (and any refusal diagnosed) by the session's transition-sound controller (S2-7).
+      // S3-6: a Morph (either backend) composites its own matched layers at the
+      // full rung; otherwise the fade look-alike plays, diagnosed with why.
+      let morphRun: MorphRun | undefined
+      if (route === 'morph' && duration > 0) {
+        const why = !shownBefore ? 'the first slide enters from black'
+          : !out || out.p.dead ? 'the slide before it is not resident'
+          : level !== 'full' ? `the slide is at the ${level} rung`
+            : manager.state === 'lost' ? 'the compositor is lost'
+              : morphBuild(out, p, liveState, spec!, compositor())
+        if (typeof why === 'string') {
+          route = 'lookalike'
+          sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: 'morph-fallback', message: `Morph could not run (${why}); the fade look-alike plays` })
+        } else morphRun = why
+      }
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
-      if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost') {
+      if (spec && duration > 0 && !outgoing && !shownBefore && level !== 'terminal' && manager.state !== 'lost' && !morphRun) {
         const s = viewport(p).scale
         outgoing = blackFrame(p, level === 'full' ? s : s / Math.max(1, backing.dpr))
         if (!outgoing) sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The black source frame did not fit the slideshow workspace; the first slide is a cut' })
       }
       shownBefore = true
-      if (spec && duration > 0 && outgoing && level !== 'terminal' && manager.state !== 'lost') {
+      if (morphRun) {
+        running = { spec: spec!, three: false, start, duration, rng: createRng((deps.seed ?? 0x5eed) ^ (p.index * 2654435761)), morph: morphRun }
+        releaseFrame(outgoing)
+        outgoing = undefined
+      } else if (spec && duration > 0 && outgoing && level !== 'terminal' && manager.state !== 'lost') {
         const owner = owners.get(p.index) ?? workspace
         const s = viewport(p).scale
         const to = flatten(p, liveState, owner, level === 'full' ? s : s / Math.max(1, backing.dpr), 'transition:to')
@@ -1159,7 +1382,16 @@ export function createStage(deps: StageDeps): Stage {
       const c = compositor()
       if (running) {
         const progress = running.duration > 0 ? (t - running.start) / running.duration : 1
-        if (progress < 1 && running.to.epoch === epoch && (!running.from || running.from.epoch === epoch)) {
+        if (running.morph) {
+          // S3-6: the morph's own layers composited by `morphFrame` (its
+          // handles are the transition's, so only a backend switch voids them).
+          if (progress < 1 && running.morph.epoch === epoch) {
+            morphFrame(running.morph.spec, progress, c)
+            kinds = running.morph.kinds
+            return
+          }
+          releaseMorph(running.morph)
+        } else if (progress < 1 && running.to && running.to.epoch === epoch && (!running.from || running.from.epoch === epoch)) {
           // transitionDraw first (a random pick draws from the rng), then frame with the same rng.
           const aspect = slidePx(p).w / slidePx(p).h
           const params = running.three ? transition3DDraw(running.spec, progress, running.rng, aspect) : transitionDraw(running.spec, progress, running.rng, aspect)
@@ -1299,8 +1531,9 @@ export function createStage(deps: StageDeps): Stage {
     dispose() {
       if (disposed) return
       disposed = true
-      running && (releaseFrame(running.from), releaseFrame(running.to))
+      running && (releaseFrame(running.from), releaseFrame(running.to), running.morph && releaseMorph(running.morph))
       running = undefined
+      left = undefined
       releaseFrame(outgoing)
       outgoing = undefined
       for (const p of [...prepared.values()]) drop(p)
