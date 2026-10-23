@@ -57,12 +57,13 @@ describe('slideshow catalogue', () => {
     expect(CATALOGUE.filter(r => r.status.startsWith('pending-stage-')).map(r => r.id)).toEqual([])
     for (const r of CATALOGUE) expect(['exact', 'approximate', 'never'], r.id).toContain(r.status)
   })
-  it('every 3-D and Morph row is an approximate shader row that keeps its look-alike, unverified until D4 (S3-7)', async () => {
+  it('every 3-D row is an approximate shader row and every Morph row an approximate transform row; each keeps its look-alike, unverified until D4 (S3-7)', async () => {
     const { CATALOGUE, TOLERANCE_APPROX } = await modules()
     const stage3 = CATALOGUE.filter(r => r.stage === 3)
     expect(stage3).toHaveLength(30) // 14 p14 + 12 p15 prstTrans + 4 Morph
     for (const r of stage3) {
-      expect(r, r.id).toMatchObject({ kind: 'transition', status: 'approximate', implementation: 'shader', verified: false })
+      // Morph is matched-layer transforms plus a crossfade on both backends, not a GPU shader (S3-7 ruling).
+      expect(r, r.id).toMatchObject({ kind: 'transition', status: 'approximate', implementation: r.ns === 'p159' ? 'transform' : 'shader', verified: false })
       expect(r.tolerance, r.id).toEqual(TOLERANCE_APPROX)
       expect(r.lookalike, r.id).toMatch(/^transition:p:/)
     }

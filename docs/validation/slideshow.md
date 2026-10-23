@@ -371,7 +371,7 @@ Controller rulings recorded in the progress ledger during Stage 2.
 
 Controller rulings recorded in the progress ledger during Stage 3.
 
-- **Every 3-D and Morph row is `approximate`, verified only from compare records** (S3-7). The owner's D4 PowerPoint captures have not arrived, so no row claims `exact` and every row stays `verified: no`. Each row's tolerance is the default approximate one (mean abs 0.08, row max 0.30). The rows are `shader` rows and keep their 2-D look-alike (the row Canvas 2D draws, and WebGL2 draws when a shader cannot). The four Morph rows are `shader` too, as the plan's checklist says, although Morph is a composited route on both backends (`morphFrame`), not a GPU shader.
+- **Every 3-D and Morph row is `approximate`, verified only from compare records** (S3-7). The owner's D4 PowerPoint captures have not arrived, so no row claims `exact` and every row stays `verified: no`. Each row's tolerance is the default approximate one (mean abs 0.08, row max 0.30). The 3-D rows are `shader` rows and keep their 2-D look-alike (the row Canvas 2D draws, and WebGL2 draws when a shader cannot). The four Morph rows are `transform` rows (controller ruling after S3-7 review): Morph is matched-layer transforms plus a crossfade on both backends (`morphFrame`), not a GPU shader, and the catalogue describes what runs; the plan's checklist had lumped it in with the 3-D rows. Each Morph row keeps fade as its look-alike.
 - **The shader path emits no diagnostic of its own when it draws** (S3-1 M1, recorded, no change). A 3-D row that plays as its shader is the row as catalogued (approximate); `transition-approximate` is said only when its 2-D look-alike draws instead, and `transition-shader-fallback` only when the shader could not draw a frame.
 - **Group registration is wired once, by the backend** (S3-7). `three/index.ts` (`registerTransitions3D`) calls `registerGeometric3D`, `registerParticle3D` and `registerDeform3D`; `createBackendManager` calls it before it creates any WebGL2 compositor. It is a function, not a module side effect, so the group tests can reset the registry and register one group.
 - **The grid cache holds every group** (S3-3 agy I1, S3-7). The 26 rows use 9 distinct grids (1×1, 32×18, 8×18, 64×36, 24×1, 24×14, 12×7, 16×9, 20×11), one more than the old `MAX_CACHED_GRIDS` of 8, so a show playing them all evicted and rebuilt. It is now 12. Each grid is still leased (`webgl2:mesh`) against the workspace on first use, so the extra bytes are only the grids a show actually plays: 291,308 B with every grid cached, at most 76 B (the 1×1 grid) more than the old cap could hold at once.
@@ -452,10 +452,10 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | transition:p15:prstTrans:pageCurlSingle | pageCurlSingle | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
 | transition:p15:prstTrans:airplane | airplane | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
 | transition:p15:prstTrans:origami | origami | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph | Morph (default) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph:byObject | Morph (byObject) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph:byWord | Morph (byWord) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph:byChar | Morph (byChar) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph | Morph (default) | transform | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph:byObject | Morph (byObject) | transform | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph:byWord | Morph (byWord) | transform | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph:byChar | Morph (byChar) | transform | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
 | behaviour:p:set | set | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:anim | anim | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:animEffect | animEffect | file | exact | 1 | no | — | 0.02 | 0.1 |
@@ -3071,7 +3071,7 @@ The catalogue is complete: `LANDED_STAGE` = 3 and no row is `pending-stage-*`
 `exact` (tolerance mean abs 0.02, row max 0.10), `approximate` (0.08 / 0.30) or
 `never`; the generated table is under "Catalogue" above. S3-7 flipped the 30
 Stage 3 rows (14 p14, 12 p15 `prstTrans`, 4 Morph) from `pending-stage-3` to
-`approximate` with implementation `shader`, each keeping its look-alike.
+`approximate`, each keeping its look-alike: the 26 3-D rows with implementation `shader`, the 4 Morph rows with `transform` (matched-layer transforms plus crossfade).
 
 ### 3-D look-alikes
 
@@ -3116,7 +3116,7 @@ airplane-transition on WebGL2.
 ### Morph approximations
 
 The four Morph rows (`transition:p159:morph`, `:byObject`, `:byWord`, `:byChar`,
-look-alike fade, tolerance 0.08 / 0.30, awaiting D4) take the composited Morph route
+implementation `transform`, look-alike fade, tolerance 0.08 / 0.30, awaiting D4) take the composited Morph route
 on both backends (S3-5 matching, S3-6 rendering): matched objects interpolate
 position, size, rotation and colour; unmatched objects fade out and in. Matching:
 `!!` names, then the same name and kind, then text (whole objects under byObject;

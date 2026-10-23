@@ -15,8 +15,8 @@ const approximate = TOLERANCE_APPROX
 function row(data: Omit<CatalogueRow, 'verified' | 'tolerance'>): CatalogueRow {
   return Object.freeze({ ...data, ...(data.preset ? { preset: Object.freeze({ ...data.preset }) } : {}), verified: false, tolerance: Object.freeze({ ...(data.status === 'exact' ? exact : approximate) }) })
 }
-/** A row with a `lookalike` is a Stage 3 row (S3-7 flipped them): a 3-D shader on WebGL2 (S3-1 to S3-4), or Morph's
- * composited route on either backend (S3-5, S3-6), approximate with the default tolerance; the look-alike is the 2-D
+/** A row with a `lookalike` is a Stage 3 row (S3-7 flipped them): a 3-D shader on WebGL2 (S3-1 to S3-4; `shader`), or
+ * Morph's matched-layer transforms plus crossfade on either backend (S3-5, S3-6; `transform`), approximate with the default tolerance; the look-alike is the 2-D
  * row drawn on Canvas 2D or when the shader cannot run. Every 3-D and Morph row awaits the owner's PowerPoint
  * captures (D4). */
 function transition(ns: string, element: string, uiName: string, implementation: CatalogueRow['implementation'], lookalike?: string, preset?: string): CatalogueRow {
@@ -93,10 +93,10 @@ export const CATALOGUE: readonly CatalogueRow[] = Object.freeze([
   transition('p15', 'prstTrans', 'pageCurlSingle', 'shader', 'transition:p:fade', 'pageCurlSingle'),
   transition('p15', 'prstTrans', 'airplane', 'shader', 'transition:p:fade', 'airplane'),
   transition('p15', 'prstTrans', 'origami', 'shader', 'transition:p:fade', 'origami'),
-  transition('p159', 'morph', 'Morph (default)', 'shader', 'transition:p:fade'),
-  transition('p159', 'morph', 'Morph (byObject)', 'shader', 'transition:p:fade', 'byObject'),
-  transition('p159', 'morph', 'Morph (byWord)', 'shader', 'transition:p:fade', 'byWord'),
-  transition('p159', 'morph', 'Morph (byChar)', 'shader', 'transition:p:fade', 'byChar'),
+  transition('p159', 'morph', 'Morph (default)', 'transform', 'transition:p:fade'),
+  transition('p159', 'morph', 'Morph (byObject)', 'transform', 'transition:p:fade', 'byObject'),
+  transition('p159', 'morph', 'Morph (byWord)', 'transform', 'transition:p:fade', 'byWord'),
+  transition('p159', 'morph', 'Morph (byChar)', 'transform', 'transition:p:fade', 'byChar'),
   behaviour('set'),
   behaviour('anim'),
   behaviour('animEffect'),

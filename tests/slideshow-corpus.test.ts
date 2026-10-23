@@ -319,7 +319,7 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
       const spec = await transitionOf(name, 1)
       expect([spec.element, spec.preset]).toEqual([element, preset])
       const row = rowForTransition(spec.ns, spec.element, spec.preset)!
-      expect(row).toMatchObject({ status: 'approximate', implementation: 'shader', stage: 3, verified: false, lookalike: 'transition:p:fade' })
+      expect(row).toMatchObject({ status: 'approximate', implementation: element === 'morph' ? 'transform' : 'shader', stage: 3, verified: false, lookalike: 'transition:p:fade' })
       if (element === 'prstTrans') {
         // The show's backend registered every 3-D row (three/index.ts): WebGL2 runs airplane's shader.
         expect(dispatchTransition(spec, webgl2)).toBe('shader')
