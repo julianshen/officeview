@@ -294,6 +294,8 @@ export function createBackendManager(host: HTMLElement, deps: BackendDeps): Back
       gl?.setSlideIndex(index)
       c2d?.setSlideIndex(index)
     },
+    // S3-1: only the painting WebGL2 compositor prepares 3-D transitions (never while lost or on Canvas 2D).
+    prepareTransition3D(t) { return active !== 'live' && phase !== 'disposed' && active.backend === 'webgl2' && active.prepareTransition3D?.(t) === true },
     dispose() { manager.dispose() },
   }
 

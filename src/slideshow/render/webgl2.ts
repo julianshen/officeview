@@ -37,8 +37,17 @@
  *   transient noise arrays (`webgl2:mask-raster`). Programs, shaders and the
  *   vertex array hold no client memory and take no lease. There is no
  *   offscreen framebuffer: the 2-D transitions (S1-15) need none (their
- *   backdrop is a scissored clear); a later shader transition that needs one
- *   leases it first and adds it to `build`/`teardown`.
+ *   backdrop is a scissored clear), and neither do the 3-D ones (S3-1).
+ * - **3-D transitions (S3-1).** Params carrying `three` (framework.ts) are
+ *   drawn by the registered `Transition3D` strictly between the ends (at 0
+ *   and 1 the flat outgoing / incoming frame): the slide rect is scissored
+ *   and cleared to opaque black, the viewport is that rect, and the shader
+ *   gets a rng re-seeded from the effect's seed every frame and the mesh
+ *   pool (three/mesh.ts: grids leased `webgl2:mesh` before creation, cached
+ *   programs), which is part of `build`/`teardown`, so context loss drops it
+ *   and a restore rebuilds it on demand. Every GL state is reset after the
+ *   draw. A throwing shader or an unregistered reference draws the params'
+ *   2-D look-alike, diagnosed (`transition-shader-fallback`).
  * - **Context loss.** A lost context keeps nothing: `contextLost` drops every
  *   lease and handle. `contextRestored` recreates the program, the buffer,
  *   the vertex array and all GL state, re-leasing each, and returns `false`
@@ -53,6 +62,9 @@ import type {
 import { createRng } from '../rng'
 import { BACKDROP_RGB, MASK_MAX_OPS, transitionRect, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskPath, type MaskRaster } from './masks'
 import { FRAGMENT_SHADER, UNIFORMS, VERTEX_SHADER, colorUniforms, mulAffine, quadMatrix, type UniformName } from './shaders'
+import { createMeshPool, type MeshPoolOwner } from './three/mesh'
+import { transition3DFor, type Transition3D } from './three/registry'
+import { shader3DOf } from './three/framework'
 
 /** Context attributes: premultiplied output like a 2-D canvas, no MSAA, depth or stencil buffers to pay for. */
 export const WEBGL2_CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
@@ -90,6 +102,8 @@ interface Resources {
   u: Record<UniformName, WebGLUniformLocation | null>
   frame: Lease
   quad: Lease
+  /** S3-1: the 3-D transitions' grids and programs (leased per grid, `webgl2:mesh`). */
+  three: MeshPoolOwner
 }
 interface MaskSurface { canvas: AnyCanvas; ctx: Ctx; tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
 interface NoiseSurface { tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
@@ -206,7 +220,7 @@ export function createWebGL2Compositor(
     gl.uniform1i(u.u_mask, 1)
     applyState()
     maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 2048
-    res = { program, shaders: [vs, fs], vao, buffer, u, frame, quad }
+    res = { program, shaders: [vs, fs], vao, buffer, u, frame, quad, three: createMeshPool(gl, workspace) }
     return true
   }
 
@@ -220,6 +234,7 @@ export function createWebGL2Compositor(
     if (mask) { if (deleteObjects) gl.deleteTexture(mask.tex); mask.lease.release(); mask = undefined }
     if (noise) { if (deleteObjects) gl.deleteTexture(noise.tex); noise.lease.release(); noise = undefined }
     if (res) {
+      res.three.dispose(deleteObjects)
       if (deleteObjects) {
         gl.deleteVertexArray(res.vao)
         gl.deleteBuffer(res.buffer)
@@ -422,6 +437,47 @@ export function createWebGL2Compositor(
     return { x: x0, y: y0, w: Math.max(...px) - x0, h: Math.max(...py) - y0 }
   }
 
+  /**
+   * S3-1: one frame of a 3-D transition, viewport-mapped to the slide's device
+   * rect `rect` (already scissored) over opaque black. Returns false (state
+   * reset, diagnosed once) when the shader throws, so the look-alike draws.
+   */
+  function drawShader(t: Transition3D, attrs: Readonly<Record<string, string>>, from: Texture, to: Texture, progress: number, tr: TransitionDraw, rect: Bounds): boolean {
+    const three = res!.three
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.viewport(rect.x, canvas.height - (rect.y + rect.h), rect.w, rect.h)
+    three.setAspect(to.bounds.w / to.bounds.h)
+    let ok = true
+    try {
+      t.draw(gl, from.tex, to.tex, progress, attrs, createRng(seedOf(tr.rng)), three.pool)
+    } catch (error) {
+      ok = false
+      const why = error instanceof Error ? error.message : String(error)
+      diagnose('transition-shader-fallback', tr.effect, `The ${tr.effect} 3-D shader could not draw (${why}); it draws its 2-D look-alike`)
+    }
+    resetState(rect)
+    return ok
+  }
+
+  /** Every GL state a 3-D draw may have changed, back to the compositor's own (scissored to the slide rect `rect`). */
+  function resetState(rect: Bounds) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, canvas.width, canvas.height)
+    gl.useProgram(res!.program)
+    gl.bindVertexArray(res!.vao)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.colorMask(true, true, true, true)
+    gl.frontFace(gl.CCW)
+    gl.blendEquation(gl.FUNC_ADD)
+    gl.clearColor(0, 0, 0, 0)
+    applyState()
+    const x0 = Math.max(0, rect.x), y0 = Math.max(0, rect.y)
+    const x1 = Math.min(canvas.width, rect.x + rect.w), y1 = Math.min(canvas.height, rect.y + rect.h)
+    gl.enable(gl.SCISSOR_TEST)
+    gl.scissor(x0, canvas.height - y1, Math.max(0, x1 - x0), Math.max(0, y1 - y0))
+  }
+
   function drawTransition(tr: TransitionDraw) {
     const params = tr.params as TransitionParams
     const fit = (t: Texture, a: unknown): Affine => {
@@ -441,6 +497,23 @@ export function createWebGL2Compositor(
     gl.enable(gl.SCISSOR_TEST)
     // GL's window origin is the bottom-left corner.
     gl.scissor(x0, canvas.height - y1, x1 - x0, y1 - y0)
+    // S3-1: a 3-D row dispatched to its shader. At the ends it is exactly the flat outgoing / incoming frame.
+    const ref = shader3DOf(tr.params)
+    const progress = clamp01(tr.progress, 0)
+    if (ref && from && to && (progress <= 0 || progress >= 1)) {
+      const end = progress <= 0 ? from : to
+      drawQuad(end, fit(end, IDENTITY), 1, undefined, undefined)
+      gl.disable(gl.SCISSOR_TEST)
+      return
+    }
+    if (ref && from && to) {
+      const t = transition3DFor(ref)
+      if (t && drawShader(t, ref.attrs, from, to, progress, tr, r)) { gl.disable(gl.SCISSOR_TEST); return }
+      if (!t) diagnose('transition-shader-fallback', tr.effect, `No 3-D shader is registered for ${ref.element}; it draws its 2-D look-alike`)
+      // The look-alike draws instead, on a clean slide rect.
+      gl.clearColor(0, 0, 0, 0)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+    }
     if (backdrop) {
       gl.clearColor(backdrop[0] / 255, backdrop[1] / 255, backdrop[2] / 255, 1)
       gl.clear(gl.COLOR_BUFFER_BIT)
@@ -565,6 +638,18 @@ export function createWebGL2Compositor(
 
     setSlideIndex(index) {
       slideIndex = index
+    },
+
+    prepareTransition3D(t) {
+      if (inert()) return false
+      try {
+        t.prepare?.(res!.three.pool)
+        return true
+      } catch {
+        return false
+      } finally {
+        gl.bindVertexArray(null)
+      }
     },
 
     contextLost() {
