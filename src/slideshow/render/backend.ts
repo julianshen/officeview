@@ -47,6 +47,7 @@ import { CANVAS2D_MAX_TEXTURE_SIZE, createCanvas2DCompositor } from './canvas2d'
 import { paintDirect, type DirectAssets } from './direct'
 import { mulAffine } from './shaders'
 import { createWebGL2Compositor, type WebGL2Compositor } from './webgl2'
+import { registerTransitions3D } from './three'
 
 /** Context-restore deadline (spec 6.3), on `deps.now()`. */
 export const RESTORE_DEADLINE_MS = 3000
@@ -113,6 +114,8 @@ export function createLivePainter(
 const IDENTITY: Affine = [1, 0, 0, 1, 0, 0]
 
 export function createBackendManager(host: HTMLElement, deps: BackendDeps): BackendManager {
+  // S3-7: every 3-D row has its shader before any WebGL2 compositor (first or restored) can dispatch one.
+  registerTransitions3D()
   const doc = host.ownerDocument
   const factory: CanvasFactory = (w, h) => {
     const c = doc.createElement('canvas')

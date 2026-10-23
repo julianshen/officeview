@@ -52,7 +52,13 @@ export type Vec3 = readonly [number, number, number]
 export const DEFAULT_FOV_DEG = 45
 /** Largest grid side; `GRID_MAX²` cells × 4 vertices still fit 16-bit indices. */
 export const GRID_MAX = 128
-export const MAX_CACHED_GRIDS = 8
+/**
+ * Grids the pool keeps (least recently used evicted beyond). S3-7: with all three groups registered the rows
+ * use 9 distinct grids (1×1, 32×18, 8×18, 64×36, 24×1, 24×14, 12×7, 16×9, 20×11; 291,308 B leased in all),
+ * so 12 holds every one with room for a new row: a slide change never evicts a grid it is about to use.
+ * Each grid is still leased (`webgl2:mesh`) on first use only, so the cache costs only the grids a show plays.
+ */
+export const MAX_CACHED_GRIDS = 12
 /** Bytes per vertex: `a_uv` and `a_cell`, two `vec2` of float. */
 export const GRID_VERTEX_BYTES = 16
 export const ATTR_UV = 0
