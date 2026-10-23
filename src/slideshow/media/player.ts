@@ -136,6 +136,8 @@ interface NodeState {
   due?: number
   live?: Live
   opening: boolean
+  /** Bumped when a pending open is abandoned (a looping sound superseded while its lease is still opening): a late lease is released, never attached. */
+  openGen: number
   /** Undecodable or missing: play commands are no-ops (spec 6.5). */
   unplayable: boolean
   want: boolean
@@ -272,7 +274,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
           const rec = onShape ? slide.media.find((m) => m.spid === spid) : sound ? slide.media.find((m) => m.rId === sound) : undefined
           const st: NodeState = {
             node: n, id: n.ctn.id, spid, ...(sound !== undefined ? { sound } : {}), rec,
-            activation: 0, ended: false, begin: 0, opening: false, unplayable: false, want: false, iterations: 0, seen: false, wasActive: false,
+            activation: 0, ended: false, begin: 0, opening: false, openGen: 0, unplayable: false, want: false, iterations: 0, seen: false, wasActive: false,
           }
           nodes.set(st.id, st)
           if (onShape && !bySpid.has(spid)) bySpid.set(spid, st)
@@ -420,7 +422,18 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       st.iterations = typeof rc === 'number' && Number.isFinite(rc) && rc > 1 ? Math.ceil(rc) - 1 : 0
       if (st.sound !== undefined) {
         // "Loop until next sound": this sound is the next one.
-        for (const o of nodes.values()) if (o !== st && o.sound !== undefined && o.live?.el.loop && o.activation > 0 && !o.ended) stop(o.id)
+        for (const o of nodes.values()) {
+          if (o === st || o.sound === undefined || o.activation === 0 || o.ended) continue
+          if (o.live?.el.loop) stop(o.id)
+          else if (o.opening && o.node.ctn.repeatCount === 'indefinite') {
+            // Still opening: the late lease must never attach or play (PR #19 review).
+            o.openGen++
+            o.opening = false
+            o.want = false
+            o.from = undefined
+            endNow(o, false)
+          }
+        }
         deps.stopTransitionSound?.(true)
       }
       if (st.unplayable) {
@@ -447,7 +460,9 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       }
       st.opening = true
       st.from = from
+      const gen = st.openGen
       open(rec, abort.signal).then((res) => {
+        if (gen !== st.openGen) { if (!('refused' in res)) res.release(); return }
         st.opening = false
         if ('refused' in res) {
           if (res.refused === 'media-limit' || res.refused === 'media-empty') st.unplayable = true
@@ -461,7 +476,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         if (st.want) doPlay(st)
       }, () => {
         // Only an abort rejects (the slide was left): nothing was charged.
-        st.opening = false
+        if (gen === st.openGen) st.opening = false
       })
     }
 

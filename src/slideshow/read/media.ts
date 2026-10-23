@@ -1,20 +1,23 @@
 import { attrs, elementChildren, getChild, getChildren, type XmlNode } from '../../core/xml'
 import type { OfficePackage } from '../../core/zip'
+import { alternateBranchSelector } from '../../pptx/parse'
 import type { DiagnosticSink, MediaRecord } from '../types'
 import type { Relationship } from './deck'
 import { READER_LIMITS } from './limits'
 /**
  * The shape each media relationship plays on (S2-7): `p:nvPr/a:videoFile|a:audioFile@r:link` and
  * `p:nvPr/p:extLst/p:ext/p14:media@r:embed`, walked through groups and the rendered branch of
- * `mc:AlternateContent`, bounded at 64 levels like the reader.
+ * `mc:AlternateContent` - the one the drawing parser selects (`alternateBranchSelector`, its compatibility
+ * rules; PR #19 review) - bounded at 64 levels like the reader.
  */
 function mediaShapes(slide: XmlNode | undefined): Map<string, string> {
   const out = new Map<string, string>()
+  const select = alternateBranchSelector()
   const walk = (n: XmlNode | undefined, depth: number) => {
     if (!n || depth > 64) return
     for (const [kind, shape] of elementChildren(n)) {
       if (kind === 'grpSp') { walk(shape, depth + 1); continue }
-      if (kind === 'AlternateContent') { walk(getChild(shape, 'Choice') ?? getChild(shape, 'Fallback'), depth + 1); continue }
+      if (kind === 'AlternateContent') { walk(select(shape), depth + 1); continue }
       const nv = getChild(shape, 'nvPicPr') ?? getChild(shape, 'nvSpPr') ?? getChild(shape, 'nvGraphicFramePr')
       const spid = attrs(getChild(nv, 'cNvPr')).id
       const nvPr = getChild(nv, 'nvPr')

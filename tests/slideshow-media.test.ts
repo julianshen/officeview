@@ -712,3 +712,82 @@ describe('effect sounds (S2-10)', () => {
     expect(d.state(11, 0)).toBe('active')
   })
 })
+
+describe('PR #19 review (Stage 2 round 1)', () => {
+  it('media on a shape in the rendered AlternateContent Fallback is matched to its record and plays', async () => {
+    const deck = await buildPptxDeck({ slides: [{
+      shapes: [{ id: 2, off: ['0', '0'], ext: ['1000', '1000'] }],
+      media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array([1]) }],
+      timingXml: timingXmlOf(mainSeqXml([])),
+    }] })
+    const handle = await openShowPackage(deck)
+    const part = handle.slideParts[0]
+    const rels = await readRelationships(handle, part)
+    const rId = rels.find((r) => /\/(video|media)$/.test(r.type))!.id
+    const pkg = await OfficePackage.load(deck)
+    const types = parseXmlOrdered((await pkg.text('[Content_Types].xml'))!)
+    // The first Choice requires a namespace no reader supports, so the drawing parser renders the Fallback (shape 7);
+    // shape 5 in the Choice also names the clip but is never shown.
+    const pic = (id: number) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="v${id}"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="${rId}"/></p:nvPr></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>`
+    const slideXml = parseXmlOrdered(`<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:cSld><p:spTree>`
+      + `<mc:AlternateContent><mc:Choice xmlns:zz="urn:example:unsupported" Requires="zz">${pic(5)}</mc:Choice><mc:Fallback>${pic(7)}</mc:Fallback></mc:AlternateContent>`
+      + `</p:spTree></p:cSld></p:sld>`)
+    const records = readMedia(rels, types, handle.pkg, 0, createDiagnosticSink(), slideXml)
+    expect(records.find((m) => m.rId === rId)?.spid).toBe('7')
+    // The video on the rendered shape plays.
+    const r = rig()
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('video', 10, '7')])])), records))
+    d.next(0)
+    await flush()
+    expect(r.elements).toHaveLength(1)
+    expect(r.elements[0].play).toHaveBeenCalledTimes(1)
+    expect(codes(r.sink)).not.toContain('media-missing')
+  })
+
+  it('a looping effect sound still opening when the next sound starts never attaches', async () => {
+    const r = rig()
+    // The first sound's lease resolves only after the second sound has started.
+    let release!: () => void
+    const gate = new Promise<void>((res) => { release = res })
+    const base = r.openWith.result
+    let first = true
+    const opened: Array<Promise<MediaLeaseResult>> = []
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink,
+      open: (m) => {
+        r.opens.push(m)
+        const p = first ? gate.then(() => base(m)) : Promise.resolve(base(m))
+        first = false
+        opened.push(p)
+        return p
+      },
+      create: (kind) => {
+        const el = r.root.ownerDocument.createElement(kind) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+    })
+    const timing = tree(mainSeq([
+      group(3, [flyIn(10), effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' })]),
+      group(5, [flyIn(20), effectSound(-2, 'rId3', 6)]),
+    ]))
+    const d = drive({ ...r, player }, slideOf(timing, [soundRec('rId2'), soundRec('rId3')]))
+    d.next(0)
+    await flush()
+    d.next(100)
+    await flush()
+    // The second sound plays; the first is ended by it.
+    expect(r.elements[1].play).toHaveBeenCalledTimes(1)
+    expect(d.ends).toEqual([[-1, false, 100]])
+    // The first lease arrives late: it is released at once, its element never gets a source or plays.
+    release()
+    await flush()
+    expect(r.leases).toHaveLength(2)
+    const late = r.leases.find((l) => l.rec.rId === 'rId2')!
+    expect(late.released).toBe(true)
+    expect(r.elements[0].play).not.toHaveBeenCalled()
+    expect(r.elements[0].getAttribute('src')).toBeNull()
+    expect(r.elements[0].isConnected).toBe(false)
+  })
+})
