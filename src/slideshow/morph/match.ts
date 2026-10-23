@@ -8,23 +8,32 @@
  * non-`!!` object, and Morph expects a 1:1 mapping. It also publishes that
  * names without `!!` never influence matching, and that charts cross-fade
  * rather than morph. The remaining rules below are the staged plan's
- * approximation, recorded in the task report: same name and kind, then same
- * text, then same preset geometry within 25% of the slide diagonal.
+ * approximation, recorded in the task report: same name and kind, then word
+ * or character units, then same preset geometry within 25% of the slide
+ * diagonal.
  *
- * Bounds: slides beyond `MORPH_MAX_OBJECTS` refuse and diagnose
- * (`morph-refused`); more text unit pairs than `MORPH_MAX_UNIT_PAIRS` coarsen
- * the remaining text pairs back to object level (`morph-units-coarsened`).
- * Text units reuse the engine's word/letter item keys (`textItems`), so the
- * transition consumes pairs and builds verbatim.
+ * Unit mode (byWord/byChar): every object pair from rules 1 and 2 whose
+ * shapes both carry text decomposes into unit pairs (LCS-aligned over the
+ * engine's word/letter item keys); the container pair with its rule of
+ * origin keeps the frame animatable, and unmatched units fade individually.
+ * Remaining text-bearing objects pair their units across objects by equal
+ * content, and each container follows the partner that carries most of its
+ * matched units. Unmatched objects fade whole; unmatched text units fade
+ * only when their container is paired.
+ *
+ * Bounds, monotonic: slides beyond `MORPH_MAX_OBJECTS` refuse and diagnose
+ * (`morph-refused`); once text unit pairs pass `MORPH_MAX_UNIT_PAIRS`, later
+ * pairs coarsen to object level (`morph-units-coarsened`) and cross-object
+ * unit matching stops (`morph-unit-bound`) — never silently.
  */
 import type { PptxShape, PptxSlide } from '../../pptx/types'
-import { textItems } from '../render/text-split'
+import { textItems, type TextItem } from '../render/text-split'
 import { targetKey } from '../target'
 import type { DiagnosticSink, TargetKey } from '../types'
 
 /** The most objects one slide contributes to a morph match (refusal beyond). */
 export const MORPH_MAX_OBJECTS = 256
-/** The most text unit pairs one match emits; further pairs match as objects. */
+/** The most text unit pairs one match emits; beyond, later pairs coarsen. */
 export const MORPH_MAX_UNIT_PAIRS = 2048
 
 export type MorphRule = '!!' | 'name-kind' | 'text' | 'geometry'
@@ -53,11 +62,21 @@ interface Entry {
   cx: number
   cy: number
   matched: boolean
+  /** The shape's text units, read lazily once in unit mode. */
+  units?: ItemView[]
+}
+
+/** One text unit: its engine item key and content. */
+interface ItemView {
+  key: TargetKey
+  text: string
+  matched: boolean
 }
 
 interface Ctx {
   pairs: MorphPair[]
   unitPairs: number
+  /** Set once the unit-pair cap is passed: later pairs coarsen. */
   coarsened: boolean
   sink?: DiagnosticSink
   slideIndex: number
@@ -77,27 +96,33 @@ function flatText(shape: PptxShape): string {
   return out
 }
 
-/** Coarse object class for name-kind matching (Microsoft's taxonomy is unpublished). */
+/** Structural object class for name-kind and geometry matching. Text
+ * presence is not part of it: adding text does not change a shape's type. */
 function kindOf(shape: PptxShape): string {
   if (shape.children?.length || shape.group) return 'group'
   if (shape.image) return 'picture'
   if (shape.table || shape.content || shape.chartFallback) return 'graphic'
-  if (shape.textBody?.paragraphs.some(p => p.runs.some(r => (r.text ?? '').length > 0))) return 'text'
   return 'shape'
 }
 
-/** Preset geometry bucket: the geometry class, or the preset name for other/absent ones. */
+/** Preset geometry bucket: same kind and geometry class, and the preset name
+ * for other/absent geometries so two freeform presets do not pair. */
 function geometryOf(shape: PptxShape): string {
   const g = shape.geometry
-  if (g && g !== 'other') return g
-  return `:${shape.presetName ?? ''}`
+  const class_ = g && g !== 'other' ? g : shape.presetName ? `:${shape.presetName}` : ':'
+  return `${kindOf(shape)}|${class_}`
 }
 
 function collect(slide: PptxSlide): Entry[] {
   const out: Entry[] = []
+  const seen = new Set<string>()
   for (const shape of slide.shapes) {
     const id = shape.source?.id
-    if (id === undefined) continue
+    // Duplicate cNvPr ids collapse to the first occurrence, as the engine
+    // treats them everywhere; later duplicates claim nothing (no pair, no
+    // fade entry) because they have no key of their own.
+    if (id === undefined || seen.has(id)) continue
+    seen.add(id)
     out.push({
       key: targetKey({ spid: id }),
       shape,
@@ -133,63 +158,178 @@ function pairQueues(ctx: Ctx, fromQ: Map<string, Entry[]>, toQ: Map<string, Entr
     const n = Math.min(fq.length, tq.length)
     for (let i = 0; i < n; i++) {
       if (fq[i].matched || tq[i].matched) continue
-      fq[i].matched = true
-      tq[i].matched = true
-      ctx.pairs.push({ from: fq[i].key, to: tq[i].key, rule })
+      add(ctx, fq[i], tq[i], rule)
     }
   }
 }
 
-/** Same flat text: whole-object pairs under byObject, per-unit pairs otherwise. !! objects never reach this. */
-function pairByText(ctx: Ctx, fromEntries: readonly Entry[], toEntries: readonly Entry[]): void {
+function add(ctx: Ctx, a: Entry, b: Entry, rule: MorphRule): void {
+  a.matched = true
+  b.matched = true
+  ctx.pairs.push({ from: a.key, to: b.key, rule })
+}
+
+/** The text units of a shape, from the engine's own item splitter. */
+function unitsOf(ctx: Ctx, e: Entry): ItemView[] {
+  if (e.units) return e.units
+  const body = e.shape.textBody
+  const units: ItemView[] = []
+  if (body) {
+    const paragraphText = (p: number): string => body.paragraphs[p].runs.map(r => r.text ?? '').join('')
+    for (const item of textItems(e.shape, ctx.unit!, { sink: ctx.sink, slideIndex: ctx.slideIndex })) {
+      units.push({ key: item.key, text: itemText(paragraphText, item), matched: false })
+    }
+  }
+  e.units = units
+  return units
+}
+
+/** A text item's content: paragraph-local character range, or the paragraph. */
+function itemText(paragraphText: (p: number) => string, item: TextItem): string {
+  const whole = paragraphText(item.paragraph)
+  if (item.st === undefined) return whole
+  return whole.slice(item.st, item.end ?? item.st)
+}
+
+/** LCS alignment of equal-content units, in reading order, one-to-one. */
+function alignUnits(a: readonly ItemView[], b: readonly ItemView[]): Array<[ItemView, ItemView]> {
+  const n = a.length
+  const m = b.length
+  if (!n || !m) return []
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = a[i - 1].text === b[j - 1].text ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
+    }
+  }
+  const out: Array<[ItemView, ItemView]> = []
+  let i = n
+  let j = m
+  while (i > 0 && j > 0) {
+    if (a[i - 1].text === b[j - 1].text && dp[i][j] === dp[i - 1][j - 1] + 1) {
+      out.push([a[i - 1], b[j - 1]])
+      a[i - 1].matched = true
+      b[j - 1].matched = true
+      i--
+      j--
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) i--
+    else j--
+  }
+  out.reverse()
+  return out
+}
+
+/** Decomposes a rules-1/2 object pair into text units: the container pair
+ * keeps its rule of origin, then aligned unit pairs follow. Coarsening is
+ * monotonic: past the cap, this and every later pair stays object-level. */
+function decompose(ctx: Ctx, a: Entry, b: Entry): void {
+  if (!a.shape.textBody || !b.shape.textBody) return
+  const aligned = alignUnits(unitsOf(ctx, a), unitsOf(ctx, b))
+  if (aligned.length === 0) return
+  if (ctx.coarsened || ctx.unitPairs + aligned.length > MORPH_MAX_UNIT_PAIRS) {
+    ctx.coarsened = true
+    ctx.sink?.add({
+      code: 'morph-units-coarsened', slideIndex: ctx.slideIndex, effect: 'sld',
+      message: `Morph text units beyond ${MORPH_MAX_UNIT_PAIRS} pairs match as objects`,
+    })
+    return
+  }
+  ctx.unitPairs += aligned.length
+  for (const [fa, fb] of aligned) ctx.pairs.push({ from: fa.key, to: fb.key, rule: 'text' })
+}
+
+/** A unit candidate for cross-object content matching. */
+interface UnitRef {
+  shape: Entry
+  item: ItemView
+  taken: boolean
+}
+
+/** Rule 3 in unit mode: units of remaining text-bearing objects pair across
+ * objects by equal content; containers follow their majority partner. */
+function pairUnitsAcrossObjects(ctx: Ctx, fromEntries: readonly Entry[], toEntries: readonly Entry[]): void {
   const untagged = (e: Entry): boolean => !e.name.startsWith('!!')
-  const fromQ = queueBy(fromEntries, e => e.text, e => e.text !== '' && untagged(e))
-  const toQ = queueBy(toEntries, e => e.text, e => e.text !== '' && untagged(e))
-  for (const [text, fq] of fromQ) {
-    const tq = toQ.get(text)
-    if (!tq) continue
-    const n = Math.min(fq.length, tq.length)
+  const fromUnits: UnitRef[] = []
+  const toUnits: UnitRef[] = []
+  for (const e of fromEntries) if (!e.matched && untagged(e) && e.text !== '') for (const item of unitsOf(ctx, e)) fromUnits.push({ shape: e, item, taken: false })
+  for (const e of toEntries) if (!e.matched && untagged(e) && e.text !== '') for (const item of unitsOf(ctx, e)) toUnits.push({ shape: e, item, taken: false })
+  if (!fromUnits.length || !toUnits.length) return
+
+  const buckets = new Map<string, { from: UnitRef[]; to: UnitRef[] }>()
+  for (const u of fromUnits) {
+    const b = buckets.get(u.item.text) ?? { from: [], to: [] }
+    b.from.push(u)
+    buckets.set(u.item.text, b)
+  }
+  for (const u of toUnits) {
+    const b = buckets.get(u.item.text)
+    if (b) b.to.push(u)
+  }
+
+  /** How many of a shape's units flew to a partner shape. */
+  const links = new Map<Entry, Map<Entry, number>>()
+  let stopped = false
+  for (const bucket of buckets.values()) {
+    const n = Math.min(bucket.from.length, bucket.to.length)
     for (let i = 0; i < n; i++) {
-      const a = fq[i]
-      const b = tq[i]
-      if (a.matched || b.matched) continue
-      if (!ctx.unit) {
-        add(ctx, a, b, 'text')
-        continue
+      if (fromUnits.length && ctx.unitPairs >= MORPH_MAX_UNIT_PAIRS) {
+        stopped = true
+        break
       }
-      const fa = textItems(a.shape, ctx.unit, { sink: ctx.sink, slideIndex: ctx.slideIndex })
-      const fb = textItems(b.shape, ctx.unit, { sink: ctx.sink, slideIndex: ctx.slideIndex })
-      // Equal text yields identical text-item sequences (equal lengths), so
-      // unit k pairs with unit k; otherwise the pair falls back to the
-      // whole object. Beyond the unit-pair cap, further pairs coarsen.
-      if (fa.length > 0 && fa.length === fb.length && ctx.unitPairs + fa.length <= MORPH_MAX_UNIT_PAIRS) {
-        a.matched = true
-        b.matched = true
-        ctx.unitPairs += fa.length
-        for (let k = 0; k < fa.length; k++) ctx.pairs.push({ from: fa[k].key, to: fb[k].key, rule: 'text' })
-      } else {
-        if (fa.length > 0 && fa.length === fb.length && !ctx.coarsened) {
-          ctx.coarsened = true
-          ctx.sink?.add({
-            code: 'morph-units-coarsened', slideIndex: ctx.slideIndex, effect: 'sld',
-            message: `Morph text units beyond ${MORPH_MAX_UNIT_PAIRS} pairs match as objects`,
-          })
-        }
-        add(ctx, a, b, 'text')
+      const a = bucket.from.find(u => !u.taken)
+      const b = bucket.to.find(u => !u.taken)
+      if (!a || !b) break
+      a.taken = true
+      b.taken = true
+      a.item.matched = true
+      b.item.matched = true
+      ctx.unitPairs++
+      ctx.pairs.push({ from: a.item.key, to: b.item.key, rule: 'text' })
+      let aLinks = links.get(a.shape)
+      if (!aLinks) links.set(a.shape, aLinks = new Map())
+      aLinks.set(b.shape, (aLinks.get(b.shape) ?? 0) + 1)
+      let bLinks = links.get(b.shape)
+      if (!bLinks) links.set(b.shape, bLinks = new Map())
+      bLinks.set(a.shape, (bLinks.get(a.shape) ?? 0) + 1)
+    }
+    if (stopped) break
+  }
+  if (stopped) {
+    ctx.sink?.add({
+      code: 'morph-unit-bound', slideIndex: ctx.slideIndex, effect: 'sld',
+      message: `Morph text unit matching stopped at ${MORPH_MAX_UNIT_PAIRS} pairs; further objects fade`,
+    })
+  }
+
+  // Containers follow the partner with most matched units; first-seen wins
+  // ties, so pairing is deterministic. A container without a free partner
+  // stays unmatched and fades whole, while its matched units still fly.
+  for (const e of fromEntries) {
+    const candidates = links.get(e)
+    if (!candidates || e.matched) continue
+    let best: Entry | undefined
+    let bestN = 0
+    for (const [partner, n] of candidates) {
+      if (partner.matched) continue
+      if (n > bestN) {
+        best = partner
+        bestN = n
       }
     }
+    if (best) add(ctx, e, best, 'text')
   }
 }
 
-/** Same preset geometry, nearer than a quarter of the slide diagonal; greedy nearest in reading order. */
+/** Rule 4: same preset geometry and kind, nearer than a quarter of the
+ * slide diagonal; greedy nearest in reading order. */
 function pairByGeometry(ctx: Ctx, fromEntries: readonly Entry[], toEntries: readonly Entry[], threshold: number): void {
   const fromQ = queueBy(fromEntries, e => e.geometry, e => !e.name.startsWith('!!'))
   const toQ = queueBy(toEntries, e => e.geometry, e => !e.name.startsWith('!!'))
-  for (const [bucket, fq] of fromQ) {
-    const tq = toQ.get(bucket)
-    if (!tq) continue
+  for (const fq of fromQ.values()) {
     for (const a of fq) {
       if (a.matched) continue
+      const tq = toQ.get(a.geometry)
+      if (!tq) continue
       let best: Entry | undefined
       let bestD = Infinity
       for (const b of tq) {
@@ -205,10 +345,12 @@ function pairByGeometry(ctx: Ctx, fromEntries: readonly Entry[], toEntries: read
   }
 }
 
-function add(ctx: Ctx, a: Entry, b: Entry, rule: MorphRule): void {
-  a.matched = true
-  b.matched = true
-  ctx.pairs.push({ from: a.key, to: b.key, rule })
+/** Whole-object fade plus, for paired containers, leftover unit fades. */
+function fades(entries: readonly Entry[]): TargetKey[] {
+  const out: TargetKey[] = []
+  for (const e of entries) if (!e.matched) out.push(e.key)
+  for (const e of entries) if (e.matched && e.units) for (const u of e.units) if (!u.matched) out.push(u.key)
+  return out
 }
 
 export function matchMorph(
@@ -239,9 +381,9 @@ export function matchMorph(
   const fromEntries = collect(from)
   const toEntries = collect(to)
 
-  // Rule 1: `!!` names, exactly as Microsoft publishes. Marked pairQueues
-  // never run again on matched entries, so a !! object cannot pair with a
-  // non-!! object below.
+  // Rule 1: `!!` names, exactly as Microsoft publishes. These entries are
+  // matched now and excluded from every rule below, so a !! object cannot
+  // pair with a non-!! object.
   pairQueues(
     ctx,
     queueBy(fromEntries, e => e.name, e => e.name.startsWith('!!')),
@@ -257,16 +399,37 @@ export function matchMorph(
     'name-kind',
   )
 
-  // Rule 3: same flat text (published detail absent; this is the plan's rule).
-  pairByText(ctx, fromEntries, toEntries)
+  if (option === 'byObject') {
+    // Rule 3: same flat text, whole objects. !! entries never participate.
+    const untagged = (e: Entry): boolean => !e.name.startsWith('!!')
+    pairQueues(
+      ctx,
+      queueBy(fromEntries, e => e.text, e => e.text !== '' && untagged(e)),
+      queueBy(toEntries, e => e.text, e => e.text !== '' && untagged(e)),
+      'text',
+    )
+  } else {
+    // Unit mode: the pairs made by rules 1-2 decompose into text units, the
+    // container pair already emitted with its rule of origin, then remaining
+    // objects pair units across objects.
+    const rulePairs = [...ctx.pairs]
+    const fromByKey = new Map(fromEntries.map(e => [e.key, e]))
+    const toByKey = new Map(toEntries.map(e => [e.key, e]))
+    for (const pair of rulePairs) {
+      const a = fromByKey.get(pair.from)
+      const b = toByKey.get(pair.to)
+      if (a && b) decompose(ctx, a, b)
+    }
+    pairUnitsAcrossObjects(ctx, fromEntries, toEntries)
+  }
 
-  // Rule 4: same preset geometry near a quarter of the slide diagonal.
+  // Rule 4: same preset geometry and kind near a quarter of the slide diagonal.
   const threshold = 0.25 * Math.hypot(Math.max(from.widthEmu, to.widthEmu), Math.max(from.heightEmu, to.heightEmu))
   pairByGeometry(ctx, fromEntries, toEntries, threshold)
 
   return {
     pairs: ctx.pairs,
-    fadeOut: fromEntries.filter(e => !e.matched).map(e => e.key),
-    fadeIn: toEntries.filter(e => !e.matched).map(e => e.key),
+    fadeOut: fades(fromEntries),
+    fadeIn: fades(toEntries),
   }
 }

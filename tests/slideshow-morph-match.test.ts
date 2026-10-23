@@ -7,12 +7,11 @@ import { matchMorph } from '../src/slideshow/morph/match'
 // Fixtures
 // ---------------------------------------------------------------------------
 const PX = 9525
+/** EMU coordinates of the 960x720 slide. The diagonal is 1200px, so the
+ * geometry threshold is 300px; the inclusive-edge test puts centres exactly
+ * 300 px apart. */
 const W = 960 * PX
 const H = 720 * PX
-
-/** EMU diagonal of the 960x720 slide, and the 25% geometry-match threshold. */
-const DIAG = Math.hypot(W, H)
-const THRESHOLD = DIAG / 4
 
 function text(text: string) {
   return {
@@ -27,18 +26,25 @@ interface ObjSpec {
   text?: string
   image?: boolean
   geometry?: 'rect' | 'ellipse' | 'roundRect'
+  children?: boolean
+  sourceless?: boolean
 }
 
-function obj(id: number, over: ObjSpec = {}): PptxShape {
+function obj(id: number | undefined, over: ObjSpec = {}): PptxShape {
   const shape: PptxShape = {
     xEmu: (over.x ?? 0) * PX, yEmu: (over.y ?? 0) * PX,
     widthEmu: (over.w ?? 100) * PX, heightEmu: (over.h ?? 50) * PX,
     geometry: over.geometry ?? 'rect',
-    source: { partPath: 'ppt/slides/slide1.xml', treePath: `spTree/sp[${id}]`, element: 'sp', id: String(id), representation: 'native' },
   }
+  if (over.sourceless) shape.source = { partPath: 'ppt/slides/slide1.xml', treePath: 'spTree/x', element: 'sp', representation: 'native' }
+  else shape.source = { partPath: 'ppt/slides/slide1.xml', treePath: `spTree/sp[${id}]`, element: 'sp', id: String(id), representation: 'native' }
   if (over.name !== undefined && shape.source) shape.source.name = over.name
   if (over.text !== undefined) shape.textBody = text(over.text)
   if (over.image) shape.image = { data: new Uint8Array(4), width: 10, height: 10 } as PptxShape['image']
+  if (over.children) {
+    shape.group = { off: { x: 0, y: 0 }, ext: { width: 100 * PX, height: 50 * PX }, chOff: { x: 0, y: 0 }, chExt: { width: 100 * PX, height: 50 * PX } }
+    shape.children = [obj(undefined, { geometry: 'ellipse' })]
+  }
   return shape
 }
 
@@ -61,9 +67,9 @@ describe('morph matching: !! names', () => {
   })
 
   test('!! objects never pair with differently named or untagged objects', () => {
-    // sp:1 is !!-tagged; sp:2 shares its text and sp:3 its geometry, and both
-    // would be legal matches for a non-tagged object. Morph must not pair a
-    // !! object with a non-!! object (published rule), so it fades out.
+    // sp:1 is !!-tagged; sp:2 shares its text and sp:3 its geometry and kind,
+    // and both would be legal matches for an untagged object. Morph must not
+    // pair a !! object with a non-!! object (published rule), so it fades out.
     const from = slideOf([
       obj(1, { name: '!!X', text: 'hello', geometry: 'rect' }),
       obj(4, { name: 'Y', text: 'hello' }),
@@ -80,6 +86,21 @@ describe('morph matching: !! names', () => {
     ])
     expect(match.fadeOut).toEqual(['sp:1'])
     expect(match.fadeIn).toEqual(['sp:3', 'sp:5'])
+  })
+
+  test('!! names pair before name-kind matches in the same slide', () => {
+    const from = slideOf([
+      obj(1, { name: '!!A' }),
+      obj(2, { name: 'A' }),
+    ])
+    const to = slideOf([
+      obj(3, { name: 'A' }),
+      obj(4, { name: '!!A' }),
+    ])
+    expect(matchMorph(from, to, 'byObject').pairs).toEqual([
+      { from: 'sp:1', to: 'sp:4', rule: '!!' },
+      { from: 'sp:2', to: 'sp:3', rule: 'name-kind' },
+    ])
   })
 })
 
@@ -138,9 +159,16 @@ describe('morph matching: rule order', () => {
     ])
     expect(match.fadeOut).toEqual(['sp:3'])
     expect(match.fadeIn).toEqual(['sp:6'])
-    // The far rect is farther than the geometry threshold from every source
-    // shape, including diagonally displaced ones.
-    expect(THRESHOLD < (W / 2)).toBe(true)
+  })
+
+  test('the geometry threshold is inclusive at a quarter of the diagonal', () => {
+    // Slide diagonal is 1200 px, so the threshold is 300 px: the frame centres
+    // sit exactly 300 px apart.
+    const from = slideOf([obj(1, { geometry: 'rect', x: 0, y: 0, w: 200, h: 100 })])
+    const to = slideOf([obj(2, { geometry: 'rect', x: 300, y: 0, w: 200, h: 100 })])
+    expect(matchMorph(from, to, 'byObject').pairs).toEqual([
+      { from: 'sp:1', to: 'sp:2', rule: 'geometry' },
+    ])
   })
 })
 
@@ -152,10 +180,14 @@ describe('morph matching: text units', () => {
     const from = slideOf([obj(1, { text: 'ab cd' })])
     const to = slideOf([obj(2, { text: 'ab cd' })])
 
-    const words = matchMorph(slideOf([obj(1, { text: 'ab cd' })]), slideOf([obj(2, { text: 'ab cd' })]), 'byWord')
+    const words = matchMorph(from, to, 'byWord')
+    // Unnamed text-bearing objects pair their units by content first; the
+    // container pair follows (its partner is only known after all unit
+    // buckets matched) and keeps the frame animatable.
     expect(words.pairs).toEqual([
       { from: 'sp:1/c:0-1', to: 'sp:2/c:0-1', rule: 'text' },
       { from: 'sp:1/c:3-4', to: 'sp:2/c:3-4', rule: 'text' },
+      { from: 'sp:1', to: 'sp:2', rule: 'text' },
     ])
     expect(words.fadeOut).toEqual([])
     expect(words.fadeIn).toEqual([])
@@ -166,11 +198,56 @@ describe('morph matching: text units', () => {
       { from: 'sp:1/c:1-1', to: 'sp:2/c:1-1', rule: 'text' },
       { from: 'sp:1/c:3-3', to: 'sp:2/c:3-3', rule: 'text' },
       { from: 'sp:1/c:4-4', to: 'sp:2/c:4-4', rule: 'text' },
+      { from: 'sp:1', to: 'sp:2', rule: 'text' },
     ])
 
-    // byObject pairs the same content once, at object level.
+    // byObject pairs the same content once, at object level, with no units.
     const whole = matchMorph(from, to, 'byObject')
     expect(whole.pairs).toEqual([{ from: 'sp:1', to: 'sp:2', rule: 'text' }])
+  })
+
+  test('byWord pairs words when names match but text differs', () => {
+    const match = matchMorph(
+      slideOf([obj(1, { name: 'T', text: 'ab cd' })]),
+      slideOf([obj(2, { name: 'T', text: 'ab xy' })]),
+      'byWord',
+    )
+    // The shared name pairs the objects; the common word pairs as a unit; the
+    // changed words fade at unit level (their containers already have targets).
+    expect(match.pairs).toEqual([
+      { from: 'sp:1', to: 'sp:2', rule: 'name-kind' },
+      { from: 'sp:1/c:0-1', to: 'sp:2/c:0-1', rule: 'text' },
+    ])
+    expect(match.fadeOut).toEqual(['sp:1/c:3-4'])
+    expect(match.fadeIn).toEqual(['sp:2/c:3-4'])
+  })
+
+  test('byWord pairs common words between different texts', () => {
+    const swapped = matchMorph(
+      slideOf([obj(1, { text: 'ab cd' })]),
+      slideOf([obj(2, { text: 'cd ab' })]),
+      'byWord',
+    )
+    expect(swapped.pairs).toEqual([
+      { from: 'sp:1/c:0-1', to: 'sp:2/c:3-4', rule: 'text' },
+      { from: 'sp:1/c:3-4', to: 'sp:2/c:0-1', rule: 'text' },
+      { from: 'sp:1', to: 'sp:2', rule: 'text' },
+    ])
+    expect(swapped.fadeOut).toEqual([])
+    expect(swapped.fadeIn).toEqual([])
+
+    const grown = matchMorph(
+      slideOf([obj(1, { text: 'ab cd' })]),
+      slideOf([obj(2, { text: 'ab cd ef' })]),
+      'byWord',
+    )
+    expect(grown.pairs).toEqual([
+      { from: 'sp:1/c:0-1', to: 'sp:2/c:0-1', rule: 'text' },
+      { from: 'sp:1/c:3-4', to: 'sp:2/c:3-4', rule: 'text' },
+      { from: 'sp:1', to: 'sp:2', rule: 'text' },
+    ])
+    // The container is paired, so leftover units fade; the frame does not.
+    expect(grown.fadeIn).toEqual(['sp:2/c:6-7'])
   })
 })
 
@@ -215,6 +292,88 @@ describe('morph matching: fades and one-to-one', () => {
       seen.add(pair.to)
     }
   })
+
+  test('duplicate source ids yield one key per id', () => {
+    // Two shapes share cNvPr id 1 on each slide. Matching keys off the id, so
+    // first wins as elsewhere in the engine: the first pairing stands, and
+    // the duplicate claims nothing (no pair, no second fade entry).
+    const a = matchMorph(
+      slideOf([obj(1, { text: 'a' }), obj(1, { text: 'b' })]),
+      slideOf([obj(2, { text: 'a' }), obj(2, { text: 'b' })]),
+      'byObject',
+    )
+    expect(a).toEqual({
+      pairs: [{ from: 'sp:1', to: 'sp:2', rule: 'text' }],
+      fadeOut: [],
+      fadeIn: [],
+    })
+
+    const b = matchMorph(
+      slideOf([obj(1, { name: '!!A' }), obj(1, { name: '!!B' })]),
+      slideOf([obj(2, { name: '!!A' }), obj(2, { name: '!!B' })]),
+      'byObject',
+    )
+    expect(b.pairs).toEqual([{ from: 'sp:1', to: 'sp:2', rule: '!!' }])
+  })
+
+  test('shapes without a source id claim nothing', () => {
+    // Id-less shapes have no target key, like everywhere else in the engine:
+    // they never pair and never enter a fade list, but their keyed partners
+    // still behave normally.
+    const match = matchMorph(
+      slideOf([obj(undefined, { sourceless: true, text: 'hi' })]),
+      slideOf([obj(2, { text: 'hi' })]),
+      'byObject',
+    )
+    expect(match).toEqual({ pairs: [], fadeOut: [], fadeIn: ['sp:2'] })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Kinds
+// ---------------------------------------------------------------------------
+describe('morph matching: kinds', () => {
+  test('adding text does not change kind', () => {
+    const match = matchMorph(
+      slideOf([obj(1, { name: 'R' })]),
+      slideOf([obj(2, { name: 'R', text: 'hi' })]),
+      'byObject',
+    )
+    expect(match.pairs).toEqual([{ from: 'sp:1', to: 'sp:2', rule: 'name-kind' }])
+    expect(match.fadeOut).toEqual([])
+    expect(match.fadeIn).toEqual([])
+  })
+
+  test('geometry pairs require the same kind', () => {
+    // An untagged text shape and a picture share a geometry bucket but not a
+    // kind; the geometry rule must not cross-fade one into the other.
+    const a = matchMorph(
+      slideOf([obj(1, { text: 'q', geometry: 'rect', x: 0, y: 0 })]),
+      slideOf([obj(2, { image: true, geometry: 'rect', x: 0, y: 0 })]),
+      'byObject',
+    )
+    expect(a).toEqual({ pairs: [], fadeOut: ['sp:1'], fadeIn: ['sp:2'] })
+
+    const b = matchMorph(
+      slideOf([obj(3, { children: true, x: 0, y: 0 })]),
+      slideOf([obj(4, { image: true, x: 0, y: 0 })]),
+      'byObject',
+    )
+    expect(b).toEqual({ pairs: [], fadeOut: ['sp:3'], fadeIn: ['sp:4'] })
+  })
+
+  test('groups pair as wholes and children claim nothing', () => {
+    const match = matchMorph(
+      slideOf([obj(1, { children: true, name: 'G' })]),
+      slideOf([obj(2, { children: true, name: 'G' })]),
+      'byObject',
+    )
+    expect(match).toEqual({
+      pairs: [{ from: 'sp:1', to: 'sp:2', rule: 'name-kind' }],
+      fadeOut: [],
+      fadeIn: [],
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -230,5 +389,58 @@ describe('morph matching: bounds', () => {
     expect(sink.list()).toEqual([
       { code: 'morph-refused', slideIndex: 4, effect: 'sld', message: expect.stringContaining('257') },
     ])
+  })
+
+  test('the object bound accepts exactly the limit', () => {
+    const many = (start: number): PptxShape[] =>
+      Array.from({ length: 256 }, (_, i) => obj(start + i, { name: 'N' + i }))
+    const sink = createDiagnosticSink()
+    const match = matchMorph(slideOf(many(0)), slideOf(many(1000)), 'byObject', sink)
+    expect(sink.list()).toEqual([])
+    expect(match.pairs.length).toBe(256)
+    expect(match.pairs.every(p => p.rule === 'name-kind')).toBe(true)
+  })
+
+  test('the unit bound coarsens monotonically and is diagnosed', () => {
+    // 82 pairs need 25 word units each: the cap (2048) is reached inside the
+    // 82nd. From there on, every pair coarsens to its container pair — even
+    // later one-word pairs that would still fit individually.
+    const from: PptxShape[] = []
+    const to: PptxShape[] = []
+    for (let i = 0; i < 100; i++) {
+      const body = i < 82 ? `T${i} ${Array.from({ length: 24 }, (_, k) => `w${k}`).join(' ')}` : `T${i}`
+      from.push(obj(i, { name: `P${i}`, text: body }))
+      to.push(obj(1000 + i, { name: `P${i}`, text: body }))
+    }
+    const sink = createDiagnosticSink()
+    const match = matchMorph(slideOf(from), slideOf(to), 'byWord', sink)
+    const units = match.pairs.filter(p => p.from.includes('/c:'))
+    const objects = match.pairs.filter(p => !p.from.includes('/c:'))
+    expect(objects.length).toBe(100)
+    expect(units.length).toBe(81 * 25)
+    // Monotonic: nothing after the 2048 cap gets unit treatment, not even the
+    // one-word pairs that would still fit.
+    expect(match.pairs.some(p => p.from.startsWith('sp:82/c:'))).toBe(false)
+    expect(match.pairs.some(p => p.from.startsWith('sp:99/c:'))).toBe(false)
+    expect(sink.list()).toEqual([
+      {
+        code: 'morph-units-coarsened', slideIndex: 0, effect: 'sld',
+        message: expect.stringContaining('2048'),
+      },
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Degenerate slides
+// ---------------------------------------------------------------------------
+describe('morph matching: degenerate slides', () => {
+  test('empty slides pair nothing and fade nothing', () => {
+    expect(matchMorph(slideOf([]), slideOf([]), 'byWord')).toEqual({
+      pairs: [], fadeOut: [], fadeIn: [],
+    })
+    expect(matchMorph(slideOf([]), slideOf([]), 'byObject')).toEqual({
+      pairs: [], fadeOut: [], fadeIn: [],
+    })
   })
 })
