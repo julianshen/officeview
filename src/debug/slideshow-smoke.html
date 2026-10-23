@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slideshow smoke page</title>
+  </head>
+  <body style="margin: 0">
+    <!--
+      Slideshow plan S1-2 CI smoke: a WebGL2 context probe and an element
+      full-screen target. It imports nothing from src/slideshow; it only
+      proves the `slideshow` Playwright project's browser can do both.
+    -->
+    <div id="stage" style="width: 320px; height: 180px; background: #123">
+      <button id="exit" type="button">Exit full screen</button>
+    </div>
+    <button id="enter" type="button">Enter full screen</button>
+    <script type="module">
+      const stage = document.getElementById('stage')
+      const log = []
+      document.addEventListener('fullscreenchange', () => log.push(document.fullscreenElement === stage ? 'enter' : 'exit'))
+      document.getElementById('enter').addEventListener('click', () => {
+        stage.requestFullscreen().catch((err) => log.push(`enter-rejected: ${err && err.message}`))
+      })
+      document.getElementById('exit').addEventListener('click', () => {
+        document.exitFullscreen().catch((err) => log.push(`exit-rejected: ${err && err.message}`))
+      })
+      window.__slideshowSmoke = {
+        log,
+        webgl2() {
+          const canvas = document.createElement('canvas')
+          const gl = canvas.getContext('webgl2')
+          if (!gl) return { ok: false }
+          const info = gl.getExtension('WEBGL_debug_renderer_info')
+          return {
+            ok: true,
+            maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+            version: gl.getParameter(gl.VERSION),
+            renderer: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+          }
+        },
+      }
+    </script>
+  </body>
+</html>

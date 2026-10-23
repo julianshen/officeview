@@ -569,6 +569,15 @@ export interface PptxMasterSpec {
 }
 
 export interface PptxSlideSpec {
+  transition?: { xml: string; wrapInAlternateContent?: { requires: string; fallbackXml: string } }
+  timingXml?: string
+  hidden?: boolean
+  notes?: string[][]
+  /** Attach to an existing shape; onRun attaches to its first text run. */
+  /** `onRun`: on the shape's first text run (`true`) or its n-th (0-based, across paragraphs). */
+  links?: Array<{ shapeId: number; action?: string; target?: string; external?: boolean; onRun?: boolean | number }>
+  media?: Array<{ kind: 'audio' | 'video'; data: Uint8Array; ext: string; shapeId: number; p14?: boolean }>
+
   layout?: [master: number, layout: number]
   bg?: PptxBgSpec
   shapes: PptxShapeSpec[]
@@ -703,11 +712,31 @@ const PPTX_MEDIA_CT: Record<string, string> = {
   tiff: 'image/tiff',
 }
 
+const SHOW_NS = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main"'
+const NOTES_NS = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+const showEscape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const showRel = (id: string, type: string, target: string, external = false) => `<Relationship Id="${id}" Type="${type.includes('://') ? type : `http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}`}" Target="${showEscape(target)}"${external ? ' TargetMode="External"' : ''}/>`
+const showRels = (rows: string) => `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rows}</Relationships>`
+function timingNextId(xml: string): number {
+  return Math.max(0, ...Array.from(xml.matchAll(/<p:cTn\b[^>]*\bid=["'](\d+)["']/g), m => Number(m[1]))) + 1
+}
+/** Wrap raw timing nodes without renumbering their references. */
+export function timingXmlOf(nodes: string): string {
+  return `<p:timing><p:tnLst><p:par><p:cTn id="${timingNextId(nodes)}" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${nodes}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+}
+/** Steps are raw timing containers, kept verbatim under the main sequence. */
+export function mainSeqXml(steps: string[]): string {
+  const nodes = steps.join('')
+  return `<p:seq concurrent="1" nextAc="seek"><p:cTn id="${timingNextId(nodes)}" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${nodes}</p:childTnLst></p:cTn></p:seq>`
+}
+
 /** Build a multi-slide deck with layouts, masters, backgrounds and a theme. */
 export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   const zip = new JSZip()
   const masters = spec.masters ?? []
   const slides = spec.slides
+  const notesSlides = slides.flatMap((sl, i) => sl.notes !== undefined ? [i] : [])
+  const mediaOverrides: string[] = []
   const mediaFiles: Array<{ name: string; ext: string; data: Uint8Array }> = []
   const mediaByRef = new Map<Uint8Array, string>()
   const allocGlobalMedia = (data: Uint8Array, name?: string): string => {
@@ -785,7 +814,54 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   const slideXmls = slides.map((sl, si) => {
     const part = pptxPart(allocGlobalMedia, sl.shapes.map((s) => s.id).filter((v): v is number => v !== undefined))
     const bg = pptxBgXml(sl.bg, part.allocImage)
-    const shapes = sl.shapes.map((s) => deckShapeXml(s, part)).join('\n    ')
+    const extras: string[] = []
+    const ids = sl.shapes.map(shape => part.idFor(shape))
+    const linkSlots = sl.links?.map(l => `${l.shapeId}:${l.onRun === true ? 0 : l.onRun === false ? '' : l.onRun ?? ''}`) ?? []
+    const mediaSlots = sl.media?.map(m => m.shapeId) ?? []
+    if (new Set(linkSlots).size !== linkSlots.length || new Set(mediaSlots).size !== mediaSlots.length) {
+      throw new Error('buildPptxDeck: duplicate show attachment')
+    }
+    for (const item of [...sl.links ?? [], ...sl.media ?? []]) {
+      if (!ids.includes(item.shapeId)) throw new Error(`buildPptxDeck: unknown show shape ${item.shapeId}`)
+    }
+    const shapes = sl.shapes.map((shape, index) => {
+      const id = ids[index]
+      let xml = deckShapeXml({ ...shape, id }, part)
+      for (const link of sl.links?.filter(l => l.shapeId === id) ?? []) {
+        const rid = `rIdShow${extras.length + 1}`
+        if (link.target !== undefined) extras.push(showRel(rid, link.external ? 'hyperlink' : 'slide', link.target, link.external))
+        const tag = `<a:hlinkClick${link.target !== undefined ? ` r:id="${rid}"` : ''}${link.action !== undefined ? ` action="${showEscape(link.action)}"` : ''}/>`
+        if (link.onRun !== undefined && link.onRun !== false) {
+          if (!xml.includes('<a:rPr')) throw new Error('buildPptxDeck: onRun link requires a text run')
+          xml = xml.replace(/<a:rPr([^>]*?)\/>/g, '<a:rPr$1></a:rPr>')
+          const n = link.onRun === true ? 0 : link.onRun
+          let at = -1
+          for (let k = 0; k <= n; k++) { at = xml.indexOf('</a:rPr>', at + 1); if (at < 0) throw new Error('buildPptxDeck: onRun index past the shape\'s runs') }
+          xml = `${xml.slice(0, at)}${tag}${xml.slice(at)}`
+        } else xml = xml.replace(/<p:cNvPr([^>]*?)\/>/, `<p:cNvPr$1>${tag}</p:cNvPr>`)
+      }
+      for (const media of sl.media?.filter(m => m.shapeId === id) ?? []) {
+        if (!/^[a-zA-Z0-9]+$/.test(media.ext)) throw new Error('buildPptxDeck: invalid media extension')
+        const ext = media.ext.toLowerCase()
+        const name = `showMedia${mediaOverrides.length + 1}.${ext}`
+        zip.file(`ppt/media/${name}`, media.data)
+        const mime = ({ mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', mp4: 'video/mp4', wmv: 'video/x-ms-wmv' } as Record<string, string>)[ext] ?? `${media.kind}/${ext}`
+        mediaOverrides.push(`<Override PartName="/ppt/media/${name}" ContentType="${mime}"/>`)
+        const rid = `rIdShow${extras.length + 1}`
+        extras.push(showRel(rid, media.kind, `../media/${name}`))
+        let content = `<a:${media.kind}File r:link="${rid}"/>`
+        if (media.p14) {
+          const embed = `rIdShow${extras.length + 1}`
+          extras.push(showRel(embed, 'http://schemas.microsoft.com/office/2007/relationships/media', `../media/${name}`))
+          content += `<p:extLst><p:ext uri="{DAA4B4D4-8D71-4841-9C94-3DE7FCFBF9D3}"><p14:media r:embed="${embed}"/></p:ext></p:extLst>`
+        }
+        xml = xml.replace('<p:nvPr/>', '<p:nvPr></p:nvPr>').replace('</p:nvPr>', `${content}</p:nvPr>`)
+      }
+      return xml
+    }).join('\n    ')
+    if (sl.notes !== undefined) extras.push(showRel('rIdNotes', 'notesSlide', `../notesSlides/notesSlide${si + 1}.xml`))
+    const choice = sl.transition?.wrapInAlternateContent
+    const transition = choice ? `<mc:AlternateContent><mc:Choice Requires="${showEscape(choice.requires)}">${sl.transition!.xml}</mc:Choice><mc:Fallback>${choice.fallbackXml}</mc:Fallback></mc:AlternateContent>` : sl.transition?.xml ?? ''
     const [mi, li] = sl.layout ?? [0, 0]
     const layoutNumber = masters.length ? layoutNumberOf(mi, li) : undefined
     if (layoutNumber === undefined && (masters.length || sl.layout)) {
@@ -795,14 +871,14 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
     const after = sl.extraXml?.afterCSld ?? ''
     return {
       xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"${sl.showMasterSp === false ? ' showMasterSp="0"' : ''}>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ${SHOW_NS}${sl.hidden ? ' show="0"' : ''}${sl.showMasterSp === false ? ' showMasterSp="0"' : ''}>
   <p:cSld>${bg}${before}<p:spTree>
     ${spTreeOpen}
     ${shapes}
-  </p:spTree></p:cSld>${after}
+  </p:spTree></p:cSld>${after}${transition}${sl.timingXml ?? ''}
 </p:sld>`,
       rels: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${layoutNumber !== undefined ? `<Relationship Id="rId1" Type="${PPTX_REL.slideLayout}" Target="../slideLayouts/slideLayout${layoutNumber}.xml"/>` : ''}${part.imageRelsXml()}
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${layoutNumber !== undefined ? `<Relationship Id="rId1" Type="${PPTX_REL.slideLayout}" Target="../slideLayouts/slideLayout${layoutNumber}.xml"/>` : ''}${part.imageRelsXml()}${extras.join('')}
 </Relationships>`,
     }
   })
@@ -864,6 +940,17 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
     zip.file(`ppt/slides/_rels/slide${i + 1}.xml.rels`, s.rels)
   })
 
+  for (const i of notesSlides) {
+    const paragraphs = slides[i].notes!.map(runs => `<a:p>${runs.map(text => `<a:r><a:rPr/><a:t>${showEscape(text)}</a:t></a:r>`).join('')}</a:p>`).join('')
+    const body = pptxLayoutPlaceholderXml({ type: 'body', idx: 1, off: ['0', '0'], ext: ['6858000', '9144000'] }, 2).replace('<a:p/>', paragraphs || '<a:p/>')
+    zip.file(`ppt/notesSlides/notesSlide${i + 1}.xml`, `<p:notes ${NOTES_NS}><p:cSld><p:spTree>${spTreeOpen}${body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>`)
+    zip.file(`ppt/notesSlides/_rels/notesSlide${i + 1}.xml.rels`, showRels(showRel('rId1', 'slide', `../slides/slide${i + 1}.xml`) + showRel('rId2', 'notesMaster', '../notesMasters/notesMaster1.xml')))
+  }
+  if (notesSlides.length) {
+    zip.file('ppt/notesMasters/notesMaster1.xml', `<p:notesMaster ${NOTES_NS}><p:cSld><p:spTree>${spTreeOpen}</p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:notesMaster>`)
+    zip.file('ppt/notesMasters/_rels/notesMaster1.xml.rels', showRels(showRel('rId1', 'theme', '../theme/theme1.xml')))
+  }
+
   const deckShapes = [
     ...slides.flatMap((s) => s.shapes),
     ...masters.flatMap((m) => [...(m.shapes ?? []), ...m.layouts.flatMap((l) => l.shapes ?? [])]),
@@ -886,6 +973,8 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   let presRelSeq = slides.length + masters.length
   if (spec.presProps) presRelRows.push(`<Relationship Id="rId${++presRelSeq}" Type="${PPTX_REL.presProps}" Target="presProps.xml"/>`)
   if (styleIds.length > 0) presRelRows.push(`<Relationship Id="rId${++presRelSeq}" Type="${PPTX_REL.tableStyles}" Target="tableStyles.xml"/>`)
+  const notesRid = notesSlides.length ? `rId${++presRelSeq}` : undefined
+  if (notesRid) presRelRows.push(showRel(notesRid, 'notesMaster', 'notesMasters/notesMaster1.xml'))
   zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   ${presRelRows.join('\n  ')}
@@ -894,8 +983,9 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
   zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   ${masters.length ? `<p:sldMasterIdLst>${masters.map((_, m) => `<p:sldMasterId id="${2147483648 + m}" r:id="rId${slides.length + m + 1}"/>`).join('')}</p:sldMasterIdLst>` : ''}
+  ${notesRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesRid}"/></p:notesMasterIdLst>` : ''}
   <p:sldIdLst>${slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('')}</p:sldIdLst>
-  ${slideSizeXml}
+  ${slideSizeXml}${notesRid ? '<p:notesSz cx="6858000" cy="9144000"/>' : ''}
 </p:presentation>`)
 
   const imgDefaults = [...new Set(mediaFiles.map((m) => m.ext))]
@@ -905,6 +995,9 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
     '<Default Extension="xml" ContentType="application/xml"/>',
     imgDefaults,
+    ...mediaOverrides,
+    ...notesSlides.map(i => `<Override PartName="/ppt/notesSlides/notesSlide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`),
+    notesSlides.length ? '<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml"/>' : '',
     '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>',
     ...slides.map((_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`),
     ...layoutGlobals.map((_, i) => `<Override PartName="/ppt/slideLayouts/slideLayout${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>`),

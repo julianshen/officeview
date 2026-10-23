@@ -340,8 +340,8 @@ export class OdfStyles {
     }
   }
 
-  /** Map a style:font-name (or fo:font-family value) through font-face-decls. */
   fontFamily(name: string | undefined): string | undefined {
+    // Map a style:font-name (or fo:font-family value) through font-face-decls.
     if (!name) return undefined
     const first = firstFont(name)
     return this.faces.get(first) ?? this.faces.get(name.trim()) ?? first
@@ -363,8 +363,8 @@ export class OdfStyles {
     return out
   }
 
-  /** Merged paragraph properties + whole-paragraph text defaults for a style. */
   paraProps(styleName: string | undefined): OdfParaProps {
+    // Merged paragraph properties + whole-paragraph text defaults for a style.
     let merged: Omit<OdfParaProps, 'text' | 'masterPageName' | 'listStyleName'> = {}
     let text: OdfTextProps = {}
     let masterPageName: string | undefined
@@ -389,8 +389,8 @@ export class OdfStyles {
     return { ...merged, text, masterPageName, listStyleName }
   }
 
-  /** Merged text properties for a text style (font-size % resolves against basePt). */
   textProps(styleName: string | undefined, basePt?: number): OdfTextProps {
+    // Merged text properties for a text style (font-size % resolves against basePt).
     let out: OdfTextProps = {}
     const base = basePt ?? this.defaultFontSizePt
     if (this.defaultText) out = mergeText(out, readTextProps(getChildren(this.defaultText, 'text-properties')[0], base))
@@ -402,8 +402,8 @@ export class OdfStyles {
     return out
   }
 
-  /** A list style (or the document outline style) with per-level formats. */
   listStyle(name: string | undefined): OdfListStyle | undefined {
+    // A list style (or the document outline style) with per-level formats.
     if (!name) return undefined
     const node = this.listStyles.get(name)
     if (!node) return undefined

@@ -88,6 +88,32 @@ print. Targets 0.5.0 (the version in package.json).
   stretched, picture effects are not applied, charts and diagrams on a master
   show as cards, and master and layout text is painted but cannot be searched
   or copied.
+- **PowerPoint slideshow.** PowerPoint documents can be presented full
+  screen with their transitions, entrance/emphasis/exit/motion animations,
+  timings, auto-advance, click triggers and hyperlinks. Start from the new
+  Present button in the slide toolbar ("From beginning", "From current
+  slide"), with F5 / Shift+F5 inside the viewer, or from the host through the
+  viewer's new `ref` (`OfficeViewerHandle.present()`, which resolves to a
+  `SlideShowSession` with `next`, `previous`, `goTo`, `exit` and `ended`).
+  PowerPoint's Slide Show keys work, Esc always exits, hidden slides, slide
+  ranges, looping and kiosk shows are honoured, and an end-of-show slide
+  closes the show. New props: `allowPresent`, `presentShortcuts`,
+  `slideShowMotion` (`prefers-reduced-motion` is followed by default: a
+  crossfade of at most 200 ms and builds that jump to their end state), and
+  the events `onSlideShowStart`, `onSlideShowEnd`, `onSlideShowSlideChange`
+  and `onSlideShowDiagnostic`. `present()` must be called inside a user
+  gesture; failures reject with a typed `SlideShowError` (`gesture-required`,
+  `not-presentable`, `already-presenting`, `load-failed`, `cancelled`,
+  `invalid-slide`). If full screen is refused (for example an iframe without
+  `allow="fullscreen"`) the show runs in the window. The show draws with
+  WebGL2 and falls back to Canvas 2D, within a bounded memory workspace
+  (512 MiB desktop, 256 MiB mobile). Its code is a lazy chunk; the eager
+  bundle ends smaller than before. Limits: Presenter View, speaker notes,
+  audio and video come in a later release (media effects are diagnosed
+  stand-ins), 3-D and morph transitions play a 2-D look-alike, custom shows
+  play the whole deck, and macOS may capture F5. Every approximated or
+  refused effect is reported through `onSlideShowDiagnostic`. See the
+  README's "Slideshow" section.
 
 ### Changed
 

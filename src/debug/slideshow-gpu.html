@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slideshow GPU harness</title>
+  </head>
+  <body style="margin: 0; background: #000">
+    <!--
+      Slideshow plan S1-14: the WebGL2 compositor, its parity with the Canvas 2D
+      compositor, and context-loss recovery, driven by
+      tests/browser/slideshow-gpu.spec.ts through window.__slideshowGpu. Every
+      clock here is manual: the spec moves the show clock and the monotonic
+      clock explicitly.
+    -->
+    <div id="stage" style="position: relative; width: 192px; height: 144px; background: #000"></div>
+    <script type="module" src="./slideshow-gpu.ts"></script>
+  </body>
+</html>

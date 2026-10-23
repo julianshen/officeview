@@ -31,7 +31,8 @@ if (collect && !collect.outputDir) throw new Error('HARNESS_COLLECT_TOKEN requir
 /**
  * Lazy chunks the library reaches only through dynamic import(). A page
  * cannot import them statically without defeating the laziness the
- * paged-toolbar spec holds open, so once viewer-e2e.tsx or viewer-perf.tsx
+ * paged-toolbar spec holds open, so once viewer-e2e.tsx, viewer-perf.tsx or
+ * slideshow-start.tsx
  * (pages that render <OfficeFile>, whose file-name parser is lazy, and paged
  * documents) is served, they are warmed into the module graph, which is
  * what lets the locked-down server serve them. Nothing is warmed for a bare
@@ -45,7 +46,7 @@ function lazyPagedChunks(): Plugin {
     configureServer(s) { server = s },
     transform(_code, id) {
       const page = id.split('?')[0]
-      if (!server || !/\/src\/debug\/viewer-(e2e|perf)\.tsx$/.test(page)) return
+      if (!server || !/\/src\/debug\/(viewer-(e2e|perf)|slideshow-start)\.tsx$/.test(page)) return
       for (const url of [
         '/src/components/paged/PagedChrome.tsx',
         '/src/components/zoomRouting.ts',
