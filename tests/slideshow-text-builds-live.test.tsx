@@ -203,3 +203,19 @@ describe('PR #19 review 7', () => {
     r.s.exit()
   })
 })
+
+describe('PR #19 review 8', () => {
+  it('a by-word entrance plus a colour animation leaves no static copy of the words in the residual text layer', async () => {
+    const { textFilter } = await import('../src/slideshow/render/scene')
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'emph', fillTo(23, 2, 'fillcolor'))])) }] })
+    const r = await show(doc)
+    const text = r.s.stage!.plan!.layers.find(l => l.kind === 'target' && l.key === 'sp:2' && l.part === 'text')
+    expect(text?.kind).toBe('target')
+    const node = text!.kind === 'target' ? text!.nodes[0]! : undefined
+    // Paragraph 0 holds every word: the word layers paint it, so the residual text layer must not.
+    const keep = node ? textFilter.get(node) : undefined
+    expect(keep).toBeDefined()
+    expect(keep!(0)).toBe(false)
+    r.s.exit()
+  })
+})
