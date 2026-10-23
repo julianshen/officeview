@@ -309,4 +309,57 @@ describe('morphFrame', () => {
       expect(sink.list().filter(d => d.code === 'compositor-workspace' && d.effect === 'morph-blend')).toHaveLength(1)
     })
   })
+
+  describe('PR #20 review 3: the morph starts from each side as it is rendered', () => {
+    const at = (d: LayerDraw, x: number, y: number) => {
+      const m = d.state.transform
+      const dx = d.state.motion?.dx ?? 0, dy = d.state.motion?.dy ?? 0
+      return [m[0]! * x + m[2]! * y + m[4]! + dx, m[1]! * x + m[3]! * y + m[5]! + dy]
+    }
+    /** The draws of one morph frame, the summed pair flattened. */
+    const drawsAt = (spec: MorphFrameSpec, p: number): LayerDraw[] => {
+      const comp = trackingCompositor()
+      morphFrame(spec, p, comp)
+      return comp.draws[0]!.flatMap(d => d.sum ? [d, d.sum.with] : [d])
+    }
+
+    it('a held translation: both layers share the interpolated centre; the outgoing one starts where it was left', () => {
+      // 100 px wide, authored at x = 0, translated to x = 100 by an animation; matched at x = 200.
+      const g0 = geometry(0, 0, 100, 50), g1 = geometry(200, 0, 100, 50)
+      for (const how of ['transform', 'motion'] as const) {
+        const held: TargetState = how === 'transform' ? { ...plain(), transform: [1, 0, 0, 1, 100, 0] } : { ...plain(), motion: { dx: 100, dy: 0 } }
+        const spec: MorphFrameSpec = { pairs: [{ from: { handle: { id: 1 }, geometry: g0, state: held }, to: { handle: { id: 2 }, geometry: g1, state: plain() }, under: true, path: { from: g0, to: g1 } }] }
+        const [a, b] = drawsAt(spec, 0.5)
+        expect(at(a!, 50, 25)[0], how).toBeCloseTo(200, 6)
+        expect(at(b!, 250, 25)[0], how).toBeCloseTo(200, 6)
+        const [a0] = drawsAt(spec, 0)
+        // At p = 0 the outgoing layer is at its rendered x = 100 (centre 150).
+        expect(at(a0!, 50, 25)[0], how).toBeCloseTo(150, 6)
+        expect(at(a0!, 0, 25)[0], how).toBeCloseTo(100, 6)
+      }
+    })
+
+    it('a held scale and a held rotation: the pair shares one box, starting from the rendered one', () => {
+      // Scaled 2× about its centre (50, 25) by an animation: rendered 200 × 100, matched to a 200 × 100 box there.
+      const g0 = geometry(0, 0, 100, 50), g1 = geometry(-50, -25, 200, 100)
+      const scale: TargetState = { ...plain(), transform: [2, 0, 0, 2, -50, -25] }
+      const s1: MorphFrameSpec = { pairs: [{ from: { handle: { id: 1 }, geometry: g0, state: scale }, to: { handle: { id: 2 }, geometry: g1, state: plain() }, under: true, path: { from: g0, to: g1 } }] }
+      const [a, b] = drawsAt(s1, 0.5)
+      // No size change on the way: the outgoing right edge stays at x = 150, as the incoming one.
+      expect(at(a!, 100, 25)[0]).toBeCloseTo(150, 6)
+      expect(at(b!, 150, 25)[0]).toBeCloseTo(150, 6)
+      // Rotated 90° about its centre by an animation, matched to the same box authored at 90°: no turn on the way.
+      const r = Math.PI / 2, c = Math.cos(r), sn = Math.sin(r)
+      const rot: TargetState = { ...plain(), transform: [c, sn, -sn, c, 50 - c * 50 + sn * 25, 25 - sn * 50 - c * 25] }
+      const g2 = geometry(0, 0, 100, 50, 90)
+      const s2: MorphFrameSpec = { pairs: [{ from: { handle: { id: 1 }, geometry: g0, state: rot }, to: { handle: { id: 2 }, geometry: g2, state: plain() }, under: true, path: { from: g0, to: g2 } }] }
+      for (const p of [0, 0.5]) {
+        const [a2] = drawsAt(s2, p)
+        // The outgoing right-edge midpoint (100, 25) is held at (50, 75) by the rotation, and stays there.
+        const [x, y] = at(a2!, 100, 25)
+        expect(x, `p=${p}`).toBeCloseTo(50, 6)
+        expect(y, `p=${p}`).toBeCloseTo(75, 6)
+      }
+    })
+  })
 })

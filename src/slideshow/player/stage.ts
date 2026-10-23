@@ -539,6 +539,8 @@ export function createStage(deps: StageDeps): Stage {
       // A backend switch: every recorded handle belonged to the old backend, which released its leases.
       epoch++
       outgoing = undefined
+      // The Morph's own workspace charges (its unit records) outlive the old backend: release them (PR #20 review 3).
+      if (running?.morph) releaseMorph(running.morph)
       running = undefined
       for (const p of prepared.values()) {
         if (!p.built) continue
@@ -1248,14 +1250,16 @@ export function createStage(deps: StageDeps): Stage {
     const containerTo = new Map<TargetKey, TargetKey>()
     for (const [t, f] of pairOf) if (containerOf(t) === undefined) containerTo.set(f, t)
     /** An unmatched unit of a paired container fades while moving with it. */
-    const carried = (q: Prepared, e: DrawEntry): Pick<MorphFrameItem, 'path'> & { geometry?: BaseGeometry } => {
+    const carried = (q: Prepared, e: DrawEntry): Pick<MorphFrameItem, 'path' | 'pathStates'> & { geometry?: BaseGeometry } => {
       const owner = e.root ? unitOwner.get(e.root) : undefined
       if (owner === undefined) return {}
       const f = q === p ? pairOf.get(owner) : owner
       const t = q === p ? owner : containerTo.get(owner)
       if (f === undefined || t === undefined || pairOf.get(t) !== f) return {}
       const fg = baseOf(from.p, f) ?? box(from.p), tg = baseOf(p, t) ?? box(p)
-      return { path: { from: fg, to: tg }, geometry: q === p ? tg : fg }
+      // The containers' drawn states render the path's ends (PR #20 review 3: a held animation moves the box).
+      const fs = fe.find(x => x.root === f)?.draw.state, ts = te.find(x => x.root === t)?.draw.state
+      return { path: { from: fg, to: tg }, geometry: q === p ? tg : fg, pathStates: { ...(fs ? { from: fs } : {}), ...(ts ? { to: ts } : {}) } }
     }
     const items: MorphFrameItem[] = []
     const kindsOut: string[] = []
@@ -1264,16 +1268,16 @@ export function createStage(deps: StageDeps): Stage {
     if (fbg || tbg) push({ ...(fbg ? { from: side(from.p, fbg) } : {}), ...(tbg ? { to: side(p, tbg) } : {}), under: true, background: true }, 'morph:background')
     for (const e of fe) {
       if (e.background || e.kind === 'watermark' || (e.root && pairedFrom.has(e.root))) continue
-      const { path, geometry } = carried(from.p, e)
-      push({ from: side(from.p, e, geometry), ...(path ? { path } : {}) }, `morph:out:${e.root ?? 'static'}`)
+      const { path, geometry, pathStates } = carried(from.p, e)
+      push({ from: side(from.p, e, geometry), ...(path ? { path, pathStates } : {}) }, `morph:out:${e.root ?? 'static'}`)
     }
     const done = new Set<TargetKey>()
     for (const e of te) {
       if (e.background || e.kind === 'watermark') continue
       const f = e.root ? pairOf.get(e.root) : undefined
       if (!e.root || f === undefined) {
-        const { path, geometry } = carried(p, e)
-        push({ to: side(p, e, geometry), ...(path ? { path } : {}) }, `morph:in:${e.root ?? 'static'}`)
+        const { path, geometry, pathStates } = carried(p, e)
+        push({ to: side(p, e, geometry), ...(path ? { path, pathStates } : {}) }, `morph:in:${e.root ?? 'static'}`)
         continue
       }
       if (done.has(e.root)) continue
@@ -1443,6 +1447,8 @@ export function createStage(deps: StageDeps): Stage {
         if (!outgoing) sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The black source frame did not fit the slideshow workspace; the first slide is a cut' })
       }
       shownBefore = true
+      // A transition still held from an earlier enter (no leave between) is dropped with everything it holds.
+      if (running) { releaseFrame(running.from); releaseFrame(running.to); if (running.morph) releaseMorph(running.morph); running = undefined }
       if (morphRun) {
         running = { spec: spec!, three: false, start, duration, rng: createRng((deps.seed ?? 0x5eed) ^ (p.index * 2654435761)), morph: morphRun }
         releaseFrame(outgoing)

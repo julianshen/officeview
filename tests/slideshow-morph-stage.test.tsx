@@ -19,6 +19,37 @@ vi.mock('../src/slideshow/morph/match', async (importOriginal) => {
   return { ...real, matchMorph: (...args: Parameters<typeof real.matchMorph>) => { morphHooks.duringMatch?.(); return real.matchMorph(...args) } }
 })
 
+/**
+ * PR #20 review 3: `backendHooks.rebuild()` emulates a backend switch (a WebGL2 restore or the Canvas 2D
+ * fallback): the old backend's uploads are released, as a switched-out backend releases its leases, and the
+ * stage's `rebuildLayers` runs against the compositor.
+ */
+const backendHooks: { rebuild?: () => Promise<void> } = {}
+vi.mock('../src/slideshow/render/backend', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/slideshow/render/backend')>()
+  return {
+    ...real,
+    createBackendManager: (host: HTMLElement, deps: Parameters<typeof real.createBackendManager>[1]) => {
+      const m = real.createBackendManager(host, deps)
+      const uploaded = new Set<{ id: number }>()
+      const bind = <T extends object>(t: T, k: string | symbol) => { const v = Reflect.get(t, k); return typeof v === 'function' ? v.bind(t) : v }
+      const facade = new Proxy(m.current, {
+        get(t, k) {
+          if (k === 'upload') return (l: never, lease: never) => { const r = t.upload(l, lease); if (!('refused' in r)) uploaded.add(r); return r }
+          if (k === 'release') return (h: { id: number }) => { uploaded.delete(h); t.release(h) }
+          return bind(t, k)
+        },
+      })
+      backendHooks.rebuild = async () => {
+        for (const h of uploaded) m.current.release(h)
+        uploaded.clear()
+        await deps.rebuildLayers(facade)
+      }
+      return new Proxy(m, { get(t, k) { return k === 'current' ? facade : bind(t, k) } })
+    },
+  }
+})
+
 import { runShow } from '../src/slideshow'
 import { sessionDeps, type SessionController } from '../src/slideshow/player/session'
 import { ManualClock } from '../src/slideshow/clock'
@@ -454,6 +485,58 @@ describe('S3-6 morph through the session and stage', () => {
       expect(kinds.some(k => k.startsWith('morph:in:sp:3') || k.startsWith('morph:pair:sp:3'))).toBe(false)
       expect(kinds.some(k => k.startsWith('morph:out:sp:3'))).toBe(true)
       r.s.exit()
+    })
+  })
+
+  describe('PR #20 review 3', () => {
+    it('a backend rebuild during a byWord morph releases the Morph’s unit records: the workspace returns to its baseline', async () => {
+      // Track the session workspace and its live leases by tag.
+      const real = sessionDeps.workspace
+      const live = new Map<string, number>()
+      let ws: ReturnType<typeof real> | undefined
+      vi.spyOn(sessionDeps, 'workspace').mockImplementation((profile) => {
+        const w = real(profile)
+        ws = w
+        return new Proxy(w, {
+          get(t, k) {
+            if (k === 'lease') {
+              return (bytes: number, tag: string) => {
+                const l = t.lease(bytes, tag)
+                if (!l) return l
+                live.set(tag, (live.get(tag) ?? 0) + 1)
+                const release = l.release.bind(l)
+                let done = false
+                l.release = () => { if (!done) { done = true; live.set(tag, live.get(tag)! - 1) } release() }
+                return l
+              }
+            }
+            const v = Reflect.get(t, k)
+            return typeof v === 'function' ? v.bind(t) : v
+          },
+        })
+      })
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, 'Alpha Beta')] },
+          { shapes: [title(3, 140, 400, 'Beta Alpha')], transition: morphOf('byWord') },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(300)
+      expect(r.s.stage!.inspect().lastDraws).toContain('morph:pair:sp:3/c:5-9')
+      const units = () => [...live].filter(([t, n]) => t.startsWith('morph-units') && n > 0).length
+      expect(units()).toBe(1)
+      // The backend switches mid-morph.
+      await backendHooks.rebuild!()
+      await r.tick(16)
+      expect(units()).toBe(0)
+      await r.tick(2000)
+      r.s.exit()
+      await new Promise((res) => setTimeout(res, 0))
+      expect(units()).toBe(0)
+      expect([...live].filter(([, n]) => n > 0)).toEqual([])
+      expect(ws!.used()).toBe(0)
     })
   })
 })

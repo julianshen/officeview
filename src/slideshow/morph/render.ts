@@ -55,6 +55,9 @@ export interface MorphFrameItem {
    * interpolated box (a lone side too). Defaults to the sides' own boxes
    * when both are present. */
   path?: { from: BaseGeometry; to: BaseGeometry }
+  /** The states the path's ends are rendered at when a side is absent (a lone unit carried with its container:
+   * the other container's state). Default: each present side's own state. */
+  pathStates?: { from?: TargetState; to?: TargetState }
 }
 
 export interface MorphFrameSpec {
@@ -109,15 +112,52 @@ export function mapTransform(base: BaseGeometry, target: BaseGeometry): Affine {
   return m
 }
 
-/** One side's layer draw at weight `w` mapped onto the box `g`. */
-function sideDraw(side: MorphLayerFrame, g: BaseGeometry, w: number): LayerDraw | undefined {
+/** A state's whole slide-px matrix: its transform, then its motion offset (as the compositors apply them). */
+export function heldMatrix(state: TargetState | undefined): Affine {
+  if (!state) return IDENTITY
+  const t = state.transform ?? IDENTITY
+  return state.motion ? mul([1, 0, 0, 1, state.motion.dx, state.motion.dy], t) : t
+}
+
+/**
+ * The box `base` occupies once `m` (a held animation: translate, scale,
+ * rotate, motion offset) is applied, decomposed as `mapTransform` composes
+ * (PR #20 review 3), so `mapTransform(base, renderedGeometry(base, m))` is
+ * `m` for any translate, rotate and scale in the shape's own axes.
+ */
+export function renderedGeometry(base: BaseGeometry, m: Affine): BaseGeometry {
+  if (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0) return base
+  const bx = base.x + base.w / 2, by = base.y + base.h / 2
+  const cx = m[0] * bx + m[2] * by + m[4], cy = m[1] * bx + m[3] * by + m[5]
+  // The linear part with the base rotation put back: R(rot) · S(sx, sy).
+  const l = mul([m[0], m[1], m[2], m[3], 0, 0], rotation(base.rot))
+  const sx = Math.hypot(l[0], l[1])
+  if (!(sx > 0)) return base
+  const sy = (l[0] * l[3] - l[1] * l[2]) / sx
+  const rot = base.rot + rotationDelta(base.rot, Math.atan2(l[1], l[0]) * 180 / Math.PI)
+  const w = base.w * sx, h = base.h * sy
+  return { x: cx - w / 2, y: cy - h / 2, w, h, rot }
+}
+
+/**
+ * One side's layer draw at weight `w` mapped onto the box `g`. The side's
+ * held state moved its layer to its rendered box; the draw maps that
+ * rendered box onto `g` (`mapTransform(rendered, g) ∘ held`), so both sides
+ * of a pair share `g` at every progress and the outgoing side starts where
+ * it was left. `g` defaults to the rendered box itself (a lone fade).
+ */
+function sideDraw(side: MorphLayerFrame, g: BaseGeometry | undefined, w: number): LayerDraw | undefined {
   const state = side.state ?? { visible: true, opacity: 1, transform: IDENTITY }
   if (!state.visible) return undefined
   const opacity = state.opacity * w
   if (!(opacity > 0)) return undefined
+  const held = heldMatrix(state)
+  const rendered = renderedGeometry(side.geometry, held)
+  const { motion: _motion, ...rest } = state
   return {
     handle: side.handle,
-    state: { ...state, opacity, transform: mul(mapTransform(side.geometry, g), state.transform) },
+    // The motion offset is folded into the transform (it is part of the rendered box).
+    state: { ...rest, opacity, transform: mul(mapTransform(rendered, g ?? rendered), held) },
     ...(side.part ? { part: side.part } : {}),
   }
 }
@@ -128,8 +168,10 @@ export function morphFrame(pairs: MorphFrameSpec, progress: number, compositor: 
   for (const item of pairs.pairs) {
     const path = item.path ?? (item.from && item.to ? { from: item.from.geometry, to: item.to.geometry } : undefined)
     if (path) {
-      // The matched pair moves together into the interpolated box.
-      const g = interpGeometry(path.from, path.to, p)
+      // The matched pair moves together into the interpolated box, between the boxes each side was rendered at.
+      const fromState = item.from?.state ?? item.pathStates?.from
+      const toState = item.to?.state ?? item.pathStates?.to
+      const g = interpGeometry(renderedGeometry(path.from, heldMatrix(fromState)), renderedGeometry(path.to, heldMatrix(toState)), p)
       const a = item.from && sideDraw(item.from, g, 1 - p)
       const b = item.to && sideDraw(item.to, g, p)
       if (item.under && a && b) {
@@ -140,10 +182,10 @@ export function morphFrame(pairs: MorphFrameSpec, progress: number, compositor: 
       if (a) out.push(a)
       if (b) out.push(b)
     } else {
-      // An unmatched object fades at its own base box.
+      // An unmatched object fades where it is rendered.
       const side = item.from ?? item.to
       if (!side) continue
-      const d = sideDraw(side, side.geometry, item.from ? 1 - p : p)
+      const d = sideDraw(side, undefined, item.from ? 1 - p : p)
       if (d) out.push(d)
     }
   }
