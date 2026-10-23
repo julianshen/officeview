@@ -136,6 +136,8 @@ interface Live {
   onReject?: (e: unknown) => void
   /** A video overlay's box as a fraction of the frame, kept from its last placement (the mirror's geometry). */
   frame?: FrameBox
+  /** An effect sound (`p:sndTgt`): "loop until next sound" and "Stop previous sound" reach it after its slide too. */
+  sound?: boolean
 }
 
 interface NodeState {
@@ -392,7 +394,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
 
     function attach(st: NodeState, el: HTMLMediaElement, lease: MediaLease): void {
       const n = st.node
-      const live: Live = { spid: st.spid, kind: n.kind, el, lease, playing: false, slide: slide.index }
+      const live: Live = { spid: st.spid, kind: n.kind, el, lease, playing: false, slide: slide.index, ...(st.sound !== undefined ? { sound: true } : {}) }
       live.onReject = (e) => rejected(st, live, e)
       el.setAttribute('data-officeview-show-media', n.kind)
       if (st.sound !== undefined) {
@@ -458,6 +460,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
           }
         }
         deps.stopTransitionSound?.(true)
+        // A looping effect sound carried from an earlier slide (numSld) is a previous sound too (PR #19 review 6).
+        for (const live of [...carried]) if (live.sound && live.el.loop) teardown(live, true)
       }
       if (st.unplayable) {
         fail(st, st.rec ? 'media-codec' : 'media-missing', st.rec ? `The browser cannot decode this ${what(st)} (${st.rec.contentType}); ${stays(st)}` : missing(st), false)
@@ -569,6 +573,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       if (c.cmdType === 'evt' && text.toLowerCase() === 'onstopaudio') {
         // "Stop previous sound": every audio of the slide, and the transition sound.
         for (const st of nodes.values()) if (st.node.kind === 'audio') stop(st.id)
+        for (const live of [...carried]) if (live.sound) teardown(live, true)
         deps.stopTransitionSound?.(false)
         return
       }

@@ -116,3 +116,45 @@ describe('S2-8 live stage', () => {
     r.s.exit()
   })
 })
+
+/** A click step with one whole-shape behaviour on `spid` (an exit or an emphasis). */
+const wholeShape = (id: number, cls: 'exit' | 'emph', behaviour: string) =>
+  `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  behaviour + `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+const hide = (id: number, spid: number) =>
+  `<p:set><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>`
+const moveRight = (id: number, spid: number) =>
+  `<p:animMotion origin="layout" path="M 0 0 L 0.25 0 E" pathEditMode="relative"><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animMotion>`
+
+describe('PR #19 review 6', () => {
+  it('a whole-shape exit after a by-word entrance hides the words too', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'exit', hide(23, 2))])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    await r.key('ArrowRight')
+    await r.tick(500)
+    expect([shown(now(), 'sp:2'), ...WORDS.map(k => shown(now(), k))]).toEqual([true, true, true, true])
+    // The exit targets the whole shape: its words are part of it.
+    await r.key('ArrowRight')
+    await r.tick(50)
+    expect([shown(now(), 'sp:2'), ...WORDS.map(k => shown(now(), k))]).toEqual([false, false, false, false])
+    r.s.exit()
+  })
+
+  it('a whole-shape emphasis after a by-word entrance moves the words with the shape', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'emph', moveRight(23, 2))])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    await r.key('ArrowRight')
+    await r.tick(500)
+    await r.key('ArrowRight')
+    await r.tick(50)
+    const offset = (key: string) => { const s = now().get(key)!; return s.transform[4] + (s.motion?.dx ?? 0) }
+    const body = offset('sp:2')
+    expect(body).toBeGreaterThan(100)
+    for (const k of WORDS) expect(offset(k)).toBeCloseTo(body, 6)
+    r.s.exit()
+  })
+})

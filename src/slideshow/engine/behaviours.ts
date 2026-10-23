@@ -627,15 +627,29 @@ export function renderStateAt(
   fan?: ReadonlyMap<BehaviourNode, IterateFan>,
 ): Map<TargetKey, TargetState> {
   const out = new Map<TargetKey, Accumulated>()
+  // Split text items (`sp:<id>/…` from a word or letter fan) belong to their shape: whole-shape behaviours that are
+  // not fanned (a later exit or emphasis) are also accumulated apart, as each item's parent state (PR #19 review 6).
+  const itemsOf = new Map<TargetKey, Set<TargetKey>>()
+  for (const f of fan?.values() ?? []) {
+    for (const { key } of f.items) {
+      const cut = key.indexOf('/')
+      if (cut < 0) continue
+      const shape = key.slice(0, cut)
+      const set = itemsOf.get(shape) ?? new Set<TargetKey>()
+      set.add(key)
+      itemsOf.set(shape, set)
+    }
+  }
+  const parents = new Map<TargetKey, Accumulated>()
   const geoOf = (key: TargetKey): BaseGeometry | undefined => base.get(key) ?? (key.includes('/') ? base.get(key.slice(0, key.indexOf('/'))) : undefined)
-  const apply = (node: BehaviourNode, progress: number, iteration: number, key: TargetKey): void => {
+  const apply = (node: BehaviourNode, progress: number, iteration: number, key: TargetKey, into = out): void => {
     const geo = geoOf(key) ?? { x: 0, y: 0, w: 0, h: 0, rot: 0 }
     const env = envOf(progress, geo, slide, rng)
     const reads = evalBehaviour(node, env, progress, slide, geo, sink)
     if (reads.failed) return
     const additive = reads.additive ?? node.additive
-    let acc = out.get(key) ?? { visible: true, opacity: 1, tracks: new Map(), color: {}, opacityCap: 1 } as Accumulated
-    out.set(key, acc)
+    let acc = into.get(key) ?? { visible: true, opacity: 1, tracks: new Map(), color: {}, opacityCap: 1 } as Accumulated
+    into.set(key, acc)
     for (const [name, value] of reads.edits) {
       if (name === 'motion:dx' || name === 'motion:dy') {
         const px = typeof value === 'number' ? value : Number(value)
@@ -687,7 +701,12 @@ export function renderStateAt(
   const waiting = new Set<TargetKey>()
   for (const { node, progress, iteration } of docOrder(snapshot)) {
     const f = fan?.get(node)
-    if (!f) { apply(node, progress, iteration, targetKey(node.target)); continue }
+    if (!f) {
+      const key = targetKey(node.target)
+      apply(node, progress, iteration, key)
+      if (itemsOf.has(key)) apply(node, progress, iteration, key, parents)
+      continue
+    }
     const elapsed = progress * f.totalMs
     for (const { key, delayMs } of f.items) {
       const raw = f.spanMs > 0 ? (elapsed - delayMs) / f.spanMs : elapsed >= delayMs ? 1 : -1
@@ -704,7 +723,29 @@ export function renderStateAt(
   }
   const states = new Map<TargetKey, TargetState>()
   for (const [key, acc] of out) states.set(key, finalize(acc, geoOf(key), slide))
+  // Each split item composes with its shape's whole-target state as its parent: visibility, opacity and transform.
+  for (const [shape, acc] of parents) {
+    const parent = finalize(acc, geoOf(shape), slide)
+    for (const key of itemsOf.get(shape) ?? []) {
+      const own = states.get(key)
+      // An item with no state of its own keeps the stage's default (hidden until its entrance).
+      if (own) states.set(key, withParent(own, parent))
+    }
+  }
   return states
+}
+
+/** `child` drawn inside `parent`: the parent's full mapping (motion after transform) applied after the child's. */
+function withParent(child: TargetState, parent: TargetState): TargetState {
+  const full = (s: TargetState): Affine => s.motion ? mulAffine(s.transform, [1, 0, 0, 1, s.motion.dx, s.motion.dy]) : s.transform
+  const { motion: _motion, ...rest } = child
+  void _motion
+  return {
+    ...rest,
+    visible: child.visible && parent.visible,
+    opacity: child.opacity * parent.opacity,
+    transform: mulAffine(full(child), full(parent)),
+  }
 }
 
 /** The track's value at a posed progress, evaluated on a THROWAWAY sink (for accumulate spans). */

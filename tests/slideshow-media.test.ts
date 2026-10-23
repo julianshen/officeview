@@ -880,3 +880,45 @@ describe('PR #19 review 5', () => {
     expect(d.ends).toEqual([])
   })
 })
+
+describe('PR #19 review 6', () => {
+  it('a looping effect sound carried to the next slide (numSld) stops at that slide\'s next sound', async () => {
+    const r = rig()
+    const looping = { ...effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' }), numSld: 3 } as AudioBehaviour
+    const a = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), looping])])), [soundRec('rId2')]))
+    a.next(0)
+    await flush()
+    const carried = r.elements[0]
+    expect(carried.loop).toBe(true)
+    a.ctl.leave()
+    // It plays on into slide 2...
+    expect(carried.isConnected).toBe(true)
+    expect(r.leases[0].released).toBe(false)
+    const b = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), effectSound(-2, 'rId3', 4)])])), [soundRec('rId3')], 1))
+    b.sync(0)
+    expect(carried.pause).not.toHaveBeenCalled()
+    // ...until slide 2's own effect sound starts: "loop until next sound".
+    b.next(100)
+    await flush()
+    expect(carried.pause).toHaveBeenCalled()
+    expect(carried.getAttribute('src')).toBeNull()
+    expect(carried.isConnected).toBe(false)
+    expect(r.leases[0].released).toBe(true)
+    expect(r.elements[1].play).toHaveBeenCalledTimes(1)
+  })
+
+  it('Stop previous sound also stops a carried effect sound', async () => {
+    const r = rig()
+    const looping = { ...effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' }), numSld: 3 } as AudioBehaviour
+    const a = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), looping])])), [soundRec('rId2')]))
+    a.next(0)
+    await flush()
+    const carried = r.elements[0]
+    a.ctl.leave()
+    const stopSound: CmdBehaviour = { ...cmd(30, '0', 'onstopaudio', 'evt'), target: { sld: true } }
+    const b = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), stopSound])])), [], 1))
+    b.next(100)
+    expect(carried.pause).toHaveBeenCalled()
+    expect(r.leases[0].released).toBe(true)
+  })
+})
