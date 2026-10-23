@@ -148,8 +148,11 @@ export function slideTitle(slide: PptxSlide): string {
 export function visibleText(slide: PptxSlide, state: RenderState, builds: readonly BuildOwnership[]): string[] {
   const byShape = new Map(builds.filter((b) => b.mode === 'paragraph').map((b) => [b.spid, b]))
   const out: Array<{ title: boolean; text: string }> = []
-  for (const shape of leaves([...underlayOf(slide), ...slide.shapes], state)) {
-    const spid = shape.source?.id
+  // Underlay (master and layout) text is never animated or built: its ids belong to other parts and must not
+  // pick up a slide shape's state or build (PR #18 review 7).
+  const under = new Set(leaves(underlayOf(slide), new Map()))
+  for (const shape of [...under, ...leaves(slide.shapes, state)]) {
+    const spid = under.has(shape) ? undefined : shape.source?.id
     const build = spid !== undefined ? byShape.get(spid) : undefined
     let text: string
     if (build) {

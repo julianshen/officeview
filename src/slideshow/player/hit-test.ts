@@ -20,7 +20,7 @@ import type { PptxShape } from '../../pptx/types'
 import { createRng } from '../rng'
 import type { Affine, MaskState, RenderState, TargetState } from '../types'
 import { isMaskRaster, maskPath, type MaskOp } from '../render/masks'
-import type { PlanLayer, RenderPlan } from '../render/plan'
+import { fromUnderlay, type PlanLayer, type RenderPlan } from '../render/plan'
 
 const IDENTITY: Affine = [1, 0, 0, 1, 0, 0]
 
@@ -131,7 +131,8 @@ export function maskShows(mask: MaskState, box: { x: number; y: number; w: numbe
   return m.fillRule === 'evenodd' ? covering % 2 === 1 : covering > 0
 }
 
-const spidOf = (shape: PptxShape): string | undefined => shape.source?.id
+/** An underlay (master or layout) node's id belongs to another part: it is never a slide trigger or link (PR #18 review 7). */
+const spidOf = (shape: PptxShape): string | undefined => (fromUnderlay.has(shape) ? undefined : shape.source?.id)
 
 /**
  * Decides what a click on `leaf` at its local point (u, v) (its box is `w` × `h`) means for the interactive

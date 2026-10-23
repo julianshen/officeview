@@ -38,6 +38,13 @@ interface Leaf {
   fixed?: true
 }
 
+/**
+ * Plan nodes painted from the slide's underlay (master and layout artwork, and their group clones). Shape ids are
+ * scoped per part, so an underlay shape can share a slide shape's id: these nodes are never targets, triggers or
+ * links (PR #18 review 7).
+ */
+export const fromUnderlay = new WeakSet<PptxShape>()
+
 export function shapeKey(shape: PptxShape): TargetKey | undefined {
   return shape.source?.id !== undefined ? targetKey({ spid: shape.source.id }) : undefined
 }
@@ -88,8 +95,8 @@ export function buildRenderPlan(
   const leaves: Leaf[] = []
   const flatten = (list: readonly PptxShape[], path: PptxShape[], fixed: boolean): void => {
     for (const node of list) {
-      if (node.group) { flatten(node.children ?? [], [...path, node], fixed); continue }
-      if (fixed) { leaves.push({ path, node, fixed: true }); continue }
+      if (node.group) { if (fixed) fromUnderlay.add(node); flatten(node.children ?? [], [...path, node], fixed); continue }
+      if (fixed) { fromUnderlay.add(node); leaves.push({ path, node, fixed: true }); continue }
       const key = shapeKey(node)
       const build = node.source?.id !== undefined ? paragraphBuilds.get(node.source.id) : undefined
       if (build) {
@@ -158,6 +165,7 @@ function prune(leaves: readonly Leaf[]): PptxShape[] {
     chain = chain.slice(0, common)
     for (let i = common; i < leaf.path.length; i++) {
       const clone: PptxShape = { ...leaf.path[i], children: [] }
+      if (fromUnderlay.has(leaf.path[i])) fromUnderlay.add(clone)
       const parent = chain[chain.length - 1]
       if (parent) parent.clone.children!.push(clone)
       else roots.push(clone)

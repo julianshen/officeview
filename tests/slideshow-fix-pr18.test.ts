@@ -12,7 +12,7 @@
  * is per module). jsdom with node-canvas; every clock is driven. Decks are "Office-shaped synthetic".
  */
 import { afterEach, expect, it, vi } from 'vitest'
-import { buildPptxDeck, type PptxShapeSpec } from '../src/testdata/ooxml-builders'
+import { buildPptxDeck, mainSeqXml, timingXmlOf, type PptxShapeSpec } from '../src/testdata/ooxml-builders'
 import { installShowSeams, loadDeck, flush, startShow, type ShowSeams } from './helpers/slideshow-show-rig'
 
 const gate: { open?: Promise<void>; release?: () => void } = {}
@@ -160,5 +160,27 @@ it('PR #18 review 6: the next visible slide past a hidden one is prefetched and 
     await r.tick(100)
     // Slide 1 is hidden: slide 2 is slide 0's next visible slide, two indices away.
     expect(r.s.stage!.inspect().slides.map(s => [s.index, s.level])).toEqual([[0, 'full'], [2, 'full']])
+  } finally { r.exit() }
+})
+
+it('PR #18 review 7: an entrance on slide shape 5 does not hide master shape 5 (ids are per part)', async () => {
+  seams = installShowSeams({ width: 1280, height: 720 })
+  const entr = '<p:par><p:cTn id="10" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>' +
+    '<p:set><p:cBhvr><p:cTn id="11" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="5"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>' +
+    '</p:childTnLst></p:cTn></p:par>'
+  const step = `<p:par><p:cTn id="20" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="21" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${entr}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+  const doc = await loadDeck(await buildPptxDeck({
+    slideSize: [W, H],
+    masters: [{ shapes: [{ id: 5, name: 'Master 5', off: ['0', '0'], ext: [String(W / 4), String(H / 4)], fill: 'CC0000' }], layouts: [{ shapes: [] }] }],
+    slides: [{ layout: [0, 0], shapes: [{ id: 5, name: 'Slide 5', off: [String(W / 2), String(H / 2)], ext: [String(W / 4), String(H / 4)], fill: '0000CC' }], timingXml: timingXmlOf(mainSeqXml([step])) }],
+  }))
+  const r = await startShow(doc, { seams, size: { width: 1280, height: 720 } })
+  try {
+    await r.tick(100)
+    const c = r.frameCanvas()!
+    const at = (fx: number, fy: number) => [...c.getContext('2d')!.getImageData(Math.round(c.width * fx), Math.round(c.height * fy), 1, 1).data.slice(0, 3)]
+    // Master shape 5 paints; slide shape 5 has not entered yet.
+    expect(at(0.125, 0.125)).toEqual([0xcc, 0, 0])
+    expect(at(0.625, 0.625)).not.toEqual([0, 0, 0xcc])
   } finally { r.exit() }
 })

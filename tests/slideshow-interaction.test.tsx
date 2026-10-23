@@ -252,6 +252,33 @@ describe('click targets', () => {
 })
 
 describe('hyperlinks', () => {
+  it('PR #18 review 7: a master shape sharing a slide shape\'s id is neither a link target nor hidden from the text list', async () => {
+    // Master shape 5 ("Master", top left) and slide shape 5 ("Slide", far right) share an id: ids are per part.
+    // The slide shape links out and enters on the first click.
+    const doc = await deck({
+      masters: [{ shapes: [at(5, 0, 0, 200, 100, 'Master')], layouts: [{ shapes: [] }] }],
+      slides: [{
+        layout: [0, 0],
+        shapes: [at(5, 600, 400, 200, 100, 'Slide')],
+        timingXml: timingXmlOf(mainSeqXml([step(10, effect(12, 5, 'entr'))])),
+        links: [{ shapeId: 5, target: 'https://example.com/slide', external: true }],
+      }, { shapes: [] }],
+    })
+    const r = await show(doc)
+    // The slide shape has not entered; the master text is on screen and listed.
+    expect(r.text()).toEqual(['Master'])
+    // A click on the master shape is no link: it advances (the slide shape enters).
+    await r.click(50, 50)
+    expect(r.opened).toEqual([])
+    expect(r.s.buildIndex).toBe(1)
+    await r.tick(10)
+    expect(r.text()).toEqual(['Master', 'Slide'])
+    // The slide shape's own link still works.
+    await r.click(700, 450)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/slide'])
+    r.s.exit()
+  })
+
   it('PR #18 review 6: a run link in a paragraph its build has not revealed is neither hit nor offered to assistive tech', async () => {
     // Paragraph 0 "Always" shows from the start; paragraph 1 "Later" (linked) enters on the first click (a by-paragraph build).
     const reveal = `<p:set><p:cBhvr><p:cTn id="12" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"><p:txEl><p:pRg st="1" end="1"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
