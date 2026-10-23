@@ -111,7 +111,8 @@ describe('S3-6 morph through the session and stage', () => {
     await r.key('ArrowRight')
     await r.tick(600)
     expect(r.s.state.slide).toBe(1)
-    // The morph route ran (not the fade look-alike).
+    // The morph route ran (not the fade look-alike), and the stage reports it as the morph (merge fix 87f0b6c).
+    expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
     expect(vi.mocked(morphFrame)).toHaveBeenCalled()
     expect(r.s.stage!.inspect().lastDraws.some(k => k.startsWith('morph'))).toBe(true)
     const m = lastMorph()!
@@ -136,6 +137,7 @@ describe('S3-6 morph through the session and stage', () => {
     // After the 1.2 s window the slide draws normally again.
     await r.tick(1000)
     expect(r.s.stage!.inspect().lastDraws.some(k => k.startsWith('morph'))).toBe(false)
+    expect(r.s.stage!.transition).toBeUndefined()
     r.s.exit()
   })
 
