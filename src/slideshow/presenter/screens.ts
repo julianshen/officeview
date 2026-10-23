@@ -80,7 +80,7 @@ export function preparePlacement(doc: Document, details: ScreenDetails | undefin
   try {
     const plan = planPlacement(details)
     if ('manual' in plan) preparedPlacement.delete(doc)
-    else preparedPlacement.set(doc, { popupFeatures: plan.popupFeatures, audienceScreen: plan.audienceScreen })
+    else preparedPlacement.set(doc, { popupFeatures: plan.popupFeatures, audienceScreen: plan.audienceScreen, presenterScreen: plan.presenterScreen })
   } catch {
     preparedPlacement.delete(doc)
   }

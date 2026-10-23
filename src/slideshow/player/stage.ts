@@ -125,6 +125,15 @@ export interface Stage {
    * the slide's own timing.
    */
   textTiming?(index: number, meta: ShowSlide, charge: (bytes: number, tag: string) => boolean): { tree: TimingTree; orderOf: ReadonlyMap<TimeNode, number> } | undefined
+  /**
+   * Additive (S2-5): what Presenter View needs to paint slide `index` at
+   * `cursor` on `timeline` (a settled checkpoint for Next; none for the grid's
+   * static state): the slide, its render state with the stage's own base
+   * geometry and entrance-hidden targets, and the decoded images and fonts.
+   * Only for the shown slide and its prepared neighbours; `undefined` for
+   * any other slide.
+   */
+  previewOf?(index: number, cursor: SlideCursor | undefined, timeline: SlideTimeline | undefined): StagePreview | undefined
   resize(css: { w: number; h: number }, dpr: number): void
   readonly level: LadderLevel | undefined
   readonly backend: string
@@ -134,6 +143,15 @@ export interface Stage {
   /** @internal Per-slide residency and layer bookkeeping, and the last frame's draws (tests, the debug harness). */
   inspect(): StageInspection
   dispose(): void
+}
+
+/** Additive (S2-5): a slide's paint inputs for Presenter View (`Stage.previewOf`). */
+export interface StagePreview {
+  slide: PptxSlide
+  state: RenderState
+  images: ReadonlyArray<CanvasImageSource | undefined>
+  resolveFont(family: string): string
+  builds: ShowSlide['builds']
 }
 
 export interface StageInspection {
@@ -989,6 +1007,13 @@ export function createStage(deps: StageDeps): Stage {
       const p = current
       if (!p) return EMPTY_STATE
       return stateOf(p, cursor, t - origin, timelineOf)
+    },
+
+    previewOf(index, cursor, timeline) {
+      const p = current?.index === index ? current : prepared.get(index)
+      if (!p || p.dead || disposed) return undefined
+      // A settled checkpoint reads the same at any time; the grid's static state has no cursor.
+      return { slide: p.slide, state: stateOf(p, cursor, 0, timeline), images: p.images, resolveFont, builds: p.meta.builds }
     },
 
     frame(cursor, t) {

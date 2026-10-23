@@ -66,7 +66,7 @@ describe('Slideshow Screen Placement (Task S2-3)', () => {
     // the popup opens with these features and full screen goes to `audienceScreen`.
     const doc = document.implementation.createHTMLDocument('opener')
     preparePlacement(doc, TWO)
-    expect(preparedPlacement.get(doc)).toEqual({ popupFeatures: 'popup=yes,left=0,top=0,width=1920,height=1040', audienceScreen: EXTERNAL })
+    expect(preparedPlacement.get(doc)).toEqual({ popupFeatures: 'popup=yes,left=0,top=0,width=1920,height=1040', audienceScreen: EXTERNAL, presenterScreen: PRIMARY })
     // A later hint with no usable second screen (unplugged) drops the stale plan.
     preparePlacement(doc, { screens: [PRIMARY] })
     expect(preparedPlacement.has(doc)).toBe(false)
