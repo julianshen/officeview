@@ -296,9 +296,9 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | behaviour:p:animRot | animRot | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:animScale | animScale | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:animClr | animClr | file | exact | 1 | no | — | 0.02 | 0.1 |
-| behaviour:p:cmd | cmd | stand-in | pending-stage-2 | 2 | no | silent timed no-op | 0.08 | 0.3 |
-| behaviour:p:audio | audio | stand-in | pending-stage-2 | 2 | no | silent timed no-op | 0.08 | 0.3 |
-| behaviour:p:video | video | stand-in | pending-stage-2 | 2 | no | poster frame | 0.08 | 0.3 |
+| behaviour:p:cmd | cmd | file | approximate | 2 | no | play, pause, resume, stop, togglePause, playFrom, onStopAudio | 0.08 | 0.3 |
+| behaviour:p:audio | audio | file | exact | 2 | no | — | 0.02 | 0.1 |
+| behaviour:p:video | video | file | approximate | 2 | no | DOM overlay at the shape position (shape effects do not move it) | 0.08 | 0.3 |
 | preset:entr:1 | appear | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:entr:2 | fly-in | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:entr:3 | venetian-blinds | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
@@ -2538,13 +2538,14 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | preset:exit:58:272 | fold: in-slightly | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:exit:58:288 | fold: out-slightly | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:exit:58:528 | fold: in-from-screen-center | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
-| build:word | Word build (paragraph stand-in) | stand-in | pending-stage-2 | 2 | no | whole paragraph | 0.08 | 0.3 |
-| build:letter | Letter build (paragraph stand-in) | stand-in | pending-stage-2 | 2 | no | whole paragraph | 0.08 | 0.3 |
-| sound:transition | Transition / cross-slide sound | stand-in | pending-stage-2 | 2 | no | silent timed no-op | 0.08 | 0.3 |
+| build:word | Text build by word (p:iterate type="wd") | mask | approximate | 2 | no | per-word layers clipped to word boxes | 0.08 | 0.3 |
+| build:letter | Text build by letter (p:iterate type="lt") | mask | approximate | 2 | no | per-letter layers clipped to letter boxes | 0.08 | 0.3 |
+| sound:transition | Transition / cross-slide sound | file | exact | 2 | no | — | 0.02 | 0.1 |
+| sound:effect | Effect sound (p:audio on a p:sndTgt) | stand-in | approximate | 2 | no | silent timed no-op | 0.08 | 0.3 |
 | build:chart | Chart build (whole chart) | transform | approximate | 1 | no | — | 0.08 | 0.3 |
 | build:smartart | SmartArt build (fallback drawing) | transform | approximate | 1 | no | — | 0.08 | 0.3 |
 | build:fallback | Fallback picture / card animation | transform | approximate | 1 | no | — | 0.08 | 0.3 |
-| media:codec | Unavailable media codec (poster / silent no-op) | stand-in | pending-stage-2 | 2 | no | — | 0.08 | 0.3 |
+| media:codec | Unavailable media codec (poster / silent no-op) | stand-in | approximate | 2 | no | poster picture, or silence | 0.08 | 0.3 |
 | never:macro | VBA / program execution | stand-in | never | 1 | no | — | 0.08 | 0.3 |
 | never:ole | OLE activation | stand-in | never | 1 | no | — | 0.08 | 0.3 |
 | never:recorded | Recorded ink / narration beyond stored timing | stand-in | never | 1 | no | — | 0.08 | 0.3 |

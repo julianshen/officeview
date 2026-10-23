@@ -26,7 +26,8 @@ import type { WatermarkOptions } from '../src/core/watermark'
 import { createElapsedTimer, formatElapsed, formatWallClock } from '../src/slideshow/presenter/timer'
 import { NotesPane, NOTES_SIZES, NOTES_DEFAULT } from '../src/slideshow/presenter/notes'
 import { SlideGrid, GRID_CELL, gridWindow } from '../src/slideshow/presenter/grid'
-import { diagnosticKind } from '../src/slideshow/presenter/diagnostics'
+import { diagnosticKind, PANEL_KIND } from '../src/slideshow/presenter/diagnostics'
+import { DIAGNOSTIC_CODES } from '../src/slideshow/diagnostics'
 import { previewTimeline } from '../src/slideshow/presenter/preview'
 
 type FakePopup = Window & { closeCalls: number }
@@ -688,6 +689,26 @@ describe('Presenter View (S2-5)', () => {
       expect(diagnosticKind({ code: 'presenter-thumbnail-approximate', message: '' })).toBe('approximate')
       expect(diagnosticKind({ code: 'presenter-styles-blocked', message: '' })).toBe('refused')
       expect(diagnosticKind({ code: 'placement-fullscreen-refused', message: '' })).toBe('refused')
+    })
+
+    it('S2-9: the panel groups agree with the diagnostic catalogue classes', () => {
+      const BY_CLASS = { refused: 'refused', approximate: 'approximate', 'stand-in': 'approximate', info: 'other' } as const
+      for (const [code, kind] of Object.entries(PANEL_KIND)) {
+        // Every explicit entry is a catalogued code; only a resource code may be placed by presentation.
+        expect(DIAGNOSTIC_CODES, code).toHaveProperty([code])
+        const cls = DIAGNOSTIC_CODES[code]
+        if (cls !== 'resource') expect(kind, code).toBe(BY_CLASS[cls])
+      }
+      // Every other catalogued code follows its class, whatever its wording.
+      for (const [code, cls] of Object.entries(DIAGNOSTIC_CODES)) {
+        if (cls === 'resource' || code in PANEL_KIND) continue
+        expect(diagnosticKind({ code, message: '' }), code).toBe(BY_CLASS[cls])
+      }
+      // Wording that once misplaced a code: kiosk-restart is a refusal, not pending; timing-requires is a note.
+      expect(diagnosticKind({ code: 'kiosk-restart', message: '' })).toBe('refused')
+      expect(diagnosticKind({ code: 'timing-requires', message: '' })).toBe('other')
+      expect(diagnosticKind({ code: 'media-codec', message: '' })).toBe('refused')
+      expect(diagnosticKind({ code: 'constructor', message: '' })).toBe('other')
     })
 
     it('M5: swapping back hands focus to a focusable host', async () => {

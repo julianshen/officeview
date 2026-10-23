@@ -1068,10 +1068,7 @@ export function createStage(deps: StageDeps): Stage {
       if (spec && deps.reduced) spec = reducedTransition(spec)
       const drawn = spec ? resolveTransition2D(spec) : undefined
       if (drawn?.approximated && spec) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: spec.element, message: `Transition ${spec.ns}:${spec.element} is drawn as its 2-D look-alike ${drawn.spec.element}` })
-      // Sounds are Stage 2 (spec 13): the transition plays silently, diagnosed once for the slide.
-      const sound = model.slide.transition?.sound
-      if (sound?.start) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound', message: 'The transition sound is pending Stage 2: the transition plays silently' })
-      if (sound?.end) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound-end', message: 'Stopping sounds at the transition is pending Stage 2: nothing plays to stop' })
+      // The transition sound is played (and any refusal diagnosed) by the session's transition-sound controller (S2-7).
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
       // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).

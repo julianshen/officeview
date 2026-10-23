@@ -18,7 +18,7 @@ export function createDiagnosticSink(): DiagnosticSink {
 
 /**
  * What a diagnostic says about the show (slideshow plan S1-22):
- * - `stand-in`: a catalogued stand-in plays (pending a later stage);
+ * - `stand-in`: a catalogued stand-in plays (pending a later stage, or an accepted gap such as an effect sound);
  * - `approximate`: the closest look-alike plays, or a part of an effect is dropped while the rest plays;
  * - `refused`: input is refused or dropped (a hostile or invalid value, a limit, an unreadable part);
  * - `resource`: memory, GPU or platform pressure changed how the show renders (ladder, cuts, fallbacks);
@@ -35,7 +35,7 @@ export const DIAGNOSTIC_CODES: Readonly<Record<string, DiagnosticClass>> = Objec
   // Show setup and session
   'slide-size': 'refused', 'no-package': 'refused', 'package-reopen': 'refused', 'show-properties': 'refused',
   'browse': 'approximate', 'custom-show': 'approximate', 'slide-range': 'refused', 'slide-root': 'refused',
-  'presenter-view-unavailable': 'stand-in', 'fullscreen-refused': 'resource', 'invalid-slide': 'info', 'kiosk-restart': 'refused',
+  'fullscreen-refused': 'resource', 'invalid-slide': 'info', 'kiosk-restart': 'refused',
   'underlay': 'refused', 'workspace': 'resource',
   // Slide metadata
   'notes-limit': 'refused', 'notes-truncated': 'refused', 'metadata-limit': 'resource', 'slide-refused': 'refused',
@@ -56,20 +56,23 @@ export const DIAGNOSTIC_CODES: Readonly<Record<string, DiagnosticClass>> = Objec
   'timing-query-budget': 'refused',
   // Behaviours
   'preset-approximate': 'approximate', 'behaviour-unsupported': 'approximate', 'behaviour-invalid-formula': 'refused',
-  'anim-effect-unknown-filter': 'approximate', 'anim-clr-unreadable': 'approximate', 'media-stand-in': 'stand-in',
+  'anim-effect-unknown-filter': 'approximate', 'anim-clr-unreadable': 'approximate',
+  // Only media the S2-7 player does not follow: an effect sound (p:audio on a p:sndTgt) is a silent timed no-op.
+  'media-stand-in': 'stand-in',
   // Rendering, memory and GPU
   'ladder-reduced': 'resource', 'ladder-flattened': 'resource', 'ladder-terminal': 'resource', 'layer-limit': 'resource',
   'reraster-limit': 'resource', 'layer-workspace': 'resource', 'layer-scale': 'resource', 'image-workspace': 'resource',
   'scratch-image': 'resource', 'paint-failed': 'resource', 'resize-kept-old': 'resource', 'mask-ops': 'resource',
   'mask-unknown': 'approximate', 'compositor-workspace': 'resource', 'compositor-handle': 'resource',
   'backend-fallback': 'resource', 'context-lost': 'resource',
-  // Stage 2: media playback (S2-7)
+  // Stage 2 (classes settled by S2-9; presenter/diagnostics.tsx PANEL_KIND groups them for the presenter)
+  // Media playback (S2-7)
   'media-autoplay': 'resource', 'media-codec': 'resource', 'media-error': 'resource', 'media-missing': 'refused',
   'media-command': 'refused', 'media-overlay': 'approximate', 'media-fullscreen': 'approximate',
-  // Stage 2: text builds by word or letter (S2-8)
+  // Text builds by word or letter (S2-8)
   'text-build-approximate': 'approximate', 'text-build-unsplit': 'approximate', 'text-build-coarsened': 'approximate',
   'text-build-cjk-chars': 'approximate', 'text-build-refused': 'refused', 'text-build-whole': 'resource',
-  // Stage 2: Presenter View, its window and screen placement (S2-1 to S2-5)
+  // Presenter View, its window and screen placement (S2-1 to S2-5)
   'popup-blocked': 'resource', 'presenter-window-failed': 'resource', 'presenter-styles-blocked': 'resource',
   'presenter-paint': 'resource', 'presenter-surface': 'resource', 'presenter-thumbnail-approximate': 'approximate',
   'preview-prime': 'resource', 'placement-permission-denied': 'resource', 'placement-api-missing': 'resource',

@@ -170,7 +170,8 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     expect(mid.visible).toBe(true)
     expect(mid.motion!.dy).toBeCloseTo(((1 + h / 2) + (yc - (1 + h / 2)) * 0.5 - yc) * H, 6)
     expect(mid.motion!.dx).toBeCloseTo(0, 9)
-    // The fly-in's sound (p:audio under the effect) is a stage-2 stand-in: a silent no-op, diagnosed on its slide.
+    // The fly-in's sound (p:audio on a p:sndTgt, in the effect's subTnLst) is on no shape: the media player does not
+    // follow it, so it is a silent timed no-op, diagnosed on its slide (S2-9; catalogue row sound:effect).
     expect(r.diagnostics.some(d => d.code === 'media-stand-in' && d.slideIndex === 0)).toBe(true)
     await r.tick(250)
     expectSettled(r.state().get('sp:4'))
@@ -186,8 +187,10 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     await r.tick(750)
     expect(r.s.stage!.transition).toEqual({ effect: 'split', duration: 1500 })
     expect(codes(r, 1)).not.toContain('transition-approximate:split')
-    // Its applause sound is a stage-2 stand-in: the split plays silently, diagnosed once for the slide.
-    expect(codes(r, 1)).toContain('media-stand-in:transition-sound')
+    // Its applause sound goes to the transition-sound controller (S2-7). jsdom decodes no audio (canPlayType is ''),
+    // so here the split runs silent with media-codec, diagnosed once for the slide; a browser plays the WAV.
+    expect(codes(r, 1)).toContain('media-codec:transition-sound')
+    expect(codes(r, 1).filter(c => c.startsWith('media-stand-in'))).toEqual([])
     await r.tick(750)
     expect(r.s.stage!.transition).toBeUndefined()
     r.exit()
@@ -235,7 +238,7 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     r.exit()
   })
 
-  it('bnc591147 trigger runs its interactive sequence; mediacall commands are stage-2 stand-ins; the avi shows its poster', async () => {
+  it('bnc591147 trigger runs its interactive sequence; mediacall commands reach the media player; the avi shows its poster', async () => {
     const { rig: r } = await show('bnc591147')
     // The video (video.avi, a 10-byte stand-in file) shows its poster picture (image1.png): the frame is painted
     // with the poster's pixels, and no image was withheld.
@@ -248,16 +251,19 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     expect(px[3]).toBe(255)
     expect(r.diagnostics.map(d => d.code)).not.toEqual(expect.arrayContaining(['image-workspace']))
     expect(r.diagnostics.map(d => d.code)).not.toEqual(expect.arrayContaining(['scratch-image']))
-    // The slide's playFrom(0.0) mediacall starts with the slide: a silent timed no-op, diagnosed as a stand-in.
+    // The slide's playFrom(0.0) mediacall starts with the slide and reaches the media player (S2-7), which refuses the
+    // undecodable AVI (application/octet-stream) on its shape: the poster stays, diagnosed as media-codec.
     await r.tick(10)
-    expect(codes(r, 0)).toContain('media-stand-in:behaviour 6')
+    expect(codes(r, 0)).toContain('media-codec:4')
+    expect(codes(r, 0).filter(c => c.startsWith('media-stand-in'))).toEqual([])
     expect(codes(r, 0)).not.toContain('behaviour-unsupported:behaviour 6')
     // A click on the poster (spid 4, also a refused ppaction://media link) runs its interactive sequence (togglePause).
     await r.click(480, 360)
     await r.tick(10)
     expect(r.s.cursor!.events.some(e => e.kind === 'trigger' && e.spid === '4')).toBe(true)
     expect(r.s.slideIndex).toBe(0)
-    expect(codes(r, 0)).toContain('media-stand-in:behaviour 12')
+    // togglePause on an unplayable node is a no-op (spec 6.5): the codec diagnostic stands, nothing new is said.
+    expect(codes(r, 0).filter(c => c.startsWith('media-'))).toEqual(['media-codec:4'])
     expect(codes(r, 0)).toContain('link-refused:4::')
     r.exit()
   })

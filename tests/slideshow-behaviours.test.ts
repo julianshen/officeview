@@ -436,4 +436,16 @@ describe('S1-11 review fixes (round 1)', () => {
     expect(over.base?.opacity).toBeCloseTo(0.5)
     expect(over.sink.list().some(d => d.code === 'anim-effect-unknown-filter')).toBe(true)
   })
+
+  it('S2-9: shape media and commands are left to the media player; only media on no shape is a diagnosed stand-in', () => {
+    const media = (id: number, kind: 'audio' | 'video' | 'cmd', target: TargetRef, extra: Record<string, unknown> = {}) =>
+      ({ kind, ctn: ctn(id, { durMs: 1000, fill: 'hold' }), target, attrNames: [], additive: 'base', accumulate: 'none', ...extra }) as unknown as BehaviourNode
+    const shape = run([par(20, [media(11, 'audio', T2), media(12, 'video', T2), media(13, 'cmd', T2, { cmdType: 'call', cmd: 'playFrom(0.0)' })], { durMs: 1000, fill: 'hold' })], 500)
+    // The player (S2-7) plays and diagnoses these; the render state is untouched and nothing is said here.
+    expect(shape.sink.list()).toEqual([])
+    expect(shape.base).toBeUndefined()
+    // An effect sound (p:sndTgt) has no shape: the player does not follow it, so it stays a silent timed no-op, diagnosed once.
+    const sound = run([par(20, [media(14, 'audio', { snd: 'rId2' })], { durMs: 1000, fill: 'hold' })], 500)
+    expect(sound.sink.list().map(d => [d.code, d.effect])).toEqual([['media-stand-in', 'behaviour 14']])
+  })
 })

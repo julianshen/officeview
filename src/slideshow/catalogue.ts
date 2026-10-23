@@ -1,10 +1,10 @@
-/** Stage 1 catalogue policy. Reference provenance: inventory.ts and validation doc.
+/** Catalogue policy as of the Stage 2 close (S2-9). Reference provenance: inventory.ts and validation doc.
  * Status describes the stage contract, not measured Office fidelity; all rows are
  * unverified until a stage-close task supplies a compare record. This module does
  * not rebuild behaviours or render effects: later engine tasks consume its rows.
  */
 import type { CatalogueRow, Tolerance } from './types'
-export const LANDED_STAGE = 1
+export const LANDED_STAGE = 2
 /** Frame-compare tolerances (fractions of 255): plan defaults for exact and approximate rows. */
 export const TOLERANCE_EXACT: Readonly<Tolerance> = Object.freeze({ meanAbs: 0.02, rowMax: 0.10 })
 export const TOLERANCE_APPROX: Readonly<Tolerance> = Object.freeze({ meanAbs: 0.08, rowMax: 0.30 })
@@ -21,10 +21,17 @@ function animation(cls: string, id: number, uiName: string, subtype?: number): C
   return row({ id: `preset:${cls}:${id}${subtype === undefined ? '' : ':' + subtype}`, kind: 'animation',
     preset: { cls, id, ...(subtype === undefined ? {} : { subtype }) }, uiName, implementation: 'preset-table', status: 'approximate', stage: 1 })
 }
+/** Media rows (S2-7, flipped by S2-9): shape audio plays as filed; video plays in a DOM overlay at the shape's
+ * position that shape effects do not move; commands cover the `call` verbs and `onStopAudio` (others refused, diagnosed). */
+const MEDIA: Readonly<Record<string, Pick<CatalogueRow, 'status'> & { lookalike?: string }>> = {
+  audio: { status: 'exact' },
+  video: { status: 'approximate', lookalike: 'DOM overlay at the shape position (shape effects do not move it)' },
+  cmd: { status: 'approximate', lookalike: 'play, pause, resume, stop, togglePause, playFrom, onStopAudio' },
+}
 function behaviour(element: string, media = false): CatalogueRow {
+  const m = media ? MEDIA[element] : undefined
   return row({ id: `behaviour:p:${element}`, kind: 'behaviour', ns: 'p', element, uiName: element,
-    implementation: media ? 'stand-in' : 'file', status: media ? 'pending-stage-2' : 'exact', stage: media ? 2 : 1,
-    ...(media ? { lookalike: element === 'video' ? 'poster frame' : 'silent timed no-op' } : {}) })
+    implementation: 'file', status: m ? m.status : 'exact', stage: m ? 2 : 1, ...(m?.lookalike ? { lookalike: m.lookalike } : {}) })
 }
 
 export const CATALOGUE: readonly CatalogueRow[] = Object.freeze([
@@ -2333,13 +2340,14 @@ export const CATALOGUE: readonly CatalogueRow[] = Object.freeze([
   animation('exit', 58, 'fold: in-slightly', 272),
   animation('exit', 58, 'fold: out-slightly', 288),
   animation('exit', 58, 'fold: in-from-screen-center', 528),
-  row({ id: 'build:word', kind: 'behaviour', uiName: 'Word build (paragraph stand-in)', implementation: 'stand-in', status: 'pending-stage-2', stage: 2, lookalike: 'whole paragraph' }),
-  row({ id: 'build:letter', kind: 'behaviour', uiName: 'Letter build (paragraph stand-in)', implementation: 'stand-in', status: 'pending-stage-2', stage: 2, lookalike: 'whole paragraph' }),
-  row({ id: 'sound:transition', kind: 'behaviour', uiName: 'Transition / cross-slide sound', implementation: 'stand-in', status: 'pending-stage-2', stage: 2, lookalike: 'silent timed no-op' }),
+  row({ id: 'build:word', kind: 'behaviour', uiName: 'Text build by word (p:iterate type="wd")', implementation: 'mask', status: 'approximate', stage: 2, lookalike: 'per-word layers clipped to word boxes' }),
+  row({ id: 'build:letter', kind: 'behaviour', uiName: 'Text build by letter (p:iterate type="lt")', implementation: 'mask', status: 'approximate', stage: 2, lookalike: 'per-letter layers clipped to letter boxes' }),
+  row({ id: 'sound:transition', kind: 'behaviour', uiName: 'Transition / cross-slide sound', implementation: 'file', status: 'exact', stage: 2 }),
+  row({ id: 'sound:effect', kind: 'behaviour', uiName: 'Effect sound (p:audio on a p:sndTgt)', implementation: 'stand-in', status: 'approximate', stage: 2, lookalike: 'silent timed no-op' }),
   row({ id: 'build:chart', kind: 'behaviour', uiName: 'Chart build (whole chart)', implementation: 'transform', status: 'approximate', stage: 1 }),
   row({ id: 'build:smartart', kind: 'behaviour', uiName: 'SmartArt build (fallback drawing)', implementation: 'transform', status: 'approximate', stage: 1 }),
   row({ id: 'build:fallback', kind: 'behaviour', uiName: 'Fallback picture / card animation', implementation: 'transform', status: 'approximate', stage: 1 }),
-  row({ id: 'media:codec', kind: 'behaviour', uiName: 'Unavailable media codec (poster / silent no-op)', implementation: 'stand-in', status: 'pending-stage-2', stage: 2 }),
+  row({ id: 'media:codec', kind: 'behaviour', uiName: 'Unavailable media codec (poster / silent no-op)', implementation: 'stand-in', status: 'approximate', stage: 2, lookalike: 'poster picture, or silence' }),
   row({ id: 'never:macro', kind: 'behaviour', uiName: 'VBA / program execution', implementation: 'stand-in', status: 'never', stage: 1 }),
   row({ id: 'never:ole', kind: 'behaviour', uiName: 'OLE activation', implementation: 'stand-in', status: 'never', stage: 1 }),
   row({ id: 'never:recorded', kind: 'behaviour', uiName: 'Recorded ink / narration beyond stored timing', implementation: 'stand-in', status: 'never', stage: 1 }),
