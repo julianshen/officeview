@@ -154,8 +154,13 @@ function harness(opts: { limit?: number; maxTextureSize?: number; gl?: boolean }
   const terminal = ws.reserveTerminal(320 * 180 * 4)!
   const fake = fakeGL(log, opts.maxTextureSize)
   current = opts.gl === false ? null : fake
+  // As on the audience surface: the terminal output canvas (the permanent reserve's surface), then the host.
+  const root = document.createElement('div')
+  const output = document.createElement('canvas')
+  output.width = 320; output.height = 180
   const host = document.createElement('div')
-  document.body.appendChild(host)
+  root.append(output, host)
+  document.body.appendChild(root)
   let t = 0
   const queue: Array<{ at: number; cb: () => void }> = []
   const sink: DiagnosticSink = createDiagnosticSink()
@@ -174,6 +179,7 @@ function harness(opts: { limit?: number; maxTextureSize?: number; gl?: boolean }
     }),
     workspace: ws,
     terminal,
+    output,
     sink,
   }
   const mgr: BackendManager = createBackendManager(host, deps)
@@ -194,7 +200,7 @@ function harness(opts: { limit?: number; maxTextureSize?: number; gl?: boolean }
   }
   const jump = (ms: number) => { t += ms }
   const glCanvas = () => host.querySelector<HTMLCanvasElement>('canvas[data-slideshow-backend="webgl2"]')
-  const liveCanvas = () => host.querySelector<HTMLCanvasElement>('canvas[data-slideshow-backend="canvas2d"]')
+  const liveCanvas = () => root.querySelector<HTMLCanvasElement>('canvas[data-slideshow-backend="canvas2d"]')
   const lose = () => {
     const canvas = glCanvas()!
     fake.lose()
@@ -207,7 +213,7 @@ function harness(opts: { limit?: number; maxTextureSize?: number; gl?: boolean }
     canvas?.dispatchEvent(new Event('webglcontextrestored'))
   }
   const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
-  return { log, ws, terminal, fake, host, deps, mgr, advance, fireEarly, jump, glCanvas, liveCanvas, lose, restore, settle, sink, rebuilt, rebuildGate, paintLive, now: () => t }
+  return { log, ws, terminal, fake, host, output, deps, mgr, advance, fireEarly, jump, glCanvas, liveCanvas, lose, restore, settle, sink, rebuilt, rebuildGate, paintLive, now: () => t }
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +317,24 @@ describe('createWebGL2Compositor', () => {
     expect(sink.list().some(d => d.code === 'compositor-workspace' && d.slideIndex === 3)).toBe(true)
   })
 
+  it('PR #18 review 4: setViewport reports a refused drawing-buffer resize (false) and keeps the output size', () => {
+    const fake = fakeGL()
+    current = fake
+    const ws = makeWorkspace(1 << 30)
+    const canvas = document.createElement('canvas')
+    canvas.width = 64; canvas.height = 64
+    const comp = createWebGL2Compositor(canvas, ws)!
+    expect(comp.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 64, deviceHeight: 64 })).toBe(true)
+    ws.pool.limit = ws.used()
+    expect(comp.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 128, deviceHeight: 128 })).toBe(false)
+    expect([canvas.width, canvas.height]).toEqual([64, 64])
+    // Through the manager's facade too.
+    const h = harness()
+    h.mgr.current.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 64, deviceHeight: 64 })
+    h.ws.pool.limit = h.ws.used()
+    expect(h.mgr.current.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 640, deviceHeight: 640 })).toBe(false)
+  })
+
   it('dispose returns every byte it leased', () => {
     const fake = fakeGL()
     current = fake
@@ -353,9 +377,10 @@ describe('createBackendManager', () => {
     // No await: the event handler did it all synchronously.
     expect(e.defaultPrevented).toBe(true)
     const live = h.liveCanvas()
-    expect(live).not.toBeNull()
-    expect(h.host.lastElementChild).toBe(live)
+    expect(live).toBe(h.output)
     expect(h.glCanvas()).not.toBeNull()
+    // The lost WebGL canvas stacks over the output: it is hidden while live state paints beneath it.
+    expect(h.glCanvas()!.style.visibility).toBe('hidden')
     expect(h.paintLive).toHaveBeenCalledTimes(1)
     expect(h.paintLive.mock.calls[0][0].canvas).toBe(live)
     expect(h.mgr.state).toBe('lost')
@@ -538,6 +563,54 @@ describe('createBackendManager', () => {
     const live = h.liveCanvas()!
     expect(live.width * live.height * 4).toBeLessThanOrEqual(h.terminal.outputBytes)
     expect(h.log.filter(l => l.startsWith('lease:'))).toEqual([])
+  })
+
+  it('PR #18 review P2: a Canvas 2D start draws on the reserved output canvas and creates no canvas of its own', () => {
+    const h = harness()
+    const created = vi.spyOn(document, 'createElement')
+    const canvases = () => created.mock.calls.flatMap((c, i) => c[0] === 'canvas' ? [created.mock.results[i].value as HTMLCanvasElement] : [])
+    for (const opts of [{ force: 'canvas2d' as const }, {}]) {
+      if (!('force' in opts)) current = null // WebGL2 unavailable
+      const host = document.createElement('div')
+      h.output.after(host)
+      const before = canvases().length
+      const mgr = createBackendManager(host, { ...h.deps, ...opts })
+      expect(mgr.current.backend).toBe('canvas2d')
+      // Forced: nothing is created. Unavailable: only the WebGL probe canvas, never sized and already gone.
+      const made = canvases().slice(before)
+      expect(made.length).toBe('force' in opts ? 0 : 1)
+      for (const c of made) expect([c.isConnected, c.width, c.height]).toEqual([false, 300, 150])
+      expect(host.querySelector('canvas')).toBeNull()
+      expect(h.output.dataset.slideshowBackend).toBe('canvas2d')
+      mgr.dispose()
+      host.remove()
+    }
+  })
+
+  it('PR #18 review P2: context loss and the deadline fallback draw on the reserved output canvas, never a new one', async () => {
+    const h = harness()
+    h.mgr.current.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 320, deviceHeight: 180 })
+    let open!: () => void
+    h.rebuildGate.hold = new Promise<void>(r => { open = r })
+    const created = vi.spyOn(document, 'createElement')
+    const canvases = () => created.mock.calls.filter(c => c[0] === 'canvas').length
+    h.lose()
+    expect(h.mgr.state).toBe('lost')
+    expect(h.liveCanvas()).toBe(h.output)
+    expect(h.paintLive.mock.calls[0][0].canvas).toBe(h.output)
+    h.advance(RESTORE_DEADLINE_MS)
+    expect(h.mgr.state).toBe('canvas2d')
+    expect(h.glCanvas()).toBeNull()
+    expect(h.liveCanvas()).toBe(h.output)
+    expect(canvases()).toBe(0)
+    expect(h.host.querySelector('canvas')).toBeNull()
+    open()
+    await h.settle()
+    expect(h.mgr.current.backend).toBe('canvas2d')
+    // The output is the reserve's surface: its size is the stage's, never the fallback's.
+    expect([h.output.width, h.output.height]).toEqual([320, 180])
+    h.mgr.dispose()
+    expect(h.output.dataset.slideshowBackend).toBeUndefined()
   })
 
   it('a forced canvas2d manager never creates a WebGL context', () => {

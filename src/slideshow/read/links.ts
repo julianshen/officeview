@@ -1,5 +1,6 @@
 import { attrs, getChild, getChildren, elementChildren, type XmlNode } from '../../core/xml'
 import type { DiagnosticSink, LinkSpec } from '../types'
+import { alternateBranchSelector } from '../../pptx/parse'
 import type { Relationship } from './deck'
 
 const jumps = new Set(['nextslide', 'previousslide', 'firstslide', 'lastslide', 'endshow'])
@@ -13,6 +14,8 @@ const jumps = new Set(['nextslide', 'previousslide', 'firstslide', 'lastslide', 
  */
 export function readLinks(xml: XmlNode, rels: readonly Relationship[], parts: readonly string[], index: number, sink: DiagnosticSink): LinkSpec[] {
   const links: LinkSpec[] = []
+  // The branch the drawing parser renders (its compatibility rules), so links sit on the shapes shown (PR #18 review 5).
+  const select = alternateBranchSelector()
 
   function action(n: XmlNode): LinkSpec['action'] {
     const a = attrs(n)
@@ -69,8 +72,8 @@ export function readLinks(xml: XmlNode, rels: readonly Relationship[], parts: re
         continue
       }
       if (kind === 'AlternateContent') {
-        // One branch is rendered: the first Choice, else the Fallback. Walking both would repeat every shape.
-        const branch = getChild(shape, 'Choice') ?? getChild(shape, 'Fallback')
+        // One branch is rendered, the one the drawing parser selects. Walking more would repeat every shape.
+        const branch = select(shape)
         if (branch) walk(branch)
         continue
       }

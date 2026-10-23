@@ -49,8 +49,8 @@ async function notesDeck(): Promise<PptxDocument> {
 }
 
 const recordingStage = (): Stage => ({
-  leave() {}, async enter() {}, slideTime: (t) => t, frame() {}, stateAt: () => new Map(),
-  plan: undefined, toSlide: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
+  leave() {}, async enter() {}, slideTime: (t) => t, frame: () => undefined, stateAt: () => new Map(),
+  plan: undefined, toSlide: () => undefined, runAt: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
 })
 beforeEach(() => {
   vi.spyOn(sessionDeps, 'clock').mockImplementation(() => new ManualClock())

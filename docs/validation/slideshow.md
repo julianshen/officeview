@@ -6,7 +6,7 @@ Validation record for the PowerPoint slideshow project (spec
 later tasks fill in their sections. The controller merges the per-task ledger files
 (`.superpowers/sdd/ledger/<task-id>.md`) into the Eager ledger and Catalogue sections
 in merge order; implementer tasks do not edit those two sections, except S1-3's explicitly assigned initial
-generated catalogue. Stage-closing tasks (S0-8 for Stage 0) do the merge.
+generated catalogue. Stage-closing tasks (S0-8 for Stage 0, S1-23 for Stage 1) do the merge.
 
 Synthetic builder decks are "Office-shaped synthetic" and are never reported as
 Office evidence.
@@ -33,6 +33,31 @@ Browser evidence is Chromium only, because WebKit cannot launch on the build hos
 
 The corpus (`bun scripts/fetch-corpus.ts`) was present for every run, so the corpus,
 appearance and browser appearance tests ran instead of skipping.
+
+### Stage 1 close (S1-23, on `feature/slideshow-s1` `094e761`)
+
+Run by S1-23 on the Mac build host, on the tree that S1-1 to S1-22 and the `main`
+merge (`c6ae65f`: Stage 0 PR #16 and the JSX runtime PR #17) produced, plus this
+task's commits: documentation, the README test, a test-only fix to two stale
+Present assertions, and the CI timeout. No source file changed.
+
+| Gate | Command | Result |
+|---|---|---|
+| Typecheck | `bunx tsc --noEmit` | exit 0, no errors |
+| Script typecheck | `bun run typecheck:scripts` | exit 0 |
+| Full Vitest, run 1 | `bunx vitest run` | 475 files passed; 8,980 passed, 2 skipped, 1 todo, 0 failed (fresh `dist/` and module map present, so the `ui-eager-graph` real-graph check ran) |
+| Full Vitest, run 2 | `bunx vitest run` | 475 files passed; 8,980 passed, 2 skipped, 1 todo, 0 failed. No flakes in either run, so nothing was re-run alone. |
+| Eager budget, fresh rebuild | `rm -rf dist && bun run build && bun scripts/eager-budget.ts` | **35,726 B** (ceiling 38,647 B; 2,921 B headroom) |
+| Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | eager graph ok, 144 eager modules (151 before the JSX runtime fix; see the ledger) |
+| Goldens, strict | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts tests/golden-corpus.test.ts tests/golden-appearance.test.ts tests/slideshow-goldens.test.ts` | 4 files, 76 passed (6 + 29 + 6, plus 35 slideshow frame goldens); no golden written or changed (`git status` clean for `tests/goldens/`) |
+| Playwright, Chromium | `IV_HARNESS_PORT=4423 timeout 1500 bunx playwright test --config playwright.viewer.config.ts --project chromium` | 134 passed, 0 skipped, 0 failed (4.1 min), after the test fix below; port 4423 free afterwards |
+| Playwright, `slideshow` project (SwiftShader WebGL2) | `IV_HARNESS_PORT=4424 timeout 1500 bunx playwright test --config playwright.viewer.config.ts --project slideshow` | 37 passed, 8 skipped (the `slideshow-perf.spec.ts` benchmark, which runs only with `OV_SLIDESHOW_BENCH=1`), 0 failed (56 s); port 4424 free afterwards |
+| WebGL2 in CI | the `slideshow-browser` job (`.github/workflows/ci.yml`) | **Not yet observed.** The job exists only on `feature/slideshow-s1`, which has never run CI; its first run is the Stage 1 PR. `tests/browser/slideshow-corpus.spec.ts` fails hard in CI when the backend is not WebGL2 or the corpus is missing. Per the controller ruling, a CI run that cannot create a WebGL2 context blocks the Stage 1 PR and goes to the owner; Canvas 2D-only coverage is not accepted. Locally, the `slideshow` project creates WebGL2 on SwiftShader (S1-2, S1-14: `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) …), SwiftShader driver)`, `MAX_TEXTURE_SIZE` 8192). |
+
+The corpus (`bun scripts/fetch-corpus.ts`, 16 `lo-` decks, `--check` clean) was present
+for every run, so the corpus, appearance and slideshow corpus tests ran instead of skipping.
+
+The first Chromium run, before any change, had 3 failures. `ui-host-isolation` "dist/style.css" needed a build (`dist/` was absent); it passes after `bun run build`. The other two, in `tests/browser/paged-toolbar.spec.ts` (S1-18: "Present button starts the show from the current slide" and "Present from a menu item hands focus to the show and Esc exits"), were stale: they compared the show surface's whole text with "Slide n of 3", and S1-20 added the end-of-show screen and the hidden slide-text layer to the surface. S1-23 changed them to check the surface's `data-slide` and the live region's text (test-only). The `chromium` project is not in CI, which is why the break went unnoticed until this gate.
 
 ## Eager ledger
 
@@ -71,6 +96,57 @@ Summary:
 
 The per-task files `.superpowers/sdd/ledger/S0-1.md` to `S0-7.md` hold the full rows, including S0-1's `T0` stub breakdown and attribution.
 
+### Stage 1 (merged by S1-23)
+
+Same metric and rules. Rows are in `feature/slideshow-s1` merge order (first-parent
+history: S1-4, S1-2, S1-3, S1-13, S1-12, S1-16, S1-8, S1-14, S1-9, S1-6, S1-7, S1-1,
+S1-5, S1-10, S1-17, S1-21, S1-11, S1-15, S1-19, S1-18, the `main` merge, S1-20,
+S1-22). `feature/slideshow-s1` forked from `feature/slideshow` `2aed465`, before
+S0-7, so its starting figure is 38,453 B, not Stage 0's final 38,498 B. As in
+Stage 0, a row's "Before" is that task's own base; the running total follows the
+branch.
+
+| Task | Item | Before | After | Delta | Running total |
+|---|---|---|---|---|---|
+| — | Fork point: `feature/slideshow` `2aed465` (S0-1 to S0-6), fresh rebuild | | 38,453 | | 38,453 |
+| S1-4 | Deck builder for transitions, timing, notes, `presProps`, hidden slides, links, media (`src/testdata/`, unreachable from `src/index.ts`); on `2aed465` | 38,453 | 38,453 | 0 | 38,453 |
+| S1-2 | Foundation contracts `src/slideshow/{types,clock,rng,diagnostics,target}.ts`, the `slideshow` Playwright project, the smoke page, the `slideshow-browser` CI job; on `2aed465` | 38,453 | 38,453 | 0 | 38,453 |
+| S1-3 | Effect catalogue and pinned inventory (lazy); on `439ad4e`; fix round 1 re-measured | 38,453 | 38,453 | 0 | 38,453 |
+| S1-13 | Canvas 2D compositor and mask library (lazy); on `a6b19ad`; fix round 1 re-measured | 38,453 | 38,453 | 0 | 38,453 |
+| S1-12 | Render plan, layer rasteriser, direct painter (lazy); on `439ad4e` | 38,453 | 38,453 | 0 | 38,453 |
+| S1-16 | Workspace, residency, fallback ladder, permanent reserve (lazy); on `a6b19ad`; fix round 1 re-measured | 38,453 | 38,453 | 0 | 38,453 |
+| S1-8 | Transition and timing reader, requirements table (lazy `src/slideshow/read/`); on `e7d5927` | 38,453 | 38,453 | 0 | 38,453 |
+| S1-14 | WebGL2 compositor and context loss (lazy); on `b1b4268` | 38,453 | 38,453 | 0 | 38,453 |
+| S1-9 | SMIL timing scheduler (lazy); on `439ad4e`; fix rounds 1–4 each re-measured | 38,453 | 38,453 | 0 | 38,453 |
+| S1-6 | Bounded motion-path parser (`src/slideshow/motion-path.ts`, lazy). No per-task ledger file; 0 B inferred from the file set (lazy only) | | | 0 | 38,453 |
+| S1-7 | Show index and leased slide-metadata store (lazy); on `e7d5927` | 38,453 | 38,453 | 0 | 38,453 |
+| S1-1 | `T1`: throwaway stubs of S1-17's eager edits, measured then reverted; on `de26f5a` | 38,453 | 39,781 | +1,328 | (not landed) |
+| S1-1 | Recovery R1: 14 class-method JSDoc blocks the build kept verbatim moved to the top of the method body (`src/rtf/parse.ts`, `src/odf/styles.ts`); text kept | 38,453 | 37,372 | **−1,081** | 37,372 |
+| S1-1 | Recovery R2: the other 15 kept comments moved before the enclosing statement or into the function body (`rtf/parse.ts`, `core/search.ts`, `OfficeFile.tsx`, `OfficeDoc.tsx`) | 37,372 | 36,834 | **−538** | **36,834** |
+| S1-1 | Check: the `T1` stubs re-applied on the recovered tree (then reverted) | 36,834 | 38,152 | +1,318 | (not landed) |
+| S1-5 | Bounded formula interpreter (lazy); on `8f8a67c` | 36,834 | 36,834 | 0 | 36,834 |
+| S1-10 | Navigation layer, auto-advance, kiosk, pause (lazy); on `8f8a67c` | 36,834 | 36,834 | 0 | 36,834 |
+| S1-17 | Eager host API: `present.ts` (error, types, platform, show coordinator, synchronous start), `OfficeDoc` `forwardRef` + host + props + F5, `OfficeFile` `forwardRef` + re-readable source, `src/index.ts` exports; on `8f8a67c` | 36,834 | 38,212 | **+1,378** | 38,212 |
+| S1-21 | D4 capture checklist, refs layout, `compareFrames` (`scripts/`, lazy `src/slideshow/`, docs). No per-task ledger file; 0 B inferred from the file set | | | 0 | 38,212 |
+| S1-11 | Behaviours to render state (lazy); on `d76f717` (before S1-17 merged) | 36,834 | 36,834 | 0 | 38,212 |
+| S1-15 | 2-D transitions (lazy); on `22292ed` (before S1-1 merged) | 38,453 | 38,453 | 0 | 38,212 |
+| S1-19 | Session controller, navigation shell, audience surface (lazy; CSS in `style.css`); on `236982d`. The +2 B is hashed chunk names only | 38,212 | 38,214 | +2 | 38,214 |
+| S1-18 | Present button and toolbar routing: busy and preload moved behind the lazy seam in fix round 1 (round 0 was +63); on `236982d` | 38,212 | 38,230 | **+18** | 38,232 (fresh rebuild of the merged `5f511cc`) |
+| — | Merge `main` (`c6ae65f`): Stage 0 (PR #16) and the JSX runtime made external (PR #17, which took `main` from 38,582 to 36,063 B, −2,519 B). Eager modules 151 → 144 | 38,232 | 35,736 | **−2,496** | 35,736 |
+| S1-20 | Engine wiring, interactions, accessibility. Round 0 on `5f511cc`: watermark plumbing +4, recovery −14 (`isCurrent` moved into the lazy `runShow`), net −8 (38,232 → 38,224), in one commit. Round 2 after the `main` merge, lazy only | 35,736 | 35,727 | −9 | 35,727 |
+| S1-22 | Corpus conformance, compare CLI, frame benchmark (lazy, tests, scripts, CI); fix round 1 lazy only; on `141c086` | 35,727 | 35,726 | −1 (variance) | 35,726 |
+| S1-23 | Stage close: documentation, the README test, a test-only browser fix, the CI timeout. Fresh rebuild on this tree (`094e761` + docs) | | 35,726 | 0 | **35,726** |
+
+Summary:
+
+- **Stage 1 own deltas: S1-1 −1,619 B, S1-17 +1,378 B, S1-18 +18 B, S1-19 +2 B (hash only), S1-20 −8 B.** Every other task is lazy only, 0 B.
+- **S1-1 recovered before the growth.** `T1` (+1,328 B) was covered by the recovery (−1,619 B) with a 291 B margin. S1-17 landed 50 B over `T1`; the controller accepted that, because 435 B remained under the ceiling and PR #17 was about to free about 2.5 KB. S1-18's +18 B was accepted the same way. S1-20's recovery and growth landed in one commit; the controller ruled that the net figure governs.
+- **The JSX runtime fix (PR #17) freed about 2.5 KB.** It reached this branch with the `main` merge: 38,232 → 35,736 B.
+- **Final 35,726 B against the 38,647 B ceiling: 2,921 B of headroom** (hard limit 38,720 B). `main` itself (`be424dd`, fresh rebuild by S1-23) measures 35,975 B; this branch is 249 B smaller, mostly S1-1's recovery net of S1-17.
+- **`check-eager`**: 144 eager modules, graph ok. Nothing under `src/slideshow/`, `src/pptx/appearance/` or `src/components/paged/` (except `metrics.ts`) is eager. `present.ts` (S1-17) is the one new eager module.
+
+The per-task files `.superpowers/sdd/ledger/S1-*.md` hold the full rows, including S1-1's `T1` stub breakdown and S1-17's attribution table. S1-6 and S1-21 wrote none.
+
 ### Static closure (information only; tracked, not gated)
 
 Each chunk gzipped separately with `node:zlib` `gzipSync` at default settings, on fresh builds.
@@ -88,6 +164,26 @@ The `office-worker` growth is the package handle and `dropCache` (S0-4), the exp
 cross-chunk exports the lazy chunk imports, the `pptxImageKey` helper, the paint seam,
 the underlay pass and the painter's `useBgFill` backdrop branch (S0-7).
 
+Stage 1 close (S1-23, fresh build of this tree, same method):
+
+| Chunk | Stage 0 final (`0a79ea9`) | Stage 1 final (this tree) | Delta |
+|---|---|---|---|
+| `index.js` (gated; `eager-budget.ts`) | 38,498 | 35,726 | −2,772 |
+| `office-worker-*.js` | 355,480 | 356,011 | +531 |
+| `importSession-*.js` | 1,159 | 1,159 | 0 |
+| **Static closure total** | **395,137** | **392,896** | **−2,241** |
+| Slideshow chunk `index-*.js` (lazy, `src/slideshow/`, not in the closure) | — | 88,274 | new |
+| `appearance-*.js` (lazy) | 5,320 | 3,102 | −2,218 |
+| `master-art-*.js` (lazy, shared by the appearance and slideshow chunks) | — | 3,198 | new |
+
+Part of the `office-worker` growth is the export bindings the lazy slideshow chunk
+imports from it (`slideTheme`, `acquireFonts`, `decodeImageAsset` and the
+master-artwork helpers; S1-19 measured +203 B). The rest arrived with the `main`
+merge (Stage 0's PR-review fixes) and later tasks; it is not attributed further. The master
+and layout artwork code moved out of `appearance-*` into the shared lazy
+`master-art-*` chunk, because the slideshow chunk now uses it too. The slideshow
+chunk is loaded only by `present()` (and the Present button's preload hint).
+
 ## Decisions
 
 Controller rulings recorded in the progress ledger during Stage 0.
@@ -101,6 +197,33 @@ Controller rulings recorded in the progress ledger during Stage 0.
 - **Validation tables.** Catalogue row flips and validation-table edits happen only in stage-closing tasks.
 - **Staged PRs.** Stage 0 is the first PR (`feature/slideshow` → `main`).
 - **Early Stage 1 work.** Stage 1 tasks that do not depend on Stage 0 code (S1-2, S1-4 and later waves) started from `feature/slideshow` `2aed465` on the integration branch `feature/slideshow-s1`, which merges `main` after this stage's PR merges.
+
+### Stage 1 decisions
+
+Controller rulings recorded in the progress ledger during Stage 1.
+
+- **Eager allowances.** S1-17 landed +1,378 B, 50 B over S1-1's `T1` measurement (+1,328 B); accepted, because 435 B remained under the ceiling and PR #17 was about to free about 2.5 KB. S1-18's +18 B (after its fix round moved the busy state and preload behind the lazy seam) was accepted the same way. S1-20's recovery (−14 B) and growth (+4 B) landed in one commit instead of recovery first; accepted, because the net figure is what matters.
+- **XML nesting depth.** fast-xml-parser's 100-tag nesting cap (about 32 time-node levels) is accepted for Stage 1, and the eager `core/xml` stays untouched (budget). An over-deep slide degrades to a static slide with a diagnostic and never crashes.
+- **Lazy `Requires` table.** The namespace-aware `mc:Choice@Requires` check is a lazy copy (`src/slideshow/read/requirements.ts`) instead of extending the eager `supportedChoiceRequirements`, which keeps p14/p15/p159 out of the eager build.
+- **Transform space.** `TargetState` is in slide px; the compositor applies `view ∘ transform` (`Compositor.setViewport`).
+- **An exceeded bound refuses and diagnoses.** More than 128 layers flattens with `layer-limit`; a refused lease steps down the fallback ladder with a diagnostic; a transition frame that does not fit is a cut with `transition-workspace`; a refused link is `link-refused`.
+- **Every effect except the "never" rows renders as its closest equivalent**, diagnosed once per slide (for example `transition-approximate`).
+- **The show runs the appearance enrichment itself** (S1-22 fix round 1, spec 8), so a `present()` before the viewer's first paint still shows backgrounds and master artwork.
+- **4K transitions.** The outgoing frame of a slide transition comes from the transition allowance its rung already priced, not a second workspace lease (S1-22 fix round 1). Transitions play at 3840 × 2160 on the 512 MiB desktop budget.
+- **Corpus deck as filed.** tdf142915's `showPr` says `useTimings="0"`, so the deck as filed does not auto-advance. The conformance test keeps the plan's name and also plays an in-memory copy with `useTimings="1"` (engine evidence only; see Follow-ups).
+- **Stage 2 began early** from `feature/slideshow-s1` on `feature/slideshow-s2`, with new-file tasks first. S2-1's recovery was folded into S2-2 (measure, recover only past the ceiling).
+
+### Project rules (adopted in Stage 1)
+
+These are standing rules, not one-task choices. Later stages follow them.
+
+- **Scheduler history window: 1,000 activations.** For each syncbase reference and each nesting level, the scheduler keeps the most recent 1,000 ancestor activations or iterations (`MAX_HISTORY`, `src/slideshow/engine/scheduler.ts`). A reference to older history is refused (it never resolves) and diagnosed: `timing-history-truncated`, `timing-reference-outside-window`. Construction stays bounded at the window. Real decks repeat far fewer than 1,000 times; the cost is that a pathological deck loses a trigger, with a diagnostic.
+- **Scheduler per-query budget: 100,000 history frames.** One query (`evaluate` or `endTimeOf`) may admit at most 100,000 history frames across all its lookups (`MAX_QUERY_HISTORY`), because chained references across levels multiply (n + n² + n³). Past it, every reference not yet resolved is refused and diagnosed (`timing-query-budget`). A real deck admits a few thousand at most. Refuse and diagnose; never truncate silently.
+- **Reduced motion never adds motion.** Under reduced motion every transition becomes a crossfade of at most 200 ms, except that `cut` (with or without `thruBlk`) and `none` stay instant (`reducedTransition`). Builds jump to their end state at each click checkpoint, so build order is kept.
+- **Kiosk mode blocks user input only, not the host API.** In a `p:kiosk` show, clicks, navigation keys, triggers and hyperlinks are inert (Esc still exits). The host API (`session.next()`, `previous()`, `goTo()`) still navigates: spec 4.2 and 4.4 disable *user* input and never name the host API (codex ruling in the S1-20 review). A test pins it.
+- **`p14:pan` with no `dir` is `l`** (Pan Left, `PpEntryEffect` 3930; S1-15 fix round 1). The other attribute defaults (`zoom` `out`, `flythrough` `in`) are working values and a D4 question (Q-transition-defaults).
+- **`ppt_x` and `ppt_y` are the shape's centre** (S1-22), as fractions of the slide: the behaviours read and write `(x + w / 2) / slideWidth` and `(y + h / 2) / slideHeight`. The evidence is the preset formulas and LibreOffice's reading; PowerPoint captures (D4) would confirm it. This changed S1-11's behaviour engine-wide. `animMotion origin="layout"` is the one remaining top-left anchor (see Follow-ups).
+- **Entrance targets start hidden, and "earlier" is judged by step.** A shape with any behaviour under an entrance preset is hidden until one of its entrance behaviours begins, unless a non-entrance behaviour on it runs in a strictly earlier main-sequence step (or before the first click). Behaviours in the same step run concurrently, and interactive sequences run only when triggered, so neither reveals the shape before its entrance (`timingTargets`, `src/slideshow/player/stage.ts`; S1-20 review I2).
 
 ## Catalogue
 
@@ -2454,7 +2577,7 @@ The Stage 0 appearance decks, plus the benchmark deck:
 | `lo-tdf123684.pptx` | `87243422753bb3922828cbb382265d304cd34fb9` | `535750a02b9b8f1b541e5627956fe810675439396d3a2ff15a4e3b682735a2b5` | master `bgRef` 1003 (theme picture background) and six non-placeholder artwork nodes; a slide `useBgFill` text box |
 | `lo-ooxtheme.pptx` | `f0f3f2575894f715759a18439588cb149996140b` | `c1694ff0017be3ec44322e1cfb0b04724dfec8028147c55685e8c8ae99977d50` | ten non-placeholder master artwork nodes; layout artwork with `showMasterSp="0"` |
 | `lo-tdf93868.pptx` | `f54fb0496e117eb55e0c16a023c045f80ba2b6dd` | `afc3699ff09d898e9e07e004fdd721ff8532b2915dc6abffab67bed80dbf67d6` | master gradient background; a `useBgFill` rounded rectangle |
-| `lo-tdf104788.pptx` | `c46fb3da50a96142d99b125370679482e87758d7` | `2d693db9af4b5f668d10fff41c4b22983f228daf4942d54bdaf111c948ecc0bf` | benchmark deck (Stage 1); no frame benchmark run yet |
+| `lo-tdf104788.pptx` | `c46fb3da50a96142d99b125370679482e87758d7` | `2d693db9af4b5f668d10fff41c4b22983f228daf4942d54bdaf111c948ecc0bf` | benchmark deck (Stage 1): spec 7 frame benchmark run by S1-22 (see "Benchmark (Stage 1)") |
 
 Builder decks from `buildPptxDeck` (`src/testdata/ooxml-builders.ts`, S0-3) are
 "Office-shaped synthetic" and are never reported as Office evidence.
@@ -2473,11 +2596,29 @@ Stage 0 golden record (Mac, `OFFICEVIEW_STRICT_GOLDEN=1`):
   - `lo-ooxtheme.pptx.0`: a white background with the layout's "Group 6" artwork (green slanted polygons and grey rules); the master's own artwork is hidden by the layout's `showMasterSp="0"`.
   - `lo-tdf93868.pptx.0`: the `useBgFill` rounded rectangle shows the master's black gradient inside the white master rectangle, and the slide's white text is visible on it.
 
+Stage 1 golden record (Mac, `OFFICEVIEW_STRICT_GOLDEN=1`, S1-23):
+
+- **No golden changed in Stage 1 close.** `tests/golden.test.ts` (6), `tests/golden-corpus.test.ts` (29) and `tests/golden-appearance.test.ts` (6) pass unchanged.
+- **35 slideshow frame goldens** (`tests/goldens/slideshow/`, S1-15) pass in `tests/slideshow-goldens.test.ts`: selected 2-D transitions through `transitionDraw` and the Canvas 2D compositor (node-canvas) at 0/25/50/75/100 %, each against its catalogue row's tolerance. They are "Office-shaped synthetic", never Office evidence; GPU frames are compared against Canvas 2D in Chromium by `tests/browser/slideshow-gpu.spec.ts`.
+
 ## Host requirements
 
 - **Direct `renderSlide` callers run `enrichSlideAppearance` first.** `getPaintables` (so `<OfficeDoc>`, `<OfficeFile>`, print and the worker) runs the lazy enrichment itself. A host that calls the low-level `renderSlide` sees no background beyond the solid colour and no master or layout artwork unless it first awaits `enrichSlideAppearance(doc)`, which is exported for that purpose and loads its code on demand. Enrichment adds underlay pictures to `doc.images`, so a host decodes images after it. The README's "Slide appearance" section documents this.
 
-Other host requirements: pending (later stages).
+Stage 1 (the slideshow):
+
+- **Call `present()` synchronously inside a user gesture.** It requests full screen before its first `await`. Where `navigator.userActivation` reports no transient activation it rejects with `gesture-required` and opens nothing; where that API is missing, the start is attempted and a refused full screen falls back to in-window.
+- **Embedding (spec 5.3), Stage 1 row only:**
+
+  | Need | Host requirement | When refused |
+  |---|---|---|
+  | Full screen | iframe `allow="fullscreen"` (and the host's Permissions-Policy) | the show runs in-window over the viewer's own document, letterboxed, with a dismissible notice, a "Click for full screen" retry and a diagnostic |
+
+  The spec's other rows (iframe `sandbox` with `allow-popups` for the presenter window, `allow="window-management"` for screen placement, and a CSP that allows officeview's stylesheet in the popup) belong to Presenter View and arrive with Stage 2. The README does not promise them yet.
+- **One show per page document.** The show coordinator is per `ownerDocument`: a second `present()` from any viewer in the same document rejects with `already-presenting`.
+- **The viewer needs the shipped stylesheet** (`officeview/style.css`) for the show surface, like the rest of the chrome; its rules are scoped under the theme root.
+
+The README's "Slideshow" section documents these for hosts.
 
 ## Known limits
 
@@ -2508,9 +2649,140 @@ Other host requirements: pending (later stages).
   - **No handle, no enrichment.** A document without a package handle (constructed, cloned, or posted from a worker) paints as before, with one document-level `no-package` diagnostic; an invalid slide size adds `slide-size` instead. A failed chunk load adds `appearance-unavailable` and paints the pre-Stage-0 appearance.
   - **Theme issues** (`ThemeContext.issues`, for example a theme `blipFill` the theme model cannot represent) are surfaced once per document in `doc.diagnostics`. No UI consumes PPTX document diagnostics yet.
 
+- **Slideshow (Stage 1).** Known limits of the show as landed:
+  - **macOS F5.** macOS often captures F5 (dictation), so F5 and Shift+F5 may never reach the page. The Present button, or a host button calling `present()`, is the reliable start.
+  - **`p:browse` shows** ("browsed by an individual") are presented the normal way, with a `browse` diagnostic. The scrollbar setting is ignored, and `p:sldRg` is not applied to a browse show.
+  - **Custom shows** (`p:custShow`) play the whole deck, with a `custom-show` diagnostic.
+  - **Kiosk.** Clicks, keys, triggers and hyperlinks are inert (Esc exits; the host API still navigates). The show loops and restarts `restart` ms (default 300,000) after the latest start or restart. `restart="0"` (or an invalid value) would restart on every frame, so it is refused: the show does not restart on its own, with a `kiosk-restart` diagnostic (S1-10's call; a D4 question, Q-kiosk-restart).
+  - **Presenter View, speaker notes UI, audio and video are Stage 2.** `presenterView: true` is diagnosed and the show is audience only (`presenter: 'none'`); the Presenter View menu item and Alt+F5 are absent. Audio, video and media commands are `pending-stage-2` stand-ins (a silent timed step, or the video's poster frame), each diagnosed.
+  - **3-D and morph transitions are Stage 3.** Each `pending-stage-3` row plays the 2-D look-alike its catalogue row names, diagnosed.
+  - **Unmapped attributes.** `xshear` (tdf104788's "breaks" entrance) has no render mapping; it is diagnosed and the rest of the effect plays.
+  - **Graphic and chart builds** (`graphicEl`, `oleChartEl` targets, SmartArt) animate the whole graphic or chart, diagnosed `timing-approximated`.
+  - **Run hyperlinks** activate per run (PR #18 review 3): a click is resolved against the laid-out run boxes, so each linked run runs its own link, and a click on the box's unlinked text falls through (to a shape link, else the advance). Vertical and warped text cannot be located and keep the first run's link. The accessibility layer offers one button per linked run. A shape with both a trigger and a link runs the trigger (pending D4, Q-trigger-link).
+  - **First-slide entry from black** plays the first slide's transition; a slide with no open rung leases its black frame from the workspace and is a diagnosed cut if it does not fit.
+  - **4K residency.** At 3840 × 2160 on the 512 MiB desktop budget, two resident slides and one transition fit; a third resident slide (previous, current and next) steps down a rung with a `ladder-*` diagnostic.
+  - **Start latency.** The show runs the appearance enrichment in its start path, so presenting a document the viewer has not painted yet waits for it (longer for large decks).
+  - **XML depth.** The shared XML parser caps nesting at 100 tags (about 32 time-node levels); a deeper slide plays static, diagnosed.
+  - **Frame-time evidence is the owner's laptop only.** CI asserts behaviour, never frame times or GPU pixels. The SwiftShader readback p95 misses 12 ms at 4K (CPU rasteriser; recorded, not the spec 7 benchmark).
+  - **tdf104788's title text** is not drawn by the static painter (in the scrolling viewer and in the show). This predates the slideshow and is outside its code.
+  - **No Office frame compare has landed.** Every catalogue row is `verified: no` until the owner's D4 captures exist (`docs/validation/slideshow-captures.md`).
+
 ## Manual checks
 
-Pending.
+Two checks need a person at a real browser, because automation cannot produce them:
+headless Chromium's full screen and Playwright's synthetic input are proxies, not
+the real thing. They are **not done yet**: S1-23 records the steps for the owner.
+
+| Check | Steps | Expected | Result |
+|---|---|---|---|
+| Real transient activation (Mac, Chrome) | `bun run dev`, open `/src/debug/slideshow-start.html` (the S1-17 dev harness, a synthetic deck), click its Present button with the mouse | the show starts full screen from the click; no `gesture-required` in the harness log | pending (owner) |
+| `present()` without a gesture | in the same page's DevTools console, run `window.__slideshowStart.present()` | the log shows `gesture-required`; nothing opens | pending (owner) |
+| Real full screen on a Mac | from the check above: the slide fills the screen (letterboxed); Esc exits; Ctrl+Cmd+F or the green button also exits the show | `fullscreenchange` enter then exit; the viewer scrolls to the last shown slide and focus returns to the Present button | pending (owner) |
+| F5 on macOS | focus the viewer and press F5 (and Fn+F5) | either the show starts, or macOS takes the key (dictation); record which | pending (owner) |
+| Refused full screen | open `/src/debug/slideshow-start.html?frame=cross` (the harness inside a cross-origin iframe without `allow="fullscreen"`), click Present | the show runs in-window with the notice and "Click for full screen" | pending (owner) |
+
+Automated proxies that do run: S1-2 (headless element full screen enter and exit on a
+click, `fullscreenchange` `['enter', 'exit']`), S1-17's no-gesture test (a
+cross-origin frame presenting through `postMessage`, which carries no activation,
+rejects with `gesture-required`), and the `slideshow` Playwright project.
+
+## Stage 1 values verified in the parser and engine tasks
+
+What each Stage 1 task checked, and against what. Nothing here is a PowerPoint
+frame compare (none has landed); the transition and timing reader's own table is
+in "S1-8 transition and timing reader" below.
+
+| Value | Where | Checked against |
+|---|---|---|
+| `showPr` defaults: `loop` false, `showNarration` false, `showAnimation` true, `useTimings` true | `read/deck.ts` (S1-7) | the published `CT_ShowProperties` schema text (republished copy, not a hashed ECMA archive) |
+| Kiosk `restart` default 300,000 ms | `read/deck.ts` (S1-7) | `CT_ShowInfoKiosk` schema text (republished copy) |
+| `p:sldRg st end`: 1-based, inclusive, `1 ≤ st ≤ end ≤ slide count`; invalid → whole deck, diagnosed | `read/deck.ts` (S1-7) | Microsoft's Open XML SDK `SlideRange` reference |
+| Show-jump verbs: `ppaction://hlinkshowjump?jump=` `nextslide`, `previousslide`, `firstslide`, `lastslide`, `endshow`; slide jumps `ppaction://hlinksldjump` through the relationship target. `lastslideviewed`, macros and custom shows are refused, diagnosed | `read/links.ts` (S1-7) | [MS-OE376] §2.1.1315 |
+| Link schemes: only `http:`, `https:`, `mailto:` (new browsing context, `noopener`); everything else refused | `read/links.ts` (S1-7), session (S1-20) | spec 4.3 policy |
+| Notes text cap 65,536 UTF-16 units, never splitting a surrogate pair; reader limits (4 MiB slide XML, 1 MiB notes, 1 MiB `presProps`, 64 MiB show metadata, 512 MiB media) | `read/limits.ts`, `read/notes.ts`, `read/store.ts` (S1-7) | spec 6.1 values; synthetic boundary tests |
+| `p14:pan` without `dir` = `l` (Pan Left) | `render/transitions2d.ts` (S1-15) | `PpEntryEffect` 3930 (ppEffectPanLeft) via the S1-15 review |
+| Workspace 512 MiB desktop / 256 MiB mobile; scratch 64 / 32 MiB; reserve at 3840 × 2160 = 33,177,600 B + scratch; 128 layers, 8 re-rasterisations per frame | `workspace.ts`, `residency.ts` (S1-16) | spec 7 values; `tests/slideshow-workspace.test.ts` |
+| WebGL2 on SwiftShader: `WebGL 2.0 (OpenGL ES 3.0 Chromium)`, `MAX_TEXTURE_SIZE` 8192 | `slideshow` Playwright project (S1-2, S1-14) | local Mac Chromium (Playwright 1.64) |
+| WebGL2 ↔ Canvas 2D parity: worst meanAbs 0.0017, rowMax 0.0663 (`scale` 1.4×); all 2-D transitions at 0/25/50/75/100 %: worst meanAbs 0.0011, rowMax 0.0017 | `tests/browser/slideshow-gpu.spec.ts` (S1-14, S1-15) | the exact tolerance (meanAbs 0.02, rowMax 0.10); synthetic, not Office evidence |
+| Formula grammar (`+ - * / % ^`, the `ppt_*` variables and `#` names, 20 functions incl. `cosh`, `sinh`, `tanh`, `rand`), 1 KiB / 256 tokens / depth 32, no `eval` | `formula.ts` (S1-5) | spec 6.2 grammar; `%` is a D4 question (Q-fmla-mod) |
+| Motion path: commands `M L C Z E` (relative and absolute), 64 KiB / 10,000 commands | `motion-path.ts` (S1-6) | spec 6.1 limits; synthetic |
+
+The values the spec marks "to verify in the parser task" that could not be settled
+from the schema or Microsoft's references are D4 questions below.
+
+## Benchmark (Stage 1)
+
+Spec 7's benchmark (tdf104788 slide 6, all six click steps, 1920 × 1080 CSS px, DPR 2,
+Chromium on the owner's Apple M4 Pro laptop) meets the target. After S1-22 fix round 1
+the GPU p95 frame work is **0.30 ms** submit and **2.00 ms** with a 1-px readback,
+with no dropped frame (target ≤ 12 ms). SwiftShader (the CI rasteriser, on the same
+Mac) misses at 4K on readback (p95 65.8 ms): recorded, not hidden, and not the spec 7
+benchmark. Full tables, method and the transition-mask profile: "S1-22 corpus
+conformance and frame benchmark" below. CI runs the benchmark recorder with no
+thresholds.
+
+## Open D4 questions
+
+No PowerPoint capture has been taken yet. The owner's capture checklist,
+**[`docs/validation/slideshow-captures.md`](slideshow-captures.md)** (S1-21), gives for
+each question the deck to open (a corpus deck or a small built deck), the exact
+steps, what to record, the engine's current assumption and the catalogue row or
+validation entry the answer settles. Until then every catalogue row stays
+`verified: no`, and the engine follows the working assumption named in each entry.
+
+| ID | Question |
+|---|---|
+| Q-spd | How long are `spd="fast"`, `"med"` and `"slow"`? (working: 500 / 750 / 1000 ms) |
+| Q-med-700 | `spd="med"` beside `p14:dur="700"`: which duration plays? |
+| Q-advtm-pending | Does `advTm` wait while on-click steps are still unplayed? |
+| Q-advtm-start | Does the `advTm` timer start when the incoming transition ends? |
+| Q-advtm-busy | Does a running finite effect hold the advance past `advTm`? |
+| Q-advtm-indefinite | Do indefinite repeats, trigger sequences and media hold the advance? |
+| Q-advtm-zero | What does `advTm="0"` do? |
+| Q-advclick | With `advClick="0"`, do mouse clicks and keys advance? |
+| Q-trigger-link | A shape with both a trigger and a hyperlink: which runs? (catalogue: "trigger beats hyperlink", pending D4) |
+| Q-kiosk-input | In a kiosk show, do hyperlinks and triggers respond? (catalogue: "kiosk link inertness", pending D4) |
+| Q-kiosk-restart | When does a kiosk show restart, and what does `restart="0"` do? |
+| Q-previous-into | Previous from a slide's start: is the previous slide shown fully built? |
+| Q-previous-trigger | Previous after a trigger fired at step k: checkpoint k−1 or k? |
+| Q-next-during | Next during a running effect: does the step jump to its end? |
+| Q-showanimation | What does "Show without animation" (`showAnimation="0"`) display? |
+| Q-transition-defaults | Default direction of Pan, Zoom (Box) and Fly Through |
+| Q-transition-visuals | What do zoom, newsflash, fly through, reveal, flash and dissolve look like? |
+| Q-transition-classes | Which XML does each disputed transition write, and how does it look? |
+| Q-transition-inherit | Is a transition on a layout or master inherited by its slides? |
+| Q-transition-extlst | Does PowerPoint read a transition placed in `p:transition/p:extLst`? |
+| Q-restart-default | An effect re-triggered while running: does it restart (absent `restart`)? |
+| Q-autorev | Auto-reverse with repeat: how long, and how is the ease applied? |
+| Q-accel-decel | Smooth start + smooth end longer than the effect: what happens? |
+| Q-repeat-fraction | Is `repeatCount` in thousandths, and does 2.5 stop mid-iteration? |
+| Q-fill-absent | Does an effect keep its end state when its behaviours have no `fill`? |
+| Q-wipe-direction | `animEffect` `wipe(up)`: which edge does the reveal start from? |
+| Q-blinds-subtype | tdf93868: are the `presetSubtype` 10 blinds horizontal or vertical? |
+| Q-usebgfill | A shape with "slide background fill" over a picture background |
+| Q-fmla-mod | What does `%` mean in an animation formula? |
+| Q-excl-pause | Does `excl` pause or stop its other children? |
+| Q-onclick-target | `onClick` with no target or a slide target |
+| Q-endsync-dur | Does `endSync` apply when `dur` is set (including indefinite)? |
+| Q-end-at-begin | Does an end condition at the begin instant end the node? |
+| Q-implicit-par-end | Implicit `par` end with unresolved children |
+| Q-additive-attrs | `cBhvr` `additive` default and the `attrName` list |
+
+Working assumptions that captures would also confirm, not yet written up as
+checklist entries: `ppt_x`/`ppt_y` as the shape's centre (S1-22), the step-granular
+initial-hiding rule (S1-20), the catalogue labels `entr:3:10` (blinds) and `entr:22:1`
+(wipe) against the decks (S1-21), and the `animEffect` `wipe`/`strips`
+motion-direction convention (S1-11; partly Q-wipe-direction).
+
+## Follow-ups (known, not blocking Stage 1)
+
+- **`animMotion origin="layout"`** still subtracts the shape's top-left corner (`motionOffsets` in `engine/behaviours.ts`), while every other position uses the centre since S1-22. No corpus deck exercises it, so a change would have no RED test behind it. An S1-11 follow-up.
+- **`xshear`** (tdf104788's "breaks" entrance) has no render mapping. It is diagnosed and the rest of the effect plays.
+- **The transient underlay re-parse is still partly uncharged.** S1-20 caches the layout and master artwork skeleton once per show (keyed by layout and master), but each non-resident acquire still re-reads the slide's relationships, the slide part (for `showMasterSp`) and the layout and master roots (for `diagnoseInheritedTransition`) through a private `HandlePackage.over(handle)` (`underlayOf` in `player/session.ts`). Those reads are bounded (4 MiB per XML part, 32 MiB per package view) but not charged to the slideshow workspace.
+- **SVG pictures have no browser test.** jsdom cannot rasterise SVG, so the image-charge test (`tests/slideshow-image-charge.test.tsx`) uses a stand-in decoder that mirrors core's preference. The production path through `decodeSvgImage` runs only in a browser, and no browser spec presents a slide with an SVG picture yet.
+- **tdf142915's `useTimings` flip is engine evidence only.** The deck as filed has `useTimings="0"` and does not auto-advance. The conformance test's second half plays an in-memory copy with `useTimings="1"` (auto-advance at 1000 ms, clicks ignored); that proves the engine's `advTm`/`advClick` handling, not anything about PowerPoint's playback of tdf142915. The committed corpus file is never modified.
+- **Per-frame cost.** `updateA11y()` recomputes the render state each tick after `frame()` has computed the same state; sharing it would halve the scheduler work per frame (well inside budget today).
+- **`stage.transition` reports the drawn element** (for example `fade` for airplane and morph) since S1-22; Stage 2 readers (S2-4 preview, S2-5 presenter) should expect that.
 
 ## S1-3 inventory provenance and name audit
 
@@ -2821,3 +3093,77 @@ ECMA-376 / [MS-PPTX] in the implementer sandbox).
 | Reader limits | 2000 `p:cTn`, 64 time-node levels (root = 1), 10000 conditions (incl. `endSync`), 1000/20000 `p:tav`, 64 KiB `animMotion@path` → `{ refused: 'limit:<name>' }`, builds empty, transition still read | synthetic. Note: the shared XML parser caps element nesting at 100 tags (fast-xml-parser `maxNestedTags`), about 32 time-node levels, so deeper trees fail at XML parse before the reader |
 | `tn` cycles | begin/end dependency graph; closing condition replaced by one that never fires; `timing-cycle` | synthetic |
 | `p:cond` with `p:tn` and no `evt` | never fires (matches the S1-9 scheduler, ss/s1-9@9d04576 `instances()`), adds no cycle edge; `timing-syncbase-no-event` | synthetic |
+
+## S1-22 corpus conformance and frame benchmark
+
+### Frame benchmark (spec 7)
+
+`tests/browser/slideshow-perf.spec.ts`, run with `OV_SLIDESHOW_BENCH=1` (never in CI). Deck tdf104788, slide 6, all six click steps, each measured from its click until it settles, at 1920 × 1080 CSS px, DPR 2 (backing store 3840 × 2160, asserted), Chromium (Playwright 1.64 bundle), on the owner's reference laptop (Apple M4 Pro, macOS). Frame work is `performance.now()` around the session's tick. "Submit" is JavaScript plus WebGL2 command submission. "Readback" adds a 1-px `readPixels` after the tick, so the GPU's work is counted too. A dropped frame is a rAF gap above 1.5 × the run's median gap.
+
+| Renderer | Mode | Frames | p50 ms | **p95 ms** | max ms | Dropped | rAF gap |
+|---|---|---|---|---|---|---|---|
+| ANGLE Metal, Apple M4 Pro (`OV_SLIDESHOW_GPU=1`) | submit | 446 | 0.50 | **0.70** | 1.40 | 0 | 16.7 ms |
+| ANGLE Metal, Apple M4 Pro (`OV_SLIDESHOW_GPU=1`) | readback | 446 | 2.10 | **2.50** | 3.20 | 0 | 16.7 ms |
+| SwiftShader (the CI rasteriser, on the same Mac) | submit | 109 | 0.30 | **0.40** | 0.60 | 3 | 50–67 ms |
+| SwiftShader (the CI rasteriser, on the same Mac) | readback | 193 | 60.2 | **65.8** | 97.4 | 1 | 50–67 ms |
+
+Result: the GPU run meets the target (p95 ≤ 12 ms, no dropped frame), with every step's p95 between 0.5 and 0.8 ms (submit) and between 2.2 and 2.7 ms (readback). SwiftShader rasterises 3840 × 2160 on the CPU, so it draws only 15–20 frames per second and its readback p95 of 65.8 ms misses the target. That run is recorded as a miss, but it is not the spec 7 benchmark, which names the reference laptop's Chromium.
+
+**Fixed in S1-22 fix round 1 (the paragraph below describes the state before it): slide transitions at the benchmark size were cuts.** On WebGL2 at 3840 × 2160, the outgoing frame of a slide transition is refused (`transition-workspace`: "The outgoing frame did not fit the slideshow workspace; the slide change is a cut"). After two resident slides of tdf44223, the workspace holds 489,330,720 of 536,870,912 B. Each resident rung prices padded bounds × 1.25, plus the largest layer, plus two transition frames. The outgoing frame is then charged to the workspace again, with a 66 MB peak while it is uploaded. This affects both the split and the fade decks, on the GPU and on SwiftShader. In one SwiftShader run the split still played, because the neighbour's prefetch had not finished yet. The transition plays at DPR 1. It also plays at DPR 2 when the workspace is 1 GiB (`budget=wide`, a profiling-only harness option).
+
+**After fix round 1.** The outgoing frame now comes from the transition allowance the outgoing slide's rung already priced. That slide's own incoming frame was released when its transition ended. A retired rung keeps its charge until the frame's lease is released, so a goTo that drops the slide while its frame is still drawn stays accounted. The black frame for the first slide, and any slide without an open rung, still lease from the workspace, and are refused with a diagnostic when they don't fit. Re-run on the M4 Pro at 1920 × 1080, DPR 2, with the product 512 MiB budget:
+
+| Test | Mode | p50 / **p95** ms | Dropped |
+|---|---|---|---|
+| tdf104788 slide 6, all steps | submit | 0.30 / **0.30** | 0 |
+| tdf104788 slide 6, all steps | readback | 1.90 / **2.00** | 0 |
+| tdf44223 slide 2 split transition (plays) | submit | 0.10 / **0.20** | 0 |
+| tdf44223 slide 2 split transition (plays) | readback | 1.80 / **2.40** | 0 |
+| tdf115394 slide 5 fade transition (plays) | submit | 0.10 / **0.20** | 0 |
+| tdf115394 slide 5 fade transition (plays) | readback | 1.60 / **1.80** | 0 |
+
+The jsdom tests in `tests/slideshow-fix-s1-22.test.ts` cover the budget:
+- a split transition plays at 3840 × 2160 on the 512 MiB desktop budget, less the WebGL2 drawing-buffer lease;
+- a split transition plays on the 256 MiB mobile budget at its largest output (1619 × 2160 after the cap);
+- a refused black frame is still a diagnosed cut.
+
+**Transition mask re-upload (the S1-14 question).** tdf44223 slide 2 `split` (a mask, re-traced and re-uploaded every frame) against tdf115394 slide 5 `fade` (a transform):
+
+| Renderer | Backing store | Mode | split p50 / p95 ms | fade p50 / p95 ms |
+|---|---|---|---|---|
+| ANGLE Metal, M4 Pro | 1920 × 1080 (DPR 1) | submit | 0.20 / 0.50 | 0.20 / 0.30 |
+| ANGLE Metal, M4 Pro | 1920 × 1080 (DPR 1) | readback | 1.80 / 2.00 | 1.00 / 1.40 |
+| ANGLE Metal, M4 Pro | 3840 × 2160 (1 GiB workspace) | submit | 0.10 / 0.30 | 0.10 / 0.20 |
+| ANGLE Metal, M4 Pro | 3840 × 2160 (1 GiB workspace) | readback | 3.50 / 3.80 | 1.60 / 1.90 |
+| SwiftShader | 1920 × 1080 (DPR 1) | readback | 23.9 / 49.0 | 18.7 / 20.9 |
+| SwiftShader | 3840 × 2160 (1 GiB workspace) | readback | 62.1 / 168.6 | 29.7 / 76.9 |
+
+The re-upload is deferred to the GPU process, so it does not appear in submit time. On the M4 Pro it adds about 1.9 ms per frame at 4K (readback p50 3.5 against 1.6 ms), well inside 12 ms. Procedural GLSL masks are not needed for the GPU target. On SwiftShader the mask roughly doubles the frame cost.
+
+### CI
+
+The slideshow job now fetches the corpus. `tests/browser/slideshow-corpus.spec.ts` presents all 16 LibreOffice decks and plays them to the end-of-show slide, once on WebGL2 (a hard failure if WebGL2 is not the backend) and once on forced Canvas 2D. It also runs the benchmark recorder on WebGL2 for tdf104788's six steps, with no thresholds. In CI a missing corpus fails the spec instead of skipping it. `tests/slideshow-corpus.test.ts` runs in the check job, which fetches the corpus before vitest.
+
+### Corpus coverage (owner rule)
+
+Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-through of each deck (every step, every trigger), classified from the timing tree and the diagnostics of that run. **native**: drawn as the file says. **closest**: the closest equivalent plays, with a diagnostic (a 2-D look-alike, a stage-2 media stand-in, a dropped attribute, a whole-graphic build). **refused**: nothing of it plays. Totals: 19 native, 11 closest, 0 refused.
+
+| Deck | Native | Closest | Refused | Items (slide: what → coverage, note) |
+|---|---|---|---|---|
+| airplane-transition | 0 | 1 | 0 | 1: p15:prstTrans:airplane → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
+| bnc591147 | 0 | 3 | 0 | 1: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed)<br>1: mediacall 2 → **closest** (pending-stage-2 stand-in (cmd togglePause), diagnosed)<br>2: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed) |
+| connector-shape-animations | 2 | 0 | 0 | 1: entr 22/1 wipe: from-top → **native** (file behaviours)<br>1: entr 22/1 wipe: from-top → **native** (file behaviours) |
+| narration | 0 | 1 | 0 | 1: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed) |
+| ooxtheme | 0 | 0 | 0 | no transitions or effects |
+| tdf104788 | 5 | 1 | 0 | 6: entr 37 rise-up → **native** (file behaviours)<br>6: entr 34 breaks → **closest** (xshear dropped)<br>6: entr 58 fold → **native** (file behaviours)<br>6: entr 47 descend → **native** (file behaviours)<br>6: entr 42 ascend → **native** (file behaviours)<br>6: entr 10 fade-in → **native** (file behaviours) |
+| tdf104792-smart-art-animation | 0 | 2 | 0 | 1: entr 10 fade-in → **closest** (graphic build animates the whole graphic)<br>1: entr 10 fade-in → **closest** (graphic build animates the whole graphic) |
+| tdf105739 | 0 | 0 | 0 | no transitions or effects |
+| tdf115394 | 5 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (750 ms))<br>3: p:fade → **native** (exact (500 ms))<br>4: p:fade → **native** (exact (250 ms))<br>5: p:fade → **native** (exact (4250 ms)) |
+| tdf123684 | 0 | 0 | 0 | no transitions or effects |
+| tdf142915 | 0 | 0 | 0 | no transitions or effects |
+| tdf146223 | 2 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (1000 ms)) |
+| tdf149588_transparentSolidFill | 0 | 1 | 0 | 1: p159:morph → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
+| tdf156808 | 1 | 0 | 0 | 1: p14:flythrough → **native** (exact (800 ms)) |
+| tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (pending-stage-2 stand-in (audio), diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (pending-stage-2 stand-in: silent, diagnosed) |
+| tdf93868 | 2 | 0 | 0 | 1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours)<br>1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours) |
+

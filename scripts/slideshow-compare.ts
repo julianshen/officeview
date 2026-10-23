@@ -3,8 +3,24 @@
 // Compares one of our rendered frames against an owner-supplied PowerPoint
 // reference frame, reads the reference layout under
 // tests/fixtures/slideshow-refs/, and reads and writes compare records
-// (docs/validation/slideshow-compare.json). The CLI that renders our frames
-// through the engine lands in S1-22; until then running this file exits 2.
+// (docs/validation/slideshow-compare.json). The CLI (S1-22) renders our
+// frames through the lazy engine at the checklist times and compares them:
+//
+//   bun scripts/slideshow-compare.ts <deck> [--rows id,…] [--out dir] [--write]
+//                                    [--refs dir] [--records file]
+//   bun scripts/slideshow-compare.ts --coverage
+//
+// <deck> is a corpus name (`tdf104788`, read from corpus/lo-<deck>.pptx) or a
+// .pptx path. The show runs exactly as tests/slideshow-corpus.test.ts runs it
+// (jsdom + node-canvas, the Canvas 2D compositor, every clock driven), at the
+// reference resolution from the deck's provenance.json (1280 px wide when the
+// deck has no references yet). Each checklist frame with a reference PNG on
+// disk is compared with its catalogue row's tolerance; frames without one are
+// listed as unverified. `--write` merges the records into
+// docs/validation/slideshow-compare.json; `--out` saves our frames as PNGs.
+// Exit status: 0 when every compared frame passes (or none could be compared),
+// 1 when any comparison fails, 2 on a usage error. `--coverage` prints the
+// per-deck native / closest / refused table for every LibreOffice corpus deck.
 //
 // Units: every difference and tolerance is a fraction of 255 (0..1), the unit
 // of the shared `Tolerance` type and the catalogue's row tolerances.
@@ -12,7 +28,7 @@
 // Verification rule (D4): a catalogue row is `verified` only from passing
 // compare records whose reference frames exist on disk under a deck with valid
 // provenance. A row without such a reference is `unverified`, never `failed`.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -258,7 +274,180 @@ export function writeCompareRecord(path: string, rows: CompareRecord[]): void {
   renameSync(tmp, path)
 }
 
+// ---------------------------------------------------------------------------
+// CLI: render through the engine and compare (S1-22)
+// ---------------------------------------------------------------------------
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..')
+export const REFS_DIR = join(REPO, 'tests/fixtures/slideshow-refs')
+export const RECORDS_PATH = join(REPO, 'docs/validation/slideshow-compare.json')
+
+/** Installs a jsdom window as the global DOM (bun has none), with node-canvas behind <canvas>. */
+async function installDom(): Promise<void> {
+  if (typeof (globalThis as { document?: unknown }).document !== 'undefined') return
+  const name = 'jsdom' // a computed specifier: jsdom ships no types and is a dev dependency only
+  const { JSDOM } = await import(name) as { JSDOM: new (html: string, options: object) => { window: Record<string, unknown> } }
+  const { window } = new JSDOM('<!doctype html><html><body></body></html>', { pretendToBeVisual: true, url: 'http://localhost/' })
+  const g = globalThis as Record<string, unknown>
+  // DOM event plumbing must come from the same realm as the DOM (jsdom rejects bun's own AbortSignal and Event).
+  const sameRealm = new Set(['AbortController', 'AbortSignal', 'Event', 'EventTarget', 'CustomEvent'])
+  for (const key of Object.getOwnPropertyNames(window)) {
+    if (key in g && !sameRealm.has(key)) continue
+    try { g[key] = window[key] } catch { /* read-only on the global */ }
+  }
+  g.window = window
+  g.document = window.document
+}
+
+export interface CliOptions { deck: string; rows?: Set<string>; out?: string; write: boolean; refs: string; records: string }
+
+function parseArgs(args: string[]): CliOptions | 'coverage' | string {
+  if (args.includes('--coverage')) return 'coverage'
+  const opts: CliOptions = { deck: '', write: false, refs: REFS_DIR, records: RECORDS_PATH }
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--rows') { const v = args[++i]; if (!v) return '--rows needs a comma-separated list of catalogue row ids'; opts.rows = new Set(v.split(',').map(r => r.trim()).filter(Boolean)) }
+    else if (a === '--out') { const v = args[++i]; if (!v) return '--out needs a directory'; opts.out = v }
+    else if (a === '--write') opts.write = true
+    else if (a === '--refs') { const v = args[++i]; if (!v) return '--refs needs a directory'; opts.refs = resolvePath(v) }
+    else if (a === '--records') { const v = args[++i]; if (!v) return '--records needs a file'; opts.records = resolvePath(v) }
+    else if (a.startsWith('--')) return `unknown option ${a}`
+    else if (!opts.deck) opts.deck = a
+    else return `unexpected argument ${a}`
+  }
+  return opts.deck ? opts : 'usage: bun scripts/slideshow-compare.ts <deck> [--rows id,…] [--out dir] [--write] [--refs dir] [--records file] | --coverage'
+}
+
+const deckFile = (deck: string) => deck.endsWith('.pptx') ? resolvePath(deck) : join(REPO, 'corpus', `lo-${deck}.pptx`)
+const deckName = (deck: string) => deck.replace(/^.*[\\/]/, '').replace(/\.pptx$/i, '').replace(/^lo-/, '')
+
+async function decodePng(path: string): Promise<ImageData> {
+  const { createCanvas, loadImage } = await import('canvas')
+  const img = await loadImage(path)
+  const c = createCanvas(img.width, img.height)
+  const ctx = c.getContext('2d')
+  ctx.drawImage(img, 0, 0)
+  return ctx.getImageData(0, 0, img.width, img.height) as unknown as ImageData
+}
+
+export interface FrameOutcome { slide: number; step: number; pct: number; ms: number; rows: string[]; status: 'pass' | 'fail' | 'unverified'; detail: string }
+
+/** Renders `deck` at its checklist times and compares the frames that have references. */
+export async function compareDeck(opts: CliOptions): Promise<{ outcomes: FrameOutcome[]; records: CompareRecord[] }> {
+  await installDom()
+  const { planDeck } = await import('./slideshow-capture-plan')
+  const { installShowSeams, loadDeck, startShow } = await import('../tests/helpers/slideshow-show-rig')
+  const { CATALOGUE } = await import('../src/slideshow/catalogue')
+  const name = deckName(opts.deck)
+  const bytes = new Uint8Array(readFileSync(deckFile(opts.deck)))
+  const plan = await planDeck(name, bytes)
+  const refs = await readRefs(opts.refs)
+  const refMap = new Map(refs.frames.filter(f => f.deck === name).map(f => [`${f.slide}-${f.step}-${f.pct}`, f.path]))
+  const prov = refs.provenance.get(name)
+  const aspect = plan.slideSize.cx / plan.slideSize.cy
+  const [width, height] = prov?.resolution ?? [1280, Math.round(1280 / aspect)]
+  const seams = installShowSeams({ width, height })
+  const outcomes: FrameOutcome[] = []
+  const records: CompareRecord[] = []
+  try {
+    const doc = await loadDeck(bytes)
+    const r = await startShow(doc, { seams, size: { width, height } })
+    const capture = (): ImageData | undefined => {
+      const c = r.frameCanvas()
+      const ctx = c?.getContext('2d')
+      return c && ctx ? ctx.getImageData(0, 0, c.width, c.height) : undefined
+    }
+    for (const slide of plan.slides) {
+      for (const step of slide.steps) {
+        // Step 0 is the slide's arrival (the show's start, or the Next that left the previous slide); later steps are clicks.
+        if (step.step > 0 || slide.slide > 1) {
+          if (slide.hidden && step.step === 0) r.s.goTo(slide.slide - 1)
+          else r.s.next()
+          await r.tick(0)
+        }
+        const t0 = seams.clock.now()
+        const rows = [...new Set([step.transition?.row, ...step.effects.map(e => e.row)].filter((x): x is string => !!x))]
+        const wanted = !opts.rows || rows.some(row => opts.rows!.has(row))
+        for (const f of step.frames) {
+          await r.tick(Math.max(0, t0 + f.ms - seams.clock.now()))
+          if (!wanted) continue
+          const ours = capture()
+          if (opts.out && ours) {
+            const { createCanvas } = await import('canvas')
+            const c = createCanvas(ours.width, ours.height)
+            const img = c.getContext('2d').createImageData(ours.width, ours.height)
+            img.data.set(ours.data)
+            c.getContext('2d').putImageData(img, 0, 0)
+            mkdirSync(join(opts.out, name), { recursive: true })
+            writeFileSync(join(opts.out, name, refFileName(slide.slide, step.step, f.pct)), c.toBuffer('image/png'))
+          }
+          const base = { slide: slide.slide, step: step.step, pct: f.pct, ms: f.ms, rows }
+          const ref = refMap.get(`${slide.slide}-${step.step}-${f.pct}`)
+          if (!ref || !ours) { outcomes.push({ ...base, status: 'unverified', detail: ours ? 'no reference frame' : 'no frame was drawn' }); continue }
+          const theirs = await decodePng(ref)
+          // A frame with no catalogue row (a static slide) is held to the exact tolerance.
+          const tolerances = rows.length ? rows.map(id => ({ id, tol: CATALOGUE.find(c => c.id === id)?.tolerance ?? TOLERANCE_EXACT })) : [{ id: '', tol: TOLERANCE_EXACT }]
+          let pass = true
+          let detail = ''
+          for (const { id, tol } of tolerances) {
+            const res = compareFrames(ours, theirs, tol)
+            pass &&= res.pass
+            detail = res.reason ?? `meanAbs ${res.meanAbs.toFixed(4)} rowMax ${res.rowMax.toFixed(4)} (row ${res.worstRow})`
+            if (id) records.push({ row: id, deck: name, slide: slide.slide, step: step.step, pct: f.pct, pass: res.pass, meanAbs: res.meanAbs, rowMax: res.rowMax })
+          }
+          outcomes.push({ ...base, status: pass ? 'pass' : 'fail', detail })
+        }
+        // Let the step settle before the next trigger.
+        await r.tick(typeof step.spanMs === 'number' ? Math.max(0, t0 + step.spanMs - seams.clock.now()) : 0)
+      }
+    }
+    r.exit()
+  } finally {
+    seams.restore()
+  }
+  return { outcomes, records }
+}
+
+/** Every LibreOffice corpus deck: native / closest / refused per transition, effect and sound. */
+async function printCoverage(): Promise<void> {
+  await installDom()
+  const { readdirSync } = await import('node:fs')
+  const { installShowSeams, loadDeck, startShow } = await import('../tests/helpers/slideshow-show-rig')
+  const { coverageMarkdown, deckCoverage, playThrough } = await import('../tests/helpers/slideshow-coverage')
+  const dir = join(REPO, 'corpus')
+  const table: Array<{ deck: string; items: Awaited<ReturnType<typeof deckCoverage>> }> = []
+  for (const file of readdirSync(dir).filter(f => f.startsWith('lo-') && f.endsWith('.pptx')).sort()) {
+    const seams = installShowSeams()
+    try {
+      const bytes = new Uint8Array(readFileSync(join(dir, file)))
+      const doc = await loadDeck(bytes)
+      const r = await startShow(doc, { seams })
+      await playThrough(r)
+      table.push({ deck: file.slice(3, -5), items: await deckCoverage(bytes, doc, r.diagnostics) })
+      r.exit()
+    } finally { seams.restore(); document.body.replaceChildren() }
+  }
+  console.log(coverageMarkdown(table))
+}
+
+export async function runCompareCli(args: string[]): Promise<number> {
+  const opts = parseArgs(args)
+  if (opts === 'coverage') { await printCoverage(); return 0 }
+  if (typeof opts === 'string') { console.error(`slideshow-compare: ${opts}`); return 2 }
+  if (!existsSync(deckFile(opts.deck))) { console.error(`slideshow-compare: no deck at ${deckFile(opts.deck)} (run bun scripts/fetch-corpus.ts)`); return 2 }
+  const { outcomes, records } = await compareDeck(opts)
+  for (const o of outcomes) console.log(`${o.status.padEnd(10)} ${o.slide}-${o.step}-${o.pct} (${o.ms} ms) ${o.rows.join(' ') || '(static)'}: ${o.detail}`)
+  const n = (s: FrameOutcome['status']) => outcomes.filter(o => o.status === s).length
+  console.log(`${deckName(opts.deck)}: ${n('pass')} pass, ${n('fail')} fail, ${n('unverified')} unverified (no reference), ${outcomes.length} frames`)
+  if (opts.write && records.length) {
+    const key = (r: CompareRecord) => `${r.row}|${r.deck}|${r.slide}|${r.step}|${r.pct}`
+    const fresh = new Set(records.map(key))
+    writeCompareRecord(opts.records, [...readCompareRecords(opts.records).filter(r => !fresh.has(key(r))), ...records])
+    console.log(`wrote ${records.length} record(s) to ${opts.records}`)
+  }
+  return n('fail') ? 1 : 0
+}
+
 if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.error('slideshow-compare: rendering frames through the engine lands in S1-22; nothing was compared.')
-  process.exitCode = 2
+  process.exitCode = await runCompareCli(process.argv.slice(2))
 }

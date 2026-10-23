@@ -64,8 +64,8 @@ interface Rig {
 let painted: number[]
 /** S1-20: the engine seam. A recording stage stands in for it here (the engine has its own suite). */
 const recordingStage = (): Stage => ({
-  leave() {}, async enter(m) { painted.push(m.index) }, slideTime: (t) => t, frame() {}, stateAt: () => new Map(),
-  plan: undefined, toSlide: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
+  leave() {}, async enter(m) { painted.push(m.index) }, slideTime: (t) => t, frame: () => undefined, stateAt: () => new Map(),
+  plan: undefined, toSlide: () => undefined, runAt: () => undefined, resize() {}, level: 'full', backend: 'canvas2d', backingStore: { w: 1, h: 1, dpr: 1 }, transition: undefined, inspect: () => ({ current: undefined, slides: [], lastDraws: [] }), dispose() {},
 })
 let clock: ManualClock
 beforeEach(() => {
@@ -296,6 +296,34 @@ describe('order, hidden slides and loop', () => {
     await press(num, 'ArrowRight')
     expect(num.s.slideIndex).toBe(2)
     num.s.exit()
+  })
+
+  it('PR #18 review 4: an empty deck started from the current slide opens on end-of-show', async () => {
+    const { doc } = await deck({ slides: [] })
+    expect(doc.slides).toHaveLength(0)
+    const r = await show(doc, { from: 'current' }, { currentSlide: () => 0 })
+    expect(r.s.state.slide).toBe('end')
+    expect(r.log).toContain('onStart')
+    r.s.exit()
+  })
+
+  it('PR #18 review 8: removing the full-screen notice (Dismiss, or a retry that enters) returns focus to the show host', async () => {
+    const { doc } = await deck({ slides: [{ shapes: [] }, { shapes: [] }] })
+    for (const which of ['Dismiss', 'Click for full screen']) {
+      const r = await show(doc, { fullscreen: Promise.resolve('refused'), retryFullscreen: async () => 'entered' })
+      await flush()
+      const button = [...r.host.querySelectorAll<HTMLButtonElement>('[data-officeview-show-notice] button')].find(b => b.textContent === which)!
+      button.focus()
+      button.click()
+      await flush()
+      expect(r.host.querySelector('[data-officeview-show-notice]')).toBeNull()
+      expect(document.activeElement).toBe(r.host)
+      // Keys reach the show again.
+      r.key('ArrowRight')
+      await flush()
+      expect(r.s.slideIndex).toBe(1)
+      r.s.exit()
+    }
   })
 
   it('a deck with every slide hidden opens on end-of-show', async () => {
@@ -611,6 +639,17 @@ describe('exit, focus and events', () => {
     await r.s.ended
     r.s.exit()
     expect(r.log.filter((l) => l === 'onEnd')).toHaveLength(1)
+    expect(r.cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('PR #18 review 2: ended settles even when the host\'s end callback throws', async () => {
+    const { doc } = await deck({ slides: [{ shapes: [] }] })
+    const r = await show(doc, {}, { onEnd: () => { throw new Error('host onSlideShowEnd failed') } })
+    expect(() => r.s.exit()).toThrow('host onSlideShowEnd failed')
+    let settled = false
+    void r.s.ended.then(() => { settled = true })
+    await flush()
+    expect(settled).toBe(true)
     expect(r.cleanup).toHaveBeenCalledTimes(1)
   })
 })

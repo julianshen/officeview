@@ -32,7 +32,7 @@ import type { ZoomContext, ZoomOutcome } from './zoomRouting'
 import { copyText } from '../core/clipboard'
 import { pagedWorkbookOf } from './pagedDocument'
 import { themeRootProps, type ThemeMode } from './theme'
-import { defaultPlatform, startPresent, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type ReexportableSource, type SlideShowDiagnostic, type SlideShowMotion } from './present'
+import { defaultPlatform, SlideShowError, startPresent, type OfficeViewerHandle, type PresentOptions, type PresentPlatform, type ReexportableSource, type SlideShowDiagnostic, type SlideShowMotion } from './present'
 import {
   distance,
   MAX_ZOOM,
@@ -310,7 +310,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   const present = (opts?: PresentOptions) => {
     setNotice('')
     const run = startPresent({
-      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, watermark, signal: epoch.current!.signal,
+      doc: document, host: hostRef.current!, opts, platform: __presentPlatform, generation: gen.current, source: __presentSource, allow: allowPresent, motion: slideShowMotion, watermark, allowCopy, signal: epoch.current!.signal,
       callbacks: { onStart: onSlideShowStart, onEnd: onSlideShowEnd, onSlideChange: onSlideShowSlideChange, onDiagnostic: onSlideShowDiagnostic },
     })
     run.catch((e) => e.code == 'load-failed' && setNotice(e.message))
@@ -940,12 +940,18 @@ const route = (fn: (m: Router) => void) => { if (router) fn(router); else void l
 const SLOT = 'ov:shrink-0 ov:bg-chrome'
 const IDENTITY: Transform = { zoom: 1, panX: 0, panY: 0 }
 
+// A spreadsheet viewer is never presentable: the ref still gets a handle that says so (PR #18 review 3).
+const SHEET: OfficeViewerHandle = { present: () => Promise.reject(new SlideShowError('not-presentable')) }
+
 export const OfficeDoc = forwardRef(function OfficeDoc(props: OfficeDocProps, ref: Ref<OfficeViewerHandle>): ReactElement {
   const { interactiveSheets = false, document, ...rest } = props
   // A worker-backed (paged) shell document carries its source (S5.4) and has no
   // rows on the main thread: only the interactive viewer can show it.
   const paged = pagedWorkbookOf(document)
-  if ((interactiveSheets || paged) && 'sheets' in document) {
+  const sheet = (interactiveSheets || paged) && 'sheets' in document
+  // The spreadsheet's handle; the legacy viewer sets its own.
+  useImperativeHandle(sheet ? ref : null, () => SHEET)
+  if (sheet) {
     return (
       <Suspense fallback={<SheetStatus theme={props.theme} text="Loading spreadsheet viewer…" />}>
         <InteractiveSheetDoc doc={document} {...(paged ? { source: paged.source } : {})} {...rest} />

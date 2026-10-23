@@ -360,6 +360,11 @@ function start(opts: { force?: 'canvas2d' } = {}) {
   host.replaceChildren()
   const ws = makeWorkspace(256 * 1024 * 1024)
   const terminal = ws.reserveTerminal(DEV_W * DEV_H * 4)!
+  // The terminal reserve's output canvas, under the backend's canvases (as on the audience surface): the
+  // Canvas 2D fallback composites on it (PR #18 review P2).
+  const output = factory(DEV_W, DEV_H) as HTMLCanvasElement
+  output.style.cssText = 'position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block'
+  host.append(output)
   const show = new ManualClock()
   const sink = createDiagnosticSink()
   const perf = { now: 0, queue: [] as Session['perf']['queue'] }
@@ -370,7 +375,7 @@ function start(opts: { force?: 'canvas2d' } = {}) {
     schedule: (cb, ms) => { perf.queue.push({ at: perf.now + ms, cb }); return perf.queue.length },
     paintLive,
     rebuildLayers: async c => { await build(c, partial, ws); if (session) { session.layers = partial.layers; session.prev = partial.prev } },
-    workspace: ws, terminal, sink, force: opts.force,
+    workspace: ws, terminal, output, sink, force: opts.force,
   })
   mgr.current.setViewport({ matrix: VIEW, deviceWidth: DEV_W, deviceHeight: DEV_H })
   void build(mgr.current, partial, ws)
@@ -402,8 +407,10 @@ function probe() {
   const s = session!
   frame()
   const host = document.getElementById('stage')!
-  const canvases = [...host.querySelectorAll('canvas')]
-  const top = canvases[canvases.length - 1]
+  // The backends' canvases, bottom to top: the output (while Canvas 2D draws on it), then the WebGL one.
+  const canvases = [...host.querySelectorAll<HTMLCanvasElement>('canvas[data-slideshow-backend]')]
+  // The visible one: the output while it is drawn on (a lost WebGL canvas over it is hidden), else the WebGL canvas.
+  const top = canvases.find(c => c.dataset.slideshowBackend === 'canvas2d') ?? canvases[canvases.length - 1]
   let redX = -1
   let grey: number[] = []
   if (top) {
@@ -418,7 +425,7 @@ function probe() {
     grey = [...ctx.getImageData(10, Math.round(VIEW[3] * 27 + VIEW[5]), 1, 1).data]
   }
   return {
-    state: s.mgr.state, backend: s.mgr.current.backend, canvases: canvases.map(c => c.dataset.slideshowBackend ?? '?'),
+    state: s.mgr.state, backend: s.mgr.current.backend, canvases: canvases.map(c => c.dataset.slideshowBackend!),
     redX, expectedX: Math.round(VIEW[0] * (MOVER_X + moverDx(s.show.now())) + VIEW[4]), grey, showTime: s.show.now(), events: { ...s.events },
   }
 }
@@ -470,7 +477,7 @@ const api = {
   beginTransition: () => { session!.transition = true },
   lose: () => { session!.ext!.loseContext() },
   restore: () => { session!.ext!.restoreContext() },
-  exit: () => { session!.mgr.dispose(); return { state: session!.mgr.state, canvases: document.getElementById('stage')!.querySelectorAll('canvas').length } },
+  exit: () => { session!.mgr.dispose(); return { state: session!.mgr.state, canvases: document.getElementById('stage')!.querySelectorAll('canvas[data-slideshow-backend]').length } },
   diagnostics: () => session!.sink.list().map(d => `${d.code}:${d.effect}`),
 }
 window.__slideshowGpu = api

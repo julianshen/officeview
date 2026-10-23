@@ -574,7 +574,8 @@ export interface PptxSlideSpec {
   hidden?: boolean
   notes?: string[][]
   /** Attach to an existing shape; onRun attaches to its first text run. */
-  links?: Array<{ shapeId: number; action?: string; target?: string; external?: boolean; onRun?: boolean }>
+  /** `onRun`: on the shape's first text run (`true`) or its n-th (0-based, across paragraphs). */
+  links?: Array<{ shapeId: number; action?: string; target?: string; external?: boolean; onRun?: boolean | number }>
   media?: Array<{ kind: 'audio' | 'video'; data: Uint8Array; ext: string; shapeId: number; p14?: boolean }>
 
   layout?: [master: number, layout: number]
@@ -815,7 +816,7 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
     const bg = pptxBgXml(sl.bg, part.allocImage)
     const extras: string[] = []
     const ids = sl.shapes.map(shape => part.idFor(shape))
-    const linkSlots = sl.links?.map(l => `${l.shapeId}:${!!l.onRun}`) ?? []
+    const linkSlots = sl.links?.map(l => `${l.shapeId}:${l.onRun === true ? 0 : l.onRun === false ? '' : l.onRun ?? ''}`) ?? []
     const mediaSlots = sl.media?.map(m => m.shapeId) ?? []
     if (new Set(linkSlots).size !== linkSlots.length || new Set(mediaSlots).size !== mediaSlots.length) {
       throw new Error('buildPptxDeck: duplicate show attachment')
@@ -830,9 +831,13 @@ export async function buildPptxDeck(spec: PptxDeckSpec): Promise<Uint8Array> {
         const rid = `rIdShow${extras.length + 1}`
         if (link.target !== undefined) extras.push(showRel(rid, link.external ? 'hyperlink' : 'slide', link.target, link.external))
         const tag = `<a:hlinkClick${link.target !== undefined ? ` r:id="${rid}"` : ''}${link.action !== undefined ? ` action="${showEscape(link.action)}"` : ''}/>`
-        if (link.onRun) {
+        if (link.onRun !== undefined && link.onRun !== false) {
           if (!xml.includes('<a:rPr')) throw new Error('buildPptxDeck: onRun link requires a text run')
-          xml = xml.replace(/<a:rPr([^>]*?)\/>/, '<a:rPr$1></a:rPr>').replace('</a:rPr>', `${tag}</a:rPr>`)
+          xml = xml.replace(/<a:rPr([^>]*?)\/>/g, '<a:rPr$1></a:rPr>')
+          const n = link.onRun === true ? 0 : link.onRun
+          let at = -1
+          for (let k = 0; k <= n; k++) { at = xml.indexOf('</a:rPr>', at + 1); if (at < 0) throw new Error('buildPptxDeck: onRun index past the shape\'s runs') }
+          xml = `${xml.slice(0, at)}${tag}${xml.slice(at)}`
         } else xml = xml.replace(/<p:cNvPr([^>]*?)\/>/, `<p:cNvPr$1>${tag}</p:cNvPr>`)
       }
       for (const media of sl.media?.filter(m => m.shapeId === id) ?? []) {

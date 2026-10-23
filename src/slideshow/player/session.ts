@@ -37,11 +37,11 @@ import { shapeResolver } from '../read/resolve'
 import { createSlideMetadataStore } from '../read/store'
 import { readSlideTiming } from '../read/timing'
 import { diagnoseInheritedTransition } from '../read/transition'
-import type { DiagnosticSink, LinkSpec, MetadataHandle, ShowClock, ShowIndex, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../types'
+import type { DiagnosticSink, LinkSpec, MetadataHandle, RenderState, ShowClock, ShowIndex, ShowSlide, SlideShowWorkspace, TerminalReserve } from '../types'
 import { admitShow, createSlideShowWorkspace, type SlideShowProfile } from '../workspace'
 import { createShowA11y, showTargets, slideTitle, visibleText, type ShowA11y, type ShowTarget } from './a11y'
 import { createCursorHider, type CursorHider, type CursorTimer } from './cursor'
-import { hitTest } from './hit-test'
+import { hitTarget } from './hit-test'
 import { createGestureState, gestureToInput, keyToInput, MODIFIER_KEYS } from './keys'
 import { runLink } from './links'
 import { nextVisible, previousVisible, visibleOrder } from './order'
@@ -92,7 +92,7 @@ export interface SessionController extends SlideShowSession {
   /** Runs one frame now (the frame driver calls it every animation frame; tests call it directly). */
   tick(): void
   /** Activates a trigger or link the way a click on its shape does (the accessibility buttons use it). */
-  activate(target: { spid: string; kind: 'trigger' | 'link' }): void
+  activate(target: { spid: string; kind: 'trigger' | 'link'; run?: { p: number; r: number } }): void
   readonly state: SessionState
   /** @internal The engine, for tests and the debug harness. */
   readonly stage: Stage | undefined
@@ -189,11 +189,12 @@ const NO_NOTES: ShowSlide['notes'] = []
 /** A slide with no readable metadata: static, no links, no transition. */
 const staticSlide = (index: number): ShowSlide => ({ index, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] })
 
-/** The viewer's protection policy as the theme root carries it (spec 6.3): no eager plumbing needed. */
-function protection(host: HTMLElement): { copy: boolean; print: boolean } {
-  const root = host.parentElement
-  const region = root?.querySelector<HTMLElement>(':scope > [data-officeview-root]')
-  return { copy: region?.style.userSelect !== 'none', print: root?.getAttribute('data-ov-print') !== 'false' }
+/**
+ * The viewer's protection policy (spec 6.3). Copy comes from the start's `allowCopy`, never from CSS a consumer
+ * style can override (PR #18 review 8); print from the theme root's `data-ov-print`.
+ */
+function protection(start: ShowStart): { copy: boolean; print: boolean } {
+  return { copy: start.allowCopy !== false, print: start.host.parentElement?.getAttribute('data-ov-print') !== 'false' }
 }
 
 export async function createSession(start: ShowStart): Promise<SessionController> {
@@ -233,6 +234,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
       sink.add({ code: 'package-reopen', message: `The document's source could not be read again (${e instanceof Error ? e.message : String(e)}); slides are static` })
     }
   }
+  if (!start.isCurrent()) throw new SlideShowError('cancelled')
+  // Spec 8: the show runs the slide appearance enrichment itself (backgrounds, master and layout artwork), so a
+  // show started before any viewer painted the document looks the same. Idempotent: a viewer that already ran it
+  // shares the same run. A failure only costs the inherited appearance; the enrichment diagnoses it on the document.
+  // Through import(), as getPaintables loads it, so the enrichment stays its own chunk.
+  await import('../../pptx/appearance').then((m) => m.enrichSlideAppearance(doc)).catch(() => undefined)
   if (!start.isCurrent()) throw new SlideShowError('cancelled')
 
   let workspace: SlideShowWorkspace | undefined
@@ -420,7 +427,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   /** The visible text list and the trigger/link buttons for what is on screen now. */
   let a11yKey = ''
-  function updateA11y(force = false): void {
+  function updateA11y(force = false, drawn?: RenderState): void {
     syncPresenter()
     if (!a11y || !stage) return
     const v = visit
@@ -428,14 +435,15 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (force || a11yKey !== '') { a11yKey = ''; a11y.setText([]); a11y.setTargets([]) }
       return
     }
-    const state = stage.stateAt(v.cursor, clock!.now())
+    // A frame passes the state it just drew for this cursor (S1-22: one state per frame); other callers compute it.
+    const state = drawn ?? stage.stateAt(v.cursor, clock!.now())
     let key = `${v.index}:${v.cursor.step}:`
     for (const [k, s] of state) if (!s.visible || !(s.opacity > 0)) key += `${k},`
     if (!force && key === a11yKey) return
     a11yKey = key
     const pptx = doc.slides[v.index]
     a11y.setText(visibleText(pptx, state, v.meta?.builds ?? []))
-    a11y.setTargets(kiosk ? [] : showTargets(pptx, state, v.timeline?.triggers() ?? [], v.meta?.links ?? []))
+    a11y.setTargets(kiosk ? [] : showTargets(pptx, state, v.timeline?.triggers() ?? [], v.meta?.links ?? [], v.meta?.builds ?? []))
   }
 
   /** Shows deck slide `i` (a cut, or a transition once its model is in) and loads its click steps. Resolves when the slide is drawable. */
@@ -503,8 +511,11 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (!live() || !v.cursor) return
       if (at === 'last') report()
       updateA11y(true)
-      for (const q of v.queue.splice(0)) {
-        if (visit !== v || exited) break
+      // Replay the inputs typed while it loaded. One that changes the slide hands the rest to the new visit,
+      // which replays them once it is ready in turn (PR #18 review 3); explicit navigation (goTo) supersedes them.
+      const rest = v.queue.splice(0)
+      for (let q = rest.shift(); q && !exited; q = rest.shift()) {
+        if (visit && visit !== v && !visit.cursor) { visit.queue.push(q, ...rest); break }
         q === 'next' ? next() : previous()
       }
     })
@@ -563,7 +574,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   const last = () => { if (order.length) void enter(order[order.length - 1]) }
 
   /** A trigger runs its interactive sequence; a link runs its action (spec 4.3). Neither is a click advance. */
-  function activate(target: { spid: string; kind: 'trigger' | 'link' }): void {
+  function activate(target: { spid: string; kind: 'trigger' | 'link'; run?: { p: number; r: number } }): void {
     if (exited || !started || kiosk) return
     const v = visit
     if (!v || !v.cursor || !v.timeline || slide !== v.index) return
@@ -572,7 +583,10 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (after) { v.cursor = after; updateA11y() }
       return
     }
-    const link = v.meta?.links.find((l: LinkSpec) => l.spid === target.spid)
+    // The link on the run named, else the shape's own; a target naming no run falls back to the first link.
+    const links = (v.meta?.links ?? []).filter((l: LinkSpec) => l.spid === target.spid)
+    const run = target.run
+    const link = run ? links.find((l) => l.run?.p === run.p && l.run.r === run.r) : links.find((l) => !l.run) ?? links[0]
     if (link && win) runLink(link, { goTo, next, previous, first, last, exit }, win, { sink, slideIndex: v.index, open: start.platform.open })
   }
 
@@ -583,13 +597,25 @@ export async function createSession(start: ShowStart): Promise<SessionController
       const at = stage.toSlide(clientX, clientY)
       const triggers = v.timeline.triggers()
       const links = v.meta?.links ?? []
-      const interactive = new Set<string>([...triggers, ...links.map((l) => l.spid)])
-      const spid = at && interactive.size ? hitTest(stage.plan, stage.stateAt(v.cursor, clock!.now()), at.x, at.y, interactive) : undefined
-      if (spid !== undefined) {
-        // A trigger beats a link on the same shape (pending D4; recorded in the catalogue).
-        activate({ spid, kind: triggers.includes(spid) ? 'trigger' : 'link' })
-        return
+      const st = stage
+      // A trigger beats a link on the same shape (pending D4; recorded in the catalogue). A link on text runs
+      // is taken only over the laid-out run it is on (PR #18 review 3); elsewhere the shape's own link, if any,
+      // else the click passes to the shapes below. Text that cannot be located keeps the first run's link.
+      const accept = (spid: string, leaf: PptxShape, lx: number, ly: number, w: number, h: number): Parameters<typeof activate>[0] | undefined => {
+        if (triggers.includes(spid)) return { spid, kind: 'trigger' }
+        const mine = links.filter((l) => l.spid === spid)
+        if (!mine.length) return undefined
+        const own = mine.some((l) => !l.run)
+        const runs = mine.filter((l) => l.run)
+        if (runs.length && leaf.source?.id === spid) {
+          const run = st.runAt(leaf, lx, ly, w, h)
+          if (run && runs.some((l) => l.run!.p === run.p && l.run!.r === run.r)) return { spid, kind: 'link', run }
+          if (run === undefined && !own) return { spid, kind: 'link', run: runs[0].run }
+        }
+        return own ? { spid, kind: 'link' } : undefined
       }
+      const target = at && (triggers.length || links.length) ? hitTarget(st.plan!, st.stateAt(v.cursor, clock!.now()), at.x, at.y, accept) : undefined
+      if (target) { activate(target); return }
       // advClick="0": mouse clicks never advance; keyboard, API and presenter next still do (spec 4.4).
       if (v.advance && !v.advance.clickAdvances) return
     }
@@ -621,8 +647,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
       }, { signal: done.signal })
       void start.fullscreen.then((outcome) => { if (outcome === 'refused') done.abort() })
     }
-    cb.onEnd?.()
-    resolveEnded()
+    // A throwing host callback still settles `ended` (PR #18 review 2); the error reaches the caller.
+    try { cb.onEnd?.() } finally { resolveEnded() }
   }
 
   /** One frame: the kiosk restart, auto-advance, then the stage draws (spec 4.4; every timer is show-clock time). */
@@ -646,10 +672,11 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
     }
     const w = visit
-    stage.frame(w && slide === w.index ? w.cursor : undefined, clock.now())
+    const cursor = w && slide === w.index ? w.cursor : undefined
+    const drawn = stage.frame(cursor, clock.now())
     // Presenter View copies the frame now, before the browser presents (and may clear) a WebGL canvas.
     afterFrame()
-    updateA11y()
+    updateA11y(false, cursor ? drawn : undefined)
   }
 
   function afterFrame(): void {
@@ -805,7 +832,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let surfaceKind: 'fullscreen' | 'in-window' = 'in-window'
   try {
     clock = sessionDeps.clock(win)
-    policy = protection(host)
+    policy = protection(start)
     surface = createAudienceSurface(host, admitted.backing, (e) => dispatch({ kind: 'click', x: e.clientX, y: e.clientY }))
     // allowPrint=false keeps every slideshow surface out of print (spec 6.3 protection policy).
     if (!policy.print) surface.root.setAttribute('data-ov-print', 'false')
@@ -813,7 +840,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     const watermark = start.watermark
     stage = sessionDeps.stage({
       doc, root: surface.root, output: surface.canvas, workspace, terminal, backing: admitted.backing, store, sink,
-      reduced: motion, now: () => sessionDeps.now(win),
+      reduced: motion, now: () => sessionDeps.now(win), showNow: () => clock!.now(),
       schedule: (fn, ms) => sessionDeps.timer(win).set(fn, ms),
       metadata: (i) => acquire(i),
       ...(watermark ? { watermark } : {}),
@@ -896,7 +923,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     }
     watchDpr()
 
-    const from = start.from === 'current' ? Math.min(Math.max(0, cb.currentSlide()), Math.max(0, count - 1)) : start.from
+    // An empty deck has no current slide: it opens on end-of-show, as a start from the beginning does (PR #18 review 4).
+    const from = start.from === 'current' ? (count ? Math.min(Math.max(0, cb.currentSlide()), count - 1) : 'beginning') : start.from
     const firstShown = firstSlide({ index }, from)
     // Every start-time diagnostic reaches the host before onStart.
     await enter(firstShown)
@@ -961,6 +989,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     surfaceKind = 'in-window'
     sink.add({ code: 'fullscreen-refused', message: 'Full screen was refused; the show runs in the window.' })
     const notice = owner.createElement('div')
+    // Removing the notice takes its focused button away: focus returns to the host, so its keys (Esc) keep working (PR #18 review 8).
+    const close = () => { notice.remove(); if (!exited) host.focus() }
     notice.setAttribute('role', 'status')
     notice.setAttribute('data-officeview-show-notice', '')
     notice.textContent = 'Full screen is not available here; presenting in the window. '
@@ -968,12 +998,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
     retry.type = 'button'
     retry.textContent = 'Click for full screen'
     retry.onclick = () => {
-      void start.retryFullscreen().then((r) => { if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; notice.remove() } })
+      void start.retryFullscreen().then((r) => { if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; close() } })
     }
     const dismiss = owner.createElement('button')
     dismiss.type = 'button'
     dismiss.textContent = 'Dismiss'
-    dismiss.onclick = () => notice.remove()
+    dismiss.onclick = close
     notice.append(retry, dismiss)
     host.append(notice)
   })
