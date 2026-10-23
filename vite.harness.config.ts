@@ -62,11 +62,37 @@ function lazyPagedChunks(): Plugin {
   }
 }
 
+/**
+ * The CSP-hardened slideshow page (src/debug/slideshow-csp.html, slideshow
+ * plan S2-2): its policy allows scripts only with the page nonce, so the
+ * dev server stamps that nonce on the page's script tags (Vite's client and
+ * the React preamble included). `?styles=nonce` tightens `style-src` to the
+ * nonce and stamps it on the page's own stylesheet links. No other page is
+ * touched.
+ */
+function cspHarnessPage(): Plugin {
+  return {
+    name: 'officeview-harness-csp-page',
+    apply: 'serve',
+    transformIndexHtml: {
+      order: 'post',
+      handler(html, ctx) {
+        if (!ctx.path.endsWith('/src/debug/slideshow-csp.html')) return html
+        let out = html.replace(/<script(?![^>]*\snonce=)/g, '<script nonce="ovcsp"')
+        if (/[?&]styles=nonce(&|$)/.test(ctx.originalUrl ?? '')) {
+          out = out.replace("style-src 'self'", "style-src 'nonce-ovcsp'").replace(/<link rel="stylesheet"/g, '<link nonce="ovcsp" rel="stylesheet"')
+        }
+        return out
+      },
+    },
+  }
+}
+
 export default mergeConfig(baseConfig, {
   // The S8.4 kernel scenarios reuse the S0.2 fixture builders, whose module
   // imports node:crypto for digests the harness never computes.
   resolve: { alias: { 'node:crypto': fileURLToPath(new URL('./src/debug/harness/nodeCryptoShim.ts', import.meta.url)) } },
-  plugins: [harnessPlugin({ root: fileURLToPath(new URL('.', import.meta.url)), collect }), lazyPagedChunks()],
+  plugins: [harnessPlugin({ root: fileURLToPath(new URL('.', import.meta.url)), collect }), lazyPagedChunks(), cspHarnessPage()],
   // LAN-mode lockdown: the harness page only needs its own directory (plus the
   // node_modules its react/jszip imports resolve to). Everything else in the
   // checkout — package.json, library sources, other configs — is denied, even

@@ -19,7 +19,7 @@
  * Working assumptions (pending D4): Previous from slide n+1 enters slide n
  * at its last checkpoint; Next enters a slide at its initial state.
  */
-import { SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
+import { preparedPlacement, SlideShowError, type ShowStart, type SlideShowSession } from '../../components/present'
 import { emuToPx } from '../../core/geometry'
 import { attrs } from '../../core/xml'
 import { throwIfAborted } from '../../core/package-error'
@@ -47,6 +47,14 @@ import { runLink } from './links'
 import { nextVisible, previousVisible, visibleOrder } from './order'
 import { createStage, type Stage, type StageDeps } from './stage'
 import { createAudienceSurface, END_OF_SHOW, type AudienceSurface } from './surface'
+import { adoptPresenterWindow, type PresenterWindow } from '../presenter/window'
+import { mountPresenterView, type PresenterSource } from '../presenter/PresenterView'
+import { createPresenterPlacement, type PresenterPlacement } from '../presenter/placement'
+import { createElapsedTimer, type ElapsedTimer } from '../presenter/timer'
+import type { PreviewOptions } from '../presenter/preview'
+import { openMediaLease } from '../media/lease'
+import { createMediaPlayer, type MediaController, type MediaPlayer } from '../media/player'
+import { createTransitionSound, type TransitionSoundController } from '../media/sounds'
 
 export type ShowInput =
   | { kind: 'next' | 'previous' | 'first' | 'last' | 'exit' | 'black' | 'white' | 'pause' }
@@ -91,6 +99,8 @@ export interface SessionController extends SlideShowSession {
   readonly stage: Stage | undefined
   /** @internal The shown slide's cursor. */
   readonly cursor: SlideCursor | undefined
+  /** @internal What Presenter View reads and drives (S2-5). */
+  readonly presenterSource: PresenterSource
 }
 
 /** A show clock the session can stop and start (pause, hidden document). */
@@ -128,6 +138,8 @@ export const sessionDeps = {
   }),
   /** Monotonic ms for the context-restore deadline. */
   now: (win: Window | null): number => (win?.performance ?? globalThis.performance).now(),
+  /** Epoch ms for Presenter View's wall clock (S2-5). */
+  wall: (): number => Date.now(),
   workspace: (profile: SlideShowProfile): SlideShowWorkspace => createSlideShowWorkspace(profile),
 }
 
@@ -167,9 +179,13 @@ interface Visit {
   timeline?: SlideTimeline
   cursor?: SlideCursor
   advance?: AutoAdvance
+  /** S2-7: the slide's media, following its timeline. */
+  media?: MediaController
   /** Step inputs typed while the slide's metadata loads. */
   queue: Array<'next' | 'previous'>
 }
+
+const NO_NOTES: ShowSlide['notes'] = []
 
 /** A slide with no readable metadata: static, no links, no transition. */
 const staticSlide = (index: number): ShowSlide => ({ index, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] })
@@ -208,9 +224,6 @@ export async function createSession(start: ShowStart): Promise<SessionController
     sink.add({ code: 'slide-size', message: `${bad}; the deck cannot be presented` })
     throw new SlideShowError('not-presentable', bad)
   }
-  if (start.presenterView === true) {
-    sink.add({ code: 'presenter-view-unavailable', message: 'Presenter View is not available yet; presenting audience only.' })
-  }
 
   // Spec 8: a handle-less document reopens a re-readable source; otherwise its slides are static ('no-package').
   let handle = start.handle
@@ -239,10 +252,29 @@ export async function createSession(start: ShowStart): Promise<SessionController
   let cursorHider: CursorHider | undefined
   let stopFrames: (() => void) | undefined
   let clock: SessionClock | undefined
+  /** Spec 5.1: 'window' with the popup adopted; 'swap' (single-screen) when it was wanted but blocked or closed; 'none' when not wanted. */
+  let presenter: SlideShowSession['presenter'] = start.popup === undefined ? 'none' : 'swap'
+  let presenterWindow: PresenterWindow | undefined
+  /** Presenter View in the popup, and the single-screen swap's view over the audience surface. */
+  let view: { dispose(): void } | undefined
+  let swapped: { dispose(): void } | undefined
+  let placement: PresenterPlacement | undefined
+  let player: MediaPlayer | undefined
+  let sounds: TransitionSoundController | undefined
   const listeners = new AbortController()
   const release = () => {
     listeners.abort()
+    view?.dispose()
+    swapped?.dispose()
+    placement?.dispose()
+    viewSubs.clear()
+    frameSubs.clear()
+    presenterWindow?.close()
     stopFrames?.()
+    // Media lets go of its URLs before the leases (and the workspace) go.
+    visit?.media?.leave()
+    sounds?.dispose()
+    player?.dispose()
     visit?.handle?.release()
     stage?.dispose()
     store?.close()
@@ -351,11 +383,35 @@ export async function createSession(start: ShowStart): Promise<SessionController
   const ended = new Promise<void>((resolve) => { resolveEnded = resolve })
 
   const syncClock = () => {
+    // A stopped show clock pauses media too, so a clip's end stays on the slide's timeline (S2-7).
+    player?.setPaused(paused || hiddenDoc)
+    sounds?.setPaused(paused || hiddenDoc)
     if (!clock) return
     if (paused || hiddenDoc) clock.pause()
     else clock.resume()
   }
   const render = () => surface?.show({ slide, count, screen })
+  /**
+   * Presenter View follows the same state (one owner, spec 5.1): subscribers
+   * are told when anything it shows changes — never per frame otherwise.
+   */
+  const viewSubs = new Set<() => void>()
+  const frameSubs = new Set<() => void>()
+  let viewVersion = 0
+  let viewKey = ''
+  let timer: ElapsedTimer | undefined
+  const syncPresenter = (force = false) => {
+    if (!viewSubs.size) return
+    const v = visit
+    const t = sessionDeps.now(win)
+    const busy = v?.timeline && v.cursor && stage ? v.timeline.busyUntil(v.cursor) > Math.max(0, slideTime()) : false
+    const key = [slide, v?.cursor?.step ?? -1, v?.meta ? 1 : 0, busy, screen, paused, presenter, swapped ? 1 : 0, sink.list().length,
+      timer ? Math.floor(timer.elapsed(t) / 1000) : 0, timer?.paused, Math.floor(sessionDeps.wall() / 60000)].join('|')
+    if (!force && key === viewKey) return
+    viewKey = key
+    viewVersion++
+    for (const cb of [...viewSubs]) cb()
+  }
   const report = () => {
     if (started && !exited && visit?.cursor && slide === visit.index) cb.onSlideChange?.(visit.index, visit.cursor.step)
   }
@@ -373,6 +429,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
   /** The visible text list and the trigger/link buttons for what is on screen now. */
   let a11yKey = ''
   function updateA11y(force = false, drawn?: RenderState): void {
+    syncPresenter()
     if (!a11y || !stage) return
     const v = visit
     if (slide === 'end' || !v || !v.cursor || screen !== 'slide') {
@@ -392,6 +449,12 @@ export async function createSession(start: ShowStart): Promise<SessionController
 
   /** Shows deck slide `i` (a cut, or a transition once its model is in) and loads its click steps. Resolves when the slide is drawable. */
   function enter(i: number | 'end', at: Visit['at'] = 'initial'): Promise<void> {
+    const left = visit
+    if (left) {
+      // Everything but cross-slide media (numSld) and a looping transition sound stops here (spec 7).
+      left.media?.leave()
+      sounds?.stopAt(left.index)
+    }
     visit?.handle?.release()
     visit = undefined
     stage?.leave()
@@ -425,7 +488,11 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (!live()) return
       const options = { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink, slideIndex: i }
       try {
-        v.timeline = createSlideTimeline(timing, options)
+        // Text by word or letter (S2-8): the stage's fanned-out working copy, charged to the slide's metadata.
+        const handle = v.handle
+        const text = timing && !('refused' in timing) && handle && v.meta && stage?.textTiming
+          ? stage.textTiming(i, v.meta, (bytes, tag) => handle.attach(bytes, tag)) : undefined
+        v.timeline = createSlideTimeline(text?.tree ?? timing, text ? { ...options, orderOf: text.orderOf } : options)
       } catch (e) {
         // A bound the navigation layer refuses (spec: refuse and diagnose, never a wrong answer): the slide is static.
         sink.add({ code: 'slide-refused', slideIndex: i, message: `Slide timing refused (${e instanceof Error ? e.message : String(e)}); the slide is static` })
@@ -433,11 +500,18 @@ export async function createSession(start: ShowStart): Promise<SessionController
       }
       v.meta ??= staticSlide(i)
       v.advance = createAutoAdvance(v.meta, index.settings, v.timeline)
+      if (player) {
+        const media = v.media = player.enter(v.meta, () => Math.max(0, slideTime()))
+        media.onEnd((id, synthetic, t) => mediaEnded(v, id, synthetic, t))
+      }
       v.cursor = at === 'last' ? v.timeline.checkpoint(v.timeline.steps) : v.timeline.initial()
       const neighbours = [previousVisible(order, i), nextVisible(order, i)].filter((n): n is number => n !== undefined)
       return stage!.enter({ index: i, slide: v.meta, timeline: v.timeline, cursor: v.cursor }, clock!.now(), neighbours)
     }).then(() => {
       if (!live() || !v.cursor) return
+      // The transition sound starts with the transition: the stage has just set its start, now that the incoming
+      // frame can be drawn (PR #18 review P1's showNow start; PR #19 review 2).
+      sounds?.start(i)
       if (at === 'last') report()
       updateA11y(true)
       // Replay the inputs typed while it loaded. One that changes the slide hands the rest to the new visit,
@@ -448,6 +522,14 @@ export async function createSession(start: ShowStart): Promise<SessionController
         q === 'next' ? next() : previous()
       }
     })
+  }
+
+  /** A media node's end, real or synthetic, joins the slide's history (spec 7); never earlier than its last event. */
+  function mediaEnded(v: Visit, id: number, synthetic: boolean, t: number): void {
+    if (visit !== v || exited || !v.cursor || !v.timeline) return
+    const last = v.cursor.mode === 'checkpoint' ? 0 : v.cursor.events[v.cursor.events.length - 1]?.t ?? 0
+    v.cursor = v.timeline.mediaEnd(v.cursor, id, Math.max(t, last), synthetic)
+    updateA11y()
   }
 
   /** The next visible slide, the loop (a kiosk restart counts as one), or the end of the show. */
@@ -586,18 +668,65 @@ export async function createSession(start: ShowStart): Promise<SessionController
       // An automatic advance is a Next (never gated by advClick or kiosk; the show plays on its own).
       next()
     }
+    // Media follows the slide's timeline (S2-7); a checkpoint entry records what has begun without playing it.
+    const m = visit
+    if (m && m.media?.wants && m.cursor && m.timeline && slide === m.index) {
+      const st = slideTime()
+      if (st >= 0) m.media.sync(m.timeline.stateAt(m.cursor, st), st, m.cursor.mode === 'checkpoint')
+    }
     const w = visit
     const cursor = w && slide === w.index ? w.cursor : undefined
     const drawn = stage.frame(cursor, clock.now())
+    // Presenter View copies the frame now, before the browser presents (and may clear) a WebGL canvas.
+    afterFrame()
     updateA11y(false, cursor ? drawn : undefined)
   }
 
+  function afterFrame(): void {
+    for (const f of frameSubs) {
+      try { f() } catch (e) {
+        frameSubs.delete(f)
+        sink.add({ code: 'presenter-paint', message: `Presenter View stopped mirroring the audience (${e instanceof Error ? e.message : String(e)})` })
+      }
+    }
+  }
+
+  /** Single-screen (spec 5.1): Alt+F5 or the toggle swaps the surface between the audience and Presenter View. */
+  function toggleView(): void {
+    if (exited || !started || presenter === 'window' || !surface || !win) return
+    presenter = 'swap'
+    if (swapped) {
+      swapped.dispose()
+      swapped = undefined
+      surface.root.hidden = false
+      // The audience gets focus back: an API host may not be focusable yet.
+      if (!host.hasAttribute('tabindex')) host.tabIndex = -1
+      host.focus()
+    } else {
+      const box = owner.createElement('div')
+      box.setAttribute('data-officeview-presenter-swap', '')
+      // allowPrint=false: the swapped-in view and its notes stay out of print too (spec 6.3).
+      if (!policy.print) box.setAttribute('data-ov-print', 'false')
+      host.append(box)
+      const mounted = mountPresenterView(box, { session, host: 'swap', doc: owner })
+      swapped = { dispose: () => { mounted.dispose(); box.remove() } }
+      surface.root.hidden = true
+    }
+    syncPresenter(true)
+  }
+
   /** Audience input, in the spec 4.3 precedence: Esc, then kiosk, the number buffer, black/white resume, the table. */
-  function dispatch(input: ShowInput): void {
+  function dispatch(input: ShowInput): void { run(input, false) }
+
+  /**
+   * Input, audience or presenter (controller ruling C6): kiosk disables the
+   * audience's input only; Presenter View's controls and keys still drive the show.
+   */
+  function run(input: ShowInput, presenterInput: boolean): void {
     if (exited || !started) return
     if (input.kind === 'exit') { exit(); return }
     // Kiosk: user input other than Esc is disabled (spec 4.4), triggers and links included (pending D4).
-    if (kiosk) return
+    if (kiosk && !presenterInput) return
     if (input.kind === 'digit') { buffer += String(input.d); return }
     let target: ShowInput = input
     if (input.kind === 'enter' && buffer) target = { kind: 'goto', index: Number(buffer) - 1 }
@@ -631,7 +760,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     get slideIndex() { return lastShown },
     get buildIndex() { return visit?.cursor?.step ?? 0 },
     get surface() { return surfaceKind },
-    get presenter() { return 'none' as const },
+    get presenter() { return presenter },
     get state(): SessionState {
       return { slide, build: visit?.cursor?.step ?? 0, screen, buffer, paused, clockPaused: paused || hiddenDoc, kiosk, loop, order, exited }
     },
@@ -645,6 +774,67 @@ export async function createSession(start: ShowStart): Promise<SessionController
     tick,
     activate,
     ended,
+    get presenterSource() { return source },
+  }
+
+  /** The audience frame on screen: the compositor's canvas, or the terminal output when the stage is hidden. */
+  const audienceFrame = (): HTMLCanvasElement | undefined => {
+    const box = surface?.root.querySelector<HTMLElement>('[data-officeview-show-stage]')
+    const shown = box && !box.hidden ? [...box.querySelectorAll<HTMLCanvasElement>('canvas[data-slideshow-backend]')].pop() : undefined
+    return shown ?? surface?.canvas
+  }
+  let policy = { copy: true, print: true }
+  let presenterKey: (e: KeyboardEvent) => void = () => {}
+  let warnedImages = false
+  let model: { index: ShowIndex; store: NonNullable<typeof store> } | undefined
+  const source: PresenterSource = {
+    subscribe(cb) {
+      viewSubs.add(cb)
+      return () => { viewSubs.delete(cb) }
+    },
+    get version() { return viewVersion },
+    deck: doc,
+    notes: () => visit?.meta?.notes ?? NO_NOTES,
+    diagnostics: () => sink.list(),
+    sink,
+    get timer() { return timer ??= createElapsedTimer(sessionDeps.now(win)) },
+    now: () => sessionDeps.now(win),
+    wall: () => sessionDeps.wall(),
+    slideTime: () => Math.max(0, slideTime()),
+    get model() { return store ? (model ??= { index, store }) : undefined },
+    get previewOptions() {
+      // The preview schedules the same expanded text timing as the live slide (PR #19 review 2).
+      const textTiming: PreviewOptions['textTiming'] = (i, meta, charge) => stage?.textTiming?.(i, meta, charge)
+      return { showAnimation: index.settings.showAnimation, reducedMotion: motion, sink, textTiming }
+    },
+    get workspace() { return workspace! },
+    ...(start.watermark ? { watermark: start.watermark } : {}),
+    get protection() { return policy },
+    audienceFrame,
+    drawMedia(ctx, dest) {
+      // Video plays in a DOM overlay, so the audience canvas lacks it: copy each frame from the one element (spec 5.2),
+      // at the geometry its overlay keeps (a video carried past its slide included; PR #19 review 4).
+      player?.drawVideos(ctx, dest)
+    },
+    onFrame(cb) {
+      frameSubs.add(cb)
+      return () => { frameSubs.delete(cb) }
+    },
+    previewOf(i, cursor, timeline) {
+      const p = stage?.previewOf?.(i, cursor, timeline)
+      if (p) return p
+      // Best effort: a slide the stage does not hold paints its static state without decoded pictures.
+      if (!warnedImages && doc.images?.length) {
+        warnedImages = true
+        sink.add({ code: 'presenter-thumbnail-approximate', message: 'Presenter View paints slides away from the current one without their pictures; the audience is unaffected' })
+      }
+      return { slide: doc.slides[i]!, state: new Map(), images: [], resolveFont: (f: string) => f, builds: [] }
+    },
+    key: (e) => presenterKey(e),
+    input: (i) => run(i, true),
+    toggleView,
+    get placement() { return placement },
+    touch: () => syncPresenter(true),
   }
 
   // ---------------------------------------------------------------------
@@ -652,9 +842,19 @@ export async function createSession(start: ShowStart): Promise<SessionController
   // ---------------------------------------------------------------------
 
   let surfaceKind: 'fullscreen' | 'in-window' = 'in-window'
+  /** Removes the fullscreen-refused notice, when one is up. */
+  let closeRefusedNotice: (() => void) | undefined
+  /**
+   * Every later full-screen request (the notice's button, "Use both screens", an opener-side placement retry) goes
+   * through here, so a success records the surface and takes the refused notice down (PR #19 review 9).
+   */
+  const retryFullscreen: typeof start.retryFullscreen = (o) => start.retryFullscreen(o).then((r) => {
+    if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; closeRefusedNotice?.() }
+    return r
+  })
   try {
     clock = sessionDeps.clock(win)
-    const policy = protection(start)
+    policy = protection(start)
     surface = createAudienceSurface(host, admitted.backing, (e) => dispatch({ kind: 'click', x: e.clientX, y: e.clientY }))
     // allowPrint=false keeps every slideshow surface out of print (spec 6.3 protection policy).
     if (!policy.print) surface.root.setAttribute('data-ov-print', 'false')
@@ -668,23 +868,62 @@ export async function createSession(start: ShowStart): Promise<SessionController
       ...(watermark ? { watermark } : {}),
       ...(sessionDeps.backend ? { force: sessionDeps.backend } : {}),
     })
+    // S2-7: one media player per show, on the audience surface only (spec 5.2); leases are charged to the show's workspace.
+    const ws = workspace
+    player = createMediaPlayer({
+      root: surface.root,
+      sink,
+      open: (rec, s) => (handle && win ? openMediaLease(handle, rec, ws, win, s) : Promise.resolve({ refused: 'no-package' })),
+      box: (spid) => stage?.mediaBox?.(spid),
+      frameBox: (spid) => stage?.mediaFrameBox?.(spid),
+      frameToBox: (f) => stage?.frameBoxToCss?.(f),
+      relieve: () => sounds?.release() ?? false,
+      stopTransitionSound: (onlyLooping) => sounds?.release(onlyLooping) ?? false,
+    })
+    const mp = player
+    sounds = createTransitionSound({ root: surface.root, sink, slide: (i) => (visit?.index === i ? visit.meta : undefined), open: (rec, s) => mp.open(rec, s) })
     cursorHider = createCursorHider(surface.root, sessionDeps.timer(win))
     const on = { signal: listeners.signal }
     const gestures = createGestureState(() => clock!.now())
-    host.addEventListener('keydown', (e) => {
-      // A focused control (the full-screen notice's buttons, the accessibility buttons) keeps its own keys; Esc still exits through the start.
-      if (e.target !== host && (e.target as Element | null)?.closest?.('button, input, textarea, select')) return
+    const keyInput = (e: KeyboardEvent, presenterInput = false) => {
       const input = keyToInput(e, buffer)
       if (input) {
         e.preventDefault()
-        dispatch(input)
+        run(input, presenterInput)
       } else if (screen !== 'slide' && !MODIFIER_KEYS.has(e.key) && e.key !== 'Tab') {
         // "Any key except Esc resumes" (spec 4.3), including keys outside the table.
         e.preventDefault()
-        dispatch({ kind: screen })
+        run({ kind: screen }, presenterInput)
       }
+    }
+    /** Alt+F5 (spec 5.1): the single-screen swap, from any focus; Ctrl or Cmd with it stays the browser's. */
+    const swapKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F5' || !e.altKey || e.ctrlKey || e.metaKey) return false
+      e.preventDefault()
+      toggleView()
+      return true
+    }
+    host.addEventListener('keydown', (e) => {
+      // The swapped-in Presenter View keeps the popup's rule (its buttons keep only Enter and Space).
+      if ((e.target as Element | null)?.closest?.('[data-officeview-presenter-view]')) { presenterKey(e); return }
+      if (swapKey(e)) return
+      // A focused control (the full-screen notice's buttons, the accessibility buttons) keeps its own keys; Esc still exits through the start.
+      if (e.target !== host && (e.target as Element | null)?.closest?.('button, input, textarea, select')) return
+      keyInput(e)
     }, on)
+    /**
+     * Keys in the presenter window (spec 4.3, 5.2): Esc always exits; a text control, an editable region
+     * or the scrolling speaker notes keep every other key; a focused button keeps Enter and Space.
+     */
+    presenterKey = (e: KeyboardEvent) => {
+      if (swapKey(e)) return
+      const t = e.target as Element | null
+      if (e.key !== 'Escape' && (t?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-officeview-presenter-notes]') || ((e.key === 'Enter' || e.key === ' ') && t?.closest?.('button')))) return
+      keyInput(e, true)
+    }
     const gesture = (e: Event) => {
+      // The swapped-in Presenter View scrolls its own notes and grid: wheel and swipe there are not show input.
+      if ((e.target as Element | null)?.closest?.('[data-officeview-presenter-view]')) return
       const input = gestureToInput(e as WheelEvent | TouchEvent, gestures)
       if (e.type === 'wheel' && e.cancelable) e.preventDefault()
       if (input) dispatch(input)
@@ -699,6 +938,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       if (exited || !stage) return
       const w = host.clientWidth || win?.innerWidth || 0, h = host.clientHeight || win?.innerHeight || 0
       if (w > 0 && h > 0) stage.resize({ w, h }, win?.devicePixelRatio ?? 1)
+      player?.layout()
     }
     win?.addEventListener('resize', resized, on)
     owner.addEventListener('fullscreenchange', resized, on)
@@ -714,8 +954,51 @@ export async function createSession(start: ShowStart): Promise<SessionController
     // Every start-time diagnostic reaches the host before onStart.
     await enter(firstShown)
     if (!start.isCurrent()) throw new SlideShowError('cancelled')
+    // Presenter View's elapsed timer counts from the first slide (spec 5.2), on the injected monotonic clock.
+    timer = createElapsedTimer(sessionDeps.now(win))
+    // Spec 5.1: adopt the popup the gesture opened; blocked (null) or already closed is single-screen.
+    const popup = start.popup
+    if (popup === null || popup?.closed) {
+      sink.add({ code: 'popup-blocked', message: 'The presenter window was blocked; presenting single-screen.' })
+    } else if (popup) {
+      // Best effort (owner ruling): a popup that cannot be adopted is closed and the show runs single-screen.
+      try {
+        const opener = win ?? popup.opener
+        const pw = presenterWindow = adoptPresenterWindow(popup, opener, sink)
+        const theme = host.parentElement?.getAttribute('data-ov-theme')
+        if (theme) pw.root.setAttribute('data-ov-theme', theme)
+        // allowPrint=false keeps the presenter window out of print too (spec 6.3).
+        if (!policy.print) pw.root.setAttribute('data-ov-print', 'false')
+        placement = createPresenterPlacement({
+          popup, opener, host, retryFullscreen, fullscreen: start.fullscreen,
+          prepared: preparedPlacement.get(owner), sink, changed: () => syncPresenter(true),
+        })
+        presenter = 'window'
+        view = mountPresenterView(pw.root, { session, host: 'window', doc: pw.doc })
+        // Closing the presenter window never ends the show: single-screen from here.
+        pw.onClosed(() => {
+          view?.dispose()
+          view = undefined
+          placement?.dispose()
+          placement = undefined
+          presenterWindow = undefined
+          if (!exited) { presenter = 'swap'; syncPresenter(true) }
+        })
+      } catch (e) {
+        view?.dispose()
+        view = undefined
+        placement?.dispose()
+        placement = undefined
+        presenterWindow = undefined
+        popup.close()
+        presenter = 'swap'
+        sink.add({ code: 'presenter-window-failed', message: `The presenter window could not be set up (${e instanceof Error ? e.message : String(e)}); presenting single-screen.` })
+      }
+    }
     signal.addEventListener('abort', exit, on)
     started = true
+    // Presenter View was asked for but there is one screen (blocked, or the window could not be set up): it starts swapped in.
+    if (presenter === 'swap') toggleView()
     kioskTimer = createKioskTimer(index.settings, clock.now(), sink)
     stage.frame(visit?.cursor, clock.now())
     stopFrames = sessionDeps.frames(win, tick)
@@ -732,7 +1015,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     sink.add({ code: 'fullscreen-refused', message: 'Full screen was refused; the show runs in the window.' })
     const notice = owner.createElement('div')
     // Removing the notice takes its focused button away: focus returns to the host, so its keys (Esc) keep working (PR #18 review 8).
-    const close = () => { notice.remove(); if (!exited) host.focus() }
+    const close = () => { closeRefusedNotice = undefined; notice.remove(); if (!exited) host.focus() }
+    closeRefusedNotice = close
     notice.setAttribute('role', 'status')
     notice.setAttribute('data-officeview-show-notice', '')
     notice.textContent = 'Full screen is not available here; presenting in the window. '
@@ -740,7 +1024,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     retry.type = 'button'
     retry.textContent = 'Click for full screen'
     retry.onclick = () => {
-      void start.retryFullscreen().then((r) => { if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; close() } })
+      void retryFullscreen()
     }
     const dismiss = owner.createElement('button')
     dismiss.type = 'button'

@@ -76,6 +76,13 @@ export interface SlideTimeline {
    * interactive sequences and media never count (spec 4.4).
    */
   busyUntil(cursor: SlideCursor): number
+  /**
+   * Additive (S2-7): a media node's end, real or synthetic (spec 7 media end
+   * and the failed-playback escape), recorded in the history so whatever
+   * waits on the node's end can run. A static slide returns the same cursor.
+   * The playback layer fires each node's end at most once per activation.
+   */
+  mediaEnd(cursor: SlideCursor, nodeId: number, t: number, synthetic: boolean): SlideCursor
 }
 
 export interface SlideTimelineOptions {
@@ -84,6 +91,12 @@ export interface SlideTimelineOptions {
   /** Passed to the scheduler, so its refusals are diagnosed. */
   sink?: DiagnosticSink
   slideIndex?: number
+  /**
+   * Additive (S2-8): when `tree` is a working copy (text builds fan out by
+   * word or letter), its nodes' source pre-order indices, so snapshot
+   * `order` keeps meaning "position in the source tree".
+   */
+  orderOf?: ReadonlyMap<TimeNode, number>
 }
 
 const INF = Number.POSITIVE_INFINITY
@@ -178,6 +191,7 @@ const staticTimeline: SlideTimeline = Object.freeze({
   triggers: () => [],
   initial: () => STATIC,
   busyUntil: () => -INF,
+  mediaEnd: (cursor: SlideCursor) => cursor,
 })
 
 export function createSlideTimeline(tree: TimingTree | { refused: string } | undefined, options: SlideTimelineOptions): SlideTimeline {
@@ -205,7 +219,7 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
   /** Source pre-order index of every node, so snapshot `order` keeps meaning "position in the source tree". */
   const orderOf = new Map<TimeNode, number>()
   let preorder = 0
-  walk(tree.root, (n) => { orderOf.set(n, preorder++) })
+  walk(tree.root, (n) => { const i = preorder++; orderOf.set(n, options.orderOf?.get(n) ?? i) })
   let steps = 0
   let root = tree.root
   let workMain: ContainerNode | undefined
@@ -369,6 +383,11 @@ export function createSlideTimeline(tree: TimingTree | { refused: string } | und
       if (cursor.mode === 'static' || !triggerSet.has(spid)) return undefined
       const events = base(cursor, t)
       return { step: cursor.step, events: [...events, { kind: 'trigger', spid, t }], mode: 'live' }
+    },
+    mediaEnd(cursor, nodeId, t, synthetic) {
+      if (cursor.mode === 'static') return cursor
+      const events = base(cursor, t)
+      return { step: cursor.step, events: [...events, { kind: 'mediaEnd', nodeId, t, synthetic }], mode: 'live' }
     },
   }
 }

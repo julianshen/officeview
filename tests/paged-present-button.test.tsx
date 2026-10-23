@@ -54,7 +54,7 @@ async function mount({ document: doc, ...props }: { document?: unknown } & Recor
 const toolbar = async (ui: RenderResult) => ui.findByRole('toolbar', { name: 'Document toolbar' })
 
 describe('paged Present button', () => {
-  it('PPTX shows Present with From beginning and From current slide; Presenter View is hidden before stage 2', async () => {
+  it('PPTX shows Present with From beginning, From current slide and Presenter View (stage 2)', async () => {
     const ui = await mount({ document: PPTX })
     const bar = await toolbar(ui)
     const present = within(bar).getByLabelText('Present')
@@ -67,9 +67,25 @@ describe('paged Present button', () => {
     const menu = ui.getByRole('menu', { name: 'Present options' })
     expect(more.getAttribute('aria-expanded')).toBe('true')
     const items = [...menu.querySelectorAll<HTMLElement>('[role^=menuitem]')]
-    expect(items.map((i) => i.textContent)).toEqual(['From beginning', 'From current slide'])
-    // Presenter View exists only from stage 2 on.
-    expect(within(menu).queryByText('Presenter View')).toBeNull()
+    expect(items.map((i) => i.textContent)).toEqual(['From beginning', 'From current slide', 'Presenter View'])
+  })
+
+  it('the Presenter View item starts the show with the presenter window, inside the click', async () => {
+    const load = vi.spyOn(showLoader, 'load').mockImplementation(() => new Promise(() => {}) as never)
+    const open = vi.fn(() => null)
+    try {
+      const ui = await mount({ document: PPTX, __presentPlatform: { ...platform, open } })
+      const bar = await toolbar(ui)
+      fireEvent.click(within(bar).getByLabelText('Present options'))
+      fireEvent.click(ui.getByRole('menuitem', { name: 'Presenter View' }))
+      // presenterView: true opens the popup synchronously in the gesture (spec 4.1), from the beginning (as Alt+F5).
+      expect(open).toHaveBeenCalledTimes(1)
+      expect(open.mock.calls[0]).toEqual([expect.anything(), 'about:blank', 'popup'])
+      expect(document.activeElement).toBe(ui.container.querySelector('[data-officeview-show]'))
+      expect(ui.queryByRole('menu')).toBeNull()
+    } finally {
+      load.mockRestore()
+    }
   })
 
   it('Present is hidden with showToolbar=false and allowPresent=false; never shown for DOCX or XLSX', async () => {
@@ -103,6 +119,26 @@ describe('paged Present button', () => {
       fireEvent.focus(main)
       fireEvent.pointerEnter(more)
       fireEvent.click(more)
+      expect(load).toHaveBeenCalledTimes(1)
+    } finally {
+      load.mockRestore()
+    }
+  })
+
+  it('the preload hint prepares screen placement on every hover and focus, loading the chunk once (S2-3)', async () => {
+    const prepareScreens = vi.fn(() => Promise.resolve())
+    const load = vi.spyOn(showLoader, 'load').mockImplementation(() => Promise.resolve({ prepareScreens }) as never)
+    try {
+      const ui = await mount({ document: PPTX })
+      const bar = await toolbar(ui)
+      const main = within(bar).getByLabelText('Present')
+      const more = within(bar).getByLabelText('Present options')
+      fireEvent.pointerEnter(main)
+      fireEvent.focus(more)
+      fireEvent.click(more)
+      await waitFor(() => expect(prepareScreens).toHaveBeenCalledTimes(3))
+      // Keyed by the viewer's document: the synchronous start reads the slot for host.ownerDocument.
+      expect(prepareScreens.mock.calls.every((c) => (c as unknown[])[0] === main.ownerDocument)).toBe(true)
       expect(load).toHaveBeenCalledTimes(1)
     } finally {
       load.mockRestore()
@@ -157,7 +193,7 @@ describe('paged Present button', () => {
       expect(within(bar).getByRole('button', { name: 'Zoom out' })).toBeTruthy()
       fireEvent.click(within(bar).getByLabelText('More options'))
       const items = [...ui.getByRole('menu').querySelectorAll<HTMLElement>('[role^=menuitem]')]
-      expect(items.map((i) => i.textContent)).toEqual(['From beginning', 'From current slide', 'Fit to width', 'Copy selection', 'Print'])
+      expect(items.map((i) => i.textContent)).toEqual(['From beginning', 'From current slide', 'Presenter View', 'Fit to width', 'Copy selection', 'Print'])
       fireEvent.click(ui.getByRole('menuitem', { name: 'From current slide' }))
       const host = ui.container.querySelector('[data-officeview-show]') as HTMLElement
       expect(document.activeElement).toBe(host)

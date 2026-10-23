@@ -178,7 +178,7 @@ function count(text: string, pattern: RegExp): { n: number; chars: number } {
  * - links: one record per `a:hlinkClick`; the strings they copy (a verb) are no longer than the tag;
  *   hrefs and shape ids are shared references.
  * - notes: at most 64 KiB of text plus one record per paragraph tag.
- * - media: one record per media relationship.
+ * - media: one record per media relationship (a relationship shared by several shapes adds a record per extra shape; the settle reconciles it).
  * - timing, transition and builds: 16 B per character of the slide after `p:cSld`, never more
  *   than the reader limits allow (2,000 time nodes, 10,000 conditions, 20,000 keyframes, 64 KiB paths).
  */
@@ -319,7 +319,7 @@ export function createSlideMetadataStore(args: Args): SlideMetadataStore {
             timing: notesRefused ? { refused: 'notes-limit' } : timing?.timing,
             notes: paragraphs,
             links: readLinks(source.node, rels, handle.slideParts, i, sink),
-            media: readMedia(rels, types?.node, handle.pkg, i, sink),
+            media: readMedia(rels, types?.node, handle.pkg, i, sink, source.node),
             // Builds belong to the timing they build for.
             builds: notesRefused ? [] : timing?.builds ?? [],
           }

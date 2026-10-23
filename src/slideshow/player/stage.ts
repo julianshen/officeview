@@ -58,10 +58,11 @@ import { imageIndices, paintedBounds, slideSize, textFilter, underlayOf } from '
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
+import { textBases, textTimingFor, type TextTiming } from './text-builds'
 import { targetKey } from '../target'
 import type {
   Affine, AllocationOwner, CanvasFactory, Compositor, CompositorViewport, DiagnosticSink, LayerDraw, LayerHandle, Lease, MetadataHandle,
-  RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TransitionSpec,
+  RenderState, Rng, ShowSlide, SlideMetadataStore, SlideShowWorkspace, TargetKey, TargetState, TerminalReserve, TimeNode, TimingTree, TransitionSpec,
 } from '../types'
 import { createFrameLimits, LAYER_LIMIT, RERASTER_LIMIT, surfaceBytes, type Backing } from '../workspace'
 import { apply, groupChildMatrix, invert, mul, nodeMatrix, stateMatrix } from './hit-test'
@@ -122,6 +123,36 @@ export interface Stage {
   /** Client px → slide px of the shown slide. */
   toSlide(clientX: number, clientY: number): { x: number; y: number } | undefined
   /**
+   * Additive (S2-7): shape `spid`'s base box on the shown slide in CSS px
+   * relative to the surface root (letterbox included), for the video
+   * overlay and the "Click to play" button; `undefined` without layout.
+   */
+  mediaBox?(spid: string): { left: number; top: number; width: number; height: number } | undefined
+  /**
+   * Additive (PR #19 review 2): the same box as a fraction of the audience frame's backing (0–1 on each axis),
+   * where the presenter mirror composites the video frame over its copy of the frame.
+   */
+  mediaFrameBox?(spid: string): { x: number; y: number; w: number; h: number } | undefined
+  /** Additive: a frame-fraction box in CSS px of the surface now (the inverse step of `mediaFrameBox`, letterbox included). */
+  frameBoxToCss?(f: { x: number; y: number; w: number; h: number }): { left: number; top: number; width: number; height: number } | undefined
+  /**
+   * Additive (S2-8): the timing to schedule for slide `index` when it builds
+   * text by word or letter: a working copy fanned out over the items, with
+   * the source pre-order `orderOf` for `createSlideTimeline`. `charge`
+   * reserves its bytes (the slide's metadata handle). `undefined`: schedule
+   * the slide's own timing.
+   */
+  textTiming?(index: number, meta: ShowSlide, charge: (bytes: number, tag: string) => boolean): { tree: TimingTree; orderOf: ReadonlyMap<TimeNode, number> } | undefined
+  /**
+   * Additive (S2-5): what Presenter View needs to paint slide `index` at
+   * `cursor` on `timeline` (a settled checkpoint for Next; none for the grid's
+   * static state): the slide, its render state with the stage's own base
+   * geometry and entrance-hidden targets, and the decoded images and fonts.
+   * Only for the shown slide and its prepared neighbours; `undefined` for
+   * any other slide.
+   */
+  previewOf?(index: number, cursor: SlideCursor | undefined, timeline: SlideTimeline | undefined): StagePreview | undefined
+  /**
    * The text run (paragraph, run index) laid out at local px (u, v) of `shape`, whose box is `w` × `h`
    * (PR #18 review 3: hyperlinks on runs). `null` when no run is there; `undefined` when the text cannot be
    * located (vertical or warped text).
@@ -136,6 +167,15 @@ export interface Stage {
   /** @internal Per-slide residency and layer bookkeeping, and the last frame's draws (tests, the debug harness). */
   inspect(): StageInspection
   dispose(): void
+}
+
+/** Additive (S2-5): a slide's paint inputs for Presenter View (`Stage.previewOf`). */
+export interface StagePreview {
+  slide: PptxSlide
+  state: RenderState
+  images: ReadonlyArray<CanvasImageSource | undefined>
+  resolveFont(family: string): string
+  builds: ShowSlide['builds']
 }
 
 export interface StageInspection {
@@ -312,7 +352,7 @@ function compose(parent: TargetState | undefined, own: TargetState | undefined):
     visible: parent.visible && (own?.visible ?? true),
     opacity: parent.opacity * (own?.opacity ?? 1),
     transform: mul(p, o),
-    ...(own?.mask ? { mask: own.mask } : {}),
+    ...(own?.mask ? { mask: own.mask, ...(own.maskBox ? { maskBox: own.maskBox } : {}), ...(own.maskTransform ? { maskTransform: mul(p, own.maskTransform) } : {}) } : {}),
     ...(own?.color ?? parent.color ? { color: own?.color ?? parent.color } : {}),
   }
 }
@@ -649,6 +689,9 @@ export function createStage(deps: StageDeps): Stage {
       }
       if (p.dead) return undefined
       if (got === 'terminal') { releaseBuilt(p.built); p.built = undefined }
+      if ((got === 'terminal' || got === 'flattened') && textTimings.get(p.meta)?.splits.size) {
+        sink.add({ code: 'text-build-whole', slideIndex: p.index, effect: got, message: `Text by word or letter: at the ${got} rung the split shapes paint whole, appearing with their first item` })
+      }
       p.level = got
       return got
     })
@@ -668,19 +711,62 @@ export function createStage(deps: StageDeps): Stage {
   // Slides
   // -------------------------------------------------------------------
 
+  /** Text builds per slide metadata (S2-8): one working copy per `ShowSlide`, shared by the timeline and the plan. */
+  const textTimings = new WeakMap<ShowSlide, TextTiming | null>()
+  function textTimingOf(index: number, meta: ShowSlide, charge: ((bytes: number, tag: string) => boolean) | undefined): TextTiming | undefined {
+    const have = textTimings.get(meta)
+    if (have !== undefined) return have ?? undefined
+    const timing = meta.timing
+    const slide = deps.doc.slides[index]
+    if (!timing || 'refused' in timing || !slide) { textTimings.set(meta, null); return undefined }
+    // Layers the items may take: the layer bound less what the slide plans without them (and a margin per split).
+    const t = timingTargets(meta)
+    const plain = buildRenderPlan(slide, t.animated, new Map(), meta.builds).layers.length
+    const tt = textTimingFor(slide, timing, { sink, slideIndex: index, charge: charge ?? (() => false), layers: LAYER_LIMIT - plain - 4 })
+    textTimings.set(meta, tt ?? null)
+    return tt
+  }
+
+  /** Timing targets of the scheduled tree, with every text item hidden and entered as its iterated target is. */
+  function targetsOf(meta: ShowSlide, tt: TextTiming | undefined) {
+    const t = timingTargets(tt ? { ...meta, timing: tt.tree } : meta)
+    if (tt) {
+      for (const [target, keys] of tt.items) {
+        for (const k of keys) {
+          t.animated.add(k)
+          if (t.hidden.has(target)) {
+            t.hidden.add(k)
+            t.entrances.set(k, t.entrances.get(target) ?? new Set())
+          }
+        }
+      }
+    }
+    return t
+  }
+
   function prepare(index: number, meta: ShowSlide, handle?: MetadataHandle): Prepared {
     const have = prepared.get(index)
     if (have && !have.dead) {
       if (handle && !have.handle) have.handle = handle
       else handle?.release()
+      if (have.meta !== meta) {
+        // Another metadata object for the same slide (a re-read): its text timing is the one now scheduled.
+        const tt = textTimingOf(index, meta, have.handle ? (b, t) => have.handle!.attach(b, t) : undefined)
+        if (tt || textTimings.get(have.meta)) {
+          const t = targetsOf(meta, tt)
+          have.hidden = t.hidden
+          have.entrances = t.entrances
+        }
+      }
       have.meta = meta
       return have
     }
     const slide = deps.doc.slides[index]
-    const { animated, colour, hidden, entrances } = timingTargets(meta)
+    const tt = textTimingOf(index, meta, handle ? (b, t) => handle.attach(b, t) : undefined)
+    const { animated, colour, hidden, entrances } = targetsOf(meta, tt)
     // Any colour animation splits its shape into fill, line and text layers (a two-part set forces the split).
     const parts = new Map<TargetKey, ReadonlySet<ColourPart>>([...colour].map(k => [k, new Set<ColourPart>(['fill', 'line'])]))
-    const plan = buildRenderPlan(slide, animated, parts, meta.builds)
+    const plan = buildRenderPlan(slide, animated, parts, meta.builds, tt?.splits)
     const images: Array<CanvasImageSource | undefined> = []
     const p: Prepared = {
       index, slide, meta, plan, layers: rasterLayers(plan, !!deps.watermark), base: baseGeometry(slide), hidden, entrances, images,
@@ -753,7 +839,18 @@ export function createStage(deps: StageDeps): Stage {
       if (p.dead) { releaseDecodedImage(img); unhold(); return }
       images[i] = img
       if (held) p.imageLeases.push(held)
-    })]).then(() => {})
+    })]).then(() => {
+      // Item geometry (S2-8) needs the real fonts: laid out once they are in, on a charged measuring context.
+      if (!tt || tt.splits.size === 0 || p.dead) return
+      const l = workspace.lease(4, `text-bases:${index}`)
+      if (!l) { sink.add({ code: 'text-build-refused', slideIndex: index, message: 'Text by word or letter: no room to measure the text; the items move as their shape does' }); return }
+      try {
+        const ctx = factory(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D | null
+        if (ctx) for (const [k, g] of textBases(slide, tt.splits, p.base, ctx, resolveFont)) p.base.set(k, g)
+      } finally {
+        l.release()
+      }
+    })
     prepared.set(index, p)
     return p
   }
@@ -780,9 +877,12 @@ export function createStage(deps: StageDeps): Stage {
   function stateOf(p: Prepared, cursor: SlideCursor | undefined, slideT: number, timeline: SlideTimeline | undefined): RenderState {
     if (!cursor || !timeline || cursor.mode === 'static') return EMPTY_STATE
     const snapshot = timeline.stateAt(cursor, Math.max(0, slideT))
-    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), p.sink, slidePx(p))
+    const fan = textTimings.get(p.meta)?.fan
+    const raw = renderStateAt(snapshot, p.base, rngOf(p.index), p.sink, slidePx(p), fan)
     const state = new Map<TargetKey, TargetState>()
-    for (const [k, v] of raw) state.set(k, relativeTo(v, p.base.get(k)))
+    // Text items without their own geometry share their shape's.
+    const baseOf = (k: TargetKey) => p.base.get(k) ?? (k.includes('/') ? p.base.get(k.slice(0, k.indexOf('/'))) : undefined)
+    for (const [k, v] of raw) state.set(k, relativeTo(v, baseOf(k)))
     if (p.hidden.size) {
       // Hidden until one of its own entrance behaviours has begun (an earlier-listed emphasis does not count).
       const entered = new Set<TargetKey>()
@@ -790,6 +890,8 @@ export function createStage(deps: StageDeps): Stage {
         if (!('spid' in e.node.target)) continue
         const key = targetKey(e.node.target)
         if (p.entrances.get(key)?.has(e.node)) entered.add(key)
+        // A fanned behaviour enters all its items; renderStateAt hides those whose turn has not come.
+        for (const item of fan?.get(e.node)?.items ?? []) if (p.entrances.get(item.key)?.has(e.node)) entered.add(item.key)
       }
       for (const k of p.hidden) if (!entered.has(k)) state.set(k, HIDDEN)
     }
@@ -819,7 +921,8 @@ export function createStage(deps: StageDeps): Stage {
         if (l.sub) { walk(l.sub, s); continue }
         const h = b.handles.get(l)
         if (!h) continue
-        const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : undefined
+        // A text range (a word, letter or paragraph clone) is text only: its colour is the text channel's.
+        const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : l.part === 'range' && s.color?.text ? 'text' : undefined
         out.push({ handle: h, state: s, ...(part ? { part } : {}) })
         kinds.push(`target:${l.key}${l.part ? `:${l.part}` : ''}`)
       }
@@ -947,6 +1050,11 @@ export function createStage(deps: StageDeps): Stage {
       origin = Number.POSITIVE_INFINITY
     },
 
+    textTiming(index, meta, charge) {
+      const tt = textTimingOf(index, meta, charge)
+      return tt && tt.fan.size > 0 ? { tree: tt.tree, orderOf: tt.orderOf } : undefined
+    },
+
     async enter(model, t, neighbours) {
       if (disposed) return
       const p = prepare(model.index, model.slide)
@@ -968,10 +1076,7 @@ export function createStage(deps: StageDeps): Stage {
       if (spec && deps.reduced) spec = reducedTransition(spec)
       const drawn = spec ? resolveTransition2D(spec) : undefined
       if (drawn?.approximated && spec) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: spec.element, message: `Transition ${spec.ns}:${spec.element} is drawn as its 2-D look-alike ${drawn.spec.element}` })
-      // Sounds are Stage 2 (spec 13): the transition plays silently, diagnosed once for the slide.
-      const sound = model.slide.transition?.sound
-      if (sound?.start) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound', message: 'The transition sound is pending Stage 2: the transition plays silently' })
-      if (sound?.end) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound-end', message: 'Stopping sounds at the transition is pending Stage 2: nothing plays to stop' })
+      // The transition sound is played (and any refusal diagnosed) by the session's transition-sound controller (S2-7).
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
       // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).
@@ -1013,6 +1118,13 @@ export function createStage(deps: StageDeps): Stage {
       const p = current
       if (!p) return EMPTY_STATE
       return stateOf(p, cursor, t - origin, timelineOf)
+    },
+
+    previewOf(index, cursor, timeline) {
+      const p = current?.index === index ? current : prepared.get(index)
+      if (!p || p.dead || disposed) return undefined
+      // A settled checkpoint reads the same at any time; the grid's static state has no cursor.
+      return { slide: p.slide, state: stateOf(p, cursor, 0, timeline), images: p.images, resolveFont, builds: p.meta.builds }
     },
 
     frame(cursor, t) {
@@ -1094,6 +1206,37 @@ export function createStage(deps: StageDeps): Stage {
       if (!inv) return undefined
       const [x, y] = apply(inv, dx, dy)
       return { x, y }
+    },
+
+    mediaBox(spid) {
+      const p = current
+      const g = p?.base.get(targetKey({ spid }))
+      if (!p || !g) return undefined
+      const r = root.getBoundingClientRect()
+      if (!(r.width > 0 && r.height > 0)) return undefined
+      // Slide px → device px (the viewport) → CSS px of the letterboxed canvas (object-fit: contain), as toSlide inverts.
+      const k = Math.min(r.width / backing.w, r.height / backing.h)
+      const m = viewport(p).matrix
+      const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
+      return { left: ox + (m[0] * g.x + m[4]) * k, top: oy + (m[3] * g.y + m[5]) * k, width: m[0] * g.w * k, height: m[3] * g.h * k }
+    },
+
+    mediaFrameBox(spid) {
+      const p = current
+      const g = p?.base.get(targetKey({ spid }))
+      if (!p || !g || !(backing.w > 0 && backing.h > 0)) return undefined
+      // Slide px → device px of the backing (the viewport), as mediaBox maps before its CSS step.
+      const m = viewport(p).matrix
+      return { x: (m[0] * g.x + m[4]) / backing.w, y: (m[3] * g.y + m[5]) / backing.h, w: m[0] * g.w / backing.w, h: m[3] * g.h / backing.h }
+    },
+
+    frameBoxToCss(f) {
+      const r = root.getBoundingClientRect()
+      if (!(r.width > 0 && r.height > 0) || !(backing.w > 0 && backing.h > 0)) return undefined
+      // Device px of the backing → CSS px of the letterboxed canvas (object-fit: contain), as mediaBox maps.
+      const k = Math.min(r.width / backing.w, r.height / backing.h)
+      const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
+      return { left: ox + f.x * backing.w * k, top: oy + f.y * backing.h * k, width: f.w * backing.w * k, height: f.h * backing.h * k }
     },
 
     runAt(shape, u, v, w, h) {

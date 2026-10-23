@@ -42,7 +42,7 @@ export interface PagedToolbarProps {
   onPrint?: () => void
   /** Present offer (slides only): the start only — the busy state and the
    * preload hint are the toolbar's own lazy business. */
-  present?: { start(from: 'beginning' | 'current'): void }
+  present?: { start(from: 'beginning' | 'current', presenterView?: boolean): void }
   compact: boolean
   showSearch: boolean
   showZoom: boolean
@@ -75,14 +75,16 @@ const MENU_ITEM = [
 
 /** Present items for the compact More menu (the split control does not fit
  * at 375px): a start moves focus into the show, so the menu must not steal
- * it back. Presenter View exists only from stage 2 on. */
+ * it back. Presenter View starts from the beginning, as Alt+F5 does. */
 const presentationItems = (present: NonNullable<PagedToolbarProps['present']>): MoreItem[] => [
   { key: 'present-beginning', label: 'From beginning', icon: <Icon icon={Presentation} name="presentation" />, onSelect: () => present.start('beginning'), takeFocus: true },
   { key: 'present-current', label: 'From current slide', icon: <Icon icon={Presentation} name="presentation" />, onSelect: () => present.start('current'), takeFocus: true },
+  { key: 'present-presenter', label: 'Presenter View', icon: <Icon icon={Presentation} name="presentation" />, onSelect: () => present.start('beginning', true), takeFocus: true },
 ]
 
 /** The Present split control (spec §4.1): the main button starts from the
- * current slide; the menu offers From beginning and From current slide with
+ * current slide; the menu offers From beginning, From current slide and
+ * Presenter View (from the beginning, as Alt+F5) with
  * the More-menu keyboard contract: opens on the first item, Arrow/Home/End
  * move, Escape and Tab and outside clicks close it and return focus. */
 function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; buttonClass: string }): ReactElement {
@@ -94,16 +96,21 @@ function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; bu
   const close = () => { setOpen(false); button.current?.focus() }
   const entries = () => [...(menu.current?.querySelectorAll<HTMLElement>('[role^=menuitem]') ?? [])]
 
-  // Preload hint (spec §5.3): one fetch per control; the catch keeps an
-  // offline hover from surfacing an unhandled rejection.
-  const preloaded = useRef(false)
-  const preload = () => { if (preloaded.current) return; preloaded.current = true; void showLoader.load().catch(() => {}) }
+  // Preload hint (spec §4.1, §5.3): one fetch per control; the catch keeps an
+  // offline hover from surfacing an unhandled rejection. Every hint also
+  // re-reads already-granted screen details into the viewer document's
+  // prepared placement (S2-3), so an unplugged screen does not linger.
+  const chunk = useRef<ReturnType<typeof showLoader.load>>(null)
+  const preload = (e: { currentTarget: Element }) => {
+    const d = e.currentTarget.ownerDocument
+    void (chunk.current ??= showLoader.load()).then((m) => m.prepareScreens(d)).catch(() => {})
+  }
   // Busy while the show module is being fetched for a start (all show state
   // stays south of the lazy seam); the settle clears it — an already-loaded
   // module joins the same inflight resolution.
-  const start = (from: 'beginning' | 'current') => {
+  const start = (from: 'beginning' | 'current', presenterView?: boolean) => {
     setBusy(true)
-    p.present.start(from)
+    p.present.start(from, presenterView)
     void showLoader.load().catch(() => {}).finally(() => setBusy(false))
   }
 
@@ -131,14 +138,14 @@ function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; bu
     else if (e.key === 'Tab') setOpen(false)
   }
 
-  const item = (label: string, from: 'beginning' | 'current') => (
+  const item = (label: string, from: 'beginning' | 'current', presenterView?: boolean) => (
     <button
-      key={from}
+      key={label}
       type="button"
       role="menuitem"
       tabIndex={-1}
       // a start moves focus into the show host: close without refocusing
-      onClick={() => { start(from); setOpen(false) }}
+      onClick={() => { start(from, presenterView); setOpen(false) }}
       className={MENU_ITEM}
     >
       <Icon icon={Presentation} name="presentation" />
@@ -175,7 +182,7 @@ function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; bu
         data-ov-control="present-more"
         onPointerEnter={preload}
         onFocus={preload}
-        onClick={() => { preload(); setOpen((o) => !o) }}
+        onClick={(e) => { preload(e); setOpen((o) => !o) }}
         className={p.buttonClass}
       >
         <Icon icon={ChevronDown} name="chevron-down" />
@@ -193,6 +200,7 @@ function PresentMenu(p: { present: NonNullable<PagedToolbarProps['present']>; bu
         >
           {item('From beginning', 'beginning')}
           {item('From current slide', 'current')}
+          {item('Presenter View', 'beginning', true)}
         </Pop>
       )}</Presence>
     </div>

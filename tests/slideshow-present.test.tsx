@@ -349,15 +349,16 @@ describe('startPresent: the synchronous prologue', () => {
     expect(acquireShowToken(host)).toBeDefined()
   })
 
-  it('presenterView true before stage 2 is diagnosed and audience-only', async () => {
+  it('presenterView true opens the popup in the gesture; a blocked popup is single-screen (Stage 2, S2-2)', async () => {
     const host = freshHost()
     const p = fakePlatform(log)
     const run = start(host, p, { opts: { presenterView: true } })
+    expect(log.slice(0, 2)).toEqual(['open', 'requestFullscreen:visible'])
     loads[0].resolve(slideshow)
     const s = await run
-    expect(log).toContain('diag:presenter-view-unavailable')
-    expect(log).not.toContain('open')
-    expect(s.presenter).toBe('none')
+    expect(log).toContain('diag:popup-blocked')
+    expect(log).not.toContain('diag:presenter-view-unavailable')
+    expect(s.presenter).toBe('swap')
     s.exit(); await s.ended
   })
 
@@ -501,23 +502,26 @@ describe('OfficeDoc host handle', () => {
     loads[1].resolve({ ...slideshow, runShow } as typeof slideshow)
     await flush()
     expect(starts.map((s) => s.from)).toEqual(['beginning', 'current'])
-    // Alt+F5 is Presenter View (stage 2): not routed here
-    expect(fireEvent.keyDown(m.region(), { key: 'F5', altKey: true })).toBe(true)
-    // PR #18 review 8: Ctrl/Cmd+F5 stays the browser's hard reload, with or without Shift
-    expect(fireEvent.keyDown(m.region(), { key: 'F5', ctrlKey: true })).toBe(true)
-    expect(fireEvent.keyDown(m.region(), { key: 'F5', metaKey: true })).toBe(true)
-    expect(fireEvent.keyDown(m.region(), { key: 'F5', ctrlKey: true, shiftKey: true })).toBe(true)
-    expect(loads).toHaveLength(2)
+    // Alt+F5 is Presenter View (S2-2): from the beginning, with presenterView
+    expect(fireEvent.keyDown(m.region(), { key: 'F5', altKey: true })).toBe(false)
+    loads[2].resolve({ ...slideshow, runShow } as typeof slideshow)
+    await flush()
+    expect(starts.map((s) => [s.from, s.presenterView])).toEqual([['beginning', undefined], ['current', undefined], ['beginning', true]])
+    // Ctrl+F5 and Cmd+F5 stay the browser's (hard reload), Shift and Alt included (review M3)
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }, { ctrlKey: true, shiftKey: true }, { metaKey: true, altKey: true }]) {
+      expect(fireEvent.keyDown(m.region(), { key: 'F5', ...mod })).toBe(true)
+    }
+    expect(loads).toHaveLength(3)
     // outside the viewer
     fireEvent.keyDown(document.body, { key: 'F5' })
-    expect(loads).toHaveLength(2)
+    expect(loads).toHaveLength(3)
     // disabled
     m.ui.rerender(<OfficeDoc ref={m.ref} document={PPTX} presentShortcuts={false} __presentPlatform={m.platform} />)
     expect(fireEvent.keyDown(m.region(), { key: 'F5' })).toBe(true)
     // a DOCX never routes F5
     m.ui.rerender(<OfficeDoc ref={m.ref} document={DOCX} __presentPlatform={m.platform} />)
     expect(fireEvent.keyDown(m.region(), { key: 'F5' })).toBe(true)
-    expect(loads).toHaveLength(2)
+    expect(loads).toHaveLength(3)
   })
 
   it('restores focus to the start element and scrolls to the last slide on exit', async () => {

@@ -1,0 +1,272 @@
+/**
+ * S2-8 fix round 1: text builds by word wired into the live stage (spec 6.5,
+ * 7). jsdom with node-canvas: the real stage runs on the Canvas 2D
+ * compositor. The show clock and frames are injected and driven; nothing
+ * waits on wall time. Decks are "Office-shaped synthetic".
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { runShow } from '../src/slideshow'
+import { sessionDeps, type SessionController } from '../src/slideshow/player/session'
+import { ManualClock } from '../src/slideshow/clock'
+import { createSlideShowWorkspace } from '../src/slideshow/workspace'
+import type { ShowStart } from '../src/components/present'
+import { buildPptxDeck, mainSeqXml, timingXmlOf, type PptxDeckSpec, type PptxShapeSpec } from '../src/testdata/ooxml-builders'
+import { OfficePackage } from '../src/core/zip'
+import { parsePptx, pptxPackageHandle } from '../src/pptx/parse'
+import type { PptxDocument } from '../src/pptx/types'
+import type { RenderState } from '../src/slideshow/types'
+
+/** A click step whose entrance appears `spid` by word, `ms` apart. */
+const byWord = (id: number, spid: number, ms: number) =>
+  `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>` +
+  `<p:iterate type="wd"><p:tmAbs val="${ms}"/></p:iterate><p:childTnLst>` +
+  `<p:set><p:cBhvr><p:cTn id="${id + 3}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
+  `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+
+const at = (id: number, x: number, y: number, w: number, h: number, text: string): PptxShapeSpec => ({
+  id, name: `Shape ${id}`, off: [String(x * 9525), String(y * 9525)], ext: [String(w * 9525), String(h * 9525)], fill: '336699',
+  paragraphs: [{ runs: [{ text }] }],
+})
+
+async function deck(spec: PptxDeckSpec): Promise<PptxDocument> {
+  return parsePptx(await OfficePackage.load(await buildPptxDeck(spec)))
+}
+
+let clock: ManualClock
+beforeEach(() => {
+  clock = new ManualClock()
+  vi.spyOn(sessionDeps, 'clock').mockImplementation(() => clock)
+  vi.spyOn(sessionDeps, 'frames').mockImplementation(() => () => {})
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    return { left: 0, top: 0, right: 1024, bottom: 768, width: 1024, height: 768, x: 0, y: 0, toJSON() {} } as DOMRect
+  })
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+  document.body.replaceChildren()
+})
+
+const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0)) }
+
+async function show(doc: PptxDocument): Promise<{ s: SessionController; log: string[]; key(k: string): Promise<void>; tick(ms: number): Promise<void> }> {
+  const host = document.createElement('div')
+  host.tabIndex = -1
+  host.setAttribute('data-officeview-show', '')
+  host.style.visibility = 'visible'
+  document.body.append(host)
+  const ac = new AbortController()
+  const log: string[] = []
+  const s = await runShow({
+    doc, handle: pptxPackageHandle(doc), host,
+    token: { release() {}, released: false, owns: () => false },
+    platform: { hasActivation: () => true, requestFullscreen: async () => {}, exitFullscreen: async () => {}, fullscreenElement: () => null, open: () => null },
+    fullscreen: Promise.resolve('entered'), retryFullscreen: async () => 'entered',
+    from: 'beginning', motion: 'auto',
+    callbacks: {
+      onStart: () => {}, onEnd: () => {}, onSlideChange: () => {},
+      onDiagnostic: (d: { code: string }) => log.push(`diag:${d.code}`),
+      currentSlide: () => 0, restoreFocus: () => {}, scrollToSlide: () => {},
+    },
+    signal: ac.signal, generation: 1, isCurrent: () => !ac.signal.aborted,
+    cleanup: () => { ac.abort(); host.style.visibility = 'hidden' },
+  } as ShowStart)
+  await flush()
+  s.tick()
+  return {
+    s, log,
+    async key(k) { host.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); await flush(); s.tick() },
+    async tick(ms) { clock.advance(ms); s.tick(); await flush(); s.tick() },
+  }
+}
+
+const shown = (state: RenderState, key: string) => state.get(key)?.visible ?? true
+const WORDS = ['sp:2/c:0-4', 'sp:2/c:6-9', 'sp:2/c:11-15']
+
+describe('S2-8 live stage', () => {
+  it('a by-word entrance reveals the words one at a time', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 500)])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    // Before the click: the body and every word are hidden.
+    expect([shown(now(), 'sp:2'), ...WORDS.map(k => shown(now(), k))]).toEqual([false, false, false, false])
+    // Every word is its own layer.
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' ? [`${l.key}:${l.part ?? ''}`] : [])
+    expect(layers).toEqual(['sp:2:body', ...WORDS.map(k => `${k}:range`)])
+    await r.key('ArrowRight')
+    await r.tick(10)
+    expect(WORDS.map(k => shown(now(), k))).toEqual([true, false, false])
+    expect(shown(now(), 'sp:2')).toBe(true)
+    await r.tick(500)
+    expect(WORDS.map(k => shown(now(), k))).toEqual([true, true, false])
+    await r.tick(500)
+    expect(WORDS.map(k => shown(now(), k))).toEqual([true, true, true])
+    expect(r.s.stage!.inspect().lastDraws).toEqual(expect.arrayContaining(WORDS.map(k => `target:${k}:range`)))
+    expect(r.log).toContain('diag:text-build-approximate')
+    r.s.exit()
+  })
+
+  it('at the terminal rung a split shape paints whole, diagnosed', async () => {
+    vi.spyOn(sessionDeps, 'workspace').mockImplementation(() => createSlideShowWorkspace('desktop', { limit: 1024 * 768 * 4 + 8 * 2 ** 20 + 2 ** 20, scratch: 8 * 2 ** 20 }))
+    const doc = await deck({ slides: [{ shapes: [at(2, 0, 0, 480, 360, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 500)])) }] })
+    const r = await show(doc)
+    expect(r.s.stage!.level).toBe('terminal')
+    expect(r.log).toContain('diag:text-build-whole')
+    r.s.exit()
+  })
+})
+
+/** A click step with one whole-shape behaviour on `spid` (an exit or an emphasis). */
+const wholeShape = (id: number, cls: 'exit' | 'emph', behaviour: string) =>
+  `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  behaviour + `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+const hide = (id: number, spid: number) =>
+  `<p:set><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>`
+const moveRight = (id: number, spid: number) =>
+  `<p:animMotion origin="layout" path="M 0 0 L 0.25 0 E" pathEditMode="relative"><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animMotion>`
+
+describe('PR #19 review 6', () => {
+  it('a whole-shape exit after a by-word entrance hides the words too', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'exit', hide(23, 2))])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    await r.key('ArrowRight')
+    await r.tick(500)
+    expect([shown(now(), 'sp:2'), ...WORDS.map(k => shown(now(), k))]).toEqual([true, true, true, true])
+    // The exit targets the whole shape: its words are part of it.
+    await r.key('ArrowRight')
+    await r.tick(50)
+    expect([shown(now(), 'sp:2'), ...WORDS.map(k => shown(now(), k))]).toEqual([false, false, false, false])
+    r.s.exit()
+  })
+
+  it('a whole-shape emphasis after a by-word entrance moves the words with the shape', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'emph', moveRight(23, 2))])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    await r.key('ArrowRight')
+    await r.tick(500)
+    await r.key('ArrowRight')
+    await r.tick(50)
+    const offset = (key: string) => { const s = now().get(key)!; return s.transform[4] + (s.motion?.dx ?? 0) }
+    const body = offset('sp:2')
+    expect(body).toBeGreaterThan(100)
+    for (const k of WORDS) expect(offset(k)).toBeCloseTo(body, 6)
+    r.s.exit()
+  })
+})
+
+const wipeOut = (id: number, spid: number) =>
+  `<p:animEffect transition="out" filter="wipe(left)"><p:cBhvr><p:cTn id="${id}" dur="1000"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+
+describe('PR #19 review 6 follow-up', () => {
+  it('a whole-shape wipe exit after a by-word entrance sweeps across the words in the shape\'s box', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'exit', wipeOut(23, 2))])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    await r.key('ArrowRight')
+    await r.tick(500)
+    await r.key('ArrowRight')
+    await r.tick(400)
+    const body = now().get('sp:2')!
+    expect(body.mask?.kind).toBe('wipe')
+    for (const k of WORDS) {
+      const w = now().get(k)!
+      // The shape's own mask, over the shape's box (not each word's): one sweep across all the words.
+      expect(w.mask).toEqual(body.mask)
+      expect(w.maskBox).toEqual({ x: 40, y: 40, w: 480, h: 120 })
+    }
+    r.s.exit()
+  })
+})
+
+const fillTo = (id: number, spid: number, attr: 'fillcolor' | 'stroke.color') =>
+  `<p:animClr clrSpc="rgb"><p:cBhvr><p:cTn id="${id}" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:to><a:srgbClr val="FF0000"/></p:to></p:animClr>`
+
+describe('PR #19 review 7', () => {
+  it('a fill-colour change on a by-word split shape recolours its fill layer', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'emph', fillTo(23, 2, 'fillcolor'))])) }] })
+    const r = await show(doc)
+    // The split body is a fill, a line and a (residual) text layer, so the fill takes the colour channel.
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' ? [`${l.key}:${l.part ?? ''}`] : [])
+    expect(layers).toEqual(['sp:2:fill', 'sp:2:line', 'sp:2:text', ...WORDS.map(k => `${k}:range`)])
+    await r.key('ArrowRight')
+    await r.tick(500)
+    await r.key('ArrowRight')
+    await r.tick(600)
+    const state = r.s.stage!.stateAt(r.s.cursor, clock.now())
+    expect(state.get('sp:2')?.color?.fill).toBeDefined()
+    expect(r.s.stage!.inspect().lastDraws).toEqual(expect.arrayContaining(['target:sp:2:fill', ...WORDS.map(k => `target:${k}:range`)]))
+    r.s.exit()
+  })
+})
+
+describe('PR #19 review 8', () => {
+  it('a by-word entrance plus a colour animation leaves no static copy of the words in the residual text layer', async () => {
+    const { textFilter } = await import('../src/slideshow/render/scene')
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'emph', fillTo(23, 2, 'fillcolor'))])) }] })
+    const r = await show(doc)
+    const text = r.s.stage!.plan!.layers.find(l => l.kind === 'target' && l.key === 'sp:2' && l.part === 'text')
+    expect(text?.kind).toBe('target')
+    const node = text!.kind === 'target' ? text!.nodes[0]! : undefined
+    // Paragraph 0 holds every word: the word layers paint it, so the residual text layer must not.
+    const keep = node ? textFilter.get(node) : undefined
+    expect(keep).toBeDefined()
+    expect(keep!(0)).toBe(false)
+    r.s.exit()
+  })
+})
+
+/** A click step whose effect (`cls`) iterates `unit` on `spid`, `ms` apart, with one visibility set of `dur`. */
+const iterated = (id: number, spid: number, cls: 'entr' | 'exit', unit: 'wd' | 'lt', ms: number, to: 'visible' | 'hidden', dur = '1') =>
+  `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>` +
+  `<p:iterate type="${unit}"><p:tmAbs val="${ms}"/></p:iterate><p:childTnLst>` +
+  `<p:set><p:cBhvr><p:cTn id="${id + 3}" dur="${dur}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${to}"/></p:to></p:set>` +
+  `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+
+describe('PR #19 review 9', () => {
+  it('a by-word entrance and a by-letter exit on one target: the exit fans by letter, the entrance still by word', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Ab cd')], timingXml: timingXmlOf(mainSeqXml([iterated(10, 2, 'entr', 'wd', 500, 'visible'), iterated(20, 2, 'exit', 'lt', 500, 'hidden')])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    // Layers are letters (the finer unit); words are their letters together.
+    const LETTERS = ['sp:2/c:0-0', 'sp:2/c:1-1', 'sp:2/c:3-3', 'sp:2/c:4-4']
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' && l.part === 'range' ? [l.key] : [])
+    expect(layers).toEqual(LETTERS)
+    await r.key('ArrowRight')
+    await r.tick(10)
+    // By word: both letters of "Ab" appear together, "cd" not yet.
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([true, true, false, false])
+    await r.tick(600)
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([true, true, true, true])
+    await r.key('ArrowRight')
+    await r.tick(10)
+    // By letter: "A" leaves alone.
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([false, true, true, true])
+    await r.tick(500)
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([false, false, true, true])
+    r.s.exit()
+  })
+
+  it('a refused fan-out leaves the text in the body, where the whole-shape effect moves it', async () => {
+    // The by-word set has no finite duration: it cannot be staggered (text-build-unsplit) and plays whole.
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([iterated(10, 2, 'entr', 'wd', 100, 'visible', 'indefinite'), wholeShape(20, 'emph', moveRight(23, 2))])) }] })
+    const r = await show(doc)
+    expect(r.log).toContain('diag:text-build-unsplit')
+    // No word layers were pulled out of the shape: one layer, the whole shape.
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' ? [`${l.key}:${l.part ?? ''}`] : [])
+    expect(layers).toEqual(['sp:2:'])
+    await r.key('ArrowRight')
+    await r.tick(100)
+    await r.key('ArrowRight')
+    await r.tick(50)
+    const s = r.s.stage!.stateAt(r.s.cursor, clock.now()).get('sp:2')!
+    expect(s.transform[4] + (s.motion?.dx ?? 0)).toBeGreaterThan(100)
+    r.s.exit()
+  })
+})

@@ -318,7 +318,7 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   }
   // The Present button and F5 both start here. Everything about its offer
   // (preload hint, busy state) lives in the lazy toolbar; see PagedToolbar.
-  const onPresent = (from: 'beginning' | 'current') => void present({ from }).catch(() => {})
+  const onPresent = (from: 'beginning' | 'current', presenterView?: boolean) => void present({ from, presenterView }).catch(() => {})
   useImperativeHandle(ref, () => ({ present }))
   // getPaintables is async (docx measurement resolves a 2D ctx); hold in state.
   const [pages, setPages] = useState<Paintable[]>([])
@@ -596,10 +596,11 @@ const LegacyOfficeDoc = forwardRef(function LegacyOfficeDoc({
   const toggleFit = () => routed((m) => apply(m.toggleFit(zoomContext())))
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // F5, Shift+F5 from the current slide, Alt+F5 Presenter View (spec 4.1).
     // Ctrl/Cmd+F5 stays the browser's hard reload.
-    if (e.key == 'F5' && presentShortcuts && allowPresent && !e.altKey && !(e.ctrlKey || e.metaKey) && 'slides' in document) {
+    if (e.key == 'F5' && presentShortcuts && allowPresent && !(e.ctrlKey || e.metaKey) && 'slides' in document) {
       e.preventDefault()
-      return onPresent(e.shiftKey ? 'current' : 'beginning')
+      return onPresent(e.shiftKey ? 'current' : 'beginning', e.altKey || undefined)
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault()

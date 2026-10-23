@@ -51,8 +51,10 @@ describe('slideshow catalogue', () => {
   })
   it('no row is pending a stage that has already landed', async () => {
     const { CATALOGUE, LANDED_STAGE } = await modules()
-    expect(LANDED_STAGE).toBe(1)
+    expect(LANDED_STAGE).toBe(2)
     for (const r of CATALOGUE) if (r.status.startsWith('pending-stage-')) expect(Number(r.status.at(-1))).toBeGreaterThan(LANDED_STAGE)
+    // Stage 2 close (S2-9): no pending-stage-2 row remains.
+    expect(CATALOGUE.filter(r => r.status === 'pending-stage-2').map(r => r.id)).toEqual([])
   })
   it('the validation doc catalogue section equals catalogueMarkdown()', async () => {
     const { catalogueMarkdown } = await modules()
@@ -85,11 +87,19 @@ describe('slideshow catalogue', () => {
     expect(rowForPreset('entr', 999999)).toBeUndefined()
     expect(rowForPreset('entr', 2, NaN)).toBeUndefined()
   })
-  it('stage-one file behaviours differ from preset reconstruction and media stand-ins', async () => {
+  it('stage-one file behaviours differ from preset reconstruction; stage-two media plays from the file', async () => {
     const { CATALOGUE, rowForPreset, catalogueMarkdown } = await modules()
     expect(rowForPreset('entr', 1)).toMatchObject({ implementation: 'preset-table', status: 'approximate', stage: 1 })
     for (const name of ['set','anim','animEffect','animMotion','animRot','animScale','animClr']) expect(CATALOGUE.find(r => r.id === `behaviour:p:${name}`)).toMatchObject({ status: 'exact', stage: 1 })
-    for (const name of ['cmd','audio','video']) expect(CATALOGUE.find(r => r.id === `behaviour:p:${name}`)).toMatchObject({ status: 'pending-stage-2', stage: 2, implementation: 'stand-in' })
+    // S2-7 plays shape media; S2-9 flipped the rows. Video is an overlay that shape effects do not move; cmd covers the call verbs.
+    expect(CATALOGUE.find(r => r.id === 'behaviour:p:audio')).toMatchObject({ status: 'exact', stage: 2, implementation: 'file' })
+    for (const name of ['cmd','video']) expect(CATALOGUE.find(r => r.id === `behaviour:p:${name}`)).toMatchObject({ status: 'approximate', stage: 2, implementation: 'file' })
+    expect(CATALOGUE.find(r => r.id === 'sound:transition')).toMatchObject({ status: 'exact', stage: 2, implementation: 'file' })
+    // S2-10: an effect sound (p:audio on a p:sndTgt) plays with its effect, like a transition sound.
+    expect(CATALOGUE.find(r => r.id === 'sound:effect')).toMatchObject({ status: 'exact', stage: 2, implementation: 'file' })
+    expect(CATALOGUE.find(r => r.id === 'sound:effect')?.lookalike).toBeUndefined()
+    // S2-8: text builds by word and letter (p:iterate wd / lt) are clipped per-item layers.
+    for (const id of ['build:word','build:letter']) expect(CATALOGUE.find(r => r.id === id)).toMatchObject({ status: 'approximate', stage: 2, implementation: 'mask' })
     expect(catalogueMarkdown()).toContain('trigger beats hyperlink')
     expect(catalogueMarkdown()).toContain('kiosk link inertness')
     expect(catalogueMarkdown()).toContain('pending D4')
@@ -118,7 +128,7 @@ it('inventory is duplicate-free and covers the catalogue in reverse', async () =
     if (r.status.startsWith('pending-stage-')) expect(r.stage).toBe(Number(r.status.at(-1)))
   }
 })
-it('shared policy rows are frozen and codec is pending stage two', async () => {
+it('shared policy rows are frozen and an unavailable codec is an approximate stand-in', async () => {
   const { CATALOGUE } = await modules()
   expect(Object.isFrozen(CATALOGUE)).toBe(true)
   for (const r of CATALOGUE) {
@@ -127,5 +137,26 @@ it('shared policy rows are frozen and codec is pending stage two', async () => {
     if (r.preset) expect(Object.isFrozen(r.preset)).toBe(true)
     if (r.lookalike === undefined) expect(Object.hasOwnProperty.call(r,'lookalike')).toBe(false)
   }
-  expect(CATALOGUE.find(r => r.id === 'media:codec')?.status).toBe('pending-stage-2')
+  expect(CATALOGUE.find(r => r.id === 'media:codec')).toMatchObject({ status: 'approximate', stage: 2, implementation: 'stand-in' })
+})
+it('the validation doc lists every Stage 2 diagnostic code with its catalogue class and panel group (S2-9)', async () => {
+  const { DIAGNOSTIC_CODES } = await import('../src/slideshow/diagnostics')
+  const { diagnosticKind } = await import('../src/slideshow/presenter/diagnostics')
+  const doc = readFileSync('docs/validation/slideshow.md', 'utf8')
+  const section = doc.split('### Stage 2 diagnostic codes\n')[1]?.split('\n## ')[0] ?? ''
+  const rows = section.split('\n').filter(l => /^\| `/.test(l)).map(l => l.split('|').slice(1, -1).map(c => c.trim()))
+  const PANEL = { refused: 'Refused', approximate: 'Approximate', pending: 'Pending', other: 'Other notes' } as const
+  const listed = new Set<string>()
+  for (const [code, cls, panel] of rows) {
+    const name = code.replace(/`/g, '')
+    listed.add(name)
+    expect(DIAGNOSTIC_CODES[name], name).toBe(cls)
+    expect(PANEL[diagnosticKind({ code: name, message: '' })], name).toBe(panel)
+  }
+  // The Stage 2 block of the catalogue (media playback onwards). S2-10 retired media-stand-in: effect sounds play.
+  const keys = Object.keys(DIAGNOSTIC_CODES)
+  expect(keys).not.toContain('media-stand-in')
+  const stage2 = keys.slice(keys.indexOf('media-autoplay'))
+  expect(stage2.filter(c => !listed.has(c))).toEqual([])
+  expect(rows.length).toBe(listed.size)
 })

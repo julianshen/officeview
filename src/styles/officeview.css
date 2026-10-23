@@ -309,6 +309,264 @@
 [data-ov-theme-root] [data-officeview-show-surface][data-officeview-show-cursor="hidden"] {
   cursor: none;
 }
+/* Media (slideshow S2-7): video plays in an overlay at its shape's box over
+ * the compositor; clicks pass through to the slide except on the "Click to
+ * play" button, which sits over the poster when the browser refused play(). */
+[data-ov-theme-root] [data-officeview-show-media-layer] {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+[data-ov-theme-root] [data-officeview-show-media="video"] {
+  position: absolute;
+  object-fit: fill;
+}
+[data-ov-theme-root] [data-officeview-show-play] {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  padding: 8px 16px;
+  border: 1px solid #fff;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font: 16px/1.4 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+/* Presenter View (slideshow S2-5): in the popup the theme root itself fills
+ * the window; in the single-screen swap a box covers the audience surface
+ * inside the show host. Current slide left, Next and the notes right, the
+ * controls below; the grid overlays the panes. */
+[data-ov-theme-root][data-officeview-presenter] {
+  position: fixed;
+  inset: 0;
+}
+[data-ov-theme-root] [data-officeview-presenter-swap] {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+[data-ov-theme-root] [data-officeview-presenter-view] {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 12px;
+  overflow: hidden;
+  background: #201f1e;
+  color: #fff;
+  font: 14px/1.4 system-ui, sans-serif;
+  outline: none;
+}
+[data-ov-theme-root] [data-officeview-presenter-sr] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+[data-ov-theme-root] [data-officeview-presenter-bar] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+[data-ov-theme-root] [data-officeview-presenter-status] {
+  margin: 0;
+  font-weight: 600;
+}
+[data-ov-theme-root] [data-officeview-presenter-timer] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+[data-ov-theme-root] [data-officeview-presenter-elapsed],
+[data-ov-theme-root] [data-officeview-presenter-clock] {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+[data-ov-theme-root] [data-officeview-presenter-panes] {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+[data-ov-theme-root] [data-officeview-presenter-current] {
+  grid-row: 1 / span 2;
+}
+[data-ov-theme-root] [data-officeview-presenter-panes] figure {
+  margin: 0;
+  min-width: 0;
+}
+[data-ov-theme-root] [data-officeview-presenter-panes] figcaption {
+  margin-top: 4px;
+  color: #c8c6c4;
+}
+[data-ov-theme-root] [data-officeview-presenter-pane],
+[data-ov-theme-root] [data-officeview-presenter-end] {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+[data-ov-theme-root] [data-officeview-presenter-end] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* The leased presenter canvases carry data-officeview-show-surface (S2-4):
+ * they sit in their panes, not over the window like the audience surface. */
+[data-ov-theme-root] [data-officeview-presenter-pane] canvas,
+[data-ov-theme-root] [data-officeview-presenter-thumb] canvas {
+  position: static;
+}
+[data-ov-theme-root] [data-officeview-presenter-pane] canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+[data-ov-theme-root] [data-officeview-presenter-pane][hidden] {
+  display: none;
+}
+[data-ov-theme-root] [data-officeview-presenter-notes-pane] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+[data-ov-theme-root] [data-officeview-presenter-notes-tools] {
+  display: flex;
+  gap: 4px;
+}
+[data-ov-theme-root] [data-officeview-presenter-notes] {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  border-radius: var(--ov-radius-panel);
+  background: #2b2a29;
+}
+[data-ov-theme-root] [data-officeview-presenter-notes] p {
+  margin: 0 0 0.5em;
+  white-space: pre-wrap;
+}
+[data-ov-theme-root] [data-officeview-presenter-controls] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+[data-ov-theme-root] [data-officeview-presenter-view] button,
+[data-ov-theme-root] [data-officeview-presenter-view] input {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid #605e5c;
+  border-radius: var(--ov-radius-control);
+  background: #3b3a39;
+  color: #fff;
+  font: inherit;
+}
+[data-ov-theme-root] [data-officeview-presenter-view] button {
+  cursor: pointer;
+}
+[data-ov-theme-root] [data-officeview-presenter-view] button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+[data-ov-theme-root] [data-officeview-presenter-view] button[aria-pressed="true"] {
+  background: var(--ov-color-accent);
+  color: var(--ov-color-on-accent);
+}
+[data-ov-theme-root] [data-officeview-presenter-view] :is(button, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--ov-color-accent);
+  outline-offset: 1px;
+}
+[data-ov-theme-root] [data-officeview-presenter-grid] {
+  position: absolute;
+  inset: 56px 12px 12px;
+  z-index: 2;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #605e5c;
+  border-radius: var(--ov-radius-panel);
+  background: #201f1e;
+}
+[data-ov-theme-root] [data-officeview-presenter-grid-close] {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin-bottom: 8px;
+}
+[data-ov-theme-root] [data-officeview-presenter-grid] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 176px);
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+[data-ov-theme-root] [data-officeview-presenter-grid] li button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 168px;
+  height: 120px;
+  padding: 4px;
+}
+[data-ov-theme-root] [data-officeview-presenter-grid] button[aria-current="true"] {
+  border-color: var(--ov-color-accent);
+}
+[data-ov-theme-root] [data-officeview-presenter-grid] button[data-hidden] {
+  opacity: 0.6;
+}
+[data-ov-theme-root] [data-officeview-presenter-thumb] {
+  display: block;
+  width: 160px;
+  height: 90px;
+  background: #000;
+}
+[data-ov-theme-root] [data-officeview-presenter-thumb][data-unheld]::after {
+  content: "No thumbnail";
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #a19f9d;
+  font-size: 12px;
+}
+[data-ov-theme-root] [data-officeview-presenter-thumb] canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+[data-ov-theme-root] [data-officeview-presenter-diagnostics] {
+  max-height: 25vh;
+  overflow: auto;
+}
+[data-ov-theme-root] [data-officeview-presenter-diagnostics] summary {
+  cursor: pointer;
+}
+[data-ov-theme-root] [data-officeview-presenter-diagnostics] h3 {
+  margin: 8px 0 4px;
+  font-size: 14px;
+}
+[data-ov-theme-root] [data-officeview-drag-hint] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--ov-radius-panel);
+  background: #3b3a39;
+}
 
 /* Utilities come last in source order, so they follow the base. source("..")
  * limits class detection to src/ (docs and tests quote ov: class names). */
@@ -323,6 +581,11 @@
   }
   /* allowPrint=false: no slideshow surface prints, wherever it is mounted (slideshow S1-20). */
   [data-ov-theme-root] [data-officeview-show-surface][data-ov-print="false"] {
+    display: none !important;
+  }
+  /* allowPrint=false: the presenter window prints nothing either (slideshow S2-5). */
+  [data-ov-theme-root][data-officeview-presenter][data-ov-print="false"],
+  [data-ov-theme-root] [data-officeview-presenter-swap][data-ov-print="false"] {
     display: none !important;
   }
 }

@@ -29,6 +29,7 @@
 import { compileFormula } from '../formula'
 import { pointAt } from '../motion-path'
 import { targetKey } from '../target'
+import { easeProgress } from './ease'
 import { rebuildFromPreset } from './presets'
 import { standInFor, transitionStandIn } from './stand-ins'
 import type { FormulaEnv } from '../formula'
@@ -36,7 +37,7 @@ import type { SchedulerSnapshot } from './scheduler'
 import type {
   Affine, AnimBehaviour, AnimClrBehaviour, AnimEffectBehaviour, AnimMotionBehaviour, AnimRotBehaviour,
   AnimScaleBehaviour, BehaviourNode, ColorMatrix, DiagnosticSink, MaskState, Rng,
-  SetBehaviour, TargetKey, TargetState,
+  ContainerNode, Iterate, SetBehaviour, TargetKey, TargetState, TimeNode, TimingTree,
 } from '../types'
 
 export interface BaseGeometry { x: number; y: number; w: number; h: number; rot: number }
@@ -320,8 +321,8 @@ function evalBehaviour(
       return reads
     }
     case 'audio': case 'video': case 'cmd':
-      // Media is Stage 2 (spec 13): a silent timed no-op; a video keeps showing its poster picture.
-      unsupported(node, node.kind, sink, 'media-stand-in')
+      // Media has no render edits. The session's media player follows shape media, effect sounds (`p:sndTgt`,
+      // S2-10) and commands on the timeline, plays them and diagnoses any refusal itself.
       return fail()
     default:
       unsupported(node, (node as BehaviourNode).kind, sink)
@@ -548,8 +549,7 @@ function unsupported(node: BehaviourNode, name: string, sink: DiagnosticSink, co
   if (!set.has(name)) {
     set.add(name)
     const label = code === 'behaviour-unsupported' ? `Attr ${name} has no render mapping; dropped`
-      : code === 'media-stand-in' ? `Media ${name} is pending Stage 2: a silent timed no-op${name === 'video' ? ' (the poster picture shows)' : ''}`
-        : `Effect filter ${JSON.stringify(name)} is not in the mask catalogue; rendering as a fade`
+      : `Effect filter ${JSON.stringify(name)} is not in the mask catalogue; rendering as a fade`
     sink.add({ code, effect: `behaviour ${node.ctn.id}`, message: label })
   }
 }
@@ -624,17 +624,32 @@ export function renderStateAt(
   rng: Rng,
   sink: DiagnosticSink,
   slide: Slide = { w: 1, h: 1 },
+  fan?: ReadonlyMap<BehaviourNode, IterateFan>,
 ): Map<TargetKey, TargetState> {
   const out = new Map<TargetKey, Accumulated>()
-  for (const { node, progress, iteration } of docOrder(snapshot)) {
-    const key = targetKey(node.target)
-    const geo = base.get(key) ?? { x: 0, y: 0, w: 0, h: 0, rot: 0 }
+  // Split text items (`sp:<id>/…` from a word or letter fan) belong to their shape: whole-shape behaviours that are
+  // not fanned (a later exit or emphasis) are also accumulated apart, as each item's parent state (PR #19 review 6).
+  const itemsOf = new Map<TargetKey, Set<TargetKey>>()
+  for (const f of fan?.values() ?? []) {
+    for (const { key } of f.items) {
+      const cut = key.indexOf('/')
+      if (cut < 0) continue
+      const shape = key.slice(0, cut)
+      const set = itemsOf.get(shape) ?? new Set<TargetKey>()
+      set.add(key)
+      itemsOf.set(shape, set)
+    }
+  }
+  const parents = new Map<TargetKey, Accumulated>()
+  const geoOf = (key: TargetKey): BaseGeometry | undefined => base.get(key) ?? (key.includes('/') ? base.get(key.slice(0, key.indexOf('/'))) : undefined)
+  const apply = (node: BehaviourNode, progress: number, iteration: number, key: TargetKey, into = out): void => {
+    const geo = geoOf(key) ?? { x: 0, y: 0, w: 0, h: 0, rot: 0 }
     const env = envOf(progress, geo, slide, rng)
     const reads = evalBehaviour(node, env, progress, slide, geo, sink)
-    if (reads.failed) continue
+    if (reads.failed) return
     const additive = reads.additive ?? node.additive
-    let acc = out.get(key) ?? { visible: true, opacity: 1, tracks: new Map(), color: {}, opacityCap: 1 } as Accumulated
-    out.set(key, acc)
+    let acc = into.get(key) ?? { visible: true, opacity: 1, tracks: new Map(), color: {}, opacityCap: 1 } as Accumulated
+    into.set(key, acc)
     for (const [name, value] of reads.edits) {
       if (name === 'motion:dx' || name === 'motion:dy') {
         const px = typeof value === 'number' ? value : Number(value)
@@ -681,9 +696,76 @@ export function renderStateAt(
       acc.color[channel] = prior ? composeColor(prior, matrix) : matrix
     }
   }
+  // Iterated entrance items that have not begun under any behaviour stay hidden (S2-8).
+  const begun = new Set<TargetKey>()
+  const waiting = new Set<TargetKey>()
+  for (const { node, progress, iteration } of docOrder(snapshot)) {
+    const f = fan?.get(node)
+    if (!f) {
+      const key = targetKey(node.target)
+      apply(node, progress, iteration, key)
+      if (itemsOf.has(key)) apply(node, progress, iteration, key, parents)
+      continue
+    }
+    const elapsed = progress * f.totalMs
+    for (const { key, delayMs } of f.items) {
+      const raw = f.spanMs > 0 ? (elapsed - delayMs) / f.spanMs : elapsed >= delayMs ? 1 : -1
+      if (raw < 0) { if (f.entrance) waiting.add(key); continue }
+      begun.add(key)
+      apply(node, easeProgress(Math.min(1, raw), f.accel, f.decel, f.autoRev), iteration, key)
+    }
+  }
+  for (const key of waiting) {
+    if (begun.has(key)) continue
+    const acc = out.get(key) ?? { visible: false, opacity: 1, tracks: new Map(), color: {}, opacityCap: 1 } as Accumulated
+    acc.visible = false
+    out.set(key, acc)
+  }
   const states = new Map<TargetKey, TargetState>()
-  for (const [key, acc] of out) states.set(key, finalize(acc, base.get(key), slide))
+  for (const [key, acc] of out) states.set(key, finalize(acc, geoOf(key), slide))
+  // Each split item composes with its shape's whole-target state as its parent: visibility, opacity and transform.
+  for (const [shape, acc] of parents) {
+    const geo = geoOf(shape)
+    const parent = finalize(acc, geo, slide)
+    for (const key of itemsOf.get(shape) ?? []) {
+      const own = states.get(key)
+      // An item with no state of its own keeps the stage's default (hidden until its entrance).
+      if (own) states.set(key, withParent(own, parent, geo))
+    }
+  }
   return states
+}
+
+/**
+ * `child` drawn inside `parent`: the parent's full mapping (motion after transform) applied after the child's; the
+ * parent's mask clips the child over the parent shape's box (so a wipe sweeps across all the items), and the
+ * parent's colour applies on top of the child's own.
+ */
+function withParent(child: TargetState, parent: TargetState, geo: BaseGeometry | undefined): TargetState {
+  const full = (s: TargetState): Affine => s.motion ? mulAffine(s.transform, [1, 0, 0, 1, s.motion.dx, s.motion.dy]) : s.transform
+  const { motion: _motion, ...rest } = child
+  void _motion
+  const out: TargetState = {
+    ...rest,
+    visible: child.visible && parent.visible,
+    opacity: child.opacity * parent.opacity,
+    transform: mulAffine(full(child), full(parent)),
+  }
+  if (parent.mask && geo) {
+    // One mask for every item: over the shape's box, placed by the shape's own mapping, not the item's.
+    out.mask = parent.mask
+    out.maskBox = { x: geo.x, y: geo.y, w: geo.w, h: geo.h }
+    out.maskTransform = full(parent)
+  }
+  if (parent.color) {
+    const color = { ...child.color }
+    for (const channel of ['fill', 'line', 'text'] as const) {
+      const p = parent.color[channel]
+      if (p) color[channel] = color[channel] ? composeColor(color[channel]!, p) : p
+    }
+    out.color = color
+  }
+  return out
 }
 
 /** The track's value at a posed progress, evaluated on a THROWAWAY sink (for accumulate spans). */
@@ -738,4 +820,206 @@ function finalize(acc: Accumulated, geo: BaseGeometry | undefined, slide: Slide)
     ...(colour ? { color: colour } : {}),
     ...(motion ? { motion } : {}),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Text by word and by letter: `p:iterate type="wd"/"lt"` (S2-8; spec 6.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * How one iterated behaviour fans out over its items. `items` are evaluated
+ * under their own keys, each `delayMs` after the behaviour begins, for
+ * `spanMs` each (one simple duration; `autoRev` doubles it), eased per item.
+ * `totalMs` is the behaviour's extended duration on the working copy.
+ */
+export interface IterateFan {
+  items: ReadonlyArray<{ key: TargetKey; delayMs: number }>
+  spanMs: number
+  totalMs: number
+  accel: number
+  decel: number
+  autoRev: boolean
+  /** Under an entrance effect: an item that has not begun is hidden. */
+  entrance: boolean
+}
+
+export interface IteratedTiming {
+  /** The working copy to schedule (the source tree itself when nothing fans out). */
+  tree: TimingTree
+  /** Pass to `createScheduler` so `SchedulerEntry.order` stays the source pre-order index. */
+  orderOf: ReadonlyMap<TimeNode, number>
+  /** Pass to `renderStateAt`. */
+  fan: ReadonlyMap<BehaviourNode, IterateFan>
+  /** Iterated target key → its item keys, for callers that track per-target visibility. */
+  items: ReadonlyMap<TargetKey, readonly TargetKey[]>
+}
+
+export interface IterateOptions {
+  sink?: DiagnosticSink
+  slideIndex?: number
+  /** When `tree` is itself a working copy: its nodes' source pre-order indices. */
+  orderOf?: ReadonlyMap<TimeNode, number>
+  /** Reserves `bytes` before the working copy is built; `false` refuses (the tree stays as it is, diagnosed). */
+  charge?: (bytes: number, tag: string) => boolean
+  /**
+   * Per target and unit, the items an effect of that unit staggers, each a group of `splits` keys that move
+   * together (PR #19 review 9): a target built by word and by letter is split into letters, and a by-word effect
+   * gives each word's letters one delay. Absent for a target or unit, each split key is its own item.
+   */
+  groups?: ReadonlyMap<TargetKey, Partial<Record<'wd' | 'lt', ReadonlyArray<readonly TargetKey[]>>>>
+}
+
+/** Item evaluations per slide and frame (fanned behaviours × items); past it an effect plays whole, diagnosed. */
+export const MAX_FAN_ITEMS = 4096
+const FAN_NODE_BYTES = 256
+const FAN_ITEM_BYTES = 48
+const MAX_TREE_DEPTH = 64
+
+/**
+ * Start offsets (ms) of `n` items: `tmAbs` is the interval itself, `tmPct`
+ * a fraction of `durMs`; `backwards` starts the last item first. A missing,
+ * negative or non-finite interval is 0 (all items at once).
+ */
+export function iterateDelays(iterate: Iterate, n: number, durMs: number): number[] {
+  const raw = iterate.tmAbsMs !== undefined ? iterate.tmAbsMs : iterate.tmPct !== undefined ? iterate.tmPct * durMs : 0
+  const step = Number.isFinite(raw) && raw > 0 ? raw : 0
+  return Array.from({ length: Math.max(0, n) }, (_, i) => (iterate.backwards ? n - 1 - i : i) * step)
+}
+
+const finiteMs = (v: number | 'indefinite' | undefined): number | undefined => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
+
+/**
+ * Fans every behaviour under a `wd`/`lt` iterate out over the boxes of its
+ * target. `splits` maps an iterated target key (a shape, or a paragraph
+ * range) to its box keys in reading order, from `splitTextBoxes`.
+ *
+ * The result is a working copy (the source tree is never mutated): each
+ * fanned behaviour lasts `D + max(delay)` (`D` its simple duration, doubled
+ * by `autoRev`), with its accel, decel and autoRev moved into the fan so they
+ * apply per item; an iterated container with a finite `dur` is extended by
+ * its largest delay. So the scheduler sees the true length and successors
+ * (`afterEffect`, `onEnd`) wait for the last item. A whole-shape target also
+ * keeps its own key as an item for the body layer: at delay 0, or under an
+ * exit effect at the last item's delay.
+ *
+ * `tmPct` is a fraction of the iterated container's duration: its finite
+ * `dur`, else its longest behaviour's. Targets without boxes and behaviours
+ * without a finite duration play whole; everything is diagnosed.
+ */
+export function expandIterations(tree: TimingTree, splits: ReadonlyMap<TargetKey, readonly TargetKey[]>, options: IterateOptions = {}): IteratedTiming {
+  const { sink, slideIndex } = options
+  const diag = (code: string, effect: string, message: string): void => { sink?.add({ code, slideIndex, effect, message }) }
+  const srcOrder = new Map<TimeNode, number>()
+  interface Plan { node: BehaviourNode; owner?: ContainerNode; effect: string; keys: readonly TargetKey[]; whole?: TargetKey; delays: number[]; entrance: boolean; exit: boolean }
+  const plans: Plan[] = []
+  const containerDur = new Map<ContainerNode, number | undefined>()
+  const longest = (n: TimeNode, depth: number): number | undefined => {
+    if (depth > MAX_TREE_DEPTH) return undefined
+    if ('children' in n) {
+      let best: number | undefined
+      for (const c of n.children) { const d = longest(c, depth + 1); if (d !== undefined) best = Math.max(best ?? 0, d) }
+      return best
+    }
+    return finiteMs(n.ctn.durMs)
+  }
+  let fanned = 0
+  const walk = (n: TimeNode, iterated: { owner: ContainerNode; iterate: Iterate } | undefined, cls: string | undefined, depth: number): void => {
+    if (srcOrder.has(n) || depth > MAX_TREE_DEPTH) return
+    srcOrder.set(n, srcOrder.size)
+    const here = n.ctn.presetClass ?? cls
+    const own = n.ctn.iterate && n.ctn.iterate.type !== 'el' ? n.ctn.iterate : undefined
+    if ('children' in n) {
+      const next = own ? { owner: n, iterate: own } : iterated
+      for (const c of n.children) walk(c, next, here, depth + 1)
+      return
+    }
+    // A behaviour's own iterate wins over its container's; it then staggers by its own duration.
+    const it = own ?? iterated?.iterate
+    if (!it) return
+    const owner = own ? undefined : iterated?.owner
+    const effect = `iterate:${(owner ?? n).ctn.id}`
+    if (!('spid' in n.target)) return
+    const key = targetKey(n.target)
+    const keys = splits.get(key)
+    const unit = it.type === 'wd' ? 'word' : 'letter'
+    if (!keys || keys.length === 0) {
+      diag('text-build-unsplit', effect, `Text by ${unit} on ${key} has no word or letter boxes; the effect plays on the whole target`)
+      return
+    }
+    const dur = finiteMs(n.ctn.durMs)
+    if (dur === undefined) {
+      diag('text-build-unsplit', effect, `Text by ${unit} on ${key}: a behaviour without a finite duration cannot be staggered; it plays on the whole target`)
+      return
+    }
+    const whole = n.target.text ? undefined : key
+    const groups = it.type === 'el' ? undefined : options.groups?.get(key)?.[it.type]
+    const cost = keys.length + (whole ? 1 : 0)
+    if (fanned + cost > MAX_FAN_ITEMS) {
+      diag('text-build-refused', effect, `Text by ${unit} on ${key} would exceed ${MAX_FAN_ITEMS} item evaluations per slide; the effect plays on the whole target`)
+      return
+    }
+    if (owner && !containerDur.has(owner)) containerDur.set(owner, finiteMs(owner.ctn.durMs) ?? longest(owner, depth))
+    const base = owner ? containerDur.get(owner) : dur
+    if (it.tmAbsMs === undefined && it.tmPct !== undefined && base === undefined) {
+      diag('text-build-unsplit', effect, `Text by ${unit} on ${key}: tmPct needs a finite effect duration; the items start together`)
+    }
+    fanned += cost
+    if (groups && groups.length > 0) {
+      // One delay per group; every key of a group takes it.
+      const per = iterateDelays(it, groups.length, base ?? 0)
+      const flat: TargetKey[] = [], delays: number[] = []
+      groups.forEach((g, i) => { for (const k of g) { flat.push(k); delays.push(per[i]) } })
+      plans.push({ node: n, owner, effect, keys: flat, whole, delays, entrance: here === 'entr', exit: here === 'exit' })
+    } else plans.push({ node: n, owner, effect, keys, whole, delays: iterateDelays(it, keys.length, base ?? 0), entrance: here === 'entr', exit: here === 'exit' })
+  }
+  walk(tree.root, undefined, undefined, 0)
+  const unchanged = (): IteratedTiming => ({ tree, orderOf: options.orderOf ?? srcOrder, fan: new Map(), items: new Map() })
+  if (plans.length === 0) return unchanged()
+
+  const bytes = srcOrder.size * FAN_NODE_BYTES + fanned * FAN_ITEM_BYTES
+  if (options.charge && !options.charge(bytes, 'iterate')) {
+    for (const p of plans) diag('text-build-refused', p.effect, `Text by word or letter: the slideshow workspace refused ${bytes} B for the fan-out; the effect plays on the whole target`)
+    return unchanged()
+  }
+
+  // The working copy: every node cloned once (shared node objects stay shared).
+  const copies = new Map<TimeNode, TimeNode>()
+  const orderOf = new Map<TimeNode, number>()
+  const copy = (n: TimeNode, depth: number): TimeNode => {
+    const have = copies.get(n)
+    if (have) return have
+    const c: TimeNode = 'children' in n
+      ? { ...n, ctn: { ...n.ctn }, children: [] as TimeNode[] }
+      : { ...n, ctn: { ...n.ctn } } as BehaviourNode
+    copies.set(n, c)
+    orderOf.set(c, options.orderOf?.get(n) ?? srcOrder.get(n) ?? srcOrder.size)
+    if ('children' in n && 'children' in c) c.children = depth >= MAX_TREE_DEPTH ? [] : n.children.map(k => copy(k, depth + 1))
+    return c
+  }
+  const root = copy(tree.root, 0)
+  const fan = new Map<BehaviourNode, IterateFan>()
+  const items = new Map<TargetKey, TargetKey[]>()
+  const extend = new Map<ContainerNode, number>()
+  for (const p of plans) {
+    const c = copies.get(p.node) as BehaviourNode
+    const src = p.node.ctn
+    const span = finiteMs(src.durMs)! * (src.autoRev ? 2 : 1)
+    const last = Math.max(0, ...p.delays)
+    c.ctn.durMs = span + last
+    c.ctn.accel = 0
+    c.ctn.decel = 0
+    c.ctn.autoRev = false
+    const list = p.keys.map((key, i) => ({ key, delayMs: p.delays[i] }))
+    // The body appears with the first item and, under an exit, leaves with the last.
+    if (p.whole) list.unshift({ key: p.whole, delayMs: p.exit ? last : 0 })
+    fan.set(c, { items: list, spanMs: span, totalMs: span + last, accel: src.accel, decel: src.decel, autoRev: src.autoRev, entrance: p.entrance })
+    items.set(targetKey(p.node.target), [...p.keys])
+    if (p.owner) extend.set(p.owner, Math.max(extend.get(p.owner) ?? 0, last))
+    diag('text-build-approximate', p.effect, 'Text by word or letter: each word or letter box is its own layer (closest look-alike)')
+  }
+  for (const [owner, last] of extend) {
+    const dur = finiteMs(owner.ctn.durMs)
+    if (dur !== undefined) (copies.get(owner) as ContainerNode).ctn.durMs = dur + last
+  }
+  return { tree: { ...tree, root }, orderOf, fan, items }
 }

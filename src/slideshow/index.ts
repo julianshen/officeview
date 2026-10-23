@@ -11,6 +11,9 @@ import type { ShowStart, ShowToken, SlideShowCallbacks } from '../components/pre
 import { PAGE_PADDING_PX } from '../components/paged/metrics'
 import { createSession, type SessionController } from './player/session'
 
+/** The preload hint's screen preparation (S2-3), called by the lazy toolbar once the chunk loaded. */
+export { prepareScreens } from './presenter/screens'
+
 export type { ShowStart, ShowToken, SessionController }
 export type { SessionState, ShowInput } from './player/session'
 

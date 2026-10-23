@@ -60,7 +60,7 @@ export interface PagedChromeProps {
   allowPrint: boolean
   /** Present offer, already gated to allowed slides documents. Everything
    * about its offer (busy, preload hint) is the toolbar's own lazy business. */
-  present?: { start(from: 'beginning' | 'current'): void }
+  present?: { start(from: 'beginning' | 'current', presenterView?: boolean): void }
   pages: readonly Paintable[]
   owner: object
   showToolbar: boolean

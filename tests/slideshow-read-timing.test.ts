@@ -309,7 +309,9 @@ describe('timing tree', () => {
     r = await readOne(`<p:audio isNarration="1"><p:cMediaNode vol="50000" numSld="3"><p:cTn id="6" fill="hold"/>${tgt()}</p:cMediaNode></p:audio><p:video fullScrn="1"><p:cMediaNode><p:cTn id="7"/>${tgt()}</p:cMediaNode></p:video>`)
     expect(byId(r.t, 6)).toMatchObject({ kind: 'audio', isNarration: true, attrNames: [], target: { spid: '2' } } satisfies Partial<AudioBehaviour>)
     expect(byId(r.t, 7)).toMatchObject({ kind: 'video', fullScrn: true } satisfies Partial<VideoBehaviour>)
-    expect(has(r.sink, 'timing-ignored', 'numSld')).toBe(true)
+    // S2-7: playback reads numSld and vol (1/1000 %), so they are carried, not ignored.
+    expect(byId(r.t, 6)).toMatchObject({ numSld: 3, volume: 0.5 })
+    expect(has(r.sink, 'timing-ignored', 'numSld')).toBe(false)
     // excl container and iterate
     const exclXml = `<p:excl><p:cTn id="6" fill="hold"><p:iterate type="wd" backwards="1"><p:tmPct val="20000"/></p:iterate><p:childTnLst><p:set>${bhvr(7)}<p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:excl>`
     r = await readOne(exclXml)

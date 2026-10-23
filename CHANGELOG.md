@@ -108,12 +108,33 @@ print. Targets 0.5.0 (the version in package.json).
   `allow="fullscreen"`) the show runs in the window. The show draws with
   WebGL2 and falls back to Canvas 2D, within a bounded memory workspace
   (512 MiB desktop, 256 MiB mobile). Its code is a lazy chunk; the eager
-  bundle ends smaller than before. Limits: Presenter View, speaker notes,
-  audio and video come in a later release (media effects are diagnosed
-  stand-ins), 3-D and morph transitions play a 2-D look-alike, custom shows
-  play the whole deck, and macOS may capture F5. Every approximated or
-  refused effect is reported through `onSlideShowDiagnostic`. See the
-  README's "Slideshow" section.
+  bundle ends smaller than before. Limits: 3-D and morph transitions play a
+  2-D look-alike, custom shows play the whole deck, and macOS may capture F5.
+  Every approximated or refused effect is reported through
+  `onSlideShowDiagnostic`. See the README's "Slideshow" section.
+- **Slideshow Presenter View, audio and video.** `present({ presenterView })`
+  (and the Present menu's "Presenter View", or Alt+F5 / Shift+Alt+F5) opens a
+  presenter window with the current slide, the next click or slide, speaker
+  notes, an elapsed timer and clock, slide controls, an all-slides grid and an
+  "Effect notes" panel. With the browser's Window Management permission the
+  presenter window and the full-screen audience go to different screens
+  ("Use both screens", "Swap displays"); the default `presenterView: 'auto'`
+  opens the window only when that placement is ready, so a plain Present
+  stays full screen on one screen. If the window is blocked, Presenter View
+  runs inside the viewer and Alt+F5 switches it with the audience picture
+  (`session.presenter` is `'window'`, `'swap'` or `'none'`). Audio, video,
+  PowerPoint's media commands, sound across slides, transition sounds and
+  sounds attached to animations (loop until next sound, stop previous sound)
+  now play where the browser decodes the format; an undecodable clip keeps its
+  poster and a refused autoplay offers "Click to play". Text builds by word
+  and by letter animate each word or letter. Embedding: an iframe needs
+  `allow="window-management"` for two-screen placement, and a sandboxed one
+  needs `allow-popups` for the presenter window (the README's example no longer
+  combines `allow-scripts` with `allow-same-origin`, which lets a same-origin
+  frame remove its own sandbox), and a host CSP must allow officeview's
+  stylesheet URL (the presenter window inherits it). The eager bundle stays
+  under its ceiling (35,937 B). Limits: video plays in an overlay that shape
+  effects do not move, and some Presenter View thumbnails show no pictures.
 
 ### Changed
 

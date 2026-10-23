@@ -433,10 +433,16 @@ function cBhvr(ctx: Ctx, node: XmlNode | undefined, el: string): BehaviourBase |
 function mediaBase(ctx: Ctx, node: XmlNode, el: string): BehaviourBase | undefined {
   const media = child(node, 'cMediaNode')
   if (!media) { add(ctx, 'timing-malformed', el, `${el} without cMediaNode; dropped`); return undefined }
-  for (const name of Object.keys(attrs(media))) {
-    if (['vol', 'mute', 'numSld', 'showWhenStopped'].includes(name)) add(ctx, 'timing-ignored', name, `cMediaNode@${name} is not applied`)
+  const ma = attrs(media)
+  for (const name of Object.keys(ma)) {
+    if (name === 'vol' || name === 'mute' || name === 'numSld') continue
+    if (name === 'showWhenStopped') add(ctx, 'timing-ignored', name, `cMediaNode@${name} is not applied`)
     else add(ctx, 'timing-unknown-attribute', `cMediaNode@${name}`, `Unknown attribute cMediaNode@${name}; dropped`)
   }
+  // S2-7: playback reads these. `vol` is 1/1000 % (100000 = full), clamped to [0, 1]; `numSld` is a slide count.
+  const vol = value(ctx, ma, 'cMediaNode', 'vol', uint)
+  const muted = value(ctx, ma, 'cMediaNode', 'mute', bool)
+  const numSld = value(ctx, ma, 'cMediaNode', 'numSld', uint)
   let ctn: CTn | undefined
   let tgt: TargetRef | undefined
   for (const [name, c] of kids(media)) {
@@ -451,7 +457,11 @@ function mediaBase(ctx: Ctx, node: XmlNode, el: string): BehaviourBase | undefin
   const resolved = resolveTarget(ctx, tgt, el)
   // A dropped behaviour's id no longer resolves: references to it are diagnosed missing.
   if (!resolved) { if (ctx.ids.get(ctn.id) === ctn) ctx.ids.delete(ctn.id); return undefined }
-  return { ctn, target: resolved, attrNames: [], additive: 'base', accumulate: 'none' }
+  const out: BehaviourBase & { numSld?: number; volume?: number; muted?: boolean } = { ctn, target: resolved, attrNames: [], additive: 'base', accumulate: 'none' }
+  if (numSld !== undefined) out.numSld = numSld
+  if (vol !== undefined) out.volume = Math.min(1, vol / 100000)
+  if (muted !== undefined) out.muted = muted
+  return out
 }
 
 function behaviour(ctx: Ctx, el: string, node: XmlNode, depth: number): BehaviourNode | undefined {
