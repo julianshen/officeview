@@ -252,6 +252,32 @@ describe('click targets', () => {
 })
 
 describe('hyperlinks', () => {
+  it('PR #18 review 6: a run link in a paragraph its build has not revealed is neither hit nor offered to assistive tech', async () => {
+    // Paragraph 0 "Always" shows from the start; paragraph 1 "Later" (linked) enters on the first click (a by-paragraph build).
+    const reveal = `<p:set><p:cBhvr><p:cTn id="12" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"><p:txEl><p:pRg st="1" end="1"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    const click = `<p:par><p:cTn id="10" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${reveal}</p:childTnLst></p:cTn></p:par>`
+    const timing = timingXmlOf(mainSeqXml([step(20, click)])).replace('</p:tnLst></p:timing>', '</p:tnLst><p:bldLst><p:bldP spid="2" grpId="0" build="p"/></p:bldLst></p:timing>')
+    const doc = await deck({
+      slides: [{
+        shapes: [at(2, 0, 0, 900, 200, undefined, { paragraphs: [{ runs: [{ text: 'Always', sz: '4000' }] }, { runs: [{ text: 'Later', sz: '4000' }] }] })],
+        timingXml: timing,
+        links: [{ shapeId: 2, target: 'https://example.com/later', external: true, onRun: 1 }],
+      }, { shapes: [] }],
+    })
+    const r = await show(doc)
+    expect(r.text()).toEqual(['Always'])
+    expect(r.buttons()).toEqual([])
+    // Where "Later" will be: not yet a link, so the click advances the build.
+    await r.click(40, 100)
+    expect(r.opened).toEqual([])
+    expect(r.s.buildIndex).toBe(1)
+    await r.tick(10)
+    expect(r.buttons().map(b => b.textContent)).toEqual(['Link: Later'])
+    await r.click(40, 100)
+    expect(r.opened.map(o => o[0])).toEqual(['https://example.com/later'])
+    r.s.exit()
+  })
+
   it('PR #18 review 5: links follow the AlternateContent branch the drawing parser renders (an unsupported Choice falls back)', async () => {
     const { default: JSZip } = await import('jszip')
     // A 96 px square: the Choice (unknown Requires) holds shape 60 linked to /choice; the Fallback holds shape 61 linked to /fallback.

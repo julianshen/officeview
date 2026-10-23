@@ -36,8 +36,12 @@ export interface Residency {
   commitResize(): void
   /** The new output could not be used (the compositor kept its size): the new reserve is refunded and the old backing store restored. */
   abortResize(): void
-  /** Moves the window to `slide - 1 .. slide + 1`, evicting everything outside it. */
-  show(slide: number): void
+  /**
+   * Moves the window to `slide` and its `neighbours` (the previous and next visible slides, which hidden slides
+   * and a `p:sldRg` range can put further than ±1; PR #18 review 6), evicting everything outside it. Without
+   * `neighbours` the window is `slide - 1 .. slide + 1`.
+   */
+  show(slide: number, neighbours?: readonly number[]): void
   /** The slides currently holding (or acquiring) residency, ascending. */
   resident(): number[]
   /** The sub-owner a resident slide's layers allocate from; `undefined` if it holds no layer lease. */
@@ -57,6 +61,11 @@ export interface ResidencyDeps {
   build?: (slide: number, level: Exclude<LadderLevel, 'terminal'>, owner: AllocationOwner) => Promise<void>
   /** Stops and releases media playing across slides (first relief under pressure). */
   stopCrossSlideMedia?: () => void
+  /**
+   * Stage-side teardown of a dropped slide (PR #18 review 6): releases its uploaded layers and other leases, so
+   * an eviction under pressure actually refunds before admission is retried. Never called for the current slide.
+   */
+  teardown?: (slide: number) => void
 }
 
 interface Entry {
@@ -104,7 +113,8 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
   let backing: Backing = deps.backing ?? { w: Math.ceil(terminal.outputBytes / 4), h: 1, dpr: 1 }
   const sink = deps.sink
   const price = (slide: number, level: Exclude<LadderLevel, 'terminal'>) => (deps.cost ? deps.cost(slide, level, backing) : defaultCost(level, backing))
-  const inWindow = (slide: number) => current !== undefined && Math.abs(slide - current) <= 1
+  let window: ReadonlySet<number> | undefined
+  const inWindow = (slide: number) => current !== undefined && (window ? window.has(slide) : Math.abs(slide - current) <= 1)
 
   let pendingResize: ResizeTicket | undefined
   /** The backing store before the pending resize (`abortResize` restores it). */
@@ -143,6 +153,8 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
     entry.abort.abort()
     entry.handle?.release()
     entry.handle = undefined
+    // The stage lets go of the slide's layers first, so the retired generation can refund what they held.
+    if (entry.slide !== current) deps.teardown?.(entry.slide)
     releaseLayers(entry)
     store.evict(entry.slide)
   }
@@ -155,7 +167,7 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
       freed = true
     }
     // The store may hold neighbour entries residency never acquired (another consumer's): drop their cache too.
-    for (const slide of store.resident()) if (slide !== current && slide !== keep) { store.evict(slide); freed = true }
+    for (const slide of store.resident()) if (slide !== current && slide !== keep) { deps.teardown?.(slide); store.evict(slide); freed = true }
     return freed
   }
 
@@ -295,8 +307,9 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
       else terminal.resize(surfaceBytes(previous.w, previous.h))
       backing = previous
     },
-    show(slide) {
+    show(slide, neighbours) {
       current = slide
+      window = neighbours ? new Set([slide, ...neighbours]) : undefined
       for (const entry of [...entries.values()]) if (!inWindow(entry.slide)) drop(entry)
     },
     resident: () => [...entries.keys()].sort((a, b) => a - b),

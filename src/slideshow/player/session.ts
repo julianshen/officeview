@@ -386,7 +386,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     a11yKey = key
     const pptx = doc.slides[v.index]
     a11y.setText(visibleText(pptx, state, v.meta?.builds ?? []))
-    a11y.setTargets(kiosk ? [] : showTargets(pptx, state, v.timeline?.triggers() ?? [], v.meta?.links ?? []))
+    a11y.setTargets(kiosk ? [] : showTargets(pptx, state, v.timeline?.triggers() ?? [], v.meta?.links ?? [], v.meta?.builds ?? []))
   }
 
   /** Shows deck slide `i` (a cut, or a transition once its model is in) and loads its click steps. Resolves when the slide is drawable. */

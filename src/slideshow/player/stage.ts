@@ -54,7 +54,7 @@ import { paintDirect } from '../render/direct'
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
 import { rasterLayer } from '../render/raster'
 import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
-import { imageIndices, paintedBounds, slideSize, underlayOf } from '../render/scene'
+import { imageIndices, paintedBounds, slideSize, textFilter, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
@@ -521,6 +521,8 @@ export function createStage(deps: StageDeps): Stage {
     backing,
     cost: (slide, level) => price(slide, level),
     build: async (slide, level, owner) => build(slide, level, owner),
+    // An evicted neighbour's uploaded layers and image leases go with it (PR #18 review 6).
+    teardown: (slide) => { const p = prepared.get(slide); if (p && p !== current) drop(p) },
   })
 
   /** Rasterises one layer through `owner` and uploads it to `c`. `undefined`: nothing to draw (empty, or deferred while lost). */
@@ -946,8 +948,9 @@ export function createStage(deps: StageDeps): Stage {
       const p = prepare(model.index, model.slide)
       current = p
       timelineOf = model.timeline
-      residency.show(model.index)
-      for (const other of [...prepared.values()]) if (other !== p && Math.abs(other.index - p.index) > 1 && !neighbours.includes(other.index)) drop(other)
+      // The window is the slide and its visible neighbours, which hidden slides can put further than ±1 (PR #18 review 6).
+      residency.show(model.index, neighbours)
+      for (const other of [...prepared.values()]) if (other !== p && !neighbours.includes(other.index)) drop(other)
       compositor().setSlideIndex(model.index)
       compositor().setViewport(viewport(p))
       await p.ready
@@ -1091,8 +1094,10 @@ export function createStage(deps: StageDeps): Stage {
       const ctx = (measurer ??= factory(1, 1)).getContext('2d')
       if (!ctx) return undefined
       const layout = layoutTextBody(body, w, h, createTextBodyMeasurer(ctx as CanvasRenderingContext2D, resolveFont), current?.slide.theme)
+      // A paragraph-build clone paints only its paragraphs (as rasterisation does): runs elsewhere are not on it (PR #18 review 6).
+      const keep = textFilter.get(shape)
       for (const line of layout.lines) {
-        if (v < line.y || v > line.y + line.height) continue
+        if ((keep && !keep(line.paragraphIndex)) || v < line.y || v > line.y + line.height) continue
         for (const seg of line.segments) {
           if (seg.transform || u < seg.x || u > seg.x + seg.width) continue
           return { p: line.paragraphIndex, r: seg.runIndex }

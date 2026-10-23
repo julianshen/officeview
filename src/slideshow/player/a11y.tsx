@@ -163,8 +163,14 @@ export function visibleText(slide: PptxSlide, state: RenderState, builds: readon
 }
 
 /** Trigger and link targets in authored z-order (paint order), visible ones only; a trigger wins over a link on the same shape. */
-export function showTargets(slide: PptxSlide, state: RenderState, triggers: readonly string[], links: readonly LinkSpec[]): ShowTarget[] {
+export function showTargets(slide: PptxSlide, state: RenderState, triggers: readonly string[], links: readonly LinkSpec[], builds: readonly BuildOwnership[] = []): ShowTarget[] {
   const trig = new Set(triggers)
+  // A run link in a paragraph its build has not revealed (or has removed) is not offered (PR #18 review 6).
+  const byShape = new Map(builds.filter((b) => b.mode === 'paragraph').map((b) => [b.spid, b]))
+  const revealed = (l: LinkSpec) => {
+    const range = l.run && byShape.get(l.spid)?.ranges.find((r) => l.run!.p >= r.st && l.run!.p <= r.end)
+    return !range || shown(state, range.key)
+  }
   const linked = new Map<string, LinkSpec[]>()
   for (const l of links) {
     const list = linked.get(l.spid) ?? []
@@ -181,7 +187,7 @@ export function showTargets(slide: PptxSlide, state: RenderState, triggers: read
         const name = n.source?.name?.trim()
         const text = shapeText(n).replace(/\s+/g, ' ').trim()
         if (trig.has(spid)) out.push({ spid, kind: 'trigger', label: name || text || `shape ${spid}` })
-        else for (const l of linked.get(spid)!) out.push({ spid, kind: 'link', label: linkText(n, l) || text || name || `shape ${spid}`, ...(l.run ? { run: l.run } : {}) })
+        else for (const l of linked.get(spid)!.filter(revealed)) out.push({ spid, kind: 'link', label: linkText(n, l) || text || name || `shape ${spid}`, ...(l.run ? { run: l.run } : {}) })
       }
       if (n.group) walk(n.children ?? [])
     }

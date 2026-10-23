@@ -148,3 +148,17 @@ it('PR #18 review 3: navigation queued on a loading slide survives the slide cha
     expect(r.s.slideIndex).toBe(3)
   } finally { r.exit() }
 })
+
+it('PR #18 review 6: the next visible slide past a hidden one is prefetched and resident', async () => {
+  seams = installShowSeams({ width: 1280, height: 720 })
+  const doc = await loadDeck(await buildPptxDeck({
+    slideSize: [W, H],
+    slides: [{ shapes: [box(2, 'DDEEFF')] }, { shapes: [box(2, 'FFEEDD')], hidden: true }, { shapes: [box(2, 'EEFFDD')] }],
+  }))
+  const r = await startShow(doc, { seams, size: { width: 1280, height: 720 } })
+  try {
+    await r.tick(100)
+    // Slide 1 is hidden: slide 2 is slide 0's next visible slide, two indices away.
+    expect(r.s.stage!.inspect().slides.map(s => [s.index, s.level])).toEqual([[0, 'full'], [2, 'full']])
+  } finally { r.exit() }
+})
