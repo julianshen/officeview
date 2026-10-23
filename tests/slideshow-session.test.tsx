@@ -653,3 +653,44 @@ describe('exit, focus and events', () => {
     expect(r.cleanup).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('PR #19 review 2', () => {
+  it('Presenter View primes previews with the stage\'s expanded text timing', async () => {
+    const textTiming = vi.fn(() => undefined)
+    vi.spyOn(sessionDeps, 'stage').mockImplementation(() => ({ ...recordingStage(), textTiming }))
+    const r = await show(staticDoc(2))
+    const opts = r.s.presenterSource.previewOptions
+    expect(typeof opts.textTiming).toBe('function')
+    const meta = { index: 1, hidden: false, timing: undefined, notes: [], links: [], media: [], builds: [] }
+    const charge = () => true
+    opts.textTiming!(1, meta, charge)
+    expect(textTiming).toHaveBeenCalledWith(1, meta, charge)
+    r.s.exit()
+  })
+
+  it('the transition sound starts when the stage starts the transition, not before the slide is drawable', async () => {
+    // Slide 2's transition sound names the audio part on its shape (jsdom decodes no audio, so starting it is observed
+    // as its media-codec diagnostic, emitted by the transition-sound controller at start).
+    const sound = '<p:transition><p:fade/><p:sndAc><p:stSnd><p:snd r:embed="rIdShow1" name="a.wav"/></p:stSnd></p:sndAc></p:transition>'
+    const { doc } = await deck({ slides: [{ shapes: [box] }, { shapes: [box], media: [{ shapeId: 2, kind: 'audio', ext: 'wav', data: new Uint8Array([1, 2, 3]) }], transition: { xml: sound } }] })
+    let ready!: () => void
+    const entered: number[] = []
+    vi.spyOn(sessionDeps, 'stage').mockImplementation(() => ({
+      ...recordingStage(),
+      async enter(m) {
+        entered.push(m.index)
+        // Slide 2 is not drawable yet (images decoding, layers building): the transition has not started.
+        if (m.index === 1) await new Promise<void>((res) => { ready = res })
+      },
+    }))
+    const r = await show(doc)
+    r.s.next()
+    await flush()
+    expect(entered).toEqual([0, 1])
+    expect(r.log.filter((l) => l === 'diag:media-codec')).toEqual([])
+    ready()
+    await flush()
+    expect(r.log.filter((l) => l === 'diag:media-codec')).toEqual(['diag:media-codec'])
+    r.s.exit()
+  })
+})

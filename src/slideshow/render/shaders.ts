@@ -11,8 +11,9 @@
  *   un-premultiplies (guarding `a = 0`), applies the 4×5 matrix (offsets
  *   already in [0, 1]), clamps and re-premultiplies, the same order as the
  *   Canvas 2D backend's `applyColorMatrix`. The mask is coverage in `.r`:
- *   mode 1 samples it at the quad's uv (a layer mask, which moves with the
- *   layer), mode 2 at the fragment's device position over `u_maskRect` (a
+ *   mode 1 samples it at the quad's uv placed in `u_maskRect` (a layer mask,
+ *   which moves with the layer: `[0, 0, 1, 1]` over the layer's own box, or
+ *   the layer's place inside its shape's box for a split text item), mode 2 at the fragment's device position over `u_maskRect` (a
  *   transition mask, fixed to the incoming frame's device rect), and 0
  *   outside that rect. The result is premultiplied, × opacity × coverage, for
  *   `blendFunc(ONE, ONE_MINUS_SRC_ALPHA)`.
@@ -53,7 +54,8 @@ void main() {
   }
   float m = 1.0;
   if (u_maskMode == 1) {
-    m = texture(u_mask, v_uv).r;
+    vec2 t = (v_uv - u_maskRect.xy) / u_maskRect.zw;
+    m = (t.x < 0.0 || t.y < 0.0 || t.x > 1.0 || t.y > 1.0) ? 0.0 : texture(u_mask, t).r;
   } else if (u_maskMode == 2) {
     vec2 d = vec2(gl_FragCoord.x, u_output.y - gl_FragCoord.y);
     vec2 t = (d - u_maskRect.xy) / u_maskRect.zw;

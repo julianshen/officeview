@@ -540,6 +540,11 @@ export function createWebGL2Compositor(
     gl.disable(gl.SCISSOR_TEST)
   }
 
+  /** A box with positive width and height from a corner and a signed size. */
+  function normBox(x: number, y: number, w: number, h: number): Bounds {
+    return { x: w < 0 ? x + w : x, y: h < 0 ? y + h : y, w: Math.abs(w), h: Math.abs(h) }
+  }
+
   function drawOne(d: LayerDraw) {
     const { state } = d
     if (!state.visible || !(state.opacity > 0)) return
@@ -555,9 +560,23 @@ export function createWebGL2Compositor(
     const ms = checkedMask(state.mask, effect)
     if (ms) {
       const seed = Number(ms.params.seed)
-      const r = resolveMask(ms, Number.isFinite(seed) ? seed : 0, effect, { kind: 'layer', box: t.bounds, tw: t.w, th: t.h })
+      // A mask over another box than the layer's (a split text item under its shape's mask): rasterised over that
+      // box at the layer's texel density (capped), and sampled through the layer's place inside it.
+      const b = t.bounds, mb = state.maskBox
+      const own = !(mb && [mb.x, mb.y, mb.w, mb.h].every(Number.isFinite) && mb.w > 0 && mb.h > 0 && b.w > 0 && b.h > 0)
+      const box = own ? b : mb!
+      const k = own ? 1 : Math.min(t.w / b.w, t.h / b.h, maxTextureSize / box.w, maxTextureSize / box.h)
+      const tw = own ? t.w : Math.max(1, Math.round(box.w * k)), th = own ? t.h : Math.max(1, Math.round(box.h * k))
+      // A shared parent mask placed by the parent's own mapping (PR #19 review 7): fixed in device space when that
+      // mapping is axis-aligned, so it does not follow the layer's transform; otherwise it moves with the layer.
+      const pm = own || !isAffine(state.maskTransform) ? undefined : mulAffine(view, state.maskTransform)
+      const device = pm && Math.abs(pm[1]) < 1e-9 && Math.abs(pm[2]) < 1e-9 && pm[0] !== 0 && pm[3] !== 0
+        ? normBox(pm[0] * box.x + pm[4], pm[3] * box.y + pm[5], pm[0] * box.w, pm[3] * box.h) : undefined
+      const r = device
+        ? resolveMask(ms, Number.isFinite(seed) ? seed : 0, effect, { kind: 'device', box: device })
+        : resolveMask(ms, Number.isFinite(seed) ? seed : 0, effect, { kind: 'layer', box, tw, th })
       if (r === 'skip') return
-      if (r !== 'none') binding = r
+      if (r !== 'none') binding = own || device ? r : { ...r, rect: [(box.x - b.x) / b.w, (box.y - b.y) / b.h, box.w / b.w, box.h / b.h] }
     }
     drawQuad(t, m, clamp01(state.opacity, 1), tint, binding)
   }

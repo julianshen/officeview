@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { runShow } from '../src/slideshow'
 import { sessionDeps } from '../src/slideshow/player/session'
 import { adoptPresenterWindow } from '../src/slideshow/presenter/window'
+import { grantedScreenDetails } from '../src/slideshow/presenter/screens'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { ManualClock } from '../src/slideshow/clock'
 import type { Stage } from '../src/slideshow/player/stage'
@@ -171,6 +172,22 @@ describe('presenter popup: the synchronous start', () => {
     expect(log.filter((l) => l.startsWith('requestFullscreen'))).toHaveLength(4)
   })
 
+  it('PR #19 review 5: the prepared audience screen is used only when Presenter View starts', async () => {
+    const audienceScreen = { availWidth: 1920, availHeight: 1080, label: 'external' }
+    for (const presenterView of [false, true] as const) {
+      log.length = 0
+      const h = freshHost()
+      preparedPlacement.set(h.ownerDocument, { popupFeatures: 'popup,left=0,top=0,width=800,height=600', audienceScreen })
+      const r = startPresent({ doc: PPTX, host: h, opts: { presenterView }, platform: platform(log, fakePopup()), generation: 1, callbacks: callbacks(), allow: true, motion: 'auto' })
+      h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await r.catch(() => {})
+      // Audience only: full screen stays on the viewer's own screen; Presenter View: the audience goes to the prepared one.
+      expect(log.filter((l) => l.startsWith('open') || l.startsWith('requestFullscreen'))).toEqual(presenterView
+        ? ['open:about:blank:popup,left=0,top=0,width=800,height=600', 'requestFullscreen:external']
+        : ['requestFullscreen'])
+    }
+  })
+
   it('a throwing platform open is a blocked popup: the start goes on and the show token is released at its end (review M4)', async () => {
     const host = freshHost()
     const p = platform(log, null)
@@ -222,7 +239,8 @@ describe('presenter popup: the synchronous start', () => {
   })
 })
 
-describe('defaultPlatform.screenDetails (review I1)', () => {
+// S2-9 removed the uncalled eager defaultPlatform.screenDetails; the preload's realm-safe lazy reader keeps its contract.
+describe('grantedScreenDetails (S2-2 review I1, moved from defaultPlatform.screenDetails by S2-9)', () => {
   const nav = navigator as Navigator & { permissions?: Permissions }
   const win = window as Window & { getScreenDetails?: () => Promise<unknown> }
   let saved: PropertyDescriptor | undefined
@@ -236,29 +254,33 @@ describe('defaultPlatform.screenDetails (review I1)', () => {
 
   it('resolves undefined, never rejects, where Window Management is missing, unknown, not granted or failing', async () => {
     Object.defineProperty(nav, 'permissions', { value: undefined, configurable: true })
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     // Firefox and Safari: the permission name is not a PermissionName (a synchronous or asynchronous TypeError).
     permissions(() => { throw new TypeError("'window-management' is not a valid enum value") })
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     permissions(() => Promise.reject(new TypeError('unknown permission')))
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     permissions(() => Promise.resolve({ state: 'prompt' }))
     win.getScreenDetails = vi.fn()
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     expect(win.getScreenDetails).not.toHaveBeenCalled()
     // Granted, but the API itself is missing or fails.
     permissions(() => Promise.resolve({ state: 'granted' }))
     delete win.getScreenDetails
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     win.getScreenDetails = () => Promise.reject(new Error('NotAllowedError'))
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
+  })
+
+  it('the eager platform carries no screen-details reader (S2-9)', () => {
+    expect('screenDetails' in defaultPlatform).toBe(false)
   })
 
   it('returns the screen details when the permission is already granted', async () => {
     const details = { screens: [{ availWidth: 1, availHeight: 1 }] }
     permissions(() => Promise.resolve({ state: 'granted' }))
     win.getScreenDetails = () => Promise.resolve(details)
-    await expect(defaultPlatform.screenDetails!()).resolves.toBe(details)
+    await expect(grantedScreenDetails(window)).resolves.toBe(details)
   })
 })
 

@@ -6,7 +6,7 @@ Validation record for the PowerPoint slideshow project (spec
 later tasks fill in their sections. The controller merges the per-task ledger files
 (`.superpowers/sdd/ledger/<task-id>.md`) into the Eager ledger and Catalogue sections
 in merge order; implementer tasks do not edit those two sections, except S1-3's explicitly assigned initial
-generated catalogue. Stage-closing tasks (S0-8 for Stage 0, S1-23 for Stage 1) do the merge.
+generated catalogue. Stage-closing tasks (S0-8 for Stage 0, S1-23 for Stage 1, S2-9 for Stage 2) do the merge.
 
 Synthetic builder decks are "Office-shaped synthetic" and are never reported as
 Office evidence.
@@ -58,6 +58,29 @@ The corpus (`bun scripts/fetch-corpus.ts`, 16 `lo-` decks, `--check` clean) was 
 for every run, so the corpus, appearance and slideshow corpus tests ran instead of skipping.
 
 The first Chromium run, before any change, had 3 failures. `ui-host-isolation` "dist/style.css" needed a build (`dist/` was absent); it passes after `bun run build`. The other two, in `tests/browser/paged-toolbar.spec.ts` (S1-18: "Present button starts the show from the current slide" and "Present from a menu item hands focus to the show and Esc exits"), were stale: they compared the show surface's whole text with "Slide n of 3", and S1-20 added the end-of-show screen and the hidden slide-text layer to the surface. S1-23 changed them to check the surface's `data-slide` and the live region's text (test-only). The `chromium` project is not in CI, which is why the break went unnoticed until this gate.
+
+### Stage 2 close (S2-9, on `feature/slideshow-s2` `011d252`)
+
+Run by S2-9 on the Mac build host, on the tree that S2-1 to S2-8 and the `main`
+merge (`011d252`: Stage 1 PR #18) produced, plus this task's commits: the media
+row flips and the stale `media-stand-in` paths (`481cdd6`), the eager
+`defaultPlatform.screenDetails` removal (`b1d9bfb`), and this documentation with
+the diagnostic-table test. Every gate below ran on the final source and test tree.
+
+| Gate | Command | Result |
+|---|---|---|
+| Typecheck | `bunx tsc --noEmit` | exit 0, no errors |
+| Script typecheck | `bun run typecheck:scripts` | exit 0 |
+| Full Vitest, run 1 | `bunx vitest run` | 488 files passed; 9,123 passed, 2 skipped, 1 todo, 0 failed (fresh `dist/` and module map present) |
+| Full Vitest, run 2 | `bunx vitest run` | 488 files passed; 9,123 passed, 2 skipped, 1 todo, 0 failed. No flakes in either run. |
+| Eager budget, fresh rebuild | `rm -rf dist && bun run build && bun scripts/eager-budget.ts` | **35,937 B** (ceiling 38,647 B; 2,710 B headroom; `011d252` was 36,024 B) |
+| Eager graph | `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts` | eager graph ok, 144 eager modules |
+| Goldens, strict | `OFFICEVIEW_STRICT_GOLDEN=1 bunx vitest run tests/golden.test.ts tests/golden-corpus.test.ts tests/golden-appearance.test.ts tests/slideshow-goldens.test.ts` | 4 files, 76 passed; no golden written or changed (`git status` clean for `tests/goldens/`) |
+| Playwright, Chromium | `IV_HARNESS_PORT=4523 timeout 1500 bunx playwright test --config playwright.viewer.config.ts --project chromium` | 134 passed, 0 skipped, 0 failed (4.1 min); port 4523 free afterwards |
+| Playwright, `slideshow` project (SwiftShader WebGL2) | `IV_HARNESS_PORT=4524 timeout 1500 bunx playwright test --config playwright.viewer.config.ts --project slideshow` | 53 passed, 8 skipped (the opt-in `slideshow-perf.spec.ts` benchmark), 0 failed (1.2 min), including the S2-2/S2-3/S2-5 presenter specs and the four media specs (narration.pptx played its m4a); port 4524 free afterwards |
+| WebGL2 in CI | the `slideshow-browser` job | observed on PR #18 (Stage 1): CI created WebGL2 on SwiftShader. The Stage 2 PR's run is the next check. |
+
+The corpus (`bun scripts/fetch-corpus.ts`, `--check` clean) was present for every run.
 
 ## Eager ledger
 
@@ -147,6 +170,40 @@ Summary:
 
 The per-task files `.superpowers/sdd/ledger/S1-*.md` hold the full rows, including S1-1's `T1` stub breakdown and S1-17's attribution table. S1-6 and S1-21 wrote none.
 
+### Stage 2 (merged by S2-9)
+
+Same metric and rules. Rows are in `feature/slideshow-s2` first-parent merge order
+(S2-6, the two `feature/slideshow-s1` merges, S2-1 + S2-2, S2-3, S2-7, S2-8, S2-4,
+S2-5, the `main` merge, S2-9). `feature/slideshow-s2` branched early from
+`feature/slideshow-s1` (after S1-18, before the JSX runtime fix reached it), so
+S2-6 measured the old 38,232 B base; the s1 merges then brought the JSX runtime fix
+and S1-20. As before, a row's "Before" is that task's own base.
+
+| Task | Item | Before | After | Delta | Running total |
+|---|---|---|---|---|---|
+| — | Fork point: `feature/slideshow-s1` `5f511cc` (after S1-18), fresh rebuild | | 38,232 | | 38,232 |
+| S2-6 | Media reader and leases (`src/slideshow/media/`, lazy); fix rounds 1–2 re-measured | 38,232 | 38,232 | 0 | 38,232 |
+| — | Merge `feature/slideshow-s1` with `main` (`fe54af4`: the JSX runtime fix) and then S1-20 (`307c380`) | 38,232 | 35,727 | −2,505 | 35,727 |
+| S2-1 | `T2`: throwaway stubs of S2-2's eager edits (popup branch, `'auto'`, Alt+F5, the `preparedPlacement` slot, the `screenDetails` default, `requestFullscreen(el, options?)`), measured then reverted. No hunt: under the ceiling (controller ruling) | 35,727 | 35,969 | +242 | (not landed) |
+| S2-2 | Presenter popup lifecycle and CSP host check: eager `present.ts` (popup before full screen, `'auto'` needs a prepared screen, per-document `preparedPlacement`, `screenDetails` default) and `OfficeDoc` Alt+F5; controller follow-up `a30b753`; fix round 1 (`screenDetails` never rejects, Ctrl/Cmd+F5 guard, guarded `open`) | 35,727 | 35,995 | **+268** | 35,995 |
+| S2-3 | Window Management placement (lazy `presenter/screens.ts`); the `preparedPlacement` export name lazy code writes (+5 B) | 35,995 | 36,000 | +5 | 36,000 |
+| S2-7 | Media playback, commands, transition sounds (lazy); on `d1c3385`. The interim +1 was a hashed chunk name | 35,995 | 35,995 | 0 | 36,000 |
+| S2-8 | Text builds by word and letter (lazy); fix round 1 with the stage wiring on `531da79`; +2 is hashed chunk names only | 36,000 | 36,002 | +2 (variance) | 36,002 |
+| S2-4 | Next-checkpoint preview and mirror (lazy `presenter/preview.ts`). No per-task ledger file; 0 B inferred from the file set (lazy only) | | | 0 | 36,002 |
+| S2-5 | Presenter View UI and single-screen swap (lazy; the toolbar item is in the lazy `PagedChrome`); fix round 1 lazy only | 36,002 | 36,003 | +1 (variance) | 36,003 |
+| — | Merge `main` (`011d252`: Stage 1 PR #18 and its review fixes, including the `interactiveSheets` ref forward and the Ctrl/Meta+F5 guard, each +20 B accepted on PR #18) | 36,003 | 36,024 | +21 | 36,024 |
+| S2-9 | Stage close: remove the uncalled eager `defaultPlatform.screenDetails` and its optional `PresentPlatform` member (not a public export); everything else lazy, tests or docs. Fresh rebuilds: 36,024 on `011d252`, 36,023 with only the lazy changes, 35,937 after | 36,024 | 35,937 | **−87** | **35,937** |
+
+Summary:
+
+- **Stage 2 own deltas: S2-2 +268 B (26 B over `T2`, accepted), S2-3 +5 B, S2-9 −87 B.** S2-5 and S2-8 moved by hashed chunk names only; every other task is lazy, 0 B.
+- **S2-1 was folded into S2-2** (controller ruling): `T2` = +242 B left 2,678 B under the ceiling, so no hunt ran. S2-2 landed +268 B; accepted with 2,652 B remaining.
+- **S2-9 recovered 87 B.** S2-3's preload reads granted screen details lazily from the document's own window (`grantedScreenDetails`), so the eager default had no caller since S2-3 (deferred to this close by the S2-3 ruling). Its S2-2 review I1 tests now run against `grantedScreenDetails(window)`.
+- **Final 35,937 B against the 38,647 B ceiling: 2,710 B of headroom** (hard limit 38,720 B). `main` (`4f1c36d`, Stage 1) is about 35,750 B (PR #18 round 8); this branch is about 187 B larger, all of it Stage 2's eager start code (popup and placement) net of the recovery.
+- **`check-eager`**: 144 eager modules, graph ok. Nothing under `src/slideshow/`, `src/pptx/appearance/` or `src/components/paged/` (except `metrics.ts`) is eager.
+
+The per-task files `.superpowers/sdd/ledger/S2-*.md` hold the full rows. S2-4 wrote none.
+
 ### Static closure (information only; tracked, not gated)
 
 Each chunk gzipped separately with `node:zlib` `gzipSync` at default settings, on fresh builds.
@@ -184,6 +241,22 @@ and layout artwork code moved out of `appearance-*` into the shared lazy
 `master-art-*` chunk, because the slideshow chunk now uses it too. The slideshow
 chunk is loaded only by `present()` (and the Present button's preload hint).
 
+Stage 2 close (S2-9, fresh build of this tree, same method):
+
+| Chunk | Stage 1 final (`094e761`) | Stage 2 final (this tree) | Delta |
+|---|---|---|---|
+| `index.js` (gated; `eager-budget.ts`) | 35,726 | 35,937 | +211 |
+| `office-worker-*.js` | 356,011 | 356,015 | +4 |
+| `importSession-*.js` | 1,159 | 1,159 | 0 |
+| **Static closure total** | **392,896** | **393,111** | **+215** |
+| Slideshow chunk `index-*.js` (lazy, not in the closure) | 88,274 | 114,426 | +26,152 |
+| `appearance-*.js` (lazy) | 3,102 | 3,104 | +2 |
+| `master-art-*.js` (lazy) | 3,198 | 3,200 | +2 |
+
+The slideshow chunk grows by Presenter View (window, preview, grid, notes, timer,
+panel, placement), media playback and transition sounds, and text builds by word
+and letter. Presenter View renders with the host's React (`react-dom` is external).
+
 ## Decisions
 
 Controller rulings recorded in the progress ledger during Stage 0.
@@ -212,6 +285,23 @@ Controller rulings recorded in the progress ledger during Stage 1.
 - **4K transitions.** The outgoing frame of a slide transition comes from the transition allowance its rung already priced, not a second workspace lease (S1-22 fix round 1). Transitions play at 3840 × 2160 on the 512 MiB desktop budget.
 - **Corpus deck as filed.** tdf142915's `showPr` says `useTimings="0"`, so the deck as filed does not auto-advance. The conformance test keeps the plan's name and also plays an in-memory copy with `useTimings="1"` (engine evidence only; see Follow-ups).
 - **Stage 2 began early** from `feature/slideshow-s1` on `feature/slideshow-s2`, with new-file tasks first. S2-1's recovery was folded into S2-2 (measure, recover only past the ceiling).
+
+### Stage 2 decisions
+
+Controller rulings recorded in the progress ledger during Stage 2.
+
+- **`'auto'` opens the popup only when placement is prepared** (S2-2 C1). `presenterView: 'auto'` (the default) opens the presenter popup only when the preload hint has already prepared a placement, which needs the Window Management permission granted. Otherwise a plain Present goes single-screen: full screen, with Presenter View one Alt+F5 or menu choice away. Reason: in Chromium `window.open` consumes the click's transient activation, so a popup-first start would land the audience in a non-fullscreen window. Cost: a multi-monitor user without the permission needs one more click for Presenter View.
+- **A blocked popup starts on Presenter View** (S2-5). When Presenter View was asked for and the popup is blocked (or `open` throws, S2-2 M4: treated as blocked, best effort), the show starts in the single-screen swap with Presenter View showing; a plain start and a popup closed mid-show stay on the audience view. Alt+F5 toggles the two views.
+- **Presenter input bypasses kiosk** (S2-5 C6). Kiosk blocks audience input only. Presenter View's buttons, the grid, the slide-number field and every key routed through Presenter View (the popup's keys and the swapped-in view's keys) are presenter input and are not gated by kiosk. Esc still exits first.
+- **A presenter live region is allowed** (S2-5 C4). Spec 9 announces slide changes from the audience surface, but the popup is another document and the swapped-out audience surface is hidden, so Presenter View's polite "Slide n of m" status is the only announcement a presenter's screen reader can reach. The elapsed timer is `role=timer` (not live); pause and reset are announced separately.
+- **Pen, laser pointer and highlighter are non-goals** (spec 2). Presenter View also has no white-screen or pause buttons (W and S still work by key).
+- **The opener's `pagehide` closes the provisional popup early** (S2-2 C5), so an unloading viewer never leaves an orphaned presenter window.
+- **Eager allowances.** S2-1 was folded into S2-2 (measure `T2`, hunt only past the ceiling); S2-2 landed 26 B over `T2` and S2-3 +5 B, both accepted under the ceiling. The uncalled eager `defaultPlatform.screenDetails` was deferred to this close and removed (−87 B).
+- **The preview never evicts the live slide** (S2-4 re-review N1, spec 7): `releasePreview` drops only the preview's own holds, never the session's metadata handle.
+- **An indefinite `p:audio` started by `cmd playFrom` never begins on the timeline** (S2-7 I1), accepted for Stage 2. PowerPoint chains successors on the command's own `dur`, which the scheduler ends on time, so decks PowerPoint writes play correctly; only an `onEnd` successor of such a media node never fires. Listed under Known limits.
+- **Text builds by word and letter landed dormant, then wired** (S2-8): the first round was not wired into the stage, and the controller held the merge until the fix round wired it in after S2-7 (CJK word split, rotated boxes, exit body timing, RTL reading order).
+- **Diagnostic classes and the presenter panel** (S2-9). The Stage 2 codes keep the classes the `main` merge provisioned (`DIAGNOSTIC_CODES`); they fit the class definitions as written. The presenter panel's groups are derived from the class: `refused` → Refused, `approximate` and `stand-in` → Approximate, `info` → Other notes. Only a `resource` code (platform or memory pressure) is placed by presentation, in `PANEL_KIND` (`src/slideshow/presenter/diagnostics.tsx`): Refused when the thing did not happen (no popup, no styles, a clip not decoded), Approximate when it happened reduced (a smaller presenter surface, a text build painted whole), Pending when a click or retry can still start it (`media-autoplay`, `preview-prime`). A test checks that every other entry agrees with its class. The unused `presenter-view-unavailable` code was dropped.
+- **Effect sounds play with their animation** (S2-10, closing the gap S2-9 found). A `p:audio` on a `p:sndTgt` (a sound attached to an animation, usually in the effect's `subTnLst`, begun with the effect; for example tdf44223's fly-in "wind.wav") is followed by the media player like shape audio. The decisions S2-9 left open: **no "Click to play"** after a refusal, because there is no poster (the transition-sound convention: diagnosed, the effect runs silent, and the timeline gets the same synthetic end); **one audio output**, because the element is a hidden `<audio>` in the audience document, created by the same player; **pressure order** unchanged, because the lease goes through the player's `open` (cross-slide media, then the looping transition sound, then one retry). "Loop until next sound" is `repeatCount="indefinite"`, and it stops when the next effect sound starts. "Stop previous sound" (`p:cmd type="evt" cmd="onstopaudio"`) stops every audio of the slide and the transition sound. `p:stSnd`/`p:endSnd` are transition elements only (S2-7); timing has no such element. A built-in sound named without a part is `media-missing`. The `media-stand-in` code is retired; `sound:effect` is file / exact.
 
 ### Project rules (adopted in Stage 1)
 
@@ -296,9 +386,9 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | behaviour:p:animRot | animRot | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:animScale | animScale | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:animClr | animClr | file | exact | 1 | no | — | 0.02 | 0.1 |
-| behaviour:p:cmd | cmd | stand-in | pending-stage-2 | 2 | no | silent timed no-op | 0.08 | 0.3 |
-| behaviour:p:audio | audio | stand-in | pending-stage-2 | 2 | no | silent timed no-op | 0.08 | 0.3 |
-| behaviour:p:video | video | stand-in | pending-stage-2 | 2 | no | poster frame | 0.08 | 0.3 |
+| behaviour:p:cmd | cmd | file | approximate | 2 | no | play, pause, resume, stop, togglePause, playFrom, onStopAudio | 0.08 | 0.3 |
+| behaviour:p:audio | audio | file | exact | 2 | no | — | 0.02 | 0.1 |
+| behaviour:p:video | video | file | approximate | 2 | no | DOM overlay at the shape position (shape effects do not move it) | 0.08 | 0.3 |
 | preset:entr:1 | appear | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:entr:2 | fly-in | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:entr:3 | venetian-blinds | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
@@ -2538,13 +2628,14 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | preset:exit:58:272 | fold: in-slightly | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:exit:58:288 | fold: out-slightly | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
 | preset:exit:58:528 | fold: in-from-screen-center | preset-table | approximate | 1 | no | — | 0.08 | 0.3 |
-| build:word | Word build (paragraph stand-in) | stand-in | pending-stage-2 | 2 | no | whole paragraph | 0.08 | 0.3 |
-| build:letter | Letter build (paragraph stand-in) | stand-in | pending-stage-2 | 2 | no | whole paragraph | 0.08 | 0.3 |
-| sound:transition | Transition / cross-slide sound | stand-in | pending-stage-2 | 2 | no | silent timed no-op | 0.08 | 0.3 |
+| build:word | Text build by word (p:iterate type="wd") | mask | approximate | 2 | no | per-word layers clipped to word boxes | 0.08 | 0.3 |
+| build:letter | Text build by letter (p:iterate type="lt") | mask | approximate | 2 | no | per-letter layers clipped to letter boxes | 0.08 | 0.3 |
+| sound:transition | Transition / cross-slide sound | file | exact | 2 | no | — | 0.02 | 0.1 |
+| sound:effect | Effect sound (p:audio on a p:sndTgt) | file | exact | 2 | no | — | 0.02 | 0.1 |
 | build:chart | Chart build (whole chart) | transform | approximate | 1 | no | — | 0.08 | 0.3 |
 | build:smartart | SmartArt build (fallback drawing) | transform | approximate | 1 | no | — | 0.08 | 0.3 |
 | build:fallback | Fallback picture / card animation | transform | approximate | 1 | no | — | 0.08 | 0.3 |
-| media:codec | Unavailable media codec (poster / silent no-op) | stand-in | pending-stage-2 | 2 | no | — | 0.08 | 0.3 |
+| media:codec | Unavailable media codec (poster / silent no-op) | stand-in | approximate | 2 | no | poster picture, or silence | 0.08 | 0.3 |
 | never:macro | VBA / program execution | stand-in | never | 1 | no | — | 0.08 | 0.3 |
 | never:ole | OLE activation | stand-in | never | 1 | no | — | 0.08 | 0.3 |
 | never:recorded | Recorded ink / narration beyond stored timing | stand-in | never | 1 | no | — | 0.08 | 0.3 |
@@ -2608,17 +2699,21 @@ Stage 1 golden record (Mac, `OFFICEVIEW_STRICT_GOLDEN=1`, S1-23):
 Stage 1 (the slideshow):
 
 - **Call `present()` synchronously inside a user gesture.** It requests full screen before its first `await`. Where `navigator.userActivation` reports no transient activation it rejects with `gesture-required` and opens nothing; where that API is missing, the start is attempted and a refused full screen falls back to in-window.
-- **Embedding (spec 5.3), Stage 1 row only:**
+- **Embedding (spec 5.3):**
 
   | Need | Host requirement | When refused |
   |---|---|---|
   | Full screen | iframe `allow="fullscreen"` (and the host's Permissions-Policy) | the show runs in-window over the viewer's own document, letterboxed, with a dismissible notice, a "Click for full screen" retry and a diagnostic |
+  | Presenter window | an iframe `sandbox` must include `allow-popups` (and the host must not block popups) | the show runs single-screen: Presenter View in the show host with the audience one Alt+F5 away (`popup-blocked`) |
+  | Screen placement | iframe `allow="window-management"` (and the Window Management permission, which the browser asks for on a click) | the popup opens where the browser puts it and the audience goes full screen on the current screen; the presenter can drag the window, with a one-time hint (`placement-*` diagnostics) |
+  | Presenter styles | a CSP whose `style-src` allows officeview's stylesheet URL in the popup (the popup inherits the opener's policy; host nonces are never replayed into it) | Presenter View still works with browser default styles, diagnosed `presenter-styles-blocked` |
 
-  The spec's other rows (iframe `sandbox` with `allow-popups` for the presenter window, `allow="window-management"` for screen placement, and a CSP that allows officeview's stylesheet in the popup) belong to Presenter View and arrive with Stage 2. The README does not promise them yet.
+  **CSP result (S2-2, Chromium).** On the CSP harness page (`src/debug/slideshow-csp.html`: `script-src 'self' 'nonce-…'`, `style-src 'self'`, `object-src 'none'`, `base-uri 'none'`, the stylesheet linked, never inlined) the popup's copied `<link>` loads under `style-src 'self'` and Presenter View is styled. With `?styles=nonce` (a nonce-only `style-src`) the copy carries no nonce and is refused; the controls still render and work, and `presenter-styles-blocked` is diagnosed once. Browser evidence: `tests/browser/slideshow-presenter.spec.ts` "CSP-hardened host".
+- **A popup needs the same click.** The presenter popup opens inside the `present()` call, before full screen, in the caller's gesture. In Chromium `window.open` consumes the activation, so without a prepared placement the full screen that follows is refused and "Click for full screen" retries on the next click. This is why `'auto'` opens the popup only when placement is prepared (Stage 2 decisions).
 - **One show per page document.** The show coordinator is per `ownerDocument`: a second `present()` from any viewer in the same document rejects with `already-presenting`.
 - **The viewer needs the shipped stylesheet** (`officeview/style.css`) for the show surface, like the rest of the chrome; its rules are scoped under the theme root.
 
-The README's "Slideshow" section documents these for hosts.
+The README's "Slideshow" section documents these for hosts, including the Stage 2 rows.
 
 ## Known limits
 
@@ -2654,7 +2749,7 @@ The README's "Slideshow" section documents these for hosts.
   - **`p:browse` shows** ("browsed by an individual") are presented the normal way, with a `browse` diagnostic. The scrollbar setting is ignored, and `p:sldRg` is not applied to a browse show.
   - **Custom shows** (`p:custShow`) play the whole deck, with a `custom-show` diagnostic.
   - **Kiosk.** Clicks, keys, triggers and hyperlinks are inert (Esc exits; the host API still navigates). The show loops and restarts `restart` ms (default 300,000) after the latest start or restart. `restart="0"` (or an invalid value) would restart on every frame, so it is refused: the show does not restart on its own, with a `kiosk-restart` diagnostic (S1-10's call; a D4 question, Q-kiosk-restart).
-  - **Presenter View, speaker notes UI, audio and video are Stage 2.** `presenterView: true` is diagnosed and the show is audience only (`presenter: 'none'`); the Presenter View menu item and Alt+F5 are absent. Audio, video and media commands are `pending-stage-2` stand-ins (a silent timed step, or the video's poster frame), each diagnosed.
+  - **Presenter View, speaker notes UI, audio and video** landed in Stage 2; their limits are below.
   - **3-D and morph transitions are Stage 3.** Each `pending-stage-3` row plays the 2-D look-alike its catalogue row names, diagnosed.
   - **Unmapped attributes.** `xshear` (tdf104788's "breaks" entrance) has no render mapping; it is diagnosed and the rest of the effect plays.
   - **Graphic and chart builds** (`graphicEl`, `oleChartEl` targets, SmartArt) animate the whole graphic or chart, diagnosed `timing-approximated`.
@@ -2666,6 +2761,16 @@ The README's "Slideshow" section documents these for hosts.
   - **Frame-time evidence is the owner's laptop only.** CI asserts behaviour, never frame times or GPU pixels. The SwiftShader readback p95 misses 12 ms at 4K (CPU rasteriser; recorded, not the spec 7 benchmark).
   - **tdf104788's title text** is not drawn by the static painter (in the scrolling viewer and in the show). This predates the slideshow and is outside its code.
   - **No Office frame compare has landed.** Every catalogue row is `verified: no` until the owner's D4 captures exist (`docs/validation/slideshow-captures.md`).
+
+- **Slideshow (Stage 2).** Known limits of Presenter View and media as landed:
+  - **An indefinite `p:audio` started by `cmd playFrom` never begins on the timeline** (S2-7 I1, accepted). PowerPoint writes a main-sequence `p:cmd playFrom` plus a root-level `p:audio` or `p:video` with `delay="indefinite"`. The player plays the clip, but the scheduler never begins the media node, so its real end is ignored and an `onEnd` successor of that node never fires. Successors that chain on the command's own `dur` (what PowerPoint writes) run on time.
+  - **Video is a DOM overlay.** A video plays in a positioned `<video>` above every slide layer at its shape's box. Effects on the shape (motion, scale, fades) move only the poster underneath, diagnosed `media-overlay`; full-screen video plays at the shape's box (`media-fullscreen`).
+  - **Thumbnails are best effort for pictures** (S2-5). Only the shown slide and the stage's prepared neighbours paint with decoded images in Presenter View's Next pane and the slide grid; other grid thumbnails show the slide without its pictures, diagnosed once as `presenter-thumbnail-approximate`. Fonts fall back to the family name there.
+  - **Word and letter boxes clip** (S2-8). Each item is the shape's text clipped to its box, so italic overhang and text shadow are cut at box edges. The body follows the first item under an entrance and the last under an exit; `repeatCount` repeats the whole staggered span; `charRg`'s inclusive end is a working choice (D4).
+  - **TIFF cannot be decoded in Chrome or Firefox.** A TIFF picture (including a video poster) is sized from its header and charged, but the browser does not decode it, so it does not paint there.
+  - **Codecs.** The browser decides: `canPlayType` refuses before any byte is read. WMV and AVI (and anything else the browser cannot decode) keep the poster, with `media-codec`; play commands on them do nothing.
+  - **Autoplay.** A refused `play()` (no gesture, or a resume after a hidden tab) leaves the poster with a "Click to play" button and `media-autoplay`; the show continues.
+  - **Real two-screen placement, popup blocking, a strict-CSP host and a real autoplay refusal** are covered by automation proxies only; the owner checks are under Manual checks.
 
 ## Manual checks
 
@@ -2685,6 +2790,17 @@ Automated proxies that do run: S1-2 (headless element full screen enter and exit
 click, `fullscreenchange` `['enter', 'exit']`), S1-17's no-gesture test (a
 cross-origin frame presenting through `postMessage`, which carries no activation,
 rejects with `gesture-required`), and the `slideshow` Playwright project.
+
+Stage 2 adds four owner checks. They are **not done yet** (pending, owner):
+
+| Check | Steps | Expected | Result |
+|---|---|---|---|
+| Real two screens with Window Management | a Mac with an external display, Chrome; `bun run dev`, open `/src/debug/slideshow-start.html?presenter=1`; click Present, accept the Window Management prompt (or grant it beforehand in site settings), then present again | Presenter View opens on the primary (laptop) screen and the audience goes full screen on the external screen; "Swap displays" exchanges them; Esc exits both | pending (owner) |
+| Popup blocking | in the same page, block pop-ups for the site in Chrome's settings, then click Present with Presenter View | no popup; the show starts single-screen on Presenter View with `popup-blocked` in the log; Alt+F5 shows the audience | pending (owner) |
+| Strict-CSP host | open `/src/debug/slideshow-csp.html`, then `?styles=nonce`; present with Presenter View | styled Presenter View on the first; on the second, unstyled but working controls and one `presenter-styles-blocked` | pending (owner) |
+| Real autoplay refusal | in Chrome with sound autoplay blocked for the site (or Safari's "Never Auto-Play"), open `/src/debug/slideshow-start.html?deck=media` and start the show from the keyboard so no click reaches the clip | the poster stays with "Click to play" and `media-autoplay`; clicking it plays the clip without advancing the slide | pending (owner) |
+
+Automated proxies: `tests/browser/slideshow-presenter.spec.ts` (popup then full screen in one activation, a cross-origin sandboxed iframe refusing both, the CSP harness, two-screen placement with a mocked `getScreenDetails`, denied / missing / single-screen diagnostics, swap, the drag hint, Presenter View in the popup) and `tests/browser/slideshow-media.spec.ts` (playback, audio across slides, a rejected later `play()`, narration.pptx where Chromium decodes m4a).
 
 ## Stage 1 values verified in the parser and engine tasks
 
@@ -2774,7 +2890,7 @@ initial-hiding rule (S1-20), the catalogue labels `entr:3:10` (blinds) and `entr
 (wipe) against the decks (S1-21), and the `animEffect` `wipe`/`strips`
 motion-direction convention (S1-11; partly Q-wipe-direction).
 
-## Follow-ups (known, not blocking Stage 1)
+## Follow-ups
 
 - **`animMotion origin="layout"`** still subtracts the shape's top-left corner (`motionOffsets` in `engine/behaviours.ts`), while every other position uses the centre since S1-22. No corpus deck exercises it, so a change would have no RED test behind it. An S1-11 follow-up.
 - **`xshear`** (tdf104788's "breaks" entrance) has no render mapping. It is diagnosed and the rest of the effect plays.
@@ -2783,6 +2899,73 @@ motion-direction convention (S1-11; partly Q-wipe-direction).
 - **tdf142915's `useTimings` flip is engine evidence only.** The deck as filed has `useTimings="0"` and does not auto-advance. The conformance test's second half plays an in-memory copy with `useTimings="1"` (auto-advance at 1000 ms, clicks ignored); that proves the engine's `advTm`/`advClick` handling, not anything about PowerPoint's playback of tdf142915. The committed corpus file is never modified.
 - **Per-frame cost.** `updateA11y()` recomputes the render state each tick after `frame()` has computed the same state; sharing it would halve the scheduler work per frame (well inside budget today).
 - **`stage.transition` reports the drawn element** (for example `fade` for airplane and morph) since S1-22; Stage 2 readers (S2-4 preview, S2-5 presenter) should expect that.
+
+Stage 2 follow-ups (known, not blocking the Stage 2 PR):
+
+- **Command-started media never begins on the timeline** (S2-7 I1): a play command beginning its media node would need a new scheduler input.
+- **Per-frame cost.** A slide with media evaluates `timeline.stateAt` once more per frame (S2-7), on top of S1-20's `updateA11y` double compute; text-build layers run `boxesFor` per item at paint time, bounded but uncached (S2-8).
+- **Media activation heuristics** (S2-7): a media node whose whole activation falls between two frames with `fill="remove"` is missed; a node restarted while active is not a new activation; a synthetic end's begin time is estimated from linear progress.
+- **Presenter controls not built** (S2-5): white screen and pause from Presenter View (W and S work by key). Pen, laser and highlighter are spec non-goals.
+- **The Presenter View diagnostic panel** reads uncatalogued codes from their wording; every catalogued code now follows its class (S2-9).
+
+## Stage 2: Presenter View and media
+
+What Stage 2 delivers, and where its evidence is. Builder decks are
+"Office-shaped synthetic"; the only Office-authored media evidence is the corpus
+(narration.pptx, bnc591147, tdf44223).
+
+| Row | What plays | Evidence |
+|---|---|---|
+| Presenter window (S2-2) | a popup opened in the start gesture, adopted into officeview's theme root with the opener's stylesheets; closes with the show and with the opener | `tests/slideshow-presenter-window.test.tsx`; browser "S2-2 presenter window lifecycle" |
+| Screen placement (S2-3) | with Window Management granted: popup on the presenter's screen, audience `requestFullscreen({ screen })` on the other; "Use both screens" asks on a click; swap; a one-time drag hint elsewhere | `tests/slideshow-screens.test.ts`; browser "S2-3 screen placement" (mocked screens) |
+| Next preview and mirror (S2-4) | Current mirrors the audience frame, with playing video (a DOM overlay on the audience) composited from its one element (PR #19 review 2); Next is the next click checkpoint or slide, painted from the preview's own timeline, which schedules the same expanded word / letter timing as the live slide (PR #19 review 2); every surface leased from the workspace with a DPR ladder | `tests/slideshow-preview.test.ts`; `tests/slideshow-presenter-view.test.tsx` "PR #19 review 2" |
+| Presenter View UI (S2-5) | Current, Next, notes (A+/A−), elapsed timer and clock, Previous / Next / End / Black / See all slides / Go to slide, Swap displays, the effect-notes panel; the single-screen swap (Alt+F5) | `tests/slideshow-presenter-view.test.tsx`; browser "S2-5 presenter view" |
+| Media reader and leases (S2-6) | bounded uncached reads of up to 512 MiB per part into a Blob URL, charged chunk by chunk, refused mid-inflate | `tests/slideshow-media-read.test.ts` |
+| Media playback (S2-7) | shape audio and video on the timeline, `p:cmd` call verbs, cross-slide `numSld`, transition sounds (`p:stSnd`, loop, `p:endSnd`), "Click to play" after a refusal, a synthetic end on failure | `tests/slideshow-media.test.ts`; `tests/browser/slideshow-media.spec.ts` |
+| Effect sounds (S2-10) | `p:audio` on a `p:sndTgt` plays when its effect begins; loop until the next sound; "Stop previous sound" (`onstopaudio`); a refusal is diagnosed with no "Click to play" | `tests/slideshow-media.test.ts` "effect sounds (S2-10)"; corpus tdf44223 slide 1 (`tests/slideshow-corpus.test.ts`) |
+| Text builds by word and letter (S2-8) | `p:iterate type="wd"`/`"lt"` as per-item layers clipped to word or letter boxes, staggered by `tmAbs`/`tmPct` | `tests/slideshow-text-builds.test.ts`, `tests/slideshow-text-builds-live.test.tsx` |
+
+Catalogue rows flipped by S2-9 (no `pending-stage-2` row remains; `LANDED_STAGE` = 2):
+`behaviour:p:audio` and `sound:transition` file / exact; `behaviour:p:video`
+(overlay) and `behaviour:p:cmd` (call verbs) file / approximate; `build:word` and
+`build:letter` (the `p:iterate` wd / lt rows) mask / approximate; `media:codec`
+an approximate stand-in; and a new `sound:effect` row, which S2-10 flipped from an
+approximate stand-in (silent timed no-op) to file / exact when effect sounds
+landed. Every row stays `verified: no`.
+
+### Stage 2 diagnostic codes
+
+Each Stage 2 code, its catalogue class (`DIAGNOSTIC_CODES`) and the group Presenter
+View's effect-notes panel puts it in (`diagnosticKind`). `tests/slideshow-catalogue.test.ts`
+checks this table against both.
+
+| Code | Class | Panel | Emitted when |
+|---|---|---|---|
+| `media-autoplay` | resource | Pending | the browser refused `play()` (no gesture, or a resume after a hidden tab); "Click to play" is offered |
+| `media-codec` | resource | Refused | `canPlayType` refused the part's content type, or the element reported an undecodable source; the poster stays |
+| `media-error` | resource | Refused | the media element raised `error` while playing |
+| `media-missing` | refused | Refused | a media node, effect sound or transition sound has no media part (including a built-in sound named without one) |
+| `media-command` | refused | Refused | a `p:cmd` that is not a supported `call` verb, or that targets no media node |
+| `media-overlay` | approximate | Approximate | a video plays in its DOM overlay; effects on its shape do not move the picture |
+| `media-fullscreen` | approximate | Approximate | a full-screen video plays at its shape's box |
+| `text-build-approximate` | approximate | Approximate | every word or letter build: each box is its own layer (the closest look-alike) |
+| `text-build-unsplit` | approximate | Approximate | no word or letter boxes, or no finite duration to stagger: the effect plays on the whole target (or, for `tmPct`, the items start together) |
+| `text-build-coarsened` | approximate | Approximate | more items than the layer budget allows: the text builds by paragraph instead |
+| `text-build-cjk-chars` | approximate | Approximate | no word segmenter: words are whitespace-delimited and CJK characters stand alone |
+| `text-build-refused` | refused | Refused | too many item evaluations per slide, the workspace refused the fan-out, or no room to measure: the effect plays on the whole target |
+| `text-build-whole` | resource | Approximate | at the flattened or terminal rung, split shapes paint whole |
+| `popup-blocked` | resource | Refused | the presenter popup was blocked (or `open` threw) |
+| `presenter-window-failed` | resource | Refused | the popup could not be set up; the show presents single-screen |
+| `presenter-styles-blocked` | resource | Refused | the host CSP (or a load error) refused officeview's stylesheet in the popup |
+| `presenter-paint` | resource | Refused | Presenter View could not paint a slide or stopped mirroring |
+| `presenter-surface` | resource | Approximate | a presenter surface stepped down its DPR ladder, or stood down to a placeholder |
+| `presenter-thumbnail-approximate` | approximate | Approximate | a grid or Next thumbnail painted without pictures |
+| `preview-prime` | resource | Pending | the metadata store refused the preview's slide; it is retried on the next change |
+| `placement-permission-denied` | resource | Refused | the Window Management permission was denied |
+| `placement-api-missing` | resource | Refused | the browser has no Window Management API |
+| `placement-single-screen` | info | Other notes | only one screen is available |
+| `placement-failed` | resource | Refused | screen details failed (for example a frame without `allow="window-management"`) |
+| `placement-fullscreen-refused` | resource | Refused | full screen on the chosen audience screen was refused |
 
 ## S1-3 inventory provenance and name audit
 
@@ -3054,7 +3237,7 @@ Audit totals: 140 exact normalized-name matches; 59 unresolved name matches. Hyp
 - lookalike values prefixed transition: are catalogue IDs; other values are
   human-readable stand-in descriptions, not IDs. A stronger discriminated type
   would change the frozen cross-task contract and is intentionally deferred.
-- media:codec is pending-stage-2. No Office fidelity, browser execution or
+- media:codec was pending-stage-2 at S1-3; S2-9 flipped it to an approximate stand-in. No Office fidelity, browser execution or
   physical-device validation is claimed by this table.
 
 ## S1-8 transition and timing reader
@@ -3071,6 +3254,7 @@ ECMA-376 / [MS-PPTX] in the implementer sandbox).
 | `p14:dur` | wins over `spd` | corpus: tdf115394 (250, 4250), tdf142915 (10, 0), airplane (1250), tdf156808 (800), tdf149588 (1500) |
 | `advClick`, `advTm` | boolean (default true); ms, absent = no auto-advance | corpus: tdf142915 `advClick="0" advTm="1000"` |
 | Transition sound | `p:stSnd@loop` + `p:snd@r:embed`; `p:endSnd` | corpus: tdf44223 slide 2 (`applause.wav`, rId2 in the p14 Choice) |
+| Effect sound | `p:audio/p:cMediaNode` on `p:sndTgt@r:embed` in the effect's `p:subTnLst`, begun `evt="begin"` on the effect node; its `cTn` has no `id` (the reader gives it a synthetic one) | corpus: tdf44223 slide 1 (`wind.wav`, rId2, endCond `onStopAudio` on `p:sldTgt`) |
 | Requires selection | `mc:Choice@Requires` prefixes resolved to URIs at the Choice; p, p14, p15, p159 supported; first supported Choice, else Fallback | corpus: airplane (p15), tdf156808 (p14), tdf149588 (p159), tdf115394 slide 4 (prefix declared on the Choice); synthetic: aliased prefix, fake-URI `p14`, undeclared prefix |
 | Effect namespace | by local name in the catalogue (the shared XML layer strips prefixes; p/p14/p15/p159 transition names are disjoint) | synthetic |
 | `p:transition/p:extLst` | an `p:ext` carrying a catalogued transition element replaces the base effect; any other URI is diagnosed `transition-extension` | synthetic only. No corpus file places a transition in `p:extLst`; the extension GUIDs one review quoted are not taken as fact. **Unverified.** |
@@ -3146,14 +3330,16 @@ The slideshow job now fetches the corpus. `tests/browser/slideshow-corpus.spec.t
 
 ### Corpus coverage (owner rule)
 
-Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-through of each deck (every step, every trigger), classified from the timing tree and the diagnostics of that run. **native**: drawn as the file says. **closest**: the closest equivalent plays, with a diagnostic (a 2-D look-alike, a stage-2 media stand-in, a dropped attribute, a whole-graphic build). **refused**: nothing of it plays. Totals: 19 native, 11 closest, 0 refused.
+Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-through of each deck (every step, every trigger), classified from the timing tree and the diagnostics of that run. **native**: drawn as the file says. **closest**: the closest equivalent plays, with a diagnostic (a 2-D look-alike, media the run could not play, a dropped attribute, a whole-graphic build). **refused**: nothing of it plays. Totals: 19 native, 11 closest, 0 refused.
+
+Regenerated by S2-9 after the media rows landed, and by S2-10 when effect sounds landed (totals unchanged). The run is jsdom, which decodes no media (`canPlayType` is `''`), so every shape clip, effect sound and transition sound the corpus plays is reported here as `media-codec`, closest, diagnosed: that is the jsdom outcome, not a browser's. Real playback is browser evidence: `tests/browser/slideshow-media.spec.ts` plays narration.pptx's m4a in Chromium (`media:playing:6`). tdf44223's fly-in sound is an effect sound on a `p:sndTgt`; S2-10's corpus test plays it with a WAV-capable stand-in decoder (the file's own part, through the lease, at the effect's begin).
 
 | Deck | Native | Closest | Refused | Items (slide: what → coverage, note) |
 |---|---|---|---|---|
 | airplane-transition | 0 | 1 | 0 | 1: p15:prstTrans:airplane → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
-| bnc591147 | 0 | 3 | 0 | 1: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed)<br>1: mediacall 2 → **closest** (pending-stage-2 stand-in (cmd togglePause), diagnosed)<br>2: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed) |
+| bnc591147 | 0 | 3 | 0 | 1: mediacall 1 → **closest** (cmd playFrom(0.0): not played in this run (media-codec; the poster stays), diagnosed)<br>1: mediacall 2 → **closest** (cmd togglePause: not played in this run (media-codec; the poster stays), diagnosed)<br>2: mediacall 1 → **closest** (cmd playFrom(0.0): not played in this run (media-codec; the poster stays), diagnosed) |
 | connector-shape-animations | 2 | 0 | 0 | 1: entr 22/1 wipe: from-top → **native** (file behaviours)<br>1: entr 22/1 wipe: from-top → **native** (file behaviours) |
-| narration | 0 | 1 | 0 | 1: mediacall 1 → **closest** (pending-stage-2 stand-in (cmd playFrom(0.0)), diagnosed) |
+| narration | 0 | 1 | 0 | 1: mediacall 1 → **closest** (cmd playFrom(0.0): not played in this run (media-codec; the poster stays), diagnosed) |
 | ooxtheme | 0 | 0 | 0 | no transitions or effects |
 | tdf104788 | 5 | 1 | 0 | 6: entr 37 rise-up → **native** (file behaviours)<br>6: entr 34 breaks → **closest** (xshear dropped)<br>6: entr 58 fold → **native** (file behaviours)<br>6: entr 47 descend → **native** (file behaviours)<br>6: entr 42 ascend → **native** (file behaviours)<br>6: entr 10 fade-in → **native** (file behaviours) |
 | tdf104792-smart-art-animation | 0 | 2 | 0 | 1: entr 10 fade-in → **closest** (graphic build animates the whole graphic)<br>1: entr 10 fade-in → **closest** (graphic build animates the whole graphic) |
@@ -3164,6 +3350,6 @@ Generated by `bun scripts/slideshow-compare.ts --coverage` from a full play-thro
 | tdf146223 | 2 | 0 | 0 | 1: p:fade → **native** (exact (1000 ms))<br>2: p:fade → **native** (exact (1000 ms)) |
 | tdf149588_transparentSolidFill | 0 | 1 | 0 | 1: p159:morph → **closest** (pending-stage-3: 2-D look-alike fade, diagnosed) |
 | tdf156808 | 1 | 0 | 0 | 1: p14:flythrough → **native** (exact (800 ms)) |
-| tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (pending-stage-2 stand-in (audio), diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (pending-stage-2 stand-in: silent, diagnosed) |
+| tdf44223 | 2 | 2 | 0 | 1: entr 2/4 fly-in: from-bottom: audio → **closest** (audio effect sound: not played in this run (media-codec; the effect runs silent), diagnosed)<br>1: entr 2/4 fly-in: from-bottom → **native** (file behaviours)<br>2: p:split → **native** (exact (1500 ms))<br>2: transition sound → **closest** (not played in this run: silent (media-codec), diagnosed) |
 | tdf93868 | 2 | 0 | 0 | 1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours)<br>1: entr 3/10 venetian-blinds: vertical → **native** (file behaviours) |
 

@@ -69,6 +69,11 @@ export interface PresenterSource {
   audienceFrame(): HTMLCanvasElement | undefined
   /** Runs after every drawn frame; returns the unsubscribe. */
   onFrame(cb: () => void): () => void
+  /**
+   * Composites the playing videos (DOM overlays on the audience, not in its canvas) into the mirror, where the
+   * audience frame landed (`dest`, the mirror's px). Additive (PR #19 review 2).
+   */
+  drawMedia?(ctx: CanvasRenderingContext2D, dest: { x: number; y: number; w: number; h: number }): void
   /** Paint inputs for slide `index` (the stage's, or a static stand-in). */
   previewOf(index: number, cursor?: SlideCursor, timeline?: SlideTimeline): StagePreview
   /** The presenter key rule (spec 4.3): text controls and the notes keep their keys, Esc exits. */
@@ -93,6 +98,36 @@ const sr = 'data-officeview-presenter-sr'
 /** Decoded pictures in a slide's (sparse, filled-as-decoded) image list. */
 const countReady = (images: ReadonlyArray<unknown>) => { let n = 0; for (const i of images) if (i) n++; return n }
 
+/** The preview's held slides: each with the request that holds it (PR #19 review 4). */
+export type PrimeHolds = Map<number, object>
+
+/**
+ * Brings the preview's holds to `want`: slides no longer wanted are released, newly wanted ones primed. A prime
+ * that fails is forgotten, so the next change retries it. Each request carries a token, so a stale callback (a
+ * slide left and primed again before its first prime settled) never touches a newer request's hold. Exported for tests.
+ */
+export function syncPrimeHolds(held: PrimeHolds, want: ReadonlySet<number>, io: {
+  release(i: number): void
+  prime(i: number): Promise<boolean>
+  primed(): void
+  forgotten(): void
+}): void {
+  for (const i of [...held.keys()]) {
+    if (want.has(i)) continue
+    io.release(i)
+    held.delete(i)
+  }
+  for (const i of want) {
+    if (held.has(i)) continue
+    const token = {}
+    held.set(i, token)
+    // Callbacks are scoped to this request: once the slide is released (or held by a newer request), they do nothing.
+    const mine = () => held.get(i) === token
+    const forget = () => { if (!mine()) return; held.delete(i); io.forgotten() }
+    io.prime(i).then((ok) => { if (!mine()) return; if (ok) io.primed(); else forget() }, forget)
+  }
+}
+
 export function PresenterView({ session, host, doc }: PresenterViewProps): ReactElement {
   const src = session.presenterSource
   useSyncExternalStore(src.subscribe, () => src.version)
@@ -110,7 +145,7 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
   const mirrorSlot = useRef<HTMLDivElement>(null)
   const previewSlot = useRef<HTMLDivElement>(null)
   const hintSlot = useRef<HTMLDivElement>(null)
-  const held = useRef(new Set<number>())
+  const held = useRef<PrimeHolds>(new Map())
   const gridWasOpen = useRef(false)
 
   // The presenter's leased surfaces live with this view; closing it drops the preview's holds.
@@ -183,7 +218,8 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
         return
       }
       const source = src.audienceFrame()
-      if (source) mirrorFrame(source, ctx)
+      const dest = source ? mirrorFrame(source, ctx) : undefined
+      if (dest) src.drawMedia?.(ctx, dest)
     }
     paint()
     return src.onFrame(paint)
@@ -197,17 +233,12 @@ export function PresenterView({ session, host, doc }: PresenterViewProps): React
     if (!model) return
     // At the end of the show nothing is wanted: every hold goes back.
     const want = new Set(slide === 'end' ? [] : [slide, ...(after === undefined ? [] : [after])])
-    for (const i of held.current) {
-      if (want.has(i)) continue
-      releasePreview(model, i)
-      held.current.delete(i)
-    }
-    for (const i of want) {
-      if (held.current.has(i)) continue
-      held.current.add(i)
-      const forget = () => { if (held.current.delete(i)) setRetry((n) => n + 1) }
-      primePreview(model, i, { ...src.previewOptions, slideIndex: i }).then((ok) => { if (ok) setPrimed((n) => n + 1); else forget() }, forget)
-    }
+    syncPrimeHolds(held.current, want, {
+      release: (i) => releasePreview(model, i),
+      prime: (i) => primePreview(model, i, { ...src.previewOptions, slideIndex: i }),
+      primed: () => setPrimed((n) => n + 1),
+      forgotten: () => setRetry((n) => n + 1),
+    })
   }, [model, slide, after, retry > 0 && src.version])
 
   let pos: PreviewPosition | 'end' = 'end'

@@ -101,9 +101,9 @@ export function grantedScreenDetails(win: Window | null | undefined): Promise<Sc
 
 /**
  * The preload hint (spec 4.1): prepares the placement from already-granted
- * details of `doc`'s window, or clears it. Never rejects. (It does not go
- * through the eager `defaultPlatform.screenDetails`, so the eager entry
- * exports nothing more for it.)
+ * details of `doc`'s window, or clears it. Never rejects. (The eager entry
+ * has no screen-details code: S2-9 removed the uncalled
+ * `defaultPlatform.screenDetails`.)
  */
 export function prepareScreens(doc: Document, screenDetails: () => Promise<ScreenDetails | undefined> = () => grantedScreenDetails(doc.defaultView)): Promise<void> {
   return Promise.resolve()

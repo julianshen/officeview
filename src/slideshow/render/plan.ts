@@ -124,7 +124,16 @@ export function buildRenderPlan(
       const whole = key !== undefined ? splits?.get(key) : undefined
       if (key !== undefined && whole && whole.length > 0) {
         const boxed = new Set(whole.map(b => b.paragraph))
-        leaves.push({ path, node: filtered({ ...node }, i => !boxed.has(i)), own: animated.has(key) ? { key, part: 'body' } : undefined })
+        const keep = (i: number) => !boxed.has(i)
+        const parts = colourParts.get(key)
+        if (parts && parts.size > 0) {
+          // A colour animation on the split shape (PR #19 review 7): the body is its fill, line and residual text
+          // layers, so fill and line take their colour channels; the words keep theirs (text). The residual text
+          // keeps the paragraph filter, so the item paragraphs are not painted twice (PR #19 review 8).
+          leaves.push({ path, node: fillPart(node), own: { key, part: 'fill' } })
+          leaves.push({ path, node: linePart(node), own: { key, part: 'line' } })
+          leaves.push({ path, node: filtered(textPart(node), keep), own: { key, part: 'text' } })
+        } else leaves.push({ path, node: filtered({ ...node }, keep), own: animated.has(key) ? { key, part: 'body' } : undefined })
         leaves.push(...boxLeaves(node, path, whole))
         continue
       }

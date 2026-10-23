@@ -17,7 +17,7 @@
  *   undecodable format (WMV, AVI) reads nothing, leaves the poster the stage
  *   already paints, and is diagnosed (spec 6.5). Elements are created in the
  *   audience surface's own document (realm-safe) and are the only media
- *   elements of the show: the presenter mirror copies frames (`drawFrame`),
+ *   elements of the show: the presenter mirror copies frames (`drawVideos`, `drawFrame`),
  *   never a second element or a second audio output (spec 5.2). Video sits in
  *   a DOM overlay at the shape's position on the slide (`box`), diagnosed
  *   once per slide: effects on the shape do not move the moving picture.
@@ -39,6 +39,19 @@
  * - **Pressure.** A lease refused for the workspace first stops and releases
  *   cross-slide media (spec 7), then retries once.
  * - **Pause.** A stopped show clock pauses playing media and resumes it.
+ * - **Effect sounds** (S2-10). A `p:audio` on a `p:sndTgt` - the sound of an
+ *   animation effect, in its `subTnLst`, begun with the effect - is followed
+ *   like shape audio: its part is the slide relationship the target names,
+ *   read through the same lease and pressure rule, played in a hidden
+ *   element of the audience document (the one audio output). There is no
+ *   poster, so a refusal is diagnosed and the show goes on without "Click to
+ *   play" (the transition-sound convention), with the same synthetic end.
+ *   "Loop until next sound" is `repeatCount="indefinite"` (`loop`); "Stop
+ *   previous sound" is `p:cmd type="evt" cmd="onstopaudio"`, which stops
+ *   every audio node of the slide and the transition sound. A new effect
+ *   sound stops a looping one, and a looping transition sound. Diagnostics name `behaviour <id>`. A
+ *   built-in sound (`builtIn:<name>`, not in the package), or media on no
+ *   shape and no sound, has no part: diagnosed `media-missing`.
  */
 import type { SchedulerEntry, SchedulerSnapshot } from '../engine/scheduler'
 import type { AudioBehaviour, CmdBehaviour, DiagnosticSink, MediaRecord, ShowSlide, TimeNode, VideoBehaviour } from '../types'
@@ -46,6 +59,8 @@ import type { MediaLease, MediaLeaseResult } from './lease'
 
 /** A shape's box in CSS px relative to the audience surface root. */
 export interface MediaBox { left: number; top: number; width: number; height: number }
+/** A box as a fraction (0–1) of the audience frame on each axis. */
+export interface FrameBox { x: number; y: number; w: number; h: number }
 
 export interface MediaPlayerDeps {
   /** The audience surface root: elements and buttons are created in its document. */
@@ -55,8 +70,21 @@ export interface MediaPlayerDeps {
   open(rec: MediaRecord, signal: AbortSignal): Promise<MediaLeaseResult>
   /** The shape's box on the shown slide (`Stage.mediaBox`); `undefined` hides the overlay. */
   box?(spid: string): MediaBox | undefined
+  /**
+   * The same box as a fraction of the audience frame (`Stage.mediaFrameBox`), read whenever the overlay is placed and
+   * kept with it, so the presenter mirror composites a video exactly where its overlay is, including a video carried
+   * to later slides (`numSld`), whose shape the shown slide no longer has (PR #19 review 4).
+   */
+  frameBox?(spid: string): FrameBox | undefined
+  /** A kept frame box back in CSS px of the surface now (`Stage.frameBoxToCss`): a carried overlay is re-placed on resize. */
+  frameToBox?(frame: FrameBox): MediaBox | undefined
   /** Frees other workspace holders (the looping transition sound) when a lease is refused; true when it freed something. */
   relieve?(): boolean
+  /**
+   * Stops the transition sound (S2-10): `onlyLooping` when an effect sound starts ("loop until next sound"),
+   * any when a "Stop previous sound" command runs. True when one was playing.
+   */
+  stopTransitionSound?(onlyLooping: boolean): boolean
   /** @internal Element factory (tests); default: `root.ownerDocument.createElement`. */
   create?(kind: 'audio' | 'video'): HTMLMediaElement
 }
@@ -80,6 +108,11 @@ export interface MediaPlayer {
   /** Opens a lease with the pressure rule: on a workspace refusal, cross-slide media goes first, then one retry. */
   open(rec: MediaRecord, signal: AbortSignal): Promise<MediaLeaseResult>
   setPaused(paused: boolean): void
+  /**
+   * The presenter mirror: draws every shown video overlay (carried ones first, as they stack) at its retained frame
+   * box, mapped into `dest`, the rectangle where the audience frame landed in the mirror. No second element, no audio.
+   */
+  drawVideos(ctx: CanvasRenderingContext2D, dest: FrameBox): void
   /** The presenter mirror: copies the current frame of the playing video on `spid` (no second element, no audio). */
   drawFrame(spid: string, ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): boolean
   /** Stops and releases media carried from earlier slides; true when anything was released. */
@@ -101,12 +134,19 @@ interface Live {
   slide: number
   /** A refused play(): the owning controller's failure path, or a diagnostic once the media is carried past its slide. */
   onReject?: (e: unknown) => void
+  /** A video overlay's box as a fraction of the frame, kept from its last placement (the mirror's geometry). */
+  frame?: FrameBox
+  /** An effect sound (`p:sndTgt`): "loop until next sound" and "Stop previous sound" reach it after its slide too. */
+  sound?: boolean
 }
 
 interface NodeState {
   node: MediaNode
   id: number
+  /** The target shape's spid; for an effect sound (no shape), the diagnostic label `behaviour <id>`. */
   spid: string
+  /** An effect sound's `p:sndTgt` (`r:embed` relationship id, or `builtIn:<name>`): no shape, no poster, no overlay. */
+  sound?: string
   rec?: MediaRecord
   activation: number
   ended: boolean
@@ -115,6 +155,8 @@ interface NodeState {
   due?: number
   live?: Live
   opening: boolean
+  /** Bumped when a pending open is abandoned (a looping sound superseded while its lease is still opening): a late lease is released, never attached. */
+  openGen: number
   /** Undecodable or missing: play commands are no-ops (spec 6.5). */
   unplayable: boolean
   want: boolean
@@ -145,6 +187,15 @@ function beginOf(e: SchedulerEntry | undefined, t: number): number {
 
 function isMedia(n: TimeNode): n is MediaNode {
   return n.kind === 'audio' || n.kind === 'video'
+}
+
+const what = (st: NodeState) => st.sound !== undefined ? 'effect sound' : st.node.kind
+const stays = (st: NodeState) => st.sound !== undefined ? 'the effect runs silent' : 'the poster stays'
+function missing(st: NodeState): string {
+  if (st.sound === undefined) return `The ${st.node.kind} on shape ${st.spid} has no media part`
+  if (st.sound.startsWith('builtIn:')) return `The effect sound "${st.sound.slice(8)}" is a built-in sound with no media part in the file; the effect runs silent`
+  if (st.sound === '') return `The ${st.node.kind} targets no shape and no sound; nothing to play`
+  return `The effect sound (${st.sound}) has no media part; the effect runs silent`
 }
 
 export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
@@ -194,6 +245,14 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
     } else teardown(live, false)
   }
 
+  function position(el: HTMLMediaElement, box: MediaBox): void {
+    const s = el.style
+    s.left = `${box.left}px`
+    s.top = `${box.top}px`
+    s.width = `${box.width}px`
+    s.height = `${box.height}px`
+  }
+
   function dropCrossSlide(): boolean {
     if (carried.size === 0) return false
     for (const live of [...carried]) teardown(live, true)
@@ -233,14 +292,19 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const walk = (n: TimeNode, depth: number) => {
         if (depth > MAX_DEPTH) return
         if ('children' in n) { for (const c of n.children) walk(c, depth + 1); return }
-        if (isMedia(n) && 'spid' in n.target) {
-          const spid = n.target.spid
+        if (isMedia(n)) {
+          const t = n.target
+          const onShape = 'spid' in t
+          // An effect sound names its part by relationship id; media on no shape and no sound has none (media-missing).
+          const sound = onShape ? undefined : 'snd' in t ? t.snd : ''
+          const spid = onShape ? t.spid : `behaviour ${n.ctn.id}`
+          const rec = onShape ? slide.media.find((m) => m.spid === spid) : sound ? slide.media.find((m) => m.rId === sound) : undefined
           const st: NodeState = {
-            node: n, id: n.ctn.id, spid, rec: slide.media.find((m) => m.spid === spid),
-            activation: 0, ended: false, begin: 0, opening: false, unplayable: false, want: false, iterations: 0, seen: false, wasActive: false,
+            node: n, id: n.ctn.id, spid, ...(sound !== undefined ? { sound } : {}), rec,
+            activation: 0, ended: false, begin: 0, opening: false, openGen: 0, unplayable: false, want: false, iterations: 0, seen: false, wasActive: false,
           }
           nodes.set(st.id, st)
-          if (!bySpid.has(spid)) bySpid.set(spid, st)
+          if (onShape && !bySpid.has(spid)) bySpid.set(spid, st)
         } else if (n.kind === 'cmd') cmds.push(n)
       }
       walk(timing.root, 0)
@@ -289,7 +353,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
     function fail(st: NodeState, code: string, message: string, offerRetry: boolean): void {
       if (left) return
       diagnose(code, st, message)
-      if (offerRetry && st.live) showButton(st)
+      // An effect sound has no poster to click: diagnosed only (the transition-sound convention).
+      if (offerRetry && st.live && st.sound === undefined) showButton(st)
       if (st.ended) return
       const d = finiteDur(st.node)
       if (d === undefined) { endNow(st, true); return }
@@ -303,8 +368,12 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       // A play() interrupted by our own pause() or a new source is not a failure.
       if (name === 'AbortError') return
       live.playing = false
-      if (name === 'NotSupportedError') { st.unplayable = true; fail(st, 'media-codec', `The browser cannot decode this ${st.node.kind} (${st.rec?.contentType}); the poster stays`, false); return }
-      fail(st, 'media-autoplay', `The browser refused to play this ${st.node.kind} (${String(name ?? e)}); "Click to play" is offered and the show continues`, true)
+      // The timeline paused or ended the node before the browser answered: a late refusal changes nothing (PR #19 review 5).
+      if (!st.want) return
+      if (name === 'NotSupportedError') { st.unplayable = true; fail(st, 'media-codec', `The browser cannot decode this ${what(st)} (${st.rec?.contentType}); ${stays(st)}`, false); return }
+      fail(st, 'media-autoplay', st.sound !== undefined
+        ? `The browser refused to play this effect sound (${String(name ?? e)}); the effect runs silent and the show continues`
+        : `The browser refused to play this ${st.node.kind} (${String(name ?? e)}); "Click to play" is offered and the show continues`, true)
     }
 
     function doPlay(st: NodeState): void {
@@ -319,20 +388,19 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       if (!live || live.kind !== 'video') return
       const box = deps.box?.(st.spid)
       live.el.hidden = !box
-      if (!box) return
-      const s = live.el.style
-      s.left = `${box.left}px`
-      s.top = `${box.top}px`
-      s.width = `${box.width}px`
-      s.height = `${box.height}px`
+      live.frame = box ? deps.frameBox?.(st.spid) : undefined
+      if (box) position(live.el, box)
     }
 
     function attach(st: NodeState, el: HTMLMediaElement, lease: MediaLease): void {
       const n = st.node
-      const live: Live = { spid: st.spid, kind: n.kind, el, lease, playing: false, slide: slide.index }
+      const live: Live = { spid: st.spid, kind: n.kind, el, lease, playing: false, slide: slide.index, ...(st.sound !== undefined ? { sound: true } : {}) }
       live.onReject = (e) => rejected(st, live, e)
       el.setAttribute('data-officeview-show-media', n.kind)
-      el.setAttribute('data-officeview-show-media-spid', st.spid)
+      if (st.sound !== undefined) {
+        el.setAttribute('data-officeview-show-effect-sound', String(st.id))
+        el.hidden = true
+      } else el.setAttribute('data-officeview-show-media-spid', st.spid)
       el.preload = 'auto'
       if (n.kind === 'video') (el as HTMLVideoElement).playsInline = true
       el.loop = n.ctn.repeatCount === 'indefinite'
@@ -354,8 +422,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         if (st.live !== live) return
         live.playing = false
         const code = el.error?.code
-        if (code === 4) { st.unplayable = true; fail(st, 'media-codec', `The browser cannot decode this ${n.kind} (${st.rec?.contentType}); the poster stays`, false); return }
-        fail(st, 'media-error', `The ${n.kind} failed while playing (media error ${code ?? 'unknown'}); "Click to play" is offered and the show continues`, true)
+        if (code === 4) { st.unplayable = true; fail(st, 'media-codec', `The browser cannot decode this ${what(st)} (${st.rec?.contentType}); ${stays(st)}`, false); return }
+        fail(st, 'media-error', `The ${what(st)} failed while playing (media error ${code ?? 'unknown'}); ${st.sound !== undefined ? 'the show continues' : '"Click to play" is offered and the show continues'}`, true)
       })
       el.src = lease.url
       st.live = live
@@ -377,12 +445,31 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       removeButton(st)
       const rc = st.node.ctn.repeatCount
       st.iterations = typeof rc === 'number' && Number.isFinite(rc) && rc > 1 ? Math.ceil(rc) - 1 : 0
+      if (st.sound !== undefined) {
+        // "Loop until next sound": this sound is the next one.
+        for (const o of nodes.values()) {
+          if (o === st || o.sound === undefined || o.activation === 0 || o.ended) continue
+          if (o.live?.el.loop) stop(o.id)
+          else if (o.opening && o.node.ctn.repeatCount === 'indefinite') {
+            // Still opening: the late lease must never attach or play (PR #19 review).
+            o.openGen++
+            o.opening = false
+            o.want = false
+            o.from = undefined
+            endNow(o, false)
+          }
+        }
+        deps.stopTransitionSound?.(true)
+        // A looping effect sound carried from an earlier slide (numSld) is a previous sound too (PR #19 review 6).
+        for (const live of [...carried]) if (live.sound && live.el.loop) teardown(live, true)
+      }
       if (st.unplayable) {
-        fail(st, st.rec ? 'media-codec' : 'media-missing', st.rec ? `The browser cannot decode this ${st.node.kind} (${st.rec.contentType}); the poster stays` : 'The media node has no media part', false)
+        fail(st, st.rec ? 'media-codec' : 'media-missing', st.rec ? `The browser cannot decode this ${what(st)} (${st.rec.contentType}); ${stays(st)}` : missing(st), false)
         return
       }
       if (st.live) {
-        if (from !== undefined) st.live.el.currentTime = from
+        // A fresh activation of reused media replays from the start, or from playFrom's offset (PR #19 review 11).
+        st.live.el.currentTime = from ?? 0
         doPlay(st)
         return
       }
@@ -390,22 +477,24 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const rec = st.rec
       if (!rec) {
         st.unplayable = true
-        fail(st, 'media-missing', `The ${st.node.kind} on shape ${st.spid} has no media part`, false)
+        fail(st, 'media-missing', missing(st), false)
         return
       }
       const el = create(st.node.kind)
       if (el.canPlayType(rec.contentType) === '') {
         st.unplayable = true
-        fail(st, 'media-codec', `The browser cannot decode this ${st.node.kind} (${rec.contentType}); the poster stays`, false)
+        fail(st, 'media-codec', `The browser cannot decode this ${what(st)} (${rec.contentType}); ${stays(st)}`, false)
         return
       }
       st.opening = true
       st.from = from
+      const gen = st.openGen
       open(rec, abort.signal).then((res) => {
+        if (gen !== st.openGen) { if (!('refused' in res)) res.release(); return }
         st.opening = false
         if ('refused' in res) {
           if (res.refused === 'media-limit' || res.refused === 'media-empty') st.unplayable = true
-          fail(st, 'media-refused', `The ${st.node.kind} was not read (${res.refused}); the poster stays`, false)
+          fail(st, 'media-refused', `The ${what(st)} was not read (${res.refused}); ${stays(st)}`, false)
           return
         }
         if (left) { res.release(); return }
@@ -415,8 +504,16 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         if (st.want) doPlay(st)
       }, () => {
         // Only an abort rejects (the slide was left): nothing was charged.
-        st.opening = false
+        if (gen === st.openGen) st.opening = false
       })
+    }
+
+    /** The activation ended for good while its lease was still opening: the late lease is released, never attached (PR #19 review 10). */
+    function cancelOpen(st: NodeState): void {
+      if (!st.opening) return
+      st.openGen++
+      st.opening = false
+      st.from = undefined
     }
 
     function stopElement(st: NodeState): void {
@@ -444,6 +541,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const st = nodes.get(nodeId)
       if (!st) return
       stopElement(st)
+      cancelOpen(st)
       if (st.live) st.live.el.currentTime = 0
       // A stopped clip has ended: whatever waits on it runs (once per activation).
       if (st.activation > 0) endNow(st, false)
@@ -483,7 +581,10 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
     function command(c: CmdBehaviour, t: number): void {
       const text = c.cmd.trim()
       if (c.cmdType === 'evt' && text.toLowerCase() === 'onstopaudio') {
+        // "Stop previous sound": every audio of the slide, and the transition sound.
         for (const st of nodes.values()) if (st.node.kind === 'audio') stop(st.id)
+        for (const live of [...carried]) if (live.sound) teardown(live, true)
+        deps.stopTransitionSound?.(false)
         return
       }
       const spid = 'spid' in c.target ? c.target.spid : undefined
@@ -525,6 +626,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         else if (!e && st.wasActive && !st.ended) {
           // The node's own timing ended it (dur, an end condition, a Next that settles its step): the clip stops with it.
           stopElement(st)
+          cancelOpen(st)
           st.ended = true
           st.due = undefined
         }
@@ -599,6 +701,15 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         } catch (e) { refused(e) }
       }
     },
+    drawVideos(ctx, dest) {
+      for (const live of all()) {
+        const f = live.frame
+        if (live.kind !== 'video' || live.el.hidden || !f) continue
+        try {
+          ctx.drawImage(live.el as HTMLVideoElement, dest.x + f.x * dest.w, dest.y + f.y * dest.h, f.w * dest.w, f.h * dest.h)
+        } catch { /* no frame yet */ }
+      }
+    },
     drawFrame(spid, ctx, x, y, w, h) {
       const live = all().find((l) => l.spid === spid && l.kind === 'video')
       if (!live) return false
@@ -610,7 +721,15 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       }
     },
     dropCrossSlide,
-    layout() { current?.layout() },
+    layout() {
+      current?.layout()
+      // A video carried past its slide has no shape on the shown one: it keeps its frame box and follows the surface.
+      for (const live of carried) {
+        if (live.kind !== 'video' || !live.frame) continue
+        const box = deps.frameToBox?.(live.frame)
+        if (box) position(live.el, box)
+      }
+    },
     dispose() {
       dropCrossSlide()
       for (const live of current ? [...current.lives()] : []) teardown(live, true)

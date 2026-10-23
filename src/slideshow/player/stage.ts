@@ -133,6 +133,13 @@ export interface Stage {
    */
   mediaBox?(spid: string): { left: number; top: number; width: number; height: number } | undefined
   /**
+   * Additive (PR #19 review 2): the same box as a fraction of the audience frame's backing (0–1 on each axis),
+   * where the presenter mirror composites the video frame over its copy of the frame.
+   */
+  mediaFrameBox?(spid: string): { x: number; y: number; w: number; h: number } | undefined
+  /** Additive: a frame-fraction box in CSS px of the surface now (the inverse step of `mediaFrameBox`, letterbox included). */
+  frameBoxToCss?(f: { x: number; y: number; w: number; h: number }): { left: number; top: number; width: number; height: number } | undefined
+  /**
    * Additive (S2-8): the timing to schedule for slide `index` when it builds
    * text by word or letter: a working copy fanned out over the items, with
    * the source pre-order `orderOf` for `createSlideTimeline`. `charge`
@@ -349,7 +356,7 @@ function compose(parent: TargetState | undefined, own: TargetState | undefined):
     visible: parent.visible && (own?.visible ?? true),
     opacity: parent.opacity * (own?.opacity ?? 1),
     transform: mul(p, o),
-    ...(own?.mask ? { mask: own.mask } : {}),
+    ...(own?.mask ? { mask: own.mask, ...(own.maskBox ? { maskBox: own.maskBox } : {}), ...(own.maskTransform ? { maskTransform: mul(p, own.maskTransform) } : {}) } : {}),
     ...(own?.color ?? parent.color ? { color: own?.color ?? parent.color } : {}),
   }
 }
@@ -920,7 +927,8 @@ export function createStage(deps: StageDeps): Stage {
         if (l.sub) { walk(l.sub, s); continue }
         const h = b.handles.get(l)
         if (!h) continue
-        const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : undefined
+        // A text range (a word, letter or paragraph clone) is text only: its colour is the text channel's.
+        const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : l.part === 'range' && s.color?.text ? 'text' : undefined
         out.push({ handle: h, state: s, ...(part ? { part } : {}) })
         kinds.push(`target:${l.key}${l.part ? `:${l.part}` : ''}`)
       }
@@ -1075,10 +1083,7 @@ export function createStage(deps: StageDeps): Stage {
       const drawn = spec ? resolveTransition2D(spec) : undefined
       // S3-1: a registered 3-D row on WebGL2 runs its shader; otherwise its 2-D look-alike, diagnosed (after reduced motion, so it never adds motion).
       const route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike'
-      // Sounds are Stage 2 (spec 13): the transition plays silently, diagnosed once for the slide.
-      const sound = model.slide.transition?.sound
-      if (sound?.start) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound', message: 'The transition sound is pending Stage 2: the transition plays silently' })
-      if (sound?.end) sink.add({ code: 'media-stand-in', slideIndex: p.index, effect: 'transition-sound-end', message: 'Stopping sounds at the transition is pending Stage 2: nothing plays to stop' })
+      // The transition sound is played (and any refusal diagnosed) by the session's transition-sound controller (S2-7).
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       // Preparation (image decoding, layer construction) took show time: the transition, and the slide's
       // timeline after it, start now that the incoming frame can be drawn (PR #18 review P1).
@@ -1222,6 +1227,24 @@ export function createStage(deps: StageDeps): Stage {
       const m = viewport(p).matrix
       const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
       return { left: ox + (m[0] * g.x + m[4]) * k, top: oy + (m[3] * g.y + m[5]) * k, width: m[0] * g.w * k, height: m[3] * g.h * k }
+    },
+
+    mediaFrameBox(spid) {
+      const p = current
+      const g = p?.base.get(targetKey({ spid }))
+      if (!p || !g || !(backing.w > 0 && backing.h > 0)) return undefined
+      // Slide px → device px of the backing (the viewport), as mediaBox maps before its CSS step.
+      const m = viewport(p).matrix
+      return { x: (m[0] * g.x + m[4]) / backing.w, y: (m[3] * g.y + m[5]) / backing.h, w: m[0] * g.w / backing.w, h: m[3] * g.h / backing.h }
+    },
+
+    frameBoxToCss(f) {
+      const r = root.getBoundingClientRect()
+      if (!(r.width > 0 && r.height > 0) || !(backing.w > 0 && backing.h > 0)) return undefined
+      // Device px of the backing → CSS px of the letterboxed canvas (object-fit: contain), as mediaBox maps.
+      const k = Math.min(r.width / backing.w, r.height / backing.h)
+      const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
+      return { left: ox + f.x * backing.w * k, top: oy + f.y * backing.h * k, width: f.w * backing.w * k, height: f.h * backing.h * k }
     },
 
     runAt(shape, u, v, w, h) {

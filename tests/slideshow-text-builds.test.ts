@@ -346,3 +346,97 @@ describe('S2-8 fix round 1', () => {
     expect(boxes.map(b => [b.box.x, b.box.x + b.box.w])).toEqual([[45, 200], [0, 45]])
   })
 })
+
+describe('PR #19 review 6 follow-up (colour)', () => {
+  it('a whole-shape colour effect composes on top of each split item\'s own colour', async () => {
+    const { renderStateAt } = await import('../src/slideshow/engine/behaviours')
+    const { createRng } = await import('../src/slideshow/rng')
+    const { createDiagnosticSink } = await import('../src/slideshow/diagnostics')
+    const ctn = (id: number) => ({ id, durMs: 1000, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold' as const })
+    const set = { kind: 'set', ctn: ctn(5), target: { spid: '2' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: 'visible' } as const
+    const tint = { kind: 'animClr', ctn: ctn(6), target: { spid: '2' }, attrNames: ['style.color'], additive: 'base', accumulate: 'none', clrSpc: 'rgb', to: '#ff0000' } as unknown
+    const entry = (node: unknown, order: number) => ({ node, progress: 1, iteration: 0, order, phase: 'frozen' })
+    const snapshot = { active: [], frozen: [entry(set, 0), entry(tint, 1)], ended: new Set<number>() } as never
+    const fan = new Map([[set as never, { items: [{ key: 'sp:2', delayMs: 0 }, { key: 'sp:2/c:0-4', delayMs: 0 }], spanMs: 1, totalMs: 1, accel: 0, decel: 0, autoRev: false, entrance: true }]])
+    const base = new Map([['sp:2', { x: 0, y: 0, w: 100, h: 50, rot: 0 }]])
+    const states = renderStateAt(snapshot, base, createRng(1), createDiagnosticSink(), { w: 960, h: 540 }, fan as never)
+    const body = states.get('sp:2')!
+    expect(body.color?.text).toBeDefined()
+    expect(states.get('sp:2/c:0-4')!.color?.text).toEqual(body.color?.text)
+  })
+})
+
+describe('PR #19 review 7 (shared mask)', () => {
+  it('while a per-word emphasis is active, a whole-shape wipe gives every word the parent\'s own mask transform', async () => {
+    const { renderStateAt } = await import('../src/slideshow/engine/behaviours')
+    const { createRng } = await import('../src/slideshow/rng')
+    const { createDiagnosticSink } = await import('../src/slideshow/diagnostics')
+    const ctn = (id: number, durMs: number) => ({ id, durMs, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold' as const })
+    // A per-word motion (fanned: each word moves right, staggered) still running, and the shape's wipe exit.
+    const nudge = { kind: 'animMotion', ctn: ctn(5, 1000), target: { spid: '2' }, attrNames: [], additive: 'base', accumulate: 'none', by: { x: 0.1, y: 0 }, origin: 'layout' } as unknown
+    const wipe = { kind: 'animEffect', ctn: ctn(6, 1000), target: { spid: '2' }, attrNames: [], additive: 'base', accumulate: 'none', transition: 'out', filter: 'wipe(left)' } as unknown
+    const entry = (node: unknown, order: number, progress: number) => ({ node, progress, iteration: 0, order, phase: 'active' })
+    const snapshot = { active: [entry(nudge, 0, 0.5), entry(wipe, 1, 0.4)], frozen: [], ended: new Set<number>() } as never
+    const items = [{ key: 'sp:2/c:0-4', delayMs: 0 }, { key: 'sp:2/c:6-9', delayMs: 300 }]
+    const fan = new Map([[nudge as never, { items, spanMs: 1000, totalMs: 1300, accel: 0, decel: 0, autoRev: false, entrance: false }]])
+    const base = new Map([['sp:2', { x: 0, y: 0, w: 400, h: 100, rot: 0 }], ['sp:2/c:0-4', { x: 0, y: 0, w: 100, h: 100, rot: 0 }], ['sp:2/c:6-9', { x: 150, y: 0, w: 100, h: 100, rot: 0 }]])
+    const states = renderStateAt(snapshot, base, createRng(1), createDiagnosticSink(), { w: 960, h: 540 }, fan as never)
+    const [w1, w2] = items.map(i => states.get(i.key)!)
+    // The words have moved by different amounts...
+    expect(w1.transform[4] + (w1.motion?.dx ?? 0)).not.toBeCloseTo(w2.transform[4] + (w2.motion?.dx ?? 0), 3)
+    // ...but share one mask, placed by the shape's own (unmoved) mapping.
+    expect(w1.mask?.kind).toBe('wipe')
+    expect(w2.mask).toEqual(w1.mask)
+    expect(w1.maskTransform).toEqual(w2.maskTransform)
+    expect(w1.maskTransform![4]).toBeCloseTo(0, 6)
+  })
+})
+
+describe('PR #19 review 10 (mixed-unit grouping)', () => {
+  it('a by-word effect on a letter-split target still staggers by word when a further charge would be refused', async () => {
+    const { buildPptxDeck } = await import('../src/testdata/ooxml-builders')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { textTimingFor } = await import('../src/slideshow/player/text-builds')
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [{ id: 2, off: ['0', '0'], ext: ['4572000', '914400'], paragraphs: [{ runs: [{ text: 'Ab cd' }] }] }] }] })
+    const slide = (await parsePptx(await OfficePackage.load(bytes))).slides[0]!
+    const c = (id: number, over: Partial<CTn> = {}): CTn => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold', ...over })
+    const set = (id: number, to: string): BehaviourNode => ({ kind: 'set', ctn: c(id, { durMs: 1, start: [{ delayMs: 0 }] }), target: { spid: '2' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to } as BehaviourNode)
+    const effect = (id: number, cls: string, unit: 'wd' | 'lt', b: BehaviourNode): ContainerNode =>
+      ({ kind: 'par', ctn: c(id, { presetClass: cls, start: [{ delayMs: 0 }], iterate: { type: unit, backwards: false, tmAbsMs: 500 } } as Partial<CTn>), children: [b] })
+    const tree: TimingTree = { root: { kind: 'par', ctn: c(1, { durMs: 'indefinite' }), children: [effect(3, 'entr', 'wd', set(4, 'visible')), effect(5, 'exit', 'lt', set(6, 'hidden'))] }, build: [] }
+    // The letter split is admitted; every later text-split charge is refused (workspace pressure).
+    let splitsCharged = 0
+    const charge = (_bytes: number, tag: string) => !tag.startsWith('text-split:') || ++splitsCharged === 1
+    const sink = createDiagnosticSink()
+    const tt = textTimingFor(slide as PptxSlide, tree, { charge, sink })!
+    const entrance = [...tt.fan.entries()].find(([n]) => n.ctn.id === 4)![1]
+    const delayOf = new Map(entrance.items.map(i => [i.key, i.delayMs]))
+    // By word: "Ab" together, then "cd" together, 500 ms later.
+    expect([delayOf.get('sp:2/c:0-0'), delayOf.get('sp:2/c:1-1'), delayOf.get('sp:2/c:3-3'), delayOf.get('sp:2/c:4-4')]).toEqual([0, 0, 500, 500])
+    const exit = [...tt.fan.entries()].find(([n]) => n.ctn.id === 6)![1]
+    expect(exit.items.filter(i => i.key !== 'sp:2').map(i => i.delayMs)).toEqual([0, 500, 1000, 1500])
+  })
+})
+
+describe('PR #19 review 12', () => {
+  it('word groups match within their paragraph: two one-word paragraphs animate one after the other', async () => {
+    const { buildPptxDeck } = await import('../src/testdata/ooxml-builders')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { textTimingFor } = await import('../src/slideshow/player/text-builds')
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [{ id: 2, off: ['0', '0'], ext: ['4572000', '1828800'], paragraphs: [{ runs: [{ text: 'Ab' }] }, { runs: [{ text: 'Cd' }] }] }] }] })
+    const slide = (await parsePptx(await OfficePackage.load(bytes))).slides[0]!
+    const c = (id: number, over: Partial<CTn> = {}): CTn => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold', ...over })
+    const set = (id: number, to: string): BehaviourNode => ({ kind: 'set', ctn: c(id, { durMs: 1, start: [{ delayMs: 0 }] }), target: { spid: '2' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to } as BehaviourNode)
+    const effect = (id: number, cls: string, unit: 'wd' | 'lt', b: BehaviourNode): ContainerNode =>
+      ({ kind: 'par', ctn: c(id, { presetClass: cls, start: [{ delayMs: 0 }], iterate: { type: unit, backwards: false, tmAbsMs: 500 } } as Partial<CTn>), children: [b] })
+    const tree: TimingTree = { root: { kind: 'par', ctn: c(1, { durMs: 'indefinite' }), children: [effect(3, 'entr', 'wd', set(4, 'visible')), effect(5, 'exit', 'lt', set(6, 'hidden'))] }, build: [] }
+    const tt = textTimingFor(slide as PptxSlide, tree, { sink: createDiagnosticSink() })!
+    const entrance = [...tt.fan.entries()].find(([n]) => n.ctn.id === 4)![1]
+    const letters = entrance.items.filter(i => i.key !== 'sp:2')
+    expect(letters).toHaveLength(4)
+    // "Ab" together at 0, then "Cd" together 500 ms later (not every letter at 0 in the first paragraph's word).
+    expect(letters.map(i => i.delayMs)).toEqual([0, 0, 500, 500])
+  })
+})

@@ -26,7 +26,8 @@ import type { WatermarkOptions } from '../src/core/watermark'
 import { createElapsedTimer, formatElapsed, formatWallClock } from '../src/slideshow/presenter/timer'
 import { NotesPane, NOTES_SIZES, NOTES_DEFAULT } from '../src/slideshow/presenter/notes'
 import { SlideGrid, GRID_CELL, gridWindow } from '../src/slideshow/presenter/grid'
-import { diagnosticKind } from '../src/slideshow/presenter/diagnostics'
+import { diagnosticKind, PANEL_KIND } from '../src/slideshow/presenter/diagnostics'
+import { DIAGNOSTIC_CODES } from '../src/slideshow/diagnostics'
 import { previewTimeline } from '../src/slideshow/presenter/preview'
 
 type FakePopup = Window & { closeCalls: number }
@@ -89,7 +90,7 @@ afterEach(() => {
 
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0)) }
 
-interface ShowOpts { watermark?: WatermarkOptions; protect?: { copy?: boolean; print?: boolean }; retry?: (o?: PresentFullscreenOptions) => Promise<'entered' | 'refused'> }
+interface ShowOpts { watermark?: WatermarkOptions; protect?: { copy?: boolean; print?: boolean }; retry?: (o?: PresentFullscreenOptions) => Promise<'entered' | 'refused'>; fullscreen?: 'entered' | 'refused' }
 async function show(doc: PptxDocument, popup: Window | null | undefined, o: ShowOpts = {}) {
   // The viewer's theme root carries the protection policy (spec 6.3), the host sits beside the page region.
   const themeRoot = document.createElement('div')
@@ -109,7 +110,7 @@ async function show(doc: PptxDocument, popup: Window | null | undefined, o: Show
     doc, handle: pptxPackageHandle(doc), host,
     token: { release() {}, released: false, owns: () => false },
     platform: { hasActivation: () => true, requestFullscreen: async () => {}, exitFullscreen: async () => {}, fullscreenElement: () => null, open: () => null },
-    fullscreen: Promise.resolve('entered'),
+    fullscreen: Promise.resolve(o.fullscreen ?? 'entered'),
     retryFullscreen: o.retry ?? (async () => 'entered'),
     from: 'beginning', motion: 'auto', presenterView: popup === undefined ? undefined : true, popup,
     ...(o.watermark ? { watermark: o.watermark } : {}),
@@ -690,6 +691,26 @@ describe('Presenter View (S2-5)', () => {
       expect(diagnosticKind({ code: 'placement-fullscreen-refused', message: '' })).toBe('refused')
     })
 
+    it('S2-9: the panel groups agree with the diagnostic catalogue classes', () => {
+      const BY_CLASS = { refused: 'refused', approximate: 'approximate', 'stand-in': 'approximate', info: 'other' } as const
+      for (const [code, kind] of Object.entries(PANEL_KIND)) {
+        // Every explicit entry is a catalogued code; only a resource code may be placed by presentation.
+        expect(DIAGNOSTIC_CODES, code).toHaveProperty([code])
+        const cls = DIAGNOSTIC_CODES[code]
+        if (cls !== 'resource') expect(kind, code).toBe(BY_CLASS[cls])
+      }
+      // Every other catalogued code follows its class, whatever its wording.
+      for (const [code, cls] of Object.entries(DIAGNOSTIC_CODES)) {
+        if (cls === 'resource' || code in PANEL_KIND) continue
+        expect(diagnosticKind({ code, message: '' }), code).toBe(BY_CLASS[cls])
+      }
+      // Wording that once misplaced a code: kiosk-restart is a refusal, not pending; timing-requires is a note.
+      expect(diagnosticKind({ code: 'kiosk-restart', message: '' })).toBe('refused')
+      expect(diagnosticKind({ code: 'timing-requires', message: '' })).toBe('other')
+      expect(diagnosticKind({ code: 'media-codec', message: '' })).toBe('refused')
+      expect(diagnosticKind({ code: 'constructor', message: '' })).toBe('other')
+    })
+
     it('M5: swapping back hands focus to a focusable host', async () => {
       const r = await show(await deck(), undefined)
       r.host.removeAttribute('tabindex')
@@ -701,5 +722,197 @@ describe('Presenter View (S2-5)', () => {
       expect(document.activeElement).toBe(r.host)
       r.s.exit()
     })
+  })
+})
+
+describe('PR #19 review 2', () => {
+  it('the stage\'s mediaFrameBox is mediaBox as a fraction of the frame (the real stage, letterboxed)', async () => {
+    vi.restoreAllMocks()
+    const { installShowSeams, loadDeck, startShow } = await import('./helpers/slideshow-show-rig')
+    // 4:3 slide on a 16:9 window: pillarboxed, so the CSS box and the frame fraction differ by the letterbox.
+    const seams = installShowSeams({ width: 1280, height: 720 })
+    try {
+      const shape = { id: 2, prst: 'rect', off: ['914400', '457200'] as [string, string], ext: ['2743200', '1371600'] as [string, string] }
+      const doc = await loadDeck(await buildPptxDeck({ slides: [{ shapes: [shape] }] }))
+      const r = await startShow(doc, { seams, size: { width: 1280, height: 720 } })
+      const st = r.s.stage!
+      const css = st.mediaBox!('2')!
+      const f = st.mediaFrameBox!('2')!
+      // 9144000 × 6858000 EMU: the shape sits at (1/10, 1/15) of the slide, 3/10 × 1/5 of it.
+      const k = Math.min(1280 / 4, 720 / 3) // CSS px per slide quarter-width unit
+      const sw = 4 * k, sh = 3 * k, ox = (1280 - sw) / 2, oy = (720 - sh) / 2
+      expect(css.left).toBeCloseTo(ox + 0.1 * sw, 3)
+      expect(css.top).toBeCloseTo(oy + sh / 15, 3)
+      // The frame is the slide's backing: the fraction of the frame that the CSS box covers inside the letterbox.
+      const frame = r.frameCanvas()!
+      const fk = Math.min(1280 / frame.width, 720 / frame.height)
+      const fx = (1280 - frame.width * fk) / 2, fy = (720 - frame.height * fk) / 2
+      expect(f.x).toBeCloseTo((css.left - fx) / (frame.width * fk), 4)
+      expect(f.y).toBeCloseTo((css.top - fy) / (frame.height * fk), 4)
+      expect(f.w).toBeCloseTo(css.width / (frame.width * fk), 4)
+      expect(f.h).toBeCloseTo(css.height / (frame.height * fk), 4)
+      // And back: a kept frame box maps to the overlay's CSS box (what a resize re-places a carried video with).
+      const back = st.frameBoxToCss!(f)!
+      expect(back.left).toBeCloseTo(css.left, 4)
+      expect(back.top).toBeCloseTo(css.top, 4)
+      expect(back.width).toBeCloseTo(css.width, 4)
+      expect(back.height).toBeCloseTo(css.height, 4)
+      r.exit()
+    } finally {
+      seams.restore()
+    }
+  })
+
+  it('the presenter mirror composites the playing video frame over the audience frame', async () => {
+    // A video on shape 2 that starts with the slide; the stage places it in the middle quarter of the frame.
+    const video = '<p:video><p:cMediaNode><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cMediaNode></p:video>'
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [box], media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array(64).fill(7) }], timingXml: `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${video}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>` }, { shapes: [box] }] })
+    const doc = await parsePptx(await OfficePackage.load(bytes))
+    vi.spyOn(sessionDeps, 'stage').mockImplementation(() => ({ ...recordingStage(), mediaBox: () => ({ left: 10, top: 10, width: 20, height: 20 }), mediaFrameBox: () => ({ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }) }))
+    // A browser that decodes the clip (jsdom decodes nothing): the bytes still come through the lease as a Blob URL.
+    const proto = HTMLMediaElement.prototype as unknown as Record<string, unknown>
+    const saved = { canPlayType: proto.canPlayType, play: proto.play, pause: proto.pause, load: proto.load }
+    const U = URL as unknown as Record<string, unknown>
+    const savedUrl = { createObjectURL: U.createObjectURL, revokeObjectURL: U.revokeObjectURL }
+    Object.assign(proto, { canPlayType: () => 'maybe', play: () => Promise.resolve(), pause() {}, load() {} })
+    Object.assign(U, { createObjectURL: () => 'blob:mirror-video', revokeObjectURL() {} })
+    try {
+      const popup = fakePopup()
+      const r = await show(doc, popup)
+      await step(r.s)
+      await step(r.s)
+      const el = r.host.querySelector<HTMLVideoElement>('video[data-officeview-show-media]')
+      expect(el?.getAttribute('src')).toBe('blob:mirror-video')
+      const mirror = q<HTMLCanvasElement>(popup.document, '[data-officeview-presenter-current] canvas')
+      const audience = r.host.querySelector<HTMLCanvasElement>('[data-officeview-show-canvas]')!
+      const ctx = mirror.getContext('2d')!
+      const draws = vi.spyOn(ctx, 'drawImage')
+      await step(r.s)
+      const frames = draws.mock.calls.filter((c) => c[0] === el)
+      expect(frames.length).toBeGreaterThan(0)
+      // The video's box in the audience frame, mapped through the mirror's fit.
+      const s = Math.min(mirror.width / audience.width, mirror.height / audience.height)
+      const dx = (mirror.width - audience.width * s) / 2, dy = (mirror.height - audience.height * s) / 2
+      const [, x, y, w, h] = frames[0] as unknown as [unknown, number, number, number, number]
+      expect(x).toBeCloseTo(dx + 0.25 * audience.width * s, 6)
+      expect(y).toBeCloseTo(dy + 0.25 * audience.height * s, 6)
+      expect(w).toBeCloseTo(0.5 * audience.width * s, 6)
+      expect(h).toBeCloseTo(0.5 * audience.height * s, 6)
+      r.s.exit()
+    } finally {
+      Object.assign(proto, saved)
+      Object.assign(U, savedUrl)
+    }
+  })
+})
+
+describe('PR #19 review 4', () => {
+  it('a stale prime callback cannot forget the hold of a newer request for the same slide', async () => {
+    const { syncPrimeHolds } = await import('../src/slideshow/presenter/PresenterView')
+    const held = new Map<number, object>()
+    const pending: Array<(ok: boolean) => void> = []
+    const log: string[] = []
+    const io = {
+      release: (i: number) => log.push(`release:${i}`),
+      prime: (i: number) => { log.push(`prime:${i}`); return new Promise<boolean>((res) => pending.push(res)) },
+      primed: () => log.push('primed'),
+      forgotten: () => log.push('forgotten'),
+    }
+    syncPrimeHolds(held, new Set([3]), io)
+    // The preview leaves slide 3 while it primes, then comes back: a second request for it.
+    syncPrimeHolds(held, new Set([4]), io)
+    syncPrimeHolds(held, new Set([3]), io)
+    expect(log).toEqual(['prime:3', 'release:3', 'prime:4', 'release:4', 'prime:3'])
+    const newer = held.get(3)
+    // The first prime settles late (the release cancelled it: false): it must not touch the newer hold.
+    pending[0]!(false)
+    await Promise.resolve(); await Promise.resolve()
+    expect(held.get(3)).toBe(newer)
+    expect(log).not.toContain('forgotten')
+    // Nor may a stale success count as the newer request's.
+    pending[1]!(true)
+    await Promise.resolve(); await Promise.resolve()
+    expect(log).not.toContain('primed')
+    // The newer request's own outcome still lands.
+    pending[2]!(false)
+    await Promise.resolve(); await Promise.resolve()
+    expect(held.has(3)).toBe(false)
+    expect(log.filter((l) => l === 'forgotten')).toHaveLength(1)
+  })
+})
+
+describe('PR #19 review 4 (carried video)', () => {
+  it('a video carried to the next slide (numSld) keeps the geometry its overlay shows in the mirror', async () => {
+    // Slide 1's video on shape 2 plays across two slides; slide 2 has its own, unrelated shape 2 elsewhere.
+    const video = '<p:video><p:cMediaNode numSld="2"><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cMediaNode></p:video>'
+    const bytes = await buildPptxDeck({ slides: [
+      { shapes: [box], media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array(64).fill(7) }], timingXml: `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${video}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>` },
+      { shapes: [box] },
+    ] })
+    const doc = await parsePptx(await OfficePackage.load(bytes))
+    let shown = 0
+    const boxes = [{ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, { x: 0, y: 0.75, w: 0.1, h: 0.1 }]
+    vi.spyOn(sessionDeps, 'stage').mockImplementation(() => ({
+      ...recordingStage(),
+      async enter(m) { shown = m.index },
+      mediaBox: () => ({ left: 10, top: 10, width: 20, height: 20 }),
+      mediaFrameBox: () => boxes[shown],
+    }))
+    const proto = HTMLMediaElement.prototype as unknown as Record<string, unknown>
+    const saved = { canPlayType: proto.canPlayType, play: proto.play, pause: proto.pause, load: proto.load }
+    const U = URL as unknown as Record<string, unknown>
+    const savedUrl = { createObjectURL: U.createObjectURL, revokeObjectURL: U.revokeObjectURL }
+    Object.assign(proto, { canPlayType: () => 'maybe', play: () => Promise.resolve(), pause() {}, load() {} })
+    Object.assign(U, { createObjectURL: () => 'blob:carried-video', revokeObjectURL() {} })
+    try {
+      const popup = fakePopup()
+      const r = await show(doc, popup)
+      await step(r.s)
+      await step(r.s)
+      const el = r.host.querySelector<HTMLVideoElement>('video[data-officeview-show-media]')!
+      expect(el.getAttribute('src')).toBe('blob:carried-video')
+      // Slide 2: the clip plays on, where the audience still sees it (its overlay was not moved).
+      r.s.next()
+      await step(r.s)
+      expect(shown).toBe(1)
+      expect(el.isConnected).toBe(true)
+      const mirror = q<HTMLCanvasElement>(popup.document, '[data-officeview-presenter-current] canvas')
+      const audience = r.host.querySelector<HTMLCanvasElement>('[data-officeview-show-canvas]')!
+      const draws = vi.spyOn(mirror.getContext('2d')!, 'drawImage')
+      await step(r.s)
+      const frames = draws.mock.calls.filter((c) => c[0] === el)
+      expect(frames.length).toBeGreaterThan(0)
+      const s = Math.min(mirror.width / audience.width, mirror.height / audience.height)
+      const dx = (mirror.width - audience.width * s) / 2, dy = (mirror.height - audience.height * s) / 2
+      const [, x, y, w, h] = frames[0] as unknown as [unknown, number, number, number, number]
+      expect(x).toBeCloseTo(dx + 0.25 * audience.width * s, 6)
+      expect(y).toBeCloseTo(dy + 0.25 * audience.height * s, 6)
+      expect(w).toBeCloseTo(0.5 * audience.width * s, 6)
+      expect(h).toBeCloseTo(0.5 * audience.height * s, 6)
+      r.s.exit()
+    } finally {
+      Object.assign(proto, saved)
+      Object.assign(U, savedUrl)
+    }
+  })
+})
+
+describe('PR #19 review 9', () => {
+  it('full screen entered through a placement retry updates the surface and removes the refused notice', async () => {
+    const presenterScreen = { availLeft: 0, availTop: 0, availWidth: 1440, availHeight: 900, isPrimary: true, label: 'laptop' }
+    const audienceScreen = { availLeft: 1440, availTop: 0, availWidth: 1920, availHeight: 1080, label: 'projector' }
+    ;(window as { getScreenDetails?: unknown }).getScreenDetails = vi.fn(() => Promise.resolve({ screens: [presenterScreen, audienceScreen] }))
+    const popup = fakePopup()
+    // The first request was refused: the show runs in the window, with the notice.
+    const r = await show(await deck(), popup, { fullscreen: 'refused', retry: async () => 'entered' })
+    const refused = () => r.host.querySelector('[data-officeview-show-notice]:not([data-placement])')
+    expect(r.s.surface).toBe('in-window')
+    expect(refused()).not.toBeNull()
+    // "Use both screens" in the presenter window enters full screen on the audience screen.
+    button(popup.document, 'Use both screens').click()
+    await flush()
+    expect(r.s.surface).toBe('fullscreen')
+    expect(refused()).toBeNull()
+    r.s.exit()
   })
 })

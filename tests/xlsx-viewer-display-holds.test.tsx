@@ -50,6 +50,9 @@ it('a pending copy and the committed display keep their view charged after the w
     const ui = render(<InteractiveSheetDoc doc={doc} source={remote} />)
     await loaded(ui)
     const first = await sort('asc')
+    // The display must show revision 1 (and so hold its view) before the copy starts: the viewer renders the
+    // notification after the sort settles, which a slow runner may not have done yet (PR #19 round 8 CI flake).
+    await waitFor(() => expect(ui.getByRole('columnheader', { name: /^Column A/ }).getAttribute('aria-sort')).toBe('ascending'))
     fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A2' } })
     fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
     const one = remote.mainLedger.snapshot().byPool.viewBuffers
@@ -61,11 +64,20 @@ it('a pending copy and the committed display keep their view charged after the w
     // the committed display still read revision 1's order.
     const notify = remote.notify.bind(remote)
     remote.notify = () => {}
-    const second = await sort('desc')
+    // "Not yet rendered" must not depend on no render happening at all: any render (a late row load, a font or
+    // asset publication on a slow runner) reads the workbook's current view. Until revision 2 is delivered, this
+    // viewer's reads of sheet A still see revision 1 (PR #19 round 8 CI flake: a render in this window moved
+    // the display on and cancelled the copy before the assertion below).
+    const view = remote.view.bind(remote)
+    remote.view = ((sheetId: string) => sheetId === 'A' ? first : view(sheetId)) as typeof remote.view
+    await sort('desc')
+    const second = view('A')
+    expect(second.order).not.toBe(first.order)
     expect(remote.mainLedger.hasLifetime(first.order), 'held by the display and the pending copy').toBe(true)
     expect(remote.mainLedger.snapshot().byPool.viewBuffers).toBe(2 * one)
     // Revision 2 commits: the display moves on and the copy (cancelled by the
     // owner change) drains; each releases its own hold exactly once.
+    remote.view = view
     remote.notify = notify
     await act(async () => { notify() })
     await act(async () => { pending.splice(0).forEach(resume => resume()); await new Promise(resolve => setTimeout(resolve, 0)) })

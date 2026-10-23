@@ -12,7 +12,8 @@
  * before the lease is released (S2-6). The format is checked with
  * `canPlayType` before any byte is read; an undecodable or refused sound,
  * or a rejected `play()`, is diagnosed and the show goes on (there is no
- * poster to click, so no "Click to play").
+ * poster to click, so no "Click to play"); a rejected sound is stopped and
+ * its lease released, so a later resume never starts it mid-slide.
  */
 import type { DiagnosticSink, MediaRecord, ShowSlide } from '../types'
 import type { MediaLease, MediaLeaseResult } from './lease'
@@ -35,8 +36,11 @@ export interface TransitionSoundDeps {
 
 export interface TransitionSoundController extends TransitionSound {
   setPaused(paused: boolean): void
-  /** Stops the sound now (workspace pressure); true when one was playing. */
-  release(): boolean
+  /**
+   * Stops the sound now; true when one was playing. Workspace pressure and "Stop previous sound" stop any;
+   * `onlyLooping` (an effect sound starting: "loop until next sound") stops only a looping one (S2-10).
+   */
+  release(onlyLooping?: boolean): boolean
   dispose(): void
 }
 
@@ -75,16 +79,22 @@ export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoun
     const el = p.el
     if (!el || paused) return
     let r: Promise<void> | undefined
+    // A refused sound retires: stopped and its lease released, so a later resume (a hidden tab coming back)
+    // never starts it mid-slide (PR #19 review 3). There is no poster to click, so no retry is offered.
+    const refuse = (e: unknown) => {
+      diagnose(p.slide, 'media-autoplay', 'transition-sound', `The browser refused the transition sound (${String((e as { name?: unknown })?.name ?? e)}); the show continues`)
+      if (playing === p) stop()
+    }
     try {
       r = el.play() as Promise<void> | undefined
     } catch (e) {
-      diagnose(p.slide, 'media-autoplay', 'transition-sound', `The browser refused the transition sound (${String((e as { name?: unknown })?.name ?? e)}); the show continues`)
+      refuse(e)
       return
     }
     if (r && typeof r.then === 'function') {
       r.then(undefined, (e) => {
         if ((e as { name?: unknown })?.name === 'AbortError') return
-        diagnose(p.slide, 'media-autoplay', 'transition-sound', `The browser refused the transition sound (${String((e as { name?: unknown })?.name ?? e)}); the show continues`)
+        refuse(e)
       })
     }
   }
@@ -142,7 +152,10 @@ export function createTransitionSound(deps: TransitionSoundDeps): TransitionSoun
       if (on) p.el.pause()
       else play(p)
     },
-    release: stop,
+    release(onlyLooping = false) {
+      if (onlyLooping && !playing?.loop) return false
+      return stop()
+    },
     dispose() { stop() },
   }
 }

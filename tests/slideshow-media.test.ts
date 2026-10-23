@@ -16,7 +16,7 @@ import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { createScheduler } from '../src/slideshow/engine/scheduler'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../src/slideshow/engine/steps'
 import type { MediaLease, MediaLeaseResult } from '../src/slideshow/media/lease'
-import { createMediaPlayer, type MediaController, type MediaPlayer } from '../src/slideshow/media/player'
+import { createMediaPlayer, type FrameBox, type MediaBox, type MediaController, type MediaPlayer } from '../src/slideshow/media/player'
 import { createTransitionSound } from '../src/slideshow/media/sounds'
 import { readMedia } from '../src/slideshow/read/media'
 import { readSlideTiming } from '../src/slideshow/read/timing'
@@ -77,6 +77,8 @@ interface Rig {
   canPlay: { value: CanPlayTypeResult }
   openWith: { result: (r: MediaRecord) => MediaLeaseResult }
   now: { t: number }
+  /** `stopTransitionSound` calls (S2-10): true = only a looping one. */
+  transitionStops: boolean[]
 }
 
 interface FakeLease extends MediaLease { released: boolean; leaves: number; rec: MediaRecord }
@@ -103,9 +105,11 @@ function rig(doc: Document = document): Rig {
   const canPlay = { value: 'maybe' as CanPlayTypeResult }
   const openWith = { result: (r: MediaRecord): MediaLeaseResult => { const l = fakeLease(r); leases.push(l); return l } }
   const now = { t: 0 }
+  const transitionStops: boolean[] = []
   const player = createMediaPlayer({
     root,
     sink,
+    stopTransitionSound: (onlyLooping) => { transitionStops.push(onlyLooping); return false },
     open: async (r) => { opens.push(r); return openWith.result(r) },
     create: (kind) => {
       const el = doc.createElement(kind) as Fake
@@ -117,7 +121,7 @@ function rig(doc: Document = document): Rig {
       return el
     },
   })
-  return { player, root, sink, elements, leases, opens, playWith, canPlay, openWith, now }
+  return { player, root, sink, elements, leases, opens, playWith, canPlay, openWith, now, transitionStops }
 }
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
@@ -551,5 +555,451 @@ describe('media supporting rules (S2-7)', () => {
     const records = readMedia(rels, types, handle.pkg, 0, createDiagnosticSink(), slideXml)
     expect(records.map((m) => [m.spid, m.contentType])).toEqual(expect.arrayContaining([['2', 'video/mp4'], ['3', 'audio/wav']]))
     expect(records.every((m) => m.spid !== undefined)).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Task S2-10: effect sounds (p:audio on a p:sndTgt, in an effect's subTnLst)
+// ---------------------------------------------------------------------------
+
+/** An effect sound as PowerPoint writes it: `p:audio` on a `p:sndTgt`, begun with its effect (`evt="begin"` on the effect's node). */
+function effectSound(id: number, snd: string, effectId: number, over: CtnOver = {}): AudioBehaviour {
+  return { kind: 'audio', ctn: ctn(id, { start: [{ delayMs: 0, evt: 'begin', tn: effectId }], ...over }), target: { snd }, attrNames: [], additive: 'base', accumulate: 'none' } as AudioBehaviour
+}
+/** The fly-in's visible set on shape 4 (the effect the sound belongs to). */
+const flyIn = (id: number): BehaviourNode => ({
+  kind: 'set', ctn: ctn(id, { durMs: 1, fill: 'hold', start: [at(0)] }), target: { spid: '4' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: 'visible',
+})
+/** The sound's media record: a relationship of the slide, on no shape. */
+const soundRec = (rId = 'rId2', contentType = 'audio/wav'): MediaRecord => ({ rId, partPath: `ppt/media/${rId}.wav`, contentType, declaredBytes: 10 })
+
+describe('effect sounds (S2-10)', () => {
+  it('an effect with a sndTgt plays its sound at the effect\'s begin', async () => {
+    const r = rig()
+    // group(3) is par 3 (the click) > par 4 (the effect); the sound begins with node 4 (tdf44223's `evt="begin" tn=5`).
+    const timing = tree(mainSeq([group(3, [flyIn(10), effectSound(-1, 'rId2', 4), successor(11, -1)])]))
+    const d = drive(r, slideOf(timing, [soundRec()]))
+    d.sync(0)
+    // Nothing plays before the effect's click.
+    expect(r.elements).toHaveLength(0)
+    expect(d.ctl.wants).toBe(true)
+    d.next(100)
+    await flush()
+    expect(r.opens.map((m) => m.rId)).toEqual(['rId2'])
+    expect(r.elements).toHaveLength(1)
+    const el = r.elements[0]
+    expect(el.tagName).toBe('AUDIO')
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(el.src).toBe('blob:ppt/media/rId2.wav')
+    expect(el.hidden).toBe(true)
+    expect(el.ownerDocument).toBe(r.root.ownerDocument)
+    expect(d.state(-1, 200)).toBe('active')
+    // Its real end releases whatever waits on it.
+    r.now.t = 1500
+    el.dispatchEvent(new Event('ended'))
+    expect(d.ends).toEqual([[-1, false, 1500]])
+    expect(d.state(11, 1600)).toBe('active')
+    expect(codes(r.sink)).toEqual([])
+    // Everything but numSld media stops on slide change: the element lets go of its URL, then the lease goes.
+    d.ctl.leave()
+    expect(el.getAttribute('src')).toBeNull()
+    expect(r.leases[0].released).toBe(true)
+  })
+
+  it('a refused effect sound is diagnosed, offers no Click to play, and the show continues', async () => {
+    const r = rig()
+    r.playWith.result = () => Promise.reject(new DOMException('no', 'NotAllowedError'))
+    const timing = tree(mainSeq([group(3, [flyIn(10), effectSound(-1, 'rId2', 4), successor(11, -1)])]))
+    const d = drive(r, slideOf(timing, [soundRec()]))
+    d.next(0)
+    r.now.t = 30
+    await flush()
+    expect(codes(r.sink)).toEqual(['media-autoplay'])
+    expect(r.sink.list()[0].effect).toBe('behaviour -1')
+    // There is no poster to click: the transition-sound convention.
+    expect(r.root.querySelector('[data-officeview-show-play]')).toBeNull()
+    expect(d.ends).toEqual([[-1, true, 30]])
+    expect(d.state(11, 30)).toBe('active')
+    // An undecodable sound reads nothing.
+    const r2 = rig()
+    r2.canPlay.value = ''
+    const d2 = drive(r2, slideOf(timing, [soundRec('rId2', 'audio/x-ms-wma')]))
+    d2.next(0)
+    await flush()
+    expect(r2.opens).toEqual([])
+    expect(codes(r2.sink)).toEqual(['media-codec'])
+    expect(d2.ends).toEqual([[-1, true, 0]])
+  })
+
+  it('a looping effect sound loops until a stop-previous-sound command', async () => {
+    const r = rig()
+    // "Loop until next sound" is repeatCount="indefinite"; "Stop previous sound" is p:cmd type="evt" cmd="onstopaudio".
+    const stopSound: CmdBehaviour = { ...cmd(30, '0', 'onstopaudio', 'evt'), target: { sld: true } }
+    const timing = tree(mainSeq([
+      group(3, [flyIn(10), effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' })]),
+      group(5, [flyIn(20), stopSound]),
+    ]))
+    const d = drive(r, slideOf(timing, [soundRec()]))
+    d.next(0)
+    await flush()
+    const el = r.elements[0]
+    expect(el.loop).toBe(true)
+    expect(el.play).toHaveBeenCalledTimes(1)
+    d.sync(5000)
+    expect(el.pause).not.toHaveBeenCalled()
+    d.next(6000)
+    expect(el.pause).toHaveBeenCalled()
+    expect(d.ends).toEqual([[-1, false, 6000]])
+    // The effect sound stopped only a looping transition sound; "Stop previous sound" stops any.
+    expect(r.transitionStops).toEqual([true, false])
+    expect(codes(r.sink)).toEqual([])
+  })
+
+  it('the next effect sound stops a looping one ("loop until next sound")', async () => {
+    const r = rig()
+    const timing = tree(mainSeq([
+      group(3, [flyIn(10), effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' })]),
+      group(5, [flyIn(20), effectSound(-2, 'rId3', 6)]),
+    ]))
+    const d = drive(r, slideOf(timing, [soundRec('rId2'), soundRec('rId3')]))
+    d.next(0)
+    await flush()
+    const looping = r.elements[0]
+    d.next(4000)
+    await flush()
+    expect(looping.pause).toHaveBeenCalled()
+    expect(d.ends).toEqual([[-1, false, 4000]])
+    expect(r.elements).toHaveLength(2)
+    expect(r.elements[1].play).toHaveBeenCalledTimes(1)
+    expect(r.elements[1].loop).toBe(false)
+  })
+
+  it('an effect sound stops a looping transition sound only; Stop previous sound stops any', async () => {
+    const r = rig()
+    const tr = (rId: string, loop: boolean) => ({ element: 'fade', ns: 'p' as const, attrs: {}, durationMs: 0, advClick: true, sound: { start: { rId, loop } } })
+    const slides = [slideOf(undefined, [rec('a', 'audio/wav', 'rIdS1')], 0, tr('rIdS1', false)), slideOf(undefined, [rec('b', 'audio/wav', 'rIdS2')], 1, tr('rIdS2', true))]
+    const sounds = createTransitionSound({ root: r.root, sink: r.sink, slide: (i) => slides[i], open: async (m) => r.openWith.result(m), create: (k) => {
+      const el = r.root.ownerDocument.createElement(k) as Fake
+      el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+      r.elements.push(el)
+      return el
+    } })
+    sounds.start(0)
+    await flush()
+    // A sound that does not loop is left alone by the next effect sound...
+    expect(sounds.release(true)).toBe(false)
+    expect(r.leases[0].released).toBe(false)
+    // ...and stopped by "Stop previous sound".
+    expect(sounds.release(false)).toBe(true)
+    expect(r.leases[0].released).toBe(true)
+    sounds.start(1)
+    await flush()
+    expect(sounds.release(true)).toBe(true)
+    expect(r.elements[1].pause).toHaveBeenCalled()
+    expect(r.leases[1].released).toBe(true)
+  })
+
+  it('a built-in sound or a sound with no part is diagnosed, never silent', async () => {
+    const r = rig()
+    const timing = tree(mainSeq([group(3, [flyIn(10), effectSound(-1, 'builtIn:wind.wav', 4), successor(11, -1)])]))
+    const d = drive(r, slideOf(timing, []))
+    d.next(0)
+    await flush()
+    expect(r.elements).toHaveLength(0)
+    expect(codes(r.sink)).toEqual(['media-missing'])
+    expect(r.sink.list()[0].message).toContain('wind.wav')
+    expect(d.ends).toEqual([[-1, true, 0]])
+    expect(d.state(11, 0)).toBe('active')
+  })
+})
+
+describe('PR #19 review (Stage 2 round 1)', () => {
+  it('media on a shape in the rendered AlternateContent Fallback is matched to its record and plays', async () => {
+    const deck = await buildPptxDeck({ slides: [{
+      shapes: [{ id: 2, off: ['0', '0'], ext: ['1000', '1000'] }],
+      media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array([1]) }],
+      timingXml: timingXmlOf(mainSeqXml([])),
+    }] })
+    const handle = await openShowPackage(deck)
+    const part = handle.slideParts[0]
+    const rels = await readRelationships(handle, part)
+    const rId = rels.find((r) => /\/(video|media)$/.test(r.type))!.id
+    const pkg = await OfficePackage.load(deck)
+    const types = parseXmlOrdered((await pkg.text('[Content_Types].xml'))!)
+    // The first Choice requires a namespace no reader supports, so the drawing parser renders the Fallback (shape 7);
+    // shape 5 in the Choice also names the clip but is never shown.
+    const pic = (id: number) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="v${id}"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="${rId}"/></p:nvPr></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>`
+    const slideXml = parseXmlOrdered(`<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:cSld><p:spTree>`
+      + `<mc:AlternateContent><mc:Choice xmlns:zz="urn:example:unsupported" Requires="zz">${pic(5)}</mc:Choice><mc:Fallback>${pic(7)}</mc:Fallback></mc:AlternateContent>`
+      + `</p:spTree></p:cSld></p:sld>`)
+    const records = readMedia(rels, types, handle.pkg, 0, createDiagnosticSink(), slideXml)
+    expect(records.find((m) => m.rId === rId)?.spid).toBe('7')
+    // The video on the rendered shape plays.
+    const r = rig()
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('video', 10, '7')])])), records))
+    d.next(0)
+    await flush()
+    expect(r.elements).toHaveLength(1)
+    expect(r.elements[0].play).toHaveBeenCalledTimes(1)
+    expect(codes(r.sink)).not.toContain('media-missing')
+  })
+
+  it('a looping effect sound still opening when the next sound starts never attaches', async () => {
+    const r = rig()
+    // The first sound's lease resolves only after the second sound has started.
+    let release!: () => void
+    const gate = new Promise<void>((res) => { release = res })
+    const base = r.openWith.result
+    let first = true
+    const opened: Array<Promise<MediaLeaseResult>> = []
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink,
+      open: (m) => {
+        r.opens.push(m)
+        const p = first ? gate.then(() => base(m)) : Promise.resolve(base(m))
+        first = false
+        opened.push(p)
+        return p
+      },
+      create: (kind) => {
+        const el = r.root.ownerDocument.createElement(kind) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+    })
+    const timing = tree(mainSeq([
+      group(3, [flyIn(10), effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' })]),
+      group(5, [flyIn(20), effectSound(-2, 'rId3', 6)]),
+    ]))
+    const d = drive({ ...r, player }, slideOf(timing, [soundRec('rId2'), soundRec('rId3')]))
+    d.next(0)
+    await flush()
+    d.next(100)
+    await flush()
+    // The second sound plays; the first is ended by it.
+    expect(r.elements[1].play).toHaveBeenCalledTimes(1)
+    expect(d.ends).toEqual([[-1, false, 100]])
+    // The first lease arrives late: it is released at once, its element never gets a source or plays.
+    release()
+    await flush()
+    expect(r.leases).toHaveLength(2)
+    const late = r.leases.find((l) => l.rec.rId === 'rId2')!
+    expect(late.released).toBe(true)
+    expect(r.elements[0].play).not.toHaveBeenCalled()
+    expect(r.elements[0].getAttribute('src')).toBeNull()
+    expect(r.elements[0].isConnected).toBe(false)
+  })
+})
+
+describe('PR #19 review 3', () => {
+  it('a transition sound the browser refused retires: a later resume never starts it mid-slide', async () => {
+    const r = rig()
+    const slides = [slideOf(undefined, [rec('a', 'audio/wav', 'rIdS1')], 0, { element: 'fade', ns: 'p', attrs: {}, durationMs: 0, advClick: true, sound: { start: { rId: 'rIdS1', loop: true } } })]
+    const plays: Fake[] = []
+    const sounds = createTransitionSound({ root: r.root, sink: r.sink, slide: (i) => slides[i], open: async (m) => r.openWith.result(m), create: (k) => {
+      const el = r.root.ownerDocument.createElement(k) as Fake
+      el.play = vi.fn(() => Promise.reject(new DOMException('no', 'NotAllowedError'))); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+      plays.push(el)
+      return el
+    } })
+    sounds.start(0)
+    await flush()
+    expect(codes(r.sink)).toEqual(['media-autoplay'])
+    const el = plays[0]
+    expect(el.play).toHaveBeenCalledTimes(1)
+    // Retired: the element let go of its URL and left the document, then the lease was released.
+    expect(el.getAttribute('src')).toBeNull()
+    expect(el.isConnected).toBe(false)
+    expect(r.leases[0].released).toBe(true)
+    // A hidden tab coming back (the show clock resumes) does not start it mid-slide.
+    sounds.setPaused(true)
+    sounds.setPaused(false)
+    await flush()
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(sounds.release()).toBe(false)
+  })
+})
+
+describe('PR #19 resize follow-up', () => {
+  it('a resize re-places every shown video overlay, a carried (numSld) one at the geometry it keeps', async () => {
+    const r = rig()
+    // The surface's mapping from frame fractions to CSS px; a resize changes it (here: twice the size).
+    let scale = 1
+    const frames: Record<string, FrameBox> = { '7': { x: 0.1, y: 0.2, w: 0.3, h: 0.4 } }
+    const toCss = (f: FrameBox): MediaBox => ({ left: f.x * 1000 * scale, top: f.y * 500 * scale, width: f.w * 1000 * scale, height: f.h * 500 * scale })
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink,
+      open: async (m) => r.openWith.result(m),
+      box: (spid) => (frames[spid] ? toCss(frames[spid]!) : undefined),
+      frameBox: (spid) => frames[spid],
+      frameToBox: toCss,
+      create: (kind) => {
+        const el = r.root.ownerDocument.createElement(kind) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+    })
+    const a = drive({ ...r, player }, slideOf(tree(mainSeq([]), media('video', 10, '7', {}, { numSld: 2 })), [rec('7')]))
+    a.sync(0)
+    await flush()
+    const el = r.elements[0]
+    expect([el.style.left, el.style.top, el.style.width, el.style.height]).toEqual(['100px', '100px', '300px', '200px'])
+    // Slide 2 has no shape 7 (its own shapes differ); the video plays on where it was.
+    a.ctl.leave()
+    delete frames['7']
+    drive({ ...r, player }, slideOf(undefined, [], 1))
+    expect(el.isConnected).toBe(true)
+    // The window doubles: the carried overlay follows, from its kept geometry.
+    scale = 2
+    player.layout()
+    expect([el.style.left, el.style.top, el.style.width, el.style.height]).toEqual(['200px', '200px', '600px', '400px'])
+    expect(el.hidden).toBe(false)
+  })
+})
+
+describe('PR #19 review 5', () => {
+  it('a play() rejection that arrives after the timeline stopped the node is ignored', async () => {
+    const r = rig()
+    let reject!: (e: unknown) => void
+    r.playWith.result = () => new Promise<void>((_, rej) => { reject = rej })
+    // A video with its own 500 ms dur: the scheduler ends it, and the controller pauses the element.
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('video', 10, '7', { durMs: 500 })])])), [rec('7')]))
+    d.next(0)
+    await flush()
+    expect(r.elements[0].play).toHaveBeenCalledTimes(1)
+    d.sync(600)
+    expect(d.state(10, 600)).not.toBe('active')
+    expect(r.elements[0].pause).toHaveBeenCalled()
+    // The browser's answer to the old play() lands now: nothing to diagnose, nothing to offer.
+    reject(new DOMException('no', 'NotAllowedError'))
+    await flush()
+    expect(codes(r.sink)).toEqual(['media-overlay'])
+    expect(r.root.querySelector('[data-officeview-show-play]')).toBeNull()
+    expect(d.ends).toEqual([])
+  })
+})
+
+describe('PR #19 review 6', () => {
+  it('a looping effect sound carried to the next slide (numSld) stops at that slide\'s next sound', async () => {
+    const r = rig()
+    const looping = { ...effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' }), numSld: 3 } as AudioBehaviour
+    const a = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), looping])])), [soundRec('rId2')]))
+    a.next(0)
+    await flush()
+    const carried = r.elements[0]
+    expect(carried.loop).toBe(true)
+    a.ctl.leave()
+    // It plays on into slide 2...
+    expect(carried.isConnected).toBe(true)
+    expect(r.leases[0].released).toBe(false)
+    const b = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), effectSound(-2, 'rId3', 4)])])), [soundRec('rId3')], 1))
+    b.sync(0)
+    expect(carried.pause).not.toHaveBeenCalled()
+    // ...until slide 2's own effect sound starts: "loop until next sound".
+    b.next(100)
+    await flush()
+    expect(carried.pause).toHaveBeenCalled()
+    expect(carried.getAttribute('src')).toBeNull()
+    expect(carried.isConnected).toBe(false)
+    expect(r.leases[0].released).toBe(true)
+    expect(r.elements[1].play).toHaveBeenCalledTimes(1)
+  })
+
+  it('Stop previous sound also stops a carried effect sound', async () => {
+    const r = rig()
+    const looping = { ...effectSound(-1, 'rId2', 4, { repeatCount: 'indefinite' }), numSld: 3 } as AudioBehaviour
+    const a = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), looping])])), [soundRec('rId2')]))
+    a.next(0)
+    await flush()
+    const carried = r.elements[0]
+    a.ctl.leave()
+    const stopSound: CmdBehaviour = { ...cmd(30, '0', 'onstopaudio', 'evt'), target: { sld: true } }
+    const b = drive(r, slideOf(tree(mainSeq([group(3, [flyIn(10), stopSound])])), [], 1))
+    b.next(100)
+    expect(carried.pause).toHaveBeenCalled()
+    expect(r.leases[0].released).toBe(true)
+  })
+})
+
+describe('PR #19 review 10', () => {
+  it('a stop that arrives while the lease is still opening releases the late lease and never attaches it', async () => {
+    const r = rig()
+    let open!: () => void
+    const gate = new Promise<void>((res) => { open = res })
+    const base = r.openWith.result
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink,
+      open: async (m) => { await gate; return base(m) },
+      create: (kind) => {
+        const el = r.root.ownerDocument.createElement(kind) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+    })
+    // The clip starts with its click; "stop" arrives on the next click, before its bytes are read.
+    const timing = tree(mainSeq([group(3, [media('audio', 10, '7', { start: [at(0)] })]), group(5, [cmd(21, '7', 'stop')])]))
+    const d = drive({ ...r, player }, slideOf(timing, [rec('7', 'audio/wav')]))
+    d.next(0)
+    d.next(100)
+    expect(d.ends).toEqual([[10, false, 100]])
+    open()
+    await flush()
+    expect(r.leases).toHaveLength(1)
+    expect(r.leases[0].released).toBe(true)
+    expect(r.elements[0].getAttribute('src')).toBeNull()
+    expect(r.elements[0].isConnected).toBe(false)
+    expect(r.elements[0].play).not.toHaveBeenCalled()
+  })
+})
+
+describe('PR #19 review 10 (shared media relationship)', () => {
+  it('two shapes that share one media relationship each get a record, and both play', async () => {
+    const deck = await buildPptxDeck({ slides: [{
+      shapes: [{ id: 2, off: ['0', '0'], ext: ['1000', '1000'] }],
+      media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array([1]) }],
+      timingXml: timingXmlOf(mainSeqXml([])),
+    }] })
+    const handle = await openShowPackage(deck)
+    const rels = await readRelationships(handle, handle.slideParts[0])
+    const rId = rels.find((r) => /\/(video|media)$/.test(r.type))!.id
+    const pkg = await OfficePackage.load(deck)
+    const types = parseXmlOrdered((await pkg.text('[Content_Types].xml'))!)
+    const pic = (id: number) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="v${id}"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="${rId}"/></p:nvPr></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>`
+    const slideXml = parseXmlOrdered(`<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree>${pic(5)}${pic(7)}</p:spTree></p:cSld></p:sld>`)
+    const sink = createDiagnosticSink()
+    const records = readMedia(rels, types, handle.pkg, 0, sink, slideXml)
+    expect(records.filter((m) => m.rId === rId).map((m) => m.spid)).toEqual(['5', '7'])
+    const r = rig()
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('video', 10, '5'), media('video', 11, '7')])])), records))
+    d.next(0)
+    await flush()
+    expect(r.elements).toHaveLength(2)
+    expect(codes(r.sink)).not.toContain('media-missing')
+  })
+})
+
+describe('PR #19 review 11', () => {
+  it('a fresh activation of reused media replays from the start (Previous mid-clip, then Next)', async () => {
+    const r = rig()
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('audio', 10, '7')])])), [rec('7', 'audio/wav')]))
+    d.next(0)
+    await flush()
+    const el = r.elements[0]
+    expect(el.play).toHaveBeenCalledTimes(1)
+    // 2.5 s into the clip, the presenter steps back...
+    el.currentTime = 2.5
+    r.now.t = 2500
+    d.cursor = d.tl.checkpoint(0)
+    d.sync(2500)
+    expect(el.pause).toHaveBeenCalled()
+    // ...and forward again: the same element, a new activation, from the top.
+    d.next(3000)
+    await flush()
+    expect(r.elements).toHaveLength(1)
+    expect(el.play).toHaveBeenCalledTimes(2)
+    expect(el.currentTime).toBe(0)
   })
 })
