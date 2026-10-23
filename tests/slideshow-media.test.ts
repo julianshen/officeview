@@ -791,3 +791,32 @@ describe('PR #19 review (Stage 2 round 1)', () => {
     expect(r.elements[0].isConnected).toBe(false)
   })
 })
+
+describe('PR #19 review 3', () => {
+  it('a transition sound the browser refused retires: a later resume never starts it mid-slide', async () => {
+    const r = rig()
+    const slides = [slideOf(undefined, [rec('a', 'audio/wav', 'rIdS1')], 0, { element: 'fade', ns: 'p', attrs: {}, durationMs: 0, advClick: true, sound: { start: { rId: 'rIdS1', loop: true } } })]
+    const plays: Fake[] = []
+    const sounds = createTransitionSound({ root: r.root, sink: r.sink, slide: (i) => slides[i], open: async (m) => r.openWith.result(m), create: (k) => {
+      const el = r.root.ownerDocument.createElement(k) as Fake
+      el.play = vi.fn(() => Promise.reject(new DOMException('no', 'NotAllowedError'))); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+      plays.push(el)
+      return el
+    } })
+    sounds.start(0)
+    await flush()
+    expect(codes(r.sink)).toEqual(['media-autoplay'])
+    const el = plays[0]
+    expect(el.play).toHaveBeenCalledTimes(1)
+    // Retired: the element let go of its URL and left the document, then the lease was released.
+    expect(el.getAttribute('src')).toBeNull()
+    expect(el.isConnected).toBe(false)
+    expect(r.leases[0].released).toBe(true)
+    // A hidden tab coming back (the show clock resumes) does not start it mid-slide.
+    sounds.setPaused(true)
+    sounds.setPaused(false)
+    await flush()
+    expect(el.play).toHaveBeenCalledTimes(1)
+    expect(sounds.release()).toBe(false)
+  })
+})

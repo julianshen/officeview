@@ -83,6 +83,9 @@ const heldByStore = new WeakMap<SlideMetadataStore, Map<number, Held>>()
 const primesInFlight = new WeakMap<SlideMetadataStore, Map<number, Promise<boolean>>>()
 /** Bumped by every whole-show release, so a prime started before it is not stored after it. */
 const holdGeneration = new WeakMap<SlideMetadataStore, number>()
+/** Bumped by a one-slide release, so that slide's prime in flight is not stored after it (PR #19 review 3). */
+const slideGeneration = new WeakMap<SlideMetadataStore, Map<number, number>>()
+const slideGen = (store: SlideMetadataStore, slide: number) => slideGeneration.get(store)?.get(slide) ?? 0
 
 /**
  * Acquires `slide`'s metadata and builds its preview timeline, holding the
@@ -100,9 +103,10 @@ export async function primePreview(model: ShowModel, slide: number, options: Pre
   const inflight = primesInFlight.get(store)?.get(slide)
   if (inflight) return inflight
   const gen = holdGeneration.get(store) ?? 0
-  const job = prime(model, slide, options, gen, signal).finally(() => {
+  const job: Promise<boolean> = prime(model, slide, options, gen, slideGen(store, slide), signal).finally(() => {
     const m = primesInFlight.get(store)
-    if (!m) return
+    // A one-slide release forgets this job; a fresh prime of the slide may own the entry now.
+    if (!m || m.get(slide) !== job) return
     m.delete(slide)
     if (m.size === 0) primesInFlight.delete(store)
   })
@@ -112,7 +116,7 @@ export async function primePreview(model: ShowModel, slide: number, options: Pre
   return job
 }
 
-async function prime(model: ShowModel, slide: number, options: PreviewOptions, gen: number, signal?: AbortSignal): Promise<boolean> {
+async function prime(model: ShowModel, slide: number, options: PreviewOptions, gen: number, sgen: number, signal?: AbortSignal): Promise<boolean> {
   const store = model.store
   let h: MetadataHandle
   try {
@@ -138,7 +142,7 @@ async function prime(model: ShowModel, slide: number, options: PreviewOptions, g
   const timeline = createSlideTimeline(text?.tree ?? timing, { ...timelineOptions, slideIndex: slide, ...(text ? { orderOf: text.orderOf } : {}) })
   const held = heldByStore.get(store)
   if (held?.has(slide)) { h.release(); return true } // a concurrent prime stored one first
-  if ((holdGeneration.get(store) ?? 0) !== gen) {
+  if ((holdGeneration.get(store) ?? 0) !== gen || slideGen(store, slide) !== sgen) {
     // Released while this prime was in flight: the fresh handle comes back,
     // and the store keeps its normal cached entry (spec 7).
     h.release()
@@ -182,6 +186,13 @@ export function releasePreview(model: ShowModel, slide?: number): void {
     holdGeneration.set(store, (holdGeneration.get(store) ?? 0) + 1)
     return
   }
+  // A prime of this slide still in flight hands its fresh handle back instead of storing it (PR #19 review 3).
+  const gens = slideGeneration.get(store) ?? new Map<number, number>()
+  gens.set(slide, (gens.get(slide) ?? 0) + 1)
+  slideGeneration.set(store, gens)
+  const inflight = primesInFlight.get(store)
+  inflight?.delete(slide)
+  if (inflight?.size === 0) primesInFlight.delete(store)
   if (!held) return
   const entry = held.get(slide)
   if (!entry) return

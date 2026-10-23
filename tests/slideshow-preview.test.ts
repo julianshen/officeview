@@ -739,3 +739,32 @@ describe('PR #19 review 2', () => {
     h2.release()
   })
 })
+
+describe('PR #19 review 3', () => {
+  it('releasing one slide cancels its in-flight prime: the late handle comes back, nothing is stored', async () => {
+    const d = await deck(timingXmlOf(mainSeqXml([click(3, '2')])))
+    const { model, store } = await modelOf(d, testWorkspace())
+    let open!: () => void
+    const gate = new Promise<void>((res) => { open = res })
+    const released: number[] = []
+    const slow = Object.create(store) as typeof store
+    slow.acquire = async (i, signal) => {
+      await gate
+      const h = await store.acquire(i, signal)
+      return { slide: h.slide, attach: (b, t) => h.attach(b, t), release: () => { released.push(i); h.release() } }
+    }
+    const m = { index: model.index, store: slow } as ShowModel
+    const job = primePreview(m, 0, NORMAL)
+    // The presenter's preview moved on before the read finished.
+    releasePreview(m, 0)
+    open()
+    expect(await job).toBe(false)
+    expect(previewTimeline(m, 0)).toBeUndefined()
+    expect(previewHandle(m, 0)).toBeUndefined()
+    expect(released).toEqual([0])
+    // A fresh prime after the release is not handed the cancelled one.
+    expect(await primePreview(m, 0, NORMAL)).toBe(true)
+    expect(previewTimeline(m, 0)).toBeDefined()
+    releasePreview(m)
+  })
+})

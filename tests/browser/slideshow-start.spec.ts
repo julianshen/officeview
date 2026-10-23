@@ -163,6 +163,9 @@ test('two viewers on one page: the second present is rejected; browser Esc exits
   // B can present now that A released the token; Esc ends it
   await page.click('#present-b')
   await expect.poll(() => fullscreen(page)).toBe('b')
+  // Full screen comes first in the start sequence; wait for the show itself before Esc, or Esc cancels the
+  // start (b:rejected:cancelled, no onEnd) on a slow runner (PR #19 round 3: CI raced exactly that).
+  await expect.poll(() => log(page)).toEqual(expect.arrayContaining(['b:onStart', 'b:started']))
   await page.keyboard.press('Escape')
   await expect.poll(() => fullscreen(page)).toBeNull()
   await expect.poll(() => log(page)).toEqual(expect.arrayContaining(['b:onEnd', 'b:ended']))
