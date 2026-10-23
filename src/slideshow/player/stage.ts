@@ -1013,7 +1013,7 @@ export function createStage(deps: StageDeps): Stage {
     get backend() { return manager.state },
     get backingStore() { return backing },
     // What is drawn: a catalogued stand-in reports its 2-D look-alike (S1-22); `random` draws its pick per rng.
-    get transition() { return running && { effect: running.spec.element === 'random' ? 'random' : resolveTransition2D(running.spec).spec.element, duration: running.duration } },
+    get transition() { return running && { effect: running.three || running.spec.element === 'random' ? running.spec.element : resolveTransition2D(running.spec).spec.element, duration: running.duration } },
     inspect() {
       return {
         current: current?.index,
