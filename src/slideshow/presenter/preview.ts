@@ -11,7 +11,7 @@
  * slide-advance against next-in-slide — the S1-10 contract, kept. On the
  * last step the only Next left is the main sequence's settle point, which
  * begins only while a finite effect still runs; that judgment belongs to the
- * show clock, so `nextCheckpoint` takes it as its trailing argument (the
+ * show clock, so `nextCheckpoint` takes it as its required trailing argument (the
  * same `clock.now()` the session passes). The returned position is the
  * settled cursor `timeline.checkpoint(step)`, whose snapshot applies every
  * zero-duration effect and holds never-ending ones at their first
@@ -32,9 +32,11 @@
  * Holds are per slide: `releasePreview(model, slide)` hands back the slide
  * the preview has left, the whole-show form drops every hold, and
  * `createPresenterSurfaces` takes an optional `onClose` that runs on
- * `dispose()` so the hold's lifetime ends with the surfaces it belongs to.
- * `releasePreview` frees the held handles when the preview changes for good
- * or the presenter closes. Additively to the brief, S2-5 reads
+ * `dispose()` (last, guarded) so the hold's lifetime ends with the surfaces
+ * it belongs to. Releases free the preview's handles only — the store keeps
+ * its normal cached entry (spec 7: the shown slide's metadata is never
+ * dropped while it is shown) and refunds it under its own pressure rules.
+ * Additively to the brief, S2-5 reads
  * `previewTimeline`/`previewHandle` to paint the primed slide.
  */
 import { isPackageError } from '../../core/package-error'
@@ -126,10 +128,9 @@ async function prime(model: ShowModel, slide: number, options: PreviewOptions, g
   const held = heldByStore.get(store)
   if (held?.has(slide)) { h.release(); return true } // a concurrent prime stored one first
   if ((holdGeneration.get(store) ?? 0) !== gen) {
-    // Released while this prime was in flight: the fresh handle comes back and
-    // the store's entry is dropped with it, so nothing stays charged unowned.
+    // Released while this prime was in flight: the fresh handle comes back,
+    // and the store keeps its normal cached entry (spec 7).
     h.release()
-    store.evict(slide)
     return false
   }
   const map = held ?? new Map<number, Held>()
@@ -151,20 +152,18 @@ export function previewHandle(model: ShowModel, slide: number): MetadataHandle |
 /**
  * Releases the preview's timing holds: one slide's (`slide` given — the
  * presenter calls this when its preview moves on), or every held slide of the
- * show. The released slide's cache entry is dropped with it, so the store
- * refunds the charge as soon as this was the last holder, and a later
- * acquire re-reads it. A prime still in flight returns its fresh handle
- * instead of pinning it (the store's refcount covers the concurrency).
+ * show. The store keeps its normal cached entry (spec 7: the shown slide's
+ * metadata is never dropped while it is shown) and refunds it under its own
+ * pressure rules; only the preview's handle is released. A prime still in
+ * flight returns its fresh handle instead of pinning it (the store's refcount
+ * covers the concurrency).
  */
 export function releasePreview(model: ShowModel, slide?: number): void {
   const store = model.store
   const held = heldByStore.get(store)
   if (slide === undefined) {
     if (held) {
-      for (const [i, { handle }] of held) {
-        handle.release()
-        store.evict(i)
-      }
+      for (const { handle } of held.values()) handle.release()
     }
     // Even with no holds yet, a whole-show release pulls the rug under any prime
     // still in flight: its fresh handle comes back instead of being stored.
@@ -177,7 +176,6 @@ export function releasePreview(model: ShowModel, slide?: number): void {
   if (!entry) return
   held.delete(slide)
   entry.handle.release()
-  store.evict(slide)
 }
 
 // ---------------------------------------------------------------------------
@@ -194,30 +192,28 @@ export const END_CURSOR: SlideCursor = Object.freeze({ step: 0, events: NO_EVENT
  * slide, like the session does). A slide that has not been primed (or whose
  * metadata could not be read) answers the slide advance.
  *
- * `t` is the show clock reading the click is judged at — the same `clock.now()`
- * the session passes to its own `next`; on the last step a running finite
- * effect means the next click is the settle point, so the position stays on
- * the slide, settled (`timeline.checkpoint(cursor.step)`). Without `t` the
- * settled answer stands: by the time a pane is read the slide has finished
- * everything finite, and the next click leaves. The cursor is never changed:
- * the replay runs on the primed slide's own timeline, the live one's history
- * stays where it is.
+ * `t` is the show clock reading the click is judged at — the same
+ * `clock.now()` the session passes to its own `next`; on the last step a
+ * running finite effect means the next click is the settle point, so the
+ * position stays on the slide, settled (`timeline.checkpoint(cursor.step)`),
+ * while anything over ends the slide. The cursor is never changed: the replay
+ * runs on the primed slide's own timeline, the live one's history stays where
+ * it is.
  */
-export function nextCheckpoint(model: ShowModel, order: readonly number[], slide: number, cursor: SlideCursor, t?: number): PreviewPosition | 'end' {
+export function nextCheckpoint(model: ShowModel, order: readonly number[], slide: number, cursor: SlideCursor, t: number): PreviewPosition | 'end' {
   const timeline = previewTimeline(model, slide)
   if (!timeline) return advance(model, order, slide)
-  if (t !== undefined && (!Number.isFinite(t) || t < 0)) throw new RangeError(`slide timeline: time ${t}`)
+  if (!Number.isFinite(t) || t < 0) throw new RangeError(`slide timeline: time ${t}`)
   const last = cursor.events[cursor.events.length - 1]
   // The last step's only remaining Next is the settle point (S1-10): with the
-  // clock and the finite effects over (or with no clock at all), the next
-  // click leaves the slide.
-  if (cursor.step >= timeline.steps && cursor.mode === 'live' && (t === undefined || timeline.busyUntil(cursor) <= t)) {
+  // finite effects over, the next click leaves the slide — the same predicate
+  // the session's own next() judges at this clock reading.
+  if (cursor.step >= timeline.steps && cursor.mode === 'live' && timeline.busyUntil(cursor) <= t) {
     return advance(model, order, slide)
   }
   // The step timeline answers the same cursor when nothing is left in the
   // slide: identity is the leave-the-slide test (S1-10 contract).
-  const at = t === undefined ? (last ? last.t : 0) : Math.max(last ? last.t : 0, t)
-  const after = timeline.next(cursor, at)
+  const after = timeline.next(cursor, Math.max(last ? last.t : 0, t))
   if (after === cursor) return advance(model, order, slide)
   return { slide, cursor: timeline.checkpoint(after.step) }
 }
@@ -292,6 +288,8 @@ export interface PresenterSurfaces {
   readonly preview: HTMLCanvasElement
   /** The "See all slides" thumbnail canvas for deck index `i`, created on first request. */
   grid(i: number): HTMLCanvasElement
+  /** Frees the thumbnail for deck index `i` (S2-5 calls it as its grid scrolls); `false` when none is held, so a cap slot opens for the next request. */
+  releaseGrid(i: number): boolean
   /** Re-cuts mirror and preview for the new pane; `false` leaves the surfaces as they came out. */
   resize(css: { w: number; h: number }, dpr: number): boolean
   /** Unloads the created nodes, releases every presenter lease, and runs the close callback once. */
@@ -459,7 +457,7 @@ export function createPresenterSurfaces(doc: Document, workspace: SlideShowWorks
       const cached = gridCache.get(i)
       if (cached) return cached
       if (gridCache.size >= GRID_MAX_THUMBS) {
-        return placeholder('presenter-grid', tell(`Presenter View caps its all-slides thumbnails at ${String(GRID_MAX_THUMBS)}; slide ${String(i)} beyond the cap shows a placeholder until one is released`))
+        return placeholder('presenter-grid', tell(`Presenter View caps its all-slides thumbnails at ${String(GRID_MAX_THUMBS)}; slide ${String(i)} beyond the cap shows a placeholder until releaseGrid frees a slot`))
       }
       // Thumbnails are fixed at DPR 1: a 300-slide deck costs ~11 MiB, not the
       // workspace the audience surface needs.
@@ -473,6 +471,19 @@ export function createPresenterSurfaces(doc: Document, workspace: SlideShowWorks
       nodes.set(`presenter:grid:${String(i)}`, { canvas: g, lease })
       gridCache.set(i, g)
       return g
+    },
+
+    releaseGrid(i) {
+      const tag = `presenter:grid:${String(i)}`
+      const entry = nodes.get(tag)
+      gridCache.delete(i)
+      if (!entry) return false
+      entry.lease?.release()
+      entry.canvas.width = 0
+      entry.canvas.height = 0
+      entry.canvas.remove()
+      nodes.delete(tag)
+      return true
     },
 
     resize(nextCss, dpr) {
@@ -511,20 +522,25 @@ export function createPresenterSurfaces(doc: Document, workspace: SlideShowWorks
     dispose() {
       if (!live) return
       live = false
-      onClose?.()
-      for (const raw of scratchLive) raw.release()
-      scratchLive.clear()
-      for (const [tag, entry] of nodes) {
-        entry.lease?.release()
-        // The bitmap is handed back with the lease, so nothing is retained uncharged.
-        entry.canvas.width = 0
-        entry.canvas.height = 0
-        entry.canvas.remove()
-        // Grid thumbnails are gone; mirror and preview stay as safe zero-size
-        // canvases, so a pending frame's accessor gets a placeholder, not a throw.
-        if (tag.startsWith('presenter:grid:')) nodes.delete(tag)
+      try {
+        for (const raw of scratchLive) raw.release()
+        scratchLive.clear()
+        for (const [tag, entry] of nodes) {
+          entry.lease?.release()
+          // The bitmap is handed back with the lease, so nothing is retained uncharged.
+          entry.canvas.width = 0
+          entry.canvas.height = 0
+          entry.canvas.remove()
+          // Grid thumbnails are gone; mirror and preview stay as safe zero-size
+          // canvases, so a pending frame's accessor gets a placeholder, not a throw.
+          if (tag.startsWith('presenter:grid:')) nodes.delete(tag)
+        }
+        gridCache.clear()
+      } finally {
+        // Last and guarded: a throwing close callback cannot stop the teardown
+        // it belongs to (the release above has already run either way).
+        onClose?.()
       }
-      gridCache.clear()
     },
   }
 }

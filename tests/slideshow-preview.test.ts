@@ -162,7 +162,7 @@ describe('nextCheckpoint', () => {
     const order = [0, 1]
     const tl = previewTimeline(model, 0)!
 
-    const p1 = nextCheckpoint(model, order, 0, tl.initial())
+    const p1 = nextCheckpoint(model, order, 0, tl.initial(), 0)
     if (p1 === 'end') throw new Error('precondition: a slide with a further step answers a position')
     expect(p1.slide).toBe(0)
     expect(p1.cursor).toMatchObject({ step: 1, mode: 'checkpoint' })
@@ -170,16 +170,16 @@ describe('nextCheckpoint', () => {
     expect(p1.cursor.events).toHaveLength(3)
 
     // At the last step the next click leaves the slide: the next visible slide, at its settled checkpoint 0.
-    const atLast = nextCheckpoint(model, order, 0, tl.checkpoint(2))
+    const atLast = nextCheckpoint(model, order, 0, tl.checkpoint(2), 0)
     expect(atLast).toEqual({ slide: 1, cursor: { step: 0, events: [], mode: 'checkpoint' } })
 
     // Past the visible order there is nowhere left: the end of the show.
-    expect(nextCheckpoint(model, order, 1, tl.checkpoint(2))).toBe('end')
+    expect(nextCheckpoint(model, order, 1, tl.checkpoint(2), 0)).toBe('end')
 
     // A slide whose timing never loaded answers the slide-advance position, still honestly.
     const d2 = await deck(timingXmlOf(mainSeqXml([click(3, '2')])))
     const { model: m2 } = await modelOf(d2, testWorkspace())
-    expect(nextCheckpoint(m2, order, 0, { step: 0, events: [], mode: 'initial' })).toEqual({ slide: 1, cursor: { step: 0, events: [], mode: 'checkpoint' } })
+    expect(nextCheckpoint(m2, order, 0, { step: 0, events: [], mode: 'initial' }, 0)).toEqual({ slide: 1, cursor: { step: 0, events: [], mode: 'checkpoint' } })
     releasePreview(model)
   })
 
@@ -205,8 +205,8 @@ describe('nextCheckpoint', () => {
     // After the effect has ended (5000 > 1000 + 500): the next click leaves the slide.
     expect(nextCheckpoint(model, [0, 1], 0, c2, 5000)).toEqual({ slide: 1, cursor: { step: 0, events: [], mode: 'checkpoint' } })
 
-    // Without a clock the settled answer stands: by the time a pane is read, the slide has finished.
-    expect(nextCheckpoint(model, [0, 1], 0, c2)).toEqual({ slide: 1, cursor: { step: 0, events: [], mode: 'checkpoint' } })
+    // Without a clock... there is none: `t` is required, and the settled-reading
+    // semantics it used to give (always leave at the last step) are gone.
     releasePreview(model)
   })
 
@@ -225,7 +225,7 @@ describe('nextCheckpoint', () => {
     const tl0 = previewTimeline(model, 0)!
     // Past the last visible slide the loop restarts at the order's first slide,
     // at that slide's own settled checkpoint 0.
-    const pos = nextCheckpoint(model, [0, 1], 1, tl0.checkpoint(2))
+    const pos = nextCheckpoint(model, [0, 1], 1, tl0.checkpoint(2), 0)
     if (pos === 'end') throw new Error('precondition: a looping show has a next slide')
     expect(pos.slide).toBe(0)
     expect(pos.cursor).toBe(tl0.checkpoint(0))
@@ -239,7 +239,7 @@ describe('nextCheckpoint', () => {
     expect(await primePreview(model, 1, NORMAL)).toBe(true)
     const tl0 = previewTimeline(model, 0)!
     const tl1 = previewTimeline(model, 1)!
-    const pos = nextCheckpoint(model, [0, 1], 0, tl0.checkpoint(2))
+    const pos = nextCheckpoint(model, [0, 1], 0, tl0.checkpoint(2), 0)
     if (pos === 'end') throw new Error('precondition: the advance is a position')
     expect(pos.slide).toBe(1)
     expect(pos.cursor).toBe(tl1.checkpoint(0))
@@ -251,7 +251,7 @@ describe('nextCheckpoint', () => {
     const { model } = await modelOf(d, testWorkspace())
     expect(await primePreview(model, 0, NORMAL)).toBe(true)
     const tl = previewTimeline(model, 0)!
-    const pos = nextCheckpoint(model, [0], 0, tl.initial())
+    const pos = nextCheckpoint(model, [0], 0, tl.initial(), 0)
     if (pos === 'end') throw new Error('precondition: a slide with a step answers a position')
     const snap = tl.stateAt(pos.cursor, 0)
     // The zero-duration set: applied and frozen at its settled end.
@@ -286,7 +286,7 @@ describe('nextCheckpoint', () => {
     const used = w.used()
     const resident = [...store.resident()]
 
-    expect(nextCheckpoint(model, [0, 1], 0, cursor)).not.toBe('end')
+    expect(nextCheckpoint(model, [0, 1], 0, cursor, cursor.events[cursor.events.length - 1]?.t ?? 0)).not.toBe('end')
 
     expect(cursor.step).toBe(1)
     expect(cursor.events).toBe(events)
@@ -331,9 +331,36 @@ describe('primePreview holds', () => {
     }
   })
 
-  it('concurrent primes share one handle; a release during a prime leaves nothing charged', async () => {
+  it('a release never evicts the entry the shown slide still holds; re-acquiring it does not double-charge (N1)', async () => {
     const d = await deck(timingXmlOf(mainSeqXml([click(3, '2')])))
-    { // Two primes in flight for one slide: one read, and one release lets go of everything.
+    const w = testWorkspace()
+    const { model, store } = await modelOf(d, w)
+    // The audience is showing slide 0: the session (and residency) hold its metadata too.
+    const shown = await store.acquire(0)
+    expect(await primePreview(model, 0, NORMAL)).toBe(true)
+    const charged = w.used()
+    expect(charged).toBeGreaterThan(0)
+    releasePreview(model, 0)
+    // Spec 7: the current slide's metadata is never dropped while it is shown.
+    expect(store.resident()).toEqual([0])
+    // A later acquire re-reads nothing: no duplicate charge while the old handle is live.
+    const again = await store.acquire(0)
+    expect(w.used()).toBe(charged)
+    // The whole-show form behaves the same on dispose/close.
+    releasePreview(model)
+    expect(store.resident()).toEqual([0])
+    shown.release()
+    again.release()
+    // Nothing of the preview's is pinned, and the store's own close refunds everything.
+    expect(previewHandle(model, 0)).toBeUndefined()
+    expect(previewTimeline(model, 0)).toBeUndefined()
+    await store.close()
+    expect(w.used()).toBe(0)
+  })
+
+  it('concurrent primes share one handle; a release drops the holds, the store keeps its cached entry (N1)', async () => {
+    const d = await deck(timingXmlOf(mainSeqXml([click(3, '2')])))
+    { // Two primes in flight for one slide: one read, and one release lets go of the preview's handles.
       const w = testWorkspace()
       const { model } = await modelOf(d, w)
       const [a, b] = await Promise.all([primePreview(model, 0, NORMAL), primePreview(model, 0, NORMAL)])
@@ -341,9 +368,11 @@ describe('primePreview holds', () => {
       expect(previewTimeline(model, 0)).toBeDefined()
       expect(w.used()).toBeGreaterThan(0)
       releasePreview(model)
-      expect(w.used()).toBe(0)
+      // No handle is pinned; the store keeps its normal cached entry (spec 7)
+      // and refunds it under its own pressure rules — the charge stays.
       expect(previewTimeline(model, 0)).toBeUndefined()
       expect(previewHandle(model, 0)).toBeUndefined()
+      expect(w.used()).toBeGreaterThan(0)
     }
     { // releasePreview while a prime is still reading: the late handle is returned, never pinned.
       const w = testWorkspace()
@@ -351,9 +380,15 @@ describe('primePreview holds', () => {
       const flight = primePreview(model, 0, NORMAL)
       releasePreview(model)
       expect(await flight).toBe(false)
-      expect(w.used()).toBe(0)
       expect(previewTimeline(model, 0)).toBeUndefined()
       expect(previewHandle(model, 0)).toBeUndefined()
+      // Re-priming after the release reuses the store's cached entry: no duplicate charge.
+      expect(await primePreview(model, 0, NORMAL)).toBe(true)
+      const held = w.used()
+      expect(held).toBeGreaterThan(0)
+      releasePreview(model)
+      expect(w.used()).toBe(held)
+      expect(previewTimeline(model, 0)).toBeUndefined()
     }
   })
 
@@ -369,7 +404,6 @@ describe('primePreview holds', () => {
     expect(previewHandle(model, 1)).toBeUndefined()
     expect(previewTimeline(model, 1)).toBeUndefined()
     releasePreview(model)
-    expect(w.used()).toBe(0)
   })
 })
 
@@ -624,6 +658,22 @@ describe('presenter surfaces', () => {
     }
   })
 
+  it('releaseGrid frees a cap slot, so thumbnails beyond the cap are not stuck as placeholders (N3)', () => {
+    const ws = createSlideShowWorkspace('desktop')
+    const surfaces = createPresenterSurfaces(document, ws)
+    for (let i = 0; i < 48; i++) expect(surfaces.grid(i).width).toBe(320)
+    expect(surfaces.grid(48).width).toBe(0)
+    // The presenter frees the scrolled-past thumbnail (S2-5 calls releaseGrid on scroll):
+    // the slot opens and the newly visible slide leases for real.
+    expect(surfaces.releaseGrid(0)).toBe(true)
+    expect(surfaces.grid(48).width).toBe(320)
+    expect(ws.used()).toBe(1_036_800 + 48 * 230_400)
+    // Freeing again is false: nothing is held for that slide now.
+    expect(surfaces.releaseGrid(0)).toBe(false)
+    surfaces.dispose()
+    expect(ws.used()).toBe(0)
+  })
+
   it('an invalid device pixel ratio at open is clamped and diagnosed, not thrown', () => {
     const ws = createSlideShowWorkspace('desktop')
     const sink = createDiagnosticSink()
@@ -635,12 +685,28 @@ describe('presenter surfaces', () => {
     expect(ws.used()).toBe(0)
   })
 
-  it('dispose runs the close callback exactly once, so the preview hold ends with the surfaces', () => {
+  it('dispose runs the close callback exactly once, and a throwing one cannot stop the teardown (N2)', () => {
     const ws = createSlideShowWorkspace('desktop')
     let closed = 0
     const surfaces = createPresenterSurfaces(document, ws, undefined, () => { closed++ })
+    const work = surfaces.scratch.lease(1000, 'presenter:work')
     surfaces.dispose()
     surfaces.dispose()
     expect(closed).toBe(1)
+    expect(work!.bytes).toBe(0)
+
+    // A throwing close callback runs last and guarded: the leases are already
+    // released when it fires, the error still surfaces, and a retry after the
+    // throw is a no-op — nothing leaks and nothing re-runs.
+    const ws2 = createSlideShowWorkspace('desktop')
+    let booms = 0
+    const throwing = createPresenterSurfaces(document, ws2, undefined, () => { booms++; throw new Error('boom') })
+    const held = throwing.scratch.lease(1000, 'presenter:work')
+    expect(() => throwing.dispose()).toThrow('boom')
+    expect(booms).toBe(1)
+    expect(held!.bytes).toBe(0)
+    expect(ws2.used()).toBe(0)
+    expect(() => throwing.dispose()).not.toThrow()
+    expect(booms).toBe(1)
   })
 })
