@@ -252,6 +252,74 @@ describe('morph matching: text units', () => {
 })
 
 // ---------------------------------------------------------------------------
+// The cross-object stage keeps units with their container (S3-5 N3, S3-7)
+// ---------------------------------------------------------------------------
+describe('morph matching: cross-object stage respects position (N3)', () => {
+  /** The container of a unit key (`sp:1/c:0-1` → `sp:1`). */
+  const container = (k: string) => k.split('/')[0]
+
+  test('units never scatter: each unit pair joins two containers that are themselves paired', () => {
+    // Slide order would pair the first "yy" with the first "yy" across the slide
+    // (sp:1, top left, to sp:3, bottom right) while sp:1 itself pairs with sp:4.
+    const from = slideOf([obj(1, { text: 'xx yy', x: 0, y: 0 }), obj(2, { text: 'zz yy', x: 800, y: 600 })])
+    const to = slideOf([obj(3, { text: 'yy zz', x: 800, y: 600 }), obj(4, { text: 'xx yy', x: 0, y: 0 })])
+    const match = matchMorph(from, to, 'byWord')
+    const objects = match.pairs.filter(p => !p.from.includes('/'))
+    expect(objects).toEqual(expect.arrayContaining([
+      { from: 'sp:1', to: 'sp:4', rule: 'text' },
+      { from: 'sp:2', to: 'sp:3', rule: 'text' },
+    ]))
+    const partner = new Map(objects.map(p => [p.from, p.to]))
+    const units = match.pairs.filter(p => p.from.includes('/'))
+    expect(units).toHaveLength(4)
+    for (const u of units) expect(partner.get(container(u.from)), `${u.from} → ${u.to}`).toBe(container(u.to))
+    expect(match.fadeOut).toEqual([])
+    expect(match.fadeIn).toEqual([])
+  })
+
+  test('text that moves across the slide still pairs (spec rule 3)', () => {
+    // "Title" top left moves to the bottom; the box now at the top left shares nothing with it.
+    const moved = matchMorph(
+      slideOf([obj(1, { text: 'Title', x: 0, y: 0 })]),
+      slideOf([obj(2, { text: 'Body', x: 0, y: 0 }), obj(3, { text: 'Title', x: 0, y: 600 })]),
+      'byWord',
+    )
+    expect(moved.pairs).toEqual([
+      { from: 'sp:1/c:0-4', to: 'sp:3/c:0-4', rule: 'text' },
+      { from: 'sp:1', to: 'sp:3', rule: 'text' },
+    ])
+    expect(moved.fadeIn).toEqual(['sp:2'])
+
+    // Identical boxes far apart pair, even with a same-geometry box near the old place.
+    const far = matchMorph(
+      slideOf([obj(1, { text: 'aa bb', x: 0, y: 0 })]),
+      slideOf([obj(2, { text: 'aa bb', x: 800, y: 600 }), obj(3, { text: 'cc', x: 0, y: 0 })]),
+      'byChar',
+    )
+    expect(far.pairs.filter(p => !p.from.includes('/'))).toEqual([{ from: 'sp:1', to: 'sp:2', rule: 'text' }])
+    expect(far.pairs.filter(p => p.from.includes('/')).every(p => container(p.to) === 'sp:2')).toBe(true)
+    expect(far.fadeIn).toEqual(['sp:3'])
+  })
+
+  test('the nearest content-sharing candidate wins, and a taken candidate falls back down the list', () => {
+    // sp:2 is nearest to sp:3; sp:1 (whose nearest is also sp:3) falls back to sp:4 across the slide.
+    const match = matchMorph(
+      slideOf([obj(1, { text: 'aa', x: 0, y: 0 }), obj(2, { text: 'aa', x: 50, y: 0 })]),
+      slideOf([obj(3, { text: 'aa', x: 60, y: 0 }), obj(4, { text: 'aa', x: 800, y: 600 })]),
+      'byWord',
+    )
+    expect(match.pairs.filter(p => !p.from.includes('/'))).toEqual([
+      { from: 'sp:1', to: 'sp:4', rule: 'text' },
+      { from: 'sp:2', to: 'sp:3', rule: 'text' },
+    ])
+    expect(match.pairs.filter(p => p.from.includes('/'))).toEqual([
+      { from: 'sp:1/c:0-1', to: 'sp:4/c:0-1', rule: 'text' },
+      { from: 'sp:2/c:0-1', to: 'sp:3/c:0-1', rule: 'text' },
+    ])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Fades and one-to-one pairing
 // ---------------------------------------------------------------------------
 describe('morph matching: fades and one-to-one', () => {
@@ -452,6 +520,20 @@ describe('morph matching: bounds', () => {
     // The 82nd pair stays at object level.
     expect(match.pairs.some(p => p.from === 'sp:82' && p.to === 'sp:1082')).toBe(true)
     expect(match.pairs.some(p => p.from.startsWith('sp:82/c:'))).toBe(false)
+  })
+
+  test('the cross-object stage stops at the unit cap: containers still pair, the rest of the units fade (morph-unit-bound)', () => {
+    // 17 unnamed boxes of 128 words (the per-shape item bound): 2,176 unit pairs, past the 2,048 cap.
+    const box = (id: number, i: number) => obj(id, { text: Array.from({ length: 128 }, (_, k) => `b${i}w${k}`).join(' '), x: i * 50 })
+    const from = Array.from({ length: 17 }, (_, i) => box(i, i))
+    const to = Array.from({ length: 17 }, (_, i) => box(1000 + i, i))
+    const sink = createDiagnosticSink()
+    const match = matchMorph(slideOf(from), slideOf(to), 'byWord', sink)
+    expect(match.pairs.filter(p => p.from.includes('/c:'))).toHaveLength(2048)
+    expect(match.pairs.filter(p => !p.from.includes('/c:'))).toHaveLength(17)
+    expect(match.pairs.filter(p => !p.from.includes('/c:')).every(p => Number(p.to.slice(3)) === 1000 + Number(p.from.slice(3)))).toBe(true)
+    expect(match.fadeOut.filter(k => k.startsWith('sp:16/c:'))).toHaveLength(2176 - 2048)
+    expect(sink.list()).toEqual([{ code: 'morph-unit-bound', slideIndex: 0, effect: 'sld', message: expect.stringContaining('2048') }])
   })
 
   test('cross-object unit matching stops after coarsening (N1)', () => {
