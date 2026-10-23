@@ -16,7 +16,7 @@ import { expect, test } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 import { checkIdentity, gitIdentity } from '../../scripts/harness/identity'
 import { DEFAULT_FOV_DEG, mul4, project, slideCamera, slidePoint, type Mat4 } from '../../src/slideshow/render/three/mesh'
-import { WIND, airplaneModel, curtainVertex, drapeVertex, fallOverModel, origamiModel, prestigeModel, warpK, windTile } from '../../src/slideshow/render/three/deform'
+import { WIND, airplaneModel, airplaneSilhouette, curtainVertex, drapeVertex, fallOverModel, origamiModel, prestigeModel, warpK, windTile } from '../../src/slideshow/render/three/deform'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const BASE = `http://127.0.0.1:${process.env.IV_HARNESS_PORT ?? 4173}`
@@ -118,13 +118,16 @@ test('the rigid and deformed rows put their edges where the sheet’s 50 % oracl
   expect(ndc(origamiModel(0.5, A, false).panels[3], 1, 0)[0]).toBeCloseTo(0.5208, 3)
   const oe = ndc(origamiModel(0.5, A, false).panels[3], 1, 0.5)
   await edges(page, 'origami', {}, 0.5, [[[oe[0] - d, 0], [oe[0] + d, 0]]])
-  // airplane at 25 %: the halves fold towards the viewer about y = 0, so (the camera filling the slide) they still cover the whole frame.
-  const folding = await page.evaluate(() => window.__slideshowDeform!.fractions('airplane', {}, 0.25))
-  expect(folding.from).toBeGreaterThan(0.98)
-  expect(Math.abs(ndc(airplaneModel(0.25, A, false).top, 0.5, 0)[1] - 1)).toBeLessThan(0.01)
-  // airplane at 50 %: both halves edge-on, so the frame is (almost) all to.
-  const flat = await page.evaluate(() => window.__slideshowDeform!.fractions('airplane', {}, 0.5))
-  expect(flat.from).toBeLessThan(0.02)
+  // airplane at 50 %: a folded paper dart, nose at the bottom centre (sheet: NDC (0, −1)); its pixels cover its outline (sheet area 0.93 of 4).
+  const nose = ndc(airplaneModel(0.5, A, false).panels.bodyL, 0.5, 1)
+  expect(nose[1]).toBeCloseTo(-1, 3)
+  await edges(page, 'airplane', {}, 0.5, [[[0, -0.85], [-0.3, -0.92]], [[0, -0.6], [0.3, -0.92]]])
+  const dart = await page.evaluate(() => window.__slideshowDeform!.fractions('airplane', {}, 0.5))
+  const outline = airplaneSilhouette(0.5, A, false).area / 4
+  expect(Math.abs(dart.from - outline), `dart ${dart.from} vs outline ${outline}`).toBeLessThan(0.02)
+  // In flight (75 %) it is still a visible dart, never an edge-on sliver.
+  const flying = await page.evaluate(() => window.__slideshowDeform!.fractions('airplane', {}, 0.75))
+  expect(flying.from).toBeGreaterThan(0.01)
 })
 
 test('wind’s tiles land where the CPU tile model puts them', async ({ page }) => {

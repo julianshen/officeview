@@ -214,10 +214,49 @@ export const curlDouble = (invY = false) => [
 ]
 export const peel = (invX = false) => [{ x0: 0, x1: a, corner: [invX ? a : 0, 1] as [number, number], target: [invX ? 0 : a, 0] as [number, number] }]
 
+/** Right-handed rotation by `th` about the axis through world points `from` → `to`. */
+export function axisRotation(from: readonly number[], to: readonly number[], th: number): Mat4 {
+  const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]], n = Math.hypot(d[0], d[1], d[2])
+  const [x, y, z] = d.map(v => v / n), c = Math.cos(th), s = Math.sin(th), t = 1 - c
+  const r = new Float32Array([
+    t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0,
+    t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0,
+    t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0,
+    0, 0, 0, 1,
+  ])
+  return m(T(from[0], from[1], from[2]), r, T(-from[0], -from[1], -from[2]))
+}
+/** airplane's four rigid triangles, in slide uv: the body halves either side of the spine and the wings under the creases from the top corners to the nose. */
+export const AIRPLANE_TRIS = {
+  bodyL: [[0, 0], [0.5, 0], [0.5, 1]], bodyR: [[0.5, 0], [1, 0], [0.5, 1]],
+  wingL: [[0, 0], [0, 1], [0.5, 1]], wingR: [[1, 0], [1, 1], [0.5, 1]],
+} as const
+export type AirplanePanel = keyof typeof AIRPLANE_TRIS
+/** airplane: a paper dart folded about diagonal creases (nose at the bottom centre), then banked, pitched and flown away into depth. */
 export function airplane(p: number, invX = false) {
-  const phi = (Math.PI / 2) * ease(2 * p), tau = ease(2 * p - 1), sx = invX ? -1 : 1
-  const G = m(T(sx * 1.6 * a * tau, 0.9 * tau, -2.5 * tau), Rz(sx * 0.35 * tau), S(1 - 0.5 * tau, 1 - 0.5 * tau, 1 - 0.5 * tau))
-  return { top: m(G, Rx(phi)), bottom: m(G, Rx(-phi)), opacity: 1 - ease((p - 0.85) / 0.15) }
+  const f = ease(2 * p), tau = ease(2 * p - 1), sx = invX ? -1 : 1
+  const beta = (Math.PI / 4) * f, th = 0.9 * Math.PI * f
+  const N = slidePoint(0.5, 1, a), TL = slidePoint(0, 0, a), TR = slidePoint(1, 0, a)
+  const bodyL = Ry(-beta), bodyR = Ry(beta)
+  const wingL = m(bodyL, axisRotation(N, TL, th)), wingR = m(bodyR, axisRotation(N, TR, -th))
+  const k = 1 - 0.4 * tau
+  const G = m(T(sx * 0.9 * a * tau, -2.4 * tau, -3 * tau), Rz(sx * 0.3 * tau), Ry(sx * 0.5 * tau), Rx(0.6 * tau), S(k, k, k))
+  return { panels: { bodyL: m(G, bodyL), bodyR: m(G, bodyR), wingL: m(G, wingL), wingR: m(G, wingR) } as Record<AirplanePanel, Mat4>, opacity: 1 - ease((p - 0.85) / 0.15), wingShade: 1 - 0.1 * f }
+}
+/** The projected outline of the dart at `p`: its convex hull in NDC (counter-clockwise) and that hull's area. */
+export function airplaneSilhouette(p: number, invX = false): { hull: number[][]; area: number } {
+  const { panels } = airplane(p, invX)
+  const pts = (Object.keys(AIRPLANE_TRIS) as AirplanePanel[]).flatMap(k => AIRPLANE_TRIS[k].map(([u, v]) => ndc(panels[k], u, v).slice(0, 2)))
+  return hullOf(pts)
+}
+export function hullOf(points: number[][]): { hull: number[][]; area: number } {
+  const ps = [...points].sort((p, q) => p[0] - q[0] || p[1] - q[1])
+  const cross = (o: number[], p: number[], q: number[]) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+  const half = (list: number[][]) => { const h: number[][] = []; for (const q of list) { while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], q) <= 1e-12) h.pop(); h.push(q) } h.pop(); return h }
+  const hull = [...half(ps), ...half([...ps].reverse())]
+  let area = 0
+  for (let i = 0; i < hull.length; i++) { const [x0, y0] = hull[i], [x1, y1] = hull[(i + 1) % hull.length]; area += x0 * y1 - x1 * y0 }
+  return { hull, area: area / 2 }
 }
 export function origami(p: number, invX = false) {
   const th = 0.9 * (Math.PI / 2) * ease(p), w = a / 4, sx = invX ? -1 : 1
@@ -275,7 +314,7 @@ export const ROWS: Row[] = [
   { id: 'transition:p15:prstTrans:pageCurlSingle', task: 'S3-4', attrs: '—', oracle: p => pref(foldFractions(p, curlSingle()), 'fraction ') },
   { id: 'transition:p15:prstTrans:pageCurlDouble', task: 'S3-4', attrs: '—', oracle: p => pref(foldFractions(p, curlDouble()), 'fraction ') },
   { id: 'transition:p15:prstTrans:peelOff', task: 'S3-4', attrs: '—', oracle: p => pref(foldFractions(p, peel()), 'fraction ') },
-  { id: 'transition:p15:prstTrans:airplane', task: 'S3-4', attrs: '—', oracle: p => ({ 'top half uv(0,0) NDC': xy(ndc(airplane(p).top, 0, 0)), 'top half uv(0,0) world': xyz(world(airplane(p).top, 0, 0)), 'p 0.75 top uv(0,0) NDC': xy(ndc(airplane(0.75).top, 0, 0)) }) },
+  { id: 'transition:p15:prstTrans:airplane', task: 'S3-4', attrs: '—', oracle: p => ({ 'nose uv(0.5,1) NDC': xy(ndc(airplane(p).panels.bodyL, 0.5, 1)), 'left wing uv(0,1) world': xyz(world(airplane(p).panels.wingL, 0, 1)), 'silhouette area (NDC)': r4(airplaneSilhouette(p).area), 'p 0.75 nose NDC': xy(ndc(airplane(0.75).panels.bodyL, 0.5, 1)), 'p 0.75 silhouette area (NDC)': r4(airplaneSilhouette(0.75).area) }) },
   { id: 'transition:p15:prstTrans:origami', task: 'S3-4', attrs: '—', oracle: p => ({ 'panel 2 uv(0.5,0) world': xyz(world(origami(p).panels[2], 0.5, 0)), 'panel 3 uv(1,0) NDC': xy(ndc(origami(p).panels[3], 1, 0)) }) },
   { id: 'transition:p15:prstTrans:curtains', task: 'S3-4', attrs: '—', oracle: p => ({ 'x at uv(0.5,0.5) (left half)': r4(curtainX(p, 0.5, 0.5)), 'x at uv(0.25,1)': r4(curtainX(p, 0.25, 1)), 'p 1 x at uv(0.5,0)': r4(curtainX(1, 0.5, 0)) }) },
   { id: 'transition:p15:prstTrans:drape', task: 'S3-4', attrs: '—', oracle: p => ({ 'y at uv(0.5,0)': r4(drapeY(p, 0)), 'y at uv(0.5,1)': r4(drapeY(p, 1)) }) },

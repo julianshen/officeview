@@ -27,7 +27,7 @@ import { DEFAULT_FOV_DEG, ease, gridBytes, mul4, project, slideCamera, slidePoin
 import { registeredTransitions3D, resetTransitions3D, transition3DFor } from '../src/slideshow/render/three/registry'
 import { dispatchTransition, transition3DDraw } from '../src/slideshow/render/three/framework'
 import {
-  DEFORM_ROWS, WIND, airplaneModel, curtainVertex, drapeVertex, fallOverModel, foldClassify, foldPages, origamiModel, prestigeModel, registerDeform3D, warpK, windTile,
+  AIRPLANE_TRIS, DEFORM_ROWS, WIND, airplaneModel, airplaneSilhouette, curtainVertex, drapeVertex, fallOverModel, foldClassify, foldPages, origamiModel, prestigeModel, registerDeform3D, warpK, windTile,
 } from '../src/slideshow/render/three/deform'
 import * as oracle from '../scripts/slideshow-3d-oracles'
 import type { CanvasFactory, Compositor, LayerHandle, Lease, SlideShowWorkspace, TransitionSpec } from '../src/slideshow/types'
@@ -162,15 +162,17 @@ function drawCalls(spec: TransitionSpec, progress: number, seed = 11): GlCall[] 
 }
 
 /** The `u_mvp` matrices a draw sent, in draw order (one per `drawElements`). */
-function mvps(calls: GlCall[]): Array<{ mvp: number[]; opacity: number; uvRect: number[] }> {
-  const out: Array<{ mvp: number[]; opacity: number; uvRect: number[] }> = []
-  let mvp: number[] = [], opacity = 1, uvRect: number[] = [0, 0, 1, 1]
+function mvps(calls: GlCall[]): Array<{ mvp: number[]; opacity: number; uvRect: number[]; tri: number[]; shade: number }> {
+  const out: Array<{ mvp: number[]; opacity: number; uvRect: number[]; tri: number[]; shade: number }> = []
+  let mvp: number[] = [], opacity = 1, uvRect: number[] = [0, 0, 1, 1], tri: number[] = [], shade = 1
   for (const c of calls) {
     const name = (c.args[0] as { uniform?: string } | null)?.uniform
     if (c.name === 'uniformMatrix4fv' && name === 'u_mvp') mvp = c.args[2] as number[]
     if (c.name === 'uniform1f' && name === 'u_opacity') opacity = c.args[1] as number
     if (c.name === 'uniform4f' && name === 'u_uvRect') uvRect = c.args.slice(1) as number[]
-    if (c.name === 'drawElements') out.push({ mvp, opacity, uvRect })
+    if (c.name === 'uniform2fv' && name === 'u_tri[0]') tri = c.args[1] as number[]
+    if (c.name === 'uniform1f' && name === 'u_shade') shade = c.args[1] as number
+    if (c.name === 'drawElements') out.push({ mvp, opacity, uvRect, tri, shade })
   }
   return out
 }
@@ -275,7 +277,7 @@ describe('deformation 3-D transitions', () => {
     // origami's invX and fallOver's invX are the oracle script's mirrors; airplane's flies left.
     for (const k of [0, 1, 2, 3]) near([...origamiModel(0.5, A, true).panels[k]], [...oracle.origami(0.5, true).panels[k]], 1e-9)
     near([...fallOverModel(0.5, true).from], [...oracle.fallOver(0.5, true).from], 1e-9)
-    near([...airplaneModel(0.75, A, true).top], [...oracle.airplane(0.75, true).top], 1e-9)
+    for (const k of Object.keys(AIRPLANE_TRIS) as Array<keyof typeof AIRPLANE_TRIS>) near([...airplaneModel(0.75, A, true).panels[k]], [...oracle.airplane(0.75, true).panels[k]], 1e-9)
     // wind's invX is an exact mirror image: cell (i, j) mirrored is cell (cols-1-i, j) with x negated.
     const w = windTile(0.5, 2, 5, 99, A, false), m = windTile(0.5, WIND.cols - 1 - 2, 5, 99, A, true)
     expect(m.t).toBe(w.t)
@@ -339,23 +341,34 @@ describe('deformation 3-D transitions', () => {
       expect(calls.filter(c => c.name === 'drawElements')).toHaveLength(1)
     }
 
-    // airplane: the halves' matrices, as sent, against the reference model and the sheet's numbers.
+    // airplane: the dart's four panels, as sent, against the reference model and the sheet's numbers.
     {
       const want = sheetOracle('transition:p15:prstTrans:airplane')
       const model = airplaneModel(p, A, false)
-      near([...model.top], [...oracle.airplane(p).top], 1e-9)
-      near([...model.bottom], [...oracle.airplane(p).bottom], 1e-9)
-      near(ndcOf(model.top, 0, 0).slice(0, 2), want['top half uv(0,0) NDC'])
-      near(worldOf(model.top, 0, 0), want['top half uv(0,0) world'])
-      near(ndcOf(airplaneModel(0.75, A, false).top, 0, 0).slice(0, 2), want['p 0.75 top uv(0,0) NDC'])
+      const keys = Object.keys(AIRPLANE_TRIS) as Array<keyof typeof AIRPLANE_TRIS>
+      expect(keys).toEqual(Object.keys(oracle.AIRPLANE_TRIS))
+      for (const k of keys) {
+        expect(AIRPLANE_TRIS[k]).toEqual(oracle.AIRPLANE_TRIS[k])
+        near([...model.panels[k]], [...oracle.airplane(p).panels[k]], 1e-9)
+      }
+      near(ndcOf(model.panels.bodyL, 0.5, 1).slice(0, 2), want['nose uv(0.5,1) NDC'])
+      near(ndcOf(model.panels.bodyR, 0.5, 1).slice(0, 2), want['nose uv(0.5,1) NDC'])
+      near(worldOf(model.panels.wingL, 0, 1), want['left wing uv(0,1) world'])
+      expect(airplaneSilhouette(p, A, false).area).toBeCloseTo(want['silhouette area (NDC)'][0], 3)
+      near(ndcOf(airplaneModel(0.75, A, false).panels.bodyL, 0.5, 1).slice(0, 2), want['p 0.75 nose NDC'])
+      expect(airplaneSilhouette(0.75, A, false).area).toBeCloseTo(want['p 0.75 silhouette area (NDC)'][0], 3)
       const sent = mvps(drawCalls(specOf(rowNamed('airplane')), p))
-      expect(sent).toHaveLength(3) // to flat, then both halves
+      expect(sent).toHaveLength(5) // to flat, then the body halves, then the wings
       near(sent[0].mvp, [...C], 1e-6)
-      const halves = sent.slice(1)
-      const top = halves.find(h => h.uvRect[1] === 0 && h.uvRect[3] === 0.5)!, bottom = halves.find(h => h.uvRect[1] === 0.5)!
-      near(top.mvp, [...mul4(C, model.top)])
-      near(bottom.mvp, [...mul4(C, model.bottom)])
-      expect(top.opacity).toBeCloseTo(model.opacity, 9)
+      const panels = sent.slice(1)
+      // Bodies before wings.
+      expect(panels.map(s => keys.find(k => JSON.stringify(AIRPLANE_TRIS[k].flat()) === JSON.stringify(s.tri))!.slice(0, 4))).toEqual(['body', 'body', 'wing', 'wing'])
+      for (const k of keys) {
+        const got = panels.find(s => JSON.stringify(s.tri) === JSON.stringify(AIRPLANE_TRIS[k].flat()))!
+        near(got.mvp, [...mul4(C, model.panels[k])])
+        expect(got.opacity).toBeCloseTo(model.opacity, 9)
+        expect(got.shade).toBeCloseTo(k.startsWith('wing') ? 0.9 : 1, 9) // the fold is complete at 50 %
+      }
     }
 
     // origami: four panels, farthest first.
@@ -521,7 +534,7 @@ describe('deformation 3-D transition contracts', () => {
     const rest = (model: Mat4, u: number, v: number) => ndcOf(model, u, v).slice(0, 2)
     const flat = (u: number, v: number) => [2 * u - 1, 1 - 2 * v]
     for (const [u, v] of [[0, 0], [1, 0], [0.3, 0.8], [1, 1]]) {
-      near(rest(airplaneModel(eps, A, false).top, u, v / 2), flat(u, v / 2))
+      for (const k of Object.keys(AIRPLANE_TRIS) as Array<keyof typeof AIRPLANE_TRIS>) near(rest(airplaneModel(eps, A, false).panels[k], u, v), flat(u, v))
       for (let k = 0; k < 4; k++) near(rest(origamiModel(eps, A, false).panels[k], u, v), flat(u, v))
       near(rest(fallOverModel(eps, false).from, u, v), flat(u, v))
       near(rest(prestigeModel(eps).from, u, v), flat(u, v))
@@ -550,6 +563,82 @@ describe('deformation 3-D transition contracts', () => {
   })
 })
 
+describe('airplane paper dart (fix round 1)', () => {
+  type Key = keyof typeof AIRPLANE_TRIS
+  const keys = Object.keys(AIRPLANE_TRIS) as Key[]
+  const interiorAngle = (hull: number[][], i: number) => {
+    const n = hull.length, p = hull[i], a = hull[(i + n - 1) % n], b = hull[(i + 1) % n]
+    const u = [a[0] - p[0], a[1] - p[1]], w = [b[0] - p[0], b[1] - p[1]]
+    return Math.acos((u[0] * w[0] + u[1] * w[1]) / (Math.hypot(u[0], u[1]) * Math.hypot(w[0], w[1])))
+  }
+
+  it('the four panels tile the slide at rest and are triangles cut along the diagonal creases', () => {
+    let area = 0
+    for (const k of keys) {
+      const [[x0, y0], [x1, y1], [x2, y2]] = AIRPLANE_TRIS[k]
+      area += Math.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) / 2
+      // Every panel touches the nose at the bottom centre.
+      expect(AIRPLANE_TRIS[k].some(([u, v]) => u === 0.5 && v === 1), k).toBe(true)
+    }
+    expect(area).toBeCloseTo(1, 12)
+    // The wings sit under the creases from the top corners to the nose.
+    expect(AIRPLANE_TRIS.wingL).toContainEqual([0, 0])
+    expect(AIRPLANE_TRIS.wingR).toContainEqual([1, 0])
+  })
+
+  it('at 50 % the projected dart is not degenerate: real area and a pointed nose', () => {
+    for (const invX of [false, true]) {
+      const { hull, area } = airplaneSilhouette(0.5, A, invX)
+      // Far from an edge-on sliver: over a fifth of the frame (4 NDC units), and every panel keeps area too.
+      expect(area).toBeGreaterThan(0.8)
+      const model = airplaneModel(0.5, A, invX)
+      for (const k of keys) {
+        const [a, b, c] = AIRPLANE_TRIS[k].map(([u, v]) => ndcOf(model.panels[k], u, v))
+        expect(Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2, k).toBeGreaterThan(0.02)
+      }
+      // The nose is a vertex of the outline, the lowest one, with an acute interior angle.
+      const nose = ndcOf(model.panels.bodyL, 0.5, 1)
+      const i = hull.findIndex(h => Math.hypot(h[0] - nose[0], h[1] - nose[1]) < 1e-9)
+      expect(i).toBeGreaterThanOrEqual(0)
+      expect(Math.min(...hull.map(h => h[1]))).toBeCloseTo(nose[1], 9)
+      expect(interiorAngle(hull, i)).toBeLessThan(Math.PI / 2)
+      // The folded wings lie over the body (no wing corner outside the body halves' outline).
+      expect(Math.abs(nose[0])).toBeLessThan(1e-9)
+    }
+  })
+
+  it('in flight the dart keeps its area until it leaves the frame (no edge-on collapse)', () => {
+    for (const p of [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85]) {
+      const { area, hull } = airplaneSilhouette(p, A, false)
+      expect(area, `p ${p}`).toBeGreaterThan(0.08)
+      // Shrinking smoothly, flying right and down.
+      expect(hull.some(h => h[0] > 0), `p ${p}`).toBe(true)
+    }
+    for (let p = 0.5; p < 0.9; p += 0.05) expect(airplaneSilhouette(p + 0.05, A, false).area).toBeLessThan(airplaneSilhouette(p, A, false).area + 1e-9)
+    // invX flies the mirror image, to the left.
+    near(airplaneSilhouette(0.75, A, true).hull.map(h => -h[0]).sort((a, b) => a - b), airplaneSilhouette(0.75, A, false).hull.map(h => h[0]).sort((a, b) => a - b), 1e-6)
+    // By the end it is gone: transparent and off the frame.
+    expect(airplaneModel(1, A, false).opacity).toBe(0)
+    expect(Math.max(...airplaneSilhouette(1, A, false).hull.map(h => h[1]))).toBeLessThan(-1)
+  })
+
+  it('p = 0 and p = 1 stay continuous', () => {
+    const flat = (u: number, v: number) => [2 * u - 1, 1 - 2 * v]
+    for (const p of [0, 1e-5]) {
+      const model = airplaneModel(p, A, false)
+      for (const k of keys) for (const [u, v] of AIRPLANE_TRIS[k]) near(ndcOf(model.panels[k], u, v).slice(0, 2), flat(u, v), p === 0 ? 1e-6 : 1e-3)
+      expect(model.opacity).toBe(1)
+      expect(model.wingShade).toBeCloseTo(1, 6) // the back of the paper darkens only as the wings fold
+    }
+    expect(airplaneSilhouette(0, A, false).area).toBeCloseTo(4, 5)
+    // Approaching 1 the dart fades out entirely over the flat incoming frame.
+    expect(airplaneModel(1 - 1e-4, A, false).opacity).toBeLessThan(1e-3)
+    // The fold is complete exactly at 50 % and the flight starts from rest there (no jump between phases).
+    const a = airplaneModel(0.5 - 1e-6, A, false), b = airplaneModel(0.5 + 1e-6, A, false)
+    for (const k of keys) near([...a.panels[k]], [...b.panels[k]], 1e-4)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // The corpus airplane deck
 // ---------------------------------------------------------------------------
@@ -574,8 +663,8 @@ describe.skipIf(corpusAbsent)(`corpus airplane${corpusAbsent ? ' — run bun scr
     for (const p of [0, 0.25, 0.5, 0.75, 1]) {
       g.fake.calls.length = 0
       g.comp.frame([], { from, to, effect: spec.element, progress: p, params: transition3DDraw(spec, p, rng, 160 / 90), rng })
-      // to flat plus both halves in between; the flat frame alone at the ends.
-      expect(g.fake.count('drawElements'), `p ${p}`).toBe(p === 0 || p === 1 ? 0 : 3)
+      // to flat plus the dart's four panels in between; the flat frame alone at the ends.
+      expect(g.fake.count('drawElements'), `p ${p}`).toBe(p === 0 || p === 1 ? 0 : 5)
     }
     expect(draw.mock.calls.map(c => c[3])).toEqual([0.25, 0.5, 0.75])
     expect(g.sink.list()).toEqual([])

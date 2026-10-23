@@ -15,7 +15,8 @@
  *   shader with both frames bound, evaluating the sheet's fold template per
  *   pixel.
  * - **Rigid rows** (airplane, origami, fallOver, prestige): CPU matrices
- *   (`airplaneModel` …) drawn with the standard program, pieces cut out with
+ *   (`airplaneModel` …); airplane's four triangles use a triangle program,
+ *   the others the standard program with pieces cut out by
  *   `uvRect`, back to front.
  * - **Deformed rows** (curtains, drape, warp): a 32 × 18 grid moved per
  *   vertex by a custom vertex shader mirroring `curtainVertex`,
@@ -30,7 +31,7 @@
  */
 import type { Rng } from '../../types'
 import {
-  DEFAULT_FOV_DEG, FRAGMENT_3D, GRID_ATTRIBUTES_GLSL, HASH_GLSL, SLIDE_GLSL, STANDARD_PROGRAM, VERTEX_3D,
+  DEFAULT_FOV_DEG, project, FRAGMENT_3D, GRID_ATTRIBUTES_GLSL, HASH_GLSL, SLIDE_GLSL, STANDARD_PROGRAM, VERTEX_3D,
   cellRandom, ease, effectSeed, mul4, rotationX, rotationY, rotationZ, scaling, slideCamera, slidePoint, translation,
   type Mat4, type MeshPool, type Vec3,
 } from './mesh'
@@ -77,12 +78,61 @@ export function foldClassify(p: number, x: number, y: number, pages: readonly Fo
   return mx >= page.x0 && mx <= page.x1 && my >= 0 && my <= 1 ? 'back' : 'from'
 }
 
-/** airplane: the two halves fold towards the viewer about y = 0, then fly off together. */
-export function airplaneModel(p: number, aspect: number, invX: boolean): { top: Mat4; bottom: Mat4; opacity: number } {
-  const phi = (Math.PI / 2) * ease(2 * p), tau = ease(2 * p - 1), sx = invX ? -1 : 1
-  const k = 1 - 0.5 * tau
-  const G = m(translation(sx * 1.6 * aspect * tau, 0.9 * tau, -2.5 * tau), rotationZ(sx * 0.35 * tau), scaling(k, k, k))
-  return { top: mul4(G, rotationX(phi)), bottom: mul4(G, rotationX(-phi)), opacity: 1 - ease((p - 0.85) / 0.15) }
+/** Right-handed rotation by `th` about the axis through world points `from` → `to`. */
+export function axisRotation(from: Vec3, to: Vec3, th: number): Mat4 {
+  const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]], n = Math.hypot(d[0], d[1], d[2])
+  const [x, y, z] = d.map(v => v / n), c = Math.cos(th), s = Math.sin(th), t = 1 - c
+  const r = new Float32Array([
+    t * x * x + c, t * x * y + s * z, t * x * z - s * y, 0,
+    t * x * y - s * z, t * y * y + c, t * y * z + s * x, 0,
+    t * x * z + s * y, t * y * z - s * x, t * z * z + c, 0,
+    0, 0, 0, 1,
+  ])
+  return m(translation(from[0], from[1], from[2]), r, translation(-from[0], -from[1], -from[2]))
+}
+
+/** airplane's four rigid triangles, in slide uv: the body halves either side of the spine, and the wings under the diagonal creases from the top corners to the nose (bottom centre). */
+export const AIRPLANE_TRIS = Object.freeze({
+  bodyL: [[0, 0], [0.5, 0], [0.5, 1]], bodyR: [[0.5, 0], [1, 0], [0.5, 1]],
+  wingL: [[0, 0], [0, 1], [0.5, 1]], wingR: [[1, 0], [1, 1], [0.5, 1]],
+} as const)
+export type AirplanePanel = keyof typeof AIRPLANE_TRIS
+const AIRPLANE_PANELS = Object.keys(AIRPLANE_TRIS) as AirplanePanel[]
+
+/**
+ * airplane: a paper dart. Over the first half the body halves open a dihedral
+ * about the spine and the wings fold over them about the diagonal creases
+ * (nose at the bottom centre); over the second half the folded dart banks,
+ * pitches its nose into depth and flies away, never edge-on.
+ */
+export function airplaneModel(p: number, aspect: number, invX: boolean): { panels: Record<AirplanePanel, Mat4>; opacity: number; wingShade: number } {
+  const f = ease(2 * p), tau = ease(2 * p - 1), sx = invX ? -1 : 1
+  const beta = (Math.PI / 4) * f, th = 0.9 * Math.PI * f
+  const N = slidePoint(0.5, 1, aspect), TL = slidePoint(0, 0, aspect), TR = slidePoint(1, 0, aspect)
+  const bodyL = rotationY(-beta), bodyR = rotationY(beta)
+  const wingL = mul4(bodyL, axisRotation(N, TL, th)), wingR = mul4(bodyR, axisRotation(N, TR, -th))
+  const k = 1 - 0.4 * tau
+  const G = m(translation(sx * 0.9 * aspect * tau, -2.4 * tau, -3 * tau), rotationZ(sx * 0.3 * tau), rotationY(sx * 0.5 * tau), rotationX(0.6 * tau), scaling(k, k, k))
+  return { panels: { bodyL: mul4(G, bodyL), bodyR: mul4(G, bodyR), wingL: mul4(G, wingL), wingR: mul4(G, wingR) }, opacity: 1 - ease((p - 0.85) / 0.15), wingShade: 1 - 0.1 * f }
+}
+
+/** The dart's projected outline at `p` under the slide camera: the convex hull (NDC, counter-clockwise) of its panel corners, and its area. */
+export function airplaneSilhouette(p: number, aspect: number, invX: boolean): { hull: number[][]; area: number } {
+  const { panels } = airplaneModel(p, aspect, invX)
+  const C = slideCamera(DEFAULT_FOV_DEG, aspect)
+  const pts = AIRPLANE_PANELS.flatMap(k => AIRPLANE_TRIS[k].map(([u, v]) => project(mul4(C, panels[k]), slidePoint(u, v, aspect)).slice(0, 2)))
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+  const cross = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+  const half = (list: number[][]) => {
+    const h: number[][] = []
+    for (const q of list) { while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], q) <= 1e-12) h.pop(); h.push(q) }
+    h.pop()
+    return h
+  }
+  const hull = [...half(pts), ...half([...pts].reverse())]
+  let area = 0
+  for (let i = 0; i < hull.length; i++) { const [x0, y0] = hull[i], [x1, y1] = hull[(i + 1) % hull.length]; area += x0 * y1 - x1 * y0 }
+  return { hull, area: area / 2 }
 }
 
 /** origami: four vertical panels as an accordion hinged in a chain from the left edge (`invX`: the right edge). Panel k is slide uv x ∈ [k/4, (k+1)/4] (`invX`: counted from the right). */
@@ -215,6 +265,7 @@ void main() {
 `
 
 const DEFORM_HEAD = `#version 300 es
+precision highp float;
 ${GRID_ATTRIBUTES_GLSL}uniform mat4 u_mvp;
 uniform float u_aspect;
 uniform float u_p;
@@ -298,6 +349,20 @@ void main() {
 }
 `
 
+/** airplane's panels: a 1 × 1 grid whose corners map to triangle `u_tri` (slide uv; the fourth corner collapses onto the third). */
+const TRIANGLE_VS = `#version 300 es
+precision highp float;
+${GRID_ATTRIBUTES_GLSL}uniform mat4 u_mvp;
+uniform float u_aspect;
+uniform vec2 u_tri[3];
+out vec2 v_uv;
+${SLIDE_GLSL}void main() {
+  vec2 uv = (1.0 - a_uv.y) * mix(u_tri[0], u_tri[1], a_uv.x) + a_uv.y * u_tri[2];
+  v_uv = uv;
+  gl_Position = u_mvp * vec4(slidePos(uv, u_aspect), 1.0);
+}
+`
+
 const PROGRAMS = {
   fold: ['three:deform:fold', VERTEX_3D, FOLD_FS],
   curtains: ['three:deform:curtains', CURTAINS_VS, DEFORM_FS],
@@ -305,6 +370,7 @@ const PROGRAMS = {
   warp: ['three:deform:warp', WARP_VS, DEFORM_FS],
   wind: ['three:deform:wind', WIND_VS, DEFORM_FS],
   standard: [STANDARD_PROGRAM, VERTEX_3D, FRAGMENT_3D],
+  triangle: ['three:deform:triangle', TRIANGLE_VS, FRAGMENT_3D],
 } as const satisfies Record<string, readonly [string, string, string]>
 type ProgramName = keyof typeof PROGRAMS
 const programOf = (mesh: MeshPool, name: ProgramName) => { const [key, vs, fs] = PROGRAMS[name]; return mesh.program(key, vs, fs) }
@@ -394,15 +460,34 @@ const ROWS: Row[] = [
   { element: 'prstTrans', preset: 'pageCurlDouble', grids: [[1, 1]], programs: ['fold'], draw: drawFold('pageCurlDouble') },
   { element: 'prstTrans', preset: 'peelOff', grids: [[1, 1]], programs: ['fold'], draw: drawFold('peelOff') },
   {
-    element: 'prstTrans', preset: 'airplane', grids: [[1, 1]], programs: ['standard'],
+    element: 'prstTrans', preset: 'airplane', grids: [[1, 1]], programs: ['standard', 'triangle'],
     draw(gl, from, to, progress, attrs, _rng, mesh) {
       const a = airplaneModel(progress, mesh.aspect, flag(attrs, 'invX'))
+      const C = camera(mesh), quad = mesh.grid(1, 1)
       premultipliedBlend(gl)
-      mesh.draw(mesh.grid(1, 1), to, camera(mesh))
-      drawPieces(gl, mesh, [
-        { model: a.top, tex: from, uvRect: [0, 0, 1, 0.5], opacity: a.opacity },
-        { model: a.bottom, tex: from, uvRect: [0, 0.5, 1, 0.5], opacity: a.opacity },
-      ])
+      mesh.draw(quad, to, C)
+      if (a.opacity <= 0) return
+      const p = programOf(mesh, 'triangle')
+      gl.useProgram(p.program)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, from)
+      gl.uniform1i(p.uniform('u_tex'), 0)
+      gl.uniform1f(p.uniform('u_aspect'), mesh.aspect)
+      gl.uniform1f(p.uniform('u_opacity'), a.opacity)
+      // The bodies, then the wings folded over them; each pair farthest (centroid world z) first.
+      const depth = (k: AirplanePanel) => {
+        const c = AIRPLANE_TRIS[k].reduce<[number, number]>((s, [u, v]) => [s[0] + u / 3, s[1] + v / 3], [0, 0])
+        const q = slidePoint(c[0], c[1], mesh.aspect), M = a.panels[k]
+        return M[2] * q[0] + M[6] * q[1] + M[10] * q[2] + M[14]
+      }
+      for (const pair of [['bodyL', 'bodyR'], ['wingL', 'wingR']] as const) {
+        for (const k of [...pair].sort((x, y) => depth(x) - depth(y))) {
+          gl.uniformMatrix4fv(p.uniform('u_mvp'), false, mul4(C, a.panels[k]))
+          gl.uniform2fv(p.uniform('u_tri[0]'), new Float32Array(AIRPLANE_TRIS[k].flat()))
+          gl.uniform1f(p.uniform('u_shade'), k.startsWith('wing') ? a.wingShade : 1)
+          mesh.drawMesh(quad)
+        }
+      }
     },
   },
   {
