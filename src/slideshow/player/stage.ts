@@ -1249,9 +1249,32 @@ export function createStage(deps: StageDeps): Stage {
     const pairedFrom = new Set(pairOf.values())
     const containerTo = new Map<TargetKey, TargetKey>()
     for (const [t, f] of pairOf) if (containerOf(t) === undefined) containerTo.set(f, t)
-    /** An unmatched unit of a paired container fades while moving with it. */
+    /** The container a text layer rides with: a Morph-only unit's, or (PR #20 review 4) a text build's range or item layer's, by its key. */
+    const ownerOf = (q: Prepared, root: TargetKey | undefined): TargetKey | undefined => {
+      if (root === undefined) return undefined
+      const own = unitOwner.get(root)
+      if (own !== undefined) return own
+      const c = containerOf(root)
+      return c !== undefined && (q === p ? toShapes : fromShapes).has(c) ? c : undefined
+    }
+    // A text build's layer on both sides (the same range or item of a paired container) pairs, riding the
+    // container's path with its own animation state; Morph-only units pair only as the matcher said.
+    const ride = new Map<TargetKey, { f: TargetKey; t: TargetKey }>()
+    for (const r of toRoots) {
+      const t = containerOf(r)
+      if (t === undefined || unitOwner.has(r) || pairOf.has(r) || !toShapes.has(t)) continue
+      const f = pairOf.get(t)
+      if (f === undefined || containerOf(f) !== undefined) continue
+      const fr = f + r.slice(t.length)
+      if (!fromRoots.has(fr) || unitOwner.has(fr) || pairedFrom.has(fr)) continue
+      pairOf.set(r, fr)
+      pairedFrom.add(fr)
+      ride.set(r, { f, t })
+      blend.set(r, blend.get(t) === 'under' ? 'under' : 'cross')
+    }
+    /** An unmatched unit or text-build layer of a paired container fades while moving with it. */
     const carried = (q: Prepared, e: DrawEntry): Pick<MorphFrameItem, 'path' | 'pathStates'> & { geometry?: BaseGeometry } => {
-      const owner = e.root ? unitOwner.get(e.root) : undefined
+      const owner = ownerOf(q, e.root)
       if (owner === undefined) return {}
       const f = q === p ? pairOf.get(owner) : owner
       const t = q === p ? owner : containerTo.get(owner)
@@ -1284,12 +1307,14 @@ export function createStage(deps: StageDeps): Stage {
       done.add(e.root)
       const t = e.root
       const ts = te.filter(x => x.root === t), fs = fe.filter(x => x.root === f)
-      const fg = baseOf(from.p, f) ?? box(from.p), tg = baseOf(p, t) ?? box(p)
+      // A text-build layer pair rides its containers' boxes (its layers paint where the container does).
+      const rides = ride.get(t)
+      const fg = baseOf(from.p, rides?.f ?? f) ?? box(from.p), tg = baseOf(p, rides?.t ?? t) ?? box(p)
       const how = blend.get(t)
       const pairUp = (a: DrawEntry | undefined, b: DrawEntry | undefined, under: boolean) => {
         if (!a && !b) return
         push({
-          ...(a ? { from: side(from.p, a) } : {}), ...(b ? { to: side(p, b) } : {}),
+          ...(a ? { from: side(from.p, a, rides ? fg : undefined) } : {}), ...(b ? { to: side(p, b, rides ? tg : undefined) } : {}),
           ...(under ? { under: true } : {}), path: { from: fg, to: tg },
         }, `morph:pair:${t}`)
       }

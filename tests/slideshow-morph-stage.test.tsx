@@ -539,4 +539,140 @@ describe('S3-6 morph through the session and stage', () => {
       expect(ws!.used()).toBe(0)
     })
   })
+
+  describe('PR #20 review 4: text-build layers ride their container’s Morph path', () => {
+    const box2 = (x: number, y: number): PptxShapeSpec => ({
+      id: 3, name: 'Body', off: [px(x), px(y)], ext: [px(400), px(120)], paragraphs: [{ runs: [{ text: 'One' }] }, { runs: [{ text: 'Two' }] }],
+    })
+    /** A click step revealing paragraph `pr` of `spid` (a paragraph build). */
+    const paraStep = (id: number, spid: number, pr: number) =>
+      `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+      `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+      `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+      `<p:set><p:cBhvr><p:cTn id="${id + 3}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"><p:txEl><p:pRg st="${pr}" end="${pr}"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
+      `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+    const withBuild = (xml: string) => xml.replace('</p:tnLst></p:timing>', '</p:tnLst><p:bldLst><p:bldP spid="3" grpId="0" build="p"/></p:bldLst></p:timing>')
+    /** A by-word entrance on `spid`, 1 ms apart. */
+    const byWord = (id: number, spid: number) =>
+      `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+      `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+      `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>` +
+      `<p:iterate type="wd"><p:tmAbs val="1"/></p:iterate><p:childTnLst>` +
+      `<p:set><p:cBhvr><p:cTn id="${id + 3}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>` +
+      `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+
+    /** Every item drawing a layer of `prefix` sits on the container path (100,100) → (300,400): mapped to the box at p = 0.5. */
+    function expectRides(m: { spec: MorphFrameSpec }, prefix: string) {
+      const items = m.spec.pairs.filter(i => (i.from?.key ?? i.to?.key ?? '').startsWith(prefix))
+      expect(items.length).toBeGreaterThan(0)
+      for (const item of items) {
+        expect(item.path, JSON.stringify(item.from?.key ?? item.to?.key)).toBeDefined()
+        expect(item.path!.from.x).toBeCloseTo(100, 3)
+        expect(item.path!.to.x).toBeCloseTo(300, 3)
+        let draws: LayerDraw[] = []
+        morphFrame({ pairs: [item] }, 0.5, { frame: (d: readonly LayerDraw[]) => { draws = d.flatMap(x => x.sum ? [x, x.sum.with] : [x]) } } as unknown as Compositor)
+        expect(draws.length).toBeGreaterThan(0)
+        for (const d of draws) {
+          const side = d.handle === item.from?.handle ? item.from! : item.to!
+          const g = side.geometry
+          const [cx, cy] = [g.x + g.w / 2, g.y + g.h / 2]
+          const t = d.state.transform
+          // The container's centre lands mid-path: (100 + 200, 100 + 60) → (300 + 200, 400 + 60) at 0.5.
+          expect(t[0] * cx + t[2] * cy + t[4]).toBeCloseTo(400, 3)
+          expect(t[1] * cx + t[3] * cy + t[5]).toBeCloseTo(310, 3)
+        }
+      }
+    }
+
+    it('byObject with a paragraph build on the outgoing box: its paragraph layers move with the box', async () => {
+      const doc = await deck({
+        slides: [
+          { shapes: [box2(100, 100)], timingXml: withBuild(timingXmlOf(mainSeqXml([paraStep(10, 3, 0), paraStep(20, 3, 1)]))) },
+          { shapes: [box2(300, 400)], transition: MORPH },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.key('ArrowRight')
+      await r.tick(50)
+      expect(r.s.state.slide).toBe(0)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.state.slide).toBe(1)
+      expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
+      const m = lastMorph()!
+      expect(r.s.stage!.inspect().lastDraws.some(k => k.includes('sp:3/p:'))).toBe(true)
+      expectRides(m, 'sp:3/p:')
+      r.s.exit()
+    })
+
+    it('byObject with a by-word animation split on the outgoing box: its word layers move with the box', async () => {
+      const doc = await deck({
+        slides: [
+          { shapes: [box2(100, 100)], timingXml: timingXmlOf(mainSeqXml([byWord(10, 3)])) },
+          { shapes: [box2(300, 400)], transition: MORPH },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(100)
+      expect(r.s.state.slide).toBe(0)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.state.slide).toBe(1)
+      const m = lastMorph()!
+      expect(r.s.stage!.inspect().lastDraws.some(k => k.includes('sp:3/c:'))).toBe(true)
+      expectRides(m, 'sp:3/c:')
+      r.s.exit()
+    })
+
+    it('the same paragraph build on both boxes: the outgoing built paragraphs ride; a not-yet-built incoming paragraph stays hidden', async () => {
+      const timing = withBuild(timingXmlOf(mainSeqXml([paraStep(10, 3, 0), paraStep(20, 3, 1)])))
+      const doc = await deck({
+        slides: [
+          { shapes: [box2(100, 100)], timingXml: timing },
+          { shapes: [box2(300, 400)], transition: MORPH, timingXml: timing },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.key('ArrowRight')
+      await r.tick(50)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.state.slide).toBe(1)
+      const m = lastMorph()!
+      // The incoming paragraphs are not built yet: none of them draws.
+      expect(m.spec.pairs.some(i => i.to?.key?.startsWith('sp:3/p:'))).toBe(false)
+      // The outgoing ones fade while riding the box's path.
+      expectRides(m, 'sp:3/p:')
+      expect(r.s.stage!.inspect().lastDraws).toContain('morph:pair:sp:3')
+      r.s.exit()
+    })
+
+    it('the same visible paragraph range on both boxes pairs and rides the box (a paragraph exit not yet played)', async () => {
+      const exitPara = (id: number, pr: number) => paraStep(id, 3, pr).replace('presetClass="entr"', 'presetClass="exit"').replace('<p:strVal val="visible"/>', '<p:strVal val="hidden"/>')
+      const timing = withBuild(timingXmlOf(mainSeqXml([exitPara(10, 0), exitPara(20, 1)])))
+      const doc = await deck({
+        slides: [
+          { shapes: [box2(100, 100)], timingXml: timing },
+          { shapes: [box2(300, 400)], transition: MORPH, timingXml: timing },
+        ],
+      })
+      const r = await show(doc)
+      // Next with effects pending would play them: go to slide 2 instead.
+      await r.key('2')
+      await r.key('Enter')
+      await r.tick(600)
+      if (r.s.state.slide !== 1) { r.s.exit(); throw new Error(`slide ${r.s.state.slide}`) }
+      const m = lastMorph()!
+      const kinds = r.s.stage!.inspect().lastDraws
+      expect(kinds).toContain('morph:pair:sp:3/p:0-0')
+      expect(kinds).toContain('morph:pair:sp:3/p:1-1')
+      const pair = m.spec.pairs.find(i => i.from?.key === 'sp:3/p:0-0' && i.to?.key === 'sp:3/p:0-0')!
+      expect(pair).toMatchObject({ under: true })
+      expectRides(m, 'sp:3/p:')
+      r.s.exit()
+    })
+  })
 })
