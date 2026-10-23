@@ -90,7 +90,7 @@ afterEach(() => {
 
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0)) }
 
-interface ShowOpts { watermark?: WatermarkOptions; protect?: { copy?: boolean; print?: boolean }; retry?: (o?: PresentFullscreenOptions) => Promise<'entered' | 'refused'> }
+interface ShowOpts { watermark?: WatermarkOptions; protect?: { copy?: boolean; print?: boolean }; retry?: (o?: PresentFullscreenOptions) => Promise<'entered' | 'refused'>; fullscreen?: 'entered' | 'refused' }
 async function show(doc: PptxDocument, popup: Window | null | undefined, o: ShowOpts = {}) {
   // The viewer's theme root carries the protection policy (spec 6.3), the host sits beside the page region.
   const themeRoot = document.createElement('div')
@@ -110,7 +110,7 @@ async function show(doc: PptxDocument, popup: Window | null | undefined, o: Show
     doc, handle: pptxPackageHandle(doc), host,
     token: { release() {}, released: false, owns: () => false },
     platform: { hasActivation: () => true, requestFullscreen: async () => {}, exitFullscreen: async () => {}, fullscreenElement: () => null, open: () => null },
-    fullscreen: Promise.resolve('entered'),
+    fullscreen: Promise.resolve(o.fullscreen ?? 'entered'),
     retryFullscreen: o.retry ?? (async () => 'entered'),
     from: 'beginning', motion: 'auto', presenterView: popup === undefined ? undefined : true, popup,
     ...(o.watermark ? { watermark: o.watermark } : {}),
@@ -894,5 +894,25 @@ describe('PR #19 review 4 (carried video)', () => {
       Object.assign(proto, saved)
       Object.assign(U, savedUrl)
     }
+  })
+})
+
+describe('PR #19 review 9', () => {
+  it('full screen entered through a placement retry updates the surface and removes the refused notice', async () => {
+    const presenterScreen = { availLeft: 0, availTop: 0, availWidth: 1440, availHeight: 900, isPrimary: true, label: 'laptop' }
+    const audienceScreen = { availLeft: 1440, availTop: 0, availWidth: 1920, availHeight: 1080, label: 'projector' }
+    ;(window as { getScreenDetails?: unknown }).getScreenDetails = vi.fn(() => Promise.resolve({ screens: [presenterScreen, audienceScreen] }))
+    const popup = fakePopup()
+    // The first request was refused: the show runs in the window, with the notice.
+    const r = await show(await deck(), popup, { fullscreen: 'refused', retry: async () => 'entered' })
+    const refused = () => r.host.querySelector('[data-officeview-show-notice]:not([data-placement])')
+    expect(r.s.surface).toBe('in-window')
+    expect(refused()).not.toBeNull()
+    // "Use both screens" in the presenter window enters full screen on the audience screen.
+    button(popup.document, 'Use both screens').click()
+    await flush()
+    expect(r.s.surface).toBe('fullscreen')
+    expect(refused()).toBeNull()
+    r.s.exit()
   })
 })

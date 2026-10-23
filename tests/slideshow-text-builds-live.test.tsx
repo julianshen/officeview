@@ -219,3 +219,54 @@ describe('PR #19 review 8', () => {
     r.s.exit()
   })
 })
+
+/** A click step whose effect (`cls`) iterates `unit` on `spid`, `ms` apart, with one visibility set of `dur`. */
+const iterated = (id: number, spid: number, cls: 'entr' | 'exit', unit: 'wd' | 'lt', ms: number, to: 'visible' | 'hidden', dur = '1') =>
+  `<p:par><p:cTn id="${id}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 1}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>` +
+  `<p:par><p:cTn id="${id + 2}" presetID="1" presetClass="${cls}" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>` +
+  `<p:iterate type="${unit}"><p:tmAbs val="${ms}"/></p:iterate><p:childTnLst>` +
+  `<p:set><p:cBhvr><p:cTn id="${id + 3}" dur="${dur}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${to}"/></p:to></p:set>` +
+  `</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>`
+
+describe('PR #19 review 9', () => {
+  it('a by-word entrance and a by-letter exit on one target: the exit fans by letter, the entrance still by word', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Ab cd')], timingXml: timingXmlOf(mainSeqXml([iterated(10, 2, 'entr', 'wd', 500, 'visible'), iterated(20, 2, 'exit', 'lt', 500, 'hidden')])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    // Layers are letters (the finer unit); words are their letters together.
+    const LETTERS = ['sp:2/c:0-0', 'sp:2/c:1-1', 'sp:2/c:3-3', 'sp:2/c:4-4']
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' && l.part === 'range' ? [l.key] : [])
+    expect(layers).toEqual(LETTERS)
+    await r.key('ArrowRight')
+    await r.tick(10)
+    // By word: both letters of "Ab" appear together, "cd" not yet.
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([true, true, false, false])
+    await r.tick(600)
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([true, true, true, true])
+    await r.key('ArrowRight')
+    await r.tick(10)
+    // By letter: "A" leaves alone.
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([false, true, true, true])
+    await r.tick(500)
+    expect(LETTERS.map(k => shown(now(), k))).toEqual([false, false, true, true])
+    r.s.exit()
+  })
+
+  it('a refused fan-out leaves the text in the body, where the whole-shape effect moves it', async () => {
+    // The by-word set has no finite duration: it cannot be staggered (text-build-unsplit) and plays whole.
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([iterated(10, 2, 'entr', 'wd', 100, 'visible', 'indefinite'), wholeShape(20, 'emph', moveRight(23, 2))])) }] })
+    const r = await show(doc)
+    expect(r.log).toContain('diag:text-build-unsplit')
+    // No word layers were pulled out of the shape: one layer, the whole shape.
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' ? [`${l.key}:${l.part ?? ''}`] : [])
+    expect(layers).toEqual(['sp:2:'])
+    await r.key('ArrowRight')
+    await r.tick(100)
+    await r.key('ArrowRight')
+    await r.tick(50)
+    const s = r.s.stage!.stateAt(r.s.cursor, clock.now()).get('sp:2')!
+    expect(s.transform[4] + (s.motion?.dx ?? 0)).toBeGreaterThan(100)
+    r.s.exit()
+  })
+})

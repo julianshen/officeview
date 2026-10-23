@@ -842,6 +842,16 @@ export async function createSession(start: ShowStart): Promise<SessionController
   // ---------------------------------------------------------------------
 
   let surfaceKind: 'fullscreen' | 'in-window' = 'in-window'
+  /** Removes the fullscreen-refused notice, when one is up. */
+  let closeRefusedNotice: (() => void) | undefined
+  /**
+   * Every later full-screen request (the notice's button, "Use both screens", an opener-side placement retry) goes
+   * through here, so a success records the surface and takes the refused notice down (PR #19 review 9).
+   */
+  const retryFullscreen: typeof start.retryFullscreen = (o) => start.retryFullscreen(o).then((r) => {
+    if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; closeRefusedNotice?.() }
+    return r
+  })
   try {
     clock = sessionDeps.clock(win)
     policy = protection(start)
@@ -960,7 +970,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
         // allowPrint=false keeps the presenter window out of print too (spec 6.3).
         if (!policy.print) pw.root.setAttribute('data-ov-print', 'false')
         placement = createPresenterPlacement({
-          popup, opener, host, retryFullscreen: start.retryFullscreen, fullscreen: start.fullscreen,
+          popup, opener, host, retryFullscreen, fullscreen: start.fullscreen,
           prepared: preparedPlacement.get(owner), sink, changed: () => syncPresenter(true),
         })
         presenter = 'window'
@@ -1005,7 +1015,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     sink.add({ code: 'fullscreen-refused', message: 'Full screen was refused; the show runs in the window.' })
     const notice = owner.createElement('div')
     // Removing the notice takes its focused button away: focus returns to the host, so its keys (Esc) keep working (PR #18 review 8).
-    const close = () => { notice.remove(); if (!exited) host.focus() }
+    const close = () => { closeRefusedNotice = undefined; notice.remove(); if (!exited) host.focus() }
+    closeRefusedNotice = close
     notice.setAttribute('role', 'status')
     notice.setAttribute('data-officeview-show-notice', '')
     notice.textContent = 'Full screen is not available here; presenting in the window. '
@@ -1013,7 +1024,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
     retry.type = 'button'
     retry.textContent = 'Click for full screen'
     retry.onclick = () => {
-      void start.retryFullscreen().then((r) => { if (r === 'entered' && !exited && start.isCurrent()) { surfaceKind = 'fullscreen'; close() } })
+      void retryFullscreen()
     }
     const dismiss = owner.createElement('button')
     dismiss.type = 'button'

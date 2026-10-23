@@ -861,6 +861,12 @@ export interface IterateOptions {
   orderOf?: ReadonlyMap<TimeNode, number>
   /** Reserves `bytes` before the working copy is built; `false` refuses (the tree stays as it is, diagnosed). */
   charge?: (bytes: number, tag: string) => boolean
+  /**
+   * Per target and unit, the items an effect of that unit staggers, each a group of `splits` keys that move
+   * together (PR #19 review 9): a target built by word and by letter is split into letters, and a by-word effect
+   * gives each word's letters one delay. Absent for a target or unit, each split key is its own item.
+   */
+  groups?: ReadonlyMap<TargetKey, Partial<Record<'wd' | 'lt', ReadonlyArray<readonly TargetKey[]>>>>
 }
 
 /** Item evaluations per slide and frame (fanned behaviours × items); past it an effect plays whole, diagnosed. */
@@ -946,6 +952,7 @@ export function expandIterations(tree: TimingTree, splits: ReadonlyMap<TargetKey
       return
     }
     const whole = n.target.text ? undefined : key
+    const groups = it.type === 'el' ? undefined : options.groups?.get(key)?.[it.type]
     const cost = keys.length + (whole ? 1 : 0)
     if (fanned + cost > MAX_FAN_ITEMS) {
       diag('text-build-refused', effect, `Text by ${unit} on ${key} would exceed ${MAX_FAN_ITEMS} item evaluations per slide; the effect plays on the whole target`)
@@ -957,7 +964,13 @@ export function expandIterations(tree: TimingTree, splits: ReadonlyMap<TargetKey
       diag('text-build-unsplit', effect, `Text by ${unit} on ${key}: tmPct needs a finite effect duration; the items start together`)
     }
     fanned += cost
-    plans.push({ node: n, owner, effect, keys, whole, delays: iterateDelays(it, keys.length, base ?? 0), entrance: here === 'entr', exit: here === 'exit' })
+    if (groups && groups.length > 0) {
+      // One delay per group; every key of a group takes it.
+      const per = iterateDelays(it, groups.length, base ?? 0)
+      const flat: TargetKey[] = [], delays: number[] = []
+      groups.forEach((g, i) => { for (const k of g) { flat.push(k); delays.push(per[i]) } })
+      plans.push({ node: n, owner, effect, keys: flat, whole, delays, entrance: here === 'entr', exit: here === 'exit' })
+    } else plans.push({ node: n, owner, effect, keys, whole, delays: iterateDelays(it, keys.length, base ?? 0), entrance: here === 'entr', exit: here === 'exit' })
   }
   walk(tree.root, undefined, undefined, 0)
   const unchanged = (): IteratedTiming => ({ tree, orderOf: options.orderOf ?? srcOrder, fan: new Map(), items: new Map() })
