@@ -17,7 +17,7 @@
  *   undecodable format (WMV, AVI) reads nothing, leaves the poster the stage
  *   already paints, and is diagnosed (spec 6.5). Elements are created in the
  *   audience surface's own document (realm-safe) and are the only media
- *   elements of the show: the presenter mirror copies frames (`drawFrame`),
+ *   elements of the show: the presenter mirror copies frames (`drawVideos`, `drawFrame`),
  *   never a second element or a second audio output (spec 5.2). Video sits in
  *   a DOM overlay at the shape's position on the slide (`box`), diagnosed
  *   once per slide: effects on the shape do not move the moving picture.
@@ -59,6 +59,8 @@ import type { MediaLease, MediaLeaseResult } from './lease'
 
 /** A shape's box in CSS px relative to the audience surface root. */
 export interface MediaBox { left: number; top: number; width: number; height: number }
+/** A box as a fraction (0–1) of the audience frame on each axis. */
+export interface FrameBox { x: number; y: number; w: number; h: number }
 
 export interface MediaPlayerDeps {
   /** The audience surface root: elements and buttons are created in its document. */
@@ -68,6 +70,12 @@ export interface MediaPlayerDeps {
   open(rec: MediaRecord, signal: AbortSignal): Promise<MediaLeaseResult>
   /** The shape's box on the shown slide (`Stage.mediaBox`); `undefined` hides the overlay. */
   box?(spid: string): MediaBox | undefined
+  /**
+   * The same box as a fraction of the audience frame (`Stage.mediaFrameBox`), read whenever the overlay is placed and
+   * kept with it, so the presenter mirror composites a video exactly where its overlay is, including a video carried
+   * to later slides (`numSld`), whose shape the shown slide no longer has (PR #19 review 4).
+   */
+  frameBox?(spid: string): FrameBox | undefined
   /** Frees other workspace holders (the looping transition sound) when a lease is refused; true when it freed something. */
   relieve?(): boolean
   /**
@@ -98,8 +106,11 @@ export interface MediaPlayer {
   /** Opens a lease with the pressure rule: on a workspace refusal, cross-slide media goes first, then one retry. */
   open(rec: MediaRecord, signal: AbortSignal): Promise<MediaLeaseResult>
   setPaused(paused: boolean): void
-  /** The shapes whose video has an element now (the shown slide's and carried ones): what the presenter mirror composites. */
-  videos(): string[]
+  /**
+   * The presenter mirror: draws every shown video overlay (carried ones first, as they stack) at its retained frame
+   * box, mapped into `dest`, the rectangle where the audience frame landed in the mirror. No second element, no audio.
+   */
+  drawVideos(ctx: CanvasRenderingContext2D, dest: FrameBox): void
   /** The presenter mirror: copies the current frame of the playing video on `spid` (no second element, no audio). */
   drawFrame(spid: string, ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): boolean
   /** Stops and releases media carried from earlier slides; true when anything was released. */
@@ -121,6 +132,8 @@ interface Live {
   slide: number
   /** A refused play(): the owning controller's failure path, or a diagnostic once the media is carried past its slide. */
   onReject?: (e: unknown) => void
+  /** A video overlay's box as a fraction of the frame, kept from its last placement (the mirror's geometry). */
+  frame?: FrameBox
 }
 
 interface NodeState {
@@ -361,6 +374,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       if (!live || live.kind !== 'video') return
       const box = deps.box?.(st.spid)
       live.el.hidden = !box
+      live.frame = box ? deps.frameBox?.(st.spid) : undefined
       if (!box) return
       const s = live.el.style
       s.left = `${box.left}px`
@@ -664,8 +678,14 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         } catch (e) { refused(e) }
       }
     },
-    videos() {
-      return [...new Set(all().filter((l) => l.kind === 'video' && !l.el.hidden).map((l) => l.spid))]
+    drawVideos(ctx, dest) {
+      for (const live of all()) {
+        const f = live.frame
+        if (live.kind !== 'video' || live.el.hidden || !f) continue
+        try {
+          ctx.drawImage(live.el as HTMLVideoElement, dest.x + f.x * dest.w, dest.y + f.y * dest.h, f.w * dest.w, f.h * dest.h)
+        } catch { /* no frame yet */ }
+      }
     },
     drawFrame(spid, ctx, x, y, w, h) {
       const live = all().find((l) => l.spid === spid && l.kind === 'video')

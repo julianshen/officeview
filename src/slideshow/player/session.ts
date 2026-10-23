@@ -812,12 +812,9 @@ export async function createSession(start: ShowStart): Promise<SessionController
     get protection() { return policy },
     audienceFrame,
     drawMedia(ctx, dest) {
-      // Video plays in a DOM overlay, so the audience canvas lacks it: copy each frame from the one element (spec 5.2).
-      if (!player || !stage?.mediaFrameBox) return
-      for (const spid of player.videos()) {
-        const b = stage.mediaFrameBox(spid)
-        if (b) player.drawFrame(spid, ctx, dest.x + b.x * dest.w, dest.y + b.y * dest.h, b.w * dest.w, b.h * dest.h)
-      }
+      // Video plays in a DOM overlay, so the audience canvas lacks it: copy each frame from the one element (spec 5.2),
+      // at the geometry its overlay keeps (a video carried past its slide included; PR #19 review 4).
+      player?.drawVideos(ctx, dest)
     },
     onFrame(cb) {
       frameSubs.add(cb)
@@ -868,6 +865,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       sink,
       open: (rec, s) => (handle && win ? openMediaLease(handle, rec, ws, win, s) : Promise.resolve({ refused: 'no-package' })),
       box: (spid) => stage?.mediaBox?.(spid),
+      frameBox: (spid) => stage?.mediaFrameBox?.(spid),
       relieve: () => sounds?.release() ?? false,
       stopTransitionSound: (onlyLooping) => sounds?.release(onlyLooping) ?? false,
     })

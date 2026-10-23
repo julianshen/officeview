@@ -799,3 +799,94 @@ describe('PR #19 review 2', () => {
     }
   })
 })
+
+describe('PR #19 review 4', () => {
+  it('a stale prime callback cannot forget the hold of a newer request for the same slide', async () => {
+    const { syncPrimeHolds } = await import('../src/slideshow/presenter/PresenterView')
+    const held = new Map<number, object>()
+    const pending: Array<(ok: boolean) => void> = []
+    const log: string[] = []
+    const io = {
+      release: (i: number) => log.push(`release:${i}`),
+      prime: (i: number) => { log.push(`prime:${i}`); return new Promise<boolean>((res) => pending.push(res)) },
+      primed: () => log.push('primed'),
+      forgotten: () => log.push('forgotten'),
+    }
+    syncPrimeHolds(held, new Set([3]), io)
+    // The preview leaves slide 3 while it primes, then comes back: a second request for it.
+    syncPrimeHolds(held, new Set([4]), io)
+    syncPrimeHolds(held, new Set([3]), io)
+    expect(log).toEqual(['prime:3', 'release:3', 'prime:4', 'release:4', 'prime:3'])
+    const newer = held.get(3)
+    // The first prime settles late (the release cancelled it: false): it must not touch the newer hold.
+    pending[0]!(false)
+    await Promise.resolve(); await Promise.resolve()
+    expect(held.get(3)).toBe(newer)
+    expect(log).not.toContain('forgotten')
+    // Nor may a stale success count as the newer request's.
+    pending[1]!(true)
+    await Promise.resolve(); await Promise.resolve()
+    expect(log).not.toContain('primed')
+    // The newer request's own outcome still lands.
+    pending[2]!(false)
+    await Promise.resolve(); await Promise.resolve()
+    expect(held.has(3)).toBe(false)
+    expect(log.filter((l) => l === 'forgotten')).toHaveLength(1)
+  })
+})
+
+describe('PR #19 review 4 (carried video)', () => {
+  it('a video carried to the next slide (numSld) keeps the geometry its overlay shows in the mirror', async () => {
+    // Slide 1's video on shape 2 plays across two slides; slide 2 has its own, unrelated shape 2 elsewhere.
+    const video = '<p:video><p:cMediaNode numSld="2"><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cMediaNode></p:video>'
+    const bytes = await buildPptxDeck({ slides: [
+      { shapes: [box], media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array(64).fill(7) }], timingXml: `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst>${video}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>` },
+      { shapes: [box] },
+    ] })
+    const doc = await parsePptx(await OfficePackage.load(bytes))
+    let shown = 0
+    const boxes = [{ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, { x: 0, y: 0.75, w: 0.1, h: 0.1 }]
+    vi.spyOn(sessionDeps, 'stage').mockImplementation(() => ({
+      ...recordingStage(),
+      async enter(m) { shown = m.index },
+      mediaBox: () => ({ left: 10, top: 10, width: 20, height: 20 }),
+      mediaFrameBox: () => boxes[shown],
+    }))
+    const proto = HTMLMediaElement.prototype as unknown as Record<string, unknown>
+    const saved = { canPlayType: proto.canPlayType, play: proto.play, pause: proto.pause, load: proto.load }
+    const U = URL as unknown as Record<string, unknown>
+    const savedUrl = { createObjectURL: U.createObjectURL, revokeObjectURL: U.revokeObjectURL }
+    Object.assign(proto, { canPlayType: () => 'maybe', play: () => Promise.resolve(), pause() {}, load() {} })
+    Object.assign(U, { createObjectURL: () => 'blob:carried-video', revokeObjectURL() {} })
+    try {
+      const popup = fakePopup()
+      const r = await show(doc, popup)
+      await step(r.s)
+      await step(r.s)
+      const el = r.host.querySelector<HTMLVideoElement>('video[data-officeview-show-media]')!
+      expect(el.getAttribute('src')).toBe('blob:carried-video')
+      // Slide 2: the clip plays on, where the audience still sees it (its overlay was not moved).
+      r.s.next()
+      await step(r.s)
+      expect(shown).toBe(1)
+      expect(el.isConnected).toBe(true)
+      const mirror = q<HTMLCanvasElement>(popup.document, '[data-officeview-presenter-current] canvas')
+      const audience = r.host.querySelector<HTMLCanvasElement>('[data-officeview-show-canvas]')!
+      const draws = vi.spyOn(mirror.getContext('2d')!, 'drawImage')
+      await step(r.s)
+      const frames = draws.mock.calls.filter((c) => c[0] === el)
+      expect(frames.length).toBeGreaterThan(0)
+      const s = Math.min(mirror.width / audience.width, mirror.height / audience.height)
+      const dx = (mirror.width - audience.width * s) / 2, dy = (mirror.height - audience.height * s) / 2
+      const [, x, y, w, h] = frames[0] as unknown as [unknown, number, number, number, number]
+      expect(x).toBeCloseTo(dx + 0.25 * audience.width * s, 6)
+      expect(y).toBeCloseTo(dy + 0.25 * audience.height * s, 6)
+      expect(w).toBeCloseTo(0.5 * audience.width * s, 6)
+      expect(h).toBeCloseTo(0.5 * audience.height * s, 6)
+      r.s.exit()
+    } finally {
+      Object.assign(proto, saved)
+      Object.assign(U, savedUrl)
+    }
+  })
+})
