@@ -64,26 +64,17 @@ export interface PresentPlatform {
   exitFullscreen(doc: Document): Promise<void>
   fullscreenElement(doc: Document): Element | null
   open(win: Window, url: string, features: string): Window | null
-  /** Screen details only where the window-management permission is already granted (no prompt); else undefined. */
-  screenDetails?(): Promise<ScreenDetails | undefined>
 }
 
 // async: a missing or throwing requestFullscreen becomes a rejection (in-window).
-// screenDetails never rejects: a missing API or permission name (Firefox, Safari)
-// resolves undefined. It reads the global navigator/window on purpose: the
-// signature takes no window, and its only caller is the opener's own toolbar
-// preload, in this realm. A host in another realm injects its own platform.
+// Screen details for placement are read lazily from the document's own window
+// (src/slideshow/presenter/screens.ts grantedScreenDetails), not here.
 export const defaultPlatform: PresentPlatform = {
   hasActivation: (w) => (w.navigator as { userActivation?: { isActive: boolean } }).userActivation?.isActive,
   requestFullscreen: async (el, o) => el.requestFullscreen(o),
   exitFullscreen: (d) => d.exitFullscreen(),
   fullscreenElement: (d) => d.fullscreenElement,
   open: (w, u, f) => w.open(u, '_blank', f),
-  screenDetails: async () => {
-    try {
-      return (await navigator.permissions.query({ name: 'window-management' as PermissionName })).state == 'granted' ? await (window as unknown as { getScreenDetails(): Promise<ScreenDetails> }).getScreenDetails() : undefined
-    } catch {}
-  },
 }
 
 /**

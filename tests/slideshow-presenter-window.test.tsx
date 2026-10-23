@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { runShow } from '../src/slideshow'
 import { sessionDeps } from '../src/slideshow/player/session'
 import { adoptPresenterWindow } from '../src/slideshow/presenter/window'
+import { grantedScreenDetails } from '../src/slideshow/presenter/screens'
 import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { ManualClock } from '../src/slideshow/clock'
 import type { Stage } from '../src/slideshow/player/stage'
@@ -222,7 +223,8 @@ describe('presenter popup: the synchronous start', () => {
   })
 })
 
-describe('defaultPlatform.screenDetails (review I1)', () => {
+// S2-9 removed the uncalled eager defaultPlatform.screenDetails; the preload's realm-safe lazy reader keeps its contract.
+describe('grantedScreenDetails (S2-2 review I1, moved from defaultPlatform.screenDetails by S2-9)', () => {
   const nav = navigator as Navigator & { permissions?: Permissions }
   const win = window as Window & { getScreenDetails?: () => Promise<unknown> }
   let saved: PropertyDescriptor | undefined
@@ -236,29 +238,33 @@ describe('defaultPlatform.screenDetails (review I1)', () => {
 
   it('resolves undefined, never rejects, where Window Management is missing, unknown, not granted or failing', async () => {
     Object.defineProperty(nav, 'permissions', { value: undefined, configurable: true })
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     // Firefox and Safari: the permission name is not a PermissionName (a synchronous or asynchronous TypeError).
     permissions(() => { throw new TypeError("'window-management' is not a valid enum value") })
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     permissions(() => Promise.reject(new TypeError('unknown permission')))
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     permissions(() => Promise.resolve({ state: 'prompt' }))
     win.getScreenDetails = vi.fn()
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     expect(win.getScreenDetails).not.toHaveBeenCalled()
     // Granted, but the API itself is missing or fails.
     permissions(() => Promise.resolve({ state: 'granted' }))
     delete win.getScreenDetails
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
     win.getScreenDetails = () => Promise.reject(new Error('NotAllowedError'))
-    await expect(defaultPlatform.screenDetails!()).resolves.toBeUndefined()
+    await expect(grantedScreenDetails(window)).resolves.toBeUndefined()
+  })
+
+  it('the eager platform carries no screen-details reader (S2-9)', () => {
+    expect('screenDetails' in defaultPlatform).toBe(false)
   })
 
   it('returns the screen details when the permission is already granted', async () => {
     const details = { screens: [{ availWidth: 1, availHeight: 1 }] }
     permissions(() => Promise.resolve({ state: 'granted' }))
     win.getScreenDetails = () => Promise.resolve(details)
-    await expect(defaultPlatform.screenDetails!()).resolves.toBe(details)
+    await expect(grantedScreenDetails(window)).resolves.toBe(details)
   })
 })
 
