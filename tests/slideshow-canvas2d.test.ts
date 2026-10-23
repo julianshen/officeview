@@ -551,3 +551,19 @@ describe('Canvas 2D compositor', () => {
     expect([s.out.width, s.out.height]).toEqual([40, 30])
   })
 })
+
+describe('PR #19 review 6 follow-up', () => {
+  it('a mask box other than the layer bounds clips the layer by the parent shape\'s mask (a word under its shape\'s wipe)', () => {
+    const s = setup()
+    // A word layer at x 32–48 inside its shape's box x 0–64: the shape's wipe from the left at 0.5 reaches x 32 only.
+    const word = s.layer('#ff0000', { x: 32, y: 8, w: 16, h: 16 })
+    s.comp.frame([{ handle: word, state: state({ mask: { kind: 'wipe', progress: 0.75, params: { from: 'l' } }, maskBox: { x: 0, y: 0, w: 64, h: 48 } }) }])
+    // 0.75 of 64 = 48: the whole word is inside the revealed part.
+    expectPx(s.px(34, 16), RED)
+    expectPx(s.px(46, 16), RED)
+    s.comp.frame([{ handle: word, state: state({ mask: { kind: 'wipe', progress: 0.625, params: { from: 'l' } }, maskBox: { x: 0, y: 0, w: 64, h: 48 } }) }])
+    // 0.625 of 64 = 40: the word's left half shows, its right half is wiped.
+    expectPx(s.px(34, 16), RED)
+    expectPx(s.px(46, 16), CLEAR)
+  })
+})

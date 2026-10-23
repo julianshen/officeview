@@ -158,3 +158,27 @@ describe('PR #19 review 6', () => {
     r.s.exit()
   })
 })
+
+const wipeOut = (id: number, spid: number) =>
+  `<p:animEffect transition="out" filter="wipe(left)"><p:cBhvr><p:cTn id="${id}" dur="1000"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+
+describe('PR #19 review 6 follow-up', () => {
+  it('a whole-shape wipe exit after a by-word entrance sweeps across the words in the shape\'s box', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'exit', wipeOut(23, 2))])) }] })
+    const r = await show(doc)
+    const now = () => r.s.stage!.stateAt(r.s.cursor, clock.now())
+    await r.key('ArrowRight')
+    await r.tick(500)
+    await r.key('ArrowRight')
+    await r.tick(400)
+    const body = now().get('sp:2')!
+    expect(body.mask?.kind).toBe('wipe')
+    for (const k of WORDS) {
+      const w = now().get(k)!
+      // The shape's own mask, over the shape's box (not each word's): one sweep across all the words.
+      expect(w.mask).toEqual(body.mask)
+      expect(w.maskBox).toEqual({ x: 40, y: 40, w: 480, h: 120 })
+    }
+    r.s.exit()
+  })
+})

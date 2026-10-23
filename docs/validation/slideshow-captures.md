@@ -714,3 +714,12 @@ Build each of these once in PowerPoint (File → New, blank 16:9 presentation, d
 - **Engine assumption**: `additive` defaults to `base` and `accumulate` to `none`. `ATTRIBUTE_NAMES` in `read/timing.ts` is the §19.5.2 list as transcribed, plus the `ppt_*` names (S1-8).
 - **Verifies**: the validation doc's `cBhvr@additive` and `cBhvr` attribute-name rows.
 - **Answer**:
+
+### Q-stop-previous-carried: Does "Stop previous sound" stop audio carried from an earlier slide?
+
+- **Open**: PowerPoint, a two-slide deck. Slide 1: an audio clip on a shape with "Play across slides" (`p:audio/p:cMediaNode@numSld` > 1, the usual background-music setup) and a looping effect sound (`p:sndTgt`, "Loop until next sound") whose effect also plays across slides. Slide 2: an effect whose sound is "[Stop Previous Sound]" (`p:cmd type="evt" cmd="onstopaudio"`).
+- **Do**: present, start both sounds on slide 1, advance to slide 2, and click its effect.
+- **Record**: which sounds stop at the click: the carried background music, the carried effect sound, both, or neither.
+- **Engine assumption**: "Stop previous sound" stops the slide's own audio, the transition sound and carried effect sounds, but not carried shape audio such as background music (PR #19 review 6).
+- **Verifies**: `media/player.ts` `onstopaudio`.
+- **Answer**:

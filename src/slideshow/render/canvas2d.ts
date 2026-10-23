@@ -55,7 +55,7 @@
  */
 import type {
   Affine, CanvasFactory, ColorMatrix, Compositor, CompositorViewport, DiagnosticSink, LayerBitmap, LayerDraw, LayerHandle, Lease, MaskState,
-  Rng, SlideShowWorkspace, TransitionDraw,
+  Rng, SlideShowWorkspace, TargetState, TransitionDraw,
 } from '../types'
 import { createRng } from '../rng'
 import { BACKDROP_RGB, MASK_MAX_OPS, transitionRect, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskRaster } from './masks'
@@ -193,6 +193,10 @@ export function createCanvas2DCompositor(
     let seed = seeds.get(rng)
     if (seed === undefined) { seed = Math.floor(rng() * 0x100000000); seeds.set(rng, seed) }
     return seed
+  }
+
+  function isBox(b: TargetState['maskBox']): b is NonNullable<TargetState['maskBox']> {
+    return !!b && [b.x, b.y, b.w, b.h].every(Number.isFinite) && b.w > 0 && b.h > 0
   }
 
   function place(ctx: Ctx, m: Affine) { ctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]) }
@@ -352,7 +356,9 @@ export function createCanvas2DCompositor(
     const local = state.motion ? mul([1, 0, 0, 1, state.motion.dx, state.motion.dy], transform) : transform
     const m = mul(view, local)
     const seed = Number(state.mask?.params.seed)
-    drawLayer(source, t.bounds, m, state.opacity, state.mask, m, t.bounds, Number.isFinite(seed) ? seed : 0, effect)
+    // A mask covers the layer's bounds, or the box it names (a split text item under its shape's mask).
+    const box = state.mask && isBox(state.maskBox) ? state.maskBox : t.bounds
+    drawLayer(source, t.bounds, m, state.opacity, state.mask, m, box, Number.isFinite(seed) ? seed : 0, effect)
   }
 
   function resizeOutput(widthPx: number, heightPx: number) {

@@ -725,27 +725,45 @@ export function renderStateAt(
   for (const [key, acc] of out) states.set(key, finalize(acc, geoOf(key), slide))
   // Each split item composes with its shape's whole-target state as its parent: visibility, opacity and transform.
   for (const [shape, acc] of parents) {
-    const parent = finalize(acc, geoOf(shape), slide)
+    const geo = geoOf(shape)
+    const parent = finalize(acc, geo, slide)
     for (const key of itemsOf.get(shape) ?? []) {
       const own = states.get(key)
       // An item with no state of its own keeps the stage's default (hidden until its entrance).
-      if (own) states.set(key, withParent(own, parent))
+      if (own) states.set(key, withParent(own, parent, geo))
     }
   }
   return states
 }
 
-/** `child` drawn inside `parent`: the parent's full mapping (motion after transform) applied after the child's. */
-function withParent(child: TargetState, parent: TargetState): TargetState {
+/**
+ * `child` drawn inside `parent`: the parent's full mapping (motion after transform) applied after the child's; the
+ * parent's mask clips the child over the parent shape's box (so a wipe sweeps across all the items), and the
+ * parent's colour applies on top of the child's own.
+ */
+function withParent(child: TargetState, parent: TargetState, geo: BaseGeometry | undefined): TargetState {
   const full = (s: TargetState): Affine => s.motion ? mulAffine(s.transform, [1, 0, 0, 1, s.motion.dx, s.motion.dy]) : s.transform
   const { motion: _motion, ...rest } = child
   void _motion
-  return {
+  const out: TargetState = {
     ...rest,
     visible: child.visible && parent.visible,
     opacity: child.opacity * parent.opacity,
     transform: mulAffine(full(child), full(parent)),
   }
+  if (parent.mask && geo) {
+    out.mask = parent.mask
+    out.maskBox = { x: geo.x, y: geo.y, w: geo.w, h: geo.h }
+  }
+  if (parent.color) {
+    const color = { ...child.color }
+    for (const channel of ['fill', 'line', 'text'] as const) {
+      const p = parent.color[channel]
+      if (p) color[channel] = color[channel] ? composeColor(color[channel]!, p) : p
+    }
+    out.color = color
+  }
+  return out
 }
 
 /** The track's value at a posed progress, evaluated on a THROWAWAY sink (for accumulate spans). */

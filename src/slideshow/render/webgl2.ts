@@ -482,9 +482,16 @@ export function createWebGL2Compositor(
     const ms = checkedMask(state.mask, effect)
     if (ms) {
       const seed = Number(ms.params.seed)
-      const r = resolveMask(ms, Number.isFinite(seed) ? seed : 0, effect, { kind: 'layer', box: t.bounds, tw: t.w, th: t.h })
+      // A mask over another box than the layer's (a split text item under its shape's mask): rasterised over that
+      // box at the layer's texel density (capped), and sampled through the layer's place inside it.
+      const b = t.bounds, mb = state.maskBox
+      const own = !(mb && [mb.x, mb.y, mb.w, mb.h].every(Number.isFinite) && mb.w > 0 && mb.h > 0 && b.w > 0 && b.h > 0)
+      const box = own ? b : mb!
+      const k = own ? 1 : Math.min(t.w / b.w, t.h / b.h, maxTextureSize / box.w, maxTextureSize / box.h)
+      const tw = own ? t.w : Math.max(1, Math.round(box.w * k)), th = own ? t.h : Math.max(1, Math.round(box.h * k))
+      const r = resolveMask(ms, Number.isFinite(seed) ? seed : 0, effect, { kind: 'layer', box, tw, th })
       if (r === 'skip') return
-      if (r !== 'none') binding = r
+      if (r !== 'none') binding = own ? r : { ...r, rect: [(box.x - b.x) / b.w, (box.y - b.y) / b.h, box.w / b.w, box.h / b.h] }
     }
     drawQuad(t, m, clamp01(state.opacity, 1), tint, binding)
   }

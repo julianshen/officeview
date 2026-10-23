@@ -352,7 +352,7 @@ function compose(parent: TargetState | undefined, own: TargetState | undefined):
     visible: parent.visible && (own?.visible ?? true),
     opacity: parent.opacity * (own?.opacity ?? 1),
     transform: mul(p, o),
-    ...(own?.mask ? { mask: own.mask } : {}),
+    ...(own?.mask ? { mask: own.mask, ...(own.maskBox ? { maskBox: own.maskBox } : {}) } : {}),
     ...(own?.color ?? parent.color ? { color: own?.color ?? parent.color } : {}),
   }
 }
@@ -921,7 +921,8 @@ export function createStage(deps: StageDeps): Stage {
         if (l.sub) { walk(l.sub, s); continue }
         const h = b.handles.get(l)
         if (!h) continue
-        const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : undefined
+        // A text range (a word, letter or paragraph clone) is text only: its colour is the text channel's.
+        const part = l.part === 'fill' || l.part === 'line' || l.part === 'text' ? l.part : l.part === 'range' && s.color?.text ? 'text' : undefined
         out.push({ handle: h, state: s, ...(part ? { part } : {}) })
         kinds.push(`target:${l.key}${l.part ? `:${l.part}` : ''}`)
       }

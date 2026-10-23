@@ -319,6 +319,11 @@ export interface TargetState {
   opacity: number
   transform: Affine
   mask?: MaskState
+  /**
+   * The box (slide px, the layer's local space) `mask` covers, when it is not the layer's own bounds: a split text
+   * item under its shape's mask (a whole-shape wipe sweeping across the words; PR #19 review 6).
+   */
+  maskBox?: { x: number; y: number; w: number; h: number }
   color?: { fill?: ColorMatrix; line?: ColorMatrix; text?: ColorMatrix }
   motion?: { dx: number; dy: number }
 }

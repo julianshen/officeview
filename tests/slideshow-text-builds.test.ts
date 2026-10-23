@@ -346,3 +346,22 @@ describe('S2-8 fix round 1', () => {
     expect(boxes.map(b => [b.box.x, b.box.x + b.box.w])).toEqual([[45, 200], [0, 45]])
   })
 })
+
+describe('PR #19 review 6 follow-up (colour)', () => {
+  it('a whole-shape colour effect composes on top of each split item\'s own colour', async () => {
+    const { renderStateAt } = await import('../src/slideshow/engine/behaviours')
+    const { createRng } = await import('../src/slideshow/rng')
+    const { createDiagnosticSink } = await import('../src/slideshow/diagnostics')
+    const ctn = (id: number) => ({ id, durMs: 1000, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold' as const })
+    const set = { kind: 'set', ctn: ctn(5), target: { spid: '2' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to: 'visible' } as const
+    const tint = { kind: 'animClr', ctn: ctn(6), target: { spid: '2' }, attrNames: ['style.color'], additive: 'base', accumulate: 'none', clrSpc: 'rgb', to: '#ff0000' } as unknown
+    const entry = (node: unknown, order: number) => ({ node, progress: 1, iteration: 0, order, phase: 'frozen' })
+    const snapshot = { active: [], frozen: [entry(set, 0), entry(tint, 1)], ended: new Set<number>() } as never
+    const fan = new Map([[set as never, { items: [{ key: 'sp:2', delayMs: 0 }, { key: 'sp:2/c:0-4', delayMs: 0 }], spanMs: 1, totalMs: 1, accel: 0, decel: 0, autoRev: false, entrance: true }]])
+    const base = new Map([['sp:2', { x: 0, y: 0, w: 100, h: 50, rot: 0 }]])
+    const states = renderStateAt(snapshot, base, createRng(1), createDiagnosticSink(), { w: 960, h: 540 }, fan as never)
+    const body = states.get('sp:2')!
+    expect(body.color?.text).toBeDefined()
+    expect(states.get('sp:2/c:0-4')!.color?.text).toEqual(body.color?.text)
+  })
+})
