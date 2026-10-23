@@ -1186,7 +1186,8 @@ export function createStage(deps: StageDeps): Stage {
       // full rung; otherwise the fade look-alike plays, diagnosed with why.
       let morphRun: MorphRun | undefined
       if (route === 'morph' && duration > 0) {
-        const why = !out || out.p.dead ? 'the slide before it is not resident'
+        const why = !shownBefore ? 'the first slide enters from black'
+          : !out || out.p.dead ? 'the slide before it is not resident'
           : level !== 'full' ? `the slide is at the ${level} rung`
             : manager.state === 'lost' ? 'the compositor is lost'
               : morphBuild(out, p, liveState, spec!, compositor())

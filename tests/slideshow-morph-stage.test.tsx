@@ -161,6 +161,43 @@ describe('S3-6 morph through the session and stage', () => {
     r.s.exit()
   })
 
+  it('each pair blends by what changed: same shape under, changed text split (fill under, text crossfades), changed outline crossfades', async () => {
+    const shape = (id: number, name: string, x: number, prst: string, text: string): PptxShapeSpec => ({
+      id, name, prst, off: [px(x), px(40)], ext: [px(160), px(100)], fill: '3060C0', paragraphs: [{ runs: [{ text }] }],
+    })
+    const doc = await deck({
+      slides: [
+        { shapes: [shape(2, 'Same', 20, 'rect', 'Keep'), shape(3, 'Text', 220, 'rect', 'Before'), shape(4, 'Outline', 420, 'rect', 'Shape')] },
+        { shapes: [shape(2, 'Same', 40, 'rect', 'Keep'), shape(3, 'Text', 240, 'rect', 'After'), shape(4, 'Outline', 440, 'ellipse', 'Shape')], transition: MORPH },
+      ],
+    })
+    const r = await show(doc)
+    await r.key('ArrowRight')
+    await r.tick(300)
+    const m = lastMorph()!
+    expect(m).toBeDefined()
+    // Same outline and content: one pair, the outgoing side held under.
+    const same = keyed(m.spec.pairs, 'sp:2')
+    expect(same).toHaveLength(1)
+    expect(same[0]).toMatchObject({ under: true })
+    expect(same[0]!.from && same[0]!.to).toBeTruthy()
+    // Changed text: split into parts; fill blends under, the text crossfades.
+    const text = keyed(m.spec.pairs, 'sp:3')
+    const fill = text.find(i => i.to?.part === 'fill')
+    const words = text.find(i => i.to?.part === 'text')
+    expect(fill).toMatchObject({ under: true })
+    expect(fill!.from?.part).toBe('fill')
+    expect(words).toBeDefined()
+    expect(words!.from?.part).toBe('text')
+    expect(words!.under).toBeUndefined()
+    // Changed outline: one crossfading pair.
+    const outline = keyed(m.spec.pairs, 'sp:4')
+    expect(outline).toHaveLength(1)
+    expect(outline[0]!.from && outline[0]!.to).toBeTruthy()
+    expect(outline[0]!.under).toBeUndefined()
+    r.s.exit()
+  })
+
   it('reduced motion plays the morph as a fade, never the morph route', async () => {
     const doc = await deck({
       slides: [
@@ -170,7 +207,11 @@ describe('S3-6 morph through the session and stage', () => {
     })
     const r = await show(doc, 'reduced')
     await r.key('ArrowRight')
-    await r.tick(300)
+    await r.tick(100)
+    // Reduced motion won: the transition running is the fade, not a morph fallback.
+    expect(r.s.stage!.transition?.effect).toBe('fade')
+    expect(r.log).not.toContain('diag:transition-approximate:morph-fallback')
+    await r.tick(200)
     expect(r.s.state.slide).toBe(1)
     expect(vi.mocked(morphFrame)).not.toHaveBeenCalled()
     r.s.exit()

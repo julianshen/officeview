@@ -61,15 +61,12 @@ for (const path of ['webgl2', 'canvas2d'] as const) {
     expect((await session(page)).backend).toBe(path)
     if (path === 'canvas2d') expect(await diagnostics(page)).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'backend-fallback' })]))
     expect(await text(page)).toEqual(['Morph me'])
-    // Next enters slide 2 through its morph transition (the 1.2 s window; the running record is stable across it).
-    await expect(async () => {
-      await page.keyboard.press('Space')
-      expect((await session(page)).slide).toBe(1)
-      const now = await session(page)
-      expect(now.transition).toEqual({ effect: 'morph', duration: 1200 })
-      // The morph route draws the matched square's pair (not the fade look-alike).
-      expect(now.draws).toContain('morph:pair:sp:2')
-    }).toPass()
+    // Next enters slide 2 through its morph transition (1.2 s): pressed once, then polled inside the window.
+    await page.keyboard.press('Space')
+    await expect.poll(async () => (await session(page)).slide, { timeout: 1000 }).toBe(1)
+    await expect.poll(async () => (await session(page)).transition, { timeout: 1000 }).toEqual({ effect: 'morph', duration: 1200 })
+    // The morph route draws the matched square's pair (not the fade look-alike).
+    await expect.poll(async () => (await session(page)).draws, { timeout: 1000, intervals: [16] }).toContain('morph:pair:sp:2')
     // The diagnostic says what played: the approximation (matched objects interpolate, content crossfades), on either backend; no fallback.
     const list = (await diagnostics(page)).filter(d => d.code === 'transition-approximate')
     expect(list).toEqual([
