@@ -507,6 +507,14 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       })
     }
 
+    /** The activation ended for good while its lease was still opening: the late lease is released, never attached (PR #19 review 10). */
+    function cancelOpen(st: NodeState): void {
+      if (!st.opening) return
+      st.openGen++
+      st.opening = false
+      st.from = undefined
+    }
+
     function stopElement(st: NodeState): void {
       st.want = false
       removeButton(st)
@@ -532,6 +540,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const st = nodes.get(nodeId)
       if (!st) return
       stopElement(st)
+      cancelOpen(st)
       if (st.live) st.live.el.currentTime = 0
       // A stopped clip has ended: whatever waits on it runs (once per activation).
       if (st.activation > 0) endNow(st, false)
@@ -616,6 +625,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         else if (!e && st.wasActive && !st.ended) {
           // The node's own timing ended it (dur, an end condition, a Next that settles its step): the clip stops with it.
           stopElement(st)
+          cancelOpen(st)
           st.ended = true
           st.due = undefined
         }

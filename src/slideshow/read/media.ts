@@ -10,8 +10,9 @@ import { READER_LIMITS } from './limits'
  * `mc:AlternateContent` - the one the drawing parser selects (`alternateBranchSelector`, its compatibility
  * rules; PR #19 review) - bounded at 64 levels like the reader.
  */
-function mediaShapes(slide: XmlNode | undefined): Map<string, string> {
-  const out = new Map<string, string>()
+function mediaShapes(slide: XmlNode | undefined): Map<string, string[]> {
+  // Every shape a relationship plays on: two shapes may share one media part (PR #19 review 10).
+  const out = new Map<string, string[]>()
   const select = alternateBranchSelector()
   const walk = (n: XmlNode | undefined, depth: number) => {
     if (!n || depth > 64) return
@@ -24,7 +25,12 @@ function mediaShapes(slide: XmlNode | undefined): Map<string, string> {
       if (!spid || !nvPr) continue
       const ids = [attrs(getChild(nvPr, 'videoFile')).link, attrs(getChild(nvPr, 'audioFile')).link]
       for (const ext of getChildren(getChild(nvPr, 'extLst'), 'ext')) ids.push(attrs(getChild(ext, 'media')).embed)
-      for (const id of ids) if (id && !out.has(id)) out.set(id, spid)
+      for (const id of new Set(ids)) {
+        if (!id) continue
+        const list = out.get(id)
+        if (!list) out.set(id, [spid])
+        else if (!list.includes(spid)) list.push(spid)
+      }
     }
   }
   walk(getChild(getChild(slide, 'cSld'), 'spTree'), 0)
@@ -55,8 +61,11 @@ export function readMedia(rels: readonly Relationship[], types: XmlNode | undefi
     const def = getChildren(types, 'Default').find(n => attrs(n).Extension?.toLowerCase() === r.target.split('.').pop()?.toLowerCase())
     if (size! > READER_LIMITS.mediaBytes)
       sink.add({ code: 'media-limit', slideIndex: index, effect: r.id, message: 'Declared media exceeds 512 MiB; playback must refuse' })
-    const spid = shapes.get(r.id)
-    out.push({ rId: r.id, partPath: r.target, contentType: attrs(override ?? def).ContentType ?? 'application/octet-stream', declaredBytes: size!, ...(spid !== undefined ? { spid } : {}) })
+    const record = { rId: r.id, partPath: r.target, contentType: attrs(override ?? def).ContentType ?? 'application/octet-stream', declaredBytes: size! }
+    // One record per shape the relationship plays on (none: a sound with no shape, an effect or transition sound).
+    const spids = shapes.get(r.id)
+    if (!spids?.length) out.push(record)
+    else for (const spid of spids) out.push({ ...record, spid })
   }
   return out
 }

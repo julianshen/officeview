@@ -88,12 +88,20 @@ export function textTimingFor(slide: PptxSlide, tree: TimingTree, options: TextT
     // Layers follow the finest unit any effect on the target uses (PR #19 review 9).
     const items = textItems(shape, units.has('lt') ? 'lt' : 'wd', { ...common, limit: budget })
     if (items.length === 0) continue
+    if (units.has('lt') && units.has('wd')) {
+      // Built by word as well: each word is the group of letters inside it. The word items only derive the groups
+      // and are dropped at once, so they take no retained charge (and repeat no diagnostic) (PR #19 review 10).
+      const words = textItems(shape, 'wd', { slideIndex: options.slideIndex, ...(ref.text ? { paragraphs: { st: ref.text.st, end: ref.text.end } } : {}) })
+      if (words.length === 0) {
+        options.sink?.add({ code: 'text-build-refused', slideIndex: options.slideIndex, effect: key, message: `Text by word and by letter on ${key}: the words could not be found; its effects play on the whole target` })
+        continue
+      }
+      groups.set(key, { wd: wordGroups(items, words) })
+    }
     const unique = [...new Set(items.map(i => i.key))]
     budget = Math.max(0, budget - unique.length)
     splits.set(key, items)
     keys.set(key, unique)
-    // Built by word as well: each word is the group of letters inside it.
-    if (units.has('lt') && units.has('wd')) groups.set(key, { wd: wordGroups(items, textItems(shape, 'wd', common)) })
   }
   const x = expandIterations(tree, keys, { sink: options.sink, slideIndex: options.slideIndex, charge: options.charge, groups })
   // Only targets that fanned out are split; a refused fan-out leaves the text in its shape (PR #19 review 9).

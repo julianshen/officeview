@@ -276,13 +276,18 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
     // Warm-up: the same gestures three times, so first-use module/JIT state and
     // the bounded tile/layout caches are full before the measured window.
     // The warm-up gestures are cold first gestures (module, JIT and cache fill), so they take the first-paint wait.
+    // Under load a cold warm-up Go To was seen to be dropped outright (PR #19 round 10 CI and a local loop of 16
+    // parallel runs: the selection never moved, aria-activedescendant stayed unset for 29 s), so a warm-up gesture
+    // that has not landed is sent once more before the test gives up. The measured window below is unchanged.
+    const reach = async (at: string, landed: () => void) => {
+      go(ui, at)
+      try { await waitFor(landed, { timeout: FIRST_PAINT_WAIT.timeout / 2 }) }
+      catch { go(ui, at); await waitFor(landed, FIRST_PAINT_WAIT) }
+    }
     for (let round = 0; round < 3; round++) {
-      go(ui, 'XFD1048576')
-      await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy(), FIRST_PAINT_WAIT)
-      go(ui, 'A1048576')
-      await waitFor(() => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS), FIRST_PAINT_WAIT)
-      go(ui, 'A1')
-      await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+      await reach('XFD1048576', () => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
+      await reach('A1048576', () => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS))
+      await reach('A1', () => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
     }
     const ledger = await measure(async () => {
       go(ui, 'XFD1048576')

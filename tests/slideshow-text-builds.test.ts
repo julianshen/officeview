@@ -391,3 +391,30 @@ describe('PR #19 review 7 (shared mask)', () => {
     expect(w1.maskTransform![4]).toBeCloseTo(0, 6)
   })
 })
+
+describe('PR #19 review 10 (mixed-unit grouping)', () => {
+  it('a by-word effect on a letter-split target still staggers by word when a further charge would be refused', async () => {
+    const { buildPptxDeck } = await import('../src/testdata/ooxml-builders')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { textTimingFor } = await import('../src/slideshow/player/text-builds')
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [{ id: 2, off: ['0', '0'], ext: ['4572000', '914400'], paragraphs: [{ runs: [{ text: 'Ab cd' }] }] }] }] })
+    const slide = (await parsePptx(await OfficePackage.load(bytes))).slides[0]!
+    const c = (id: number, over: Partial<CTn> = {}): CTn => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold', ...over })
+    const set = (id: number, to: string): BehaviourNode => ({ kind: 'set', ctn: c(id, { durMs: 1, start: [{ delayMs: 0 }] }), target: { spid: '2' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to } as BehaviourNode)
+    const effect = (id: number, cls: string, unit: 'wd' | 'lt', b: BehaviourNode): ContainerNode =>
+      ({ kind: 'par', ctn: c(id, { presetClass: cls, start: [{ delayMs: 0 }], iterate: { type: unit, backwards: false, tmAbsMs: 500 } } as Partial<CTn>), children: [b] })
+    const tree: TimingTree = { root: { kind: 'par', ctn: c(1, { durMs: 'indefinite' }), children: [effect(3, 'entr', 'wd', set(4, 'visible')), effect(5, 'exit', 'lt', set(6, 'hidden'))] }, build: [] }
+    // The letter split is admitted; every later text-split charge is refused (workspace pressure).
+    let splitsCharged = 0
+    const charge = (_bytes: number, tag: string) => !tag.startsWith('text-split:') || ++splitsCharged === 1
+    const sink = createDiagnosticSink()
+    const tt = textTimingFor(slide as PptxSlide, tree, { charge, sink })!
+    const entrance = [...tt.fan.entries()].find(([n]) => n.ctn.id === 4)![1]
+    const delayOf = new Map(entrance.items.map(i => [i.key, i.delayMs]))
+    // By word: "Ab" together, then "cd" together, 500 ms later.
+    expect([delayOf.get('sp:2/c:0-0'), delayOf.get('sp:2/c:1-1'), delayOf.get('sp:2/c:3-3'), delayOf.get('sp:2/c:4-4')]).toEqual([0, 0, 500, 500])
+    const exit = [...tt.fan.entries()].find(([n]) => n.ctn.id === 6)![1]
+    expect(exit.items.filter(i => i.key !== 'sp:2').map(i => i.delayMs)).toEqual([0, 500, 1000, 1500])
+  })
+})

@@ -922,3 +922,61 @@ describe('PR #19 review 6', () => {
     expect(r.leases[0].released).toBe(true)
   })
 })
+
+describe('PR #19 review 10', () => {
+  it('a stop that arrives while the lease is still opening releases the late lease and never attaches it', async () => {
+    const r = rig()
+    let open!: () => void
+    const gate = new Promise<void>((res) => { open = res })
+    const base = r.openWith.result
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink,
+      open: async (m) => { await gate; return base(m) },
+      create: (kind) => {
+        const el = r.root.ownerDocument.createElement(kind) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+    })
+    // The clip starts with its click; "stop" arrives on the next click, before its bytes are read.
+    const timing = tree(mainSeq([group(3, [media('audio', 10, '7', { start: [at(0)] })]), group(5, [cmd(21, '7', 'stop')])]))
+    const d = drive({ ...r, player }, slideOf(timing, [rec('7', 'audio/wav')]))
+    d.next(0)
+    d.next(100)
+    expect(d.ends).toEqual([[10, false, 100]])
+    open()
+    await flush()
+    expect(r.leases).toHaveLength(1)
+    expect(r.leases[0].released).toBe(true)
+    expect(r.elements[0].getAttribute('src')).toBeNull()
+    expect(r.elements[0].isConnected).toBe(false)
+    expect(r.elements[0].play).not.toHaveBeenCalled()
+  })
+})
+
+describe('PR #19 review 10 (shared media relationship)', () => {
+  it('two shapes that share one media relationship each get a record, and both play', async () => {
+    const deck = await buildPptxDeck({ slides: [{
+      shapes: [{ id: 2, off: ['0', '0'], ext: ['1000', '1000'] }],
+      media: [{ shapeId: 2, kind: 'video', ext: 'mp4', data: new Uint8Array([1]) }],
+      timingXml: timingXmlOf(mainSeqXml([])),
+    }] })
+    const handle = await openShowPackage(deck)
+    const rels = await readRelationships(handle, handle.slideParts[0])
+    const rId = rels.find((r) => /\/(video|media)$/.test(r.type))!.id
+    const pkg = await OfficePackage.load(deck)
+    const types = parseXmlOrdered((await pkg.text('[Content_Types].xml'))!)
+    const pic = (id: number) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="v${id}"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="${rId}"/></p:nvPr></p:nvPicPr><p:blipFill/><p:spPr/></p:pic>`
+    const slideXml = parseXmlOrdered(`<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree>${pic(5)}${pic(7)}</p:spTree></p:cSld></p:sld>`)
+    const sink = createDiagnosticSink()
+    const records = readMedia(rels, types, handle.pkg, 0, sink, slideXml)
+    expect(records.filter((m) => m.rId === rId).map((m) => m.spid)).toEqual(['5', '7'])
+    const r = rig()
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('video', 10, '5'), media('video', 11, '7')])])), records))
+    d.next(0)
+    await flush()
+    expect(r.elements).toHaveLength(2)
+    expect(codes(r.sink)).not.toContain('media-missing')
+  })
+})
