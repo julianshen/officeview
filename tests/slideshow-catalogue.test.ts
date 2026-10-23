@@ -40,7 +40,7 @@ describe('slideshow catalogue', () => {
   it('every 3-D row names a lookalike that is itself a 2-D exact row', async () => {
     const { CATALOGUE, rowForTransition } = await modules()
     for (const element of ['vortex', 'prism', 'honeycomb', 'glitter', 'ripple', 'switch', 'flip', 'doors', 'window', 'ferris', 'gallery', 'conveyor', 'shred']) {
-      expect(rowForTransition('p14', element)?.status).toBe('pending-stage-3')
+      expect(rowForTransition('p14', element)).toMatchObject({ status: 'approximate', implementation: 'shader', stage: 3 })
     }
     for (const row of CATALOGUE.filter(r => r.kind === 'transition' && r.stage === 3)) {
       const fallback = CATALOGUE.find(r => r.id === row.lookalike)
@@ -49,12 +49,27 @@ describe('slideshow catalogue', () => {
     expect(rowForTransition('p14', 'prism')?.lookalike).toBe('transition:p:push')
     expect(rowForTransition('p14', 'vortex')?.lookalike).toBe('transition:p:dissolve')
   })
-  it('no row is pending a stage that has already landed', async () => {
+  it('no pending-stage rows remain', async () => {
     const { CATALOGUE, LANDED_STAGE } = await modules()
-    expect(LANDED_STAGE).toBe(2)
-    for (const r of CATALOGUE) if (r.status.startsWith('pending-stage-')) expect(Number(r.status.at(-1))).toBeGreaterThan(LANDED_STAGE)
-    // Stage 2 close (S2-9): no pending-stage-2 row remains.
-    expect(CATALOGUE.filter(r => r.status === 'pending-stage-2').map(r => r.id)).toEqual([])
+    // Stage 3 close (S3-7): the catalogue is complete. Every row is exact, approximate (with its
+    // tolerance) or never; none is pending a stage.
+    expect(LANDED_STAGE).toBe(3)
+    expect(CATALOGUE.filter(r => r.status.startsWith('pending-stage-')).map(r => r.id)).toEqual([])
+    for (const r of CATALOGUE) expect(['exact', 'approximate', 'never'], r.id).toContain(r.status)
+  })
+  it('every 3-D row is an approximate shader row and every Morph row an approximate transform row; each keeps its look-alike, unverified until D4 (S3-7)', async () => {
+    const { CATALOGUE, TOLERANCE_APPROX } = await modules()
+    const stage3 = CATALOGUE.filter(r => r.stage === 3)
+    expect(stage3).toHaveLength(30) // 14 p14 + 12 p15 prstTrans + 4 Morph
+    for (const r of stage3) {
+      // Morph is matched-layer transforms plus a crossfade on both backends, not a GPU shader (S3-7 ruling).
+      expect(r, r.id).toMatchObject({ kind: 'transition', status: 'approximate', implementation: r.ns === 'p159' ? 'transform' : 'shader', verified: false })
+      expect(r.tolerance, r.id).toEqual(TOLERANCE_APPROX)
+      expect(r.lookalike, r.id).toMatch(/^transition:p:/)
+    }
+    expect(stage3.filter(r => r.ns === 'p159').map(r => r.id)).toEqual([
+      'transition:p159:morph', 'transition:p159:morph:byObject', 'transition:p159:morph:byWord', 'transition:p159:morph:byChar',
+    ])
   })
   it('the validation doc catalogue section equals catalogueMarkdown()', async () => {
     const { catalogueMarkdown } = await modules()
@@ -79,7 +94,7 @@ describe('slideshow catalogue', () => {
     expect(rowForTransition('p', 'wipe', 'bogus')).toBeUndefined()
     expect(rowForTransition('p15', 'prstTrans', 'bogus')).toBeUndefined()
     expect(rowForTransition('p15', 'prstTrans:fallOver')).toBeUndefined()
-    expect(rowForTransition('p159', 'morph', 'byWord')?.status).toBe('pending-stage-3')
+    expect(rowForTransition('p159', 'morph', 'byWord')?.status).toBe('approximate')
     expect(rowForPreset('entr', 2, 1)?.uiName).toContain('from-top')
     expect(rowForPreset('entr', 2, 999999)).toBe(rowForPreset('entr', 2))
     expect(rowForPreset('unknown', 2)).toBeUndefined()
@@ -156,7 +171,27 @@ it('the validation doc lists every Stage 2 diagnostic code with its catalogue cl
   // The Stage 2 block of the catalogue (media playback onwards). S2-10 retired media-stand-in: effect sounds play.
   const keys = Object.keys(DIAGNOSTIC_CODES)
   expect(keys).not.toContain('media-stand-in')
-  const stage2 = keys.slice(keys.indexOf('media-autoplay'))
+  const stage2 = keys.slice(keys.indexOf('media-autoplay'), keys.indexOf('transition-shader-fallback'))
   expect(stage2.filter(c => !listed.has(c))).toEqual([])
   expect(rows.length).toBe(listed.size)
+})
+it('the validation doc lists every Stage 3 diagnostic code with its catalogue class and panel group (S3-7)', async () => {
+  const { DIAGNOSTIC_CODES } = await import('../src/slideshow/diagnostics')
+  const { diagnosticKind } = await import('../src/slideshow/presenter/diagnostics')
+  const doc = readFileSync('docs/validation/slideshow.md', 'utf8')
+  const section = doc.split('### Stage 3 diagnostic codes\n')[1]?.split('\n## ')[0] ?? ''
+  const rows = section.split('\n').filter(l => /^\| `/.test(l)).map(l => l.split('|').slice(1, -1).map(c => c.trim()))
+  const PANEL = { refused: 'Refused', approximate: 'Approximate', pending: 'Pending', other: 'Other notes' } as const
+  const listed = rows.map(([code, cls, panel]) => {
+    const name = code.replace(/`/g, '')
+    expect(DIAGNOSTIC_CODES[name], name).toBe(cls)
+    expect(PANEL[diagnosticKind({ code: name, message: '' })], name).toBe(panel)
+    return name
+  })
+  // The Stage 3 block of the catalogue: transition-shader-fallback onwards, each listed once.
+  const keys = Object.keys(DIAGNOSTIC_CODES)
+  expect(listed).toEqual(keys.slice(keys.indexOf('transition-shader-fallback')))
+  expect(listed).toEqual(['transition-shader-fallback', 'morph-refused', 'morph-units-coarsened', 'morph-unit-bound'])
+  // morph-fallback is an effect of transition-approximate, not a code.
+  expect(keys).not.toContain('morph-fallback')
 })

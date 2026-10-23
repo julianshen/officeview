@@ -140,9 +140,10 @@ function wordGroups(letters: readonly TextItem[], words: readonly TextItem[]): T
  * Base geometry for every item of `splits`, laid out with the real fonts:
  * each shape's text is laid out once on `measure` and its item boxes placed
  * relative to the shape's own base (`base`, group transforms composed).
+ * `tight` gives each word or letter its own measured span (`boxesFor`).
  */
 export function textBases(slide: PptxSlide, splits: ReadonlyMap<TargetKey, readonly TextItem[]>, base: ReadonlyMap<TargetKey, BaseGeometry>,
-  measure: CanvasRenderingContext2D, resolveFont: FontResolver): Map<TargetKey, BaseGeometry> {
+  measure: CanvasRenderingContext2D, resolveFont: FontResolver, tight = false): Map<TargetKey, BaseGeometry> {
   const out = new Map<TargetKey, BaseGeometry>()
   const shapes = shapesById(slide)
   const measurer = createTextBodyMeasurer(measure, resolveFont)
@@ -152,7 +153,7 @@ export function textBases(slide: PptxSlide, splits: ReadonlyMap<TargetKey, reado
     if (!shape?.textBody) continue
     const layout = layoutTextBody(shape.textBody, emuToPx(shape.widthEmu), emuToPx(shape.heightEmu), measurer, slide.theme)
     const own = base.get(targetKey({ spid: shape.source!.id! }))
-    for (const [k, g] of textBoxBases(shape, boxesFor(shape, layout, items, measurer), own)) out.set(k, g)
+    for (const [k, g] of textBoxBases(shape, boxesFor(shape, layout, items, measurer, tight), own)) out.set(k, g)
   }
   return out
 }

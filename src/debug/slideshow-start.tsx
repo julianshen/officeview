@@ -168,6 +168,20 @@ async function playDeck(): Promise<PptxDocument> {
   return parsePptx(await OfficePackage.load(await buildPptxDeck({ slides })))
 }
 
+/** deck=morph (S3-6): two slides whose shapes pair (a moved square, a moved title); slide 2's `p159:morph byObject` (1.2 s) drives the matched-layer morph on either backend. */
+async function morphDeck(): Promise<PptxDocument> {
+  const slides = [
+    { shapes: [{ id: 2, name: 'Square', off: [px(80), px(60)] as [string, string], ext: [px(120), px(120)] as [string, string], fill: 'D06040' },
+      box(3, 240, 300, 400, 80, 'Morph me')] },
+    {
+      shapes: [{ id: 2, name: 'Square', off: [px(700), px(380)] as [string, string], ext: [px(120), px(120)] as [string, string], fill: 'D06040' },
+        box(3, 240, 80, 400, 80, 'Morph me')],
+      transition: { xml: '<p:transition spd="slow" p14:dur="1200"><p159:morph option="byObject"/></p:transition>' },
+    },
+  ]
+  return parsePptx(await OfficePackage.load(await buildPptxDeck({ slides })))
+}
+
 /** A silent PCM WAV of `ms` milliseconds (8 kHz, mono, 16-bit): a format every Chromium decodes. */
 function wav(ms: number): Uint8Array {
   const samples = Math.round(8 * ms)
@@ -218,6 +232,7 @@ async function mediaDeck(): Promise<PptxDocument> {
 async function deck(text: string): Promise<PptxDocument> {
   const kind = params.get('deck')
   if (kind === 'play') return playDeck()
+  if (kind === 'morph') return morphDeck()
   if (kind === 'media') return mediaDeck()
   if (kind === 'narration') {
     const res = await fetch('/corpus/lo-narration.pptx')

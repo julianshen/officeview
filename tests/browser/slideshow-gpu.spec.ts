@@ -225,3 +225,17 @@ test.describe('WebGL2 ↔ Canvas 2D parity', () => {
     expect(transition).toHaveLength(15)
   })
 })
+
+// PR #20 review 2: a same-outline Morph pair sums alpha-correctly on both backends (the WebGL2 sum target too).
+for (const backend of ['webgl2', 'canvas2d'] as const) {
+  test(`a translucent Morph pair keeps its alpha on ${backend}`, async ({ page }) => {
+    const r = await page.evaluate(b => window.__slideshowGpu!.morphSum(b), backend)
+    expect(r.diagnostics).toEqual([])
+    expect(r.results).toHaveLength(6)
+    for (const x of r.results) {
+      expect(Math.abs(x.inside - 128), JSON.stringify(x)).toBeLessThanOrEqual(2)
+      // Below the shape nothing is painted: the sum target lands the right way up.
+      expect(x.below, JSON.stringify(x)).toBe(0)
+    }
+  })
+}

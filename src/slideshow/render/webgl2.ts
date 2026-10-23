@@ -35,10 +35,22 @@
  *   CPU copy, which the caller drops), the mask canvas plus its texture
  *   (`webgl2:mask`, 8 B/px), the noise texture (`webgl2:noise`) and the
  *   transient noise arrays (`webgl2:mask-raster`). Programs, shaders and the
- *   vertex array hold no client memory and take no lease. There is no
- *   offscreen framebuffer: the 2-D transitions (S1-15) need none (their
- *   backdrop is a scissored clear); a later shader transition that needs one
- *   leases it first and adds it to `build`/`teardown`.
+ *   vertex array hold no client memory and take no lease. The 2-D
+ *   transitions (S1-15) need no offscreen framebuffer (their backdrop is a
+ *   scissored clear), and neither do the 3-D ones (S3-1). The one offscreen
+ *   target is the Morph pair sum (PR #20 review 2, `webgl2:morph-sum`,
+ *   w × h × 4): leased before it is created, reused across pairs and
+ *   frames, dropped on resize, context loss and dispose.
+ * - **3-D transitions (S3-1).** Params carrying `three` (framework.ts) are
+ *   drawn by the registered `Transition3D` strictly between the ends (at 0
+ *   and 1 the flat outgoing / incoming frame): the slide rect is scissored
+ *   and cleared to opaque black, the viewport is that rect, and the shader
+ *   gets a rng re-seeded from the effect's seed every frame and the mesh
+ *   pool (three/mesh.ts: grids leased `webgl2:mesh` before creation, cached
+ *   programs), which is part of `build`/`teardown`, so context loss drops it
+ *   and a restore rebuilds it on demand. Every GL state is reset after the
+ *   draw. A throwing shader or an unregistered reference draws the params'
+ *   2-D look-alike, diagnosed (`transition-shader-fallback`).
  * - **Context loss.** A lost context keeps nothing: `contextLost` drops every
  *   lease and handle. `contextRestored` recreates the program, the buffer,
  *   the vertex array and all GL state, re-leasing each, and returns `false`
@@ -53,6 +65,9 @@ import type {
 import { createRng } from '../rng'
 import { BACKDROP_RGB, MASK_MAX_OPS, transitionRect, isMaskKind, isMaskRaster, maskOpCount, maskPath, maskRasterBytes, tracePath, type MaskPath, type MaskRaster } from './masks'
 import { FRAGMENT_SHADER, UNIFORMS, VERTEX_SHADER, colorUniforms, mulAffine, quadMatrix, type UniformName } from './shaders'
+import { createMeshPool, type MeshPoolOwner } from './three/mesh'
+import { transition3DFor, type Transition3D } from './three/registry'
+import { shader3DOf } from './three/framework'
 
 /** Context attributes: premultiplied output like a 2-D canvas, no MSAA, depth or stencil buffers to pay for. */
 export const WEBGL2_CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
@@ -90,9 +105,13 @@ interface Resources {
   u: Record<UniformName, WebGLUniformLocation | null>
   frame: Lease
   quad: Lease
+  /** S3-1: the 3-D transitions' grids and programs (leased per grid, `webgl2:mesh`). */
+  three: MeshPoolOwner
 }
 interface MaskSurface { canvas: AnyCanvas; ctx: Ctx; tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
 interface NoiseSurface { tex: WebGLTexture; lease: Lease; w: number; h: number; key?: string }
+/** The Morph pair sum target (PR #20 review 2): an output-sized texture behind a framebuffer. */
+interface SumTarget { fbo: WebGLFramebuffer; tex: WebGLTexture; lease: Lease; w: number; h: number }
 interface TransitionParams {
   mask?: MaskState; from?: Affine; to?: Affine; fromOpacity?: number; toOpacity?: number
   fromOnTop?: boolean; backdrop?: 'black' | 'white'
@@ -133,6 +152,7 @@ export function createWebGL2Compositor(
   let res: Resources | undefined
   let mask: MaskSurface | undefined
   let noise: NoiseSurface | undefined
+  let sum: SumTarget | undefined
   let maxTextureSize = 0
   let view: Affine = IDENTITY
   let slideIndex: number | undefined
@@ -206,7 +226,7 @@ export function createWebGL2Compositor(
     gl.uniform1i(u.u_mask, 1)
     applyState()
     maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 2048
-    res = { program, shaders: [vs, fs], vao, buffer, u, frame, quad }
+    res = { program, shaders: [vs, fs], vao, buffer, u, frame, quad, three: createMeshPool(gl, workspace) }
     return true
   }
 
@@ -219,7 +239,9 @@ export function createWebGL2Compositor(
     textures.clear()
     if (mask) { if (deleteObjects) gl.deleteTexture(mask.tex); mask.lease.release(); mask = undefined }
     if (noise) { if (deleteObjects) gl.deleteTexture(noise.tex); noise.lease.release(); noise = undefined }
+    dropSum(deleteObjects)
     if (res) {
+      res.three.dispose(deleteObjects)
       if (deleteObjects) {
         gl.deleteVertexArray(res.vao)
         gl.deleteBuffer(res.buffer)
@@ -230,6 +252,34 @@ export function createWebGL2Compositor(
       res.quad.release()
       res = undefined
     }
+  }
+
+  function dropSum(deleteObjects: boolean) {
+    if (!sum) return
+    if (deleteObjects) { gl.deleteFramebuffer(sum.fbo); gl.deleteTexture(sum.tex) }
+    sum.lease.release()
+    sum = undefined
+  }
+
+  /** The output-sized sum target, leased before it is created (`webgl2:morph-sum`); undefined when refused. */
+  function sumTarget(): SumTarget | undefined {
+    const w = canvas.width, h = canvas.height
+    if (sum && sum.w === w && sum.h === h) return sum
+    dropSum(true)
+    const lease = workspace.lease(w * h * 4, 'webgl2:morph-sum')
+    if (!lease) return undefined
+    gl.activeTexture(gl.TEXTURE0)
+    const tex = newTexture(gl.NEAREST)
+    const fbo = tex ? gl.createFramebuffer() : null
+    if (!tex || !fbo) { if (tex) gl.deleteTexture(tex); lease.release(); return undefined }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    if (!ok) { gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); lease.release(); return undefined }
+    sum = { fbo, tex, lease, w, h }
+    return sum
   }
 
   function newTexture(filter: number): WebGLTexture | null {
@@ -422,6 +472,47 @@ export function createWebGL2Compositor(
     return { x: x0, y: y0, w: Math.max(...px) - x0, h: Math.max(...py) - y0 }
   }
 
+  /**
+   * S3-1: one frame of a 3-D transition, viewport-mapped to the slide's device
+   * rect `rect` (already scissored) over opaque black. Returns false (state
+   * reset, diagnosed once) when the shader throws, so the look-alike draws.
+   */
+  function drawShader(t: Transition3D, attrs: Readonly<Record<string, string>>, from: Texture, to: Texture, progress: number, tr: TransitionDraw, rect: Bounds): boolean {
+    const three = res!.three
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.viewport(rect.x, canvas.height - (rect.y + rect.h), rect.w, rect.h)
+    three.setAspect(to.bounds.w / to.bounds.h)
+    let ok = true
+    try {
+      t.draw(gl, from.tex, to.tex, progress, attrs, createRng(seedOf(tr.rng)), three.pool)
+    } catch (error) {
+      ok = false
+      const why = error instanceof Error ? error.message : String(error)
+      diagnose('transition-shader-fallback', tr.effect, `The ${tr.effect} 3-D shader could not draw (${why}); it draws its 2-D look-alike`)
+    }
+    resetState(rect)
+    return ok
+  }
+
+  /** Every GL state a 3-D draw may have changed, back to the compositor's own (scissored to the slide rect `rect`). */
+  function resetState(rect: Bounds) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, canvas.width, canvas.height)
+    gl.useProgram(res!.program)
+    gl.bindVertexArray(res!.vao)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.colorMask(true, true, true, true)
+    gl.frontFace(gl.CCW)
+    gl.blendEquation(gl.FUNC_ADD)
+    gl.clearColor(0, 0, 0, 0)
+    applyState()
+    const x0 = Math.max(0, rect.x), y0 = Math.max(0, rect.y)
+    const x1 = Math.min(canvas.width, rect.x + rect.w), y1 = Math.min(canvas.height, rect.y + rect.h)
+    gl.enable(gl.SCISSOR_TEST)
+    gl.scissor(x0, canvas.height - y1, Math.max(0, x1 - x0), Math.max(0, y1 - y0))
+  }
+
   function drawTransition(tr: TransitionDraw) {
     const params = tr.params as TransitionParams
     const fit = (t: Texture, a: unknown): Affine => {
@@ -441,6 +532,23 @@ export function createWebGL2Compositor(
     gl.enable(gl.SCISSOR_TEST)
     // GL's window origin is the bottom-left corner.
     gl.scissor(x0, canvas.height - y1, x1 - x0, y1 - y0)
+    // S3-1: a 3-D row dispatched to its shader. At the ends it is exactly the flat outgoing / incoming frame.
+    const ref = shader3DOf(tr.params)
+    const progress = clamp01(tr.progress, 0)
+    if (ref && from && to && (progress <= 0 || progress >= 1)) {
+      const end = progress <= 0 ? from : to
+      drawQuad(end, fit(end, IDENTITY), 1, undefined, undefined)
+      gl.disable(gl.SCISSOR_TEST)
+      return
+    }
+    if (ref && from && to) {
+      const t = transition3DFor(ref)
+      if (t && drawShader(t, ref.attrs, from, to, progress, tr, r)) { gl.disable(gl.SCISSOR_TEST); return }
+      if (!t) diagnose('transition-shader-fallback', tr.effect, `No 3-D shader is registered for ${ref.element}; it draws its 2-D look-alike`)
+      // The look-alike draws instead, on a clean slide rect.
+      gl.clearColor(0, 0, 0, 0)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+    }
     if (backdrop) {
       gl.clearColor(backdrop[0] / 255, backdrop[1] / 255, backdrop[2] / 255, 1)
       gl.clear(gl.COLOR_BUFFER_BIT)
@@ -472,17 +580,79 @@ export function createWebGL2Compositor(
     return { x: w < 0 ? x + w : x, y: h < 0 ? y + h : y, w: Math.abs(w), h: Math.abs(h) }
   }
 
-  function drawOne(d: LayerDraw) {
+  /** An unmasked draw's texture, tint and device matrix; undefined when it draws nothing. */
+  function resolveDraw(d: LayerDraw, effect: string): { t: Texture; tint: ColorMatrix | undefined; m: Affine } | undefined {
     const { state } = d
-    if (!state.visible || !(state.opacity > 0)) return
-    const effect = state.mask ? `mask:${state.mask.kind}` : 'layer'
+    if (!state.visible || !(state.opacity > 0)) return undefined
     const t = lookup(d.handle, effect)
-    if (!t) return
+    if (!t) return undefined
     const matrix = d.part ? state.color?.[d.part] : undefined
     const tint = matrix && matrix.length >= 20 ? matrix : undefined
     const transform = isAffine(state.transform) ? state.transform : IDENTITY
     const local = state.motion ? mulAffine([1, 0, 0, 1, state.motion.dx, state.motion.dy], transform) : transform
-    const m = mulAffine(view, local)
+    return { t, tint, m: mulAffine(view, local) }
+  }
+
+  /** The integer device rect covering the parts, clipped to the output; undefined when empty. */
+  function coverRect(parts: ReadonlyArray<{ bounds: Bounds; m: Affine }>): Bounds | undefined {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const { bounds: b, m } of parts) {
+      for (const x of [b.x, b.x + b.w]) for (const y of [b.y, b.y + b.h]) {
+        const px = m[0] * x + m[2] * y + m[4], py = m[1] * x + m[3] * y + m[5]
+        x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py)
+      }
+    }
+    const l = Math.max(0, Math.floor(x0)), t = Math.max(0, Math.floor(y0))
+    const r = Math.min(canvas.width, Math.ceil(x1)), b = Math.min(canvas.height, Math.ceil(y1))
+    return r > l && b > t ? { x: l, y: t, w: r - l, h: b - t } : undefined
+  }
+
+  /**
+   * A Morph pair summed alpha-correctly (`LayerDraw.sum`, PR #20 review 2),
+   * as the Canvas 2D backend does: both sides drawn additively
+   * (`ONE, ONE`) at their weights into the sum target, scissored to the
+   * device rect they cover, then that rect composites source-over
+   * (`ONE, ONE_MINUS_SRC_ALPHA`). A masked side, or a refused target
+   * (diagnosed once), holds the outgoing side under instead.
+   */
+  function drawSum(d: LayerDraw, s: NonNullable<LayerDraw['sum']>) {
+    const held = () => {
+      drawOne({ handle: d.handle, state: { ...d.state, opacity: s.heldOpacity }, ...(d.part ? { part: d.part } : {}) })
+      drawOne(s.with)
+    }
+    if (d.state.mask || s.with.state.mask) return held()
+    const a = resolveDraw(d, 'layer'), b = resolveDraw(s.with, 'layer')
+    if (!a || !b) return held()
+    const r = coverRect([{ bounds: a.t.bounds, m: a.m }, { bounds: b.t.bounds, m: b.m }])
+    if (!r) return
+    const target = sumTarget()
+    if (!target) {
+      diagnose('compositor-workspace', 'morph-blend', 'The Morph blend surface did not fit the slideshow workspace; matched shapes hold the outgoing side under (a translucent pair can pop on its last frame)')
+      return held()
+    }
+    const H = canvas.height
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo)
+    gl.enable(gl.SCISSOR_TEST)
+    gl.scissor(r.x, H - r.y - r.h, r.w, r.h)
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.blendFunc(gl.ONE, gl.ONE)
+    drawQuad(a.t, a.m, clamp01(d.state.opacity, 1), a.tint, undefined)
+    drawQuad(b.t, b.m, clamp01(s.with.state.opacity, 1), b.tint, undefined)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+    // The target's rows run bottom-up (GL): the quad samples it flipped onto the output rect.
+    drawQuad({ tex: target.tex, bounds: { x: 0, y: H, w: canvas.width, h: -H }, lease: target.lease, w: target.w, h: target.h }, IDENTITY, 1, undefined, undefined)
+    gl.disable(gl.SCISSOR_TEST)
+  }
+
+  function drawOne(d: LayerDraw) {
+    if (d.sum) return drawSum(d, d.sum)
+    const { state } = d
+    const effect = state.mask ? `mask:${state.mask.kind}` : 'layer'
+    const resolved = resolveDraw(d, effect)
+    if (!resolved) return
+    const { t, tint, m } = resolved
     let binding: MaskBinding | undefined
     const ms = checkedMask(state.mask, effect)
     if (ms) {
@@ -523,6 +693,8 @@ export function createWebGL2Compositor(
     }
     canvas.width = w
     canvas.height = h
+    // The output-sized Morph sum target is re-leased at the new size on next use.
+    dropSum(!lost && !gl.isContextLost())
     return true
   }
 
@@ -586,6 +758,18 @@ export function createWebGL2Compositor(
 
     setSlideIndex(index) {
       slideIndex = index
+    },
+
+    prepareTransition3D(t) {
+      if (inert()) return false
+      try {
+        t.prepare?.(res!.three.pool)
+        return true
+      } catch {
+        return false
+      } finally {
+        gl.bindVertexArray(null)
+      }
     },
 
     contextLost() {

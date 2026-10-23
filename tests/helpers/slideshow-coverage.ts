@@ -108,7 +108,11 @@ export async function deckCoverage(bytes: Uint8Array, doc: PptxDocument, diagnos
       const drawn = resolveTransition2D(tr)
       if (row?.status === 'never') items.push({ slide, kind: 'transition', what: name, row: row.id, coverage: 'refused', note: 'never row' })
       else if (!row) items.push({ slide, kind: 'transition', what: name, coverage: 'closest', note: `uncatalogued: ${drawn.spec.element} stand-in${on('transition-unknown-preset') ? ', diagnosed' : ', NOT diagnosed'}` })
-      else if (drawn.approximated) items.push({ slide, kind: 'transition', what: name, row: row.id, coverage: 'closest', note: `${row.status}: 2-D look-alike ${drawn.spec.element}${on('transition-approximate') ? ', diagnosed' : ', NOT diagnosed'}` })
+      else if (row.ns === 'p159') {
+        // S3-6: Morph takes its composited route on either backend; it falls back to the fade look-alike, diagnosed with why.
+        const fell = diagnostics.find(d => d.code === 'transition-approximate' && d.slideIndex === i && d.effect === 'morph-fallback')
+        items.push({ slide, kind: 'transition', what: name, row: row.id, coverage: 'closest', note: `${row.status}: Morph route${fell ? `, fell back to the 2-D look-alike ${drawn.spec.element} (${fell.message.match(/\(([^)]*)\)/)?.[1] ?? 'diagnosed'})` : ''}${on('transition-approximate', 'morph') ? ', diagnosed' : ', NOT diagnosed'}` })
+      } else if (drawn.approximated) items.push({ slide, kind: 'transition', what: name, row: row.id, coverage: 'closest', note: `${row.status}: ${row.stage === 3 ? `3-D shader on WebGL2; this run (Canvas 2D) draws the 2-D look-alike ${drawn.spec.element}` : `2-D look-alike ${drawn.spec.element}`}${on('transition-approximate') ? ', diagnosed' : ', NOT diagnosed'}` })
       else items.push({ slide, kind: 'transition', what: name, row: row.id, coverage: 'native', note: `${row.status} (${tr.durationMs} ms)` })
     }
     if (tr?.sound?.start) {

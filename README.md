@@ -646,7 +646,8 @@ handle, so it paints as before and records a `no-package` diagnostic in
 ### Slideshow
 
 PowerPoint documents can be presented as a full-screen slideshow, with their
-transitions, animations, timings, click triggers, audio and video, and with
+transitions (3-D transitions and Morph included), animations, timings, click
+triggers, audio and video, and with
 Presenter View (speaker notes, the next slide and a timer) in a second window
 or on the same screen. The show engine is a
 lazily loaded chunk (`src/slideshow/`); it is fetched the first time a show
@@ -764,6 +765,20 @@ play" button and the show continues (a refused sound has no poster, so it is
 only diagnosed). Video plays in an overlay at its shape's
 position. Media is read lazily, at most 512 MiB per file.
 
+**3-D transitions and Morph.** PowerPoint's 3-D transitions (vortex, switch,
+flip, ripple, honeycomb, prism with its Cube / Box / Rotate variants, doors,
+window, ferris, gallery, conveyor, glitter, warp, shred, and the prstTrans
+presets fall over, drape, curtains, wind, prestige, fracture, crush, peel off,
+page curl, airplane and origami) draw as GPU shaders on WebGL2. On Canvas 2D,
+or when a shader cannot draw (memory, compile), each draws its catalogued 2-D
+look-alike (dissolve, push, checker, split or fade), diagnosed. Morph (by
+object, word or character) moves, resizes, rotates and recolours the objects
+the two slides share (by `!!` name, then name and kind, then text, then
+geometry) and fades the rest, on both backends. Both are close look-alikes,
+not frame-exact copies of PowerPoint: PowerPoint does not publish how it draws
+them, and no PowerPoint capture has been compared yet. Reduced motion turns
+each into a crossfade.
+
 `present()` rejects with a `SlideShowError` whose `code` is one of:
 
 | Code | When |
@@ -846,8 +861,13 @@ cross-origin frame cannot reach its parent's `<iframe>` element.
   slides show no pictures; words and letters built one at a time are
   clipped to their boxes, so italic overhang and text shadow are cut. There
   is no pen, laser pointer or highlighter.
-- **3-D and morph transitions** (vortex, prism, airplane, morph and others)
-  play a catalogued 2-D look-alike, diagnosed.
+- **3-D and Morph limits.** 3-D transitions are look-alikes, and on Canvas 2D
+  they play their 2-D look-alike. Morph is an approximation: objects that
+  differ in geometry, picture, group, table or chart crossfade (dipping up to
+  25 % at the midpoint), word and character pairs move with their shape, a
+  Morph on the first slide (or one whose previous slide is not ready) fades in
+  instead, and on a tight memory budget a Morph falls back to a fade. Each
+  case is diagnosed.
 - No effect is silently skipped: everything approximated, replaced or refused
   reaches `onSlideShowDiagnostic`. The full effect catalogue, the validation
   record and the remaining limits are in

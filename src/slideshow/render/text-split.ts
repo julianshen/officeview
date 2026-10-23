@@ -190,9 +190,11 @@ function spanOn(line: PlacedTextLine, st: number, end: number, measure: MeasureT
 /**
  * Places `items` on `layout`: one box per item per line it touches (a whole
  * paragraph item: one band over its lines), tiled along each line, in
- * reading order. Vertical or transformed lines give no boxes.
+ * reading order. Vertical or transformed lines give no boxes. `tight` keeps
+ * each word or letter box to its own measured span instead (a Morph's unit
+ * geometry: the same word keeps its size wherever it sits on the line).
  */
-export function boxesFor(shape: PptxShape, layout: TextLayout, items: readonly TextItem[], measure?: MeasureText): TextBox[] {
+export function boxesFor(shape: PptxShape, layout: TextLayout, items: readonly TextItem[], measure?: MeasureText, tight = false): TextBox[] {
   const width = emuToPx(shape.widthEmu)
   const byParagraph = new Map<number, TextItem[]>()
   for (const item of items) {
@@ -228,6 +230,7 @@ export function boxesFor(shape: PptxShape, layout: TextLayout, items: readonly T
     // Tile in visual order; give the boxes in reading (source) order.
     const visual = [...pieces].sort((a, b) => a.left - b.left)
     const tiled = visual.map((p, i) => {
+      if (tight) return { ...p.item, box: { x: p.left, y: line.y, w: p.right - p.left, h: line.height } }
       const x0 = i === 0 ? Math.min(0, p.left) : (visual[i - 1].right + p.left) / 2
       const x1 = i === visual.length - 1 ? Math.max(width, p.right) : (p.right + visual[i + 1].left) / 2
       return { ...p.item, box: { x: x0, y: line.y, w: x1 - x0, h: line.height } }
