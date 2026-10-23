@@ -15,7 +15,8 @@ vi.mock('../src/slideshow/morph/render', async (importOriginal) => {
 import { runShow } from '../src/slideshow'
 import { sessionDeps, type SessionController } from '../src/slideshow/player/session'
 import { ManualClock } from '../src/slideshow/clock'
-import { morphFrame, type MorphFrameItem, type MorphFrameSpec } from '../src/slideshow/morph/render'
+import { morphFrame, interpGeometry, type MorphFrameItem, type MorphFrameSpec } from '../src/slideshow/morph/render'
+import type { Compositor, LayerDraw } from '../src/slideshow/types'
 import type { ShowStart } from '../src/components/present'
 import { buildPptxDeck, mainSeqXml, timingXmlOf, type PptxDeckSpec, type PptxShapeSpec } from '../src/testdata/ooxml-builders'
 import { OfficePackage } from '../src/core/zip'
@@ -27,7 +28,8 @@ const square = (x: number, y: number, fill = 'D06040'): PptxShapeSpec => ({ id: 
 const title = (id: number, x: number, y: number, text: string): PptxShapeSpec => ({
   id, name: `Title ${id}`, off: [px(x), px(y)], ext: [px(400), px(80)], paragraphs: [{ runs: [{ text }] }],
 })
-const MORPH = { xml: '<p:transition spd="slow" p14:dur="1200"><p159:morph xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" option="byObject"/></p:transition>' }
+const morphOf = (option: 'byObject' | 'byWord' | 'byChar') => ({ xml: `<p:transition spd="slow" p14:dur="1200"><p159:morph xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" option="${option}"/></p:transition>` })
+const MORPH = morphOf('byObject')
 
 /** A click step whose exit effect hides `spid` at once. */
 const exitStep = (id: number, spid: number) =>
@@ -217,5 +219,175 @@ describe('S3-6 morph through the session and stage', () => {
     expect(r.s.state.slide).toBe(1)
     expect(vi.mocked(morphFrame)).not.toHaveBeenCalled()
     r.s.exit()
+  })
+
+  describe('PR #20 review: byWord and byChar Morph move the matched units', () => {
+    /** Where the real `morphFrame` draws `item` at `progress`: the side's draw transforms. */
+    const drawsOf = (item: MorphFrameItem, progress: number): LayerDraw[] => {
+      let out: LayerDraw[] = []
+      morphFrame({ pairs: [item] }, progress, { frame: (d: readonly LayerDraw[]) => { out = [...d] } } as unknown as Compositor)
+      return out
+    }
+    const centre = (g: { x: number; y: number; w: number; h: number }) => [g.x + g.w / 2, g.y + g.h / 2] as const
+    const apply = (m: readonly number[], x: number, y: number) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]] as const
+
+    /** The matched unit `to` (from `from`) moves on its own path: a unit box on each side, drawn at the midpoint at p = 0.5. */
+    function expectUnitMoves(m: { spec: MorphFrameSpec }, kinds: readonly string[], from: string, to: string, container: { from: number; to: number }) {
+      expect(kinds).toContain(`morph:pair:${to}`)
+      const item = m.spec.pairs.find(i => i.from?.key === from && i.to?.key === to)!
+      expect(item).toBeDefined()
+      expect(item.path).toBeDefined()
+      // Tight unit boxes, not the 400 px container: the same word keeps its size (no stretch on the way).
+      expect(item.path!.from.w).toBeLessThan(200)
+      expect(Math.abs(item.path!.to.w - item.path!.from.w)).toBeLessThan(2)
+      expect(item.from!.geometry).toEqual(item.path!.from)
+      expect(item.to!.geometry).toEqual(item.path!.to)
+      // Its own path: the unit moves by something other than its container's offset.
+      const unitDx = item.path!.to.x - item.path!.from.x
+      expect(Math.abs(unitDx - (container.to - container.from))).toBeGreaterThan(5)
+      const mid = interpGeometry(item.path!.from, item.path!.to, 0.5)
+      const [fx, fy] = centre(item.path!.from), [tx, ty] = centre(item.path!.to)
+      expect(centre(mid)[0]).toBeCloseTo((fx + tx) / 2, 3)
+      expect(centre(mid)[1]).toBeCloseTo((fy + ty) / 2, 3)
+      // The real frame draws both sides with the unit's centre at the midpoint.
+      const d = drawsOf(item, 0.5)
+      expect(d.length).toBeGreaterThan(0)
+      for (const draw of d) {
+        const [cx, cy] = draw.handle === item.from!.handle ? [fx, fy] : [tx, ty]
+        const [x, y] = apply(draw.state.transform, cx, cy)
+        expect(x).toBeCloseTo((fx + tx) / 2, 3)
+        expect(y).toBeCloseTo((fy + ty) / 2, 3)
+      }
+      return item
+    }
+
+    it('byWord: a word that changes place moves on its own path; the unmatched word fades', async () => {
+      // Rule 2 pairs the box; LCS aligns "Alpha" (c:0-4 → c:5-9); "Beta" fades out and in.
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, 'Alpha Beta')] },
+          { shapes: [title(3, 140, 400, 'Beta Alpha')], transition: morphOf('byWord') },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
+      const m = lastMorph()!
+      expect(m).toBeDefined()
+      const kinds = r.s.stage!.inspect().lastDraws
+      expectUnitMoves(m, kinds, 'sp:3/c:0-4', 'sp:3/c:5-9', { from: 100, to: 140 })
+      // The unmatched word fades on each side.
+      expect(kinds).toContain('morph:out:sp:3/c:6-9')
+      expect(kinds).toContain('morph:in:sp:3/c:0-3')
+      // ...moving with its container while it fades.
+      const gone = m.spec.pairs.find(i => i.from?.key === 'sp:3/c:6-9' && !i.to)!
+      expect(gone.path!.from.x).toBeCloseTo(100, 3)
+      expect(gone.path!.to.x).toBeCloseTo(140, 3)
+      expect(gone.from!.geometry).toEqual(gone.path!.from)
+      // The container still pairs (its body: geometry, fill and line).
+      expect(kinds).toContain('morph:pair:sp:3')
+      expect(r.log).not.toContain('diag:transition-approximate:morph-fallback')
+      expect(r.log).not.toContain('diag:morph-units-coarsened:sld')
+      r.s.exit()
+    })
+
+    it('byChar: a letter that changes place moves on its own path', async () => {
+      // "AB" → "xAB": A (c:0-0 → c:1-1) and B (c:1-1 → c:2-2) pair; x fades in.
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, 'AB')] },
+          { shapes: [title(3, 100, 300, 'xAB')], transition: morphOf('byChar') },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      const m = lastMorph()!
+      expect(m).toBeDefined()
+      const kinds = r.s.stage!.inspect().lastDraws
+      expectUnitMoves(m, kinds, 'sp:3/c:0-0', 'sp:3/c:1-1', { from: 100, to: 100 })
+      expect(kinds).toContain('morph:pair:sp:3/c:2-2')
+      expect(kinds).toContain('morph:in:sp:3/c:0-0')
+      r.s.exit()
+    })
+
+    it('byWord with the same text: the body pairs under, every word pairs, nothing draws twice', async () => {
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, 'Alpha Beta')] },
+          { shapes: [title(3, 300, 400, 'Alpha Beta')], transition: morphOf('byWord') },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      const m = lastMorph()!
+      expect(m).toBeDefined()
+      const kinds = r.s.stage!.inspect().lastDraws
+      expect(kinds.filter(k => k === 'morph:pair:sp:3/c:0-4')).toHaveLength(1)
+      expect(kinds.filter(k => k === 'morph:pair:sp:3/c:6-9')).toHaveLength(1)
+      expect(kinds.filter(k => k === 'morph:pair:sp:3')).toHaveLength(1)
+      expect(kinds.some(k => k.startsWith('morph:out:') || k.startsWith('morph:in:'))).toBe(false)
+      const body = keyed(m.spec.pairs, 'sp:3')
+      expect(body).toHaveLength(1)
+      expect(body[0]).toMatchObject({ under: true })
+      expect(body[0]!.from?.part).toBeUndefined()
+      r.s.exit()
+    })
+
+    it('when the unit layers do not fit the workspace the boxes morph whole, diagnosed (not the fade look-alike)', async () => {
+      // The workspace refuses every word layer (`layer:sp:3/c:…`); everything else fits.
+      const real = sessionDeps.workspace
+      vi.spyOn(sessionDeps, 'workspace').mockImplementation((profile) => {
+        const w = real(profile)
+        return new Proxy(w, {
+          get(t, k) {
+            if (k === 'lease') return (bytes: number, tag: string) => tag.includes('/c:') ? undefined : t.lease(bytes, tag)
+            const v = Reflect.get(t, k)
+            return typeof v === 'function' ? v.bind(t) : v
+          },
+        })
+      })
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, 'Alpha Beta')] },
+          { shapes: [title(3, 140, 400, 'Beta Alpha')], transition: morphOf('byWord') },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
+      expect(r.log).toContain('diag:morph-units-coarsened:sld')
+      expect(r.log).not.toContain('diag:transition-approximate:morph-fallback')
+      const kinds = r.s.stage!.inspect().lastDraws
+      expect(kinds).toContain('morph:pair:sp:3')
+      expect(kinds.some(k => k.includes('sp:3/'))).toBe(false)
+      r.s.exit()
+    })
+
+    it('past the Morph layer bound the units coarsen: the boxes morph whole, diagnosed', async () => {
+      // 128 words a side split into ~130 layers each: more than MORPH_MAX_LAYERS (256) together.
+      const words = Array.from({ length: 128 }, () => 'w').join(' ')
+      const doc = await deck({
+        slides: [
+          { shapes: [title(3, 100, 100, words)] },
+          { shapes: [title(3, 140, 300, words)], transition: morphOf('byWord') },
+        ],
+      })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(600)
+      expect(r.s.stage!.transition).toEqual({ effect: 'morph', duration: 1200 })
+      expect(r.log).toContain('diag:morph-units-coarsened:sld')
+      expect(r.log).not.toContain('diag:transition-approximate:morph-fallback')
+      const kinds = r.s.stage!.inspect().lastDraws
+      expect(kinds).toContain('morph:pair:sp:3')
+      expect(kinds.some(k => k.startsWith('morph:pair:sp:3/'))).toBe(false)
+      const m = lastMorph()!
+      expect(keyed(m.spec.pairs, 'sp:3').some(i => i.from && i.to)).toBe(true)
+      r.s.exit()
+    })
   })
 })

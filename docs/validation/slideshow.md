@@ -3132,7 +3132,7 @@ Accepted limits (S3-6 rulings):
 - **Pairs that differ in geometry, picture, group, table or chart crossfade**, and the crossfade can dip up to 25 % at mid-morph.
 - **On a tight workspace the morph is refused**: it falls back to the fade look-alike and emits `transition-approximate` with effect `morph-fallback` and the reason. The same fallback covers a first slide (it enters from black, as PowerPoint does), an outgoing slide that is not resident, a lower ladder rung, a lost compositor and the layer bound.
 - **A rapid Next-Next can capture a stale outgoing state** (pre-existing; a follow-up).
-- **Word and character Morph pairs move with their containing shape**: a unit is not interpolated on its own path.
+- **Word and character Morph units** (byWord and byChar, PR #20 review round 1): each paired box that owns a matched unit is split, for the Morph only, into its word or letter layers (the text-build splitter). A matched unit moves on its own path between its two measured boxes, held under its partner (the content is equal); an unmatched unit fades while moving with its box; the box's body (geometry, fill, line) pairs as any object does. Limits: a unit's box is its measured span on each side, so the same word can differ in width by about a pixel and scales by that much on the way; a box an animation already splits (text by word or letter, or by paragraph) keeps its own layers, and its units move with the box; when the split slides would pass the Morph layer bound (`2 × LAYER_LIMIT`, 256) or the workspace refuses the unit layers or their records, the units coarsen and the boxes morph whole (`morph-units-coarsened`).
 - **Cross-object pairing** (byWord and byChar) pairs each remaining text object with its nearest content-sharing partner; a box whose words split across two boxes keeps only the nearer one (Stage 3 decisions).
 
 ### Stage 3 diagnostic codes
@@ -3146,7 +3146,7 @@ a `transition-approximate` when a Morph cannot run.
 |---|---|---|---|
 | `transition-shader-fallback` | resource | Approximate | a 3-D shader could not draw a frame (its grid did not fit the workspace, its program did not compile, the context was lost, or no shader is registered), so the row's 2-D look-alike drew it |
 | `morph-refused` | refused | Refused | a slide has more than 256 objects (`MORPH_MAX_OBJECTS`): no object pairs, every object fades |
-| `morph-units-coarsened` | approximate | Approximate | text units passed 2,048 pairs (`MORPH_MAX_UNIT_PAIRS`) while decomposing name-matched pairs: later pairs match as whole objects |
+| `morph-units-coarsened` | approximate | Approximate | text units passed 2,048 pairs (`MORPH_MAX_UNIT_PAIRS`) while decomposing name-matched pairs: later pairs match as whole objects; or, at the stage, the split unit layers would pass the Morph layer bound (256) or did not fit the workspace: every box morphs whole |
 | `morph-unit-bound` | approximate | Approximate | the cross-object stage reached the unit cap: its objects still pair, and their remaining units fade |
 
 ## S1-3 inventory provenance and name audit

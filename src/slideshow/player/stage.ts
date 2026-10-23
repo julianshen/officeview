@@ -60,11 +60,11 @@ import { paintDirect } from '../render/direct'
 import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type RenderPlan } from '../render/plan'
 import { rasterLayer } from '../render/raster'
 import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
-import type { TextItem } from '../render/text-split'
+import { TEXT_BOX_BYTES, textItems, type TextItem } from '../render/text-split'
 import { imageIndices, paintedBounds, slideSize, textFilter, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { dispatchTransition, transition3DDraw } from '../render/three/framework'
-import { matchMorph, type MorphOption } from '../morph/match'
+import { matchMorph, type MorphOption, type MorphPair } from '../morph/match'
 import { morphFrame, type MorphFrameItem, type MorphFrameSpec, type MorphLayerFrame } from '../morph/render'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
@@ -456,6 +456,8 @@ interface Running {
 interface MorphRun {
   spec: MorphFrameSpec
   handles: LayerHandle[]
+  /** Workspace charges held while it runs (the Morph-only text unit records). */
+  leases: Lease[]
   epoch: number
   /** `inspect().lastDraws` while the morph draws. */
   kinds: string[]
@@ -1063,7 +1065,19 @@ export function createStage(deps: StageDeps): Stage {
   const releaseMorph = (m: MorphRun) => {
     if (m.epoch === epoch) for (const h of m.handles) compositor().release(h)
     m.handles = []
+    for (const l of m.leases) l.release()
+    m.leases = []
   }
+
+  /** The top-level object a text unit key (`sp:<spid>/c:…`, `/p:…`) belongs to; undefined for an object key. */
+  const containerOf = (k: TargetKey): TargetKey | undefined => {
+    const i = k.indexOf('/')
+    return i < 0 ? undefined : k.slice(0, i)
+  }
+
+  /** Whether the Morph may split `shape` into its own text units: not when an animation already splits it (its layers carry the build's state). */
+  const unitSplittable = (q: Prepared, key: TargetKey, shape: PptxShape): boolean =>
+    !q.splits?.has(key) && !q.meta.builds.some(b => b.mode === 'paragraph' && b.ranges.length > 0 && b.spid === shape.source?.id)
 
   /**
    * The Morph's own layers and frame spec. Both slides are re-planned with
@@ -1073,18 +1087,31 @@ export function createStage(deps: StageDeps): Stage {
    * initial state. Items go in z order: the backgrounds (outgoing under
    * incoming), the outgoing objects that fade out, then the incoming
    * slide's layers in its own order (matched pairs at the incoming object's
-   * z, fade-ins), and the incoming watermark on top. Unit pairs
-   * (`byWord`/`byChar`) morph with their containers' layers.
+   * z, fade-ins), and the incoming watermark on top.
+   *
+   * Unit pairs (`byWord`/`byChar`, PR #20 review): each paired container
+   * that owns a matched unit is split into its word or letter items (the
+   * text-build planner's `splits`, Morph-only), laid out for their own base
+   * boxes. A matched unit then morphs on its own path (held under, the
+   * content being equal); an unmatched unit fades while moving with its
+   * container; the container's body (geometry, fill, line, text in no item)
+   * pairs as any object does. A shape an animation already splits keeps its
+   * own layers (its units move with it). When the split slides would pass
+   * `MORPH_MAX_LAYERS`, or the workspace refuses the items' records or
+   * measuring, the units coarsen to whole objects (`morph-units-coarsened`).
    */
   function morphBuild(from: Left, p: Prepared, live: RenderState, spec: TransitionSpec, c: Compositor): MorphRun | string {
-    const match = matchMorph(from.p.slide, p.slide, morphOptionOf(spec), sink)
+    const option = morphOptionOf(spec)
+    const match = matchMorph(from.p.slide, p.slide, option, sink)
     const fromShapes = topShapes(from.p.slide)
     const toShapes = topShapes(p.slide)
     const pairOf = new Map<TargetKey, TargetKey>()
     const blend = new Map<TargetKey, 'under' | 'split' | 'cross'>()
     const fromSplit = new Set<TargetKey>()
     const toSplit = new Set<TargetKey>()
+    const unitPairs: MorphPair[] = []
     for (const m of match.pairs) {
+      if (containerOf(m.from) !== undefined || containerOf(m.to) !== undefined) { unitPairs.push(m); continue }
       const a = fromShapes.get(m.from), b = toShapes.get(m.to)
       if (!a || !b || pairOf.has(m.to)) continue
       pairOf.set(m.to, m.from)
@@ -1092,19 +1119,70 @@ export function createStage(deps: StageDeps): Stage {
       blend.set(m.to, how)
       if (how === 'split') { fromSplit.add(m.from); toSplit.add(m.to) }
     }
-    const planOf = (q: Prepared, shapes: Map<TargetKey, PptxShape>, split: Set<TargetKey>): RenderPlan => {
+
+    // Morph-only unit splits: the paired containers that own a matched unit, both sides splittable.
+    const unit = option === 'byWord' ? 'wd' : 'lt'
+    const fromUnits = new Map<TargetKey, readonly TextItem[]>()
+    const toUnits = new Map<TargetKey, readonly TextItem[]>()
+    if (option !== 'byObject') {
+      for (const m of unitPairs) {
+        const fc = containerOf(m.from), tc = containerOf(m.to)
+        if (fc === undefined || tc === undefined || pairOf.get(tc) !== fc) continue
+        if (fromUnits.has(fc) && toUnits.has(tc)) continue
+        const a = fromShapes.get(fc), b = toShapes.get(tc)
+        if (!a || !b || !unitSplittable(from.p, fc, a) || !unitSplittable(p, tc, b)) continue
+        // The matcher's own item keys (it split with the same defaults and diagnosed already).
+        fromUnits.set(fc, textItems(a, unit))
+        toUnits.set(tc, textItems(b, unit))
+      }
+    }
+    const coarsen = (why: string) => {
+      sink.add({ code: 'morph-units-coarsened', slideIndex: p.index, effect: 'sld', message: `Morph text units match as whole objects: ${why}` })
+      fromUnits.clear()
+      toUnits.clear()
+    }
+
+    const planOf = (q: Prepared, shapes: Map<TargetKey, PptxShape>, split: Set<TargetKey>, units: ReadonlyMap<TargetKey, readonly TextItem[]>): RenderPlan => {
       const parts = new Map(q.parts)
       for (const k of split) if (!parts.has(k)) parts.set(k, new Set<ColourPart>(['fill', 'line']))
-      return buildRenderPlan(q.slide, new Set([...q.animated, ...shapes.keys()]), parts, q.meta.builds, q.splits)
+      const splits = units.size ? new Map([...(q.splits ?? []), ...units]) : q.splits
+      return buildRenderPlan(q.slide, new Set([...q.animated, ...shapes.keys()]), parts, q.meta.builds, splits)
     }
-    const fromPlan = planOf(from.p, fromShapes, fromSplit)
-    const toPlan = planOf(p, toShapes, toSplit)
-    // The outgoing watermark never draws: the incoming one draws unchanged on top.
-    const fromLayers = rasterLayers(fromPlan, false)
-    const toLayers = rasterLayers(toPlan, !!deps.watermark)
-    if (fromLayers.length + toLayers.length > MORPH_MAX_LAYERS) return `${fromLayers.length + toLayers.length} layers exceed the ${MORPH_MAX_LAYERS} layer bound`
+    const plans = () => {
+      const fromPlan = planOf(from.p, fromShapes, fromSplit, fromUnits)
+      const toPlan = planOf(p, toShapes, toSplit, toUnits)
+      // The outgoing watermark never draws: the incoming one draws unchanged on top.
+      return { fromPlan, toPlan, fromLayers: rasterLayers(fromPlan, false), toLayers: rasterLayers(toPlan, !!deps.watermark) }
+    }
+    let planned = plans()
+    const leases: Lease[] = []
+    const fromGeo = new Map<TargetKey, BaseGeometry>()
+    const toGeo = new Map<TargetKey, BaseGeometry>()
+    if (fromUnits.size) {
+      const count = planned.fromLayers.length + planned.toLayers.length
+      const items = [...fromUnits.values(), ...toUnits.values()].reduce((n, xs) => n + xs.length, 0)
+      const records = count <= MORPH_MAX_LAYERS ? workspace.lease(items * TEXT_BOX_BYTES, `morph-units:${p.index}`) : undefined
+      const measuring = records && workspace.lease(4, `morph-text-bases:${p.index}`)
+      if (count > MORPH_MAX_LAYERS) coarsen(`${count} layers would exceed the ${MORPH_MAX_LAYERS} layer bound`)
+      else if (!records || !measuring) { records?.release(); coarsen('the slideshow workspace refused their records') }
+      else {
+        leases.push(records)
+        try {
+          // Item geometry with the real fonts, as text builds lay theirs out (S2-8).
+          const ctx = factory(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D | null
+          if (ctx) {
+            for (const [k, g] of textBases(from.p.slide, fromUnits, from.p.base, ctx, resolveFont, true)) fromGeo.set(k, g)
+            for (const [k, g] of textBases(p.slide, toUnits, p.base, ctx, resolveFont, true)) toGeo.set(k, g)
+          } else coarsen('no context to measure them')
+        } finally {
+          measuring.release()
+        }
+      }
+      if (!fromUnits.size) planned = plans()
+    }
+    const unleash = () => { for (const l of leases.splice(0)) l.release() }
     const scale = layerScale('full', p)
-    const handles: LayerHandle[] = []
+    let handles: LayerHandle[] = []
     const raster = (q: Prepared, layers: readonly PlanLayer[]) => {
       const map = new Map<PlanLayer, LayerHandle>()
       for (const l of layers) {
@@ -1113,27 +1191,72 @@ export function createStage(deps: StageDeps): Stage {
       }
       return map
     }
-    let fh: Map<PlanLayer, LayerHandle>, th: Map<PlanLayer, LayerHandle>
-    try {
-      fh = raster(from.p, fromLayers)
-      th = raster(p, toLayers)
-    } catch (e) {
-      for (const h of handles) c.release(h)
-      if (e instanceof Pressure) return 'its layers do not fit the slideshow workspace'
-      throw e
+    let fh: Map<PlanLayer, LayerHandle> | undefined, th: Map<PlanLayer, LayerHandle> | undefined
+    for (;;) {
+      const count = planned.fromLayers.length + planned.toLayers.length
+      if (count > MORPH_MAX_LAYERS) { unleash(); return `${count} layers exceed the ${MORPH_MAX_LAYERS} layer bound` }
+      try {
+        fh = raster(from.p, planned.fromLayers)
+        th = raster(p, planned.toLayers)
+        break
+      } catch (e) {
+        for (const h of handles) c.release(h)
+        handles = []
+        unleash()
+        if (!(e instanceof Pressure)) throw e
+        if (!fromUnits.size) return 'its layers do not fit the slideshow workspace'
+        // The unit layers did not fit: the containers morph whole instead (the closest effect).
+        coarsen('their layers do not fit the slideshow workspace')
+        fromGeo.clear()
+        toGeo.clear()
+        planned = plans()
+      }
     }
-    const fe = entriesOf(fromPlan.layers, fh, from.state)
-    const te = entriesOf(toPlan.layers, th, live)
+    const { fromPlan, toPlan } = planned
+    // A Morph-only unit has no state of its own: it shows, hides and moves as its container does.
+    const unitOwner = new Map<TargetKey, TargetKey>()
+    for (const units of [fromUnits, toUnits]) for (const [k, items] of units) for (const it of items) unitOwner.set(it.key, k)
+    const withUnits = (state: RenderState, units: ReadonlyMap<TargetKey, readonly TextItem[]>): RenderState => {
+      if (!units.size) return state
+      const out = new Map(state)
+      for (const [k, items] of units) {
+        const s = state.get(k)
+        if (s) for (const it of items) if (!out.has(it.key)) out.set(it.key, s)
+      }
+      return out
+    }
+    const fe = entriesOf(fromPlan.layers, fh, withUnits(from.state, fromUnits))
+    const te = entriesOf(toPlan.layers, th, withUnits(live, toUnits))
     const box = (q: Prepared): BaseGeometry => ({ x: 0, y: 0, ...slidePx(q), rot: 0 })
-    const side = (q: Prepared, e: DrawEntry): MorphLayerFrame => ({
-      handle: e.draw.handle, geometry: (e.root ? q.base.get(e.root) : undefined) ?? box(q), state: e.draw.state,
+    const baseOf = (q: Prepared, k: TargetKey): BaseGeometry | undefined => (q === p ? toGeo : fromGeo).get(k) ?? q.base.get(k)
+    const side = (q: Prepared, e: DrawEntry, geometry?: BaseGeometry): MorphLayerFrame => ({
+      handle: e.draw.handle, geometry: geometry ?? (e.root ? baseOf(q, e.root) : undefined) ?? box(q), state: e.draw.state,
       ...(e.draw.part ? { part: e.draw.part } : {}), ...(e.root ? { key: e.root } : {}),
     })
+    // Matched units of split containers pair like objects (held under: their content is equal).
+    for (const m of unitPairs) {
+      const fc = containerOf(m.from), tc = containerOf(m.to)
+      if (fc === undefined || tc === undefined || !fromUnits.has(fc) || !toUnits.has(tc) || pairOf.has(m.to)) continue
+      pairOf.set(m.to, m.from)
+      blend.set(m.to, 'under')
+    }
     // Pairs whose two objects both draw (an exited or not-yet-entered object fades instead).
     const fromRoots = new Set(fe.flatMap(e => e.root ? [e.root] : []))
     const toRoots = new Set(te.flatMap(e => e.root ? [e.root] : []))
     for (const [t, f] of [...pairOf]) if (!toRoots.has(t) || !fromRoots.has(f)) pairOf.delete(t)
     const pairedFrom = new Set(pairOf.values())
+    const containerTo = new Map<TargetKey, TargetKey>()
+    for (const [t, f] of pairOf) if (containerOf(t) === undefined) containerTo.set(f, t)
+    /** An unmatched unit of a paired container fades while moving with it. */
+    const carried = (q: Prepared, e: DrawEntry): Pick<MorphFrameItem, 'path'> & { geometry?: BaseGeometry } => {
+      const owner = e.root ? unitOwner.get(e.root) : undefined
+      if (owner === undefined) return {}
+      const f = q === p ? pairOf.get(owner) : owner
+      const t = q === p ? owner : containerTo.get(owner)
+      if (f === undefined || t === undefined || pairOf.get(t) !== f) return {}
+      const fg = baseOf(from.p, f) ?? box(from.p), tg = baseOf(p, t) ?? box(p)
+      return { path: { from: fg, to: tg }, geometry: q === p ? tg : fg }
+    }
     const items: MorphFrameItem[] = []
     const kindsOut: string[] = []
     const push = (item: MorphFrameItem, kind: string) => { items.push(item); kindsOut.push(kind) }
@@ -1141,18 +1264,23 @@ export function createStage(deps: StageDeps): Stage {
     if (fbg || tbg) push({ ...(fbg ? { from: side(from.p, fbg) } : {}), ...(tbg ? { to: side(p, tbg) } : {}), under: true, background: true }, 'morph:background')
     for (const e of fe) {
       if (e.background || e.kind === 'watermark' || (e.root && pairedFrom.has(e.root))) continue
-      push({ from: side(from.p, e) }, `morph:out:${e.root ?? 'static'}`)
+      const { path, geometry } = carried(from.p, e)
+      push({ from: side(from.p, e, geometry), ...(path ? { path } : {}) }, `morph:out:${e.root ?? 'static'}`)
     }
     const done = new Set<TargetKey>()
     for (const e of te) {
       if (e.background || e.kind === 'watermark') continue
       const f = e.root ? pairOf.get(e.root) : undefined
-      if (!e.root || f === undefined) { push({ to: side(p, e) }, `morph:in:${e.root ?? 'static'}`); continue }
+      if (!e.root || f === undefined) {
+        const { path, geometry } = carried(p, e)
+        push({ to: side(p, e, geometry), ...(path ? { path } : {}) }, `morph:in:${e.root ?? 'static'}`)
+        continue
+      }
       if (done.has(e.root)) continue
       done.add(e.root)
       const t = e.root
       const ts = te.filter(x => x.root === t), fs = fe.filter(x => x.root === f)
-      const fg = from.p.base.get(f) ?? box(from.p), tg = p.base.get(t) ?? box(p)
+      const fg = baseOf(from.p, f) ?? box(from.p), tg = baseOf(p, t) ?? box(p)
       const how = blend.get(t)
       const pairUp = (a: DrawEntry | undefined, b: DrawEntry | undefined, under: boolean) => {
         if (!a && !b) return
@@ -1173,7 +1301,7 @@ export function createStage(deps: StageDeps): Stage {
       }
     }
     const over = te.filter(e => e.kind === 'watermark').map(e => e.draw)
-    return { spec: { pairs: items, ...(over.length ? { over } : {}) }, handles, epoch, kinds: kindsOut }
+    return { spec: { pairs: items, ...(over.length ? { over } : {}) }, handles, leases, epoch, kinds: kindsOut }
   }
 
   // -------------------------------------------------------------------
