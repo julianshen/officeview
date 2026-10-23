@@ -143,7 +143,7 @@ async function playDeck(): Promise<PptxDocument> {
   return parsePptx(await OfficePackage.load(await buildPptxDeck({ slides })))
 }
 
-/** deck=morph (S3-6): two slides whose shapes pair (a moved square, a moved title); slide 2's `p159:morph byObject` (1.2 s) drives the matched-layer morph on WebGL2. */
+/** deck=morph (S3-6): two slides whose shapes pair (a moved square, a moved title); slide 2's `p159:morph byObject` (1.2 s) drives the matched-layer morph on either backend. */
 async function morphDeck(): Promise<PptxDocument> {
   const slides = [
     { shapes: [{ id: 2, name: 'Square', off: [px(80), px(60)] as [string, string], ext: [px(120), px(120)] as [string, string], fill: 'D06040' },

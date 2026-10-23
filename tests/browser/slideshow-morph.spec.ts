@@ -5,12 +5,12 @@
  * pair (a moved square, a moved title) and slide 2's `p159:morph byObject`
  * (1.2 s). The show ENTERS slide 2 through the stage's dispatch.
  *
- * Asserts behaviour only: on WebGL2 the running transition is the morph (the
- * dispatch's `transition-approximate` diagnostic explains the approximation:
- * matched objects interpolate, content crossfades); the forced Canvas 2D
- * path keeps the catalogued fade look-alike, diagnosed as such. The
- * composited morph frames are covered by the pixel goldens and the
- * morphFrame unit tests.
+ * Asserts behaviour only: on both backends the running transition is the
+ * morph route (the stage's `lastDraws` probe shows the matched square's
+ * morph pair; the dispatch's `transition-approximate` diagnostic explains
+ * the approximation: matched objects interpolate, content crossfades) and no
+ * `morph-fallback` is diagnosed. The composited morph frames are covered by
+ * the pixel goldens and the morphFrame unit tests.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
@@ -46,11 +46,11 @@ async function present(page: Page, query: string): Promise<void> {
 }
 const session = (page: Page) => page.evaluate(() => {
   const s = window.__slideshowStart!.sessions.a as unknown as SessionController
-  return { slide: s.state.slide, backend: s.stage!.backend, level: s.stage!.level, transition: s.stage!.transition }
+  return { slide: s.state.slide, backend: s.stage!.backend, level: s.stage!.level, transition: s.stage!.transition, draws: s.stage!.inspect().lastDraws }
 })
 const diagnostics = (page: Page) => page.evaluate(() => {
   const s = window.__slideshowStart!.sessions.a as unknown as SessionController
-  return s.presenterSource.diagnostics().map(d => ({ code: d.code, message: d.message }))
+  return s.presenterSource.diagnostics().map(d => ({ code: d.code, effect: d.effect, message: d.message }))
 })
 const text = (page: Page) => page.locator('[data-officeview-show-text] li').allTextContents()
 
@@ -65,14 +65,17 @@ for (const path of ['webgl2', 'canvas2d'] as const) {
     await expect(async () => {
       await page.keyboard.press('Space')
       expect((await session(page)).slide).toBe(1)
-      expect((await session(page)).transition).toEqual({ effect: 'morph', duration: 1200 })
+      const now = await session(page)
+      expect(now.transition).toEqual({ effect: 'morph', duration: 1200 })
+      // The morph route draws the matched square's pair (not the fade look-alike).
+      expect(now.draws).toContain('morph:pair:sp:2')
     }).toPass()
-    // The diagnostic says what played: on WebGL2 the approximation (matched objects interpolate, content crossfades), on Canvas 2D the catalogued look-alike after the forced-backend note.
+    // The diagnostic says what played: the approximation (matched objects interpolate, content crossfades), on either backend; no fallback.
     const list = (await diagnostics(page)).filter(d => d.code === 'transition-approximate')
     expect(list).toEqual([
-      expect.objectContaining({ code: 'transition-approximate', message: expect.stringContaining('p159:morph') }),
+      expect.objectContaining({ code: 'transition-approximate', effect: 'morph', message: expect.stringContaining('p159:morph') }),
     ])
-    expect(list[0]!.message.includes(path === 'webgl2' ? 'approximation' : 'look-alike')).toBe(true)
+    expect(list[0]!.message.includes('approximation')).toBe(true)
     await page.keyboard.press('Escape')
     await expect.poll(() => page.evaluate(() => [...window.__slideshowStart!.log])).toContain('a:ended')
   })

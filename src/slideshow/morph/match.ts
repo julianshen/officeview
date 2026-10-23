@@ -24,7 +24,7 @@
  * Bounds, monotonic: slides beyond `MORPH_MAX_OBJECTS` refuse and diagnose
  * (`morph-refused`); once text unit pairs pass `MORPH_MAX_UNIT_PAIRS`, later
  * pairs coarsen to object level (`morph-units-coarsened`) and cross-object
- * matching stops — never silently.
+ * unit matching stops (`morph-unit-bound`) — never silently.
  */
 import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { textItems, type TextItem } from '../render/text-split'
@@ -224,17 +224,10 @@ function alignUnits(a: readonly ItemView[], b: readonly ItemView[]): Array<[Item
  * monotonic: past the cap, this and every later pair stays object-level. */
 function decompose(ctx: Ctx, a: Entry, b: Entry): void {
   if (!a.shape.textBody || !b.shape.textBody) return
-  const unitsA = unitsOf(ctx, a)
-  const unitsB = unitsOf(ctx, b)
-  const aligned = alignUnits(unitsA, unitsB)
+  const aligned = alignUnits(unitsOf(ctx, a), unitsOf(ctx, b))
   if (aligned.length === 0) return
   if (ctx.coarsened || ctx.unitPairs + aligned.length > MORPH_MAX_UNIT_PAIRS) {
-    // Coarsening must leave nothing behind (N2): every unit of the
-    // coarsened pair is marked matched, so it cannot linger as an
-    // individual fade alongside the object pair.
     ctx.coarsened = true
-    for (const u of unitsA) u.matched = true
-    for (const u of unitsB) u.matched = true
     ctx.sink?.add({
       code: 'morph-units-coarsened', slideIndex: ctx.slideIndex, effect: 'sld',
       message: `Morph text units beyond ${MORPH_MAX_UNIT_PAIRS} pairs match as objects`,
@@ -245,83 +238,86 @@ function decompose(ctx: Ctx, a: Entry, b: Entry): void {
   for (const [fa, fb] of aligned) ctx.pairs.push({ from: fa.key, to: fb.key, rule: 'text' })
 }
 
-/** Rule 3 in unit mode: the remaining text-bearing objects pair by position
- * first (nearest-greedy in reading order, one to one, ties to the first
- * candidate), so equal-text repeats cannot scatter a unit across the slide
- * (N3); units then align by equal content within each pair. Cross-object
- * content pairing is gone. */
+/** A unit candidate for cross-object content matching. */
+interface UnitRef {
+  shape: Entry
+  item: ItemView
+  taken: boolean
+}
+
+/** Rule 3 in unit mode: units of remaining text-bearing objects pair across
+ * objects by equal content; containers follow their majority partner. */
 function pairUnitsAcrossObjects(ctx: Ctx, fromEntries: readonly Entry[], toEntries: readonly Entry[]): void {
-  // Past the unit cap the cross-object stage stops entirely (N1): remaining
-  // containers fade whole, which the unit-bound diagnostic already recorded.
-  if (ctx.coarsened) return
   const untagged = (e: Entry): boolean => !e.name.startsWith('!!')
-  const fromF = fromEntries.filter(e => !e.matched && untagged(e) && e.text !== '')
-  const toF = toEntries.filter(e => !e.matched && untagged(e) && e.text !== '')
-  if (!fromF.length || !toF.length) return
+  const fromUnits: UnitRef[] = []
+  const toUnits: UnitRef[] = []
+  for (const e of fromEntries) if (!e.matched && untagged(e) && e.text !== '') for (const item of unitsOf(ctx, e)) fromUnits.push({ shape: e, item, taken: false })
+  for (const e of toEntries) if (!e.matched && untagged(e) && e.text !== '') for (const item of unitsOf(ctx, e)) toUnits.push({ shape: e, item, taken: false })
+  if (!fromUnits.length || !toUnits.length) return
 
-  for (const a of fromF) {
-    if (a.matched) continue
-    let best: Entry | undefined
-    let bestD = Infinity
-    for (const b of toF) {
-      if (b.matched) continue
-      const dx = a.cx - b.cx, dy = a.cy - b.cy, d = dx * dx + dy * dy
-      if (d < bestD) { bestD = d; best = b }
-    }
-    if (!best) continue
-    a.matched = true
-    best.matched = true
-    const before = ctx.pairs.length
-    alignPairUnits(ctx, a, best)
-    // Nothing shared content: the position pairing lets both sides rest
-    // unmatched, and they fade whole.
-    if (ctx.pairs.length === before) {
-      a.matched = false
-      best.matched = false
-    }
+  const buckets = new Map<string, { from: UnitRef[]; to: UnitRef[] }>()
+  for (const u of fromUnits) {
+    const b = buckets.get(u.item.text) ?? { from: [], to: [] }
+    b.from.push(u)
+    buckets.set(u.item.text, b)
   }
-}
+  for (const u of toUnits) {
+    const b = buckets.get(u.item.text)
+    if (b) b.to.push(u)
+  }
 
-/** Aligns the text units of one position-paired container pair by equal
- * content (reading order, one to one): swapping two units inside one box
- * pairs them, where an LCS would not. On success the container pair follows
- * its unit pairs; past the cap the pair coarsens to object level and none
- * of its units can linger as individual fades (N2). */
-function alignPairUnits(ctx: Ctx, a: Entry, b: Entry): void {
-  const aUnits = unitsOf(ctx, a)
-  const bUnits = unitsOf(ctx, b)
-  if (!aUnits.length || !bUnits.length) return
-  const toByText = new Map<string, ItemView[]>()
-  for (const u of bUnits) {
-    const q = toByText.get(u.text)
-    if (q) q.push(u)
-    else toByText.set(u.text, [u])
+  /** How many of a shape's units flew to a partner shape. */
+  const links = new Map<Entry, Map<Entry, number>>()
+  let stopped = false
+  for (const bucket of buckets.values()) {
+    const n = Math.min(bucket.from.length, bucket.to.length)
+    for (let i = 0; i < n; i++) {
+      if (fromUnits.length && ctx.unitPairs >= MORPH_MAX_UNIT_PAIRS) {
+        stopped = true
+        break
+      }
+      const a = bucket.from.find(u => !u.taken)
+      const b = bucket.to.find(u => !u.taken)
+      if (!a || !b) break
+      a.taken = true
+      b.taken = true
+      a.item.matched = true
+      b.item.matched = true
+      ctx.unitPairs++
+      ctx.pairs.push({ from: a.item.key, to: b.item.key, rule: 'text' })
+      let aLinks = links.get(a.shape)
+      if (!aLinks) links.set(a.shape, aLinks = new Map())
+      aLinks.set(b.shape, (aLinks.get(b.shape) ?? 0) + 1)
+      let bLinks = links.get(b.shape)
+      if (!bLinks) links.set(b.shape, bLinks = new Map())
+      bLinks.set(a.shape, (bLinks.get(a.shape) ?? 0) + 1)
+    }
+    if (stopped) break
   }
-  const aligned: Array<[ItemView, ItemView]> = []
-  for (const u of aUnits) {
-    const q = toByText.get(u.text)?.find(v => !v.matched)
-    if (!q) continue
-    u.matched = true
-    q.matched = true
-    aligned.push([u, q])
-  }
-  if (!aligned.length) return
-  if (ctx.coarsened || ctx.unitPairs + aligned.length > MORPH_MAX_UNIT_PAIRS) {
-    ctx.coarsened = true
-    for (const u of aUnits) u.matched = true
-    for (const u of bUnits) u.matched = true
-    ctx.pairs.push({ from: a.key, to: b.key, rule: 'text' })
+  if (stopped) {
     ctx.sink?.add({
-      code: 'morph-units-coarsened', slideIndex: ctx.slideIndex, effect: 'sld',
-      message: `Morph text units beyond ${MORPH_MAX_UNIT_PAIRS} pairs match as objects`,
+      code: 'morph-unit-bound', slideIndex: ctx.slideIndex, effect: 'sld',
+      message: `Morph text unit matching stopped at ${MORPH_MAX_UNIT_PAIRS} pairs; further objects fade`,
     })
-    return
   }
-  ctx.unitPairs += aligned.length
-  for (const [fa, fb] of aligned) ctx.pairs.push({ from: fa.key, to: fb.key, rule: 'text' })
-  ctx.pairs.push({ from: a.key, to: b.key, rule: 'text' })
-  a.matched = true
-  b.matched = true
+
+  // Containers follow the partner with most matched units; first-seen wins
+  // ties, so pairing is deterministic. A container without a free partner
+  // stays unmatched and fades whole, while its matched units still fly.
+  for (const e of fromEntries) {
+    const candidates = links.get(e)
+    if (!candidates || e.matched) continue
+    let best: Entry | undefined
+    let bestN = 0
+    for (const [partner, n] of candidates) {
+      if (partner.matched) continue
+      if (n > bestN) {
+        best = partner
+        bestN = n
+      }
+    }
+    if (best) add(ctx, e, best, 'text')
+  }
 }
 
 /** Rule 4: same preset geometry and kind, nearer than a quarter of the

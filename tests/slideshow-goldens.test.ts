@@ -128,7 +128,7 @@ describe.skipIf(process.platform !== 'darwin')('slideshow transition frame golde
   }
 })
 
-/** S3-6: the morph's composited frame — a matched pair whose content interpolates into the moving box, an unmatched square fading in place. */
+/** S3-6: the morph's composited frame — a matched pair (same outline: the outgoing side held under the incoming) whose content interpolates into the moving box, an unmatched square fading in place. */
 const geometry = (x: number, y: number, w: number, h: number, rot = 0): BaseGeometry => ({ x, y, w, h, rot })
 function renderMorph(progress: number): Uint8ClampedArray {
   const ws = workspace()
@@ -152,7 +152,7 @@ function renderMorph(progress: number): Uint8ClampedArray {
   }
   const spec: MorphFrameSpec = {
     pairs: [
-      { from: { handle: upload('from'), geometry: geometry(0, 0, SLIDE_W, SLIDE_H) }, to: { handle: upload('to'), geometry: geometry(8, 4, SLIDE_W - 16, SLIDE_H - 8) } },
+      { from: { handle: upload('from'), geometry: geometry(0, 0, SLIDE_W, SLIDE_H) }, to: { handle: upload('to'), geometry: geometry(8, 4, SLIDE_W - 16, SLIDE_H - 8) }, under: true },
       { from: { handle: upload2(square as unknown as HTMLCanvasElement, 24, 16), geometry: geometry(20, 60, 24, 16) } },
     ],
     over: [{ handle: upload2(square as unknown as HTMLCanvasElement, 24, 16), state: { visible: true, opacity: 1, transform: [1, 0, 0, 1, 0, 0] } }],
