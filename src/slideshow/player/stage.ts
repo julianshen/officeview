@@ -352,7 +352,7 @@ function compose(parent: TargetState | undefined, own: TargetState | undefined):
     visible: parent.visible && (own?.visible ?? true),
     opacity: parent.opacity * (own?.opacity ?? 1),
     transform: mul(p, o),
-    ...(own?.mask ? { mask: own.mask, ...(own.maskBox ? { maskBox: own.maskBox } : {}) } : {}),
+    ...(own?.mask ? { mask: own.mask, ...(own.maskBox ? { maskBox: own.maskBox } : {}), ...(own.maskTransform ? { maskTransform: mul(p, own.maskTransform) } : {}) } : {}),
     ...(own?.color ?? parent.color ? { color: own?.color ?? parent.color } : {}),
   }
 }

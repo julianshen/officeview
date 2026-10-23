@@ -365,3 +365,29 @@ describe('PR #19 review 6 follow-up (colour)', () => {
     expect(states.get('sp:2/c:0-4')!.color?.text).toEqual(body.color?.text)
   })
 })
+
+describe('PR #19 review 7 (shared mask)', () => {
+  it('while a per-word emphasis is active, a whole-shape wipe gives every word the parent\'s own mask transform', async () => {
+    const { renderStateAt } = await import('../src/slideshow/engine/behaviours')
+    const { createRng } = await import('../src/slideshow/rng')
+    const { createDiagnosticSink } = await import('../src/slideshow/diagnostics')
+    const ctn = (id: number, durMs: number) => ({ id, durMs, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold' as const })
+    // A per-word motion (fanned: each word moves right, staggered) still running, and the shape's wipe exit.
+    const nudge = { kind: 'animMotion', ctn: ctn(5, 1000), target: { spid: '2' }, attrNames: [], additive: 'base', accumulate: 'none', by: { x: 0.1, y: 0 }, origin: 'layout' } as unknown
+    const wipe = { kind: 'animEffect', ctn: ctn(6, 1000), target: { spid: '2' }, attrNames: [], additive: 'base', accumulate: 'none', transition: 'out', filter: 'wipe(left)' } as unknown
+    const entry = (node: unknown, order: number, progress: number) => ({ node, progress, iteration: 0, order, phase: 'active' })
+    const snapshot = { active: [entry(nudge, 0, 0.5), entry(wipe, 1, 0.4)], frozen: [], ended: new Set<number>() } as never
+    const items = [{ key: 'sp:2/c:0-4', delayMs: 0 }, { key: 'sp:2/c:6-9', delayMs: 300 }]
+    const fan = new Map([[nudge as never, { items, spanMs: 1000, totalMs: 1300, accel: 0, decel: 0, autoRev: false, entrance: false }]])
+    const base = new Map([['sp:2', { x: 0, y: 0, w: 400, h: 100, rot: 0 }], ['sp:2/c:0-4', { x: 0, y: 0, w: 100, h: 100, rot: 0 }], ['sp:2/c:6-9', { x: 150, y: 0, w: 100, h: 100, rot: 0 }]])
+    const states = renderStateAt(snapshot, base, createRng(1), createDiagnosticSink(), { w: 960, h: 540 }, fan as never)
+    const [w1, w2] = items.map(i => states.get(i.key)!)
+    // The words have moved by different amounts...
+    expect(w1.transform[4] + (w1.motion?.dx ?? 0)).not.toBeCloseTo(w2.transform[4] + (w2.motion?.dx ?? 0), 3)
+    // ...but share one mask, placed by the shape's own (unmoved) mapping.
+    expect(w1.mask?.kind).toBe('wipe')
+    expect(w2.mask).toEqual(w1.mask)
+    expect(w1.maskTransform).toEqual(w2.maskTransform)
+    expect(w1.maskTransform![4]).toBeCloseTo(0, 6)
+  })
+})

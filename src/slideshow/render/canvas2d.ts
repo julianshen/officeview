@@ -358,7 +358,9 @@ export function createCanvas2DCompositor(
     const seed = Number(state.mask?.params.seed)
     // A mask covers the layer's bounds, or the box it names (a split text item under its shape's mask).
     const box = state.mask && isBox(state.maskBox) ? state.maskBox : t.bounds
-    drawLayer(source, t.bounds, m, state.opacity, state.mask, m, box, Number.isFinite(seed) ? seed : 0, effect)
+    // A shared parent mask is placed by the parent's own mapping, not the layer's (PR #19 review 7).
+    const maskM = box !== t.bounds && isAffine(state.maskTransform) ? mul(view, state.maskTransform) : m
+    drawLayer(source, t.bounds, m, state.opacity, state.mask, maskM, box, Number.isFinite(seed) ? seed : 0, effect)
   }
 
   function resizeOutput(widthPx: number, heightPx: number) {

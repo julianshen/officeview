@@ -124,7 +124,15 @@ export function buildRenderPlan(
       const whole = key !== undefined ? splits?.get(key) : undefined
       if (key !== undefined && whole && whole.length > 0) {
         const boxed = new Set(whole.map(b => b.paragraph))
-        leaves.push({ path, node: filtered({ ...node }, i => !boxed.has(i)), own: animated.has(key) ? { key, part: 'body' } : undefined })
+        const body = filtered({ ...node }, i => !boxed.has(i))
+        const parts = colourParts.get(key)
+        if (parts && parts.size > 0) {
+          // A colour animation on the split shape (PR #19 review 7): the body is its fill, line and residual text
+          // layers, so fill and line take their colour channels; the words keep theirs (text).
+          leaves.push({ path, node: fillPart(body), own: { key, part: 'fill' } })
+          leaves.push({ path, node: linePart(body), own: { key, part: 'line' } })
+          leaves.push({ path, node: textPart(body), own: { key, part: 'text' } })
+        } else leaves.push({ path, node: body, own: animated.has(key) ? { key, part: 'body' } : undefined })
         leaves.push(...boxLeaves(node, path, whole))
         continue
       }

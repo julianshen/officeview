@@ -567,3 +567,22 @@ describe('PR #19 review 6 follow-up', () => {
     expectPx(s.px(46, 16), CLEAR)
   })
 })
+
+describe('PR #19 review 7', () => {
+  it('a shared parent mask is placed by its own transform, not by each word\'s: one sweep edge across moving words', () => {
+    const s = setup()
+    const a = s.layer('#ff0000', { x: 8, y: 8, w: 16, h: 16 })
+    const b = s.layer('#ff0000', { x: 32, y: 8, w: 16, h: 16 })
+    const mask = { kind: 'wipe' as const, progress: 0.625, params: { from: 'l' } }
+    const shared = { mask, maskBox: { x: 0, y: 0, w: 64, h: 48 }, maskTransform: I }
+    // Word b is mid-emphasis: its own transform moves it 4 px right (now x 36–52). The shape's wipe edge stays at x 40.
+    s.comp.frame([
+      { handle: a, state: state(shared) },
+      { handle: b, state: state({ ...shared, transform: [1, 0, 0, 1, 4, 0] }) },
+    ])
+    expectPx(s.px(12, 16), RED)
+    expectPx(s.px(38, 16), RED)
+    expectPx(s.px(42, 16), CLEAR)
+    expectPx(s.px(50, 16), CLEAR)
+  })
+})

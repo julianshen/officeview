@@ -324,6 +324,11 @@ export interface TargetState {
    * item under its shape's mask (a whole-shape wipe sweeping across the words; PR #19 review 6).
    */
   maskBox?: { x: number; y: number; w: number; h: number }
+  /**
+   * The mapping (slide px, motion included) that places `maskBox`: the parent shape's own, so the shared mask stays
+   * put while each item moves under its own transform; absent, the mask follows the layer (PR #19 review 7).
+   */
+  maskTransform?: Affine
   color?: { fill?: ColorMatrix; line?: ColorMatrix; text?: ColorMatrix }
   motion?: { dx: number; dy: number }
 }

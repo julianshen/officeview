@@ -752,8 +752,10 @@ function withParent(child: TargetState, parent: TargetState, geo: BaseGeometry |
     transform: mulAffine(full(child), full(parent)),
   }
   if (parent.mask && geo) {
+    // One mask for every item: over the shape's box, placed by the shape's own mapping, not the item's.
     out.mask = parent.mask
     out.maskBox = { x: geo.x, y: geo.y, w: geo.w, h: geo.h }
+    out.maskTransform = full(parent)
   }
   if (parent.color) {
     const color = { ...child.color }

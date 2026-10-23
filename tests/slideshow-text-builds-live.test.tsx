@@ -182,3 +182,24 @@ describe('PR #19 review 6 follow-up', () => {
     r.s.exit()
   })
 })
+
+const fillTo = (id: number, spid: number, attr: 'fillcolor' | 'stroke.color') =>
+  `<p:animClr clrSpc="rgb"><p:cBhvr><p:cTn id="${id}" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl><p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:to><a:srgbClr val="FF0000"/></p:to></p:animClr>`
+
+describe('PR #19 review 7', () => {
+  it('a fill-colour change on a by-word split shape recolours its fill layer', async () => {
+    const doc = await deck({ slides: [{ shapes: [at(2, 40, 40, 480, 120, 'Alpha beta gamma')], timingXml: timingXmlOf(mainSeqXml([byWord(10, 2, 100), wholeShape(20, 'emph', fillTo(23, 2, 'fillcolor'))])) }] })
+    const r = await show(doc)
+    // The split body is a fill, a line and a (residual) text layer, so the fill takes the colour channel.
+    const layers = r.s.stage!.plan!.layers.flatMap(l => l.kind === 'target' ? [`${l.key}:${l.part ?? ''}`] : [])
+    expect(layers).toEqual(['sp:2:fill', 'sp:2:line', 'sp:2:text', ...WORDS.map(k => `${k}:range`)])
+    await r.key('ArrowRight')
+    await r.tick(500)
+    await r.key('ArrowRight')
+    await r.tick(600)
+    const state = r.s.stage!.stateAt(r.s.cursor, clock.now())
+    expect(state.get('sp:2')?.color?.fill).toBeDefined()
+    expect(r.s.stage!.inspect().lastDraws).toEqual(expect.arrayContaining(['target:sp:2:fill', ...WORDS.map(k => `target:${k}:range`)]))
+    r.s.exit()
+  })
+})
