@@ -24,8 +24,9 @@ import { createDiagnosticSink, DIAGNOSTIC_CODES } from '../src/slideshow/diagnos
 import { baseGeometry } from '../src/slideshow/player/stage'
 import { readTransition } from '../src/slideshow/read/transition'
 import { resolveTransition2D, transitionDraw } from '../src/slideshow/render/transitions2d'
+import { dispatchTransition } from '../src/slideshow/render/three/framework'
 import { createRng } from '../src/slideshow/rng'
-import type { Affine, TargetState, TransitionSpec } from '../src/slideshow/types'
+import type { Affine, Compositor, TargetState, TransitionSpec } from '../src/slideshow/types'
 import { coverageMarkdown, deckCoverage, playThrough, slideXmls } from './helpers/slideshow-coverage'
 import { installShowSeams, loadDeck, startShow, type ShowRig, type ShowSeams } from './helpers/slideshow-show-rig'
 
@@ -308,17 +309,36 @@ describe.skipIf(!HAVE)('slideshow corpus conformance (LibreOffice sd/qa/unit/dat
     r.exit()
   })
 
-  it('airplane and morph decks play their catalogued pending-stage-3 stand-ins with diagnostics', async () => {
+  it('airplane and morph decks play as Stage 3 rows: airplane is a shader on WebGL2 and its look-alike on Canvas 2D; Morph takes the morph route on both', async () => {
+    // jsdom has no WebGL2, so the show runs on Canvas 2D; the WebGL2 half is the dispatch below (and, on a real
+    // GPU, tests/browser/slideshow-corpus.spec.ts, which plays both decks on WebGL2).
+    const webgl2 = { backend: 'webgl2', prepareTransition3D: () => true } as unknown as Compositor
+    const canvas2d = { backend: 'canvas2d' } as unknown as Compositor
     for (const [name, element, duration, preset] of [['airplane-transition', 'prstTrans', 1250, 'airplane'], ['tdf149588_transparentSolidFill', 'morph', 1500, undefined]] as const) {
       const { rig: r } = await show(name)
       const spec = await transitionOf(name, 1)
       expect([spec.element, spec.preset]).toEqual([element, preset])
       const row = rowForTransition(spec.ns, spec.element, spec.preset)!
-      expect(row.status).toBe('pending-stage-3')
-      expect(row.lookalike).toBe('transition:p:fade')
-      // The first slide plays its transition from black, drawn as the row's look-alike for the file's duration.
-      expect(r.s.stage!.transition).toEqual({ effect: 'fade', duration })
-      expect(codes(r, 0)).toContain(`transition-approximate:${element}`)
+      expect(row).toMatchObject({ status: 'approximate', implementation: 'shader', stage: 3, verified: false, lookalike: 'transition:p:fade' })
+      if (element === 'prstTrans') {
+        // The show's backend registered every 3-D row (three/index.ts): WebGL2 runs airplane's shader.
+        expect(dispatchTransition(spec, webgl2)).toBe('shader')
+        // Canvas 2D draws the fade look-alike, diagnosed once, for the file's duration.
+        expect(dispatchTransition(spec, canvas2d)).toBe('lookalike')
+        expect(r.s.stage!.transition).toEqual({ effect: 'fade', duration })
+        expect(codes(r, 0)).toContain('transition-approximate:prstTrans:airplane')
+      } else {
+        // Morph takes the morph route on both backends, diagnosed as an approximation.
+        expect(dispatchTransition(spec, webgl2)).toBe('morph')
+        expect(dispatchTransition(spec, canvas2d)).toBe('morph')
+        expect(codes(r, 0)).toContain('transition-approximate:morph')
+        // The deck's only slide carries the Morph, and a first slide enters from black, as PowerPoint does: nothing
+        // to morph from, so the fade look-alike plays and says why (S3-6).
+        expect(codes(r, 0)).toContain('transition-approximate:morph-fallback')
+        expect(r.diagnostics.find(d => d.effect === 'morph-fallback')?.message).toContain('the first slide enters from black')
+        expect(r.s.stage!.transition).toEqual({ effect: 'fade', duration })
+      }
+      expect(codes(r, 0).filter(c => c.startsWith('transition-shader-fallback'))).toEqual([])
       await r.tick(duration / 2)
       expect(r.s.stage!.transition).toEqual({ effect: 'fade', duration })
       await r.tick(duration / 2)

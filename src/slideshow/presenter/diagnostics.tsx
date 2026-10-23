@@ -44,6 +44,7 @@ export const PANEL_KIND: Readonly<Record<string, DiagnosticKind>> = {
   'media-codec': 'refused',
   'media-error': 'refused',
   'text-build-whole': 'approximate',
+  'transition-shader-fallback': 'approximate',
 }
 
 const BY_CLASS: Readonly<Partial<Record<DiagnosticClass, DiagnosticKind>>> = {

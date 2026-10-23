@@ -318,7 +318,8 @@ These are standing rules, not one-task choices. Later stages follow them.
 ## Catalogue
 
 <!-- slideshow-catalogue:start -->
-Stage contract, not an implementation-completion claim. Every row is unverified; no Office frame compare has landed.
+Complete as of the Stage 3 close (S3-7): no row is pending a stage. Status is the stage contract, not measured Office fidelity.
+Every row is unverified; no Office frame compare has landed. The 3-D and Morph rows (stage 3) are approximate at the tolerance shown, look-alikes awaiting the owner's PowerPoint captures (D4).
 Animation names retain the LibreOffice reference spelling where the Microsoft UI correspondence is uncertain (see source audit below).
 
 | ID | Name | Implementation | Status | Stage | Verified | Lookalike / stand-in | Mean abs | Row max |
@@ -344,41 +345,41 @@ Animation names retain the LibreOffice reference spelling where the Microsoft UI
 | transition:p:wheel | Clock | mask | exact | 1 | no | — | 0.02 | 0.1 |
 | transition:p:wipe | wipe | mask | exact | 1 | no | — | 0.02 | 0.1 |
 | transition:p:zoom | zoom | transform | exact | 1 | no | — | 0.02 | 0.1 |
-| transition:p14:vortex | vortex | stand-in | pending-stage-3 | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
-| transition:p14:switch | switch | stand-in | pending-stage-3 | 3 | no | transition:p:push | 0.08 | 0.3 |
-| transition:p14:flip | flip | stand-in | pending-stage-3 | 3 | no | transition:p:push | 0.08 | 0.3 |
-| transition:p14:ripple | ripple | stand-in | pending-stage-3 | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
-| transition:p14:honeycomb | honeycomb | stand-in | pending-stage-3 | 3 | no | transition:p:checker | 0.08 | 0.3 |
-| transition:p14:prism | Prism (Cube / Box / Rotate variants; D4 unverified) | stand-in | pending-stage-3 | 3 | no | transition:p:push | 0.08 | 0.3 |
-| transition:p14:doors | doors | stand-in | pending-stage-3 | 3 | no | transition:p:split | 0.08 | 0.3 |
-| transition:p14:window | window | stand-in | pending-stage-3 | 3 | no | transition:p:split | 0.08 | 0.3 |
-| transition:p14:ferris | ferris | stand-in | pending-stage-3 | 3 | no | transition:p:push | 0.08 | 0.3 |
-| transition:p14:gallery | gallery | stand-in | pending-stage-3 | 3 | no | transition:p:push | 0.08 | 0.3 |
-| transition:p14:conveyor | conveyor | stand-in | pending-stage-3 | 3 | no | transition:p:push | 0.08 | 0.3 |
+| transition:p14:vortex | vortex | shader | approximate | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
+| transition:p14:switch | switch | shader | approximate | 3 | no | transition:p:push | 0.08 | 0.3 |
+| transition:p14:flip | flip | shader | approximate | 3 | no | transition:p:push | 0.08 | 0.3 |
+| transition:p14:ripple | ripple | shader | approximate | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
+| transition:p14:honeycomb | honeycomb | shader | approximate | 3 | no | transition:p:checker | 0.08 | 0.3 |
+| transition:p14:prism | Prism (Cube / Box / Rotate variants; D4 unverified) | shader | approximate | 3 | no | transition:p:push | 0.08 | 0.3 |
+| transition:p14:doors | doors | shader | approximate | 3 | no | transition:p:split | 0.08 | 0.3 |
+| transition:p14:window | window | shader | approximate | 3 | no | transition:p:split | 0.08 | 0.3 |
+| transition:p14:ferris | ferris | shader | approximate | 3 | no | transition:p:push | 0.08 | 0.3 |
+| transition:p14:gallery | gallery | shader | approximate | 3 | no | transition:p:push | 0.08 | 0.3 |
+| transition:p14:conveyor | conveyor | shader | approximate | 3 | no | transition:p:push | 0.08 | 0.3 |
 | transition:p14:pan | pan (D4 classification unverified) | transform | exact | 1 | no | — | 0.02 | 0.1 |
-| transition:p14:glitter | glitter | stand-in | pending-stage-3 | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
-| transition:p14:warp | warp (D4 classification unverified) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p14:glitter | glitter | shader | approximate | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
+| transition:p14:warp | warp (D4 classification unverified) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
 | transition:p14:flythrough | flythrough | transform | exact | 1 | no | — | 0.02 | 0.1 |
 | transition:p14:flash | flash (D4 classification unverified) | transform | exact | 1 | no | — | 0.02 | 0.1 |
-| transition:p14:shred | shred | stand-in | pending-stage-3 | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
+| transition:p14:shred | shred | shader | approximate | 3 | no | transition:p:dissolve | 0.08 | 0.3 |
 | transition:p14:reveal | reveal (D4 classification unverified) | transform | exact | 1 | no | — | 0.02 | 0.1 |
 | transition:p14:wheelReverse | wheelReverse (D4 classification unverified) | mask | exact | 1 | no | — | 0.02 | 0.1 |
-| transition:p15:prstTrans:fallOver | fallOver (D4 classification unverified) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:drape | drape (D4 classification unverified) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:curtains | curtains | stand-in | pending-stage-3 | 3 | no | transition:p:split | 0.08 | 0.3 |
-| transition:p15:prstTrans:wind | wind (D4 classification unverified) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:prestige | prestige | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:fracture | fracture | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:crush | crush | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:peelOff | peelOff | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:pageCurlDouble | pageCurlDouble | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:pageCurlSingle | pageCurlSingle | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:airplane | airplane | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p15:prstTrans:origami | origami | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph | Morph (default) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph:byObject | Morph (byObject) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph:byWord | Morph (byWord) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
-| transition:p159:morph:byChar | Morph (byChar) | stand-in | pending-stage-3 | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:fallOver | fallOver (D4 classification unverified) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:drape | drape (D4 classification unverified) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:curtains | curtains | shader | approximate | 3 | no | transition:p:split | 0.08 | 0.3 |
+| transition:p15:prstTrans:wind | wind (D4 classification unverified) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:prestige | prestige | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:fracture | fracture | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:crush | crush | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:peelOff | peelOff | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:pageCurlDouble | pageCurlDouble | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:pageCurlSingle | pageCurlSingle | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:airplane | airplane | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p15:prstTrans:origami | origami | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph | Morph (default) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph:byObject | Morph (byObject) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph:byWord | Morph (byWord) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
+| transition:p159:morph:byChar | Morph (byChar) | shader | approximate | 3 | no | transition:p:fade | 0.08 | 0.3 |
 | behaviour:p:set | set | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:anim | anim | file | exact | 1 | no | — | 0.02 | 0.1 |
 | behaviour:p:animEffect | animEffect | file | exact | 1 | no | — | 0.02 | 0.1 |

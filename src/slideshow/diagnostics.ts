@@ -75,4 +75,10 @@ export const DIAGNOSTIC_CODES: Readonly<Record<string, DiagnosticClass>> = Objec
   'presenter-paint': 'resource', 'presenter-surface': 'resource', 'presenter-thumbnail-approximate': 'approximate',
   'preview-prime': 'resource', 'placement-permission-denied': 'resource', 'placement-api-missing': 'resource',
   'placement-single-screen': 'info', 'placement-failed': 'resource', 'placement-fullscreen-refused': 'resource',
+  // Stage 3 (S3-7). A 3-D row's look-alike and a Morph that cannot run use transition-approximate (effect
+  // `<element>[:<preset>]`, `morph` or `morph-fallback`).
+  // 3-D shaders (S3-1): the shader could not draw a frame (workspace, compile, context), so the look-alike draws it.
+  'transition-shader-fallback': 'resource',
+  // Morph matching (S3-5)
+  'morph-refused': 'refused', 'morph-units-coarsened': 'approximate', 'morph-unit-bound': 'approximate',
 })

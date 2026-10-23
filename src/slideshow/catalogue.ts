@@ -1,10 +1,12 @@
-/** Catalogue policy as of the Stage 2 close (S2-9). Reference provenance: inventory.ts and validation doc.
+/** Catalogue policy as of the Stage 3 close (S3-7): complete, with no pending-stage row.
+ * Reference provenance: inventory.ts and validation doc.
  * Status describes the stage contract, not measured Office fidelity; all rows are
- * unverified until a stage-close task supplies a compare record. This module does
- * not rebuild behaviours or render effects: later engine tasks consume its rows.
+ * unverified until a compare record exists (the owner's D4 PowerPoint captures have
+ * not arrived, so no 3-D or Morph row claims exact). This module does not rebuild
+ * behaviours or render effects: the engine consumes its rows.
  */
 import type { CatalogueRow, Tolerance } from './types'
-export const LANDED_STAGE = 2
+export const LANDED_STAGE = 3
 /** Frame-compare tolerances (fractions of 255): plan defaults for exact and approximate rows. */
 export const TOLERANCE_EXACT: Readonly<Tolerance> = Object.freeze({ meanAbs: 0.02, rowMax: 0.10 })
 export const TOLERANCE_APPROX: Readonly<Tolerance> = Object.freeze({ meanAbs: 0.08, rowMax: 0.30 })
@@ -13,9 +15,13 @@ const approximate = TOLERANCE_APPROX
 function row(data: Omit<CatalogueRow, 'verified' | 'tolerance'>): CatalogueRow {
   return Object.freeze({ ...data, ...(data.preset ? { preset: Object.freeze({ ...data.preset }) } : {}), verified: false, tolerance: Object.freeze({ ...(data.status === 'exact' ? exact : approximate) }) })
 }
+/** A row with a `lookalike` is a Stage 3 row (S3-7 flipped them): a 3-D shader on WebGL2 (S3-1 to S3-4), or Morph's
+ * composited route on either backend (S3-5, S3-6), approximate with the default tolerance; the look-alike is the 2-D
+ * row drawn on Canvas 2D or when the shader cannot run. Every 3-D and Morph row awaits the owner's PowerPoint
+ * captures (D4). */
 function transition(ns: string, element: string, uiName: string, implementation: CatalogueRow['implementation'], lookalike?: string, preset?: string): CatalogueRow {
   return row({ id: `transition:${ns}:${element}${preset === undefined ? '' : ':' + preset}`, kind: 'transition', ns, element,
-    uiName, implementation, status: lookalike ? 'pending-stage-3' : 'exact', stage: lookalike ? 3 : 1, ...(lookalike ? { lookalike } : {}) })
+    uiName, implementation, status: lookalike ? 'approximate' : 'exact', stage: lookalike ? 3 : 1, ...(lookalike ? { lookalike } : {}) })
 }
 function animation(cls: string, id: number, uiName: string, subtype?: number): CatalogueRow {
   return row({ id: `preset:${cls}:${id}${subtype === undefined ? '' : ':' + subtype}`, kind: 'animation',
@@ -56,41 +62,41 @@ export const CATALOGUE: readonly CatalogueRow[] = Object.freeze([
   transition('p', 'wheel', 'Clock', 'mask'),
   transition('p', 'wipe', 'wipe', 'mask'),
   transition('p', 'zoom', 'zoom', 'transform'),
-  transition('p14', 'vortex', 'vortex', 'stand-in', 'transition:p:dissolve'),
-  transition('p14', 'switch', 'switch', 'stand-in', 'transition:p:push'),
-  transition('p14', 'flip', 'flip', 'stand-in', 'transition:p:push'),
-  transition('p14', 'ripple', 'ripple', 'stand-in', 'transition:p:dissolve'),
-  transition('p14', 'honeycomb', 'honeycomb', 'stand-in', 'transition:p:checker'),
-  transition('p14', 'prism', 'Prism (Cube / Box / Rotate variants; D4 unverified)', 'stand-in', 'transition:p:push'),
-  transition('p14', 'doors', 'doors', 'stand-in', 'transition:p:split'),
-  transition('p14', 'window', 'window', 'stand-in', 'transition:p:split'),
-  transition('p14', 'ferris', 'ferris', 'stand-in', 'transition:p:push'),
-  transition('p14', 'gallery', 'gallery', 'stand-in', 'transition:p:push'),
-  transition('p14', 'conveyor', 'conveyor', 'stand-in', 'transition:p:push'),
+  transition('p14', 'vortex', 'vortex', 'shader', 'transition:p:dissolve'),
+  transition('p14', 'switch', 'switch', 'shader', 'transition:p:push'),
+  transition('p14', 'flip', 'flip', 'shader', 'transition:p:push'),
+  transition('p14', 'ripple', 'ripple', 'shader', 'transition:p:dissolve'),
+  transition('p14', 'honeycomb', 'honeycomb', 'shader', 'transition:p:checker'),
+  transition('p14', 'prism', 'Prism (Cube / Box / Rotate variants; D4 unverified)', 'shader', 'transition:p:push'),
+  transition('p14', 'doors', 'doors', 'shader', 'transition:p:split'),
+  transition('p14', 'window', 'window', 'shader', 'transition:p:split'),
+  transition('p14', 'ferris', 'ferris', 'shader', 'transition:p:push'),
+  transition('p14', 'gallery', 'gallery', 'shader', 'transition:p:push'),
+  transition('p14', 'conveyor', 'conveyor', 'shader', 'transition:p:push'),
   transition('p14', 'pan', 'pan (D4 classification unverified)', 'transform'),
-  transition('p14', 'glitter', 'glitter', 'stand-in', 'transition:p:dissolve'),
-  transition('p14', 'warp', 'warp (D4 classification unverified)', 'stand-in', 'transition:p:fade'),
+  transition('p14', 'glitter', 'glitter', 'shader', 'transition:p:dissolve'),
+  transition('p14', 'warp', 'warp (D4 classification unverified)', 'shader', 'transition:p:fade'),
   transition('p14', 'flythrough', 'flythrough', 'transform'),
   transition('p14', 'flash', 'flash (D4 classification unverified)', 'transform'),
-  transition('p14', 'shred', 'shred', 'stand-in', 'transition:p:dissolve'),
+  transition('p14', 'shred', 'shred', 'shader', 'transition:p:dissolve'),
   transition('p14', 'reveal', 'reveal (D4 classification unverified)', 'transform'),
   transition('p14', 'wheelReverse', 'wheelReverse (D4 classification unverified)', 'mask'),
-  transition('p15', 'prstTrans', 'fallOver (D4 classification unverified)', 'stand-in', 'transition:p:fade', 'fallOver'),
-  transition('p15', 'prstTrans', 'drape (D4 classification unverified)', 'stand-in', 'transition:p:fade', 'drape'),
-  transition('p15', 'prstTrans', 'curtains', 'stand-in', 'transition:p:split', 'curtains'),
-  transition('p15', 'prstTrans', 'wind (D4 classification unverified)', 'stand-in', 'transition:p:fade', 'wind'),
-  transition('p15', 'prstTrans', 'prestige', 'stand-in', 'transition:p:fade', 'prestige'),
-  transition('p15', 'prstTrans', 'fracture', 'stand-in', 'transition:p:fade', 'fracture'),
-  transition('p15', 'prstTrans', 'crush', 'stand-in', 'transition:p:fade', 'crush'),
-  transition('p15', 'prstTrans', 'peelOff', 'stand-in', 'transition:p:fade', 'peelOff'),
-  transition('p15', 'prstTrans', 'pageCurlDouble', 'stand-in', 'transition:p:fade', 'pageCurlDouble'),
-  transition('p15', 'prstTrans', 'pageCurlSingle', 'stand-in', 'transition:p:fade', 'pageCurlSingle'),
-  transition('p15', 'prstTrans', 'airplane', 'stand-in', 'transition:p:fade', 'airplane'),
-  transition('p15', 'prstTrans', 'origami', 'stand-in', 'transition:p:fade', 'origami'),
-  transition('p159', 'morph', 'Morph (default)', 'stand-in', 'transition:p:fade'),
-  transition('p159', 'morph', 'Morph (byObject)', 'stand-in', 'transition:p:fade', 'byObject'),
-  transition('p159', 'morph', 'Morph (byWord)', 'stand-in', 'transition:p:fade', 'byWord'),
-  transition('p159', 'morph', 'Morph (byChar)', 'stand-in', 'transition:p:fade', 'byChar'),
+  transition('p15', 'prstTrans', 'fallOver (D4 classification unverified)', 'shader', 'transition:p:fade', 'fallOver'),
+  transition('p15', 'prstTrans', 'drape (D4 classification unverified)', 'shader', 'transition:p:fade', 'drape'),
+  transition('p15', 'prstTrans', 'curtains', 'shader', 'transition:p:split', 'curtains'),
+  transition('p15', 'prstTrans', 'wind (D4 classification unverified)', 'shader', 'transition:p:fade', 'wind'),
+  transition('p15', 'prstTrans', 'prestige', 'shader', 'transition:p:fade', 'prestige'),
+  transition('p15', 'prstTrans', 'fracture', 'shader', 'transition:p:fade', 'fracture'),
+  transition('p15', 'prstTrans', 'crush', 'shader', 'transition:p:fade', 'crush'),
+  transition('p15', 'prstTrans', 'peelOff', 'shader', 'transition:p:fade', 'peelOff'),
+  transition('p15', 'prstTrans', 'pageCurlDouble', 'shader', 'transition:p:fade', 'pageCurlDouble'),
+  transition('p15', 'prstTrans', 'pageCurlSingle', 'shader', 'transition:p:fade', 'pageCurlSingle'),
+  transition('p15', 'prstTrans', 'airplane', 'shader', 'transition:p:fade', 'airplane'),
+  transition('p15', 'prstTrans', 'origami', 'shader', 'transition:p:fade', 'origami'),
+  transition('p159', 'morph', 'Morph (default)', 'shader', 'transition:p:fade'),
+  transition('p159', 'morph', 'Morph (byObject)', 'shader', 'transition:p:fade', 'byObject'),
+  transition('p159', 'morph', 'Morph (byWord)', 'shader', 'transition:p:fade', 'byWord'),
+  transition('p159', 'morph', 'Morph (byChar)', 'shader', 'transition:p:fade', 'byChar'),
   behaviour('set'),
   behaviour('anim'),
   behaviour('animEffect'),
@@ -2379,7 +2385,8 @@ export function rowForPreset(cls: string, id: number, subtype?: number): Catalog
 
 export function catalogueMarkdown(): string {
   return [
-    'Stage contract, not an implementation-completion claim. Every row is unverified; no Office frame compare has landed.',
+    'Complete as of the Stage 3 close (S3-7): no row is pending a stage. Status is the stage contract, not measured Office fidelity.',
+    'Every row is unverified; no Office frame compare has landed. The 3-D and Morph rows (stage 3) are approximate at the tolerance shown, look-alikes awaiting the owner\'s PowerPoint captures (D4).',
     'Animation names retain the LibreOffice reference spelling where the Microsoft UI correspondence is uncertain (see source audit below).',
     '',
     '| ID | Name | Implementation | Status | Stage | Verified | Lookalike / stand-in | Mean abs | Row max |',
