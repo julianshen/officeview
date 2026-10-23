@@ -23,8 +23,10 @@
  *
  * Bounds, monotonic: slides beyond `MORPH_MAX_OBJECTS` refuse and diagnose
  * (`morph-refused`); once text unit pairs pass `MORPH_MAX_UNIT_PAIRS`, later
- * pairs coarsen to object level (`morph-units-coarsened`) and cross-object
- * unit matching stops (`morph-unit-bound`) — never silently.
+ * pairs coarsen to object level (`morph-units-coarsened`, with every unit of
+ * a coarsened pair matched) and the cross-object stage does not run at all;
+ * if the cross-object stage itself reaches the cap, it stops there
+ * (`morph-unit-bound`). Never silently.
  */
 import type { PptxShape, PptxSlide } from '../../pptx/types'
 import { textItems, type TextItem } from '../render/text-split'
@@ -224,10 +226,17 @@ function alignUnits(a: readonly ItemView[], b: readonly ItemView[]): Array<[Item
  * monotonic: past the cap, this and every later pair stays object-level. */
 function decompose(ctx: Ctx, a: Entry, b: Entry): void {
   if (!a.shape.textBody || !b.shape.textBody) return
-  const aligned = alignUnits(unitsOf(ctx, a), unitsOf(ctx, b))
+  const unitsA = unitsOf(ctx, a)
+  const unitsB = unitsOf(ctx, b)
+  const aligned = alignUnits(unitsA, unitsB)
   if (aligned.length === 0) return
   if (ctx.coarsened || ctx.unitPairs + aligned.length > MORPH_MAX_UNIT_PAIRS) {
+    // N2: a coarsened pair leaves nothing behind. Every unit of it is
+    // marked matched, so none lingers as an individual fade beside the
+    // object pair.
     ctx.coarsened = true
+    for (const u of unitsA) u.matched = true
+    for (const u of unitsB) u.matched = true
     ctx.sink?.add({
       code: 'morph-units-coarsened', slideIndex: ctx.slideIndex, effect: 'sld',
       message: `Morph text units beyond ${MORPH_MAX_UNIT_PAIRS} pairs match as objects`,
@@ -248,6 +257,9 @@ interface UnitRef {
 /** Rule 3 in unit mode: units of remaining text-bearing objects pair across
  * objects by equal content; containers follow their majority partner. */
 function pairUnitsAcrossObjects(ctx: Ctx, fromEntries: readonly Entry[], toEntries: readonly Entry[]): void {
+  // N1: once a pair has coarsened (diagnosed `morph-units-coarsened`), the
+  // cross-object stage does not run; the remaining objects fade whole.
+  if (ctx.coarsened) return
   const untagged = (e: Entry): boolean => !e.name.startsWith('!!')
   const fromUnits: UnitRef[] = []
   const toUnits: UnitRef[] = []
