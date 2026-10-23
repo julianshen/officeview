@@ -16,7 +16,7 @@ import { createDiagnosticSink } from '../src/slideshow/diagnostics'
 import { createScheduler } from '../src/slideshow/engine/scheduler'
 import { createSlideTimeline, type SlideCursor, type SlideTimeline } from '../src/slideshow/engine/steps'
 import type { MediaLease, MediaLeaseResult } from '../src/slideshow/media/lease'
-import { createMediaPlayer, type MediaController, type MediaPlayer } from '../src/slideshow/media/player'
+import { createMediaPlayer, type FrameBox, type MediaBox, type MediaController, type MediaPlayer } from '../src/slideshow/media/player'
 import { createTransitionSound } from '../src/slideshow/media/sounds'
 import { readMedia } from '../src/slideshow/read/media'
 import { readSlideTiming } from '../src/slideshow/read/timing'
@@ -818,5 +818,43 @@ describe('PR #19 review 3', () => {
     await flush()
     expect(el.play).toHaveBeenCalledTimes(1)
     expect(sounds.release()).toBe(false)
+  })
+})
+
+describe('PR #19 resize follow-up', () => {
+  it('a resize re-places every shown video overlay, a carried (numSld) one at the geometry it keeps', async () => {
+    const r = rig()
+    // The surface's mapping from frame fractions to CSS px; a resize changes it (here: twice the size).
+    let scale = 1
+    const frames: Record<string, FrameBox> = { '7': { x: 0.1, y: 0.2, w: 0.3, h: 0.4 } }
+    const toCss = (f: FrameBox): MediaBox => ({ left: f.x * 1000 * scale, top: f.y * 500 * scale, width: f.w * 1000 * scale, height: f.h * 500 * scale })
+    const player = createMediaPlayer({
+      root: r.root, sink: r.sink,
+      open: async (m) => r.openWith.result(m),
+      box: (spid) => (frames[spid] ? toCss(frames[spid]!) : undefined),
+      frameBox: (spid) => frames[spid],
+      frameToBox: toCss,
+      create: (kind) => {
+        const el = r.root.ownerDocument.createElement(kind) as Fake
+        el.play = vi.fn(() => Promise.resolve()); el.pause = vi.fn(); el.load = vi.fn(); el.canPlayType = vi.fn(() => 'maybe' as CanPlayTypeResult)
+        r.elements.push(el)
+        return el
+      },
+    })
+    const a = drive({ ...r, player }, slideOf(tree(mainSeq([]), media('video', 10, '7', {}, { numSld: 2 })), [rec('7')]))
+    a.sync(0)
+    await flush()
+    const el = r.elements[0]
+    expect([el.style.left, el.style.top, el.style.width, el.style.height]).toEqual(['100px', '100px', '300px', '200px'])
+    // Slide 2 has no shape 7 (its own shapes differ); the video plays on where it was.
+    a.ctl.leave()
+    delete frames['7']
+    drive({ ...r, player }, slideOf(undefined, [], 1))
+    expect(el.isConnected).toBe(true)
+    // The window doubles: the carried overlay follows, from its kept geometry.
+    scale = 2
+    player.layout()
+    expect([el.style.left, el.style.top, el.style.width, el.style.height]).toEqual(['200px', '200px', '600px', '400px'])
+    expect(el.hidden).toBe(false)
   })
 })

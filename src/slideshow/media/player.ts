@@ -76,6 +76,8 @@ export interface MediaPlayerDeps {
    * to later slides (`numSld`), whose shape the shown slide no longer has (PR #19 review 4).
    */
   frameBox?(spid: string): FrameBox | undefined
+  /** A kept frame box back in CSS px of the surface now (`Stage.frameBoxToCss`): a carried overlay is re-placed on resize. */
+  frameToBox?(frame: FrameBox): MediaBox | undefined
   /** Frees other workspace holders (the looping transition sound) when a lease is refused; true when it freed something. */
   relieve?(): boolean
   /**
@@ -241,6 +243,14 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
     } else teardown(live, false)
   }
 
+  function position(el: HTMLMediaElement, box: MediaBox): void {
+    const s = el.style
+    s.left = `${box.left}px`
+    s.top = `${box.top}px`
+    s.width = `${box.width}px`
+    s.height = `${box.height}px`
+  }
+
   function dropCrossSlide(): boolean {
     if (carried.size === 0) return false
     for (const live of [...carried]) teardown(live, true)
@@ -375,12 +385,7 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       const box = deps.box?.(st.spid)
       live.el.hidden = !box
       live.frame = box ? deps.frameBox?.(st.spid) : undefined
-      if (!box) return
-      const s = live.el.style
-      s.left = `${box.left}px`
-      s.top = `${box.top}px`
-      s.width = `${box.width}px`
-      s.height = `${box.height}px`
+      if (box) position(live.el, box)
     }
 
     function attach(st: NodeState, el: HTMLMediaElement, lease: MediaLease): void {
@@ -698,7 +703,15 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
       }
     },
     dropCrossSlide,
-    layout() { current?.layout() },
+    layout() {
+      current?.layout()
+      // A video carried past its slide has no shape on the shown one: it keeps its frame box and follows the surface.
+      for (const live of carried) {
+        if (live.kind !== 'video' || !live.frame) continue
+        const box = deps.frameToBox?.(live.frame)
+        if (box) position(live.el, box)
+      }
+    },
     dispose() {
       dropCrossSlide()
       for (const live of current ? [...current.lives()] : []) teardown(live, true)

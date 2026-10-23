@@ -133,6 +133,8 @@ export interface Stage {
    * where the presenter mirror composites the video frame over its copy of the frame.
    */
   mediaFrameBox?(spid: string): { x: number; y: number; w: number; h: number } | undefined
+  /** Additive: a frame-fraction box in CSS px of the surface now (the inverse step of `mediaFrameBox`, letterbox included). */
+  frameBoxToCss?(f: { x: number; y: number; w: number; h: number }): { left: number; top: number; width: number; height: number } | undefined
   /**
    * Additive (S2-8): the timing to schedule for slide `index` when it builds
    * text by word or letter: a working copy fanned out over the items, with
@@ -1225,6 +1227,15 @@ export function createStage(deps: StageDeps): Stage {
       // Slide px → device px of the backing (the viewport), as mediaBox maps before its CSS step.
       const m = viewport(p).matrix
       return { x: (m[0] * g.x + m[4]) / backing.w, y: (m[3] * g.y + m[5]) / backing.h, w: m[0] * g.w / backing.w, h: m[3] * g.h / backing.h }
+    },
+
+    frameBoxToCss(f) {
+      const r = root.getBoundingClientRect()
+      if (!(r.width > 0 && r.height > 0) || !(backing.w > 0 && backing.h > 0)) return undefined
+      // Device px of the backing → CSS px of the letterboxed canvas (object-fit: contain), as mediaBox maps.
+      const k = Math.min(r.width / backing.w, r.height / backing.h)
+      const ox = (r.width - backing.w * k) / 2, oy = (r.height - backing.h * k) / 2
+      return { left: ox + f.x * backing.w * k, top: oy + f.y * backing.h * k, width: f.w * backing.w * k, height: f.h * backing.h * k }
     },
 
     runAt(shape, u, v, w, h) {

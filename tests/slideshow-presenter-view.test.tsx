@@ -751,6 +751,12 @@ describe('PR #19 review 2', () => {
       expect(f.y).toBeCloseTo((css.top - fy) / (frame.height * fk), 4)
       expect(f.w).toBeCloseTo(css.width / (frame.width * fk), 4)
       expect(f.h).toBeCloseTo(css.height / (frame.height * fk), 4)
+      // And back: a kept frame box maps to the overlay's CSS box (what a resize re-places a carried video with).
+      const back = st.frameBoxToCss!(f)!
+      expect(back.left).toBeCloseTo(css.left, 4)
+      expect(back.top).toBeCloseTo(css.top, 4)
+      expect(back.width).toBeCloseTo(css.width, 4)
+      expect(back.height).toBeCloseTo(css.height, 4)
       r.exit()
     } finally {
       seams.restore()

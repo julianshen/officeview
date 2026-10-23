@@ -866,6 +866,7 @@ export async function createSession(start: ShowStart): Promise<SessionController
       open: (rec, s) => (handle && win ? openMediaLease(handle, rec, ws, win, s) : Promise.resolve({ refused: 'no-package' })),
       box: (spid) => stage?.mediaBox?.(spid),
       frameBox: (spid) => stage?.mediaFrameBox?.(spid),
+      frameToBox: (f) => stage?.frameBoxToCss?.(f),
       relieve: () => sounds?.release() ?? false,
       stopTransitionSound: (onlyLooping) => sounds?.release(onlyLooping) ?? false,
     })
