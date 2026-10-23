@@ -418,3 +418,25 @@ describe('PR #19 review 10 (mixed-unit grouping)', () => {
     expect(exit.items.filter(i => i.key !== 'sp:2').map(i => i.delayMs)).toEqual([0, 500, 1000, 1500])
   })
 })
+
+describe('PR #19 review 12', () => {
+  it('word groups match within their paragraph: two one-word paragraphs animate one after the other', async () => {
+    const { buildPptxDeck } = await import('../src/testdata/ooxml-builders')
+    const { OfficePackage } = await import('../src/core/zip')
+    const { parsePptx } = await import('../src/pptx/parse')
+    const { textTimingFor } = await import('../src/slideshow/player/text-builds')
+    const bytes = await buildPptxDeck({ slides: [{ shapes: [{ id: 2, off: ['0', '0'], ext: ['4572000', '1828800'], paragraphs: [{ runs: [{ text: 'Ab' }] }, { runs: [{ text: 'Cd' }] }] }] }] })
+    const slide = (await parsePptx(await OfficePackage.load(bytes))).slides[0]!
+    const c = (id: number, over: Partial<CTn> = {}): CTn => ({ id, durMs: undefined, accel: 0, decel: 0, autoRev: false, start: [], end: [], fill: 'hold', ...over })
+    const set = (id: number, to: string): BehaviourNode => ({ kind: 'set', ctn: c(id, { durMs: 1, start: [{ delayMs: 0 }] }), target: { spid: '2' }, attrNames: ['style.visibility'], additive: 'base', accumulate: 'none', to } as BehaviourNode)
+    const effect = (id: number, cls: string, unit: 'wd' | 'lt', b: BehaviourNode): ContainerNode =>
+      ({ kind: 'par', ctn: c(id, { presetClass: cls, start: [{ delayMs: 0 }], iterate: { type: unit, backwards: false, tmAbsMs: 500 } } as Partial<CTn>), children: [b] })
+    const tree: TimingTree = { root: { kind: 'par', ctn: c(1, { durMs: 'indefinite' }), children: [effect(3, 'entr', 'wd', set(4, 'visible')), effect(5, 'exit', 'lt', set(6, 'hidden'))] }, build: [] }
+    const tt = textTimingFor(slide as PptxSlide, tree, { sink: createDiagnosticSink() })!
+    const entrance = [...tt.fan.entries()].find(([n]) => n.ctn.id === 4)![1]
+    const letters = entrance.items.filter(i => i.key !== 'sp:2')
+    expect(letters).toHaveLength(4)
+    // "Ab" together at 0, then "Cd" together 500 ms later (not every letter at 0 in the first paragraph's word).
+    expect(letters.map(i => i.delayMs)).toEqual([0, 0, 500, 500])
+  })
+})

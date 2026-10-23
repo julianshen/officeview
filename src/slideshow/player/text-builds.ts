@@ -110,8 +110,9 @@ export function textTimingFor(slide: PptxSlide, tree: TimingTree, options: TextT
 }
 
 /**
- * The letter keys of each word, in word order: a letter belongs to the first word whose character range holds it
- * (or, for paragraph items of a coarsened split, the first in its paragraph). Words left empty are dropped.
+ * The letter keys of each word, in word order: a letter belongs to the first word of its own paragraph whose
+ * character range (paragraph-local) holds it (or, for paragraph items of a coarsened split, the first in its
+ * paragraph). Words left empty are dropped.
  */
 function wordGroups(letters: readonly TextItem[], words: readonly TextItem[]): TargetKey[][] {
   const order: TargetKey[] = []
@@ -120,9 +121,10 @@ function wordGroups(letters: readonly TextItem[], words: readonly TextItem[]): T
   const placed = new Set<TargetKey>()
   for (const l of letters) {
     if (placed.has(l.key)) continue
-    const w = words.find(w => l.st !== undefined && l.end !== undefined && w.st !== undefined && w.end !== undefined
+    // Offsets are paragraph-local: a letter joins a word of its own paragraph only (PR #19 review 12).
+    const w = words.find(w => l.paragraph === w.paragraph && (l.st !== undefined && l.end !== undefined && w.st !== undefined && w.end !== undefined
       ? l.st >= w.st && l.end <= w.end
-      : l.paragraph === w.paragraph)
+      : true))
     if (!w) continue
     byWord.get(w.key)!.push(l.key)
     placed.add(l.key)
