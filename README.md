@@ -646,7 +646,9 @@ handle, so it paints as before and records a `no-package` diagnostic in
 ### Slideshow
 
 PowerPoint documents can be presented as a full-screen slideshow, with their
-transitions, animations, timings and click triggers. The show engine is a
+transitions, animations, timings, click triggers, audio and video, and with
+Presenter View (speaker notes, the next slide and a timer) in a second window
+or on the same screen. The show engine is a
 lazily loaded chunk (`src/slideshow/`); it is fetched the first time a show
 starts (or when the pointer reaches the Present button), so the eager bundle
 carries only the start code. It draws with WebGL2 and falls back to Canvas 2D.
@@ -654,11 +656,13 @@ carries only the start code. It draws with WebGL2 and falls back to Canvas 2D.
 **Starting a show.**
 
 - The PowerPoint toolbar has a **Present** button. The button starts from the
-  current slide; its menu offers "From beginning" and "From current slide".
-  It is hidden with `showToolbar={false}` or `allowPresent={false}`.
+  current slide; its menu offers "From beginning", "From current slide" and
+  "Presenter View". It is hidden with `showToolbar={false}` or
+  `allowPresent={false}`.
 - With focus inside the viewer, **F5** presents from the beginning and
-  **Shift+F5** from the current slide. `presentShortcuts={false}` turns the
-  keys off.
+  **Shift+F5** from the current slide; **Alt+F5** (Shift+Alt+F5 from the
+  current slide) presents with Presenter View. `presentShortcuts={false}`
+  turns the keys off. Ctrl/Cmd+F5 stays the browser's reload.
 - Hosts can start a show themselves through the viewer's `ref` (below).
 
 **Keys during the show** (PowerPoint's Slide Show keys):
@@ -671,6 +675,7 @@ carries only the start code. It draws with WebGL2 and falls back to Canvas 2D.
 | Go to slide n | type the number, then Enter |
 | Black / white screen | B or `.` / W or `,` (any key except Esc resumes) |
 | Pause / resume an automatic show | S or `+` |
+| Switch between Presenter View and the audience view (one screen) | Alt+F5 |
 | Exit | Esc or `-` |
 
 Esc always exits, in every mode, including kiosk shows. Previous snaps to the
@@ -701,9 +706,10 @@ const viewer = useRef<OfficeViewerHandle>(null)
 ```
 
 - `present(opts?)` takes `from` (`'beginning'`, the default; `'current'`; or a
-  0-based slide index, which may be a hidden slide) and `presenterView`. It
-  resolves to a `SlideShowSession` with `slideIndex`, `buildIndex`,
-  `surface` (`'fullscreen'` or `'in-window'`), `presenter`, `next()`,
+  0-based slide index, which may be a hidden slide) and `presenterView`
+  (below). It resolves to a `SlideShowSession` with `slideIndex`, `buildIndex`,
+  `surface` (`'fullscreen'` or `'in-window'`), `presenter` (`'window'`,
+  `'swap'` or `'none'`), `next()`,
   `previous()`, `goTo(slideIndex)`, `exit()` (idempotent) and `ended`, a
   promise that resolves exactly once when the show exits for any reason and
   never rejects.
@@ -720,6 +726,42 @@ const viewer = useRef<OfficeViewerHandle>(null)
   `session.surface` is `'in-window'`.
 - Unmounting the viewer, replacing its document or setting
   `allowPresent={false}` ends a running show.
+
+**Presenter View.** `presenterView` chooses it:
+
+- `true` opens a second browser window for the presenter in the same gesture,
+  before full screen. It shows the current slide (a mirror of the audience
+  picture, animations included), the next click or slide, the speaker notes
+  (with A+ / A−), an elapsed timer and the clock, Previous / Next / End show /
+  Black screen buttons, "See all slides", a "Go to slide" field, "Swap
+  displays" and a collapsible "Effect notes" panel listing what was
+  approximated or refused. `session.presenter` is `'window'`.
+- `'auto'` (the default) opens the window only when officeview has already
+  prepared a two-screen placement: the browser has the Window Management
+  permission, so Presenter View can open on one screen and the audience go
+  full screen on the other. Otherwise a plain Present shows the audience only,
+  full screen, and Presenter View is one Alt+F5 (or menu choice) away. (A
+  popup costs the click's user activation in Chromium, so opening it without a
+  placement would leave the audience out of full screen.)
+- `false` shows the audience only (`'none'`).
+- **One screen.** If the window is blocked or cannot open, the show starts on
+  Presenter View inside the viewer (`'swap'`), and Alt+F5 switches between
+  Presenter View and the audience picture.
+- **Two screens.** Where the browser supports Window Management, "Use both
+  screens" asks for the permission on a click and places the windows; in
+  other browsers drag the window to the other screen (a one-time hint says
+  so).
+- Presenter input (its buttons and keys) works in kiosk shows; audience input
+  stays blocked. Esc in either window ends the show, and closing the viewer
+  closes the presenter window.
+
+**Audio and video.** Audio and video on slides play on the show's timeline
+(including PowerPoint's play, pause, resume, stop and toggle-pause commands
+and sound across slides), and transition sounds play, wherever the browser
+decodes the format. A clip the browser cannot decode keeps its poster picture,
+diagnosed; one the browser refuses to start (autoplay) shows a "Click to
+play" button and the show continues. Video plays in an overlay at its shape's
+position. Media is read lazily, at most 512 MiB per file.
 
 `present()` rejects with a `SlideShowError` whose `code` is one of:
 
@@ -753,10 +795,14 @@ choice that `slideShowMotion="full"` overrides.
 | Need | Host requirement | When refused |
 |---|---|---|
 | Full screen | iframe `allow="fullscreen"` (and the host page's Permissions-Policy) | the show runs in the window, with a notice and a diagnostic |
+| Presenter View window | a `sandbox` iframe must include `allow-popups` | Presenter View runs on one screen, inside the viewer (`popup-blocked`) |
+| Two-screen placement | iframe `allow="window-management"` | the presenter window opens where the browser puts it; the presenter can drag it (`placement-*` diagnostics) |
+| Presenter View styles | a CSP whose `style-src` allows officeview's stylesheet URL (the presenter window inherits the page's CSP; host nonces are not copied into it) | Presenter View works with browser default styles (`presenter-styles-blocked`) |
 
-Presenter View (a second window) arrives in a later release. It will add the
-iframe `sandbox` `allow-popups`, `allow="window-management"` and a host CSP
-that allows officeview's stylesheet in the popup.
+For example:
+`<iframe src="…" allow="fullscreen; window-management" sandbox="allow-scripts allow-same-origin allow-popups">`.
+Link officeview's stylesheet (`officeview/style.css`) rather than inlining it,
+so a host CSP of `style-src 'self'` covers the presenter window too.
 
 **Known limits.**
 
@@ -769,10 +815,17 @@ that allows officeview's stylesheet in the popup.
 - **Kiosk shows** block clicks, keys, triggers and hyperlinks (Esc still
   exits) and restart after their `restart` time; the host API still
   navigates.
-- **Presenter View, speaker notes, audio and video** are not in this release:
-  `presenterView: true` is diagnosed and the show is audience only, and audio
-  and video effects play as diagnosed stand-ins (a silent timed step, or the
-  video's poster frame).
+- **Media limits.** A sound attached to an animation (an "effect sound") is
+  not played (diagnosed). An indefinite clip started by a play command never
+  ends its media node on the timeline, so an effect waiting on that clip's end
+  does not run (effects timed after the command, as PowerPoint writes them,
+  do). Video sits in an overlay that effects on its shape do not move. TIFF
+  pictures do not paint in Chrome or Firefox.
+- **Presenter View limits.** Grid thumbnails other than the current and next
+  slides show no pictures; for a build by word or letter, the Next pane may
+  show the next slide instead; words and letters built one at a time are
+  clipped to their boxes, so italic overhang and text shadow are cut. There
+  is no pen, laser pointer or highlighter.
 - **3-D and morph transitions** (vortex, prism, airplane, morph and others)
   play a catalogued 2-D look-alike, diagnosed.
 - No effect is silently skipped: everything approximated, replaced or refused

@@ -138,3 +138,23 @@ it('shared policy rows are frozen and an unavailable codec is an approximate sta
   }
   expect(CATALOGUE.find(r => r.id === 'media:codec')).toMatchObject({ status: 'approximate', stage: 2, implementation: 'stand-in' })
 })
+it('the validation doc lists every Stage 2 diagnostic code with its catalogue class and panel group (S2-9)', async () => {
+  const { DIAGNOSTIC_CODES } = await import('../src/slideshow/diagnostics')
+  const { diagnosticKind } = await import('../src/slideshow/presenter/diagnostics')
+  const doc = readFileSync('docs/validation/slideshow.md', 'utf8')
+  const section = doc.split('### Stage 2 diagnostic codes\n')[1]?.split('\n## ')[0] ?? ''
+  const rows = section.split('\n').filter(l => /^\| `/.test(l)).map(l => l.split('|').slice(1, -1).map(c => c.trim()))
+  const PANEL = { refused: 'Refused', approximate: 'Approximate', pending: 'Pending', other: 'Other notes' } as const
+  const listed = new Set<string>()
+  for (const [code, cls, panel] of rows) {
+    const name = code.replace(/`/g, '')
+    listed.add(name)
+    expect(DIAGNOSTIC_CODES[name], name).toBe(cls)
+    expect(PANEL[diagnosticKind({ code: name, message: '' })], name).toBe(panel)
+  }
+  // The Stage 2 block of the catalogue (media playback onwards) plus the effect-sound stand-in.
+  const keys = Object.keys(DIAGNOSTIC_CODES)
+  const stage2 = [...keys.slice(keys.indexOf('media-autoplay')), 'media-stand-in']
+  expect(stage2.filter(c => !listed.has(c))).toEqual([])
+  expect(rows.length).toBe(listed.size)
+})
