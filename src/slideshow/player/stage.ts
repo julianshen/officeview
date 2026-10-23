@@ -35,6 +35,9 @@
  *   initial frame is flattened and the two are composited with
  *   `transitionDraw` (called before `frame`, with one rng for the whole
  *   effect). Reduced motion uses `reducedTransition` (never adds motion).
+ *   S3-1: `dispatchTransition` sends a registered 3-D row on WebGL2 to its
+ *   shader (`transition3DDraw` params); anything else draws `transitionDraw`,
+ *   an approximated row diagnosed once.
  * - **Resize and DPR.** A new output takes its reserve before the old is
  *   released (`residency.resize`); the output and the viewport swap, then
  *   `commitResize`. Current, previous and next are re-rasterised layer by
@@ -53,6 +56,7 @@ import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type Render
 import { rasterLayer } from '../render/raster'
 import { imageIndices, paintedBounds, slideSize, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
+import { dispatchTransition, transition3DDraw } from '../render/three/framework'
 import { createResidency, type LadderLevel, type Residency } from '../residency'
 import { createRng } from '../rng'
 import { textBases, textTimingFor, type TextTiming } from './text-builds'
@@ -368,6 +372,8 @@ interface Frame { handle: LayerHandle; epoch: number; lease?: Lease }
 
 interface Running {
   spec: TransitionSpec
+  /** S3-1: dispatched to its registered 3-D shader (`transition3DDraw` params), else `transitionDraw`. */
+  three: boolean
   from?: Frame
   to: Frame
   start: number
@@ -967,7 +973,8 @@ export function createStage(deps: StageDeps): Stage {
       let spec = model.slide.transition
       if (spec && deps.reduced) spec = reducedTransition(spec)
       const drawn = spec ? resolveTransition2D(spec) : undefined
-      if (drawn?.approximated && spec) sink.add({ code: 'transition-approximate', slideIndex: p.index, effect: spec.element, message: `Transition ${spec.ns}:${spec.element} is drawn as its 2-D look-alike ${drawn.spec.element}` })
+      // S3-1: a registered 3-D row on WebGL2 runs its shader; otherwise its 2-D look-alike, diagnosed (after reduced motion, so it never adds motion).
+      const route = spec ? dispatchTransition(spec, compositor(), sink, p.index) : 'lookalike'
       const duration = spec && drawn && drawn.spec.element !== 'cut' && Number.isFinite(spec.durationMs) ? Math.max(0, spec.durationMs) : 0
       const start = t
       // The show's first slide transitions from black, as PowerPoint does (S1-20 review M1).
@@ -982,7 +989,7 @@ export function createStage(deps: StageDeps): Stage {
         const s = viewport(p).scale
         const to = flatten(p, liveState, owner, level === 'full' ? s : s / Math.max(1, backing.dpr), 'transition:to')
         if (to) {
-          running = { spec: level === 'flattened' ? { ...spec, element: 'fade', ns: 'p', attrs: {} } : spec, from: outgoing, to, start, duration, rng: createRng((deps.seed ?? 0x5eed) ^ (p.index * 2654435761)) }
+          running = { spec: level === 'flattened' ? { ...spec, element: 'fade', ns: 'p', attrs: {} } : spec, three: route === 'shader' && level !== 'flattened', from: outgoing, to, start, duration, rng: createRng((deps.seed ?? 0x5eed) ^ (p.index * 2654435761)) }
           outgoing = undefined
         } else sink.add({ code: 'transition-workspace', slideIndex: p.index, message: 'The incoming frame did not fit the slideshow workspace; the slide change is a cut' })
       }
@@ -1041,7 +1048,8 @@ export function createStage(deps: StageDeps): Stage {
         const progress = running.duration > 0 ? (t - running.start) / running.duration : 1
         if (progress < 1 && running.to.epoch === epoch && (!running.from || running.from.epoch === epoch)) {
           // transitionDraw first (a random pick draws from the rng), then frame with the same rng.
-          const params = transitionDraw(running.spec, progress, running.rng, slidePx(p).w / slidePx(p).h)
+          const aspect = slidePx(p).w / slidePx(p).h
+          const params = running.three ? transition3DDraw(running.spec, progress, running.rng, aspect) : transitionDraw(running.spec, progress, running.rng, aspect)
           const wm = p.plan.layers[p.plan.layers.length - 1]
           const mark = wm && p.built?.epoch === epoch ? p.built.handles.get(wm) : undefined
           c.frame(mark ? [{ handle: mark, state: PLAIN }] : [], {

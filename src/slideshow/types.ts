@@ -5,6 +5,7 @@
  * verbatim; extend them, never rename them.
  */
 import type { XmlNode } from '../core/xml'
+import type { Transition3D } from './render/three/registry'
 
 // ---------------------------------------------------------------------------
 // Random numbers
@@ -429,6 +430,12 @@ export interface Compositor {
   setViewport(view: CompositorViewport): void
   /** Additive (S1-13 fix round 1): the slide that compositor diagnostics are attributed to. */
   setSlideIndex(index: number | undefined): void
+  /**
+   * Additive (S3-1): WebGL2 only. Prepares `t` (leases its grids, compiles its
+   * programs) so a transition dispatched to its shader can start; `false`
+   * when it cannot (lost context, refused lease, failed compile).
+   */
+  prepareTransition3D?(t: Transition3D): boolean
   dispose(): void
 }
 
