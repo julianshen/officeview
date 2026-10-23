@@ -48,5 +48,6 @@ test('headless Chromium enters and exits element full screen on a click', async 
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null)).toBe('stage')
   await page.click('#exit')
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null)).toBeNull()
-  expect(await page.evaluate(() => window.__slideshowSmoke!.log)).toEqual(['enter', 'exit'])
+  // fullscreenchange can land after fullscreenElement clears (seen on Linux CI): wait for the log.
+  await expect.poll(() => page.evaluate(() => window.__slideshowSmoke!.log)).toEqual(['enter', 'exit'])
 })
