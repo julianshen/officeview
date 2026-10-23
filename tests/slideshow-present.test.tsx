@@ -147,6 +147,28 @@ describe('startPresent: the synchronous prologue', () => {
     expect(ref.current).toBeNull()
   })
 
+  it('PR #18 review 4: a full-screen retry that succeeds after the show ended leaves full screen again', async () => {
+    const host = freshHost()
+    // The first request is refused (the notice offers a retry); the retry is still pending when the show ends.
+    const p = fakePlatform(log, { fs: 'defer' })
+    let starts = 0
+    const real = p.requestFullscreen
+    p.requestFullscreen = (el) => (starts++ === 0 ? Promise.reject(new Error('denied')) : real(el))
+    let handed!: ShowStart
+    const run = start(host, p)
+    loads[0].resolve({ ...slideshow, runShow: async (s: ShowStart) => { handed = s; return {} as never } } as typeof slideshow)
+    await run
+    expect(await handed.fullscreen).toBe('refused')
+    const retry = handed.retryFullscreen()
+    handed.cleanup()
+    expect(log).not.toContain('exitFullscreen')
+    p.settle!.enter()
+    expect(await retry).toBe('entered')
+    await flush()
+    expect(log).toContain('exitFullscreen')
+    expect(p.fs).toBeNull()
+  })
+
   it('not-presentable for DOCX and for allowPresent=false; invalid-slide for 1.5, -1 and slideCount', async () => {
     const host = freshHost()
     const p = fakePlatform(log)

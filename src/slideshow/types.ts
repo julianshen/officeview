@@ -417,8 +417,11 @@ export interface Compositor {
   release(handle: LayerHandle): void
   frame(draws: readonly LayerDraw[], transition?: TransitionDraw): void
   resize(widthPx: number, heightPx: number): void
-  /** Additive (S1-13 fix round 1). Resizes the output when the device size differs. Default: identity, current size. */
-  setViewport(view: CompositorViewport): void
+  /**
+   * Additive (S1-13 fix round 1). Resizes the output when the device size differs. Default: identity, current size.
+   * Returns false when the output could not take the new size and keeps its old one (PR #18 review 4).
+   */
+  setViewport(view: CompositorViewport): boolean | void
   /** Additive (S1-13 fix round 1): the slide that compositor diagnostics are attributed to. */
   setSlideIndex(index: number | undefined): void
   dispose(): void

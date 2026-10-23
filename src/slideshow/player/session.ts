@@ -707,7 +707,8 @@ export async function createSession(start: ShowStart): Promise<SessionController
     }
     watchDpr()
 
-    const from = start.from === 'current' ? Math.min(Math.max(0, cb.currentSlide()), Math.max(0, count - 1)) : start.from
+    // An empty deck has no current slide: it opens on end-of-show, as a start from the beginning does (PR #18 review 4).
+    const from = start.from === 'current' ? (count ? Math.min(Math.max(0, cb.currentSlide()), count - 1) : 'beginning') : start.from
     const firstShown = firstSlide({ index }, from)
     // Every start-time diagnostic reaches the host before onStart.
     await enter(firstShown)

@@ -1111,7 +1111,17 @@ export function createStage(deps: StageDeps): Stage {
       output.width = backing.w
       output.height = backing.h
       lastDirect = ''
-      compositor().setViewport(viewport(current))
+      // The compositor's output is part of the transaction: when it keeps its old size (WebGL2 under pressure),
+      // the old backing store, layer scale and viewport stay and the new reserve is refunded (PR #18 review 4).
+      if (compositor().setViewport(viewport(current)) === false) {
+        residency.abortResize()
+        backing = residency.backing
+        output.width = backing.w
+        output.height = backing.h
+        compositor().setViewport(viewport(current))
+        sink.add({ code: 'resize-kept-old', message: 'the compositor could not take the new output size; the old backing store is kept and scaled' })
+        return
+      }
       residency.commitResize()
       // A DPR-only change keeps the pixel size but moves the reduced rung's layer scale (S1-20 review M2).
       if (before.w === backing.w && before.h === backing.h && before.dpr === backing.dpr) return

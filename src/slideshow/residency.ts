@@ -34,6 +34,8 @@ export interface Residency {
   resize(css: { w: number; h: number }, dpr: number): 'resized' | 'kept-old'
   /** The new output surface has replaced the old one: the old output is refunded. */
   commitResize(): void
+  /** The new output could not be used (the compositor kept its size): the new reserve is refunded and the old backing store restored. */
+  abortResize(): void
   /** Moves the window to `slide - 1 .. slide + 1`, evicting everything outside it. */
   show(slide: number): void
   /** The slides currently holding (or acquiring) residency, ascending. */
@@ -105,6 +107,8 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
   const inWindow = (slide: number) => current !== undefined && Math.abs(slide - current) <= 1
 
   let pendingResize: ResizeTicket | undefined
+  /** The backing store before the pending resize (`abortResize` restores it). */
+  let previous: Backing = backing
 
   /** A retired generation keeps exactly what is still held: everything while a build runs, then its live leases. */
   const settle = (g: Generation) => {
@@ -275,6 +279,7 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
         if (!ticket) return keep()
         pendingResize = ticket
       } else if (!terminal.resize(bytes)) return keep()
+      previous = backing
       backing = next
       return 'resized'
     },
@@ -282,6 +287,13 @@ export function createResidency(ws: SlideShowWorkspace, store: SlideMetadataStor
       const ticket = pendingResize
       pendingResize = undefined
       ticket?.commit()
+    },
+    abortResize() {
+      const ticket = pendingResize
+      pendingResize = undefined
+      if (ticket) ticket.abort()
+      else terminal.resize(surfaceBytes(previous.w, previous.h))
+      backing = previous
     },
     show(slide) {
       current = slide

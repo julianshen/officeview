@@ -489,20 +489,22 @@ export function createWebGL2Compositor(
     drawQuad(t, m, clamp01(state.opacity, 1), tint, binding)
   }
 
-  function resizeOutput(widthPx: number, heightPx: number) {
+  /** False when the new drawing buffer did not fit: the output keeps its size. */
+  function resizeOutput(widthPx: number, heightPx: number): boolean {
     const w = Math.max(1, Math.floor(widthPx)), h = Math.max(1, Math.floor(heightPx))
-    if (!Number.isFinite(w) || !Number.isFinite(h) || (w === canvas.width && h === canvas.height)) return
+    if (!Number.isFinite(w) || !Number.isFinite(h) || (w === canvas.width && h === canvas.height)) return true
     if (res) {
       const next = workspace.lease(w * h * 4, 'webgl2:framebuffer')
       if (!next) {
         diagnose('compositor-workspace', 'output', `The ${w}×${h} WebGL2 drawing buffer did not fit the slideshow workspace; the output keeps its size`)
-        return
+        return false
       }
       res.frame.release()
       res.frame = next
     }
     canvas.width = w
     canvas.height = h
+    return true
   }
 
   if (!build()) return undefined
@@ -560,7 +562,7 @@ export function createWebGL2Compositor(
     setViewport(next: CompositorViewport) {
       if (disposed) return
       view = isAffine(next.matrix) ? next.matrix : IDENTITY
-      resizeOutput(next.deviceWidth, next.deviceHeight)
+      return resizeOutput(next.deviceWidth, next.deviceHeight)
     },
 
     setSlideIndex(index) {

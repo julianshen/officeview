@@ -165,19 +165,19 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
     : P.hasActivation(d.defaultView!) === false ? 'gesture-required' : 0
   const token = code ? 0 : acquireShowToken(host)
   if (!token) return Promise.reject(new SlideShowError(code || 'already-presenting'))
-  let done: unknown, handed: unknown, entered: unknown, pending: unknown = 1
+  let done: unknown, handed: unknown, entered: unknown
   const ac = new AbortController(), signal = ac.signal
   const end = () => ac.abort()
   const exit = () => {
     token.owns(P.fullscreenElement(d)) && P.exitFullscreen(d).catch(end)
   }
-  // A start can fail before the browser has entered full screen: then the
-  // exit waits for the synchronous request to settle.
+  // A start can fail before the browser has entered full screen: a request
+  // still in flight exits when it settles (`retryFullscreen`).
   const cleanup = () => {
     if (done) return
     done = 1
     end()
-    pending ? fullscreen.then(exit) : exit()
+    exit()
     host.style.visibility = 'hidden'
     token.release()
   }
@@ -192,8 +192,9 @@ export function startPresent(req: PresentRequest): Promise<SlideShowSession> {
   }
   host.style.visibility = 'visible'
   const back = d.activeElement
-  const retryFullscreen = () => P.requestFullscreen(host).then(() => 'entered' as const, () => 'refused' as const)
-  const fullscreen = retryFullscreen().finally(() => pending = 0)
+  // A request (the first or a retry) that succeeds after the show ended leaves full screen at once.
+  const retryFullscreen = () => P.requestFullscreen(host).then(() => (done && exit(), 'entered' as const), () => 'refused' as const)
+  const fullscreen = retryFullscreen()
   host.focus()
   return Promise.race([
     new Promise<never>((_, no) => signal.addEventListener('abort', () => handed || no(new SlideShowError('cancelled')))),

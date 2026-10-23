@@ -269,13 +269,15 @@ export function createBackendManager(host: HTMLElement, deps: BackendDeps): Back
     )
   }
 
-  function forward() {
-    if (!view) return
-    gl?.setViewport(view)
+  /** False when the WebGL2 output could not take the new size (PR #18 review 4: the caller keeps the old one). */
+  function forward(): boolean {
+    if (!view) return true
+    const ok = gl?.setViewport(view) !== false
     if (live) {
       fitLive()
       c2d?.setViewport(fitted())
     }
+    return ok
   }
 
   const facade: Compositor = {
@@ -294,7 +296,7 @@ export function createBackendManager(host: HTMLElement, deps: BackendDeps): Back
     },
     setViewport(next) {
       view = next
-      forward()
+      return forward()
     },
     setSlideIndex(index) {
       slideIndex = index

@@ -317,6 +317,24 @@ describe('createWebGL2Compositor', () => {
     expect(sink.list().some(d => d.code === 'compositor-workspace' && d.slideIndex === 3)).toBe(true)
   })
 
+  it('PR #18 review 4: setViewport reports a refused drawing-buffer resize (false) and keeps the output size', () => {
+    const fake = fakeGL()
+    current = fake
+    const ws = makeWorkspace(1 << 30)
+    const canvas = document.createElement('canvas')
+    canvas.width = 64; canvas.height = 64
+    const comp = createWebGL2Compositor(canvas, ws)!
+    expect(comp.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 64, deviceHeight: 64 })).toBe(true)
+    ws.pool.limit = ws.used()
+    expect(comp.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 128, deviceHeight: 128 })).toBe(false)
+    expect([canvas.width, canvas.height]).toEqual([64, 64])
+    // Through the manager's facade too.
+    const h = harness()
+    h.mgr.current.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 64, deviceHeight: 64 })
+    h.ws.pool.limit = h.ws.used()
+    expect(h.mgr.current.setViewport({ matrix: [1, 0, 0, 1, 0, 0], deviceWidth: 640, deviceHeight: 640 })).toBe(false)
+  })
+
   it('dispose returns every byte it leased', () => {
     const fake = fakeGL()
     current = fake

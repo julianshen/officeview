@@ -298,6 +298,15 @@ describe('order, hidden slides and loop', () => {
     num.s.exit()
   })
 
+  it('PR #18 review 4: an empty deck started from the current slide opens on end-of-show', async () => {
+    const { doc } = await deck({ slides: [] })
+    expect(doc.slides).toHaveLength(0)
+    const r = await show(doc, { from: 'current' }, { currentSlide: () => 0 })
+    expect(r.s.state.slide).toBe('end')
+    expect(r.log).toContain('onStart')
+    r.s.exit()
+  })
+
   it('a deck with every slide hidden opens on end-of-show', async () => {
     const { doc } = await deck({ slides: [{ shapes: [], hidden: true }, { shapes: [], hidden: true }] })
     const r = await show(doc)
