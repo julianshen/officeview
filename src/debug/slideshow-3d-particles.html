@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Slideshow tile and particle 3-D harness</title>
+  </head>
+  <body style="margin: 0; background: #000">
+    <!--
+      Slideshow plan S3-3: the tile and particle 3-D transitions on the WebGL2
+      compositor, driven by tests/browser/slideshow-3d-particles.spec.ts through
+      window.__slideshowParticles. No clock is read: the spec sets every
+      progress and seed.
+    -->
+    <div id="stage"></div>
+    <script type="module" src="./slideshow-3d-particles.ts"></script>
+  </body>
+</html>
