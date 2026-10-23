@@ -980,3 +980,26 @@ describe('PR #19 review 10 (shared media relationship)', () => {
     expect(codes(r.sink)).not.toContain('media-missing')
   })
 })
+
+describe('PR #19 review 11', () => {
+  it('a fresh activation of reused media replays from the start (Previous mid-clip, then Next)', async () => {
+    const r = rig()
+    const d = drive(r, slideOf(tree(mainSeq([group(3, [media('audio', 10, '7')])])), [rec('7', 'audio/wav')]))
+    d.next(0)
+    await flush()
+    const el = r.elements[0]
+    expect(el.play).toHaveBeenCalledTimes(1)
+    // 2.5 s into the clip, the presenter steps back...
+    el.currentTime = 2.5
+    r.now.t = 2500
+    d.cursor = d.tl.checkpoint(0)
+    d.sync(2500)
+    expect(el.pause).toHaveBeenCalled()
+    // ...and forward again: the same element, a new activation, from the top.
+    d.next(3000)
+    await flush()
+    expect(r.elements).toHaveLength(1)
+    expect(el.play).toHaveBeenCalledTimes(2)
+    expect(el.currentTime).toBe(0)
+  })
+})

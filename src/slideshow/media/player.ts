@@ -468,7 +468,8 @@ export function createMediaPlayer(deps: MediaPlayerDeps): MediaPlayer {
         return
       }
       if (st.live) {
-        if (from !== undefined) st.live.el.currentTime = from
+        // A fresh activation of reused media replays from the start, or from playFrom's offset (PR #19 review 11).
+        st.live.el.currentTime = from ?? 0
         doPlay(st)
         return
       }
