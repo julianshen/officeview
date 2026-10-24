@@ -72,19 +72,19 @@ bun scripts/fetch-corpus.ts
 bun scripts/slideshow-capture-export.ts all
 ```
 
-Add `--dry-run` to print every step (the AppleScript, the copies, the frames it would write) without running anything, and `--deck <name>` (repeatable) to do some decks only. `export` and `extract` run the two halves on their own.
+Add `--dry-run` to print every step (the AppleScript, the copies, the frames it would write) without running anything, and `--deck <name>` (repeatable) to do some decks only. `export` and `extract` run the two halves on their own. A short first run, `bun scripts/slideshow-capture-export.ts all --deck tdf105739` (one static slide), answers both prompts and proves the setup before the long run.
 
 - **Two prompts, once each.** Click Allow / OK on both; macOS remembers them:
   1. "<your terminal> wants access to control Microsoft PowerPoint" (Automation, the first time the script drives PowerPoint);
   2. "<your terminal> would like to access data from other apps" (the script copies each deck into, and moves each movie out of, PowerPoint's sandbox container).
 
-  A "Grant File Access" sheet inside PowerPoint means the staging folder is outside its container; the default `~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/officeview-capture` avoids it (`--staging` changes it).
+  Stay at the Mac until the first deck has exported: an unanswered prompt blocks the export until that deck's timeout. A "Grant File Access" sheet inside PowerPoint means the staging folder is outside its container; the default `~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/officeview-capture` avoids it (`--staging` changes it).
 - **What it does.** For each deck: copy `corpus/lo-<deck>.pptx` into the staging folder (the corpus file is only read), open it in PowerPoint, export a 1920×1080 movie (`save … as save as movie`), close it without saving, and move the movie to `~/officeview-captures/<deck>.mov` (`--videos` changes it) with a `<deck>.export.json` noting PowerPoint's version. Then it finds each step's activity burst in the movie, extracts the table's frames at `t0 + ms` with the crop rules above, writes `tests/fixtures/slideshow-refs/<deck>/` with its `provenance.json`, runs `bun scripts/slideshow-compare.ts <deck> --write`, and prints, per deck, the frames written or why the deck was refused, and which catalogue rows moved to verified or failed.
-- **Duration.** Expect roughly one to three minutes per deck while PowerPoint renders, so 15 to 45 minutes for all 16 decks; leave the Mac alone meanwhile. Each deck has a timeout (`--timeout`, default 1,900 s): a deck that hangs, for example on an unanswered dialog, is reported and the next deck runs.
+- **Duration.** Expect roughly one to three minutes per deck while PowerPoint renders, so 15 to 45 minutes for all 16 decks; once the prompts are answered, leave the Mac alone. Each deck has a timeout (`--timeout`, default 1,900 s): a deck that hangs, for example on an unanswered dialog, is reported and the next deck runs.
 - **Refusals.** In a movie export PowerPoint advances the clicks itself, so step start times are not known in advance. The bursts are matched in order to the table rows; when they cannot be matched exactly (a step that changes nothing visible, two steps that run together, a frame time that runs into the next step) the deck is refused with the rows and bursts listed, and nothing is written for it. Capture such a deck by hand as above. Rows whose burst lasts noticeably longer or shorter than the table's span are printed as warnings: that is the first hint that PowerPoint's duration differs from ours.
 - **Caveat.** These frames are PowerPoint's own renderer, but a movie export is not a live slide show: `provenance.json` says so in its notes, with the frame rate. The behavioural questions below (kiosk, trigger versus hyperlink, advTm with pending clicks, Previous into a slide, and the rest) still need a live show recorded as above.
 
-The script does not tick the **Done** boxes: the tables are generated, so tick them by hand after reviewing the frames.
+The script does not tick the **Done** boxes: the tables are generated and the drift test compares them with the generator's output, so the frames on disk and `docs/validation/slideshow-compare.json` are the record of what was captured.
 
 ### Naming
 

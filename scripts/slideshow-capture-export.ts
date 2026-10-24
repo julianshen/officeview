@@ -274,8 +274,13 @@ export interface RowExpect {
 }
 
 const MEDIA_CLASSES = new Set(['mediacall'])
-/** A burst that starts within this many frames of the movie start is slide 1's opening transition. */
-export const ANCHOR_FRAMES = 2
+/**
+ * Slide 1's opening transition: a first burst that starts within this many
+ * frames of the movie start, or one the movie holds black before (mean
+ * analysis luma under DARK_LUMA on frame 0 and on the frame before it; video
+ * black is 16).
+ */
+export const ANCHOR_FRAMES = 2, DARK_LUMA = 24
 
 /** The rows of a capture plan with what each is expected to look like in the movie (hidden slides are not exported). */
 export function expectRows(plan: CapturePlan): RowExpect[] {
@@ -312,9 +317,9 @@ const span = (s: RowExpect['spanMs']) => typeof s === 'number' ? `${s} ms` : s
  * burst). Refuses on a count mismatch, a burst far longer than its row (two
  * steps merged), or a frame time that runs into the next step.
  */
-export function mapBursts(rows: readonly RowExpect[], bursts: readonly Burst[], fps: number, frameCount: number): Mapping {
+export function mapBursts(rows: readonly RowExpect[], bursts: readonly Burst[], fps: number, frameCount: number, darkStart = false): Mapping {
   const queue = [...bursts]
-  const anchorBurst = rows[0]?.expect === 'anchor' && queue[0] && queue[0].first <= ANCHOR_FRAMES ? queue.shift() : undefined
+  const anchorBurst = rows[0]?.expect === 'anchor' && queue[0] && (queue[0].first <= ANCHOR_FRAMES || (darkStart && rows[0].opening)) ? queue.shift() : undefined
   const needed = rows.filter(r => r.expect === 'burst')
   const table = () => [
     'rows:', ...rows.map(r => `  ${id(r)} ${r.trigger} span ${span(r.spanMs)}${r.expect === 'burst' ? '' : ` (${r.expect === 'anchor' ? 'movie start' : 'no visible change expected'})`}`),
@@ -345,7 +350,7 @@ export function mapBursts(rows: readonly RowExpect[], bursts: readonly Burst[], 
       for (const f of r.frames) skipped.push({ file: f.file, reason: 'the opening transition or build did not show at the movie start' })
       continue
     }
-    const t0 = r.expect === 'anchor' ? 0 : b ? b.first - 1 : undefined
+    const t0 = b ? b.first - 1 : r.expect === 'anchor' ? 0 : undefined
     for (const f of r.frames) {
       if (t0 === undefined || r.spanMs === 0) { frames.push({ file: f.file, index: settled }); continue }
       const index = t0 + Math.round(f.ms * fps / 1000)
@@ -361,7 +366,13 @@ export const seekSeconds = (index: number, fps: number) => Math.max(0, (index - 
 
 const ffmpegCrop = (c: Crop) => `crop=${c.w}:${c.h}:${c.x}:${c.y}`
 
-export type Analysis = { ok: true; probe: Extract<Probe, { ok: true }>; bursts: Burst[]; frameCount: number } | { ok: false; reason: string }
+export type Analysis =
+  | { ok: true; probe: Extract<Probe, { ok: true }>; bursts: Burst[]; frameCount: number; gray: Uint8Array; darkStart: boolean }
+  | { ok: false; reason: string }
+
+const ANALYSIS_N = ANALYSIS_W * ANALYSIS_H
+const meanLuma = (gray: Uint8Array, i: number) => { let s = 0; for (let p = i * ANALYSIS_N, e = p + ANALYSIS_N; p < e; p++) s += gray[p]; return s / ANALYSIS_N }
+const analysisFilter = (c: Crop) => `${ffmpegCrop(c)},scale=${ANALYSIS_W}:${ANALYSIS_H}:flags=area,format=gray`
 
 export async function analyzeMovie(movie: string, crop: Crop | ((p: Extract<Probe, { ok: true }>) => Crop), run: Runner, gapMs = BURST_GAP_MS): Promise<Analysis> {
   const pr = await run('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height,r_frame_rate,avg_frame_rate,nb_frames', '-of', 'json', movie])
@@ -369,15 +380,45 @@ export async function analyzeMovie(movie: string, crop: Crop | ((p: Extract<Prob
   const probe = parseProbe(pr.stdout.toString())
   if (!probe.ok) return probe
   const c = typeof crop === 'function' ? crop(probe) : crop
-  const g = await run('ffmpeg', ['-v', 'error', '-i', movie, '-vf', `${ffmpegCrop(c)},scale=${ANALYSIS_W}:${ANALYSIS_H}:flags=area,format=gray`, '-f', 'rawvideo', '-pix_fmt', 'gray', '-'])
+  const g = await run('ffmpeg', ['-v', 'error', '-i', movie, '-vf', analysisFilter(c), '-f', 'rawvideo', '-pix_fmt', 'gray', '-'])
   if (g.code !== 0) return { ok: false, reason: `ffmpeg decode failed: ${g.stderr.trim()}` }
   const gray = new Uint8Array(g.stdout.buffer, g.stdout.byteOffset, g.stdout.byteLength)
-  return { ok: true, probe, bursts: detectBursts(gray, ANALYSIS_W, ANALYSIS_H, probe.fps, gapMs), frameCount: Math.floor(gray.length / (ANALYSIS_W * ANALYSIS_H)) }
+  const bursts = detectBursts(gray, ANALYSIS_W, ANALYSIS_H, probe.fps, gapMs)
+  const darkStart = !!bursts[0] && meanLuma(gray, 0) < DARK_LUMA && meanLuma(gray, bursts[0].first - 1) < DARK_LUMA
+  return { ok: true, probe, bursts, frameCount: Math.floor(gray.length / ANALYSIS_N), gray, darkStart }
 }
 
-export async function extractFrame(movie: string, index: number, fps: number, crop: Crop, out: string, run: Runner): Promise<void> {
-  const r = await run('ffmpeg', ['-v', 'error', '-y', '-i', movie, '-ss', seekSeconds(index, fps), '-frames:v', '1', '-vf', ffmpegCrop(crop), out])
+/**
+ * Extract frame `index` as a cropped PNG. The same seek also yields the
+ * frame through the analysis filter, so the caller can check that the seek
+ * landed on the frame the analysis numbered `index` (a movie with an edit
+ * list or a non-zero start could otherwise shift every frame).
+ */
+export async function extractFrame(movie: string, index: number, fps: number, crop: Crop, out: string, run: Runner): Promise<Uint8Array> {
+  const ss = seekSeconds(index, fps)
+  const r = await run('ffmpeg', ['-v', 'error', '-y', '-i', movie,
+    '-ss', ss, '-frames:v', '1', '-vf', ffmpegCrop(crop), out,
+    '-ss', ss, '-frames:v', '1', '-vf', analysisFilter(crop), '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1'])
   if (r.code !== 0 || !existsSync(out)) throw new Error(`ffmpeg could not extract frame ${index} to ${out}: ${r.stderr.trim()}`)
+  return new Uint8Array(r.stdout.buffer, r.stdout.byteOffset, r.stdout.byteLength)
+}
+
+/** Mean grey-level difference between a landed analysis frame and frame `k` of the analysis decode. */
+const frameDiff = (gray: Uint8Array, k: number, landed: Uint8Array) => {
+  let s = 0
+  for (let p = 0; p < ANALYSIS_N; p++) s += Math.abs(gray[k * ANALYSIS_N + p] - landed[p])
+  return s / ANALYSIS_N
+}
+
+/** Undefined when the seek landed on frame `index` (or one identical to it); else why not. */
+export function seekCheck(gray: Uint8Array, index: number, landed: Uint8Array): string | undefined {
+  if (landed.length !== ANALYSIS_N) return `seek for frame ${index} returned no frame`
+  const count = Math.floor(gray.length / ANALYSIS_N)
+  const own = frameDiff(gray, index, landed)
+  let best = index, bestDiff = own
+  for (let k = Math.max(0, index - 3); k <= Math.min(count - 1, index + 3); k++) { const d = frameDiff(gray, k, landed); if (d < bestDiff - 0.5) { best = k; bestDiff = d } }
+  if (best !== index || own > 2) return `the seek for frame ${index} landed on a different frame (closest: ${best}, mean difference ${own.toFixed(2)})`
+  return undefined
 }
 
 /** Width and height from a PNG's IHDR. */
@@ -444,7 +485,7 @@ export async function extractDecks(opts: ExtractOptions, run: Runner, log: (line
     if (!a.ok) { res.refused = a.reason; continue }
     const c = crop!
     log(`${deck}: ${a.probe.width}×${a.probe.height} at ${a.probe.fpsText} fps, ${a.frameCount} frames, crop ${ffmpegCrop(c)}, ${a.bursts.length} burst(s)`)
-    const m = mapBursts(expectRows(plan), a.bursts, a.probe.fps, a.frameCount)
+    const m = mapBursts(expectRows(plan), a.bursts, a.probe.fps, a.frameCount, a.darkStart)
     if (!m.ok) { res.refused = m.reason; continue }
     res.skipped = m.skipped.map(s => `${s.file}: ${s.reason}`)
     res.warnings = m.warnings
@@ -469,7 +510,9 @@ export async function extractDecks(opts: ExtractOptions, run: Runner, log: (line
     try {
       for (const f of m.frames) {
         const out = join(tmp, f.file)
-        await extractFrame(movie, f.index, a.probe.fps, c, out, run)
+        const landed = await extractFrame(movie, f.index, a.probe.fps, c, out, run)
+        const missed = seekCheck(a.gray, f.index, landed)
+        if (missed) throw new Error(`${f.file}: ${missed}`)
         const size = pngSize(readFileSync(out))
         if (!size || size[0] !== c.w || size[1] !== c.h) throw new Error(`${f.file} is ${size?.join('×') ?? 'not a PNG'}, expected ${c.w}×${c.h}`)
       }

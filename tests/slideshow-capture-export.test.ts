@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   ANCHOR_FRAMES, analyzeMovie, appleScriptFor, buildProvenance, cropFor, detectBursts, expectRows, exportDecks, extractDecks, extractFrame,
-  mapBursts, mergeRuns, parseProbe, pngSize, realRunner, seekSeconds, statusChanges, type Burst, type ProcResult, type RowExpect, type Runner,
+  mapBursts, mergeRuns, parseProbe, pngSize, realRunner, seekCheck, seekSeconds, statusChanges, type Burst, type ProcResult, type RowExpect, type Runner,
 } from '../scripts/slideshow-capture-export'
 import { parseProvenance, readRefs } from '../scripts/slideshow-compare'
 import type { CapturePlan, CaptureStep } from '../scripts/slideshow-capture-plan'
@@ -188,6 +188,14 @@ describe('row mapping', () => {
     expect(ANCHOR_FRAMES).toBeGreaterThanOrEqual(1)
   })
 
+  it('an opening transition after a black hold is slide 1\'s, with t0 the last black frame', () => {
+    const rows = expectRows(plan([[step(1, 0, 1000, [], 'fade'), step(1, 1, 500, ['entr'])]]))
+    expect(mapBursts(rows, [burst(10, 39), burst(100, 115)], fps, 300).ok).toBe(false) // without the dark start: one burst too many
+    const m = mapBursts(rows, [burst(10, 39), burst(100, 115)], fps, 300, true)
+    expect(m.ok && m.frames.find(f => f.file === '1-0-0.png')?.index).toBe(9)
+    expect(m.ok && m.frames.find(f => f.file === '1-0-100.png')?.index).toBe(39)
+  })
+
   it('an opening transition the export did not play skips those frames instead of mislabelling the still slide', () => {
     const rows = expectRows(plan([[step(1, 0, 1000, [], 'fade'), step(1, 1, 500, ['entr'])]]))
     const m = mapBursts(rows, [burst(100, 115)], fps, 300)
@@ -255,6 +263,15 @@ describe('provenance and frame files', () => {
     expect(seekSeconds(30, 30)).toBe('0.983333')
   })
 
+  it('checks that a seek landed on the analysed frame', () => {
+    const n = 160 * 90
+    const gray = new Uint8Array(10 * n)
+    for (let i = 0; i < 10; i++) gray.fill(i * 20, i * n, (i + 1) * n)
+    expect(seekCheck(gray, 4, gray.slice(4 * n, 5 * n))).toBeUndefined()
+    expect(seekCheck(gray, 4, gray.slice(5 * n, 6 * n))).toMatch(/landed on a different frame \(closest: 5/)
+    expect(seekCheck(gray, 4, new Uint8Array(0))).toMatch(/no frame/)
+  })
+
   it('reads a PNG size from its IHDR', () => {
     const b = Buffer.alloc(24)
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b)
@@ -302,7 +319,8 @@ describe.skipIf(!hasX264)('ffmpeg integration (synthesized CFR movie)', () => {
 
     // The extracted PNG is exactly frame 64: luma 200 - (64/30 - 2) * 300 = 160.
     const out = join(dir, '2-1-25.png')
-    await extractFrame(mov, at['2-1-25.png'], a.probe.fps, crop, out, realRunner)
+    const landed = await extractFrame(mov, at['2-1-25.png'], a.probe.fps, crop, out, realRunner)
+    expect(seekCheck(a.gray, 64, landed)).toBeUndefined()
     expect(pngSize(readFileSync(out))).toEqual([320, 180])
     const { loadImage, createCanvas } = await import('canvas')
     const img = await loadImage(out)
@@ -311,6 +329,16 @@ describe.skipIf(!hasX264)('ffmpeg integration (synthesized CFR movie)', () => {
     const g = ctx.getImageData(160, 90, 1, 1).data[1]
     // limited-range luma 160 is full-range (160 - 16) * 255 / 219 ≈ 168; neighbours are ±10 away
     expect(Math.abs(g - 168)).toBeLessThanOrEqual(3)
+  }, 30_000)
+
+  it('codec noise on a still, detailed slide is not a burst', async () => {
+    const dir = scratch()
+    const png = join(dir, 'still.png'), mov = join(dir, 'still.mov')
+    // testsrc2: text, gradients and sharp edges; CRF 28 is noisier than any export.
+    expect(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=s=1920x1080', '-frames:v', '1', png]).status).toBe(0)
+    expect(spawnSync('ffmpeg', ['-v', 'error', '-y', '-loop', '1', '-i', png, '-t', '4', '-r', '30', '-c:v', 'libx264', '-crf', '28', '-g', '30', '-pix_fmt', 'yuv420p', mov]).status).toBe(0)
+    const a = await analyzeMovie(mov, cropFor(1920, 1080, 12192000, 6858000), realRunner)
+    expect(a.ok && a.bursts).toEqual([])
   }, 30_000)
 })
 
