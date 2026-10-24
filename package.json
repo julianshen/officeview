@@ -51,7 +51,11 @@
     "bench:viewer": "bun scripts/bench-interactive-viewer.ts",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "site:samples": "bun scripts/build-site-samples.ts",
+    "site:dev": "bun run site:samples && vite --config vite.site.config.ts",
+    "site:build": "bun run site:samples && vite build --config vite.site.config.ts",
+    "site:typecheck": "tsc -p site/tsconfig.json"
   },
   "peerDependencies": {
     "react": ">=18"

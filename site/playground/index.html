@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Playground — officeview</title>
+    <meta name="description" content="Open your own Office file in officeview and try every viewer option. Files never leave your browser." />
+    <meta property="og:title" content="Playground — officeview" />
+    <meta property="og:description" content="Open your own Office file in officeview and try every viewer option. Files never leave your browser." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <script>
+      // Apply the stored theme before first paint.
+      try { var t = localStorage.getItem('ov-site-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/playground.tsx"></script>
+  </body>
+</html>
