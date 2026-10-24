@@ -5,16 +5,21 @@ import { buildTextIndex, findMatches, getPaintables, loadOfficeFile, type TextIn
 export default function TextSearch({ url }: { url: string }) {
   const [index, setIndex] = useState<TextIndex | null>(null)
   const [query, setQuery] = useState('revenue')
+  const [error, setError] = useState('')
 
   useEffect(() => {
     let cancelled = false
     loadOfficeFile({ url })
       .then((doc) => getPaintables(doc))
       .then(async (pages) => {
-        const built = await buildTextIndex(pages)
-        pages.dispose()
-        if (!cancelled) setIndex(built)
+        try {
+          const built = await buildTextIndex(pages)
+          if (!cancelled) setIndex(built)
+        } finally {
+          pages.dispose()   // release fonts and images even if indexing fails
+        }
       })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
     return () => { cancelled = true }
   }, [url])
 
@@ -23,7 +28,7 @@ export default function TextSearch({ url }: { url: string }) {
   return (
     <div style={{ padding: 16, overflow: 'auto', font: '14px/1.5 system-ui' }}>
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search…" style={{ width: '100%', padding: 8, fontSize: 14 }} />
-      <p style={{ color: '#605e5c' }}>{index ? `${matches.length} matches` : 'Indexing…'}</p>
+      <p style={{ color: '#605e5c' }}>{error ? `Could not index the document: ${error}` : index ? `${matches.length} matches` : 'Indexing…'}</p>
       <ol style={{ paddingLeft: 20 }}>
         {matches.slice(0, 50).map((m, i) => {
           const line = index!.pages[m.pageIndex].lines[m.lineIndex].text

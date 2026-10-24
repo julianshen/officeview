@@ -4,6 +4,7 @@ import { getPaintables, loadOfficeFile, type Paintable } from 'officeview'
 /** Render page thumbnails without the viewer: load, extract paintable pages, draw each to a canvas. */
 export default function PageThumbnails({ url }: { url: string }) {
   const [pages, setPages] = useState<Paintable[]>([])
+  const [error, setError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -15,11 +16,13 @@ export default function PageThumbnails({ url }: { url: string }) {
         if (cancelled) dispose()
         else setPages([...paintables])
       })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
     return () => { cancelled = true; dispose() }
   }, [url])
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, padding: 16, overflow: 'auto', alignContent: 'flex-start' }}>
+      {error && <p role="alert" style={{ color: '#c50f1f', font: '14px system-ui' }}>Could not render pages: {error}</p>}
       {pages.map((page, i) => <Thumbnail key={i} page={page} label={`Page ${i + 1}`} />)}
     </div>
   )

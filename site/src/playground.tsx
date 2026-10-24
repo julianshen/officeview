@@ -52,7 +52,8 @@ function initialSource(): Source {
 }
 
 /** The JSX a host would write for the current options (defaults omitted). */
-function snippet(o: Options, name: string): string {
+function snippet(o: Options, name: string, local: boolean): string {
+  const str = (v: string) => JSON.stringify(v)
   const attrs: string[] = []
   const add = (s: string) => attrs.push(s)
   if (o.theme !== 'site' && o.theme !== 'system') add(`theme="${o.theme}"`)
@@ -64,26 +65,28 @@ function snippet(o: Options, name: string): string {
   if (!o.allowPresent) add('allowPresent={false}')
   if (!o.presentShortcuts) add('presentShortcuts={false}')
   if (o.slideShowMotion !== 'auto') add(`slideShowMotion="${o.slideShowMotion}"`)
-  if (o.interactiveSheets) add('interactiveSheets')
+  if (o.interactiveSheets) { add('interactiveSheets'); add('viewerWorker={createViewerWorker}') }
   if (o.pageGapPx !== 16) add(`pageGapPx={${o.pageGapPx}}`)
   if (o.watermarkOn && o.watermark.text) {
     const w = o.watermark
-    const parts = [`text: '${w.text.replace(/'/g, "\\'")}'`]
+    const parts = [`text: ${str(w.text)}`]
     if (w.placement !== 'tile') parts.push(`placement: '${w.placement}'`)
     if (w.rotate !== -45) parts.push(`rotate: ${w.rotate}`)
     if (w.opacity !== 0.15) parts.push(`opacity: ${w.opacity}`)
-    if (w.color !== '#000000') parts.push(`color: '${w.color}'`)
+    if (w.color !== DEFAULTS.watermark.color) parts.push(`color: ${str(w.color)}`)
     add(`watermark={{ ${parts.join(', ')} }}`)
   }
-  const data = 'data={source}'
-  const all = [data, ...attrs]
+  const all = [local ? 'data={file}' : 'data={source}', ...attrs]
   const body = all.length <= 2 && all.join(' ').length < 60 ? ` ${all.join(' ')} />` : `\n${all.map((a) => `  ${a}`).join('\n')}\n/>`
-  return `import { OfficeFile } from 'officeview'
-import 'officeview/style.css'
-
-const source = { url: '/files/${name}' }   // create once: a new object reloads the file
-
-<OfficeFile${body}`
+  const lines = ["import { OfficeFile } from 'officeview'", "import 'officeview/style.css'", '']
+  if (o.interactiveSheets) {
+    lines.push("// viewer-worker.ts contains one line: import 'officeview/worker'",
+      "const createViewerWorker = () => new Worker(new URL('./viewer-worker.ts', import.meta.url), { type: 'module' })", '')
+  }
+  lines.push(local
+    ? '// file: the File from an <input type="file"> or a drop event, kept in state'
+    : `// Wherever you host the file. Create the source once: a new object reloads it.\nconst source = { url: ${str(`/files/${name}`)} }`)
+  return `${lines.join('\n')}\n\n<OfficeFile${body}`
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -135,6 +138,13 @@ function Playground() {
     }))
   }, [sample?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    // Follow links to another sample (#id) while the playground is open.
+    const on = () => { const id = location.hash.slice(1); if (SAMPLES.some((s) => s.id === id)) setSource({ kind: 'sample', id }) }
+    window.addEventListener('hashchange', on)
+    return () => window.removeEventListener('hashchange', on)
+  }, [])
+
   const note = (line: string) => setLog((l) => [`${new Date().toLocaleTimeString()}  ${line}`, ...l].slice(0, 40))
 
   const openFile = (file: File | undefined) => {
@@ -150,7 +160,10 @@ function Playground() {
   }
 
   const theme = o.theme === 'site' ? siteTheme : o.theme
-  const watermark = o.watermarkOn && o.watermark.text ? o.watermark : undefined
+  // The default colour is left unset, as in the generated code, so the library picks a visible one.
+  const watermark = o.watermarkOn && o.watermark.text
+    ? (o.watermark.color === DEFAULTS.watermark.color ? { ...o.watermark, color: undefined } : o.watermark)
+    : undefined
 
   return (
     <main className="playground">
@@ -276,7 +289,7 @@ function Playground() {
         <div className="outputs">
           <div>
             <h2>Code</h2>
-            <Code title="Viewer.tsx">{snippet(o, name)}</Code>
+            <Code title="Viewer.tsx">{snippet(o, name, source.kind === 'file')}</Code>
           </div>
           <div>
             <h2>Events</h2>
