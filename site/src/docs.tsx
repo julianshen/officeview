@@ -539,8 +539,7 @@ const createViewerWorker = () =>
         />
         <p>
           Axes (category, value, date, logarithmic, secondary), data labels, markers, trendlines, error bars, titles and
-          legends are supported. Data labels currently have a known bug in browsers: a chart with data labels can fail to draw
-          and show its card instead (see <a href="#limitations">Known limitations</a>), so test your charts. A chart the engine cannot draw keeps the file's fallback picture, or shows a card; it is
+          legends are supported. A chart the engine cannot draw keeps the file's fallback picture, or shows a card; it is
           never silently blank.
         </p>
       </Section>
@@ -629,7 +628,6 @@ pages.dispose()`}</Code>
           <li>ODT does not render text boxes, vector shapes, multi-column text or nested tables.</li>
           <li>3-D transitions and Morph are close look-alikes of PowerPoint, not frame-exact copies. There is no pen or laser pointer.</li>
           <li>The interactive spreadsheet viewer is experimental; Safari, physical touch devices and VoiceOver have not been verified.</li>
-          <li>In browsers, some charts with data labels fail to draw (“Chart text was not measured during layout”) and show the “This chart could not be drawn” card. A fix is tracked separately.</li>
           <li>Copy and print prevention and watermarks are deterrents, not DRM.</li>
         </ul>
         <p>

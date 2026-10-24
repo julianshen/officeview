@@ -10,6 +10,17 @@ in git history.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Charts with data labels draw in browsers.** Painting a data label looked its
+  width up by reading `ctx.font` back from the canvas, but browsers normalise that
+  string, so the lookup missed with "Chart text was not measured during layout"
+  and the chart was replaced by its "This chart could not be drawn" card. Labels
+  now use the font string they were measured with. Affected any chart with data
+  labels (for example labelled columns, pies with percentages, waterfall and
+  funnel); node-canvas, used by the test suite, does not normalise, which is why
+  tests did not catch it.
+
 ## [0.9.0] - 2026-10-24
 
 The UI restyle: a Fluent (Office 365) look for every viewer surface, light and

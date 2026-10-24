@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildPptxDeck, mainSeqXml, timingXmlOf, type PptxShapeSpec, type PptxSlideSpec } from '../src/testdata/ooxml-builders'
 import { buildOdt, odfBulletListStyle, odfWriterHeadingStyles } from '../src/testdata/odf-builders'
-import { buildChartDocument, chartExGallery, classicGallery, galleryHierarchyWorkbook } from '../src/testdata/chart-gallery'
+import { chartGallery } from '../src/testdata/chart-gallery'
 
 const OUT = fileURLToPath(new URL('../site/public/samples/', import.meta.url))
 
@@ -664,20 +664,8 @@ function letterRtf(): Uint8Array {
 // Charts: the repo's synthetic chart gallery, one chart per family
 // ---------------------------------------------------------------------------
 
-/**
- * Every natively drawn chart family in one Word document. Data labels are
- * stripped from the classic charts, waterfall and funnel: in browsers they
- * currently hit a measurement bug in the chart engine and fall back to a card.
- */
-async function chartsDocx(): Promise<Uint8Array> {
-  const workbook = await galleryHierarchyWorkbook()
-  const charts = [...classicGallery(), ...chartExGallery(true)].map((chart) => ({
-    name: chart.name,
-    part: chart.hierarchy ? chart.part : chart.part.replace(/<c:dLbls>[\s\S]*?<\/c:dLbls>/g, '').replace(/<cx:dataLabels\b[\s\S]*?<\/cx:dataLabels>/g, '').replace('<a:t>with labels</a:t>', '<a:t>clustered</a:t>'),
-    ...(chart.hierarchy ? { workbook } : {}),
-  }))
-  return buildChartDocument('docx', charts, { columns: 2, width: 336, height: 228 })
-}
+/** Every natively drawn chart family in one Word document. */
+const chartsDocx = () => chartGallery('docx')
 
 // ---------------------------------------------------------------------------
 
