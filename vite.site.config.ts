@@ -41,6 +41,8 @@ export default defineConfig({
         demos: at('./site/demos/index.html'),
         playground: at('./site/playground/index.html'),
         docs: at('./site/docs/index.html'),
+        guides: at('./site/guides/index.html'),
+        examples: at('./site/examples/index.html'),
       },
     },
   },

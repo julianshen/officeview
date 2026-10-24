@@ -1,13 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
 import { Code } from './code'
-import { Icon, REPO, href, mount } from './layout'
-import './docs.css'
+import { DocShell, H3, Note, Props, Section, Table, c, type DocNav, type PropRow } from './doc-kit'
+import { REPO, href, mount } from './layout'
 
-// ---------------------------------------------------------------------------
-// Building blocks
-// ---------------------------------------------------------------------------
-
-const NAV: Array<[group: string, items: Array<[id: string, label: string]>]> = [
+const NAV: DocNav = [
   ['Getting started', [['introduction', 'Introduction'], ['installation', 'Installation'], ['getting-started', 'Quick start'], ['sizing', 'Sizing the viewer'], ['formats', 'Supported formats']]],
   ['Components', [['officefile', '<OfficeFile>'], ['officedoc', '<OfficeDoc>'], ['props', 'Props reference'], ['viewer-handle', 'OfficeViewerHandle']]],
   ['Loading documents', [['sources', 'Byte sources'], ['progress', 'Progress'], ['authentication', 'Authenticated downloads'], ['load-office-file', 'loadOfficeFile()'], ['use-office-file', 'useOfficeFile()']]],
@@ -15,62 +10,11 @@ const NAV: Array<[group: string, items: Array<[id: string, label: string]>]> = [
   ['Reference', [['low-level', 'Low-level API'], ['types', 'Types'], ['limitations', 'Known limitations']]],
 ]
 
-function Section({ id, title, children, lead }: { id: string; title: string; lead?: ReactNode; children: ReactNode }) {
-  return (
-    <section id={id} className="doc-section">
-      <h2><a href={`#${id}`} className="anchor" aria-hidden="true">#</a>{title}</h2>
-      {lead && <p className="doc-lead">{lead}</p>}
-      {children}
-    </section>
-  )
-}
-
-const H3 = ({ id, children }: { id?: string; children: ReactNode }) => <h3 id={id}>{children}</h3>
-
-type Row = [name: string, type: string, def: string, desc: ReactNode]
-
-function Props({ rows }: { rows: Row[] }) {
-  return (
-    <div className="table-wrap">
-      <table className="data props">
-        <thead><tr><th>Prop</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
-        <tbody>
-          {rows.map(([name, type, def, desc]) => (
-            <tr key={name}>
-              <td><code className="prop-name">{name}</code></td>
-              <td><code className="prop-type">{type}</code></td>
-              <td>{def ? <code>{def}</code> : <span className="muted">—</span>}</td>
-              <td>{desc}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function Table({ head, rows }: { head: string[]; rows: ReactNode[][] }) {
-  return (
-    <div className="table-wrap">
-      <table className="data">
-        <thead><tr>{head.map((h) => <th key={h}>{h}</th>)}</tr></thead>
-        <tbody>{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>)}</tbody>
-      </table>
-    </div>
-  )
-}
-
-const Note = ({ children, warn }: { children: ReactNode; warn?: boolean }) => (
-  <div className={`callout${warn ? ' warn' : ''}`}>{warn ? <Icon.alert /> : <Icon.info />}<div>{children}</div></div>
-)
-
-const c = (s: string) => <code>{s}</code>
-
 // ---------------------------------------------------------------------------
 // Content
 // ---------------------------------------------------------------------------
 
-const VIEW_PROPS: Row[] = [
+const VIEW_PROPS: PropRow[] = [
   ['theme', "'light' | 'dark' | 'system'", "'system'", <>Colour theme of the viewer chrome. {c("'system'")} follows {c('prefers-color-scheme')}. The document itself is never themed. See <a href="#theming">Theming</a>.</>],
   ['title', 'string', '', <>File name shown in the toolbar. {c('<OfficeFile>')} derives one from a {c('File')}, the URL or {c('Content-Disposition')}.</>],
   ['showToolbar', 'boolean', 'true', 'Show the toolbar and status line of the page viewer (Word, PowerPoint, RTF, ODT and page-mode Excel).'],
@@ -120,7 +64,7 @@ function Swatch({ value }: { value: string }) {
 
 function Content() {
   return (
-    <article className="doc-content">
+    <>
       <Section id="introduction" title="Introduction">
         <p className="doc-lead">
           officeview is a set of React components that render Office documents on an HTML {c('<canvas>')}. It parses
@@ -133,9 +77,9 @@ function Content() {
           functions are exported for hosts that want to parse or paint documents themselves.
         </p>
         <div className="doc-cards">
-          <a href={href('demos/')}><strong>Demos</strong><span>Sample documents in the live viewer</span></a>
+          <a href={href('guides/')}><strong>Guides</strong><span>Vite, Next.js, workers, serving files, CSP</span></a>
+          <a href={href('examples/')}><strong>Examples</strong><span>Runnable recipes with their source</span></a>
           <a href={href('playground/')}><strong>Playground</strong><span>Open your own file, try every option</span></a>
-          <a href={REPO}><strong>Source</strong><span>GitHub repository and issues</span></a>
         </div>
       </Section>
 
@@ -172,7 +116,7 @@ export function App() {
             to the viewer, so it never restyles your page.
           </p>
         </Note>
-        <p>To load a file from a URL, pass a descriptor. The download streams, and the viewer shows progress:</p>
+        <p>To load a file from a URL, pass a descriptor. The download streams, and the viewer shows progress. In a component that re-renders, create the descriptor once (see <a href="#sources">Byte sources</a>):</p>
         <Code>{`<OfficeFile data={{ url: '/files/report.docx' }} />`}</Code>
       </Section>
 
@@ -285,6 +229,16 @@ const viewer = useRef<OfficeViewerHandle>(null)
             [c('Promise<any of these>'), <>For example {c('fetch(url)')} itself.</>],
           ]}
         />
+        <Note warn>
+          <p>
+            <strong>Keep the source object stable.</strong> {c('data')} is compared by identity: a new object loads the file
+            again. An inline {c("data={{ url }}")} in a component that re-renders re-downloads the document each time. Create
+            the descriptor once, with {c('useMemo')} or outside the component:
+          </p>
+          <Code>{`const source = useMemo(() => ({ url, headers: { Authorization: \`Bearer \${token}\` } }), [url, token])
+
+<OfficeFile data={source} />`}</Code>
+        </Note>
         <Note>
           <p>
             Rendering starts once the last byte has arrived: DOCX, XLSX and PPTX are zip files whose index sits at the end.
@@ -341,10 +295,12 @@ const doc = await loadOfficeFile(fetch('/report.docx'), {
       </Section>
 
       <Section id="use-office-file" title="useOfficeFile()" lead="The hook behind <OfficeFile>, for hosts that render their own loading and error states.">
-        <Code>{`import { OfficeDoc, useOfficeFile } from 'officeview'
+        <Code>{`import { useMemo } from 'react'
+import { OfficeDoc, useOfficeFile } from 'officeview'
 
 function Viewer({ url }: { url: string }) {
-  const state = useOfficeFile({ url }, { onProgress: setProgress })
+  const source = useMemo(() => ({ url }), [url])   // a stable source: see Byte sources
+  const state = useOfficeFile(source)
   if (state.status === 'loading') return <Spinner />
   if (state.status === 'error') return <ErrorPanel message={state.message} code={state.code} />
   return (
@@ -679,47 +635,10 @@ pages.dispose()`}</Code>
           <a href={`${REPO}/issues`}>GitHub</a>.
         </p>
       </Section>
-    </article>
+    </>
   )
 }
 
 // ---------------------------------------------------------------------------
 
-function Docs() {
-  const [active, setActive] = useState('introduction')
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    const sections = Array.from(document.querySelectorAll<HTMLElement>('.doc-section'))
-    const io = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-        if (visible[0]) setActive(visible[0].target.id)
-      },
-      { rootMargin: '-80px 0px -65% 0px' },
-    )
-    sections.forEach((s) => io.observe(s))
-    // The content renders after the browser has handled the URL fragment.
-    if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView()
-    return () => io.disconnect()
-  }, [])
-  return (
-    <main className="container docs-layout">
-      <button className="docs-nav-toggle btn btn-secondary btn-sm" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <Icon.menu /> Contents
-      </button>
-      <nav className={`docs-nav${open ? ' open' : ''}`} aria-label="Documentation">
-        {NAV.map(([group, items]) => (
-          <div key={group} className="docs-nav-group">
-            <div className="docs-nav-title">{group}</div>
-            {items.map(([id, label]) => (
-              <a key={id} href={`#${id}`} className={active === id ? 'active' : ''} onClick={() => setOpen(false)}>{label}</a>
-            ))}
-          </div>
-        ))}
-      </nav>
-      <Content />
-    </main>
-  )
-}
-
-mount('docs', <Docs />)
+mount('docs', <DocShell nav={NAV} label="Documentation"><Content /></DocShell>)

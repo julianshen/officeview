@@ -88,12 +88,14 @@ export function Logo() {
   )
 }
 
-type PageId = 'home' | 'demos' | 'playground' | 'docs'
+type PageId = 'home' | 'demos' | 'playground' | 'docs' | 'guides' | 'examples'
 
 const NAV: Array<[PageId, string, string]> = [
+  ['docs', 'Docs', 'docs/'],
+  ['guides', 'Guides', 'guides/'],
+  ['examples', 'Examples', 'examples/'],
   ['demos', 'Demos', 'demos/'],
   ['playground', 'Playground', 'playground/'],
-  ['docs', 'Docs', 'docs/'],
 ]
 
 export function Header({ page }: { page: PageId }) {
@@ -131,6 +133,8 @@ export function Footer() {
         <div>officeview v{VERSION} · MIT licensed · Sample documents are fictional.</div>
         <nav aria-label="Footer">
           <a href={href('docs/')}>Documentation</a>
+          <a href={href('guides/')}>Guides</a>
+          <a href={href('examples/')}>Examples</a>
           <a href={REPO}>GitHub</a>
           <a href={NPM}>npm</a>
           <a href={`${REPO}/blob/main/CHANGELOG.md`}>Changelog</a>

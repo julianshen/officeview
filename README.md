@@ -2,7 +2,9 @@
 
 React components that render Office documents (Word `.docx`, Excel `.xlsx`, PowerPoint `.pptx`, Writer `.odt`) on an HTML `<canvas>` — pixel-faithful rendering, **not** translation into DOM/HTML. Works on desktop and mobile browsers.
 
-**[Website](https://julianshen.github.io/officeview/)** · [Live demos](https://julianshen.github.io/officeview/demos/) · [Playground](https://julianshen.github.io/officeview/playground/) · [Documentation](https://julianshen.github.io/officeview/docs/)
+**[Website](https://julianshen.github.io/officeview/)** · [Documentation](https://julianshen.github.io/officeview/docs/) · [Guides](https://julianshen.github.io/officeview/guides/) · [Examples](https://julianshen.github.io/officeview/examples/) · [Live demos](https://julianshen.github.io/officeview/demos/) · [Playground](https://julianshen.github.io/officeview/playground/)
+
+Standalone [Vite](examples/vite-react) and [Next.js](examples/nextjs) projects are in [`examples/`](examples).
 
 ## Architecture
 

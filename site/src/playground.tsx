@@ -75,11 +75,13 @@ function snippet(o: Options, name: string): string {
     if (w.color !== '#000000') parts.push(`color: '${w.color}'`)
     add(`watermark={{ ${parts.join(', ')} }}`)
   }
-  const data = `data={{ url: '/files/${name}' }}`
+  const data = 'data={source}'
   const all = [data, ...attrs]
   const body = all.length <= 2 && all.join(' ').length < 60 ? ` ${all.join(' ')} />` : `\n${all.map((a) => `  ${a}`).join('\n')}\n/>`
   return `import { OfficeFile } from 'officeview'
 import 'officeview/style.css'
+
+const source = { url: '/files/${name}' }   // create once: a new object reloads the file
 
 <OfficeFile${body}`
 }
