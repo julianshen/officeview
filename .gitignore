@@ -19,3 +19,7 @@ playwright-report/
 .tmp/
 
 .superpowers/
+
+# Website build output and generated samples
+site-dist/
+site/public/samples/

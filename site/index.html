@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>officeview — Office documents rendered on canvas</title>
+    <meta name="description" content="React components that render Word, Excel, PowerPoint, Writer and RTF documents on an HTML canvas. Pixel-faithful, not HTML translation." />
+    <meta property="og:title" content="officeview — Office documents rendered on canvas" />
+    <meta property="og:description" content="React components that render Word, Excel, PowerPoint, Writer and RTF documents on an HTML canvas. Pixel-faithful, not HTML translation." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <script>
+      // Apply the stored theme before first paint.
+      try { var t = localStorage.getItem('ov-site-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/home.tsx"></script>
+  </body>
+</html>

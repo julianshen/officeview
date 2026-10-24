@@ -1,0 +1,12 @@
+.example-frame {
+  display: flex; flex-direction: column;
+  height: min(620px, calc(100vh - 160px));
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  overflow: hidden; background: #ffffff; color: #201f1e; box-shadow: var(--shadow-md);
+}
+.example-frame > * { flex: 1 1 auto; min-height: 0; }
+.example-frame > [data-ov-theme-root] { flex: 1 1 auto; min-height: 0; }
+.example-frame button { font: 14px system-ui; padding: 5px 12px; border-radius: 6px; border: 1px solid #c8c6c4; background: #fff; color: #201f1e; cursor: pointer; }
+.example-frame button:hover { background: #f3f2f1; }
+.demo-nav .nav-sub { margin-top: 18px; }
+.demo-nav a svg { width: 15px; height: 15px; flex: none; }

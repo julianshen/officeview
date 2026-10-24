@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    "paths": { "officeview": ["../src/index.ts"] }
+  },
+  "include": ["src", "../src/types", "../vite.site.config.ts", "../scripts/build-site-samples.ts"]
+}
