@@ -10,9 +10,12 @@ in git history.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-24
+
 The UI restyle: a Fluent (Office 365) look for every viewer surface, light and
 dark themes, a toolbar and status line for the page viewer, and isolated paged
-print. Targets 0.5.0 (the version in package.json).
+print, plus full-screen PowerPoint slideshow with Presenter View, media,
+3-D transitions and Morph.
 
 ### Breaking
 
@@ -236,4 +239,5 @@ downloads.
 - Text layout uses browser `measureText` with no font shaping, so line breaks
   can differ slightly from Word's exact metrics.
 
+[0.9.0]: https://github.com/julianshen/officeview/releases/tag/v0.9.0
 [0.4.0]: https://github.com/julianshen/officeview/releases/tag/v0.4.0
