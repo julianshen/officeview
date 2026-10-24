@@ -31,7 +31,8 @@ export function useSiteTheme(): [SiteTheme, () => void] {
   useEffect(() => {
     if (storedTheme()) return
     const mq = matchMedia('(prefers-color-scheme: dark)')
-    const on = () => setTheme(mq.matches ? 'dark' : 'light')
+    // An explicit choice made on this page wins over later OS changes.
+    const on = () => { if (!storedTheme()) setTheme(mq.matches ? 'dark' : 'light') }
     mq.addEventListener('change', on)
     return () => mq.removeEventListener('change', on)
   }, [])

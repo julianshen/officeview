@@ -123,8 +123,16 @@ function Playground() {
   const isSheet = /\.xlsx$/i.test(name)
 
   useEffect(() => {
-    // Samples that need an option to show their point turn it on.
-    if (sample?.props?.interactiveSheets) set('interactiveSheets', true)
+    // A sample's own options (interactive sheets, protection, watermark) carry over.
+    const props = sample?.props
+    if (!props) return
+    setO((prev) => ({
+      ...prev,
+      ...(props.interactiveSheets !== undefined ? { interactiveSheets: props.interactiveSheets } : {}),
+      ...(props.allowCopy !== undefined ? { allowCopy: props.allowCopy } : {}),
+      ...(props.allowPrint !== undefined ? { allowPrint: props.allowPrint } : {}),
+      ...(props.watermark ? { watermarkOn: true, watermark: { ...prev.watermark, ...props.watermark, color: props.watermark.color ?? prev.watermark.color } } : {}),
+    }))
   }, [sample?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const note = (line: string) => setLog((l) => [`${new Date().toLocaleTimeString()}  ${line}`, ...l].slice(0, 40))
