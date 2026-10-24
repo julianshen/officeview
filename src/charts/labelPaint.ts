@@ -130,10 +130,13 @@ export function paintDataLabels(model: ChartModel, ctx: CanvasRenderingContext2D
     let at = x - width / 2
     if (label.legendKey) { ctx.fillStyle = '#' + s.color; ctx.fillRect(at, y - 4, 8, 8); at += 12 }
     for (const run of runs) {
-      ctx.font = labelFont(run, layout.fontPx, family)
+      // Look the width up by the font string layout measured with, never by
+      // reading ctx.font back: browsers normalise it (quotes, weight names).
+      const font = labelFont(run, layout.fontPx, family)
+      ctx.font = font
       ctx.fillStyle = run.color ?? '#595959'
       ctx.fillText(run.text, at, y)
-      at += layout.width(run.text, ctx.font)
+      at += layout.width(run.text, font)
     }
     ctx.restore()
   }
