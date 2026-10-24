@@ -1,0 +1,79 @@
+# Publishes officeview to npm.
+#
+# Runs when a GitHub release is published (create the release from the
+# GitHub UI with a new tag such as v0.9.1), or by hand from the Actions tab.
+# The tag must match the version in package.json, so bump the version and
+# merge that to main before cutting the release.
+#
+# Needs the repository secret NPM_TOKEN: an npm Automation (or granular
+# publish) token for the officeview package. Never commit the token itself.
+
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# One publish at a time; a second run waits rather than racing the first.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build and publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install system libraries for node-canvas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Set up bun (pinned, do not float)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Set up Node for npm publish
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Check the release tag matches package.json
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::Release tag $TAG does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Skip if this version is already on npm
+        id: check
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "officeview@$version" version >/dev/null 2>&1; then
+            echo "::notice::officeview@$version is already published; nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # prepublishOnly runs `bun run build` (typecheck + vite + declarations).
+      - name: Publish
+        if: steps.check.outputs.skip != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
