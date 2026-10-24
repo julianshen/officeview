@@ -1428,6 +1428,9 @@ export function createStage(deps: StageDeps): Stage {
       left = undefined
       current = p
       timelineOf = model.timeline
+      // The live state is this slide's from now on, at its arrival: a leave before it is drawable (a rapid
+      // Next-Next) captures this slide as entered, never the state of the slide before it.
+      liveState = stateOf(p, model.cursor, 0, model.timeline)
       // The window is the slide and its visible neighbours, which hidden slides can put further than ±1 (PR #18 review 6).
       residency.show(model.index, neighbours)
       for (const other of [...prepared.values()]) if (other !== p && !neighbours.includes(other.index)) drop(other)
