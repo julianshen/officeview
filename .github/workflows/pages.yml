@@ -1,0 +1,89 @@
+# Builds the project website (site/) and deploys it to GitHub Pages.
+#
+# Pull requests build and type-check the site so a broken page is caught
+# before merge; only pushes to main (or a manual run) deploy it. The site
+# renders the library from src/, so it always shows the code on main.
+#
+# One-time setup: Settings → Pages → Build and deployment → Source:
+# "GitHub Actions".
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'src/**'
+      - 'scripts/build-site-samples.ts'
+      - 'vite.site.config.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build site
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install system libraries for node-canvas
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+
+      - name: Set up bun (pinned, do not float)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Restore bun dependency cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Type-check the site
+        run: bun run site:typecheck
+
+      - name: Build the site
+        run: bun run site:build
+
+      - name: Upload the Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site-dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
