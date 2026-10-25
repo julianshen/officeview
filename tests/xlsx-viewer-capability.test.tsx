@@ -106,8 +106,11 @@ describe('Esc cancels a pending copy (spec §9.3 fall-through)', () => {
   it('Esc on the Cancel copy control stops a copy that waits for worker values', FIRST_PAINT_TEST, async () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn(async () => {}) } })
     const hold = { on: false }
-    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => workerPort(undefined, hold)} />)
+    const viewer = <OfficeFile data={workbook()} interactiveSheets viewerWorker={() => workerPort(undefined, hold)} />
+    const ui = render(viewer)
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    // The wait runs outside act: drain the mount's passive effects (the navigator's address reset) before typing a Go To.
+    act(() => ui.rerender(viewer))
     hold.on = true
     fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: 'A900000' } })
     fireEvent.click(ui.getByRole('button', { name: 'Go To' }))

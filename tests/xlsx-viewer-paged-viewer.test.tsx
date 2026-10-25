@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { OfficeFile } from '../src/components/OfficeFile'
 import { ViewerKernel } from '../src/worker/viewerKernel'
 import { OfficePackage } from '../src/core/zip'
@@ -82,6 +83,15 @@ function go(ui: ReturnType<typeof render>, at: string) {
   return grid
 }
 const internal = (props: Record<string, unknown>) => props as object
+/** Mounts a viewer, waits for its first painted gridcell, then drains the mount's passive effects: the wait runs
+ * outside act, so under load the navigator's mount-time address reset can still be queued and would wipe the
+ * first Go To's address (see the complexity suite's mount()). A root update inside act flushes it first. */
+async function mount(element: ReactElement, firstCell: RegExp) {
+  const ui = render(element)
+  await waitFor(() => expect(ui.getByRole('gridcell', { name: firstCell })).toBeTruthy(), FIRST_PAINT_WAIT)
+  act(() => ui.rerender(element))
+  return ui
+}
 
 describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for paged admissions', () => {
   it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', FIRST_PAINT_TEST, async () => {
@@ -247,8 +257,7 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
 
   it('reaches XFD1048576 by Go To, find and copy through worker reads', FIRST_PAINT_TEST, async () => {
     const h = workerHarness(), write = clipboard()
-    const ui = render(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(<OfficeFile data={workbook()} interactiveSheets viewerWorker={() => h.port} />, /alpha/)
     const grid = go(ui, 'XFD1048576')
     await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
     fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
@@ -281,8 +290,7 @@ describe('S5.4 far corner and copy limits on a paged fixture', () => {
 describe('S5.4 view commits run in the worker', () => {
   it('header sort and a value-list filter commit through worker sort/filter commands', FIRST_PAINT_TEST, async () => {
     const h = workerHarness()
-    const ui = render(<OfficeFile data={workbook(CORNER.replace(/<row r="1048576">.*<\/row>/, ''))} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /alpha/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(<OfficeFile data={workbook(CORNER.replace(/<row r="1048576">.*<\/row>/, ''))} interactiveSheets viewerWorker={() => h.port} />, /alpha/)
     go(ui, 'B1')
     fireEvent.click(ui.getByRole('button', { name: 'Cycle sort column B' }))
     await waitFor(() => expect(ui.getByRole('columnheader', { name: /Column B; sort priority 1, ascending/ })).toBeTruthy())
@@ -394,8 +402,7 @@ describe('S5.4 review: worker-backed cells keep resident semantics', () => {
     const expected = await residentCopy(bytes, 'A1')
     expect(expected).not.toBe('44927')
     const h = workerHarness(), write = clipboard()
-    const ui = render(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: new RegExp(expected.replace(/[/.]/g, '\\$&')) })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />, new RegExp(expected.replace(/[/.]/g, '\\$&')))
     const grid = go(ui, 'A1')
     fireEvent.keyDown(grid, { key: 'c', ctrlKey: true })
     await waitFor(() => expect(write).toHaveBeenCalledWith(expected))
@@ -406,8 +413,7 @@ describe('S5.4 review: worker-backed cells keep resident semantics', () => {
   it('F2 authored-hidden columns stay collapsed: a row copy across them omits the hidden value', FIRST_PAINT_TEST, async () => {
     const bytes = pkg({ sheetData: SECRET, beforeSheetData: HIDDEN_COLS })
     const h = workerHarness(), write = clipboard()
-    const ui = render(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />)
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /shown/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(<OfficeFile data={new Blob([bytes as BlobPart])} interactiveSheets viewerWorker={() => h.port} />, /shown/)
     go(ui, 'A1')
     const grid = ui.getByRole('grid')
     fireEvent.keyDown(grid, { key: 'ArrowRight', shiftKey: true })
