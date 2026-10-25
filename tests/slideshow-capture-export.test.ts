@@ -235,6 +235,25 @@ describe('row mapping', () => {
     expect(!m.ok && m.reason).toMatch(/1-1-75\.png at frame 52 is in the next step/)
   })
 
+  it('a step with a start delay: t0 is the first changed frame less the delay', () => {
+    // 1000 ms span, first 500 ms a delay: the change shows at frame 165, so the click was at frame 150
+    const rows = expectRows(plan([[step(1, 0, 0), { ...step(1, 1, 1000, ['entr']), leadMs: 500 }]]))
+    const m = mapBursts(rows, [burst(165, 179)], fps, 400)
+    expect(m.ok).toBe(true)
+    if (!m.ok) return
+    const at = Object.fromEntries(m.frames.map(f => [f.file, f.index]))
+    expect(at['1-1-0.png']).toBe(149)
+    expect(at['1-1-25.png']).toBe(157) // in the delay, before the change
+    expect(at['1-1-100.png']).toBe(179)
+    expect(m.warnings).toEqual([])
+  })
+
+  it('refuses a start delay that reaches back into the previous burst', () => {
+    const rows = expectRows(plan([[step(1, 0, 0), step(1, 1, 500, ['entr']), { ...step(1, 2, 2500, ['entr']), leadMs: 2000 }]]))
+    const m = mapBursts(rows, [burst(30, 44), burst(80, 94)], fps, 400)
+    expect(m.ok || m.reason).toMatch(/1-2: its 2000 ms start delay puts the trigger at frame 19, inside the previous burst \(ends frame 44\)/)
+  })
+
   it('warns when a burst lasts noticeably shorter than the row span', () => {
     const rows = expectRows(plan([[step(1, 0, 0), step(1, 1, 1000, ['entr'])]]))
     const m = mapBursts(rows, [burst(30, 44)], fps, 200)
@@ -381,4 +400,22 @@ describe.skipIf(!hasX264 || !existsSync(join(CORPUS, 'lo-tdf105739.pptx')))('ext
     expect(set.frames.map(f => `${f.deck}/${f.slide}-${f.step}-${f.pct}`)).toEqual(['tdf105739/1-0-100'])
     expect(set.provenance.get('tdf105739')).toMatchObject({ powerpoint: 'Microsoft PowerPoint for Mac 16.106 (26020821)', os: 'macOS 26.5.2 (25F84)', resolution: [320, 180], capturedBy: 'Test Owner' })
   }, 30_000)
+})
+
+describe.skipIf(!existsSync(join(CORPUS, 'lo-tdf104788.pptx')))('capture plan start delay', () => {
+  it('a click effect that starts 500 ms after the click: leadMs 500; effects that start at once carry none', async () => {
+    const { default: JSZip } = await import('jszip')
+    const { planDeck } = await import('../scripts/slideshow-capture-plan')
+    const zip = await JSZip.loadAsync(readFileSync(join(CORPUS, 'lo-tdf104788.pptx')))
+    const xml = await zip.file('ppt/slides/slide6.xml')!.async('string')
+    const at = 'presetID="37" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="'
+    expect(xml).toContain(`${at}0"/>`)
+    zip.file('ppt/slides/slide6.xml', xml.replace(`${at}0"/>`, `${at}500"/>`))
+    const delayed = await planDeck('tdf104788', await zip.generateAsync({ type: 'uint8array' }))
+    const original = await planDeck('tdf104788', new Uint8Array(readFileSync(join(CORPUS, 'lo-tdf104788.pptx'))))
+    const step = (p: CapturePlan, n: number) => p.slides.find(s => s.slide === 6)!.steps.find(s => s.step === n)!
+    expect(step(delayed, 1).leadMs).toBe(500)
+    expect(step(original, 1).leadMs).toBeUndefined()
+    expect(step(delayed, 2).leadMs).toBeUndefined()
+  })
 })

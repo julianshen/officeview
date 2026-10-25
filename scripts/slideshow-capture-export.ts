@@ -267,6 +267,8 @@ export interface RowExpect {
   trigger: CaptureStep['trigger']
   spanMs: CaptureStep['spanMs']
   frames: CaptureStep['frames']
+  /** Ms from the trigger to the first visual change (an effect's start delay); 0 when it starts at once. */
+  leadMs: number
   /** `anchor`: slide 1's arrival, at the movie start; `burst`: one activity burst; `none`: no visible change (media only). */
   expect: 'anchor' | 'burst' | 'none'
   /** Slide 1 only: it has an opening transition or build that should show as a burst at the start. */
@@ -290,7 +292,7 @@ export function expectRows(plan: CapturePlan): RowExpect[] {
     if (s.hidden) continue
     for (const st of s.steps) {
       const visible = st.effects.some(e => !MEDIA_CLASSES.has(e.cls))
-      const base = { slide: st.slide, step: st.step, trigger: st.trigger, spanMs: st.spanMs, frames: st.frames }
+      const base = { slide: st.slide, step: st.step, trigger: st.trigger, spanMs: st.spanMs, frames: st.frames, leadMs: st.leadMs ?? 0 }
       if (st.step === 0 && first) {
         const tr = st.transition && !/^none\b/.test(st.transition.element)
         rows.push({ ...base, expect: 'anchor', opening: !!tr || visible })
@@ -311,8 +313,11 @@ const ms = (frames: number, fps: number) => Math.round(frames * 1000 / fps)
 const span = (s: RowExpect['spanMs']) => typeof s === 'number' ? `${s} ms` : s
 
 /**
- * Map bursts onto rows in order. t0 is the last frame before a burst's first
- * changed frame; a frame at `ms` is t0 + round(ms × fps / 1000). Span-0 rows
+ * Map bursts onto rows in order. A burst's first changed frame is the row's
+ * first visual change, `leadMs` after its trigger (an effect's start delay),
+ * so t0 is the last frame before it less the lead, and a frame at `ms` is
+ * t0 + round(ms × fps / 1000); a lead that reaches back into the previous
+ * burst is refused. Span-0 rows
  * and media-only rows take the settled frame (the last frame before the next
  * burst). Refuses on a count mismatch, a burst far longer than its row (two
  * steps merged), or a frame time that runs into the next step.
@@ -342,15 +347,18 @@ export function mapBursts(rows: readonly RowExpect[], bursts: readonly Burst[], 
     const settled = next - 1
     if (b && settled <= b.last) return { ok: false, reason: `${id(r)}: no still frame between its burst (ends frame ${b.last}) and the next (frame ${next}).\n${table()}` }
     if (b && typeof r.spanMs === 'number') {
-      const dur = ms(b.last - b.first + 1, fps)
-      if (dur > 2 * r.spanMs + 500) return { ok: false, reason: `${id(r)}: its burst lasts ${dur} ms but the row's span is ${r.spanMs} ms; probably two steps merged.\n${table()}` }
-      if (Math.abs(dur - r.spanMs) > 2000 / fps + 0.1 * r.spanMs) warnings.push(`${id(r)}: burst lasts ${dur} ms, row span ${r.spanMs} ms`)
+      const dur = ms(b.last - b.first + 1, fps), visible = Math.max(0, r.spanMs - r.leadMs)
+      const rowSpan = `row span ${r.spanMs} ms${r.leadMs ? `, the first ${r.leadMs} ms a start delay` : ''}`
+      if (dur > 2 * visible + 500) return { ok: false, reason: `${id(r)}: its burst lasts ${dur} ms but the row's span is ${r.spanMs} ms${r.leadMs ? ` (the first ${r.leadMs} ms a start delay)` : ''}; probably two steps merged.\n${table()}` }
+      if (Math.abs(dur - visible) > 2000 / fps + 0.1 * visible) warnings.push(`${id(r)}: burst lasts ${dur} ms, ${rowSpan}`)
     }
     if (r.expect === 'anchor' && !b && r.opening) {
       for (const f of r.frames) skipped.push({ file: f.file, reason: 'the opening transition or build did not show at the movie start' })
       continue
     }
-    const t0 = b ? b.first - 1 : r.expect === 'anchor' ? 0 : undefined
+    const t0 = b ? b.first - 1 - Math.round(r.leadMs * fps / 1000) : r.expect === 'anchor' ? 0 : undefined
+    const prevLast = k > 0 ? rows.slice(0, k).reverse().map(x => own.get(x)).find(x => x)?.last ?? -1 : -1
+    if (b && t0 !== undefined && t0 <= prevLast) return { ok: false, reason: `${id(r)}: its ${r.leadMs} ms start delay puts the trigger at frame ${t0}, inside the previous burst (ends frame ${prevLast}).\n${table()}` }
     for (const f of r.frames) {
       if (t0 === undefined || r.spanMs === 0) { frames.push({ file: f.file, index: settled }); continue }
       const index = t0 + Math.round(f.ms * fps / 1000)
