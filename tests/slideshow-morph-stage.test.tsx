@@ -22,9 +22,9 @@ vi.mock('../src/slideshow/morph/match', async (importOriginal) => {
 /**
  * PR #20 review 3: `backendHooks.rebuild()` emulates a backend switch (a WebGL2 restore or the Canvas 2D
  * fallback): the old backend's uploads are released, as a switched-out backend releases its leases, and the
- * stage's `rebuildLayers` runs against the compositor.
+ * stage's `rebuildLayers` runs against the compositor. `backendHooks.onUpload` sees every layer the stage uploads.
  */
-const backendHooks: { rebuild?: () => Promise<void> } = {}
+const backendHooks: { rebuild?: () => Promise<void>; onUpload?: (layer: { canvas: HTMLCanvasElement }) => void } = {}
 vi.mock('../src/slideshow/render/backend', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/slideshow/render/backend')>()
   return {
@@ -35,7 +35,7 @@ vi.mock('../src/slideshow/render/backend', async (importOriginal) => {
       const bind = <T extends object>(t: T, k: string | symbol) => { const v = Reflect.get(t, k); return typeof v === 'function' ? v.bind(t) : v }
       const facade = new Proxy(m.current, {
         get(t, k) {
-          if (k === 'upload') return (l: never, lease: never) => { const r = t.upload(l, lease); if (!('refused' in r)) uploaded.add(r); return r }
+          if (k === 'upload') return (l: never, lease: never) => { backendHooks.onUpload?.(l); const r = t.upload(l, lease); if (!('refused' in r)) uploaded.add(r); return r }
           if (k === 'release') return (h: { id: number }) => { uploaded.delete(h); t.release(h) }
           return bind(t, k)
         },
@@ -92,6 +92,7 @@ async function deck(spec: PptxDeckSpec): Promise<PptxDocument> {
 let clock: ManualClock
 beforeEach(() => {
   morphHooks.duringMatch = undefined
+  backendHooks.onUpload = undefined
   clock = new ManualClock()
   vi.mocked(morphFrame).mockClear()
   vi.spyOn(sessionDeps, 'clock').mockImplementation(() => clock)
@@ -672,6 +673,81 @@ describe('S3-6 morph through the session and stage', () => {
       const pair = m.spec.pairs.find(i => i.from?.key === 'sp:3/p:0-0' && i.to?.key === 'sp:3/p:0-0')!
       expect(pair).toMatchObject({ under: true })
       expectRides(m, 'sp:3/p:')
+      r.s.exit()
+    })
+  })
+
+  describe('rapid Next-Next: the outgoing side is the slide actually left', () => {
+    /** A blue box (spid 4) at (360, 300); the first slide's exit hides it. */
+    const blue = (): PptxShapeSpec => ({ id: 4, name: 'Blue', off: [px(360), px(300)], ext: [px(160), px(120)], fill: '2050C0' })
+
+    /**
+     * Presses Next, and Next again while the stage is still entering the slide the first one went to (its
+     * `enter` waits for the slide to be drawable): the second slide change leaves a slide whose enter never
+     * completed. `onUpload` sees the canvases the stage uploads while that slide is left.
+     */
+    async function rapidNext(r: Awaited<ReturnType<typeof show>>, onUpload?: (canvas: HTMLCanvasElement) => void) {
+      const stage = r.s.stage!
+      const host = document.querySelector<HTMLElement>('[data-officeview-show]')!
+      const enter = stage.enter.bind(stage), leave = stage.leave.bind(stage)
+      let pressed = false
+      stage.leave = () => {
+        if (pressed && onUpload) backendHooks.onUpload = (l) => onUpload(l.canvas)
+        try { leave() } finally { backendHooks.onUpload = undefined }
+      }
+      stage.enter = (model, t, neighbours) => {
+        const entering = enter(model, t, neighbours)
+        if (model.index === 1 && !pressed) {
+          pressed = true
+          host.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }))
+        }
+        return entering
+      }
+      await r.key('ArrowRight')
+      expect(pressed).toBe(true)
+    }
+
+    const slides = (third: PptxDeckSpec['slides'][number]['transition']): PptxDeckSpec['slides'] => [
+      // The blue box exits on the first slide's only click.
+      { shapes: [square(80, 60), blue()], timingXml: timingXmlOf(mainSeqXml([exitStep(10, 4)])) },
+      { shapes: [square(80, 60), blue()] },
+      { shapes: [square(700, 380), blue()], transition: third },
+    ]
+
+    it('the flat transition’s outgoing frame is the second slide (its blue box shown), not the first slide’s state', async () => {
+      const doc = await deck({ slides: slides({ xml: '<p:transition spd="slow"><p:fade/></p:transition>' }) })
+      const r = await show(doc)
+      await r.key('ArrowRight') // plays the exit: the first slide's state hides spid 4
+      await r.tick(100)
+      expect(r.s.state.slide).toBe(0)
+      const frames: HTMLCanvasElement[] = []
+      await rapidNext(r, (c) => frames.push(c))
+      await r.tick(100)
+      expect(r.s.state.slide).toBe(2)
+      expect(r.s.stage!.transition?.effect).toBe('fade')
+      // The one upload made by the leave is the outgoing frame of the second slide.
+      expect(frames).toHaveLength(1)
+      const c = frames[0]!
+      const k = c.width / 960
+      const [red, green, b] = c.getContext('2d')!.getImageData(Math.round(440 * k), Math.round(360 * k), 1, 1).data
+      expect([red, green, b]).toEqual([0x20, 0x50, 0xc0])
+      r.s.exit()
+    })
+
+    it('the Morph’s outgoing state is the second slide’s: its blue box pairs instead of fading in', async () => {
+      const doc = await deck({ slides: slides(MORPH) })
+      const r = await show(doc)
+      await r.key('ArrowRight')
+      await r.tick(100)
+      expect(r.s.state.slide).toBe(0)
+      await rapidNext(r)
+      await r.tick(300)
+      expect(r.s.state.slide).toBe(2)
+      expect(r.log).not.toContain('diag:transition-approximate:morph-fallback')
+      const m = lastMorph()!
+      expect(m).toBeDefined()
+      // Shown on the slide left, so it is on the outgoing side and pairs.
+      expect(keyed(m.spec.pairs, 'sp:4').some(i => i.from && i.to)).toBe(true)
       r.s.exit()
     })
   })

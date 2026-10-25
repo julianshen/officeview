@@ -20,6 +20,12 @@ in git history.
   labels (for example labelled columns, pies with percentages, waterfall and
   funnel); node-canvas, used by the test suite, does not normalise, which is why
   tests did not catch it.
+- **A rapid Next-Next in a slideshow starts the next transition from the right
+  slide.** Pressing Next again while the slide just reached was still being
+  prepared could start the following transition (its outgoing frame, and a
+  Morph's outgoing side) from the slide before it. The slide being left is now
+  always the one most recently entered, at its arrival state if it never
+  finished entering.
 
 ## [0.9.0] - 2026-10-24
 
