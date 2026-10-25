@@ -329,6 +329,16 @@ describe('rasterLayer', () => {
     }
   })
 
+  it('a useBgFill shape split for a colour animation shows the background only in its fill layer', async () => {
+    const slide = await parsedSlide([{ id: 6, off: [emu(20), emu(20)], ext: [emu(160), emu(80)], fill: 'FF0000', lineW: '38100', paragraphs: [{ runs: [{ text: 'MMMM', sz: '4000', color: 'FF0000' }] }] }])
+    slide.shapes[0].useBgFill = true
+    const plan = buildRenderPlan(slide, new Set(['sp:6']), new Map([['sp:6', new Set(['fill' as const])]]), [])
+    const part = (name: string) => plan.layers.find(l => l.kind === 'target' && l.part === name) as { nodes: PptxShape[] }
+    expect(part('fill').nodes.map(n => n.useBgFill)).toEqual([true])
+    // The line layer paints over the fill layer: a backdrop there would cover the fill's colour animation.
+    expect(part('line').nodes.map(n => n.useBgFill)).toEqual([undefined])
+  })
+
   it('same-colour fill and text, fill-only colour change with partial transparency, changes only the fill', async () => {
     const slide = await parsedSlide([{ id: 6, off: [emu(20), emu(20)], ext: [emu(160), emu(80)], fill: 'FF0000', lineW: '38100', paragraphs: [{ runs: [{ text: 'MMMM', sz: '4000', b: true, color: 'FF0000' }] }] }])
     slide.shapes[0].drawingStyle!.fill = { kind: 'solid', color: { r: 255, g: 0, b: 0, a: 0.5 } }
