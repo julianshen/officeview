@@ -2,7 +2,7 @@
 
 This directory holds the owner's PowerPoint reference frames for the slideshow compare step (spec §11 D4). How to capture them, and the exact file list for each deck, is in `docs/validation/slideshow-captures.md`. The schema below is enforced by `readRefs` and `parseProvenance` in `scripts/slideshow-compare.ts`.
 
-It is empty until captures exist. An empty or missing directory means that every catalogue row is **unverified**, never failed.
+The first captures (2026-10-25, PowerPoint for Mac 16.114 movie export) cover 15 of the 16 corpus decks; tdf104788 was refused by the step locator. The matching compare records are in `docs/validation/slideshow-compare.json`. A deck without a directory here leaves its rows **unverified**, never failed.
 
 ## Layout
 
