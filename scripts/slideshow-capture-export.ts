@@ -72,6 +72,9 @@ export const realRunner: Runner = (cmd, args, opts = {}) => new Promise(resolve 
 // export: PowerPoint → <videos>/<deck>.mov
 // ---------------------------------------------------------------------------
 
+/** Seconds the exported movie's size must hold still before the export counts as finished. */
+export const MOVIE_STABLE_S = 10
+
 const asText = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 
 /**
@@ -79,6 +82,10 @@ const asText = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}
  * (PowerPoint.sdef: `save as movie settings`, `save … as save as movie`, the
  * standard `close … saving no`). The movie settings are best effort: if
  * PowerPoint refuses them the export still runs at its default size.
+ * `save … as save as movie` returns as soon as the export starts and
+ * PowerPoint writes the movie in the background, so the script waits until
+ * the file has existed with an unchanged size for MOVIE_STABLE_S seconds
+ * before closing the presentation (the shell runs outside PowerPoint).
  */
 export function appleScriptFor(input: string, output: string): string {
   return `with timeout of ${APPLESCRIPT_TIMEOUT_S} seconds
@@ -99,6 +106,22 @@ export function appleScriptFor(input: string, output: string): string {
 			close p saving no
 			error e number n
 		end try
+		set lastSize to -1
+		set stable to 0
+		repeat while stable < ${MOVIE_STABLE_S}
+			delay 1
+			try
+				tell current application to set sz to (do shell script "stat -f %z " & quoted form of ${asText(output)}) as integer
+			on error
+				set sz to -1
+			end try
+			if sz > 0 and sz = lastSize then
+				set stable to stable + 1
+			else
+				set stable to 0
+			end if
+			set lastSize to sz
+		end repeat
 		close p saving no
 		return (version as text) & tab & (build as text)
 	end tell
@@ -143,12 +166,14 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
     const r = await run('osascript', ['-'], { input: script, timeoutMs: opts.timeoutMs })
     rmSync(staged, { force: true })
     if (r.timedOut) {
-      results.push({ deck, ok: false, reason: `timed out after ${opts.timeoutMs / 1000} s. PowerPoint may still be exporting, or waiting on a dialog: a "Grant File Access" sheet means --staging is outside PowerPoint's container. Check PowerPoint, close the presentation, then rerun with --deck ${deck}` })
+      results.push({ deck, ok: false, reason: `timed out after ${opts.timeoutMs / 1000} s. PowerPoint may still be exporting, or waiting on a dialog such as a "Grant File Access" sheet. Check PowerPoint, close the presentation, then rerun with --deck ${deck}` })
       continue
     }
     const made = existsSync(stagedMovie) && statSync(stagedMovie).size > 0
     if (r.code !== 0 || !made) {
-      results.push({ deck, ok: false, reason: `osascript exit ${r.code}${made ? '' : ', no movie written'}: ${(r.stderr || r.stdout.toString()).trim() || '(no output)'}` })
+      const out = (r.stderr || r.stdout.toString()).trim() || '(no output)'
+      const hint = /-9074\b/.test(out) ? ` (PowerPoint could not open ${staged}: answer any dialog it shows, such as a "Grant File Access" sheet, then rerun with --deck ${deck})` : ''
+      results.push({ deck, ok: false, reason: `osascript exit ${r.code}${made ? '' : ', no movie written'}: ${out}${hint}` })
       continue
     }
     moveFile(stagedMovie, movie)
@@ -164,23 +189,44 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
 // extract: probe, find bursts, map them onto the rows
 // ---------------------------------------------------------------------------
 
-export type Probe = { ok: true; width: number; height: number; fps: number; fpsText: string; frames?: number } | { ok: false; reason: string }
+/** `tick`: the movie's timescale rate when r_frame_rate reports it instead of a frame rate; frame times must then be checked as steady. */
+export type Probe = { ok: true; width: number; height: number; fps: number; fpsText: string; frames?: number; tick?: number } | { ok: false; reason: string }
 
 const rational = (s: unknown) => {
   const m = typeof s === 'string' ? /^(\d+)\/(\d+)$/.exec(s) : null
   return m && +m[2] > 0 ? +m[1] / +m[2] : NaN
 }
 
-/** ffprobe's stream JSON. A movie whose average frame rate differs from its nominal rate is variable-frame-rate and refused. */
+/**
+ * ffprobe's stream JSON. A movie whose average frame rate differs from its
+ * nominal rate is variable-frame-rate and refused, except when the nominal
+ * rate is a timescale (at least TICK_RATIO × the average): PowerPoint writes
+ * 30 fps in 1/600 s ticks, so frame gaps alternate 19 and 20 ticks and
+ * ffprobe reports 600/1. Then fps is the average and `tick` asks the caller
+ * to check the frame times with steadyFrameTimes.
+ */
 export function parseProbe(json: string): Probe {
   let s: Record<string, unknown> | undefined
   try { s = (JSON.parse(json) as { streams?: Array<Record<string, unknown>> }).streams?.[0] } catch { return { ok: false, reason: 'ffprobe output is not JSON' } }
   if (!s) return { ok: false, reason: 'no video stream' }
   const r = rational(s.r_frame_rate), avg = rational(s.avg_frame_rate)
   if (!(r > 0)) return { ok: false, reason: `no frame rate (r_frame_rate ${String(s.r_frame_rate)})` }
-  if (!(avg > 0) || Math.abs(r - avg) / r > 0.001) return { ok: false, reason: `variable frame rate: r_frame_rate ${String(s.r_frame_rate)} ≠ avg_frame_rate ${String(s.avg_frame_rate)}; frame times would be wrong` }
   const frames = Number(s.nb_frames)
-  return { ok: true, width: Number(s.width), height: Number(s.height), fps: r, fpsText: String(s.r_frame_rate), ...(Number.isSafeInteger(frames) && frames > 0 ? { frames } : {}) }
+  const extra = { ...(Number.isSafeInteger(frames) && frames > 0 ? { frames } : {}) }
+  if (avg > 0 && r >= TICK_RATIO * avg) return { ok: true, width: Number(s.width), height: Number(s.height), fps: avg, fpsText: avg.toFixed(3), ...extra, tick: r }
+  if (!(avg > 0) || Math.abs(r - avg) / r > 0.001) return { ok: false, reason: `variable frame rate: r_frame_rate ${String(s.r_frame_rate)} ≠ avg_frame_rate ${String(s.avg_frame_rate)}; frame times would be wrong` }
+  return { ok: true, width: Number(s.width), height: Number(s.height), fps: r, fpsText: String(s.r_frame_rate), ...extra }
+}
+
+const TICK_RATIO = 4
+
+/** Frame times (seconds, any order) are steady when every gap is within one and a half timescale ticks of every other. */
+export function steadyFrameTimes(pts: readonly number[], tick: number): boolean {
+  const t = [...pts].sort((a, b) => a - b)
+  if (t.length < 2) return false
+  let lo = Infinity, hi = -Infinity
+  for (let i = 1; i < t.length; i++) { const d = t[i] - t[i - 1]; lo = Math.min(lo, d); hi = Math.max(hi, d) }
+  return hi - lo <= 1.5 / tick
 }
 
 export interface Crop { w: number; h: number; x: number; y: number }
@@ -387,6 +433,12 @@ export async function analyzeMovie(movie: string, crop: Crop | ((p: Extract<Prob
   if (pr.code !== 0) return { ok: false, reason: `ffprobe failed: ${pr.stderr.trim()}` }
   const probe = parseProbe(pr.stdout.toString())
   if (!probe.ok) return probe
+  if (probe.tick) {
+    const pk = await run('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0', movie])
+    if (pk.code !== 0) return { ok: false, reason: `ffprobe failed: ${pk.stderr.trim()}` }
+    const pts = pk.stdout.toString().split('\n').filter(l => l.trim()).map(Number)
+    if (!steadyFrameTimes(pts, probe.tick)) return { ok: false, reason: `variable frame rate: frame gaps differ by more than 1.5 ticks of 1/${probe.tick} s; frame times would be wrong` }
+  }
   const c = typeof crop === 'function' ? crop(probe) : crop
   const g = await run('ffmpeg', ['-v', 'error', '-i', movie, '-vf', analysisFilter(c), '-f', 'rawvideo', '-pix_fmt', 'gray', '-'])
   if (g.code !== 0) return { ok: false, reason: `ffmpeg decode failed: ${g.stderr.trim()}` }
@@ -593,7 +645,7 @@ export function parseCli(args: string[]): Cli | string {
 const PROMPTS = `PowerPoint export: expect two macOS prompts, once each (click Allow / OK):
   1. "<your terminal> wants access to control Microsoft PowerPoint" (Automation);
   2. "<your terminal> would like to access data from other apps" (the staging folder is inside PowerPoint's container).
-A "Grant File Access" sheet in PowerPoint means --staging is outside its container.`
+If PowerPoint itself shows a dialog (such as a "Grant File Access" sheet), answer it: the export waits on it.`
 
 async function main(args: string[]): Promise<number> {
   const cli = parseCli(args)
