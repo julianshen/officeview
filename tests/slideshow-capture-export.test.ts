@@ -12,8 +12,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  ANCHOR_FRAMES, analyzeMovie, appleScriptFor, buildProvenance, compareDecks, cropFor, detectBursts, expectRows, exportDecks, extractDecks, extractFrame,
-  mapBursts, mergeRuns, parseProbe, pngSize, realRunner, seekCheck, seekSeconds, statusChanges, type Burst, type ProcResult, type RowExpect, type Runner,
+  ANCHOR_FRAMES, MOVIE_STABLE_S, analyzeMovie, appleScriptFor, buildProvenance, compareDecks, cropFor, detectBursts, expectRows, exportDecks, extractDecks, extractFrame,
+  mapBursts, mergeRuns, parseProbe, pngSize, realRunner, seekCheck, seekSeconds, statusChanges, steadyFrameTimes, type Burst, type ProcResult, type RowExpect, type Runner,
 } from '../scripts/slideshow-capture-export'
 import { parseProvenance, readRefs } from '../scripts/slideshow-compare'
 import type { CapturePlan, CaptureStep } from '../scripts/slideshow-capture-plan'
@@ -52,6 +52,32 @@ describe('AppleScript export', () => {
     expect(s).toContain('close p saving no')
     expect(s).not.toMatch(/as save as MP4/i)
     expect(s.trimEnd()).toMatch(/end timeout$/)
+  })
+
+  it('waits for the background export: closes only after the movie size has held still for MOVIE_STABLE_S seconds, checked from outside PowerPoint', () => {
+    const s = appleScriptFor('/c/in.pptx', '/c/out.mov')
+    const save = s.indexOf('as save as movie'), wait = s.indexOf(`repeat while stable < ${MOVIE_STABLE_S}`), close = s.lastIndexOf('close p saving no')
+    expect(save).toBeGreaterThan(0)
+    expect(wait).toBeGreaterThan(save)
+    expect(close).toBeGreaterThan(wait)
+    expect(s).toContain('tell current application to set sz to (do shell script "stat -f %z " & quoted form of "/c/out.mov") as integer')
+  })
+
+  it.skipIf(process.platform !== 'darwin' || !existsSync('/Applications/Microsoft PowerPoint.app'))('compiles against PowerPoint\'s dictionary', () => {
+    const out = join(scratch(), 'x.scpt')
+    const r = spawnSync('osacompile', ['-o', out], { input: appleScriptFor('/c/in.pptx', '/c/out.mov') })
+    expect(r.stderr.toString()).toBe('')
+    expect(r.status).toBe(0)
+  })
+
+  it('PowerPoint error -9074 (it could not open the staged deck): the reason says to answer its dialog and rerun the deck', async () => {
+    const root = scratch()
+    const corpus = join(root, 'corpus')
+    spawnSync('mkdir', ['-p', corpus])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    const run: Runner = async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: '72:200: execution error: Microsoft PowerPoint got an error. (-9074)', timedOut: false })
+    const res = await exportDecks({ decks: ['a'], corpus, staging: join(root, 's'), videos: join(root, 'v'), timeoutMs: 5000, dryRun: false }, run, () => {})
+    expect(res[0].reason).toMatch(/\(-9074\) \(PowerPoint could not open .*a\.pptx: answer any dialog it shows, such as a "Grant File Access" sheet, then rerun with --deck a\)$/)
   })
 
   it('quotes backslashes and double quotes in paths', () => {
@@ -118,6 +144,16 @@ describe('probe', () => {
   it('reads size and fps of a CFR movie', () => {
     expect(parseProbe(json('30/1', '30/1'))).toEqual({ ok: true, width: 1920, height: 1080, fps: 30, fpsText: '30/1', frames: 300 })
     expect(parseProbe(json('30000/1001', '30000/1001'))).toMatchObject({ ok: true, fps: 30000 / 1001 })
+  })
+  it('PowerPoint 30 fps in 1/600 s ticks (r_frame_rate 600/1): fps is the average, frame times to be checked', () => {
+    expect(parseProbe(json('600/1', '9120/301'))).toMatchObject({ ok: true, fps: 9120 / 301, fpsText: '30.299', tick: 600 })
+  })
+  it('steady frame times: gaps of 19 and 20 ticks pass; a held frame or a dropped tick run fails', () => {
+    const ticks = (gaps: number[]) => gaps.reduce<number[]>((t, g) => [...t, t[t.length - 1] + g / 600], [0])
+    expect(steadyFrameTimes(ticks([20, 20, 19, 20, 20, 19, 20]), 600)).toBe(true)
+    expect(steadyFrameTimes(ticks([20, 20, 19, 600, 20]), 600)).toBe(false)
+    expect(steadyFrameTimes(ticks([20, 22, 20]), 600)).toBe(false)
+    expect(steadyFrameTimes([0], 600)).toBe(false)
   })
   it('refuses a variable-frame-rate movie', () => {
     const r = parseProbe(json('60/1', '5734/97'))
