@@ -47,6 +47,23 @@ describe('controlled S6.1 navigator/status shell', () => {
     expect(change).toHaveBeenCalledWith('b')
     expect(ui.container.querySelector('img')).toBeNull()
   })
+  it('a disabled navigator is visibly inert, never silently accepting a Go To, and navigates once re-enabled', () => {
+    const navigate = vi.fn(), notice = vi.fn()
+    const props = { documentId: 'doc', sheets, activeSheetId: 'a', onSheetChange: () => {}, onNavigate: navigate, onNotice: notice }
+    const ui = render(<SheetNavigator {...props} disabled />)
+    for (const name of ['Worksheet', 'Address space', 'Go To cell']) expect((ui.getByLabelText(name) as HTMLInputElement).disabled).toBe(true)
+    const button = ui.getByRole('button', { name: 'Go To' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    // Even a submit that bypasses the disabled button (a host form submit) is a no-op, with no notice.
+    fireEvent.submit(button.form!)
+    expect(navigate).not.toHaveBeenCalled()
+    expect(notice).not.toHaveBeenCalled()
+    ui.rerender(<SheetNavigator {...props} disabled={false} />)
+    expect(button.disabled).toBe(false)
+    fireEvent.change(ui.getByLabelText('Go To cell'), { target: { value: 'B2' } })
+    fireEvent.click(button)
+    expect(navigate).toHaveBeenCalledWith({ addressSpace: 'display', at: { rowSlot: 1, col: 1 } })
+  })
   it('diagnoses invalid addresses without issuing navigation and isolates viewer gestures', () => {
     const navigate = vi.fn(), notice = vi.fn(), parent = vi.fn()
     const ui = render(<div onPointerDown={parent} onDoubleClick={parent} onKeyDown={parent}><SheetNavigator documentId="doc" sheets={sheets} activeSheetId="a" onSheetChange={() => {}} onNavigate={navigate} onNotice={notice} /></div>)

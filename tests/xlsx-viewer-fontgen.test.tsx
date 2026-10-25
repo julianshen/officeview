@@ -197,9 +197,12 @@ it('a real font lease change rejects held old-font plans before adopting new-fon
     return prepareSheetAssets(...args)
   })
   const data = coldData(), factory = () => h.port, seams = { assetLoader, onFrame: f.onFrame } as object
-  const ui = render(<OfficeFile data={data} interactiveSheets viewerWorker={factory} {...seams} />)
+  const viewer = <OfficeFile data={data} interactiveSheets viewerWorker={factory} {...seams} />
+  const ui = render(viewer)
   try {
     await waitFor(() => expect(f.last()?.identity.fontGen).toBe(1), FIRST_PAINT_WAIT)
+    // The wait runs outside act: drain the mount's passive effects (the navigator's address reset) before typing a Go To.
+    act(() => ui.rerender(viewer))
     h.hold(c => c.kind === 'viewport' || c.kind === 'read' && c.query.op === 'rows')
     go(ui, 'A1000')
     await waitFor(() => expect(h.held.some(x => x.command.kind === 'viewport' && x.out.kind === 'complete')).toBe(true))

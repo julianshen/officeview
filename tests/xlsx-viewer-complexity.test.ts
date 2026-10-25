@@ -21,7 +21,7 @@
 import v8 from 'node:v8'
 import vm from 'node:vm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
+import { createElement, type ReactElement } from 'react'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { OfficeDoc } from '../src/components/OfficeDoc'
 import { OfficeFile } from '../src/components/OfficeFile'
@@ -166,6 +166,17 @@ function go(ui: ReturnType<typeof render>, at: string, space: 'display' | 'sourc
   act(() => grid.focus())
   return grid
 }
+/** Mounts a viewer and waits for its first painted gridcell, then drains the mount's passive effects.
+ * The wait runs outside act, so under load the cell can appear while the mount commit's passive effects
+ * (the navigator's address reset among them) are still queued on React's scheduler; the first Go To's
+ * address change then flushes them and the reset wipes the typed address before it submits ("Enter a
+ * valid cell address"). A root update inside act flushes pending passive effects before anything else. */
+async function mount(element: ReactElement, firstCell: RegExp) {
+  const ui = render(element)
+  await waitFor(() => expect(ui.getByRole('gridcell', { name: firstCell })).toBeTruthy(), FIRST_PAINT_WAIT)
+  act(() => ui.rerender(element))
+  return ui
+}
 const activeId = (ui: ReturnType<typeof render>) => {
   const id = ui.getByRole('grid').getAttribute('aria-activedescendant')
   return id ? Number(/-cell-(\d+)$/.exec(id)?.[1]) : null
@@ -271,23 +282,17 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
   it('Go To XFD1048576 on a one-cell corner sheet allocates no row lane, map or full-sheet canvas', async () => {
     const doc = await objectDoc(CORNERS)
     const f = frames()
-    const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true, ...internal({ onFrame: f.onFrame }) }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(createElement(OfficeDoc, { document: doc, interactiveSheets: true, ...internal({ onFrame: f.onFrame }) }), /origin/)
     // Warm-up: the same gestures three times, so first-use module/JIT state and
     // the bounded tile/layout caches are full before the measured window.
     // The warm-up gestures are cold first gestures (module, JIT and cache fill), so they take the first-paint wait.
-    // Under load a cold warm-up Go To was seen to be dropped outright (PR #19 round 10 CI and a local loop of 16
-    // parallel runs: the selection never moved, aria-activedescendant stayed unset for 29 s), so a warm-up gesture
-    // that has not landed is sent once more before the test gives up. The measured window below is unchanged.
-    const reach = async (at: string, landed: () => void) => {
-      go(ui, at)
-      try { await waitFor(landed, { timeout: FIRST_PAINT_WAIT.timeout / 2 }) }
-      catch { go(ui, at); await waitFor(landed, FIRST_PAINT_WAIT) }
-    }
     for (let round = 0; round < 3; round++) {
-      await reach('XFD1048576', () => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
-      await reach('A1048576', () => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS))
-      await reach('A1', () => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy())
+      go(ui, 'XFD1048576')
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+      go(ui, 'A1048576')
+      await waitFor(() => expect(activeId(ui)).toBe((MAX_ROWS - 1) * MAX_COLS), FIRST_PAINT_WAIT)
+      go(ui, 'A1')
+      await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
     }
     const ledger = await measure(async () => {
       go(ui, 'XFD1048576')
@@ -319,8 +324,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
 
   it('cell IDs across the 2^31 and 2^32 boundaries stay exact end to end (no bitwise packing)', FIRST_PAINT_TEST, async () => {
     const doc = await objectDoc(BOUNDARIES)
-    const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /origin/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(createElement(OfficeDoc, { document: doc, interactiveSheets: true }), /origin/)
     go(ui, 'A131073')
     await waitFor(() => expect(ui.getByRole('gridcell', { name: 'A131073, value two-pow-31' })).toBeTruthy())
     expect(activeId(ui)).toBe(2 ** 31) // a signed 32-bit result would be negative
@@ -331,8 +335,7 @@ describe('resident (object) viewer: navigation and paint stay viewport-bounded',
 
   it('a giant narrow-column merge (D1:D1048576) paints and refuses a sort without a coverage map', async () => {
     const doc = await objectDoc(table(40), '<mergeCells count="1"><mergeCell ref="D1:D1048576"/></mergeCells>')
-    const ui = render(createElement(OfficeDoc, { document: doc, interactiveSheets: true }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value id/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(createElement(OfficeDoc, { document: doc, interactiveSheets: true }), /^A1, value id/)
     const ledger = await measure(async () => {
       go(ui, 'D524288')
       await waitFor(() => expect(ui.getByRole('grid').getAttribute('aria-activedescendant')).toBeTruthy())
@@ -355,8 +358,7 @@ describe('worker-backed viewer: bounded reads, one parse, no per-command reparse
   it('open, corner navigation and a sort issue bounded reads and never re-open or re-parse the workbook', async () => {
     const h = workerHarness()
     const blob = new Blob([xlsxBytes({ sheetData: table(3000) + `<row r="1048576">${inline('XFD1048576', 'corner')}</row>` }) as BlobPart])
-    const ui = render(createElement(OfficeFile, { data: blob, interactiveSheets: true, viewerWorker: () => h.port }))
-    await waitFor(() => expect(ui.getByRole('gridcell', { name: /^A1, value id/ })).toBeTruthy(), FIRST_PAINT_WAIT)
+    const ui = await mount(createElement(OfficeFile, { data: blob, interactiveSheets: true, viewerWorker: () => h.port }), /^A1, value id/)
     const ledger = await measure(async () => {
       go(ui, 'XFD1048576')
       await waitFor(() => expect(ui.getByRole('gridcell', { name: /corner/ })).toBeTruthy())
