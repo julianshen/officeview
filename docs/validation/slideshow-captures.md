@@ -61,7 +61,7 @@ The table's times are milliseconds after the trigger (`t0`), from the engine's r
    - Every PNG in a deck directory must have the same pixel size. The compare tool fails any size mismatch and never resizes.
 3. At 60 fps a frame lasts 16.7 ms, so a frame time can be off by up to one frame. The compare tolerance absorbs that for slow effects. Spans under 50 ms list only their 0 and 100 % frames.
 4. Write `tests/fixtures/slideshow-refs/<deck>/provenance.json`. The schema is in `tests/fixtures/slideshow-refs/README.md`, and placeholders such as "unknown" are rejected.
-5. Tick the row's **Done** box in this file and commit the PNGs, the provenance file and this file together.
+5. Commit the PNGs and the provenance file together. Leave the **Done** boxes unticked: the tables are generated, and the drift test in `tests/slideshow-compare.test.ts` compares them byte for byte with the generator, so the frames on disk and `docs/validation/slideshow-compare.json` are the record of what was captured.
 
 ### Automated export (macOS, owner run)
 
