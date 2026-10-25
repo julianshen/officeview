@@ -491,7 +491,8 @@ test.describe('S2-5 presenter view', () => {
     await view.locator('[data-officeview-presenter-grid] button[data-slide="4"]').click()
     await expect.poll(() => page.evaluate(() => window.__slideshowStart!.sessions.a?.slideIndex)).toBe(4)
     await expect(view.locator('[data-officeview-presenter-next]')).toHaveAttribute('aria-label', 'Next: end of slide show')
-    await view.locator('button[aria-label="End show"]').click()
+    // Ending the show closes this popup, which can land before Playwright finishes the click: only that error is expected.
+    await view.locator('button[aria-label="End show"]').click().catch((error: unknown) => { if (!popup.isClosed()) throw error })
     await expect.poll(() => popup.isClosed()).toBe(true)
   })
 })
