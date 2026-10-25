@@ -542,6 +542,18 @@ export function statusChanges(before: ReadonlyMap<string, VerifyStatus>, after: 
   return [...after].filter(([row, to]) => (before.get(row) ?? 'unverified') !== to).map(([row, to]) => ({ row, from: before.get(row) ?? 'unverified', to }))
 }
 
+/** Runs the comparison for each deck against the selected corpus (by path, so --corpus is honoured); returns the decks whose comparison failed. */
+export async function compareDecks(decks: readonly string[], opts: { corpus: string; refs: string; records: string; dryRun: boolean }, log: (l: string) => void, compare: (args: string[]) => Promise<number> = runCompareCli): Promise<string[]> {
+  const failed: string[] = []
+  for (const deck of decks) {
+    const args = [join(opts.corpus, `lo-${deck}.pptx`), '--write', '--refs', opts.refs, '--records', opts.records]
+    if (opts.dryRun) { log(`[dry-run] would run: bun scripts/slideshow-compare.ts ${args.join(' ')}`); continue }
+    log(`compare ${deck}:`)
+    if (await compare(args) !== 0) failed.push(deck)
+  }
+  return failed
+}
+
 interface Cli { cmd: 'export' | 'extract' | 'all'; decks: string[]; dryRun: boolean; corpus: string; staging: string; videos: string; refs: string; records: string; timeoutMs: number; gapMs: number }
 
 const USAGE = 'usage: bun scripts/slideshow-capture-export.ts export|extract|all [--deck <name>]… [--dry-run] [--staging dir] [--videos dir] [--corpus dir] [--refs dir] [--records file] [--timeout s] [--gap-ms ms]'
@@ -592,13 +604,7 @@ async function main(args: string[]): Promise<number> {
     const decks = cli.cmd === 'all' && !cli.dryRun ? exported.filter(r => r.ok).map(r => r.deck) : cli.decks
     extracted = await extractDecks({ ...cli, decks }, run, log)
   }
-  if (cli.cmd === 'all') {
-    for (const r of extracted.filter(x => x.written > 0)) {
-      if (cli.dryRun) { log(`[dry-run] would run: bun scripts/slideshow-compare.ts ${r.deck} --write --refs ${cli.refs} --records ${cli.records}`); continue }
-      log(`compare ${r.deck}:`)
-      await runCompareCli([r.deck, '--write', '--refs', cli.refs, '--records', cli.records])
-    }
-  }
+  const compareFailed = cli.cmd === 'all' ? await compareDecks(extracted.filter(x => x.written > 0).map(r => r.deck), cli, log) : []
   console.log('\nSummary')
   for (const r of exported) if (!r.ok) console.log(`  ${r.deck}: export failed: ${r.reason}`)
   for (const r of extracted) {
@@ -612,7 +618,8 @@ async function main(args: string[]): Promise<number> {
     console.log(moved.length ? '  catalogue rows moved:' : '  no catalogue row changed status')
     for (const m of moved) console.log(`    ${m.row}: ${m.from} → ${m.to}`)
   }
-  return exported.some(r => !r.ok) || extracted.some(r => r.refused) ? 1 : 0
+  for (const d of compareFailed) console.log(`  ${d}: compare failed`)
+  return exported.some(r => !r.ok) || extracted.some(r => r.refused) || compareFailed.length ? 1 : 0
 }
 
 if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main(process.argv.slice(2))

@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  ANCHOR_FRAMES, analyzeMovie, appleScriptFor, buildProvenance, cropFor, detectBursts, expectRows, exportDecks, extractDecks, extractFrame,
+  ANCHOR_FRAMES, analyzeMovie, appleScriptFor, buildProvenance, compareDecks, cropFor, detectBursts, expectRows, exportDecks, extractDecks, extractFrame,
   mapBursts, mergeRuns, parseProbe, pngSize, realRunner, seekCheck, seekSeconds, statusChanges, type Burst, type ProcResult, type RowExpect, type Runner,
 } from '../scripts/slideshow-capture-export'
 import { parseProvenance, readRefs } from '../scripts/slideshow-compare'
@@ -239,6 +239,25 @@ describe('row mapping', () => {
     const rows = expectRows(plan([[step(1, 0, 0), step(1, 1, 1000, ['entr'])]]))
     const m = mapBursts(rows, [burst(30, 44)], fps, 200)
     expect(m.ok && m.warnings.join()).toMatch(/1-1: burst lasts 500 ms, row span 1000 ms/)
+  })
+})
+
+describe('compare step of all', () => {
+  const opts = { corpus: '/alt/corpus', refs: '/r', records: '/rec.json', dryRun: false }
+  it('compares the deck from the selected corpus directory, by path', async () => {
+    const calls: string[][] = []
+    await compareDecks(['tdf105739'], opts, () => {}, async args => { calls.push(args); return 0 })
+    expect(calls).toEqual([['/alt/corpus/lo-tdf105739.pptx', '--write', '--refs', '/r', '--records', '/rec.json']])
+  })
+  it('returns the decks whose comparison failed and keeps going', async () => {
+    const failed = await compareDecks(['a', 'b', 'c'], opts, () => {}, async args => args[0].includes('lo-b.') ? 1 : 0)
+    expect(failed).toEqual(['b'])
+  })
+  it('dry run only logs', async () => {
+    const lines: string[] = []
+    const failed = await compareDecks(['a'], { ...opts, dryRun: true }, l => lines.push(l), async () => { throw new Error('ran') })
+    expect(failed).toEqual([])
+    expect(lines.join()).toMatch(/\[dry-run\] would run: bun scripts\/slideshow-compare.ts \/alt\/corpus\/lo-a.pptx --write/)
   })
 })
 
