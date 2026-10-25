@@ -46,6 +46,8 @@ export interface CaptureStep {
   spanMs: number | 'indefinite' | 'unresolved'
   /** Frame offsets in ms after the trigger, keyed by percent. */
   frames: Array<{ pct: number; ms: number; file: string }>
+  /** Ms from the trigger until the first visual behaviour starts (an effect's start delay); omitted when 0. */
+  leadMs?: number
 }
 export interface CaptureSlide {
   slide: number
@@ -89,6 +91,7 @@ function frames(slide: number, step: number, span: CaptureStep['spanMs']): Captu
 }
 
 const SPACING = 1_000_000
+const LEAD_STEP_MS = 5, LEAD_MAX_MS = 10_000
 
 const MEDIA = new Set(['audio', 'video', 'cmd'])
 function behaviours(node: TimeNode, out: BehaviourNode[] = []): BehaviourNode[] {
@@ -126,6 +129,21 @@ export function planSlide(slideXml: XmlNode, slideIndex: number, resolver: Targe
     }
     return end
   }
+  // When the first visual behaviour of the groups starts, in ms after the
+  // trigger at `t`: a step whose effects open with a delay shows nothing
+  // until then. Sampled every LEAD_STEP_MS, up to the span (or LEAD_MAX_MS).
+  const leadOf = (gs: ContainerNode[], events: ShowEvent[], t: number, span: CaptureStep['spanMs']): number => {
+    if (!scheduler) return 0
+    const visual = new Set(gs.flatMap(g => behaviours(g)).filter(b => !MEDIA.has(b.kind)))
+    if (!visual.size) return 0
+    const limit = typeof span === 'number' ? span : LEAD_MAX_MS
+    for (let d = 0; d <= limit; d += LEAD_STEP_MS) {
+      const snap = scheduler.evaluate(events, t + d)
+      if (snap.active.some(e => visual.has(e.node)) || snap.frozen.some(e => visual.has(e.node))) return d
+    }
+    return 0
+  }
+  const lead = (ms: number) => ms > 0 ? { leadMs: ms } : {}
 
   // Step 0: the transition, then every group that starts without a click.
   let autoEnd: number | 'indefinite' | 'unresolved' = 0
@@ -141,6 +159,7 @@ export function planSlide(slideXml: XmlNode, slideIndex: number, resolver: Targe
     slide, step: 0, trigger: 'arrive',
     ...(tr ? { transition: { element: tr.preset ? `${tr.element}:${tr.preset}` : tr.element, ns: tr.ns, durationMs: tr.durationMs, ...(trRow ? { row: trRow.id } : {}) } } : {}),
     effects: auto.flatMap(effectsOf), spanMs: span0, frames: frames(slide, 0, span0),
+    ...lead(transMs > 0 ? 0 : leadOf(auto, [], 0, span0)),
   }]
   const events: ShowEvent[] = []
   clicks.forEach((g, i) => {
@@ -148,7 +167,7 @@ export function planSlide(slideXml: XmlNode, slideIndex: number, resolver: Targe
     events.push({ kind: 'next', t })
     const e = endOf(g, events.slice())
     const span: CaptureStep['spanMs'] = e === undefined ? 'unresolved' : e === 'indefinite' ? 'indefinite' : Math.max(0, e - t)
-    steps.push({ slide, step: i + 1, trigger: 'click', effects: effectsOf(g), spanMs: span, frames: frames(slide, i + 1, span) })
+    steps.push({ slide, step: i + 1, trigger: 'click', effects: effectsOf(g), spanMs: span, frames: frames(slide, i + 1, span), ...lead(leadOf([g], events, t, span)) })
   })
   return { slide, hidden, advClick: tr?.advClick ?? true, ...(tr?.advTmMs !== undefined ? { advTmMs: tr.advTmMs } : {}), interactive, steps }
 }
