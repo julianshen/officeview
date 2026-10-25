@@ -60,11 +60,15 @@ export interface SceneAssets {
   withheld?: (shape: PptxShape) => boolean
 }
 
-/** The `renderSlide` scene options, with paragraph filtering for clones. */
-export function sceneOptions(slide: PptxSlide, assets: SceneAssets): ScenePaintOptions<PptxShape> {
+/**
+ * The `renderSlide` scene options, with paragraph filtering for clones.
+ * `root` is the context's transform at slide px (0, 0): `useBgFill` shapes paint the slide's backdrop through it.
+ */
+export function sceneOptions(slide: PptxSlide, assets: SceneAssets, root?: DOMMatrix): ScenePaintOptions<PptxShape> {
   const { resolveFont } = assets
   return {
     images: assets.images,
+    ...(slide.backdrop && root ? { backdrop: [slide.backdrop], root } : {}),
     missingImage(shape) {
       if (assets.withheld?.(shape)) return
       const message = 'Embedded image could not be decoded; static representation is unavailable'

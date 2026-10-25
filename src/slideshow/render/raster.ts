@@ -104,7 +104,7 @@ export function rasterLayer(layer: PlanLayer, slide: PptxSlide, ctx: RasterConte
   if (layer.kind === 'watermark') {
     paintWatermark(c2d, { widthPx: slideW, heightPx: slideH, background: slide.background }, ctx.watermark)
   } else {
-    const options = sceneOptions(slide, { images: ctx.images, resolveFont: ctx.resolveFont, contentAssets: ctx.contentAssets })
+    const options = sceneOptions(slide, { images: ctx.images, resolveFont: ctx.resolveFont, contentAssets: ctx.contentAssets }, c2d.getTransform())
     if (layer.kind === 'static' && layer.background) {
       c2d.fillStyle = slide.background ?? '#ffffff'
       c2d.fillRect(0, 0, slideW, slideH)
