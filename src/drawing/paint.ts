@@ -439,13 +439,19 @@ export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedG
         const lineWidth = setupLine(ctx, style.line, issues)
         if (lineWidth === undefined) continue
         ctx.strokeStyle = stroke
-        const m = ctx.getTransform(), scale = (Math.abs(m.a) + Math.abs(m.d)) / 2
-        if (pixelSnap && m.b === 0 && m.c === 0 && scale > 0) {
-          const device = Math.max(1, Math.floor(lineWidth * scale + 0.5))
+        const m = ctx.getTransform()
+        if (pixelSnap && m.b === 0 && m.c === 0 && m.a !== 0 && m.d !== 0) {
+          // Whole device pixels per axis: wx for vertical edges, wy for horizontal ones (unequal group scales keep both).
+          const wx = Math.max(1, Math.floor(lineWidth * Math.abs(m.a) + 0.5)), wy = Math.max(1, Math.floor(lineWidth * Math.abs(m.d) + 0.5))
           ctx.save()
           try {
-            if (device % 2) { ctx.setTransform(m.a, 0, 0, m.d, m.e + 0.5, m.f + 0.5); drawPath(ctx, path.commands) }
-            ctx.lineWidth = device / scale; ctx.stroke()
+            if (wx % 2 || wy % 2) { ctx.setTransform(m.a, 0, 0, m.d, m.e + (wx % 2) / 2, m.f + (wy % 2) / 2); drawPath(ctx, path.commands) }
+            // The path keeps the shape transform; the pen is a 1-unit line scaled to wx×wy device pixels.
+            const dash = ctx.getLineDash(), unit = (Math.abs(m.a) + Math.abs(m.d)) / (wx + wy)
+            ctx.setTransform(wx, 0, 0, wy, 0, 0)
+            ctx.lineWidth = 1
+            if (dash.length) ctx.setLineDash(dash.map(d => d * unit))
+            ctx.stroke()
           } finally { ctx.restore() }
         } else ctx.stroke()
         const ends = endpoints(path.commands)

@@ -20,9 +20,10 @@ const node = (style: { fill?: boolean; line?: DrawingLine }): SceneNode => ({
   },
 })
 // The caller places the slide half a pixel right and a quarter down: device box x 10.5..50.5, y 10.25..40.25.
-function paint(n: SceneNode, pixelSnap: boolean) {
-  const ctx = createCanvas(80, 60).getContext('2d') as unknown as CanvasRenderingContext2D
+function paint(n: SceneNode, pixelSnap: boolean, sx = 1) {
+  const ctx = createCanvas(160, 60).getContext('2d') as unknown as CanvasRenderingContext2D
   ctx.translate(0.5, 0.25)
+  ctx.scale(sx, 1)
   paintScene([n], ctx, { pixelSnap })
   return {
     alphaAt: (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3],
@@ -59,6 +60,14 @@ test('line widths round to whole pixels (at least one), even widths straddle the
 test('fill plus line: the fill stops where the right/bottom line begins', () => {
   const p = paint(node({ fill: true, line: { width: 1 } }), true)
   expect([10, 11, 12, 50, 51, 52].map(x => p.red(x, 25))).toEqual([undefined, 0, 128, 128, 0, undefined])
+})
+
+test('under unequal axis scales each axis keeps its own whole-pixel width', () => {
+  // x scale 2: device box x 20.5..100.5 (snapped 21..101), y 10.25..40.25 (10..40); a 1 px line is 2 px wide
+  // on the vertical edges and 1 px on the horizontal ones, as it was without snapping, but on whole pixels.
+  const p = paint(node({ line: { width: 1 } }), true, 2)
+  expect(p.row(25, [19, 20, 21, 22, 99, 100, 101, 102])).toEqual([0, 255, 255, 0, 0, 255, 255, 0])
+  expect(p.col(60, [9, 10, 11, 39, 40, 41])).toEqual([0, 255, 0, 0, 255, 0])
 })
 
 test('rotated shapes are not snapped', () => {
