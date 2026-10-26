@@ -13,7 +13,7 @@ import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { emuToPx } from '../core/geometry'
 import { parseGeometry, resolveGeometry } from '../drawing/geometry'
-import { parseDrawingColor, parseFillDefinition, parseGroupShapeProperties, parseThemeContext, resolveDrawingColor, resolveDrawingStyle, resolveFill, type DrawingColor, type DrawingIssue, type DrawingStyle, type ThemeContext } from '../drawing/style'
+import { fixedAlpha, parseDrawingColor, parseFillDefinition, parseGroupShapeProperties, parseThemeContext, resolveDrawingColor, resolveDrawingStyle, resolveFill, type DrawingColor, type DrawingIssue, type DrawingStyle, type ThemeContext } from '../drawing/style'
 
 import { parseTextBody, textFontDefaults, type InheritedTextLayer } from './text-parse'
 
@@ -170,14 +170,10 @@ function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: 
     for (const [name, effect] of orderedChildren(blip)) {
       if (name === '#text') continue
       if (name === 'alphaModFix') {
-        const amount = attrs(effect).amt
-        const value = amount === undefined ? 100000 : /^[+-]?\d+$/.test(amount.trim()) ? Number(amount) : NaN
-        if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
-          shape.diagnostics!.push({ kind: 'invalid-paint', message: `Invalid fixed alpha amount ${amount ?? ''}`, feature: name, source })
-        } else if (value > 100000) {
-          // Canvas globalAlpha can attenuate, but cannot amplify source pixel alpha.
-          shape.diagnostics!.push({ kind: 'unsupported-effect', message: 'Image alpha amplification is deferred', feature: name, source })
-        } else opacity = (opacity ?? 1) * value / 100000
+        const alpha = fixedAlpha(attrs(effect).amt)
+        if (alpha === 'invalid') shape.diagnostics!.push({ kind: 'invalid-paint', message: `Invalid fixed alpha amount ${attrs(effect).amt ?? ''}`, feature: name, source })
+        else if (alpha === 'amplified') shape.diagnostics!.push({ kind: 'unsupported-effect', message: 'Image alpha amplification is deferred', feature: name, source })
+        else opacity = (opacity ?? 1) * alpha
       } else shape.diagnostics!.push({ kind: 'unsupported-effect', message: `Image effect ${name} is deferred`, feature: name, source })
     }
     const image = rid ? slideImages.get(rid) : undefined

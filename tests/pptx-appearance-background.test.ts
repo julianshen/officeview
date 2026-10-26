@@ -171,3 +171,20 @@ it('refuses a picture beyond the 32 MiB enrichment ceiling without losing diagno
   const source = await pkg({ slides: [{ shapes: [], bg: { picture: { data: new Uint8Array(32 * 1024 * 1024 + 1) } } }] })
   expect(await resolveSlideBackground(source, slide, theme())).toMatchObject({ background: { kind: 'none' }, diagnostics: [expect.objectContaining({ kind: 'missing-image', feature: 'resource-limit' })] })
 })
+it('a background picture alphaModFix becomes the picture opacity; amplification and bad amounts are diagnosed', async () => {
+  const data = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  const resolve = async (effect: string) => resolveSlideBackground(await pkg({ slides: [{ shapes: [], bg: { picture: { data } } }] }, async zip => {
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace(/<a:blip ([^>]*?)\/>/, `<a:blip $1>${effect}</a:blip>`))
+  }), slide, theme())
+  const translucent = await resolve('<a:alphaModFix amt="70000"/>')
+  expect(translucent.diagnostics).toEqual([])
+  expect(translucent.background).toMatchObject({ kind: 'picture', image: { opacity: 0.7 } })
+  expect(backgroundNode(translucent.background, 9144000, 6858000)?.image?.opacity).toBe(0.7)
+  expect((await resolve('<a:alphaModFix/>')).background).toMatchObject({ kind: 'picture', image: { opacity: 1 } })
+  for (const [effect, kind] of [['<a:alphaModFix amt="150000"/>', 'unsupported-fill'], ['<a:alphaModFix amt="7e4"/>', 'invalid-paint']]) {
+    const result = await resolve(effect)
+    expect(result.background.kind).toBe('picture')
+    if (result.background.kind === 'picture') expect(result.background.image.opacity).toBeUndefined()
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ kind, feature: 'alphaModFix' }))
+  }
+})

@@ -6,7 +6,7 @@ import { attrs, getChild, getChildren, orderedChildren, parseXmlOrdered, type Xm
 import { sniffImageMime } from '../../core/images'
 import { resolvePartTarget } from '../../drawing/parts'
 import { parseGeometry } from '../../drawing/geometry'
-import { parseDrawingColor, parseDrawingColors, parseFillDefinition, resolveDrawingColor, resolveFill, type DrawingColor, type DrawingIssue, type DrawingFill, type ThemeContext } from '../../drawing/style'
+import { fixedAlpha, parseDrawingColor, parseDrawingColors, parseFillDefinition, resolveDrawingColor, resolveFill, type DrawingColor, type DrawingIssue, type DrawingFill, type ThemeContext } from '../../drawing/style'
 import type { Duotone } from '../../core/images'
 import type { SceneRectFractions } from '../../drawing/scene'
 import type { PptxDiagnostic, PptxImageRef, PptxShape } from '../types'
@@ -55,8 +55,17 @@ async function themePart(pkg: HandlePackage, slidePath: string): Promise<string 
 async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: XmlNode, diagnostics: PptxDiagnostic[], theme: ThemeContext, placeholder?: DrawingColor): Promise<SlideBackground> {
   const blip = getChild(blipFill, 'blip')
   let duotone: Duotone | undefined
+  let opacity: number | undefined
   for (const [name, effect] of orderedChildren(blip)) {
     if (name === '#text') continue
+    if (name === 'alphaModFix') {
+      // tdf146223: PowerPoint composites a 70% background picture over the white slide.
+      const alpha = fixedAlpha(attrs(effect).amt)
+      if (alpha === 'invalid') diagnostics.push({ kind: 'invalid-paint', message: `Invalid background picture alpha amount ${attrs(effect).amt ?? ''}`, feature: name })
+      else if (alpha === 'amplified') diagnostics.push({ kind: 'unsupported-fill', message: 'Background picture alpha amplification is not applied', feature: name })
+      else opacity = (opacity ?? 1) * alpha
+      continue
+    }
     if (name === 'duotone') {
       const issues: DrawingIssue[] = []
       const colours = parseDrawingColors(effect).map(color => resolveDrawingColor(color, theme, placeholder, issues))
@@ -86,7 +95,7 @@ async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: Xm
     return none()
   }
   const crop = getChild(blipFill, 'srcRect')
-  const image: PptxImageRef = { data, partPath: path, mime: sniffImageMime(data), ...(crop ? { srcRect: fractionRect(crop) } : {}), ...(duotone ? { duotone } : {}) }
+  const image: PptxImageRef = { data, partPath: path, mime: sniffImageMime(data), ...(crop ? { srcRect: fractionRect(crop) } : {}), ...(duotone ? { duotone } : {}), ...(opacity !== undefined ? { opacity } : {}) }
   const tile = getChild(blipFill, 'tile')
   if (tile) {
     const a = attrs(tile)
