@@ -6,14 +6,14 @@
  * ffmpeg + libx264).
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   ANCHOR_FRAMES, MOVIE_STABLE_S, analyzeMovie, appleScriptFor, buildProvenance, compareDecks, cropFor, detectBursts, expectRows, exportDecks, extractDecks, extractFrame,
-  mapBursts, mergeRuns, parseProbe, pngSize, realRunner, seekCheck, seekSeconds, statusChanges, steadyFrameTimes, type Burst, type ProcResult, type RowExpect, type Runner,
+  mapBursts, mergeRuns, parseCli, parseProbe, pngSize, realRunner, seekCheck, seekSeconds, statusChanges, steadyFrameTimes, type Burst, type ProcResult, type RowExpect, type Runner,
 } from '../scripts/slideshow-capture-export'
 import { parseProvenance, readRefs } from '../scripts/slideshow-compare'
 import type { CapturePlan, CaptureStep } from '../scripts/slideshow-capture-plan'
@@ -41,6 +41,146 @@ function plan(slides: CaptureStep[][]): CapturePlan {
 const burst = (first: number, last: number): Burst => ({ first, last })
 
 describe('AppleScript export', () => {
+  it('retries an interrupted staging copy, then exports that deck', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    let copies = 0
+    const files = {
+      copyFileSync(from: string, to: string) {
+        copies++
+        if (copies === 1) throw Object.assign(new Error('interrupted'), { code: 'EINTR' })
+        copyFileSync(from, to)
+      },
+      renameSync,
+      unlinkSync,
+    }
+    const run: Runner = async () => { writeFileSync(join(staging, 'a.mov'), 'movie'); return ok('16.106\t26020821') }
+    const [r] = await exportDecks({ decks: ['a'], corpus, staging, videos, timeoutMs: 1000, dryRun: false }, run, () => {}, files as never)
+    expect(copies).toBe(2)
+    expect(r).toMatchObject({ deck: 'a', ok: true, movie: join(videos, 'a.mov') })
+  })
+
+  it('reports persistent EINTR for one deck and continues with the next', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    writeFileSync(join(corpus, 'lo-b.pptx'), 'B')
+    let attempts = 0
+    const files = {
+      copyFileSync(from: string, to: string) {
+        if (from.endsWith('lo-a.pptx')) { attempts++; throw Object.assign(new Error('interrupted'), { code: 'EINTR' }) }
+        copyFileSync(from, to)
+      },
+      renameSync,
+      unlinkSync,
+    }
+    const calls: string[] = []
+    const run: Runner = async (_cmd, _args, opts) => {
+      calls.push(opts?.input ?? '')
+      writeFileSync(join(staging, 'b.mov'), 'movie')
+      return ok('16.106\t26020821')
+    }
+    const res = await exportDecks({ decks: ['a', 'b'], corpus, staging, videos, timeoutMs: 1000, dryRun: false }, run, () => {}, files as never)
+    expect(attempts).toBe(5)
+    expect(res[0]).toMatchObject({ deck: 'a', ok: false })
+    expect(res[0].reason).toMatch(/EINTR.*--deck a/)
+    expect(res[1].ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain(join(staging, 'b.pptx'))
+  })
+
+  it('reports a non-EINTR staging-copy error and continues without retrying it', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    writeFileSync(join(corpus, 'lo-b.pptx'), 'B')
+    let attempts = 0
+    const files = {
+      copyFileSync(from: string, to: string) {
+        if (from.endsWith('lo-a.pptx')) { attempts++; throw Object.assign(new Error('denied'), { code: 'EACCES' }) }
+        copyFileSync(from, to)
+      },
+      renameSync,
+      unlinkSync,
+    }
+    const calls: string[] = []
+    const run: Runner = async (_cmd, _args, opts) => { calls.push(opts?.input ?? ''); writeFileSync(join(staging, 'b.mov'), 'movie'); return ok() }
+    const res = await exportDecks({ decks: ['a', 'b'], corpus, staging, videos, timeoutMs: 1000, dryRun: false }, run, () => {}, files as never)
+    expect(attempts).toBe(1)
+    expect(res[0]).toMatchObject({ deck: 'a', ok: false })
+    expect(res[0].reason).toMatch(/EACCES.*--deck a/)
+    expect(res[1].ok).toBe(true)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('retries an interrupted movie rename', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    let moves = 0
+    const files = {
+      copyFileSync,
+      renameSync(from: string, to: string) {
+        if (from.endsWith('a.mov') && ++moves === 1) throw Object.assign(new Error('interrupted'), { code: 'EAGAIN' })
+        renameSync(from, to)
+      },
+      unlinkSync,
+    }
+    const run: Runner = async () => { writeFileSync(join(staging, 'a.mov'), 'movie'); return ok() }
+    const [r] = await exportDecks({ decks: ['a'], corpus, staging, videos, timeoutMs: 1000, dryRun: false }, run, () => {}, files as never)
+    expect(moves).toBe(2)
+    expect(r.ok).toBe(true)
+    expect(readFileSync(join(videos, 'a.mov'), 'utf8')).toBe('movie')
+  })
+
+  it('skip-existing skips only when both movie and export record exist', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus, videos])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    writeFileSync(join(videos, 'a.mov'), 'movie')
+    writeFileSync(join(videos, 'a.export.json'), '{}')
+    let calls = 0
+    const run: Runner = async () => { calls++; throw new Error('must skip') }
+    const log: string[] = []
+    const [r] = await exportDecks({ decks: ['a'], corpus, staging, videos, timeoutMs: 1000, dryRun: false, skipExisting: true }, run, m => log.push(m))
+    expect(calls).toBe(0)
+    expect(r).toEqual({ deck: 'a', ok: true, movie: join(videos, 'a.mov') })
+    expect(log.join('\n')).toMatch(/skip-existing/)
+  })
+
+  it('re-exports when skip-existing is set but only the movie exists', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus, videos])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    writeFileSync(join(videos, 'a.mov'), 'old movie')
+    let calls = 0
+    const run: Runner = async () => { calls++; writeFileSync(join(staging, 'a.mov'), 'new movie'); return ok() }
+    const [r] = await exportDecks({ decks: ['a'], corpus, staging, videos, timeoutMs: 1000, dryRun: false, skipExisting: true }, run, () => {})
+    expect(calls).toBe(1)
+    expect(r.ok).toBe(true)
+    expect(readFileSync(join(videos, 'a.mov'), 'utf8')).toBe('new movie')
+  })
+
+  it('parses --skip-existing and mentions it in usage', () => {
+    const parsed = parseCli(['export', '--skip-existing'])
+    expect(typeof parsed).not.toBe('string')
+    if (typeof parsed !== 'string') expect(parsed.skipExisting).toBe(true)
+    expect(parseCli(['export', '--not-an-option'])).toContain('--skip-existing')
+  })
+
+  it('dry-run says it would skip a deck whose movie and export record both exist', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus, videos])
+    writeFileSync(join(videos, 'a.mov'), 'movie')
+    writeFileSync(join(videos, 'a.export.json'), '{}')
+    const log: string[] = []
+    const run: Runner = async () => { throw new Error('must not run') }
+    const [r] = await exportDecks({ decks: ['a'], corpus, staging: join(root, 's'), videos, timeoutMs: 1000, dryRun: true, skipExisting: true }, run, m => log.push(m))
+    expect(r).toMatchObject({ deck: 'a', ok: true, movie: join(videos, 'a.mov') })
+    expect(log.join('\n')).toMatch(/dry-run.*would skip existing/)
+  })
+
   it('opens the staged copy, sets 1920x1080 movie settings, saves as movie and closes without saving, under a 1800 s timeout', () => {
     const s = appleScriptFor('/c/in.pptx', '/c/out.mov')
     expect(s).toMatch(/^with timeout of 1800 seconds/)
