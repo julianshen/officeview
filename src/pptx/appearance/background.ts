@@ -6,7 +6,8 @@ import { attrs, getChild, getChildren, orderedChildren, parseXmlOrdered, type Xm
 import { sniffImageMime } from '../../core/images'
 import { resolvePartTarget } from '../../drawing/parts'
 import { parseGeometry } from '../../drawing/geometry'
-import { parseDrawingColor, parseFillDefinition, resolveDrawingColor, resolveFill, type DrawingIssue, type DrawingFill, type ThemeContext } from '../../drawing/style'
+import { parseDrawingColor, parseDrawingColors, parseFillDefinition, resolveDrawingColor, resolveFill, type DrawingColor, type DrawingIssue, type DrawingFill, type ThemeContext } from '../../drawing/style'
+import type { Duotone } from '../../core/images'
 import type { SceneRectFractions } from '../../drawing/scene'
 import type { PptxDiagnostic, PptxImageRef, PptxShape } from '../types'
 
@@ -50,11 +51,24 @@ async function themePart(pkg: HandlePackage, slidePath: string): Promise<string 
   return undefined
 }
 
-async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: XmlNode, diagnostics: PptxDiagnostic[]): Promise<SlideBackground> {
+/** `placeholder` is the colour `phClr` stands for: the bgRef's colour for a theme background style. */
+async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: XmlNode, diagnostics: PptxDiagnostic[], theme: ThemeContext, placeholder?: DrawingColor): Promise<SlideBackground> {
   const blip = getChild(blipFill, 'blip')
-  // The existing painter cannot apply these transforms; preserve the picture with a visible diagnostic.
-  for (const [name] of orderedChildren(blip)) {
-    if (name !== '#text') diagnostics.push({ kind: 'unsupported-fill', message: `Background picture effect ${name} is not applied`, feature: name })
+  let duotone: Duotone | undefined
+  for (const [name, effect] of orderedChildren(blip)) {
+    if (name === '#text') continue
+    if (name === 'duotone') {
+      const issues: DrawingIssue[] = []
+      const colours = parseDrawingColors(effect).map(color => resolveDrawingColor(color, theme, placeholder, issues))
+      // An approximated colour (an unsupported transform) still paints, but stays diagnosed.
+      diagnostics.push(...issues)
+      const [dark, light] = colours
+      if (colours.length === 2 && dark && light) { duotone = { dark, light }; continue }
+      diagnostics.push({ kind: 'unsupported-fill', message: 'Background picture duotone needs two resolvable colours; the picture is painted as is', feature: name })
+      continue
+    }
+    // The existing painter cannot apply these transforms; preserve the picture with a visible diagnostic.
+    diagnostics.push({ kind: 'unsupported-fill', message: `Background picture effect ${name} is not applied`, feature: name })
   }
   const id = attrs(blip)['r:embed'] ?? attrs(blip).embed
   const rel = (await relationships(pkg, owner)).find(r => attrs(r).Id === id)
@@ -72,7 +86,7 @@ async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: Xm
     return none()
   }
   const crop = getChild(blipFill, 'srcRect')
-  const image: PptxImageRef = { data, partPath: path, mime: sniffImageMime(data), ...(crop ? { srcRect: fractionRect(crop) } : {}) }
+  const image: PptxImageRef = { data, partPath: path, mime: sniffImageMime(data), ...(crop ? { srcRect: fractionRect(crop) } : {}), ...(duotone ? { duotone } : {}) }
   const tile = getChild(blipFill, 'tile')
   if (tile) {
     const a = attrs(tile)
@@ -106,7 +120,7 @@ export async function resolveSlideBackground(pkg: OfficePackage, slidePath: stri
         const properties = getChild(bg, 'bgPr')
         if (properties) {
           const picture = getChild(properties, 'blipFill')
-          return { background: picture ? await pictureBackground(reader, owner, picture, diagnostics) : fillBackground(properties, theme, diagnostics), diagnostics }
+          return { background: picture ? await pictureBackground(reader, owner, picture, diagnostics, theme) : fillBackground(properties, theme, diagnostics), diagnostics }
         }
         const ref = getChild(bg, 'bgRef'), index = Number(attrs(ref).idx)
         if (index === 0 || index === 1000) return { background: none(), diagnostics }
@@ -119,7 +133,12 @@ export async function resolveSlideBackground(pkg: OfficePackage, slidePath: stri
             const format = getChild(getChild(await xml(reader, path), 'themeElements'), 'fmtScheme')
             const list = getChild(format, index >= 1001 ? 'bgFillStyleLst' : 'fillStyleLst')
             const slot = orderedChildren(list).filter(([name]) => name !== '#text')[index >= 1001 ? index - 1001 : index - 1]
-            if (slot?.[0] === 'blipFill') return { background: await pictureBackground(reader, path, slot[1], diagnostics), diagnostics }
+            if (slot?.[0] === 'blipFill') {
+              const issues: DrawingIssue[] = []
+              const placeholder = resolveDrawingColor(parseDrawingColor(ref), theme, undefined, issues)
+              diagnostics.push(...issues)
+              return { background: await pictureBackground(reader, path, slot[1], diagnostics, theme, placeholder), diagnostics }
+            }
             if (!slot || slot[0] !== 'noFill') diagnostics.push({ kind: 'unsupported-fill', message: 'Theme background style is not representable', feature: 'bgRef' })
           } else diagnostics.push({ kind: 'missing-theme-style', message: 'Theme background source is unavailable', feature: 'bgRef' })
         }

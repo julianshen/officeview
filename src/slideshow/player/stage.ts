@@ -48,7 +48,7 @@
  *   painting (their slide-px bounds scale with the viewport).
  */
 import { acquireFonts, type FontLease } from '../../core/fonts/register'
-import { decodeImage, decodeImageAsset, releaseDecodedImage, type ImageDecodeFn } from '../../core/images'
+import { decodeImage, decodeImageAsset, releaseDecodedImage, type ImageDecodeFn, type ImageScratch } from '../../core/images'
 import type { WatermarkOptions } from '../../core/watermark'
 import { layoutTextBody } from '../../drawing/text-layout'
 import { createTextBodyMeasurer } from '../../drawing/text-paint'
@@ -856,7 +856,10 @@ export function createStage(deps: StageDeps): Stage {
         if (!img) unhold()
         return img
       }
-      const img = await decodeImageAsset(asset as never, decode).catch(() => undefined)
+      // A duotone's temporary canvas and pixel buffer are charged too, while the source is still held.
+      let toneRefused = false
+      const scratch: ImageScratch = bytes => workspace.lease(bytes, `${tag}:duotone`) ?? (toneRefused = true, undefined)
+      const img = await decodeImageAsset(asset as never, decode, scratch).catch(() => undefined)
       if (img) {
         // Always reconcile with the decoded dimensions before keeping the bitmap: grow (or trim) the charge,
         // or close the bitmap and refuse when the workspace cannot hold it (a header that understated its size).
@@ -871,6 +874,7 @@ export function createStage(deps: StageDeps): Stage {
       } else {
         unhold()
         if (refused === 'unsized') sink.add({ code: 'image-workspace', slideIndex: index, effect: `image:${i}`, message: `Image ${i} has no readable size to reserve before decoding; painted as the missing-image placeholder` })
+        else if (toneRefused) sink.add({ code: 'image-workspace', slideIndex: index, effect: `image:${i}`, message: `Image ${i}: its duotone does not fit the slideshow workspace; painted as the missing-image placeholder` })
         else if (refused) refuse(i, refused.w, refused.h)
         return
       }

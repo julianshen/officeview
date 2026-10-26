@@ -1,6 +1,7 @@
 import type { GeometryDefinition } from './geometry'
 import type { DrawingStyle } from './style'
 import type { ImageSelection, SvgCandidate, SvgVerdict } from '../core/svg'
+import type { Duotone } from '../core/images'
 
 /** DrawingML picture-use fractions; negative destination values are outsets. */
 export interface SceneRectFractions { l: number; t: number; r: number; b: number }
@@ -24,6 +25,8 @@ export interface SceneImage {
   pathHint?: string
   /** Parse/decode selection record shared with the drawing coverage entry. */
   imageSelection?: ImageSelection
+  /** `a:duotone`, applied to the decoded pixels; it belongs to this use, so it is part of the image's identity. */
+  duotone?: Duotone
 }
 
 export interface SceneGroupTransform {

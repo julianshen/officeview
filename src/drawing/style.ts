@@ -127,20 +127,25 @@ const has = <T>(map: Record<string, T>, key: string): boolean => Object.prototyp
 
 /** Supply a color-containing node, e.g. solidFill, gs, fillRef, or palette slot. */
 export function parseDrawingColor(node: XmlNode | undefined): ColorDefinition | undefined {
+  return parseDrawingColors(node)[0]
+}
+/** Every colour child of a node, in document order (e.g. the two colours of an `a:duotone`). */
+export function parseDrawingColors(node: XmlNode | undefined): ColorDefinition[] {
+  const out: ColorDefinition[] = []
   for (const [name, child] of orderedChildren(node)) {
     if (!has(colorKinds, name)) continue
     const kind = colorKinds[name as keyof typeof colorKinds]
     const a = attrs(child)
-    return {
+    out.push({
       kind,
       ...(a.val !== undefined ? { value: a.val } : {}),
       ...(a.lastClr !== undefined ? { lastColor: a.lastClr } : {}),
       ...(kind === 'scrgb' ? { channels: [a.r ?? '', a.g ?? '', a.b ?? ''] as [string, string, string] } : {}),
       ...(kind === 'hsl' ? { channels: [a.hue ?? '', a.sat ?? '', a.lum ?? ''] as [string, string, string] } : {}),
       transforms: orderedChildren(child).filter(([n]) => n !== '#text').map(([name, n]) => ({ name, ...(attrs(n).val !== undefined ? { value: attrs(n).val } : {}) })),
-    }
+    })
   }
-  return undefined
+  return out
 }
 
 // DrawingML preset names use dk/lt/med abbreviations for the CSS/X11 colors.

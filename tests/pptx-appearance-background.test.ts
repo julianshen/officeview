@@ -88,15 +88,38 @@ it('inherited pictures resolve relative to their owner and explicit noFill stops
   const noFill = await pkg(spec, async zip => { zip.file(slide, (await zip.file(slide)!.async('string')).replace('<p:cSld>', '<p:cSld><p:bg><p:bgPr><a:noFill/></p:bgPr></p:bg>')) })
   expect((await resolveSlideBackground(noFill, slide, theme())).background).toEqual({ kind: 'fill', fill: { kind: 'none' } })
 })
-it('theme blipFill resolves against the theme part and diagnoses duotone', async () => {
-  const source = await pkg({ masters: [{ layouts: [{}], bg: { bgRef: { idx: 1001, color: 'FF0000' } } }], slides: [{ shapes: [], layout: [0, 0] }], theme: { bgFillStyles: ['<a:blipFill><a:blip r:embed="themeImage"><a:duotone><a:srgbClr val="000000"/><a:srgbClr val="FFFFFF"/></a:duotone></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill>'] } }, async zip => {
+it('theme blipFill resolves against the theme part and carries its duotone', async () => {
+  const source = await pkg({ masters: [{ layouts: [{}], bg: { bgRef: { idx: 1001, color: 'FF0000' } } }], slides: [{ shapes: [], layout: [0, 0] }], theme: { bgFillStyles: ['<a:blipFill><a:blip r:embed="themeImage"><a:duotone><a:srgbClr val="000000"/><a:schemeClr val="phClr"/></a:duotone></a:blip><a:stretch><a:fillRect/></a:stretch></a:blipFill>'] } }, async zip => {
     zip.file('ppt/theme/_rels/theme1.xml.rels', '<Relationships><Relationship Id="themeImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/theme-only.png"/></Relationships>')
     zip.file('ppt/media/theme-only.png', new Uint8Array([137, 80, 78, 71]))
   })
   const t = parseThemeContext(await source.xmlOrdered('ppt/theme/theme1.xml'))
   const result = await resolveSlideBackground(source, slide, t)
-  expect(result.background).toMatchObject({ kind: 'picture', image: { partPath: 'ppt/media/theme-only.png' } })
-  expect(result.diagnostics).toContainEqual(expect.objectContaining({ kind: 'unsupported-fill', feature: 'duotone' }))
+  // phClr is the bgRef's colour.
+  expect(result.background).toMatchObject({ kind: 'picture', image: { partPath: 'ppt/media/theme-only.png', duotone: { dark: { r: 0, g: 0, b: 0, a: 1 }, light: { r: 255, g: 0, b: 0, a: 1 } } } })
+  expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'duotone' }))
+})
+it('a duotone without two resolvable colours is diagnosed and the picture painted as is', async () => {
+  const data = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  for (const colours of ['<a:srgbClr val="000000"/>', '<a:srgbClr val="000000"/><a:srgbClr val="zz"/>']) {
+    const source = await pkg({ slides: [{ shapes: [], bg: { picture: { data } } }] }, async zip => {
+      zip.file(slide, (await zip.file(slide)!.async('string')).replace(/<a:blip ([^>]*?)\/>/, `<a:blip $1><a:duotone>${colours}</a:duotone></a:blip>`))
+    })
+    const result = await resolveSlideBackground(source, slide, theme())
+    expect(result.background.kind).toBe('picture')
+    if (result.background.kind === 'picture') expect(result.background.image.duotone).toBeUndefined()
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ kind: 'unsupported-fill', feature: 'duotone' }))
+  }
+})
+it('a duotone colour with an approximated transform is applied and stays diagnosed', async () => {
+  const data = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  const source = await pkg({ slides: [{ shapes: [], bg: { picture: { data } } }] }, async zip => {
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace(/<a:blip ([^>]*?)\/>/, '<a:blip $1><a:duotone><a:srgbClr val="000000"><a:gamma/></a:srgbClr><a:srgbClr val="FFFFFF"/></a:duotone></a:blip>'))
+  })
+  const result = await resolveSlideBackground(source, slide, theme())
+  expect(result.background).toMatchObject({ kind: 'picture', image: { duotone: { light: { r: 255, g: 255, b: 255, a: 1 } } } })
+  expect(result.diagnostics.length).toBeGreaterThan(0)
+  expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'duotone' }))
 })
 it('lo-tdf123684 resolves its theme picture background', async ctx => {
   const { existsSync, readFileSync } = await import('node:fs')
