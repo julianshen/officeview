@@ -142,7 +142,7 @@ function doLayoutHorizontalTextBody(body: PptxTextBody, width: number, height: n
       const [from, to] = sortedBoundaryRange(boundaryPositions, start, end, includeStart)
       for (let at = from; at < to; at++) target.push(boundaryPositions[at])
     }
-    y += spacingPx(paragraph.spaceBefore, paragraphSize)
+    if (!(body.powerPoint && paragraphIndex === 0)) y += spacingPx(paragraph.spaceBefore, paragraphSize)
     const metrics = (style: PptxTextStyle) => {
       const size = px(style.fontSizePt ?? 12), m = measure('Mg', style)
       lineSize = Math.max(lineSize, size); ascent = Math.max(ascent, m.ascent ?? size * .8); descent = Math.max(descent, m.descent ?? size * .2)
@@ -337,7 +337,7 @@ function doLayoutHorizontalTextBody(body: PptxTextBody, width: number, height: n
     }
     // A trailing source break creates the following (possibly empty) line.
     finish()
-    y += spacingPx(paragraph.spaceAfter, paragraphSize)
+    if (!(body.powerPoint && paragraphIndex === body.paragraphs.length - 1)) y += spacingPx(paragraph.spaceAfter, paragraphSize)
   }
   const offset = top + (body.anchor === 'ctr' ? (bottom - top - y) / 2 : body.anchor === 'b' ? bottom - top - y : 0)
   for (const line of lines) { line.y += offset; line.baseline += offset; for (const slot of line.inlineSlots ?? []) slot.y += offset }

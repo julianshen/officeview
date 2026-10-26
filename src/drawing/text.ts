@@ -99,6 +99,8 @@ export interface DrawingTextBody {
   wrap: boolean
   textWarp?: TextWarp
   autofit?: DrawingTextAutofit
+  /** Lay out as PowerPoint does (measured; Word and Excel are not): the first paragraph's space before and the last paragraph's space after are ignored. */
+  powerPoint?: boolean
 }
 export interface LocalAffine { a: number; b: number; c: number; d: number; e: number; f: number }
 
