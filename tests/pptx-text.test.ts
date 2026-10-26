@@ -442,3 +442,27 @@ test('PowerPoint ignores the first paragraph\'s space before and the last paragr
   // Every PowerPoint text body opts in.
   expect((await bodyXml('<a:bodyPr/><a:p><a:r><a:t>x</a:t></a:r></a:p>')).powerPoint).toBe(true)
 })
+
+test('PowerPoint places the baseline by its line model, the same for every font', () => {
+  // Probe decks (PowerPoint 16.114 movie exports; Trebuchet, Arial, Verdana, Georgia, Times, Courier; 18–54 pt):
+  // a line is pct × 1.2 em; the first baseline sits L − 0.24 em below the text top at 100% or less and
+  // 0.9 em × pct above 100%; the block ends 0.24 em below the last baseline. 40 pt = 160/3 px here.
+  const em = 40 * 4 / 3
+  // The stub measurer's ascent/descent (12/4) must not matter.
+  const at = (pct: number | undefined, anchor: 't' | 'ctr' | 'b' = 't', lines = 1) => layout(body(Array.from({ length: lines }, () =>
+    p([run('one', { fontSizePt: 40 })], pct === undefined ? {} : { lineSpacing: { kind: 'percent', value: pct } })), { anchor, powerPoint: true }), 1000, 600)
+  expect(at(undefined).lines[0].baseline).toBeCloseTo(0.96 * em)
+  for (const [pct, b] of [[0.8, 0.72], [0.9, 0.84], [1, 0.96], [1.2, 1.08], [1.5, 1.35], [2, 1.8], [3, 2.7]]) {
+    expect(at(pct).lines[0].baseline, `${pct}`).toBeCloseTo(b * em)
+    // Bottom anchoring: the last baseline is 0.24 em above the box bottom whatever the spacing.
+    expect(at(pct, 'b').lines[0].baseline, `${pct} b`).toBeCloseTo(600 - 0.24 * em)
+    // Centre anchoring moves half as far as top anchoring.
+    expect(at(pct, 'ctr').lines[0].baseline - at(1, 'ctr').lines[0].baseline, `${pct} ctr`).toBeCloseTo((b - 0.96) * em / 2)
+    // Later lines step by the line height.
+    const two = at(pct, 't', 2)
+    expect(two.lines[1].baseline - two.lines[0].baseline, `${pct} pitch`).toBeCloseTo(pct * 1.2 * em)
+  }
+  // Word and Excel text keeps the measured-ascent placement.
+  const word = layout(body([p([run('one', { fontSizePt: 40 })])]), 1000, 600)
+  expect(word.lines[0].baseline).not.toBeCloseTo(0.96 * em)
+})
