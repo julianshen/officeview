@@ -150,7 +150,7 @@ function parseShape(sp: XmlNode, slideImages: Map<string, PptxImageRef>, theme: 
     const ph = getChildren(getChildren(getChildren(sp, 'nvSpPr')[0], 'nvPr')[0], 'ph')[0]
     const pa = attrs(ph)
     const inherited = inheritance?.layers(pa.type ?? 'body', pa.idx === undefined ? 0 : num(pa.idx), !!ph)
-    shape.textBody = parseTextBody(txBody, theme, textDefaults, textFontDefaults(getChildren(sp, 'style')[0], theme), inherited)
+    shape.textBody = { ...parseTextBody(txBody, theme, textDefaults, textFontDefaults(getChildren(sp, 'style')[0], theme), inherited), powerPoint: true }
     shape.diagnostics!.push(...(shape.textBody.diagnostics ?? []))
   }
   const nvSpPr = getChildren(sp, 'nvSpPr')[0]
@@ -969,7 +969,7 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
         if (name === 'graphicData' || name === 'contentPart') {
           const adapters = {
             chartContext: drawingPartContext(pkg).chart,
-            parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme.context, defaults, textFontDefaults(getChildren(shape, 'style')[0], theme.context)),
+            parseDiagramText: (body: XmlNode, shape: XmlNode) => ({ ...parseTextBody(body, theme.context, defaults, textFontDefaults(getChildren(shape, 'style')[0], theme.context)), powerPoint: true }),
             parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme.context, defaults).paragraphs[0],
           }
           let payload = await prepareDrawingContent(pkg, name === 'contentPart' ? { contentPart: node } : node, path, contentTheme, theme.context, adapters)

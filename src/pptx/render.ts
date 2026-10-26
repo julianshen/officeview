@@ -62,7 +62,7 @@ export function renderSlide(
           fontFamilyCss: family => JSON.stringify(resolveFont(family)),
           paintDiagramText(node, c, width, height) { if (node.textBody) paintTextBody(node.textBody, c, 0, 0, width, height, resolveFont, slide.theme) },
           paintTextbox(drawing, c, width, height) {
-            paintTextBody({ paragraphs: drawing.paragraphs, anchor: drawing.anchor ?? 't', wrap: drawing.wrap ?? true,
+            paintTextBody({ paragraphs: drawing.paragraphs, anchor: drawing.anchor ?? 't', wrap: drawing.wrap ?? true, powerPoint: true,
               insetLeftEmu: drawing.insets.left, insetRightEmu: drawing.insets.right,
               insetTopEmu: drawing.insets.top, insetBottomEmu: drawing.insets.bottom,
               direction: drawing.direction,
@@ -219,6 +219,7 @@ function paintTable(
             insetTopEmu: cell.margins?.topEmu ?? CELL_VPAD_EMU,
             insetBottomEmu: cell.margins?.bottomEmu ?? CELL_VPAD_EMU,
             wrap: true,
+            powerPoint: true,
           },
           ctx,
           cx,

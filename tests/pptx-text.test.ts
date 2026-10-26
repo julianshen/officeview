@@ -424,3 +424,21 @@ test('visual review NEW-4: a:highlight paints a band behind the run', () => {
   paintTextBody(b, ctx as unknown as CanvasRenderingContext2D, 0, 0, 300, 100, f => f)
   expect(calls).toEqual(['rect:#ff0000', 'text:red', 'rect:#4472c4', 'text:blue', 'text: plain'])
 })
+
+test('PowerPoint ignores the first paragraph\'s space before and the last paragraph\'s space after', async () => {
+  // ooxtheme probes (PowerPoint 16.114 movie exports): 10 or 30 pt before the first paragraph and 30 pt after the
+  // last one leave top-, centre- and bottom-anchored text where it is; 30 pt before a second paragraph moves it 30 pt.
+  const before = { kind: 'points', value: 30 } as const, after = { kind: 'points', value: 30 } as const
+  for (const anchor of ['t', 'ctr', 'b'] as const) {
+    const plain = layout(body([p([run('one')]), p([run('two')])], { anchor, powerPoint: true }))
+    const spaced = layout(body([p([run('one')], { spaceBefore: before }), p([run('two')], { spaceBefore: before, spaceAfter: after })], { anchor, powerPoint: true }))
+    expect(spaced.lines[1].baseline - spaced.lines[0].baseline, anchor).toBeCloseTo(plain.lines[1].baseline - plain.lines[0].baseline + 40)
+    if (anchor === 't') expect(spaced.lines[0].baseline).toBeCloseTo(plain.lines[0].baseline)
+    if (anchor === 'b') expect(spaced.lines[1].baseline).toBeCloseTo(plain.lines[1].baseline)
+  }
+  // Word and Excel text keeps both (unmeasured there).
+  const word = layout(body([p([run('one')], { spaceBefore: before })]))
+  expect(word.lines[0].y).toBeCloseTo(40)
+  // Every PowerPoint text body opts in.
+  expect((await bodyXml('<a:bodyPr/><a:p><a:r><a:t>x</a:t></a:r></a:p>')).powerPoint).toBe(true)
+})
