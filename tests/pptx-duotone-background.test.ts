@@ -6,11 +6,13 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
+import { sessionDeps } from '../src/slideshow/player/session'
 import { installShowSeams, loadDeck, startShow, type ShowSeams } from './helpers/slideshow-show-rig'
 
 const DECK = 'corpus/lo-tdf123684.pptx'
 let seams: ShowSeams | undefined
-afterEach(() => { seams?.restore(); seams = undefined; document.body.replaceChildren() })
+const realWorkspace = sessionDeps.workspace
+afterEach(() => { sessionDeps.workspace = realWorkspace; seams?.restore(); seams = undefined; document.body.replaceChildren() })
 
 describe.skipIf(!existsSync(DECK))('duotone picture background', () => {
   it('tdf123684 paints its theme picture through the duotone', async () => {
@@ -31,5 +33,20 @@ describe.skipIf(!existsSync(DECK))('duotone picture background', () => {
     const [rr, gg, bb] = px(0.02, 0.04)
     expect(bb).toBeGreaterThan(rr + 20)
     expect(Math.max(rr, gg, bb)).toBeLessThan(110)
+  }, 30_000)
+
+  it('a duotone whose buffers the workspace refuses paints the placeholder and says why', async () => {
+    const size = { width: 960, height: 540 }
+    seams = installShowSeams(size)
+    const asked: string[] = []
+    sessionDeps.workspace = (...args) => {
+      const ws = realWorkspace(...args)
+      const lease = ws.lease.bind(ws)
+      return Object.assign(ws, { lease: (bytes: number, tag: string) => tag.endsWith(':duotone') ? (asked.push(tag), undefined) : lease(bytes, tag) })
+    }
+    const r = await startShow(await loadDeck(new Uint8Array(readFileSync(DECK))), { seams, size })
+    await r.tick(100)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(r.diagnostics).toContainEqual(expect.objectContaining({ code: 'image-workspace', message: expect.stringContaining('duotone') }))
   }, 30_000)
 })

@@ -60,6 +60,8 @@ async function pictureBackground(pkg: HandlePackage, owner: string, blipFill: Xm
     if (name === 'duotone') {
       const issues: DrawingIssue[] = []
       const colours = parseDrawingColors(effect).map(color => resolveDrawingColor(color, theme, placeholder, issues))
+      // An approximated colour (an unsupported transform) still paints, but stays diagnosed.
+      diagnostics.push(...issues)
       const [dark, light] = colours
       if (colours.length === 2 && dark && light) { duotone = { dark, light }; continue }
       diagnostics.push({ kind: 'unsupported-fill', message: 'Background picture duotone needs two resolvable colours; the picture is painted as is', feature: name })

@@ -64,19 +64,34 @@ async function surface(width: number, height: number): Promise<Surface> {
   return mod.createCanvas(width, height)
 }
 
-/** The decoded image recoloured on a canvas of its own size; the source is released. Undefined when no 2d context is available. */
-async function applyDuotone(image: CanvasImageSource, duotone: Duotone): Promise<CanvasImageSource | undefined> {
+/**
+ * Reserves memory for a decode step's temporary buffers: a held reservation, or undefined to refuse.
+ * The recolour step asks for its canvas and pixel buffer (2 × width × height × 4 bytes) before allocating them.
+ */
+export type ImageScratch = (bytes: number) => { release(): void } | undefined
+
+/**
+ * The decoded image recoloured on a canvas of its own size; the source is released. Undefined (source
+ * released) when `scratch` refuses the buffers or no 2d context is available.
+ */
+async function applyDuotone(image: CanvasImageSource, duotone: Duotone, scratch?: ImageScratch): Promise<CanvasImageSource | undefined> {
   const { width, height } = image as unknown as { width: number; height: number }
   if (!(width > 0 && height > 0)) return image
-  const canvas = await surface(width, height)
-  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | null
-  if (!ctx) return undefined
-  ctx.drawImage(image, 0, 0, width, height)
-  const pixels = ctx.getImageData(0, 0, width, height)
-  duotonePixels(pixels.data, duotone.dark, duotone.light)
-  ctx.putImageData(pixels, 0, 0)
-  releaseDecodedImage(image)
-  return canvas as unknown as CanvasImageSource
+  const held = scratch?.(2 * width * height * 4)
+  if (scratch && !held) { releaseDecodedImage(image); return undefined }
+  try {
+    const canvas = await surface(width, height)
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | null
+    if (!ctx) return undefined
+    ctx.drawImage(image, 0, 0, width, height)
+    const pixels = ctx.getImageData(0, 0, width, height)
+    duotonePixels(pixels.data, duotone.dark, duotone.light)
+    ctx.putImageData(pixels, 0, 0)
+    return canvas as unknown as CanvasImageSource
+  } finally {
+    releaseDecodedImage(image)
+    held?.release()
+  }
 }
 
 function svgRejection(bytes: Uint8Array, mime?: string, pathHint?: string): string | undefined {
@@ -154,9 +169,9 @@ export function releaseDecodedImage(image: CanvasImageSource | undefined): void 
  * and an ordinary raster never inherits another source's rejection reason. A
  * custom decoder returning `undefined` is a decode failure.
  */
-export async function decodeImageAsset(asset: ImageCandidates, decode?: ImageDecodeFn): Promise<CanvasImageSource | undefined> {
+export async function decodeImageAsset(asset: ImageCandidates, decode?: ImageDecodeFn, scratch?: ImageScratch): Promise<CanvasImageSource | undefined> {
   const image = await decodeRepresentation(asset, decode)
-  return image && asset.duotone ? applyDuotone(image, asset.duotone) : image
+  return image && asset.duotone ? applyDuotone(image, asset.duotone, scratch) : image
 }
 
 async function decodeRepresentation(asset: ImageCandidates, decode?: ImageDecodeFn): Promise<CanvasImageSource | undefined> {

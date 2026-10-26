@@ -111,6 +111,16 @@ it('a duotone without two resolvable colours is diagnosed and the picture painte
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ kind: 'unsupported-fill', feature: 'duotone' }))
   }
 })
+it('a duotone colour with an approximated transform is applied and stays diagnosed', async () => {
+  const data = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  const source = await pkg({ slides: [{ shapes: [], bg: { picture: { data } } }] }, async zip => {
+    zip.file(slide, (await zip.file(slide)!.async('string')).replace(/<a:blip ([^>]*?)\/>/, '<a:blip $1><a:duotone><a:srgbClr val="000000"><a:gamma/></a:srgbClr><a:srgbClr val="FFFFFF"/></a:duotone></a:blip>'))
+  })
+  const result = await resolveSlideBackground(source, slide, theme())
+  expect(result.background).toMatchObject({ kind: 'picture', image: { duotone: { light: { r: 255, g: 255, b: 255, a: 1 } } } })
+  expect(result.diagnostics.length).toBeGreaterThan(0)
+  expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'duotone' }))
+})
 it('lo-tdf123684 resolves its theme picture background', async ctx => {
   const { existsSync, readFileSync } = await import('node:fs')
   const path = 'corpus/lo-tdf123684.pptx'

@@ -55,6 +55,18 @@ describe('decodeImageAsset with a duotone', () => {
     expect(pixelsOf(await decodeImageAsset({ data, mime: 'image/png', duotone: { dark: DARK, light: LIGHT } }))).toEqual([[30, 81, 85, 255], [200, 240, 100, 255]])
   })
 
+  it('reserves its canvas and pixel buffer through scratch first, and refuses when scratch does', async () => {
+    const data = png([[0, 0, 0, 255], [255, 255, 255, 255]])
+    const asked: number[] = []
+    let released = 0
+    const granted = await decodeImageAsset({ data, mime: 'image/png', duotone: { dark: DARK, light: LIGHT } }, undefined, bytes => { asked.push(bytes); return { release: () => { released++ } } })
+    // Two 2 × 1 RGBA buffers, released once the recolour is done.
+    expect(asked).toEqual([16])
+    expect(released).toBe(1)
+    expect(pixelsOf(granted)).toEqual([[30, 81, 85, 255], [200, 240, 100, 255]])
+    expect(await decodeImageAsset({ data, mime: 'image/png', duotone: { dark: DARK, light: LIGHT } }, undefined, () => undefined)).toBeUndefined()
+  })
+
   it('decodeImageAssets keeps a duotoned use of a picture apart from a plain use of the same bytes', async () => {
     const data = png([[255, 255, 255, 255]])
     const [plain, toned, again] = await decodeImageAssets([
