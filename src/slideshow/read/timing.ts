@@ -732,8 +732,9 @@ export interface ExpandOptions {
  * targets. Other builds, and text-less shapes, are `whole`. A shape the timing
  * tree targets by paragraph with no template at all builds as `cust`: PowerPoint
  * still holds those paragraphs back for their effects (tdf93868 has no bldLst).
- * Not when a behaviour also targets the whole shape: split range layers would
- * stop following its exit or motion.
+ * Not when a behaviour also targets the whole shape (split range layers would
+ * stop following its exit or motion), nor when the ranges overlap (a shared
+ * paragraph would be painted once per range).
  */
 export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetResolver, options: ExpandOptions = {}): BuildOwnership[] {
   const out: BuildOwnership[] = []
@@ -765,7 +766,9 @@ export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetRes
   }
   const templated = new Set(build.map(b => b.spid))
   for (const [spid, refs] of options.referenced ?? []) {
-    if (!templated.has(spid) && !options.whole?.has(spid) && refs.length) out.push({ spid, mode: 'paragraph', ranges: referencedRanges(spid, refs), animBg: false, body: targetKey({ spid }) })
+    if (templated.has(spid) || options.whole?.has(spid) || !refs.length) continue
+    const ranges = referencedRanges(spid, refs)
+    if (ranges.every((r, i) => i === 0 || r.st > ranges[i - 1].end)) out.push({ spid, mode: 'paragraph', ranges, animBg: false, body: targetKey({ spid }) })
   }
   return out
 }
