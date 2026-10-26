@@ -1039,7 +1039,8 @@ export async function parsePptx(pkg: OfficePackage, options: ParsePptxOptions = 
     if (index === undefined) {
       index = doc.images.length
       const { opacity: _opacity, srcRect: _srcRect, fillRect: _fillRect, ...part } = shape.image
-      doc.images.push(part)
+      // PowerPoint paints a stretched 2 × 2 picture as one colour (tdf146223).
+      doc.images.push({ ...part, flatTwoByTwo: true })
       imageIndices.set(key, index)
     } else if (shape.image.imageSelection && doc.images[index].imageSelection !== shape.image.imageSelection) {
       // Aliased pair: share the retained selection so decode propagates everywhere.

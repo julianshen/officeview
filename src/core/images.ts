@@ -32,6 +32,8 @@ export interface ImageCandidates {
   imageSelection?: ImageSelection
   /** Recolour the decoded pixels (`a:duotone`). */
   duotone?: Duotone
+  /** Paint a raster that is exactly 2 × 2 pixels as one colour, as PowerPoint does (see flatTwoByTwoPixels). */
+  flatTwoByTwo?: boolean
 }
 
 /** `a:duotone`'s two colours, resolved: luminance 0 maps to `dark`, luminance 1 to `light`. Channels 0–255, alpha 0–1. */
@@ -92,6 +94,41 @@ async function applyDuotone(image: CanvasImageSource, duotone: Duotone, scratch?
     releaseDecodedImage(image)
     held?.release()
   }
+}
+
+/**
+ * The one colour PowerPoint paints for a stretched 2 × 2 picture, written over all four RGBA pixels in
+ * place (tdf146223; probe decks exported as movies from PowerPoint 16.114). A PNG gets the plain mean.
+ * A JPEG gets the bilinear sample 13/32 of a pixel right of and below the top-left pixel's centre:
+ * weights (19/32)² top-left, 19 × 13/32² top-right and bottom-left, (13/32)² bottom-right; every
+ * one-white-pixel probe matched within two levels. Other formats are unmeasured and take the mean.
+ * Colours are weighted by alpha, so transparent pixels add no colour.
+ */
+export function flatTwoByTwoPixels(data: Uint8ClampedArray, jpeg: boolean): void {
+  const weights = jpeg ? [361, 247, 247, 169].map(w => w / 1024) : [0.25, 0.25, 0.25, 0.25]
+  let r = 0, g = 0, b = 0, a = 0
+  weights.forEach((w, i) => {
+    const wa = w * data[i * 4 + 3]
+    r += wa * data[i * 4]; g += wa * data[i * 4 + 1]; b += wa * data[i * 4 + 2]; a += wa
+  })
+  const flat = a > 0 ? [r / a, g / a, b / a, a] : [0, 0, 0, 0]
+  for (let i = 0; i < 4; i++) data.set(flat, i * 4)
+}
+
+/** A 2 × 2 decoded image flattened on a canvas of its own size (source released); any other size is returned as is. */
+async function flattenTwoByTwo(image: CanvasImageSource, jpeg: boolean): Promise<CanvasImageSource> {
+  const { width, height } = image as unknown as { width: number; height: number }
+  if (width !== 2 || height !== 2) return image
+  // 32 bytes of canvas and pixels: too small to charge to a workspace.
+  const canvas = await surface(2, 2)
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | null
+  if (!ctx) return image
+  ctx.drawImage(image, 0, 0, 2, 2)
+  const pixels = ctx.getImageData(0, 0, 2, 2)
+  flatTwoByTwoPixels(pixels.data, jpeg)
+  ctx.putImageData(pixels, 0, 0)
+  releaseDecodedImage(image)
+  return canvas as unknown as CanvasImageSource
 }
 
 function svgRejection(bytes: Uint8Array, mime?: string, pathHint?: string): string | undefined {
@@ -171,7 +208,11 @@ export function releaseDecodedImage(image: CanvasImageSource | undefined): void 
  */
 export async function decodeImageAsset(asset: ImageCandidates, decode?: ImageDecodeFn, scratch?: ImageScratch): Promise<CanvasImageSource | undefined> {
   const image = await decodeRepresentation(asset, decode)
-  return image && asset.duotone ? applyDuotone(image, asset.duotone, scratch) : image
+  const toned = image && asset.duotone ? await applyDuotone(image, asset.duotone, scratch) : image
+  // Rasters only: a vector has no pixels to flatten, whether it is a usable SVG candidate or the primary bytes themselves.
+  const mime = asset.data ? sniffImageMime(asset.data) : undefined
+  const raster = asset.data && mime !== 'image/svg+xml' && asset.mime !== 'image/svg+xml' && !asset.svg?.verdict.ok
+  return toned && asset.flatTwoByTwo && raster ? flattenTwoByTwo(toned, mime === 'image/jpeg') : toned
 }
 
 async function decodeRepresentation(asset: ImageCandidates, decode?: ImageDecodeFn): Promise<CanvasImageSource | undefined> {

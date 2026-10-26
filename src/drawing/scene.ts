@@ -27,6 +27,8 @@ export interface SceneImage {
   imageSelection?: ImageSelection
   /** `a:duotone`, applied to the decoded pixels; it belongs to this use, so it is part of the image's identity. */
   duotone?: Duotone
+  /** PowerPoint paints a raster of exactly 2 × 2 pixels as one colour; set by the pptx adapter for every picture. */
+  flatTwoByTwo?: boolean
 }
 
 export interface SceneGroupTransform {
