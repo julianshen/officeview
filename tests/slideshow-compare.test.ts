@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CATALOGUE } from '../src/slideshow/catalogue'
 import {
   CAPTURE_PCTS, TOLERANCE_APPROX, TOLERANCE_EXACT, compareFrames, frameKey, parseProvenance, parseRefName,
-  readCompareRecords, readRefs, refFileName, rowStatus, runCompareCli, writeCompareRecord, type CompareRecord,
+  readCompareRecords, readRefs, refFileName, registerOfficeFonts, rowStatus, runCompareCli, sfntNames, writeCompareRecord, type CompareRecord,
 } from '../scripts/slideshow-compare'
 import { BEHAVIOURAL_QUESTIONS } from '../scripts/slideshow-capture-questions'
 
@@ -272,4 +272,53 @@ describe.skipIf(!existsSync('corpus/lo-tdf146223.pptx'))('compare CLI (S1-22)', 
     expect(await runCompareCli([])).toBe(2)
     expect(await runCompareCli(['tdf146223', '--bogus'])).toBe(2)
   }, 60_000)
+})
+
+describe('Office fonts for compares', () => {
+  /** A minimal SFNT with only a name table: Windows (UTF-16BE) family/subfamily, or Mac Roman. */
+  function sfnt(family: string, subfamily: string, platform: 1 | 3 = 3): Buffer {
+    const enc = (s: string) => platform === 3 ? Buffer.from(s, 'utf16le').swap16() : Buffer.from(s, 'latin1')
+    const strings = [enc(family), enc(subfamily)]
+    const name = Buffer.alloc(6 + 12 * 2 + strings[0].length + strings[1].length)
+    name.writeUInt16BE(0, 0); name.writeUInt16BE(2, 2); name.writeUInt16BE(6 + 24, 4)
+    let at = 0
+    strings.forEach((s, i) => {
+      const r = 6 + 12 * i
+      name.writeUInt16BE(platform, r); name.writeUInt16BE(platform === 3 ? 1 : 0, r + 2); name.writeUInt16BE(platform === 3 ? 0x409 : 0, r + 4)
+      name.writeUInt16BE(i + 1, r + 6); name.writeUInt16BE(s.length, r + 8); name.writeUInt16BE(at, r + 10)
+      s.copy(name, 30 + at); at += s.length
+    })
+    const head = Buffer.alloc(12 + 16)
+    head.writeUInt32BE(0x00010000, 0); head.writeUInt16BE(1, 4)
+    head.write('name', 12, 'latin1'); head.writeUInt32BE(28, 20); head.writeUInt32BE(name.length, 24)
+    return Buffer.concat([head, name])
+  }
+
+  it('reads the legacy family and subfamily names from a font file', () => {
+    expect(sfntNames(sfnt('Calibri Light', 'Regular'))).toEqual({ family: 'Calibri Light', subfamily: 'Regular' })
+    expect(sfntNames(sfnt('Calibri', 'Bold Italic', 1))).toEqual({ family: 'Calibri', subfamily: 'Bold Italic' })
+    expect(sfntNames(Buffer.from('ttcf....'))).toBeUndefined()
+    expect(sfntNames(Buffer.alloc(3))).toBeUndefined()
+  })
+
+  it('registers every readable font in a folder under its own family, weight and style', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'office-fonts-'))
+    try {
+      writeFileSync(join(dir, 'calibril.ttf'), sfnt('Calibri Light', 'Regular'))
+      writeFileSync(join(dir, 'Calibriz.ttf'), sfnt('Calibri', 'Bold Italic'))
+      writeFileSync(join(dir, 'Calibri.ttf'), sfnt('Calibri', 'Regular'))
+      // Office ships only Trebuchet's bold italic: registering it alone would hide the system's whole family.
+      writeFileSync(join(dir, 'TrebuchetMSBoldItalic.ttf'), sfnt('Trebuchet MS', 'Bold Italic'))
+      writeFileSync(join(dir, 'Cambria.ttc'), Buffer.from('ttcf'))
+      writeFileSync(join(dir, 'notes.txt'), 'x')
+      const seen: Array<[string, { family: string; weight: string; style: string }]> = []
+      const n = await registerOfficeFonts(dir, (path, d) => { seen.push([path.replace(/^.*[\\/]/, ''), d]) })
+      expect(n).toBe(3)
+      expect(seen.map(([, d]) => d.family)).not.toContain('Trebuchet MS')
+      expect(seen).toContainEqual(['calibril.ttf', { family: 'Calibri Light', weight: 'normal', style: 'normal' }])
+      expect(seen).toContainEqual(['Calibriz.ttf', { family: 'Calibri', weight: 'bold', style: 'italic' }])
+      // A missing folder (PowerPoint not installed) registers nothing.
+      expect(await registerOfficeFonts(join(dir, 'absent'), () => { throw new Error('unexpected') })).toBe(0)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
 })

@@ -7,8 +7,12 @@
 // frames through the lazy engine at the checklist times and compares them:
 //
 //   bun scripts/slideshow-compare.ts <deck> [--rows id,…] [--out dir] [--write]
-//                                    [--refs dir] [--records file]
+//                                    [--refs dir] [--records file] [--system-fonts]
 //   bun scripts/slideshow-compare.ts --coverage
+//
+// PowerPoint for Mac's bundled fonts (Calibri, Cambria, Aptos, …) are registered
+// before rendering when PowerPoint is installed, so a frame measures our layout
+// rather than this machine's font fallback; --system-fonts skips that.
 //
 // <deck> is a corpus name (`tdf104788`, read from corpus/lo-<deck>.pptx) or a
 // .pptx path. The show runs exactly as tests/slideshow-corpus.test.ts runs it
@@ -320,7 +324,7 @@ async function installDom(): Promise<void> {
   g.document = window.document
 }
 
-export interface CliOptions { deck: string; rows?: Set<string>; out?: string; write: boolean; refs: string; records: string }
+export interface CliOptions { deck: string; rows?: Set<string>; out?: string; write: boolean; refs: string; records: string; systemFonts?: boolean }
 
 function parseArgs(args: string[]): CliOptions | 'coverage' | string {
   if (args.includes('--coverage')) return 'coverage'
@@ -330,13 +334,14 @@ function parseArgs(args: string[]): CliOptions | 'coverage' | string {
     if (a === '--rows') { const v = args[++i]; if (!v) return '--rows needs a comma-separated list of catalogue row ids'; opts.rows = new Set(v.split(',').map(r => r.trim()).filter(Boolean)) }
     else if (a === '--out') { const v = args[++i]; if (!v) return '--out needs a directory'; opts.out = v }
     else if (a === '--write') opts.write = true
+    else if (a === '--system-fonts') opts.systemFonts = true
     else if (a === '--refs') { const v = args[++i]; if (!v) return '--refs needs a directory'; opts.refs = resolvePath(v) }
     else if (a === '--records') { const v = args[++i]; if (!v) return '--records needs a file'; opts.records = resolvePath(v) }
     else if (a.startsWith('--')) return `unknown option ${a}`
     else if (!opts.deck) opts.deck = a
     else return `unexpected argument ${a}`
   }
-  return opts.deck ? opts : 'usage: bun scripts/slideshow-compare.ts <deck> [--rows id,…] [--out dir] [--write] [--refs dir] [--records file] | --coverage'
+  return opts.deck ? opts : 'usage: bun scripts/slideshow-compare.ts <deck> [--rows id,…] [--out dir] [--write] [--refs dir] [--records file] [--system-fonts] | --coverage'
 }
 
 const deckFile = (deck: string) => deck.endsWith('.pptx') ? resolvePath(deck) : join(REPO, 'corpus', `lo-${deck}.pptx`)
@@ -351,10 +356,78 @@ async function decodePng(path: string): Promise<ImageData> {
   return ctx.getImageData(0, 0, img.width, img.height) as unknown as ImageData
 }
 
+/**
+ * PowerPoint for Mac's bundled fonts. Office decks name Calibri, Cambria, Aptos and the like, which ship inside
+ * Office rather than with macOS; without them a frame measures this machine's fallback font, not our layout.
+ */
+export const OFFICE_FONT_DIR = '/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts'
+
+/** A TrueType/OpenType file's legacy family (name ID 1) and subfamily (ID 2); undefined for collections and unreadable files. */
+export function sfntNames(b: Buffer): { family: string; subfamily: string } | undefined {
+  if (b.length < 12 || ![0x00010000, 0x4f54544f, 0x74727565].includes(b.readUInt32BE(0))) return undefined
+  const tables = b.readUInt16BE(4)
+  for (let i = 0; i < tables && 12 + 16 * (i + 1) <= b.length; i++) {
+    const r = 12 + 16 * i
+    if (b.toString('latin1', r, r + 4) !== 'name') continue
+    const t = b.readUInt32BE(r + 8)
+    if (t + 6 > b.length) return undefined
+    const count = b.readUInt16BE(t + 2), strings = t + b.readUInt16BE(t + 4)
+    const found: Record<number, { score: number; text: string }> = {}
+    for (let k = 0; k < count && t + 6 + 12 * (k + 1) <= b.length; k++) {
+      const n = t + 6 + 12 * k
+      const platform = b.readUInt16BE(n), language = b.readUInt16BE(n + 4), id = b.readUInt16BE(n + 6)
+      const length = b.readUInt16BE(n + 8), offset = strings + b.readUInt16BE(n + 10)
+      if ((id !== 1 && id !== 2) || offset + length > b.length) continue
+      // Prefer Windows US English (UTF-16BE), then any Windows, then Mac Roman.
+      const score = platform === 3 ? (language === 0x409 ? 3 : 2) : platform === 1 ? 1 : 0
+      if (!score || (found[id]?.score ?? 0) >= score) continue
+      const raw = b.subarray(offset, offset + length)
+      found[id] = { score, text: platform === 3 ? Buffer.from(raw).swap16().toString('utf16le') : raw.toString('latin1') }
+    }
+    return found[1] && found[2] ? { family: found[1].text, subfamily: found[2].text } : undefined
+  }
+  return undefined
+}
+
+export type FontRegistrar = (path: string, desc: { family: string; weight: string; style: string }) => void
+
+/**
+ * Registers the readable .ttf/.otf faces in `dir` under their own family, weight and style; returns how many.
+ * A family is registered only when its regular face is among them: a registered family hides the system's,
+ * and Office ships some families partially (Trebuchet MS bold italic only; Cambria's regular is a .ttc).
+ */
+export async function registerOfficeFonts(dir = OFFICE_FONT_DIR, register?: FontRegistrar): Promise<number> {
+  if (!existsSync(dir)) return 0
+  const { readdirSync } = await import('node:fs')
+  const reg = register ?? ((await import('canvas')) as unknown as { registerFont: FontRegistrar }).registerFont
+  const faces: Array<{ path: string; family: string; weight: string; style: string }> = []
+  for (const file of readdirSync(dir)) {
+    if (!/\.(ttf|otf)$/i.test(file)) continue
+    const path = join(dir, file)
+    let names: ReturnType<typeof sfntNames>
+    try { names = sfntNames(readFileSync(path)) } catch { continue }
+    if (!names) continue
+    const sub = names.subfamily.toLowerCase()
+    faces.push({ path, family: names.family, weight: /bold/.test(sub) ? 'bold' : 'normal', style: /italic|oblique/.test(sub) ? 'italic' : 'normal' })
+  }
+  const complete = new Set(faces.filter(f => f.weight === 'normal' && f.style === 'normal').map(f => f.family))
+  let n = 0
+  for (const { path, ...desc } of faces) {
+    if (!complete.has(desc.family)) continue
+    try { reg(path, desc); n++ } catch { /* an unreadable face is skipped */ }
+  }
+  return n
+}
+
 export interface FrameOutcome { slide: number; step: number; pct: number; ms: number; atMs?: number; rows: string[]; status: 'pass' | 'fail' | 'unverified'; detail: string }
 
 /** Renders `deck` at its checklist times and compares the frames that have references. */
+let officeFonts: Promise<number> | undefined
+
 export async function compareDeck(opts: CliOptions): Promise<{ outcomes: FrameOutcome[]; records: CompareRecord[] }> {
+  // Before any canvas exists: node-canvas only sees fonts registered ahead of its contexts.
+  if (!opts.systemFonts) officeFonts ??= registerOfficeFonts()
+  await officeFonts
   await installDom()
   const { planDeck } = await import('./slideshow-capture-plan')
   const { installShowSeams, loadDeck, startShow } = await import('../tests/helpers/slideshow-show-rig')
@@ -458,6 +531,7 @@ export async function runCompareCli(args: string[]): Promise<number> {
   if (typeof opts === 'string') { console.error(`slideshow-compare: ${opts}`); return 2 }
   if (!existsSync(deckFile(opts.deck))) { console.error(`slideshow-compare: no deck at ${deckFile(opts.deck)} (run bun scripts/fetch-corpus.ts)`); return 2 }
   const { outcomes, records } = await compareDeck(opts)
+  if (!opts.systemFonts) console.log(`fonts: ${await officeFonts} Office faces from ${OFFICE_FONT_DIR} (--system-fonts to skip)`)
   for (const o of outcomes) {
     const time = o.atMs === undefined ? `${o.ms} ms` : `${o.ms} ms → ${Number(o.atMs.toFixed(3))} ms`
     console.log(`${o.status.padEnd(10)} ${o.slide}-${o.step}-${o.pct} (${time}) ${o.rows.join(' ') || '(static)'}: ${o.detail}`)
