@@ -106,7 +106,7 @@ function indexUnderlayImages(doc: PptxDocument): void {
         if (index === undefined) {
           index = doc.images.length
           const { opacity: _opacity, srcRect: _srcRect, fillRect: _fillRect, ...part } = shape.image
-          doc.images.push(part)
+          doc.images.push({ ...part, flatTwoByTwo: true })
           indices.set(key, index)
         } else if (shape.image.imageSelection && doc.images[index].imageSelection !== shape.image.imageSelection) {
           shape.image.imageSelection = doc.images[index].imageSelection
