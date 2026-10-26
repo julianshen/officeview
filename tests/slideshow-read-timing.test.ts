@@ -592,6 +592,24 @@ describe('builds', () => {
     expect(r.builds[0]).toEqual({ spid: '5', mode: 'paragraph', ranges: [range(0, 0), range(1, 1)], animBg: true, body: 'sp:5' })
   })
 
+  it('paragraph targets on a shape with no build template own their ranges, as a cust build would (tdf93868)', async () => {
+    const pRg = (id: number, st: number) => `<p:set><p:cBhvr><p:cTn id="${id}" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="5"><p:txEl><p:pRg st="${st}" end="${st}"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
+    const d = await deck({ slides: [{ shapes: [shape(5, [0, 0, 0, 0]), shape(6)], timingXml: timingOf([click(pRg(6, 2)), click(pRg(7, 0)), click(`<p:set>${bhvr(8, '', [], '6')}</p:set>`)]) }] })
+    const r = readSlideTiming(d.xml, 0, shapeResolver(d.slide), createDiagnosticSink())
+    expect(tree(r).build).toEqual([])
+    expect(r.builds).toEqual([{ spid: '5', mode: 'paragraph', ranges: [range(0, 0), range(2, 2)], animBg: false, body: 'sp:5' }])
+    // A whole-shape behaviour on the same shape keeps its text in one layer, so the text follows it.
+    const mixed = await deck({ slides: [{ shapes: [shape(5, [0, 0])], timingXml: timingOf([click(pRg(6, 1)), click(`<p:set>${bhvr(7, '', [], '5')}</p:set>`)]) }] })
+    expect(readSlideTiming(mixed.xml, 0, shapeResolver(mixed.slide), createDiagnosticSink()).builds).toEqual([])
+    // Overlapping ranges would paint the shared paragraph twice, so the text stays whole.
+    const pRg2 = (id: number, st: number, end: number) => pRg(id, st).replace(`end="${st}"`, `end="${end}"`)
+    const overlap = await deck({ slides: [{ shapes: [shape(5, [0, 0, 0])], timingXml: timingOf([click(pRg2(6, 0, 1)), click(pRg(7, 1))]) }] })
+    expect(readSlideTiming(overlap.xml, 0, shapeResolver(overlap.slide), createDiagnosticSink()).builds).toEqual([])
+    // A template, even a whole one, keeps the reader's hands off the shape.
+    const whole = await deck({ slides: [{ shapes: [shape(5, [0, 0])], timingXml: timingOf([click(pRg(6, 1))], '<p:bldLst><p:bldP spid="5" grpId="0"/></p:bldLst>') }] })
+    expect(readSlideTiming(whole.xml, 0, shapeResolver(whole.slide), createDiagnosticSink()).builds).toEqual([{ spid: '5', mode: 'whole', ranges: [], animBg: false, body: 'sp:5' }])
+  })
+
   it('reader to store to planner: builds survive in ShowSlide.builds and drive buildRenderPlan', async () => {
     // Shape 5 has three paragraphs and a by-paragraph build; step 1 animates its first paragraph.
     const textTarget = `<p:set><p:cBhvr><p:cTn id="6" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="5"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`
