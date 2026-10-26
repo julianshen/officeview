@@ -11,6 +11,7 @@
 //   bun scripts/slideshow-capture-export.ts all     [--deck <name>]… [options]
 //
 // Options: --dry-run (print what would happen, change nothing),
+//   --skip-existing (reuse a movie that has its export record),
 //   --staging <dir> (where PowerPoint reads the deck and writes the movie;
 //   default inside its sandbox container, so no "Grant File Access" sheet),
 //   --videos <dir> (default ~/officeview-captures), --corpus <dir>,
@@ -129,27 +130,82 @@ end timeout
 `
 }
 
-export interface ExportOptions { decks: readonly string[]; corpus: string; staging: string; videos: string; timeoutMs: number; dryRun: boolean }
+export interface ExportOptions { decks: readonly string[]; corpus: string; staging: string; videos: string; timeoutMs: number; dryRun: boolean; skipExisting?: boolean }
 export interface ExportResult { deck: string; ok: boolean; movie?: string; reason?: string }
 
-function moveFile(from: string, to: string): void {
-  try { renameSync(from, to) } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e
-    copyFileSync(from, to)
-    unlinkSync(from)
+export interface ExportFileOps {
+  mkdirSync(path: string, options?: { recursive?: boolean }): unknown
+  rmSync(path: string, options?: { force?: boolean }): void
+  statSync(path: string): { size: number }
+  copyFileSync(from: string, to: string): void
+  renameSync(from: string, to: string): void
+  unlinkSync(path: string): void
+}
+
+const realFileOps: ExportFileOps = { mkdirSync, rmSync, statSync, copyFileSync, renameSync, unlinkSync }
+const retryDelay = new Int32Array(new SharedArrayBuffer(4))
+const RETRY_DELAY_MS = 250
+
+function retryFileOp<T>(op: () => T): T {
+  for (let attempt = 0; ; attempt++) {
+    try { return op() } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if ((code !== 'EINTR' && code !== 'EAGAIN') || attempt === 4) throw e
+      Atomics.wait(retryDelay, 0, 0, RETRY_DELAY_MS)
+    }
   }
 }
 
+function fileExists(path: string, files: ExportFileOps): boolean {
+  try { files.statSync(path); return true } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
+  }
+}
+
+function moveFile(from: string, to: string, files: ExportFileOps): void {
+  try { retryFileOp(() => files.renameSync(from, to)) } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e
+    retryFileOp(() => files.copyFileSync(from, to))
+    retryFileOp(() => files.unlinkSync(from))
+  }
+}
+
+const fileFailure = (deck: string, operation: string, error: unknown) => {
+  const e = error as NodeJS.ErrnoException
+  const label = e.code ? `${e.code}: ${e.message}` : String(e)
+  return `${operation} failed (${label}); rerun with --deck ${deck}`
+}
+
 /** Export each deck in turn; a failed or timed-out deck is reported and the next one runs. */
-export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: string) => void): Promise<ExportResult[]> {
+export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: string) => void, fileOps: Partial<ExportFileOps> = {}): Promise<ExportResult[]> {
+  const files = { ...realFileOps, ...fileOps }
   const results: ExportResult[] = []
+  const failFile = (deck: string, operation: string, error: unknown) => results.push({ deck, ok: false, reason: fileFailure(deck, operation, error) })
   for (const deck of opts.decks) {
     const source = join(opts.corpus, `lo-${deck}.pptx`)
     const staged = join(opts.staging, `${deck}.pptx`)
     const stagedMovie = join(opts.staging, `${deck}.mov`)
     const movie = join(opts.videos, `${deck}.mov`)
+    const record = join(opts.videos, `${deck}.export.json`)
     const script = appleScriptFor(staged, stagedMovie)
-    if (!existsSync(source)) { results.push({ deck, ok: false, reason: `missing ${source}: run bun scripts/fetch-corpus.ts` }); continue }
+    let hasMovie = false, hasRecord = false
+    try {
+      if (opts.skipExisting) {
+        hasMovie = retryFileOp(() => fileExists(movie, files))
+        hasRecord = retryFileOp(() => fileExists(record, files))
+      }
+    } catch (e) { failFile(deck, 'existing-export check', e); continue }
+    if (opts.skipExisting && hasMovie && hasRecord) {
+      log(opts.dryRun
+        ? `[dry-run] ${deck}: would skip existing movie and export record (${movie})`
+        : `${deck}: skip-existing ${movie} (movie and export record already exist)`)
+      results.push({ deck, ok: true, movie })
+      continue
+    }
+    let hasSource: boolean
+    try { hasSource = retryFileOp(() => fileExists(source, files)) } catch (e) { failFile(deck, 'source check', e); continue }
+    if (!hasSource) { results.push({ deck, ok: false, reason: `missing ${source}: run bun scripts/fetch-corpus.ts` }); continue }
     if (opts.dryRun) {
       log(`[dry-run] ${deck}: copy ${source} → ${staged}`)
       log(`[dry-run] ${deck}: osascript (timeout ${opts.timeoutMs / 1000} s):\n${script}`)
@@ -157,26 +213,36 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
       results.push({ deck, ok: true, movie })
       continue
     }
-    mkdirSync(opts.staging, { recursive: true })
-    mkdirSync(opts.videos, { recursive: true })
-    rmSync(stagedMovie, { force: true })
-    copyFileSync(source, staged)
+    try { retryFileOp(() => files.mkdirSync(opts.staging, { recursive: true })) } catch (e) { failFile(deck, 'staging directory creation', e); continue }
+    try { retryFileOp(() => files.mkdirSync(opts.videos, { recursive: true })) } catch (e) { failFile(deck, 'videos directory creation', e); continue }
+    try { retryFileOp(() => files.rmSync(stagedMovie, { force: true })) } catch (e) { failFile(deck, 'pre-export movie cleanup', e); continue }
+    try { retryFileOp(() => files.copyFileSync(source, staged)) } catch (e) {
+      failFile(deck, 'staging copy', e)
+      continue
+    }
     log(`${deck}: exporting (PowerPoint renders the whole show; this takes a while)…`)
     const started = Date.now()
     const r = await run('osascript', ['-'], { input: script, timeoutMs: opts.timeoutMs })
-    rmSync(staged, { force: true })
+    try { retryFileOp(() => files.rmSync(staged, { force: true })) } catch (e) { failFile(deck, 'staged deck cleanup', e); continue }
     if (r.timedOut) {
       results.push({ deck, ok: false, reason: `timed out after ${opts.timeoutMs / 1000} s. PowerPoint may still be exporting, or waiting on a dialog such as a "Grant File Access" sheet. Check PowerPoint, close the presentation, then rerun with --deck ${deck}` })
       continue
     }
-    const made = existsSync(stagedMovie) && statSync(stagedMovie).size > 0
+    let made: boolean
+    try { made = retryFileOp(() => files.statSync(stagedMovie)).size > 0 } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { failFile(deck, 'staged movie size check', e); continue }
+      made = false
+    }
     if (r.code !== 0 || !made) {
       const out = (r.stderr || r.stdout.toString()).trim() || '(no output)'
       const hint = /-9074\b/.test(out) ? ` (PowerPoint could not open ${staged}: answer any dialog it shows, such as a "Grant File Access" sheet, then rerun with --deck ${deck})` : ''
       results.push({ deck, ok: false, reason: `osascript exit ${r.code}${made ? '' : ', no movie written'}: ${out}${hint}` })
       continue
     }
-    moveFile(stagedMovie, movie)
+    try { moveFile(stagedMovie, movie, files) } catch (e) {
+      failFile(deck, 'movie move', e)
+      continue
+    }
     const [version, build] = r.stdout.toString().trim().split('\t')
     writeFileSync(join(opts.videos, `${deck}.export.json`), JSON.stringify({ deck, version: version || undefined, build: build || undefined, exportedAt: new Date().toISOString(), seconds: Math.round((Date.now() - started) / 1000) }, null, 2) + '\n')
     log(`${deck}: wrote ${movie} (${Math.round((Date.now() - started) / 1000)} s)`)
@@ -614,19 +680,20 @@ export async function compareDecks(decks: readonly string[], opts: { corpus: str
   return failed
 }
 
-interface Cli { cmd: 'export' | 'extract' | 'all'; decks: string[]; dryRun: boolean; corpus: string; staging: string; videos: string; refs: string; records: string; timeoutMs: number; gapMs: number }
+interface Cli { cmd: 'export' | 'extract' | 'all'; decks: string[]; dryRun: boolean; skipExisting: boolean; corpus: string; staging: string; videos: string; refs: string; records: string; timeoutMs: number; gapMs: number }
 
-const USAGE = 'usage: bun scripts/slideshow-capture-export.ts export|extract|all [--deck <name>]… [--dry-run] [--staging dir] [--videos dir] [--corpus dir] [--refs dir] [--records file] [--timeout s] [--gap-ms ms]'
+const USAGE = 'usage: bun scripts/slideshow-capture-export.ts export|extract|all [--deck <name>]… [--dry-run] [--skip-existing] [--staging dir] [--videos dir] [--corpus dir] [--refs dir] [--records file] [--timeout s] [--gap-ms ms]'
 
 export function parseCli(args: string[]): Cli | string {
   const [cmd, ...rest] = args
   if (cmd !== 'export' && cmd !== 'extract' && cmd !== 'all') return USAGE
-  const o: Cli = { cmd, decks: [], dryRun: false, corpus: join(REPO, 'corpus'), staging: DEFAULT_STAGING, videos: DEFAULT_VIDEOS, refs: REFS_DIR, records: RECORDS_PATH, timeoutMs: DEFAULT_TIMEOUT_MS, gapMs: BURST_GAP_MS }
+  const o: Cli = { cmd, decks: [], dryRun: false, skipExisting: false, corpus: join(REPO, 'corpus'), staging: DEFAULT_STAGING, videos: DEFAULT_VIDEOS, refs: REFS_DIR, records: RECORDS_PATH, timeoutMs: DEFAULT_TIMEOUT_MS, gapMs: BURST_GAP_MS }
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]
     const value = () => { const v = rest[++i]; if (v === undefined) throw new Error(`${a} needs a value`); return v }
     try {
       if (a === '--dry-run') o.dryRun = true
+      else if (a === '--skip-existing') o.skipExisting = true
       else if (a === '--deck') { const d = value(); if (!(CORPUS_DECKS as readonly string[]).includes(d)) return `unknown deck ${d} (one of ${CORPUS_DECKS.join(', ')})`; o.decks.push(d) }
       else if (a === '--staging') o.staging = resolvePath(value())
       else if (a === '--videos') o.videos = resolvePath(value())
