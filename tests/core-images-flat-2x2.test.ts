@@ -68,4 +68,18 @@ describe('decodeImageAsset with flatTwoByTwo', () => {
     const plain = await decodeImageAsset({ data: png(2, 2, [0, 57, 32, 92]), mime: 'image/png' })
     expect(pixelsOf(plain).map(p => p[0])).toEqual([0, 57, 32, 92])
   })
+
+  it('leaves a 2 × 2 SVG primary alone: it is a vector, not four pixels', async () => {
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="1" height="2" fill="#000"/><rect x="1" width="1" height="2" fill="#fff"/></svg>')
+    // Stand-in decoder: the vector rendered at its intrinsic 2 × 2 size.
+    const decode = async () => {
+      const c = createCanvas(2, 2), ctx = c.getContext('2d')
+      const img = ctx.createImageData(2, 2)
+      img.data.set(grey(0, 255, 0, 255))
+      ctx.putImageData(img, 0, 0)
+      return c as unknown as CanvasImageSource
+    }
+    const image = await decodeImageAsset({ data: svg, mime: 'image/svg+xml', flatTwoByTwo: true }, decode)
+    expect(pixelsOf(image).map(p => p[0])).toEqual([0, 255, 0, 255])
+  })
 })

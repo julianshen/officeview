@@ -209,9 +209,10 @@ export function releaseDecodedImage(image: CanvasImageSource | undefined): void 
 export async function decodeImageAsset(asset: ImageCandidates, decode?: ImageDecodeFn, scratch?: ImageScratch): Promise<CanvasImageSource | undefined> {
   const image = await decodeRepresentation(asset, decode)
   const toned = image && asset.duotone ? await applyDuotone(image, asset.duotone, scratch) : image
-  // Rasters only: a usable SVG candidate is preferred, and a vector has no pixels to flatten.
-  const raster = asset.data && !asset.svg?.verdict.ok
-  return toned && asset.flatTwoByTwo && raster ? flattenTwoByTwo(toned, sniffImageMime(asset.data!) === 'image/jpeg') : toned
+  // Rasters only: a vector has no pixels to flatten, whether it is a usable SVG candidate or the primary bytes themselves.
+  const mime = asset.data ? sniffImageMime(asset.data) : undefined
+  const raster = asset.data && mime !== 'image/svg+xml' && asset.mime !== 'image/svg+xml' && !asset.svg?.verdict.ok
+  return toned && asset.flatTwoByTwo && raster ? flattenTwoByTwo(toned, mime === 'image/jpeg') : toned
 }
 
 async function decodeRepresentation(asset: ImageCandidates, decode?: ImageDecodeFn): Promise<CanvasImageSource | undefined> {
