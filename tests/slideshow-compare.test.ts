@@ -118,6 +118,15 @@ describe('reference layout', () => {
     expect(parseProvenance(null).ok).toBe(false)
   })
 
+  it('round-trips exact frame timing while continuing to accept old provenance', () => {
+    const withFrameTimes = {
+      ...PROVENANCE,
+      frames: { '2-0-25.png': { atMs: 264.026, movieFrame: 8 } },
+    }
+    expect(parseProvenance(JSON.parse(JSON.stringify(withFrameTimes)))).toEqual({ ok: true, value: withFrameTimes })
+    expect(parseProvenance(PROVENANCE)).toEqual({ ok: true, value: PROVENANCE })
+  })
+
   it('readRefs tells a missing directory from an empty one and skips malformed names', async () => {
     const root = tempDir()
     const missing = await readRefs(join(root, 'nope'))
@@ -238,8 +247,17 @@ describe.skipIf(!existsSync('corpus/lo-tdf146223.pptx'))('compare CLI (S1-22)', 
     for (const slide of [1, 2]) for (const pct of [0, 25, 50, 75, 100]) expect(ours(`${slide}-0-${pct}.png`).subarray(1, 4).toString()).toBe('PNG')
     expect(ours('1-0-50.png').equals(ours('1-0-100.png'))).toBe(false)
     // Our own frames as references (provenance at the rendered 1280 × 960) pass with the row's tolerance.
-    deckDir(refs, 'tdf146223', [], { ...PROVENANCE, resolution: [1280, 960] })
-    writeFileSync(join(refs, 'tdf146223', '1-0-50.png'), ours('1-0-50.png'))
+    deckDir(refs, 'tdf146223', [], {
+      ...PROVENANCE,
+      resolution: [1280, 960],
+      frames: {
+        '1-0-50.png': { atMs: 250, movieFrame: 8 },
+        '2-0-100.png': { atMs: 1000, movieFrame: 30 },
+      },
+    })
+    // Label a 25% rendered image as 50%: this passes only if compare uses the
+    // reference's exact atMs (250), rather than the nominal 500 ms time.
+    writeFileSync(join(refs, 'tdf146223', '1-0-50.png'), ours('1-0-25.png'))
     writeFileSync(join(refs, 'tdf146223', '2-0-100.png'), ours('2-0-100.png'))
     expect(await runCompareCli([...args, '--write'])).toBe(0)
     expect(readCompareRecords(records).map(r => [r.row, r.slide, r.step, r.pct, r.pass])).toEqual([

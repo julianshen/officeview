@@ -40,7 +40,7 @@ export interface CaptureStep {
   /** What starts the step: the slide's arrival (step 0) or a click (step ≥ 1). */
   trigger: 'arrive' | 'click'
   /** Step 0 only: the incoming transition. */
-  transition?: { element: string; ns: string; durationMs: number; spd?: string; dur?: string; row?: string }
+  transition?: { element: string; ns: string; durationMs: number; thruBlk?: boolean; spd?: string; dur?: string; row?: string }
   effects: StepEffect[]
   /** Ms from the trigger until the step settles; 'indefinite' or 'unresolved' when the engine cannot bound it. */
   spanMs: number | 'indefinite' | 'unresolved'
@@ -157,7 +157,11 @@ export function planSlide(slideXml: XmlNode, slideIndex: number, resolver: Targe
   const trRow = tr ? rowForTransition(tr.ns, tr.element, tr.preset) : undefined
   const steps: CaptureStep[] = [{
     slide, step: 0, trigger: 'arrive',
-    ...(tr ? { transition: { element: tr.preset ? `${tr.element}:${tr.preset}` : tr.element, ns: tr.ns, durationMs: tr.durationMs, ...(trRow ? { row: trRow.id } : {}) } } : {}),
+    ...(tr ? { transition: {
+      element: tr.preset ? `${tr.element}:${tr.preset}` : tr.element, ns: tr.ns, durationMs: tr.durationMs,
+      ...(tr.attrs.thruBlk === '1' || tr.attrs.thruBlk === 'true' ? { thruBlk: true } : {}),
+      ...(trRow ? { row: trRow.id } : {}),
+    } } : {}),
     effects: auto.flatMap(effectsOf), spanMs: span0, frames: frames(slide, 0, span0),
     ...lead(transMs > 0 ? 0 : leadOf(auto, [], 0, span0)),
   }]
