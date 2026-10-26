@@ -56,7 +56,7 @@ function fillPart(shape: PptxShape): PptxShape {
 }
 function linePart(shape: PptxShape): PptxShape {
   return {
-    ...shape, textBody: undefined, fill: undefined, content: undefined, table: undefined, imageIndex: undefined, chartFallback: undefined,
+    ...shape, textBody: undefined, fill: undefined, useBgFill: undefined, content: undefined, table: undefined, imageIndex: undefined, chartFallback: undefined,
     drawingStyle: shape.drawingStyle && { line: shape.drawingStyle.line, issues: shape.drawingStyle.issues },
   }
 }

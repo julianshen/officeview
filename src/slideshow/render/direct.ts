@@ -84,7 +84,7 @@ export function paintDirect(ctx: CanvasRenderingContext2D, slide: PptxSlide, sta
   const options = sceneOptions(slide, {
     images: admitted, resolveFont: assets.resolveFont, contentAssets: assets.contentAssets,
     withheld: shape => shape.imageIndex !== undefined && withheld.has(shape.imageIndex),
-  })
+  }, ctx.getTransform().scale(assets.scale, assets.scale)) // slide px, as painted below
 
   const paint = (layer: PlanLayer): void => {
     if (layer.kind === 'watermark') return
