@@ -343,7 +343,8 @@ function setupLine(ctx: CanvasRenderingContext2D, line: DrawingLine, issues: Dra
 
 /** Does not alter the caller's Canvas drawing state. Returns painting diagnostics. */
 /** `only: 'shadow'` paints just the shadow pass (a background-filled shape casts its shadow, then shows the background). */
-export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedGeometry | ResolvedPath[], style: DrawingStyle, width: number, height: number, only?: 'shadow'): DrawingIssue[] {
+/** `pixelSnap` strokes PowerPoint's way under an axis-aligned transform (see `snapToPixels`): whole-pixel widths, odd ones on pixel centres. */
+export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedGeometry | ResolvedPath[], style: DrawingStyle, width: number, height: number, only?: 'shadow', pixelSnap = false): DrawingIssue[] {
   const issues: DrawingIssue[] = []
   if (![width, height].every(n => Number.isFinite(n) && n >= 0)) return [{ kind: 'invalid-paint', message: 'Invalid drawing extents' }]
   const paths = Array.isArray(geometry) ? geometry : geometry.paths
@@ -437,7 +438,16 @@ export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedG
       if (stroke && style.line) {
         const lineWidth = setupLine(ctx, style.line, issues)
         if (lineWidth === undefined) continue
-        ctx.strokeStyle = stroke; ctx.stroke()
+        ctx.strokeStyle = stroke
+        const m = ctx.getTransform(), scale = (Math.abs(m.a) + Math.abs(m.d)) / 2
+        if (pixelSnap && m.b === 0 && m.c === 0 && scale > 0) {
+          const device = Math.max(1, Math.floor(lineWidth * scale + 0.5))
+          ctx.save()
+          try {
+            if (device % 2) { ctx.setTransform(m.a, 0, 0, m.d, m.e + 0.5, m.f + 0.5); drawPath(ctx, path.commands) }
+            ctx.lineWidth = device / scale; ctx.stroke()
+          } finally { ctx.restore() }
+        } else ctx.stroke()
         const ends = endpoints(path.commands)
         arrow(ctx, ends.head, style.line.headEnd, lineWidth, true)
         arrow(ctx, ends.tail, style.line.tailEnd, lineWidth, false)

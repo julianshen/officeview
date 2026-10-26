@@ -18,6 +18,26 @@ export interface ScenePaintOptions<Node> {
   /** The page background, in the coordinate space `root` names: `useBgFill` nodes show it through their filled geometry. */
   backdrop?: readonly Node[]
   root?: DOMMatrix
+  /** PowerPoint's device-pixel rule for geometry (measured from its movie export); see `snapToPixels`. */
+  pixelSnap?: boolean
+}
+
+const roundHalfUp = (v: number) => Math.floor(v + 0.5 + 1e-7)
+/**
+ * Maps an axis-aligned `w`×`h` box onto whole device pixels, edges rounded half up, as PowerPoint
+ * rasterises shapes: fills end crisply on pixel boundaries, and `paintGeometry`'s `pixelSnap` then puts
+ * a W px line on pixels [s - floor(W/2), s - floor(W/2) + W) around each snapped edge s. An axis
+ * whose extent rounds to nothing keeps its scale; rotated or skewed transforms are left alone.
+ */
+function snapToPixels(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  const m = ctx.getTransform()
+  if (m.b !== 0 || m.c !== 0) return
+  const axis = (origin: number, scale: number, size: number): [number, number] => {
+    const a = roundHalfUp(origin), b = roundHalfUp(origin + scale * size)
+    return size > 0 && a !== b ? [(b - a) / size, a] : [scale, size > 0 ? origin : a]
+  }
+  const [a, e] = axis(m.e, m.a, w), [d, f] = axis(m.f, m.d, h)
+  ctx.setTransform(a, 0, 0, d, e, f)
 }
 
 /** Paint source-ordered objects onto the existing caller surface and transform.
@@ -59,20 +79,25 @@ function paintNode<Node extends SceneTree<Node>>(shape: Node, ctx: CanvasRenderi
     if (shape.drawingGeometry) {
       const geometry = resolveGeometry(shape.drawingGeometry, w, h)
       const style = shape.drawingStyle ?? { issues: [] }
-      if (backdropped) {
-        // The shape's silhouette casts its authored shadow (an opaque stand-in fill; only the shadow pass paints).
-        if (style.shadow) paintGeometry(ctx, geometry, { issues: [], shadow: style.shadow, line: style.line, fill: { kind: 'solid', color: { r: 0, g: 0, b: 0, a: 1 } } }, w, h, 'shadow')
-        // The background shows through the shape as it lies on the page: clip here, paint it in page space.
-        ctx.save()
-        try {
-          ctx.beginPath()
-          for (const path of geometry.paths) if (path.fill !== 'none') tracePath(ctx, path.commands)
-          ctx.clip()
-          ctx.setTransform(options.root!)
-          paintScene(options.backdrop!, ctx, { images: options.images, missingImage: options.missingImage })
-        } finally { ctx.restore() }
-        paintGeometry(ctx, geometry, { ...style, fill: undefined, shadow: undefined }, w, h)
-      } else paintGeometry(ctx, geometry, style, w, h)
+      const snap = !!options.pixelSnap
+      ctx.save()
+      try {
+        if (snap) snapToPixels(ctx, w, h)
+        if (backdropped) {
+          // The shape's silhouette casts its authored shadow (an opaque stand-in fill; only the shadow pass paints).
+          if (style.shadow) paintGeometry(ctx, geometry, { issues: [], shadow: style.shadow, line: style.line, fill: { kind: 'solid', color: { r: 0, g: 0, b: 0, a: 1 } } }, w, h, 'shadow')
+          // The background shows through the shape as it lies on the page: clip here, paint it in page space.
+          ctx.save()
+          try {
+            ctx.beginPath()
+            for (const path of geometry.paths) if (path.fill !== 'none') tracePath(ctx, path.commands)
+            ctx.clip()
+            ctx.setTransform(options.root!)
+            paintScene(options.backdrop!, ctx, { images: options.images, missingImage: options.missingImage, pixelSnap: options.pixelSnap })
+          } finally { ctx.restore() }
+          paintGeometry(ctx, geometry, { ...style, fill: undefined, shadow: undefined }, w, h, undefined, snap)
+        } else paintGeometry(ctx, geometry, style, w, h, undefined, snap)
+      } finally { ctx.restore() }
     } else {
       // Legacy handwritten models keep their existing simple geometry contract.
       const path = () => {

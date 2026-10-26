@@ -68,6 +68,7 @@ export function sceneOptions(slide: PptxSlide, assets: SceneAssets, root?: DOMMa
   const { resolveFont } = assets
   return {
     images: assets.images,
+    pixelSnap: true,
     ...(slide.backdrop && root ? { backdrop: [slide.backdrop], root } : {}),
     missingImage(shape) {
       if (assets.withheld?.(shape)) return
