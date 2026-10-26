@@ -134,20 +134,25 @@ export interface ExportOptions { decks: readonly string[]; corpus: string; stagi
 export interface ExportResult { deck: string; ok: boolean; movie?: string; reason?: string }
 
 export interface ExportFileOps {
+  existsSync(path: string): boolean
+  mkdirSync(path: string, options?: { recursive?: boolean }): unknown
+  rmSync(path: string, options?: { force?: boolean }): void
+  statSync(path: string): { size: number }
   copyFileSync(from: string, to: string): void
   renameSync(from: string, to: string): void
   unlinkSync(path: string): void
 }
 
-const realFileOps: ExportFileOps = { copyFileSync, renameSync, unlinkSync }
+const realFileOps: ExportFileOps = { existsSync, mkdirSync, rmSync, statSync, copyFileSync, renameSync, unlinkSync }
 const retryDelay = new Int32Array(new SharedArrayBuffer(4))
+const RETRY_DELAY_MS = 250
 
 function retryFileOp<T>(op: () => T): T {
   for (let attempt = 0; ; attempt++) {
     try { return op() } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
       if ((code !== 'EINTR' && code !== 'EAGAIN') || attempt === 4) throw e
-      Atomics.wait(retryDelay, 0, 0, 10)
+      Atomics.wait(retryDelay, 0, 0, RETRY_DELAY_MS)
     }
   }
 }
@@ -167,8 +172,10 @@ const fileFailure = (deck: string, operation: string, error: unknown) => {
 }
 
 /** Export each deck in turn; a failed or timed-out deck is reported and the next one runs. */
-export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: string) => void, files: ExportFileOps = realFileOps): Promise<ExportResult[]> {
+export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: string) => void, fileOps: Partial<ExportFileOps> = {}): Promise<ExportResult[]> {
+  const files = { ...realFileOps, ...fileOps }
   const results: ExportResult[] = []
+  const failFile = (deck: string, operation: string, error: unknown) => results.push({ deck, ok: false, reason: fileFailure(deck, operation, error) })
   for (const deck of opts.decks) {
     const source = join(opts.corpus, `lo-${deck}.pptx`)
     const staged = join(opts.staging, `${deck}.pptx`)
@@ -176,14 +183,23 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
     const movie = join(opts.videos, `${deck}.mov`)
     const record = join(opts.videos, `${deck}.export.json`)
     const script = appleScriptFor(staged, stagedMovie)
-    if (opts.skipExisting && existsSync(movie) && existsSync(record)) {
+    let hasMovie = false, hasRecord = false
+    try {
+      if (opts.skipExisting) {
+        hasMovie = retryFileOp(() => files.existsSync(movie))
+        hasRecord = retryFileOp(() => files.existsSync(record))
+      }
+    } catch (e) { failFile(deck, 'existing-export check', e); continue }
+    if (opts.skipExisting && hasMovie && hasRecord) {
       log(opts.dryRun
         ? `[dry-run] ${deck}: would skip existing movie and export record (${movie})`
         : `${deck}: skip-existing ${movie} (movie and export record already exist)`)
       results.push({ deck, ok: true, movie })
       continue
     }
-    if (!existsSync(source)) { results.push({ deck, ok: false, reason: `missing ${source}: run bun scripts/fetch-corpus.ts` }); continue }
+    let hasSource: boolean
+    try { hasSource = retryFileOp(() => files.existsSync(source)) } catch (e) { failFile(deck, 'source check', e); continue }
+    if (!hasSource) { results.push({ deck, ok: false, reason: `missing ${source}: run bun scripts/fetch-corpus.ts` }); continue }
     if (opts.dryRun) {
       log(`[dry-run] ${deck}: copy ${source} → ${staged}`)
       log(`[dry-run] ${deck}: osascript (timeout ${opts.timeoutMs / 1000} s):\n${script}`)
@@ -191,22 +207,26 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
       results.push({ deck, ok: true, movie })
       continue
     }
-    mkdirSync(opts.staging, { recursive: true })
-    mkdirSync(opts.videos, { recursive: true })
-    rmSync(stagedMovie, { force: true })
+    try { retryFileOp(() => files.mkdirSync(opts.staging, { recursive: true })) } catch (e) { failFile(deck, 'staging directory creation', e); continue }
+    try { retryFileOp(() => files.mkdirSync(opts.videos, { recursive: true })) } catch (e) { failFile(deck, 'videos directory creation', e); continue }
+    try { retryFileOp(() => files.rmSync(stagedMovie, { force: true })) } catch (e) { failFile(deck, 'pre-export movie cleanup', e); continue }
     try { retryFileOp(() => files.copyFileSync(source, staged)) } catch (e) {
-      results.push({ deck, ok: false, reason: fileFailure(deck, 'staging copy', e) })
+      failFile(deck, 'staging copy', e)
       continue
     }
     log(`${deck}: exporting (PowerPoint renders the whole show; this takes a while)…`)
     const started = Date.now()
     const r = await run('osascript', ['-'], { input: script, timeoutMs: opts.timeoutMs })
-    rmSync(staged, { force: true })
+    try { retryFileOp(() => files.rmSync(staged, { force: true })) } catch (e) { failFile(deck, 'staged deck cleanup', e); continue }
     if (r.timedOut) {
       results.push({ deck, ok: false, reason: `timed out after ${opts.timeoutMs / 1000} s. PowerPoint may still be exporting, or waiting on a dialog such as a "Grant File Access" sheet. Check PowerPoint, close the presentation, then rerun with --deck ${deck}` })
       continue
     }
-    const made = existsSync(stagedMovie) && statSync(stagedMovie).size > 0
+    let made: boolean
+    try { made = retryFileOp(() => files.statSync(stagedMovie)).size > 0 } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { failFile(deck, 'staged movie size check', e); continue }
+      made = false
+    }
     if (r.code !== 0 || !made) {
       const out = (r.stderr || r.stdout.toString()).trim() || '(no output)'
       const hint = /-9074\b/.test(out) ? ` (PowerPoint could not open ${staged}: answer any dialog it shows, such as a "Grant File Access" sheet, then rerun with --deck ${deck})` : ''
@@ -214,7 +234,7 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
       continue
     }
     try { moveFile(stagedMovie, movie, files) } catch (e) {
-      results.push({ deck, ok: false, reason: fileFailure(deck, 'movie move', e) })
+      failFile(deck, 'movie move', e)
       continue
     }
     const [version, build] = r.stdout.toString().trim().split('\t')

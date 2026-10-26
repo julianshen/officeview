@@ -6,7 +6,7 @@
  * ffmpeg + libx264).
  */
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync as fsStatSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -112,6 +112,39 @@ describe('AppleScript export', () => {
     expect(res[0].reason).toMatch(/EACCES.*--deck a/)
     expect(res[1].ok).toBe(true)
     expect(calls).toHaveLength(1)
+  })
+
+  it('retries transient pre-export cleanup and reports a persistent failure without stopping later decks', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus])
+    for (const deck of ['a', 'b']) writeFileSync(join(corpus, `lo-${deck}.pptx`), deck)
+    let aAttempts = 0, bAttempts = 0, statAttempts = 0
+    const files = {
+      rmSync(path: string, options?: { force?: boolean }) {
+        if (path.endsWith('a.mov')) { aAttempts++; throw Object.assign(new Error('interrupted'), { code: 'EINTR' }) }
+        if (path.endsWith('b.mov') && ++bAttempts === 1) throw Object.assign(new Error('interrupted'), { code: 'EINTR' })
+        rmSync(path, options)
+      },
+      statSync(path: string) {
+        if (path.endsWith('b.mov') && statAttempts++ === 0) throw Object.assign(new Error('interrupted'), { code: 'EINTR' })
+        return fsStatSync(path)
+      },
+    }
+    const calls: string[] = []
+    const run: Runner = async (_cmd, _args, opts) => {
+      calls.push(opts?.input ?? '')
+      writeFileSync(join(staging, 'b.mov'), 'movie')
+      return ok('16.106\t26020821')
+    }
+    const res = await exportDecks({ decks: ['a', 'b'], corpus, staging, videos, timeoutMs: 1000, dryRun: false }, run, () => {}, files as never)
+    expect(aAttempts).toBe(5)
+    expect(bAttempts).toBe(2)
+    expect(statAttempts).toBe(2)
+    expect(res[0]).toMatchObject({ deck: 'a', ok: false })
+    expect(res[0].reason).toMatch(/pre-export movie cleanup.*EINTR.*--deck a/)
+    expect(res[1].ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain(join(staging, 'b.pptx'))
   })
 
   it('retries an interrupted movie rename', async () => {
