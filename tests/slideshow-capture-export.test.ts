@@ -182,6 +182,28 @@ describe('AppleScript export', () => {
     expect(log.join('\n')).toMatch(/skip-existing/)
   })
 
+  it('retries an interrupted existing-movie check before deciding to skip', async () => {
+    const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
+    spawnSync('mkdir', ['-p', corpus, videos])
+    writeFileSync(join(corpus, 'lo-a.pptx'), 'A')
+    writeFileSync(join(videos, 'a.mov'), 'movie')
+    writeFileSync(join(videos, 'a.export.json'), '{}')
+    let movieChecks = 0, calls = 0
+    const files = {
+      statSync(path: string) {
+        if (path.endsWith('a.mov') && ++movieChecks === 1) throw Object.assign(new Error('interrupted'), { code: 'EINTR' })
+        return fsStatSync(path)
+      },
+    }
+    const run: Runner = async () => { calls++; throw new Error('must skip') }
+    const log: string[] = []
+    const [r] = await exportDecks({ decks: ['a'], corpus, staging, videos, timeoutMs: 1000, dryRun: false, skipExisting: true }, run, m => log.push(m), files)
+    expect(movieChecks).toBe(2)
+    expect(calls).toBe(0)
+    expect(r).toEqual({ deck: 'a', ok: true, movie: join(videos, 'a.mov') })
+    expect(log.join('\n')).toMatch(/skip-existing/)
+  })
+
   it('re-exports when skip-existing is set but only the movie exists', async () => {
     const root = scratch(), corpus = join(root, 'corpus'), staging = join(root, 'staging'), videos = join(root, 'videos')
     spawnSync('mkdir', ['-p', corpus, videos])

@@ -134,7 +134,6 @@ export interface ExportOptions { decks: readonly string[]; corpus: string; stagi
 export interface ExportResult { deck: string; ok: boolean; movie?: string; reason?: string }
 
 export interface ExportFileOps {
-  existsSync(path: string): boolean
   mkdirSync(path: string, options?: { recursive?: boolean }): unknown
   rmSync(path: string, options?: { force?: boolean }): void
   statSync(path: string): { size: number }
@@ -143,7 +142,7 @@ export interface ExportFileOps {
   unlinkSync(path: string): void
 }
 
-const realFileOps: ExportFileOps = { existsSync, mkdirSync, rmSync, statSync, copyFileSync, renameSync, unlinkSync }
+const realFileOps: ExportFileOps = { mkdirSync, rmSync, statSync, copyFileSync, renameSync, unlinkSync }
 const retryDelay = new Int32Array(new SharedArrayBuffer(4))
 const RETRY_DELAY_MS = 250
 
@@ -154,6 +153,13 @@ function retryFileOp<T>(op: () => T): T {
       if ((code !== 'EINTR' && code !== 'EAGAIN') || attempt === 4) throw e
       Atomics.wait(retryDelay, 0, 0, RETRY_DELAY_MS)
     }
+  }
+}
+
+function fileExists(path: string, files: ExportFileOps): boolean {
+  try { files.statSync(path); return true } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
   }
 }
 
@@ -186,8 +192,8 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
     let hasMovie = false, hasRecord = false
     try {
       if (opts.skipExisting) {
-        hasMovie = retryFileOp(() => files.existsSync(movie))
-        hasRecord = retryFileOp(() => files.existsSync(record))
+        hasMovie = retryFileOp(() => fileExists(movie, files))
+        hasRecord = retryFileOp(() => fileExists(record, files))
       }
     } catch (e) { failFile(deck, 'existing-export check', e); continue }
     if (opts.skipExisting && hasMovie && hasRecord) {
@@ -198,7 +204,7 @@ export async function exportDecks(opts: ExportOptions, run: Runner, log: (line: 
       continue
     }
     let hasSource: boolean
-    try { hasSource = retryFileOp(() => files.existsSync(source)) } catch (e) { failFile(deck, 'source check', e); continue }
+    try { hasSource = retryFileOp(() => fileExists(source, files)) } catch (e) { failFile(deck, 'source check', e); continue }
     if (!hasSource) { results.push({ deck, ok: false, reason: `missing ${source}: run bun scripts/fetch-corpus.ts` }); continue }
     if (opts.dryRun) {
       log(`[dry-run] ${deck}: copy ${source} → ${staged}`)
