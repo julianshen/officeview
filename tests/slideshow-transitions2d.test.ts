@@ -17,7 +17,7 @@ import { createRng } from '../src/slideshow/rng'
 import { createCanvas2DCompositor } from '../src/slideshow/render/canvas2d'
 import { createWebGL2Compositor } from '../src/slideshow/render/webgl2'
 import {
-  REDUCED_TRANSITION_MS, TRANSITION_2D_IDS, randomPick, reducedTransition, transitionDraw,
+  REDUCED_TRANSITION_MS, TRANSITION_2D_IDS, easeFade, randomPick, reducedTransition, transitionDraw,
 } from '../src/slideshow/render/transitions2d'
 import type { CanvasFactory, LayerHandle, Lease, Rng, SlideShowWorkspace, TransitionSpec } from '../src/slideshow/types'
 
@@ -175,6 +175,22 @@ function countWhere(data: Uint8ClampedArray, want: Px) {
 // The brief's tests
 // ---------------------------------------------------------------------------
 describe('transitionDraw', () => {
+  it('uses PowerPoint probe sine easing for plain fades in both compositors', () => {
+    const samples = [[0, 0], [0.25, 0.1464], [0.5, 0.5], [0.75, 0.8536], [1, 1]] as const
+    for (const [progress, expected] of samples) {
+      expect(easeFade(progress)).toBeCloseTo(expected, 4)
+      expect(transitionDraw(spec('fade'), progress, createRng(1)).toOpacity).toBeCloseTo(expected, 4)
+      const c2 = canvasFrame(spec('fade'), progress)
+      expect(near(c2.px(32, 24), [Math.round(255 * (1 - expected)), 0, Math.round(255 * expected), 255])).toBe(true)
+      const gl = webglFrame(spec('fade'), progress)
+      const opacities = gl.calls.filter(c => c.name === 'uniform1f' && (c.args[0] as { uniform?: string })?.uniform === 'u_opacity').map(c => c.args[1] as number)
+      if (progress > 0) expect(opacities.at(-1)).toBeCloseTo(expected, 4)
+    }
+    // Through-black timing was not measured by the probe and stays unchanged.
+    expect(transitionDraw(spec('fade', { thruBlk: '1' }), 0.25, createRng(1)).fromOpacity).toBe(0.5)
+    expect(transitionDraw(spec('fade', { thruBlk: '1' }), 0.25, createRng(1)).toOpacity).toBe(0)
+  })
+
   it('every 2-D catalogue row has a transitionDraw and both compositors render it', () => {
     // The 2-D set is the catalogue's stage-1 transition rows, not a list kept beside it.
     expect([...TRANSITION_2D_IDS].sort()).toEqual(ROW_SPECS.map(r => r.id).sort())
@@ -327,7 +343,7 @@ describe('mask mapping details', () => {
   it('a catalogued stand-in draws its 2-D look-alike and an unknown element a fade', () => {
     const vortex = transitionDraw(spec('vortex', {}, 'p14'), 0.4, createRng(1))
     expect(vortex.mask?.kind).toBe('dissolve')
-    expect(transitionDraw(spec('nonsense'), 0.4, createRng(1))).toEqual({ toOpacity: 0.4 })
+    expect(transitionDraw(spec('nonsense'), 0.4, createRng(1)).toOpacity).toBeCloseTo(0.3455, 4)
     expect(transitionDraw({ ...spec('prstTrans', {}, 'p15'), preset: 'curtains' }, 0.4, createRng(1)).mask?.kind).toBe('split')
   })
 })

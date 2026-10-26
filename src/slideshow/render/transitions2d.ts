@@ -68,6 +68,8 @@ const NATIVE: ReadonlySet<string> = new Set(
 type Params = TransitionDraw['params'] & TransitionParams2D
 
 const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
+/** PowerPoint movie probes (0.5–4 s fades) fit a sine ease-in-out, not linear opacity. */
+export const easeFade = (progress: number) => 0.5 - 0.5 * Math.cos(Math.PI * clamp01(progress))
 const pick = <T extends string>(v: string | undefined, allowed: readonly T[], fallback: T): T =>
   v !== undefined && (allowed as readonly string[]).includes(v) ? (v as T) : fallback
 const flag = (v: string | undefined) => v === '1' || v === 'true'
@@ -191,7 +193,7 @@ export function transitionDraw(spec: TransitionSpec, progress: number, rng: Rng,
       if (flag(a.thruBlk)) return { backdrop: 'black', fromOpacity: p < 1 / 3 ? 1 : 0, toOpacity: p >= 2 / 3 ? 1 : 0 }
       return { toOpacity: p >= 0.5 ? 1 : 0 }
     case 'fade':
-      return flag(a.thruBlk) ? through('black', p) : { toOpacity: p }
+      return flag(a.thruBlk) ? through('black', p) : { toOpacity: easeFade(p) }
     case 'flash':
       return through('white', p)
 
