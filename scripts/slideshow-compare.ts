@@ -125,10 +125,12 @@ export interface Provenance {
   date: string
   /** Optional free text (display scaling, recorder, anything unusual). */
   notes?: string
+  /** Exact reference-frame timing relative to its step start, keyed by PNG filename. */
+  frames?: Record<string, { atMs: number; movieFrame: number }>
 }
 
 const PLACEHOLDER = /^(unknown|n\/?a|tbd|todo|placeholder|none|-+|\?+)$/i
-const KEYS = new Set(['powerpoint', 'os', 'resolution', 'capturedBy', 'date', 'notes'])
+const KEYS = new Set(['powerpoint', 'os', 'resolution', 'capturedBy', 'date', 'notes', 'frames'])
 
 export function parseProvenance(value: unknown): { ok: true; value: Provenance } | { ok: false; errors: string[] } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ok: false, errors: ['provenance must be a JSON object'] }
@@ -149,14 +151,32 @@ export function parseProvenance(value: unknown): { ok: true; value: Provenance }
   const valid = m && (() => { const t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return t.getUTCFullYear() === +m[1] && t.getUTCMonth() === +m[2] - 1 && t.getUTCDate() === +m[3] })()
   if (!valid) errors.push(`date must be an ISO calendar date YYYY-MM-DD (got ${JSON.stringify(d)})`)
   if (v.notes !== undefined && typeof v.notes !== 'string') errors.push('notes must be a string when present')
+  let frames: Provenance['frames']
+  if (v.frames !== undefined) {
+    if (typeof v.frames !== 'object' || v.frames === null || Array.isArray(v.frames)) errors.push('frames must be an object keyed by reference PNG filename')
+    else {
+      frames = {}
+      for (const [file, raw] of Object.entries(v.frames)) {
+        if (!parseRefName(file)) errors.push(`frames.${file} must use <slide>-<step>-<pct>.png`)
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) { errors.push(`frames.${file} must be { atMs, movieFrame }`); continue }
+        const value = raw as Record<string, unknown>
+        if (typeof value.atMs !== 'number' || !Number.isFinite(value.atMs) || value.atMs < 0) errors.push(`frames.${file}.atMs must be a non-negative finite number`)
+        if (!Number.isSafeInteger(value.movieFrame) || (value.movieFrame as number) < 0) errors.push(`frames.${file}.movieFrame must be a non-negative integer`)
+        for (const key of Object.keys(value)) if (key !== 'atMs' && key !== 'movieFrame') errors.push(`frames.${file}: unknown field ${key}`)
+        if (typeof value.atMs === 'number' && Number.isFinite(value.atMs) && value.atMs >= 0 && Number.isSafeInteger(value.movieFrame) && (value.movieFrame as number) >= 0)
+          frames[file] = { atMs: value.atMs, movieFrame: value.movieFrame as number }
+      }
+    }
+  }
   for (const k of Object.keys(v)) if (!KEYS.has(k)) errors.push(`unknown field ${k}`)
   if (errors.length) return { ok: false, errors }
   const out: Provenance = { powerpoint: v.powerpoint as string, os: v.os as string, resolution: [(r as number[])[0], (r as number[])[1]], capturedBy: v.capturedBy as string, date: d as string }
   if (typeof v.notes === 'string') out.notes = v.notes
+  if (frames) out.frames = frames
   return { ok: true, value: out }
 }
 
-export interface RefFrame { deck: string; slide: number; step: number; pct: number; path: string }
+export interface RefFrame { deck: string; slide: number; step: number; pct: number; path: string; atMs?: number; movieFrame?: number }
 export interface RefSet {
   root: string
   /** The reference directory does not exist: every row is unverified. */
@@ -208,7 +228,8 @@ export async function readRefs(dir: string): Promise<RefSet> {
       if (!f.isFile() || !f.name.toLowerCase().endsWith('.png')) continue
       const name = parseRefName(f.name)
       if (!name) { set.problems.push(`${deck}/${f.name}: not <slide>-<step>-<pct>.png (pct 0, 25, 50, 75 or 100)`); continue }
-      set.frames.push({ deck, ...name, path: join(deckDir, f.name) })
+      const timing = parsed.value.frames?.[f.name]
+      set.frames.push({ deck, ...name, path: join(deckDir, f.name), ...(timing ? timing : {}) })
     }
   }
   set.frames.sort((x, y) => x.deck.localeCompare(y.deck) || x.slide - y.slide || x.step - y.step || x.pct - y.pct)
@@ -330,7 +351,7 @@ async function decodePng(path: string): Promise<ImageData> {
   return ctx.getImageData(0, 0, img.width, img.height) as unknown as ImageData
 }
 
-export interface FrameOutcome { slide: number; step: number; pct: number; ms: number; rows: string[]; status: 'pass' | 'fail' | 'unverified'; detail: string }
+export interface FrameOutcome { slide: number; step: number; pct: number; ms: number; atMs?: number; rows: string[]; status: 'pass' | 'fail' | 'unverified'; detail: string }
 
 /** Renders `deck` at its checklist times and compares the frames that have references. */
 export async function compareDeck(opts: CliOptions): Promise<{ outcomes: FrameOutcome[]; records: CompareRecord[] }> {
@@ -342,7 +363,7 @@ export async function compareDeck(opts: CliOptions): Promise<{ outcomes: FrameOu
   const bytes = new Uint8Array(readFileSync(deckFile(opts.deck)))
   const plan = await planDeck(name, bytes)
   const refs = await readRefs(opts.refs)
-  const refMap = new Map(refs.frames.filter(f => f.deck === name).map(f => [`${f.slide}-${f.step}-${f.pct}`, f.path]))
+  const refMap = new Map(refs.frames.filter(f => f.deck === name).map(f => [`${f.slide}-${f.step}-${f.pct}`, f]))
   const prov = refs.provenance.get(name)
   const aspect = plan.slideSize.cx / plan.slideSize.cy
   const [width, height] = prov?.resolution ?? [1280, Math.round(1280 / aspect)]
@@ -369,7 +390,9 @@ export async function compareDeck(opts: CliOptions): Promise<{ outcomes: FrameOu
         const rows = [...new Set([step.transition?.row, ...step.effects.map(e => e.row)].filter((x): x is string => !!x))]
         const wanted = !opts.rows || rows.some(row => opts.rows!.has(row))
         for (const f of step.frames) {
-          await r.tick(Math.max(0, t0 + f.ms - seams.clock.now()))
+          const reference = refMap.get(`${slide.slide}-${step.step}-${f.pct}`)
+          const atMs = reference?.atMs
+          await r.tick(Math.max(0, t0 + (atMs ?? f.ms) - seams.clock.now()))
           if (!wanted) continue
           const ours = capture()
           if (opts.out && ours) {
@@ -381,10 +404,9 @@ export async function compareDeck(opts: CliOptions): Promise<{ outcomes: FrameOu
             mkdirSync(join(opts.out, name), { recursive: true })
             writeFileSync(join(opts.out, name, refFileName(slide.slide, step.step, f.pct)), c.toBuffer('image/png'))
           }
-          const base = { slide: slide.slide, step: step.step, pct: f.pct, ms: f.ms, rows }
-          const ref = refMap.get(`${slide.slide}-${step.step}-${f.pct}`)
-          if (!ref || !ours) { outcomes.push({ ...base, status: 'unverified', detail: ours ? 'no reference frame' : 'no frame was drawn' }); continue }
-          const theirs = await decodePng(ref)
+          const base = { slide: slide.slide, step: step.step, pct: f.pct, ms: f.ms, ...(atMs !== undefined ? { atMs } : {}), rows }
+          if (!reference || !ours) { outcomes.push({ ...base, status: 'unverified', detail: ours ? 'no reference frame' : 'no frame was drawn' }); continue }
+          const theirs = await decodePng(reference.path)
           // A frame with no catalogue row (a static slide) is held to the exact tolerance.
           const tolerances = rows.length ? rows.map(id => ({ id, tol: CATALOGUE.find(c => c.id === id)?.tolerance ?? TOLERANCE_EXACT })) : [{ id: '', tol: TOLERANCE_EXACT }]
           let pass = true
@@ -436,7 +458,10 @@ export async function runCompareCli(args: string[]): Promise<number> {
   if (typeof opts === 'string') { console.error(`slideshow-compare: ${opts}`); return 2 }
   if (!existsSync(deckFile(opts.deck))) { console.error(`slideshow-compare: no deck at ${deckFile(opts.deck)} (run bun scripts/fetch-corpus.ts)`); return 2 }
   const { outcomes, records } = await compareDeck(opts)
-  for (const o of outcomes) console.log(`${o.status.padEnd(10)} ${o.slide}-${o.step}-${o.pct} (${o.ms} ms) ${o.rows.join(' ') || '(static)'}: ${o.detail}`)
+  for (const o of outcomes) {
+    const time = o.atMs === undefined ? `${o.ms} ms` : `${o.ms} ms → ${Number(o.atMs.toFixed(3))} ms`
+    console.log(`${o.status.padEnd(10)} ${o.slide}-${o.step}-${o.pct} (${time}) ${o.rows.join(' ') || '(static)'}: ${o.detail}`)
+  }
   const n = (s: FrameOutcome['status']) => outcomes.filter(o => o.status === s).length
   console.log(`${deckName(opts.deck)}: ${n('pass')} pass, ${n('fail')} fail, ${n('unverified')} unverified (no reference), ${outcomes.length} frames`)
   if (opts.write && records.length) {

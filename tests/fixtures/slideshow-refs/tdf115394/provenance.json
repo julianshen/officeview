@@ -6,6 +6,108 @@
     1080
   ],
   "capturedBy": "Julian Shen",
-  "date": "2026-10-25",
-  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.302 fps CFR, movie 1920×1080; steps located by scripts/slideshow-capture-export.ts"
+  "date": "2026-10-26",
+  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.302 fps CFR, movie 1920×1080; steps located by scripts/slideshow-capture-export.ts",
+  "frames": {
+    "1-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 1
+    },
+    "1-0-25.png": {
+      "atMs": 264.00548696844993,
+      "movieFrame": 9
+    },
+    "1-0-50.png": {
+      "atMs": 495.0102880658436,
+      "movieFrame": 16
+    },
+    "1-0-75.png": {
+      "atMs": 759.0157750342936,
+      "movieFrame": 24
+    },
+    "1-0-100.png": {
+      "atMs": 990.0205761316872,
+      "movieFrame": 31
+    },
+    "2-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 184
+    },
+    "2-0-25.png": {
+      "atMs": 198.00411522633746,
+      "movieFrame": 190
+    },
+    "2-0-50.png": {
+      "atMs": 363.0075445816187,
+      "movieFrame": 195
+    },
+    "2-0-75.png": {
+      "atMs": 561.0116598079561,
+      "movieFrame": 201
+    },
+    "2-0-100.png": {
+      "atMs": 759.0157750342936,
+      "movieFrame": 207
+    },
+    "3-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 360
+    },
+    "3-0-25.png": {
+      "atMs": 132.00274348422496,
+      "movieFrame": 364
+    },
+    "3-0-50.png": {
+      "atMs": 264.00548696844993,
+      "movieFrame": 368
+    },
+    "3-0-75.png": {
+      "atMs": 363.0075445816187,
+      "movieFrame": 371
+    },
+    "3-0-100.png": {
+      "atMs": 495.0102880658436,
+      "movieFrame": 375
+    },
+    "4-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 529
+    },
+    "4-0-25.png": {
+      "atMs": 66.00137174211248,
+      "movieFrame": 531
+    },
+    "4-0-50.png": {
+      "atMs": 132.00274348422496,
+      "movieFrame": 533
+    },
+    "4-0-75.png": {
+      "atMs": 198.00411522633746,
+      "movieFrame": 535
+    },
+    "4-0-100.png": {
+      "atMs": 264.00548696844993,
+      "movieFrame": 537
+    },
+    "5-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 691
+    },
+    "5-0-25.png": {
+      "atMs": 1056.0219478737997,
+      "movieFrame": 723
+    },
+    "5-0-50.png": {
+      "atMs": 2112.0438957475994,
+      "movieFrame": 755
+    },
+    "5-0-75.png": {
+      "atMs": 3201.0665294924556,
+      "movieFrame": 788
+    },
+    "5-0-100.png": {
+      "atMs": 4257.088477366256,
+      "movieFrame": 820
+    }
+  }
 }

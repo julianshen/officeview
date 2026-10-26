@@ -427,6 +427,19 @@ describe('row mapping', () => {
     expect(m.ok && m.frames.find(f => f.file === '1-0-100.png')?.index).toBe(39)
   })
 
+  it('anchors a through-black opening from black at the actual transition start', () => {
+    const opening = step(1, 0, 1000, [], 'fade')
+    ;(opening.transition as unknown as { thruBlk: boolean }).thruBlk = true
+    const rows = expectRows(plan([[opening]]))
+    const m = mapBursts(rows, [burst(15, 44)], fps, 60, true)
+    expect(m.ok).toBe(true)
+    if (!m.ok) return
+    const frames = Object.fromEntries(m.frames.map(f => [f.file, f]))
+    expect(frames['1-0-0.png']).toMatchObject({ index: 0, atMs: 0 })
+    expect(frames['1-0-25.png']).toMatchObject({ index: 8, atMs: 1000 / 30 * 8 })
+    expect(frames['1-0-50.png']).toMatchObject({ index: 15, atMs: 500 })
+  })
+
   it('an opening transition the export did not play skips those frames instead of mislabelling the still slide', () => {
     const rows = expectRows(plan([[step(1, 0, 1000, [], 'fade'), step(1, 1, 500, ['entr'])]]))
     const m = mapBursts(rows, [burst(100, 115)], fps, 300)
@@ -440,7 +453,11 @@ describe('row mapping', () => {
   it('a media-only step takes the settled frame of the step before it', () => {
     const rows = expectRows(plan([[step(1, 0, 0), step(1, 1, 0, ['mediacall'])], [step(2, 0, 0)]]))
     const m = mapBursts(rows, [burst(90, 90)], fps, 200)
-    expect(m.ok && m.frames).toEqual([{ file: '1-0-100.png', index: 89 }, { file: '1-1-100.png', index: 89 }, { file: '2-0-100.png', index: 199 }])
+    expect(m.ok && m.frames).toEqual([
+      { file: '1-0-100.png', index: 89, atMs: 89 * 1000 / fps },
+      { file: '1-1-100.png', index: 89, atMs: 0 },
+      { file: '2-0-100.png', index: 199, atMs: (199 - 89) * 1000 / fps },
+    ])
   })
 
   it('refuses when the burst count does not match the rows, listing both', () => {

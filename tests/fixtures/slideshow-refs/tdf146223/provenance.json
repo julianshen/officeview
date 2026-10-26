@@ -6,6 +6,48 @@
     1080
   ],
   "capturedBy": "Julian Shen",
-  "date": "2026-10-25",
-  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.301 fps CFR, movie 1440×1080; steps located by scripts/slideshow-capture-export.ts"
+  "date": "2026-10-26",
+  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.301 fps CFR, movie 1440×1080; steps located by scripts/slideshow-capture-export.ts",
+  "frames": {
+    "1-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 0
+    },
+    "1-0-25.png": {
+      "atMs": 264.02173913043475,
+      "movieFrame": 8
+    },
+    "1-0-50.png": {
+      "atMs": 495.0407608695652,
+      "movieFrame": 15
+    },
+    "1-0-75.png": {
+      "atMs": 759.0625,
+      "movieFrame": 23
+    },
+    "1-0-100.png": {
+      "atMs": 990.0815217391304,
+      "movieFrame": 30
+    },
+    "2-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 184
+    },
+    "2-0-25.png": {
+      "atMs": 264.02173913043475,
+      "movieFrame": 192
+    },
+    "2-0-50.png": {
+      "atMs": 495.0407608695652,
+      "movieFrame": 199
+    },
+    "2-0-75.png": {
+      "atMs": 759.0625,
+      "movieFrame": 207
+    },
+    "2-0-100.png": {
+      "atMs": 990.0815217391304,
+      "movieFrame": 214
+    }
+  }
 }

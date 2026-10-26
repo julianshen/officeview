@@ -378,6 +378,7 @@ export interface RowExpect {
   step: number
   trigger: CaptureStep['trigger']
   spanMs: CaptureStep['spanMs']
+  transition?: CaptureStep['transition']
   frames: CaptureStep['frames']
   /** Ms from the trigger to the first visual change (an effect's start delay); 0 when it starts at once. */
   leadMs: number
@@ -404,7 +405,7 @@ export function expectRows(plan: CapturePlan): RowExpect[] {
     if (s.hidden) continue
     for (const st of s.steps) {
       const visible = st.effects.some(e => !MEDIA_CLASSES.has(e.cls))
-      const base = { slide: st.slide, step: st.step, trigger: st.trigger, spanMs: st.spanMs, frames: st.frames, leadMs: st.leadMs ?? 0 }
+      const base = { slide: st.slide, step: st.step, trigger: st.trigger, spanMs: st.spanMs, frames: st.frames, leadMs: st.leadMs ?? 0, ...(st.transition ? { transition: st.transition } : {}) }
       if (st.step === 0 && first) {
         const tr = st.transition && !/^none\b/.test(st.transition.element)
         rows.push({ ...base, expect: 'anchor', opening: !!tr || visible })
@@ -417,7 +418,7 @@ export function expectRows(plan: CapturePlan): RowExpect[] {
 }
 
 export type Mapping =
-  | { ok: true; frames: Array<{ file: string; index: number }>; skipped: Array<{ file: string; reason: string }>; warnings: string[] }
+  | { ok: true; frames: Array<{ file: string; index: number; atMs: number }>; skipped: Array<{ file: string; reason: string }>; warnings: string[] }
   | { ok: false; reason: string }
 
 const id = (r: RowExpect) => `${r.slide}-${r.step}`
@@ -450,7 +451,7 @@ export function mapBursts(rows: readonly RowExpect[], bursts: readonly Burst[], 
   // The first changed frame of the next burst after each row.
   const nextStart = (k: number) => { for (let j = k + 1; j < rows.length; j++) { const b = own.get(rows[j]); if (b) return b.first } return frameCount }
 
-  const frames: Array<{ file: string; index: number }> = []
+  const frames: Array<{ file: string; index: number; atMs: number }> = []
   const skipped: Array<{ file: string; reason: string }> = []
   const warnings: string[] = []
   for (const [k, r] of rows.entries()) {
@@ -468,14 +469,23 @@ export function mapBursts(rows: readonly RowExpect[], bursts: readonly Burst[], 
       for (const f of r.frames) skipped.push({ file: f.file, reason: 'the opening transition or build did not show at the movie start' })
       continue
     }
-    const t0 = b ? b.first - 1 - Math.round(r.leadMs * fps / 1000) : r.expect === 'anchor' ? 0 : undefined
+    const throughBlackStart = k === 0 && darkStart && r.opening && r.transition?.ns === 'p' && r.transition.element === 'fade' && r.transition.thruBlk === true
+    const t0 = b
+      ? throughBlackStart
+        ? Math.max(0, b.first - Math.round(r.transition!.durationMs * fps / 2000))
+        : b.first - 1 - Math.round(r.leadMs * fps / 1000)
+      : r.expect === 'anchor' ? 0 : undefined
     const prevLast = k > 0 ? rows.slice(0, k).reverse().map(x => own.get(x)).find(x => x)?.last ?? -1 : -1
     if (b && t0 !== undefined && t0 <= prevLast) return { ok: false, reason: `${id(r)}: its ${r.leadMs} ms start delay puts the trigger at frame ${t0}, inside the previous burst (ends frame ${prevLast}).\n${table()}` }
     for (const f of r.frames) {
-      if (t0 === undefined || r.spanMs === 0) { frames.push({ file: f.file, index: settled }); continue }
+      if (t0 === undefined || r.spanMs === 0) {
+        const index = settled
+        frames.push({ file: f.file, index, atMs: t0 === undefined ? f.ms : (index - t0) * 1000 / fps })
+        continue
+      }
       const index = t0 + Math.round(f.ms * fps / 1000)
       if (index >= next) return { ok: false, reason: `${f.file} at frame ${index} is in the next step (it starts changing at frame ${next}); PowerPoint's step is shorter than the row's ${span(r.spanMs)} or the steps are too close.\n${table()}` }
-      frames.push({ file: f.file, index })
+      frames.push({ file: f.file, index, atMs: (index - t0) * 1000 / fps })
     }
   }
   return { ok: true, frames, skipped, warnings }
@@ -553,7 +563,7 @@ export function pngSize(b: Buffer): [number, number] | undefined {
   return [b.readUInt32BE(16), b.readUInt32BE(20)]
 }
 
-export interface ProvenanceInput { version: string; build?: string; os: string; resolution: [number, number]; capturedBy: string; date: string; fps: number; movie: [number, number] }
+export interface ProvenanceInput { version: string; build?: string; os: string; resolution: [number, number]; capturedBy: string; date: string; fps: number; movie: [number, number]; frames?: Provenance['frames'] }
 
 export function buildProvenance(p: ProvenanceInput): Provenance {
   const fps = Number.isInteger(p.fps) ? `${p.fps}` : p.fps.toFixed(3)
@@ -565,6 +575,7 @@ export function buildProvenance(p: ProvenanceInput): Provenance {
     capturedBy: p.capturedBy,
     date: p.date,
     notes: `PowerPoint movie export (File → Export, save as movie), not a live slide show; ${fps} fps CFR, movie ${p.movie[0]}×${p.movie[1]}${cropped}; steps located by scripts/slideshow-capture-export.ts`,
+    ...(p.frames ? { frames: p.frames } : {}),
   }
 }
 
@@ -615,12 +626,13 @@ export async function extractDecks(opts: ExtractOptions, run: Runner, log: (line
     if (!m.ok) { res.refused = m.reason; continue }
     res.skipped = m.skipped.map(s => `${s.file}: ${s.reason}`)
     res.warnings = m.warnings
-    for (const f of m.frames) log(`  ${f.file} ← frame ${f.index} (${(f.index / a.probe.fps).toFixed(3)} s)`)
+    for (const f of m.frames) log(`  ${f.file} ← frame ${f.index} (${(f.index / a.probe.fps).toFixed(3)} s; ${f.atMs.toFixed(3)} ms after step start)`)
     const app = await appVersion(opts.videos, deck, run)
     if (!app) { res.refused = 'PowerPoint version unknown (no export sidecar and no readable Info.plist)'; continue }
     if (!capturedBy) { res.refused = 'git config user.name is empty: provenance needs who captured'; continue }
     if (!os) { res.refused = 'sw_vers gave no macOS version'; continue }
-    const prov = buildProvenance({ ...app, os, resolution: [c.w, c.h], capturedBy, date: localDate(), fps: a.probe.fps, movie: [a.probe.width, a.probe.height] })
+    const frameTimes = Object.fromEntries(m.frames.map(f => [f.file, { atMs: f.atMs, movieFrame: f.index }]))
+    const prov = buildProvenance({ ...app, os, resolution: [c.w, c.h], capturedBy, date: localDate(), fps: a.probe.fps, movie: [a.probe.width, a.probe.height], frames: frameTimes })
     const checked = parseProvenance(prov)
     if (!checked.ok) { res.refused = `provenance invalid: ${checked.errors.join('; ')}`; continue }
     const target = join(opts.refs, deck)

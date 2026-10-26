@@ -6,6 +6,52 @@
     1080
   ],
   "capturedBy": "Julian Shen",
-  "date": "2026-10-25",
-  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.302 fps CFR, movie 1920×1080; steps located by scripts/slideshow-capture-export.ts"
+  "date": "2026-10-26",
+  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.302 fps CFR, movie 1920×1080; steps located by scripts/slideshow-capture-export.ts",
+  "frames": {
+    "1-0-100.png": {
+      "atMs": 2013.0579297245963,
+      "movieFrame": 61
+    },
+    "1-1-0.png": {
+      "atMs": 0,
+      "movieFrame": 61
+    },
+    "1-1-25.png": {
+      "atMs": 132.00379867046533,
+      "movieFrame": 65
+    },
+    "1-1-50.png": {
+      "atMs": 264.00759734093066,
+      "movieFrame": 69
+    },
+    "1-1-75.png": {
+      "atMs": 363.0104463437797,
+      "movieFrame": 72
+    },
+    "1-1-100.png": {
+      "atMs": 495.01424501424503,
+      "movieFrame": 76
+    },
+    "2-0-0.png": {
+      "atMs": 0,
+      "movieFrame": 152
+    },
+    "2-0-25.png": {
+      "atMs": 363.0104463437797,
+      "movieFrame": 163
+    },
+    "2-0-50.png": {
+      "atMs": 759.0218423551756,
+      "movieFrame": 175
+    },
+    "2-0-75.png": {
+      "atMs": 1122.0322886989554,
+      "movieFrame": 186
+    },
+    "2-0-100.png": {
+      "atMs": 1485.042735042735,
+      "movieFrame": 197
+    }
+  }
 }

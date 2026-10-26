@@ -6,6 +6,12 @@
     1080
   ],
   "capturedBy": "Julian Shen",
-  "date": "2026-10-25",
-  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.299 fps CFR, movie 1920×1080; steps located by scripts/slideshow-capture-export.ts"
+  "date": "2026-10-26",
+  "notes": "PowerPoint movie export (File → Export, save as movie), not a live slide show; 30.299 fps CFR, movie 1920×1080; steps located by scripts/slideshow-capture-export.ts",
+  "frames": {
+    "1-0-100.png": {
+      "atMs": 4983.662280701755,
+      "movieFrame": 151
+    }
+  }
 }
