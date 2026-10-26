@@ -263,14 +263,15 @@ export async function decodeImageAssets(assets: Array<ImageCandidates & { drawin
   // candidates (byte-less) and ordinary rasters therefore never collapse.
   const svgState = (svg: ImageCandidates['svg']): string => svg ? (svg.verdict.ok ? 'ok' : `rej:${(svg.verdict as { reason: string }).reason}`) : 'none'
   const primaryState = (verdict: ImageCandidates['primarySvgVerdict']): string => verdict ? (verdict.ok ? 'ok' : `rej:${(verdict as { reason: string }).reason}`) : 'none'
-  const canonical: Array<{ data?: Uint8Array; svg?: Uint8Array; svgState: string; primaryState: string; svgOnly: boolean; decoded: Promise<CanvasImageSource | undefined> }> = []
+  const tone = (duotone: ImageCandidates['duotone']): string => duotone ? JSON.stringify([duotone.dark, duotone.light]) : ''
+  const canonical: Array<{ data?: Uint8Array; svg?: Uint8Array; svgState: string; primaryState: string; svgOnly: boolean; duotone: string; decoded: Promise<CanvasImageSource | undefined> }> = []
   const representative: number[] = []
   for (const asset of assets) {
     if (asset.drawing || (!asset.data && !asset.svg)) { representative.push(-1); continue }
-    const state = svgState(asset.svg), primary = primaryState(asset.primarySvgVerdict), svgOnly = asset.hasRaster === false
-    const found = canonical.findIndex(entry => entry.svgState === state && entry.primaryState === primary && entry.svgOnly === svgOnly && bytesEqual(entry.data, asset.data) && bytesEqual(entry.svg, asset.svg?.bytes))
+    const state = svgState(asset.svg), primary = primaryState(asset.primarySvgVerdict), svgOnly = asset.hasRaster === false, duotone = tone(asset.duotone)
+    const found = canonical.findIndex(entry => entry.svgState === state && entry.primaryState === primary && entry.svgOnly === svgOnly && entry.duotone === duotone && bytesEqual(entry.data, asset.data) && bytesEqual(entry.svg, asset.svg?.bytes))
     if (found >= 0) { representative.push(found); continue }
-    canonical.push({ data: asset.data, svg: asset.svg?.bytes, svgState: state, primaryState: primary, svgOnly, decoded: decodeImageAsset(asset, decode) })
+    canonical.push({ data: asset.data, svg: asset.svg?.bytes, svgState: state, primaryState: primary, svgOnly, duotone, decoded: decodeImageAsset(asset, decode) })
     representative.push(canonical.length - 1)
   }
   const decoded = await Promise.all(assets.map((_, index) => representative[index] < 0 ? undefined : canonical[representative[index]].decoded))

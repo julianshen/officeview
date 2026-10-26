@@ -30,6 +30,53 @@ export interface ImageCandidates {
   hasRaster?: boolean
   /** Shared parse/decode selection record (also referenced by drawing coverage). */
   imageSelection?: ImageSelection
+  /** Recolour the decoded pixels (`a:duotone`). */
+  duotone?: Duotone
+}
+
+/** `a:duotone`'s two colours, resolved: luminance 0 maps to `dark`, luminance 1 to `light`. Channels 0–255, alpha 0–1. */
+export interface Duotone {
+  dark: { r: number; g: number; b: number; a: number }
+  light: { r: number; g: number; b: number; a: number }
+}
+
+/**
+ * Recolour RGBA pixels in place (ECMA-376 20.1.8.23 duotone): each pixel's luminance (Rec. 601
+ * weights, as LibreOffice's duotone filter) is the position on the line from `dark` to `light`.
+ * The pixel keeps its alpha, scaled by the interpolated colour's alpha.
+ */
+export function duotonePixels(data: Uint8ClampedArray, dark: Duotone['dark'], light: Duotone['light']): void {
+  for (let i = 0; i < data.length; i += 4) {
+    const t = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) / 255
+    data[i] = dark.r + (light.r - dark.r) * t
+    data[i + 1] = dark.g + (light.g - dark.g) * t
+    data[i + 2] = dark.b + (light.b - dark.b) * t
+    data[i + 3] = data[i + 3] * (dark.a + (light.a - dark.a) * t)
+  }
+}
+
+type Surface = { width: number; height: number; getContext(type: '2d'): unknown }
+/** A canvas from the same backend `decodeImage` decodes with. */
+async function surface(width: number, height: number): Promise<Surface> {
+  if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(width, height) as unknown as Surface
+  if (typeof document !== 'undefined' && typeof createImageBitmap === 'function') return Object.assign(document.createElement('canvas'), { width, height })
+  const mod = (await import(/* @vite-ignore */ 'canvas')) as unknown as { createCanvas: (w: number, h: number) => Surface }
+  return mod.createCanvas(width, height)
+}
+
+/** The decoded image recoloured on a canvas of its own size; the source is released. Undefined when no 2d context is available. */
+async function applyDuotone(image: CanvasImageSource, duotone: Duotone): Promise<CanvasImageSource | undefined> {
+  const { width, height } = image as unknown as { width: number; height: number }
+  if (!(width > 0 && height > 0)) return image
+  const canvas = await surface(width, height)
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | null
+  if (!ctx) return undefined
+  ctx.drawImage(image, 0, 0, width, height)
+  const pixels = ctx.getImageData(0, 0, width, height)
+  duotonePixels(pixels.data, duotone.dark, duotone.light)
+  ctx.putImageData(pixels, 0, 0)
+  releaseDecodedImage(image)
+  return canvas as unknown as CanvasImageSource
 }
 
 function svgRejection(bytes: Uint8Array, mime?: string, pathHint?: string): string | undefined {
@@ -108,6 +155,11 @@ export function releaseDecodedImage(image: CanvasImageSource | undefined): void 
  * custom decoder returning `undefined` is a decode failure.
  */
 export async function decodeImageAsset(asset: ImageCandidates, decode?: ImageDecodeFn): Promise<CanvasImageSource | undefined> {
+  const image = await decodeRepresentation(asset, decode)
+  return image && asset.duotone ? applyDuotone(image, asset.duotone) : image
+}
+
+async function decodeRepresentation(asset: ImageCandidates, decode?: ImageDecodeFn): Promise<CanvasImageSource | undefined> {
   // Parse-time reason is IMMUTABLE: recomputed each render from retained facts,
   // so a stale decode failure can never survive a later success.
   const parseReason = asset.svg && !asset.svg.verdict.ok ? asset.svg.verdict.reason

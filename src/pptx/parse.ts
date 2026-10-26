@@ -899,7 +899,8 @@ export function alternateBranchSelector(): (alternate: XmlNode) => XmlNode | und
 /** The complete candidate pair that identifies one `doc.images` asset (shared with the lazy appearance enrichment). */
 export function pptxImageKey(image: PptxImageRef): string {
   const svgState = image.svg ? (image.svg.verdict.ok ? 'ok' : `rej:${(image.svg.verdict as { reason: string }).reason}`) : 'none'
-  return `${image.partPath ?? ''}\u0000${image.svg?.partPath ?? ''}\u0000${svgState}\u0000${image.hasRaster === false ? 'svg-only' : 'raster'}`
+  const duotone = image.duotone ? JSON.stringify([image.duotone.dark, image.duotone.light]) : ''
+  return `${image.partPath ?? ''}\u0000${image.svg?.partPath ?? ''}\u0000${svgState}\u0000${image.hasRaster === false ? 'svg-only' : 'raster'}\u0000${duotone}`
 }
 
 function walkShapes(shapes: PptxShape[], visit: (shape: PptxShape) => void): void {
