@@ -186,9 +186,19 @@ describe('transitionDraw', () => {
       const opacities = gl.calls.filter(c => c.name === 'uniform1f' && (c.args[0] as { uniform?: string })?.uniform === 'u_opacity').map(c => c.args[1] as number)
       if (progress > 0) expect(opacities.at(-1)).toBeCloseTo(expected, 4)
     }
-    // Through-black timing was not measured by the probe and stays unchanged.
-    expect(transitionDraw(spec('fade', { thruBlk: '1' }), 0.25, createRng(1)).fromOpacity).toBe(0.5)
-    expect(transitionDraw(spec('fade', { thruBlk: '1' }), 0.25, createRng(1)).toOpacity).toBe(0)
+  })
+
+  it('fades through black as two sine-eased halves, as PowerPoint does', () => {
+    // Probe (white → grey slides, 0.5–4 s): the outgoing slide eases to black over the first half and the
+    // incoming one eases in over the second, with no hold at black (rms 0.5 luma at 0.5 s; linear halves 29).
+    for (const [progress, from, to] of [[0, 1, 0], [0.125, 0.8536, 0], [0.25, 0.5, 0], [0.375, 0.1464, 0], [0.5, 0, 0], [0.625, 0, 0.1464], [0.75, 0, 0.5], [0.875, 0, 0.8536], [1, 0, 1]] as const) {
+      const d = transitionDraw(spec('fade', { thruBlk: '1' }), progress, createRng(1))
+      expect(d.backdrop, `${progress}`).toBe('black')
+      expect(d.fromOpacity, `${progress} from`).toBeCloseTo(from, 4)
+      expect(d.toOpacity, `${progress} to`).toBeCloseTo(to, 4)
+    }
+    // Flash (through white) is unmeasured and keeps its linear halves.
+    expect(transitionDraw(spec('flash', {}, 'p14'), 0.25, createRng(1)).fromOpacity).toBe(0.5)
   })
 
   it('every 2-D catalogue row has a transitionDraw and both compositors render it', () => {
