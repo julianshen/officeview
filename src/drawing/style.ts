@@ -129,6 +129,15 @@ const has = <T>(map: Record<string, T>, key: string): boolean => Object.prototyp
 export function parseDrawingColor(node: XmlNode | undefined): ColorDefinition | undefined {
   return parseDrawingColors(node)[0]
 }
+/**
+ * A blip's `a:alphaModFix amt` (default 100000) as an opacity in 0–1. Canvas globalAlpha can attenuate
+ * but cannot amplify source pixel alpha, so amounts above 100000 are 'amplified'.
+ */
+export function fixedAlpha(amount: string | undefined): number | 'invalid' | 'amplified' {
+  const value = amount === undefined ? 100000 : /^[+-]?\d+$/.test(amount.trim()) ? Number(amount) : NaN
+  if (!Number.isInteger(value) || value < 0 || value > 2147483647) return 'invalid'
+  return value > 100000 ? 'amplified' : value / 100000
+}
 /** Every colour child of a node, in document order (e.g. the two colours of an `a:duotone`). */
 export function parseDrawingColors(node: XmlNode | undefined): ColorDefinition[] {
   const out: ColorDefinition[] = []
