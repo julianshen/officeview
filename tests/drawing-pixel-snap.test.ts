@@ -70,6 +70,19 @@ test('under unequal axis scales each axis keeps its own whole-pixel width', () =
   expect(p.col(60, [9, 10, 11, 39, 40, 41])).toEqual([0, 255, 0, 0, 255, 0])
 })
 
+test('a gradient outline keeps its brush anchored to the shape far from the canvas origin', () => {
+  // Shape at x 200: a red-to-blue outline is red on its left edge (a device-space brush would read the pad colour, blue).
+  const red = { r: 255, g: 0, b: 0, a: 1 }, blue = { r: 0, g: 0, b: 255, a: 1 }
+  const n = { ...node({ line: { width: 1, fill: { kind: 'gradient' as const, gradient: 'linear' as const, angle: 0, scaled: false, stops: [{ position: 0, color: red }, { position: 1, color: blue }] } } }), xEmu: emu(200) }
+  const ctx = createCanvas(300, 60).getContext('2d') as unknown as CanvasRenderingContext2D
+  ctx.translate(0.5, 0.25)
+  paintScene([n], ctx, { pixelSnap: true })
+  const [r, , b, a] = ctx.getImageData(201, 25, 1, 1).data
+  expect(a).toBe(255)
+  expect(r).toBeGreaterThan(200)
+  expect(b).toBeLessThan(55)
+})
+
 test('rotated shapes are not snapped', () => {
   const p = paint({ ...node({ fill: true }), rotationDeg: 30 }, true)
   const edge = p.row(12, Array.from({ length: 60 }, (_, i) => i)).filter(a => a > 0 && a < 255)
