@@ -724,7 +724,9 @@ export interface ExpandOptions {
  * gives one range per non-empty paragraph whose level is above `bldLvl`
  * (paragraph levels are 0-based, `bldLvl` 1-based); deeper and empty
  * paragraphs join the preceding range. `cust` uses the ranges the timing tree
- * targets. Other builds, and text-less shapes, are `whole`.
+ * targets. Other builds, and text-less shapes, are `whole`. A shape the timing
+ * tree targets by paragraph with no template at all builds as `cust`: PowerPoint
+ * still holds those paragraphs back for their effects (tdf93868 has no bldLst).
  */
 export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetResolver, options: ExpandOptions = {}): BuildOwnership[] {
   const out: BuildOwnership[] = []
@@ -736,16 +738,11 @@ export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetRes
     }
     const body = targetKey({ spid: b.spid })
     const key = (st: number, end: number) => ({ key: targetKey({ spid: b.spid, text: { kind: 'p', st, end } }), st, end })
-    const ranges: Array<{ key: string; st: number; end: number }> = []
+    let ranges: Array<{ key: string; st: number; end: number }> = []
     if (b.kind === 'bldP' && (b.build === 'p' || b.build === 'cust')) {
       const refs = b.build === 'cust' ? options.referenced?.get(b.spid) : undefined
-      if (refs?.length) {
-        const seen = new Set<string>()
-        for (const r of [...refs].sort((x, y) => x.st - y.st || x.end - y.end)) {
-          const k = key(r.st, r.end)
-          if (!seen.has(k.key)) { seen.add(k.key); ranges.push(k) }
-        }
-      } else {
+      if (refs?.length) ranges = referencedRanges(b.spid, refs)
+      else {
         const paragraphs = resolve.paragraphs(b.spid)
         let st = -1
         paragraphs.forEach((p, i) => {
@@ -758,6 +755,20 @@ export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetRes
       }
     }
     out.push({ spid: b.spid, mode: ranges.length ? 'paragraph' : 'whole', ranges, animBg: b.kind === 'bldP' ? b.animBg : false, body })
+  }
+  const templated = new Set(build.map(b => b.spid))
+  for (const [spid, refs] of options.referenced ?? []) {
+    if (!templated.has(spid) && refs.length) out.push({ spid, mode: 'paragraph', ranges: referencedRanges(spid, refs), animBg: false, body: targetKey({ spid }) })
+  }
+  return out
+}
+
+/** The distinct paragraph ranges the timing tree targets on `spid`, in paragraph order. */
+function referencedRanges(spid: string, refs: ReadonlyArray<{ st: number; end: number }>): Array<{ key: string; st: number; end: number }> {
+  const seen = new Set<string>(), out: Array<{ key: string; st: number; end: number }> = []
+  for (const { st, end } of [...refs].sort((x, y) => x.st - y.st || x.end - y.end)) {
+    const key = targetKey({ spid, text: { kind: 'p', st, end } })
+    if (!seen.has(key)) { seen.add(key); out.push({ key, st, end }) }
   }
   return out
 }
