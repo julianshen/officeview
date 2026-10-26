@@ -70,6 +70,22 @@ test('under unequal axis scales each axis keeps its own whole-pixel width', () =
   expect(p.col(60, [9, 10, 11, 39, 40, 41])).toEqual([0, 255, 0, 0, 255, 0])
 })
 
+test('a dashed outline under unequal scales keeps its per-axis dash lengths', () => {
+  // x scale 2: a 2-unit dash is 4 device px along the top edge and 2 px down the left edge.
+  const ctx = createCanvas(160, 60).getContext('2d') as unknown as CanvasRenderingContext2D
+  ctx.translate(0.5, 0.25); ctx.scale(2, 1)
+  paintScene([node({ line: { width: 0.5, dash: 'dash' } })], ctx, { pixelSnap: true })
+  const inked = (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data[3] > 0
+  // Two dash periods: from the first run's start to the third's (anti-aliased hairlines blur run lengths, not starts).
+  const twoPeriods = (at: (i: number) => boolean, from: number, to: number) => {
+    const starts: number[] = []
+    for (let i = from; i < to && starts.length < 3; i++) if (at(i) && !at(i - 1)) starts.push(i)
+    return starts[2] - starts[0]
+  }
+  const along = twoPeriods(x => inked(x, 9) || inked(x, 10), 24, 100), down = twoPeriods(y => inked(20, y) || inked(21, y), 12, 40)
+  expect(along / down).toBeCloseTo(2, 0)
+})
+
 test('a gradient outline keeps its brush anchored to the shape far from the canvas origin', () => {
   // Shape at x 200: a red-to-blue outline is red on its left edge (a device-space brush would read the pad colour, blue).
   const red = { r: 255, g: 0, b: 0, a: 1 }, blue = { r: 0, g: 0, b: 255, a: 1 }
