@@ -193,7 +193,8 @@ export function transitionDraw(spec: TransitionSpec, progress: number, rng: Rng,
       if (flag(a.thruBlk)) return { backdrop: 'black', fromOpacity: p < 1 / 3 ? 1 : 0, toOpacity: p >= 2 / 3 ? 1 : 0 }
       return { toOpacity: p >= 0.5 ? 1 : 0 }
     case 'fade':
-      return flag(a.thruBlk) ? through('black', p) : { toOpacity: easeFade(p) }
+      // Through black, each half eases the same way (probe, 0.5–4 s); no hold at black.
+      return flag(a.thruBlk) ? { backdrop: 'black', fromOpacity: 1 - easeFade(2 * p), toOpacity: easeFade(2 * p - 1) } : { toOpacity: easeFade(p) }
     case 'flash':
       return through('white', p)
 
