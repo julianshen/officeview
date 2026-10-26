@@ -83,6 +83,8 @@ interface Ctx {
   synthetic: number
   ids: Map<number, CTn>
   textRefs: Map<string, Array<{ st: number; end: number }>>
+  /** Shapes some behaviour targets whole (no text range). */
+  wholeRefs: Set<string>
 }
 
 const CONTAINERS = new Set(['par', 'seq', 'excl'])
@@ -376,6 +378,7 @@ function resolveTarget(ctx: Ctx, t: TargetRef | undefined, el: string): TargetRe
   const where = ctx.resolve.shape(t.spid)
   if (where === 'missing') { add(ctx, 'unresolved-target', t.spid, `Target shape ${t.spid} is not on the slide; behaviour dropped`); return undefined }
   if (where === 'master-only') { add(ctx, 'master-target', t.spid, `Target shape ${t.spid} is on the layout or master; behaviour dropped`); return undefined }
+  if (!t.text) ctx.wholeRefs.add(t.spid)
   if (t.text?.kind === 'p') {
     const count = ctx.resolve.paragraphs(t.spid).length
     if (t.text.end >= count) { add(ctx, 'unresolved-target', `${t.spid}/p:${t.text.st}-${t.text.end}`, `Paragraph range past the shape's ${count} paragraphs; behaviour dropped`); return undefined }
@@ -715,6 +718,8 @@ export interface ExpandOptions {
   slideIndex?: number
   /** Paragraph ranges the timing tree targets, by spid: the units of a `build="cust"` template. */
   referenced?: ReadonlyMap<string, ReadonlyArray<{ st: number; end: number }>>
+  /** Shapes the timing tree also targets whole; their text is not split without a template. */
+  whole?: ReadonlySet<string>
 }
 
 /**
@@ -727,6 +732,8 @@ export interface ExpandOptions {
  * targets. Other builds, and text-less shapes, are `whole`. A shape the timing
  * tree targets by paragraph with no template at all builds as `cust`: PowerPoint
  * still holds those paragraphs back for their effects (tdf93868 has no bldLst).
+ * Not when a behaviour also targets the whole shape: split range layers would
+ * stop following its exit or motion.
  */
 export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetResolver, options: ExpandOptions = {}): BuildOwnership[] {
   const out: BuildOwnership[] = []
@@ -758,7 +765,7 @@ export function expandBuilds(build: readonly BuildTemplate[], resolve: TargetRes
   }
   const templated = new Set(build.map(b => b.spid))
   for (const [spid, refs] of options.referenced ?? []) {
-    if (!templated.has(spid) && refs.length) out.push({ spid, mode: 'paragraph', ranges: referencedRanges(spid, refs), animBg: false, body: targetKey({ spid }) })
+    if (!templated.has(spid) && !options.whole?.has(spid) && refs.length) out.push({ spid, mode: 'paragraph', ranges: referencedRanges(spid, refs), animBg: false, body: targetKey({ spid }) })
   }
   return out
 }
@@ -796,7 +803,7 @@ function timingElement(root: XmlNode, ctx: Ctx): XmlNode | undefined {
 export function createSlideTimingReader(options: TimingReaderOptions = {}): SlideTimingReader {
   return (slideXml, slideIndex, resolve, sink) => {
     const transition: TransitionSpec | undefined = readTransition(slideXml, slideIndex, sink)
-    const ctx: Ctx = { slideIndex, sink, resolve, parsePath: options.parseMotionPath, nodes: 0, conds: 0, tavs: 0, synthetic: -1, ids: new Map(), textRefs: new Map() }
+    const ctx: Ctx = { slideIndex, sink, resolve, parsePath: options.parseMotionPath, nodes: 0, conds: 0, tavs: 0, synthetic: -1, ids: new Map(), textRefs: new Map(), wholeRefs: new Set() }
     const withTransition = <T extends object>(r: T) => (transition ? { transition, ...r } : r)
     const timingNode = timingElement(slideXml, ctx)
     if (!timingNode) return withTransition({ timing: undefined, builds: [] })
@@ -816,7 +823,7 @@ export function createSlideTimingReader(options: TimingReaderOptions = {}): Slid
       if (!root) return withTransition({ timing: undefined, builds: [] })
       breakCycles(ctx)
       const tree: TimingTree = { root, build }
-      return withTransition({ timing: tree, builds: expandBuilds(build, resolve, { sink, slideIndex, referenced: ctx.textRefs }) })
+      return withTransition({ timing: tree, builds: expandBuilds(build, resolve, { sink, slideIndex, referenced: ctx.textRefs, whole: ctx.wholeRefs }) })
     } catch (e) {
       if (!(e instanceof Refused)) throw e
       sink.add({ code: 'timing-limit', slideIndex, effect: e.why, message: `Timing exceeds the ${e.why} limit; the slide is static` })

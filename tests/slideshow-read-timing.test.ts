@@ -598,6 +598,9 @@ describe('builds', () => {
     const r = readSlideTiming(d.xml, 0, shapeResolver(d.slide), createDiagnosticSink())
     expect(tree(r).build).toEqual([])
     expect(r.builds).toEqual([{ spid: '5', mode: 'paragraph', ranges: [range(0, 0), range(2, 2)], animBg: false, body: 'sp:5' }])
+    // A whole-shape behaviour on the same shape keeps its text in one layer, so the text follows it.
+    const mixed = await deck({ slides: [{ shapes: [shape(5, [0, 0])], timingXml: timingOf([click(pRg(6, 1)), click(`<p:set>${bhvr(7, '', [], '5')}</p:set>`)]) }] })
+    expect(readSlideTiming(mixed.xml, 0, shapeResolver(mixed.slide), createDiagnosticSink()).builds).toEqual([])
     // A template, even a whole one, keeps the reader's hands off the shape.
     const whole = await deck({ slides: [{ shapes: [shape(5, [0, 0])], timingXml: timingOf([click(pRg(6, 1))], '<p:bldLst><p:bldP spid="5" grpId="0"/></p:bldLst>') }] })
     expect(readSlideTiming(whole.xml, 0, shapeResolver(whole.slide), createDiagnosticSink()).builds).toEqual([{ spid: '5', mode: 'whole', ranges: [], animBg: false, body: 'sp:5' }])
