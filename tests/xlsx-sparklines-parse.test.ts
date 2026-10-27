@@ -86,6 +86,19 @@ describe('XLSX sparkline group parsing', () => {
     expect(parseA1Area("'My Sheet'!$B$2:$F$2")).toEqual({ sheet: 'My Sheet', r0: 1, c0: 1, r1: 1, c1: 5 })
   })
 
+  it('parses the group-level date range when dateAxis is enabled', () => {
+    const body = group('dateAxis="1"', '<xm:f>Sheet1!$B$1:$F$1</xm:f>').replace('<xm:f>A1:A2</xm:f>', '<xm:f>Sheet1!A1:E1</xm:f>')
+    const { groups } = parse(body)
+    expect(groups[0].dateRange).toEqual({ sheet: 'Sheet1', r0: 0, c0: 1, r1: 0, c1: 5 })
+  })
+
+  it('leaves a malformed group date range unresolved with one diagnostic', () => {
+    const { groups, diagnostics } = parse(group('dateAxis="1"', '<xm:f>[1]Sheet1!A1:A3</xm:f>'))
+    expect(groups[0].dateRange).toBeUndefined()
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0].feature).toBe('sparkline-date-range')
+  })
+
   it('refuses multi-range and external references', () => {
     for (const formula of ['Sheet1!A1:A3 Sheet1!B1:B3', '[1]Sheet1!A1:A3']) {
       const { groups, diagnostics } = parse(group().replace('<xm:f>A1:A2</xm:f>', `<xm:f>${formula}</xm:f>`))

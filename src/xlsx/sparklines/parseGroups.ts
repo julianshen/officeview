@@ -111,8 +111,8 @@ function readGroup(node: XmlNode, color: SheetColorContext, diagnostics: Diagnos
     if (resolved !== undefined) group.colors[key] = resolved
   }
 
-  const dateAxis = x14Children(node, 'dateAxis')[0]
-  const dateFormula = dateAxis && xmChild(dateAxis, 'f') ? textOf(xmChild(dateAxis, 'f')) : undefined
+  const dateFormulaNode = xmChild(node, 'f')
+  const dateFormula = dateFormulaNode ? textOf(dateFormulaNode) : undefined
   if (dateFormula) {
     group.dateRange = areaOf(dateFormula)
     if (!group.dateRange) diagnostic(diagnostics, 'unsupported', 'sparkline-date-range', `Unsupported sparkline date range: ${dateFormula.slice(0, 80)}`)
