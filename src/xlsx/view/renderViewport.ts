@@ -13,6 +13,8 @@ import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, t
 import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
+import { paintSparklinesIn } from '../sparklineLoader'
+import { belowDetail } from './viewport'
 
 /** The host side of canonical records (spec §11.2): the same formatting and text
  * layout the static renderer uses, laid out in a box at the origin. Measurement
@@ -193,6 +195,32 @@ export function renderSheetViewport(
     const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
     for (const record of records) replay(record, 'fill')
     if (extraActive) replay(extraActive, 'fill')
+    if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready') {
+      const cornerA = geometry.metrics.logicalPointToSource(vx, vy)
+      const cornerB = geometry.metrics.logicalPointToSource(Math.max(vx, vx + width - Number.EPSILON), Math.max(vy, vy + height - Number.EPSILON))
+      const colA = geometry.metrics.cols.locate(vx), colB = geometry.metrics.cols.locate(Math.max(vx, vx + width - Number.EPSILON))
+      if (cornerA && cornerB && colA !== null && colB !== null) {
+        const r0 = Math.min(cornerA.row, cornerB.row), r1 = Math.max(cornerA.row, cornerB.row)
+        const c0 = Math.min(colA, colB), c1 = Math.max(colA, colB)
+        ctx.save()
+        ctx.translate(-vx, -vy)
+        let painted: boolean
+        try { painted = paintSparklinesIn(ctx, sheet, (row, col) => {
+            const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+            const first = geometry.metrics.sourceCellToLogical({ row, col })
+            if (!first) return undefined
+            const last = merge ? geometry.metrics.sourceCellToLogical({ row: merge.maxRow, col: merge.maxCol }) : undefined
+            const rect = { x: first.x, y: first.y, width: last ? last.x + last.width - first.x : first.width, height: last ? last.y + last.height - first.y : first.height }
+            if (belowDetail(rect.width, viewport.zoom * viewport.deviceScale) || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
+            return rect
+          }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' })
+        } finally { ctx.restore() }
+        if (!painted) {
+          const diagnostics = (sheet.diagnostics ??= [])
+          if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
+        }
+      }
+    }
     for (const record of records) replay(record, 'content')
     if (extraActive) replay(extraActive, 'content')
     if (plan.kind === 'detail') {

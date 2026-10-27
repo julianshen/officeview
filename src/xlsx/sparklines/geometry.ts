@@ -10,7 +10,12 @@
 import type { ResolvedSparkline } from './resolve'
 
 export interface SparkCell { x: number; y: number; w: number; h: number }
-export interface SparkScale { zoom: number; dpr: number }
+export interface SparkScale {
+  zoom: number
+  dpr: number
+  /** Internal painter mode: emit exact device-grid coordinates without a device→logical→device round trip. */
+  output?: 'logical' | 'device'
+}
 
 /** `sizePx` is the half-diagonal for diamonds, the half-side for squares, the radius for circles. */
 export type SparkPrimitive =
@@ -42,8 +47,12 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
   const devPerPx = zoom * dpr
-  const toDev = (logical: number): number => logical * devPerPx
-  const toLogical = (dev: number): number => dev / devPerPx
+  // `cell` is in sheet logical coordinates, so snap against the global sheet device grid.
+  // Viewport painting subtracts its tile origin only in the canvas transform, after this step.
+  const toDevX = (logical: number): number => logical * devPerPx
+  const toDevY = (logical: number): number => logical * devPerPx
+  const toOutputX = (dev: number): number => dev / (scale.output === 'device' ? 1 : devPerPx)
+  const toOutputY = (dev: number): number => dev / (scale.output === 'device' ? 1 : devPerPx)
 
   // tinyCellRule: when the insets swallow the cell the plot box collapses and nothing draws, markers included.
   const left = cell.x + INSETS.left * PT_PX
@@ -72,7 +81,7 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   // lineStrokeWidth: whole device px, ≥ 1, round half up of the lineWeight in device px (the row pins the behaviour
   // at 1 px/pt; the scale-relative rounding is its extension). lineJoin/lineCap: round, round.
   const strokeDev = Math.max(1, Math.floor(group.lineWeightPt * PT_PX * devPerPx + 0.5))
-  const strokePx = strokeDev / devPerPx
+  const strokePx = strokeDev / (scale.output === 'device' ? 1 : devPerPx)
   const oddStroke = strokeDev % 2 === 1
 
   // vertexSnapRule: odd device width → pixel centre ⌊x⌋+½, ⌊y⌋+½; even width → pixel corner round(x), round(y).
@@ -81,8 +90,8 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   // Computable points: values carry numbers (Task 4); defensively treat non-finite as absent like a null slot.
   const has = (i: number): boolean => i >= 0 && i < n && s.values[i] !== null && Number.isFinite(s.values[i] as number)
   // lineEndpointRule: n points sit at the centres of n equal slots across the plot box, never at its edges.
-  const xDevOf = (i: number): number => toDev(left + (i + 0.5) * plotW / n)
-  const yDevOf = (i: number): number => toDev(yOf(s.values[i] as number))
+  const xDevOf = (i: number): number => toDevX(left + (i + 0.5) * plotW / n)
+  const yDevOf = (i: number): number => toDevY(yOf(s.values[i] as number))
 
   // Colour precedence (colourPrecedence): a point's colour is the last painted of markers → first/last → high → low
   // (low beats high and both beat first, last and markers). first vs last is undetermined — they coincide only when
@@ -128,8 +137,8 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   // lineClipRule: strokes clip to the plot box rows [⌊top⌋, ⌊bottom⌋+1) in device px (markers are NOT clipped);
   // customClipRule: out-of-range values are not dropped — the polyline runs through them and is cut where it
   // crosses the band edges.
-  const clipTop = Math.floor(toDev(top))
-  const clipBottom = Math.floor(toDev(bottom)) + 1
+  const clipTop = Math.floor(toDevY(top))
+  const clipBottom = Math.floor(toDevY(bottom)) + 1
 
   const primitives: SparkPrimitive[] = []
   const seriesColor = group.colors.series ?? SERIES_FALLBACK
@@ -140,14 +149,14 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   // wide (its width against lineWeight is underdetermined), across the whole plot box from the first to the last
   // device pixel column.
   if (group.displayXAxis && s.min < 0 && s.max > 0 && group.colors.axis) {
-    const yDev = snapVertex(toDev(yOf(0)))
+    const yDev = snapVertex(toDevY(yOf(0)))
     primitives.push({
       kind: 'axis',
-      x0: toLogical(Math.floor(toDev(left)) + 0.5),
-      x1: toLogical(Math.floor(toDev(right)) + 0.5),
-      y: toLogical(yDev),
+      x0: toOutputX(Math.floor(toDevX(left)) + 0.5),
+      x1: toOutputX(Math.floor(toDevX(right)) + 0.5),
+      y: toOutputY(yDev),
       color: group.colors.axis,
-      widthPx: 1 / devPerPx,
+      widthPx: scale.output === 'device' ? 1 : 1 / devPerPx,
     })
   }
 
@@ -175,7 +184,7 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     const flush = (): void => {
       // Snapping and clipping happen on the device grid (clipToBand works in device px); anything reaching the
       // primitive converts back to logical px, exactly like the marker and axis primitives below.
-      if (current.length >= 2) primitives.push({ kind: 'polyline', points: current.map((p): [number, number] => [toLogical(p.x), toLogical(p.y)]), color: seriesColor, widthPx: strokePx, join: 'round', cap: 'round' })
+      if (current.length >= 2) primitives.push({ kind: 'polyline', points: current.map((p): [number, number] => [toOutputX(p.x), toOutputY(p.y)]), color: seriesColor, widthPx: strokePx, join: 'round', cap: 'round' })
       current = []
     }
     for (let k = 0; k + 1 < indices.length; k++) {
@@ -200,9 +209,9 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     const snap = decoration.special ? Math.floor : Math.round
     primitives.push({
       kind: 'marker',
-      x: toLogical(snap(xDevOf(i))),
-      y: toLogical(snap(yDevOf(i))),
-      sizePx: markerHalfDiag,
+      x: toOutputX(snap(xDevOf(i))),
+      y: toOutputY(snap(yDevOf(i))),
+      sizePx: markerHalfDiag * (scale.output === 'device' ? devPerPx : 1),
       color: decoration.color,
       shape: 'diamond',
     })

@@ -19,6 +19,7 @@ import type { XlsxDocument, XlsxDrawing } from '../../xlsx/types'
 import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { ensureChartPainter, hasXlsxCharts, type ChartReceiverLease } from '../../xlsx/chartLoader'
+import { ensureSparklinePainter } from '../../xlsx/sparklineLoader'
 import { acquireFonts } from '../../core/fonts/register'
 import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
@@ -237,6 +238,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       // The receiving document's chart budget for transferred models (spec 6.4): a supplied context as is; else one
       // per viewer document, sized by the viewer profile and parented to the viewer's live ledger (chartParent).
       charts = await ensureChartPainter(drawings, chartReceiver(options.chartOwner ?? doc, { chartProfile: profile === 'M' ? 'mobile' : 'desktop', ...options }))
+      await ensureSparklinePainter(sheet ? [sheet] : [])
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {

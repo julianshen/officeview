@@ -27,6 +27,7 @@ import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
 import { CELL_FONT_STACK, cellFontString } from './cellFont'
+import { paintSparklinesIn } from './sparklineLoader'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -480,7 +481,7 @@ export function renderPrintPage(
     ctx.clip()
     ctx.translate(printable.x, printable.y)
     ctx.scale(scale, scale)
-    renderSheet(sheet, ctx, metrics, undefined, prepared, page)
+    renderSheet(sheet, ctx, metrics, undefined, prepared, page, scale)
   } finally {
     ctx.restore()
   }
@@ -713,6 +714,7 @@ export function renderSheet(
   watermark?: WatermarkOptions | ResolvedWatermark,
   prepared?: RenderSheetAssets,
   viewport?: SheetViewport,
+  sparklineScale = 1,
 ): void {
   const m = metrics ?? computeMetrics(sheet)
   const { colWidthsPx, rowHeightsPx } = m
@@ -794,6 +796,20 @@ export function renderSheet(
       const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
+    }
+  }
+  if (sheet.resolvedSparklines?.size) {
+    const painted = paintSparklinesIn(ctx, sheet, (row, col) => {
+      if (row < 0 || row >= rowHeightsPx.length || col < 0 || col >= colWidthsPx.length) return undefined
+      const merge = merges.anchorAt(row, col)
+      const x = colX[col], y = rowY[row]
+      const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[col]
+      const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[row]
+      return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
+    }, { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }, { zoom: sparklineScale, dpr: 1 })
+    if (!painted) {
+      const diagnostics = (sheet.diagnostics ??= [])
+      if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
     }
   }
   for (const layout of laidOut) {
