@@ -61,7 +61,7 @@ import { buildRenderPlan, shapeKey, type ColourPart, type PlanLayer, type Render
 import { rasterLayer } from '../render/raster'
 import { imageDrawSize, rasteriseSvg } from '../render/svg-raster'
 import { TEXT_BOX_BYTES, textItems, type TextItem } from '../render/text-split'
-import { imageIndices, paintedBounds, slideSize, textFilter, underlayOf } from '../render/scene'
+import { imageIndices, paintedBounds, slideSize, textFilter, textRangeBox, underlayOf } from '../render/scene'
 import { reducedTransition, resolveTransition2D, transitionDraw } from '../render/transitions2d'
 import { dispatchTransition, transition3DDraw } from '../render/three/framework'
 import { matchMorph, type MorphOption, type MorphPair } from '../morph/match'
@@ -946,13 +946,25 @@ export function createStage(deps: StageDeps): Stage {
   function draws(p: Prepared, state: RenderState): LayerDraw[] {
     const b = p.built
     if (!b || b.epoch !== epoch) { kinds = []; return [] }
-    const entries = entriesOf(p.plan.layers, b.handles, state)
+    const entries = entriesOf(p.plan.layers, b.handles, state, p.slide)
     kinds = entries.map(e => e.kind)
     return entries.map(e => e.draw)
   }
 
+  /** PowerPoint's sweep box for a text-range layer's mask (`textRangeBox`), measured once per layer. */
+  const rangeBoxes = new WeakMap<PlanLayer, TargetState['maskBox'] | null>()
+  function rangeBox(l: PlanLayer, slide: PptxSlide): TargetState['maskBox'] {
+    let box = rangeBoxes.get(l)
+    if (box === undefined) {
+      const b = l.kind === 'target' ? textRangeBox(l.nodes, slide, resolveFont, factory(1, 1).getContext('2d') as unknown as CanvasRenderingContext2D) : undefined
+      box = b ? { x: b.minX, y: b.minY, w: b.maxX - b.minX, h: b.maxY - b.minY } : null
+      rangeBoxes.set(l, box)
+    }
+    return box ?? undefined
+  }
+
   /** Every layer draw of `layers` at `state`, in paint order; invisible targets are left out. */
-  function entriesOf(layers: readonly PlanLayer[], handles: ReadonlyMap<PlanLayer, LayerHandle>, state: RenderState): DrawEntry[] {
+  function entriesOf(layers: readonly PlanLayer[], handles: ReadonlyMap<PlanLayer, LayerHandle>, state: RenderState, slide?: PptxSlide): DrawEntry[] {
     const out: DrawEntry[] = []
     const walk = (layers: readonly PlanLayer[], parent: TargetState | undefined, root: TargetKey | undefined) => {
       for (const l of layers) {
@@ -967,8 +979,13 @@ export function createStage(deps: StageDeps): Stage {
           continue
         }
         const own = state.get(l.key)
-        const s = compose(parent, own)
+        let s = compose(parent, own)
         if (!s.visible) continue
+        // A paragraph range's mask sweeps PowerPoint's text box, not the layer's padded bitmap.
+        if (l.part === 'range' && s.mask && !s.maskBox && slide) {
+          const maskBox = rangeBox(l, slide)
+          if (maskBox) s = { ...s, maskBox }
+        }
         if (l.sub) { walk(l.sub, s, root ?? l.key); continue }
         const h = handles.get(l)
         if (!h) continue
