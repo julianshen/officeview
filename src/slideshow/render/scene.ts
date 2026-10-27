@@ -255,8 +255,9 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
  * lines' extent, em being each line's largest font size. Fit to PowerPoint's blinds frames (lo-tdf93868:
  * two 20 pt lines of Calibri to within a pixel, one 40 pt line to about two); the horizontal extent is unmeasured
  * and keeps the painted bounds' em/2 slack. Word and letter clones (`textClip`) are left out: their sweep box is
- * unmeasured and stays the painted bounds. So is text whose shadow or outline reaches past the box: a mask clips
- * outside its box even when complete, which would cut the effect off for good. Undefined in all those cases.
+ * unmeasured and stays the painted bounds. So is anything painted past the box (a shadow, an outline, a
+ * highlight's line band, an inline object): a mask clips outside its box even when complete, which would cut it
+ * off for good. Undefined in all those cases.
  */
 export function textRangeBox(nodes: readonly PptxShape[], slide: PptxSlide, resolveFont: FontResolver, measure: CanvasRenderingContext2D): Box | undefined {
   const { add, box } = boxUnion()
@@ -281,7 +282,10 @@ export function textRangeBox(nodes: readonly PptxShape[], slide: PptxSlide, reso
         const reach = (sh ? Math.min(Math.abs(sh.offsetX) || 0, 200) + Math.min(Math.abs(sh.offsetY) || 0, 200) + Math.min(Math.max(0, sh.blurPx || 0), 100) * 2 : 0)
           + Math.min(s.style.textOutline?.widthPx ?? 0, 100)
         if (reach > 0 && (line.y - reach < top || line.y + line.height + reach > bottom || reach > lineEm(line) / 2)) clips = true
+        // A highlight fills the whole line band, which wide line spacing takes above the box.
+        if (s.style.highlight && s.text !== '\n' && (line.y < top || line.y + line.height > bottom)) clips = true
       }
+      for (const slot of line.inlineSlots ?? []) if (slot.y < top || slot.y + slot.height > bottom) clips = true
     }
     add(m, l - slack, top, r + slack, bottom)
   })

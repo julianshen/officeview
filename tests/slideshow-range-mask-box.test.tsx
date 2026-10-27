@@ -81,6 +81,11 @@ describe('textRangeBox', () => {
     // A hairline outline stays inside: the box is PowerPoint's.
     expect(textRangeBox([styled({ textOutline: { color: '#000', widthPx: 1 } })], slide, f => f, measure())).toBeDefined()
     expect(textRangeBox([styled({ textShadow: { color: '#000', blurPx: 1, offsetX: 2, offsetY: 2 } })], slide, f => f, measure())).toBeDefined()
+    // A highlight fills its line band: inside the box at 100% spacing, above it at 200% (the baseline sits 1.8 em down).
+    expect(textRangeBox([styled({ highlight: '#ff0' })], slide, f => f, measure())).toBeDefined()
+    const spaced = styled({ highlight: '#ff0' })
+    spaced.textBody.paragraphs = spaced.textBody.paragraphs.map(p => ({ ...p, lineSpacing: { kind: 'percent' as const, value: 2 } }))
+    expect(textRangeBox([spaced], slide, f => f, measure())).toBeUndefined()
   })
 
   it('leaves word and letter clones to their painted bounds', async () => {
