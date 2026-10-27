@@ -1,12 +1,14 @@
 // XLSX sparkline reference comparison (plan 2026-10-27-xlsx-sparklines Task 7, spec section 8 and section 11).
 //
-//   bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]
+//   bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir] [--refs dir]
 //
-// For every case of stage ≤ N (default 1) with a reference under tests/fixtures/xlsx-sparklines/refs/, renders the
-// case workbook through the viewer's static sheet renderer and compares the host cells with Excel's capture.
-// Prints `<id>: pass|fail|unverified meanAbs rowMax (tol …)` per case and a total line. `--out` writes
-// <id>.ref.png, <id>.ours.png and <id>.diff.png (the cropped host block) for inspection.
-// Exit status: 0 when no compared case fails, 1 otherwise, 2 on a usage error.
+// For every case of stage ≤ N (default 1), renders the case workbook through the viewer's static sheet renderer and
+// compares the host cells with Excel's capture under tests/fixtures/xlsx-sparklines/refs/ (or --refs). Every captured
+// sheet needs its plain and -bordered PNG and both .json sidecars; the sidecar's route, scale/pxPerPt, sheet and
+// range are validated and the render scale is derived from pxPerPt. A missing or unsupported reference FAILS the
+// case unless the doc marks it *unverified*. Prints `<id>: pass|fail|unverified meanAbs rowMax (tol …)` per case and
+// a total line. `--out` writes <id>.ref.png, <id>.ours.png and <id>.diff.png (the cropped host block).
+// Exit status: 0 when no case fails, 1 otherwise, 2 on a usage error.
 //
 // Rendering. The references are Excel for Mac `copy picture` bitmaps at a fixed 1 px per point (72 dpi); the viewer
 // lays out in CSS px (96 dpi). So the sheet renders through `renderSheet` with a 0.75 canvas transform AND
@@ -41,14 +43,21 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { computeMetrics, renderSheet, type GridMetrics } from '../src/xlsx/render'
 import { preloadSparklines } from '../src/xlsx/sparklineLoader'
 import type { XlsxSheet } from '../src/xlsx/types'
-import { SPARKLINE_CASES, type SparklineCase } from './sparkline-refs/cases'
+import { SPARKLINE_CASES, captureRange, type SparklineCase } from './sparkline-refs/cases'
 
 const REPO = resolvePath(dirname(fileURLToPath(import.meta.url)), '..')
 export const FIXTURES = join(REPO, 'tests/fixtures/xlsx-sparklines')
 export const REFS = join(FIXTURES, 'refs')
 export const DOC = join(REPO, 'docs/validation/xlsx-sparklines.md')
-/** Viewer CSS px → capture px (96 dpi → 72 dpi). */
-export const COMPARE_SCALE = 0.75
+/** Viewer CSS px per point (96 dpi): a capture at `pxPerPt` renders at pxPerPt / CSS_PX_PER_PT. */
+export const CSS_PX_PER_PT = 96 / 72
+/** The comparison scale of the Stage 1 references (1 px per point, 96 dpi → 72 dpi). */
+export const COMPARE_SCALE = 1 / CSS_PX_PER_PT
+/**
+ * Capture densities the comparison supports. The geometry constants and the Cases tolerances were measured from
+ * 1 px/pt copy-picture captures; any other density is refused rather than compared against those tolerances.
+ */
+export const SUPPORTED_PX_PER_PT: readonly number[] = [1]
 /** A pixel counts as strongly different above this many levels (of 255) in any channel. */
 export const STRONG_DELTA = 64
 
@@ -195,10 +204,10 @@ export function hostBlock(sheet: XlsxSheet): HostBlock | undefined {
 
 export interface Render { frame: Frame; block: { x: number; y: number; w: number; h: number }; natural: { w: number; h: number } }
 /**
- * Renders the sheet at COMPARE_SCALE with the host block forced to `size` (capture px), the reference's
+ * Renders the sheet at `scale` (capture px per CSS px, from the sidecar) with the host block forced to `size` (capture px), the reference's
  * gridline-to-gridline host size; `natural` is the viewer's own host size at the comparison scale.
  */
-export function renderHosts(sheet: XlsxSheet, size: { w: number; h: number }): Render {
+export function renderHosts(sheet: XlsxSheet, size: { w: number; h: number }, scale = COMPARE_SCALE): Render {
   const host = hostBlock(sheet)
   if (!host) throw new Error('no sparkline host')
   const natural = computeMetrics(sheet)
@@ -209,21 +218,21 @@ export function renderHosts(sheet: XlsxSheet, size: { w: number; h: number }): R
     const total = sum(sizes, from, to)
     for (let i = from; i <= to; i++) if (sizes[i] > 0) sizes[i] = sizes[i] / total * target
   }
-  force(m.colWidthsPx, host.col0, host.col1, size.w / COMPARE_SCALE)
-  force(m.rowHeightsPx, host.row0, host.row1, size.h / COMPARE_SCALE)
+  force(m.colWidthsPx, host.col0, host.col1, size.w / scale)
+  force(m.rowHeightsPx, host.row0, host.row1, size.h / scale)
   m.widthPx = m.colWidthsPx.reduce((a, b) => a + b, 0)
   m.heightPx = m.rowHeightsPx.reduce((a, b) => a + b, 0)
-  const canvas = createCanvas(Math.ceil(m.widthPx * COMPARE_SCALE), Math.ceil(m.heightPx * COMPARE_SCALE))
+  const canvas = createCanvas(Math.ceil(m.widthPx * scale), Math.ceil(m.heightPx * scale))
   const ctx = canvas.getContext('2d')
-  ctx.scale(COMPARE_SCALE, COMPARE_SCALE)
-  renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m, undefined, undefined, undefined, COMPARE_SCALE)
+  ctx.scale(scale, scale)
+  renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m, undefined, undefined, undefined, scale)
   const frame: Frame = { width: canvas.width, height: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data as unknown as Uint8ClampedArray }
-  const x = Math.round(sum(m.colWidthsPx, 0, host.col0 - 1) * COMPARE_SCALE)
-  const y = Math.round(sum(m.rowHeightsPx, 0, host.row0 - 1) * COMPARE_SCALE)
+  const x = Math.round(sum(m.colWidthsPx, 0, host.col0 - 1) * scale)
+  const y = Math.round(sum(m.rowHeightsPx, 0, host.row0 - 1) * scale)
   return {
     frame,
-    block: { x, y, w: Math.round(sum(m.colWidthsPx, host.col0, host.col1) * COMPARE_SCALE), h: Math.round(sum(m.rowHeightsPx, host.row0, host.row1) * COMPARE_SCALE) },
-    natural: { w: sum(natural.colWidthsPx, host.col0, host.col1) * COMPARE_SCALE, h: sum(natural.rowHeightsPx, host.row0, host.row1) * COMPARE_SCALE },
+    block: { x, y, w: Math.round(sum(m.colWidthsPx, host.col0, host.col1) * scale), h: Math.round(sum(m.rowHeightsPx, host.row0, host.row1) * scale) },
+    natural: { w: sum(natural.colWidthsPx, host.col0, host.col1) * scale, h: sum(natural.rowHeightsPx, host.row0, host.row1) * scale },
   }
 }
 
@@ -253,16 +262,48 @@ export interface CaseResult {
 export interface CompareOptions {
   /** Perturb the parsed sheet (its resolved sparklines) before rendering: negative controls. */
   mutate?: (sheet: XlsxSheet) => void
+  /** Reference directory (default REFS); tests point it at a temporary copy. */
+  refsDir?: string
+}
+
+/** A reference that cannot be compared: a missing image or sidecar, or unsupported capture metadata. */
+export class UnusableReferenceError extends Error {}
+
+export interface Sidecar { route: string; scale: number; pxPerPt: number; sheet: string; range: string }
+/**
+ * Reads and validates a capture sidecar (scripts/sparkline-refs/capture.ts writes it) against the case sheet it
+ * belongs to, and returns the capture density. Unsupported metadata throws UnusableReferenceError.
+ */
+export function readSidecar(path: string, expected: { sheet: string; range: string }): Sidecar {
+  if (!existsSync(path)) throw new UnusableReferenceError(`missing sidecar ${path}`)
+  let v: Partial<Sidecar>
+  try { v = JSON.parse(readFileSync(path, 'utf8')) } catch { throw new UnusableReferenceError(`unreadable sidecar ${path}`) }
+  const bad = (why: string) => new UnusableReferenceError(`unsupported sidecar ${path}: ${why}`)
+  if (v.route !== 'copy-picture') throw bad(`route ${JSON.stringify(v.route)} (expected "copy-picture")`)
+  if (typeof v.pxPerPt !== 'number' || !Number.isFinite(v.pxPerPt) || v.pxPerPt <= 0) throw bad(`pxPerPt ${JSON.stringify(v.pxPerPt)}`)
+  if (v.scale !== v.pxPerPt) throw bad(`scale ${JSON.stringify(v.scale)} differs from pxPerPt ${v.pxPerPt}`)
+  if (!SUPPORTED_PX_PER_PT.includes(v.pxPerPt)) throw bad(`pxPerPt ${v.pxPerPt} (supported: ${SUPPORTED_PX_PER_PT.join(', ')}; constants and tolerances were measured at 1 px/pt)`)
+  if (v.sheet !== expected.sheet) throw bad(`sheet ${JSON.stringify(v.sheet)} (expected ${JSON.stringify(expected.sheet)})`)
+  if (v.range !== expected.range) throw bad(`range ${JSON.stringify(v.range)} (expected ${JSON.stringify(expected.range)})`)
+  return v as Sidecar
 }
 
 /** Compares every host sheet of a case that has a reference. */
 export async function compareCase(c: SparklineCase, opts: CompareOptions = {}): Promise<CaseResult[]> {
   const results: CaseResult[] = []
+  const dir = opts.refsDir ?? REFS
   for (const s of c.sheets) {
-    if (!s.groups.length) continue
-    const plainPath = join(REFS, `${refBase(c, s.name, false)}.png`)
-    const borderedPath = join(REFS, `${refBase(c, s.name, true)}.png`)
-    if (!existsSync(plainPath) || !existsSync(borderedPath)) continue
+    // Every sheet capture.ts captures is required: both images and both sidecars, with matching metadata.
+    const range = captureRange(s)
+    if (!range) continue
+    const base = (bordered: boolean) => join(dir, refBase(c, s.name, bordered))
+    const plainPath = `${base(false)}.png`, borderedPath = `${base(true)}.png`
+    const missing = [plainPath, borderedPath].filter(f => !existsSync(f))
+    if (missing.length) throw new UnusableReferenceError(`${c.id}: missing reference ${missing.join(', ')}`)
+    const meta = readSidecar(`${base(false)}.json`, { sheet: s.name, range })
+    const metaBordered = readSidecar(`${base(true)}.json`, { sheet: s.name, range })
+    if (meta.pxPerPt !== metaBordered.pxPerPt) throw new UnusableReferenceError(`${c.id}: plain and bordered captures differ in pxPerPt`)
+    const scale = meta.pxPerPt / CSS_PX_PER_PT
     const plain = await loadFrame(plainPath), bordered = await loadFrame(borderedPath)
     const { xs, ys } = findBorders(bordered)
     if (xs.length < 2 || ys.length < 2) throw new Error(`${c.id}: host borders not found (x ${xs}, y ${ys})`)
@@ -270,12 +311,13 @@ export async function compareCase(c: SparklineCase, opts: CompareOptions = {}): 
     const ry = ys[0], rh = ys[ys.length - 1] - ry
     const sheet = await loadCaseSheet(c, s.name)
     opts.mutate?.(sheet)
-    const render = renderHosts(sheet, { w: rw, h: rh })
+    const render = renderHosts(sheet, { w: rw, h: rh }, scale)
     const gridRows = ys.slice(0, -1).map(y => y - ry)
     const ref = innerBox(crop(plain, rx, ry, rw, rh), gridRows)
     const ours = innerBox(crop(render.frame, render.block.x, render.block.y, rw, rh), gridRows)
     results.push({ id: c.id, sheet: s.name, diff: diffFrames(ref, ours), refSize: { w: rw, h: rh }, naturalSize: render.natural, ref, ours })
   }
+  if (!results.length) throw new UnusableReferenceError(`${c.id}: no sparkline host sheet to compare`)
   return results
 }
 
@@ -312,15 +354,23 @@ const fmt = (n: number) => n.toFixed(4)
 export async function main(argv: string[]): Promise<number> {
   const arg = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined }
   const stage = Number(arg('--stage') ?? 1)
-  const only = arg('--case'), out = arg('--out')
-  if (!Number.isInteger(stage) || stage < 1) { console.error('usage: bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]'); return 2 }
+  const only = arg('--case'), out = arg('--out'), refsDir = arg('--refs')
+  if (!Number.isInteger(stage) || stage < 1) { console.error('usage: bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir] [--refs dir]'); return 2 }
   if (out) mkdirSync(out, { recursive: true })
   const table = readCaseTable()
-  let pass = 0, fail = 0, unverified = 0, missing = 0
-  for (const c of stageCases(stage, only)) {
+  let pass = 0, fail = 0, unverified = 0
+  const selected = stageCases(stage, only)
+  if (!selected.length) { console.error(`no stage ≤ ${stage} case${only ? ` named ${only}` : ''}`); return 2 }
+  for (const c of selected) {
     const entry = table.get(c.id)
-    const results = await compareCase(c)
-    if (!results.length) { missing++; console.log(`${c.id}: no reference`); continue }
+    let results: CaseResult[]
+    try { results = await compareCase(c, { refsDir }) } catch (error) {
+      if (!(error instanceof UnusableReferenceError)) throw error
+      // Only a case the doc marks unverified may lack a usable reference.
+      if (entry?.unverifiedReason !== undefined) { unverified++; console.log(`${c.id}: unverified (${error.message})`) }
+      else { fail++; console.log(`${c.id}: fail (${error.message})`) }
+      continue
+    }
     const d = combine(results)
     const tol = entry?.tolerance
     const size = results.map(r => {
@@ -338,7 +388,7 @@ export async function main(argv: string[]): Promise<number> {
       await savePng(r.ref, `${base}.ref.png`); await savePng(r.ours, `${base}.ours.png`); await savePng(diffImage(r.ref, r.ours), `${base}.diff.png`)
     }
   }
-  console.log(`total: ${pass} pass, ${fail} fail, ${unverified} unverified${missing ? `, ${missing} without reference` : ''}`)
+  console.log(`total: ${pass} pass, ${fail} fail, ${unverified} unverified`)
   return fail ? 1 : 0
 }
 

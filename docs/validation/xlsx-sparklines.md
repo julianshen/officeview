@@ -113,6 +113,11 @@ these constants, snap as in `vertexSnapRule`, and accept a ±1 px vertex toleran
 the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 case and asserts the tolerances
 below. It reads the **Cases** table, so a tolerance or status changes here, not in code.
 
+- **References required.** Every captured sheet of every case needs its plain and `-bordered` PNG and both `.json`
+  sidecars. The sidecar must say `route: "copy-picture"`, `scale` = `pxPerPt` = 1 (the density the constants and
+  tolerances were measured at), and the case's sheet and capture range. The render scale is derived as
+  pxPerPt · 72/96. A missing file or unsupported metadata fails the case, in the test and in the CLI (exit 1), unless
+  the Cases table marks the case *unverified*.
 - **Render path.** `renderSheet` on a canvas scaled by 0.75 with `sparklineScale = 0.75`: what the interactive viewport
   does at 75 % zoom, so the geometry snaps on the same 1 px-per-point device grid Excel snapped on. `getPaintables`
   paints at scale 1, and resampling its bitmap would blur snapped strokes. `preloadSparklines()` runs first.

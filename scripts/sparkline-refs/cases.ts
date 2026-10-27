@@ -260,3 +260,22 @@ export function caseHostRanges(c: SparklineCase): string[] {
   }
   return out
 }
+
+/** Columns I (the host's left neighbour, for spill and border context) through the last host column, over the host rows. */
+export function captureRange(sheet: CaseSheet): string | undefined {
+  const hosts = sheet.groups.flatMap(g => g.sparklines.map(s => s.sqref))
+  if (hosts.length === 0) return undefined
+  let r0 = Infinity, r1 = 0, c1 = 0
+  for (const ref of hosts) {
+    const m = /^([A-Z]+)(\d+)$/.exec(ref)
+    if (!m) continue
+    const row = Number(m[2])
+    let col = colIndex(m[1])
+    for (const merge of sheet.merges ?? []) {
+      const mm = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(merge)
+      if (mm && mm[1] === m[1] && Number(mm[2]) === row) col = Math.max(col, colIndex(mm[3]))
+    }
+    r0 = Math.min(r0, row); r1 = Math.max(r1, row); c1 = Math.max(c1, col)
+  }
+  return Number.isFinite(r0) ? `I${r0}:${colName(c1)}${r1}` : undefined
+}
