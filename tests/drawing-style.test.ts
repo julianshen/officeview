@@ -492,6 +492,13 @@ describe('theme effect style shadows (a:effectRef)', () => {
     expect(style.issues.some(i => i.kind === 'unsupported-effect')).toBe(false)
   })
 
+  it('a local effectDag suppresses the theme style shadow', () => {
+    const style = resolveDrawingStyle(spPr('<a:effectDag><a:glow rad="50000"><a:srgbClr val="FFFF00"/></a:glow></a:effectDag>'), ref(2), shadowTheme())
+    expect(style.shadow).toBeUndefined()
+    expect(style.issues.some(i => i.feature === 'effectDag')).toBe(true)
+    expect(resolveDrawingStyle(spPr('<a:effectDag/>'), ref(2), shadowTheme()).shadow).toBeUndefined()
+  })
+
   it('a local non-empty effectLst replaces the theme style effects', () => {
     const style = resolveDrawingStyle(spPr('<a:effectLst><a:glow rad="50000"><a:srgbClr val="FFFF00"/></a:glow></a:effectLst>'), ref(2), shadowTheme())
     expect(style.shadow).toBeUndefined()

@@ -570,15 +570,17 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
   // style reference is the shape's own declaration in the DrawingML
   // precedence model (direct properties > style references > container
   // defaults). Away from explicit declarations the cascade stays untouched.
+  // A local effectDag is the other spPr effect container and replaces the
+  // theme effects the same way (its own effects stay deferred, below).
   let shadow: DrawingShadow | undefined = defaults.shadow ? { ...defaults.shadow } : undefined
-  const effectLst = getChild(spPr, 'effectLst')
+  const effectLst = getChild(spPr, 'effectLst'), effectDag = getChild(spPr, 'effectDag')
   if (effectLst) {
     for (const [name, child] of orderedChildren(effectLst)) {
       if (name === '#text') continue
       if (name === 'outerShdw') shadow = resolveShadowDefinition(parseOuterShadow(child), fillPlaceholder, theme, issues)
       else issue(issues, 'unsupported-effect', `Drawing effect ${name} is deferred`, name)
     }
-  } else {
+  } else if (!effectDag) {
     const effectRef = getChild(style, 'effectRef')
     if (effectRef) {
       const index = referenceIndex(effectRef, issues)
@@ -594,7 +596,6 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
       }
     }
   }
-  const effectDag = getChild(spPr, 'effectDag')
   if (effectDag && orderedChildren(effectDag).some(([n]) => n !== '#text')) {
     issue(issues, 'unsupported-effect', 'Drawing effects are deferred', 'effectDag')
   }
