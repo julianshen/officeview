@@ -12,7 +12,7 @@ measurements. Later tasks cite the **Measured constants** rows by name and updat
 | Route | AppleScript `copy picture … appearance screen format bitmap` of the host range, read back from the pasteboard as PNG (`scripts/sparkline-refs/capture.ts`) |
 | Excel | Microsoft Excel for Mac **16.114** (`excelVersion` in every sidecar) |
 | Scale | **1 px per point** (72 dpi; sidecar `scale: 1, pxPerPt: 1`). Sheet zoom has no effect on this route |
-| Captured | 2026-10-27 (sidecar `capturedAt`, 15:32–15:36 UTC) |
+| Captured | sidecar `capturedAt` 2026-10-27 16:26–16:34 UTC (settled recapture; every image is byte-identical to the first capture except the two `line-scale-group` references) |
 | Measured | 2026-10-28, from `tests/fixtures/xlsx-sparklines/refs/*.png` with Python 3 + PIL. The measurement scripts were scratch scripts and are not committed |
 | Comparison scale | The viewer renders at 96 dpi (1 pt = 4/3 CSS px), so it compares at **scale 0.75** against these captures |
 

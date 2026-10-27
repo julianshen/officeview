@@ -11,10 +11,12 @@
  * Writes tests/fixtures/xlsx-sparklines/refs/<id>[-bordered][-<sheet>].png plus a .json sidecar.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { SPARKLINE_CASES, colIndex, colName, type CaseSheet } from './cases'
 
+/** Measured: Excel drew group-axis sparklines up to ~7 s after opening (2026-10-28); 10 s leaves margin. */
+const FIRST_COPY_MS = 10_000
 const FIXTURES = resolve(import.meta.dir, '../../tests/fixtures/xlsx-sparklines')
 const REFS = join(FIXTURES, 'refs')
 
@@ -71,13 +73,16 @@ function capture(file: string, sheetName: string, range: string, out: string): v
     return false
   }, `open ${name}`)
   // Excel draws some sparklines (group axes, measured: up to ~7 s) after the workbook opens, and a failed copy
-  // leaves the previous pasteboard image. So the clipboard is cleared before every copy, and a capture counts only
-  // once two copies at least 2 s apart, taken no earlier than 3 s after opening, are byte-identical.
+  // leaves the previous pasteboard image. So the clipboard is cleared before every copy, the first copy waits
+  // FIRST_COPY_MS (past the ~7 s worst case, so two early blanks cannot certify each other), and a capture counts only
+  // once two copies at least 2 s apart are byte-identical. Copies go to a temporary file; only a settled image
+  // replaces the reference.
   const opened = Date.now()
+  const tmp = `${out}.tmp`
   let previous: Buffer | undefined
   const deadline = opened + 60_000
   for (;;) {
-    const waitMs = previous ? 2_000 : Math.max(0, 3_000 - (Date.now() - opened))
+    const waitMs = previous ? 2_000 : Math.max(0, FIRST_COPY_MS - (Date.now() - opened))
     if (waitMs) execFileSync('sleep', [String(waitMs / 1000)])
     osa(['set the clipboard to ""'])
     osa([
@@ -93,13 +98,13 @@ function capture(file: string, sheetName: string, range: string, out: string): v
       'end tell',
     ], 90_000)
     osa([
-      `set f to open for access POSIX file "${q(out)}" with write permission`,
+      `set f to open for access POSIX file "${q(tmp)}" with write permission`,
       'set eof f to 0',
       'write (the clipboard as «class PNGf») to f',
       'close access f',
     ])
-    const current = readFileSync(out)
-    if (previous && current.equals(previous)) return
+    const current = readFileSync(tmp)
+    if (previous && current.equals(previous)) { renameSync(tmp, out); return }
     if (Date.now() > deadline) throw new Error(`capture did not settle: ${name}`)
     previous = current
   }
