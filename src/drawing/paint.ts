@@ -343,7 +343,8 @@ function setupLine(ctx: CanvasRenderingContext2D, line: DrawingLine, issues: Dra
 
 /** Does not alter the caller's Canvas drawing state. Returns painting diagnostics. */
 /** `only: 'shadow'` paints just the shadow pass (a background-filled shape casts its shadow, then shows the background). */
-export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedGeometry | ResolvedPath[], style: DrawingStyle, width: number, height: number, only?: 'shadow'): DrawingIssue[] {
+/** `pixelSnap` strokes PowerPoint's way under an axis-aligned transform (see `snapToPixels`): whole-pixel widths, odd ones on pixel centres. */
+export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedGeometry | ResolvedPath[], style: DrawingStyle, width: number, height: number, only?: 'shadow', pixelSnap = false): DrawingIssue[] {
   const issues: DrawingIssue[] = []
   if (![width, height].every(n => Number.isFinite(n) && n >= 0)) return [{ kind: 'invalid-paint', message: 'Invalid drawing extents' }]
   const paths = Array.isArray(geometry) ? geometry : geometry.paths
@@ -437,7 +438,26 @@ export function paintGeometry(ctx: CanvasRenderingContext2D, geometry: ResolvedG
       if (stroke && style.line) {
         const lineWidth = setupLine(ctx, style.line, issues)
         if (lineWidth === undefined) continue
-        ctx.strokeStyle = stroke; ctx.stroke()
+        ctx.strokeStyle = stroke
+        const m = ctx.getTransform()
+        if (pixelSnap && m.b === 0 && m.c === 0 && m.a !== 0 && m.d !== 0) {
+          // Whole device pixels per axis: wx for vertical edges, wy for horizontal ones (unequal group scales keep both).
+          const wx = Math.max(1, Math.floor(lineWidth * Math.abs(m.a) + 0.5)), wy = Math.max(1, Math.floor(lineWidth * Math.abs(m.d) + 0.5))
+          // Under equal scales one width in shape units serves both axes, and the stroke keeps the shape transform, so
+          // dashes and gradient or pattern brushes (read in the stroke-time transform) are unchanged. Unequal scales
+          // need a device-space pen (wx×wy), which only a plain solid line survives; anything else stays unsnapped.
+          const equal = Math.abs(Math.abs(m.a) - Math.abs(m.d)) < 1e-9
+          const pen = !equal && typeof stroke === 'string' && ctx.getLineDash().length === 0
+          if (equal || pen) {
+            ctx.save()
+            try {
+              if (wx % 2 || wy % 2) { ctx.setTransform(m.a, 0, 0, m.d, m.e + (wx % 2) / 2, m.f + (wy % 2) / 2); drawPath(ctx, path.commands) }
+              if (pen) { ctx.setTransform(wx, 0, 0, wy, 0, 0); ctx.lineWidth = 1 }
+              else { ctx.setTransform(m); ctx.lineWidth = wx / Math.abs(m.a) }
+              ctx.stroke()
+            } finally { ctx.restore() }
+          } else ctx.stroke()
+        } else ctx.stroke()
         const ends = endpoints(path.commands)
         arrow(ctx, ends.head, style.line.headEnd, lineWidth, true)
         arrow(ctx, ends.tail, style.line.tailEnd, lineWidth, false)
