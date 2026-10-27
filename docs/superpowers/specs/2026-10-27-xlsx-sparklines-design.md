@@ -1,13 +1,13 @@
 # XLSX Sparklines — Design Spec
 
-**Status:** draft 7.
+**Status:** draft 8.
 - Builder check folded in.
 - Round 1: agy and codex both returned REQUEST CHANGES. Their findings are addressed here, marked **[rev]** with reviewer and finding.
 - Round 2: agy APPROVE; codex resolved all 7 and raised R2-1 (reply and cache byte budget), addressed in draft 4.
 - Round 3: codex asked for receiver-side pre-admission (R2-1 continued), addressed in draft 5.
 - Round 4: codex resolved R2-1 and raised R4-1 (worker success-path release), addressed in draft 6.
 - Round 5: codex APPROVE.
-- Draft 7 adds §3.1 (LibreOffice study, owner request) and its consequences.
+- Draft 7 adds §3.1 (LibreOffice study, owner request) and its consequences. Round 6: agy APPROVE; codex R6-1 to R6-3 addressed in draft 8.
 **Date:** 2026-10-27 · **Baseline:** `main` @ `38ed2b1`.
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -97,7 +97,7 @@ The builder confirms each default against the MS-XLSX schema text, and §8 has a
 
 **Other suites** (checked 2026-10-27, owner request):
 - **LibreOffice / Collabora.** LibreOffice Calc has native sparklines since 7.4 (2022), and Collabora Office since 22.05. LibreOffice reads XLSX sparklines and offers Excel's options.
-  - Whether its XLSX export writes the same `x14:sparklineGroups` structure, and with which attributes spelled out or omitted, is unverified.
+  - Its XLSX export writes the same `x14:sparklineGroups` structure according to its source (§3.1), but no LibreOffice-saved file has been inspected yet.
   - LibreOffice is not installed on the development machine. The plan adds at least one LibreOffice-written workbook as a fixture, saved by the owner or obtained from LibreOffice's own test files, to exercise §9 item 5.
   - LibreOffice's ODS sparklines are out of scope, because the viewer does not read ODS.
 - **Apache OpenOffice.** It has no native sparklines, only an old third-party extension (EuroOffice Sparkline) that draws ordinary charts. OpenOffice-written XLSX files therefore carry no sparklines, and there is nothing extra to support.
@@ -108,7 +108,7 @@ LibreOffice Calc's sparkline source (`sc/`, MPL-2.0) was studied for behaviour o
 
 LibreOffice never states that a constant was measured against Excel. Its geometry is therefore a second hypothesis, never evidence, and Excel references (§8) decide.
 
-**What it teaches about input files (LibreOffice-written XLSX):**
+**What it teaches about input files (LibreOffice-written XLSX).** These are inferred from LibreOffice's exporter source (`sc/source/filter/excel/export/SparklineExt.cxx`, `ExportTools.cxx`), not observed in a saved file. **[rev]** (codex R6-2) Every behaviour below is schema-valid input that the viewer must handle anyway, so nothing here depends on the inference being exact. A LibreOffice-written fixture (§3) confirms them when it is obtained.
 - **Default attributes are omitted.** Every attribute equal to its schema default is left out, false booleans are never written, and `manualMin`/`manualMax` appear only with `custom`. Applying the §3 defaults correctly is therefore essential, not an edge case.
 - **Unused colour elements are omitted entirely**, so a file can lack `colorAxis`, `colorMarkers` and others. A missing colour element is normal input, not malformed input (§5.5).
 - **Theme colours** are written as `theme` plus `tint`, and RGB colours as 8-hex `rgb`. Tints may be negative (shades). LibreOffice's own renderer ignores negative tints, which is a known LibreOffice bug and must not be copied.
@@ -270,7 +270,6 @@ Each case below leaves the cell empty and raises one diagnostic on `XlsxSheet.di
 - an unknown `type` **[rev]** (codex 6: never defaulted to line)
 - a multi-cell or list `sqref`
 - a non-conforming manual-axis combination, unless measured otherwise
-- a group whose series colour does not resolve
 
 Fallback to the schema default, with a diagnostic, is limited to attributes where the default cannot produce a different chart: an out-of-range `lineWeight`, and an unknown boolean spelling, which is treated as false. Every other out-of-enumeration value (`type`, `displayEmptyCellsAs`, axis types) fails closed. **[rev]** (codex 6)
 
@@ -312,7 +311,19 @@ Excel for Mac is installed on the development machine (`/Applications/Microsoft 
 3. **Sparklines on the paged path, whose data is on another sheet.** Pending data must not draw a partial chart, and the arrival repaint must cover tiles already cached.
 4. **Tile-edge and zoom behaviour.** The same sparkline at 50%, 100% and 175% zoom, and straddling a tile boundary, at DPR 1 and 2.
 5. **Files written by LibreOffice and other writers**: absent attributes (defaults), absent colour elements, `dateAxis` without a date range, alternate namespace prefixes, `xm:f` with `$`, quoted sheet names, and several ranges.
-6. **LibreOffice's known traps** (§3.1): a flat series, n = 1, all-negative high and low, the `group` axis type, negative tints, merged hosts, data on a later sheet, and sparklines in static PNG and PDF export. Each one has a test.
+6. **LibreOffice's known traps** (§3.1), each with a named test:
+   - a flat series
+   - n = 1
+   - all-negative high and low
+   - the `group` axis type
+   - negative tints
+   - merged hosts
+   - data on a later sheet
+   - sparklines in static PNG and PDF export
+   - `dateAxis` with a non-uniform date range, which must not be spaced evenly
+   - `rightToLeft` with first and last colours, where colour follows data order, not display order
+
+   **[rev]** (codex R6-3)
 
 ## 10. Delivery **[owner]**: three stages, each its own reviewed PR
 
