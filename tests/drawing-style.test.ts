@@ -125,11 +125,14 @@ describe('DrawingML theme and style resolution', () => {
     if (style.fill?.kind === 'gradient') expect(style.fill.stops).toHaveLength(3)
     expect(style.line?.headEnd).toEqual({ type: 'diamond', width: 'lg', length: 'lg' })
   })
-  it('documents rectangular/shape gradient first-stop and deferred effects', () => {
+  it('documents rectangular/shape gradient first-stop and local effectLst precedence over effectRef', () => {
     const style = resolveDrawingStyle(xml('<spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="rect"/></a:gradFill><a:effectLst><a:outerShdw/></a:effectLst><a:sp3d/></spPr>'), xml('<style><a:effectRef idx="1"/></style>'), theme())
     expect(style.fill).toEqual({ kind: 'solid', color: rgba(255, 0, 0) })
     expect(style.issues.some(i => i.kind === 'unsupported-gradient' && i.feature === 'rect')).toBe(true)
-    expect(style.issues.some(i => i.kind === 'unsupported-effect')).toBe(true)
+    // The explicit local effect list replaces the theme style, and its
+    // default-valued outerShdw renders without deferral.
+    expect(style.shadow).toBeDefined()
+    expect(style.issues.some(i => i.kind === 'unsupported-effect')).toBe(false)
     expect(style.issues.some(i => i.kind === 'unsupported-3d')).toBe(true)
   })
 })
@@ -430,5 +433,100 @@ describe('geometry painting', () => {
     expect(paintGeometry(ctx, [rectangle()], fillStyle(), NaN, 100).some(i => i.kind === 'invalid-paint')).toBe(true)
     expect(pixel(50, 50)[3]).toBe(0)
     expect(ctx.lineWidth).toBe(5)
+  })
+})
+
+describe('theme effect style shadows (a:effectRef)', () => {
+  const themeXml = `<a:theme xmlns:a="urn:a"><a:themeElements>
+    <a:clrScheme name="t"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="222222"/></a:dk2><a:lt2><a:srgbClr val="EEEEEE"/></a:lt2></a:clrScheme>
+    <a:fontScheme name="t"><a:majorFont><a:latin typeface="M"/></a:majorFont><a:minorFont><a:latin typeface="m"/></a:minorFont></a:fontScheme>
+    <a:fmtScheme name="t">
+      <a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst>
+      <a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst>
+      <a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst>
+      <a:effectStyleLst>
+        <a:effectStyle><a:effectLst><a:glow rad="50000"><a:srgbClr val="FFFF00"/></a:glow></a:effectLst></a:effectStyle>
+        <a:effectStyle><a:effectLst><a:outerShdw dist="190500" dir="5400000" blurRad="38100"><a:schemeClr val="phClr"><a:alpha val="50000"/></a:schemeClr></a:outerShdw></a:effectLst></a:effectStyle>
+        <a:effectStyle><a:effectLst><a:outerShdw dist="95250" dir="0" blurRad="19050"><a:srgbClr val="333333"/></a:outerShdw><a:reflection/></a:effectLst></a:effectStyle>
+      </a:effectStyleLst>
+    </a:fmtScheme>
+  </a:themeElements></a:theme>`
+  const shadowTheme = () => parseThemeContext(themeXml)
+  const spPr = (inner = '') => xml(`<spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>${inner}</spPr>`)
+  const ref = (index: number) => xml(`<style><a:effectRef idx="${index}"><a:srgbClr val="FF0000"/></a:effectRef></style>`)
+
+  it('resolves the theme effect style outerShdw with phClr from the effectRef color', () => {
+    const style = resolveDrawingStyle(spPr(), ref(2), shadowTheme())
+    expect(style.shadow).toBeDefined()
+    expect(style.shadow?.offsetX).toBeCloseTo(0, 1)
+    expect(style.shadow?.offsetY).toBeCloseTo(20, 1)
+    expect(style.shadow?.blurPx).toBeCloseTo(4, 1)
+    expect(style.shadow?.color).toEqual(rgba(255, 0, 0, 0.5))
+    expect(style.shadow?.rotWithShape).toBe(true)
+    expect(style.issues.filter(i => i.kind === 'unsupported-effect')).toEqual([])
+  })
+
+  it('mixes the outerShdw of a style with sibling deferred effects and keeps the deferred diagnostic', () => {
+    const style = resolveDrawingStyle(spPr(), ref(3), shadowTheme())
+    expect(style.shadow).toBeDefined()
+    expect(style.shadow?.offsetX).toBeCloseTo(10, 1)
+    expect(style.shadow?.color).toEqual(rgba(51, 51, 51))
+    expect(style.issues.some(i => i.kind === 'unsupported-effect' && i.feature === 'effectRef' && i.message.includes('style 3'))).toBe(true)
+  })
+
+  it('keeps the deferred diagnostic for styles with no renderable shadow', () => {
+    const style = resolveDrawingStyle(spPr(), ref(1), shadowTheme())
+    expect(style.shadow).toBeUndefined()
+    expect(style.issues.some(i => i.kind === 'unsupported-effect' && i.feature === 'effectRef')).toBe(true)
+  })
+
+  it('ignores theme references outside the style list without inventing or crashing', () => {
+    const style = resolveDrawingStyle(spPr(), ref(7), shadowTheme())
+    expect(style.shadow).toBeUndefined()
+    expect(style.issues.some(i => i.feature === 'effectRef')).toBe(false)
+  })
+
+  it('an explicit empty local effectLst suppresses the theme style shadow', () => {
+    const style = resolveDrawingStyle(spPr('<a:effectLst/>'), ref(2), shadowTheme())
+    expect(style.shadow).toBeUndefined()
+    expect(style.issues.some(i => i.kind === 'unsupported-effect')).toBe(false)
+  })
+
+  it('a local effectDag suppresses the theme style shadow', () => {
+    const style = resolveDrawingStyle(spPr('<a:effectDag><a:glow rad="50000"><a:srgbClr val="FFFF00"/></a:glow></a:effectDag>'), ref(2), shadowTheme())
+    expect(style.shadow).toBeUndefined()
+    expect(style.issues.some(i => i.feature === 'effectDag')).toBe(true)
+    expect(resolveDrawingStyle(spPr('<a:effectDag/>'), ref(2), shadowTheme()).shadow).toBeUndefined()
+  })
+
+  it('a local non-empty effectLst replaces the theme style effects', () => {
+    const style = resolveDrawingStyle(spPr('<a:effectLst><a:glow rad="50000"><a:srgbClr val="FFFF00"/></a:glow></a:effectLst>'), ref(2), shadowTheme())
+    expect(style.shadow).toBeUndefined()
+    expect(style.issues.some(i => i.kind === 'unsupported-effect' && i.feature === 'glow')).toBe(true)
+    expect(style.issues.some(i => i.kind === 'unsupported-effect' && i.feature === 'effectRef')).toBe(false)
+  })
+
+  it('a local outerShdw wins over the theme style shadow', () => {
+    const style = resolveDrawingStyle(spPr('<a:effectLst><a:outerShdw dist="142875" dir="5400000" blurRad="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst>'), ref(2), shadowTheme())
+    expect(style.shadow?.offsetY).toBeCloseTo(15, 1)
+    expect(style.shadow?.color).toEqual(rgba(0, 0, 0))
+  })
+
+  it('theme shadow takes precedence over the group cascade default, which returns when no ref applies', () => {
+    const cascade: DrawingStyle = { shadow: { color: rgba(0, 0, 0), blurPx: 0, offsetX: 5, offsetY: 5 }, issues: [] }
+    const themed = resolveDrawingStyle(spPr(), ref(2), shadowTheme(), cascade)
+    expect(themed.shadow?.offsetY).toBeCloseTo(20, 1)
+    expect(themed.shadow?.offsetX).toBeCloseTo(0, 1)
+    const local = resolveDrawingStyle(spPr('<a:effectLst/>'), undefined, shadowTheme(), cascade)
+    expect(local.shadow?.offsetY).toBeCloseTo(5, 1)
+  })
+
+  it('paints the theme-derived shadow ink below the shape', () => {
+    const style = resolveDrawingStyle(spPr(), ref(2), shadowTheme())
+    const { ctx, pixel } = surface(100, 100)
+    ctx.translate(20, 20)
+    paintGeometry(ctx, [rectangle(0, 0, 40, 40)], style, 40, 40)
+    expect(pixel(50, 62)[3]).toBeGreaterThan(0)
+    expect(pixel(50, 10)[3]).toBe(0)
   })
 })
