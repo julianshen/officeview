@@ -69,6 +69,20 @@ describe('textRangeBox', () => {
     expect(body.maxX).toBeCloseTo(920 + em / 2, 6)
   })
 
+  it('leaves text whose shadow or outline reaches past the box to its painted bounds (a mask clips outside it)', async () => {
+    const doc = await deck([{ runs: [{ text: 'Shadowed', sz: '2000' }] }])
+    const slide = doc.slides[0]!
+    const styled = (style: object) => {
+      const s = slide.shapes[0]!
+      return { ...s, textBody: { ...s.textBody!, paragraphs: s.textBody!.paragraphs.map(p => ({ ...p, runs: p.runs.map(r => ({ ...r, ...style })) })) } }
+    }
+    expect(textRangeBox([styled({ textShadow: { color: '#000', blurPx: 0, offsetX: 0, offsetY: 60 } })], slide, f => f, measure())).toBeUndefined()
+    expect(textRangeBox([styled({ textOutline: { color: '#000', widthPx: 40 } })], slide, f => f, measure())).toBeUndefined()
+    // A hairline outline stays inside: the box is PowerPoint's.
+    expect(textRangeBox([styled({ textOutline: { color: '#000', widthPx: 1 } })], slide, f => f, measure())).toBeDefined()
+    expect(textRangeBox([styled({ textShadow: { color: '#000', blurPx: 1, offsetX: 2, offsetY: 2 } })], slide, f => f, measure())).toBeDefined()
+  })
+
   it('leaves word and letter clones to their painted bounds', async () => {
     const doc = await deck([{ runs: [{ text: 'Alpha beta', sz: '4000' }] }])
     const slide = doc.slides[0]!

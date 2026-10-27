@@ -255,11 +255,13 @@ export function paintedBounds(nodes: readonly PptxShape[], slide: PptxSlide, res
  * lines' extent, em being each line's largest font size. Fit to PowerPoint's blinds frames (lo-tdf93868:
  * two 20 pt lines of Calibri to within a pixel, one 40 pt line to about two); the horizontal extent is unmeasured
  * and keeps the painted bounds' em/2 slack. Word and letter clones (`textClip`) are left out: their sweep box is
- * unmeasured and stays the painted bounds. Undefined without measurable horizontal text.
+ * unmeasured and stays the painted bounds. So is text whose shadow or outline reaches past the box: a mask clips
+ * outside its box even when complete, which would cut the effect off for good. Undefined in all those cases.
  */
 export function textRangeBox(nodes: readonly PptxShape[], slide: PptxSlide, resolveFont: FontResolver, measure: CanvasRenderingContext2D): Box | undefined {
   const { add, box } = boxUnion()
   const measurer = createTextBodyMeasurer(measure, resolveFont)
+  let clips = false
   walkLeaves(nodes, [1, 0, 0, 1, 0, 0], (shape, w, h, m) => {
     const body = shape.textBody
     if (!body || body.paragraphs.length === 0 || (body.direction && body.direction !== 'horz') || body.textWarp || textClip.has(shape)) return
@@ -267,16 +269,23 @@ export function textRangeBox(nodes: readonly PptxShape[], slide: PptxSlide, reso
     const lines = layoutTextBody(body, w, h, measurer, slide.theme).lines.filter(line => !keep || keep(line.paragraphIndex))
     if (lines.length === 0) return
     const first = lines[0], last = lines[lines.length - 1]
+    const top = first.baseline - 1.3 * lineEm(first), bottom = last.baseline + 0.9 * lineEm(last)
     let l = 0, r = w, slack = 0
     for (const line of lines) {
-      const em = lineEm(line)
-      slack = Math.max(slack, em / 2)
+      slack = Math.max(slack, lineEm(line) / 2)
       l = Math.min(l, line.x)
-      for (const s of line.segments) { l = Math.min(l, s.x); r = Math.max(r, s.x + s.width) }
+      for (const s of line.segments) {
+        l = Math.min(l, s.x); r = Math.max(r, s.x + s.width)
+        // How far the segment's shadow and outline reach past its line box, as paintedBounds measures them.
+        const sh = s.style.textShadow
+        const reach = (sh ? Math.min(Math.abs(sh.offsetX) || 0, 200) + Math.min(Math.abs(sh.offsetY) || 0, 200) + Math.min(Math.max(0, sh.blurPx || 0), 100) * 2 : 0)
+          + Math.min(s.style.textOutline?.widthPx ?? 0, 100)
+        if (reach > 0 && (line.y - reach < top || line.y + line.height + reach > bottom || reach > lineEm(line) / 2)) clips = true
+      }
     }
-    add(m, l - slack, first.baseline - 1.3 * lineEm(first), r + slack, last.baseline + 0.9 * lineEm(last))
+    add(m, l - slack, top, r + slack, bottom)
   })
-  return box()
+  return clips ? undefined : box()
 }
 
 /** True when any node carries text that `paintedBounds` would measure. */
