@@ -9,6 +9,7 @@ import { computeMetrics, computePrintMetrics, renderPrintPage, renderSheet } fro
 import { parseXlsx } from '../src/xlsx/parse'
 import { buildSheetGeometry, planViewport } from '../src/xlsx/view/viewport'
 import { createRowOrder } from '../src/xlsx/view/order'
+import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { viewportSparklineCandidates } from '../src/xlsx/view/renderViewport'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { registerSparklinePainter } from '../src/xlsx/sparklineLoader'
@@ -61,6 +62,46 @@ describe('XLSX sparkline rendering', () => {
     const y = print.printable.y + m.rowHeightsPx.slice(0, row).reduce((a, b) => a + b, 0) * print.scale
     const host = canvas.getContext('2d').getImageData(Math.floor(x), Math.floor(y), Math.ceil(m.colWidthsPx[col] * print.scale), Math.ceil(m.rowHeightsPx[row] * print.scale)).data
     expect([...host].some((value, i) => i % 4 !== 3 && value < 240)).toBe(true)
+  })
+
+  it('static export includes and paints a sparkline host beyond populated cells', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const { preloadSparklines } = await import('../src/xlsx/sparklineLoader')
+    await preloadSparklines()
+    const sparkline = [...sheet.resolvedSparklines!.values()][0].values().next().value!
+    const host = { row: 4, col: 25 }
+    sheet.rows = [{ index: 0, cells: Array.from({ length: 8 }, (_, col) => ({
+      ref: `${String.fromCharCode(65 + col)}1`, row: 0, col, value: col + 1, styleIndex: 0,
+    })) }]
+    sheet.mergeRanges = [{ minRow: 1, minCol: 1, maxRow: 7, maxCol: 6 }]
+    sheet.resolvedSparklines = new Map([[host.row, new Map([[host.col, { ...sparkline, host }]])]])
+
+    const source = createObjectWorkbookSource(doc, 'sparkline-host-extent')
+    try {
+      expect(source.store(source.sheets[0].sheetId).extent.used).toEqual({ r0: 0, r1: host.row, c0: 0, c1: host.col })
+    } finally { await source.release() }
+
+    const pages = await getPaintables(doc)
+    try {
+      const page = pages[0]
+      expect(page.spec.widthPx).toBeGreaterThan(0)
+      const canvas = createCanvas(page.spec.widthPx, page.spec.heightPx), ctx = canvas.getContext('2d')
+      page.paint(ctx as unknown as CanvasRenderingContext2D)
+      const metrics = computeMetrics(sheet)
+      expect(metrics.colWidthsPx.length).toBeGreaterThan(host.col)
+      expect(metrics.rowHeightsPx.length).toBeGreaterThan(host.row)
+      const x = metrics.colWidthsPx.slice(0, host.col).reduce((sum, width) => sum + width, 0)
+      const y = metrics.rowHeightsPx.slice(0, host.row).reduce((sum, height) => sum + height, 0)
+      const width = metrics.colWidthsPx[host.col], height = metrics.rowHeightsPx[host.row]
+      const pixels = ctx.getImageData(x, y, width, height).data
+      const color = sparkline.group.colors.series?.slice(2).toUpperCase() ?? '000000'
+      let ink = 0
+      for (let i = 0; i < pixels.length; i += 4) {
+        const matches = [0, 1, 2].reduce((sum, channel) => sum + Math.abs(pixels[i + channel] - parseInt(color.slice(channel * 2, channel * 2 + 2), 16)), 0) < 100
+        if (matches && pixels[i + 2] > pixels[i] + 16 && pixels[i + 1] > pixels[i] + 8 && pixels[i + 3] > 0) ink++
+      }
+      expect(ink).toBeGreaterThan(0)
+    } finally { pages.dispose() }
   })
 
   it('renderSheet returns normally with the lazy painter loaded', async () => {
