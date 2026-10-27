@@ -48,10 +48,27 @@ export interface ThemeContext {
   fillStyles: FillDefinition[]
   bgFillStyles: FillDefinition[]
   lineStyles: LineDefinition[]
-  effectStyles: string[][]
+  effectStyles: EffectStyleDefinition[]
   issues: DrawingIssue[]
 }
 export type RectAlignment = 'tl' | 't' | 'tr' | 'l' | 'ctr' | 'r' | 'bl' | 'b' | 'br'
+
+/** Authored a:outerShdw attributes; dist/blurRad raw EMU, dir in 60000ths of a degree. The color child stays unresolved — its phClr must be fed the referencing color. */
+export interface ShadowDefinition {
+  color?: ColorDefinition
+  dist?: number
+  dir?: number
+  blurRad?: number
+  algn?: string
+  rotWithShape?: string
+  /** Non-default sx/sy/kx/ky detected at parse time; diagnosed at resolve. */
+  scaledOrSkewed?: boolean
+}
+export interface EffectStyleDefinition {
+  /** Effect element names with no renderable counterpart (glow, reflection, scene3d, ...). */
+  names: string[]
+  shadow?: ShadowDefinition
+}
 
 export interface DrawingShadow {
   color: DrawingColor
@@ -354,6 +371,53 @@ export function parseLineDefinition(node: XmlNode | undefined, issues: DrawingIs
   if (tail) line.tailEnd = tail
   return line
 }
+
+/** Extract the authored a:outerShdw attributes; the color child is kept unresolved for phClr. */
+function parseOuterShadow(child: XmlNode): ShadowDefinition {
+  const a = attrs(child)
+  const sx = percentage(a.sx) ?? 1, sy = percentage(a.sy) ?? 1, kx = (numeric(a.kx) ?? 0) / 60000, ky = (numeric(a.ky) ?? 0) / 60000
+  return {
+    ...(a.dist !== undefined ? { dist: numeric(a.dist) } : {}),
+    ...(a.dir !== undefined ? { dir: numeric(a.dir) } : {}),
+    ...(a.blurRad !== undefined ? { blurRad: numeric(a.blurRad) } : {}),
+    ...(a.algn !== undefined ? { algn: a.algn } : {}),
+    ...(a.rotWithShape !== undefined ? { rotWithShape: a.rotWithShape } : {}),
+    ...(sx !== 1 || sy !== 1 || kx !== 0 || ky !== 0 ? { scaledOrSkewed: true } : {}),
+    color: parseDrawingColor(child),
+  }
+}
+
+const validShadowAlgns: readonly RectAlignment[] = ['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br'] as const
+
+/**
+ * Resolves an authored outer shadow into a canvas DrawingShadow. Shared by the
+ * spPr effectLst path and theme effectRef (effectStyle) shadows; `placeholder`
+ * resolves the shadow color's phClr.
+ */
+function resolveShadowDefinition(def: ShadowDefinition, placeholder: DrawingColor | undefined, theme: ThemeContext | undefined, issues: DrawingIssue[]): DrawingShadow {
+  const distPx = Math.max(0, def.dist ?? 0) / 9525
+  const blurPx = Math.min(100, Math.max(0, (def.blurRad ?? 0) / 9525))
+  const dirRad = ((def.dir ?? 0) / 60000) * Math.PI / 180
+  // Same DoS posture as text shadows (MAX_SHADOW_OFFSET_PX): hostile
+  // distances clamp per axis instead of projecting silhouettes megameters
+  // off-canvas.
+  const clampAxis = (n: number): number => Math.min(200, Math.max(-200, n))
+  const offsetX = clampAxis(Math.cos(dirRad) * distPx)
+  const offsetY = clampAxis(Math.sin(dirRad) * distPx)
+  const algn = def.algn !== undefined && (validShadowAlgns as readonly string[]).includes(def.algn) ? def.algn as RectAlignment : undefined
+  const rotWithShape = def.rotWithShape !== undefined ? !['0', 'false'].includes(def.rotWithShape) : true
+  // CT_OuterShadowEffect scale/skew (sx/sy ST_Percentage default 100%,
+  // kx/ky ST_FixedAngle default 0) apply about the algn anchor before the
+  // dist/dir translation. Canvas 2D shadow projection paints the
+  // unscaled silhouette, so non-default values are diagnosed and the
+  // shadow falls back to the pure dist/dir offset. (Per MS-OI29500,
+  // spPr shadows only render at 100% sx/sy anyway; ignoring scale here
+  // matches Office for every conformant spPr shadow.)
+  if (def.scaledOrSkewed) issue(issues, 'unsupported-effect', 'Scaled or skewed outer shadows render unscaled; sx/sy/kx/ky are deferred', 'outerShdw-scale')
+  const color = resolveDrawingColor(def.color, theme, placeholder, issues) ?? { r: 0, g: 0, b: 0, a: 1 }
+  return { color, blurPx, offsetX, offsetY, ...(algn ? { algn } : {}), rotWithShape }
+}
+
 function parseFonts(node: XmlNode | undefined): ThemeFonts {
   const fonts: ThemeFonts = { supplemental: {} }
   for (const [xmlName, field] of [['latin', 'latin'], ['ea', 'eastAsian'], ['cs', 'complexScript']] as const) {
@@ -391,11 +455,19 @@ export function parseThemeContext(input?: string | XmlNode, colorMap: Record<str
   }
   for (const child of getChildren(getChild(format, 'lnStyleLst'), 'ln')) theme.lineStyles.push(parseLineDefinition(child, theme.issues) ?? {})
   for (const child of getChildren(getChild(format, 'effectStyleLst'), 'effectStyle')) {
-    const effects = orderedChildren(getChild(child, 'effectLst')).filter(([n]) => n !== '#text').map(([n]) => n)
-    if (getChild(child, 'effectDag')) effects.push('effectDag')
-    if (getChild(child, 'scene3d')) effects.push('scene3d')
-    if (getChild(child, 'sp3d')) effects.push('sp3d')
-    theme.effectStyles.push(effects)
+    const names: string[] = []
+    let shadow: ShadowDefinition | undefined
+    for (const [name, effect] of orderedChildren(getChild(child, 'effectLst'))) {
+      if (name === '#text') continue
+      // The shadow is the only renderable effect in a theme effect style so far;
+      // everything else stays deferred through `names`.
+      if (name === 'outerShdw') shadow = parseOuterShadow(effect)
+      else names.push(name)
+    }
+    if (getChild(child, 'effectDag')) names.push('effectDag')
+    if (getChild(child, 'scene3d')) names.push('scene3d')
+    if (getChild(child, 'sp3d')) names.push('sp3d')
+    theme.effectStyles.push({ names, ...(shadow ? { shadow } : {}) })
   }
   return theme
 }
@@ -491,53 +563,34 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
       if (inheritedLine?.[end] || directLine?.[end]) line[end] = { type: 'none', width: 'med', length: 'med', ...defaults.line?.[end], ...inheritedLine?.[end], ...directLine?.[end] }
     }
   }
-  // Under DrawingML group effect model, group shadow cascades to child shapes.
-  // We defensive-copy defaults.shadow to avoid aliasing and mutation bleed.
+  // Effect precedence, matched against PowerPoint: an explicit spPr effect
+  // list (even an empty <a:effectLst/>) fully replaces the theme style
+  // effects referenced by a:effectRef, and its authored outerShdw wins. A
+  // theme effectRef shadow in turn replaces the group cascade default — the
+  // style reference is the shape's own declaration in the DrawingML
+  // precedence model (direct properties > style references > container
+  // defaults). Away from explicit declarations the cascade stays untouched.
   let shadow: DrawingShadow | undefined = defaults.shadow ? { ...defaults.shadow } : undefined
   const effectLst = getChild(spPr, 'effectLst')
   if (effectLst) {
     for (const [name, child] of orderedChildren(effectLst)) {
       if (name === '#text') continue
-      if (name === 'outerShdw') {
-        const a = attrs(child)
-        const distNum = numeric(a.dist) ?? 0
-        const dirNum = numeric(a.dir) ?? 0
-        const blurNum = numeric(a.blurRad) ?? 0
-        const distPx = Math.max(0, distNum) / 9525
-        const blurPx = Math.min(100, Math.max(0, blurNum / 9525))
-        const dirRad = ((dirNum / 60000) * Math.PI) / 180
-        // Same DoS posture as text shadows (MAX_SHADOW_OFFSET_PX): hostile
-        // distances clamp per axis instead of projecting silhouettes megameters
-        // off-canvas.
-        const clampAxis = (n: number): number => Math.min(200, Math.max(-200, n))
-        const offsetX = clampAxis(Math.cos(dirRad) * distPx)
-        const offsetY = clampAxis(Math.sin(dirRad) * distPx)
-        const rawAlgn = a.algn
-        const validAlgns: readonly RectAlignment[] = ['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br'] as const
-        const algn = typeof rawAlgn === 'string' && (validAlgns as readonly string[]).includes(rawAlgn)
-          ? (rawAlgn as RectAlignment)
-          : undefined
-        const rotWithShape = a.rotWithShape !== undefined
-          ? !['0', 'false'].includes(a.rotWithShape)
-          : true
-        // CT_OuterShadowEffect scale/skew (sx/sy ST_Percentage default 100%,
-        // kx/ky ST_FixedAngle default 0) apply about the algn anchor before the
-        // dist/dir translation. Canvas 2D shadow projection paints the
-        // unscaled silhouette, so non-default values are diagnosed and the
-        // shadow falls back to the pure dist/dir offset. (Per MS-OI29500,
-        // spPr shadows only render at 100% sx/sy anyway; ignoring scale here
-        // matches Office for every conformant spPr shadow.)
-        const sx = percentage(a.sx) ?? 1
-        const sy = percentage(a.sy) ?? 1
-        const kx = (numeric(a.kx) ?? 0) / 60000
-        const ky = (numeric(a.ky) ?? 0) / 60000
-        if (sx !== 1 || sy !== 1 || kx !== 0 || ky !== 0) {
-          issue(issues, 'unsupported-effect', 'Scaled or skewed outer shadows render unscaled; sx/sy/kx/ky are deferred', 'outerShdw-scale')
+      if (name === 'outerShdw') shadow = resolveShadowDefinition(parseOuterShadow(child), fillPlaceholder, theme, issues)
+      else issue(issues, 'unsupported-effect', `Drawing effect ${name} is deferred`, name)
+    }
+  } else {
+    const effectRef = getChild(style, 'effectRef')
+    if (effectRef) {
+      const index = referenceIndex(effectRef, issues)
+      if (index) {
+        const definition = theme?.effectStyles[index - 1]
+        if (definition) {
+          if (definition.names.length) issue(issues, 'unsupported-effect', `Theme effect style ${index} is deferred`, 'effectRef')
+          if (definition.shadow) {
+            const placeholder = resolveDrawingColor(parseDrawingColor(effectRef), theme, undefined, issues)
+            shadow = resolveShadowDefinition(definition.shadow, placeholder, theme, issues)
+          }
         }
-        const color = resolveDrawingColor(parseDrawingColor(child), theme, fillPlaceholder, issues) ?? { r: 0, g: 0, b: 0, a: 1 }
-        shadow = { color, blurPx, offsetX, offsetY, ...(algn ? { algn } : {}), rotWithShape }
-      } else {
-        issue(issues, 'unsupported-effect', `Drawing effect ${name} is deferred`, name)
       }
     }
   }
@@ -546,11 +599,6 @@ export function resolveDrawingStyle(spPr?: XmlNode, style?: XmlNode, theme?: The
     issue(issues, 'unsupported-effect', 'Drawing effects are deferred', 'effectDag')
   }
   for (const name of ['sp3d', 'scene3d']) if (getChild(spPr, name)) issue(issues, 'unsupported-3d', 'Drawing 3D effects are deferred', name)
-  const effectRef = getChild(style, 'effectRef')
-  if (effectRef) {
-    const index = referenceIndex(effectRef, issues)
-    if (index && theme?.effectStyles[index - 1]?.length) issue(issues, 'unsupported-effect', `Theme effect style ${index} is deferred`, 'effectRef')
-  }
   return { ...(fill ? { fill } : {}), ...(line ? { line } : {}), ...(shadow ? { shadow } : {}), issues }
 }
 
