@@ -80,6 +80,17 @@ describe('xlsx sparkline reference workbooks', () => {
       expect(styles, c.id).not.toContain('indexedColors')
       const plainSheet = await plain.file('xl/worksheets/sheet1.xml')!.async('string')
       expect(plainSheet, c.id).toContain('showGridLines="' + (c.id === 'layering' ? '1' : '0') + '"')
+      // Host geometry: 40 characters wide (OOXML 40.7109375) and 60 pt high, except the tiny-cell case.
+      const [width, height] = c.id === 'line-tiny-cell' ? ['2.7109375', '5'] : ['40.7109375', '60']
+      c.sheets.forEach((sheet, i) => {
+        const xml = i === 0 ? plainSheet : ''
+        for (const g of sheet.groups) for (const sp of g.sparklines) {
+          const m = /^([A-Z]+)(\d+)$/.exec(sp.sqref)!
+          expect(xml, `${c.id} row of ${sp.sqref}`).toContain(`<row r="${m[2]}" ht="${height}" customHeight="1"`)
+          const col = [...m[1]].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0)
+          expect(xml, `${c.id} column of ${sp.sqref}`).toContain(`<col min="${col}" max="${col}" width="${width}" customWidth="1"/>`)
+        }
+      })
     }
   })
 })
