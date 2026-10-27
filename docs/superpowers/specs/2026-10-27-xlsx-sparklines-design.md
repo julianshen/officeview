@@ -1,13 +1,13 @@
 # XLSX Sparklines — Design Spec
 
-**Status:** draft 8.
+**Status:** draft 9.
 - Builder check folded in.
 - Round 1: agy and codex both returned REQUEST CHANGES. Their findings are addressed here, marked **[rev]** with reviewer and finding.
 - Round 2: agy APPROVE; codex resolved all 7 and raised R2-1 (reply and cache byte budget), addressed in draft 4.
 - Round 3: codex asked for receiver-side pre-admission (R2-1 continued), addressed in draft 5.
 - Round 4: codex resolved R2-1 and raised R4-1 (worker success-path release), addressed in draft 6.
 - Round 5: codex APPROVE.
-- Draft 7 adds §3.1 (LibreOffice study, owner request) and its consequences. Round 6: agy APPROVE; codex R6-1 to R6-3 addressed in draft 8.
+- Draft 7 adds §3.1 (LibreOffice study, owner request) and its consequences. Round 6: agy APPROVE; codex R6-1 to R6-3 addressed in draft 8. Round 7: codex R7-1 (multi-range is non-conforming) addressed in draft 9.
 **Date:** 2026-10-27 · **Baseline:** `main` @ `38ed2b1`.
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -108,7 +108,7 @@ LibreOffice Calc's sparkline source (`sc/`, MPL-2.0) was studied for behaviour o
 
 LibreOffice never states that a constant was measured against Excel. Its geometry is therefore a second hypothesis, never evidence, and Excel references (§8) decide.
 
-**What it teaches about input files (LibreOffice-written XLSX).** These are inferred from LibreOffice's exporter source (`sc/source/filter/excel/export/SparklineExt.cxx`, `ExportTools.cxx`), not observed in a saved file. **[rev]** (codex R6-2) Every behaviour below is schema-valid input that the viewer must handle anyway, so nothing here depends on the inference being exact. A LibreOffice-written fixture (§3) confirms them when it is obtained.
+**What it teaches about input files (LibreOffice-written XLSX).** These are inferred from LibreOffice's exporter source (`sc/source/filter/excel/export/SparklineExt.cxx`, `ExportTools.cxx`), not observed in a saved file. **[rev]** (codex R6-2) Every behaviour below except multiple ranges is schema-valid input that the viewer must handle anyway, so nothing there depends on the inference being exact. Multiple ranges are non-conforming: MS-XLSX CT_Sparkline defines a single area. They keep the fail-closed rule in §6.5 unless Excel references justify support. **[rev]** (codex R7-1) A LibreOffice-written fixture (§3) confirms them when it is obtained.
 - **Default attributes are omitted.** Every attribute equal to its schema default is left out, false booleans are never written, and `manualMin`/`manualMax` appear only with `custom`. Applying the §3 defaults correctly is therefore essential, not an edge case.
 - **Unused colour elements are omitted entirely**, so a file can lack `colorAxis`, `colorMarkers` and others. A missing colour element is normal input, not malformed input (§5.5).
 - **Theme colours** are written as `theme` plus `tint`, and RGB colours as 8-hex `rgb`. Tints may be negative (shades). LibreOffice's own renderer ignores negative tints, which is a known LibreOffice bug and must not be copied.
