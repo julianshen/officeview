@@ -715,16 +715,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const sheetId = dataSheet.sheetId ?? dataSheet.name
         const sheetEntry = entries.get(sheetId)
         const input = viewInput(sheetId)
-        const entryMatchesInput = sheetEntry?.revision === input.revision
-        const visibility = input.visibility ?? (entryMatchesInput ? sheetEntry?.view.visibility : undefined)
+        // A stale external prop cannot regress a view the workbook has already
+        // committed for this source sheet.
+        const committedView = sheetEntry && sheetEntry.revision >= input.revision ? sheetEntry.view : undefined
+        const visibility = committedView?.visibility ?? input.visibility
         if (!visibility) continue
-        let baseHidden = sheetEntry?.view.baseHidden
+        let baseHidden = committedView?.baseHidden
         if (!baseHidden) {
           if (remote) { try { baseHidden = remote.geometry(sheetId).baseHidden } catch { continue } }
           else baseHidden = sheetBaseHidden(dataSheet)
         }
         sparklineViews.set(dataSheet.name.toLowerCase(), {
-          order: input.order ?? (entryMatchesInput ? sheetEntry?.view.order : undefined) ?? createIdentityOrder(),
+          order: committedView?.order ?? input.order ?? createIdentityOrder(),
           visibility,
           baseHidden,
         })

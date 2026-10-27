@@ -303,6 +303,34 @@ describe('XLSX sparkline rendering', () => {
     expect(authoredCandidate.get(row)?.has(col)).toBe(true)
   })
 
+  it('omits every member of a group-scaled sparkline group when one member is filter-hidden', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const [, baseColumns] = [...sheet.resolvedSparklines!.entries()][0], base = [...baseColumns.values()][0]
+    const geometry = buildSheetGeometry(sheet)
+    if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+    const views = new Map([[sheet.name.toLowerCase(), {
+      order: geometry.metrics.order,
+      visibility: { visible: (slot: number) => slot !== 2 },
+      baseHidden: { contains: () => false },
+    }]])
+    const plan = { kind: 'detail', merges: [] } as unknown as import('../src/xlsx/view/viewport').ViewportPlan
+    for (const [minAxisType, maxAxisType] of [['group', 'individual'], ['individual', 'group']] as const) {
+      const group = {
+        ...base.group, minAxisType, maxAxisType,
+        sparklines: [
+          { ...base.group.sparklines[0], host: { row: 0, col: 0 } },
+          { ...base.group.sparklines[0], host: { row: 0, col: 1 } },
+        ],
+      }
+      const first = { ...base, host: { row: 0, col: 0 }, sourceRows: [0, 1], values: [1, 2], group }
+      const second = { ...base, host: { row: 0, col: 1 }, sourceRows: [2, 3], values: [10, 80], group }
+      sheet.resolvedSparklines = new Map([[0, new Map([[0, first], [1, second]])]])
+      const candidates = viewportSparklineCandidates(sheet, geometry, { box: { x: 0, y: 0, width: 160, height: 48 }, zoom: 1, deviceScale: 1 }, plan, views)
+      expect(candidates.size).toBe(0)
+    }
+    expect(sheet.diagnostics?.filter(item => item.feature === 'sparkline-filter-hidden')).toHaveLength(1)
+  })
+
   it('paints a last-cell sparkline when a tile crosses the sheet boundary', async () => {
     const doc = await parse(), sheet = doc.sheets[0]
     const { preloadSparklines, registerSparklinePainter } = await import('../src/xlsx/sparklineLoader')

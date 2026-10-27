@@ -15,6 +15,7 @@ import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '.
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
 import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
+import type { ResolvedSparkline } from '../sparklines/resolve'
 import { belowDetail } from './viewport'
 
 /** The host side of canonical records (spec §11.2): the same formatting and text
@@ -112,29 +113,48 @@ export function viewportSparklineCandidates(
   if (geometry.kind !== 'ready' || !sheet.resolvedSparklines?.size) return candidates
   const { x, y, width, height } = viewport.box
   const visibleRows = new Set<number>(), visibleCols = new Set<number>()
+  const groupFiltered = new Map<ResolvedSparkline['group'], boolean>()
+  const resolved = sheet.resolvedSparklines
   for (const run of geometry.metrics.rows.visibleBetween(y, y + height).runs) {
     for (let slot = run.start; slot <= run.end; slot++) visibleRows.add(geometry.metrics.order.displayToSource(slot))
   }
   for (const run of geometry.metrics.cols.visibleBetween(x, x + width).runs) {
     for (let col = run.start; col <= run.end; col++) visibleCols.add(col)
   }
-  const add = (row: number, col: number) => {
-    const sparkline = sheet.resolvedSparklines!.get(row)?.get(col)
-    if (!sparkline) return
+  const sourceFiltered = (sparkline: ResolvedSparkline): boolean => {
     const view = views?.get(sparkline.dataSheet.toLowerCase())
-    if (view?.visibility && sparkline.sourceRows.some(sourceRow => {
+    return Boolean(view?.visibility && sparkline.sourceRows.some(sourceRow => {
       const slot = view.order.sourceToDisplay(sourceRow)
       return !view.visibility!.visible(slot) && !view.baseHidden?.contains(sourceRow)
-    })) {
+    }))
+  }
+  const groupHasFilteredMember = (sparkline: ResolvedSparkline): boolean => {
+    const { group } = sparkline
+    if (group.minAxisType !== 'group' && group.maxAxisType !== 'group') return false
+    const cached = groupFiltered.get(group)
+    if (cached !== undefined) return cached
+    let hidden = false
+    for (const definition of group.sparklines) {
+      const host = definition.host
+      const member = host ? resolved.get(host.row)?.get(host.col) : undefined
+      if (member?.group === group && sourceFiltered(member)) { hidden = true; break }
+    }
+    groupFiltered.set(group, hidden)
+    return hidden
+  }
+  const add = (row: number, col: number) => {
+    const sparkline = resolved.get(row)?.get(col)
+    if (!sparkline) return
+    if (groupHasFilteredMember(sparkline) || sourceFiltered(sparkline)) {
       const diagnostics = (sheet.diagnostics ??= [])
-      if (!diagnostics.some(item => item.feature === 'sparkline-filter-hidden')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-filter-hidden', message: 'Sparkline omitted because its data intersects rows hidden by the viewer filter' })
+      if (!diagnostics.some(item => item.feature === 'sparkline-filter-hidden')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-filter-hidden', message: 'Sparkline or group omitted because member data intersects rows hidden by the viewer filter' })
       return
     }
     let columns = candidates.get(row)
     if (!columns) candidates.set(row, columns = new Set())
     columns.add(col)
   }
-  for (const row of visibleRows) for (const col of sheet.resolvedSparklines.get(row)?.keys() ?? []) if (visibleCols.has(col)) add(row, col)
+  for (const row of visibleRows) for (const col of resolved.get(row)?.keys() ?? []) if (visibleCols.has(col)) add(row, col)
   if (plan.kind === 'detail') for (const merge of plan.merges) add(merge.range.minRow, merge.range.minCol)
   return candidates
 }

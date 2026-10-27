@@ -50,7 +50,7 @@ it('uses the latest external source-sheet filter when an inactive sheet owns a s
     }
     return true
   })
-  const sparkline = { host: { row: 0, col: 0 }, dataSheet: 'Source', sourceRows: [0] }
+  const sparkline = { host: { row: 0, col: 0 }, dataSheet: 'Source', sourceRows: [0], group: { minAxisType: 'individual', maxAxisType: 'individual' } }
   const document: XlsxDocument = { sheets: [
     { name: 'Host', sheetId: 'A', rows: [{ index: 0, cells: [] }], cols: [], merges: [], mergeRanges: [],
       resolvedSparklines: new Map([[0, new Map([[0, sparkline as never]])]]) },
@@ -69,6 +69,15 @@ it('uses the latest external source-sheet filter when an inactive sheet owns a s
     await waitFor(() => expect(hostCandidates.slice(-10).some(Boolean)).toBe(true), FIRST_PAINT_WAIT)
     ui.rerender(<InteractiveSheetDoc doc={document} views={{ B: { revision: 2, visibility: hidden } }} />)
     await waitFor(() => expect(document.sheets[0].diagnostics?.some(item => item.feature === 'sparkline-filter-hidden')).toBe(true), FIRST_PAINT_WAIT)
+    fireEvent.change(worksheet, { target: { value: 'B' } })
+    await waitFor(() => expect((worksheet as HTMLSelectElement).value).toBe('B'), FIRST_PAINT_WAIT)
+    fireEvent.change(worksheet, { target: { value: 'A' } })
+    await waitFor(() => expect((worksheet as HTMLSelectElement).value).toBe('A'), FIRST_PAINT_WAIT)
+    const priorCandidates = hostCandidates.length
+    ui.rerender(<InteractiveSheetDoc doc={document} views={{ B: { revision: 1, visibility: visible } }} watermark={{ text: 'refresh', opacity: 0.2 }} />)
+    fireEvent.click(ui.getByRole('button', { name: 'Zoom in' }))
+    await waitFor(() => expect(hostCandidates.length).toBeGreaterThan(priorCandidates), FIRST_PAINT_WAIT)
+    expect(hostCandidates.slice(priorCandidates).every(hasHost => !hasHost)).toBe(true)
   } finally {
     cleanup()
     registerSparklinePainter(paint.paintSparklinesIn)
