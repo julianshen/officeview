@@ -299,6 +299,10 @@ let copySerial = 0
 function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): ReactElement {
   const { doc, docId, views, watermark, fallbackFonts, allowCopy = true, allowPrint = true, showSearch = true, showZoomControls = true } = props
   const sheetIds = useMemo(() => doc.sheets.map(sheetIdOf), [doc])
+  const hasResolvedSparklines = useMemo(
+    () => doc.sheets.some(sheet => Boolean(sheet.resolvedSparklines?.size)),
+    [doc],
+  )
   const [activeSheetId, setActiveSheetId] = useState(sheetIds[0] ?? '')
   const [, setTick] = useState(0)
   const rerender = useCallback(() => setTick(tick => tick + 1), [])
@@ -702,25 +706,28 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // live, open owner instead of a closed one.
     if (entry) bindOverflowCache(entry.geometry, overflowFor())
     if (!entry || !scroll) return null
-    const sparklineViews = new Map<string, import('../../xlsx/view/renderViewport').SparklineViewState>()
-    for (const dataSheet of doc.sheets) {
-      const sheetId = dataSheet.sheetId ?? dataSheet.name
-      const sheetEntry = entries.get(sheetId)
-      const input = sheetEntry?.input ?? viewInput(sheetId)
-      if (!input.visibility) continue
-      let baseHidden = sheetEntry?.view.baseHidden
-      if (!baseHidden) {
-        if (remote) { try { baseHidden = remote.geometry(sheetId).baseHidden } catch { continue } }
-        else baseHidden = sheetBaseHidden(dataSheet)
+    let sparklineViews: Map<string, import('../../xlsx/view/renderViewport').SparklineViewState> | undefined
+    if (hasResolvedSparklines) {
+      sparklineViews = new Map()
+      for (const dataSheet of doc.sheets) {
+        const sheetId = dataSheet.sheetId ?? dataSheet.name
+        const sheetEntry = entries.get(sheetId)
+        const input = sheetEntry?.input ?? viewInput(sheetId)
+        if (!input.visibility) continue
+        let baseHidden = sheetEntry?.view.baseHidden
+        if (!baseHidden) {
+          if (remote) { try { baseHidden = remote.geometry(sheetId).baseHidden } catch { continue } }
+          else baseHidden = sheetBaseHidden(dataSheet)
+        }
+        sparklineViews.set(dataSheet.name.toLowerCase(), {
+          order: sheetEntry?.view.order ?? input.order ?? createIdentityOrder(),
+          visibility: sheetEntry?.view.visibility ?? input.visibility,
+          baseHidden,
+        })
       }
-      sparklineViews.set(dataSheet.name.toLowerCase(), {
-        order: sheetEntry?.view.order ?? input.order ?? createIdentityOrder(),
-        visibility: sheetEntry?.view.visibility ?? input.visibility,
-        baseHidden,
-      })
     }
     return {
-      sheet: entry.sheet, geometry: entry.geometry, sparklineViews, identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
+      sheet: entry.sheet, geometry: entry.geometry, ...(sparklineViews ? { sparklineViews } : {}), identity, colors: palette.colors, paletteKey: palette.key, origin: scroll.logicalOrigin, viewport, zoom: scroll.zoom, dpr,
       extent: { width: entry.metrics.cols.totalCss(), height: entry.metrics.rows.totalCss() },
       assets: assets?.lease.assets, layoutCache: entry.layoutCache, layoutAdmission, layoutHost: layoutHost(entry.sheet), merges: entry.merges, ...(mark ? { watermark: mark } : {}),
       structureGen: entry.structureGen,
