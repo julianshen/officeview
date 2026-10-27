@@ -7,7 +7,9 @@ import { OfficePackage } from '../src/core/zip'
 import { getPaintables } from '../src/render/paint'
 import { computeMetrics, computePrintMetrics, renderPrintPage, renderSheet } from '../src/xlsx/render'
 import { parseXlsx } from '../src/xlsx/parse'
-import { buildSheetGeometry } from '../src/xlsx/view/viewport'
+import { buildSheetGeometry, planViewport } from '../src/xlsx/view/viewport'
+import { createRowOrder } from '../src/xlsx/view/order'
+import { viewportSparklineCandidates } from '../src/xlsx/view/renderViewport'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { registerSparklinePainter } from '../src/xlsx/sparklineLoader'
 import { sparklinePrimitivesForViewport, translateSparkPrimitive } from '../src/xlsx/sparklines/paint'
@@ -67,6 +69,20 @@ describe('XLSX sparkline rendering', () => {
     await preloadSparklines()
     const m = computeMetrics(doc.sheets[0]), canvas = createCanvas(m.widthPx, m.heightPx)
     expect(() => renderSheet(doc.sheets[0], canvas.getContext('2d') as unknown as CanvasRenderingContext2D, m)).not.toThrow()
+  })
+
+  it('derives sparkline zoom from the canvas transform without a public renderSheet parameter', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const original = (await import('../src/xlsx/sparklines/paint')).paintSparklinesIn
+    let seen: number | undefined
+    registerSparklinePainter(((...args) => { seen = args[4].zoom; return true }) as typeof original)
+    try {
+      const m = computeMetrics(sheet), canvas = createCanvas(Math.ceil(m.widthPx * 0.75), Math.ceil(m.heightPx * 0.75)), ctx = canvas.getContext('2d')
+      ctx.scale(0.75, 0.75)
+      renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m)
+      expect(seen).toBe(0.75)
+      expect(renderSheet.length).toBe(6)
+    } finally { registerSparklinePainter(original) }
   })
 
   it('a viewport tile seam through a host matches one wide tile at every zoom and device scale', async () => {
@@ -135,6 +151,72 @@ describe('XLSX sparkline rendering', () => {
     let blue = 0
     for (let i = 0; i < data.length; i += 4) if (data[i + 2] > data[i] + 16 && data[i + 1] > data[i] + 8) blue++
     expect(blue).toBe(0)
+  })
+
+  it('selects hosts by sorted display slots and maps them back to source rows', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const [hostRow, columns] = [...sheet.resolvedSparklines!.entries()][0], [hostCol] = [...columns.keys()]
+    const lastSlot = Math.max(2, hostRow)
+    const displayOrder = Array.from({ length: lastSlot + 1 }, (_, row) => row).filter(row => row !== hostRow)
+    displayOrder.push(hostRow)
+    const geometry = buildSheetGeometry(sheet, { order: createRowOrder([{ r0: 0, r1: lastSlot, sourceAtOffset: new Uint32Array(displayOrder) }]) })
+    if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+    const height = geometry.metrics.rows.start(lastSlot)
+    const plan = { kind: 'detail', merges: [] } as unknown as import('../src/xlsx/view/viewport').ViewportPlan
+    const candidates = viewportSparklineCandidates(sheet, geometry, { box: { x: 0, y: 0, width: geometry.metrics.cols.totalCss(), height }, zoom: 1, deviceScale: 1 }, plan)
+    expect(geometry.metrics.order.sourceToDisplay(hostRow)).toBe(lastSlot)
+    expect(candidates.get(hostRow)?.has(hostCol) ?? false).toBe(false)
+  })
+
+  it('includes a merged host anchor in a tile that intersects only the far side of its merge', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const [row, columns] = [...sheet.resolvedSparklines!.entries()][0], [col] = [...columns.keys()]
+    sheet.mergeRanges.push({ minRow: row, minCol: col, maxRow: row, maxCol: col + 1 })
+    const geometry = buildSheetGeometry(sheet)
+    if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+    const anchor = geometry.metrics.sourceCellToLogical({ row, col })!
+    const farCell = geometry.metrics.sourceCellToLogical({ row, col: col + 1 })!
+    const split = anchor.x + anchor.width
+    const viewport = { box: { x: split, y: anchor.y, width: farCell.width, height: 100 }, zoom: 1, deviceScale: 1 }
+    const plan = planViewport(geometry, viewport)
+    expect(plan.kind).toBe('detail')
+    if (plan.kind !== 'detail') throw new Error('expected detail plan')
+    expect(plan.merges.some(merge => merge.range.minRow === row && merge.range.minCol === col)).toBe(true)
+    const visible = viewportSparklineCandidates(sheet, geometry, viewport, plan)
+    expect(visible.get(row)?.has(col)).toBe(true)
+    const leftViewport = { box: { x: anchor.x, y: anchor.y, width: anchor.width, height: 100 }, zoom: 1, deviceScale: 1 }
+    const leftPlan = planViewport(geometry, leftViewport)
+    expect(leftPlan.kind).toBe('detail')
+    if (leftPlan.kind !== 'detail') throw new Error('expected detail plan')
+    expect(viewportSparklineCandidates(sheet, geometry, leftViewport, leftPlan).get(row)?.has(col)).toBe(true)
+    let rectCalls = 0
+    const painter = (await import('../src/xlsx/sparklines/paint')).paintSparklinesIn
+    painter(createCanvas(128, 128).getContext('2d') as unknown as CanvasRenderingContext2D, sheet, () => { rectCalls++; return { x: -10, y: 0, width: 100, height: 20 } }, { r0: 99, c0: 99, r1: 100, c1: 100 }, { zoom: 1, dpr: 1 }, visible)
+    expect(rectCalls).toBe(1)
+  })
+
+  it('omits a sparkline whose data crosses a viewer-filter-hidden row', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const [row, columns] = [...sheet.resolvedSparklines!.entries()][0], [col, sparkline] = [...columns.entries()][0]
+    const geometry = buildSheetGeometry(sheet)
+    if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+    const hiddenSourceRow = sparkline.sourceRows[0]
+    const views = new Map([[sheet.name.toLowerCase(), {
+      order: geometry.metrics.order,
+      visibility: { visible: (slot: number) => slot !== hiddenSourceRow },
+      baseHidden: { contains: () => false },
+      rows: geometry.metrics.rows,
+    }]])
+    const plan = { kind: 'detail', merges: [] } as unknown as import('../src/xlsx/view/viewport').ViewportPlan
+    const candidates = viewportSparklineCandidates(sheet, geometry, { box: { x: 0, y: 0, width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, zoom: 1, deviceScale: 1 }, plan, views)
+    expect(candidates.get(row)?.has(col) ?? false).toBe(false)
+    expect(sheet.diagnostics?.filter(item => item.feature === 'sparkline-filter-hidden')).toHaveLength(1)
+    const authoredHidden = new Map([[sheet.name.toLowerCase(), {
+      order: geometry.metrics.order, visibility: { visible: (slot: number) => slot !== hiddenSourceRow },
+      baseHidden: { contains: (source: number) => source === hiddenSourceRow },
+    }]])
+    const authoredCandidate = viewportSparklineCandidates(sheet, geometry, { box: { x: 0, y: 0, width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, zoom: 1, deviceScale: 1 }, plan, authoredHidden)
+    expect(authoredCandidate.get(row)?.has(col)).toBe(true)
   })
 
   it('does no painter work for sheets without resolved sparklines', async () => {

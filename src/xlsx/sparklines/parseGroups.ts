@@ -94,11 +94,14 @@ function readGroup(node: XmlNode, color: SheetColorContext, diagnostics: Diagnos
   for (const [field, axisType] of [['manualMin', minAxisType], ['manualMax', maxAxisType]] as const) {
     const raw = a[field]
     if (raw === undefined) continue
+    if (axisType !== 'custom') continue
     const value = finite(raw)
     if (value === undefined) refused(group, diagnostics, 'sparkline-axis-nonconforming', `Invalid ${field} value: ${raw}`)
-    else if (axisType !== 'custom') refused(group, diagnostics, 'sparkline-axis-nonconforming', `${field} requires its axis type to be custom`)
     else if (field === 'manualMin') group.manualMin = value
     else group.manualMax = value
+  }
+  if ((a.manualMin !== undefined && minAxisType !== 'custom') || (a.manualMax !== undefined && maxAxisType !== 'custom')) {
+    diagnostic(diagnostics, 'parse', 'sparkline-axis-manual-ignored', 'manualMin/manualMax ignored unless their axis type is custom')
   }
   if (minAxisType === 'custom' && a.manualMin === undefined) refused(group, diagnostics, 'sparkline-axis-nonconforming', 'custom minAxisType requires manualMin')
   if (maxAxisType === 'custom' && a.manualMax === undefined) refused(group, diagnostics, 'sparkline-axis-nonconforming', 'custom maxAxisType requires manualMax')
@@ -111,34 +114,33 @@ function readGroup(node: XmlNode, color: SheetColorContext, diagnostics: Diagnos
     if (resolved !== undefined) group.colors[key] = resolved
   }
 
+  // Date-axis rendering is staged out in Stage 1. Preserve a valid optional
+  // date range for later stages, but leave malformed and unused ranges silent.
   const dateFormulaNode = xmChild(node, 'f')
   const dateFormula = dateFormulaNode ? textOf(dateFormulaNode) : undefined
-  if (dateFormula) {
-    group.dateRange = areaOf(dateFormula)
-    if (!group.dateRange) diagnostic(diagnostics, 'unsupported', 'sparkline-date-range', `Unsupported sparkline date range: ${dateFormula.slice(0, 80)}`)
-  }
+  if (dateFormula) group.dateRange = areaOf(dateFormula)
   const sparklineContainer = x14Children(node, 'sparklines')[0]
   const sparkNodes = x14Children(sparklineContainer, 'sparkline')
-  if (sparkNodes.length > MAX_SPARKLINES_PER_GROUP) diagnostic(diagnostics, 'unsupported', 'sparkline-count-limit', `Sparkline group exceeds ${MAX_SPARKLINES_PER_GROUP} entries`)
+  if (sparkNodes.length > MAX_SPARKLINES_PER_GROUP) {
+    group.incomplete = true
+    diagnostic(diagnostics, 'unsupported', 'sparkline-count-limit', `Sparkline group exceeds ${MAX_SPARKLINES_PER_GROUP} entries`)
+  }
   for (const sparkline of sparkNodes.slice(0, MAX_SPARKLINES_PER_GROUP)) {
     const parsed = readSparkline(sparkline, diagnostics)
+    if (!parsed.host || !parsed.data) group.incomplete = true
     if (parsed.data) {
       const points = areaPoints(parsed.data)
       if (points > MAX_POINTS_PER_SPARKLINE) {
         parsed.data = undefined
+        group.incomplete = true
         diagnostic(diagnostics, 'unsupported', 'sparkline-point-limit', `Sparkline exceeds ${MAX_POINTS_PER_SPARKLINE} source points`)
       } else if (parsed.data.r0 !== parsed.data.r1 && parsed.data.c0 !== parsed.data.c1) {
         parsed.data = undefined
+        group.incomplete = true
         diagnostic(diagnostics, 'unsupported', 'sparkline-data-reference', 'Sparkline data reference must be one-dimensional')
       }
     }
     group.sparklines.push(parsed)
-  }
-  if (group.dateAxis && group.dateRange) for (const sparkline of group.sparklines) {
-    if (sparkline.data && areaPoints(group.dateRange) !== areaPoints(sparkline.data)) {
-      sparkline.data = undefined
-      diagnostic(diagnostics, 'unsupported', 'sparkline-date-range', 'Sparkline date range length does not match its data range')
-    }
   }
   return group
 }
@@ -154,6 +156,7 @@ export function parseSparklineGroups(groupsNode: XmlNode, color: SheetColorConte
     const count = areaPoints(sparkline.data)
     if (points + count > MAX_POINTS_PER_SHEET) {
       sparkline.data = undefined
+      group.incomplete = true
       diagnostic(diagnostics, 'unsupported', 'sparkline-sheet-point-limit', `Worksheet exceeds ${MAX_POINTS_PER_SHEET} sparkline source points`)
     } else points += count
   }

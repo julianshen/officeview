@@ -481,7 +481,7 @@ export function renderPrintPage(
     ctx.clip()
     ctx.translate(printable.x, printable.y)
     ctx.scale(scale, scale)
-    renderSheet(sheet, ctx, metrics, undefined, prepared, page, scale)
+    renderSheet(sheet, ctx, metrics, undefined, prepared, page)
   } finally {
     ctx.restore()
   }
@@ -714,9 +714,12 @@ export function renderSheet(
   watermark?: WatermarkOptions | ResolvedWatermark,
   prepared?: RenderSheetAssets,
   viewport?: SheetViewport,
-  sparklineScale = 1,
 ): void {
   const m = metrics ?? computeMetrics(sheet)
+  // Sparkline snapping uses the caller's actual canvas scale. Deriving it here
+  // avoids exposing another positional argument on the public renderSheet API.
+  const transform = typeof ctx.getTransform === 'function' ? ctx.getTransform() ?? { a: 1, b: 0 } : { a: 1, b: 0 }
+  const sparklineScale = Math.hypot(transform.a, transform.b) || 1
   const { colWidthsPx, rowHeightsPx } = m
   const limits = staticAdmission(sheet, m, viewport)
   if (limits.length) throw new StaticExportLimitError(limits)

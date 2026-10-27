@@ -13,7 +13,8 @@ import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, t
 import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
-import { paintSparklinesIn } from '../sparklineLoader'
+import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
+import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
 import { belowDetail } from './viewport'
 
 /** The host side of canonical records (spec §11.2): the same formatting and text
@@ -93,6 +94,49 @@ export interface ViewportPaintOptions {
   /** Lays records out (default: on the tile's own context). The viewer passes
    * its shared, admitted measurement context (components/xlsx/measureContext). */
   layoutHost?: CellLayoutHost
+  /** Per-sheet live view geometry, used to omit sparklines crossing filter-hidden source rows. */
+  sparklineViews?: ReadonlyMap<string, SparklineViewState>
+}
+export interface SparklineViewState {
+  order: Pick<RowOrder, 'sourceToDisplay'>
+  visibility?: Pick<RowVisibility, 'visible'>
+  baseHidden?: Pick<IntervalSet, 'contains'>
+}
+
+/** Select resolved hosts in display-slot space, plus anchors of merges touching the tile. */
+export function viewportSparklineCandidates(
+  sheet: XlsxSheet, geometry: SheetGeometryResult, viewport: LogicalViewport, plan: ViewportPlan,
+  views?: ReadonlyMap<string, SparklineViewState>,
+): SparklineCandidates {
+  const candidates = new Map<number, Set<number>>()
+  if (geometry.kind !== 'ready' || !sheet.resolvedSparklines?.size) return candidates
+  const { x, y, width, height } = viewport.box
+  const visibleRows = new Set<number>(), visibleCols = new Set<number>()
+  for (const run of geometry.metrics.rows.visibleBetween(y, y + height).runs) {
+    for (let slot = run.start; slot <= run.end; slot++) visibleRows.add(geometry.metrics.order.displayToSource(slot))
+  }
+  for (const run of geometry.metrics.cols.visibleBetween(x, x + width).runs) {
+    for (let col = run.start; col <= run.end; col++) visibleCols.add(col)
+  }
+  const add = (row: number, col: number) => {
+    const sparkline = sheet.resolvedSparklines!.get(row)?.get(col)
+    if (!sparkline) return
+    const view = views?.get(sparkline.dataSheet.toLowerCase())
+    if (view?.visibility && sparkline.sourceRows.some(sourceRow => {
+      const slot = view.order.sourceToDisplay(sourceRow)
+      return !view.visibility!.visible(slot) && !view.baseHidden?.contains(sourceRow)
+    })) {
+      const diagnostics = (sheet.diagnostics ??= [])
+      if (!diagnostics.some(item => item.feature === 'sparkline-filter-hidden')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-filter-hidden', message: 'Sparkline omitted because its data intersects rows hidden by the viewer filter' })
+      return
+    }
+    let columns = candidates.get(row)
+    if (!columns) candidates.set(row, columns = new Set())
+    columns.add(col)
+  }
+  for (const row of visibleRows) for (const col of sheet.resolvedSparklines.get(row)?.keys() ?? []) if (visibleCols.has(col)) add(row, col)
+  if (plan.kind === 'detail') for (const merge of plan.merges) add(merge.range.minRow, merge.range.minCol)
+  return candidates
 }
 const LAYOUT_MEMORY = 'layout-memory'
 const VIEWPORT_NOTICE: Record<Exclude<ViewportPlan['kind'], 'detail'>, string> = {
@@ -205,6 +249,7 @@ export function renderSheetViewport(
         ctx.save()
         ctx.translate(-vx, -vy)
         let painted: boolean
+        const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
         try { painted = paintSparklinesIn(ctx, sheet, (row, col) => {
             const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
             const first = geometry.metrics.sourceCellToLogical({ row, col })
@@ -213,7 +258,7 @@ export function renderSheetViewport(
             const rect = { x: first.x, y: first.y, width: last ? last.x + last.width - first.x : first.width, height: last ? last.y + last.height - first.y : first.height }
             if (belowDetail(rect.width, viewport.zoom * viewport.deviceScale) || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
             return rect
-          }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' })
+          }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates)
         } finally { ctx.restore() }
         if (!painted) {
           const diagnostics = (sheet.diagnostics ??= [])

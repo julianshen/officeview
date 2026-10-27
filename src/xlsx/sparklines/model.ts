@@ -13,5 +13,7 @@ export interface XlsxSparklineGroup {
   colors: Partial<Record<'series' | 'negative' | 'axis' | 'markers' | 'first' | 'last' | 'high' | 'low', string>>
   dateRange?: SparklineArea
   sparklines: XlsxSparkline[]
+  /** A source member was omitted, so a group-scaled group must fail closed. */
+  incomplete?: boolean
   refused?: string
 }

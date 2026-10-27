@@ -3,7 +3,8 @@ import { sparklineGeometry, type SparkPrimitive, type SparkScale } from './geome
 import type { ResolvedSparkline } from './resolve'
 import type { Rect } from '../view/textLayout'
 
-export type SparklinePainter = (ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cellRect: (row: number, col: number) => Rect | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, scale: SparkScale) => boolean
+export type SparklineCandidates = ReadonlyMap<number, ReadonlySet<number>>
+export type SparklinePainter = (ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cellRect: (row: number, col: number) => Rect | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, scale: SparkScale, candidates?: SparklineCandidates) => boolean
 
 function cssColor(color: string): string {
   const hex = color.replace(/^#/, '')
@@ -61,11 +62,15 @@ function paintPrimitive(ctx: CanvasRenderingContext2D, primitive: SparkPrimitive
 }
 
 /** Lazy-chunk implementation: geometry remains outside the eager renderer. */
-export const paintSparklinesIn: SparklinePainter = (ctx, sheet, cellRect, visible, scale) => {
-  for (const [row, columns] of sheet.resolvedSparklines ?? []) {
-    if (row < visible.r0 || row > visible.r1) continue
+export const paintSparklinesIn: SparklinePainter = (ctx, sheet, cellRect, visible, scale, candidates) => {
+  const resolved = sheet.resolvedSparklines ?? new Map()
+  const rows: Iterable<[number, ReadonlyMap<number, ResolvedSparkline>]> = candidates
+    ? [...candidates].flatMap(([row, columns]) => { const source = resolved.get(row); return source ? [[row, new Map([...columns].flatMap(col => { const item = source.get(col); return item ? [[col, item] as const] : [] }))] as const] : [] })
+    : resolved
+  for (const [row, columns] of rows) {
+    if (!candidates && (row < visible.r0 || row > visible.r1)) continue
     for (const [col, sparkline] of columns) {
-      if (col < visible.c0 || col > visible.c1) continue
+      if (!candidates && (col < visible.c0 || col > visible.c1)) continue
       const rect = cellRect(row, col)
       if (!rect || !(rect.width > 0 && rect.height > 0)) continue
       const transform = ctx.getTransform()

@@ -225,7 +225,7 @@ export function renderHosts(sheet: XlsxSheet, size: { w: number; h: number }, sc
   const canvas = createCanvas(Math.ceil(m.widthPx * scale), Math.ceil(m.heightPx * scale))
   const ctx = canvas.getContext('2d')
   ctx.scale(scale, scale)
-  renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m, undefined, undefined, undefined, scale)
+  renderSheet(sheet, ctx as unknown as CanvasRenderingContext2D, m)
   const frame: Frame = { width: canvas.width, height: canvas.height, data: ctx.getImageData(0, 0, canvas.width, canvas.height).data as unknown as Uint8ClampedArray }
   const x = Math.round(sum(m.colWidthsPx, 0, host.col0 - 1) * scale)
   const y = Math.round(sum(m.rowHeightsPx, 0, host.row0 - 1) * scale)

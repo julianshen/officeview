@@ -13,6 +13,10 @@ import type { SparklineArea, SparklineDiagnostic, XlsxSparkline, XlsxSparklineGr
 
 export interface ResolvedSparkline {
   host: { row: number; col: number }
+  /** Canonical worksheet supplying the data (used to apply viewer-owned filters at paint time). */
+  dataSheet: string
+  /** Source rows corresponding to `values`, including null/error slots. */
+  sourceRows: number[]
   group: XlsxSparklineGroup
   /** Plotted order with hidden points removed. `null` is an empty slot (a gap, or bridged: see `group.displayEmptyCellsAs`
    * and `bridged`). Slots are kept for empty and error cells, so positions do not close up (`gapRule`, `spanRule`). */
@@ -121,17 +125,19 @@ function* cellsInReadingOrder(area: SparklineArea): Generator<[number, number]> 
   else for (let r = area.r0; r <= area.r1; r++) yield [r, area.c0]
 }
 
-interface Partial_ { sparkline: XlsxSparkline; host: { row: number; col: number }; values: Array<number | null>; bridged: number[] }
+interface Partial_ { sparkline: XlsxSparkline; host: { row: number; col: number }; dataSheet: string; sourceRows: number[]; values: Array<number | null>; bridged: number[] }
 
 function plotted(
   group: XlsxSparklineGroup, area: SparklineArea, access: SheetAccess, cached: boolean,
-): { values: Array<number | null>; bridged: number[] } {
+): { values: Array<number | null>; bridged: number[]; sourceRows: number[] } {
   const values: Array<number | null> = []
   const bridged: number[] = []
+  const sourceRows: number[] = []
   for (const [row, col] of cellsInReadingOrder(area)) {
     // `hiddenRowsRule`/`hiddenColsRule`/`filterHiddenRule`: hidden points are REMOVED and the rest re-spaced, not gaps.
     // `displayHiddenRule`: displayHidden draws them as if visible.
     if (!group.displayHidden && (access.rowHidden(row) || access.colHidden(col))) continue
+    sourceRows.push(row)
     const point = pointOf(access.cell(row, col), cached)
     if (point === POINT_SKIPPED) { bridged.push(values.length); values.push(null) }
     // `zeroRule`: an empty cell is 0 and takes part in min/max. `gapRule`/`spanRule`: otherwise a null slot, which the
@@ -139,7 +145,7 @@ function plotted(
     else if (point === POINT_EMPTY) values.push(group.displayEmptyCellsAs === 'zero' ? 0 : null)
     else values.push(point)
   }
-  return { values, bridged }
+  return { values, bridged, sourceRows }
 }
 
 function extent(values: ReadonlyArray<number | null>): { min: number; max: number } | undefined {
@@ -173,24 +179,38 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
     for (const group of sheet.sparklineGroups) {
       if (stagedOut(group)) continue
       const parts: Partial_[] = []
+      let droppedMember = group.incomplete === true
       for (const sparkline of group.sparklines) {
         // Parse already diagnosed an unreadable host or reference; nothing to draw.
-        if (!sparkline.host || !sparkline.data) continue
+        if (!sparkline.host || !sparkline.data) { droppedMember = true; continue }
+        const merge = sheet.mergeRanges.find(range => sparkline.host!.row >= range.minRow && sparkline.host!.row <= range.maxRow && sparkline.host!.col >= range.minCol && sparkline.host!.col <= range.maxCol)
+        if (merge && (sparkline.host.row !== merge.minRow || sparkline.host.col !== merge.minCol)) {
+          diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-merged-host', message: 'Sparkline host is covered by a merged cell and is not the merge anchor' })
+          droppedMember = true
+          continue
+        }
         const area = sparkline.data
         const target = area.sheet === undefined ? sheet : byName.get(area.sheet.toLowerCase())
         if (!target) {
           diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-data-reference', message: `Sparkline data sheet not found: ${area.sheet?.slice(0, 80)}` })
+          droppedMember = true
           continue
         }
         // Defensive: a hand-built model may carry what the parser already rejects (same feature and message, so it dedupes).
         if (area.r0 !== area.r1 && area.c0 !== area.c1) {
           diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-data-reference', message: 'Sparkline data reference must be one-dimensional' })
+          droppedMember = true
           continue
         }
-        const { values, bridged } = plotted(group, area, accessOf(target), policy.cached)
+        const { values, bridged, sourceRows } = plotted(group, area, accessOf(target), policy.cached)
         // `singlePointRule`: a range with no drawable point draws nothing, and contributes nothing to a group scale.
         if (!extent(values)) continue
-        parts.push({ sparkline, host: sparkline.host, values, bridged })
+        parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows, values, bridged })
+      }
+      const groupScaled = group.minAxisType === 'group' || group.maxAxisType === 'group'
+      if (groupScaled && droppedMember) {
+        diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-group-incomplete', message: 'Group-scaled sparkline group omitted because one or more members could not be resolved' })
+        continue
       }
       if (!parts.length) continue
       // `groupScaleRule` is UNRESOLVED in the validation doc (Excel drew nothing for the group fixture; an investigation is
@@ -203,6 +223,10 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
         // `individualScaleRule`: each sparkline uses its own min and max.
         const min = group.minAxisType === 'custom' ? group.manualMin! : group.minAxisType === 'group' ? groupExtent!.min : own.min
         const max = group.maxAxisType === 'custom' ? group.manualMax! : group.maxAxisType === 'group' ? groupExtent!.max : own.max
+        if ((group.minAxisType === 'custom' || group.maxAxisType === 'custom') && min >= max) {
+          diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-custom-scale', message: 'Custom sparkline scale must have an effective minimum below its maximum' })
+          continue
+        }
         // `tieRule`: every tied point is high (low). Flat series therefore make every point both. High/low come from the
         // sparkline's own values, so an all-negative series has its largest negative as the high (LibreOffice tdf#152929).
         const highIndices: number[] = [], lowIndices: number[] = []
@@ -213,7 +237,11 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
         })
         let row = resolved.get(part.host.row)
         if (!row) resolved.set(part.host.row, row = new Map())
-        row.set(part.host.col, { host: part.host, group, values: part.values, bridged: part.bridged, firstIndex: 0, lastIndex: part.values.length - 1, highIndices, lowIndices, min, max })
+        if (row.has(part.host.col)) {
+          diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-duplicate-host', message: 'Multiple sparklines target one host cell; the first is kept' })
+          continue
+        }
+        row.set(part.host.col, { host: part.host, dataSheet: part.dataSheet, sourceRows: part.sourceRows, group, values: part.values, bridged: part.bridged, firstIndex: 0, lastIndex: part.values.length - 1, highIndices, lowIndices, min, max })
       }
     }
     if (resolved.size) sheet.resolvedSparklines = resolved

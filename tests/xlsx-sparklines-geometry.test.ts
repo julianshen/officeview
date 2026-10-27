@@ -35,7 +35,7 @@ const mk = (values: Array<number | null>, over: Partial<XlsxSparklineGroup> = {}
     if (v === min) low.push(i)
   })
   return {
-    host: { row: 0, col: 0 }, group: groupOf(over), values, bridged: resolved.bridged ?? [],
+    host: { row: 0, col: 0 }, dataSheet: 'Sheet1', sourceRows: values.map((_, index) => index), group: groupOf(over), values, bridged: resolved.bridged ?? [],
     firstIndex: resolved.firstIndex ?? 0, lastIndex: resolved.lastIndex ?? values.length - 1,
     highIndices: resolved.highIndices ?? high, lowIndices: resolved.lowIndices ?? low, min, max,
   }

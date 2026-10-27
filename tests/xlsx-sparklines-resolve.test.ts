@@ -195,6 +195,35 @@ describe('resolveWorkbookSparklines', () => {
   })
 
   describe('scale', () => {
+    it('fails closed for a group-scaled group with a dropped member', () => {
+      const s = withGroups(sheetOf('S', [[1, 2], [3, 4]]), groupOf([
+        spark('D1', 'A1:B1'), { ...spark('D2', 'A2:B2'), data: undefined },
+      ], { minAxisType: 'group', maxAxisType: 'group' }))
+      resolve([s])
+      expect(s.resolvedSparklines).toBeUndefined()
+      expect(s.diagnostics?.filter(item => item.feature === 'sparkline-group-incomplete')).toHaveLength(1)
+    })
+
+    it('fails closed for custom effective min >= max but preserves flat individual scales', () => {
+      const custom = withGroups(sheetOf('S', [[3, 3]]), groupOf([spark('D1', 'A1:B1')], { minAxisType: 'custom', manualMin: 3 }))
+      resolve([custom])
+      expect(custom.resolvedSparklines).toBeUndefined()
+      expect(custom.diagnostics?.filter(item => item.feature === 'sparkline-custom-scale')).toHaveLength(1)
+      const individual = withGroups(sheetOf('I', [[3, 3]]), groupOf([spark('D1', 'A1:B1')]))
+      resolve([individual])
+      expect(at(individual, 'D1')).toMatchObject({ min: 3, max: 3 })
+    })
+
+    it('keeps the first duplicate host and rejects non-anchor merged hosts', () => {
+      const duplicate = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('D1', 'A1:A1'), spark('D1', 'B1:B1')]))
+      resolve([duplicate])
+      expect(at(duplicate, 'D1')?.values).toEqual([1])
+      expect(duplicate.diagnostics?.filter(item => item.feature === 'sparkline-duplicate-host')).toHaveLength(1)
+      const merged = withGroups(sheetOf('M', [[1, 2, 3]], { mergeRanges: [{ minRow: 0, minCol: 0, maxRow: 0, maxCol: 1 }] }), groupOf([spark('B1', 'C1:C1')]))
+      resolve([merged])
+      expect(merged.resolvedSparklines).toBeUndefined()
+      expect(merged.diagnostics?.filter(item => item.feature === 'sparkline-merged-host')).toHaveLength(1)
+    })
     it('individual: each sparkline uses its own min and max (individualScaleRule)', () => {
       const s = withGroups(sheetOf('S', [[1, 8], [10, 80]]), groupOf([spark('D1', 'A1:B1'), spark('D2', 'A2:B2')]))
       resolve([s])

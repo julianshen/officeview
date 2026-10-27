@@ -50,11 +50,21 @@ describe('XLSX sparkline group parsing', () => {
     expect(groups[0].sparklines[0].host).toEqual({ row: 1, col: 6 })
   })
 
-  it('refuses manualMin unless minAxisType is custom, with one diagnostic', () => {
+  it('ignores manual bounds under individual/group axes and diagnoses once', () => {
+    const fixtureStyle = group('minAxisType="group" maxAxisType="group" manualMin="-10" manualMax="80"')
+    const { groups, diagnostics } = parse(fixtureStyle)
+    expect(groups[0]).toMatchObject({ minAxisType: 'group', maxAxisType: 'group' })
+    expect(groups[0].refused).toBeUndefined()
+    expect(groups[0].manualMin).toBeUndefined()
+    expect(groups[0].manualMax).toBeUndefined()
+    expect(diagnostics).toEqual([{ kind: 'parse', feature: 'sparkline-axis-manual-ignored', message: 'manualMin/manualMax ignored unless their axis type is custom' }])
+  })
+
+  it('ignores a manual bound under an individual axis without refusing the group', () => {
     const { groups, diagnostics } = parse(group('manualMin="2"'))
-    expect(groups[0].refused).toBe('sparkline-axis-nonconforming')
+    expect(groups[0].refused).toBeUndefined()
     expect(diagnostics).toHaveLength(1)
-    expect(diagnostics[0].feature).toBe('sparkline-axis-nonconforming')
+    expect(diagnostics[0].feature).toBe('sparkline-axis-manual-ignored')
   })
 
   it('refuses a custom axis when its manual bound is absent', () => {
@@ -92,11 +102,15 @@ describe('XLSX sparkline group parsing', () => {
     expect(groups[0].dateRange).toEqual({ sheet: 'Sheet1', r0: 0, c0: 1, r1: 0, c1: 5 })
   })
 
-  it('leaves a malformed group date range unresolved with one diagnostic', () => {
-    const { groups, diagnostics } = parse(group('dateAxis="1"', '<xm:f>[1]Sheet1!A1:A3</xm:f>'))
+  it('keeps date-axis staging silent for malformed or unused date ranges', () => {
+    const staged = parse(group('dateAxis="1"', '<xm:f>[1]Sheet1!A1:A3</xm:f>'))
+    expect(staged.groups[0].dateRange).toBeUndefined()
+    expect(staged.diagnostics.some(item => item.feature === 'sparkline-date-range')).toBe(false)
+    const unused = parse(group('dateAxis="0"', '<xm:f>[1]Sheet1!A1:A3</xm:f>'))
+    expect(unused.diagnostics.some(item => item.feature === 'sparkline-date-range')).toBe(false)
+    const { groups, diagnostics } = staged
     expect(groups[0].dateRange).toBeUndefined()
-    expect(diagnostics).toHaveLength(1)
-    expect(diagnostics[0].feature).toBe('sparkline-date-range')
+    expect(diagnostics).toEqual([])
   })
 
   it('refuses multi-range and external references', () => {

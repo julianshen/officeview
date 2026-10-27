@@ -1,7 +1,11 @@
 import { describe, test, expect } from 'vitest'
-import { parseXml, parseXmlOrdered, getChildren, attrs, textOf } from '../src/core/xml'
+import { parseXml, parseXmlOrdered, getChild, getChildren, attrs, textOf } from '../src/core/xml'
 
 describe('xml normalize', () => {
+  test('keeps historical last-wins behavior for stripped namespace-name collisions', () => {
+    const root = parseXml('<root xmlns:a="urn:a" xmlns:b="urn:b"><a:x v="1"/><b:x v="2"/></root>')
+    expect(attrs(getChild(root, 'x'))).toEqual({ v: '2' })
+  })
   test('strips namespaces and lifts attributes', () => {
     const xml = `<?xml version="1.0"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

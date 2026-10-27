@@ -79,6 +79,8 @@ const namespaceMap = new WeakMap<XmlNode, ReadonlyMap<string, string>>()
 const elementNamespaceMap = new WeakMap<XmlNode, string | undefined>()
 /** Own namespace of normalized child elements, including text-only scalar nodes. */
 const childNamespaceMap = new WeakMap<XmlNode, ReadonlyMap<string, readonly (string | undefined)[]>>()
+/** Namespace-sensitive child lists, retained only for worksheet roots with sparkline extensions and that extLst subtree. */
+const namespaceChildrenMap = new WeakMap<XmlNode, ReadonlyMap<string, readonly XmlNode[]>>()
 
 function withNamespaces(parent: ReadonlyMap<string, string>, raw: unknown): ReadonlyMap<string, string> {
   if (!raw || typeof raw !== 'object') return parent
@@ -219,15 +221,17 @@ export function orderedChildren(node: XmlNode | undefined): Array<[string, XmlNo
  *    namespace prefixes from attribute names
  *  - strip namespace prefixes from element names ("w:p" -> "p")
  */
-function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new Map(), elementName?: string): XmlNode | XmlNode[] | XmlValue | undefined {
-  if (Array.isArray(node)) return node.map(value => normalize(value, inherited, elementName)) as XmlNode[]
+type NamespaceTracking = false | 'root' | 'subtree' | 'choices'
+function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new Map(), elementName?: string, namespaceAware: NamespaceTracking = false): XmlNode | XmlNode[] | XmlValue | undefined {
+  if (Array.isArray(node)) return node.map(value => normalize(value, inherited, elementName, namespaceAware)) as XmlNode[]
   if (node === null || node === undefined) return undefined
   if (typeof node !== 'object') return node as XmlValue
   const src = node as Record<string, unknown>
   const local = withNamespaces(inherited, src['@attrs'])
   const out: Record<string, unknown> = {}
   const attrs: Record<string, string> = {}
-  const childNamespaces = new Map<string, Array<string | undefined>>()
+  const childNamespaces = namespaceAware === 'subtree' ? new Map<string, Array<string | undefined>>() : undefined
+  const namespaceChildren = namespaceAware === 'subtree' ? new Map<string, XmlNode[]>() : undefined
   for (const [k, v] of Object.entries(src)) {
     if (k === '@attrs' && v && typeof v === 'object') {
       for (const [ak, av] of Object.entries(v as Record<string, unknown>)) {
@@ -243,23 +247,35 @@ function normalize(node: unknown, inherited: ReadonlyMap<string, string> = new M
       continue
     }
     const nk = k.includes(':') ? k.slice(k.indexOf(':') + 1) : k
-    const child = normalize(v, local, k)
+    const childAware: NamespaceTracking = namespaceAware === 'subtree' || namespaceAware === 'choices' ? namespaceAware : namespaceAware === 'root' && nk === 'extLst' ? 'subtree' : false
+    const child = normalize(v, local, k, childAware)
     const colon = k.indexOf(':')
     const childNs = local.get(colon >= 0 ? k.slice(0, colon) : '')
-    const childCount = Array.isArray(v) ? v.length : 1
-    const nsList = childNamespaces.get(nk) ?? []
-    for (let i = 0; i < childCount; i++) nsList.push(childNs)
-    childNamespaces.set(nk, nsList)
-    if (Object.prototype.hasOwnProperty.call(out, nk)) {
-      const existing = out[nk]
-      out[nk] = [...(Array.isArray(existing) ? existing : [existing]), ...(Array.isArray(child) ? child : [child])]
-    } else out[nk] = child
+    if (childNamespaces) {
+      const nsList = childNamespaces.get(nk) ?? []
+      const values = Array.isArray(child) ? child : [child]
+      for (let i = 0; i < values.length; i++) nsList.push(childNs)
+      childNamespaces.set(nk, nsList)
+      const nodes = namespaceChildren!.get(nk) ?? []
+      for (const value of values) nodes.push(asNode(value, childNs))
+      namespaceChildren!.set(nk, nodes)
+    }
+    // Same-raw-name repetitions already arrive as a parser array; collisions
+    // from different prefixes retain the historical last-wins behavior.
+    out[nk] = child
   }
   out[ATTRS] = attrs
-  namespaceMap.set(out as XmlNode, local)
-  const colon = elementName?.indexOf(':') ?? -1
-  elementNamespaceMap.set(out as XmlNode, local.get(colon >= 0 ? elementName!.slice(0, colon) : ''))
-  childNamespaceMap.set(out as XmlNode, childNamespaces)
+  if (namespaceAware) {
+    if (namespaceAware !== 'choices' || elementName?.slice(elementName.lastIndexOf(':') + 1) === 'Choice') namespaceMap.set(out as XmlNode, local)
+    if (namespaceAware !== 'choices') {
+      const colon = elementName?.indexOf(':') ?? -1
+      elementNamespaceMap.set(out as XmlNode, local.get(colon >= 0 ? elementName!.slice(0, colon) : ''))
+    }
+  }
+  if (childNamespaces) {
+    childNamespaceMap.set(out as XmlNode, childNamespaces)
+    namespaceChildrenMap.set(out as XmlNode, namespaceChildren!)
+  }
   return out as XmlNode
 }
 
@@ -280,7 +296,13 @@ export function parseXml(xml: string): XmlNode {
   if (rootKey === undefined) {
     throw new Error('Unexpected XML root shape')
   }
-  const normalized = normalize(parsed[rootKey], new Map(), rootKey)
+  // Namespace metadata is needed only for the worksheet root and its sparkline
+  // extension subtree. Ordinary documents keep the historical compact tree.
+  const hasSparklineExtension = xml.includes('http://schemas.microsoft.com/office/spreadsheetml/2009/9/main') || xml.includes('http://schemas.microsoft.com/office/excel/2006/main')
+  const namespaceTracking: NamespaceTracking = hasSparklineExtension
+    ? (rootKey === 'worksheet' || rootKey.endsWith(':worksheet') ? 'root' : 'subtree')
+    : /\bRequires\s*=/.test(xml) ? 'choices' : false
+  const normalized = normalize(parsed[rootKey], new Map(), rootKey, namespaceTracking)
   if (normalized === undefined || Array.isArray(normalized) || typeof normalized !== 'object') {
     throw new Error('Unexpected XML root shape')
   }
@@ -305,6 +327,8 @@ function asNode(v: unknown, namespace?: string): XmlNode {
 
 export function getChildren(node: XmlNode | undefined, name: string): XmlNode[] {
   if (!node) return []
+  const namespaceChildren = namespaceChildrenMap.get(node)?.get(name)
+  if (namespaceChildren) return [...namespaceChildren]
   const v = node[name]
   const namespaces = childNamespaceMap.get(node)?.get(name) ?? []
   if (Array.isArray(v)) return v.map((item, index) => asNode(item, namespaces[index]))
@@ -315,6 +339,8 @@ export function getChildren(node: XmlNode | undefined, name: string): XmlNode[] 
 /** Element children (excluding @attrs/#text) of a node. */
 export function elementChildren(node: XmlNode | undefined): Array<[string, XmlNode]> {
   if (!node) return []
+  const namespaceChildren = namespaceChildrenMap.get(node)
+  if (namespaceChildren) return [...namespaceChildren].flatMap(([name, children]) => children.map(child => [name, child] as [string, XmlNode]))
   const out: Array<[string, XmlNode]> = []
   for (const [k, v] of Object.entries(node)) {
     if (k === ATTRS || k === TEXT) continue
