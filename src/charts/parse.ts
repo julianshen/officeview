@@ -21,6 +21,8 @@ import { readCategoryLevels } from './categories'
 import { CHART_TITLE_LINE_LIMIT, CHART_TITLE_RUN_LIMIT, CHART_TITLE_TEXT_LIMIT, CHART_TITLE_TRUNCATED, runsText, titleRuns } from './titles'
 import { markTrendlineLegendDeletions, readTrendlines } from './trendlines'
 import { readErrorBars } from './errorBars'
+import { parseChartRange } from '../xlsx/ranges'
+export { parseChartRange } from '../xlsx/ranges'
 import { contourGridDiagnostic, contourGridOf } from './families/contour'
 import { readBubbleOptions } from './families/bubble'
 import { readRadarStyle } from './families/radar'
@@ -215,31 +217,6 @@ function formulaOf(node: XmlNode | undefined): string | undefined {
   const ref = child(node, 'numRef') ?? child(node, 'strRef') ?? child(node, 'multiLvlStrRef')
   const f = textOf(child(ref, 'f')).trim()
   return f || undefined
-}
-
-const colIndex = (letters: string): number => { let n = 0; for (const ch of letters.toUpperCase()) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1 }
-const CELL = /^\$?([A-Za-z]{1,3})\$?(\d{1,7})$/
-const NAME = /^[A-Za-z_\\][A-Za-z0-9_.\\]*$/
-/** A single-area reference (`Sheet1!$A$1:$A$5`, `'My sheet'!B2`) or a defined name. Multi-area references are unresolved. */
-export function parseChartRange(formula: string): ChartRange | undefined {
-  let text = formula.trim()
-  while (text.startsWith('(') && text.endsWith(')')) text = text.slice(1, -1).trim()
-  if (text.includes(',')) return undefined
-  let sheet: string | undefined
-  const bang = text.lastIndexOf('!')
-  if (bang >= 0) {
-    const raw = text.slice(0, bang)
-    sheet = raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1).replace(/''/g, "'") : raw
-    text = text.slice(bang + 1)
-  }
-  const [from, to = from] = text.split(':')
-  const a = CELL.exec(from), b = CELL.exec(to)
-  // A defined name (workbook or sheet scope), resolved against the workbook later.
-  if ((!a || !b) && !text.includes(':') && NAME.test(text)) return { ...(sheet ? { sheet } : {}), definedName: text, r0: 0, c0: 0, r1: 0, c1: 0 }
-  if (!a || !b) return undefined
-  const c0 = colIndex(a[1]), r0 = Number(a[2]) - 1, c1 = colIndex(b[1]), r1 = Number(b[2]) - 1
-  if (![c0, r0, c1, r1].every(n => Number.isSafeInteger(n) && n >= 0)) return undefined
-  return { ...(sheet ? { sheet } : {}), r0: Math.min(r0, r1), c0: Math.min(c0, c1), r1: Math.max(r0, r1), c1: Math.max(c0, c1) }
 }
 
 const AXIS_KINDS: Record<string, ChartAxis['kind']> = { catAx: 'category', dateAx: 'date', valAx: 'value', serAx: 'series' }

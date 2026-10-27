@@ -128,6 +128,8 @@ export type XlsxDrawingAnchorRecord =
 export interface XlsxDrawingAnchors { records: XlsxDrawingAnchorRecord[]; unresolved: number }
 
 export interface XlsxSheet {
+  /** Parsed x14 sparkline groups (resident worksheet path). */
+  sparklineGroups?: import('./sparklines/model').XlsxSparklineGroup[]
   drawingCoverage?: DrawingCoverageEntry[]
   /** Authored frozen panes of the first sheet view (interactive viewer only). */
   frozen?: XlsxFrozenPane
