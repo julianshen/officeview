@@ -1,11 +1,13 @@
 # XLSX Sparklines — Design Spec
 
-**Status:** draft 6.
+**Status:** draft 7.
 - Builder check folded in.
 - Round 1: agy and codex both returned REQUEST CHANGES. Their findings are addressed here, marked **[rev]** with reviewer and finding.
 - Round 2: agy APPROVE; codex resolved all 7 and raised R2-1 (reply and cache byte budget), addressed in draft 4.
 - Round 3: codex asked for receiver-side pre-admission (R2-1 continued), addressed in draft 5.
 - Round 4: codex resolved R2-1 and raised R4-1 (worker success-path release), addressed in draft 6.
+- Round 5: codex APPROVE.
+- Draft 7 adds §3.1 (LibreOffice study, owner request) and its consequences.
 **Date:** 2026-10-27 · **Baseline:** `main` @ `38ed2b1`.
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -100,6 +102,35 @@ The builder confirms each default against the MS-XLSX schema text, and §8 has a
   - LibreOffice's ODS sparklines are out of scope, because the viewer does not read ODS.
 - **Apache OpenOffice.** It has no native sparklines, only an old third-party extension (EuroOffice Sparkline) that draws ordinary charts. OpenOffice-written XLSX files therefore carry no sparklines, and there is nothing extra to support.
 
+### 3.1 Prior art: LibreOffice's implementation **[owner]** (studied 2026-10-27)
+
+LibreOffice Calc's sparkline source (`sc/`, MPL-2.0) was studied for behaviour only. **No code is copied into this MIT project**, and every claim below is our own description.
+
+LibreOffice never states that a constant was measured against Excel. Its geometry is therefore a second hypothesis, never evidence, and Excel references (§8) decide.
+
+**What it teaches about input files (LibreOffice-written XLSX):**
+- **Default attributes are omitted.** Every attribute equal to its schema default is left out, false booleans are never written, and `manualMin`/`manualMax` appear only with `custom`. Applying the §3 defaults correctly is therefore essential, not an edge case.
+- **Unused colour elements are omitted entirely**, so a file can lack `colorAxis`, `colorMarkers` and others. A missing colour element is normal input, not malformed input (§5.5).
+- **Theme colours** are written as `theme` plus `tint`, and RGB colours as 8-hex `rgb`. Tints may be negative (shades). LibreOffice's own renderer ignores negative tints, which is a known LibreOffice bug and must not be copied.
+- **`dateAxis="1"` is written without the group's date-range `xm:f`**, and LibreOffice's importer drops that range even when present. A date axis with no date range is therefore realistic input (§5.4).
+- **Extra attributes.** `xr2:uid` is present on groups, and unknown attributes are ignored.
+- **Multiple ranges.** `xm:f` may hold several space-separated ranges. LibreOffice uses only the first.
+
+**Traps its bug tracker shows** (LibreOffice meta-bug tdf#150884). Each becomes a test case (§9):
+- a flat series not drawn (tdf#166931)
+- a single-point line not drawn
+- high wrong when all values are negative (tdf#152929)
+- bar spacing and area in merged hosts (tdf#167712, tdf#159712)
+- sparklines lost depending on sheet order (tdf#159606, tdf#168704)
+- sparklines missing from print and PDF export (tdf#168356)
+- the `group` axis type silently treated as `individual`
+- `dateAxis` not implemented
+- `rightToLeft` recolouring by display order instead of data order
+
+**Data on a later sheet.** A sparkline's data may live on a sheet that comes later in the workbook, which is the cause of the sheet-order bugs. Resolution therefore runs after every sheet is parsed, never during the host sheet's parse. **[call]**
+
+**Test fixture.** LibreOffice's `sc/qa/unit/data/xlsx/Sparklines.xlsx` was written by Excel and covers line, column and win/loss, all flags, row and column ranges, and RGB colours. It is MPL-2.0, so it is not vendored. **[call]** It serves as a local cross-check of parser expectations, and equivalent workbooks are generated in §8.
+
 ## 4. Scope **[owner]**: the whole Excel feature set
 
 | Area | Items |
@@ -131,6 +162,7 @@ The exact geometry is **[measure]** throughout. Excel's rendering is the authori
 - A **number** cell is its value. This includes a formula's cached or recalculated value, and dates, which are serial numbers.
 - An **empty** cell follows `displayEmptyCellsAs`: a gap, a zero, or bridged (line only; column and win/loss treat span as gap **[measure]**).
 - **Text, boolean and error** cells are treated as Excel treats them, with each pinned by a reference. **[measure]** The hypothesis is that text and booleans count as empty and that errors count as empty or zero.
+- **LibreOffice's alternatives** (§3.1), to be settled by references: text and errors count as a real 0 that takes part in min/max; booleans count as 1/0; `span` on column interpolates and draws a bar.
 - **Hidden rows/columns** in the data range are skipped unless `displayHidden`. Hidden means the sheet's own row or column hidden flag, including rows collapsed in an outline. Whether rows hidden by an autofilter count is **[measure]**.
 - **Text spilling from a neighbouring cell** stops at a sparkline host cell if Excel stops it there. **[measure]** **[rev]** (agy 2.3)
 
@@ -144,17 +176,17 @@ The exact geometry is **[measure]** throughout. Excel's rendering is the authori
 
 ### 5.4 Horizontal positions
 - **Evenly spaced (no date axis):** for line, n points span the plot width, with the first and last at the edges or inset **[measure]**. For column and win/loss, n equal slots with a gap between bars **[measure]**.
-- **`dateAxis`:** the x position is proportional to the date value from the group's date range. That range must be the same length as each data range. A mismatched, empty or non-numeric date range is handled as Excel handles it. Dates out of chronological order are either plotted in data order at their date positions, or sorted. **[measure]** **[rev]** (agy 2.3)
+- **`dateAxis`:** the x position is proportional to the date value from the group's date range. That range must be the same length as each data range. A missing date range (as LibreOffice writes it, §3.1), or a mismatched, empty or non-numeric one, is handled as Excel handles it. The hypothesis for a missing range is even spacing. Dates out of chronological order are either plotted in data order at their date positions, or sorted. **[measure]** **[rev]** (agy 2.3)
 - **`rightToLeft`** reverses the plot direction only. First and last still refer to the first and last cells of the data range, so first appears at the right. **[measure]** **[rev]** (agy 2.3)
 
 ### 5.5 Points and colours
 - The **series colour** strokes the line and fills the bars. **Negative** recolours negative bars (column, win/loss) and is ignored for line **[measure]**.
 - **Markers** draw a marker at every line point. High, low, first and last override the marker colour at their points and also draw on line sparklines without `markers`. For column and win/loss they recolour the bar.
-- **Precedence** when one point is several of these at once (for example first and high) is **[measure]**.
+- **Precedence** when one point is several of these at once (for example first and high) is **[measure]**. LibreOffice's order is first > last > high > low > negative > markers, and its negative also adds markers on line sparklines. These are alternatives to test, not defaults.
 - **Ties** for high or low (several points share the extreme) all get the colour, or only the first does. **[measure]**
-- **Marker size and shape** relative to `lineWeight` is **[measure]**.
+- **Marker size and shape** relative to `lineWeight` is **[measure]**. LibreOffice uses a fixed 4 px × zoom square, but that is not evidence for Excel's size.
 - **Colour resolution** reuses `resolveSheetColor` (`src/xlsx/sheetColors.ts`) with the workbook theme and indexed palette. Today `parseStyles` keeps `indexedColors` in a local variable, so the indexed palette is not available to `parseSheet`. The styles result must expose the sheet colour context (`{ indexed, theme }`) and pass it to sparkline parsing. **[rev]** (agy P2)
-- **Non-conforming `auto`, or a colour that resolves to nothing:** a missing element colour falls back to Excel's default for that element if a reference pins one **[measure]**. A missing series colour on a group means the group is not drawn, with a diagnostic.
+- **A missing colour element, non-conforming `auto`, or a colour that resolves to nothing** uses the colour Excel itself uses when it opens such a file, pinned by a reference workbook that omits each element. **[measure]** LibreOffice paints black. **[rev]** (LibreOffice study) An earlier draft refused to draw a group with no series colour. LibreOffice-written files omit unused colour elements, so a missing colour is normal input, and colour is fidelity rather than data, so it does not fail closed.
 
 ### 5.6 Line rendering
 - The line is a polyline of width `lineWeight` points, converted to device pixels at the current zoom and DPR.
@@ -232,6 +264,7 @@ Each case below leaves the cell empty and raises one diagnostic on `XlsxSheet.di
 - a missing sheet
 - an unparseable reference
 - a 2-D range, unless measured as drawable
+- a multi-range `xm:f`, unless measured as drawable (Excel's behaviour is **[measure]**; LibreOffice uses only the first range)
 - cap overflow
 - a date range of the wrong length, unless measured otherwise
 - an unknown `type` **[rev]** (codex 6: never defaulted to line)
@@ -278,7 +311,8 @@ Excel for Mac is installed on the development machine (`/Applications/Microsoft 
 2. **Group scale with hidden rows and empty cells together.** It is easy to compute the group min and max over points the sparkline doesn't show.
 3. **Sparklines on the paged path, whose data is on another sheet.** Pending data must not draw a partial chart, and the arrival repaint must cover tiles already cached.
 4. **Tile-edge and zoom behaviour.** The same sparkline at 50%, 100% and 175% zoom, and straddling a tile boundary, at DPR 1 and 2.
-5. **Files written by LibreOffice and other writers**: absent attributes (defaults), alternate namespace prefixes, `xm:f` with `$` and quoted sheet names.
+5. **Files written by LibreOffice and other writers**: absent attributes (defaults), absent colour elements, `dateAxis` without a date range, alternate namespace prefixes, `xm:f` with `$`, quoted sheet names, and several ranges.
+6. **LibreOffice's known traps** (§3.1): a flat series, n = 1, all-negative high and low, the `group` axis type, negative tints, merged hosts, data on a later sheet, and sparklines in static PNG and PDF export. Each one has a test.
 
 ## 10. Delivery **[owner]**: three stages, each its own reviewed PR
 
