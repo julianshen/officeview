@@ -26,7 +26,8 @@ const TOP = BASELINE - 1.3 * EM, BOTTOM = BASELINE + 0.9 * EM
 const shape = (paragraphs: PptxShapeSpec['paragraphs']): PptxShapeSpec => ({
   id: 2, name: 'Text 2', off: [String(40 * PX), String(40 * PX)], ext: [String(880 * PX), String(400 * PX)], paragraphs,
 })
-const MS = 'MMMMMM MMMMMM MMMMMM'
+// Short enough to stay on one line in any fallback font (the bands below assume one line).
+const MS = 'MMMM MMMM'
 
 /** A click step whose blinds(horizontal) entrance reveals paragraph `st..end` of `spid` over `dur` ms. */
 const blinds = (id: number, spid: number, st: number, end: number, dur: number) => {
@@ -178,6 +179,9 @@ describe('a paragraph build under blinds', () => {
       else if (a >= 0.5) { expect(shown, `row ${y}`).toBeLessThan(0.1); checked++ }
     }
     expect(checked).toBeGreaterThan(10)
+    // One line of ink: a wrap would move the box this test assumes.
+    const rows = Array.from({ length: full.data.height }, (_, y) => y).filter(y => ink(full.data, y) >= 255 * 4)
+    expect(rows[rows.length - 1]! - rows[0]!).toBeLessThan(1.2 * EM * k)
     r.s.exit()
   })
 })
