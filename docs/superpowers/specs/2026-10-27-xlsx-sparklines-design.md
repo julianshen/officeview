@@ -90,7 +90,14 @@ Sparklines live in the worksheet's `extLst`:
 
 The builder confirms each default against the MS-XLSX schema text, and §8 has a reference workbook that omits every attribute.
 
-**Namespaces:** prefixes vary, so elements are matched by namespace URI, on both parse paths (§6.2). LibreOffice writes the same structure.
+**Namespaces:** prefixes vary, so elements are matched by namespace URI, on both parse paths (§6.2).
+
+**Other suites** (checked 2026-10-27, owner request):
+- **LibreOffice / Collabora.** LibreOffice Calc has native sparklines since 7.4 (2022), and Collabora Office since 22.05. LibreOffice reads XLSX sparklines and offers Excel's options.
+  - Whether its XLSX export writes the same `x14:sparklineGroups` structure, and with which attributes spelled out or omitted, is unverified.
+  - LibreOffice is not installed on the development machine. The plan adds at least one LibreOffice-written workbook as a fixture, saved by the owner or obtained from LibreOffice's own test files, to exercise §9 item 5.
+  - LibreOffice's ODS sparklines are out of scope, because the viewer does not read ODS.
+- **Apache OpenOffice.** It has no native sparklines, only an old third-party extension (EuroOffice Sparkline) that draws ordinary charts. OpenOffice-written XLSX files therefore carry no sparklines, and there is nothing extra to support.
 
 ## 4. Scope **[owner]**: the whole Excel feature set
 
