@@ -10,6 +10,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import { buildSheetGeometry, planViewport } from '../src/xlsx/view/viewport'
 import { createRowOrder } from '../src/xlsx/view/order'
 import { createObjectWorkbookSource } from '../src/xlsx/view/source'
+import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 import { viewportSparklineCandidates } from '../src/xlsx/view/renderViewport'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { registerSparklinePainter } from '../src/xlsx/sparklineLoader'
@@ -258,6 +259,32 @@ describe('XLSX sparkline rendering', () => {
     }]])
     const authoredCandidate = viewportSparklineCandidates(sheet, geometry, { box: { x: 0, y: 0, width: geometry.metrics.cols.totalCss(), height: geometry.metrics.rows.totalCss() }, zoom: 1, deviceScale: 1 }, plan, authoredHidden)
     expect(authoredCandidate.get(row)?.has(col)).toBe(true)
+  })
+
+  it('paints a last-cell sparkline when a tile crosses the sheet boundary', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const { preloadSparklines, registerSparklinePainter } = await import('../src/xlsx/sparklineLoader')
+    const paint = await import('../src/xlsx/sparklines/paint')
+    await preloadSparklines()
+    const sparkline = [...sheet.resolvedSparklines!.values()][0].values().next().value!
+    const host = { row: MAX_ROWS - 1, col: MAX_COLS - 1 }
+    sheet.rows = []
+    sheet.resolvedSparklines = new Map([[host.row, new Map([[host.col, { ...sparkline, host }]])]])
+    const geometry = buildSheetGeometry(sheet)
+    if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+    const cell = geometry.metrics.sourceCellToLogical(host)!
+    const viewport = { box: { x: cell.x, y: cell.y, width: cell.width + 64, height: cell.height + 64 }, zoom: 1, deviceScale: 1 }
+    expect(geometry.metrics.logicalPointToSource(viewport.box.x + viewport.box.width - Number.EPSILON, viewport.box.y + viewport.box.height - Number.EPSILON)).toBeNull()
+    let seen = false
+    registerSparklinePainter((_ctx, _sheet, _rect, _visible, _scale, candidates) => {
+      seen = candidates?.get(host.row)?.has(host.col) ?? false
+      return true
+    })
+    try {
+      const canvas = createCanvas(128, 96)
+      renderSheetViewport(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, geometry, viewport)
+      expect(seen).toBe(true)
+    } finally { registerSparklinePainter(paint.paintSparklinesIn) }
   })
 
   it('does no painter work for sheets without resolved sparklines', async () => {

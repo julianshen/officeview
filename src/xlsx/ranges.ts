@@ -9,11 +9,21 @@ export interface ChartRange {
 const colIndex = (letters: string): number => { let n = 0; for (const ch of letters.toUpperCase()) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1 }
 const CELL = /^\$?([A-Za-z]{1,3})\$?(\d{1,7})$/
 const NAME = /^[A-Za-z_\\][A-Za-z0-9_.\\]*$/
+function hasUnquotedComma(text: string): boolean {
+  let quoted = false
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "'") {
+      if (quoted && text[i + 1] === "'") { i++; continue }
+      quoted = !quoted
+    } else if (!quoted && text[i] === ',') return true
+  }
+  return quoted
+}
 /** A single-area reference (`Sheet1!$A$1:$A$5`, `'My sheet'!B2`) or a defined name. Multi-area references are unresolved. */
 export function parseChartRange(formula: string): ChartRange | undefined {
   let text = formula.trim()
   while (text.startsWith('(') && text.endsWith(')')) text = text.slice(1, -1).trim()
-  if (text.includes(',')) return undefined
+  if (hasUnquotedComma(text)) return undefined
   let sheet: string | undefined
   const bang = text.lastIndexOf('!')
   if (bang >= 0) {

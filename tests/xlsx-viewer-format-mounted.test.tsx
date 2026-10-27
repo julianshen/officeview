@@ -39,6 +39,42 @@ it('does not build sparkline view state for filtered worksheets when the workboo
   expect(buildHidden.mock.calls.some(([sheet]) => sheet.name === 'B')).toBe(false)
 })
 
+it('uses the latest external source-sheet filter when an inactive sheet owns a sparkline source', async () => {
+  const { preloadSparklines, registerSparklinePainter } = await import('../src/xlsx/sparklineLoader')
+  const paint = await import('../src/xlsx/sparklines/paint')
+  await preloadSparklines()
+  const hostCandidates: boolean[] = []
+  registerSparklinePainter((_ctx, sheet, _rect, _visible, _scale, candidates) => {
+    if (sheet.name === 'Host') {
+      hostCandidates.push(candidates?.get(0)?.has(0) ?? false)
+    }
+    return true
+  })
+  const sparkline = { host: { row: 0, col: 0 }, dataSheet: 'Source', sourceRows: [0] }
+  const document: XlsxDocument = { sheets: [
+    { name: 'Host', sheetId: 'A', rows: [{ index: 0, cells: [] }], cols: [], merges: [], mergeRanges: [],
+      resolvedSparklines: new Map([[0, new Map([[0, sparkline as never]])]]) },
+    { name: 'Source', sheetId: 'B', rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, value: 5, styleIndex: 0 }] }], cols: [], merges: [], mergeRanges: [] },
+  ] }
+  const visible = visibilityFromHidden(createIntervalSet([]))
+  const hidden = visibilityFromHidden(createIntervalSet([{ r0: 0, r1: 0 }]))
+  const ui = render(<InteractiveSheetDoc doc={document} views={{ B: { revision: 1, visibility: visible } }} />)
+  try {
+    await waitFor(() => expect(hostCandidates.some(Boolean)).toBe(true), FIRST_PAINT_WAIT)
+    const worksheet = ui.getByRole('combobox', { name: 'Worksheet' })
+    fireEvent.change(worksheet, { target: { value: 'B' } })
+    await waitFor(() => expect((worksheet as HTMLSelectElement).value).toBe('B'), FIRST_PAINT_WAIT)
+    fireEvent.change(worksheet, { target: { value: 'A' } })
+    await waitFor(() => expect((worksheet as HTMLSelectElement).value).toBe('A'), FIRST_PAINT_WAIT)
+    await waitFor(() => expect(hostCandidates.slice(-10).some(Boolean)).toBe(true), FIRST_PAINT_WAIT)
+    ui.rerender(<InteractiveSheetDoc doc={document} views={{ B: { revision: 2, visibility: hidden } }} />)
+    await waitFor(() => expect(document.sheets[0].diagnostics?.some(item => item.feature === 'sparkline-filter-hidden')).toBe(true), FIRST_PAINT_WAIT)
+  } finally {
+    cleanup()
+    registerSparklinePainter(paint.paintSparklinesIn)
+  }
+}, 30000)
+
 it('mounted semantic formatting refusal preserves the grid and exposes an explicit state', async () => {
   let ledger: MainMemoryLedger | undefined
   const document = doc(), onLedger = (value: MainMemoryLedger) => { ledger = value }

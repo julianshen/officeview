@@ -561,6 +561,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const ownerRef = useRef(ownerOf)
   ownerRef.current = ownerOf
   const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(revisionOf)])
+  const sparklineViewKey = hasResolvedSparklines ? ownerKey : ''
+  const sparklineViewKeyRef = useRef(sparklineViewKey)
 
   const entry = activeSheetId ? entryFor(activeSheetId) : null
   const identity = identityOf(activeSheetId)
@@ -712,16 +714,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       for (const dataSheet of doc.sheets) {
         const sheetId = dataSheet.sheetId ?? dataSheet.name
         const sheetEntry = entries.get(sheetId)
-        const input = sheetEntry?.input ?? viewInput(sheetId)
-        if (!input.visibility) continue
+        const input = viewInput(sheetId)
+        const entryMatchesInput = sheetEntry?.revision === input.revision
+        const visibility = input.visibility ?? (entryMatchesInput ? sheetEntry?.view.visibility : undefined)
+        if (!visibility) continue
         let baseHidden = sheetEntry?.view.baseHidden
         if (!baseHidden) {
           if (remote) { try { baseHidden = remote.geometry(sheetId).baseHidden } catch { continue } }
           else baseHidden = sheetBaseHidden(dataSheet)
         }
         sparklineViews.set(dataSheet.name.toLowerCase(), {
-          order: sheetEntry?.view.order ?? input.order ?? createIdentityOrder(),
-          visibility: sheetEntry?.view.visibility ?? input.visibility,
+          order: input.order ?? (entryMatchesInput ? sheetEntry?.view.order : undefined) ?? createIdentityOrder(),
+          visibility,
           baseHidden,
         })
       }
@@ -810,6 +814,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
+    if (sparklineViewKeyRef.current !== sparklineViewKey) {
+      renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+      sparklineViewKeyRef.current = sparklineViewKey
+    }
     const seenGen = structureGens.get(activeSheetId)
     if (seenGen !== undefined && seenGen !== frame.structureGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
@@ -834,7 +842,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     timer = setTimeout(step, 0)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
+  }, [identityKey, ownerKey, sparklineViewKey, scroll, viewport, dpr, assets, surfaceBytes, profile, mark, palette.key, loadTick, entry?.structureGen, entry?.resizeGen])
   // A restored 2D context starts blank, and the cached tile canvases may have
   // been lost with it: drop the tiles and repaint both layers at once.
   const surfacesMounted = Boolean(entry && scroll)

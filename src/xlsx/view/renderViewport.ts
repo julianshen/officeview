@@ -240,9 +240,14 @@ export function renderSheetViewport(
     for (const record of records) replay(record, 'fill')
     if (extraActive) replay(extraActive, 'fill')
     if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready') {
-      const cornerA = geometry.metrics.logicalPointToSource(vx, vy)
-      const cornerB = geometry.metrics.logicalPointToSource(Math.max(vx, vx + width - Number.EPSILON), Math.max(vy, vy + height - Number.EPSILON))
-      const colA = geometry.metrics.cols.locate(vx), colB = geometry.metrics.cols.locate(Math.max(vx, vx + width - Number.EPSILON))
+      const metrics = geometry.metrics
+      const endX = Math.max(vx, vx + width - Number.EPSILON), endY = Math.max(vy, vy + height - Number.EPSILON)
+      // Tile boxes may extend past the finite worksheet domain. Clamp only the
+      // far corner to the last representable point so in-bounds hosts still paint.
+      const insideEnd = (end: number, extent: number) => Math.min(end, Math.max(0, extent - Math.max(Number.MIN_VALUE, extent * Number.EPSILON)))
+      const cornerA = metrics.logicalPointToSource(vx, vy)
+      const cornerB = metrics.logicalPointToSource(insideEnd(endX, metrics.cols.totalCss()), insideEnd(endY, metrics.rows.totalCss()))
+      const colA = metrics.cols.locate(vx), colB = metrics.cols.locate(insideEnd(endX, metrics.cols.totalCss()))
       if (cornerA && cornerB && colA !== null && colB !== null) {
         const r0 = Math.min(cornerA.row, cornerB.row), r1 = Math.max(cornerA.row, cornerB.row)
         const c0 = Math.min(colA, colB), c1 = Math.max(colA, colB)

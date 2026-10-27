@@ -114,6 +114,9 @@ describe('chart parser', async () => {
 
   test('single-area references', () => {
     expect(parseChartRange("'My ''x'' sheet'!$B$2:$B$6")).toEqual({ sheet: "My 'x' sheet", r0: 1, c0: 1, r1: 5, c1: 1 })
+    expect(parseChartRange("'Sales, West'!A1:H1")).toEqual({ sheet: 'Sales, West', r0: 0, c0: 0, r1: 0, c1: 7 })
+    expect(parseChartRange("'Sales, O''Brien'!A1:H1")).toEqual({ sheet: "Sales, O'Brien", r0: 0, c0: 0, r1: 0, c1: 7 })
+    expect(parseChartRange('A1:H1,B1:C1')).toBeUndefined()
     expect(parseChartRange('Sheet1!A1')).toEqual({ sheet: 'Sheet1', r0: 0, c0: 0, r1: 0, c1: 0 })
     expect(parseChartRange('$C$9:$A$1')).toEqual({ r0: 0, c0: 0, r1: 8, c1: 2 })
     expect(parseChartRange('(Sheet1!$A$1,Sheet1!$A$3)')).toBeUndefined()

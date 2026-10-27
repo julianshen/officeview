@@ -96,6 +96,16 @@ describe('XLSX sparkline group parsing', () => {
     expect(parseA1Area("'My Sheet'!$B$2:$F$2")).toEqual({ sheet: 'My Sheet', r0: 1, c0: 1, r1: 1, c1: 5 })
   })
 
+  it('accepts commas inside quoted sheet names but rejects multi-area references', () => {
+    expect(parseA1Area("'Sales, West'!A1:H1")).toEqual({ sheet: 'Sales, West', r0: 0, c0: 0, r1: 0, c1: 7 })
+    expect(parseA1Area("'Sales, O''Brien'!A1:H1")).toEqual({ sheet: "Sales, O'Brien", r0: 0, c0: 0, r1: 0, c1: 7 })
+    expect(parseA1Area('A1:H1,B1:C1')).toBeUndefined()
+    const quoted = parse(group().replace('<xm:f>A1:A2</xm:f>', "<xm:f>'Sales, O''Brien'!A1:H1</xm:f>"))
+    expect(quoted.groups[0].sparklines[0].data).toMatchObject({ sheet: "Sales, O'Brien", r0: 0, c0: 0, r1: 0, c1: 7 })
+    const list = parse(group().replace('<xm:f>A1:A2</xm:f>', '<xm:f>A1:H1,B1:C1</xm:f>'))
+    expect(list.groups[0].sparklines[0].data).toBeUndefined()
+  })
+
   it('parses the group-level date range when dateAxis is enabled', () => {
     const body = group('dateAxis="1"', '<xm:f>Sheet1!$B$1:$F$1</xm:f>').replace('<xm:f>A1:A2</xm:f>', '<xm:f>Sheet1!A1:E1</xm:f>')
     const { groups } = parse(body)
