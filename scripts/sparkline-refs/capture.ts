@@ -11,7 +11,7 @@
  * Writes tests/fixtures/xlsx-sparklines/refs/<id>[-bordered][-<sheet>].png plus a .json sidecar.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { SPARKLINE_CASES, colIndex, colName, type CaseSheet } from './cases'
 
@@ -70,24 +70,39 @@ function capture(file: string, sheetName: string, range: string, out: string): v
     if (Date.now() - sent > 10_000) { execFileSync('open', ['-a', 'Microsoft Excel', file]); sent = Date.now() }
     return false
   }, `open ${name}`)
-  osa([
-    'tell application "Microsoft Excel"',
-    `set wb to workbook "${q(name)}"`,
-    'activate object wb',
-    `set ws to worksheet "${q(sheetName)}" of wb`,
-    'activate object ws',
-    'set zoom of active window to 100',
-    // A selection border would be captured, so the selection moves far away first (spec section 8).
-    'select range "XFD1048576" of ws',
-    `copy picture range "${range}" of ws appearance screen format bitmap`,
-    'end tell',
-  ], 90_000)
-  osa([
-    `set f to open for access POSIX file "${q(out)}" with write permission`,
-    'set eof f to 0',
-    'write (the clipboard as «class PNGf») to f',
-    'close access f',
-  ])
+  // Excel draws some sparklines (group axes, measured: up to ~7 s) after the workbook opens, and a failed copy
+  // leaves the previous pasteboard image. So the clipboard is cleared before every copy, and a capture counts only
+  // once two copies at least 2 s apart, taken no earlier than 3 s after opening, are byte-identical.
+  const opened = Date.now()
+  let previous: Buffer | undefined
+  const deadline = opened + 60_000
+  for (;;) {
+    const waitMs = previous ? 2_000 : Math.max(0, 3_000 - (Date.now() - opened))
+    if (waitMs) execFileSync('sleep', [String(waitMs / 1000)])
+    osa(['set the clipboard to ""'])
+    osa([
+      'tell application "Microsoft Excel"',
+      `set wb to workbook "${q(name)}"`,
+      'activate object wb',
+      `set ws to worksheet "${q(sheetName)}" of wb`,
+      'activate object ws',
+      'set zoom of active window to 100',
+      // A selection border would be captured, so the selection moves far away first (spec section 8).
+      'select range "XFD1048576" of ws',
+      `copy picture range "${range}" of ws appearance screen format bitmap`,
+      'end tell',
+    ], 90_000)
+    osa([
+      `set f to open for access POSIX file "${q(out)}" with write permission`,
+      'set eof f to 0',
+      'write (the clipboard as «class PNGf») to f',
+      'close access f',
+    ])
+    const current = readFileSync(out)
+    if (previous && current.equals(previous)) return
+    if (Date.now() > deadline) throw new Error(`capture did not settle: ${name}`)
+    previous = current
+  }
 }
 
 if (import.meta.main) {
