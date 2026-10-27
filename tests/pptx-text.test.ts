@@ -446,7 +446,7 @@ test('PowerPoint ignores the first paragraph\'s space before and the last paragr
 test('PowerPoint places the baseline by its line model, the same for every font', () => {
   // Probe decks (PowerPoint 16.114 movie exports; Trebuchet, Arial, Verdana, Georgia, Times, Courier; 18–54 pt):
   // a line is pct × 1.2 em; the first baseline sits L − 0.24 em below the text top at 100% or less and
-  // 0.9 em × pct above 100%; the block ends 0.24 em below the last baseline. 40 pt = 160/3 px here.
+  // 0.9 em × pct above 100%. 40 pt = 160/3 px here.
   const em = 40 * 4 / 3
   // The stub measurer's ascent/descent (12/4) must not matter.
   const at = (pct: number | undefined, anchor: 't' | 'ctr' | 'b' = 't', lines = 1) => layout(body(Array.from({ length: lines }, () =>
@@ -456,8 +456,9 @@ test('PowerPoint places the baseline by its line model, the same for every font'
     expect(at(pct).lines[0].baseline, `${pct}`).toBeCloseTo(b * em)
     // Bottom anchoring: the last baseline is 0.24 em above the box bottom whatever the spacing.
     expect(at(pct, 'b').lines[0].baseline, `${pct} b`).toBeCloseTo(600 - 0.24 * em)
-    // Centre anchoring moves half as far as top anchoring.
-    expect(at(pct, 'ctr').lines[0].baseline - at(1, 'ctr').lines[0].baseline, `${pct} ctr`).toBeCloseTo((b - 0.96) * em / 2)
+    // Compressed centered paragraphs retain the normal-leading tail; other lines move half as far as top anchoring.
+    const centeredDelta = pct < 1 ? ((b - 0.288) / 2 - 0.36) * em : (b - 0.96) * em / 2
+    expect(at(pct, 'ctr').lines[0].baseline - at(1, 'ctr').lines[0].baseline, `${pct} ctr`).toBeCloseTo(centeredDelta)
     // Later lines step by the line height.
     const two = at(pct, 't', 2)
     expect(two.lines[1].baseline - two.lines[0].baseline, `${pct} pitch`).toBeCloseTo(pct * 1.2 * em)
@@ -465,4 +466,17 @@ test('PowerPoint places the baseline by its line model, the same for every font'
   // Word and Excel text keeps the measured-ascent placement.
   const word = layout(body([p([run('one', { fontSizePt: 40 })])]), 1000, 600)
   expect(word.lines[0].baseline).not.toBeCloseTo(0.96 * em)
+})
+
+test('PowerPoint centres sub-100% text using the uncompressed leading tail', () => {
+  const em = 44 * 4 / 3
+  const make = (pct: number) => layout(body([p([run('title', { fontSizePt: 44 })], {
+    lineSpacing: { kind: 'percent', value: pct },
+  })], { anchor: 'ctr', powerPoint: true }), 1000, 600)
+  const compressed = make(0.9).lines[0].baseline
+  const normal = make(1).lines[0].baseline
+  // In the tdf115394 textbox (44 pt, 90%, centered), the reference ink is
+  // about 1.25 slide px above our prior centered layout. Retain the tail from
+  // the normal 1.2-em advance when the line is compressed.
+  expect(compressed - normal).toBeCloseTo(-0.084 * em)
 })
