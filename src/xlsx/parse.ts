@@ -29,6 +29,7 @@ import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
 import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
+import { resolveWorkbookSparklines } from './sparklines/resolve'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -482,6 +483,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     // A selected fallback's pictures join the document's media (each picture paints through its index).
     if (replaced) doc.images = collectXlsxImages(sheets)
   }
+  // Sparkline points are read from the final cell values (same policy as the grid and the chart fill above).
+  resolveWorkbookSparklines(sheets, { cached: options.valuePolicy === 'cached' })
   return doc
 }
 
