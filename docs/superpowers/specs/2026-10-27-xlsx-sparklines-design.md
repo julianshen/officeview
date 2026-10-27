@@ -1,10 +1,11 @@
 # XLSX Sparklines — Design Spec
 
-**Status:** draft 5.
+**Status:** draft 6.
 - Builder check folded in.
 - Round 1: agy and codex both returned REQUEST CHANGES. Their findings are addressed here, marked **[rev]** with reviewer and finding.
 - Round 2: agy APPROVE; codex resolved all 7 and raised R2-1 (reply and cache byte budget), addressed in draft 4.
 - Round 3: codex asked for receiver-side pre-admission (R2-1 continued), addressed in draft 5.
+- Round 4: codex resolved R2-1 and raised R4-1 (worker success-path release), addressed in draft 6.
 **Date:** 2026-10-27 · **Baseline:** `main` @ `38ed2b1`.
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -188,6 +189,7 @@ The exact geometry is **[measure]** throughout. Excel's rendering is the authori
   - **Receiver grants first.** Before requesting a sheet's sparklines, the main thread reserves a bounded byte grant against its reply pool and passes the limit with the request.
   - **Worker side.** The worker reserves under its own ledger before extracting. It refuses, without building or posting, if the reply would exceed the grant. A refusal means the sheet's sparklines are not drawn, with a diagnostic.
   - **Handoff on receipt.** The incoming reply is held under the grant until the cache adopts it. Ownership then passes to the cache's charge with no uncharged gap.
+  - **Success path.** **[rev]** (codex R4-1) The reply's point buffers are transferred, not cloned: they are passed in the `postMessage` transfer list, so they stop being worker-owned once posted. The worker's temporary charge is released right after the post returns, and released exactly once if the post throws. The worker keeps no retained copy. A test of repeated successful reads, followed by eviction, proves the worker ledger returns to its baseline every time.
   - **Release.** Every grant and charge is released exactly once, when the request or entry is stale (superseded), refused, cancelled, evicted, invalidated (values changed), or the sheet or document is closed. Tests cover each of these exits.
 - **Shared code.** One function maps the parsed group element to the model, so the two paths cannot drift. **[call]**
 - **Resource caps.**
