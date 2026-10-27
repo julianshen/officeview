@@ -64,6 +64,33 @@ describe('line sparkline geometry', () => {
     ])
   })
 
+  it('keeps polyline vertices at the same logical positions across zoom and device scales', () => {
+    // Task 5 fix round 1: vertices are snapped on the device grid but emitted in logical px, so {zoom:2} and
+    // {dpr:2} must reproduce the zoom-1 geometry within the ≤ 0.5 device px snapping slack (vertexSnapRule).
+    // [1, 3] keeps every slot centre and mapped y off an exact device-pixel boundary at this cell — an
+    // integral coordinate sits on the boundary where the parity modes (centre vs corner) legitimately differ.
+    const groups = { markers: true, colors: { markers: 'FFC000FF' } }
+    const base = polylines(sparklineGeometry(mk([1, 3], groups), CELL, Z1))[0]
+    for (const scale of [{ zoom: 2, dpr: 1 }, { zoom: 1, dpr: 2 }]) {
+      const devPx = scale.zoom * scale.dpr
+      const tol = 0.5 / devPx // 0.5 device px expressed in logical px
+      const line = polylines(sparklineGeometry(mk([1, 3], groups), CELL, scale))[0]
+      base.points.forEach(([x, y], k) => {
+        expect(Math.abs(line.points[k][0] - x)).toBeLessThanOrEqual(tol)
+        expect(Math.abs(line.points[k][1] - y)).toBeLessThanOrEqual(tol)
+      })
+      // The whole-device-px stroke keeps its logical width (lineStrokeWidth): 2 device px at 2× → 1 logical px.
+      expect(line.widthPx).toBe(1)
+      // Vertices line up with the marker centres within the snap slack.
+      const ms = markers(sparklineGeometry(mk([1, 3], groups), CELL, scale))
+      expect(ms).toHaveLength(2)
+      ms.forEach((m, k) => {
+        expect(Math.abs(m.x - line.points[k][0])).toBeLessThanOrEqual(tol)
+        expect(Math.abs(m.y - line.points[k][1])).toBeLessThanOrEqual(tol)
+      })
+    }
+  })
+
   it('insets the first and last points by P/(2n) instead of the plot edges (plotInsetLeft/Right, lineEndpointRule)', () => {
     // P/2n = 94.6667px/6 = 15.778 px = 11.833 pt from each edge: first x 38.444 px = 28.833 pt = 2 + 26.833 pt into the
     // cell (cell is 75 pt wide), NOT at the plot edge L = 28.333 pt. The snapped 38.5 and 101.5 bound both edges.

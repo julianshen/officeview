@@ -173,7 +173,9 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     if (indices.length < 2) continue
     let current: Array<{ x: number; y: number }> = []
     const flush = (): void => {
-      if (current.length >= 2) primitives.push({ kind: 'polyline', points: current.map((p): [number, number] => [p.x, p.y]), color: seriesColor, widthPx: strokePx, join: 'round', cap: 'round' })
+      // Snapping and clipping happen on the device grid (clipToBand works in device px); anything reaching the
+      // primitive converts back to logical px, exactly like the marker and axis primitives below.
+      if (current.length >= 2) primitives.push({ kind: 'polyline', points: current.map((p): [number, number] => [toLogical(p.x), toLogical(p.y)]), color: seriesColor, widthPx: strokePx, join: 'round', cap: 'round' })
       current = []
     }
     for (let k = 0; k + 1 < indices.length; k++) {
