@@ -1,9 +1,10 @@
 # XLSX Sparklines — Design Spec
 
-**Status:** draft 4.
+**Status:** draft 5.
 - Builder check folded in.
 - Round 1: agy and codex both returned REQUEST CHANGES. Their findings are addressed here, marked **[rev]** with reviewer and finding.
 - Round 2: agy APPROVE; codex resolved all 7 and raised R2-1 (reply and cache byte budget), addressed in draft 4.
+- Round 3: codex asked for receiver-side pre-admission (R2-1 continued), addressed in draft 5.
 **Date:** 2026-10-27 · **Baseline:** `main` @ `38ed2b1`.
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -175,11 +176,12 @@ The exact geometry is **[measure]** throughout. Excel's rendering is the authori
   - On the paged path the worker resolves each sparkline's points from worker-resident cells: values, hidden flags, and the date range.
   - It sends the resolved, render-ready sparklines for a sheet through a new protocol message in `src/worker/viewerProtocol.ts`, modelled on the remote drawings path (`readSheetDrawings` / `RemoteDrawingCache`).
   - The main thread keeps them in a per-sheet cache. **[call]**
-- **Byte admission and ownership.** **[rev]** (codex R2-1) The reply and the cache follow the remote drawings path's budget contract (`src/worker/viewerRemoteDrawings.ts` `RemoteDrawingCache`, and the reply grant in `src/xlsx/view/contracts.ts`):
-  - **Bounded encoding.** The encoded reply size is bounded by a formula stated in the plan beside the count caps: points × bytes per point, plus a fixed amount per sparkline and per group.
-  - **Worker side.** The worker reserves those bytes under its ledger before it extracts or serialises anything. A refused reservation means the sheet's sparklines are not drawn, with a diagnostic.
-  - **Main thread.** The retained copy is charged under the main thread's ledger when it is adopted.
-  - **Release.** Every charge is released exactly once, when the entry is stale (a superseded request), refused, evicted, invalidated (values changed), or the sheet or document is closed. Tests cover each of these exits.
+- **Byte admission and ownership.** **[rev]** (codex R2-1, R3) The reply follows the remote drawings path's receiver-granted contract: the reply grant in `src/xlsx/view/contracts.ts`, its dispatch and admission in `src/worker/viewerRemoteSource.ts`, and `RemoteDrawingCache` in `src/worker/viewerRemoteDrawings.ts`.
+  - **Bounded encoding.** The encoded reply size is bounded by a formula stated in the plan beside the count caps. It covers every field in the reply: point payloads (typed-array buffers), per-sparkline and per-group metadata, resolved colours, strings, and diagnostics.
+  - **Receiver grants first.** Before requesting a sheet's sparklines, the main thread reserves a bounded byte grant against its reply pool and passes the limit with the request.
+  - **Worker side.** The worker reserves under its own ledger before extracting. It refuses, without building or posting, if the reply would exceed the grant. A refusal means the sheet's sparklines are not drawn, with a diagnostic.
+  - **Handoff on receipt.** The incoming reply is held under the grant until the cache adopts it. Ownership then passes to the cache's charge with no uncharged gap.
+  - **Release.** Every grant and charge is released exactly once, when the request or entry is stale (superseded), refused, cancelled, evicted, invalidated (values changed), or the sheet or document is closed. Tests cover each of these exits.
 - **Shared code.** One function maps the parsed group element to the model, so the two paths cannot drift. **[call]**
 - **Resource caps.**
   - Caps: groups per sheet, sparklines per group, points per sparkline, and total points per sheet. The concrete numbers are set in the plan and sized from realistic workbooks.
