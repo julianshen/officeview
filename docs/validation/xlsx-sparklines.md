@@ -39,18 +39,19 @@ pairs). Borders therefore do not move or clip the sparkline.
 
 | Name | Value | Unit | Case id(s) | Method / evidence |
 |---|---|---|---|---|
-| `plotInsetLeft` | **2.0** (±0.06) | pt from inner left edge | line-basic, line-weight-2_25, line-hidden-cols, line-filter-hidden, line-merged-host | Plot box left L = 48.0. The vertex-x model x<sub>i</sub> = L + (i+½)·P/n (see `lineEndpointRule`) reproduces every snapped vertex column for n = 8, 6, 5 and 1. The 1-px and 2-px strokes together bound L to [47.94, 48.06) (note 1). The axis line also starts at L (see `axisRule`) |
+| `plotInsetLeft` | **2.0** (±0.06) | pt from inner left edge | line-basic, line-weight-2_25, line-hidden-cols, line-filter-hidden, line-merged-host | Plot box left L = 48.0. The vertex-x model x<sub>i</sub> = L + (i+½)·P/n (see `lineEndpointRule`) reproduces every snapped vertex column for n = 8, 6, 5 and 1. The 1-px and 2-px strokes together bound L to [47.94, 48.06) (note 1). The axis line also starts at L (see `axisRule`). **Geometry (Task 7):** 3.0 pt from the host rectangle, because the rectangle includes the 1-pt left gridline (`cellBoxRule`) |
 | `plotInsetRight` | **2.0** (±0.06) | pt from inner right edge | same, line-axis | P = 199 for a 203-pt-wide inner box and P = 403 for the 407-pt merged box, so R = 247.0 and 451.0. The axis spans the whole of [L, R] |
-| `plotInsetTop` | **4.15** (range 4.10–4.30) | pt from inner top edge | 17 rows across 14 cases (note 2) | The max value maps to y<sub>T</sub> ≈ 5.13–5.15, so its vertex is always in pixel row 5. Fitted from ~120 snapped vertex positions of known value |
-| `plotInsetBottom` | **3.5** (range 3.35–3.65) | pt from inner bottom edge | as above | The min value maps to y<sub>B</sub> ≈ 56.35–56.65, so its vertex is always in pixel row 56. Plot height H = y<sub>B</sub> − y<sub>T</sub> ≈ 51.2–51.5 of the 59-pt inner height. The insets are **asymmetric**: top is about 0.6 pt more than bottom |
+| `plotInsetTop` | **4.08** (Task 7 refit; Task 2 fit 4.15, range 4.10–4.30) | pt from inner top edge (geometry: **5.08** from the host rectangle, which includes the 1-pt top gridline, `cellBoxRule`) | 17 rows across 14 cases (note 2); Task 7 comparison of all 29 line cases | The max value maps to y<sub>T</sub> ≈ 5.08–5.15, so its vertex is always in pixel row 5. Task 2 fitted ~120 snapped vertex positions of known value. **Task 7:** with 4.15 / 3.5 the symmetric midpoint (y = 30.83) lands in row 30, but Excel draws it, and the axis, in row 31 (line-axis rowMax 0.98: the whole axis row is off). Max → row 5, min → row 56 and midpoint → row 31 hold together only when top ≥ 4, bottom > 3 and top − bottom ≥ 1. A sweep of the comparison over that band picked top 4.08 / bottom 3.06, the middle of the plateau with the fewest unmatched pixels. Every case then passes |
+| `plotInsetBottom` | **3.06** (Task 7 refit; Task 2 fit 3.5, range 3.35–3.65) | pt from inner bottom edge (= the next gridline, the host rectangle's edge) | as above | The min value maps to y<sub>B</sub> ≈ 56.5–56.94, so its vertex is always in pixel row 56. Plot height H = y<sub>B</sub> − y<sub>T</sub> = 51.86 of the 59-pt inner height. The insets are **asymmetric**: top is about 1 pt more than bottom. See `plotInsetTop` for the Task 7 evidence |
 | plot inset zoom dependence | **unknowable** | — | — | Copy picture renders at a fixed 1 px/pt whatever the sheet zoom (Task 2 probe). Whether the insets are fixed points, fixed device px or zoom-scaled cannot be measured on this route. It would need the screenshot route at 200 % zoom |
-| `verticalMapping` | y(v) = y<sub>T</sub> + (max − v)/(max − min) · H, with y<sub>T</sub> ≈ 5.13, H ≈ 51.5. The vertex then lands in pixel row ⌊y⌋ (1-px strokes, centre ⌊y⌋+½) or on the pixel boundary round(y) (2-px strokes) | pt | all line cases | Exact rows for known values: **max → row 5** (centre 5.5), **min → row 56** (centre 56.5), and the midpoint of a symmetric range (v = 0 on −4..4, −10..10; 4 on 0..8; 50 on 0..100) → **row 31**. For line-basic, D = 4,7,3,9,2,8,5,6 lands in rows 41,19,49,5,56,12,34,27. The single linear fit reproduces 111 of 121 snapped vertex rows (115 from 1-px strokes, 6 from 2-px strokes). Every miss is off by exactly 1 row, and f = ½ always lands 1 row lower than any linear fit predicts. The sub-pixel rounding is **underdetermined** at the ±1 px level (note 2) |
+| `verticalMapping` | y(v) = y<sub>T</sub> + (max − v)/(max − min) · H, with y<sub>T</sub> ≈ 5.13, H ≈ 51.5 (Task 2). **Task 7 constants: y<sub>T</sub> = 5.08, H = 51.86**, which put the midpoint in row 31 (see `plotInsetTop`). The vertex then lands in pixel row ⌊y⌋ (1-px strokes, centre ⌊y⌋+½) or on the pixel boundary round(y) (2-px strokes) | pt | all line cases | Exact rows for known values: **max → row 5** (centre 5.5), **min → row 56** (centre 56.5), and the midpoint of a symmetric range (v = 0 on −4..4, −10..10; 4 on 0..8; 50 on 0..100) → **row 31**. For line-basic, D = 4,7,3,9,2,8,5,6 lands in rows 41,19,49,5,56,12,34,27. The single linear fit reproduces 111 of 121 snapped vertex rows (115 from 1-px strokes, 6 from 2-px strokes). Every miss is off by exactly 1 row, and f = ½ always lands 1 row lower than any linear fit predicts. The sub-pixel rounding is **underdetermined** at the ±1 px level (note 2) |
 | `lineEndpointRule` | n points sit at the **slot centres** of n equal slots across the plot box: x<sub>i</sub> = L + (i + ½)·P/n. The first and last points are inset by P/(2n) from the plot box (12.44 pt for n = 8). They are **not** at the plot edges | — | line-basic (n=8), line-hidden-cols/-rows (n=6), line-filter-hidden (n=5), line-single (n=1), line-merged-host (n=8, P=403) | Vertex columns: n=8: 60,85,110,135,159,184,209,234 (predicted 60.44, 85.31, …, 234.56, floored). n=6: 64…230. n=5: 67…227. n=1: centre 147.0 (marker at cols 146–147; plot centre 147.5). Merged: fitted vertices 73.5, 123.5, 173.5, 224.5, 274.5, 325.5, 375.5, 425.5, all exactly the predicted floors. A fixed-inset model (first point always at 14.5) fails n = 5 and n = 6 |
 | `vertexSnapRule` | A vertex is snapped so the stroke edges fall on pixel boundaries: **odd device width → pixel centre ⌊x⌋+½, ⌊y⌋+½; even width → pixel corner round(x), round(y)**. Ordinary markers snap their centre to round(x), round(y). **High/low/first/last points snap to ⌊x⌋, ⌊y⌋**, which is 1 px left of / above an ordinary marker where the fractional part is ≥ ½ | px | line-basic, line-weight-2_25 rows 1/3/4, line-markers, line-points-hl-fl, line-precedence, line-ties, line-colours-theme-tint | 2-px stroke (lineWeight 2.25) fitted vertices: (85.03, 19.98), (110.00, 49.06), (134.98, 4.97), (160.02, 56.03), (184.95, 12.03), (210.06, 33.99), i.e. integers. 1-px and 5-px strokes are at .5 centres. For the marker at x = 159.94: line-markers covers cols 159–160 (round), line-points-hl-fl low point covers cols 158–159 (floor). At y = 41.72: marker rows 41–42, first point rows 40–41 |
 | `lineStrokeWidth` | device px = **max(1, round-half-up(lineWeight))** at 1 px/pt: 0.5 → 1, 0.75 → 1, 2.25 → 2, 4.5 → 5 | px at 1 px/pt | line-basic (0.75), line-weight-2_25 rows 1–4 (2.25, 2.25 + markers, 0.5, 4.5) | Mean coverage per column ÷ √(1+m²) over the middle of all 7 segments: 0.75 → 1.01–1.05, 0.5 → 1.01–1.05, 2.25 → 1.94–2.05, 4.5 → 4.95–5.01. lineWeight 0.5 is pixel-identical to 0.75 (0 differing px against line-hidden-shown). Widths are whole pixels, not fractional anti-aliased widths. **Underdetermined:** the rounding at other scales (round(w·pxPerPt)? minimum 1 device px?) is not observable at a fixed 1 px/pt |
 | `lineJoin` | **round** | — | line-weight-2_25 row 4 (4.5 pt = 5 px) | At the vertex (85.5, 19.5) the join's outer edge reaches y = 17.0 (row 17 alpha 191/255/128 at cols 84/85/86, row 16 empty). Round predicts 17.0. Bevel predicts ≈ 17.6–17.9 (row 17 ≤ 40 % covered). Miter predicts ≈ 15.9 (row 16 covered) |
 | `lineCap` | **round** | — | line-weight-2_25 row 4 | At the first vertex (60.5, 41.5) the ink reaches col 58 (row 41 full) but not col 57, and its lowest row is 43 (partial at cols 59 and 61). That matches a radius-2.5 disc. Butt leaves col 58 empty. Square fills col 57. The ink x-extent of 58…236 = first/last vertex ± 2.5 |
-| `lineClipRule` | Line strokes are **clipped to the plot box rows [⌊y<sub>T</sub>⌋, ⌊y<sub>B</sub>⌋+1) = y ∈ [5, 57)**. Markers are **not** clipped | pt | line-weight-2_25 rows 1/4, line-scale-custom-clip | The 4.5-pt stroke's peak at y 5.5 and valley at 56.5 are cut flat: the first ink row is 5 and the last is 56, both fully opaque, where a 5-px round-joined stroke would reach 3.0 and 59.0. Ink y-extent for 0.75, 2.25 and 4.5 strokes alike: 5…56. The 2.25 markers reach rows 2…58. Horizontal clipping is not observable, because no stroke reaches L or R |
+| `lineClipRule` | Two levels (Task 7). The **centreline** is cut where it crosses the snapped rows of the plot top and bottom, the rows a max or min vertex snaps to (1 px stroke: 5.5 and 56.5). The **stroke** is then clipped to the plot box rows **[⌊y<sub>T</sub>⌋, ⌊y<sub>B</sub>⌋+1) = y ∈ [5, 57)**. Markers are **not** clipped | pt | line-weight-2_25 rows 1/4, line-scale-custom-clip, line-scale-custom row 3 | The 4.5-pt stroke's peak at y 5.5 and valley at 56.5 are cut flat: the first ink row is 5 and the last is 56, both fully opaque, where a 5-px round-joined stroke would reach 3.0 and 59.0. Ink y-extent for 0.75, 2.25 and 4.5 strokes alike: 5…56. The 2.25 markers reach rows 2…58. **Task 7:** clipping only the centreline to [5, 57) let the 1-px stroke run on past the min vertex and bleed into row 57 (line-scale-custom row 3: 8 ink px in row 57 and ink left of x = 86, where Excel has none). Cutting the centreline at the snapped min/max rows and clipping the stroke region to the rows reproduces it. Horizontal clipping is not observable, because no stroke reaches L or R |
+| `cellBoxRule` | The host rectangle runs **gridline to gridline**, and its first device column and row are the cell's own left and top gridline: the border at x = 45 and y = 0 belongs to the host, and the next gridline (x = 249, y = 60) does not. The viewer draws a cell's gridline on its first pixel too (`renderSheet` strokes x = colX + ½). So the measured inner-edge insets gain 1 pt on the left and top in the geometry | pt | every line case (Task 7) | Before the fix every vertex and the axis were exactly 1 px left of and above the reference (line-basic first ink column 59 against Excel's 60). With the gridline counted, the line-basic count of pixels differing by more than 96 levels (no ±1-row window) went from 259 to 0 |
 | `markerShape` | **diamond** (square rotated 45°), filled, no outline | — | line-markers, line-weight-2_25 row 2 | 6-px-diagonal diamonds at 2.25 pt: edge pixels at alpha ½ along the diagonals, interior opaque. At 0.75 pt each marker is 4 px at alpha 128 in a 2 × 2 block, which is exactly the coverage of a diamond of diagonal 2 centred on a pixel corner |
 | `markerSize` | half-diagonal = **1 pt at lineWeight 0.75, 3 pt at 2.25**. Both fit half-diagonal = (4/3)·lineWeight. **Underdetermined:** 2·strokePx − 1 fits the same two points | pt | line-markers, line-weight-2_25 row 2 | Diamond extents: 0.75 → cols 59–60 × rows 41–42 around (60, 42). 2.25 → cols 57–62 × rows 39–44 around (60, 42). No 0.5-pt or 4.5-pt case has markers |
 | `specialPointSize` | High/low/first/last points are drawn as the same diamond as `markerSize`, with or without `markers` | — | line-points-hl-fl, line-ties | 2 × 2-px half-alpha blocks at 0.75 pt, with the `vertexSnapRule` floor placement |
@@ -62,7 +63,7 @@ pairs). Borders therefore do not move or clip the sparkline.
 | `singlePointRule` | n = 1 with no point flags: **nothing drawn**. n = 1 with flags: one special-point diamond at the plot-box centre x and at the top y (like a flat positive series). A range with no drawable point: nothing | — | line-single rows 1–3 | Row 2: 4 px of (0,159,159) α 128 at cols 146–147, rows 4–5 (centre 147, 5). Rows 1 and 3 have zero ink pixels |
 | `tinyCellRule` | Host 2 chars × 5 pt (inner 13 × 4 pt, smaller than the 7.65 pt of vertical insets): **nothing drawn**, markers included | — | line-tiny-cell | 0 ink pixels in the unbordered capture (60 × 6 px) |
 | `customScaleRule` | Points map against manualMin/manualMax. **min and max are independent**: custom on one side, individual on the other | — | line-scale-custom rows 1–5 | Rows 1–2 (0..100): vertex rows 56,55,55,54,54,53,53,52 for 1..8, and 51,46,41,36,31,25,20,15 for 10..80. Row 4 (min 0 custom, max individual 8): 1..8 → rows 50,44,37,31,24,18,11,5. Row 5 (min individual 1, max custom 12): rows 56,51,47,42,37,33,28,23 |
-| `customClipRule` | Values outside [manualMin, manualMax] are **not dropped**. The polyline runs through them and is **clipped to the plot box** (`lineClipRule`). A segment that leaves the box is cut where it crosses y<sub>T</sub>/y<sub>B</sub>, and the part outside is invisible | — | line-scale-custom-clip, line-scale-custom row 3 | Clip row 1 (1..8 on 2..6): ink x 85…185, from the idx 1 vertex (value 2) to the idx 5 vertex (value 6). Row 2 (−5,0,5,10,5,0,−5,−10 on 2..6): two strokes whose ends are the band crossings x = 95.26 (0→5 crosses 2) and x = 174.86 (5→0 crosses 2), with ink x 95…174. Ink y is 5…56 in both rows. Custom row 3 (C on 0..100): ink x 86…182 |
+| `customClipRule` | Values outside [manualMin, manualMax] are **not dropped**. The polyline runs through them and is **clipped to the plot box** (`lineClipRule`). A segment that leaves the box is cut where it crosses the snapped top/bottom rows (Task 7, see `lineClipRule`), and the part outside is invisible | — | line-scale-custom-clip, line-scale-custom row 3 | Clip row 1 (1..8 on 2..6): ink x 85…185, from the idx 1 vertex (value 2) to the idx 5 vertex (value 6). Row 2 (−5,0,5,10,5,0,−5,−10 on 2..6): two strokes whose ends are the band crossings x = 95.26 (0→5 crosses 2) and x = 174.86 (5→0 crosses 2), with ink x 95…174. Ink y is 5…56 in both rows. Custom row 3 (C on 0..100): ink x 86…182 |
 | `individualScaleRule` | Each sparkline uses its own min and max and fills the plot box | — | line-scale-individual | Rows 1 (1..8) and 2 (10..80) are pixel-identical (0 differing px). Row 3 (−10..10) reaches rows 5 and 56 |
 | `groupScaleRule` | min and max shared across every sparkline of the group; `manualMin`/`manualMax` ignored under `group` | — | line-scale-group | The first capture was blank because Excel draws group-axis sparklines up to about 7 s after opening. `capture.ts` now waits for two identical copies. Recaptured: with the shared min −10 and max 80, the predicted vertex rows (`verticalMapping`) are 46–50 for row 1 (values 1..8) and 5–45 for row 2 (values 10..80). The measured ink is 46–50 and 4–44, matching within the ±1 px vertex tolerance. A byte-identical image results with `manualMin="-10" manualMax="80"` added (investigation 2026-10-28) |
 | `cellValueRule` | **text → 0** and takes part in min/max. **TRUE → 1** and takes part in min/max. **#N/A → skipped and bridged** (no vertex, neighbours joined) even with displayEmptyCellsAs = "gap", and excluded from min/max. Other error codes were not tested | — | line-text-bool-error rows 1–3 | Forward-render scores, (lower is better) per row: text {0: 43.8, 1: 254, gap: 249}, bool {0: 258, 1: 9.4, gap: 243}, #N/A {0: 337, 1: 333, bridged over a 2..8 range: 10.3}. In the #N/A row the per-column centroids at x = 90…130 follow the straight 7→4 chord within 0.15 px. Text = 0 **contradicts** the spec hypothesis (text = empty) and matches LibreOffice. TRUE = 1 matches LibreOffice. #N/A **contradicts** both "empty" (gap would break the line) and LibreOffice's error = 0 |
@@ -106,37 +107,81 @@ these constants, snap as in `vertexSnapRule`, and accept a ±1 px vertex toleran
 - Not tested by Stage 1:
   - negative adds markers on line sparklines (no line case sets negative = 1)
 
+## Comparison (Task 7)
+
+`bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]` renders each case and compares its host cells with
+the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 case and asserts the tolerances
+below. It reads the **Cases** table, so a tolerance or status changes here, not in code.
+
+- **Render path.** `renderSheet` on a canvas scaled by 0.75 with `sparklineScale = 0.75`: what the interactive viewport
+  does at 75 % zoom, so the geometry snaps on the same 1 px-per-point device grid Excel snapped on. `getPaintables`
+  paints at scale 1, and resampling its bitmap would blur snapped strokes. `preloadSparklines()` runs first.
+- **Cell size (reported separately).** Excel for Mac at 72 dpi gives the 40.71-character host column 204 px
+  gridline to gridline, but the viewer's 96 dpi width (285 CSS px) is 213.75 pt at the comparison scale. Slot positions
+  scale with the plot width, so the natural widths would move vertices by up to ~5 px for a column-width reason. The host
+  column(s) and row(s) are therefore forced to the reference's border-to-border size from the `-bordered` twin
+  (204 × 60 per row; merged 408; tiny cell 14 × 5), and every output line prints the natural size beside it. Rows
+  already agree (60 pt → 80 CSS px → 60) except the tiny cell (5 pt → 7 CSS px → 5.25).
+- **Crop.** Gridline to gridline (`cellBoxRule`), then the gridline pixels are dropped: each host row's inner box,
+  x ∈ [46, 249) and y ∈ [1, 60) as in **Host cell bounds**. The static renderer draws gridlines even with
+  showGridLines = 0, which is not a sparkline matter, and no sparkline ink reaches a gridline.
+- **Reference alpha.** The copy-picture PNG is transparent wherever Excel paints nothing (coverage is in alpha), so
+  it is composited over white, the sheet colour.
+- **Metrics** (fractions of 255, as in `scripts/slideshow-compare.ts`): the pixel difference is the largest R, G, B or
+  A difference. **meanAbs** is its mean over the block, **rowMax** the largest row mean, and **strong** the count of
+  pixels, in either image, with no pixel within ±1 row in the same column of the other image closer than 64 levels.
+  The ±1 row window is the `verticalMapping` ±1 px tolerance (note 2). rowMax still catches a whole row off by one,
+  such as the axis.
+- **Tolerances.** Each case's tolerance is its measured anti-aliasing noise (the meanAbs, rowMax and strong columns
+  are the residuals of the final geometry) plus a fixed margin: meanAbs + 0.002, rowMax + 0.010, strong + 3, rounded
+  up. The noise is Cairo's anti-aliasing against Excel's quarter-step coverage, plus the ±1 row vertex
+  ambiguity. **Negative controls** (`tests/xlsx-sparklines-reference.test.ts`) must fail. Each one perturbs the parsed
+  model through the real render path:
+  - line-basic: a matching vertex moved 2 px; the series colour at tint −0.25 instead of −0.5 (2F5597) and with no tint
+    (4472C4)
+  - line-markers: markers off
+  - line-points-hl-fl: one missing marker (high off; last off)
+  - line-axis: the axis one row down
+  - line-precedence: high and low colours swapped
+  - line-merged-host: a vertex moved 2 px
+
+  The single-missing-marker controls clear the strong margin by only 1–2 pixels. A 0.75-pt diamond is 4 px at
+  α ½, which is why the margin is a flat 3 and not proportional.
+
 ## Cases
 
-| Case id | Status |
-|---|---|
-| line-basic | captured, not yet compared |
-| line-defaults-omitted | captured, not yet compared |
-| line-markers | captured, not yet compared |
-| line-points-hl-fl | captured, not yet compared |
-| line-precedence | captured, not yet compared |
-| line-ties | captured, not yet compared |
-| line-weight-2_25 | captured, not yet compared |
-| line-scale-individual | captured, not yet compared |
-| line-scale-group | captured, not yet compared |
-| line-scale-custom | captured, not yet compared |
-| line-scale-custom-clip | captured, not yet compared |
-| line-empty-gap | captured, not yet compared |
-| line-empty-zero | captured, not yet compared |
-| line-empty-span | captured, not yet compared |
-| line-text-bool-error | captured, not yet compared |
-| line-hidden-rows | captured, not yet compared |
-| line-hidden-shown | captured, not yet compared |
-| line-filter-hidden | captured, not yet compared |
-| line-hidden-cols | captured, not yet compared |
-| line-axis | captured, not yet compared |
-| line-flat | captured, not yet compared |
-| line-single | captured, not yet compared |
-| line-all-negative | captured, not yet compared |
-| line-merged-host | captured, not yet compared |
-| line-later-sheet | captured, not yet compared (refs are suffixed `-Sheet1`) |
-| line-colours-theme-tint | captured, not yet compared |
-| line-colours-indexed | captured, not yet compared |
-| line-colours-missing | captured, not yet compared |
-| line-tiny-cell | captured, not yet compared |
-| layering | captured, not yet compared |
+Status is `pass` (compared within tolerance) or `*unverified*` with the reason in Note (spec §8 owner rule). Tolerance
+is `meanAbs / rowMax / strong`.
+
+| Case id | Status | meanAbs | rowMax | strong | Tolerance | Note |
+|---|---|---|---|---|---|---|
+| line-basic | pass | 0.0056 | 0.0147 | 14 | 0.008 / 0.025 / 17 |  |
+| line-defaults-omitted | pass | 0.0046 | 0.0130 | 6 | 0.007 / 0.023 / 9 |  |
+| line-markers | pass | 0.0068 | 0.0197 | 52 | 0.009 / 0.030 / 55 |  |
+| line-points-hl-fl | pass | 0.0065 | 0.0177 | 41 | 0.009 / 0.028 / 44 |  |
+| line-precedence | pass | 0.0092 | 0.0343 | 132 | 0.012 / 0.045 / 135 |  |
+| line-ties | pass | 0.0056 | 0.0107 | 5 | 0.008 / 0.021 / 8 |  |
+| line-weight-2_25 | pass | 0.0102 | 0.0476 | 176 | 0.013 / 0.058 / 179 |  |
+| line-scale-individual | pass | 0.0051 | 0.0244 | 60 | 0.008 / 0.035 / 63 |  |
+| line-scale-group | pass | 0.0018 | 0.0164 | 2 | 0.004 / 0.027 / 5 |  |
+| line-scale-custom | pass | 0.0042 | 0.0761 | 116 | 0.007 / 0.087 / 119 |  |
+| line-scale-custom-clip | pass | 0.0040 | 0.0172 | 7 | 0.006 / 0.028 / 10 |  |
+| line-empty-gap | pass | 0.0048 | 0.0274 | 60 | 0.007 / 0.038 / 63 |  |
+| line-empty-zero | pass | 0.0038 | 0.0130 | 11 | 0.006 / 0.023 / 14 |  |
+| line-empty-span | pass | 0.0059 | 0.0274 | 68 | 0.008 / 0.038 / 71 |  |
+| line-text-bool-error | pass | 0.0054 | 0.0273 | 75 | 0.008 / 0.038 / 78 |  |
+| line-hidden-rows | pass | 0.0047 | 0.0139 | 22 | 0.007 / 0.024 / 25 |  |
+| line-hidden-shown | pass | 0.0064 | 0.0168 | 43 | 0.009 / 0.027 / 46 |  |
+| line-filter-hidden | pass | 0.0050 | 0.0146 | 28 | 0.007 / 0.025 / 31 |  |
+| line-hidden-cols | pass | 0.0047 | 0.0139 | 22 | 0.007 / 0.024 / 25 |  |
+| line-axis | pass | 0.0048 | 0.0203 | 66 | 0.007 / 0.031 / 69 |  |
+| line-flat | pass | 0.0000 | 0.0027 | 5 | 0.002 / 0.013 / 8 |  |
+| line-single | pass | 0.0000 | 0.0002 | 0 | 0.002 / 0.011 / 3 | row 3 (no drawable point) blank on both sides |
+| line-all-negative | pass | 0.0072 | 0.0192 | 21 | 0.010 / 0.030 / 24 |  |
+| line-merged-host | pass | 0.0050 | 0.0160 | 34 | 0.007 / 0.027 / 37 | cell ref 408×60, viewer 427.5×60 |
+| line-later-sheet | pass | 0.0068 | 0.0197 | 52 | 0.009 / 0.030 / 55 | refs suffixed `-Sheet1` |
+| line-colours-theme-tint | pass | 0.0063 | 0.0168 | 69 | 0.009 / 0.027 / 72 |  |
+| line-colours-indexed | pass | 0.0068 | 0.0197 | 49 | 0.009 / 0.030 / 52 |  |
+| line-colours-missing | pass | 0.0051 | 0.0109 | 108 | 0.008 / 0.021 / 111 |  |
+| line-tiny-cell | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | both blank (tinyCellRule); cell ref 14×5, viewer 14.25×5.25 |
+| layering | *unverified* | 0.0267 | 0.4292 | 2841 | — | Cell text, not the sparkline, dominates the difference: the static renderer draws the host text and the spilled neighbour text in node-canvas's fallback font, vertically centred, where Excel draws Calibri bottom-aligned in the 60-pt rows (rows 1, 2 and 5 of the capture), so no tolerance separates a sparkline defect from text placement. The sparkline rows without text (3: fill only, 4: gridlines only) measure 0.0056 / 0.0147 / 14 each, exactly line-basic's residual, so the line over a fill matches; rows 1, 2 and 5 measure up to 0.0707 / 0.4292 / 1766 from the text alone. the fill-under and text-over orders are confirmed by eye in the `--out` images, not by the gate |

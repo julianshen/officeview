@@ -17,17 +17,25 @@ export interface SparkScale {
   output?: 'logical' | 'device'
 }
 
-/** `sizePx` is the half-diagonal for diamonds, the half-side for squares, the radius for circles. */
+/**
+ * `sizePx` is the half-diagonal for diamonds, the half-side for squares, the radius for circles. A polyline's `band`
+ * is the horizontal strip [y0, y1) its stroke is clipped to (lineClipRule).
+ */
 export type SparkPrimitive =
-  | { kind: 'polyline'; points: Array<[number, number]>; color: string; widthPx: number; join: CanvasLineJoin; cap: CanvasLineCap }
+  | { kind: 'polyline'; points: Array<[number, number]>; color: string; widthPx: number; join: CanvasLineJoin; cap: CanvasLineCap; band?: { y0: number; y1: number } }
   | { kind: 'marker'; x: number; y: number; sizePx: number; color: string; shape: 'square' | 'circle' | 'diamond' }
   | { kind: 'rect'; x: number; y: number; w: number; h: number; color: string }
   | { kind: 'axis'; x0: number; x1: number; y: number; color: string; widthPx: number }
 
-// Plot box insets, pt from the cell edges (plotInsetLeft/Right 2.0 pt ±0.06; top 4.15 pt, bottom 3.5 pt — asymmetric:
-// top is about 0.6 pt more than bottom). The insets' zoom dependence is unknowable from the 1 px/pt capture route;
-// they are treated as fixed points.
-const INSETS = { left: 2.0, right: 2.0, top: 4.15, bottom: 3.5 }
+// Plot box insets, pt from the host rectangle's edges (docs/validation/xlsx-sparklines.md, `cellBoxRule`,
+// `plotInsetLeft/Right/Top/Bottom`, Task 7 reference comparison). The host rectangle runs gridline to gridline and its
+// first column/row is the cell's own left/top gridline, so the measured inner-edge insets gain that gridline: left
+// 2.0 + 1 = 3.0 and top 4.08 + 1 = 5.08; right and bottom are measured from the next gridline, the rectangle's edge.
+// Top 4.08 / bottom 3.06 (refit from 4.15 / 3.5 by the reference comparison): the only band in which max → row 5,
+// min → row 56 and a symmetric midpoint → row 31 all hold (top ≥ 4, bottom > 3, top − bottom ≥ 1 from the inner
+// edges). The insets' zoom dependence is unknowable from the 1 px/pt capture route; they are treated as fixed points.
+/** @internal Exported for the Task 7 constant sweep; not part of the public API. */
+export const INSETS = { left: 3.0, right: 2.0, top: 5.08, bottom: 3.06 }
 /** 1 pt in logical (CSS) px. */
 const PT_PX = 4 / 3
 /** colourFallback: colorSeries absent → black. Every other element without its colour is simply not drawn. */
@@ -134,11 +142,15 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   }
   if (run.length) runs.push(run)
 
-  // lineClipRule: strokes clip to the plot box rows [⌊top⌋, ⌊bottom⌋+1) in device px (markers are NOT clipped);
-  // customClipRule: out-of-range values are not dropped — the polyline runs through them and is cut where it
-  // crosses the band edges.
-  const clipTop = Math.floor(toDevY(top))
-  const clipBottom = Math.floor(toDevY(bottom)) + 1
+  // lineClipRule / customClipRule, two levels (Task 7 reference comparison, line-scale-custom row 3 and
+  // line-scale-custom-clip): out-of-range values are not dropped — the CENTRELINE runs through them and is cut where
+  // it crosses the snapped rows of the plot top and bottom (the rows a max / min vertex snaps to: clip row 1 ink runs
+  // exactly from the value-2 vertex to the value-6 vertex, and a segment leaving the min vertex downwards leaves no
+  // ink beside it), and the STROKE is then clipped to the plot box rows [⌊top⌋, ⌊bottom⌋+1) in device px, which
+  // cuts a wide stroke flat at the extremes (line-weight-2_25 row 4). Markers are NOT clipped.
+  const clipTop = snapVertex(toDevY(top))
+  const clipBottom = snapVertex(toDevY(bottom))
+  const band = { y0: toOutputY(Math.floor(toDevY(top))), y1: toOutputY(Math.floor(toDevY(bottom)) + 1) }
 
   const primitives: SparkPrimitive[] = []
   const seriesColor = group.colors.series ?? SERIES_FALLBACK
@@ -184,7 +196,7 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     const flush = (): void => {
       // Snapping and clipping happen on the device grid (clipToBand works in device px); anything reaching the
       // primitive converts back to logical px, exactly like the marker and axis primitives below.
-      if (current.length >= 2) primitives.push({ kind: 'polyline', points: current.map((p): [number, number] => [toOutputX(p.x), toOutputY(p.y)]), color: seriesColor, widthPx: strokePx, join: 'round', cap: 'round' })
+      if (current.length >= 2) primitives.push({ kind: 'polyline', points: current.map((p): [number, number] => [toOutputX(p.x), toOutputY(p.y)]), color: seriesColor, widthPx: strokePx, join: 'round', cap: 'round', band })
       current = []
     }
     for (let k = 0; k + 1 < indices.length; k++) {

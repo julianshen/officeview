@@ -12,7 +12,7 @@ function cssColor(color: string): string {
 
 /** Apply the viewport's device-space translation after geometry has snapped on the sheet-global grid. */
 export function translateSparkPrimitive(primitive: SparkPrimitive, offsetX: number, offsetY: number): SparkPrimitive {
-  if (primitive.kind === 'polyline') return { ...primitive, points: primitive.points.map(([x, y]) => [x + offsetX, y + offsetY] as [number, number]) }
+  if (primitive.kind === 'polyline') return { ...primitive, points: primitive.points.map(([x, y]) => [x + offsetX, y + offsetY] as [number, number]), ...(primitive.band ? { band: { y0: primitive.band.y0 + offsetY, y1: primitive.band.y1 + offsetY } } : {}) }
   if (primitive.kind === 'axis') return { ...primitive, x0: primitive.x0 + offsetX, x1: primitive.x1 + offsetX, y: primitive.y + offsetY }
   if (primitive.kind === 'rect') return { ...primitive, x: primitive.x + offsetX, y: primitive.y + offsetY }
   return { ...primitive, x: primitive.x + offsetX, y: primitive.y + offsetY }
@@ -35,6 +35,11 @@ function paintPrimitive(ctx: CanvasRenderingContext2D, primitive: SparkPrimitive
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   if (primitive.kind === 'polyline') {
     if (primitive.points.length >= 2) {
+      if (primitive.band) {
+        // lineClipRule: the stroke is clipped to the plot box rows (the axis-aligned band survives any scale transform).
+        const y0 = point(0, primitive.band.y0)[1], y1 = point(0, primitive.band.y1)[1]
+        ctx.beginPath(); ctx.rect(-1e6, Math.min(y0, y1), 2e6, Math.abs(y1 - y0)); ctx.clip()
+      }
       ctx.lineWidth = primitive.widthPx * scale; ctx.lineJoin = primitive.join; ctx.lineCap = primitive.cap
       ctx.beginPath()
       const first = point(...primitive.points[0]); ctx.moveTo(...first)
