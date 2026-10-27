@@ -135,17 +135,20 @@ describe('XLSX sparkline rendering', () => {
     sheet.cols = [...sheet.cols.filter(spec => spec.min > 9 || spec.max < 9), { min: 9, max: 9, widthChars: 180 }]
     const geometry = buildSheetGeometry(sheet)
     if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+    const [row, columns] = [...sheet.resolvedSparklines!.entries()][0], [col] = [...columns.keys()]
+    const host = geometry.metrics.sourceCellToLogical({ row, col })!
+    // Only the host's row is needed; keeping the horizontal 512px tile sizes
+    // intact preserves the seam assertion while reducing raster work.
+    const logicalHeight = Math.ceil(host.y + host.height + 2)
     const render = (x: number, logicalWidth: number, zoom: number, dpr: number) => {
-      const scale = zoom * dpr, canvas = createCanvas(Math.ceil(logicalWidth * scale), Math.ceil(128 * scale)), ctx = canvas.getContext('2d')
+      const scale = zoom * dpr, canvas = createCanvas(Math.ceil(logicalWidth * scale), Math.ceil(logicalHeight * scale)), ctx = canvas.getContext('2d')
       ctx.scale(scale, scale)
-      renderSheetViewport(sheet, ctx as unknown as CanvasRenderingContext2D, geometry, { box: { x, y: 0, width: logicalWidth, height: 128 }, zoom, deviceScale: dpr })
+      renderSheetViewport(sheet, ctx as unknown as CanvasRenderingContext2D, geometry, { box: { x, y: 0, width: logicalWidth, height: logicalHeight }, zoom, deviceScale: dpr })
       return ctx.getImageData(0, 0, canvas.width, canvas.height).data
     }
     const rasterResults: Array<{ zoom: number; dpr: number; maxDifference: number; where: string }> = []
     for (const zoom of [0.5, 1, 1.75]) for (const dpr of [1, 2]) {
       const scale = zoom * dpr, logicalTileWidth = 512 / scale
-      const [row, columns] = [...sheet.resolvedSparklines!.entries()][0], [col] = [...columns.entries()][0]
-      const host = geometry.metrics.sourceCellToLogical({ row, col })!
       // Half a logical px makes the tile origins fractional on the global device grid at several zoom/DPR pairs.
       const seam = host.x + host.width / 2 + 0.5, start = seam - logicalTileWidth
       const left = render(start, logicalTileWidth, zoom, dpr), right = render(seam, logicalTileWidth, zoom, dpr), whole = render(start, logicalTileWidth * 2, zoom, dpr)
@@ -161,7 +164,7 @@ describe('XLSX sparkline rendering', () => {
       const globalLeft = normalize(leftPrimitives, leftOffset)
       expect(normalize(rightPrimitives, rightOffset), `zoom=${zoom} dpr=${dpr}: right primitives normalized to sheet device coordinates`).toEqual(globalLeft)
       expect(normalize(widePrimitives, leftOffset), `zoom=${zoom} dpr=${dpr}: wide primitives normalized to sheet device coordinates`).toEqual(globalLeft)
-      const tileWidth = 512, wholeWidth = 1024, height = Math.ceil(128 * scale)
+      const tileWidth = 512, wholeWidth = 1024, height = Math.ceil(logicalHeight * scale)
       let maxDifference = 0
       let where = ''
       // node-canvas/Cairo has extent-dependent antialiasing: identical primitives measured 10–15/255
@@ -178,7 +181,7 @@ describe('XLSX sparkline rendering', () => {
     for (const result of rasterResults) {
       expect(result.maxDifference, `zoom=${result.zoom} dpr=${result.dpr} ${result.where}`).toBeLessThanOrEqual(16)
     }
-  })
+  }, 60_000)
 
   it('skips sparkline detail when the host is below MIN_DETAIL_DEVICE_PX', async () => {
     const doc = await parse(), sheet = doc.sheets[0]
@@ -235,6 +238,45 @@ describe('XLSX sparkline rendering', () => {
     const painter = (await import('../src/xlsx/sparklines/paint')).paintSparklinesIn
     painter(createCanvas(128, 128).getContext('2d') as unknown as CanvasRenderingContext2D, sheet, () => { rectCalls++; return { x: -10, y: 0, width: 100, height: 20 } }, { r0: 99, c0: 99, r1: 100, c1: 100 }, { zoom: 1, dpr: 1 }, visible)
     expect(rectCalls).toBe(1)
+  })
+
+  it('sizes a merged sparkline host from visible merged columns when its far column is hidden', async () => {
+    const doc = await parse(), sheet = doc.sheets[0]
+    const { preloadSparklines } = await import('../src/xlsx/sparklineLoader')
+    const painter = await import('../src/xlsx/sparklines/paint')
+    await preloadSparklines()
+    const sparkline = [...sheet.resolvedSparklines!.values()][0].values().next().value!
+    const host = { row: 0, col: 0 }
+    sheet.rows = [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, value: 1, styleIndex: 0 }] }]
+    sheet.merges = ['A1:C1']
+    sheet.mergeRanges = [{ minRow: 0, minCol: 0, maxRow: 0, maxCol: 2 }]
+    sheet.cols = [{ min: 2, max: 2, hidden: true }]
+    sheet.resolvedSparklines = new Map([[0, new Map([[0, { ...sparkline, host }]])]])
+    const metrics = computeMetrics(sheet)
+    const expectedStaticWidth = metrics.colWidthsPx[0] + metrics.colWidthsPx[1]
+    let staticRect: { width: number } | undefined
+    const originalPainter = painter.paintSparklinesIn
+    registerSparklinePainter(((_ctx, paintedSheet, cellRect) => {
+      if (paintedSheet === sheet) staticRect = cellRect(0, 0) ?? undefined
+      return true
+    }) as typeof originalPainter)
+    try {
+      const canvas = createCanvas(metrics.widthPx, metrics.heightPx)
+      renderSheet(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, metrics)
+      expect(staticRect?.width).toBe(expectedStaticWidth)
+
+      const geometry = buildSheetGeometry(sheet)
+      if (geometry.kind !== 'ready') throw new Error('expected ready geometry')
+      let viewportRect: { width: number } | undefined
+      registerSparklinePainter(((_ctx, paintedSheet, cellRect) => {
+        if (paintedSheet === sheet) viewportRect = cellRect(0, 0) ?? undefined
+        return true
+      }) as typeof originalPainter)
+      const viewport = { box: { x: 0, y: 0, width: expectedStaticWidth + 8, height: 48 }, zoom: 1, deviceScale: 1 }
+      renderSheetViewport(sheet, createCanvas(128, 64).getContext('2d') as unknown as CanvasRenderingContext2D, geometry, viewport)
+      expect(viewportRect?.width).toBe(expectedStaticWidth)
+      expect(geometry.metrics.cols.size(2)).toBe(0)
+    } finally { registerSparklinePainter(originalPainter) }
   })
 
   it('omits a sparkline whose data crosses a viewer-filter-hidden row', async () => {

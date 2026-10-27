@@ -257,12 +257,25 @@ export function renderSheetViewport(
         const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
         try { painted = paintSparklinesIn(ctx, sheet, (row, col) => {
             const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+            if (merge) {
+              const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
+              const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
+              const row0 = Math.min(firstSlot, lastSlot), row1 = Math.max(firstSlot, lastSlot)
+              const x = geometry.metrics.cols.start(merge.minCol), y = geometry.metrics.rows.start(row0)
+              const rect = {
+                x, y,
+                width: geometry.metrics.cols.start(merge.maxCol + 1) - x,
+                height: geometry.metrics.rows.start(row1 + 1) - y,
+              }
+              if (!(rect.width > 0 && rect.height > 0)
+                || belowDetail(rect.width, viewport.zoom * viewport.deviceScale)
+                || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
+              return rect
+            }
             const first = geometry.metrics.sourceCellToLogical({ row, col })
             if (!first) return undefined
-            const last = merge ? geometry.metrics.sourceCellToLogical({ row: merge.maxRow, col: merge.maxCol }) : undefined
-            const rect = { x: first.x, y: first.y, width: last ? last.x + last.width - first.x : first.width, height: last ? last.y + last.height - first.y : first.height }
-            if (belowDetail(rect.width, viewport.zoom * viewport.deviceScale) || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
-            return rect
+            if (belowDetail(first.width, viewport.zoom * viewport.deviceScale) || belowDetail(first.height, viewport.zoom * viewport.deviceScale)) return undefined
+            return first
           }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates)
         } finally { ctx.restore() }
         if (!painted) {
