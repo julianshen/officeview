@@ -881,7 +881,7 @@ cross-origin frame cannot reach its parent's `<iframe>` element.
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
 
-**Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out.
+**Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out. Charts (see [Charts](#charts)) and line, column and win/loss sparklines (see [Sparklines](#sparklines)) are drawn in place.
 
 **PowerPoint (.pptx)** — slides, shapes (rect/roundRect/ellipse) with fills, outlines and rotation, text bodies (runs with color/bold/italic/typeface, alignment, insets, vertical anchor, wrapping), embedded pictures with `a:srcRect` cropping, and tables (`a:tbl` grid, `gridSpan`/`rowSpan`/merges, cell fills, banding and first-row styling resolved from `tableStyles.xml`). Slide backgrounds (solid, gradient, pattern, picture and theme `bgRef`, inherited slide → layout → master) and the master's and layout's non-placeholder artwork (logos, bands, honouring `showMasterSp`) are attached by a lazily loaded enrichment step that `getPaintables` (and so `<OfficeDoc>`, print and the worker) runs before painting. A host that calls the low-level `renderSlide` directly sees the slides without them unless it first awaits `enrichSlideAppearance(doc)`, which is exported for that purpose and loads its code on demand.
 
@@ -963,6 +963,78 @@ values, or reads blank (Excel) or shows a card (Word, PowerPoint) when it has no
 
 Compatibility evidence, including which behaviours are still unverified against Office, is tracked in
 [`docs/validation/chart-compat.md`](docs/validation/chart-compat.md).
+
+## Sparklines
+
+Excel sparklines (the `x14:sparklineGroups` extension that Excel 2010+, LibreOffice and XlsxWriter write) are drawn
+inside their host cells: in the page viewer, in print and PNG/PDF export, in the interactive viewer, and in large
+workbooks opened through the viewer worker, where the worker resolves the data and the sparklines appear once it
+arrives. The painter is a lazy chunk, loaded only when a workbook has sparklines. A sparkline reads the same cell
+values the grid shows, so it never disagrees with the numbers beside it.
+
+### Drawn
+
+- **Types:** line, column and win/loss.
+- **Points:** markers (line), and high, low, first, last and negative points, each in its own colour. Every tied high
+  or low point is coloured; low beats high, and both beat first and last.
+- **Line and axis:** line weight; with "show axis" on, line and column draw the zero axis when the scale spans zero,
+  and win/loss draws its middle divider.
+- **Vertical scale:** individual, shared across the group, or custom, set for minimum and maximum separately. Values
+  outside a custom range are clipped, not dropped.
+- **Empty cells:** gap, zero, or connected. `#N/A` is bridged; text counts as 0 and TRUE as 1, as in Excel.
+- **Hidden data:** rows and columns hidden by hand or by an autofilter are skipped, and the remaining points re-spaced,
+  unless "show hidden data" is set.
+- **Date axis:** one slot per day across the date range, points in date order, first and last being the earliest and
+  latest dates. Timestamps share their day's slot, in time order. A date axis with no date range draws nothing, as in
+  Excel.
+- **Right-to-left:** the plot is mirrored; first and last keep data order, so first is drawn at the right.
+- **Data shape:** row or column ranges, data on another sheet, and merged host cells (the plot spans the merge).
+- **Colours:** RGB, theme with tint, and indexed. A missing series colour is black; any other missing colour leaves
+  that element undrawn, as Excel does.
+
+Hosts that call the low-level `renderSheet` directly must first `await preloadSparklines()`. Without it the sheet paints
+without sparklines and a `sparkline-painter-unavailable` diagnostic is added to `sheet.diagnostics`. `getPaintables`,
+and so `<OfficeDoc>`, loads the painter itself.
+
+### Not drawn
+
+Each case below leaves the cell empty with a `sparkline-*` diagnostic (on the sheet's `diagnostics`, except worker read
+failures, which stay on the worker viewer's sparkline entry); a sparkline is never drawn from data it could not resolve:
+
+- data in another workbook, a defined name, a missing sheet, a two-dimensional or multi-area range;
+- a host that is not a single cell, or an unknown sparkline type;
+- past the resource caps: groups beyond 1,024 per sheet and sparklines beyond 16,384 per group are dropped, and a
+  sparkline over 16,384 points is not drawn; the sparkline that would pass 1,048,576 points per sheet is dropped,
+  and a group-scaled group containing it is dropped whole (other members of an individual or custom group still draw);
+- in the interactive viewer, a sparkline (or any member of a group-scaled group) whose data rows are hidden by the
+  viewer's own filter (`sparkline-filter-hidden`);
+- on a worker-backed workbook, a sheet whose sparkline data could not be read (`sparkline-data-unavailable`).
+
+In the interactive viewer at coarse zoom, where a host cell is too small for detail, sparklines are skipped like other
+cell detail. Creating,
+editing or selecting sparklines, tooltips, and sparklines outside a worksheet are out of scope.
+
+### Validation and limits
+
+The reference suite was checked by pixel comparison against Excel for Mac 16.114: reference workbooks are captured from
+Excel's on-screen rendering and compared with the viewer's, cell by cell. 51 of the 52 comparisons pass within an
+anti-aliasing tolerance, including a workbook written by XlsxWriter, and the worker path renders pixel-identically to
+the resident one. Still unverified, or known to differ:
+
+- Host-cell text over a sparkline: unverified, because the static renderer's fallback font differs from Excel's.
+- A `negative` colour on a line sparkline draws no marker; Excel's behaviour there was not captured.
+- An `auto` colour (non-conforming in sparklines) is treated as missing: black for the series, undrawn otherwise.
+  Excel's behaviour was not captured.
+- The axis when the scale's minimum or maximum is exactly 0, and the axis on an all-positive column sparkline.
+- On a date axis: identical timestamps, hidden first or last dates, and "show hidden data" with filtered date rows.
+- Column-oriented data ranges and quoted sheet names are unit-tested only, with no Excel capture.
+- A near-flat line on a shared group scale sits 0.3–0.9 px lower than Excel's, and on 2.25-point lines some vertices
+  sit about 1 px lower.
+- Whether Excel's plot insets scale with sheet zoom cannot be measured from its captures, and no LibreOffice-written
+  workbook has been tested yet.
+
+The measurements, cases and scope record are in
+[`docs/validation/xlsx-sparklines.md`](docs/validation/xlsx-sparklines.md).
 
 ## Selecting and copying
 

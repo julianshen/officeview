@@ -520,6 +520,20 @@ const createViewerWorker = () =>
           <li><strong>Formulas.</strong> Small files are recalculated by the built-in engine; large files show their saved values, with a notice.</li>
           <li><strong>Capacity.</strong> The full 1,048,576 × 16,384 grid is addressable; memory budgets differ for desktop and mobile.</li>
         </ul>
+        <H3>Cell sparklines</H3>
+        <p>
+          Excel sparklines are small charts painted inside worksheet cells in both page and interactive grid views. Verified
+          types are line, column and win/loss, with marker and point highlighting, negative bar colours, empty and hidden-data
+          handling, shared or custom scales, date axes and right-to-left order. A group-scale example appears in the{' '}
+          <a href={href('demos/')}>KPI trends demo</a>.
+        </p>
+        <p>
+          External-workbook and defined-name references, missing sheets, malformed or multi-area data ranges, invalid hosts,
+          cap overflow and non-conforming custom scales are not drawn; the viewer reports a diagnostic. A date-axis group with no date range draws nothing, as in Excel. Some edge behaviour is
+          still unverified against Excel, including line-negative markers, zero-boundary and all-positive-column axes, exact
+          date ties, hidden or filter-hidden date endpoints, text layering, and column-oriented or quoted-sheet references. See the{' '}
+          <a href={`${REPO}/blob/main/docs/validation/xlsx-sparklines.md`}>sparkline validation record</a> for the verified scope.
+        </p>
         <p>The README covers admission limits, filter semantics and accessibility in detail.</p>
       </Section>
 

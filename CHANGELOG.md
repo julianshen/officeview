@@ -10,8 +10,92 @@ in git history.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-28
+
+Excel sparklines: line, column and win/loss sparklines drawn in their cells,
+checked by pixel comparison against Excel's own rendering, in every
+spreadsheet view including worker-backed large files. Also a project website,
+and a round of PowerPoint and slideshow fidelity fixes measured against
+PowerPoint's own output: text placement, crisp shape outlines, theme shadows,
+picture backgrounds and fade timing.
+
+### Added
+
+- **Excel sparklines.** Sparklines (the `x14:sparklineGroups` extension
+  written by Excel 2010 and later, LibreOffice and XlsxWriter) used to leave
+  their cells empty. All three types are now drawn: line, column and win/loss.
+  The viewer honours markers; high, low, first, last and (column and win/loss)
+  negative points, each in its own colour; line weight; the horizontal axis; individual, group and
+  custom vertical scales; empty cells as gaps, zero or connected; hidden and
+  filtered-out data (skipped unless "show hidden data" is on); date axes;
+  right-to-left plotting; merged host cells; and data on another sheet.
+  Sparklines follow Excel's rules where they are surprising: text counts as 0
+  and TRUE as 1, `#N/A` is bridged, a date axis without a date range draws
+  nothing, timestamps share their day's slot, and right-to-left keeps first
+  and last in data order. They appear in the page viewer, in print and PNG/PDF
+  export, in the interactive viewer, and in large workbooks opened through the
+  viewer worker, which reads the data off the main thread. The painter is a
+  lazy chunk, loaded only for workbooks that contain sparklines; the eager
+  bundle grows only by the parser and data resolver and stays under its
+  ceiling. A sparkline
+  whose data cannot be resolved is not drawn rather than drawn wrong: external
+  workbook or defined-name references, a missing sheet, a two-dimensional or
+  multi-area range, an unknown type and the resource caps (1,024 groups per
+  sheet, 16,384 sparklines per group, 16,384 points per sparkline, 1,048,576
+  points per sheet) each leave the cell empty with a `sparkline-*` diagnostic
+  on `XlsxSheet.diagnostics` (past the per-sheet point cap, a group-scaled
+  group is dropped whole). The exported `XlsxSheet` type gains two optional
+  fields, `sparklineGroups` (the parsed groups) and `resolvedSparklines` (the
+  render-ready values). Hosts that call `renderSheet` directly use the new
+  `preloadSparklines()` export first; without it the sheet paints with no
+  sparklines and a `sparkline-painter-unavailable` diagnostic. 51 of 52
+  reference comparisons against Excel for Mac pass; the README's new
+  "Sparklines" section lists what is drawn and what is still unverified.
+- **Project website** at <https://julianshen.github.io/officeview/>: API
+  reference, setup guides (Vite, Next.js, webpack, the viewer worker, CSP,
+  performance, accessibility, testing, troubleshooting), live examples shown
+  next to their source, sample-document demos and a playground with a control
+  for every viewer prop. Standalone Vite and Next.js projects are in
+  `examples/`.
+- **Theme shadows.** Shapes whose style references a theme effect
+  (`<a:effectRef>`) now draw the theme's outer shadow. As in PowerPoint, a
+  shape's own effect list, even an empty one, replaces it, and the theme
+  shadow replaces one inherited from a group. Glow, reflection and 3-D effects
+  remain unsupported and diagnosed.
+- **Duotone picture backgrounds.** A slide background picture with
+  `a:duotone` is recoloured between its two colours instead of painting in
+  its original colours, in the viewer and in the slideshow. Duotone on
+  ordinary pictures is still diagnosed and not applied.
+
 ### Fixed
 
+- **PowerPoint text sits where PowerPoint puts it.** Text baselines follow
+  PowerPoint's own line model, measured across fonts, sizes, anchors and line
+  spacings, instead of sitting about 0.1 em too high. The first paragraph's
+  space before and the last paragraph's space after are ignored, as
+  PowerPoint does, and vertically centred text with tight line spacing is
+  centred as PowerPoint centres it. Word and Excel text is unchanged.
+- **Crisp PowerPoint shape outlines.** Shapes snap to the device-pixel grid
+  as PowerPoint does, so a 1 px outline is one sharp pixel instead of two
+  half-grey ones. Rotated shapes are not snapped.
+- **Background picture opacity.** A background picture's transparency
+  (`a:alphaModFix`) is applied instead of being ignored.
+- **Tiny stretched pictures.** A stretched picture of exactly 2×2 pixels is
+  painted as one flat colour, as PowerPoint paints it, instead of a gradient
+  across the slide. Word and Excel pictures are unchanged.
+- **Slideshow: shapes filled with the slide background** (`useBgFill`) show
+  the background in the show, not just in the viewer. A deck whose master
+  relied on this could present as a blank white slide.
+- **Slideshow fades ease like PowerPoint's.** Plain fades, and both halves of
+  a fade through black, follow PowerPoint's sine curve instead of a linear
+  ramp.
+- **Slideshow paragraph builds.** Paragraphs animated on click in a slide
+  with no build list stay hidden until their entrance, instead of showing
+  from the start; and mask effects on a paragraph build (blinds, wipe and
+  similar) sweep PowerPoint's text box rather than the painted bitmap's.
+- PowerPoint text, outlines and shadows move by a few pixels as a result of
+  these fixes. Hosts that keep their own pixel goldens of PowerPoint slides
+  should expect to re-record them.
 - **Charts with data labels draw in browsers.** Painting a data label looked its
   width up by reading `ctx.font` back from the canvas, but browsers normalise that
   string, so the lookup missed with "Chart text was not measured during layout"
@@ -256,5 +340,6 @@ downloads.
 - Text layout uses browser `measureText` with no font shaping, so line breaks
   can differ slightly from Word's exact metrics.
 
+[0.10.0]: https://github.com/julianshen/officeview/releases/tag/v0.10.0
 [0.9.0]: https://github.com/julianshen/officeview/releases/tag/v0.9.0
 [0.4.0]: https://github.com/julianshen/officeview/releases/tag/v0.4.0
