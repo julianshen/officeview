@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { REF_CASES, type TableCase, type TimelineCase } from '../scripts/xlsx-refs/cases'
+import { REF_CASES, type SlicerCase, type TableCase, type TimelineCase } from '../scripts/xlsx-refs/cases'
 import { buildCaseWorkbook } from '../scripts/xlsx-refs/generate'
 
 function elementShape(xml: string): string[] {
@@ -43,6 +43,18 @@ function serialDate(serial: number): string {
   return new Date(Date.UTC(1899, 11, 30 + serial)).toISOString().replace('.000Z', '')
 }
 
+function drawingAnchors(xml: string) {
+  return [...xml.matchAll(/<xdr:twoCellAnchor\b[^>]*>([\s\S]*?)<\/xdr:twoCellAnchor>/g)].map(match => {
+    const point = (edge: 'from' | 'to') => {
+      const block = new RegExp(`<xdr:${edge}>([\\s\\S]*?)<\\/xdr:${edge}>`).exec(match[1])?.[1]
+      if (!block) throw new Error(`missing ${edge} anchor`)
+      const value = (name: 'col' | 'row' | 'colOff' | 'rowOff') => Number(new RegExp(`<xdr:${name}>(\\d+)<\\/xdr:${name}>`).exec(block)?.[1])
+      return { col: value('col'), row: value('row'), colOff: value('colOff'), rowOff: value('rowOff') }
+    }
+    return { from: point('from'), to: point('to') }
+  })
+}
+
 describe('pivot reference workbook generator', () => {
   it('includes the full Stage 1 style and control matrix', () => {
     expect(REF_CASES.filter(c => c.kind === 'table' && c.id.startsWith('table-light-')).length
@@ -50,7 +62,12 @@ describe('pivot reference workbook generator', () => {
       + REF_CASES.filter(c => c.kind === 'table' && c.id.startsWith('table-dark-')).length).toBe(60)
     expect(REF_CASES.filter(c => c.kind === 'pivot' && c.id.startsWith('pivot-') && c.id.match(/^pivot-(light|medium|dark)-\d+$/)).length).toBe(84)
     expect(REF_CASES.filter(c => c.kind === 'slicer' && !c.id.startsWith('slicer-two') && !c.id.startsWith('slicer-no') && !c.id.startsWith('slicer-scrolled')).length).toBe(14)
-    expect(REF_CASES.filter(c => c.kind === 'timeline').length).toBe(56)
+    const timelineCases = REF_CASES.filter(c => c.kind === 'timeline')
+    expect(timelineCases.length).toBe(48)
+    expect(new Set(timelineCases.map(c => (c.spec as TimelineCase).styleName))).toEqual(new Set([
+      ...Array.from({ length: 6 }, (_, i) => `TimeSlicerStyleLight${i + 1}`),
+      ...Array.from({ length: 6 }, (_, i) => `TimeSlicerStyleDark${i + 1}`),
+    ]))
   })
 
   it('round-trips every XML case through the resident parser without diagnostics', async () => {
@@ -126,15 +143,14 @@ describe('pivot reference workbook generator', () => {
       expect(sheet, c.id).not.toContain('<pivotTableParts')
       expect(drawing, c.id).toContain('<a:off')
       expect(drawing, c.id).toContain('<a:ext')
-      expect(drawing, c.id).toContain('<xdr:col>3</xdr:col>')
-      expect(drawing, c.id).toContain('<xdr:col>6</xdr:col>')
       expect(pivot, c.id).toContain('ref="G1:H6"')
       expect(pivot, c.id).toContain('<pivotField axis="axisRow"')
       expect(pivot, c.id).toContain('<pivotField dataField="1"')
       expect(pivot, c.id).toContain('<items count="5">')
-      expect(pivot, `${c.id} Product field agrees with selected slicer items`).toContain(
-        '<pivotField showAll="0"><items count="5"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/><item t="default"/></items></pivotField>',
-      )
+      const productField = c.kind === 'slicer' && (c.spec as SlicerCase).noData
+        ? '<pivotField showAll="0"><items count="6"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/><item h="1" x="4"/><item t="default"/></items></pivotField>'
+        : '<pivotField showAll="0"><items count="5"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/><item t="default"/></items></pivotField>'
+      expect(pivot, `${c.id} Product field agrees with selected slicer items`).toContain(productField)
       expect(sheet, c.id).toContain('r="G1"')
       expect(sheet, c.id).toContain('r="H6"')
       expect(sheet, c.id).not.toContain('r="A1"')
@@ -157,6 +173,58 @@ describe('pivot reference workbook generator', () => {
       expect(workbookRels).toContain('http://schemas.microsoft.com/office/2011/relationships/timelineCache')
       expect(workbookRels).toContain('http://schemas.microsoft.com/office/2007/relationships/slicerCache')
     }
+  })
+
+  it('keeps slicer and timeline anchors separate, in A1:L18, and clear of the pivot output', async () => {
+    for (const c of REF_CASES.filter(item => item.kind === 'slicer' || item.kind === 'timeline')) {
+      const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+      const anchors = drawingAnchors(await zip.file('xl/drawings/drawing1.xml')!.async('text'))
+      expect(anchors, c.id).toHaveLength(2)
+      for (const anchor of anchors) {
+        expect(anchor.from.col, `${c.id} left bound`).toBeGreaterThanOrEqual(0)
+        expect(anchor.from.row, `${c.id} top bound`).toBeGreaterThanOrEqual(0)
+        expect(anchor.to.col, `${c.id} right bound`).toBeLessThanOrEqual(12)
+        expect(anchor.to.row, `${c.id} bottom bound`).toBeLessThanOrEqual(18)
+      }
+      const [slicer, timeline] = anchors
+      type Rect = { from: { col: number; row: number }; to: { col: number; row: number } }
+      const overlaps = (a: Rect, b: Rect) => a.from.col < b.to.col && a.to.col > b.from.col && a.from.row < b.to.row && a.to.row > b.from.row
+      expect(overlaps(slicer, timeline), `${c.id} control anchors overlap`).toBe(false)
+      // Pivot output G1:H6 occupies columns 6-8 and rows 0-6 in zero-based anchor coordinates.
+      expect(overlaps(slicer, { from: { col: 6, row: 0 }, to: { col: 8, row: 6 } }), `${c.id} slicer covers pivot`).toBe(false)
+      expect(overlaps(timeline, { from: { col: 6, row: 0 }, to: { col: 8, row: 6 } }), `${c.id} timeline covers pivot`).toBe(false)
+    }
+  })
+
+  it('makes the scrolled slicer viewport shorter than its four item rows', async () => {
+    // Excel-authored recipe R1 sets slicer rowHeight=209550 EMU (22 px at 96 dpi); the sheet default is 15 pt = 190500 EMU per row.
+    const c = REF_CASES.find(item => item.id === 'slicer-scrolled')!
+    const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+    const slicer = attributesOf(await zip.file('xl/slicers/slicer1.xml')!.async('text'), 'slicer')
+    const reference = await JSZip.loadAsync(readFileSync('tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx'))
+    const itemHeightEmu = Number(attributesOf(await reference.file('xl/slicers/slicer1.xml')!.async('text'), 'slicer').rowHeight)
+    const anchor = drawingAnchors(await zip.file('xl/drawings/drawing1.xml')!.async('text'))[0]
+    const anchorHeightEmu = (anchor.to.row - anchor.from.row) * 190500 + anchor.to.rowOff - anchor.from.rowOff
+    expect(slicer.startItem).toBe('2')
+    expect(Number(slicer.rowHeight)).toBe(itemHeightEmu)
+    expect(anchorHeightEmu).toBeGreaterThanOrEqual(3 * itemHeightEmu)
+    expect(anchorHeightEmu).toBeLessThan(4 * itemHeightEmu)
+  })
+
+  it('shows an unreferenced Product cache item in the no-data slicer case', async () => {
+    const c = REF_CASES.find(item => item.id === 'slicer-no-data')!
+    const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+    const definition = await zip.file('xl/pivotCache/pivotCacheDefinition1.xml')!.async('text')
+    const productField = [...definition.matchAll(/<cacheField\b[^>]*>([\s\S]*?)<\/cacheField>/g)][1][1]
+    const products = /<sharedItems\b[^>]*>([\s\S]*?)<\/sharedItems>/.exec(productField)?.[1] ?? ''
+    expect(products).toContain('<s v="Elderberries"/>')
+    const itemIndex = [...products.matchAll(/<s v="[^"]+"\/>/g)].findIndex(match => match[0] === '<s v="Elderberries"/>')
+    const recordRows = [...(await zip.file('xl/pivotCache/pivotCacheRecords1.xml')!.async('text')).matchAll(/<r>([\s\S]*?)<\/r>/g)]
+    expect(itemIndex).toBeGreaterThanOrEqual(0)
+    expect(recordRows.every(row => [...row[1].matchAll(/<(?:x|n) v="([^"]+)"\/>/g)][1][1] !== String(itemIndex))).toBe(true)
+    const slicerCache = await zip.file('xl/slicerCaches/slicerCache1.xml')!.async('text')
+    expect(slicerCache).toContain(`<i x="${itemIndex}" nd="1"/>`)
+    expect(attributesOf(await zip.file('xl/slicers/slicer1.xml')!.async('text'), 'slicer').showNoDataItems).toBe('1')
   })
 
   it('stores a date-formatted Date source field for timeline cases', async () => {

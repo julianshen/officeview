@@ -104,9 +104,8 @@ function tableXml(spec: TableCase): string {
   return `${XML}<table xmlns="${NS.main}" id="1" name="Table1" displayName="Table1" ref="A1:E${lastRow}" headerRowCount="${spec.headerRowCount}" totalsRowCount="${spec.totalsRowCount}"><autoFilter ref="A1:E${lastRow - spec.totalsRowCount}"/><tableColumns count="5">${columns}</tableColumns><tableStyleInfo name="${esc(spec.styleName)}" showFirstColumn="${+spec.flags.showFirstColumn}" showLastColumn="${+spec.flags.showLastColumn}" showRowStripes="${+spec.flags.showRowStripes}" showColumnStripes="${+spec.flags.showColumnStripes}"/></table>`
 }
 
-function drawingXml(_c: RefCase): string {
-  // These are Excel's saved anchor positions; the timeline ends at column G's left edge,
-  // where the saved pivot output begins, so the controls do not cover pivot cells.
+function drawingXml(c: RefCase): string {
+  const scrolledSlicer = c.kind === 'slicer' && (c.spec as SlicerCase).scroll
   const fallback = (text: string, x: string, y: string, cx: string, cy: string) => `<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="0" name=""/><xdr:cNvSpPr><a:spLocks noTextEdit="1"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:prstClr val="white"/></a:solidFill><a:ln w="1"><a:solidFill><a:prstClr val="green"/></a:solidFill></a:ln></xdr:spPr><xdr:txBody><a:bodyPr vertOverflow="clip" horzOverflow="clip"/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" altLang="en-US" sz="1100"/><a:t>${esc(text)}</a:t></a:r></a:p></xdr:txBody></xdr:sp>`
   const anchor = (kind: 'slicer' | 'timeline') => {
     const timeline = kind === 'timeline'
@@ -120,10 +119,11 @@ function drawingXml(_c: RefCase): string {
     const choice = `<mc:Choice ${choiceNamespace} Requires="${requires}"><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${id}" name="${name}"><a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="${creationId}"/></a:ext></a:extLst></xdr:cNvPr><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="${uri}">${control}</a:graphicData></a:graphic></xdr:graphicFrame></mc:Choice>`
     const text = timeline ? 'Timeline supported in Excel 2013 or later.' : 'This shape represents a slicer. Excel 2010 or later supports slicers.'
     const fb = timeline ? fallback(text, '1536700', '749300', '3340100', '1346200') : fallback(text, '2286000', '101600', '1828800', '2238375')
-    const colFrom = timeline ? 1 : 3, colTo = timeline ? 6 : 5
-    const rowFrom = timeline ? 4 : 0, rowTo = timeline ? 11 : 13
-    const colOffFrom = timeline ? 787400 : 12700, rowOffFrom = timeline ? 38100 : 101600
-    const colOffTo = timeline ? 508000 : 444500, rowOffTo = timeline ? 139700 : 28575
+    // Controls occupy separate regions of A1:L18 and avoid the saved pivot cells G1:H6.
+    const colFrom = timeline ? 7 : 3, colTo = timeline ? 11 : 5
+    const rowFrom = timeline ? 6 : 0, rowTo = timeline ? 11 : scrolledSlicer ? 3 : 13
+    const colOffFrom = timeline ? 787400 : 12700, rowOffFrom = timeline ? 38100 : scrolledSlicer ? 0 : 101600
+    const colOffTo = timeline ? 508000 : 444500, rowOffTo = timeline ? 139700 : scrolledSlicer ? 57150 : 28575
     return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${colFrom}</xdr:col><xdr:colOff>${colOffFrom}</xdr:colOff><xdr:row>${rowFrom}</xdr:row><xdr:rowOff>${rowOffFrom}</xdr:rowOff></xdr:from><xdr:to><xdr:col>${colTo}</xdr:col><xdr:colOff>${colOffTo}</xdr:colOff><xdr:row>${rowTo}</xdr:row><xdr:rowOff>${rowOffTo}</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="${NS.mc}">${choice}<mc:Fallback>${fb}</mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>`
   }
   return `${XML}<xdr:wsDr xmlns:xdr="${NS.xdr}" xmlns:a="${NS.a}">${anchor('slicer')}${anchor('timeline')}</xdr:wsDr>`
@@ -131,7 +131,7 @@ function drawingXml(_c: RefCase): string {
 function controlParts(c: RefCase): Record<string, string> {
   const slicer = c.kind === 'slicer' ? c.spec as SlicerCase : { styleName: 'SlicerStyleLight1', columnCount: 1, noData: false, startItem: 0, itemCount: 4, scroll: false }
   const timeline = c.kind === 'timeline' ? c.spec as TimelineCase : { styleName: 'TimeSlicerStyleLight1', level: 'months' as const }
-  const slicerItems = [2, 1, 3, 0].slice(0, slicer.itemCount).map((index, order) => `<i x="${index}"${index === 2 || index === 3 ? ' s="1"' : ''}${slicer.noData && order === slicer.itemCount - 1 ? ' nd="1"' : ''}/>`).join('')
+  const slicerItems = [2, 1, 3, 0, 4].slice(0, slicer.itemCount).map((index, order) => `<i x="${index}"${index === 2 || index === 3 ? ' s="1"' : ''}${slicer.noData && order === slicer.itemCount - 1 ? ' nd="1"' : ''}/>`).join('')
   const level = ({ years: 0, quarters: 1, months: 2, days: 3 } as const)[timeline.level]
   const nsCache = `xmlns:mc="${NS.mc}" mc:Ignorable="x xr10" xmlns:x="${NS.main}" xmlns:xr10="${NS.xr10}"`
   const nsTimeline = `xmlns:mc="${NS.mc}" mc:Ignorable="x xr10" xmlns:x="${NS.main}" xmlns:xr10="${NS.xr10}"`
@@ -154,10 +154,13 @@ function controlParts(c: RefCase): Record<string, string> {
     'xl/timelineCaches/timelineCache1.xml': `${XML}<timelineCacheDefinition xmlns="${NS.x15}" xmlns:x15="${NS.x15}" ${nsTimelineCache} name="NativeTimeline_Date" xr10:uid="{FE35D545-E153-F14A-8900-EDB8C368CE04}" sourceName="Date"><pivotTables><pivotTable tabId="2" name="PivotTable1"/></pivotTables><state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="1" filterType="unknown"><bounds startDate="${boundsStart}" endDate="${boundsEnd}"/></state></timelineCacheDefinition>`,
   }
 }
-function pivotParts(): Record<string, string> {
+function pivotParts(c: RefCase): Record<string, string> {
   const values = controlRows.map(row => [row.region, row.product, row.date, row.sales, row.units] as const)
+  const noDataProduct = c.kind === 'slicer' && (c.spec as SlicerCase).noData
+  const sharedValues = controlHeaders.map((_, field) => [...new Set(values.map(row => row[field]))])
+  if (noDataProduct) sharedValues[1].push('Elderberries')
   const cacheFields = controlHeaders.map((name, field) => {
-    const unique = [...new Set(values.map(row => row[field]))]
+    const unique = sharedValues[field]
     const dateField = name === 'Date'
     const numericField = !dateField && typeof unique[0] === 'number'
     if (numericField) {
@@ -174,10 +177,10 @@ function pivotParts(): Record<string, string> {
   }).join('')
   const records = values.map(row => `<r>${row.map((value, i) => i >= 3
     ? `<n v="${value}"/>`
-    : `<x v="${[...new Set(values.map(r => r[i]))].indexOf(value)}"/>`).join('')}</r>`).join('')
+    : `<x v="${sharedValues[i].indexOf(value)}"/>`).join('')}</r>`).join('')
   const fields = [
     `<pivotField axis="axisRow" showAll="0"><items count="5">${Array.from({ length: 4 }, (_, j) => `<item x="${j}"/>`).join('')}<item t="default"/></items></pivotField>`,
-    '<pivotField showAll="0"><items count="5"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/><item t="default"/></items></pivotField>',
+    `<pivotField showAll="0"><items count="${noDataProduct ? 6 : 5}"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/>${noDataProduct ? '<item h="1" x="4"/>' : ''}<item t="default"/></items></pivotField>`,
     `<pivotField numFmtId="176" showAll="0"><items count="40">${Array.from({ length: 39 }, (_, j) => `<item x="${j}"/>`).join('')}<item t="default"/></items></pivotField>`,
     '<pivotField dataField="1" showAll="0"/>',
     '<pivotField showAll="0"/>',
@@ -259,7 +262,7 @@ function workbookFiles(c: RefCase): Record<string, string> {
     'xl/styles.xml': `${XML}<styleSheet xmlns="${NS.main}"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${tableCase?.custom ? '<dxfs count="1"><dxf><font><b/><color rgb="FFFF0000"/></font><fill><patternFill patternType="solid"><bgColor rgb="FFFFFF00"/></patternFill></fill></dxf></dxfs><tableStyles count="1" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"><tableStyle name="OfficeViewCustom" pivot="0" table="1" count="2"><tableStyleElement type="wholeTable" dxfId="0"/><tableStyleElement type="headerRow" dxfId="0"/></tableStyle></tableStyles>' : '<dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>'}</styleSheet>`,
     ...sheetFiles,
     ...(tableCase ? { 'xl/tables/table1.xml': tableXml(tableCase) } : {}),
-    ...(control ? { 'xl/drawings/drawing1.xml': drawingXml(c), ...controlXml, ...pivotParts() } : {}),
+    ...(control ? { 'xl/drawings/drawing1.xml': drawingXml(c), ...controlXml, ...pivotParts(c) } : {}),
   }
 }
 

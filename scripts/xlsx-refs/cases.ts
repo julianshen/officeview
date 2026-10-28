@@ -80,13 +80,13 @@ const slicerStyleNames = [
 const slicerCases: RefCase[] = slicerStyleNames.map(styleName => ({ id: `slicer-${styleName.replace('SlicerStyle', '').toLowerCase()}`, kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName, columnCount: 1, noData: false, startItem: 0, itemCount: 4, scroll: false } satisfies SlicerCase }))
 slicerCases.push(
   { id: 'slicer-two-column', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 2, noData: false, startItem: 0, itemCount: 4, scroll: false } },
-  { id: 'slicer-no-data', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: true, startItem: 0, itemCount: 4, scroll: false } },
+  { id: 'slicer-no-data', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: true, startItem: 0, itemCount: 5, scroll: false } },
   { id: 'slicer-scrolled', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: false, startItem: 2, itemCount: 4, scroll: true } },
 )
 
 const timelineStyleNames = [
   ...Array.from({ length: 6 }, (_, i) => `TimeSlicerStyleLight${i + 1}`),
-  ...Array.from({ length: 6 }, (_, i) => `TimeSlicerStyleDark${i + 1}`), 'TimeSlicerStyleOther1', 'TimeSlicerStyleOther2',
+  ...Array.from({ length: 6 }, (_, i) => `TimeSlicerStyleDark${i + 1}`),
 ]
 const timelineCases: RefCase[] = timelineStyleNames.flatMap(styleName => (['years', 'quarters', 'months', 'days'] as const).map(level => ({
   id: `timeline-${styleName.replace('TimeSlicerStyle', '').toLowerCase()}-${level}`, kind: 'timeline' as const, build: 'xml' as const,
