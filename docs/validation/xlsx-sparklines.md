@@ -107,6 +107,27 @@ these constants, snap as in `vertexSnapRule`, and accept a ±1 px vertex toleran
 - Not tested by Stage 1:
   - negative adds markers on line sparklines (no line case sets negative = 1)
 
+## Stage 2 measured constants (column and win/loss, Task 8)
+
+Captured 2026-10-28 with Excel for Mac 16.114, copy-picture at 1 px/pt (same route as Stage 1). The plot box, insets,
+`verticalMapping` constants (T = 5.08, H = 51.86), `cellBoxRule`, `mergedHostRule`, `tinyCellRule` and
+`colourResolution` are Stage 1's and hold unchanged (P = 199 with L = 48, R = 247; merged P = 403, R = 451). Bar
+pixels are solid, a single colour with no anti-aliasing, so every bar edge is an exact device-pixel boundary.
+
+| Name | Value | Unit | Case id(s) | Method / evidence |
+|---|---|---|---|---|
+| `barSlotRule` | Each of the n values owns one of n equal slots across the plot box (the same slots as `lineEndpointRule`). The bar is **centred on the slot centre** c<sub>i</sub> = L + (i + ½)·P/n | — | col-basic, col-merged-host, wl-basic | Bar centres 60.5, 85, 110, 135, 160, 185, 210, 234.5 against slot centres 60.44 … 234.56 (P = 199) |
+| `barWidthRule` | bar width w = **slot / 1.4** (5/7 of the slot: a 40 % gap between bars, half on each side). Edges are **round(c − w/2)** and **round(c + w/2)** in device px | px | col-basic (P = 199: w = 17.77, bars 17–18 px), col-merged-host (P = 403: w = 35.98, every bar 36 px), wl-basic | All 16 bars of both widths match exactly: e.g. merged slot 4 c = 274.69 → 256.70 / 292.68 → columns 257–292. With a fixed-pt gap the merged bars would be 43 px wide |
+| `columnBaselineRule` | When the effective scale includes 0 (min ≤ 0 ≤ max) bars run from the **baseline row round(y(0))** to round(y(v)), with y the Stage 1 `verticalMapping`. A value at the baseline (0) draws nothing | — | col-negative rows 1, 2, 4; col-scale-no-zero row 3 (custom 0..100); col-empty-span rows 3–4 (zero) | [−3,2,−1,4,−4,3,1,−2]: y(0) = 31.01 → positive bars end at row 30, negative bars start at row 31; tops 5, 12, 18, 25 and bottoms 37, 44, 50, 57 = round(y(v)). Empties as zero: no bar at those slots |
+| `columnNoZeroRule` (smallest bar) | When the scale excludes 0 the baseline is the plot edge on 0's side (bottom for min > 0, top for max < 0), and the scale's end nearest 0 maps **δ = 0.63 pt inside** that edge: min > 0 → y(v) = T + (max − v)/(max − min)·(H − δ); max < 0 mirrored. So the smallest value keeps a sliver (1 px at 1 px/pt). **Underdetermined:** every δ in [0.45, 0.81] pt fits; 0.63 is the midpoint | pt | col-basic, col-scale-no-zero rows 1, 2, 4, 5 (group scale 10..80), col-empty-span rows 1–2, 5–6, col-negative row 3 (all negative) | Feasibility sweep over the 42 bars of six rows (scratch fit): δ ∈ [0.45, 0.81]. Min 2 of 2..9 → 1-px bar at row 56; all-negative max −2 → 1-px bar at row 5, mirror-identical heights (52, 45, 37, 30, 23, 15, 8, 1) |
+| `columnScaleRule` | individual, group (shared min/max, as `groupScaleRule`) and custom scales use the same maps as lines; custom 0..100 includes 0 so `columnBaselineRule` applies | — | col-scale-no-zero | Row 3 (custom 0..100) tops 31, 30, 30, 28, 29, 29, 31, 28 = round(y(v)) with H unchanged |
+| `columnEmptyRule` | gap and span both leave the slot empty (no bar; slots keep their positions). zero draws a zero-height bar, i.e. nothing, but the 0 takes part in min/max | — | col-empty-span | Rows 1–2 (gap) and 5–6 (span) are pixel-identical |
+| `winLossRule` | Every win bar runs from **round(T) to round(T + H/2)** (rows 5–30), every loss bar from **round(T + H/2) to round(T + H)** (rows 31–56), whatever the magnitudes. Sign test is exact: **v > 0 win, v < 0 loss, v = 0 no bar** (±1e-16 draw full bars) | — | wl-basic, wl-tiny-values, wl-zero | All-positive data (wl-basic row 4) draws the same win bars; empty cells as zero draw nothing (wl-zero row 2) |
+| `barNegativeRule` | negative = 1 colours every bar with v < 0 in colorNegative; negative off draws them in colorSeries | — | col-negative rows 1–3, wl-basic rows 1–2, wl-tiny-values row 2 | Orange (FF8000) exactly on the negative slots |
+| `barColourPrecedence` | Last painted of **series → negative → first/last → high → low**: first and last beat negative, high and low beat first and last, low beats high. Ties: every tied bar is coloured. High/low are the max/min **values** (win/loss too, not "all wins") | — | col-hl-fl rows 1–4, wl-hl-fl rows 1–3 | col-hl-fl row 2: first −3 green, last −2 purple, low −4 teal over negative orange; row 3 first = high red, last = low teal; wl-hl-fl row 3 low −4 teal at idx 2 only, the −1 losses stay blue |
+| `barAxisRule` | Columns: drawn when displayXAxis = 1 and min < 0 < max (unchanged from `axisRule`; the all-positive column axis is unmeasured). Win/loss: **always** drawn at the middle row round(T + H/2), even for all-zero data. 1 px, colorAxis, plot-box wide (floor(L) … floor(R)), and **painted over the bars** (lines paint it under) | — | col-negative row 4, wl-basic row 3, wl-zero row 3 | Row 31, columns 48–247 magenta, including over the first row of every loss / negative bar |
+| `barTinyCellRule` | col-tiny (2 chars × 5 pt): nothing drawn, as `tinyCellRule` | — | col-tiny | 0 ink pixels |
+
 ## Comparison (Task 7)
 
 `bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]` renders each case and compares its host cells with
