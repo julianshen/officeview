@@ -1,12 +1,13 @@
 # XLSX Pivot Tables, Pivot Charts, Slicers and Timelines — Design Spec
 
-**Status:** draft 4.
+**Status:** draft 5.
 - Builder check folded in (§7.7–§7.10); owner answers recorded (§11).
 - Round 1: codex (CODEX-1 to -8) and agy (AGY-1 to -12) both REQUEST CHANGES. Accepted findings are marked **[rev]** with their id.
   - AGY-5 is rejected: sparklines are on `main` at `ba8abf83`, and the cited lines are correct there.
   - AGY-10 is rejected: MS-XLSX `CT_Slicer` names the cache with the attribute `cache`.
   - AGY-3's first point is rejected: an unknown function keeps the cell's saved value (`docs/formula-compatibility.md`), so `GETPIVOTDATA` does not show `#NAME?` on open.
 - Round 2: agy APPROVE. Codex resolved CODEX-1 to -8 and raised R2-1 and R2-2, addressed in draft 4.
+- Round 3: codex resolved R2-2; R2-1 was partial (the per-tile guarantee), addressed in draft 5.
 **Date:** 2026-10-29 · **Baseline:** `main` @ `ba8abf83` (v0.10.0).
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -41,7 +42,7 @@ Today the viewer knows none of this.
 2. Pivots are recomputed from the cache records saved in the file, and the recomputation reproduces Excel's saved output. This is proven per file on first interaction (§6.4) and per case against Excel (§9).
 3. Every interaction in §4 changes the pivot exactly as Excel would for the same action, verified by driving Excel to make the same change (§9).
 4. A pivot that cannot be recomputed faithfully is never shown with wrong numbers. It stays as saved, non-interactive, and the viewer says why (§7.6).
-5. Workbooks without pivots, slicers or timelines never load the pivot engine. The eager graph grows only by the detection stub, and sheets with none of these take no new per-tile work (§8). **[rev]** (CODEX-R2-1)
+5. Workbooks without pivots, slicers or timelines never load the pivot engine. The eager graph grows only by the detection stub, and sheets with no pivot, slicer, timeline or styled table take no new per-tile work (§8). **[rev]** (CODEX-R2-1)
    - A workbook with styled Excel tables loads only the lazy `tableStyles` chunk (§6.2) and pays its style-resolution cost, which is the price of drawing table styles. **[owner]** (§11)
 
 ## 2. Non-goals and anti-goals
@@ -419,7 +420,7 @@ Display of the saved output and the style still happens in every case.
   - `tests/helpers/eager-graph.ts` gains a rule forbidding everything under `src/xlsx/pivots/` and the style-engine modules, except the stub.
   - `check-eager.ts` and `eager-budget.ts` must pass.
 - **No new runtime dependencies.** WASM would be the exception, and only through the §6.3 gate.
-- **Hot path:** sheets without pivots add no per-tile work beyond an `undefined` check.
+- **Hot path:** sheets without pivots, slicers, timelines or styled tables add no per-tile work beyond an `undefined` check. A styled table's cells take style resolution once per layout, cached with the cell layout, not per tile paint.
 - **Determinism:** the layout is a pure function of its inputs, and painting is a pure function of the layout, zoom and DPR.
 - **Memory:** the record store, layouts and style tables are charged to the existing ledgers.
 - **Accessibility:** every pivot control is reachable by keyboard and has an accessible name. The pivot region keeps the grid's ARIA model, with expanded/collapsed state on row headers. **[call]**
