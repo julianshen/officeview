@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import JSZip from 'jszip'
@@ -16,6 +16,8 @@ import { ViewerKernel } from '../src/worker/viewerKernel'
 import { ViewerClient } from '../src/worker/viewerClient'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { sparklineInvalidationBox } from '../src/xlsx/view/sparklineInvalidation'
+import * as sparklineGroupsParser from '../src/xlsx/sparklines/parseGroups'
+import type { XmlNode } from '../src/core/xml'
 
 const microtask = () => new Promise(resolve => setTimeout(resolve, 0))
 const fixtureBytes = (name: string) => new Uint8Array(readFileSync(resolve(process.cwd(), `tests/fixtures/xlsx-sparklines/${name}.xlsx`)))
@@ -67,6 +69,51 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
 }
 
 describe('paged sparkline transfer cache', () => {
+  it('bounds duplicate sparkline singleton children and matches the resident first-match parse', async () => {
+    const zip = await JSZip.loadAsync(fixtureBytes('line-basic'))
+    const path = 'xl/worksheets/sheet1.xml'
+    let xml = await zip.file(path)!.async('string')
+    const colorKinds = ['colorSeries', 'colorNegative', 'colorAxis', 'colorMarkers', 'colorFirst', 'colorLast', 'colorHigh', 'colorLow']
+    const repeatedColors = colorKinds.map(kind => Array.from({ length: 1_024 }, () => `<x14:${kind} rgb="FFFF0000"/>`).join('')).join('')
+    const repeatedGroupDates = '<xm:f>Sheet1!A1:H1</xm:f>' + Array.from({ length: 1_024 }, () => '<xm:f>Sheet1!B1:B1</xm:f>').join('')
+    xml = xml.replace('<x14:sparklines>', `${repeatedGroupDates}${repeatedColors}<x14:sparklines>`)
+    const repeatedFormula = Array.from({ length: 1_024 }, () => '<xm:f>Sheet1!B1:B1</xm:f>').join('')
+    const repeatedHost = Array.from({ length: 1_024 }, () => '<xm:sqref>K1</xm:sqref>').join('')
+    xml = xml.replace('<xm:sqref>J1</xm:sqref>', `<xm:sqref>J1</xm:sqref>${repeatedFormula}${repeatedHost}`)
+    xml = xml.replace('</x14:sparklines>', `</x14:sparklines>${'<x14:sparklines/>'.repeat(1_024)}`)
+    zip.file(path, xml)
+    const bytes = await zip.generateAsync({ type: 'uint8array' })
+    const resident = await parseXlsx(await OfficePackage.load(bytes))
+    const captured: XmlNode[] = []
+    const parseGroups = sparklineGroupsParser.parseSparklineGroups
+    const spy = vi.spyOn(sparklineGroupsParser, 'parseSparklineGroups').mockImplementation((node, color, diagnostics) => {
+      captured.push(node)
+      return parseGroups(node, color, diagnostics)
+    })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer as ArrayBuffer]) }, { docId: 'spark-duplicate-singletons', profile: 'D' })
+    try {
+      await session.done
+      const source = createPagedWorkbookSource(session), sheet = source.sheets[0]
+      const store = source.store(sheet.sheetId) as unknown as { sheet: { metadata: { sparklineGroups: XlsxSparklineGroup[] } } }
+      expect(store.sheet.metadata.sparklineGroups).toEqual(resident.sheets[0].sparklineGroups)
+
+      const capturedRoot = captured.at(-1)!
+      const firstChild = (value: unknown): XmlNode => Array.isArray(value) ? value[0] as XmlNode : value as XmlNode
+      const group = firstChild(capturedRoot.sparklineGroup)
+      const sparklineContainer = firstChild(group.sparklines)
+      const sparkline = firstChild(sparklineContainer.sparkline)
+      for (const kind of colorKinds) expect(group[kind]).not.toBeInstanceOf(Array)
+      expect(group.f).not.toBeInstanceOf(Array)
+      expect(group.sparklines).not.toBeInstanceOf(Array)
+      expect(sparkline.f).not.toBeInstanceOf(Array)
+      expect(sparkline.sqref).not.toBeInstanceOf(Array)
+      await source.release()
+    } finally {
+      spy.mockRestore()
+      await session.release()
+    }
+  })
+
   it('does not materialize a large data range for a sparkline with no host', async () => {
     const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(fixtureBytes('line-basic')).buffer as ArrayBuffer]) }, { docId: 'spark-invalid-host', profile: 'D' })
     try {

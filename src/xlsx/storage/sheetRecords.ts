@@ -417,6 +417,9 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
     if (parent.local === 'sparkline') return uri === XM_SPARKLINE_NS && (local === 'f' || local === 'sqref')
     return false
   }
+  const singletonSparkChild = (parent: SparkFrame, local: string, uri: string | undefined): boolean =>
+    (parent.local === 'sparklineGroup' && (local === 'sparklines' || local.startsWith('color') || (uri === XM_SPARKLINE_NS && local === 'f')))
+    || (parent.local === 'sparkline' && uri === XM_SPARKLINE_NS && (local === 'f' || local === 'sqref'))
   const attachSparkChild = (parent: SparkFrame, child: SparkFrame) => {
     const list = parent.children.get(child.local) ?? []
     list.push(child.node)
@@ -561,7 +564,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         const parent = captureFrames[captureFrames.length - 1]
         let frame: SparkFrame | undefined
         if (parent && childAllowed(parent, local, uri)) {
-          let skip = false
+          // These children are read with first-match semantics by the resident
+          // parser. Ignore later copies before node allocation so uncharged
+          // duplicate payload cannot bypass the sparkline/point caps.
+          let skip = singletonSparkChild(parent, local, uri) && parent.children.has(local)
           let group = parent.group
           if (parent.local === 'sparklineGroups' && local === 'sparklineGroup') {
             if (sparkGroupCount >= MAX_SPARKLINE_GROUPS_PER_SHEET) groupLimitExceeded = true
