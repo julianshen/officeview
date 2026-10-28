@@ -78,15 +78,15 @@ describe('paged toolbar and status line', () => {
     expect(title.className).toContain('ov:truncate')
     expect(within(bar).getByTestId('officeview-page-position').textContent).toBe('1 / 3')
     expect(status(ui.container)!.textContent).toBe('Page 1 of 3 · — words')
-    await flushIdle()
-    expect(status(ui.container)!.textContent).toBe(`Page 1 of 3 · ${REPORT_WORDS} words`)
+    // the count may schedule or commit after one drain, so drain on every poll
+    await waitFor(async () => { await flushIdle(); expect(status(ui.container)!.textContent).toBe(`Page 1 of 3 · ${REPORT_WORDS} words`) }, { timeout: 3000 })
   })
 
   it('formats large word counts with a thousands separator', async () => {
     const ui = await mount({ document: docxModel([Array.from({ length: 2418 }, (_, i) => `w${i}`).join(' ')]) })
     await toolbar(ui)
-    await flushIdle()
-    expect(status(ui.container)!.textContent).toBe('Page 1 of 3 · 2,418 words')
+    // the count may schedule or commit after one drain, so drain on every poll
+    await waitFor(async () => { await flushIdle(); expect(status(ui.container)!.textContent).toBe('Page 1 of 3 · 2,418 words') }, { timeout: 3000 })
   })
 
   it('uses Slide wording and no word count for PPTX', async () => {
