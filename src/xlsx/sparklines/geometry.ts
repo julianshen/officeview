@@ -188,9 +188,12 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     // barAxisRule, painted OVER the bars (the line paints it under): the column axis is exactly the line's
     // (displayXAxis AND min < 0 < max of the effective scale — the all-positive column axis is unmeasured, ruling
     // 4); the win/loss axis is ALWAYS drawn when displayXAxis, at the middle row round(T + H/2), even all-zero.
-    // 1 device px, colorAxis, floor(L) … floor(R) wide, built exactly like the line axis (snap + device conversion).
+    // 1 device px, colorAxis, floor(L) … floor(R) wide, built exactly like the line axis except its rounding: the
+    // bar axis is always odd-width (1 device px) whatever the lineWeightPt, so its y snaps to the pixel centre
+    // ⌊y⌋ + ½ independent of the line stroke's parity (the parity snap is the line path's own behaviour).
     if (group.displayXAxis && group.colors.axis && (stacked || (s.min < 0 && s.max > 0))) {
-      const axisYDev = snapVertex(stacked ? Tdev + Hdev / 2 : yDevFor(0, s.min, s.max))
+      const snapAxisY = (dev: number): number => Math.floor(dev) + 0.5
+      const axisYDev = snapAxisY(stacked ? Tdev + Hdev / 2 : yDevFor(0, s.min, s.max))
       primitives.push({
         kind: 'axis',
         x0: toOutputX(Math.floor(Ldev) + 0.5),

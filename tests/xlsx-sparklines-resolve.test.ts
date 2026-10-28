@@ -238,9 +238,9 @@ describe('resolveWorkbookSparklines', () => {
       resolve([t])
       expect(at(t, 'D1')).toMatchObject({ min: 1, max: 12 })
     })
-    // groupScaleRule is UNRESOLVED in the validation doc (Excel drew nothing for the group fixture), so these pin the
-    // standard group semantics the implementation uses until the investigation lands.
-    it('group: min and max over every sparkline in the group (standard semantics; groupScaleRule pending)', () => {
+    // groupScaleRule, measured (docs/validation/xlsx-sparklines.md; line-scale-group): min and max are shared
+    // across every sparkline of the group and manual values are ignored under group.
+    it('group: min and max over every sparkline in the group, manual values ignored (groupScaleRule, measured)', () => {
       const s = withGroups(sheetOf('S', [[1, 8], [10, 80], [-5, 5]]), groupOf([spark('D1', 'A1:B1'), spark('D2', 'A2:B2'), spark('D3', 'A3:B3')], { minAxisType: 'group', maxAxisType: 'group' }))
       resolve([s])
       for (const host of ['D1', 'D2', 'D3']) expect(at(s, host)).toMatchObject({ min: -5, max: 80 })

@@ -428,6 +428,17 @@ describe('column and win/loss sparkline geometry (Stage 2, Task 8)', () => {
     }
   })
 
+  it('snaps both bar axes to the odd 1-px centre row, independent of lineWeightPt (barAxisRule)', () => {
+    // The bar axis is always 1 device px wide, so its y snaps to the pixel centre ⌊y⌋ + ½ like an odd stroke
+    // whatever the line weight: the capture mid row T + H/2 = 31.01 → y 31.5 and the column's y(0) on [−2, 2] =
+    // 31.01 → y 31.5, for the default 0.75 pt (1 device px) AND 1.5 pt (2 device px, which the line path's parity
+    // snap would put on a corner).
+    for (const weight of [0.75, 1.5] as const) {
+      expect(axes(sparklineGeometry(mk([-2, 2], { type: 'column', displayXAxis: true, lineWeightPt: weight, colors: { axis: 'FF8000FF' } }), HOST, CAP)).map(a => [a.y, a.widthPx])).toEqual([[31.5, 1]])
+      expect(axes(sparklineGeometry(mk([0, 0, -1], { type: 'stacked', displayXAxis: true, lineWeightPt: weight, colors: { axis: 'FF8000FF' } }), HOST, CAP)).map(a => [a.y, a.widthPx])).toEqual([[31.5, 1]])
+    }
+  })
+
   it('draws nothing in a cell too small for the plot box, both types (barTinyCellRule)', () => {
     expect(sparklineGeometry(mk([1, 2, 3], { type: 'column', colors: { series: SER } }), { x: 0, y: 0, w: 17.34, h: 5.34 }, Z1)).toEqual([])
     expect(sparklineGeometry(mk([1, -2], { type: 'stacked', displayXAxis: true, colors: { series: SER, axis: 'FF8000FF' } }), { x: 0, y: 0, w: 17.34, h: 5.34 }, Z1)).toEqual([])
