@@ -23,3 +23,6 @@ playwright-report/
 # Website build output and generated samples
 site-dist/
 site/public/samples/
+
+# Office lock files (Excel keeps reference workbooks open during capture)
+~$*
