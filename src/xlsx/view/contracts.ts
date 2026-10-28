@@ -3,6 +3,7 @@ import type { ThemeContext } from '../../drawing/style'
 import type { RangeDetection } from './rangeDetection'
 import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
+import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
 export const MAX_OVERVIEW_GROUPS_DESKTOP = 2048
@@ -208,9 +209,35 @@ export interface SourceStore {
    * `memory` is the caller's transient share of the document pool: the store
    * sizes it to its working set and refuses (a diagnostic) what does not fit. */
   readDrawings?(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings>
+  /** S3: resolves this sheet's sparkline groups from worker-owned cell stores. */
+  readSparklines?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, replyEnvelopeBytes?: number): Promise<SheetSparklines>
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
+
+/** Clone-safe, render-ready sparkline transfer. NaN encodes a null point. */
+export interface TransferredSparkline {
+  host: SourceCell
+  dataSheet: string
+  sourceRows: number[]
+  groupIndex: number
+  values: Float64Array
+  bridged: number[]
+  firstIndex: number
+  lastIndex: number
+  highIndices: number[]
+  lowIndices: number[]
+  min: number
+  max: number
+  axis?: { positions: Float64Array; slot: number }
+}
+export interface SheetSparklines {
+  sparklines: TransferredSparkline[]
+  groups: XlsxSparklineGroup[]
+  diagnostics: SparklineDiagnostic[]
+  /** Referenced sheet pages that were still loading when this snapshot ran. */
+  pendingSheetIds?: string[]
+}
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,
  * with sheet-local picture indexes. Whatever the budget or a part cap kept out
@@ -475,6 +502,8 @@ export type SourceReadQuery =
    * worker replaces a reply over it with a payload-free quota reply. Omitted:
    * no grant (legacy callers); every RemoteWorkbook dispatch sets it. */
   | { op: 'drawings'; replyByteLimit?: number }
+  /** S3: receiver-granted sparkline resolution; sheet id is on the read owner. */
+  | { op: 'sparklines'; grantBytes: number }
   /** S10.2: operation range detection (sort admission includes the structural
    * guard) run next to the store, so a paged sheet is not scanned strip by
    * strip across the worker boundary. Same detectors, same outcome. */
@@ -490,6 +519,7 @@ export type SourceReadResult =
   | { op: 'layout'; layout: SheetLayout }
   | { op: 'releaseScan'; released: boolean }
   | { op: 'drawings'; result: SheetDrawings }
+  | { op: 'sparklines'; result: SheetSparklines }
   | { op: 'detectRange'; detection: RangeDetection }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
@@ -517,6 +547,9 @@ export interface SheetLayout {
   /** Authored-hidden columns: zero width for paint, navigation, find and copy. */
   hiddenCols?: readonly { start: number; end: number }[]
   used?: SourceRect
+  /** S3: metadata-only fast path; false lets sheets without sparklines avoid
+   * any per-frame preparation or worker request. */
+  hasSparklines?: boolean
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }

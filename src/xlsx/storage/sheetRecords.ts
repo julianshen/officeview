@@ -12,6 +12,11 @@ import { PackageError } from '../../core/package-error'
 import { localName, XstringDecoder, type XmlEvents } from '../../core/xml-stream'
 import { isLoadEvaluated, MAX_LOAD_FORMULA_CHARS } from '../view/values'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, type AnchorParts } from '../anchorRecords'
+import { registerNamespaceAware, type XmlNode } from '../../core/xml'
+import type { SheetColorContext } from '../sheetColors'
+import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
+import { MAX_POINTS_PER_SHEET, MAX_POINTS_PER_SPARKLINE, MAX_SPARKLINES_PER_GROUP, MAX_SPARKLINE_GROUPS_PER_SHEET, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, XM_SPARKLINE_NS, parseSparklineGroups } from '../sparklines/parseGroups'
+import { parseA1Area } from '../ranges'
 
 export interface AdmissionCounters {
   expandedBytes: number
@@ -321,6 +326,9 @@ export interface SheetMetadata {
   frozen?: XlsxFrozenPane
   /** Metadata-only rows arrived out of order: rowHeights/hiddenRows need normalizeRowMetadata. */
   unorderedRows?: boolean
+  /** Bounded sparkline records parsed from worksheet extension parts. */
+  sparklineGroups?: XlsxSparklineGroup[]
+  sparklineDiagnostics?: SparklineDiagnostic[]
 }
 /** Stable sort by row (as the legacy geometry sorts rows) and re-merge hidden intervals. */
 export function normalizeRowMetadata(meta: SheetMetadata): void {
@@ -343,6 +351,8 @@ export interface SheetRecordOptions {
   maxTextChars: number
   /** Cap on merges, tableParts and drawing references each (typed resource-limit). */
   maxStructuralRecords?: number
+  sparklineColorContext?: SheetColorContext
+  onSparklineDiagnostic?(diagnostic: SparklineDiagnostic): void
   onCell(record: CellRecord): void
   /** Called after every complete row; the importer cuts pages at row boundaries. */
   onRowEnd(row: number): void
@@ -379,6 +389,64 @@ const MAX_COORD_ROW = 1_048_575, MAX_COORD_COL = 16_383
 export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptions): XmlEvents {
   const { partId } = options
   const stack: string[] = []
+  type NsFrame = { local: string; uri?: string; scope: ReadonlyMap<string, string>; extensionUri?: string }
+  type SparkGroupInfo = { sparkCount: number; incomplete: boolean }
+  type SparkFrame = { node: XmlNode; local: string; uri?: string; scope: ReadonlyMap<string, string>; children: Map<string, XmlNode[]>; group?: SparkGroupInfo; textOverflow?: boolean }
+  const nsStack: NsFrame[] = []
+  const aggregateChildren = new Map<string, XmlNode[]>()
+  let aggregateRoot: XmlNode | undefined
+  let aggregateScope: ReadonlyMap<string, string> | undefined
+  let captureRootDepth = -1
+  let captureFrames: Array<SparkFrame | undefined> = []
+  let sparkGroupCount = 0
+  let groupLimitExceeded = false
+  let sparkCountExceeded = false
+  let pointLimitExceeded = false
+  let sparkPoints = 0
+  let stopSparkCapture = false
+  const sparkDiagnostics: SparklineDiagnostic[] = []
+  const sparkAttrNames = new Set(['type', 'lineWeight', 'displayEmptyCellsAs', 'markers', 'high', 'low', 'first', 'last', 'negative', 'displayXAxis', 'displayHidden', 'dateAxis', 'rightToLeft', 'minAxisType', 'maxAxisType', 'manualMin', 'manualMax'])
+  const colorAttrNames = new Set(['rgb', 'theme', 'indexed', 'tint', 'auto'])
+  /** The eight colour elements parseSparklineGroups reads; any other `color*` name is never captured (PR #49 review). */
+  const sparkColorNames = new Set(['colorSeries', 'colorNegative', 'colorAxis', 'colorMarkers', 'colorFirst', 'colorLast', 'colorHigh', 'colorLow'])
+  const sparkDiagnostic = (feature: string, message: string) => {
+    if (!sparkDiagnostics.some(item => item.feature === feature && item.message === message)) sparkDiagnostics.push({ kind: 'unsupported', feature, message })
+  }
+  const childAllowed = (parent: SparkFrame, local: string, uri: string | undefined): boolean => {
+    if (parent.local === 'sparklineGroups') return local === 'sparklineGroup' && uri === X14_SPARKLINE_NS
+    if (parent.local === 'sparklineGroup') return (uri === X14_SPARKLINE_NS && (local === 'sparklines' || sparkColorNames.has(local))) || (uri === XM_SPARKLINE_NS && local === 'f')
+    if (parent.local === 'sparklines') return local === 'sparkline' && uri === X14_SPARKLINE_NS
+    if (parent.local === 'sparkline') return uri === XM_SPARKLINE_NS && (local === 'f' || local === 'sqref')
+    return false
+  }
+  const singletonSparkChild = (parent: SparkFrame, local: string, uri: string | undefined): boolean =>
+    (parent.local === 'sparklineGroup' && (local === 'sparklines' || sparkColorNames.has(local) || (uri === XM_SPARKLINE_NS && local === 'f')))
+    || (parent.local === 'sparkline' && uri === XM_SPARKLINE_NS && (local === 'f' || local === 'sqref'))
+  const attachSparkChild = (parent: SparkFrame, child: SparkFrame) => {
+    const list = parent.children.get(child.local) ?? []
+    list.push(child.node)
+    parent.children.set(child.local, list)
+    parent.node[child.local] = list.length === 1 ? child.node : list
+  }
+  const finishSparkFrame = (frame: SparkFrame) => registerNamespaceAware(frame.node, frame.uri, frame.scope, frame.children)
+  const finalizeSparklines = () => {
+    if (!aggregateRoot) return
+    const groups = parseSparklineGroups(aggregateRoot, options.sparklineColorContext ?? {}, sparkDiagnostics)
+    for (const group of groups) {
+      const info = sparkGroupInfos[groupIndex++]
+      if (info?.incomplete) group.incomplete = true
+    }
+    if (groupLimitExceeded) sparkDiagnostic('sparkline-group-limit', `Worksheet exceeds ${MAX_SPARKLINE_GROUPS_PER_SHEET} sparkline groups`)
+    if (sparkCountExceeded) sparkDiagnostic('sparkline-count-limit', `Sparkline group exceeds ${MAX_SPARKLINES_PER_GROUP} entries`)
+    if (pointLimitExceeded) sparkDiagnostic('sparkline-sheet-point-limit', `Worksheet exceeds ${MAX_POINTS_PER_SHEET} sparkline source points`)
+    if (groups.length) meta.sparklineGroups = groups
+    if (sparkDiagnostics.length) {
+      meta.sparklineDiagnostics = [...sparkDiagnostics]
+      for (const diagnostic of sparkDiagnostics) options.onSparklineDiagnostic?.(diagnostic)
+    }
+  }
+  const sparkGroupInfos: SparkGroupInfo[] = []
+  let groupIndex = 0
   let mcDepth = 0
   let paneSeen = false, sheetViews = 0
   let inSheetData = false
@@ -458,6 +526,92 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   return {
     open(qname, names, values, count, selfClosing) {
       const local = localName(qname)
+      const nsDepth = nsStack.length
+      const parentScope = nsStack[nsDepth - 1]?.scope ?? new Map<string, string>()
+      let scope: ReadonlyMap<string, string> = parentScope
+      for (let i = 0; i < count; i++) {
+        const attr = names[i]
+        if (attr !== 'xmlns' && !attr.startsWith('xmlns:')) continue
+        if (scope === parentScope) scope = new Map(parentScope)
+        ;(scope as Map<string, string>).set(attr === 'xmlns' ? '' : attr.slice(6), values[i])
+      }
+      const colon = qname.indexOf(':')
+      const uri = scope.get(colon < 0 ? '' : qname.slice(0, colon))
+      const extensionUri = local === 'ext' ? attrMap(names, values, count).uri : undefined
+      const nsParent = nsStack[nsDepth - 1]
+      const nsGrandparent = nsStack[nsDepth - 2]
+      const isSparklineExtension = local === 'sparklineGroups' && uri === X14_SPARKLINE_NS
+        && nsParent?.local === 'ext' && nsParent.uri === SPREADSHEETML_NS && nsParent.extensionUri === SPARKLINE_EXTENSION_URI
+        && nsGrandparent?.local === 'extLst' && nsGrandparent.uri === SPREADSHEETML_NS
+        && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
+        && nsStack[1] === nsGrandparent
+
+      const nsFrame: NsFrame = { local, uri, scope, ...(extensionUri !== undefined ? { extensionUri } : {}) }
+      if (isSparklineExtension && captureRootDepth < 0) {
+        aggregateRoot ??= { '@attrs': {} }
+        aggregateScope ??= scope
+        captureRootDepth = nsDepth
+        const root: SparkFrame = { node: { '@attrs': {} }, local, uri, scope, children: new Map() }
+        captureFrames = [root]
+        if (selfClosing) {
+          finishSparkFrame(root)
+          for (const [name, children] of root.children) {
+            const list = aggregateChildren.get(name) ?? []
+            list.push(...children); aggregateChildren.set(name, list)
+            ;(aggregateRoot as XmlNode)[name] = list.length === 1 ? list[0] : list
+          }
+          captureRootDepth = -1; captureFrames = []
+        }
+      } else if (captureRootDepth >= 0 && nsDepth > captureRootDepth) {
+        const parent = captureFrames[captureFrames.length - 1]
+        let frame: SparkFrame | undefined
+        if (parent && childAllowed(parent, local, uri)) {
+          // These children are read with first-match semantics by the resident
+          // parser. Ignore later copies before node allocation so uncharged
+          // duplicate payload cannot bypass the sparkline/point caps.
+          let skip = singletonSparkChild(parent, local, uri) && parent.children.has(local)
+          let group = parent.group
+          if (parent.local === 'sparklineGroups' && local === 'sparklineGroup') {
+            if (sparkGroupCount >= MAX_SPARKLINE_GROUPS_PER_SHEET) groupLimitExceeded = true
+            else {
+              group = { sparkCount: 0, incomplete: false }
+              sparkGroupCount++
+              sparkGroupInfos.push(group)
+            }
+          }
+          if (parent.local === 'sparklines' && local === 'sparkline' && group) {
+            group.sparkCount++
+            if (group.sparkCount > MAX_SPARKLINES_PER_GROUP) {
+              group.incomplete = true; sparkCountExceeded = true
+              skip = true
+            }
+            if (stopSparkCapture) { group.incomplete = true; skip = true }
+          }
+          if (!skip && !(parent.local === 'sparklineGroups' && local === 'sparklineGroup' && !group)) {
+            const node: XmlNode = { '@attrs': {} }
+            const allowedAttrs = local === 'sparklineGroup' ? sparkAttrNames : sparkColorNames.has(local) ? colorAttrNames : undefined
+            if (allowedAttrs) {
+              const attrs = node['@attrs'] as Record<string, string>
+              for (let i = 0; i < count; i++) {
+                const key = localName(names[i])
+                if (!allowedAttrs.has(key)) continue
+                if (values[i].length <= 512) attrs[key] = values[i]
+                else if (local === 'sparklineGroup') {
+                  if (group) group.incomplete = true
+                  sparkDiagnostic('sparkline-attribute-limit', 'Sparkline group attribute exceeds the streaming text limit')
+                }
+              }
+            }
+            frame = { node, local, uri, scope, children: new Map(), group }
+            attachSparkChild(parent, frame)
+            if (local === 'sparklineGroups') aggregateRoot = node
+          }
+        }
+        if (!selfClosing) captureFrames.push(frame)
+        else if (frame) finishSparkFrame(frame)
+      }
+      if (!selfClosing) nsStack.push(nsFrame)
+
       const depth = stack.length
       if (local === 'AlternateContent') { if (!selfClosing) mcDepth++; return }
       if (mcDepth > 0) {
@@ -610,6 +764,46 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
     },
     close(qname) {
       const local = localName(qname)
+      const nsDepth = nsStack.length - 1
+      if (captureRootDepth >= 0) {
+        if (nsDepth > captureRootDepth) {
+          const frame = captureFrames.pop()
+          if (frame) {
+            finishSparkFrame(frame)
+            if (frame.local === 'sparkline') {
+              const fNode = frame.node.f as XmlNode | undefined
+              const formula = typeof fNode?.['#text'] === 'string' ? fNode['#text'] as string : undefined
+              let quoted = false, validFormula = true
+              if (formula) for (let i = 0; i < formula.length; i++) {
+                if (formula[i] === "'") {
+                  if (quoted && formula[i + 1] === "'") { i++; continue }
+                  quoted = !quoted
+                } else if (!quoted && /\s/.test(formula[i])) { validFormula = false; break }
+              }
+              const area = formula && validFormula && !quoted ? parseA1Area(formula) : undefined
+              if (area && !area.definedName && !area.sheet?.startsWith('[') && !(area.r0 !== area.r1 && area.c0 !== area.c1)) {
+                const points = (area.r1 - area.r0 + 1) * (area.c1 - area.c0 + 1)
+                if (points <= MAX_POINTS_PER_SPARKLINE) {
+                  if (sparkPoints + points > MAX_POINTS_PER_SHEET) {
+                    pointLimitExceeded = true; stopSparkCapture = true
+                    if (frame.group) frame.group.incomplete = true
+                  } else sparkPoints += points
+                }
+              }
+            }
+          }
+        } else if (nsDepth === captureRootDepth) {
+          const root = captureFrames.pop()
+          if (root) finishSparkFrame(root)
+          for (const [name, children] of root?.children ?? []) {
+            const list = aggregateChildren.get(name) ?? []
+            list.push(...children); aggregateChildren.set(name, list)
+            if (aggregateRoot) aggregateRoot[name] = list.length === 1 ? list[0] : list
+          }
+          captureRootDepth = -1; captureFrames = []
+        }
+      }
+      if (nsStack.length) nsStack.pop()
       if (local === 'AlternateContent' && mcDepth > 0) { mcDepth--; return }
       stack.pop()
       if (mcDepth > 0) return
@@ -628,8 +822,23 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         columnAttrs = undefined; firstRule = undefined; ruleDepth = -1
       } else if (ruleDepth >= 0 && depth === ruleDepth) ruleDepth = -1
       else if (local === 'sortState' && depth === sortDepth) { sort = undefined; sortDepth = -1 }
+      if (local === 'worksheet' && nsDepth === 0) {
+        if (aggregateRoot && aggregateScope) registerNamespaceAware(aggregateRoot, X14_SPARKLINE_NS, aggregateScope, aggregateChildren)
+        finalizeSparklines()
+      }
     },
     text(text) {
+      const sparkFrame = captureFrames[captureFrames.length - 1]
+      if (sparkFrame && sparkFrame.uri === XM_SPARKLINE_NS && (sparkFrame.local === 'f' || sparkFrame.local === 'sqref') && !sparkFrame.textOverflow) {
+        const current = typeof sparkFrame.node['#text'] === 'string' ? sparkFrame.node['#text'] as string : ''
+        if (current.length + text.length <= 256) sparkFrame.node['#text'] = current + text
+        else {
+          sparkFrame.node['#text'] = ''
+          sparkFrame.textOverflow = true
+          if (sparkFrame.group) sparkFrame.group.incomplete = true
+          sparkDiagnostic('sparkline-data-reference', 'Sparkline reference exceeds the streaming text limit')
+        }
+      }
       if (!inCell || collect === undefined) return
       // str/inline text is decoded (_xHHHH_); numeric, boolean and error <v> text is not (parse.ts).
       if (collect === 'f') {

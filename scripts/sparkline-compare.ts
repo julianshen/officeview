@@ -8,6 +8,8 @@
 // range are validated and the render scale is derived from pxPerPt. A missing or unsupported reference FAILS the
 // case unless the doc marks it *unverified*. Prints `<id>: pass|fail|unverified meanAbs rowMax (tol …)` per case and
 // a total line. `--out` writes <id>.ref.png, <id>.ours.png and <id>.diff.png (the cropped host block).
+// With --stage 3 (or --case xlsxwriter-written[-row9]) it also compares the XlsxWriter-written workbook, an
+// independent-writer check with a forced cell size and no -bordered twin (see `compareXlsxWriter`).
 // Exit status: 0 when no case fails, 1 otherwise, 2 on a usage error.
 //
 // Rendering. The references are Excel for Mac `copy picture` bitmaps at a fixed 1 px per point (72 dpi); the viewer
@@ -236,13 +238,16 @@ export function renderHosts(sheet: XlsxSheet, size: { w: number; h: number }, sc
   }
 }
 
-export async function loadCaseSheet(c: SparklineCase, sheetName: string): Promise<XlsxSheet> {
+/** Parses `<FIXTURES>/<file>` and returns its sheet `sheetName`, with the lazy sparkline painter loaded. */
+export async function loadSheetFile(file: string, sheetName: string): Promise<XlsxSheet> {
   await preloadSparklines()
-  const doc = await parseXlsx(await OfficePackage.load(readFileSync(join(FIXTURES, `${c.id}.xlsx`))))
+  const doc = await parseXlsx(await OfficePackage.load(readFileSync(join(FIXTURES, file))))
   const sheet = doc.sheets.find(s => s.name === sheetName)
-  if (!sheet) throw new Error(`${c.id}: no sheet ${sheetName}`)
+  if (!sheet) throw new Error(`${file}: no sheet ${sheetName}`)
   return sheet
 }
+
+export const loadCaseSheet = (c: SparklineCase, sheetName: string): Promise<XlsxSheet> => loadSheetFile(`${c.id}.xlsx`, sheetName)
 
 // ---------------------------------------------------------------------------------------------------------------
 // One case
@@ -321,6 +326,99 @@ export async function compareCase(c: SparklineCase, opts: CompareOptions = {}): 
   return results
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// The XlsxWriter-written workbook (plan Task 13): an independent-writer check against an Excel capture
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * `xlsxwriter-written.xlsx` (scripts/sparkline-refs/xlsxwriter-case.py) was captured by Excel at 1 px/pt as
+ * `refs/xlsxwriter-written.png` + `.json` (range I1:J11 of Sheet1), but has no `-bordered` twin, so the host cell size
+ * cannot be read from border pixels as `compareCase` does. It is forced instead to what the other 1 px/pt captures
+ * measured for the same layout (column I is 45 px; host column J of 40.7109375 characters is 204 px gridline to
+ * gridline; every host row is 60 pt), exactly as `renderHosts` forces `compareCase`'s sizes.
+ */
+export const XLSXWRITER = {
+  id: 'xlsxwriter-written', file: 'xlsxwriter-written.xlsx', sheet: 'Sheet1', range: 'I1:J11',
+  /** Left gridline of the host column, its width and one row's height, in capture px. */
+  hostX: 45, hostW: 204, rowH: 60, rows: 11,
+} as const
+
+/**
+ * The Cases rows that gate the XlsxWriter comparison, each over a set of host rows (1-based). Row 9 is the near-flat
+ * group-scaled line (values 1..8 on the shared 1..80 scale), where the documented ±1 px vertex ambiguity moves a
+ * whole row of ink, so it gets its own measured tolerance instead of loosening the rest.
+ */
+export const XLSXWRITER_PARTS: ReadonlyArray<{ id: string; rows: readonly number[] }> = [
+  { id: 'xlsxwriter-written', rows: [1, 2, 3, 4, 5, 6, 7, 8, 10, 11] },
+  { id: 'xlsxwriter-written-row9', rows: [9] },
+]
+
+/**
+ * Row 11's host also holds the text "Growth": Excel draws it bottom-left in its capture font (a serif face), the
+ * static renderer in node-canvas's fallback font, which is the same cell-text difference as `layering`. Ours is
+ * therefore rendered WITHOUT that text (its cell value is cleared before rendering), and Excel's own glyphs are
+ * covered by one rectangle painted white in both images. The rectangle (x, y, w, h in the row's inner box) is the
+ * bounding box of Excel's neutral-grey glyph pixels, x 2–31 and y 49–57, padded by 1 px. It also covers the sparkline's
+ * first vertex (x 15–17, y 54–55) and about 20 px of the first segment: the one patch of row 11 that is not compared.
+ */
+export const XLSXWRITER_TEXT_MASK: { row: number; cell: { row: number; col: number }; rect: readonly [number, number, number, number] } = {
+  row: 11, cell: { row: 10, col: 9 }, rect: [1, 48, 33, 11],
+}
+
+export interface XlsxWriterResult {
+  /** Metrics over the stacked requested rows. */
+  diff: BlockDiff
+  /** The same metrics per host row (inner box), row 1 first. */
+  rows: BlockDiff[]
+  refSize: { w: number; h: number }
+  naturalSize: { w: number; h: number }
+  ref: Frame
+  ours: Frame
+}
+
+export interface XlsxWriterOptions {
+  mutate?: (sheet: XlsxSheet) => void
+  refsDir?: string
+  /** Host rows (1-based) the aggregate covers; every row's own metrics are always reported. Default: all. */
+  rows?: readonly number[]
+  /** Skip the text handling (keeps ours' text and the unmasked row 11: the raw text residual). */
+  noMask?: boolean
+}
+
+export async function compareXlsxWriter(opts: XlsxWriterOptions = {}): Promise<XlsxWriterResult> {
+  const x = XLSXWRITER, dir = opts.refsDir ?? REFS
+  const png = join(dir, `${x.id}.png`)
+  if (!existsSync(png)) throw new UnusableReferenceError(`${x.id}: missing reference ${png}`)
+  const meta = readSidecar(join(dir, `${x.id}.json`), { sheet: x.sheet, range: x.range })
+  const scale = meta.pxPerPt / CSS_PX_PER_PT
+  const w = x.hostW, h = x.rowH * x.rows
+  const sheet = await loadSheetFile(x.file, x.sheet)
+  if (!opts.noMask) for (const row of sheet.rows) for (const cell of row.cells) if (cell.row === XLSXWRITER_TEXT_MASK.cell.row && cell.col === XLSXWRITER_TEXT_MASK.cell.col) cell.value = null
+  opts.mutate?.(sheet)
+  const render = renderHosts(sheet, { w, h }, scale)
+  const refBlock = crop(await loadFrame(png), x.hostX, 0, w, h), oursBlock = crop(render.frame, render.block.x, render.block.y, w, h)
+  // Each host row's inner box (its top gridline row and the left gridline column dropped), text mask applied to both.
+  const strip = (f: Frame, r: number): Frame => {
+    const box = innerBox(crop(f, 0, r * x.rowH, w, x.rowH), [0])
+    if (!opts.noMask && r + 1 === XLSXWRITER_TEXT_MASK.row) {
+      const [rx, ry, rw, rh] = XLSXWRITER_TEXT_MASK.rect
+      for (let yy = ry; yy < Math.min(ry + rh, box.height); yy++) for (let xx = rx; xx < Math.min(rx + rw, box.width); xx++) box.data.fill(255, (yy * box.width + xx) * 4, (yy * box.width + xx) * 4 + 4)
+    }
+    return box
+  }
+  const refRows = Array.from({ length: x.rows }, (_, r) => strip(refBlock, r)), oursRows = Array.from({ length: x.rows }, (_, r) => strip(oursBlock, r))
+  const rows = refRows.map((f, r) => diffFrames(f, oursRows[r]))
+  const keep = (opts.rows ?? Array.from({ length: x.rows }, (_, i) => i + 1)).map(r => r - 1)
+  const stack = (parts: Frame[]): Frame => {
+    const data = new Uint8ClampedArray(parts.reduce((n, p) => n + p.data.length, 0))
+    let at = 0
+    for (const p of parts) { data.set(p.data, at); at += p.data.length }
+    return { width: parts[0].width, height: parts.length * parts[0].height, data }
+  }
+  const ref = stack(keep.map(r => refRows[r])), ours = stack(keep.map(r => oursRows[r]))
+  return { diff: diffFrames(ref, ours), rows, refSize: { w, h }, naturalSize: render.natural, ref, ours }
+}
+
 /** Worst metrics over a case's sheets. */
 export function combine(results: CaseResult[]): BlockDiff {
   return results.reduce<BlockDiff>((a, r) => ({
@@ -360,7 +458,8 @@ export async function main(argv: string[]): Promise<number> {
   const table = readCaseTable()
   let pass = 0, fail = 0, unverified = 0
   const selected = stageCases(stage, only)
-  if (!selected.length) { console.error(`no stage ≤ ${stage} case${only ? ` named ${only}` : ''}`); return 2 }
+  const withWriter = !only ? stage >= 3 : XLSXWRITER_PARTS.some(p => p.id === only)
+  if (!selected.length && !withWriter) { console.error(`no stage ≤ ${stage} case${only ? ` named ${only}` : ''}`); return 2 }
   for (const c of selected) {
     const entry = table.get(c.id)
     let results: CaseResult[]
@@ -386,6 +485,23 @@ export async function main(argv: string[]): Promise<number> {
     if (out) for (const r of results) {
       const base = join(out, results.length > 1 ? `${c.id}-${r.sheet}` : c.id)
       await savePng(r.ref, `${base}.ref.png`); await savePng(r.ours, `${base}.ours.png`); await savePng(diffImage(r.ref, r.ours), `${base}.diff.png`)
+    }
+  }
+  if (withWriter) for (const part of XLSXWRITER_PARTS.filter(p => !only || p.id === only)) {
+    const entry = table.get(part.id)
+    try {
+      const r = await compareXlsxWriter({ refsDir, rows: part.rows })
+      const tol = entry?.tolerance
+      const verdict = entry?.unverifiedReason !== undefined ? 'unverified' : tol && withinTolerance(r.diff, tol) ? 'pass' : 'fail'
+      if (verdict === 'pass') pass++; else if (verdict === 'fail') fail++; else unverified++
+      const tolText = tol ? `tol ${fmt(tol.meanAbs)}/${fmt(tol.rowMax)}/${tol.strong}` : 'tol none'
+      console.log(`${part.id}: ${verdict} ${fmt(r.diff.meanAbs)} ${fmt(r.diff.rowMax)} strong ${r.diff.strong} row ${r.diff.worstRow} (${tolText}, host rows ${part.rows.join(',')}) [cell ${XLSXWRITER.sheet}: forced ${r.refSize.w}x${r.refSize.h}, viewer ${r.naturalSize.w.toFixed(2)}x${r.naturalSize.h.toFixed(2)}]`)
+      if (part === XLSXWRITER_PARTS[0]) console.log(`${XLSXWRITER.id} per host row (meanAbs rowMax strong): ${r.rows.map((d, i) => `${i + 1}: ${fmt(d.meanAbs)} ${fmt(d.rowMax)} ${d.strong}`).join(' | ')}`)
+      if (out) { await savePng(r.ref, join(out, `${part.id}.ref.png`)); await savePng(r.ours, join(out, `${part.id}.ours.png`)); await savePng(diffImage(r.ref, r.ours), join(out, `${part.id}.diff.png`)) }
+    } catch (error) {
+      if (!(error instanceof UnusableReferenceError)) throw error
+      if (entry?.unverifiedReason !== undefined) { unverified++; console.log(`${part.id}: unverified (${error.message})`) }
+      else { fail++; console.log(`${part.id}: fail (${error.message})`) }
     }
   }
   console.log(`total: ${pass} pass, ${fail} fail, ${unverified} unverified`)

@@ -43,6 +43,7 @@ import { replyLimitEnvelope } from './viewerReplyLimit'
 import { initialIdentity, initialWorkbookOwner, reply, visibilityFromDisplayBitsets, type CommandOf } from './viewerProtocol'
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
+import { RemoteSparklineCache, type PagedSheetSparklines, type SparklineChangeReason } from './viewerRemoteSparklines'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
@@ -193,6 +194,9 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly completed = new Set<string>()
   /** S13.2: each sheet's drawing content, read once its structure is complete. */
   private readonly drawingCache: RemoteDrawingCache
+  private readonly sparklineCache: RemoteSparklineCache
+  private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
+  private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -213,9 +217,52 @@ export class RemoteWorkbook implements WorkbookSource {
       // Adopted/evicted content re-keys the sheet's geometry and tiles.
       changed: sheetId => { (this.merges(sheetId) as { gen: number }).gen++; this.notify() },
     }, 2 * drawingPayloadBudget(this.profile))
+    this.sparklineCache = new RemoteSparklineCache({
+      identity: sheetId => this.identity(sheetId), loadState: sheetId => this.loadState(sheetId),
+      hasSparklines: sheetId => this.layout(sheetId).hasSparklines === true,
+      grant: requestId => {
+        const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
+        const limit = Math.min(headroom, MAIN_THREAD_BUDGETS[this.profile] / 4)
+        const owner = `sparkline-grant:${requestId}`
+        if (!Number.isSafeInteger(limit) || limit < 4096 || this.mainLedger.ownerBytes('replies', owner) > 0) return null
+        this.mainLedger.set('replies', owner, limit)
+        return limit
+      },
+      releaseGrant: requestId => this.mainLedger.release('replies', `sparkline-grant:${requestId}`),
+      admitDecoded: (_sheetId, requestId, bytes) => {
+        const owner = `sparkline-decoded:${requestId}`
+        if (!Number.isSafeInteger(bytes) || bytes <= 0 || this.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.profile]
+          || this.mainLedger.ownerBytes('sparklines', owner) > 0) return null
+        this.mainLedger.set('sparklines', owner, bytes)
+        let held = true
+        return () => { if (held) { held = false; this.mainLedger.release('sparklines', owner) } }
+      },
+      request: (command, signal) => this.request(command, signal), nextRequestId: () => this.nextRequestId(),
+      release: reply => this.mainLedger.settle(reply),
+      changed: (sheetId, hosts, reason: SparklineChangeReason = 'updated') => {
+        if (reason === 'evicted') {
+          for (const listener of this.sparklineEvictionListeners) listener(sheetId)
+          this.notify()
+          return
+        }
+        if (reason === 'status') { this.notify(); return }
+        const previous = this.sparklineChanges.get(sheetId) ?? []
+        const union = new Map(previous.map(host => [`${host.row}:${host.col}`, host]))
+        for (const host of hosts) union.set(`${host.row}:${host.col}`, host)
+        this.sparklineChanges.set(sheetId, [...union.values()])
+        this.notify()
+      },
+    }, MAIN_THREAD_BUDGETS[this.profile] / 4)
   }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
+  sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
+  subscribeSparklineEvictions(listener: (sheetId: string) => void): () => void {
+    if (this.closed) return () => {}
+    this.sparklineEvictionListeners.add(listener)
+    return () => { this.sparklineEvictionListeners.delete(listener) }
+  }
+  takeSparklineChanges(sheetId: string): readonly { row: number; col: number }[] { const hosts = this.sparklineChanges.get(sheetId) ?? []; this.sparklineChanges.delete(sheetId); return hosts }
 
   get isClosed(): boolean { return this.closed }
   /** @internal S10.2 tests: document-owned buffers this workbook still holds. */
@@ -437,9 +484,11 @@ export class RemoteWorkbook implements WorkbookSource {
   /** `reservation`: a 'replies' owner admitted for this reply before the command
    * was sent; it ends exactly when the reply's own charge starts (never both). */
   async request<K extends RemoteKind>(command: CommandOf<K>, signal?: AbortSignal, progress?: (completed: number, total: number) => void, reservation?: string): Promise<Settled<K>> {
-    if (this.closed) return CLOSED
-    if (signal?.aborted) return CANCELLED
     const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
+    const sparklineRead = head.kind === 'read' && head.query?.op === 'sparklines'
+    const sparklineGrant = sparklineRead ? `sparkline-grant:${head.requestId}` : undefined
+    if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); return CLOSED }
+    if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); return CANCELLED }
     const key = head.kind === 'read' ? `read:${head.query?.op}` : head.kind
     const scope = JSON.stringify([head.owner.docId, 'sheetId' in head.owner ? head.owner.sheetId : null, key])
     this.latestQueries.set(scope, head.requestId)
@@ -449,8 +498,15 @@ export class RemoteWorkbook implements WorkbookSource {
     // reserved synchronously (concurrent reads see each other's credit) and the
     // worker never posts a reply over it; see drawingGrant.
     const drawings = key === 'read:drawings' ? command as CommandOf<'read'> : undefined
+    const sparklines = key === 'read:sparklines' ? command as CommandOf<'read'> : undefined
     let grant: string | undefined
-    if (drawings) {
+    if (sparklines) {
+      const grantBytes = sparklines.query.op === 'sparklines' ? sparklines.query.grantBytes : undefined
+      const owner = `sparkline-grant:${head.requestId}`
+      if (this.client.isPending(head.requestId)) return CLOSED
+      if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
+      grant = owner
+    } else if (drawings) {
       // A duplicate id must not touch the credit of the read that owns it.
       if (this.client.isPending(head.requestId) || this.mainLedger.ownerBytes('replies', `drawing-grant:${head.requestId}`) > 0) return CLOSED
       const admitted = this.drawingGrant(drawings)
@@ -467,7 +523,7 @@ export class RemoteWorkbook implements WorkbookSource {
       // No reply is walked here: the worker stamped its exact size on it (a
       // granted one within its grant). A missing or invalid size is charged as
       // the whole grant, or, as a protocol error, the whole main budget.
-      const pool = drawings ? 'drawings' : 'replies', targets = leaseTargets(reply)
+      const pool = drawings ? 'drawings' : sparklines ? 'sparklines' : 'replies', targets = leaseTargets(reply)
       const bytes = grant ? grantedBytes(reply, this.mainLedger.ownerBytes('replies', grant)) : stampedBytes(reply, MAIN_THREAD_BUDGETS[this.profile])
       const held = grant ?? reservation
       const moved = held ? Math.min(bytes, this.mainLedger.ownerBytes('replies', held)) : 0
@@ -482,7 +538,8 @@ export class RemoteWorkbook implements WorkbookSource {
         // links were made; the existing cache displays this typed refusal.
         return { ...reply, result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: false, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } } as WorkerReply<K>
       }
-      this.capture(reply, scope, !drawings)
+      this.capture(reply, scope, !drawings && !sparklines)
+      if (sparklines && signal?.aborted) this.mainLedger.settle(reply)
       return reply
     }, error => {
       // A grant is refunded only when the command provably never left: a
@@ -754,8 +811,11 @@ export class RemoteWorkbook implements WorkbookSource {
     if (this.closed) return
     this.closed = true
     this.listeners.clear()
+    this.sparklineEvictionListeners.clear()
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
     this.drawingCache.close()
+    this.sparklineCache.close()
+    this.sparklineChanges.clear()
     this.overflow?.cache.close()
     this.overflow = undefined
     // Owned caches go with the document: nothing answers from them after close.

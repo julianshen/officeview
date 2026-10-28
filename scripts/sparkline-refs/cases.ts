@@ -94,6 +94,7 @@ const DISTINCT: Record<ColourKey, ColourSpec> = {
 const group = (attrs: CaseGroup['attrs'], sparklines: CaseSparkline[], colours: CaseGroup['colours'] = DISTINCT): CaseGroup => ({ attrs, colours, sparklines })
 const sheet1 = (rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }): CaseSheet => ({ name: 'Sheet1', gridlines: false, ...rest })
 const oneSheet = (id: string, purpose: string, rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }, stage: SparklineCase['stage'] = 1): SparklineCase => ({ id, stage, purpose, sheets: [sheet1(rest)] })
+const stage3 = (id: string, purpose: string, rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }): SparklineCase => oneSheet(id, purpose, rest, 3)
 const stage2 = (id: string, purpose: string, rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }): SparklineCase => oneSheet(id, purpose, rest, 2)
 
 // ---- column-oriented hidden-row data: A3:A10, host J1 -------------------------------------------------------------
@@ -121,6 +122,12 @@ const HL_FL = { high: 1, low: 1, first: 1, last: 1 }
 const COL = { type: 'column', displayEmptyCellsAs: 'gap' }
 const WL = { type: 'stacked', displayEmptyCellsAs: 'gap' }
 const NEAR: number[] = [50, 52, 51, 55, 53, 54, 50, 56] // far from zero: does the smallest bar keep a minimum height
+const UNEVEN: number[] = [45000, 45001, 45003, 45010, 45011, 45020, 45021, 45030] // serial dates, gaps of 1..9 days
+const UNSORTED: number[] = [45010, 45000, 45003, 45030, 45001, 45020, 45011, 45021]
+/** A dated group: `type`-specific attrs plus dateAxis, dates in `dateRow`, one sparkline per data row. */
+const dated = (attrs: CaseGroup['attrs'], rows: number[], dateRow: number, colours: CaseGroup['colours'] = DISTINCT): CaseGroup =>
+  ({ ...group({ ...attrs, dateAxis: 1 }, rowSparklines(rows), colours), dateRange: rowArea(dateRow) })
+const RTL = { displayEmptyCellsAs: 'gap', rightToLeft: 1 }
 const WL_TINY: CaseValue[] = [1e-16, -1e-16, 1, -1, 1e-16, 0.5, -1e-16, 2]
 
 export const SPARKLINE_CASES: readonly SparklineCase[] = [
@@ -316,6 +323,58 @@ export const SPARKLINE_CASES: readonly SparklineCase[] = [
       group({ ...WL, ...HL_FL }, rowSparklines([1])),
       group({ ...WL, ...HL_FL, negative: 1 }, rowSparklines([2])),
       group({ ...WL, high: 1, low: 1 }, rowSparklines([3])),
+    ],
+  }),
+
+  // ---- Stage 3: date axis and right-to-left ----
+  stage3('date-uneven', 'Date axis with uneven dates (row 7): line with markers (row 1), column (row 2), win/loss (row 3), line with the same dates but no dateAxis (row 4, control).', {
+    cells: [...rowsBlock([D, D, X, D]), ...rowOf(7, UNEVEN)], groups: [
+      dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [1], 7),
+      dated(COL, [2], 7),
+      dated(WL, [3], 7),
+      { ...group({ displayEmptyCellsAs: 'gap', markers: 1 }, rowSparklines([4])), dateRange: rowArea(7) },
+    ],
+  }),
+  stage3('date-unsorted', 'Date axis with dates out of order (row 7): line with markers and first/last (row 1), column (row 2): plotted in data order at date positions, or sorted.', {
+    cells: [...rowsBlock([D, D]), ...rowOf(7, UNSORTED)], groups: [
+      dated({ displayEmptyCellsAs: 'gap', markers: 1, first: 1, last: 1 }, [1], 7),
+      dated(COL, [2], 7),
+    ],
+  }),
+  {
+    id: 'date-missing-range', stage: 3,
+    purpose: 'LibreOffice-style group: dateAxis="1" with no date range, no default attributes, only colorSeries (Review Focus 5); line (row 1) and column (row 2).',
+    sheets: [sheet1({ cells: rowsBlock([D, D]), groups: [
+      { attrs: { dateAxis: 1 }, colours: { colorSeries: { rgb: 'FF0000FF' } }, sparklines: rowSparklines([1]) },
+      { attrs: { type: 'column', dateAxis: 1 }, colours: { colorSeries: { rgb: 'FF0000FF' } }, sparklines: rowSparklines([2]) },
+    ] })],
+  },
+  stage3('date-length-mismatch', 'Date range shorter (6 dates, row 7) and longer (10 dates, row 8) than the 8-point data range, line with markers.', {
+    cells: [...rowsBlock([D, D]), ...rowOf(7, UNEVEN.slice(0, 6)), ...UNEVEN.concat([45031, 45040]).map((v, i) => ({ ref: `${colName(i + 1)}8`, v }))], groups: [
+      { ...group({ displayEmptyCellsAs: 'gap', markers: 1, dateAxis: 1 }, rowSparklines([1])), dateRange: 'Sheet1!A7:F7' },
+      { ...group({ displayEmptyCellsAs: 'gap', markers: 1, dateAxis: 1 }, rowSparklines([2])), dateRange: 'Sheet1!A8:J8' },
+    ],
+  }),
+  stage3('date-text', 'Date range with a text cell (row 7, C7) and with an empty cell (row 8, E8), line with markers.', {
+    cells: [...rowsBlock([D, D]), ...rowOf(7, UNEVEN.map((v, i) => i === 2 ? 'n/a' : v)), ...rowOf(8, UNEVEN.map((v, i) => i === 4 ? null : v))], groups: [
+      dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [1], 7),
+      dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [2], 8),
+    ],
+  }),
+  stage3('rtl-line', 'rightToLeft="1" line with markers (row 1); with a date axis on uneven dates (row 2, dates row 7); empty cells under span (row 3).', {
+    cells: [...rowsBlock([D, D, [3, 7, null, 4, null, null, 8, 5]]), ...rowOf(7, UNEVEN)], groups: [
+      group({ ...RTL, markers: 1 }, rowSparklines([1])),
+      dated({ ...RTL, markers: 1 }, [2], 7),
+      group({ rightToLeft: 1, displayEmptyCellsAs: 'span', markers: 1 }, rowSparklines([3])),
+    ],
+  }),
+  stage3('rtl-hl-fl', 'rightToLeft="1" with first/last/high/low: is first the leftmost or rightmost point (data order vs display order); row 2 first = high, last = low.', {
+    cells: rowsBlock([D, [9, 3, 5, 2, 6, 4, 7, 1]]), groups: [group({ ...RTL, ...HL_FL }, rowSparklines([1, 2]))],
+  }),
+  stage3('rtl-column', 'rightToLeft="1" column with first/last and negative (row 1, data spanning zero); win/loss with first/last (row 2).', {
+    cells: rowsBlock([X, X]), groups: [
+      group({ type: 'column', ...RTL, first: 1, last: 1, negative: 1 }, rowSparklines([1])),
+      group({ type: 'stacked', ...RTL, first: 1, last: 1 }, rowSparklines([2])),
     ],
   }),
 ]

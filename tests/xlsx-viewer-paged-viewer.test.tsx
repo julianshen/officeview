@@ -6,16 +6,24 @@
  * real resident kernel behind a port with worker message semantics.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import JSZip from 'jszip'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { OfficeFile } from '../src/components/OfficeFile'
 import { ViewerKernel } from '../src/worker/viewerKernel'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import type { SheetFrameStats } from '../src/components/xlsx/InteractiveSheetDoc'
 import { xlsxBytes } from './helpers/xlsx-package'
 import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
+import * as sparklineLoader from '../src/xlsx/sparklineLoader'
+import { TileCache } from '../src/xlsx/view/tileCache'
+import { prepareSheetAssets } from '../src/components/xlsx/sheetAssets'
 
 // Admission's object path allows one row, so these small fixtures are 'paged'
 // on the main thread and in the worker alike (the same override both sides).
@@ -35,9 +43,9 @@ const workbook = (sheetData = CORNER) => new Blob([xlsxBytes({ sheetData }) as B
 
 /** A port with dedicated-worker semantics over a real kernel: commands and
  * replies are structured-cloned; replies can be held to model a slow worker. */
-function workerHarness() {
+function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
   const parse = vi.fn(async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)))
-  const kernel = new ViewerKernel({ parse }, quiet)
+  const kernel = new ViewerKernel(env ?? { parse }, quiet)
   const listeners = new Set<(event: MessageEvent) => void>()
   const posted: WorkerCommand[] = []
   const held: Array<() => void> = []
@@ -395,6 +403,112 @@ async function residentCopy(bytes: Uint8Array, at: string): Promise<string> {
 }
 
 describe('S5.4 review: worker-backed cells keep resident semantics', () => {
+  it('does not cache a paged sparkline host tile before its painter asset is ready', FIRST_PAINT_TEST, async () => {
+    const sourceBytes = new Uint8Array(readFileSync(resolve(process.cwd(), 'tests/fixtures/xlsx-sparklines/line-basic.xlsx')))
+    const h = workerHarness({
+      parse: async bytes => parseXlsx(await OfficePackage.load(bytes)),
+      openSource: async (source, docId) => {
+        if (source.kind !== 'blob') throw new Error('test expects blob source')
+        const session = await openImportSession(source, { docId, profile: 'D' })
+        await session.done
+        return createPagedWorkbookSource(session)
+      },
+    })
+    h.hold(command => command.kind === 'read' && command.query.op === 'sparklines')
+    let releaseSparkAssets!: () => void
+    const sparkAssetGate = new Promise<void>(resolve => { releaseSparkAssets = resolve })
+    let resolveInitialAssets!: () => void
+    const initialAssetsReady = new Promise<void>(resolve => { resolveInitialAssets = resolve })
+    let sparkAssetStarted = false, painterReady = false
+    const loader: typeof prepareSheetAssets = async (doc, options) => {
+      if (doc.sheets[options?.sheetIndex ?? 0]?.resolvedSparklines?.size) {
+        sparkAssetStarted = true
+        await sparkAssetGate
+        const lease = await prepareSheetAssets(doc, options)
+        painterReady = true
+        return lease
+      }
+      const lease = await prepareSheetAssets(doc, options)
+      resolveInitialAssets()
+      return lease
+    }
+    const originalPaint = sparklineLoader.paintSparklinesIn
+    const paint = vi.spyOn(sparklineLoader, 'paintSparklinesIn')
+    const paintedGenerations: boolean[] = []
+    const sparkPaintResults: boolean[] = []
+    paint.mockImplementation((ctx, sheet, cellRect, visible, scale, candidates) => {
+      if (sheet.resolvedSparklines?.size) {
+        paintedGenerations.push(painterReady)
+        if (!painterReady) return false
+      }
+      const result = originalPaint(ctx, sheet, cellRect, visible, scale, candidates)
+      if (sheet.resolvedSparklines?.size && painterReady) sparkPaintResults.push(result)
+      return result
+    })
+    const { remote } = await openRemote(h, sourceBytes)
+    const doc = { sheets: [{ name: 'Sheet1', sheetId: '1', rows: [], cols: [], merges: [], mergeRanges: [] }] }
+    const ui = render(<InteractiveSheetDoc doc={doc} source={remote} assetLoader={loader} />)
+    await waitFor(() => expect(ui.getAllByRole('gridcell').length).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await initialAssetsReady
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'read' && command.query.op === 'sparklines')).toBe(true))
+    h.release()
+    await waitFor(() => expect(sparkAssetStarted).toBe(true))
+    // Let the worker-result render/layout effect run while ensureSparklinePainter
+    // is held behind the sheet-assets promise.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+    expect(paintedGenerations).toEqual([])
+    releaseSparkAssets()
+    await waitFor(() => expect(paintedGenerations).toContain(true), FIRST_PAINT_WAIT)
+
+    expect(paintedGenerations).not.toContain(false)
+    expect(sparkPaintResults).toContain(true)
+    ui.unmount()
+    await remote.close()
+  })
+
+  it('publishes arriving worker sparklines into the frame entry and invalidates only merged host tiles', FIRST_PAINT_TEST, async () => {
+    const sourceBytes = new Uint8Array(readFileSync(resolve(process.cwd(), 'tests/fixtures/xlsx-sparklines/line-basic.xlsx')))
+    const zip = await JSZip.loadAsync(sourceBytes)
+    const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    zip.file('xl/worksheets/sheet1.xml', xml.replace('</sheetData>', '</sheetData><mergeCells count="1"><mergeCell ref="J1:Z1"/></mergeCells>'))
+    const bytes = await zip.generateAsync({ type: 'uint8array' })
+    const h = workerHarness({
+      parse: async bytes => parseXlsx(await OfficePackage.load(bytes)),
+      openSource: async (source, docId) => {
+        if (source.kind !== 'blob') throw new Error('test expects blob source')
+        const session = await openImportSession(source, { docId, profile: 'D' })
+        await session.done
+        return createPagedWorkbookSource(session)
+      },
+    })
+    h.hold(command => command.kind === 'read' && command.query.op === 'sparklines')
+    const { remote } = await openRemote(h, bytes)
+    expect(remote.layout('1').hasSparklines).toBe(true)
+    const paint = vi.spyOn(sparklineLoader, 'paintSparklinesIn')
+    const invalidations: Array<(key: { identity: { sheetId: string }; col: number; row: number; zoom: number; dpr: number }) => boolean> = []
+    const original = TileCache.prototype.invalidate
+    vi.spyOn(TileCache.prototype, 'invalidate').mockImplementation(function (this: TileCache, predicate: Parameters<TileCache['invalidate']>[0]) {
+      invalidations.push(predicate as typeof invalidations[number])
+      return original.call(this, predicate)
+    })
+    const doc = { sheets: [{ name: 'Sheet1', sheetId: '1', rows: [], cols: [], merges: [], mergeRanges: [] }] }
+    const ui = render(<InteractiveSheetDoc doc={doc} source={remote} />)
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'read' && command.query.op === 'sparklines')).toBe(true))
+    expect(paint.mock.calls.some(([, sheet]) => sheet.resolvedSparklines?.size)).toBe(false)
+    h.release()
+    await waitFor(() => expect(paint.mock.calls.some(([, sheet]) => sheet.resolvedSparklines?.size)).toBe(true))
+    const identity = remote.identity('1')
+    const matches = invalidations.map(predicate => [
+      predicate({ identity, col: 0, row: 0, zoom: 1, dpr: 1 }),
+      predicate({ identity, col: 1, row: 0, zoom: 1, dpr: 1 }),
+      predicate({ identity, col: 2, row: 0, zoom: 1, dpr: 1 }),
+      predicate({ identity: { ...identity, sheetId: 'other' }, col: 1, row: 0, zoom: 1, dpr: 1 }),
+    ])
+    expect(matches.some(([left, firstHostTile, secondHostTile, other]) => left === false && firstHostTile === true && secondHostTile === true && other === false)).toBe(true)
+    ui.unmount()
+    await remote.close()
+  })
+
   // A worker-backed mount's first paint: 0.5-0.6 s at 1 vCPU, 1.3-1.6 s at
   // 0.5 vCPU (Linux container); GitHub's runner timed out at the default 1 s.
   it('F1 formats paged cells with the workbook style table and date system (copy and find parity)', FIRST_PAINT_TEST, async () => {

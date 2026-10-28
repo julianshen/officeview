@@ -11,6 +11,13 @@ import { valueAuthority } from '../view/values'
 import type { XlsxCell, XlsxRow, XlsxSheet } from '../types'
 import type { SparklineArea, SparklineDiagnostic, XlsxSparkline, XlsxSparklineGroup } from './model'
 
+export interface SparklineAxis {
+  /** Plot-width fraction of each plotted point's day-slot centre (dateSlotRule: (d − dmin + ½)·slot), parallel to `values`. */
+  positions: number[]
+  /** One day's slot width as the same fraction: 1/(dmax − dmin + 1). */
+  slot: number
+}
+
 export interface ResolvedSparkline {
   host: { row: number; col: number }
   /** Canonical worksheet supplying the data (used to apply viewer-owned filters at paint time). */
@@ -18,15 +25,17 @@ export interface ResolvedSparkline {
   /** Source rows corresponding to `values`, including null/error slots. */
   sourceRows: number[]
   group: XlsxSparklineGroup
-  /** Plotted order with hidden points removed. `null` is an empty slot (a gap, or bridged: see `group.displayEmptyCellsAs`
-   * and `bridged`). Slots are kept for empty and error cells, so positions do not close up (`gapRule`, `spanRule`). */
+  /** Plotted order with hidden points removed — and, when `axis` is set, sorted by date (`dateSortRule`), so the
+   * first/last plotted slots are the earliest/latest dated points. `null` is an empty slot (a gap, or bridged: see
+   * `group.displayEmptyCellsAs` and `bridged`). Slots are kept for empty and error cells, so positions do not close
+   * up (`gapRule`, `spanRule`). */
   values: Array<number | null>
   /** Indices into `values` that are null because the cell is an error: always bridged, whatever `displayEmptyCellsAs`
    * says (`cellValueRule`: #N/A is skipped and bridged even with "gap"). */
   bridged: number[]
-  /** Indices into `values` (data order == plotted order until rightToLeft ships in Stage 3). `-1` when there are no points.
-   * First/last are the first/last plotted slot; high/low include every tied point (`tieRule`) and look at this
-   * sparkline's own non-null points, never the scale. */
+  /** Indices into `values` (plotted order; for a date axis the plotted order is date order). `-1` when there are no
+   * points. First/last are the first/last plotted slot; high/low include every tied point (`tieRule`) and look at
+   * this sparkline's own non-null points, never the scale. */
   firstIndex: number
   lastIndex: number
   highIndices: number[]
@@ -34,20 +43,26 @@ export interface ResolvedSparkline {
   /** The scale after individual / group / custom, applied per side. */
   min: number
   max: number
+  /** `dateSlotRule` (Task 10): set only when the group has dateAxis and a usable date range, i.e. the window maps
+   * dates to day slots of the plot box. Absent = even slots (a dateAxis group without a useable range is not drawn). */
+  axis?: SparklineAxis
 }
 /** row → col → resolved sparkline. */
 export type ResolvedSparklines = ReadonlyMap<number, ReadonlyMap<number, ResolvedSparkline>>
 
 const MAX_COLS = 16_384
 
-/** Staging gate (spec §10): features not yet in a merged stage (dateAxis, rightToLeft: Stage 3) are not drawn and raise no diagnostic. */
+/** Staging gate (spec §10): features from a stage that has not merged in are not drawn. Task 10 delivered the date
+ * axis and rightToLeft (they resolve now; geometry mirrors the x), so only a refused group stays staged out. */
 function stagedOut(group: XlsxSparklineGroup): boolean {
-  return group.refused !== undefined || group.dateAxis || group.rightToLeft
+  return group.refused !== undefined
 }
 
-function diagnose(sheet: XlsxSheet, diagnostic: SparklineDiagnostic): void {
+function diagnose(sheet: Pick<SparklineResolveSheet, 'diagnostics' | 'maxDiagnostics'>, diagnostic: SparklineDiagnostic): void {
   const list = sheet.diagnostics ??= []
-  if (!list.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) list.push(diagnostic)
+  if (list.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) return
+  if (sheet.maxDiagnostics !== undefined && list.length >= sheet.maxDiagnostics) return
+  list.push(diagnostic)
 }
 
 /** Lazy per-sheet lookups, built only for sheets a sparkline reads. */
@@ -96,6 +111,25 @@ class SheetAccess {
   }
 }
 
+/** The synchronous cell/visibility surface used by the one resolver on both
+ * resident sheets and worker-prepared paged snapshots. Worker reads populate
+ * this bounded snapshot asynchronously before calling the same resolver. */
+export interface SparklineAccess {
+  rowHidden(row: number): boolean
+  colHidden(col: number): boolean
+  cell(row: number, col: number): XlsxCell | undefined
+}
+export interface SparklineResolveSheet {
+  name: string
+  sparklineGroups?: XlsxSparklineGroup[]
+  mergeRanges: XlsxSheet['mergeRanges']
+  diagnostics?: SparklineDiagnostic[]
+  /** Worker snapshot cap; resident callers omit it to preserve full diagnostics. */
+  maxDiagnostics?: number
+  resolvedSparklines?: ResolvedSparklines
+  access: SparklineAccess
+}
+
 const POINT_EMPTY = Symbol('empty')
 const POINT_SKIPPED = Symbol('skipped')
 type Point = number | typeof POINT_EMPTY | typeof POINT_SKIPPED
@@ -125,10 +159,10 @@ function* cellsInReadingOrder(area: SparklineArea): Generator<[number, number]> 
   else for (let r = area.r0; r <= area.r1; r++) yield [r, area.c0]
 }
 
-interface Partial_ { sparkline: XlsxSparkline; host: { row: number; col: number }; dataSheet: string; sourceRows: number[]; values: Array<number | null>; bridged: number[] }
+interface Partial_ { sparkline: XlsxSparkline; host: { row: number; col: number }; dataSheet: string; sourceRows: number[]; values: Array<number | null>; bridged: number[]; axis?: SparklineAxis }
 
 function plotted(
-  group: XlsxSparklineGroup, area: SparklineArea, access: SheetAccess, cached: boolean,
+  group: XlsxSparklineGroup, area: SparklineArea, access: SparklineAccess, cached: boolean,
 ): { values: Array<number | null>; bridged: number[]; sourceRows: number[] } {
   const values: Array<number | null> = []
   const bridged: number[] = []
@@ -148,6 +182,65 @@ function plotted(
   return { values, bridged, sourceRows }
 }
 
+/** A date cell's number (Excel serial), or undefined: `dateCellRule` — any non-number (text, empty, error, boolean,
+ * or an absent cell) drops the date's point entirely, and a date never converts to 0 the way `pointOf` maps booleans. */
+function dateOf(cell: XlsxCell | undefined, cached: boolean): number | undefined {
+  if (!cell) return undefined
+  const authority = valueAuthority(cell, cached ? 'cached' : 'engine')
+  if (authority.unavailable) return undefined
+  const { value } = authority
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  return value
+}
+
+function plottedDated(
+  group: XlsxSparklineGroup, area: SparklineArea, dateArea: SparklineArea,
+  access: SparklineAccess, dateAccess: SparklineAccess, cached: boolean,
+): { values: Array<number | null>; bridged: number[]; sourceRows: number[]; axis: SparklineAxis } | undefined {
+  // `dateLengthRule`: pair data cell k with date cell k in reading order BEFORE any pruning, keeping the first
+  // min(nData, nDates) pairs; `dateCellRule`: a pair whose date cell has no number is dropped entirely (out of
+  // values and min/max — with no slot left behind, `gapRule`/`spanRule` do not apply to dates).
+  const pairs: Array<{ row: number; col: number; date: number }> = []
+  const dateCells = cellsInReadingOrder(dateArea)
+  for (const [row, col] of cellsInReadingOrder(area)) {
+    const next = dateCells.next()
+    if (next.done) break
+    const [dateRow, dateCol] = next.value
+    const date = dateOf(dateAccess.cell(dateRow, dateCol), cached)
+    if (date === undefined) continue // pair dropped: the number is simply not in values
+    pairs.push({ row, col, date })
+  }
+  // `hiddenRowsRule`/`hiddenColsRule`/`filterHiddenRule` (on the DATA cell): the hidden point is removed — and with
+  // it its date slot, so the span is over the used dates only.
+  const visible = pairs.filter(pair => !(!group.displayHidden && (access.rowHidden(pair.row) || access.colHidden(pair.col))))
+  if (!visible.length) return undefined
+  // `dateSortRule`: plotted order is date order (stable for tied dates), whatever the cell reading order; the
+  // first/last slots therefore fall out as the earliest/latest dated points.
+  visible.sort((a, b) => a.date - b.date)
+  // `dateSlotRule`: the box holds dmax − dmin + 1 equal day slots over the used dates; the point dated d sits at
+  // (d − dmin + ½)·slot of the plot width, one day slot each.
+  let dmin = Infinity, dmax = -Infinity
+  for (const pair of visible) {
+    if (pair.date < dmin) dmin = pair.date
+    if (pair.date > dmax) dmax = pair.date
+  }
+  const slot = 1 / (dmax - dmin + 1)
+  const values: Array<number | null> = []
+  const bridged: number[] = []
+  const sourceRows: number[] = []
+  const positions: number[] = []
+  for (const pair of visible) {
+    sourceRows.push(pair.row)
+    const point = pointOf(access.cell(pair.row, pair.col), cached)
+    if (point === POINT_SKIPPED) { bridged.push(values.length); values.push(null) }
+    // `zeroRule` / `gapRule` / `spanRule` exactly as the undated `plotted`: the data cell keeps its meaning.
+    else if (point === POINT_EMPTY) values.push(group.displayEmptyCellsAs === 'zero' ? 0 : null)
+    else values.push(point)
+    positions.push((pair.date - dmin + 0.5) * slot)
+  }
+  return { values, bridged, sourceRows, axis: { positions, slot } }
+}
+
 function extent(values: ReadonlyArray<number | null>): { min: number; max: number } | undefined {
   let min = Infinity, max = -Infinity
   for (const value of values) {
@@ -159,19 +252,12 @@ function extent(values: ReadonlyArray<number | null>): { min: number; max: numbe
 }
 
 /** Fill `XlsxSheet.resolvedSparklines` on every sheet. `policy.cached` is the workbook's value policy (parse.ts: `valuePolicy === 'cached'`). */
-export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached: boolean }): void {
-  const byName = new Map<string, XlsxSheet>()
+export function resolveSparklineDataSheets(sheets: SparklineResolveSheet[], policy: { cached: boolean }): void {
+  const byName = new Map<string, SparklineResolveSheet>()
   for (const sheet of sheets) {
     const key = sheet.name.toLowerCase()
     if (!byName.has(key)) byName.set(key, sheet)
   }
-  const access = new Map<XlsxSheet, SheetAccess>()
-  const accessOf = (sheet: XlsxSheet): SheetAccess => {
-    let found = access.get(sheet)
-    if (!found) access.set(sheet, found = new SheetAccess(sheet))
-    return found
-  }
-
   for (const sheet of sheets) {
     delete sheet.resolvedSparklines
     if (!sheet.sparklineGroups?.length) continue
@@ -202,10 +288,27 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
           droppedMember = true
           continue
         }
-        const { values, bridged, sourceRows } = plotted(group, area, accessOf(target), policy.cached)
-        // `singlePointRule`: a range with no drawable point draws nothing, and contributes nothing to a group scale.
-        if (!extent(values)) continue
-        parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows, values, bridged })
+        // `dateMissingRule` (Task 10): with dateAxis the sparkline needs a usable date range — one the parse kept,
+        // one-dimensional, on a resolvable sheet (ruling: dateAxisOff/false and an unusable range draw nothing and
+        // raise no diagnostic, unlike the data range).
+        let axis: SparklineAxis | undefined
+        if (group.dateAxis) {
+          const dateArea = group.dateRange
+          if (!dateArea || (dateArea.r0 !== dateArea.r1 && dateArea.c0 !== dateArea.c1)) continue
+          const dateTarget = dateArea.sheet === undefined ? sheet : byName.get(dateArea.sheet.toLowerCase())
+          if (!dateTarget) continue
+          const dated = plottedDated(group, area, dateArea, target.access, dateTarget.access, policy.cached)
+          // No usable date pair, or no numeric point after pairing: nothing to draw or scale, silently. Like the
+          // undated singlePointRule, this is not a dropped group member.
+          if (!dated || !extent(dated.values)) continue
+          axis = dated.axis
+          parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows: dated.sourceRows, values: dated.values, bridged: dated.bridged, axis })
+        } else {
+          const { values, bridged, sourceRows } = plotted(group, area, target.access, policy.cached)
+          // `singlePointRule`: a range with no drawable point draws nothing, and contributes nothing to a group scale.
+          if (!extent(values)) continue
+          parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows, values, bridged })
+        }
       }
       const groupScaled = group.minAxisType === 'group' || group.maxAxisType === 'group'
       if (groupScaled && droppedMember) {
@@ -241,9 +344,29 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
           diagnose(sheet, { kind: 'unsupported', feature: 'sparkline-duplicate-host', message: 'Multiple sparklines target one host cell; the first is kept' })
           continue
         }
-        row.set(part.host.col, { host: part.host, dataSheet: part.dataSheet, sourceRows: part.sourceRows, group, values: part.values, bridged: part.bridged, firstIndex: 0, lastIndex: part.values.length - 1, highIndices, lowIndices, min, max })
+        row.set(part.host.col, { host: part.host, dataSheet: part.dataSheet, sourceRows: part.sourceRows, group, values: part.values, bridged: part.bridged, firstIndex: 0, lastIndex: part.values.length - 1, highIndices, lowIndices, min, max, axis: part.axis })
       }
     }
     if (resolved.size) sheet.resolvedSparklines = resolved
+  }
+}
+
+/** Resident entry point retained for parser callers. */
+export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached: boolean }): void {
+  const access = new Map<XlsxSheet, SheetAccess>()
+  const adapters: SparklineResolveSheet[] = sheets.map(sheet => {
+    let found = access.get(sheet)
+    if (!found) access.set(sheet, found = new SheetAccess(sheet))
+    return {
+      name: sheet.name, sparklineGroups: sheet.sparklineGroups, mergeRanges: sheet.mergeRanges,
+      diagnostics: sheet.diagnostics as SparklineDiagnostic[] | undefined,
+      resolvedSparklines: sheet.resolvedSparklines, access: found,
+    }
+  })
+  resolveSparklineDataSheets(adapters, policy)
+  for (let i = 0; i < sheets.length; i++) {
+    if (adapters[i].resolvedSparklines) sheets[i].resolvedSparklines = adapters[i].resolvedSparklines
+    else delete sheets[i].resolvedSparklines
+    if (adapters[i].diagnostics) sheets[i].diagnostics = adapters[i].diagnostics as XlsxSheet['diagnostics']
   }
 }
