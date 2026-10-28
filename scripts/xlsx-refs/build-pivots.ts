@@ -7,7 +7,7 @@
  * through the AppleScript pivot dictionary, refreshes, and saves as `tests/fixtures/xlsx-pivots/<id>.xlsx`, so
  * every cell, cache and pivot part is Excel's own output.
  *
- *   bun scripts/xlsx-refs/build-pivots.ts [--case id]
+ *   bun scripts/xlsx-refs/build-pivots.ts [--case id] | --measure
  *
  * Needs an awake, unlocked display. Output paths stay inside the worktree, where Excel already has file access.
  */
@@ -68,9 +68,31 @@ export function buildPivotCase(c: RefCase): string {
   return out
 }
 
+/** Measurement workbooks (not reference cases): Excel opens a style input from style-inputs.ts and saves it as is. */
+export const MEASURE_INPUTS = [['pivot-precedence-input.xlsx', 'measure-precedence'], ['pivot-cell-override-input.xlsx', 'measure-cell-override']] as const
+
+export function resaveMeasureInput(input: string, id: string): string {
+  const out = join(PIVOT_DIR, `${id}.xlsx`)
+  const work = join(PIVOT_DIR, `.${id}.input.xlsx`)
+  copyFileSync(join(PIVOT_DIR, 'recipes', input), work)
+  const name = openWorkbook(work)
+  try {
+    if (existsSync(out)) rmSync(out)
+    saveAs(name, out)
+    closeWorkbook(`${id}.xlsx`, false)
+  } finally {
+    rmSync(work, { force: true })
+  }
+  return out
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2)
   const only = args.includes('--case') ? args[args.indexOf('--case') + 1] : undefined
+  if (args.includes('--measure')) {
+    for (const [input, id] of MEASURE_INPUTS) console.log(`built ${resaveMeasureInput(input, id)}`)
+    process.exit(0)
+  }
   let count = 0
   for (const c of REF_CASES) {
     if (c.kind !== 'pivot' || c.build !== 'excel' || (only && c.id !== only)) continue
