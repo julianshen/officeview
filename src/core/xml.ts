@@ -100,6 +100,17 @@ export function registerOrdered(node: XmlNode, ordered: Array<[string, XmlNode]>
   return node
 }
 
+/** Registers namespace metadata for a compact XML node assembled by a streaming reader. */
+export function registerNamespaceAware(node: XmlNode, elementUri: string | undefined, namespaces: ReadonlyMap<string, string>, children: ReadonlyMap<string, readonly XmlNode[]>): XmlNode {
+  elementNamespaceMap.set(node, elementUri)
+  namespaceMap.set(node, namespaces)
+  const childNamespaces = new Map<string, readonly (string | undefined)[]>()
+  for (const [name, nodes] of children) childNamespaces.set(name, nodes.map(elementNamespaceUri))
+  childNamespaceMap.set(node, childNamespaces)
+  namespaceChildrenMap.set(node, children)
+  return node
+}
+
 /** The in-scope namespace bindings of an ordered node. */
 export function namespaceScope(node: XmlNode | undefined): ReadonlyMap<string, string> | undefined {
   return node ? namespaceMap.get(node) : undefined

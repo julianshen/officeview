@@ -4,7 +4,7 @@
  * pulls in the ZIP/XML readers: only the lazy large-source chunk loads this.
  */
 import type { WorkbookFormatting } from '../view/contracts'
-import { DEFAULT_FORMATTING, workbookFormatting } from './pagedFormatting'
+import { DEFAULT_FORMATTING, workbookFormattingWithColorContext } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import { PackageError, isPackageError, throwIfAborted } from '../../core/package-error'
 import { blobRangeSource, openPart, readPartBytes, readZipInventory, type RangeSource, type ZipInventory } from '../../core/zip-stream'
@@ -16,6 +16,7 @@ import { isTablePartSource, parseTableMetadata } from '../formula/tables'
 import type { TableMetadata } from '../formula/types'
 import type { XlsxDrawingAnchors } from '../types'
 import { anchorId, anchorRecord } from '../anchorRecords'
+import type { SheetColorContext } from '../sheetColors'
 import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
 } from '../view/declaredFilters'
@@ -305,14 +306,17 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         /* Unverified optional metadata never upgrades a fixed array (parse.ts). */
       }
     }
+    let sparklineColorContext: SheetColorContext = {}
     try {
       const stylesText = inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined
-      // The theme only colours styles; an unreadable theme keeps the Office default.
+      // The theme colours both cell styles and sparkline groups; an unreadable theme keeps the Office default.
       let themeText: string | undefined
-      if (stylesText !== undefined && themePath && inventory.find(themePath)) {
+      if (themePath && inventory.find(themePath)) {
         try { themeText = await readPlanned(themePath) } catch (error) { if (isPackageError(error) && error.code === 'cancelled') throw error }
       }
-      workbook.formatting = await workbookFormatting(workbookRoot, stylesText, themeText)
+      const parsedFormatting = await workbookFormattingWithColorContext(workbookRoot, stylesText, themeText)
+      workbook.formatting = parsedFormatting.formatting
+      sparklineColorContext = parsedFormatting.colorContext
     } catch (error) {
       if (isPackageError(error) && error.code === 'cancelled') throw error
       // parse.ts tolerates an unreadable styles part: cells keep General format.
@@ -380,6 +384,10 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         dynamicIndices,
         maxTextChars: limits.maxTokenChars,
         maxStructuralRecords: limits.paged.structuralRecords,
+        sparklineColorContext,
+        onSparklineDiagnostic(diagnostic) {
+          workbook.diagnostics.push({ code: diagnostic.feature, message: diagnostic.message, partId: sheet.partPath })
+        },
         declared: container,
         onCell(record) {
           // Charged before the builder retains the record's text and formula metadata.
