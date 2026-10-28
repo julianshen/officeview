@@ -55,7 +55,7 @@ for (const [name, patch] of [
   ['row-stripes-on', { showRowStripes: true }], ['row-stripes-off', { showRowStripes: false }],
   ['column-stripes-on', { showColumnStripes: true }], ['column-stripes-off', { showColumnStripes: false }],
 ] as const) {
-  tableCases.push(table(`table-flag-${name}`, { styleName: 'TableStyleMedium2', flags: { ...flags, ...patch }, headerRowCount: 1, totalsRowCount: name === 'last-column-on' ? 1 : 0 }))
+  tableCases.push(table(`table-flag-${name}`, { styleName: 'TableStyleMedium2', flags: { ...flags, ...patch }, headerRowCount: 1, totalsRowCount: 0 }))
 }
 tableCases.push(table('table-totals-row', { styleName: 'TableStyleMedium2', flags, headerRowCount: 1, totalsRowCount: 1 }))
 tableCases.push(table('table-custom-dxf', { styleName: 'OfficeViewCustom', flags, headerRowCount: 1, totalsRowCount: 0, custom: true }))
@@ -77,11 +77,11 @@ const slicerStyleNames = [
   ...Array.from({ length: 6 }, (_, i) => `SlicerStyleLight${i + 1}`),
   ...Array.from({ length: 6 }, (_, i) => `SlicerStyleDark${i + 1}`), 'SlicerStyleOther1', 'SlicerStyleOther2',
 ]
-const slicerCases: RefCase[] = slicerStyleNames.map(styleName => ({ id: `slicer-${styleName.replace('SlicerStyle', '').toLowerCase()}`, kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName, columnCount: 1, noData: false, startItem: 0, itemCount: 8, scroll: false } satisfies SlicerCase }))
+const slicerCases: RefCase[] = slicerStyleNames.map(styleName => ({ id: `slicer-${styleName.replace('SlicerStyle', '').toLowerCase()}`, kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName, columnCount: 1, noData: false, startItem: 0, itemCount: 4, scroll: false } satisfies SlicerCase }))
 slicerCases.push(
-  { id: 'slicer-two-column', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 2, noData: false, startItem: 0, itemCount: 8, scroll: false } },
-  { id: 'slicer-no-data', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: true, startItem: 0, itemCount: 8, scroll: false } },
-  { id: 'slicer-scrolled', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: false, startItem: 3, itemCount: 8, scroll: true } },
+  { id: 'slicer-two-column', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 2, noData: false, startItem: 0, itemCount: 4, scroll: false } },
+  { id: 'slicer-no-data', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: true, startItem: 0, itemCount: 4, scroll: false } },
+  { id: 'slicer-scrolled', kind: 'slicer', build: 'xml', sheet: 'Report', range: 'A1:L18', appearance: 'screen', spec: { styleName: 'SlicerStyleLight1', columnCount: 1, noData: false, startItem: 2, itemCount: 4, scroll: true } },
 )
 
 const timelineStyleNames = [
