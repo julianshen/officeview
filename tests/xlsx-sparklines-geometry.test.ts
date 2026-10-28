@@ -502,6 +502,23 @@ describe('date axis and right-to-left geometry (Stage 3, Task 10)', () => {
     ])
   })
 
+  it('floors fractional serials to day slots while retaining same-day point order (dateFractionalRule)', () => {
+    const fractionalAxis = { positions: [1 / 12, 1 / 12, 1 / 12, 1 / 4, 5 / 12, 7 / 12, 3 / 4, 11 / 12], slot: 1 / 6 }
+    const barEdges = bars(sparklineGeometry(mk(D, { type: 'column', colors: { series: SER } }, { axis: fractionalAxis }), HOST, CAP))
+      .map(bar => [bar.x, bar.x + bar.w])
+    expect(barEdges).toEqual([
+      [53, 76], [53, 76], [53, 76], [86, 110], [119, 143], [152, 176], [185, 209], [219, 242],
+    ])
+
+    const line = polylines(sparklineGeometry(mk(D, { markers: true }, { axis: fractionalAxis }), HOST, CAP))[0]
+    expect(line.points).toEqual([
+      [64.5, 42.5], [64.5, 19.5], [64.5, 49.5], [97.5, 5.5], [130.5, 56.5], [164.5, 12.5], [197.5, 34.5], [230.5, 27.5],
+    ])
+    const intradayAxis = { positions: Array(8).fill(0.5), slot: 1 }
+    expect(polylines(sparklineGeometry(mk(D, {}, { axis: intradayAxis }), HOST, CAP))[0].points.map(point => point[0]))
+      .toEqual(Array(8).fill(147.5))
+  })
+
   it('moves line vertices off the even slots onto the dated day centres (dateSlotRule)', () => {
     // date-uneven line (individual scale [2, 9]): even-slot spacing would put vertices at 60.5/85.5/110.5…;
     // the dated slots put them at 51.5/57.5/70.5/115.5… (x = (o+½)·P/31 snapped ⌊·⌋+½ for the 1-px stroke).

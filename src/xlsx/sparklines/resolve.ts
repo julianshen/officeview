@@ -217,14 +217,17 @@ function plottedDated(
   // `dateSortRule`: plotted order is date order (stable for tied dates), whatever the cell reading order; the
   // first/last slots therefore fall out as the earliest/latest dated points.
   visible.sort((a, b) => a.date - b.date)
-  // `dateSlotRule`: the box holds dmax − dmin + 1 equal day slots over the used dates; the point dated d sits at
-  // (d − dmin + ½)·slot of the plot width, one day slot each.
+  // `dateFractionalRule`: fractional serials share the slot for floor(d), while
+  // ordering remains by the full serial above (stable ties retain data order).
+  // The box holds floor(dmax) − floor(dmin) + 1 equal day slots and each point
+  // sits at the centre of its whole-day slot.
   let dmin = Infinity, dmax = -Infinity
   for (const pair of visible) {
     if (pair.date < dmin) dmin = pair.date
     if (pair.date > dmax) dmax = pair.date
   }
-  const slot = 1 / (dmax - dmin + 1)
+  const firstDay = Math.floor(dmin), lastDay = Math.floor(dmax)
+  const slot = 1 / (lastDay - firstDay + 1)
   const values: Array<number | null> = []
   const bridged: number[] = []
   const sourceRows: number[] = []
@@ -236,7 +239,7 @@ function plottedDated(
     // `zeroRule` / `gapRule` / `spanRule` exactly as the undated `plotted`: the data cell keeps its meaning.
     else if (point === POINT_EMPTY) values.push(group.displayEmptyCellsAs === 'zero' ? 0 : null)
     else values.push(point)
-    positions.push((pair.date - dmin + 0.5) * slot)
+    positions.push((Math.floor(pair.date) - firstDay + 0.5) * slot)
   }
   return { values, bridged, sourceRows, axis: { positions, slot } }
 }
