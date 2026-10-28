@@ -492,7 +492,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
       // that changed since are still applied, to the view already shown.
-      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen) return { entry: previous }
+      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen && previous.sparklineGen === sparklineGen) return { entry: previous }
       input = previous.input
     }
     // A rebuild for session sizes alone keeps the view buffers it already shows
