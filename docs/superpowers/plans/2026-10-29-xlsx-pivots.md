@@ -209,7 +209,7 @@
 **Interfaces:**
 - Produces:
   - `type TableStyleElementType`, the union of every ECMA-376 §18.18.83 `ST_TableStyleType` value.
-  - `interface DxfStyle { font?: { bold?: boolean; italic?: boolean; underline?: XlsxCellStyle['underline']; strike?: boolean; color?: ColorSpec }; fill?: ColorSpec; border?: Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'horizontal' | 'vertical', { style: string; color?: ColorSpec }>>; numFmt?: { id: number; code?: string } }`
+  - `interface DxfStyle { font?: { name?: string; sizePt?: number; bold?: boolean; italic?: boolean; underline?: XlsxCellStyle['underline']; strike?: boolean; color?: ColorSpec }; fill?: { pattern?: string; fg?: ColorSpec; bg?: ColorSpec }; border?: Partial<Record<'left' | 'right' | 'top' | 'bottom' | 'horizontal' | 'vertical', { style: string; color?: ColorSpec }>>; numFmt?: { id: number; code?: string } }`
   - `type ColorSpec = { rgb: string } | { theme: number; tint?: number } | { indexed: number }`
   - `interface TableStyleDef { name: string; pivot: boolean; table: boolean; elements: Partial<Record<TableStyleElementType, { dxf: DxfStyle; size?: number }>> }`
   - `interface StylesExtras { dxfs: DxfStyle[]; tableStyles: Map<string, TableStyleDef>; defaultTableStyle?: string; defaultPivotStyle?: string; slicerStyles: Map<string, SlicerStyleDef> }`
@@ -221,7 +221,9 @@
   - precedence: `wholeTable` < `firstRowStripe` < `firstColumn` < `headerRow` per §18.8.40;
   - an inner `horizontal` border becomes a top/bottom edge on interior cells only;
   - own-`s=` layering per the Task 3 measurement;
-  - underline, strike and indent change the painted pixels, using a node-canvas probe as the existing render tests do.
+  - underline, strike and indent change the painted pixels, using a node-canvas probe as the existing render tests do;
+  - a custom dxf that sets font name, font size and a solid pattern fill resolves to them;
+  - a non-solid pattern fill is painted as its foreground colour, with the `table-style-pattern-fill` diagnostic. This follows the cell painter, which paints solid fills only. **[call]** (codex plan review 2)
 - [ ] **Step 2:** Run the tests and confirm they fail.
 - [ ] **Step 3:** Implement the code.
 - [ ] **Step 4:** Run the tests until they pass, then run the full gates. Commit.
@@ -278,7 +280,8 @@
   - stripes with `size` 2;
   - a table with no `styleInfo.name` paints exactly as today (pixel-equal);
   - a sheet without tables never loads the engine (spy on the loader);
-  - `renderSheet` without `preloadTableStyles` paints unstyled and adds the `table-style-engine-unavailable` diagnostic.
+  - `renderSheet` without `preloadTableStyles` paints unstyled and adds the `table-style-engine-unavailable` diagnostic;
+  - a plain worksheet, and a workbook with only unstyled tables, are pixel-equal to `main` and never load the chunk (codex plan review).
 - [ ] **Step 2:** Run the tests and confirm they fail.
 - [ ] **Step 3:** Implement the code.
 - [ ] **Step 4:** Run the tests until they pass. Run the full gates and the eager gates. Hand off uncommitted.
@@ -286,7 +289,8 @@
 ### Task 8: Table styles on the paged path (codex; review: agy + Claude sonnet)
 
 **Files:**
-- Modify: `src/xlsx/view/pagedSource.ts`, around the `readDrawings` and sparkline seams at about 531 and 583, adding a `SourceReadQuery` op `regionStyles`.
+- Modify: `src/xlsx/view/contracts.ts` (486–510), adding the `SourceReadQuery` op `regionStyles` and a bounded `SourceReadResult` variant for it. The result carries the sheet identity and the source stamp, and is accepted only if the stamp is still current.
+- Modify: `src/xlsx/view/pagedSource.ts`, around the `readDrawings` and sparkline seams at about 531 and 583, implementing `regionStyles`.
 - Modify: `src/worker/viewerSession.ts` and `src/xlsx/view/viewerRemoteSource.ts`, adding a main-thread cache for the remote region layer under a byte grant (precedent: `RemoteSparklineCache`).
 - Modify: `src/components/xlsx/InteractiveSheetDoc.tsx`, so `styleOf` becomes position-aware where region styles exist.
 - Test: `tests/xlsx-table-styles-paged.test.ts`.
@@ -299,7 +303,9 @@
 - [ ] **Step 1:** Write the failing tests:
   - paged-vs-resident pixel identity for three table cases;
   - the grant is refused over the limit, which gives the `table-style-reply-limit` diagnostic and an unstyled paint;
-  - the cache is released on sheet close and document close.
+  - the cache is released on sheet close and document close;
+  - a stale reply (an older stamp) is discarded and refunded;
+  - an aborted read refunds its grant.
 - [ ] **Step 2:** Run the tests and confirm they fail.
 - [ ] **Step 3:** Implement the code.
 - [ ] **Step 4:** Run the tests until they pass. Run the full gates. Hand off uncommitted.
@@ -381,7 +387,8 @@
 
 **Files:**
 - Create: `src/xlsx/pivots/slicers/model.ts`, `parseSlicers.ts`, `parseTimelines.ts` and `paint.ts`.
-- Modify: `src/drawing/coverage.ts`, where `XLSX_REQUIREMENTS` is at 110: accept the `sle` and `tsle` Choices only when the `pivots` chunk can paint them. Otherwise the Fallback paints, as today.
+- Modify: `src/drawing/coverage.ts` (`XLSX_REQUIREMENTS` at 110, and `supportedChoiceRequirements()`): make the supported set a per-call input. Drawing resolution passes `sle` and `tsle` only once `ensurePivotEngine()` has resolved. Otherwise the Fallback is chosen, which covers exports and direct `renderSheet` calls that did not preload the chunk.
+  - Include the content-type and drawing-content files this touches. Test both: with the chunk loaded the Choice is taken; without it, the Fallback is drawn.
 - Modify: `src/xlsx/drawing.ts`, so a slicer or timeline graphic frame becomes a drawing whose content kind is `'slicer' | 'timeline'`, painted through the lazy painter.
 - Test: `tests/xlsx-slicers-display.test.ts`.
 
@@ -405,6 +412,7 @@
 ### Task 13: Pivots, slicers and timelines on the paged path (codex; review: agy + Claude sonnet)
 
 **Files:**
+- Modify: `src/xlsx/view/contracts.ts`, adding the op `pivotDisplay` and its bounded `SourceReadResult` variant, with the same identity, stamp and grant lifecycle as Task 8.
 - Modify: `src/xlsx/view/pagedSource.ts`, adding the `SourceReadQuery` op `pivotDisplay`. The worker runs `loadPivotWorkbook` over `RangePackage`, then `savedPivotRoles`, `pivotButtons` and the slicer and timeline parsers, and ships the roles as region styles (extending Task 8's reply), the buttons, and the slicer and timeline models.
 - Modify: `src/worker/viewerSession.ts`, `src/xlsx/view/viewerRemoteSource.ts` and `src/xlsx/view/pagedDrawings.ts`, so slicer and timeline drawings are resolved on the paged path.
 - Test: `tests/xlsx-pivots-paged.test.ts`.
@@ -437,7 +445,7 @@
 
 ## Stage 2: engine (PR 2) — refined at stage start
 
-The interfaces are fixed now; the steps are written in the stage-start revision.
+The steps are written in the stage-start revision. `RecordStore` and `PivotViewState` are provisional until the Stage 1 corpus and the Task 3/14 measurements show the real encodings.
 
 - **Task 15. Record store (codex).**
   - `decodeRecords(defn: PivotCacheDefinition, events: XmlEvents, budget: Budget): RecordStore`, columnar: `Uint32Array` item indices per shared field, typed value tables for inline fields.
