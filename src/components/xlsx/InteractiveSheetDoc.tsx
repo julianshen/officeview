@@ -85,7 +85,7 @@ import { themeRootProps, type ThemeMode } from '../theme'
 import { warnIfStylesMissing } from '../styleWarning'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
-import { documentWithSparklines, sheetWithSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
+import { documentWithSparklines, sheetWithSparklines, sheetWithoutResolvedSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
@@ -313,6 +313,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
   const remote = isRemoteWorkbook(source) ? source : null
+  useEffect(() => {
+    if (!remote) return
+    return remote.subscribeSparklineEvictions(sheetId => {
+      const retained = entries.get(sheetId)
+      if (retained) retained.sheet = sheetWithoutResolvedSparklines(retained.sheet)
+    })
+  }, [remote, entries])
   const hasResidentSparklines = useMemo(() => doc.sheets.some(sheet => Boolean(sheet.resolvedSparklines?.size)), [doc])
   const hasActiveWorkerSparklines = Boolean(remote && remote.layout(activeSheetId).hasSparklines)
   const hasResolvedSparklines = hasResidentSparklines || hasActiveWorkerSparklines

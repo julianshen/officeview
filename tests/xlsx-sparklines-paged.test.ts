@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import JSZip from 'jszip'
-import { RemoteSparklineCache, sparklineNotices, type SparklineHost } from '../src/worker/viewerRemoteSparklines'
+import { RemoteSparklineCache, sheetWithSparklines, sheetWithoutResolvedSparklines, sparklineNotices, type SparklineHost } from '../src/worker/viewerRemoteSparklines'
 import { initialIdentity, transferablesOf } from '../src/worker/viewerProtocol'
 import type { WorkerCommand, WorkerReply, SheetSparklines } from '../src/xlsx/view/contracts'
+import type { XlsxSparklineGroup } from '../src/xlsx/sparklines/model'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
@@ -66,6 +67,32 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
 }
 
 describe('paged sparkline transfer cache', () => {
+  it('does not materialize a large data range for a sparkline with no host', async () => {
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(fixtureBytes('line-basic')).buffer as ArrayBuffer]) }, { docId: 'spark-invalid-host', profile: 'D' })
+    try {
+      await session.done
+      const source = createPagedWorkbookSource(session), sheet = source.sheets[0], store = source.store(sheet.sheetId)
+      type InternalStore = {
+        sheet: { metadata: { sparklineGroups: XlsxSparklineGroup[] } }
+        readSparklineCell(at: { row: number; col: number }, options: { signal: AbortSignal; stamp: typeof store.stamp }): Promise<unknown>
+      }
+      const internal = store as unknown as InternalStore
+      const group = internal.sheet.metadata.sparklineGroups[0]
+      expect(group).toBeDefined()
+      const sparkline = group.sparklines[0]
+      internal.sheet.metadata.sparklineGroups = [{ ...group, sparklines: [{ ...sparkline, host: undefined, data: { ...sparkline.data!, r0: 0, r1: 4_999, c0: 0, c1: 0 } }] }]
+      let reads = 0, reserved = 0
+      internal.readSparklineCell = async () => { reads++; return { kind: 'unknown' } }
+
+      const result = await store.readSparklines!({ signal: new AbortController().signal, stamp: store.stamp }, 64 * 1024 * 1024, { set: bytes => { reserved += bytes; return true } })
+
+      expect(result.sparklines).toEqual([])
+      expect(reads).toBe(0)
+      expect(reserved).toBeGreaterThan(0)
+      await source.release()
+    } finally { await session.release() }
+  })
+
   it('skips zero-area host boxes but reserves null for oversized merges', () => {
     expect(sparklineInvalidationBox(10, 10, [], 1)).toBeUndefined()
     expect(sparklineInvalidationBox(10, 20, [], 1)).toBeUndefined()
@@ -152,6 +179,11 @@ describe('paged sparkline transfer cache', () => {
     const internals = remote as unknown as { completed: Set<string>; structures: Map<string, { gen: number; merges: never[]; state: 'done' }>; identities: Map<string, ReturnType<RemoteWorkbook['identity']>>; sparklineCache: RemoteSparklineCache }
     for (const id of ['a', 'b', 'c']) { internals.completed.add(id); internals.structures.set(id, { gen: 0, merges: [], state: 'done' }) }
     Object.defineProperty(internals.sparklineCache, 'budgetBytes', { value: 1000 })
+    const retained = new Map<string, ReturnType<typeof sheetWithSparklines>>()
+    const unsubscribeEvictions = remote.subscribeSparklineEvictions(sheetId => {
+      const sheet = retained.get(sheetId)
+      if (sheet) retained.set(sheetId, sheetWithoutResolvedSparklines(sheet))
+    })
     const bytes = () => remote.mainLedger.snapshot().byPool.sparklines
     const waitReady = async (id: string) => { remote.sparklines(id); await new Promise(resolve => setTimeout(resolve, 5)); return remote.sparklines(id) }
 
@@ -190,11 +222,47 @@ describe('paged sparkline transfer cache', () => {
 
     internals.identities.set('a', old)
     expect((await waitReady('a')).state).toBe('ready')
+    retained.set('a', sheetWithSparklines({ name: 'A', rows: [], cols: [], merges: [], mergeRanges: [] }, remote.sparklines('a')))
+    expect(retained.get('a')?.resolvedSparklines).toBeDefined()
     const oneEntry = bytes()
     expect((await waitReady('c')).state).toBe('ready') // C evicts A under the 1,000-byte cache cap.
     expect(bytes()).toBe(oneEntry)
+    expect(retained.get('a')?.resolvedSparklines).toBeUndefined()
+    unsubscribeEvictions()
     await remote.close()
     expect(bytes()).toBe(0)
+  })
+
+  it('drops an evicted sheet entry map when its LRU charge is released', async () => {
+    const group = { type: 'line' as const, lineWeightPt: 0.75, displayEmptyCellsAs: 'gap' as const, markers: false, high: false, low: false, first: false, last: false, negative: false, displayXAxis: false, displayHidden: false, dateAxis: false, rightToLeft: false, minAxisType: 'individual' as const, maxAxisType: 'individual' as const, colors: {}, sparklines: [] }
+    const result: SheetSparklines = {
+      sparklines: [{ host: { row: 0, col: 9 }, dataSheet: 'sheet', sourceRows: [0], groupIndex: 0, values: new Float64Array([7]), bridged: [], firstIndex: 0, lastIndex: 0, highIndices: [], lowIndices: [], min: 7, max: 7 }],
+      groups: [group], diagnostics: [],
+    }
+    let retainedSheet: ReturnType<typeof sheetWithSparklines> | undefined
+    const evictions: string[] = []
+    const identity = (id: string) => initialIdentity('spark-lru', id)
+    const cache = new RemoteSparklineCache({
+      identity, loadState: () => ({ completeness: 'complete' }), hasSparklines: () => true, grant: () => 4096,
+      releaseGrant: () => {}, admitDecoded: () => () => {}, release: () => {}, nextRequestId: (() => { let id = 0; return () => `${++id}` })(),
+      changed: (id, _hosts, reason?: string) => {
+        if (reason !== 'evicted') return
+        evictions.push(id)
+        if (id === 'a' && retainedSheet) retainedSheet = sheetWithoutResolvedSparklines(retainedSheet)
+      },
+      request: async command => ({ kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: command.owner, replyBytes: 128, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result } } } as WorkerReply<'read'>),
+    }, 1200)
+    const ready = async (id: string) => { const pending = cache.get(id); await new Promise(resolve => setTimeout(resolve, 0)); return pending }
+    const a = await ready('a')
+    retainedSheet = sheetWithSparklines({ name: 'A', rows: [], cols: [], merges: [], mergeRanges: [] }, a)
+    expect(retainedSheet.resolvedSparklines).toBeDefined()
+    await ready('b')
+
+    expect(evictions).toContain('a')
+    expect(retainedSheet.resolvedSparklines).toBeUndefined()
+    expect(cache.retainedEntries).toBe(1)
+    expect(cache.retainedBytes).toBe(904)
+    cache.close()
   })
 
   it('does not request until a receiver grant is available', async () => {
@@ -209,6 +277,27 @@ describe('paged sparkline transfer cache', () => {
     expect(cache.get('sheet').state).toBe('waiting')
     await microtask()
     expect(requests).toEqual([])
+    cache.close()
+  })
+
+  it('notifies subscribers when a completed refusal has diagnostics but no hosts', async () => {
+    const identity = initialIdentity('doc', 'refused')
+    const changed: Array<{ sheetId: string; hosts: readonly { row: number; col: number }[] }> = []
+    const message = 'Sparkline data exceeds the receiver memory grant'
+    const host: SparklineHost = {
+      identity: () => identity, loadState: () => ({ completeness: 'complete' }), hasSparklines: () => true,
+      grant: () => 4096, releaseGrant: () => {}, admitDecoded: () => () => {}, release: () => {}, nextRequestId: () => 'refused',
+      changed: (sheetId, hosts) => changed.push({ sheetId, hosts: [...hosts] }),
+      request: async command => ({ kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: identity, replyBytes: 128, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result: {
+        sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message }],
+      } } } } as WorkerReply<'read'>),
+    }
+    const cache = new RemoteSparklineCache(host)
+    cache.get('refused')
+    await microtask()
+
+    expect(sparklineNotices(cache.get('refused'))).toEqual([message])
+    expect(changed).toEqual([{ sheetId: 'refused', hosts: [] }])
     cache.close()
   })
 

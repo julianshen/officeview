@@ -8,6 +8,7 @@ import type { CommandOf } from './viewerProtocol'
 const RETRY_MS = 250
 const MAX_ATTEMPTS = 20
 const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
+export type SparklineChangeReason = 'updated' | 'evicted' | 'status'
 export interface SparklineHost {
   identity(sheetId: string): CacheIdentity
   loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete' }
@@ -20,7 +21,7 @@ export interface SparklineHost {
   request(command: CommandOf<'read'>, signal?: AbortSignal): Promise<WorkerReply<'read'> | symbol>
   nextRequestId(): string
   release(reply: WorkerReply<'read'>): void
-  changed(sheetId: string, hosts: readonly { row: number; col: number }[]): void
+  changed(sheetId: string, hosts: readonly { row: number; col: number }[], reason?: SparklineChangeReason): void
 }
 export interface PagedSheetSparklines {
   readonly state: 'waiting' | 'loading' | 'ready' | 'failed'
@@ -88,7 +89,7 @@ export class RemoteSparklineCache {
     if (entry.owner && !sameOwner(entry.owner, owner)) {
       const hosts = entry.resolved ? [...entry.resolved.values()].flatMap(row => [...row.values()].map(spark => spark.host)) : []
       this.reset(entry); entry.gen++
-      if (hosts.length) queueMicrotask(() => { if (!this.closed) this.host.changed(sheetId, hosts) })
+      queueMicrotask(() => { if (!this.closed) this.host.changed(sheetId, hosts, 'updated') })
     }
     if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
     return entry
@@ -101,7 +102,7 @@ export class RemoteSparklineCache {
     if (!entry) return
     const hosts = entry.resolved ? [...entry.resolved.values()].flatMap(row => [...row.values()].map(spark => spark.host)) : []
     this.reset(entry); entry.gen++
-    if (hosts.length) this.host.changed(sheetId, hosts)
+    this.host.changed(sheetId, hosts, 'updated')
   }
   close(): void {
     if (this.closed) return
@@ -131,6 +132,7 @@ export class RemoteSparklineCache {
     catch (cause) {
       this.host.releaseGrant(requestId); entry.controller = undefined; entry.state = 'failed'
       entry.diagnostics = [{ kind: 'unsupported', feature: 'sparkline-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Sparkline request could not be sent' }]
+      this.host.changed(sheetId, [], 'status')
       return
     }
     const out = await pending
@@ -147,8 +149,12 @@ export class RemoteSparklineCache {
       this.host.release(out)
       if (out.kind === 'error' && !out.retryable) {
         entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'sparkline-read-failed', message: out.diagnostics[0]?.message ?? `Sparkline read failed (${out.code})` }]
+        this.host.changed(sheetId, [], 'status')
       } else if (entry.attempts < MAX_ATTEMPTS) this.retry(sheetId, entry, seq)
-      else { entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'sparkline-read-failed', message: 'Sparkline read could not complete' }] }
+      else {
+        entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'sparkline-read-failed', message: 'Sparkline read could not complete' }]
+        this.host.changed(sheetId, [], 'status')
+      }
       return
     }
     if (data?.diagnostics.some(item => item.feature === 'sparkline-data-unavailable')) {
@@ -157,13 +163,17 @@ export class RemoteSparklineCache {
       if (pending.some(id => this.host.loadState(id).completeness === 'incomplete')) {
         entry.state = 'failed'
         entry.diagnostics = [data.diagnostics.find(item => item.feature === 'sparkline-data-unavailable') ?? data.diagnostics[0] ?? { kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is incomplete' }]
+        this.host.changed(sheetId, [], 'status')
       } else if (pending.some(id => this.host.loadState(id).completeness === 'loading')) {
         const delay = entry.sourceRetryMs ?? RETRY_MS
         entry.sourceRetryMs = Math.min(4_000, delay * 2)
         this.retry(sheetId, entry, seq, delay)
       }
       else if (entry.attempts < MAX_ATTEMPTS) this.retry(sheetId, entry, seq)
-      else { entry.state = 'failed'; entry.diagnostics = [data.diagnostics.find(item => item.feature === 'sparkline-data-unavailable') ?? data.diagnostics[0] ?? { kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is unavailable' }] }
+      else {
+        entry.state = 'failed'; entry.diagnostics = [data.diagnostics.find(item => item.feature === 'sparkline-data-unavailable') ?? data.diagnostics[0] ?? { kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is unavailable' }]
+        this.host.changed(sheetId, [], 'status')
+      }
       return
     }
     const result = data ?? { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'sparkline-resource-limit', message: 'Sparkline reply exceeded its receiver grant' }] }
@@ -175,6 +185,7 @@ export class RemoteSparklineCache {
     if (bytes + decodedBytes > this.budgetBytes) {
       this.host.release(out); entry.state = 'failed'
       entry.diagnostics = [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline data exceeds the main-thread cache budget' }]
+      this.host.changed(sheetId, [], 'status')
       return
     }
     for (const [id, other] of this.entries) {
@@ -182,12 +193,13 @@ export class RemoteSparklineCache {
       if (other === entry || other.state !== 'ready') continue
       const oldHosts = other.resolved ? [...other.resolved.values()].flatMap(row => [...row.values()].map(spark => spark.host)) : []
       this.reset(other); other.gen++
-      if (oldHosts.length) this.host.changed(id, oldHosts)
+      this.host.changed(id, oldHosts, 'evicted')
     }
     const decodedRelease = decodedBytes > 0 ? this.host.admitDecoded(sheetId, requestId, decodedBytes) : undefined
     if (decodedBytes > 0 && !decodedRelease) {
       this.host.release(out); entry.state = 'failed'
       entry.diagnostics = [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline data exceeds the main-thread memory budget' }]
+      this.host.changed(sheetId, [], 'status')
       return
     }
     entry.resolved = rebuildResolvedSparklines(result)
@@ -199,7 +211,7 @@ export class RemoteSparklineCache {
     entry.state = out.kind === 'quota' ? 'failed' : 'ready'
     entry.gen++
     const hosts = result.sparklines.map(spark => spark.host)
-    if (hosts.length) this.host.changed(sheetId, hosts)
+    this.host.changed(sheetId, hosts, hosts.length ? 'updated' : 'status')
   }
   private retry(sheetId: string, entry: Entry, seq: number, delay = RETRY_MS): void {
     entry.state = 'waiting'
@@ -212,6 +224,12 @@ export function sheetWithSparklines(base: XlsxSheet, content: PagedSheetSparklin
   const diagnostics = [...(base.diagnostics ?? [])]
   for (const item of content.diagnostics) if (!diagnostics.some(found => found.feature === item.feature && found.message === item.message)) diagnostics.push(item)
   return { ...base, resolvedSparklines: content.resolved, diagnostics }
+}
+/** Drops a retained display sheet's reference to decoded sparkline arrays after its cache entry is evicted. */
+export function sheetWithoutResolvedSparklines(sheet: XlsxSheet): XlsxSheet {
+  if (!sheet.resolvedSparklines) return sheet
+  const { resolvedSparklines: _released, ...base } = sheet
+  return base
 }
 export function documentWithSparklines(doc: XlsxDocument, index: number, content: PagedSheetSparklines): XlsxDocument {
   if (content.state !== 'ready' || !doc.sheets[index]) return doc

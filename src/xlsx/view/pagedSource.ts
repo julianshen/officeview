@@ -636,7 +636,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const requested = new Map<string, Set<string>>()
     let collected = 0
     for (const group of groups) for (const spark of group.sparklines) {
-      if (!spark.data) continue
+      if (!spark.host || !spark.data) continue
       const target = spark.data.sheet === undefined ? this.sheet : byName.get(spark.data.sheet.toLowerCase())
       if (!target) continue
       const addRange = (sheet: PagedSheet, rect: { r0: number; r1: number; c0: number; c1: number }) => {
