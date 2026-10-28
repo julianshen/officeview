@@ -61,7 +61,7 @@ describe('xlsx sparkline reference workbooks', () => {
 
   it('covers every Stage 3 measure item', () => {
     expect(SPARKLINE_CASES.filter(c => c.stage === 3).map(c => c.id)).toEqual([
-      'date-uneven', 'date-unsorted', 'date-missing-range', 'date-length-mismatch', 'date-text', 'rtl-line', 'rtl-hl-fl', 'rtl-column',
+      'date-uneven', 'date-unsorted', 'date-missing-range', 'date-length-mismatch', 'date-text', 'date-fractional', 'rtl-line', 'rtl-hl-fl', 'rtl-column',
     ])
   })
 
