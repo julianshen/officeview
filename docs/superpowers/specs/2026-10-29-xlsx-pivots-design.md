@@ -1,6 +1,11 @@
 # XLSX Pivot Tables, Pivot Charts, Slicers and Timelines — Design Spec
 
-**Status:** draft 2. Builder check folded in (§7.7–§7.10) and owner answers recorded (§11); two reviewers (different model families) next.
+**Status:** draft 3.
+- Builder check folded in (§7.7–§7.10); owner answers recorded (§11).
+- Round 1: codex (CODEX-1 to -8) and agy (AGY-1 to -12) both REQUEST CHANGES. Accepted findings are marked **[rev]** with their id.
+  - AGY-5 is rejected: sparklines are on `main` at `ba8abf83`, and the cited lines are correct there.
+  - AGY-10 is rejected: MS-XLSX `CT_Slicer` names the cache with the attribute `cache`.
+  - AGY-3's first point is rejected: an unknown function keeps the cell's saved value (`docs/formula-compatibility.md`), so `GETPIVOTDATA` does not show `#NAME?` on open.
 **Date:** 2026-10-29 · **Baseline:** `main` @ `ba8abf83` (v0.10.0).
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -83,6 +88,7 @@ Pivot data is spread over several parts. A builder should read ECMA-376 Part 1 �
   - `tableStyles`: custom table, pivot and slicer styles, plus `defaultPivotStyle`. The x14 `slicerStyles` extension holds custom slicer styles.
   - **Built-in pivot styles are not in the file.** PivotStyleLight1–28, Medium1–28 and Dark1–28 must be authored in code. They are defined relative to the theme, and ECMA-376 ships `presetTableStyles.xml` with their definitions. **[measure]** Check them against Excel renders.
 - **Pivot charts:** a normal chart part plus `c:pivotSource` (pivot name, `fmtId`) and `c:pivotFmts`. Series refs point into the pivot's output range. Field buttons come from the x14 `pivotOptions` (`dropZoneFilter`, `dropZoneCategories`, `dropZoneData`, `dropZoneSeries`, `dropZonesVisible`).
+- **Worksheet `extLst`:** `x14:slicerList` and `x15:timelineRefs` list a sheet's slicer and timeline parts through its relationships. This is how a sheet's controls are tied to their parts and caches. **[rev]** (CODEX-6)
 - **Slicers:**
   - `xl/slicers/slicerN.xml`: caption, cache, `columnCount`, `rowHeight`, `style`, `showCaption`, `startItem`, `lockedPosition`.
   - `xl/slicerCaches/slicerCacheN.xml`: the pivot tables it drives; tabular data with sort order, `crossFilter` and `showMissing`; and items with `x`, `s` selected and `nd` no-data. A table slicer instead points at an Excel table column.
@@ -93,7 +99,7 @@ Pivot data is spread over several parts. A builder should read ECMA-376 Part 1 �
 
 - **Parsing:**
   - Nothing reads pivot, slicer or timeline parts, `dxfs` or `tableStyles`.
-  - `parseStyles` (`src/xlsx/parse.ts:93`) reads only numFmts, fonts, fills, borders and cellXfs. `XlsxCellStyle` has no underline, font name or indent.
+  - `parseStyles` (`src/xlsx/parse.ts:93`) reads the numFmts, fonts, fills, borders and cellXfs collections, plus the `indexedColors` palette (`parse.ts:98-103`), which style work should reuse. **[rev]** (CODEX-7) `XlsxCellStyle` has no underline, font name or indent.
   - Excel table (ListObject) styles are not rendered.
 - **Slicers today:** `XLSX_REQUIREMENTS` (`src/drawing/coverage.ts:110`) lacks the slicer and timeline namespaces, so the fallback shape paints.
 - **Sparklines are the template:**
@@ -119,7 +125,7 @@ Pivot data is spread over several parts. A builder should read ECMA-376 Part 1 �
   - `c:pivotSource` is unparsed.
 - **Large files:**
   - Non-drawing parts over 4 MiB (2 MiB on mobile) route the workbook to the paged path (`admission.ts`).
-  - `RangePackage` caps parts at 8 MiB, so cache records must be *streamed*, using `openPart` and `tokenizeBytes` with `sharedStringEvents` as the template.
+  - `RangePackage`'s drawing-part cap is 8 MiB on desktop and 4 MiB on mobile (`importSession.ts:71-72,107-108`). Cache records need their own cap (§6.2) and must be *streamed* **[rev]** (CODEX-8), using `openPart` and `tokenizeBytes` with `sharedStringEvents` as the template.
   - Worker replies are grant-checked against the memory ledger.
   - With no worker route, a paged decision falls back to a full main-thread `parseXlsx`, so pivot loading must never live inside `parseXlsx`.
 - **Eager budget:** a 38,720 B gzip ceiling. Usage was about 35.95 KB after sparklines, which leaves about 2.7 KB.
@@ -142,7 +148,7 @@ Pivot data is spread over several parts. A builder should read ECMA-376 Part 1 �
 | Grouping | Saved date groups (years, quarters, months, days, hours, minutes, seconds) and number range groups; manual (discrete) groups | Group or ungroup a date or number field; change the grouping levels or interval |
 | Calculated | Saved output of calculated fields and items | Recomputed when the pivot changes (§5.6); no editing of their formulas |
 | Pivot charts | Chart from the saved cache, with field buttons per `pivotOptions` | The chart follows its pivot; its field buttons open the same filter and sort menus |
-| Slicers | Drawn per slicer style, columns, item states (selected, unselected, no data) and scroll position | Click to select, Ctrl/⌘-click for multi-select, clear filter; one slicer driving several pivots; cross-filter "no data" states |
+| Slicers | Drawn per slicer style, columns, item states (selected, unselected, no data) and scroll position | Click to select, Ctrl/⌘-click or the header's Multi-Select toggle (for touch) for multi-select **[rev]** (AGY-7), clear filter; one slicer driving several pivots; cross-filter "no data" states |
 | Timelines | Drawn per timeline style and level, with the selected period | Select a period by click or drag; change the level (years, quarters, months, days); clear |
 | Table slicers | Slicers on Excel tables, drawn | Click filters the table's rows through the existing filter engine **[call]** |
 | Dependent cells | — | Formulas that read the pivot (cell refs, `GETPIVOTDATA`) and charts on those cells update or are marked stale (§7.5) |
@@ -192,7 +198,7 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
   - % of, % of parent row total, % of parent column total, % of parent total;
   - difference from, % difference from;
   - running total in, % running total in;
-  - rank smallest to largest, rank largest to smallest;
+  - rank smallest to largest, rank largest to smallest, where tie handling is **[measure]**: competition ranking (1, 2, 2, 4) or dense ranking (1, 2, 2, 3) **[rev]** (AGY-12);
   - index.
 
   Previous and next base items are encoded as `baseItem` 1048828 and 1048829. Division by zero gives `#DIV/0!`, shown as `errorCaption` if set. **[measure]**
@@ -207,7 +213,9 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
 ### 5.5 Filters
 - **Label filters** (`filters/filter` with `type` caption*): string comparisons that are case-insensitive, with wildcards.
 - **Value filters** (value*): test each item's aggregate on `iMeasureFld`.
-- **Date filters** (date*, including dynamic ones such as "this month"): dynamic date filters are evaluated against the **saved file's reference date, not today**. **[call]** This reproduces the saved output; a "relative to today" option is left out.
+- **Date filters** (date*): fixed-date filters (between, before, after) evaluate normally.
+  - **Dynamic filters** ("this month", "yesterday" and similar): a pivot that has one is not interactive until Excel's behaviour is measured. **[rev]** (CODEX-4)
+  - **What to measure:** which reference date Excel uses (open time, the cache's `refreshedDate`, or the saved membership), and when it re-evaluates (on refresh only, or on any re-layout). Use an Excel reference reopened across a month boundary. **[measure]**
 - **Top 10** (`count`, `percent`, `sum`): ties are handled per Excel. **[measure]**
 - **Order:** filters apply in `evalOrder`.
 - **Page fields:** each filters by one item or a set of items.
@@ -215,7 +223,7 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
 ### 5.6 Calculated fields and items
 - **Calculated fields:** a calculated field's formula combines *sums* of other fields, evaluated per cell after aggregation, as Excel does. They use the existing formula engine through `evaluateFormula` with field names bound as names.
   - If the formula uses a function or construct the engine cannot evaluate, that pivot is not interactive (§7.6).
-  - Quoted field names with spaces must lex correctly; this is untested today.
+  - Excel quotes field names that contain spaces (`='Unit Price'*Quantity`). The lexer (`src/xlsx/formula/lexer.ts:350`) treats a quoted run only as a sheet name before `!`, so calculated-field evaluation needs a lexer mode where a quoted run not followed by `!` is a field name. This mode is scoped to pivot formulas. **[rev]** (AGY-8)
 - **Calculated items:** a calculated item is a formula over items of one field, evaluated per record group. Its subtotal and grand-total interactions are subtle.
   - **[call]** Calculated items are recomputed only if the Stage 2 oracle tests pass on Excel-made references.
   - Until then, a pivot containing calculated items is not interactive.
@@ -229,22 +237,30 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
 - **Captions:** the "Row Labels" and "Column Labels" header captions, or field names when headers are shown; the data caption.
 - **Style roles:** each output cell gets one, such as header row, first column, subtotal row 1–3, grand-total row, row and column stripes, page field labels and values, or blank row. The style engine (§6.5) resolves roles to formats.
 - **Placement:** the pivot keeps its top-left anchor from `location`. Its new size follows from the layout.
+- **Merged labels:** with "merge and center cells with labels" (`mergeItem`), the layout includes the merged label rectangles. They are applied through the overlay's merge set, replacing the pivot region's saved merges. **[rev]** (AGY-6)
 
 ## 6. Architecture
 
 ### 6.1 Model (eager, tiny)
-- **What the eager parse records:** for each sheet, the pivot locations (sheet, rectangle, part path) and each slicer and timeline anchor.
+- **What the eager parse records:** for each sheet:
+  - the pivot locations (sheet, rectangle, part path);
+  - each slicer and timeline anchor;
+  - each Excel table's `tableStyleInfo` (style name and flags), which the existing `parseTableMetadata` skips today. **[rev]** (AGY-2)
 - **What it skips:** no definitions or records. That is enough to know a sheet has pivots and where they are.
 - **Size:** the eager stub must stay within the remaining budget (§8).
 
 ### 6.2 Parsing (lazy chunk `pivots`)
-- **The chunk** holds the full definition parsers (cache definition, pivot definition, slicer and timeline parts, styles `dxfs` and `tableStyles`), the built-in style tables, the engine, and the painters. It loads on the first sheet that has a pivot, slicer or timeline.
+- **Two lazy chunks. [rev]** (AGY-2)
+  - **`tableStyles`** holds the style engine, the built-in table, pivot, slicer and timeline style tables, and the `dxfs`/`tableStyles` parser. It loads for the first sheet with a styled Excel table, a pivot, a slicer or a timeline.
+  - **`pivots`** holds the definition parsers (cache definition, pivot definition, slicer and timeline parts), the engine and the painters. It loads for the first sheet with a pivot, slicer or timeline.
+  - So a workbook with tables but no pivots never loads the engine.
 - **Resident path:** parts are read from `OfficePackage` after `parseXlsx` returns, not inside it.
 - **Paged path:**
   - Definitions are read with `RangePackage`.
   - Records are **streamed** in the worker (`openPart` and `tokenizeBytes`) into a compact columnar store: typed arrays of item indices plus per-field value tables, charged to the worker memory pool.
   - The engine runs in the worker, and layouts come back as grant-checked replies.
   - A record store over its cap leaves the pivot as saved and non-interactive (§7.6). The cap is a builder figure, sized from realistic workbooks.
+  - **Per profile. [rev]** (AGY-9) The cap is set separately for desktop and mobile. Mobile's cap must fit the mobile worker budget with headroom for layouts, and is far below the desktop figure. The 200 ms benchmark (§6.3) is a desktop target.
 
 ### 6.3 Engine placement and language **[owner] [call]**
 - **Language:** the engine is TypeScript. The owner offered Rust/WebAssembly.
@@ -261,7 +277,8 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
 2. **It compares** that layout with the saved `rowItems` and `colItems`, and every value with the saved cell values inside `location`. Numbers must match within Excel's display precision; text must match exactly.
 3. **On a mismatch** the pivot is not interactive, and the reason (the first differing cell) is reported as a diagnostic.
 4. **Its purpose:** every real file proves the engine on its own data before any number we compute reaches the user.
-5. **When it is skipped:** when the cache is stale (`refreshOnLoad="1"`, or the saved cells provably predate the records), the check cannot run. **[call]** The pivot is then still interactive, but the first interaction shows a one-line notice that values are recomputed from the saved data.
+5. **When it cannot run:** the saved `rowItems` or `colItems` are absent, the saved cells are missing or incomplete, or the saved cells provably predate the records. The pivot is then *unverified*: displayed as saved and not interactive, with a diagnostic. **[rev]** (CODEX-2)
+   - The exception is `refreshOnLoad` pivots, which follow §7.7.
 
 ### 6.5 Style engine
 - **Inputs:**
@@ -281,7 +298,8 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
 - **Pivot charts:**
   - At display, `c:pivotSource` is linked to its pivot.
   - On a pivot change, the series are rebuilt from the new layout and the chart is refilled through `fillChartRanges` and `succeedChartModel`, then repainted.
-  - Series are one per leaf column item, with categories from the row items (multi-level).
+  - Series, categories and orientation are derived from the *current* layout and the chart's pivot options, not fixed to one orientation. By default series come from column-axis leaves and categories from row-axis items. Values on rows (`dataOnRows`) and field moves change that mapping, and each mapping needs an Excel reference.
+  - A mapping without a passing reference means a pivot with that chart is not interactive, because the chart would otherwise go stale. **[rev]** (CODEX-3)
   - How Excel assigns formats to series that appear or disappear (`pivotFmts`) is **[measure]**.
 
 ### 6.7 Interaction UI
@@ -294,6 +312,7 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
 - **Value field settings:** a small dialog for the summary function and show-values-as with its base field and base item. It follows the `SortDialog` modal pattern.
 - **Group dialog:** start, end, interval and date levels.
 - **Shared view state:** all of it is view state, per sheet, discarded on close.
+- **Reset to saved view:** an action in the pivot's context menu and in the field list that returns the pivot, and any slicers driving it, to the file's state. **[rev]** (AGY-11)
 
 ### 6.8 Worker protocol
 - **New commands** join `viewerProtocol.ts`:
@@ -302,6 +321,11 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
   - pivot release.
   - Slicer clicks are applies to every pivot the slicer drives.
 - **Lifetimes:** byte grants and release-on-every-exit follow the sparkline precedent (`RemoteSparklineCache`).
+- **Ordering. [rev]** (CODEX-5)
+  - Every apply carries document, cache and pivot identity and a per-pivot view revision.
+  - The main thread commits a reply only if it matches the current revision. Stale replies are discarded and their grant refunded.
+  - The value-generation bump and tile invalidation happen on commit, never on send.
+  - A shared record store stays alive and charged until every pivot view and in-flight apply that leases it has released.
 
 ## 7. Behaviour rules
 
@@ -331,6 +355,8 @@ The layout is the cells of the pivot region: values, labels, captions, per-cell 
   - This needs a recompute entry point for a dependency set; the engine evaluates on load only today.
   - Charts on those cells are refilled.
   - `GETPIVOTDATA` is implemented against the live layout.
+  - **Registration hook. [rev]** (AGY-3) The eager formula engine keeps no pivot code. It gains a registration hook through which the lazy `pivots` chunk installs the live `GETPIVOTDATA`.
+    - Until a pivot on the sheet has changed, `GETPIVOTDATA` keeps its saved value, as any unknown function does today.
 - **Paged path:** formulas are never evaluated there. Dependent formula cells are marked stale (a subtle indicator plus a tooltip), and a status-line notice appears.
 - **Fallback:** if dependents cannot be found reliably, the notice appears for any pivot change on a sheet that has formulas outside pivots.
 
@@ -346,12 +372,15 @@ Each case below gets one diagnostic code (`pivot-*`) and a short, user-visible r
 
 Display of the saved output and the style still happens in every case.
 
-### 7.7 Stale caches and `refreshOnLoad` **[call]** (builder check 1)
-- Excel recomputes a `refreshOnLoad="1"` pivot when it opens the file, so what Excel draws is the recomputed output, not the saved cells.
-- **Before Stage 2:** the saved cells are shown.
-- **From Stage 2:** such a pivot is displayed from the engine's output in every mode, including page mode and export. The engine therefore loads for display when a sheet has one.
-- **If the engine cannot handle the pivot** (any §7.6 case), it is shown as saved, with the diagnostic.
-- The §6.4 check cannot run for these pivots. Their correctness rests on the Excel-oracle tests (§9), which include `refreshOnLoad` cases.
+### 7.7 `refreshOnLoad` pivots **[rev]** (CODEX-1, AGY-1)
+- **What Excel does:** it refreshes a `refreshOnLoad="1"` pivot from its *source* when the file opens. The saved records and cells may both be out of date relative to that source.
+- **Display, in every mode:** always the saved cells, never a recomputation. Page mode, export and print stay engine-free. A diagnostic (`pivot-refresh-on-load`) notes that Excel would refresh this pivot on open.
+- **Interaction, in the interactive viewer only:**
+  - **Allowed** only when the cache source is a worksheet range, table or name *in this workbook* whose cells the viewer can read. That is resident, or paged through the worker.
+  - **Refresh:** on the first interaction the engine rebuilds the records from that source range, as Excel's refresh does, then applies the change. A one-line notice says the pivot was refreshed from the workbook's data.
+  - **Exception to §2:** this is the one case where the live source range is read, because it is what Excel itself does for these pivots.
+  - **Otherwise** (external source, unreadable range, or records only): not interactive.
+- **Verification:** Excel-oracle `refreshOnLoad` cases (§9) assert the refreshed output for a source that differs from the saved records.
 
 ### 7.8 Column widths after a change **[call]** (builder check 3)
 - Excel autofits the pivot's columns on update when `useAutoFormatting` is on, which is the default.
@@ -361,6 +390,13 @@ Display of the saved output and the style still happens in every case.
 
 ### 7.9 Pivot output is source data, not paint **[call]** (builder check 4)
 - **A source change:** the pivot value layer changes the cell source that every consumer reads: painting, find, copy, grid ARIA, value queries, and the paged worker's view of the cells.
+- **The contract. [rev]** (AGY-4)
+  - The source stores (`ObjectXlsxSheetAdapter` resident, `PagedXlsxSheetAdapter` paged) accept an optional *value overlay*: `(row, col) → overlay cell | undefined`, consulted before the row records or pages.
+  - The overlay also answers the used extent and the merge set (AGY-6).
+  - **Resident path:** the overlay lives on the main thread.
+  - **Paged path:** the overlay lives in the worker, set by the committed pivot apply. The main thread mirrors only what painting needs.
+  - Neither store's underlying records or pages are rewritten.
+  - A committed change bumps the sheet's `valueGen` for both caches; a merge change also bumps `structureGen`.
 - **Why:** a paint-only overlay would let copy or search return the old numbers, which is a wrong number.
 - **Growing past the sheet:** a pivot that grows past the sheet's used extent extends it.
 - **Sheet sort and filter:** the interactive viewer's sheet-level sort and filter are disabled for a range that intersects a pivot, with a message. Excel does not apply sheet sort or filter across a pivot either. **[measure]**
@@ -377,7 +413,7 @@ Display of the saved output and the style still happens in every case.
 ## 8. Constraints
 - **Eager budget:**
   - The eager graph grows only by the detection stub.
-  - `tests/helpers/eager-graph.ts` gains a rule forbidding everything under `src/xlsx/pivots/` except the stub.
+  - `tests/helpers/eager-graph.ts` gains a rule forbidding everything under `src/xlsx/pivots/` and the style-engine modules, except the stub.
   - `check-eager.ts` and `eager-budget.ts` must pass.
 - **No new runtime dependencies.** WASM would be the exception, and only through the §6.3 gate.
 - **Hot path:** sheets without pivots add no per-tile work beyond an `undefined` check.
