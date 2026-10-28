@@ -43,7 +43,7 @@ function waitFor(done: () => boolean, what: string): void {
  * Excel completes `open` and `close` only after the sending script returns, so each step is its own script and the
  * workbook is addressed by name, never as the active workbook.
  */
-function capture(file: string, sheetName: string, range: string, out: string): void {
+export function capture(file: string, sheetName: string, range: string, out: string): void {
   const name = file.split('/').pop()!
   // Excel drops an open that arrives while a close is pending, so workbooks stay open for the whole run and an
   // open that has not registered after 10 s is sent again.
