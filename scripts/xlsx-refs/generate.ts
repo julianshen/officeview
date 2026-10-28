@@ -78,7 +78,7 @@ function worksheetXml(tableCase?: TableCase, controlKind?: 'slicer' | 'timeline'
   // Keep the Report's saved values to the left of the pivot output (G:K).
   const startCol = controlKind ? 6 : 0
   const rowXml = tableRows.map((values, ri) => `<row r="${ri + 1}">${values.map((v, ci) => {
-    const s = (controlSource || controlKind) && ci === 2 && ri > 0 ? ' s="2"' : ''
+    const s = control && ci === 2 && ri > 0 ? ' s="2"' : ''
     if (v === '') return `<c r="${cell(ri + 1, ci + startCol)}"${s}/>`
     return typeof v === 'number' ? `<c r="${cell(ri + 1, ci + startCol)}"${s}><v>${v}</v></c>` : `<c r="${cell(ri + 1, ci + startCol)}"${s} t="inlineStr"><is><t>${esc(String(v))}</t></is></c>`
   }).join('')}</row>`).join('')
