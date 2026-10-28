@@ -1,11 +1,12 @@
 # XLSX Pivot Tables, Pivot Charts, Slicers and Timelines — Design Spec
 
-**Status:** draft 3.
+**Status:** draft 4.
 - Builder check folded in (§7.7–§7.10); owner answers recorded (§11).
 - Round 1: codex (CODEX-1 to -8) and agy (AGY-1 to -12) both REQUEST CHANGES. Accepted findings are marked **[rev]** with their id.
   - AGY-5 is rejected: sparklines are on `main` at `ba8abf83`, and the cited lines are correct there.
   - AGY-10 is rejected: MS-XLSX `CT_Slicer` names the cache with the attribute `cache`.
   - AGY-3's first point is rejected: an unknown function keeps the cell's saved value (`docs/formula-compatibility.md`), so `GETPIVOTDATA` does not show `#NAME?` on open.
+- Round 2: agy APPROVE. Codex resolved CODEX-1 to -8 and raised R2-1 and R2-2, addressed in draft 4.
 **Date:** 2026-10-29 · **Baseline:** `main` @ `ba8abf83` (v0.10.0).
 **Decision marks:**
 - **[owner]** is a decision the owner made.
@@ -40,7 +41,8 @@ Today the viewer knows none of this.
 2. Pivots are recomputed from the cache records saved in the file, and the recomputation reproduces Excel's saved output. This is proven per file on first interaction (§6.4) and per case against Excel (§9).
 3. Every interaction in §4 changes the pivot exactly as Excel would for the same action, verified by driving Excel to make the same change (§9).
 4. A pivot that cannot be recomputed faithfully is never shown with wrong numbers. It stays as saved, non-interactive, and the viewer says why (§7.6).
-5. Workbooks without pivots pay nothing: the eager bundle and the hot path are unchanged (§8).
+5. Workbooks without pivots, slicers or timelines never load the pivot engine. The eager graph grows only by the detection stub, and sheets with none of these take no new per-tile work (§8). **[rev]** (CODEX-R2-1)
+   - A workbook with styled Excel tables loads only the lazy `tableStyles` chunk (§6.2) and pays its style-resolution cost, which is the price of drawing table styles. **[owner]** (§11)
 
 ## 2. Non-goals and anti-goals
 
@@ -57,7 +59,7 @@ Today the viewer knows none of this.
 **Anti-goals** (failure even if it technically works):
 - **A wrong number.** A recomputed value that differs from what Excel would show is worse than no interaction. Unverifiable means view-only plus a stated reason.
 - **Silent staleness.** After a pivot changes, a value elsewhere that depends on it must not keep its old number without a sign that it is stale (§7.5).
-- **Slower open, scroll or zoom for workbooks without pivots.**
+- **Slower open, scroll or zoom for workbooks without pivots or styled tables.**
 - **Pivot code in the eager bundle**, beyond a tiny detection stub.
 
 ## 3. Background: the file format
@@ -380,7 +382,8 @@ Display of the saved output and the style still happens in every case.
   - **Refresh:** on the first interaction the engine rebuilds the records from that source range, as Excel's refresh does, then applies the change. A one-line notice says the pivot was refreshed from the workbook's data.
   - **Exception to §2:** this is the one case where the live source range is read, because it is what Excel itself does for these pivots.
   - **Otherwise** (external source, unreadable range, or records only): not interactive.
-- **Verification:** Excel-oracle `refreshOnLoad` cases (§9) assert the refreshed output for a source that differs from the saved records.
+  - **Missing records.** When the records part is absent (`saveData="0"`), this refresh path overrides §7.6's missing-records refusal, but only when the source can be read. If it can't, §7.6 applies, with its diagnostic. **[rev]** (CODEX-R2-2)
+- **Verification:** Excel-oracle `refreshOnLoad` cases (§9) assert the refreshed output for a source that differs from the saved records, including a `refreshOnLoad` plus `saveData="0"` case.
 
 ### 7.8 Column widths after a change **[call]** (builder check 3)
 - Excel autofits the pivot's columns on update when `useAutoFormatting` is on, which is the default.
