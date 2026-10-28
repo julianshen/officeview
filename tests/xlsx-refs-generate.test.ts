@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import JSZip from 'jszip'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
-import { REF_CASES, type TableCase } from '../scripts/xlsx-refs/cases'
+import { REF_CASES, type TableCase, type TimelineCase } from '../scripts/xlsx-refs/cases'
 import { buildCaseWorkbook } from '../scripts/xlsx-refs/generate'
 
 function elementShape(xml: string): string[] {
@@ -171,7 +171,30 @@ describe('pivot reference workbook generator', () => {
       expect(timelineCache, c.id).toContain('<bounds startDate=')
       expect(timelineCache, c.id).not.toContain('<timelineState')
       expect(timelineCache, c.id).not.toContain('<selection')
-      expect(timelineCache, c.id).toContain('<bounds startDate="2024-01-01T00:00:00" endDate="2026-01-01T00:00:00"/>')
+    }
+  })
+
+  it('writes each timeline case style, and derives scrollPosition and cache bounds from the Data sheet dates', async () => {
+    const timelineCases = REF_CASES.filter(item => item.kind === 'timeline')
+    expect(timelineCases.length).toBeGreaterThan(0)
+    for (const c of timelineCases) {
+      const spec = c.spec as TimelineCase
+      const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+      const source = await zip.file('xl/worksheets/sheet2.xml')!.async('text')
+      const dateSerials = [...source.matchAll(/<c r="C\d+"[^>]*><v>(\d+)<\/v><\/c>/g)].map(match => Number(match[1]))
+      expect(dateSerials.length, `${c.id} Data sheet Date values`).toBe(40)
+      const toUtc = (serial: number) => new Date(Date.UTC(1899, 11, 30 + serial))
+      const min = toUtc(Math.min(...dateSerials)), max = toUtc(Math.max(...dateSerials))
+      const iso = (y: number, m: number) => `${y}-${String(m).padStart(2, '0')}-01T00:00:00`
+      const expectedScroll = spec.level === 'months' || spec.level === 'days'
+        ? iso(min.getUTCFullYear(), min.getUTCMonth() + 1)
+        : iso(min.getUTCFullYear(), 1)
+      const timeline = attributesOf(await zip.file('xl/timelines/timeline1.xml')!.async('text'), 'timeline')
+      if (spec.styleName === 'TimeSlicerStyleLight1') expect(timeline.style, `${c.id} default style omitted like Excel`).toBeUndefined()
+      else expect(timeline.style, `${c.id} style`).toBe(spec.styleName)
+      expect(timeline.scrollPosition, `${c.id} scrollPosition`).toBe(expectedScroll)
+      const bounds = attributesOf(await zip.file('xl/timelineCaches/timelineCache1.xml')!.async('text'), 'bounds')
+      expect(bounds, `${c.id} bounds`).toEqual({ startDate: iso(min.getUTCFullYear(), 1), endDate: iso(max.getUTCFullYear() + 1, 1) })
     }
   })
 

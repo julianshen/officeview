@@ -133,11 +133,22 @@ function controlParts(c: RefCase): Record<string, string> {
   const nsCache = `xmlns:mc="${NS.mc}" mc:Ignorable="x xr10" xmlns:x="${NS.main}" xmlns:xr10="${NS.xr10}"`
   const nsTimeline = `xmlns:mc="${NS.mc}" mc:Ignorable="x xr10" xmlns:x="${NS.main}" xmlns:xr10="${NS.xr10}"`
   const nsTimelineCache = `xmlns:mc="${NS.mc}" mc:Ignorable="xr10" xmlns:xr10="${NS.xr10}"`
+  // Excel omits style for the default TimeSlicerStyleLight1; every other style is written explicitly.
+  const timelineStyle = timeline.styleName === 'TimeSlicerStyleLight1' ? '' : ` style="${esc(timeline.styleName)}"`
+  // Derived from the Data sheet dates: scroll to the first of the min date's month (months/days) or Jan 1 of
+  // its year (years/quarters); bounds run from Jan 1 of the min year to Jan 1 of the year after the max year.
+  const serials = controlRows.map(row => row.date)
+  const minDate = new Date(toDateTime(Math.min(...serials))), maxDate = new Date(toDateTime(Math.max(...serials)))
+  const firstOf = (year: number, month: number) => `${year}-${String(month).padStart(2, '0')}-01T00:00:00`
+  const scrollPosition = timeline.level === 'months' || timeline.level === 'days'
+    ? firstOf(minDate.getUTCFullYear(), minDate.getUTCMonth() + 1)
+    : firstOf(minDate.getUTCFullYear(), 1)
+  const boundsStart = firstOf(minDate.getUTCFullYear(), 1), boundsEnd = firstOf(maxDate.getUTCFullYear() + 1, 1)
   return {
     'xl/slicers/slicer1.xml': `${XML}<slicers xmlns="${NS.x14}" ${nsCache}><slicer name="Product" xr10:uid="{9FD6D7D5-54C3-D440-9F1C-DE221ED3D12A}" cache="Slicer_Product" caption="Product" rowHeight="209550" style="${slicer.styleName}" columnCount="${slicer.columnCount}" startItem="${slicer.startItem}" showNoDataItems="${+slicer.noData}"/></slicers>`,
     'xl/slicerCaches/slicerCache1.xml': `${XML}<slicerCacheDefinition xmlns="${NS.x14}" ${nsCache} name="Slicer_Product" xr10:uid="{51DE0EAB-D8C0-484E-8A22-4B5730F7CD76}" sourceName="Product"><pivotTables><pivotTable tabId="2" name="PivotTable1"/></pivotTables><data><tabular pivotCacheId="1"><items count="${slicer.itemCount}">${slicerItems}</items></tabular></data></slicerCacheDefinition>`,
-    'xl/timelines/timeline1.xml': `${XML}<timelines xmlns="${NS.x15}" ${nsTimeline}><timeline name="Date" xr10:uid="{BCDD19F5-7DFF-6745-8336-A62734B2B7F9}" cache="NativeTimeline_Date" caption="Date" level="${level}" selectionLevel="${level}" scrollPosition="2025-06-22T00:00:00"/></timelines>`,
-    'xl/timelineCaches/timelineCache1.xml': `${XML}<timelineCacheDefinition xmlns="${NS.x15}" xmlns:x15="${NS.x15}" ${nsTimelineCache} name="NativeTimeline_Date" xr10:uid="{FE35D545-E153-F14A-8900-EDB8C368CE04}" sourceName="Date"><pivotTables><pivotTable tabId="2" name="PivotTable1"/></pivotTables><state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="1" filterType="unknown"><bounds startDate="2024-01-01T00:00:00" endDate="2026-01-01T00:00:00"/></state></timelineCacheDefinition>`,
+    'xl/timelines/timeline1.xml': `${XML}<timelines xmlns="${NS.x15}" ${nsTimeline}><timeline name="Date" xr10:uid="{BCDD19F5-7DFF-6745-8336-A62734B2B7F9}" cache="NativeTimeline_Date" caption="Date"${timelineStyle} level="${level}" selectionLevel="${level}" scrollPosition="${scrollPosition}"/></timelines>`,
+    'xl/timelineCaches/timelineCache1.xml': `${XML}<timelineCacheDefinition xmlns="${NS.x15}" xmlns:x15="${NS.x15}" ${nsTimelineCache} name="NativeTimeline_Date" xr10:uid="{FE35D545-E153-F14A-8900-EDB8C368CE04}" sourceName="Date"><pivotTables><pivotTable tabId="2" name="PivotTable1"/></pivotTables><state minimalRefreshVersion="6" lastRefreshVersion="6" pivotCacheId="1" filterType="unknown"><bounds startDate="${boundsStart}" endDate="${boundsEnd}"/></state></timelineCacheDefinition>`,
   }
 }
 function pivotParts(): Record<string, string> {
