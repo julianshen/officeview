@@ -147,8 +147,8 @@ bar edges are exact.
 ## Comparison (Task 7)
 
 `bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]` renders each case and compares its host cells with
-the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 and Stage 2 case and asserts the tolerances
-below. It reads the **Cases** table, so a tolerance or status changes here, not in code.
+the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1, 2 and 3 case (and the XlsxWriter fixture below)
+and asserts the tolerances below. It reads the **Cases** table, so a tolerance or status changes here, not in code.
 
 - **References required.** Every captured sheet of every case needs its plain and `-bordered` PNG and both `.json`
   sidecars. The sidecar must say `route: "copy-picture"`, `scale` = `pxPerPt` = 1 (the density the constants and
@@ -199,10 +199,170 @@ below. It reads the **Cases** table, so a tolerance or status changes here, not 
   The single-missing-marker controls clear the strong margin by only 1–2 pixels. A 0.75-pt diamond is 4 px at
   α ½, which is why the margin is a flat 3 and not proportional.
 
+  Stage 3 (Task 13) controls, same mechanism, every one of which must fail the case's tolerance:
+  - date-uneven: the date axis removed from the line, the column and the win/loss row (even slots); the date-off control row
+    (dates present, `dateAxis` off) given the date axis; date-length-mismatch: the date axis removed
+  - date-unsorted: the values left in data order (`values`, high/low/first/last indices un-sorted) at the date positions
+  - date-missing-range: a dateAxis group without dates drawn at even slots (the spec §5.4 hypothesis)
+  - date-text: the dropped (text-dated) point put back
+  - rtl-hl-fl, rtl-line, rtl-column: `rightToLeft` off (line, date-axis line, column, win/loss); first and last swapped, which is
+    display-order colouring instead of data-order colouring
+  - xlsxwriter-written: the date axis off on J6, `rightToLeft` off on J4, the win/loss axis off on J3, a bar value changed on J7;
+    xlsxwriter-written-row9 (wide tolerance): a vertex moved far
+
 - **Stage 2 notes.** The first `--stage 2` run measured 0.08–0.13 meanAbs on most bar cases, with first, last and high
 bars wrongly coloured: the bar path applied `colors.first/last/high/low` without checking the group's `first/last/high/low`
 flags (the parser keeps every element colour, flagged or not; the line path already gated on the flag). Fixed in
 `geometry.ts` (`colorize` takes the flag) with a unit test; every Stage 2 case then measures 0 strong pixels.
+
+## Stage 3 comparison (Task 13)
+
+`bun scripts/sparkline-compare.ts --stage 3` re-measured the eight Stage 3 cases on 2026-10-28 and every residual equals Task
+10's implementer's measurement to four decimals: date-uneven 0.0030 / 0.0197 / 61, date-unsorted 0.0034 / 0.0418 / 45,
+date-missing-range 0, date-length-mismatch 0.0048 / 0.0154 / 16, date-text 0.0062 / 0.0533 / 48, rtl-line 0.0058 / 0.0205 / 69,
+rtl-hl-fl 0.0077 / 0.0343 / 83, rtl-column 0. The `--out` ref / ours / diff images were inspected before the Cases rows were
+written: every line, marker and bar is in the right place in all eight (the right x for each date, the sorted polyline, the
+dropped points bridged, the mirrored order, first on the right under `rightToLeft`). The diff images are faint
+anti-aliasing fringes along the segments, heaviest on long shallow segments (where Cairo and Excel spread the same ink across
+different row pairs) and darkest at the vertices of steep segments; date-missing-range and rtl-column are pixel-identical, and
+the bar rows of date-uneven show no diff. No case was labelled unverified and no geometry or resolve code changed.
+Tolerances follow the rule above (noise + 0.002 / 0.010 / 3, rounded up).
+
+## XlsxWriter fixture (the independent-writer check, Task 13)
+
+`tests/fixtures/xlsx-sparklines/xlsxwriter-written.xlsx` was written by XlsxWriter 3.3.0 (`scripts/sparkline-refs/xlsxwriter-case.py`),
+not by this repository's generator, so its XML (extension namespaces on `<ext>`, groups in reverse order, style presets as
+theme + tint colours of the workbook's own Office 2007 theme, data on `Sheet2`) is what a real third-party writer emits. Excel
+for Mac 16.114 captured it as `refs/xlsxwriter-written.png` + `.json` (range I1:J11 of Sheet1, 1 px per point, 250 × 661 px).
+Its parse is also pinned on both paths by `tests/xlsx-sparklines-other-writer.test.ts`.
+
+There is no `-bordered` twin, so the reference cell size cannot be read from border pixels. `compareXlsxWriter` forces it, as
+`renderHosts` forces the other cases: column J (40.7109375 characters) is **204 px** gridline to gridline at 72 dpi in Excel
+and starts at x = 45 (column I is 45 px), the eleven host rows are **60 pt** each, so the block is 204 × 660 (viewer natural
+width 213.75). The inner box of every row is then compared exactly as in **Host cell bounds**. The comparison is run as two
+Cases rows so that one residual cannot loosen the rest: `xlsxwriter-written` over host rows 1–8, 10 and 11, and
+`xlsxwriter-written-row9` over row 9.
+
+Per host row (meanAbs / rowMax / strong, from `bun scripts/sparkline-compare.ts --stage 3`):
+
+| Row | Sparkline | meanAbs | rowMax | strong | Residual |
+|---|---|---|---|---|---|
+| J1 | line, markers, style 1 | 0.0029 | 0.0061 | 0 | anti-aliasing |
+| J2 | column, every point flag + negative, style 3 | 0.0002 | 0.0008 | 0 | bars and all five colours identical (155,187,89), (79,98,40) |
+| J3 | win/loss, negative + axis, style 20 | 0.0007 | 0.0016 | 0 | identical |
+| J4 | line, `reverse` (rightToLeft), first/last, series E965E0 | 0.0035 | 0.0107 | 4 | anti-aliasing; `rtlRule` and data-order colours hold for a third-party writer |
+| J5 | line, empty cells "connect" (span) | 0.0045 | 0.0121 | 13 | anti-aliasing |
+| J6 | line, date axis (Sheet2 row 13), weight 2.25, markers; column C of the data hidden | 0.0111 | 0.0603 | 57 | the 2-px vertex snap, see below |
+| J7 | column, custom min 0, max 100 | 0.0013 | 0.0028 | 0 | one colour level: Excel (36,64,98), ours (37,64,97), inside `colourResolution`'s ±2 |
+| J8 | line, `show_hidden`, markers | 0.0057 | 0.0158 | 14 | anti-aliasing |
+| J9 | line, markers, style 6, group min/max | 0.0145 | 0.2617 | 132 | **geometry residual, see below** |
+| J10 | the same group | 0.0038 | 0.0270 | 14 | anti-aliasing (the group scale itself is right) |
+| J11 | line, high/low flags, host text "Growth" | 0.0054 | 0.0150 | 18 | the text is excluded, see below; unmasked and with our text it measures 0.0181 / 0.0853 / 361 |
+
+- **Row 6** (the only date axis plus lineWeight 2.25 in any fixture). Dates 45000 + [0, 1, 3, 10, 11, 20, 21, 30] with column C
+  hidden on the data sheet, so the date and its value at offset 3 drop together (displayHidden off) and 7 points remain over
+  the unchanged 31-day span. Marker centroids against ours: 5 of the 7 vertices agree within 0.05 px in x and y. The two others
+  (the values 2 and 5, whose model y is 55.9 and 33.7 inside the box) sit about 0.7 px higher in Excel than in ours. That is the
+  same residual `line-weight-2_25` carries (its strong count, 176, is the largest of Stage 1): the 2-px vertices of Stage 1 were
+  fitted at integers (160.02, 56.03) and (210.06, 33.99), where the model y of the same two values is 56.94 and 34.7, so
+  `vertexSnapRule`'s round() does not reproduce Excel's choice for the low end of the range. Task 7 already accepted it. The x
+  positions of the date axis are exact.
+- **Row 9** is a geometry residual, reported and not labelled away. It is the series 1..8 on the shared 1..80 group scale,
+  so a nearly flat line near the plot bottom. Excel draws the stretch at x 106–130 of the box in one pixel row at full intensity
+  (host row 53), where the model puts value 5 at y = 54.3 (row 54), so ours splits that stretch across two rows; elsewhere
+  Excel's centreline is 0.3–0.9 px above ours (0.9 px at x = 46). The ±1 row window in `strong` hides pure one-row shifts, so
+  the 132 unmatched pixels are the crisp-versus-split segments, and the rowMax of 0.2617 is a near-horizontal segment whose
+  whole length lands in a different row. This is `verticalMapping` note 2's rounding underdetermination meeting a near-flat
+  series, the case rowMax is most sensitive to. **Evidence that no single inset change reconciles it:** a sweep of the plot
+  top / bottom insets (top / bottom 4.08 / 3.06 is the current pair; 4.4 / 3.4; 4.8 / 3.6; 5.2 / 3.9; 5.6 / 4.2; 4.08 / 3.4;
+  4.6 / 3.06; 5.0 / 3.06) over every Stage 1–3 case (without `layering`) gave a total strong count of 1666 and a worst
+  rowMax of 0.076 at the current pair, and 1720–8079 and 0.70–0.98 (a whole row off: the axis or the extreme rows) at every
+  other pair. The pair that fixes row 9 (4.8 / 3.6 takes it to 0.0017 / 0.023 / 4) takes the other rows of this capture to a worst rowMax of 0.605 and
+  the Stage 1–3 total to 3589. So the fix, if there is one, is a different rounding rule, not a different constant. No geometry
+  code was changed. The row has its own Cases row with its measured tolerance, wide enough to catch a gross vertex error and
+  nothing finer.
+- **Row 11 and the host text.** Excel draws "Growth" bottom-left in a serif face; the static renderer draws it in node-canvas's
+  fallback font, vertically centred (the `layering` difference). To measure the sparkline alone the comparison clears
+  J11's text in ours and paints one rectangle white in both images (x 1–33, y 48–58 of the row's inner box: the bounding box
+  of Excel's neutral glyph pixels, x 2–31 and y 49–57, padded by 1). **That rectangle also covers the sparkline's first vertex
+  (x 15–17, y 54–55) and about 20 px of its first segment, the one patch of row 11 that is unverified**; every other
+  first vertex is verified by the other rows. The remainder of row 11 measures 0.0054 / 0.0150 / 18.
+- **First observation of host text over a sparkline.** `layering` left host text *unobserved* because no earlier capture put text
+  where a line passes. In this capture the first segment of row 11 crosses the glyph "G": at (20, 52) of the box the pixel is
+  (5, 9, 14), darker than the line colour (36, 64, 98) and than every other glyph pixel's grey, which is text painted
+  **over** the line (line-over-text would leave (36, 64, 98)). The viewer paints cell text after the sparklines
+  (`renderSheet`: fills, sparklines, then cell content), the same order. This is one observation at one pixel, from a mask-excluded patch,
+  so it is not gated.
+- **Colours.** J2, J3 and J7 have strong 0: their non-zero meanAbs is anti-aliasing and the one level of colour rounding
+  above. XlsxWriter's presets (style 1: accent1 of the Office 2007 theme, tint −0.5 → (36,64,98) in Excel, FF254061 in the
+  parse test) resolve through the workbook's own theme, the negative-tint trap below.
+
+## Scope verification (spec §4)
+
+*verified* means the case ids named below pass their Cases rows (or are pixel-identical) against Excel. *unverified* means no
+Excel capture covers the item, with the concrete reason; it is covered by unit tests only.
+
+| Spec §4 row | Status | Case ids and reason |
+|---|---|---|
+| Types: line, column, win/loss | **verified** | line: the 30 Stage 1 cases; column: col-basic, col-negative, col-scale-no-zero, col-hl-fl, col-empty-span, col-merged-host, col-tiny; win/loss: wl-basic, wl-tiny-values, wl-zero, wl-hl-fl; independent writer: xlsxwriter-written rows 1–11 |
+| Points: markers (line only), high, low, first, last, negative | **verified** except one item | markers: line-markers, line-weight-2_25; high/low/first/last: line-points-hl-fl, line-precedence, line-ties, line-flat, col-hl-fl, wl-hl-fl, rtl-hl-fl; negative (columns, win/loss): col-negative, wl-basic, wl-tiny-values, rtl-column. **unverified: `negative` adding markers to a line sparkline**, because no line case sets negative = 1 (no capture exists, so the viewer draws no marker there) |
+| Colours: series, negative, axis, markers, first, last, high, low (rgb, theme + tint, indexed) | **verified** | line-basic, line-colours-theme-tint, line-colours-indexed, line-colours-missing, col-hl-fl, wl-hl-fl; theme + tint on a non-Office theme: xlsxwriter-written rows 1–8, 10 (Office 2007 theme). `auto` is non-conforming and not drawn (spec §6.5) |
+| Line: `lineWeight` | **verified** | line-weight-2_25 (0.5, 0.75, 2.25, 4.5 pt), xlsxwriter-written row 6 (2.25). The 2-px vertex snap carries a measured ±1 px residual (row 6 above); fractional lineWeight rounding at other scales is not observable at 1 px/pt |
+| Axis: `displayXAxis` | **verified** except two items | line-axis, line-all-negative, line-colours-indexed, col-negative, wl-basic, wl-zero, xlsxwriter-written row 3. **unverified: min or max exactly 0, and the all-positive column axis** (no captures; the constants say "underdetermined") |
+| Vertical scale: individual / group / custom | **verified** with one residual | line-scale-individual, line-scale-group, line-scale-custom, line-scale-custom-clip, col-scale-no-zero, xlsxwriter-written rows 7, 9, 10. The group scale itself is right in rows 9–10; row 9 is the near-flat ±1 px residual above. Group scale with hidden rows and empty cells together is unit-tested only (`xlsx-sparklines-resolve.test.ts`) because no capture combines them |
+| Empty cells: gap / zero / span | **verified** | line-empty-gap, line-empty-zero, line-empty-span, line-defaults-omitted, col-empty-span, wl-zero, rtl-line row 3 (span), date-text row 2, xlsxwriter-written row 5 (connect) |
+| Hidden data: `displayHidden` | **verified** | line-hidden-rows, line-hidden-cols, line-hidden-shown, line-filter-hidden, xlsxwriter-written rows 6 and 8 (hidden data column, with and without `show_hidden`) |
+| Horizontal axis: `dateAxis` with a date range | **verified** except two items | date-uneven, date-unsorted, date-missing-range, date-length-mismatch, date-text, rtl-line row 2, xlsxwriter-written row 6. **unverified: fractional date serials and ties in dates** (every fixture date is a whole serial and distinct) |
+| Horizontal axis: `rightToLeft` | **verified** | rtl-line, rtl-hl-fl, rtl-column, date-uneven (mirror pair with rtl-line row 2), xlsxwriter-written row 4 |
+| Data shape: row ranges, other sheet, merged hosts | **verified** | row ranges in every case; other sheet: line-later-sheet and every xlsxwriter-written row (data on Sheet2); merged hosts: line-merged-host, col-merged-host |
+| Data shape: **column** ranges, **quoted** sheet names | **unverified** | no Excel capture has a column-oriented data range or a quoted sheet name (the capture generator only writes row ranges on `Sheet1`..`Sheet3`). Covered by `xlsx-sparklines-resolve.test.ts` "row and column ranges in reading order" and `xlsx-sparklines-parse.test.ts` "parses quoted sheet names and absolute A1 references" |
+
+Layering with cell text remains **unverified** in the Cases table (`layering`, the font difference), with one new observation of
+text over a line above.
+
+## LibreOffice trap tests (spec §9 item 6)
+
+Every trap has a named test; the reference cases are the Excel measurement of the same input. `file::test name`.
+
+| Trap | Tests |
+|---|---|
+| a flat series | `xlsx-sparklines-geometry.test.ts::a flat series is drawn with every point low (colourPrecedence, line-flat row 3, tieRule)`; `…::draws a flat positive series at the plot top and a flat zero series at the vertical middle (flatSeriesRule)`; `xlsx-sparklines-resolve.test.ts::flat series: resolution yields every point as both high and low (flatSeriesRule is geometry)`; reference line-flat |
+| n = 1 | `xlsx-sparklines-geometry.test.ts::a single point draws nothing without flags and one diamond at the plot centre and top with flags (singlePointRule, specialPointSize, flatSeriesRule)`; `xlsx-sparklines-resolve.test.ts::a single point resolves (singlePointRule is geometry)`; reference line-single |
+| all-negative high and low | `xlsx-sparklines-resolve.test.ts::all-negative high/low: high is the largest negative value (LibreOffice tdf#152929 trap)`; `xlsx-sparklines-geometry.test.ts::hangs all-negative bars from the top edge, mirrored δ rule, heights 8,37,15,52,1,45,23,30 (columnNoZeroRule, max < 0)`; reference line-all-negative, col-negative row 3 |
+| the `group` axis type | `xlsx-sparklines-resolve.test.ts::group: min and max over every sparkline in the group, manual values ignored (groupScaleRule, measured)`; `…::group scale ignores hidden and empty points (Review Focus 2)`; `…::group scale with hidden rows and empty cells together: empties are excluded under gap, counted as 0 under zero`; `…::fails closed for a group-scaled group with a dropped member`; `xlsx-sparklines-render.test.ts::omits every member of a group-scaled sparkline group when one member is filter-hidden`; reference line-scale-group |
+| negative tints | `xlsx-sparklines-reference.test.ts::the default series colour (accent1, tint -0.5) resolves within 2 levels of Excel's captured (32,55,100)` (describe "XLSX sparkline colour fidelity (LibreOffice trap: negative tints)"); `xlsx-sparklines-parse.test.ts::resolves theme tint and indexed colours from the supplied workbook context`; `xlsx-sparklines-reference.test.ts::a wrong series colour (tint −0.25 instead of −0.5, and no tint)`; `xlsx-sparklines-other-writer.test.ts::parses every group with the options XlsxWriter wrote` (style 1 tint); reference line-colours-theme-tint (theme 0 / 2 tinted −0.5 / −0.25), line-basic |
+| merged hosts | `xlsx-sparklines-render.test.ts::includes a merged host anchor in a tile that intersects only the far side of its merge`; `…::sizes a merged sparkline host from visible merged columns when its far column is hidden`; `xlsx-sparklines-geometry.test.ts::widens bars with the merged host: P = 403, every bar 36 px wide (col-merged-host, barWidthRule, mergedHostRule)`; `xlsx-sparklines-resolve.test.ts::keeps the first duplicate host and rejects non-anchor merged hosts`; reference line-merged-host, col-merged-host |
+| data on a later sheet | `xlsx-sparklines-resolve.test.ts::resolves, with the sheet name matched case-insensitively` and `…::reads hidden flags from the data sheet, not the host sheet` (describe "data on a later sheet"), and `engine: data on a later sheet resolves (laterSheetRule)` / `cached: data on a later sheet resolves (laterSheetRule)`; reference line-later-sheet; `xlsx-sparklines-other-writer.test.ts` (data on Sheet2) |
+| sparklines in static PNG and PDF export | `xlsx-sparklines-render.test.ts::the static print-page raster contains the sparkline for PDF/print export`; `…::static export includes and paints a sparkline host beyond populated cells`; every reference comparison and the paged-render test render through the static `renderSheet` raster |
+| `dateAxis` with a non-uniform date range, not spaced evenly | `xlsx-sparklines-geometry.test.ts::moves line vertices off the even slots onto the dated day centres (dateSlotRule)`; `…::centres bars on their day slots and sizes them by day width (dateSlotRule, barWidthRule)`; `xlsx-sparklines-resolve.test.ts::pairs the data cells with the date cells and hands geometry the day-slot fractions (dateSlotRule)`; reference date-uneven with controls `the date axis off: line, column and win/loss fall back to even slots` and `the control row (dates present, dateAxis off) must stay on even slots: giving it the date axis fails` |
+| `rightToLeft` with first and last, colour in data order | `xlsx-sparklines-geometry.test.ts::mirrors line x about the plot box, keeping indices and colours in data order (rtlRule)`; `…::mirrors column and win/loss bars with the same rounded edges, colours staying in data order (rtlRule)`; `xlsx-sparklines-resolve.test.ts::rightToLeft is geometry only: resolution, including the date axis, is unchanged (rtlRule)`; reference rtl-hl-fl with control `right-to-left colours in display order instead of data order: first and last swapped` |
+
+The traps with no dedicated unit test before Task 13 were negative tints (only a parse-level test and Excel-measured
+references) and the date-axis-off control; both are now covered above.
+
+**`dateMissingRule` refutes the spec's even-spacing hypothesis.** Spec §5.4 hypothesised that a `dateAxis="1"` group with no
+date range (as LibreOffice writes) falls back to evenly spaced points. Excel draws **nothing** for it, for a line and for a
+column (`date-missing-range`: 0 ink pixels in both rows, pixel-identical to the viewer, which draws nothing and raises no
+diagnostic). The viewer follows Excel; the negative control "a dateAxis group with no date range drawn at even slots" fails the
+tolerance.
+
+## Paged equals resident, as pixels (Task 13)
+
+`tests/xlsx-sparklines-paged-render.test.ts` renders every fixture (all 49 `SPARKLINE_CASES` plus `xlsxwriter-written`, 50 workbooks)
+twice through the static renderer, at zoom 0.75 and 1.5: once with the resident `resolvedSparklines`, once with the
+worker-resolved snapshot (`readSparklines` on the paged source, rebuilt by `rebuildResolvedSparklines`). The two bitmaps
+are byte-identical in every case, and a third render with no sparklines proves the comparison is not blank against blank (every
+fixture paints ink except the three that Excel and the viewer both leave blank: line-tiny-cell, col-tiny, date-missing-range).
+A control changes one paged value and the bitmaps differ.
+
+## LibreOffice-written fixture (plan Step 1b): pending
+
+Spec §3 asks for a workbook saved by LibreOffice 7.4 or later, parsed on both paths. **Pending: the owner has no
+LibreOffice-written workbook and LibreOffice is not installed.** No `lo-written.xlsx` exists (and LibreOffice code and fixtures
+never enter the repo otherwise, Global Constraints). The independent-writer check is the XlsxWriter fixture above; the
+LibreOffice-specific shapes (`dateAxis` without a date range, absent default attributes and colour elements, alternate
+prefixes) are covered by hand-authored cases and parse tests, not by a file LibreOffice wrote. If the owner supplies one, it is added
+as `tests/fixtures/xlsx-sparklines/lo-written.xlsx` with a parse-parity test on both paths.
 
 ## Cases
 
@@ -252,3 +412,13 @@ is `meanAbs / rowMax / strong`.
 | wl-tiny-values | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
 | wl-zero | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
 | wl-hl-fl | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| date-uneven | pass | 0.0030 | 0.0197 | 61 | 0.005 / 0.030 / 64 | anti-aliasing only (images inspected: every line and bar in the right place; bar rows 2–3 pixel-identical, markers and chords differ by Cairo's AA against Excel's quarter-step coverage); cell ref 204×60 per row |
+| date-unsorted | pass | 0.0034 | 0.0418 | 45 | 0.006 / 0.052 / 48 | anti-aliasing only; the monotonic date-ordered polyline, first/last on the earliest/latest dates and the sorted column heights all match; the 0.0418 rowMax (worst row 42) is a long shallow segment, which puts the same ink in a different row pair |
+| date-missing-range | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | both blank (`dateMissingRule`: dateAxis with no date range draws nothing) |
+| date-length-mismatch | pass | 0.0048 | 0.0154 | 16 | 0.007 / 0.026 / 19 | anti-aliasing only |
+| date-text | pass | 0.0062 | 0.0533 | 48 | 0.009 / 0.064 / 51 | anti-aliasing only; the 0.0533 rowMax (worst row 90) is a long shallow segment, which puts the same ink in a different row pair |
+| rtl-line | pass | 0.0058 | 0.0205 | 69 | 0.008 / 0.031 / 72 | anti-aliasing only; row 2 is the exact mirror of date-uneven row 1 |
+| rtl-hl-fl | pass | 0.0077 | 0.0343 | 83 | 0.010 / 0.045 / 86 | anti-aliasing only; first (green) at the right, last at the left, in data order |
+| rtl-column | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| xlsxwriter-written | pass | 0.0039 | 0.0603 | 118 | 0.006 / 0.071 / 121 | independent-writer check, host rows 1–8, 10 and 11 (see **XlsxWriter fixture**); row 11's text "Growth" is cleared in ours and Excel's glyphs are masked in both (its first vertex region is the one unverified patch); no `-bordered` twin, so the cell is forced to 204×60 per row; per-row residuals in that section |
+| xlsxwriter-written-row9 | pass | 0.0145 | 0.2617 | 132 | 0.017 / 0.272 / 135 | host row 9 of the same capture, a **geometry residual reported, not labelled away**: a near-flat group-scaled line (1..8 on the shared 1..80 scale) where Excel's centreline is 0.3–0.9 px above ours and one stretch is crisp in Excel but split across two rows in ours; the tolerance is the measured noise and only catches a gross vertex error; no inset pair fixes it without moving other cases a whole row (see **XlsxWriter fixture**) |
