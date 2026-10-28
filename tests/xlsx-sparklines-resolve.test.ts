@@ -342,11 +342,20 @@ describe('resolveWorkbookSparklines', () => {
   })
 
   describe('staging gate (spec 10)', () => {
-    for (const [label, over] of [['column', { type: 'column' }], ['stacked', { type: 'stacked' }], ['dateAxis', { dateAxis: true }], ['rightToLeft', { rightToLeft: true }]] as const) {
+    for (const [label, over] of [['dateAxis', { dateAxis: true }], ['rightToLeft', { rightToLeft: true }]] as const) {
       it(`${label} groups resolve to nothing and raise no diagnostic`, () => {
         const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1'), spark('J2', area('A1:B2')), spark('J3', area('A1:B1', 'Nowhere'))], over))
         resolve([s])
         expect(s.resolvedSparklines).toBeUndefined()
+        expect(s.diagnostics).toBeUndefined()
+      })
+    }
+    for (const type of ['column', 'stacked'] as const) {
+      it(`${type} groups resolve like line groups (Stage 2)`, () => {
+        const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { type }))
+        resolve([s])
+        expect(at(s, 'J1')!.values).toEqual([1, 2, 3])
+        expect(at(s, 'J1')!.group.type).toBe(type)
         expect(s.diagnostics).toBeUndefined()
       })
     }
@@ -357,7 +366,7 @@ describe('resolveWorkbookSparklines', () => {
       expect(s.diagnostics).toBeUndefined()
     })
     it('a line group beside a gated one still resolves', () => {
-      const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { type: 'column' }), groupOf([spark('J2', 'A1:C1')]))
+      const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { dateAxis: true }), groupOf([spark('J2', 'A1:C1')]))
       resolve([s])
       expect(at(s, 'J1')).toBeUndefined()
       expect(at(s, 'J2')!.values).toEqual([1, 2, 3])

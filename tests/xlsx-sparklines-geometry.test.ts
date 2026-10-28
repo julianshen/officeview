@@ -418,6 +418,16 @@ describe('column and win/loss sparkline geometry (Stage 2, Task 8)', () => {
     expect(w.map(b => b.color)).toEqual(['FF22AA22', SER, 'FF00AAAA', 'FFCC0000', 'FFCC0000'])
   })
 
+  it('ignores first/last/high/low colours whose flag is off, and colours only the flagged elements (Task 9 comparison)', () => {
+    // The parser keeps every element colour whether or not the flag is on (the line path gates on the flag, so must bars).
+    const colors = { series: SER, negative: 'FF8000FF', first: 'FF22AA22', last: 'FF8000AA', high: 'FFCC0000', low: 'FF00AAAA' }
+    for (const type of ['column', 'stacked'] as const) {
+      expect(bars(sparklineGeometry(mk([-3, 1, -4, 2, 2], { type, colors }), HOST, CAP)).map(b => b.color), `${type} flags off`).toEqual(Array(5).fill(SER))
+      expect(bars(sparklineGeometry(mk([-3, 1, -4, 2, 2], { type, high: true, colors }), HOST, CAP)).map(b => b.color), `${type} high only`)
+        .toEqual([SER, SER, SER, 'FFCC0000', 'FFCC0000'])
+    }
+  })
+
   it('draws nothing in a cell too small for the plot box, both types (barTinyCellRule)', () => {
     expect(sparklineGeometry(mk([1, 2, 3], { type: 'column', colors: { series: SER } }), { x: 0, y: 0, w: 17.34, h: 5.34 }, Z1)).toEqual([])
     expect(sparklineGeometry(mk([1, -2], { type: 'stacked', displayXAxis: true, colors: { series: SER, axis: 'FF8000FF' } }), { x: 0, y: 0, w: 17.34, h: 5.34 }, Z1)).toEqual([])

@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Stage 1 XLSX sparkline reference comparison (plan Task 7, spec section 8 and section 11). Every case renders through
+ * Stage 1 and Stage 2 XLSX sparkline reference comparison (plan Tasks 7 and 9, spec section 8 and section 11). Every case renders through
  * the viewer's static sheet renderer at the capture scale and is compared with Excel for Mac's copy-picture reference
  * under the tolerance in docs/validation/xlsx-sparklines.md (Cases table). Cases marked *unverified* there are skipped
  * and must carry a reason. Negative controls perturb the parsed model and must FAIL the same tolerances.
@@ -17,13 +17,21 @@ import type { ResolvedSparkline } from '../src/xlsx/sparklines/resolve'
 const table = readCaseTable()
 /** Every Stage 1 case is expected to have references; none is filtered out by what happens to be on disk. */
 const cases = stageCases(1)
+/** Cases first captured for Stage 2 (column and win/loss bars). */
+const stage2Cases = stageCases(2).filter(c => c.stage === 2)
 const byId = (id: string) => {
-  const c = stageCases(1).find(x => x.id === id)
+  const c = stageCases(2).find(x => x.id === id)
   if (!c) throw new Error(`no case ${id}`)
   return c
 }
 const sparklines = (sheet: XlsxSheet): ResolvedSparkline[] => [...(sheet.resolvedSparklines ?? new Map()).values()].flatMap(m => [...m.values()]) as ResolvedSparkline[]
 const first = (sheet: XlsxSheet): ResolvedSparkline => sparklines(sheet)[0]
+/** The sparkline hosted in the 1-based sheet row `row` (Stage 2 cases put one sparkline per row, column J). */
+const inRow = (sheet: XlsxSheet, row: number): ResolvedSparkline => {
+  const found = sparklines(sheet).find(s => s.host.row === row - 1)
+  if (!found) throw new Error(`no sparkline in row ${row}`)
+  return found
+}
 const groups = (sheet: XlsxSheet) => [...new Set(sparklines(sheet).map(s => s.group))]
 /** Plot height in capture px for the 60-pt host rows (59-pt inner box minus the insets 4.08 + 3.06 pt). */
 const PLOT_H = 59 - 4.08 - 3.06
@@ -138,6 +146,67 @@ describe('XLSX sparkline references (Stage 1)', () => {
       // A slightly lower scale minimum moves y(0) on [−4, 4] from row 31 to row 30.
       await fails('line-axis', s => { for (const sp of sparklines(s)) sp.min -= 0.1 })
       await fails('line-precedence', s => { for (const g of groups(s)) [g.colors.high, g.colors.low] = [g.colors.low, g.colors.high] })
+    }, 60_000)
+  })
+})
+
+describe('XLSX sparkline references (Stage 2: column and win/loss)', () => {
+  it('there are 11 Stage 2 cases, each verified with a Cases row and complete references', () => {
+    expect(stage2Cases.map(c => c.id)).toEqual(['col-basic', 'col-negative', 'col-scale-no-zero', 'col-hl-fl', 'col-empty-span', 'col-merged-host', 'col-tiny', 'wl-basic', 'wl-tiny-values', 'wl-zero', 'wl-hl-fl'])
+    for (const c of stage2Cases) {
+      const entry = table.get(c.id)
+      expect(entry, c.id).toBeDefined()
+      expect(entry!.unverifiedReason, c.id).toBeUndefined()
+      expect(entry!.tolerance, c.id).toBeDefined()
+      for (const s of c.sheets.filter(x => captureRange(x))) for (const bordered of [false, true]) {
+        const base = join(REFS, refBase(c, s.name, bordered))
+        expect(existsSync(`${base}.png`), `${base}.png`).toBe(true)
+        expect(readSidecar(`${base}.json`, { sheet: s.name, range: captureRange(s)! }).pxPerPt, `${base}.json`).toBe(1)
+      }
+    }
+  })
+
+  it('stage-2 references pass within tolerance', async () => {
+    const failures: string[] = []
+    for (const c of stage2Cases) {
+      const entry = table.get(c.id) as CaseEntry
+      try {
+        const d = combine(await compareCase(c))
+        if (!withinTolerance(d, entry.tolerance!)) failures.push(`${c.id}: ${d.meanAbs.toFixed(4)} ${d.rowMax.toFixed(4)} strong ${d.strong}`)
+      } catch (error) { failures.push(`${c.id}: ${(error as Error).message}`) }
+    }
+    expect(failures).toEqual([])
+  }, 120_000)
+
+  describe('negative controls fail', () => {
+    const fails = async (id: string, mutate: (sheet: XlsxSheet) => void) => {
+      const d = combine(await compareCase(byId(id), { mutate }))
+      expect(withinTolerance(d, table.get(id)!.tolerance!), `${id}: ${d.meanAbs.toFixed(4)} ${d.rowMax.toFixed(4)} strong ${d.strong}`).toBe(false)
+    }
+    it('a bar whose value moves it, and a column filled where Excel leaves a gap', async () => {
+      await fails('col-basic', s => { (inRow(s, 1).values as number[])[3] = 5 })
+      await fails('col-merged-host', s => { (first(s).values as number[])[0] = 9 })
+      await fails('col-empty-span', s => { (inRow(s, 1).values as Array<number | null>)[1] = 5 })
+    }, 60_000)
+    it('a shifted scale and a wrong baseline', async () => {
+      await fails('col-scale-no-zero', s => { inRow(s, 1).min -= 5 })
+      await fails('col-negative', s => { inRow(s, 1).max += 3 })
+    }, 60_000)
+    it('negative colouring and the axis, columns and win/loss', async () => {
+      await fails('col-negative', s => { inRow(s, 1).group.negative = false })
+      await fails('col-negative', s => { inRow(s, 4).group.displayXAxis = false })
+      await fails('wl-basic', s => { inRow(s, 2).group.negative = false })
+      await fails('wl-basic', s => { inRow(s, 3).group.displayXAxis = false })
+      await fails('wl-zero', s => { for (const sp of sparklines(s)) sp.group.displayXAxis = !sp.group.displayXAxis })
+    }, 60_000)
+    it('a win bar turned into a loss bar', async () => {
+      await fails('wl-basic', s => { const v = inRow(s, 1).values as number[]; v[0] = -Math.abs(v[0]) || -1; v[1] = -Math.abs(v[1]) })
+    }, 60_000)
+    it('missing or swapped element colours', async () => {
+      await fails('col-hl-fl', s => { inRow(s, 1).group.high = false })
+      await fails('col-hl-fl', s => { inRow(s, 1).group.last = false })
+      await fails('col-hl-fl', s => { const g = inRow(s, 3).group; [g.colors.high, g.colors.low] = [g.colors.low, g.colors.high] })
+      await fails('wl-hl-fl', s => { inRow(s, 1).group.low = false })
     }, 60_000)
   })
 })

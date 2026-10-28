@@ -114,8 +114,8 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     // coloured. A missing element colour is not applied (colourFallback): colorNegative absent keeps the series
     // colour; colorSeries absent → black (shared seriesColor).
     const winners = new Map<number, string>()
-    const colorize = (color: string | undefined, indices: Iterable<number>): void => {
-      if (!color) return
+    const colorize = (on: boolean, color: string | undefined, indices: Iterable<number>): void => {
+      if (!on || !color) return
       for (const i of indices) if (has(i)) winners.set(i, color)
     }
     if (group.negative && group.colors.negative) {
@@ -125,10 +125,10 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
       }
     }
     // firstIndex/lastIndex are data-order slots; a null slot has no bar and no mark (Task 4 note).
-    colorize(group.colors.first, [s.firstIndex])
-    colorize(group.colors.last, [s.lastIndex])
-    colorize(group.colors.high, [...s.highIndices])
-    colorize(group.colors.low, [...s.lowIndices])
+    colorize(group.first, group.colors.first, [s.firstIndex])
+    colorize(group.last, group.colors.last, [s.lastIndex])
+    colorize(group.high, group.colors.high, [...s.highIndices])
+    colorize(group.low, group.colors.low, [...s.lowIndices])
 
     // columnNoZeroRule (δ = 0.63 pt): when the effective scale excludes 0 the baseline is the plot edge on 0's side
     // and the scale's end nearest 0 maps δ inside it, so the smallest value keeps a sliver (1 px at 1 px/pt). δ is

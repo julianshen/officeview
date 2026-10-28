@@ -40,9 +40,9 @@ export type ResolvedSparklines = ReadonlyMap<number, ReadonlyMap<number, Resolve
 
 const MAX_COLS = 16_384
 
-/** Staging gate (spec §10): features not yet in a merged stage are not drawn and raise no diagnostic. */
+/** Staging gate (spec §10): features not yet in a merged stage (dateAxis, rightToLeft: Stage 3) are not drawn and raise no diagnostic. */
 function stagedOut(group: XlsxSparklineGroup): boolean {
-  return group.refused !== undefined || group.type !== 'line' || group.dateAxis || group.rightToLeft
+  return group.refused !== undefined || group.dateAxis || group.rightToLeft
 }
 
 function diagnose(sheet: XlsxSheet, diagnostic: SparklineDiagnostic): void {

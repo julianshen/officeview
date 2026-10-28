@@ -131,7 +131,7 @@ pixels are solid, a single colour with no anti-aliasing, so every bar edge is an
 ## Comparison (Task 7)
 
 `bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]` renders each case and compares its host cells with
-the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 case and asserts the tolerances
+the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 and Stage 2 case and asserts the tolerances
 below. It reads the **Cases** table, so a tolerance or status changes here, not in code.
 
 - **References required.** Every captured sheet of every case needs its plain and `-bordered` PNG and both `.json`
@@ -171,8 +171,22 @@ below. It reads the **Cases** table, so a tolerance or status changes here, not 
   - line-precedence: high and low colours swapped
   - line-merged-host: a vertex moved 2 px
 
+  Stage 2 (Task 9) controls, same mechanism (bars are solid and unanti-aliased, so the Stage 2 residual is zero and the
+  tolerance is the flat 0.002 / 0.010 / 3 floor; `rowMax` is what catches a bar one row off, since ±1-row matching
+  hides it from `strong`):
+  - col-basic, col-merged-host, col-empty-span: a bar value changed / a gap filled
+  - col-scale-no-zero, col-negative: the scale shifted (smallest-bar sliver, baseline row)
+  - col-negative, wl-basic: negative colouring off; the axis off (columns, win/loss); wl-zero: the axis toggled
+  - wl-basic: win bars turned into loss bars
+  - col-hl-fl, wl-hl-fl: high, last or low off; high and low colours swapped
+
   The single-missing-marker controls clear the strong margin by only 1–2 pixels. A 0.75-pt diamond is 4 px at
   α ½, which is why the margin is a flat 3 and not proportional.
+
+- **Stage 2 notes.** The first `--stage 2` run measured 0.08–0.13 meanAbs on most bar cases, with first, last and high
+bars wrongly coloured: the bar path applied `colors.first/last/high/low` without checking the group's `first/last/high/low`
+flags (the parser keeps every element colour, flagged or not; the line path already gated on the flag). Fixed in
+`geometry.ts` (`colorize` takes the flag) with a unit test; every Stage 2 case then measures 0 strong pixels.
 
 ## Cases
 
@@ -211,3 +225,14 @@ is `meanAbs / rowMax / strong`.
 | line-colours-missing | pass | 0.0051 | 0.0109 | 108 | 0.008 / 0.021 / 111 |  |
 | line-tiny-cell | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | both blank (tinyCellRule); cell ref 14×5, viewer 14.25×5.25 |
 | layering | *unverified* | 0.0267 | 0.4292 | 2841 | — | Cell text, not the sparkline, dominates the difference: the static renderer draws the host text and the spilled neighbour text in node-canvas's fallback font, vertically centred, where Excel draws Calibri bottom-aligned in the 60-pt rows (rows 1, 2 and 5 of the capture), so no tolerance separates a sparkline defect from text placement. The sparkline rows without text (3: fill only, 4: gridlines only) measure 0.0056 / 0.0147 / 14 each, exactly line-basic's residual, so the line over a fill matches; rows 1, 2 and 5 measure up to 0.0707 / 0.4292 / 1766 from the text alone. the fill-under and text-over orders are confirmed by eye in the `--out` images, not by the gate |
+| col-basic | pass | 0.0006 | 0.0027 | 0 | 0.003 / 0.013 / 3 | row 2 default series (accent1, tint −0.5) is (32,56,100) here and (32,55,100) in Excel: one level in G, inside `colourResolution`'s ±2, not geometry; cell ref 204×60 per row |
+| col-negative | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-scale-no-zero | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-hl-fl | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-empty-span | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-merged-host | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | cell ref 408×60, viewer 427.5×60 |
+| col-tiny | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | both blank (barTinyCellRule); cell ref 14×5, viewer 14.25×5.25 |
+| wl-basic | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| wl-tiny-values | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| wl-zero | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| wl-hl-fl | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
