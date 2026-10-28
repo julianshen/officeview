@@ -37,7 +37,7 @@ const mk = (values: Array<number | null>, over: Partial<XlsxSparklineGroup> = {}
   return {
     host: { row: 0, col: 0 }, dataSheet: 'Sheet1', sourceRows: values.map((_, index) => index), group: groupOf(over), values, bridged: resolved.bridged ?? [],
     firstIndex: resolved.firstIndex ?? 0, lastIndex: resolved.lastIndex ?? values.length - 1,
-    highIndices: resolved.highIndices ?? high, lowIndices: resolved.lowIndices ?? low, min, max,
+    highIndices: resolved.highIndices ?? high, lowIndices: resolved.lowIndices ?? low, min, max, axis: resolved.axis,
   }
 }
 
@@ -463,5 +463,97 @@ describe('column and win/loss sparkline geometry (Stage 2, Task 8)', () => {
     // n = 2: slot 99.5, w 71: edges [62,133), [162,233).
     const p = bars(sparklineGeometry(mk([2, 4], { type: 'column', high: true, low: true }), HOST, CAP))
     expect(p.map(b => [b.color, b.x])).toEqual([['000000', 62], ['000000', 162]])
+  })
+})
+
+/**
+ * Stage 3 (plan Task 10): the date axis and the right-to-left mirror. Resolve hands geometry the axis (`positions`
+ * = each point's fraction of the plot width — dateSlotRule puts the point dated d at its day-slot centre — and
+ * `slot` = the day-slot width as the same fraction); geometry multiplies by P and mirrors x about the plot box for
+ * rightToLeft (rtlRule: x' = L + R − x BEFORE snapping; indices and colours stay in data order, so first draws at
+ * the RIGHT). HOST/CAP like the Stage 2 describe: 1 device px per pt, so the doc's numbers (L = 48, R = 247,
+ * P = 199 device px) come out exactly.
+ */
+describe('date axis and right-to-left geometry (Stage 3, Task 10)', () => {
+  type Bar = Extract<SparkPrimitive, { kind: 'rect' }>
+  const bars = (p: SparkPrimitive[]): Bar[] => p.filter((x): x is Bar => x.kind === 'rect')
+  const HOST = { x: 45 * 4 / 3, y: 0, w: 204 * 4 / 3, h: 60 * 4 / 3 }
+  const CAP = { zoom: 0.75, dpr: 1, output: 'device' as const }
+  const SER = 'FFC00000', GREEN = 'FF22AA22', PURPLE = 'FF8000AA', HIGH = 'FFCC0000', LOW = 'FF00AAAA', MARK = 'FFC000FF'
+  // The date-uneven dates: serials 45000 + [0,1,3,10,11,20,21,30] under [4,7,3,9,2,8,5,6]; span 45000–45030 →
+  // 31 equal day slots of P/31 = 6.419 device px. The axis fractions dateSlotRule: ((d − 45000) + ½)/31.
+  const OFF = [0, 1, 3, 10, 11, 20, 21, 30]
+  const D = [4, 7, 3, 9, 2, 8, 5, 6]
+  const axis = { positions: OFF.map(o => (o + 0.5) * (1 / 31)), slot: 1 / 31 }
+
+  it('centres bars on their day slots and sizes them by day width (dateSlotRule, barWidthRule)', () => {
+    // date-uneven column (individual scale [2, 9], columnNoZeroRule): slot 6.419, w = slot/1.4 = 4.585; bar edges
+    // round(c ± w/2) of the day-slot centres: [49,54) [55,60) [68,73) [113,118) [120,124) [177,182) [184,188)
+    // [241,246); tops/heights map exactly like col-basic's (42/20/49/5/56/12/34/27, baseline row 57).
+    expect(bars(sparklineGeometry(mk(D, { type: 'column', colors: { series: SER } }, { axis }), HOST, CAP))).toEqual([
+      { kind: 'rect', x: 49, y: 42, w: 5, h: 15, color: SER },
+      { kind: 'rect', x: 55, y: 20, w: 5, h: 37, color: SER },
+      { kind: 'rect', x: 68, y: 49, w: 5, h: 8, color: SER },
+      { kind: 'rect', x: 113, y: 5, w: 5, h: 52, color: SER },
+      { kind: 'rect', x: 120, y: 56, w: 4, h: 1, color: SER },
+      { kind: 'rect', x: 177, y: 12, w: 5, h: 45, color: SER },
+      { kind: 'rect', x: 184, y: 34, w: 4, h: 23, color: SER },
+      { kind: 'rect', x: 241, y: 27, w: 5, h: 30, color: SER },
+    ])
+  })
+
+  it('moves line vertices off the even slots onto the dated day centres (dateSlotRule)', () => {
+    // date-uneven line (individual scale [2, 9]): even-slot spacing would put vertices at 60.5/85.5/110.5…;
+    // the dated slots put them at 51.5/57.5/70.5/115.5… (x = (o+½)·P/31 snapped ⌊·⌋+½ for the 1-px stroke).
+    expect(polylines(sparklineGeometry(mk(D, {}, { axis }), HOST, CAP))[0].points).toEqual([
+      [51.5, 42.5], [57.5, 19.5], [70.5, 49.5], [115.5, 5.5], [121.5, 56.5], [179.5, 12.5], [186.5, 34.5], [243.5, 27.5],
+    ])
+  })
+
+  it('mirrors line x about the plot box, keeping indices and colours in data order (rtlRule)', () => {
+    // rtl-line row 1 (even slots, no date axis): x'_i = R − x_i before snapping: vertex centres 59.5…234.5 (a
+    // mirror of the even-slot centres; the low vertex at 135.5, not the dated 173.5); markers keep their per-index
+    // snapshots (ordinary round, specials ⌊·⌋), so first keeps its colour at the RIGHTMOST slot (data order).
+    const p = sparklineGeometry(mk(D, {
+      rightToLeft: true, markers: true, first: true, last: true, high: true, low: true,
+      colors: { series: SER, markers: MARK, first: GREEN, last: PURPLE, high: HIGH, low: LOW },
+    }), HOST, CAP)
+    expect(polylines(p)[0].points).toEqual([
+      [234.5, 42.5], [209.5, 19.5], [184.5, 49.5], [159.5, 5.5], [135.5, 56.5], [110.5, 12.5], [85.5, 34.5], [60.5, 27.5],
+    ])
+    expect(markers(p).map(m => [m.x, m.y, m.color])).toEqual([
+      [234, 42, GREEN], [210, 20, MARK], [185, 50, MARK], [159, 5, HIGH], [135, 56, LOW], [110, 12, MARK], [85, 35, MARK], [60, 27, PURPLE],
+    ])
+  })
+
+  it('mirrors a date axis under rightToLeft: the exact tr mirror of the date positions (rtlRule, dateSlotRule)', () => {
+    // rtl-line row 2: the dated vertices mirror about the plot box (51.5 ↔ 243.5, 57.5 ↔ 237.5 …) and the line
+    // connects them in date order; data-order colours hold (first at the earliest date, now on the right).
+    const p = sparklineGeometry(mk(D, { rightToLeft: true }, { axis }), HOST, CAP)
+    expect(polylines(p)[0].points).toEqual([
+      [243.5, 42.5], [237.5, 19.5], [224.5, 49.5], [179.5, 5.5], [173.5, 56.5], [115.5, 12.5], [108.5, 34.5], [51.5, 27.5],
+    ])
+  })
+
+  it('mirrors column and win/loss bars with the same rounded edges, colours staying in data order (rtlRule)', () => {
+    // rtl-column: rightToLeft mirrors each bar's edges about the plot box, reproducing col-basic's edges exactly
+    // in reverse order; first/last colours stay on their data-order bars (first on the RIGHT, last on the left).
+    const base = bars(sparklineGeometry(mk(D, { type: 'column', first: true, last: true, colors: { series: SER, first: GREEN, last: PURPLE } }), HOST, CAP))
+    expect(base.map(b => b.color)).toEqual([GREEN, SER, SER, SER, SER, SER, SER, PURPLE])
+    const rtl = bars(sparklineGeometry(mk(D, { type: 'column', first: true, last: true, rightToLeft: true, colors: { series: SER, first: GREEN, last: PURPLE } }), HOST, CAP))
+    expect(rtl.map(b => [b.x, b.y, b.w, b.h])).toEqual([
+      [226, 42, 17, 15], [201, 20, 18, 37], [176, 49, 18, 8], [151, 5, 18, 52],
+      [126, 56, 18, 1], [101, 12, 18, 45], [76, 34, 18, 23], [52, 27, 17, 30],
+    ])
+    // The mirrored edges are col-basic's exactly reversed (y/heights keep each bar's own mapping).
+    expect(rtl.map(b => [b.x, b.w])).toEqual([...base.map(b => [b.x, b.w])].reverse())
+    expect(rtl.map(b => b.color)).toEqual([GREEN, SER, SER, SER, SER, SER, SER, PURPLE])
+    // Win/loss over zero: [−3, 1, −4, 2, 2] with first/last — the mirrored edges reproduce the Stage 2 rows
+    // ([54,82) [93,122) [133,162) [173,202) [213,241)) reversed, wins above / losses below row 31 as before.
+    const wl = bars(sparklineGeometry(mk([-3, 1, -4, 2, 2], { type: 'stacked', negative: true, first: true, last: true, rightToLeft: true, colors: { series: SER, negative: 'FF8000FF', first: GREEN, last: PURPLE } }), HOST, CAP))
+    expect(wl.map(b => [b.y, b.h, b.color])).toEqual([
+      [31, 26, GREEN], [5, 26, SER], [31, 26, 'FF8000FF'], [5, 26, SER], [5, 26, PURPLE],
+    ])
+    expect(wl.map(b => b.x)).toEqual([213, 173, 133, 93, 54])
   })
 })

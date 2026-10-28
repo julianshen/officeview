@@ -92,6 +92,9 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   const strokeDev = Math.max(1, Math.floor(group.lineWeightPt * PT_PX * devPerPx + 0.5))
   const strokePx = strokeDev / (scale.output === 'device' ? 1 : devPerPx)
   const oddStroke = strokeDev % 2 === 1
+  // `rtlRule` (Task 10): rightToLeft mirrors the x about the plot box BEFORE any snapping (x' = L + R − x), while
+  // indices and colours stay in data order — a first point keeps its colour at the RIGHT edge of the box.
+  const rtl = group.rightToLeft === true
 
   // vertexSnapRule: odd device width → pixel centre ⌊x⌋+½, ⌊y⌋+½; even width → pixel corner round(x), round(y).
   const snapVertex = (dev: number): number => oddStroke ? Math.floor(dev) + 0.5 : Math.round(dev)
@@ -106,8 +109,19 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     // barSlotRule / barWidthRule: each of the n values owns one of n equal slots (lineEndpointRule's slots) and the
     // bar is centred on the slot centre; width = slot / 1.4 (a 40% gap between bars, half on each side); edges are
     // round(c − w/2) and round(c + w/2) in device px (measured: P = 199 → 17–18 px, P = 403 → 36 px exactly).
-    const slot = (Rdev - Ldev) / n
+    // `dateSlotRule` (Task 10): with a resolved axis the slot is the group's day slot (axis.slot of the plot width)
+    // and the centre is the dated day-slot centre `positions[i]` of the plot width; `rtlRule` mirrors the centre
+    // about the plot box (measured edges reproduce the undated ones mirrored exactly; colours stay in data order).
+    const slot = s.axis ? toDevX(plotW) * s.axis.slot : (Rdev - Ldev) / n
     const halfBar = slot / 1.4 / 2
+    const centreDev = (i: number): number => {
+      if (s.axis) {
+        const frac = s.axis.positions[i] ?? (i + 0.5) / n
+        return toDevX(rtl ? right - frac * plotW : left + frac * plotW)
+      }
+      const centre = Ldev + (i + 0.5) * slot
+      return rtl ? Ldev + Rdev - centre : centre
+    }
 
     // barColourPrecedence: each bar's colour is the last painted of series → negative → first/last → high → low
     // (high/low are the max/min values, win/loss too, not "all wins" — the resolve indices). Ties: every tied bar is
@@ -172,8 +186,9 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
         barBottom = Math.max(baseRow, valueRow)
       }
       if (!(barBottom > barTop)) continue // zero-height bar draws nothing (columnEmptyRule 'zero')
-      const barLeft = Math.round(Ldev + (i + 0.5) * slot - halfBar)
-      const barRight = Math.round(Ldev + (i + 0.5) * slot + halfBar)
+      const centre = centreDev(i)
+      const barLeft = Math.round(centre - halfBar)
+      const barRight = Math.round(centre + halfBar)
       if (!(barRight > barLeft)) continue
       primitives.push({
         kind: 'rect',
@@ -217,8 +232,18 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
     return top + plotH / 2
   }
 
-  // lineEndpointRule: n points sit at the centres of n equal slots across the plot box, never at its edges.
-  const xDevOf = (i: number): number => toDevX(left + (i + 0.5) * plotW / n)
+  // lineEndpointRule: n points sit at the centres of n equal slots across the plot box, never at its edges — the
+  // undated slots keep the exact Task 5 expression (the pin at o.5 boundaries is knife-edge exact). `dateSlotRule`
+  // (Task 10): with a resolved axis the x of point i is `s.axis.positions[i]` of the plot width — the centre of the
+  // point's dated day slot — never evenly spaced; `rtlRule` mirrors the payoff side about the box in logical px.
+  const xDevOf = (i: number): number => {
+    const frac = s.axis ? s.axis.positions[i] ?? (i + 0.5) / n : undefined
+    if (frac === undefined) {
+      const slot = (i + 0.5) * plotW / n
+      return toDevX(rtl ? right - slot : left + slot)
+    }
+    return toDevX(rtl ? right - frac * plotW : left + frac * plotW)
+  }
   const yDevOf = (i: number): number => toDevY(yOf(s.values[i] as number))
 
   // Colour precedence (colourPrecedence): a point's colour is the last painted of markers → first/last → high → low

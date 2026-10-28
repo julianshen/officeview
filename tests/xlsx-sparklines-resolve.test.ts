@@ -341,15 +341,28 @@ describe('resolveWorkbookSparklines', () => {
     })
   })
 
-  describe('staging gate (spec 10)', () => {
-    for (const [label, over] of [['dateAxis', { dateAxis: true }], ['rightToLeft', { rightToLeft: true }]] as const) {
-      it(`${label} groups resolve to nothing and raise no diagnostic`, () => {
-        const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1'), spark('J2', area('A1:B2')), spark('J3', area('A1:B1', 'Nowhere'))], over))
-        resolve([s])
-        expect(s.resolvedSparklines).toBeUndefined()
-        expect(s.diagnostics).toBeUndefined()
-      })
-    }
+  describe('staging gate (Stage 3 lifts the flags; only group.refused stays staged out)', () => {
+    it('a refused group has no entries and adds no diagnostic of its own (parse already diagnosed it)', () => {
+      const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1'), spark('J2', area('A1:B2')), spark('J3', area('A1:B1', 'Nowhere'))], { refused: 'sparkline-type' }))
+      resolve([s])
+      expect(s.resolvedSparklines).toBeUndefined()
+      expect(s.diagnostics).toBeUndefined()
+    })
+    // Task 10: dateAxis and rightToLeft no longer stage out. dateAxis resolves an axis from the parse-kept date range
+    // (and without one is simply not drawn, dateMissingRule below); rightToLeft resolves untouched (geometry's concern).
+    it('dateAxis and rightToLeft groups pass the gate like unflagged ones', () => {
+      const s = withGroups(
+        sheetOf('S', [[4, 7, 3, 9, 2, 8, 5, 6], [0, 1, 3, 10, 11, 20, 21, 30].map(o => 45000 + o)]),
+        groupOf([spark('J1', 'A1:H1')], { dateAxis: true, dateRange: area('A2:H2') }),
+        groupOf([spark('J2', 'A1:C1')], { rightToLeft: true }),
+        groupOf([spark('J3', 'A1:C1')], { dateAxis: true }),
+      )
+      resolve([s])
+      expect(at(s, 'J1')!.axis).toBeDefined()
+      expect(at(s, 'J2')!.values).toEqual([4, 7, 3])
+      expect(at(s, 'J3')).toBeUndefined()
+      expect(s.diagnostics).toBeUndefined()
+    })
     for (const type of ['column', 'stacked'] as const) {
       it(`${type} groups resolve like line groups (Stage 2)`, () => {
         const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { type }))
@@ -359,17 +372,156 @@ describe('resolveWorkbookSparklines', () => {
         expect(s.diagnostics).toBeUndefined()
       })
     }
-    it('a refused group has no entries and adds no diagnostic of its own (parse already diagnosed it)', () => {
-      const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { refused: 'sparkline-type' }))
-      resolve([s])
-      expect(s.resolvedSparklines).toBeUndefined()
-      expect(s.diagnostics).toBeUndefined()
-    })
-    it('a line group beside a gated one still resolves', () => {
+    it('a dateAxis group without a resolution still lets a plain neighbour resolve', () => {
       const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { dateAxis: true }), groupOf([spark('J2', 'A1:C1')]))
       resolve([s])
       expect(at(s, 'J1')).toBeUndefined()
       expect(at(s, 'J2')!.values).toEqual([1, 2, 3])
+    })
+  })
+
+  describe('date axis (Stage 3, plan Task 10): dateSlotRule / dateSortRule / dateMissingRule / dateLengthRule / dateCellRule', () => {
+    // The date-uneven layout: data A1:H1 over serials 45000 + [0,1,3,10,11,20,21,30] in A2:H2 — 8 values over a
+    // 45000–45030 span = 31 day slots. Axis positions are fractions of P: (d − dmin + ½)·slot with slot = 1/31.
+    const offs = [0, 1, 3, 10, 11, 20, 21, 30]
+    const D = [4, 7, 3, 9, 2, 8, 5, 6]
+    const datedSheet = (values: Array<number | null>, dates: Array<number | string | null>, over: Partial<XlsxSparklineGroup> = {}): XlsxSheet =>
+      withGroups(sheetOf('S', [values, dates]), groupOf([spark('J1', 'A1:H1')], { dateAxis: true, dateRange: area('A2:H2'), ...over }))
+    const frac = (o: number, range = 31): number => (o + 0.5) * (1 / range)
+
+    it('pairs the data cells with the date cells and hands geometry the day-slot fractions (dateSlotRule)', () => {
+      const s = datedSheet(D, offs.map(o => 45000 + o))
+      resolve([s])
+      const r = at(s, 'J1')!
+      expect(r.values).toEqual([4, 7, 3, 9, 2, 8, 5, 6])
+      expect(r.axis).toEqual({ positions: offs.map(o => frac(o)), slot: 1 / 31 })
+      expect(r.firstIndex).toBe(0)
+      expect(r.lastIndex).toBe(7)
+    })
+
+    it('sorts the pairs by date: plotted values in date order, first/last/high/low over the sorted order (dateSortRule)', () => {
+      // Measured date-unsorted pairing: dates 45000 + [10,0,3,30,1,20,11,21] under [4,7,3,9,2,8,5,6] sort to
+      // values [7,2,3,4,5,8,6,9]; the earliest (45000, value 7) is the first point, 45030 (value 9) the last.
+      // The permutation also shows in the source rows, so the pairs come from a column range (dates in the next column).
+      const s = withGroups(
+        sheetOf('S', [[4, 10], [7, 0], [3, 3], [9, 30], [2, 1], [8, 20], [5, 11], [6, 21]].map(line => line.map(o => typeof o === 'number' && o > 100 ? 45000 + o : o))),
+        groupOf([spark('J1', 'A1:A8')], { dateAxis: true, dateRange: area('B1:B8') }),
+      )
+      resolve([s])
+      const r = at(s, 'J1')!
+      expect(r.values).toEqual([7, 2, 3, 4, 5, 8, 6, 9])
+      expect(r.axis!.positions).toEqual([0, 1, 3, 10, 11, 20, 21, 30].map(o => frac(o)))
+      expect(r.sourceRows).toEqual([1, 4, 2, 0, 6, 5, 7, 3])
+      expect(r.firstIndex).toBe(0)
+      expect(r.lastIndex).toBe(7)
+      expect(r.highIndices).toEqual([7])
+      expect(r.lowIndices).toEqual([1])
+    })
+
+    it('a dateAxis group without a date range draws nothing and raises no diagnostic (dateMissingRule)', () => {
+      const s = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { dateAxis: true }))
+      resolve([s])
+      expect(s.resolvedSparklines).toBeUndefined()
+      expect(s.diagnostics).toBeUndefined()
+    })
+
+    it('an unusable date range — two-dimensional or on a missing sheet — skips only that group, silently (ruling)', () => {
+      const t = withGroups(sheetOf('S', [[1, 2, 3], [4, 5]]), groupOf([spark('J1', 'A1:C1')], { dateAxis: true, dateRange: area('A1:B2') }))
+      resolve([t])
+      expect(at(t, 'J1')).toBeUndefined()
+      expect(t.diagnostics).toBeUndefined()
+      const u = withGroups(sheetOf('S', [[1, 2, 3]]), groupOf([spark('J1', 'A1:C1')], { dateAxis: true, dateRange: area('A1:C1', 'Nowhere') }))
+      resolve([u])
+      expect(at(u, 'J1')).toBeUndefined()
+      expect(u.diagnostics).toBeUndefined()
+    })
+
+    it('truncates to the first min(nData, nDates) pairs and slots over the used dates (dateLengthRule)', () => {
+      // Shorter date range (6 dates 45000+[0,1,3,10,11,20]): values [4,7,3,9,2,8], span 45000–45020 = 21 slots.
+      const s = datedSheet(D, [0, 1, 3, 10, 11, 20].map(o => 45000 + o))
+      resolve([s])
+      const r = at(s, 'J1')!
+      expect(r.values).toEqual([4, 7, 3, 9, 2, 8])
+      expect(r.axis).toEqual({ positions: [0, 1, 3, 10, 11, 20].map(o => frac(o, 21)), slot: 1 / 21 })
+      expect(r.max).toBe(9)
+      // Longer date range (10 dates): the first 8 pairs pass — identical to the 31-slot date-uneven layout.
+      const longer = datedSheet(D, [0, 1, 3, 10, 11, 20, 21, 30, 40, 50].map(o => 45000 + o))
+      resolve([longer])
+      expect(at(longer, 'J1')!.values).toEqual([4, 7, 3, 9, 2, 8, 5, 6])
+      expect(at(longer, 'J1')!.axis).toEqual({ positions: offs.map(o => frac(o)), slot: 1 / 31 })
+    })
+
+    it('a non-number date cell drops the point entirely — out of values and min/max — while the span and slot grid stay (dateCellRule)', () => {
+      // Text at col 2 (offset 3): the [3-under-45003] pair is dropped wholesale: values lose that slot, the others
+      // keep theirs; scale min 2 unchanged (the text takes no part in min/max); span stays 45000–45030 (31 slots).
+      const s = datedSheet(D, offs.map(o => (o === 3 ? 'N/A' : 45000 + o)), { displayEmptyCellsAs: 'gap' })
+      resolve([s])
+      const r = at(s, 'J1')!
+      expect(r.values).toEqual([4, 7, 9, 2, 8, 5, 6])
+      expect(r.axis!.slot).toBe(1 / 31)
+      expect(r.axis!.positions).toEqual([0, 1, 10, 11, 20, 21, 30].map(o => frac(o)))
+      expect(r.min).toBe(2)
+      expect(r.max).toBe(9)
+      // Empty at col 4 (offset 11): the value 2 pair drops, so the scale min becomes 3.
+      const e = datedSheet(D, offs.map(o => (o === 11 ? null : 45000 + o)), { displayEmptyCellsAs: 'gap' })
+      resolve([e])
+      expect(at(e, 'J1')!.values).toEqual([4, 7, 3, 9, 8, 5, 6])
+      expect(at(e, 'J1')!.min).toBe(3)
+      // An EMPTY DATA cell with a valid date keeps today's empty rules: under gap the null slot stays at its date
+      // position (values and positions stay parallel), excluded from min/max like any other gap.
+      const g = datedSheet([4, 7, null, 9, 2, 8, 5, 6], offs.map(o => 45000 + o), { displayEmptyCellsAs: 'gap' })
+      resolve([g])
+      const rg = at(g, 'J1')!
+      expect(rg.values).toEqual([4, 7, null, 9, 2, 8, 5, 6])
+      expect(rg.axis!.positions).toEqual(offs.map(o => frac(o)))
+      expect(rg.min).toBe(2)
+      expect(rg.bridged).toEqual([])
+    })
+
+    it('rightToLeft is geometry only: resolution, including the date axis, is unchanged (rtlRule)', () => {
+      const plain = datedSheet(D, offs.map(o => 45000 + o))
+      const rtl = datedSheet(D, offs.map(o => 45000 + o), { rightToLeft: true })
+      resolve([plain])
+      resolve([rtl])
+      const a = at(plain, 'J1')!, b = at(rtl, 'J1')!
+      expect({ ...b, group: undefined }).toEqual({ ...a, group: undefined })
+    })
+
+    it('the committed Stage 3 fixtures resolve end to end (parse -> resolve wiring)', async () => {
+      const open = async (id: string) => parseXlsx(await OfficePackage.load(readFileSync(fileURLToPath(new URL(`./fixtures/xlsx-sparklines/${id}.xlsx`, import.meta.url)))), { valuePolicy: 'cached' })
+      const entry = (doc: Awaited<ReturnType<typeof open>>, ref: string) => { const h = area(ref); return doc.sheets[0].resolvedSparklines?.get(h.r0)?.get(h.c0) }
+      const uneven = await open('date-uneven')
+      expect(entry(uneven, 'J1')!.values).toEqual([4, 7, 3, 9, 2, 8, 5, 6])
+      expect(entry(uneven, 'J1')!.axis).toEqual({ positions: offs.map(o => frac(o)), slot: 1 / 31 })
+      expect(entry(uneven, 'J4')!.values).toEqual([4, 7, 3, 9, 2, 8, 5, 6])
+      expect(entry(uneven, 'J4')!.axis).toBeUndefined() // same dates, but no dateAxis: even slots (dateAxisOffRule)
+      const unsorted = await open('date-unsorted')
+      expect(entry(unsorted, 'J1')!.values).toEqual([7, 2, 3, 4, 5, 8, 6, 9])
+      expect(entry(unsorted, 'J1')!).toMatchObject({ firstIndex: 0, lastIndex: 7, highIndices: [7], lowIndices: [1] })
+      const lengths = await open('date-length-mismatch')
+      expect(entry(lengths, 'J1')!.values).toEqual([4, 7, 3, 9, 2, 8])
+      expect(entry(lengths, 'J1')!.axis!.slot).toBe(1 / 21)
+      expect(entry(lengths, 'J2')!.values).toEqual([4, 7, 3, 9, 2, 8, 5, 6])
+      expect(entry(lengths, 'J2')!.axis!.slot).toBe(1 / 31)
+      const text = await open('date-text')
+      expect(entry(text, 'J1')!.values).toEqual([4, 7, 9, 2, 8, 5, 6])
+      expect(entry(text, 'J2')!).toMatchObject({ values: [4, 7, 3, 9, 8, 5, 6], min: 3 })
+      const missing = await open('date-missing-range')
+      expect(missing.sheets[0].resolvedSparklines).toBeUndefined()
+      expect(missing.sheets[0].diagnostics ?? []).toEqual([])
+      const rtl = await open('rtl-line')
+      expect(entry(rtl, 'J1')!.group.rightToLeft).toBe(true)
+      expect(entry(rtl, 'J1')!.axis).toBeUndefined()
+      expect(entry(rtl, 'J2')!.axis).toEqual({ positions: offs.map(o => frac(o)), slot: 1 / 31 })
+      expect(entry(rtl, 'J3')!.values).toEqual([3, 7, null, 4, null, null, 8, 5])
+      const hlfl = await open('rtl-hl-fl')
+      expect(entry(hlfl, 'J1')!.values).toEqual(D)
+      expect(entry(hlfl, 'J2')!.values).toEqual([9, 3, 5, 2, 6, 4, 7, 1])
+      expect(entry(hlfl, 'J1')!.highIndices).toEqual([3])
+      expect(entry(hlfl, 'J2')!.highIndices).toEqual([0])
+      const column = await open('rtl-column')
+      expect(entry(column, 'J1')!.values).toEqual([-3, 2, -1, 4, -4, 3, 1, -2])
+      expect(entry(column, 'J2')!.values).toEqual([-3, 2, -1, 4, -4, 3, 1, -2])
     })
   })
 
