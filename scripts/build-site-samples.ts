@@ -295,7 +295,7 @@ type XRow = Array<XCell | null>
 const colName = (i: number): string => (i >= 26 ? colName(Math.floor(i / 26) - 1) : '') + String.fromCharCode(65 + (i % 26))
 
 /** Cell style indices into XLSX_STYLES' cellXfs. */
-const S = { title: 1, header: 2, text: 3, money: 4, pct: 5, totalLabel: 6, totalMoney: 7, subtitle: 8, int: 9, date: 10, totalPct: 11, headerLeft: 12 }
+const S = { title: 1, header: 2, text: 3, money: 4, pct: 5, totalLabel: 6, totalMoney: 7, subtitle: 8, int: 9, date: 10, totalPct: 11, headerLeft: 12, dateHeader: 13 }
 
 const XLSX_STYLES = `${XML}<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <numFmts count="3"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0"/><numFmt numFmtId="165" formatCode="0.0%"/><numFmt numFmtId="166" formatCode="d mmm yyyy"/></numFmts>
@@ -307,7 +307,7 @@ const XLSX_STYLES = `${XML}<styleSheet xmlns="http://schemas.openxmlformats.org/
 <border><left/><right/><top/><bottom style="thin"><color rgb="FFD5DCE6"/></bottom><diagonal/></border>
 <border><left/><right/><top style="medium"><color rgb="FF0F4C81"/></top><bottom style="medium"><color rgb="FF0F4C81"/></bottom><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="13">
+<cellXfs count="14">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
 <xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
@@ -321,9 +321,43 @@ const XLSX_STYLES = `${XML}<styleSheet xmlns="http://schemas.openxmlformats.org/
 <xf numFmtId="166" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left"/></xf>
 <xf numFmtId="165" fontId="3" fillId="3" borderId="2" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1"/>
 <xf numFmtId="0" fontId="2" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
+<xf numFmtId="166" fontId="2" fillId="2" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 </cellXfs></styleSheet>`
 
-interface SheetSpec { name: string; rows: XRow[]; widths: number[]; merges?: string[]; freezeRows?: number; autoFilter?: string; rowHeights?: Record<number, number> }
+type SparklineColour = { rgb: string } | { theme: number; tint?: number }
+interface SampleSparklineGroup {
+  attrs: Record<string, string | number>
+  colours: Partial<Record<'colorSeries' | 'colorNegative' | 'colorAxis' | 'colorMarkers' | 'colorFirst' | 'colorLast' | 'colorHigh' | 'colorLow', SparklineColour>>
+  sparklines: Array<{ f: string; sqref: string }>
+  dateRange?: string
+}
+interface SheetSpec { name: string; rows: XRow[]; widths: number[]; merges?: string[]; freezeRows?: number; autoFilter?: string; rowHeights?: Record<number, number>; sparklineGroups?: SampleSparklineGroup[] }
+
+const SPARKLINE_EXTENSION_URI = '{05C60535-1F16-4fd2-B633-F4F36F0B64E0}'
+const SPARKLINE_X14_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
+const SPARKLINE_XM_NS = 'http://schemas.microsoft.com/office/excel/2006/main'
+const SPARKLINE_X14AC_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac'
+
+/** Extension structure and child order match the Excel-captured reference workbooks. */
+function sparklineExtLst(groups: SampleSparklineGroup[] | undefined): string {
+  if (!groups?.length) return ''
+  const colourOrder = ['colorSeries', 'colorNegative', 'colorAxis', 'colorMarkers', 'colorFirst', 'colorLast', 'colorHigh', 'colorLow'] as const
+  const groupXml = groups.map((group) => {
+    const attrs = Object.entries(group.attrs).map(([key, value]) => ` ${key}="${esc(String(value))}"`).join('')
+    const colours = colourOrder.flatMap((key) => {
+      const colour = group.colours[key]
+      if (!colour) return []
+      const value = 'rgb' in colour
+        ? `rgb="${colour.rgb}"`
+        : `theme="${colour.theme}"${colour.tint === undefined ? '' : ` tint="${colour.tint}"`}`
+      return [`<x14:${key} ${value}/>`]
+    }).join('')
+    const dateRange = group.dateRange ? `<xm:f>${esc(group.dateRange)}</xm:f>` : ''
+    const sparklines = group.sparklines.map((sparkline) => `<x14:sparkline><xm:f>${esc(sparkline.f)}</xm:f><xm:sqref>${esc(sparkline.sqref)}</xm:sqref></x14:sparkline>`).join('')
+    return `<x14:sparklineGroup${attrs}>${colours}${dateRange}<x14:sparklines>${sparklines}</x14:sparklines></x14:sparklineGroup>`
+  }).join('')
+  return `<extLst><ext uri="${SPARKLINE_EXTENSION_URI}" xmlns:x14="${SPARKLINE_X14_NS}"><x14:sparklineGroups xmlns:xm="${SPARKLINE_XM_NS}">${groupXml}</x14:sparklineGroups></ext></extLst>`
+}
 
 async function writeXlsx(sheets: SheetSpec[]): Promise<Uint8Array> {
   const strings: string[] = []
@@ -346,12 +380,16 @@ async function writeXlsx(sheets: SheetSpec[]): Promise<Uint8Array> {
       return `<row r="${ri + 1}"${ht ? ` ht="${ht}" customHeight="1"` : ''}>${cells}</row>`
     }).join('')
     const pane = sheet.freezeRows ? `<pane ySplit="${sheet.freezeRows}" topLeftCell="A${sheet.freezeRows + 1}" activePane="bottomLeft" state="frozen"/>` : ''
-    return `${XML}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+    const sparkline = Boolean(sheet.sparklineGroups?.length)
+    const namespaces = sparkline
+      ? ` xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac" xmlns:x14ac="${SPARKLINE_X14AC_NS}"`
+      : ''
+    return `${XML}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"${namespaces}>` +
       `<sheetViews><sheetView workbookViewId="0" showGridLines="1">${pane}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>` +
       `<cols>${sheet.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` +
       `<sheetData>${rows}</sheetData>${sheet.autoFilter ? `<autoFilter ref="${sheet.autoFilter}"/>` : ''}` +
       `${sheet.merges?.length ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : ''}` +
-      `<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>`
+      `<pageMargins left="0.5" right="0.5" top="0.6" bottom="0.6" header="0.3" footer="0.3"/><pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>${sparklineExtLst(sheet.sparklineGroups)}</worksheet>`
   }
   const sheetParts = sheets.map(sheetXml)
   const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -447,6 +485,59 @@ async function ledgerXlsx(): Promise<Uint8Array> {
     ])
   }
   return writeXlsx([{ name: 'Orders', rows, widths: [12, 13, 15, 14, 24, 8, 11, 12, 10], freezeRows: 1, autoFilter: `A1:I${rows.length}`, rowHeights: { 1: 20 } }])
+}
+
+/** A compact KPI dashboard demonstrating Excel sparklines in a worksheet. */
+async function sparklineDashboardXlsx(): Promise<Uint8Array> {
+  const excelDate = (iso: string) => Math.round((Date.parse(`${iso}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86_400_000)
+  const periods = ['2026-01-01', '2026-01-31', '2026-02-28', '2026-03-31', '2026-05-31', '2026-08-31', '2026-10-31', '2026-12-31']
+  const values = (label: string, numbers: number[], style = S.int): XRow => [
+    { v: label, s: S.text },
+    ...numbers.map((v) => ({ v, s: style })),
+    null, // J is the sparkline host cell.
+  ]
+  const rowSpark = (row: number) => ({ f: `Dashboard!B${row}:I${row}`, sqref: `J${row}` })
+  const series = 'FF0F6CBD'
+  const positive = 'FF107C41'
+  const negative = 'FFC50F1F'
+  const rows: XRow[] = [
+    [{ v: 'Halcyon Instruments · KPI dashboard', s: S.title }],
+    [{ v: 'Irregular checkpoints · revenue and operating trends · values in USD thousands', s: S.subtitle }],
+    [],
+    [{ v: 'Metric / date', s: S.headerLeft }, ...periods.map((d) => ({ v: excelDate(d), s: S.dateHeader })), { v: 'Trend', s: S.header }],
+    values('North America sales ($k)', [1240, 1320, 1280, 1510, 1630, 1580, 1790, 1940]),
+    values('Europe sales ($k)', [840, 910, 895, 1020, 1100, 1080, 1210, 1300]),
+    values('Asia Pacific sales ($k)', [420, 510, 490, 640, 710, 735, 880, 1020]),
+    values('Net bookings ($k)', [120, -45, 85, 160, -20, 110, 175, 90]),
+    values('Plan met', [1, 1, -1, 1, -1, 1, 1, 1]),
+    values('Customer retention', [0.91, 0.92, 0.915, 0.94, 0.955, 0.948, 0.97, 0.982], S.pct),
+  ]
+  return writeXlsx([{
+    name: 'Dashboard', rows, widths: [25, 12, 12, 12, 12, 12, 12, 12, 12, 28], merges: ['A1:J1', 'A2:J2'], freezeRows: 4, rowHeights: { 1: 26, 2: 20, 4: 24, 5: 30, 6: 30, 7: 30, 8: 30, 9: 30, 10: 30 },
+    sparklineGroups: [
+      {
+        attrs: { type: 'line', displayEmptyCellsAs: 'gap', markers: 1, high: 1, low: 1, minAxisType: 'group', maxAxisType: 'group' },
+        colours: { colorSeries: { rgb: series }, colorMarkers: { rgb: series }, colorHigh: { rgb: positive }, colorLow: { rgb: negative } },
+        sparklines: [rowSpark(5), rowSpark(6), rowSpark(7)],
+      },
+      {
+        attrs: { type: 'column', displayEmptyCellsAs: 'zero', negative: 1 },
+        colours: { colorSeries: { rgb: series }, colorNegative: { rgb: negative } },
+        sparklines: [rowSpark(8)],
+      },
+      {
+        attrs: { type: 'stacked', negative: 1 },
+        colours: { colorSeries: { rgb: series }, colorNegative: { rgb: negative } },
+        sparklines: [rowSpark(9)],
+      },
+      {
+        attrs: { type: 'line', displayEmptyCellsAs: 'gap', dateAxis: 1, markers: 1 },
+        colours: { colorSeries: { rgb: series }, colorMarkers: { rgb: series } },
+        dateRange: 'Dashboard!B4:I4',
+        sparklines: [rowSpark(10)],
+      },
+    ],
+  }])
 }
 
 // ---------------------------------------------------------------------------
@@ -673,6 +764,7 @@ const samples: Array<[string, () => Promise<Uint8Array> | Uint8Array]> = [
   ['quarterly-review.docx', reportDocx],
   ['operating-budget.xlsx', budgetXlsx],
   ['sales-ledger.xlsx', ledgerXlsx],
+  ['sparkline-dashboard.xlsx', sparklineDashboardXlsx],
   ['product-launch.pptx', launchPptx],
   ['chart-gallery.docx', chartsDocx],
   ['design-review.odt', notesOdt],

@@ -78,6 +78,19 @@ const source = { url: '/files/operating-budget.xlsx' }
 <OfficeFile data={source} />`,
   },
   {
+    id: 'sparklines',
+    title: 'KPI trends with sparklines',
+    format: 'xlsx',
+    file: 'sparkline-dashboard.xlsx',
+    summary: 'A compact, fictional KPI dashboard over irregular checkpoints with three regional sales lines on a shared scale, negative booking columns, win/loss plan results, and a retention line plotted against uneven dates.',
+    tryThis: ['Compare the regional lines: they share one vertical scale.', 'Find the negative bookings (red columns) and the missed plans (red win/loss bars).', 'Compare the retention trend with the irregular checkpoint dates.'],
+    props: { interactiveSheets: true },
+    code: `// Created once, outside the component: a new object would reload the file.
+const source = { url: '/files/sparkline-dashboard.xlsx' }
+
+<OfficeFile data={source} interactiveSheets />`,
+  },
+  {
     id: 'charts',
     title: 'Chart gallery',
     format: 'docx',
