@@ -269,14 +269,178 @@ describe('line sparkline geometry', () => {
     expect(p).toEqual([{ kind: 'marker', x: 101, y: 36, sizePx: 4 / 3, color: 'FF333333', shape: 'diamond' }])
   })
 
-  it('returns no primitives for column and stacked types in Stage 1 (spec §10: only line is staged)', () => {
-    expect(sparklineGeometry(mk([1, 2], { type: 'column' }), CELL, Z1)).toEqual([])
-    expect(sparklineGeometry(mk([1, 2], { type: 'stacked' }), CELL, Z1)).toEqual([])
-  })
-
   it('falls back to black when colorSeries is absent, and skips elements with missing colours (colourFallback)', () => {
     expect(polylines(sparklineGeometry(mk([1, 2]), CELL, Z1))[0].color).toBe('000000')
     // colorMarkers absent → the markers flag is effectively off (while series still draws; the row's row-6 case).
     expect(markers(sparklineGeometry(mk([1, 2], { markers: true }), CELL, Z1))).toEqual([])
+  })
+
+  it('keeps the line path untouched by Stage 2: same [1, 3, 2] polyline (regression)', () => {
+    expect(polylines(sparklineGeometry(mk([1, 3, 2], { colors: { series: 'FF0000FF' } }), CELL, Z1))).toEqual([
+      { kind: 'polyline', points: [[39.5, 65.5], [70.5, 36.5], [101.5, 51.5]], color: 'FF0000FF', widthPx: 1, join: 'round', cap: 'round', band: BAND },
+    ])
+  })
+})
+
+describe('column and win/loss sparkline geometry (Stage 2, Task 8)', () => {
+  type Bar = Extract<SparkPrimitive, { kind: 'rect' }>
+  const bars = (p: SparkPrimitive[]): Bar[] => p.filter((x): x is Bar => x.kind === 'rect')
+  // Capture hosts, gridline to gridline (cellBoxRule), in logical px; the capture scale 0.75 (zoom) × 1 (dpr) with
+  // output 'device' is 1 device px per pt, so the doc's measured device numbers (L = 48, R = 247, T = 5.08,
+  // B = 56.94, H = 51.86, P = 199; merged P = 403, R = 451) come out exactly in the emitted device coordinates.
+  const HOST = { x: 45 * 4 / 3, y: 0, w: 204 * 4 / 3, h: 60 * 4 / 3 }
+  const MERGED = { ...HOST, w: 408 * 4 / 3 }
+  const CAP = { zoom: 0.75, dpr: 1, output: 'device' as const }
+  const SER = 'FF4472C4'
+
+  it('reproduces col-basic: n slots, 40% gap, rounded edges, the δ smallest-bar rule and exact rows', () => {
+    // D = [4, 7, 3, 9, 2, 8, 5, 6] on the individual scale [2, 9]: scale excludes 0, so columnNoZeroRule (min > 0)
+    // puts the baseline at the bottom plot edge (round(B) = 57) and maps δ = 0.63 pt inside it:
+    // y(v) = T + (9−v)/7·(H−δ) with T = 5.08, H = 51.86 → round = tops 42/20/49/5/56/12/34/27 (value 2 keeps a
+    // 1-px sliver at row 56). barSlotRule/barWidthRule: width w = slot/1.4 = 17.77, edges round(c ± w/2):
+    // [52,69) [76,94) [101,119) [126,144) [151,169) [176,194) [201,219) [226,243).
+    expect(bars(sparklineGeometry(mk([4, 7, 3, 9, 2, 8, 5, 6], { type: 'column', colors: { series: SER } }), HOST, CAP))).toEqual([
+      { kind: 'rect', x: 52, y: 42, w: 17, h: 15, color: SER },
+      { kind: 'rect', x: 76, y: 20, w: 18, h: 37, color: SER },
+      { kind: 'rect', x: 101, y: 49, w: 18, h: 8, color: SER },
+      { kind: 'rect', x: 126, y: 5, w: 18, h: 52, color: SER },
+      { kind: 'rect', x: 151, y: 56, w: 18, h: 1, color: SER },
+      { kind: 'rect', x: 176, y: 12, w: 18, h: 45, color: SER },
+      { kind: 'rect', x: 201, y: 34, w: 18, h: 23, color: SER },
+      { kind: 'rect', x: 226, y: 27, w: 17, h: 30, color: SER },
+    ])
+  })
+
+  it('widens bars with the merged host: P = 403, every bar 36 px wide (col-merged-host, barWidthRule, mergedHostRule)', () => {
+    const p = bars(sparklineGeometry(mk([4, 7, 3, 9, 2, 8, 5, 6], { type: 'column', colors: { series: SER } }), MERGED, CAP))
+    expect(p[0]).toEqual({ kind: 'rect', x: 55, y: 42, w: 36, h: 15, color: SER })
+    expect(p[4]).toEqual({ kind: 'rect', x: 257, y: 56, w: 36, h: 1, color: SER }) // measured columns 257–292
+    expect(p.map(b => b.w)).toEqual([36, 36, 36, 36, 36, 36, 36, 36])
+  })
+
+  it('runs columns from the baseline row round(y(0)) = 31 both ways, negatives only orange under negative="1" (columnBaselineRule, barNegativeRule)', () => {
+    // [−3, 2, −1, 4, −4, 3, 1, −2] on [−4, 4]: scale includes 0, plain verticalMapping; y(0) = 31.01 → baseline
+    // row 31: positive bars end at row 30 (tops 5/12/18/25 for 4/3/2/1), negative bars start at row 31
+    // (bottoms 37/44/50/57 for −1/−2/−3/−4). Same slots/widths as col-basic.
+    const values = [-3, 2, -1, 4, -4, 3, 1, -2]
+    const geom = (negative: boolean) =>
+      bars(sparklineGeometry(mk(values, { type: 'column', negative, colors: { series: SER, negative: 'FF8000FF' } }), HOST, CAP))
+    expect(geom(false).map(b => [b.x, b.y, b.w, b.h])).toEqual([
+      [52, 31, 17, 19], [76, 18, 18, 13], [101, 31, 18, 6], [126, 5, 18, 26],
+      [151, 31, 18, 26], [176, 12, 18, 19], [201, 25, 18, 6], [226, 31, 17, 13],
+    ])
+    expect(geom(false).map(b => b.color)).toEqual(Array(8).fill(SER))
+    expect(geom(true).map(b => b.color)).toEqual(
+      ['FF8000FF', SER, 'FF8000FF', SER, 'FF8000FF', SER, SER, 'FF8000FF'],
+    )
+    // colourFallback: a missing colorNegative is not applied — negative bars keep the series colour.
+    expect(bars(sparklineGeometry(mk(values, { type: 'column', negative: true, colors: { series: SER } }), HOST, CAP)).filter(b => b.color === 'FF8000FF')).toEqual([])
+  })
+
+  it('hangs all-negative bars from the top edge, mirrored δ rule, heights 8,37,15,52,1,45,23,30 (columnNoZeroRule, max < 0)', () => {
+    // Scale [−9, −2] excludes 0: baseline is the TOP plot edge (round(T) = 5) and the end nearest 0 (max −2) maps
+    // δ = 0.63 pt inside: y(v) = T + δ + (−2−v)/7·(H−δ). min −9 → y 56.94 → row 57; max −2 → row 6, a 1-px bar.
+    expect(bars(sparklineGeometry(mk([-3, -7, -4, -9, -2, -8, -5, -6], { type: 'column', negative: true, colors: { series: SER, negative: 'FF8000FF' } }), HOST, CAP)).map(b => [b.y, b.h, b.color])).toEqual([
+      [5, 8, 'FF8000FF'], [5, 37, 'FF8000FF'], [5, 15, 'FF8000FF'], [5, 52, 'FF8000FF'],
+      [5, 1, 'FF8000FF'], [5, 45, 'FF8000FF'], [5, 23, 'FF8000FF'], [5, 30, 'FF8000FF'],
+    ])
+  })
+
+  it('draws win/loss bars full-height by exact sign, ±1e-16 included, zeros and empties excluded (winLossRule)', () => {
+    // Wins [round(T), round(T + H/2)) = rows [5, 31), losses [31, round(B)) = [31, 57) — whatever the magnitudes;
+    // v = 0 draws nothing. n = 5: slot 39.8, bar edges round(c ± 14.214): [54,82) [93,122) [133,162) [173,202) [213,241).
+    expect(bars(sparklineGeometry(mk([1e-16, -1e-16, 0, 2, -3], { type: 'stacked', negative: true, colors: { series: SER, negative: 'FF8000FF' } }), HOST, CAP)).map(b => [b.x, b.y, b.w, b.h, b.color])).toEqual([
+      [54, 5, 28, 26, SER], [93, 31, 29, 26, 'FF8000FF'], [173, 5, 29, 26, SER], [213, 31, 28, 26, 'FF8000FF'],
+    ])
+  })
+
+  it('draws the win/loss axis at the middle row whenever displayXAxis, even all-zero, painted after the bars; the column axis keeps min < 0 < max (barAxisRule)', () => {
+    // All-zero stacked: no bars; the axis alone, at round(T + H/2) row 31 (snap 31.5, 1 device px, floor(L)+½ …
+    // floor(R)+½ = 48.5 … 247.5, colorAxis present).
+    const p = sparklineGeometry(mk([0, 0, 0], { type: 'stacked', displayXAxis: true, colors: { series: SER, axis: 'FF8000FF' } }), HOST, CAP)
+    expect(p).toEqual([{ kind: 'axis', x0: 48.5, x1: 247.5, y: 31.5, color: 'FF8000FF', widthPx: 1 }])
+    // Win/loss axis colour missing → not drawn (colourFallback).
+    expect(axes(sparklineGeometry(mk([0, 0], { type: 'stacked', displayXAxis: true, colors: { series: SER } }), HOST, CAP))).toEqual([])
+    // Column axis: same y(0) as the line's (axisRule): [−2, 2] → y(0) = 31.01 → 31.5.
+    expect(axes(sparklineGeometry(mk([-2, 2], { type: 'column', displayXAxis: true, colors: { axis: 'FF8000FF' } }), HOST, CAP))[0].y).toBe(31.5)
+    // The all-positive column axis is not drawn (ruling; axisRule's min < 0 < max is unmeasured for columns).
+    expect(axes(sparklineGeometry(mk([2, 9], { type: 'column', displayXAxis: true, colors: { axis: 'FF8000FF' } }), HOST, CAP))).toEqual([])
+  })
+
+  it('shows gap/zero/span empties and a literal 0 as an empty slot, slots keeping their positions (columnEmptyRule)', () => {
+    // [2, _, 4] on [2, 4]: middle slot empty; the drawn bars keep slots 0 and 2 of n = 3 (slot 66.333, w 47.38:
+    // c 81.17 → [57,105); c 213.83 → [190,238)): value 2 (the smallest) keeps a δ sliver at rows 56–57, value 4
+    // tops at row 5.
+    for (const mode of ['gap', 'zero', 'span'] as const) {
+      expect(bars(sparklineGeometry(mk([2, null, 4], { type: 'column', displayEmptyCellsAs: mode, colors: { series: SER } }), HOST, CAP)).map(b => [b.x, b.x + b.w, b.y, b.h])).toEqual([
+        [57, 105, 56, 1], [190, 238, 5, 52],
+      ])
+    }
+    // A literal 0 under a zero-including scale sits at the baseline → zero-height bar → nothing.
+    expect(bars(sparklineGeometry(mk([3, 0, 5], { type: 'column', colors: { series: SER } }), HOST, CAP))).toHaveLength(2)
+  })
+
+  it('draws a flat column full-height from the bottom (positive), from the top (negative), nothing (zero) — unmeasured ruling', () => {
+    // flatSeriesRule widening to [min(0, v), max(0, v)] + columnBaselineRule: [0, 5] → baseline row 57, value at row 5.
+    expect(bars(sparklineGeometry(mk([5, 5, 5], { type: 'column', colors: { series: SER } }), HOST, CAP)).map(b => [b.y, b.h])).toEqual([[5, 52], [5, 52], [5, 52]])
+    // [−5, 0]: baseline row 5, value at row 57.
+    expect(bars(sparklineGeometry(mk([-5, -5, -5], { type: 'column', colors: { series: SER } }), HOST, CAP)).map(b => [b.y, b.h])).toEqual([[5, 52], [5, 52], [5, 52]])
+    expect(bars(sparklineGeometry(mk([0, 0, 0], { type: 'column', colors: { series: SER } }), HOST, CAP))).toEqual([])
+  })
+
+  it('draws a single value as one full-width slot bar (ruling: singlePointRule does not apply to bars)', () => {
+    // slot = P = 199, w = 142.14, c = 147.5: round edges [76, 219); flat widened [0, 5] → full height rows [5, 57).
+    expect(bars(sparklineGeometry(mk([5], { type: 'column', colors: { series: SER } }), HOST, CAP))).toEqual([{ kind: 'rect', x: 76, y: 5, w: 143, h: 52, color: SER }])
+    expect(bars(sparklineGeometry(mk([-5], { type: 'column', colors: { series: SER } }), HOST, CAP))).toEqual([{ kind: 'rect', x: 76, y: 5, w: 143, h: 52, color: SER }])
+  })
+
+  it('clips bars cut by a custom scale to the plot box rows [round(T), round(B)) (ruling 3; customScaleRule)', () => {
+    // [150, 50] on custom [0, 100]: y(150) = 5.08 − 0.5·51.86 → round −21 → clamped to row 5: full-height bar;
+    // y(50) = 31.01 → rows [31, 57). Baseline y(0) = round(56.94) = 57. n = 2: slot 99.5, w 71: [62,133), [162,233).
+    expect(bars(sparklineGeometry(mk([150, 50], { type: 'column' }, { min: 0, max: 100 }), HOST, CAP)).map(b => [b.x, b.y, b.w, b.h])).toEqual([
+      [62, 5, 71, 52], [162, 31, 71, 26],
+    ])
+  })
+
+  it('paints bar colours last of series → negative → first/last → high → low, every tie coloured (barColourPrecedence)', () => {
+    // [−3, 1, −4, 2, 2] with everything on: negative orange on slots 0/2; first beats it on 0; low −4 (slot 2)
+    // beats negative and most everything; high 2 at slots 3 AND 4 (tie) beats series and last; slot 1 stays series.
+    const p = bars(sparklineGeometry(mk([-3, 1, -4, 2, 2], {
+      type: 'column', negative: true, first: true, last: true, high: true, low: true,
+      colors: { series: SER, negative: 'FF8000FF', first: 'FF22AA22', last: 'FF8000AA', high: 'FFCC0000', low: 'FF00AAAA' },
+    }), HOST, CAP))
+    expect(p.map(b => b.color)).toEqual(['FF22AA22', SER, 'FF00AAAA', 'FFCC0000', 'FFCC0000'])
+    // Win/loss: same precedence over full-height sign bars (low −4 is the only low; high beats last on slot 4).
+    const w = bars(sparklineGeometry(mk([-3, 1, -4, 2, 2], {
+      type: 'stacked', negative: true, first: true, last: true, high: true, low: true,
+      colors: { series: SER, negative: 'FF8000FF', first: 'FF22AA22', last: 'FF8000AA', high: 'FFCC0000', low: 'FF00AAAA' },
+    }), HOST, CAP))
+    expect(w.map(b => b.color)).toEqual(['FF22AA22', SER, 'FF00AAAA', 'FFCC0000', 'FFCC0000'])
+  })
+
+  it('draws nothing in a cell too small for the plot box, both types (barTinyCellRule)', () => {
+    expect(sparklineGeometry(mk([1, 2, 3], { type: 'column', colors: { series: SER } }), { x: 0, y: 0, w: 17.34, h: 5.34 }, Z1)).toEqual([])
+    expect(sparklineGeometry(mk([1, -2], { type: 'stacked', displayXAxis: true, colors: { series: SER, axis: 'FF8000FF' } }), { x: 0, y: 0, w: 17.34, h: 5.34 }, Z1)).toEqual([])
+  })
+
+  it('keeps bar edges on whole device px and the 40% gap at 3.5 device px per logical px (zoom 1.75 dpr 2, barWidthRule)', () => {
+    // Device edges stay integral after rounding; the rounded bar width stays within 1 device px of slot/1.4
+    // (the plot width P = 265.333 logical px → 928.667 device px at 3.5×: slot 116.08, bar 82.92).
+    const p = bars(sparklineGeometry(mk([4, 7, 3, 9, 2, 8, 5, 6], { type: 'column', colors: { series: SER } }), HOST, { zoom: 1.75, dpr: 2, output: 'device' }))
+    const slot = (HOST.w - 3 * 4 / 3 - 2 * 4 / 3) * 1.75 * 2 / 8
+    let i = 0
+    for (const b of p) {
+      for (const e of [b.x, b.y, b.w, b.h]) expect(Number.isInteger(e), `${i}:${e}`).toBe(true)
+      expect(Math.abs(b.w - slot / 1.4), `width ${i}`).toBeLessThanOrEqual(1)
+      i++
+    }
+    expect(p).toHaveLength(8)
+  })
+
+  it('passes colourFallback and the black series fallback through to bars (colourFallback)', () => {
+    // Missing colorSeries → black; a flag without its colour (high) does not decorate anything.
+    // n = 2: slot 99.5, w 71: edges [62,133), [162,233).
+    const p = bars(sparklineGeometry(mk([2, 4], { type: 'column', high: true, low: true }), HOST, CAP))
+    expect(p.map(b => [b.color, b.x])).toEqual([['000000', 62], ['000000', 162]])
   })
 })

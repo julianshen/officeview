@@ -44,14 +44,18 @@ const SERIES_FALLBACK = '000000'
 interface Pt { x: number; y: number }
 
 /**
- * Pure geometry for one resolved line sparkline (Task 8 adds column and stacked; other types return []).
- * Clipping to the host cell (§5.1) and to the current tile is the painter's concern; everything the measurements
- * pin about shape — slot positions, vertical mapping, pixel snapping, stroke width, plot-box row clipping,
- * marker placement and colour precedence — is decided here.
+ * Pure geometry for one resolved sparkline: line paths plus the Stage 2 (plan Task 8) column and stacked (win/loss)
+ * bars; other types return []. Clipping to the host cell (§5.1) and to the current tile is the painter's concern;
+ * everything the measurements pin about shape — slot positions, vertical mapping, pixel rounding, bar widths, the
+ * baseline and δ rules, stroke width, plot-box row clipping, marker placement and colour precedence — is decided here.
  */
 export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: SparkScale): SparkPrimitive[] {
   const group = s.group
-  if (group.type !== 'line') return []
+  const type = group.type
+  // Stage 2 (Task 8): column and stacked (win/loss) bars; anything else → [] (spec §10: only staged types return
+  // anything). Bars share the line's plot box, insets, tiny-cell collapse and the device-grid snap helpers
+  // (barTinyCellRule = tinyCellRule: `col-tiny` measures 0 ink pixels).
+  if (type !== 'line' && type !== 'column' && type !== 'stacked') return []
   const zoom = scale.zoom > 0 && Number.isFinite(scale.zoom) ? scale.zoom : 1
   const dpr = scale.dpr > 0 && Number.isFinite(scale.dpr) ? scale.dpr : 1
   const devPerPx = zoom * dpr
@@ -62,7 +66,8 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   const toOutputX = (dev: number): number => dev / (scale.output === 'device' ? 1 : devPerPx)
   const toOutputY = (dev: number): number => dev / (scale.output === 'device' ? 1 : devPerPx)
 
-  // tinyCellRule: when the insets swallow the cell the plot box collapses and nothing draws, markers included.
+  // tinyCellRule (and barTinyCellRule): when the insets swallow the cell the plot box collapses and nothing draws,
+  // markers included.
   const left = cell.x + INSETS.left * PT_PX
   const right = cell.x + cell.w - INSETS.right * PT_PX
   const top = cell.y + INSETS.top * PT_PX
@@ -74,20 +79,16 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   const n = s.values.length
   if (!n) return []
 
-  // verticalMapping: y(v) = top + (max − v)/(max − min)·plotH, the single documented linear map (its rounding is
-  // underdetermined at the ±1 px level; comparisons allow a ±1 px vertex tolerance). Flat series (flatSeriesRule):
-  // the scale widens to [min(0, v), max(0, v)] — v ≠ 0 renders at the plot edge of its sign (v > 0 measured at the
-  // top; v < 0 unmeasured and extrapolated to the bottom), v = 0 is centred.
+  /** colourFallback: colorSeries absent → black. Every other element without its colour is simply not drawn. */
+  const seriesColor = group.colors.series ?? SERIES_FALLBACK
+  // Computable points: values carry numbers (Task 4); defensively treat non-finite as absent like a null slot.
+  const has = (i: number): boolean => i >= 0 && i < n && s.values[i] !== null && Number.isFinite(s.values[i] as number)
+  // verticalMapping note: flat series (flatSeriesRule) widen the scale to [min(0, v), max(0, v)] — both paths use it.
   const flat = s.min >= s.max
-  const yOf = (v: number): number => {
-    if (!flat) return top + (s.max - v) / (s.max - s.min) * plotH
-    if (v > 0) return top
-    if (v < 0) return bottom
-    return top + plotH / 2
-  }
 
   // lineStrokeWidth: whole device px, ≥ 1, round half up of the lineWeight in device px (the row pins the behaviour
-  // at 1 px/pt; the scale-relative rounding is its extension). lineJoin/lineCap: round, round.
+  // at 1 px/pt; the scale-relative rounding is its extension). lineJoin/lineCap: round, round. The axis is 1 device
+  // px (odd), so both paths snap like the line does.
   const strokeDev = Math.max(1, Math.floor(group.lineWeightPt * PT_PX * devPerPx + 0.5))
   const strokePx = strokeDev / (scale.output === 'device' ? 1 : devPerPx)
   const oddStroke = strokeDev % 2 === 1
@@ -95,8 +96,124 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   // vertexSnapRule: odd device width → pixel centre ⌊x⌋+½, ⌊y⌋+½; even width → pixel corner round(x), round(y).
   const snapVertex = (dev: number): number => oddStroke ? Math.floor(dev) + 0.5 : Math.round(dev)
 
-  // Computable points: values carry numbers (Task 4); defensively treat non-finite as absent like a null slot.
-  const has = (i: number): boolean => i >= 0 && i < n && s.values[i] !== null && Number.isFinite(s.values[i] as number)
+  if (type !== 'line') {
+    const stacked = type === 'stacked'
+    const Ldev = toDevX(left), Rdev = toDevX(right), Tdev = toDevY(top), Bdev = toDevY(bottom)
+    const Hdev = Bdev - Tdev
+    const rowTop = Math.round(Tdev)
+    const rowBottom = Math.round(Bdev)
+    const midRow = Math.round(Tdev + Hdev / 2)
+    // barSlotRule / barWidthRule: each of the n values owns one of n equal slots (lineEndpointRule's slots) and the
+    // bar is centred on the slot centre; width = slot / 1.4 (a 40% gap between bars, half on each side); edges are
+    // round(c − w/2) and round(c + w/2) in device px (measured: P = 199 → 17–18 px, P = 403 → 36 px exactly).
+    const slot = (Rdev - Ldev) / n
+    const halfBar = slot / 1.4 / 2
+
+    // barColourPrecedence: each bar's colour is the last painted of series → negative → first/last → high → low
+    // (high/low are the max/min values, win/loss too, not "all wins" — the resolve indices). Ties: every tied bar is
+    // coloured. A missing element colour is not applied (colourFallback): colorNegative absent keeps the series
+    // colour; colorSeries absent → black (shared seriesColor).
+    const winners = new Map<number, string>()
+    const colorize = (color: string | undefined, indices: Iterable<number>): void => {
+      if (!color) return
+      for (const i of indices) if (has(i)) winners.set(i, color)
+    }
+    if (group.negative && group.colors.negative) {
+      for (let i = 0; i < n; i++) {
+        const v = s.values[i]
+        if (v !== null && Number.isFinite(v) && (v as number) < 0) winners.set(i, group.colors.negative)
+      }
+    }
+    // firstIndex/lastIndex are data-order slots; a null slot has no bar and no mark (Task 4 note).
+    colorize(group.colors.first, [s.firstIndex])
+    colorize(group.colors.last, [s.lastIndex])
+    colorize(group.colors.high, [...s.highIndices])
+    colorize(group.colors.low, [...s.lowIndices])
+
+    // columnNoZeroRule (δ = 0.63 pt): when the effective scale excludes 0 the baseline is the plot edge on 0's side
+    // and the scale's end nearest 0 maps δ inside it, so the smallest value keeps a sliver (1 px at 1 px/pt). δ is
+    // the midpoint of the feasible sweep [0.45, 0.81] pt (unmeasured; underdetermined per the row's notes) and
+    // applies for any scale type (ruling). columnScaleRule/verticalMapping otherwise: the single linear map with
+    // H = plot height; columnBaselineRule: baseline row round(y(0)) when the scale includes 0.
+    const deltaDev = 0.63 * PT_PX * devPerPx
+    const yDevFor = (v: number, ymin: number, ymax: number): number => {
+      if (ymin > 0) return Tdev + (ymax - v) / (ymax - ymin) * (Hdev - deltaDev)
+      if (ymax < 0) return Tdev + deltaDev + (ymax - v) / (ymax - ymin) * (Hdev - deltaDev)
+      return Tdev + (ymax - v) / (ymax - ymin) * Hdev
+    }
+    // Custom scales that cut bars (ruling 3): bar edges clamp to the plot box rows [round(T), round(B)).
+    const clampRow = (row: number): number => Math.min(rowBottom, Math.max(rowTop, row))
+
+    const primitives: SparkPrimitive[] = []
+    for (let i = 0; i < n; i++) {
+      // columnEmptyRule: gap, zero and span slots keep their positions and stay empty; a literal 0 sits at the
+      // baseline → zero-height bar → nothing (the 0 takes part in min/max via the resolved scale, Task 4).
+      if (!has(i)) continue
+      const v = s.values[i] as number
+      let barTop: number, barBottom: number
+      if (stacked) {
+        // winLossRule: a win bar runs [round(T), round(T + H/2)) and a loss bar [round(T + H/2), round(T + H)),
+        // whatever the magnitudes. Exact sign test: v > 0 win, v < 0 loss, v = 0 nothing (±1e-16 draws full bars).
+        if (v > 0) { barTop = rowTop; barBottom = midRow }
+        else if (v < 0) { barTop = midRow; barBottom = rowBottom }
+        else continue
+      } else {
+        // Flat scale (ruling 1, unmeasured): widen like flatSeriesRule to [min(0, v), max(0, v)] then apply the
+        // baseline rules — v > 0 a full-height bar from the bottom, v < 0 full-height from the top, v = 0 nothing
+        // (the widened scale [0, 0] collapses to the zero-height bar below).
+        const ymin = flat ? Math.min(0, v) : s.min
+        const ymax = flat ? Math.max(0, v) : s.max
+        if (flat && ymin === ymax) continue
+        const baseRow = ymin > 0 || ymax < 0
+          ? (ymin > 0 ? rowBottom : rowTop)
+          : Math.round(yDevFor(0, ymin, ymax))
+        const valueRow = clampRow(Math.round(yDevFor(v, ymin, ymax)))
+        barTop = Math.min(baseRow, valueRow)
+        barBottom = Math.max(baseRow, valueRow)
+      }
+      if (!(barBottom > barTop)) continue // zero-height bar draws nothing (columnEmptyRule 'zero')
+      const barLeft = Math.round(Ldev + (i + 0.5) * slot - halfBar)
+      const barRight = Math.round(Ldev + (i + 0.5) * slot + halfBar)
+      if (!(barRight > barLeft)) continue
+      primitives.push({
+        kind: 'rect',
+        x: toOutputX(barLeft),
+        y: toOutputY(barTop),
+        w: toOutputX(barRight - barLeft),
+        h: toOutputY(barBottom - barTop),
+        color: winners.get(i) ?? (group.negative && group.colors.negative && v < 0 ? group.colors.negative : seriesColor),
+      })
+    }
+
+    // barAxisRule, painted OVER the bars (the line paints it under): the column axis is exactly the line's
+    // (displayXAxis AND min < 0 < max of the effective scale — the all-positive column axis is unmeasured, ruling
+    // 4); the win/loss axis is ALWAYS drawn when displayXAxis, at the middle row round(T + H/2), even all-zero.
+    // 1 device px, colorAxis, floor(L) … floor(R) wide, built exactly like the line axis (snap + device conversion).
+    if (group.displayXAxis && group.colors.axis && (stacked || (s.min < 0 && s.max > 0))) {
+      const axisYDev = snapVertex(stacked ? Tdev + Hdev / 2 : yDevFor(0, s.min, s.max))
+      primitives.push({
+        kind: 'axis',
+        x0: toOutputX(Math.floor(Ldev) + 0.5),
+        x1: toOutputX(Math.floor(Rdev) + 0.5),
+        y: toOutputY(axisYDev),
+        color: group.colors.axis,
+        widthPx: scale.output === 'device' ? 1 : 1 / devPerPx,
+      })
+    }
+    return primitives
+  }
+
+  // verticalMapping: y(v) = top + (max − v)/(max − min)·plotH, the single documented linear map (its rounding is
+  // underdetermined at the ±1 px level; comparisons allow a ±1 px vertex tolerance). Flat series (flatSeriesRule):
+  // the scale widens to [min(0, v), max(0, v)] — v ≠ 0 renders at the plot edge of its sign (v > 0 measured at the
+  // top; v < 0 unmeasured and extrapolated to the bottom), v = 0 is centred.
+  const yOf = (v: number): number => {
+    if (!flat) return top + (s.max - v) / (s.max - s.min) * plotH
+    if (v > 0) return top
+    if (v < 0) return bottom
+    return top + plotH / 2
+  }
+
   // lineEndpointRule: n points sit at the centres of n equal slots across the plot box, never at its edges.
   const xDevOf = (i: number): number => toDevX(left + (i + 0.5) * plotW / n)
   const yDevOf = (i: number): number => toDevY(yOf(s.values[i] as number))
@@ -153,7 +270,6 @@ export function sparklineGeometry(s: ResolvedSparkline, cell: SparkCell, scale: 
   const band = { y0: toOutputY(Math.floor(toDevY(top))), y1: toOutputY(Math.floor(toDevY(bottom)) + 1) }
 
   const primitives: SparkPrimitive[] = []
-  const seriesColor = group.colors.series ?? SERIES_FALLBACK
 
   // paintOrder: axis → series line → markers → special points. Special points share the marker shape (the painter
   // draws one primitive per point), so the array order below preserves the paint order.
