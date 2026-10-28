@@ -13,12 +13,12 @@
 import { defaultColumnWidthPx } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
-  RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
+  RangeCompletion, ReadOptions, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
 import { resolveDrawingAnchors } from './drawingBounds'
 import { PackageError } from '../../core/package-error'
-import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, type SourceCell, type SourceRect } from './coordinates'
+import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, type SourceCell, type SourceRect } from './coordinates'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
@@ -36,6 +36,10 @@ import type { ChartModel } from '../../charts/model'
 import type { DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, DrawingNodeLedger, drawingFootprint, unavailableDrawings } from './drawingPayload'
 import type { XlsxCellStyle, XlsxDrawing, XlsxSheet } from '../types'
+import type { XlsxCell } from '../types'
+import type { SparklineAccess, SparklineResolveSheet } from '../sparklines/resolve'
+import { resolveSparklineDataSheets } from '../sparklines/resolve'
+import type { XlsxSparklineGroup } from '../sparklines/model'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
@@ -57,6 +61,26 @@ function lower(values: ArrayLike<number>, target: number, from = 0, to = values.
  * means "reopening may succeed"; re-reading this source never can. */
 function ended(failure: SourceFailure | undefined): SourceFailure | undefined {
   return failure && failure.retryable ? Object.freeze({ ...failure, retryable: false }) : failure
+}
+
+/** Stack-free conservative structured-clone size for the bounded sparkline
+ * model. The import caps its depth; repeated references are counted again. */
+function sparklinePayloadTreeBytes(value: unknown): number {
+  if (value === null || value === undefined) return 8
+  if (typeof value === 'string') return 16 + value.length * 2
+  if (typeof value !== 'object') return 8
+  if (ArrayBuffer.isView(value)) return value.byteLength
+  if (value instanceof ArrayBuffer) return value.byteLength
+  if (Array.isArray(value)) {
+    let bytes = 16 + value.length * 8
+    for (const item of value) bytes += sparklinePayloadTreeBytes(item)
+    return bytes
+  }
+  let bytes = 24
+  for (const key in value) if (Object.prototype.hasOwnProperty.call(value, key)) {
+    bytes += 16 + sparklinePayloadTreeBytes((value as Record<string, unknown>)[key])
+  }
+  return bytes
 }
 
 export class PagedXlsxSheetAdapter implements SourceStore {
@@ -182,6 +206,39 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (i < 0) return { kind: 'blank' }
       const cell = await this.payload(p, i)
       return this.isUnavailable(p, i) ? { kind: 'unavailable', cell, reason: 'formula-value-unavailable' } : { kind: 'cell', cell }
+    } catch (cause) {
+      const f = pageFailure(cause)
+      return { kind: 'error', code: f.code, retryable: f.retryable }
+    }
+  }
+
+  /** Sparkline values distinguish numeric, boolean, empty, error and text, but
+   * never inspect text content. Avoid materializing an SST/blob string solely
+   * to map it to zero; this keeps a referenced huge text value bounded. */
+  private async readSparklineCell(at: { row: number; col: number }, options: ReadOptions): Promise<CellRead> {
+    const error = this.guard(options)
+    if (error) return { kind: 'error', code: error.code, retryable: error.retryable }
+    if (!isValidCoordinate(at.row, at.col)) return { kind: 'error', code: 'invalid-coordinate', retryable: false }
+    const status = this.status(at.row)
+    if (status.kind === 'unknown') return { kind: 'unknown', pageId: status.pageId }
+    if (status.kind === 'error') return { kind: 'error', code: status.failure.code, retryable: status.failure.retryable }
+    const [page] = this.pagesFor(at.row, at.row)
+    if (!page || page.aggregate.records === 0 || at.col < page.c0 || at.col > page.c1) return { kind: 'blank' }
+    try {
+      const payload = await this.load(page, options.signal), i = this.find(payload, at.row, at.col)
+      if (i < 0) return { kind: 'blank' }
+      const meta = payload.meta.get(i), hasCachedValue = (payload.flags[i] & F_CACHED) !== 0
+      const value: XlsxCell['value'] = payload.kinds[i] === K_NUMBER ? payload.nums[i]
+        : payload.kinds[i] === K_BOOL ? payload.nums[i] === 1
+          : payload.kinds[i] === K_EMPTY ? null : ''
+      const authority = valueAuthority({ value, hasCachedValue, valueIsError: (payload.flags[i] & F_ERROR) !== 0, formula: meta?.formula, sharedFormula: meta?.sharedFormula }, this.valuePolicy)
+      const cell: SingleCellPayload = {
+        id: cellId(at.row, at.col), row: at.row, col: at.col, value: authority.value,
+        styleIndex: payload.styles[i], valueProvenance: authority.provenance, hasCachedValue, valueIsError: authority.valueIsError,
+        ...(meta?.formula !== undefined ? { formula: meta.formula } : {}),
+        ...(meta?.sharedFormula !== undefined ? { sharedFormula: { ...meta.sharedFormula } } : {}),
+      }
+      return authority.unavailable ? { kind: 'unavailable', cell, reason: 'formula-value-unavailable' } : { kind: 'cell', cell }
     } catch (cause) {
       const f = pageFailure(cause)
       return { kind: 'error', code: f.code, retryable: f.retryable }
@@ -517,6 +574,141 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       options.signal.removeEventListener('abort', abort)
       this.workbook.parts.signal.removeEventListener('abort', abort)
     }
+  }
+
+  /** S3: asynchronously snapshot only the source cells referenced by this
+   * sheet's groups, then run the same synchronous resolver as resident XLSX.
+   * The worker owns both the metadata and every page read (including cross-sheet
+   * ranges); the receiver grant is checked before any point arrays are built. */
+  async readSparklines(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<SheetSparklines> {
+    const groups = this.sheet.metadata.sparklineGroups ?? []
+    const sourceDiagnostics = this.sheet.metadata.sparklineDiagnostics ?? []
+    if (!groups.length) return { sparklines: [], groups: [], diagnostics: sourceDiagnostics.slice(0, 64).map(item => ({ ...item, message: item.message.slice(0, 256) })) }
+    const sheets = this.workbook.sheets
+    const byName = new Map(sheets.map(sheet => [sheet.name.toLowerCase(), sheet] as const))
+    let sparkCount = 0, points = 0, axisPoints = 0, dataNameUnits = 0
+    let planned = 0
+    for (const group of groups) for (const spark of group.sparklines) {
+      const area = spark.data
+      if (!spark.host || !area) continue
+      const target = area.sheet === undefined ? this.sheet : byName.get(area.sheet.toLowerCase())
+      if (!target) continue
+      const dataPoints = area.r0 === area.r1 ? area.c1 - area.c0 + 1 : area.r1 - area.r0 + 1
+      const date = group.dateAxis ? group.dateRange : undefined
+      const datePoints = date ? (date.r0 === date.r1 ? date.c1 - date.c0 + 1 : date.r1 - date.r0 + 1) : 0
+      sparkCount++
+      points += dataPoints
+      axisPoints += datePoints
+      dataNameUnits += target.name.length
+      if (++planned % 128 === 0) {
+        if (options.signal.aborted) return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-cancelled', message: 'Sparkline resolution was cancelled' }] }
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+      }
+    }
+    // Required wire bound: Σ(points × 8) + Σ(axis points × 8) + sparklines × 96
+    // + groups × 256 + diagnostics UTF-16 × 2. The safe preflight extends that
+    // formula for the other cloned fields: sourceRows/bridged/high/low arrays
+    // (at most 64 B per point), per-record object/string overhead, the exact
+    // bounded group tree (including its source definitions), and diagnostic
+    // object slots. The axis positions are the additional Task 10 term.
+    const groupTreeBytes = sparklinePayloadTreeBytes(groups)
+    const baseBound = points * 8 + axisPoints * 8 + sparkCount * 96 + groups.length * 256 + 64 * 256 * 2
+    const metadataBound = points * 64 + sparkCount * 512 + dataNameUnits * 2 + Math.max(0, groupTreeBytes - groups.length * 256) + 64 * 640
+    const estimated = baseBound + metadataBound + 1024 // final reply envelope and ownership stamps
+    // Worker-only snapshot structures coexist with the wire result while it is
+    // resolved. Reserve them before constructing coordinate sets or cell maps.
+    const preparationBytes = estimated + (points + axisPoints) * 512
+    if (!Number.isSafeInteger(preparationBytes) || estimated > grantBytes || memory && !memory.set(preparationBytes)) {
+      return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline data exceeds the receiver memory grant' }] }
+    }
+    const boundedSourceDiagnostics = sourceDiagnostics.slice(0, 64).map(item => ({ ...item, message: item.message.slice(0, 256) }))
+    const stores = new Map<string, PagedXlsxSheetAdapter>()
+    const sheetFor = (sheet: PagedSheet): PagedXlsxSheetAdapter => {
+      let store = stores.get(sheet.sheetId)
+      if (!store) stores.set(sheet.sheetId, store = sheet.sheetId === this.sheet.sheetId ? this : new PagedXlsxSheetAdapter(
+        Object.freeze({ ...this.stamp, sheetId: sheet.sheetId }), this.workbook, sheet, this.drawingState, this.pacing,
+      ))
+      return store
+    }
+    const cellsBySheet = new Map<string, Map<string, XlsxCell>>()
+    const requested = new Map<string, Set<string>>()
+    let collected = 0
+    for (const group of groups) for (const spark of group.sparklines) {
+      if (!spark.data) continue
+      const target = spark.data.sheet === undefined ? this.sheet : byName.get(spark.data.sheet.toLowerCase())
+      if (!target) continue
+      const addRange = (sheet: PagedSheet, rect: { r0: number; r1: number; c0: number; c1: number }) => {
+        let set = requested.get(sheet.sheetId)
+        if (!set) requested.set(sheet.sheetId, set = new Set())
+        if (rect.r0 === rect.r1) for (let col = rect.c0; col <= rect.c1; col++) set.add(`${rect.r0}:${col}`)
+        else for (let row = rect.r0; row <= rect.r1; row++) set.add(`${row}:${rect.c0}`)
+      }
+      addRange(target, spark.data)
+      const date = group.dateAxis ? group.dateRange : undefined
+      if (date) {
+        const dateTarget = date.sheet === undefined ? this.sheet : byName.get(date.sheet.toLowerCase())
+        if (dateTarget) addRange(dateTarget, date)
+      }
+      if (++collected % 128 === 0) {
+        if (options.signal.aborted) return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-cancelled', message: 'Sparkline resolution was cancelled' }] }
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+      }
+    }
+    for (const sheet of sheets) {
+      const coords = requested.get(sheet.sheetId)
+      if (!coords) continue
+      const store = sheetFor(sheet), result = new Map<string, XlsxCell>()
+      cellsBySheet.set(sheet.sheetId, result)
+      let visited = 0
+      for (const key of coords) {
+        if (options.signal.aborted) return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-cancelled', message: 'Sparkline resolution was cancelled' }] }
+        const [row, col] = key.split(':').map(Number)
+        const read = await store.readSparklineCell({ row, col }, { signal: options.signal, stamp: store.stamp })
+        if (read.kind === 'cell' || read.kind === 'unavailable') {
+          const cell = read.cell
+          result.set(key, { ...cell, row, col, ref: formatA1({ row, col }) })
+        } else if (read.kind === 'unknown' || read.kind === 'error') {
+          return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is not fully available in the worker' }] }
+        }
+        if (++visited % 128 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0))
+      }
+    }
+    const resolveSheet = (sheet: PagedSheet, isHost: boolean): SparklineResolveSheet => {
+      const cells = cellsBySheet.get(sheet.sheetId) ?? new Map<string, XlsxCell>()
+      const access: SparklineAccess = {
+        rowHidden: row => sheet.metadata.hiddenRows.some(run => run.r0 <= row && row <= run.r1),
+        colHidden: col => sheet.metadata.cols.some(spec => spec.hidden && spec.min <= col && col <= spec.max),
+        cell: (row, col) => cells.get(`${row}:${col}`),
+      }
+      return {
+        name: sheet.name, ...(isHost ? { sparklineGroups: groups } : {}),
+        mergeRanges: sheet.mergeRects.map(range => ({ minRow: range.r0, maxRow: range.r1, minCol: range.c0, maxCol: range.c1 })),
+        diagnostics: isHost ? [...boundedSourceDiagnostics] : [], maxDiagnostics: 64, access,
+      }
+    }
+    const models = sheets.map(sheet => resolveSheet(sheet, sheet.sheetId === this.sheet.sheetId))
+    resolveSparklineDataSheets(models, { cached: true })
+    const hostModel = models.find(model => model.name === this.sheet.name)!
+    const outputGroups: XlsxSparklineGroup[] = []
+    const groupIndex = new Map<XlsxSparklineGroup, number>()
+    const output: SheetSparklines['sparklines'] = []
+    for (const row of hostModel.resolvedSparklines?.values() ?? []) for (const resolved of row.values()) {
+      let index = groupIndex.get(resolved.group)
+      if (index === undefined) { index = outputGroups.length; groupIndex.set(resolved.group, index); outputGroups.push(resolved.group) }
+      output.push({
+        host: resolved.host, dataSheet: resolved.dataSheet, sourceRows: resolved.sourceRows, groupIndex: index,
+        values: Float64Array.from(resolved.values, value => value === null ? Number.NaN : value), bridged: resolved.bridged,
+        firstIndex: resolved.firstIndex, lastIndex: resolved.lastIndex, highIndices: resolved.highIndices, lowIndices: resolved.lowIndices,
+        min: resolved.min, max: resolved.max,
+        ...(resolved.axis ? { axis: { positions: Float64Array.from(resolved.axis.positions), slot: resolved.axis.slot } } : {}),
+      })
+    }
+    const diagnostics = (hostModel.diagnostics ?? []).slice(0, 64).map(item => ({ ...item, message: item.message.slice(0, 256) }))
+    const actualBytes = sparklinePayloadTreeBytes({ sparklines: output, groups: outputGroups, diagnostics })
+    if (actualBytes > grantBytes || memory && !memory.set(actualBytes)) {
+      return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline data exceeds the receiver memory grant' }] }
+    }
+    return { sparklines: output, groups: outputGroups, diagnostics }
   }
 
   /** Fill uncached chart references from committed pages, as a bounded stream:
@@ -921,6 +1113,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       return Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message ?? SAVED_VALUES_STATUS }])
     },
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
+    hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)

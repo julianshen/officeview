@@ -58,9 +58,11 @@ function stagedOut(group: XlsxSparklineGroup): boolean {
   return group.refused !== undefined
 }
 
-function diagnose(sheet: XlsxSheet, diagnostic: SparklineDiagnostic): void {
+function diagnose(sheet: Pick<SparklineResolveSheet, 'diagnostics' | 'maxDiagnostics'>, diagnostic: SparklineDiagnostic): void {
   const list = sheet.diagnostics ??= []
-  if (!list.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) list.push(diagnostic)
+  if (list.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) return
+  if (sheet.maxDiagnostics !== undefined && list.length >= sheet.maxDiagnostics) return
+  list.push(diagnostic)
 }
 
 /** Lazy per-sheet lookups, built only for sheets a sparkline reads. */
@@ -109,6 +111,25 @@ class SheetAccess {
   }
 }
 
+/** The synchronous cell/visibility surface used by the one resolver on both
+ * resident sheets and worker-prepared paged snapshots. Worker reads populate
+ * this bounded snapshot asynchronously before calling the same resolver. */
+export interface SparklineAccess {
+  rowHidden(row: number): boolean
+  colHidden(col: number): boolean
+  cell(row: number, col: number): XlsxCell | undefined
+}
+export interface SparklineResolveSheet {
+  name: string
+  sparklineGroups?: XlsxSparklineGroup[]
+  mergeRanges: XlsxSheet['mergeRanges']
+  diagnostics?: SparklineDiagnostic[]
+  /** Worker snapshot cap; resident callers omit it to preserve full diagnostics. */
+  maxDiagnostics?: number
+  resolvedSparklines?: ResolvedSparklines
+  access: SparklineAccess
+}
+
 const POINT_EMPTY = Symbol('empty')
 const POINT_SKIPPED = Symbol('skipped')
 type Point = number | typeof POINT_EMPTY | typeof POINT_SKIPPED
@@ -141,7 +162,7 @@ function* cellsInReadingOrder(area: SparklineArea): Generator<[number, number]> 
 interface Partial_ { sparkline: XlsxSparkline; host: { row: number; col: number }; dataSheet: string; sourceRows: number[]; values: Array<number | null>; bridged: number[]; axis?: SparklineAxis }
 
 function plotted(
-  group: XlsxSparklineGroup, area: SparklineArea, access: SheetAccess, cached: boolean,
+  group: XlsxSparklineGroup, area: SparklineArea, access: SparklineAccess, cached: boolean,
 ): { values: Array<number | null>; bridged: number[]; sourceRows: number[] } {
   const values: Array<number | null> = []
   const bridged: number[] = []
@@ -174,7 +195,7 @@ function dateOf(cell: XlsxCell | undefined, cached: boolean): number | undefined
 
 function plottedDated(
   group: XlsxSparklineGroup, area: SparklineArea, dateArea: SparklineArea,
-  access: SheetAccess, dateAccess: SheetAccess, cached: boolean,
+  access: SparklineAccess, dateAccess: SparklineAccess, cached: boolean,
 ): { values: Array<number | null>; bridged: number[]; sourceRows: number[]; axis: SparklineAxis } | undefined {
   // `dateLengthRule`: pair data cell k with date cell k in reading order BEFORE any pruning, keeping the first
   // min(nData, nDates) pairs; `dateCellRule`: a pair whose date cell has no number is dropped entirely (out of
@@ -231,19 +252,12 @@ function extent(values: ReadonlyArray<number | null>): { min: number; max: numbe
 }
 
 /** Fill `XlsxSheet.resolvedSparklines` on every sheet. `policy.cached` is the workbook's value policy (parse.ts: `valuePolicy === 'cached'`). */
-export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached: boolean }): void {
-  const byName = new Map<string, XlsxSheet>()
+export function resolveSparklineDataSheets(sheets: SparklineResolveSheet[], policy: { cached: boolean }): void {
+  const byName = new Map<string, SparklineResolveSheet>()
   for (const sheet of sheets) {
     const key = sheet.name.toLowerCase()
     if (!byName.has(key)) byName.set(key, sheet)
   }
-  const access = new Map<XlsxSheet, SheetAccess>()
-  const accessOf = (sheet: XlsxSheet): SheetAccess => {
-    let found = access.get(sheet)
-    if (!found) access.set(sheet, found = new SheetAccess(sheet))
-    return found
-  }
-
   for (const sheet of sheets) {
     delete sheet.resolvedSparklines
     if (!sheet.sparklineGroups?.length) continue
@@ -283,13 +297,13 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
           if (!dateArea || (dateArea.r0 !== dateArea.r1 && dateArea.c0 !== dateArea.c1)) continue
           const dateTarget = dateArea.sheet === undefined ? sheet : byName.get(dateArea.sheet.toLowerCase())
           if (!dateTarget) continue
-          const dated = plottedDated(group, area, dateArea, accessOf(target), accessOf(dateTarget), policy.cached)
+          const dated = plottedDated(group, area, dateArea, target.access, dateTarget.access, policy.cached)
           // No usable dated point (every pair dropped): nothing to draw, silently.
           if (!dated) continue
           axis = dated.axis
           parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows: dated.sourceRows, values: dated.values, bridged: dated.bridged, axis })
         } else {
-          const { values, bridged, sourceRows } = plotted(group, area, accessOf(target), policy.cached)
+          const { values, bridged, sourceRows } = plotted(group, area, target.access, policy.cached)
           // `singlePointRule`: a range with no drawable point draws nothing, and contributes nothing to a group scale.
           if (!extent(values)) continue
           parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows, values, bridged })
@@ -333,5 +347,24 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
       }
     }
     if (resolved.size) sheet.resolvedSparklines = resolved
+  }
+}
+
+/** Resident entry point retained for parser callers. */
+export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached: boolean }): void {
+  const access = new Map<XlsxSheet, SheetAccess>()
+  const adapters: SparklineResolveSheet[] = sheets.map(sheet => {
+    let found = access.get(sheet)
+    if (!found) access.set(sheet, found = new SheetAccess(sheet))
+    return {
+      name: sheet.name, sparklineGroups: sheet.sparklineGroups, mergeRanges: sheet.mergeRanges,
+      diagnostics: sheet.diagnostics as SparklineDiagnostic[] | undefined,
+      resolvedSparklines: sheet.resolvedSparklines, access: found,
+    }
+  })
+  resolveSparklineDataSheets(adapters, policy)
+  for (let i = 0; i < sheets.length; i++) {
+    sheets[i].resolvedSparklines = adapters[i].resolvedSparklines
+    if (adapters[i].diagnostics) sheets[i].diagnostics = adapters[i].diagnostics as XlsxSheet['diagnostics']
   }
 }

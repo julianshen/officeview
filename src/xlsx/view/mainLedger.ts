@@ -16,8 +16,8 @@
  */
 export { estimatePayloadBytes } from './payloadBytes'
 
-export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'drawings' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom' | 'geometry' | 'structure' | 'document' | 'canvasText'
-export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'drawings', 'copy', 'controls', 'layout', 'merges', 'dom', 'geometry', 'structure', 'document', 'canvasText']
+export type MainPool = 'rowCache' | 'viewBuffers' | 'replies' | 'drawings' | 'sparklines' | 'copy' | 'controls' | 'layout' | 'merges' | 'dom' | 'geometry' | 'structure' | 'document' | 'canvasText'
+export const MAIN_POOLS: readonly MainPool[] = ['rowCache', 'viewBuffers', 'replies', 'drawings', 'sparklines', 'copy', 'controls', 'layout', 'merges', 'dom', 'geometry', 'structure', 'document', 'canvasText']
 
 /**
  * Estimated bytes per owned grid DOM element: the element, its attribute and
@@ -89,7 +89,7 @@ export interface MainLedgerSnapshot {
   atPeak: Record<MainPool, number>
 }
 
-const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, drawings: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0, geometry: 0, structure: 0, document: 0, canvasText: 0 })
+const emptyPools = (): Record<MainPool, number> => ({ rowCache: 0, viewBuffers: 0, replies: 0, drawings: 0, sparklines: 0, copy: 0, controls: 0, layout: 0, merges: 0, dom: 0, geometry: 0, structure: 0, document: 0, canvasText: 0 })
 
 /** The part of FinalizationRegistry the ledger uses (injectable for tests). */
 export interface CollectionWatcher { register(target: object, token: string): void }

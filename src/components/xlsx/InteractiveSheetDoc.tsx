@@ -85,6 +85,7 @@ import { themeRootProps, type ThemeMode } from '../theme'
 import { warnIfStylesMissing } from '../styleWarning'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
+import { documentWithSparklines, sheetWithSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
@@ -299,10 +300,6 @@ let copySerial = 0
 function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): ReactElement {
   const { doc, docId, views, watermark, fallbackFonts, allowCopy = true, allowPrint = true, showSearch = true, showZoomControls = true } = props
   const sheetIds = useMemo(() => doc.sheets.map(sheetIdOf), [doc])
-  const hasResolvedSparklines = useMemo(
-    () => doc.sheets.some(sheet => Boolean(sheet.resolvedSparklines?.size)),
-    [doc],
-  )
   const [activeSheetId, setActiveSheetId] = useState(sheetIds[0] ?? '')
   const [, setTick] = useState(0)
   const rerender = useCallback(() => setTick(tick => tick + 1), [])
@@ -313,6 +310,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
   const remote = isRemoteWorkbook(source) ? source : null
+  const hasResolvedSparklines = doc.sheets.some(sheet => Boolean(sheet.resolvedSparklines?.size))
+    || Boolean(remote && remote.layout(activeSheetId).hasSparklines)
   // README / spec §12.4: admission selects D (desktop) or M (phones and tablets,
   // iPadOS included); presentation (bitmap pool, DPR admission, tiles, images)
   // follows the same device profile, not a fixed D. A worker-backed source
@@ -414,18 +413,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // A worker-backed sheet's drawing content arrives after its structure (S13.2);
   // its pictures are leased like resident ones once it does.
   const activeDrawings = remote && activeSheetId ? remote.drawings(activeSheetId) : null
+  const activeSparklines = remote && activeSheetId && remote.layout(activeSheetId).hasSparklines ? remote.sparklines(activeSheetId) : null
   useEffect(() => {
     if (!activeSheetId) return
     let cancelled = false
     const sheetIndex = sheetIds.indexOf(activeSheetId)
-    void loadAssets(activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent }).then(next => {
+    let assetDoc = activeDrawings ? documentWithDrawings(doc, sheetIndex, activeDrawings) : doc
+    if (activeSparklines) assetDoc = documentWithSparklines(assetDoc, sheetIndex, activeSparklines)
+    void loadAssets(assetDoc, { ...(fontKey ? { fallbackFonts } : {}), sheetIndex, profile, imageCache: imageCacheFor(), chartOwner: doc, chartParent }).then(next => {
       if (cancelled) { next.dispose(); return }
       if (fontGenRef.current.key !== fontKey || fontGenRef.current.gen === 0) fontGenRef.current = { key: fontKey, gen: fontGenRef.current.gen + 1 }
       setAssets({ lease: next, fontGen: fontGenRef.current.gen, fontKey, sheetId: activeSheetId })
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, chartParent])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -476,7 +478,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * candidate with those session sizes (a resize or reset being admitted). */
   const prepareEntry = (sheetId: string, override?: SessionSizes): { entry: SheetEntry } | { candidate: Candidate } => {
     const index = sheetIds.indexOf(sheetId)
-    const sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
+    let sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
+    if (remote && remote.layout(sheetId).hasSparklines) sheet = sheetWithSparklines(sheet, remote.sparklines(sheetId))
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
@@ -816,6 +819,28 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
+    const changedSparkHosts = remote?.takeSparklineChanges(activeSheetId) ?? []
+    if (changedSparkHosts.length) renderer.cache.invalidate(key => {
+      if (!entry) return false
+      if (key.identity.sheetId !== activeSheetId) return false
+      const tile = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
+      for (const host of changedSparkHosts) {
+        const merge = entry.sheet.mergeRanges.find(range => range.minRow === host.row && range.minCol === host.col)
+        const r0 = merge?.minRow ?? host.row, r1 = merge?.maxRow ?? host.row
+        const c0 = merge?.minCol ?? host.col, c1 = merge?.maxCol ?? host.col
+        if (r1 - r0 > 10000) return true
+        let x0 = entry.metrics.cols.start(c0), x1 = entry.metrics.cols.start(c1) + entry.metrics.cols.size(c1)
+        if (x1 < x0) [x0, x1] = [x1, x0]
+        let y0 = Number.POSITIVE_INFINITY, y1 = Number.NEGATIVE_INFINITY
+        for (let sourceRow = r0; sourceRow <= r1; sourceRow++) {
+          const slot = entry.metrics.order.sourceToDisplay(sourceRow)
+          const top = entry.metrics.rows.start(slot), bottom = top + entry.metrics.rows.size(slot)
+          y0 = Math.min(y0, top); y1 = Math.max(y1, bottom)
+        }
+        if (tile.x < x1 && x0 < tile.x + tile.width && tile.y < y1 && y0 < tile.y + tile.height) return true
+      }
+      return false
+    })
     if (sparklineViewKeyRef.current !== sparklineViewKey) {
       renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
       sparklineViewKeyRef.current = sparklineViewKey
@@ -1806,7 +1831,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
               body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', activeSparklines ? sparklineNotices(activeSparklines).join(' ') : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

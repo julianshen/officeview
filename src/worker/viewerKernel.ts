@@ -206,8 +206,10 @@ export class ViewerKernel {
     // sends; it is answered once, without running the provider, by a
     // payload-free error reply whose size depends only on the request id and
     // owner (also <= the envelope).
-    const limit = command.kind === 'read' && command.query?.op === 'drawings' ? command.query.replyByteLimit : undefined
-    let checked = limit !== undefined
+    const grantedSparklines = command.kind === 'read' && command.query?.op === 'sparklines'
+    const sparklineLimit = command.kind === 'read' && command.query?.op === 'sparklines' ? command.query.grantBytes : undefined
+    const limit = command.kind === 'read' && command.query?.op === 'drawings' ? command.query.replyByteLimit : sparklineLimit
+    let checked = grantedSparklines || limit !== undefined
     // Worker shares of a finished result (its outgoing clone) end only once the
     // reply carrying it was posted, or once this command ended without it.
     const outgoing: (() => void)[] = []
@@ -243,6 +245,11 @@ export class ViewerKernel {
       // An over-long id cannot be answered within any bound; no client sends one.
       if (typeof command.requestId !== 'string' || command.requestId.length > MAX_REQUEST_ID_UNITS) return
       if (command.kind === 'cancel') { emit(this.cancel(command)); return }
+      if (grantedSparklines && limit === undefined) {
+        checked = false
+        emit(errorReply(command, capturedOwner(command) as never, 'resource-limit', false, [{ code: 'sparkline-grant-required', message: 'Sparkline reads require a receiver byte grant' }]), true)
+        return
+      }
       if (this.inflight.has(command.requestId)) {
         emit(errorReply(command, capturedOwner(command) as never, 'invalid-cursor', false, [{ code: 'duplicate-request', message: 'requestId is already in flight' }]), true)
         return
