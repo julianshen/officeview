@@ -60,7 +60,12 @@ const headers = ['Region', 'Product', 'Year', 'Sales', 'Units']
 const rows = pivotSourceRows(20261029, 5)
 const data = [headers, ...rows.map(r => [r.region, r.product, r.year, r.sales, r.units] as const)]
 const controlHeaders = ['Region', 'Product', 'Date', 'Sales', 'Units']
-const controlRows = pivotSourceRows(20261029, 16).map((row, i) => ({ ...row, product: ['Apples', 'Bananas', 'Cherries', 'Dates'][[1, 3, 0, 2][i % 4]], date: 45_292 + ((row.date - 44_562) % 731) }))
+const controlRows = pivotSourceRows(20261029, 40).map((row, i) => ({
+  ...row,
+  product: ['Apples', 'Bananas', 'Cherries', 'Dates'][[1, 3, 0, 2][i % 4]],
+  // Match the reference's 39 distinct Date members across 40 pivot-cache records.
+  date: 45_303 + (i % 39),
+}))
 const controlData = [controlHeaders, ...controlRows.map(r => [r.region, r.product, r.date, r.sales, r.units] as const)]
 const reportRegions = ['East', 'West', 'North', 'South']
 const reportRows = [['Region', 'Sum of Sales'], ...reportRegions.map(region => [region, controlRows.filter(row => row.region === region).reduce((total, row) => total + row.sales, 0)] as const), ['Grand Total', controlRows.reduce((total, row) => total + row.sales, 0)] as const]
@@ -140,19 +145,25 @@ function pivotParts(): Record<string, string> {
   const cacheFields = controlHeaders.map((name, field) => {
     const unique = [...new Set(values.map(row => row[field]))]
     const dateField = name === 'Date'
-    const items = unique.map(value => dateField ? `<d v="${toDateTime(Number(value))}"/>` : typeof value === 'number' ? `<n v="${value}"/>` : `<s v="${esc(String(value))}"/>`).join('')
-    return `<cacheField name="${name}"><sharedItems${dateField ? ' containsDate="1" containsNonDate="0"' : ''} count="${unique.length}">${items}</sharedItems></cacheField>`
+    const items = unique.map(value => dateField ? `<d v="${toDateTime(Number(value)).replace(/Z$/, '')}"/>` : typeof value === 'number' ? `<n v="${value}"/>` : `<s v="${esc(String(value))}"/>`).join('')
+    return `<cacheField name="${name}"${dateField ? ' numFmtId="176"' : ''}><sharedItems${dateField ? ' containsDate="1" containsNonDate="0"' : ''} count="${unique.length}">${items}</sharedItems></cacheField>`
   }).join('')
   const records = values.map(row => `<r>${row.map((value, i) => `<x v="${[...new Set(values.map(r => r[i]))].indexOf(value)}"/>`).join('')}</r>`).join('')
-  const productItems = Array.from({ length: 4 }, (_, j) => `<item x="${j}"/>`).join('')
-  const fields = controlHeaders.map((_, i) => `<pivotField${i === 0 ? ' axis="axisRow"' : ''}${i === 3 ? ' dataField="1"' : ''} showAll="0"><items count="${i === 0 || i === 1 ? 4 : 1}">${i === 0 ? Array.from({ length: 4 }, (_, j) => `<item x="${j}"/>`).join('') : i === 1 ? productItems : '<item t="default"/>'}</items></pivotField>`).join('')
-  const rowItems = Array.from({ length: 4 }, (_, i) => `<i><x v="${i}"/></i>`).join('')
-  const x14Cache = `<extLst><ext uri="{BBE1A952-AA13-448e-AADC-164F8A28A991}" xmlns:x14="${NS.x14}"><x14:pivotCacheDefinition pivotCacheId="1" slicerData="1"/></ext></extLst>`
+  const fields = [
+    `<pivotField axis="axisRow" showAll="0"><items count="5">${Array.from({ length: 4 }, (_, j) => `<item x="${j}"/>`).join('')}<item t="default"/></items></pivotField>`,
+    '<pivotField showAll="0"><items count="5"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/><item t="default"/></items></pivotField>',
+    `<pivotField numFmtId="176" showAll="0"><items count="40">${Array.from({ length: 39 }, (_, j) => `<item x="${j}"/>`).join('')}<item t="default"/></items></pivotField>`,
+    '<pivotField dataField="1" showAll="0"/>',
+    '<pivotField showAll="0"/>',
+  ].join('')
+  const rowItems = `<i><x/></i>${Array.from({ length: 3 }, (_, i) => `<i><x v="${i + 1}"/></i>`).join('')}<i t="grand"><x/></i>`
+  const x14Cache = `<extLst><ext uri="{725AE2AE-9491-48be-B2B4-4EB974FC3084}" xmlns:x14="${NS.x14}"><x14:pivotCacheDefinition pivotCacheId="1" slicerData="1"/></ext></extLst>`
+  const pivotTableExt = `<extLst><ext uri="{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}" xmlns:x14="${NS.x14}"><x14:pivotTableDefinition hideValuesRow="1" xmlns:xm="${NS.xm}"/></ext><ext uri="{747A6164-185A-40DC-8AA5-F01512510D54}" xmlns:xpdl="http://schemas.microsoft.com/office/spreadsheetml/2016/pivotdefaultlayout"><xpdl:pivotTableDefinition16/></ext></extLst>`
   return {
     'xl/pivotCache/pivotCacheDefinition1.xml': `${XML}<pivotCacheDefinition xmlns="${NS.main}" xmlns:r="${NS.rel}" r:id="rId1" recordCount="${values.length}" refreshOnLoad="1" saveData="1"><cacheSource type="worksheet"><worksheetSource ref="A1:E${values.length + 1}" sheet="Data"/></cacheSource><cacheFields count="5">${cacheFields}</cacheFields>${x14Cache}</pivotCacheDefinition>`,
     'xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels': `${XML}<Relationships xmlns="${NS.pkg}"><Relationship Id="rId1" Type="${NS.cacheRecordsRel}" Target="pivotCacheRecords1.xml"/></Relationships>`,
     'xl/pivotCache/pivotCacheRecords1.xml': `${XML}<pivotCacheRecords xmlns="${NS.main}" count="${values.length}">${records}</pivotCacheRecords>`,
-    'xl/pivotTables/pivotTable1.xml': `${XML}<pivotTableDefinition xmlns="${NS.main}" xmlns:r="${NS.rel}" name="PivotTable1" cacheId="1" dataCaption="Values" compact="1" outline="1" subtotalTop="1"><location ref="G1:H6" firstHeaderRow="1" firstDataRow="2" firstDataCol="1"/><pivotFields count="5">${fields}</pivotFields><rowFields count="1"><field x="0"/></rowFields><rowItems count="4">${rowItems}</rowItems><dataFields count="1"><dataField name="Sum of Sales" fld="3" subtotal="sum"/></dataFields><pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="1" showColStripes="0"/></pivotTableDefinition>`,
+    'xl/pivotTables/pivotTable1.xml': `${XML}<pivotTableDefinition xmlns="${NS.main}" xmlns:r="${NS.rel}" name="PivotTable1" cacheId="1" dataCaption="Values" compact="1" outline="1" subtotalTop="1"><location ref="G1:H6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="5">${fields}</pivotFields><rowFields count="1"><field x="0"/></rowFields><rowItems count="5">${rowItems}</rowItems><colItems count="1"><i/></colItems><dataFields count="1"><dataField name="Sum of Sales" fld="3" subtotal="sum"/></dataFields><pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="1" showColStripes="0"/>${pivotTableExt}</pivotTableDefinition>`,
     'xl/pivotTables/_rels/pivotTable1.xml.rels': `${XML}<Relationships xmlns="${NS.pkg}"><Relationship Id="rId1" Type="${NS.pivotCacheRel}" Target="../pivotCache/pivotCacheDefinition1.xml"/></Relationships>`,
   }
 }

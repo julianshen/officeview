@@ -86,11 +86,11 @@ describe('pivot reference workbook generator', () => {
       expect(zip.file('xl/pivotCache/pivotCacheRecords1.xml'), c.id).toBeTruthy()
       expect(zip.file('xl/pivotTables/pivotTable1.xml'), c.id).toBeTruthy()
       const records = await zip.file('xl/pivotCache/pivotCacheRecords1.xml')!.async('text')
-      expect(records, c.id).toContain('count="16"')
+      expect(records, c.id).toContain('count="40"')
     }
   })
 
-  it('writes conforming control extensions, cache names, dates and non-overlapping drawings', async () => {
+  it('writes conforming control extensions, cache names, dates and template-matching drawing layout', async () => {
     for (const c of REF_CASES.filter(item => item.kind === 'slicer' || item.kind === 'timeline')) {
       const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
       const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('text')
@@ -109,12 +109,15 @@ describe('pivot reference workbook generator', () => {
       expect(pivot, c.id).toContain('ref="G1:H6"')
       expect(pivot, c.id).toContain('<pivotField axis="axisRow"')
       expect(pivot, c.id).toContain('<pivotField dataField="1"')
-      expect(pivot, c.id).toContain('<items count="4">')
+      expect(pivot, c.id).toContain('<items count="5">')
+      expect(pivot, `${c.id} Product field agrees with selected slicer items`).toContain(
+        '<pivotField showAll="0"><items count="5"><item x="2"/><item h="1" x="1"/><item x="3"/><item h="1" x="0"/><item t="default"/></items></pivotField>',
+      )
       expect(sheet, c.id).toContain('r="G1"')
       expect(sheet, c.id).toContain('r="H6"')
       expect(sheet, c.id).not.toContain('r="A1"')
       expect(pivot, c.id).not.toContain('<colFields count="0"')
-      expect((pivot.match(/<i>/g) ?? []).length, c.id).toBe(Number(/rowItems count="(\d+)"/.exec(pivot)?.[1]))
+      expect((pivot.match(/<i(?:\s[^>]*)?>/g) ?? []).length, c.id).toBe(Number(/rowItems count="(\d+)"/.exec(pivot)?.[1]))
       expect(workbook, c.id).toContain('name="NativeTimeline_Date">#N/A</definedName>')
       expect(workbook, c.id).toContain('name="Slicer_Product">#N/A</definedName>')
       expect(sheet, c.id).toContain('uri="{A8765BA9-456A-4dab-B4F3-ACF838C121DE}"')
@@ -142,9 +145,16 @@ describe('pivot reference workbook generator', () => {
       const cache = await zip.file('xl/pivotCache/pivotCacheDefinition1.xml')!.async('text')
       expect(source, c.id).toContain('r="C2" s="2"')
       expect(styles, c.id).toContain('formatCode="yyyy-mm-dd"')
-      expect(cache, c.id).toContain('<sharedItems containsDate="1" containsNonDate="0" count="16">')
+      expect(cache, c.id).toContain('<cacheField name="Date" numFmtId="176">')
+      expect(cache, c.id).toContain('<sharedItems containsDate="1" containsNonDate="0" count="39">')
       expect(cache, c.id).toContain('<d v="')
+      expect(cache, c.id).not.toMatch(/<d v="[^"]+Z"/)
       expect(cache, c.id).toContain('<x14:pivotCacheDefinition pivotCacheId="1"')
+      const reference = await JSZip.loadAsync(readFileSync('tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx'))
+      const referenceCache = await reference.file('xl/pivotCache/pivotCacheDefinition1.xml')!.async('text')
+      const expectedUri = /<ext uri="([^"]+)"[^>]*><x14:pivotCacheDefinition/.exec(referenceCache)?.[1]
+      expect(expectedUri, 'Excel template pivot-cache extension URI').toBe('{725AE2AE-9491-48be-B2B4-4EB974FC3084}')
+      expect(cache, c.id).toContain(`<ext uri="${expectedUri}"`)
       const timelineCache = await zip.file('xl/timelineCaches/timelineCache1.xml')!.async('text')
       expect(timelineCache, c.id).toContain('sourceName="Date"')
       expect(timelineCache, c.id).toContain('<state ')
@@ -218,6 +228,9 @@ describe('pivot reference workbook generator', () => {
       const actualBook = await generated.file('xl/workbook.xml')!.async('text')
       expect(elementShape(subtree(actualBook, 'extLst')), `${c.id} workbook ext`).toEqual(elementShape(subtree(expectedBook, 'extLst')))
       expect(elementShape(subtree(actualBook, 'definedNames')), `${c.id} defined names`).toEqual(elementShape(subtree(expectedBook, 'definedNames')))
+      const expectedPivot = await reference.file('xl/pivotTables/pivotTable1.xml')!.async('text')
+      const actualPivot = await generated.file('xl/pivotTables/pivotTable1.xml')!.async('text')
+      expect(elementShape(actualPivot), `${c.id} pivot table element tree`).toEqual(elementShape(expectedPivot))
     }
   })
 })
