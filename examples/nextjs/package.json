@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "next": "^16.0.0",
-    "officeview": "^0.9.0",
+    "officeview": "^0.10.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
