@@ -48,7 +48,7 @@ describe('xlsx sparkline reference workbooks', () => {
     ]
     for (const id of required) expect(ids.has(id), id).toBe(true)
     expect(ids.size).toBe(SPARKLINE_CASES.length)
-    for (const c of SPARKLINE_CASES) expect(c.stage, c.id).toBe(/^(col|wl)-/.test(c.id) ? 2 : 1)
+    for (const c of SPARKLINE_CASES) expect(c.stage, c.id).toBe(/^(col|wl)-/.test(c.id) ? 2 : /^(date|rtl)-/.test(c.id) ? 3 : 1)
   })
 
   it('covers every Stage 2 measure item', () => {
@@ -56,6 +56,12 @@ describe('xlsx sparkline reference workbooks', () => {
     expect(stage2).toEqual([
       'col-basic', 'col-negative', 'col-scale-no-zero', 'col-hl-fl', 'col-empty-span', 'col-merged-host', 'col-tiny',
       'wl-basic', 'wl-tiny-values', 'wl-zero', 'wl-hl-fl',
+    ])
+  })
+
+  it('covers every Stage 3 measure item', () => {
+    expect(SPARKLINE_CASES.filter(c => c.stage === 3).map(c => c.id)).toEqual([
+      'date-uneven', 'date-unsorted', 'date-missing-range', 'date-length-mismatch', 'date-text', 'rtl-line', 'rtl-hl-fl', 'rtl-column',
     ])
   })
 

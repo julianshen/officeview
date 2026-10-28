@@ -128,6 +128,22 @@ pixels are solid, a single colour with no anti-aliasing, so every bar edge is an
 | `barAxisRule` | Columns: drawn when displayXAxis = 1 and min < 0 < max (unchanged from `axisRule`; the all-positive column axis is unmeasured). Win/loss: **always** drawn at the middle row round(T + H/2), even for all-zero data. 1 px, colorAxis, plot-box wide (floor(L) … floor(R)), and **painted over the bars** (lines paint it under) | — | col-negative row 4, wl-basic row 3, wl-zero row 3 | Row 31, columns 48–247 magenta, including over the first row of every loss / negative bar |
 | `barTinyCellRule` | col-tiny (2 chars × 5 pt): nothing drawn, as `tinyCellRule` | — | col-tiny | 0 ink pixels |
 
+## Stage 3 measured constants (date axis and right-to-left, Task 10)
+
+Captured 2026-10-28, Excel for Mac 16.114, copy-picture at 1 px/pt. Plot box L = 48, R = 247 (P = 199) as in Stage 1.
+Line point x positions come from marker centroids (alpha-weighted, ±0.7 px from marker snapping and line overlap);
+bar edges are exact.
+
+| Name | Value | Unit | Case id(s) | Method / evidence |
+|---|---|---|---|---|
+| `dateSlotRule` | With dateAxis = 1 and a usable date range, the plot box holds **d<sub>max</sub> − d<sub>min</sub> + 1 equal day slots**; the point dated d sits at the **centre of its day slot**: x = L + (d − d<sub>min</sub> + ½)·P/(d<sub>max</sub> − d<sub>min</sub> + 1). Bars use `barWidthRule` on that slot (width = slot / 1.4, edges rounded). Snapping and every vertical rule are unchanged | — | date-uneven rows 1–3 | Dates offsets 0,1,3,10,11,20,21,30 (31 slots of 6.419 px): all 16 bar edges of rows 2–3 match exactly (e.g. offset 30 → c = 243.79 → 241.50 / 246.08 → columns 241–245). Line markers at 50.3, 58, 69, 114.5, 179.7, 185, 243.7 against predicted 51.2, 57.6, 70.5, 115.4, 179.6, 186.0, 243.8. **Fractional dates are unmeasured** (all fixture dates are whole serials) |
+| `dateAxisOffRule` | A date range without dateAxis = 1 is **ignored**: even slots | — | date-uneven row 4 | Markers at the `lineEndpointRule` slot centres, identical to line-markers |
+| `dateSortRule` | Points are **sorted by date** before plotting: the line connects them in date order, and **first/last are the earliest/latest dated points**, not the first/last cells | — | date-unsorted rows 1–2 | Dates [45010, 45000, 45003, 45030, 45001, 45020, 45011, 45021] with values [4,7,3,9,2,8,5,6]: first (green) on value 7 at the earliest date (x 50), last (purple) on value 9 at the latest (x 242.5); the polyline is monotonic in x; column heights 7,2,3,4,5,8,6,9 left to right. Ties in date are unmeasured |
+| `dateMissingRule` | dateAxis = 1 with **no date range** (LibreOffice-style): **nothing is drawn** (line and column) | — | date-missing-range | 0 ink pixels in both rows; not even spacing (the spec §5.4 hypothesis is refuted) |
+| `dateLengthRule` | Data and date ranges of different lengths: **the first min(n<sub>data</sub>, n<sub>dates</sub>) pairs** are plotted, the extra values or dates are ignored, and the date span is taken over the used dates only | — | date-length-mismatch rows 1–2 | Row 1 (6 dates): markers at the 21-slot centres of offsets 0,1,10,20 (52.7, 61, 147.7, 241.5; predicted 52.7, 62.2, 147.5, 242.3); values 9..2 of the first six only. Row 2 (10 dates): identical to date-uneven row 1 |
+| `dateCellRule` | A date cell that is **text or empty drops its point**: no vertex, removed from min/max, and the line **bridges** its neighbours | — | date-text rows 1–2 | Row 1 (C7 text): no marker at offset 3, scale unchanged (min 2 still present). Row 2 (E8 empty): value 2 dropped, min becomes 3 (value 3 at row 56); chords pass through (85, 12–13) and (150, 9–10) |
+| `rtlRule` | rightToLeft = 1 **mirrors x only**: x<sub>i</sub> = R − (i + ½)·P/n (and the date-slot x mirrored about the plot box). Colours follow **data order**: first is drawn at the right, last at the left. Bars, gaps, spans, markers and precedence are mirrored unchanged | — | rtl-line rows 1–3, rtl-hl-fl rows 1–2, rtl-column rows 1–2 | rtl-hl-fl row 1: first (green) at x 233.7 on value 4 (data index 0), last at 59.3; row 2 first = high → red at the right, last = low → teal at the left. rtl-line row 2 (date axis) markers are the exact mirror of date-uneven row 1 (50.33 ↔ 243.67). rtl-column bar edges identical to col-basic, colours reversed (last purple at left, first green at right) |
+
 ## Comparison (Task 7)
 
 `bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]` renders each case and compares its host cells with
