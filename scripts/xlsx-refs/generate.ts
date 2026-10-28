@@ -80,7 +80,8 @@ function worksheetXml(tableCase?: TableCase, controlKind?: 'slicer' | 'timeline'
   const rowXml = tableRows.map((values, ri) => `<row r="${ri + 1}">${values.map((v, ci) => {
     const s = control && ci === 2 && ri > 0 ? ' s="2"' : ''
     if (v === '') return `<c r="${cell(ri + 1, ci + startCol)}"${s}/>`
-    return typeof v === 'number' ? `<c r="${cell(ri + 1, ci + startCol)}"${s}><v>${v}</v></c>` : `<c r="${cell(ri + 1, ci + startCol)}"${s} t="inlineStr"><is><t>${esc(String(v))}</t></is></c>`
+    const f = tableCase?.totalsRowCount && ri === tableRows.length - 1 && ci >= 3 ? `<f>SUBTOTAL(109,Table1[${headers[ci]}])</f>` : ''
+    return typeof v === 'number' ? `<c r="${cell(ri + 1, ci + startCol)}"${s}>${f}<v>${v}</v></c>` : `<c r="${cell(ri + 1, ci + startCol)}"${s} t="inlineStr"><is><t>${esc(String(v))}</t></is></c>`
   }).join('')}</row>`).join('')
   const tablePart = tableCase ? '<tableParts count="1"><tablePart r:id="rId1"/></tableParts>' : ''
   const drawing = controlKind ? '<drawing r:id="rId2"/>' : ''
@@ -96,7 +97,9 @@ function worksheetXml(tableCase?: TableCase, controlKind?: 'slicer' | 'timeline'
 }
 
 function tableXml(spec: TableCase): string {
-  const columns = headers.map((name, i) => `<tableColumn id="${i + 1}" name="${name}"/>`).join('')
+  // Excel repairs a totals row whose columns don't declare it: the label column and the summed columns say so.
+  const totals = (i: number) => !spec.totalsRowCount ? '' : i === 0 ? ' totalsRowLabel="Total"' : i >= 3 ? ' totalsRowFunction="sum"' : ''
+  const columns = headers.map((name, i) => `<tableColumn id="${i + 1}" name="${name}"${totals(i)}/>`).join('')
   const lastRow = spec.totalsRowCount ? 7 : 6
   return `${XML}<table xmlns="${NS.main}" id="1" name="Table1" displayName="Table1" ref="A1:E${lastRow}" headerRowCount="${spec.headerRowCount}" totalsRowCount="${spec.totalsRowCount}"><autoFilter ref="A1:E${lastRow - spec.totalsRowCount}"/><tableColumns count="5">${columns}</tableColumns><tableStyleInfo name="${esc(spec.styleName)}" showFirstColumn="${+spec.flags.showFirstColumn}" showLastColumn="${+spec.flags.showLastColumn}" showRowStripes="${+spec.flags.showRowStripes}" showColumnStripes="${+spec.flags.showColumnStripes}"/></table>`
 }

@@ -78,6 +78,18 @@ describe('pivot reference workbook generator', () => {
     }
   })
 
+  it('declares the totals row on its table columns, with SUBTOTAL formulas in the summed cells', async () => {
+    // Excel repairs a table whose totals row is only values (opened in Excel 16.114, 2026-10-29).
+    const c = REF_CASES.find(item => item.id === 'table-totals-row')!
+    const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+    const table = await zip.file('xl/tables/table1.xml')!.async('text')
+    expect(tagAttributeValues(table, 'tableColumn', 'totalsRowLabel')).toEqual(['Total', '', '', '', ''])
+    expect(tagAttributeValues(table, 'tableColumn', 'totalsRowFunction')).toEqual(['', '', '', 'sum', 'sum'])
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('text')
+    expect(sheet).toMatch(/<c r="D7"><f>SUBTOTAL\(109,Table1\[Sales\]\)<\/f><v>/)
+    expect(sheet).toMatch(/<c r="E7"><f>SUBTOTAL\(109,Table1\[Units\]\)<\/f><v>/)
+  })
+
   it('provides deterministic source rows for Excel-built pivot cases', async () => {
     const { pivotSourceRows } = await import('../scripts/xlsx-refs/generate')
     expect(pivotSourceRows(17, 20)).toEqual(pivotSourceRows(17, 20))

@@ -6,7 +6,7 @@
  * are included and the range follows the real layout (values-on-rows runs far below the default A1:H24). The
  * `screen` appearance keeps gridlines, which give the cell geometry the sparkline harness got from bordered twins.
  *
- *   bun scripts/xlsx-refs/capture-all.ts [--kind table|pivot|slicer|timeline] [--case id]
+ *   bun scripts/xlsx-refs/capture-all.ts [--kind table|pivot|slicer|timeline] [--case id] [--skip-existing]
  *
  * Writes tests/fixtures/xlsx-pivots/refs/<id>.png plus a .json sidecar. Needs an awake, unlocked display.
  */
@@ -33,7 +33,7 @@ export const captureRange = (c: RefCase, file: string): string => c.kind === 'pi
 if (import.meta.main) {
   const args = process.argv.slice(2)
   const arg = (flag: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined
-  const kind = arg('--kind'), only = arg('--case')
+  const kind = arg('--kind'), only = arg('--case'), skipExisting = args.includes('--skip-existing')
   mkdirSync(REFS, { recursive: true })
   const excelVersion = osa(['tell application "Microsoft Excel" to get version'])
   let count = 0
@@ -41,6 +41,7 @@ if (import.meta.main) {
     if ((kind && c.kind !== kind) || (only && c.id !== only)) continue
     const file = join(FIXTURES, `${c.id}.xlsx`)
     if (!existsSync(file)) { console.log(`missing ${c.id}.xlsx (build it first)`); continue }
+    if (skipExisting && existsSync(join(REFS, `${c.id}.json`))) continue
     const range = captureRange(c, file)
     capture(file, c.sheet, range, join(REFS, `${c.id}.png`), { appearance: c.appearance })
     closeWorkbook(`${c.id}.xlsx`, false)
