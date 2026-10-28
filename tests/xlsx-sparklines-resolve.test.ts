@@ -396,6 +396,32 @@ describe('resolveWorkbookSparklines', () => {
       withGroups(sheetOf('S', [values, dates]), groupOf([spark('J1', 'A1:H1')], { dateAxis: true, dateRange: area('A2:H2'), ...over }))
     const frac = (o: number, range = 31): number => (o + 0.5) * (1 / range)
 
+    it('does not throw on date-paired error-only and gap-only series', () => {
+      const s = withGroups(
+        sheetOf('S', [[{ error: '#N/A' }], [undefined], [5], [45000]]),
+        groupOf([spark('C1', 'A1'), spark('C2', 'A2')], { dateAxis: true, dateRange: area('A4') }),
+      )
+
+      expect(() => resolve([s])).not.toThrow()
+      expect(at(s, 'C1')).toBeUndefined()
+      expect(at(s, 'C2')).toBeUndefined()
+      expect(s.resolvedSparklines).toBeUndefined()
+    })
+
+    it('skips empty date-paired members without invalidating their group-scaled sibling', () => {
+      const s = withGroups(
+        sheetOf('S', [[{ error: '#N/A' }], [undefined], [5], [45000]]),
+        groupOf([spark('C1', 'A1'), spark('C2', 'A2'), spark('C3', 'A3')], {
+          dateAxis: true, dateRange: area('A4'), minAxisType: 'group', maxAxisType: 'group',
+        }),
+      )
+      resolve([s])
+      expect(at(s, 'C1')).toBeUndefined()
+      expect(at(s, 'C2')).toBeUndefined()
+      expect(at(s, 'C3')).toMatchObject({ values: [5], min: 5, max: 5 })
+      expect(s.diagnostics).toBeUndefined()
+    })
+
     it('pairs the data cells with the date cells and hands geometry the day-slot fractions (dateSlotRule)', () => {
       const s = datedSheet(D, offs.map(o => 45000 + o))
       resolve([s])

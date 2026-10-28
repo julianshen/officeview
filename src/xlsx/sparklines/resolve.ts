@@ -298,8 +298,9 @@ export function resolveSparklineDataSheets(sheets: SparklineResolveSheet[], poli
           const dateTarget = dateArea.sheet === undefined ? sheet : byName.get(dateArea.sheet.toLowerCase())
           if (!dateTarget) continue
           const dated = plottedDated(group, area, dateArea, target.access, dateTarget.access, policy.cached)
-          // No usable dated point (every pair dropped): nothing to draw, silently.
-          if (!dated) continue
+          // No usable date pair, or no numeric point after pairing: nothing to draw or scale, silently. Like the
+          // undated singlePointRule, this is not a dropped group member.
+          if (!dated || !extent(dated.values)) continue
           axis = dated.axis
           parts.push({ sparkline, host: sparkline.host, dataSheet: target.name, sourceRows: dated.sourceRows, values: dated.values, bridged: dated.bridged, axis })
         } else {

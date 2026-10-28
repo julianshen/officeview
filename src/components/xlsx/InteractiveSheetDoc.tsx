@@ -313,8 +313,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => () => { void source.release() }, [source])
   // Worker-backed source: row loads, merges and adopted worker views re-render.
   const remote = isRemoteWorkbook(source) ? source : null
-  const hasResolvedSparklines = doc.sheets.some(sheet => Boolean(sheet.resolvedSparklines?.size))
-    || Boolean(remote && remote.layout(activeSheetId).hasSparklines)
+  const hasResidentSparklines = useMemo(() => doc.sheets.some(sheet => Boolean(sheet.resolvedSparklines?.size)), [doc])
+  const hasActiveWorkerSparklines = Boolean(remote && remote.layout(activeSheetId).hasSparklines)
+  const hasResolvedSparklines = hasResidentSparklines || hasActiveWorkerSparklines
   // README / spec §12.4: admission selects D (desktop) or M (phones and tablets,
   // iPadOS included); presentation (bitmap pool, DPR admission, tiles, images)
   // follows the same device profile, not a fixed D. A worker-backed source

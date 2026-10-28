@@ -341,6 +341,11 @@ describe('XLSX sparkline references (XlsxWriter-written workbook, an independent
       const r = await compareXlsxWriter({ rows: part.rows, mutate: s => { (inRow(s, 9).values as number[])[3] = 40 } })
       expect(withinTolerance(r.diff, tol), `${r.diff.meanAbs.toFixed(4)} ${r.diff.rowMax.toFixed(4)} strong ${r.diff.strong}`).toBe(false)
     }, 60_000)
+    it('the row-9 tolerance also rejects a mid-sized five-pixel vertex shift', async () => {
+      const part = XLSXWRITER_PARTS[1], tol = table.get(part.id)!.tolerance!
+      const r = await compareXlsxWriter({ rows: part.rows, mutate: s => { (inRow(s, 9).values as number[])[3] = 13 } })
+      expect(withinTolerance(r.diff, tol), `${r.diff.meanAbs.toFixed(4)} ${r.diff.rowMax.toFixed(4)} strong ${r.diff.strong}`).toBe(false)
+    }, 60_000)
   })
 })
 

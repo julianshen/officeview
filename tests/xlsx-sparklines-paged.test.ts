@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import JSZip from 'jszip'
 import { RemoteSparklineCache, sparklineNotices, type SparklineHost } from '../src/worker/viewerRemoteSparklines'
 import { initialIdentity, transferablesOf } from '../src/worker/viewerProtocol'
 import type { WorkerCommand, WorkerReply, SheetSparklines } from '../src/xlsx/view/contracts'
@@ -17,6 +18,34 @@ import { sparklineInvalidationBox } from '../src/xlsx/view/sparklineInvalidation
 
 const microtask = () => new Promise(resolve => setTimeout(resolve, 0))
 const fixtureBytes = (name: string) => new Uint8Array(readFileSync(resolve(process.cwd(), `tests/fixtures/xlsx-sparklines/${name}.xlsx`)))
+async function datedEmptyMembersBytes() {
+  const zip = await JSZip.loadAsync(fixtureBytes('date-uneven'))
+  const path = 'xl/worksheets/sheet1.xml'
+  let xml = await zip.file(path)!.async('string')
+  for (const col of 'ABCDEFGH') {
+    xml = xml.replace(new RegExp(`<c r="${col}1"[^>]*>.*?<v>.*?</v>.*?</c>`), `<c r="${col}1" t="e"><v>#N/A</v></c>`)
+    xml = xml.replace(new RegExp(`<c r="${col}2"[^>]*>.*?</c>`), `<c r="${col}2"></c>`)
+  }
+  zip.file(path, xml)
+  return zip.generateAsync({ type: 'uint8array' })
+}
+function excelCol(zeroBased: number): string {
+  let value = zeroBased + 1, label = ''
+  while (value > 0) { value--; label = String.fromCharCode(65 + value % 26) + label; value = Math.floor(value / 26) }
+  return label
+}
+async function manyLongDateRangeSparklinesBytes(count: number) {
+  const zip = await JSZip.loadAsync(fixtureBytes('date-uneven'))
+  const path = 'xl/worksheets/sheet1.xml'
+  let xml = await zip.file(path)!.async('string')
+  const sparklines = Array.from({ length: count }, (_, index) =>
+    `<x14:sparkline><xm:f>Sheet1!A1</xm:f><xm:sqref>${excelCol(9 + index)}1</xm:sqref></x14:sparkline>`,
+  ).join('')
+  const groups = `<x14:sparklineGroups xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:sparklineGroup dateAxis="1"><xm:f>Sheet1!A7:AZ7</xm:f><x14:sparklines>${sparklines}</x14:sparklines></x14:sparklineGroup></x14:sparklineGroups>`
+  xml = xml.replace(/<x14:sparklineGroups[^>]*>.*?<\/x14:sparklineGroups>/, groups)
+  zip.file(path, xml)
+  return zip.generateAsync({ type: 'uint8array' })
+}
 async function resolvePaged(bytes: Uint8Array, docId: string) {
   const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer as ArrayBuffer]) }, { docId, profile: 'D' })
   try {
@@ -310,6 +339,50 @@ describe('paged sparkline transfer cache', () => {
       const { output } = await resolvePaged(bytes, `spark-worker-parity-${fixture}`)
       expect(output, fixture).toEqual(Object.fromEntries(resident.sheets.map(sheet => [sheet.name, { resolved: sheet.resolvedSparklines, diagnostics: sheet.diagnostics ?? [] }])))
     }
+  })
+
+  it('resident and paged paths omit date-axis members with only errors or gaps while preserving valid siblings', async () => {
+    const bytes = await datedEmptyMembersBytes()
+    const resident = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
+    const { output } = await resolvePaged(bytes, 'spark-dated-empty-members')
+    expect(output).toEqual(Object.fromEntries(resident.sheets.map(sheet => [sheet.name, { resolved: sheet.resolvedSparklines, diagnostics: sheet.diagnostics ?? [] }])))
+    const sheet = resident.sheets[0]
+    expect(sheet.resolvedSparklines?.get(0)?.get(9)).toBeUndefined()
+    expect(sheet.resolvedSparklines?.get(1)?.get(9)).toBeUndefined()
+    expect(sheet.resolvedSparklines?.get(2)?.get(9)).toBeDefined()
+    expect(sheet.resolvedSparklines?.get(3)?.get(9)).toBeDefined()
+  })
+
+  it('preflights and reads only the paired date prefix when a paged group has many longer date ranges', async () => {
+    const bytes = await manyLongDateRangeSparklinesBytes(500)
+    const resident = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
+    expect(resident.sheets[0].sparklineGroups?.[0].dateAxis).toBe(true)
+    expect(resident.sheets[0].sparklineGroups?.[0].dateRange).toMatchObject({ r0: 6, c0: 0, r1: 6, c1: 51 })
+    expect(resident.sheets[0].resolvedSparklines?.size).toBeGreaterThan(0)
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer as ArrayBuffer]) }, { docId: 'spark-long-dates', profile: 'D' })
+    try {
+      await session.done
+      const source = createPagedWorkbookSource(session), sheet = source.sheets[0], store = source.store(sheet.sheetId)
+      const readCells = new Set<string>()
+      type ReadSparklineCell = (cell: { row: number; col: number }, options: { signal: AbortSignal; stamp: typeof store.stamp }) => Promise<unknown>
+      const instrumentedStore = store as unknown as { readSparklineCell: ReadSparklineCell }
+      const readSparklineCell = instrumentedStore.readSparklineCell.bind(store)
+      instrumentedStore.readSparklineCell = async (cell, options) => {
+        readCells.add(`${cell.row}:${cell.col}`)
+        return readSparklineCell(cell, options)
+      }
+      let admitted = 0
+      const limit = 2 * 1024 * 1024
+      const result = await store.readSparklines!({ signal: new AbortController().signal, stamp: store.stamp }, limit, { set: bytes => { admitted = Math.max(admitted, bytes); return bytes <= limit } })
+      expect(result.diagnostics.some(item => item.feature === 'sparkline-resource-limit')).toBe(false)
+      expect(result.sparklines).toHaveLength(500)
+      expect(result.sparklines[0].axis).toBeDefined()
+      expect(readCells).toEqual(new Set(['0:0', '6:0']))
+      expect(admitted).toBeGreaterThan(0)
+      expect(admitted).toBeLessThanOrEqual(limit)
+      expect(rebuildResolvedSparklines(result)).toEqual(resident.sheets[0].resolvedSparklines)
+      await source.release()
+    } finally { await session.release() }
   })
 
   it('refuses an undersized grant before taking a worker preparation charge', async () => {

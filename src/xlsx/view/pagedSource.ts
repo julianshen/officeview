@@ -63,8 +63,8 @@ function ended(failure: SourceFailure | undefined): SourceFailure | undefined {
   return failure && failure.retryable ? Object.freeze({ ...failure, retryable: false }) : failure
 }
 
-/** Stack-free conservative structured-clone size for the bounded sparkline
- * model. The import caps its depth; repeated references are counted again. */
+/** Conservative structured-clone size for the sparkline model, recursive; depth is bounded by the sparkline model.
+ * Repeated references are counted again. */
 function sparklinePayloadTreeBytes(value: unknown): number {
   if (value === null || value === undefined) return 8
   if (typeof value === 'string') return 16 + value.length * 2
@@ -595,7 +595,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (!target) continue
       const dataPoints = area.r0 === area.r1 ? area.c1 - area.c0 + 1 : area.r1 - area.r0 + 1
       const date = group.dateAxis ? group.dateRange : undefined
-      const datePoints = date ? (date.r0 === date.r1 ? date.c1 - date.c0 + 1 : date.r1 - date.r0 + 1) : 0
+      const datePoints = date ? Math.min(dataPoints, date.r0 === date.r1 ? date.c1 - date.c0 + 1 : date.r1 - date.r0 + 1) : 0
       sparkCount++
       points += dataPoints
       axisPoints += datePoints
@@ -649,7 +649,16 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const date = group.dateAxis ? group.dateRange : undefined
       if (date) {
         const dateTarget = date.sheet === undefined ? this.sheet : byName.get(date.sheet.toLowerCase())
-        if (dateTarget) addRange(dateTarget, date)
+        if (dateTarget) {
+          const dataPoints = spark.data.r0 === spark.data.r1 ? spark.data.c1 - spark.data.c0 + 1 : spark.data.r1 - spark.data.r0 + 1
+          const datePoints = date.r0 === date.r1 ? date.c1 - date.c0 + 1 : date.r1 - date.r0 + 1
+          const pairedPoints = Math.min(dataPoints, datePoints)
+          // Date pairing is positional; cells after the data range's length cannot contribute to slots or values.
+          const pairedDate = date.r0 === date.r1
+            ? { ...date, c1: date.c0 + pairedPoints - 1 }
+            : { ...date, r1: date.r0 + pairedPoints - 1 }
+          addRange(dateTarget, pairedDate)
+        }
       }
       if (++collected % 128 === 0) {
         if (options.signal.aborted) return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-cancelled', message: 'Sparkline resolution was cancelled' }] }
