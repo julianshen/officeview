@@ -79,16 +79,23 @@ describe('<OfficeDoc> search', () => {
     const utils = await mount()
     fireEvent.change(input(utils.container), { target: { value: 'alpha' } })
     await waitFor(() => expect(status(utils.container).textContent).toBe('1 of 1'))
-    // the page canvas should now contain highlight-yellow pixels
-    const canvas = utils.container.querySelector('canvas') as HTMLCanvasElement
-    const ctx = canvas.getContext('2d')!
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data
-    let yellow = 0
-    for (let i = 0; i < img.length; i += 4) {
-      // rgba(255,214,0,0.45) over white lands around (255, 240, 190)
-      if (img[i] > 245 && img[i + 1] > 225 && img[i + 1] < 252 && img[i + 2] < 210) yellow++
+    // the page canvas should now contain highlight-yellow pixels. The status
+    // text and the highlight request land in the same React commit, but the
+    // wash is painted in the post-commit paint effect, so under load the
+    // canvas may not be repainted yet: poll for the pixels, re-querying the
+    // canvas each attempt in case the element was replaced.
+    const yellowIn = (canvas: HTMLCanvasElement | null): number => {
+      if (!canvas) return 0
+      const ctx = canvas.getContext('2d')!
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+      let yellow = 0
+      for (let i = 0; i < img.length; i += 4) {
+        // rgba(255,214,0,0.45) over white lands around (255, 240, 190)
+        if (img[i] > 245 && img[i + 1] > 225 && img[i + 1] < 252 && img[i + 2] < 210) yellow++
+      }
+      return yellow
     }
-    expect(yellow).toBeGreaterThan(20)
+    await waitFor(() => expect(yellowIn(utils.container.querySelector('canvas') as HTMLCanvasElement)).toBeGreaterThan(20), { timeout: 4000 })
   })
 
   test('cmd/ctrl+F focuses the search input', async () => {
