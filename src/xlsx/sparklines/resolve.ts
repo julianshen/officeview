@@ -40,9 +40,9 @@ export type ResolvedSparklines = ReadonlyMap<number, ReadonlyMap<number, Resolve
 
 const MAX_COLS = 16_384
 
-/** Staging gate (spec §10): features not yet in a merged stage are not drawn and raise no diagnostic. */
+/** Staging gate (spec §10): features not yet in a merged stage (dateAxis, rightToLeft: Stage 3) are not drawn and raise no diagnostic. */
 function stagedOut(group: XlsxSparklineGroup): boolean {
-  return group.refused !== undefined || group.type !== 'line' || group.dateAxis || group.rightToLeft
+  return group.refused !== undefined || group.dateAxis || group.rightToLeft
 }
 
 function diagnose(sheet: XlsxSheet, diagnostic: SparklineDiagnostic): void {
@@ -213,9 +213,9 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
         continue
       }
       if (!parts.length) continue
-      // `groupScaleRule` is UNRESOLVED in the validation doc (Excel drew nothing for the group fixture; an investigation is
-      // pending). Until it lands this is the standard group semantics: min/max over every plotted (non-hidden, non-null)
-      // point of every sparkline in the group.
+      // `groupScaleRule`, measured (docs/validation/xlsx-sparklines.md; line-scale-group, and col-scale-no-zero
+      // rows 4–5 for columns): min and max are shared across every sparkline of the group — the min/max over every
+      // plotted (non-hidden, non-null) point of every sparkline — and manualMin/manualMax are ignored under group.
       const groupExtent = group.minAxisType === 'group' || group.maxAxisType === 'group' ? extent(parts.flatMap(part => part.values)) : undefined
       for (const part of parts) {
         const own = extent(part.values)!

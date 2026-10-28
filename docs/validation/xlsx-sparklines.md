@@ -74,8 +74,8 @@ pairs). Borders therefore do not move or clip the sparkline.
 | `displayHiddenRule` | displayHidden = 1 draws hidden data as if visible | — | line-hidden-shown | Pixel-identical to line-weight-2_25 row 3 and to line-axis row 2 (the same 8 points, 1-px blue) |
 | `filterHiddenRule` | Rows hidden by an **autofilter are skipped exactly like hand-hidden rows** | — | line-filter-hidden | 5 points [4,9,2,5,6] at the n = 5 slot centres (ink x 67…227), with vertex rows 41,5,56,34,27 |
 | `colourFallback` | **colorSeries absent → black (000000).** colorMarkers, colorFirst, colorLast, colorHigh, colorLow or colorAxis absent → **that element is not drawn at all** (its flag is effectively off) | — | line-colours-missing rows 1–6 | Rows 1–5 (no colour elements, flags markers + axis / first / last / high / low): 462 ink px each, all (0,0,0), with no axis on row 31. Row 6 (colorSeries only, every point flag on): the same 462 px, all (0,0,255), with no markers. This **contradicts** LibreOffice (black for every element) except for the series |
-| `colourResolution` | theme index 0 = lt1, 1 = dk1, 2 = lt2, 3 = dk2, 4–9 = accent1–6. Tints are applied in HSL (ECMA-376 tint). Indexed colours use the default palette. Captured RGB is within ±2 per channel of the resolved value | — | line-basic, line-colours-theme-tint, line-colours-indexed | Default series (accent1, tint −0.5) → (32,55,100) = 203864. theme 0 tint −0.5 → (128,128,128). theme 2 tint −0.25 → (173,169,169). theme 3 tint +0.5 → (151,167,187) (computed 153,168,189). Indexed 12/11/14/16/10 → 0000FF/00FF00/FF00FF/800000/FF0000. 00A0A0 → (0,159,159) and FFC000 → (255,191,0): 1-unit colour-management drift |
-| `layering` | **Cell fill paints under** the sparkline. **Spill text from the left neighbour is not stopped by the host and paints over** the sparkline. **Host text** never overlaps the line in this capture, so it is **unobserved**. **Gridlines and borders** are never touched by the line or markers (the line stays ≥ 2 pt in from the left/right inner edges and ≥ 3.35 pt from top/bottom), so their order against the sparkline is **unobservable** here | — | layering, all `-bordered` twins | Fill: half-coverage line pixels are (143,149,152) = ½·203864 + ½·FFF2CC. Spill text: at (161, 112–114) the pixel is (11,19,35) α 0.733. Text-over-line predicts (12,20,36) α 0.733, line-over-text predicts (22,38,68). The spill text runs through J (row 2 of the capture). Borders: 0 non-border pixel differences between plain and bordered captures |
+| `colourResolution` | theme index 0 = lt1, 1 = dk1, 2 = lt2, 3 = dk2, 4–9 = accent1–6. Tints are applied in HSL (ECMA-376 tint). Indexed colours use the default palette. Captured RGB is within ±2 per channel of the resolved value | — | line-basic, line-colours-theme-tint, line-colours-indexed | Default series (accent1, tint −0.5) → (32,55,100) = 203764. theme 0 tint −0.5 → (128,128,128). theme 2 tint −0.25 → (173,169,169). theme 3 tint +0.5 → (151,167,187) (computed 153,168,189). Indexed 12/11/14/16/10 → 0000FF/00FF00/FF00FF/800000/FF0000. 00A0A0 → (0,159,159) and FFC000 → (255,191,0): 1-unit colour-management drift |
+| `layering` | **Cell fill paints under** the sparkline. **Spill text from the left neighbour is not stopped by the host and paints over** the sparkline. **Host text** never overlaps the line in this capture, so it is **unobserved**. **Gridlines and borders** are never touched by the line or markers (the line stays ≥ 2 pt in from the left/right inner edges and ≥ 3.35 pt from top/bottom), so their order against the sparkline is **unobservable** here | — | layering, all `-bordered` twins | Fill: half-coverage line pixels are (143,149,152) = ½·203764 + ½·FFF2CC. Spill text: at (161, 112–114) the pixel is (11,19,35) α 0.733. Text-over-line predicts (12,20,36) α 0.733, line-over-text predicts (22,38,68). The spill text runs through J (row 2 of the capture). Borders: 0 non-border pixel differences between plain and bordered captures |
 | `mergedHostRule` | The plot box is the **merged range's** inner box with the same insets (2 pt left/right, same vertical mapping) | — | line-merged-host | Border x = 45 and 453, so the inner box is [46, 453) and P = 403. The fitted vertices equal the slot-centre floors exactly (see `lineEndpointRule`), and the vertex rows are the same as line-basic |
 | `laterSheetRule` | Data on a later sheet (Sheet3, host on Sheet1) renders identically | — | line-later-sheet | Pixel-identical to line-markers (0 differing px) |
 | `defaultsOmittedRule` | Omitted attributes take the schema defaults: line type, 0.75 pt (1 px), displayEmptyCellsAs = **zero**, no points, no axis, individual scale. The a14/xmm prefixes are accepted | — | line-defaults-omitted | The empty C1 draws at the bottom (row 56 = value 0, min 0). The other vertex rows are 33,16,5,45,10,28,22 against the model's 33,16,5,44,10,27,22, within the ±1 `verticalMapping` tolerance. Width is 1 px. No marker pixels. There is no explicit pixel twin in the Stage 1 set, so this is consistent with the defaults but not pixel-proven against an explicit case |
@@ -107,10 +107,31 @@ these constants, snap as in `vertexSnapRule`, and accept a ±1 px vertex toleran
 - Not tested by Stage 1:
   - negative adds markers on line sparklines (no line case sets negative = 1)
 
+## Stage 2 measured constants (column and win/loss, Task 8)
+
+Captured 2026-10-28 with Excel for Mac 16.114, copy-picture at 1 px/pt (same route as Stage 1). The plot box, insets,
+`verticalMapping` constants (T = 5.08, H = 51.86), `cellBoxRule`, `mergedHostRule`, `tinyCellRule` and
+`colourResolution` are Stage 1's and hold unchanged (P = 199 with L = 48, R = 247; merged P = 403, R = 451). Bar
+pixels are solid, a single colour with no anti-aliasing, so every bar edge is an exact device-pixel boundary.
+
+| Name | Value | Unit | Case id(s) | Method / evidence |
+|---|---|---|---|---|
+| `barSlotRule` | Each of the n values owns one of n equal slots across the plot box (the same slots as `lineEndpointRule`). The bar is **centred on the slot centre** c<sub>i</sub> = L + (i + ½)·P/n | — | col-basic, col-merged-host, wl-basic | Bar centres 60.5, 85, 110, 135, 160, 185, 210, 234.5 against slot centres 60.44 … 234.56 (P = 199) |
+| `barWidthRule` | bar width w = **slot / 1.4** (5/7 of the slot: a 40 % gap between bars, half on each side). Edges are **round(c − w/2)** and **round(c + w/2)** in device px | px | col-basic (P = 199: w = 17.77, bars 17–18 px), col-merged-host (P = 403: w = 35.98, every bar 36 px), wl-basic | All 16 bars of both widths match exactly: e.g. merged slot 4 c = 274.69 → 256.70 / 292.68 → columns 257–292. With a fixed-pt gap the merged bars would be 43 px wide |
+| `columnBaselineRule` | When the effective scale includes 0 (min ≤ 0 ≤ max) bars run from the **baseline row round(y(0))** to round(y(v)), with y the Stage 1 `verticalMapping`. A value at the baseline (0) draws nothing | — | col-negative rows 1, 2, 4; col-scale-no-zero row 3 (custom 0..100); col-empty-span rows 3–4 (zero) | [−3,2,−1,4,−4,3,1,−2]: y(0) = 31.01 → positive bars end at row 30, negative bars start at row 31; tops 5, 12, 18, 25 and bottoms 37, 44, 50, 57 = round(y(v)). Empties as zero: no bar at those slots |
+| `columnNoZeroRule` (smallest bar) | When the scale excludes 0 the baseline is the plot edge on 0's side (bottom for min > 0, top for max < 0), and the scale's end nearest 0 maps **δ = 0.63 pt inside** that edge: min > 0 → y(v) = T + (max − v)/(max − min)·(H − δ); max < 0 mirrored. So the smallest value keeps a sliver (1 px at 1 px/pt). **Underdetermined:** every δ in [0.45, 0.81] pt fits; 0.63 is the midpoint | pt | col-basic, col-scale-no-zero rows 1, 2, 4, 5 (group scale 10..80), col-empty-span rows 1–2, 5–6, col-negative row 3 (all negative) | Feasibility sweep over the 42 bars of six rows (scratch fit): δ ∈ [0.45, 0.81]. Min 2 of 2..9 → 1-px bar at row 56; all-negative max −2 → 1-px bar at row 5, mirror-identical heights (52, 45, 37, 30, 23, 15, 8, 1) |
+| `columnScaleRule` | individual, group (shared min/max, as `groupScaleRule`) and custom scales use the same maps as lines; custom 0..100 includes 0 so `columnBaselineRule` applies | — | col-scale-no-zero | Row 3 (custom 0..100) tops 31, 30, 30, 28, 29, 29, 31, 28 = round(y(v)) with H unchanged |
+| `columnEmptyRule` | gap and span both leave the slot empty (no bar; slots keep their positions). zero draws a zero-height bar, i.e. nothing, but the 0 takes part in min/max | — | col-empty-span | Rows 1–2 (gap) and 5–6 (span) are pixel-identical |
+| `winLossRule` | Every win bar runs from **round(T) to round(T + H/2)** (rows 5–30), every loss bar from **round(T + H/2) to round(T + H)** (rows 31–56), whatever the magnitudes. Sign test is exact: **v > 0 win, v < 0 loss, v = 0 no bar** (±1e-16 draw full bars) | — | wl-basic, wl-tiny-values, wl-zero | All-positive data (wl-basic row 4) draws the same win bars; empty cells as zero draw nothing (wl-zero row 2) |
+| `barNegativeRule` | negative = 1 colours every bar with v < 0 in colorNegative; negative off draws them in colorSeries | — | col-negative rows 1–3, wl-basic rows 1–2, wl-tiny-values row 2 | Orange (FF8000) exactly on the negative slots |
+| `barColourPrecedence` | Last painted of **series → negative → first/last → high → low**: first and last beat negative, high and low beat first and last, low beats high. Ties: every tied bar is coloured. High/low are the max/min **values** (win/loss too, not "all wins") | — | col-hl-fl rows 1–4, wl-hl-fl rows 1–3 | col-hl-fl row 2: first −3 green, last −2 purple, low −4 teal over negative orange; row 3 first = high red, last = low teal; wl-hl-fl row 3 low −4 teal at idx 2 only, the −1 losses stay blue |
+| `barAxisRule` | Columns: drawn when displayXAxis = 1 and min < 0 < max (unchanged from `axisRule`; the all-positive column axis is unmeasured). Win/loss: **always** drawn at the middle row round(T + H/2), even for all-zero data. 1 px, colorAxis, plot-box wide (floor(L) … floor(R)), and **painted over the bars** (lines paint it under) | — | col-negative row 4, wl-basic row 3, wl-zero row 3 | Row 31, columns 48–247 magenta, including over the first row of every loss / negative bar |
+| `barTinyCellRule` | col-tiny (2 chars × 5 pt): nothing drawn, as `tinyCellRule` | — | col-tiny | 0 ink pixels |
+
 ## Comparison (Task 7)
 
 `bun scripts/sparkline-compare.ts [--stage N] [--case id] [--out dir]` renders each case and compares its host cells with
-the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 case and asserts the tolerances
+the plain capture; `tests/xlsx-sparklines-reference.test.ts` runs it for every Stage 1 and Stage 2 case and asserts the tolerances
 below. It reads the **Cases** table, so a tolerance or status changes here, not in code.
 
 - **References required.** Every captured sheet of every case needs its plain and `-bordered` PNG and both `.json`
@@ -150,8 +171,22 @@ below. It reads the **Cases** table, so a tolerance or status changes here, not 
   - line-precedence: high and low colours swapped
   - line-merged-host: a vertex moved 2 px
 
+  Stage 2 (Task 9) controls, same mechanism (bars are solid and unanti-aliased, so the Stage 2 residual is zero and the
+  tolerance is the flat 0.002 / 0.010 / 3 floor; `rowMax` is what catches a bar one row off, since ±1-row matching
+  hides it from `strong`):
+  - col-basic, col-merged-host, col-empty-span: a bar value changed / a gap filled
+  - col-scale-no-zero, col-negative: the scale shifted (smallest-bar sliver, baseline row)
+  - col-negative, wl-basic: negative colouring off; the axis off (columns, win/loss); wl-zero: the axis toggled
+  - wl-basic: win bars turned into loss bars
+  - col-hl-fl, wl-hl-fl: high, last or low off; high and low colours swapped
+
   The single-missing-marker controls clear the strong margin by only 1–2 pixels. A 0.75-pt diamond is 4 px at
   α ½, which is why the margin is a flat 3 and not proportional.
+
+- **Stage 2 notes.** The first `--stage 2` run measured 0.08–0.13 meanAbs on most bar cases, with first, last and high
+bars wrongly coloured: the bar path applied `colors.first/last/high/low` without checking the group's `first/last/high/low`
+flags (the parser keeps every element colour, flagged or not; the line path already gated on the flag). Fixed in
+`geometry.ts` (`colorize` takes the flag) with a unit test; every Stage 2 case then measures 0 strong pixels.
 
 ## Cases
 
@@ -190,3 +225,14 @@ is `meanAbs / rowMax / strong`.
 | line-colours-missing | pass | 0.0051 | 0.0109 | 108 | 0.008 / 0.021 / 111 |  |
 | line-tiny-cell | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | both blank (tinyCellRule); cell ref 14×5, viewer 14.25×5.25 |
 | layering | *unverified* | 0.0267 | 0.4292 | 2841 | — | Cell text, not the sparkline, dominates the difference: the static renderer draws the host text and the spilled neighbour text in node-canvas's fallback font, vertically centred, where Excel draws Calibri bottom-aligned in the 60-pt rows (rows 1, 2 and 5 of the capture), so no tolerance separates a sparkline defect from text placement. The sparkline rows without text (3: fill only, 4: gridlines only) measure 0.0056 / 0.0147 / 14 each, exactly line-basic's residual, so the line over a fill matches; rows 1, 2 and 5 measure up to 0.0707 / 0.4292 / 1766 from the text alone. the fill-under and text-over orders are confirmed by eye in the `--out` images, not by the gate |
+| col-basic | pass | 0.0006 | 0.0027 | 0 | 0.003 / 0.013 / 3 | row 2 default series (accent1, tint −0.5) is (32,56,100) here and (32,55,100) in Excel: one level in G, inside `colourResolution`'s ±2, not geometry; cell ref 204×60 per row |
+| col-negative | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-scale-no-zero | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-hl-fl | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-empty-span | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| col-merged-host | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | cell ref 408×60, viewer 427.5×60 |
+| col-tiny | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 | both blank (barTinyCellRule); cell ref 14×5, viewer 14.25×5.25 |
+| wl-basic | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| wl-tiny-values | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| wl-zero | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |
+| wl-hl-fl | pass | 0.0000 | 0.0000 | 0 | 0.002 / 0.010 / 3 |  |

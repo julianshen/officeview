@@ -48,7 +48,15 @@ describe('xlsx sparkline reference workbooks', () => {
     ]
     for (const id of required) expect(ids.has(id), id).toBe(true)
     expect(ids.size).toBe(SPARKLINE_CASES.length)
-    for (const c of SPARKLINE_CASES) expect(c.stage).toBe(1)
+    for (const c of SPARKLINE_CASES) expect(c.stage, c.id).toBe(/^(col|wl)-/.test(c.id) ? 2 : 1)
+  })
+
+  it('covers every Stage 2 measure item', () => {
+    const stage2 = SPARKLINE_CASES.filter(c => c.stage === 2).map(c => c.id)
+    expect(stage2).toEqual([
+      'col-basic', 'col-negative', 'col-scale-no-zero', 'col-hl-fl', 'col-empty-span', 'col-merged-host', 'col-tiny',
+      'wl-basic', 'wl-tiny-values', 'wl-zero', 'wl-hl-fl',
+    ])
   })
 
   it('the committed fixtures match the generator output', async () => {
@@ -80,8 +88,8 @@ describe('xlsx sparkline reference workbooks', () => {
       expect(styles, c.id).not.toContain('indexedColors')
       const plainSheet = await plain.file('xl/worksheets/sheet1.xml')!.async('string')
       expect(plainSheet, c.id).toContain('showGridLines="' + (c.id === 'layering' ? '1' : '0') + '"')
-      // Host geometry: 40 characters wide (OOXML 40.7109375) and 60 pt high, except the tiny-cell case.
-      const [width, height] = c.id === 'line-tiny-cell' ? ['2.7109375', '5'] : ['40.7109375', '60']
+      // Host geometry: 40 characters wide (OOXML 40.7109375) and 60 pt high, except the tiny-cell cases.
+      const [width, height] = c.sheets[0].hostSize ? ['2.7109375', '5'] : ['40.7109375', '60']
       c.sheets.forEach((sheet, i) => {
         const xml = i === 0 ? plainSheet : ''
         for (const g of sheet.groups) for (const sp of g.sparklines) {

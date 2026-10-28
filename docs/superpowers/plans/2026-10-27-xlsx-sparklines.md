@@ -345,11 +345,11 @@ These are the inputs most likely to bite. Each is pinned in the task named:
 
 **Interfaces:** the same `sparklineGeometry` signature. `rect` primitives are added for bars, and `axis` for column and win/loss.
 
-- [ ] **Step 1: Add cases and capture them.** The orchestrator runs capture (Task 2 route).
+- [x] **Step 1: Add cases and capture them.** The orchestrator runs capture (Task 2 route).
   - Cases: `col-basic`, `col-negative`, `col-scale-no-zero` (the smallest-bar rule), `col-hl-fl`, `col-empty-span`, `col-merged-host`, `col-tiny`, `wl-basic`, `wl-tiny-values` (`1e-16`), `wl-zero`, `wl-hl-fl`.
   - Measure: bar slot, width and gap, the baseline, the minimum bar height, snapping, win/loss bar height and the sign test, and precedence on bars.
-- [ ] **Step 2: Write the failing geometry tests from the measured rows.** This includes `wl-tiny-values`: `1e-16` draws a win bar unless measured otherwise.
-- [ ] **Step 3: Implement.** Run, pass, commit.
+- [x] **Step 2: Write the failing geometry tests from the measured rows.** This includes `wl-tiny-values`: `1e-16` draws a win bar unless measured otherwise.
+- [x] **Step 3: Implement.** Run, pass, commit.
 
 ### Task 9: Enable Stage 2 types and verify
 
@@ -358,8 +358,8 @@ These are the inputs most likely to bite. Each is pinned in the task named:
 - Modify: `tests/xlsx-sparklines-resolve.test.ts`
 - Modify: `docs/validation/xlsx-sparklines.md`
 
-- [ ] **Step 1: Change the staging-gate test** so `column` and `stacked` resolve, while `dateAxis` and `rightToLeft` still do not.
-- [ ] **Step 2: Implement the gate change.** Run `bun scripts/sparkline-compare.ts --stage 2` and iterate until every case passes or is recorded as *unverified*.
+- [x] **Step 1: Change the staging-gate test** so `column` and `stacked` resolve, while `dateAxis` and `rightToLeft` still do not.
+- [x] **Step 2: Implement the gate change.** Run `bun scripts/sparkline-compare.ts --stage 2` and iterate until every case passes or is recorded as *unverified*.
 - [ ] **Step 3: Full gates, commit, PR 2, Codex bot, and merge on owner approval.**
 
 ---

@@ -93,7 +93,8 @@ const DISTINCT: Record<ColourKey, ColourSpec> = {
 
 const group = (attrs: CaseGroup['attrs'], sparklines: CaseSparkline[], colours: CaseGroup['colours'] = DISTINCT): CaseGroup => ({ attrs, colours, sparklines })
 const sheet1 = (rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }): CaseSheet => ({ name: 'Sheet1', gridlines: false, ...rest })
-const oneSheet = (id: string, purpose: string, rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }): SparklineCase => ({ id, stage: 1, purpose, sheets: [sheet1(rest)] })
+const oneSheet = (id: string, purpose: string, rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }, stage: SparklineCase['stage'] = 1): SparklineCase => ({ id, stage, purpose, sheets: [sheet1(rest)] })
+const stage2 = (id: string, purpose: string, rest: Omit<CaseSheet, 'name' | 'gridlines'> & { gridlines?: boolean }): SparklineCase => oneSheet(id, purpose, rest, 2)
 
 // ---- column-oriented hidden-row data: A3:A10, host J1 -------------------------------------------------------------
 
@@ -116,6 +117,11 @@ const THEME_TINT = (series: ColourSpec, markers: ColourSpec, first: ColourSpec, 
   colorSeries: series, colorNegative: { theme: 5 }, colorAxis: { rgb: 'FF000000' }, colorMarkers: markers, colorFirst: first, colorLast: last, colorHigh: high, colorLow: low,
 })
 const ALL_POINTS = { markers: 1, high: 1, low: 1, first: 1, last: 1 }
+const HL_FL = { high: 1, low: 1, first: 1, last: 1 }
+const COL = { type: 'column', displayEmptyCellsAs: 'gap' }
+const WL = { type: 'stacked', displayEmptyCellsAs: 'gap' }
+const NEAR: number[] = [50, 52, 51, 55, 53, 54, 50, 56] // far from zero: does the smallest bar keep a minimum height
+const WL_TINY: CaseValue[] = [1e-16, -1e-16, 1, -1, 1e-16, 0.5, -1e-16, 2]
 
 export const SPARKLINE_CASES: readonly SparklineCase[] = [
   oneSheet('line-basic', 'Plot box, line endpoints, stroke, join and cap with Excel\'s own defaults: a plain line, theme-accent colours.', {
@@ -248,6 +254,69 @@ export const SPARKLINE_CASES: readonly SparklineCase[] = [
       { ref: host(5), v: 'Host text 123' },
     ],
     groups: [group({ displayEmptyCellsAs: 'gap' }, rowSparklines([1, 2, 3, 4, 5]), EXCEL_DEFAULT)],
+  }),
+
+  // ---- Stage 2: column and win/loss ----
+  stage2('col-basic', 'Column bars: slot, bar width and gap, baseline and snapping, with distinct colours (row 1) and Excel\'s own default colours (row 2).', {
+    cells: rowsBlock([D, D]), groups: [group(COL, rowSparklines([1])), group(COL, rowSparklines([2]), EXCEL_DEFAULT)],
+  }),
+  stage2('col-negative', 'Columns over data spanning zero: negative="1" (row 1), negative off (row 2), all-negative with negative="1" (row 3), spanning zero with negative="1" and the axis (row 4).', {
+    cells: rowsBlock([X, X, NEG, X]), groups: [
+      group({ ...COL, negative: 1 }, rowSparklines([1])),
+      group(COL, rowSparklines([2])),
+      group({ ...COL, negative: 1 }, rowSparklines([3])),
+      group({ ...COL, negative: 1, displayXAxis: 1 }, rowSparklines([4])),
+    ],
+  }),
+  stage2('col-scale-no-zero', 'Columns whose data stays far from zero: individual scale (row 1, the smallest bar), 10..80 (row 2), custom 0..100 (row 3), group scale over rows 1-2 (rows 4-5).', {
+    cells: rowsBlock([NEAR, B, NEAR, NEAR, B]), groups: [
+      group(COL, rowSparklines([1, 2])),
+      group({ ...COL, minAxisType: 'custom', maxAxisType: 'custom', manualMin: 0, manualMax: 100 }, rowSparklines([3])),
+      group({ ...COL, minAxisType: 'group', maxAxisType: 'group' }, rowSparklines([4, 5])),
+    ],
+  }),
+  stage2('col-hl-fl', 'Bar colours: high, low, first and last (row 1); the same with negative="1" over data spanning zero (row 2); precedence when first = high and last = low (row 3); ties (row 4).', {
+    cells: rowsBlock([D, X, [9, 3, 5, 2, 6, 4, 7, 1], [2, 9, 4, 9, 1, 6, 1, 9]]), groups: [
+      group({ ...COL, ...HL_FL }, rowSparklines([1])),
+      group({ ...COL, ...HL_FL, negative: 1 }, rowSparklines([2])),
+      group({ ...COL, ...HL_FL }, rowSparklines([3])),
+      group({ ...COL, high: 1, low: 1 }, rowSparklines([4])),
+    ],
+  }),
+  stage2('col-empty-span', 'Empty cells under columns: gap (rows 1-2), zero (rows 3-4), span (rows 5-6), over interior, leading and trailing empties.', {
+    cells: rowsBlock([...emptyGappy, ...emptyGappy, ...emptyGappy]), groups: (['gap', 'zero', 'span'] as const).map((mode, i) =>
+      group({ type: 'column', displayEmptyCellsAs: mode }, rowSparklines([2 * i + 1, 2 * i + 2]))),
+  }),
+  stage2('col-merged-host', 'Columns in a host merged with its right neighbour (J1:K1): bar width follows the merged width.', {
+    cells: rowOf(1, D), merges: ['J1:K1'], groups: [group(COL, rowSparklines([1]))],
+  }),
+  stage2('col-tiny', 'Columns in a host too small for a plot box after the inset (2 characters wide, 5 pt high).', {
+    cells: rowOf(1, D), hostSize: { widthChars: 2, heightPt: 5 }, groups: [group(COL, rowSparklines([1]))],
+  }),
+  stage2('wl-basic', 'Win/loss bars over data spanning zero: plain (row 1), negative="1" (row 2), with the axis (row 3), all-positive (row 4).', {
+    cells: rowsBlock([X, X, X, D]), groups: [
+      group(WL, rowSparklines([1])),
+      group({ ...WL, negative: 1 }, rowSparklines([2])),
+      group({ ...WL, negative: 1, displayXAxis: 1 }, rowSparklines([3])),
+      group(WL, rowSparklines([4])),
+    ],
+  }),
+  stage2('wl-tiny-values', 'The win/loss sign test on tiny values (+-1e-16): plain (row 1) and with negative="1" (row 2).', {
+    cells: rowsBlock([WL_TINY, WL_TINY]), groups: [group(WL, rowSparklines([1])), group({ ...WL, negative: 1 }, rowSparklines([2]))],
+  }),
+  stage2('wl-zero', 'Zeros under win/loss: mixed zeros (row 1), empty cells as zero (row 2), all zeros (row 3).', {
+    cells: rowsBlock([[1, 0, -1, 0, 2, 0, -2, 1], [1, null, -1, null, 2, null, -2, 1], [0, 0, 0, 0, 0, 0, 0, 0]]), groups: [
+      group({ ...WL, negative: 1 }, rowSparklines([1])),
+      group({ type: 'stacked', displayEmptyCellsAs: 'zero', negative: 1 }, rowSparklines([2])),
+      group({ ...WL, negative: 1, displayXAxis: 1 }, rowSparklines([3])),
+    ],
+  }),
+  stage2('wl-hl-fl', 'Win/loss bar colours: high, low, first and last (row 1); with negative="1" too (row 2); ties for high and low (row 3).', {
+    cells: rowsBlock([X, X, [2, 9, -4, 9, -1, 6, -1, 9]]), groups: [
+      group({ ...WL, ...HL_FL }, rowSparklines([1])),
+      group({ ...WL, ...HL_FL, negative: 1 }, rowSparklines([2])),
+      group({ ...WL, high: 1, low: 1 }, rowSparklines([3])),
+    ],
   }),
 ]
 
