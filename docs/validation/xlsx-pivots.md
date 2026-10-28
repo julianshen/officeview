@@ -74,6 +74,13 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 
 ### D. Hand-written slicer and timeline workbooks
 - Opening the first hand-written slicer workbook (`slicer-light1.xlsx`, from generator 604ef109) put up Excel's content-repair prompt. After repair, Excel opened it marked "Repaired" with the pivot table and the slicer **both removed**: the Report sheet had 0 pivot tables and 0 shapes, and only the cell data was left.
-- **Timelines:** no hand-written timeline workbook has been opened in Excel yet. The re-test of the fixed slicer and timeline files (generator 217ebf4a and later) was blocked when the Mac's screen locked, and needs the owner to unlock it. Their capture route (copy picture or a window crop) is also untested; Task 3 records both.
+- **Re-test, 2026-10-29 (generator 5d95b657, Excel 16.114):** `slicer-light1`, `slicer-two-column`, `slicer-no-data`, `timeline-dark1-days` and `timeline-dark1-months` all open with no repair prompt, and the pivot, Product slicer and Date timeline load. A part-by-part bisect against recipe R1 (template parts swapped in with ids normalised, one group at a time) found what Excel needs from a hand-written cache:
+  - Version attributes on the cache root (`createdVersion="8" refreshedVersion="8" minRefreshableVersion="3"`) and the pivot root (`createdVersion`/`updatedVersion="8"`, `minRefreshableVersion="5"`).
+  - `sharedItems` type flags that agree with the items. A date field is `containsSemiMixedTypes="0" containsNonDate="0" containsDate="1" containsString="0"` with `minDate`/`maxDate`. Numeric fields carry no shared items (numbers inline as `<n>` in the records, `minValue`/`maxValue` on `sharedItems`).
+  - No `slicerData` attribute on `x14:pivotCacheDefinition`. A single-variable test showed that this attribute alone makes Excel repair the file and drop the slicer.
+  - No `refreshOnLoad`. This one was not isolated; it is dropped because R1 doesn't have it.
+- A template pivot definition paired with a generated cache also makes Excel repair the file, because the field-item order differs. Bisects must swap the pivot definition and its cache together.
+- The timeline cases shipped with the template's `scrollPosition` and bounds and without a `style` attribute (fix round 4). A hand fix (`style="TimeSlicerStyleDark1"`, scroll position and bounds taken from the data) opens clean.
+- **Capture route:** still untested; Task 3 records it.
 - **Recipe R1** (`tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx`) is an Excel-saved pivot with a Product slicer (Apples and Cherries selected) and a Date timeline (all periods), built through UI scripting.
-- Generator fixes are in progress (Task 2, fix round 1). An Excel-authored slicer and timeline template (recipe R1, built by the orchestrator through Excel UI scripting) is the structural reference for them.
+- An Excel-authored slicer and timeline template (recipe R1, built by the orchestrator through Excel UI scripting) is the structural reference for them.
