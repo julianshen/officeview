@@ -42,7 +42,7 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
   - It failed at the first step, creating the cache (below). `probe-pivots.ts` repeats that failing step on the POI sample.
 - **A pivot cache cannot be created through AppleScript.** `make new pivot cache at <workbook>` returns parameter error -50 with a range object, an A1 string, an R1C1 string, or no properties. `create pivot table` needs a cache, so a new pivot cannot be made.
 - **An existing pivot can be reshaped:**
-  - `table style` (the property `table style2` does not apply);
+  - the pivot style, through `table style2`. Setting `table style2` reads back as `missing value` but is what Excel saves in `pivotTableStyleInfo`. `table style` reads back the new name but is not saved (corrected 2026-10-29 during Task 3; the first probe only read the value back);
   - `layout row default`;
   - pivot item `visible`;
   - data field `calculation`, written as `pivot field calculation …`, not `percent of total`;

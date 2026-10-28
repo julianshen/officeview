@@ -27,7 +27,7 @@ const attempt = (label: string, lines: string[]) => {
 }
 // A. creation (expected to fail: parameter error -50) and reshaping (expected to work).
 attempt('A make pivot cache', [`make new pivot cache at ${wb} with properties {source data:"Tabelle1!R1C1:R4C3"}`])
-attempt('A table style', [`set table style of ${pivot} to "PivotStyleMedium9"`, `return table style of ${pivot}`])
+attempt('A table style2', [`set table style2 of ${pivot} to "PivotStyleMedium9"`]) // saved style; `table style` reads back but is not saved
 attempt('A show values as', [`set calculation of data field 1 of ${pivot} to pivot field calculation percent of total`, `refresh table ${pivot}`])
 const savedA = join(out, 'probe-a.xlsx')
 saveAs(name, savedA)
