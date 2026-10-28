@@ -33,6 +33,16 @@ function tagAttributeValues(xml: string, tag: string, attribute: string): string
   })
 }
 
+function attributesOf(xml: string, tag: string): Record<string, string> {
+  const open = new RegExp(`<${tag}\\b[^>]*>`).exec(xml)?.[0]
+  if (!open) throw new Error(`missing <${tag}>`)
+  return Object.fromEntries([...open.matchAll(/([\w:.-]+)="([^"]*)"/g)].map(match => [match[1], match[2]]))
+}
+
+function serialDate(serial: number): string {
+  return new Date(Date.UTC(1899, 11, 30 + serial)).toISOString().replace('.000Z', '')
+}
+
 describe('pivot reference workbook generator', () => {
   it('includes the full Stage 1 style and control matrix', () => {
     expect(REF_CASES.filter(c => c.kind === 'table' && c.id.startsWith('table-light-')).length
@@ -146,7 +156,7 @@ describe('pivot reference workbook generator', () => {
       expect(source, c.id).toContain('r="C2" s="2"')
       expect(styles, c.id).toContain('formatCode="yyyy-mm-dd"')
       expect(cache, c.id).toContain('<cacheField name="Date" numFmtId="176">')
-      expect(cache, c.id).toContain('<sharedItems containsDate="1" containsNonDate="0" count="39">')
+      expect(cache, c.id).toContain('<sharedItems containsSemiMixedTypes="0" containsNonDate="0" containsDate="1" containsString="0" minDate=')
       expect(cache, c.id).toContain('<d v="')
       expect(cache, c.id).not.toMatch(/<d v="[^"]+Z"/)
       expect(cache, c.id).toContain('<x14:pivotCacheDefinition pivotCacheId="1"')
@@ -162,6 +172,98 @@ describe('pivot reference workbook generator', () => {
       expect(timelineCache, c.id).not.toContain('<timelineState')
       expect(timelineCache, c.id).not.toContain('<selection')
       expect(timelineCache, c.id).toContain('<bounds startDate="2024-01-01T00:00:00" endDate="2026-01-01T00:00:00"/>')
+    }
+  })
+
+  it('matches template pivot/cache capability versions for control cases', async () => {
+    const reference = await JSZip.loadAsync(readFileSync('tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx'))
+    const expectedCacheXml = await reference.file('xl/pivotCache/pivotCacheDefinition1.xml')!.async('text')
+    const expectedCache = attributesOf(expectedCacheXml, 'pivotCacheDefinition')
+    const expectedPivot = attributesOf(await reference.file('xl/pivotTables/pivotTable1.xml')!.async('text'), 'pivotTableDefinition')
+    const cacheVersionAttrs = ['createdVersion', 'refreshedVersion', 'minRefreshableVersion']
+    const pivotVersionAttrs = [
+      'updatedVersion', 'minRefreshableVersion', 'createdVersion', 'applyNumberFormats', 'applyBorderFormats',
+      'applyFontFormats', 'applyPatternFormats', 'applyAlignmentFormats', 'applyWidthHeightFormats',
+      'useAutoFormatting', 'itemPrintTitles', 'indent', 'outlineData', 'multipleFieldFilters',
+    ]
+    const controlCases = REF_CASES.filter(item => item.kind === 'slicer' || item.kind === 'timeline')
+    for (const c of controlCases) {
+      const id = c.id
+      const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+      const cache = await zip.file('xl/pivotCache/pivotCacheDefinition1.xml')!.async('text')
+      const pivot = await zip.file('xl/pivotTables/pivotTable1.xml')!.async('text')
+      const cacheAttrs = attributesOf(cache, 'pivotCacheDefinition')
+      const pivotAttrs = attributesOf(pivot, 'pivotTableDefinition')
+      for (const name of cacheVersionAttrs) expect(cacheAttrs[name], `${id} cache ${name}`).toBe(expectedCache[name])
+      for (const name of pivotVersionAttrs) expect(pivotAttrs[name], `${id} pivot ${name}`).toBe(expectedPivot[name])
+      expect(Object.keys(attributesOf(cache, 'x14:pivotCacheDefinition')), `${id} x14 cache extension attributes`)
+        .toEqual(Object.keys(attributesOf(expectedCacheXml, 'x14:pivotCacheDefinition')))
+      expect(cacheAttrs).not.toHaveProperty('refreshOnLoad')
+    }
+  })
+
+  it('writes type-consistent cache fields and records for slicer and timeline cases', async () => {
+    for (const id of ['slicer-light1', 'timeline-light1-years']) {
+      const c = REF_CASES.find(item => item.id === id)!
+      const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+      const cache = await zip.file('xl/pivotCache/pivotCacheDefinition1.xml')!.async('text')
+      const recordsXml = await zip.file('xl/pivotCache/pivotCacheRecords1.xml')!.async('text')
+      const dataXml = await zip.file('xl/worksheets/sheet2.xml')!.async('text')
+      const fields = [...cache.matchAll(/<cacheField\b[^>]*>([\s\S]*?)<\/cacheField>/g)]
+      expect(fields, id).toHaveLength(5)
+
+      for (const [index, name] of [[0, 'Region'], [1, 'Product']] as const) {
+        const open = fields[index][0].slice(0, fields[index][0].indexOf('>') + 1)
+        const shared = /<sharedItems\b[^>]*>([\s\S]*?)<\/sharedItems>/.exec(fields[index][1])
+        expect(attributesOf(open, 'cacheField').numFmtId, `${id} ${name} numFmtId`).toBe('0')
+        expect(shared?.[1], `${id} ${name} string-only items`).toMatch(/^(?:<s v="[^"]+"\/>)+$/)
+      }
+
+      const dateOpen = fields[2][0].slice(0, fields[2][0].indexOf('>') + 1)
+      const dateShared = /<sharedItems\b([^>]*)>([\s\S]*?)<\/sharedItems>/.exec(fields[2][1])!
+      const dateAttrs = attributesOf(dateShared[0], 'sharedItems')
+      const dateSerials = [...dataXml.matchAll(/<c r="C(\d+)"[^>]*><v>([^<]+)<\/v><\/c>/g)].map(match => Number(match[2]))
+      const dateValues = [...dateShared[2].matchAll(/<d v="([^"]+)"\/>/g)].map(match => match[1])
+      expect(attributesOf(dateOpen, 'cacheField').numFmtId, `${id} Date numFmtId`).toBe('176')
+      expect(dateAttrs.containsSemiMixedTypes, `${id} Date purity`).toBe('0')
+      expect(dateAttrs.containsDate).toBe('1')
+      expect(dateAttrs.containsNonDate).toBe('0')
+      expect(dateAttrs.containsString).toBe('0')
+      expect(dateAttrs.minDate).toBe(serialDate(Math.min(...dateSerials)))
+      expect(dateAttrs.maxDate).toBe(serialDate(Math.max(...dateSerials)))
+      expect(dateValues.some(value => value.endsWith('Z'))).toBe(false)
+
+      const numericColumns = ['D', 'E']
+      const records = [...recordsXml.matchAll(/<r>([\s\S]*?)<\/r>/g)].map(match => [...match[1].matchAll(/<(x|n) v="([^"]+)"\/>/g)].map(item => ({ kind: item[1], value: item[2] })))
+      expect(records, id).toHaveLength(40)
+      expect(records.every(record => record.length === 5), id).toBe(true)
+      for (const record of records) for (const index of [0, 1, 2]) {
+        expect(record[index].kind, `${id} shared field ${index}`).toBe('x')
+        const itemCount = Number(/count="(\d+)"/.exec(fields[index][1])?.[1])
+        expect(Number(record[index].value), `${id} shared item index ${index}`).toBeGreaterThanOrEqual(0)
+        expect(Number(record[index].value), `${id} shared item index ${index}`).toBeLessThan(itemCount)
+      }
+      for (let numericIndex = 0; numericIndex < numericColumns.length; numericIndex++) {
+        const index = numericIndex + 3
+        const field = fields[index][1]
+        const sharedOpen = /<sharedItems\b([^>]*)\/>/.exec(field)?.[0]
+        const sharedAttrs = attributesOf(sharedOpen!, 'sharedItems')
+        const col = numericColumns[numericIndex]
+        const values = [...dataXml.matchAll(new RegExp(`<c r="${col}\\d+"[^>]*><v>([^<]+)</v></c>`, 'g'))].map(match => Number(match[1]))
+        expect(field, `${id} ${col} has no shared items`).not.toContain('<s ')
+        expect(field, `${id} ${col} uses summary-only sharedItems`).toMatch(/<sharedItems\b[^>]*\/>/)
+        expect(field, `${id} ${col} has no shared values`).not.toMatch(/<(?:s|n|d) v="/)
+        expect(sharedAttrs.containsSemiMixedTypes, `${id} ${col} homogeneous numeric`).toBe('0')
+        expect(sharedAttrs.containsString).toBe('0')
+        expect(sharedAttrs.containsNumber).toBe('1')
+        expect(sharedAttrs.minValue).toBe(String(Math.min(...values)))
+        expect(sharedAttrs.maxValue).toBe(String(Math.max(...values)))
+        expect(sharedAttrs.containsInteger).toBe(values.every(Number.isInteger) ? '1' : undefined)
+        records.forEach((record, row) => {
+          expect(record[index].kind, `${id} ${col} record ${row + 1}`).toBe('n')
+          expect(Number(record[index].value), `${id} ${col} record ${row + 1}`).toBe(values[row])
+        })
+      }
     }
   })
 
