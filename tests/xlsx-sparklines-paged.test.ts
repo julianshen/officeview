@@ -13,6 +13,7 @@ import { rebuildResolvedSparklines } from '../src/worker/viewerRemoteSparklines'
 import { ViewerKernel } from '../src/worker/viewerKernel'
 import { ViewerClient } from '../src/worker/viewerClient'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { sparklineInvalidationBox } from '../src/xlsx/view/sparklineInvalidation'
 
 const microtask = () => new Promise(resolve => setTimeout(resolve, 0))
 const fixtureBytes = (name: string) => new Uint8Array(readFileSync(resolve(process.cwd(), `tests/fixtures/xlsx-sparklines/${name}.xlsx`)))
@@ -36,6 +37,14 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
 }
 
 describe('paged sparkline transfer cache', () => {
+  it('skips zero-area host boxes but reserves null for oversized merges', () => {
+    expect(sparklineInvalidationBox(10, 10, [], 1)).toBeUndefined()
+    expect(sparklineInvalidationBox(10, 20, [], 1)).toBeUndefined()
+    expect(sparklineInvalidationBox(10, 20, [{ top: 5, bottom: 5 }], 1)).toBeUndefined()
+    expect(sparklineInvalidationBox(10, 20, [{ top: 5, bottom: 15 }], 10_001)).toBeNull()
+    expect(sparklineInvalidationBox(10, 20, [{ top: 5, bottom: 15 }, { top: 20, bottom: 30 }], 2)).toEqual({ x: 10, y: 5, width: 10, height: 25 })
+  })
+
   it('uses the RemoteWorkbook ledger for grant adoption, abort settlement, and early refund', async () => {
     const listeners = new Set<(event: MessageEvent) => void>()
     let deliver: ((reply: WorkerReply<'read'>) => void) | undefined
@@ -209,6 +218,8 @@ describe('paged sparkline transfer cache', () => {
     hosts.length = 0
     owner = { ...first, valueGen: first.valueGen + 1 }
     expect(cache.get('sheet')).toMatchObject({ state: 'loading', resolved: undefined, gen: 2 })
+    expect(hosts).toEqual([])
+    await Promise.resolve()
     expect(hosts.some(list => list.length === 1 && list[0].row === 4 && list[0].col === 3)).toBe(true)
     cache.close()
   })
@@ -216,6 +227,7 @@ describe('paged sparkline transfer cache', () => {
   it('waits through a referenced sheet import and retries the sparkline snapshot after it completes', async () => {
     const identity = initialIdentity('doc', 'host')
     let dataState: 'loading' | 'complete' = 'loading', requests = 0, ids = 0
+    const requestTimes: number[] = []
     const group = { type: 'line' as const, lineWeightPt: 0.75, displayEmptyCellsAs: 'gap' as const, markers: false, high: false, low: false, first: false, last: false, negative: false, displayXAxis: false, displayHidden: false, dateAxis: false, rightToLeft: false, minAxisType: 'individual' as const, maxAxisType: 'individual' as const, colors: {}, sparklines: [] }
     const resolved: SheetSparklines = { sparklines: [{ host: { row: 0, col: 9 }, dataSheet: 'Data', sourceRows: [0], groupIndex: 0, values: new Float64Array([7]), bridged: [], firstIndex: 0, lastIndex: 0, highIndices: [], lowIndices: [], min: 7, max: 7 }], groups: [group], diagnostics: [] }
     const host: SparklineHost = {
@@ -223,6 +235,7 @@ describe('paged sparkline transfer cache', () => {
       grant: () => 4096, releaseGrant: () => {}, admitDecoded: () => () => {}, release: () => {}, nextRequestId: () => `${++ids}`, changed: () => {},
       request: async command => {
         requests++
+        requestTimes.push(Date.now())
         const result = dataState === 'loading' ? { sparklines: [], groups: [], pendingSheetIds: ['data'], diagnostics: [{ kind: 'unsupported' as const, feature: 'sparkline-data-unavailable', message: 'waiting for data sheet' }] } : resolved
         return { kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: identity, replyBytes: 128, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result } } } as WorkerReply<'read'>
       },
@@ -236,12 +249,14 @@ describe('paged sparkline transfer cache', () => {
     // become a terminal unavailable result while this referenced sheet imports.
     await new Promise(resolve => setTimeout(resolve, 5200))
     expect(cache.get('host').state).toBe('waiting')
+    expect(requests).toBeLessThanOrEqual(6)
+    const pendingIntervals = requestTimes.slice(1).map((time, index) => time - requestTimes[index])
+    expect(pendingIntervals.slice(0, 4).every((interval, index) => interval >= [200, 400, 800, 1600][index])).toBe(true)
     dataState = 'complete'
-    await new Promise(resolve => setTimeout(resolve, 300))
-    expect(requests).toBeGreaterThan(20)
+    await new Promise(resolve => setTimeout(resolve, 3200))
     expect(cache.get('host')).toMatchObject({ state: 'ready', resolved: expect.any(Map) })
     cache.close()
-  }, 12_000)
+  }, 14_000)
 
   it('ends a referenced sheet that failed import with one bounded diagnostic', async () => {
     const identity = initialIdentity('doc', 'host')

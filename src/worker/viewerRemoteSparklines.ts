@@ -32,6 +32,7 @@ export interface PagedSheetSparklines {
 }
 interface Entry {
   state: PagedSheetSparklines['state']; gen: number; owner?: CacheIdentity; seq: number; bytes: number; decodedBytes: number; attempts: number
+  sourceRetryMs?: number
   resolved?: ResolvedSparklines; diagnostics: SparklineDiagnostic[]; reply?: WorkerReply<'read'>
   decodedRelease?: () => void; controller?: AbortController; timer?: ReturnType<typeof setTimeout>
 }
@@ -87,7 +88,7 @@ export class RemoteSparklineCache {
     if (entry.owner && !sameOwner(entry.owner, owner)) {
       const hosts = entry.resolved ? [...entry.resolved.values()].flatMap(row => [...row.values()].map(spark => spark.host)) : []
       this.reset(entry); entry.gen++
-      if (hosts.length) this.host.changed(sheetId, hosts)
+      if (hosts.length) queueMicrotask(() => { if (!this.closed) this.host.changed(sheetId, hosts) })
     }
     if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
     return entry
@@ -113,7 +114,7 @@ export class RemoteSparklineCache {
     if (entry.timer) clearTimeout(entry.timer); entry.timer = undefined
     if (entry.reply) this.host.release(entry.reply)
     entry.decodedRelease?.(); entry.decodedRelease = undefined
-    entry.reply = undefined; entry.resolved = undefined; entry.diagnostics = []; entry.owner = undefined; entry.state = 'waiting'; entry.bytes = 0; entry.decodedBytes = 0; entry.attempts = 0
+    entry.reply = undefined; entry.resolved = undefined; entry.diagnostics = []; entry.owner = undefined; entry.state = 'waiting'; entry.bytes = 0; entry.decodedBytes = 0; entry.attempts = 0; entry.sourceRetryMs = undefined
   }
   private async load(sheetId: string, entry: Entry): Promise<void> {
     if (this.closed) return
@@ -156,7 +157,11 @@ export class RemoteSparklineCache {
       if (pending.some(id => this.host.loadState(id).completeness === 'incomplete')) {
         entry.state = 'failed'
         entry.diagnostics = [data.diagnostics.find(item => item.feature === 'sparkline-data-unavailable') ?? data.diagnostics[0] ?? { kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is incomplete' }]
-      } else if (pending.some(id => this.host.loadState(id).completeness === 'loading')) this.retry(sheetId, entry, seq)
+      } else if (pending.some(id => this.host.loadState(id).completeness === 'loading')) {
+        const delay = entry.sourceRetryMs ?? RETRY_MS
+        entry.sourceRetryMs = Math.min(4_000, delay * 2)
+        this.retry(sheetId, entry, seq, delay)
+      }
       else if (entry.attempts < MAX_ATTEMPTS) this.retry(sheetId, entry, seq)
       else { entry.state = 'failed'; entry.diagnostics = [data.diagnostics.find(item => item.feature === 'sparkline-data-unavailable') ?? data.diagnostics[0] ?? { kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is unavailable' }] }
       return
@@ -196,9 +201,9 @@ export class RemoteSparklineCache {
     const hosts = result.sparklines.map(spark => spark.host)
     if (hosts.length) this.host.changed(sheetId, hosts)
   }
-  private retry(sheetId: string, entry: Entry, seq: number): void {
+  private retry(sheetId: string, entry: Entry, seq: number, delay = RETRY_MS): void {
     entry.state = 'waiting'
-    entry.timer = setTimeout(() => { entry.timer = undefined; if (entry.seq === seq) void this.load(sheetId, entry) }, RETRY_MS)
+    entry.timer = setTimeout(() => { entry.timer = undefined; if (entry.seq === seq) void this.load(sheetId, entry) }, delay)
   }
 }
 

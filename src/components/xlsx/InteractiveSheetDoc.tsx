@@ -95,6 +95,7 @@ import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/fr
 import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, type SessionSizes } from '../../xlsx/view/axisSizes'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
+import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -832,21 +833,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const anchored = merge?.minRow === host.row && merge.minCol === host.col ? merge : undefined
         const r0 = anchored?.minRow ?? host.row, r1 = anchored?.maxRow ?? host.row
         const c0 = anchored?.minCol ?? host.col, c1 = anchored?.maxCol ?? host.col
-        if (r1 - r0 > 10000) return null
+        if (r1 - r0 > 10_000) return null
         const x0 = Math.min(entry.metrics.cols.start(c0), entry.metrics.cols.start(c1))
         const x1 = Math.max(entry.metrics.cols.start(c0) + entry.metrics.cols.size(c0), entry.metrics.cols.start(c1) + entry.metrics.cols.size(c1))
-        let y0 = Number.POSITIVE_INFINITY, y1 = Number.NEGATIVE_INFINITY
+        const visibleRows: Array<{ top: number; bottom: number }> = []
         for (let sourceRow = r0; sourceRow <= r1; sourceRow++) {
           const slot = entry.metrics.order.sourceToDisplay(sourceRow)
           const top = entry.metrics.rows.start(slot), bottom = top + entry.metrics.rows.size(slot)
-          if (bottom > top) { y0 = Math.min(y0, top); y1 = Math.max(y1, bottom) }
+          if (bottom > top) visibleRows.push({ top, bottom })
         }
-        return y1 > y0 && x1 > x0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null
+        return sparklineInvalidationBox(x0, x1, visibleRows, r1 - r0)
       })
       renderer.cache.invalidate(key => {
         if (key.identity.sheetId !== activeSheetId) return false
         const tile = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
-        return changedBoxes.some(box => !box || (tile.x < box.x + box.width && box.x < tile.x + tile.width && tile.y < box.y + box.height && box.y < tile.y + tile.height))
+        return changedBoxes.some(box => box === null || (box !== undefined && tile.x < box.x + box.width && box.x < tile.x + tile.width && tile.y < box.y + box.height && box.y < tile.y + tile.height))
       })
     }
     if (sparklineViewKeyRef.current !== sparklineViewKey) {
