@@ -1,7 +1,7 @@
 /** Parse XLSX parts into the XlsxDocument model. */
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
-import { attrs, getChildren, textOf, type XmlNode } from '../core/xml'
+import { attrs, elementNamespaceUri, getChildren, textOf, type XmlNode } from '../core/xml'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type {
   CalcSettings,
@@ -27,6 +27,9 @@ import { resolveSheetColor, type SheetColorContext } from './sheetColors'
 import { defaultColumnWidthPx, maxDigitWidthPx, sheetFormat } from './columnWidth'
 import { MAX_COLS, MAX_ROWS, formatA1 } from './view/coordinates'
 import { PackageError } from '../core/package-error'
+import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
+import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
+import { resolveWorkbookSparklines } from './sparklines/resolve'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -70,6 +73,7 @@ function asNode(v: unknown): XmlNode {
 }
 
 interface Styles {
+  colorContext: SheetColorContext
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
    * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
@@ -88,7 +92,7 @@ export const MAX_FORMAT_CODE_UNITS = 255
 
 async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
-  const styles: Styles = { numFmtIds: [], numFmts: new Map(), fonts: [], fills: [], borders: [], xfs: [] }
+  const styles: Styles = { colorContext: themePalette ? { theme: themePalette } : {}, numFmtIds: [], numFmts: new Map(), fonts: [], fills: [], borders: [], xfs: [] }
   if (!root) return styles
   // Indexed and theme colour references resolve here, once, for every path.
   const indexed = getChildren(getChildren(root, 'colors')[0], 'indexedColors')[0]
@@ -96,6 +100,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
     ...(themePalette ? { theme: themePalette } : {}),
     ...(indexed ? { indexed: getChildren(indexed, 'rgbColor').map(node => String(attrs(node).rgb ?? '')) } : {}),
   }
+  styles.colorContext = colorContext
   const colorOf = (node: XmlNode | undefined) => node ? resolveSheetColor(attrs(node), colorContext) : undefined
   for (const numFmtsN of getChildren(root, 'numFmts')) {
     for (const nf of getChildren(numFmtsN, 'numFmt')) {
@@ -478,6 +483,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     // A selected fallback's pictures join the document's media (each picture paints through its index).
     if (replaced) doc.images = collectXlsxImages(sheets)
   }
+  // Sparkline points are read from the final cell values (same policy as the grid and the chart fill above).
+  resolveWorkbookSparklines(sheets, { cached: options.valuePolicy === 'cached' })
   return doc
 }
 
@@ -498,6 +505,37 @@ async function parseSheet(
   const sheet: XlsxSheet = { name, sourcePartPath: path, sheetId, workbookIndex, kind, rows: [], cols: [], merges: [], mergeRanges: [] }
   if (!root) return sheet
   const data = getChildren(root, 'worksheet')[0] ?? root
+  const sheetMainNs = elementNamespaceUri(data)
+  const sparklineDiagnostics: SparklineDiagnostic[] = []
+  const sparklineGroups: XlsxSparklineGroup[] = []
+  for (const extList of getChildren(data, 'extLst')) {
+    if (sheetMainNs !== SPREADSHEETML_NS || elementNamespaceUri(extList) !== sheetMainNs) continue
+    for (const ext of getChildren(extList, 'ext')) {
+      if (elementNamespaceUri(ext) !== sheetMainNs || attrs(ext).uri !== SPARKLINE_EXTENSION_URI) continue
+      for (const groupsNode of getChildren(ext, 'sparklineGroups')) {
+        if (elementNamespaceUri(groupsNode) === X14_SPARKLINE_NS) sparklineGroups.push(...parseSparklineGroups(groupsNode, styles.colorContext, sparklineDiagnostics))
+      }
+    }
+  }
+  if (sparklineGroups.length > MAX_SPARKLINE_GROUPS_PER_SHEET) {
+    sparklineGroups.length = MAX_SPARKLINE_GROUPS_PER_SHEET
+    sparklineDiagnostics.push({ kind: 'unsupported', feature: 'sparkline-group-limit', message: `Worksheet exceeds ${MAX_SPARKLINE_GROUPS_PER_SHEET} sparkline groups` })
+  }
+  let sparklinePoints = 0
+  for (const group of sparklineGroups) for (const sparkline of group.sparklines) {
+    if (!sparkline.data) continue
+    const points = (sparkline.data.r1 - sparkline.data.r0 + 1) * (sparkline.data.c1 - sparkline.data.c0 + 1)
+    if (sparklinePoints + points > MAX_POINTS_PER_SHEET) {
+      sparkline.data = undefined
+      sparklineDiagnostics.push({ kind: 'unsupported', feature: 'sparkline-sheet-point-limit', message: `Worksheet exceeds ${MAX_POINTS_PER_SHEET} sparkline source points` })
+    } else sparklinePoints += points
+  }
+  if (sparklineGroups.length) sheet.sparklineGroups = sparklineGroups
+  if (sparklineDiagnostics.length) {
+    for (const diagnostic of sparklineDiagnostics) {
+      if (!sheet.diagnostics?.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) (sheet.diagnostics ??= []).push(diagnostic)
+    }
+  }
   // Excel's column pixel model; set before drawings are placed against the grid.
   const columns = { maxDigitWidthPx: digitWidth, defaultWidthPx: defaultColumnWidthPx(sheetFormat(attrs(getChildren(data, 'sheetFormatPr')[0])), digitWidth) }
   if (columns.maxDigitWidthPx !== 7 || columns.defaultWidthPx !== 64) sheet.columnMetrics = columns

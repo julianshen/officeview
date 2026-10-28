@@ -13,6 +13,10 @@ import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, t
 import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
+import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
+import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
+import type { ResolvedSparkline } from '../sparklines/resolve'
+import { belowDetail } from './viewport'
 
 /** The host side of canonical records (spec §11.2): the same formatting and text
  * layout the static renderer uses, laid out in a box at the origin. Measurement
@@ -91,6 +95,68 @@ export interface ViewportPaintOptions {
   /** Lays records out (default: on the tile's own context). The viewer passes
    * its shared, admitted measurement context (components/xlsx/measureContext). */
   layoutHost?: CellLayoutHost
+  /** Per-sheet live view geometry, used to omit sparklines crossing filter-hidden source rows. */
+  sparklineViews?: ReadonlyMap<string, SparklineViewState>
+}
+export interface SparklineViewState {
+  order: Pick<RowOrder, 'sourceToDisplay'>
+  visibility?: Pick<RowVisibility, 'visible'>
+  baseHidden?: Pick<IntervalSet, 'contains'>
+}
+
+/** Select resolved hosts in display-slot space, plus anchors of merges touching the tile. */
+export function viewportSparklineCandidates(
+  sheet: XlsxSheet, geometry: SheetGeometryResult, viewport: LogicalViewport, plan: ViewportPlan,
+  views?: ReadonlyMap<string, SparklineViewState>,
+): SparklineCandidates {
+  const candidates = new Map<number, Set<number>>()
+  if (geometry.kind !== 'ready' || !sheet.resolvedSparklines?.size) return candidates
+  const { x, y, width, height } = viewport.box
+  const visibleRows = new Set<number>(), visibleCols = new Set<number>()
+  const groupFiltered = new Map<ResolvedSparkline['group'], boolean>()
+  const resolved = sheet.resolvedSparklines
+  for (const run of geometry.metrics.rows.visibleBetween(y, y + height).runs) {
+    for (let slot = run.start; slot <= run.end; slot++) visibleRows.add(geometry.metrics.order.displayToSource(slot))
+  }
+  for (const run of geometry.metrics.cols.visibleBetween(x, x + width).runs) {
+    for (let col = run.start; col <= run.end; col++) visibleCols.add(col)
+  }
+  const sourceFiltered = (sparkline: ResolvedSparkline): boolean => {
+    const view = views?.get(sparkline.dataSheet.toLowerCase())
+    return Boolean(view?.visibility && sparkline.sourceRows.some(sourceRow => {
+      const slot = view.order.sourceToDisplay(sourceRow)
+      return !view.visibility!.visible(slot) && !view.baseHidden?.contains(sourceRow)
+    }))
+  }
+  const groupHasFilteredMember = (sparkline: ResolvedSparkline): boolean => {
+    const { group } = sparkline
+    if (group.minAxisType !== 'group' && group.maxAxisType !== 'group') return false
+    const cached = groupFiltered.get(group)
+    if (cached !== undefined) return cached
+    let hidden = false
+    for (const definition of group.sparklines) {
+      const host = definition.host
+      const member = host ? resolved.get(host.row)?.get(host.col) : undefined
+      if (member?.group === group && sourceFiltered(member)) { hidden = true; break }
+    }
+    groupFiltered.set(group, hidden)
+    return hidden
+  }
+  const add = (row: number, col: number) => {
+    const sparkline = resolved.get(row)?.get(col)
+    if (!sparkline) return
+    if (groupHasFilteredMember(sparkline) || sourceFiltered(sparkline)) {
+      const diagnostics = (sheet.diagnostics ??= [])
+      if (!diagnostics.some(item => item.feature === 'sparkline-filter-hidden')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-filter-hidden', message: 'Sparkline or group omitted because member data intersects rows hidden by the viewer filter' })
+      return
+    }
+    let columns = candidates.get(row)
+    if (!columns) candidates.set(row, columns = new Set())
+    columns.add(col)
+  }
+  for (const row of visibleRows) for (const col of resolved.get(row)?.keys() ?? []) if (visibleCols.has(col)) add(row, col)
+  if (plan.kind === 'detail') for (const merge of plan.merges) add(merge.range.minRow, merge.range.minCol)
+  return candidates
 }
 const LAYOUT_MEMORY = 'layout-memory'
 const VIEWPORT_NOTICE: Record<Exclude<ViewportPlan['kind'], 'detail'>, string> = {
@@ -193,6 +259,51 @@ export function renderSheetViewport(
     const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
     for (const record of records) replay(record, 'fill')
     if (extraActive) replay(extraActive, 'fill')
+    if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready') {
+      const metrics = geometry.metrics
+      const endX = Math.max(vx, vx + width - Number.EPSILON), endY = Math.max(vy, vy + height - Number.EPSILON)
+      // Tile boxes may extend past the finite worksheet domain. Clamp only the
+      // far corner to the last representable point so in-bounds hosts still paint.
+      const insideEnd = (end: number, extent: number) => Math.min(end, Math.max(0, extent - Math.max(Number.MIN_VALUE, extent * Number.EPSILON)))
+      const cornerA = metrics.logicalPointToSource(vx, vy)
+      const cornerB = metrics.logicalPointToSource(insideEnd(endX, metrics.cols.totalCss()), insideEnd(endY, metrics.rows.totalCss()))
+      const colA = metrics.cols.locate(vx), colB = metrics.cols.locate(insideEnd(endX, metrics.cols.totalCss()))
+      if (cornerA && cornerB && colA !== null && colB !== null) {
+        const r0 = Math.min(cornerA.row, cornerB.row), r1 = Math.max(cornerA.row, cornerB.row)
+        const c0 = Math.min(colA, colB), c1 = Math.max(colA, colB)
+        ctx.save()
+        ctx.translate(-vx, -vy)
+        let painted: boolean
+        const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
+        try { painted = paintSparklinesIn(ctx, sheet, (row, col) => {
+            const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+            if (merge) {
+              const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
+              const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
+              const row0 = Math.min(firstSlot, lastSlot), row1 = Math.max(firstSlot, lastSlot)
+              const x = geometry.metrics.cols.start(merge.minCol), y = geometry.metrics.rows.start(row0)
+              const rect = {
+                x, y,
+                width: geometry.metrics.cols.start(merge.maxCol + 1) - x,
+                height: geometry.metrics.rows.start(row1 + 1) - y,
+              }
+              if (!(rect.width > 0 && rect.height > 0)
+                || belowDetail(rect.width, viewport.zoom * viewport.deviceScale)
+                || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
+              return rect
+            }
+            const first = geometry.metrics.sourceCellToLogical({ row, col })
+            if (!first) return undefined
+            if (belowDetail(first.width, viewport.zoom * viewport.deviceScale) || belowDetail(first.height, viewport.zoom * viewport.deviceScale)) return undefined
+            return first
+          }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates)
+        } finally { ctx.restore() }
+        if (!painted) {
+          const diagnostics = (sheet.diagnostics ??= [])
+          if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
+        }
+      }
+    }
     for (const record of records) replay(record, 'content')
     if (extraActive) replay(extraActive, 'content')
     if (plan.kind === 'detail') {

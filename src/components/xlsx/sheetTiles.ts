@@ -13,6 +13,7 @@ import { frozenViewportSize, paneRegions, type FrozenExtent } from '../../xlsx/v
 import { TILE_CANVAS_BYTES, shapeCacheBytes } from '../../xlsx/view/mainLedger'
 import type { CacheIdentity, LogicalCellBox, LogicalViewport, ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
+import type { SparklineViewState } from '../../xlsx/view/renderViewport'
 import { renderSheetViewport } from '../../xlsx/view/renderViewport'
 import { paintWatermark, type ResolvedWatermark } from '../../core/watermark'
 import { LayoutAdmissionError, type CellLayoutHost, type LayoutAdmission, type LayoutCache } from '../../xlsx/view/textLayout'
@@ -36,6 +37,8 @@ export interface SheetFrame {
   plan?: (window: LogicalViewport, visible: boolean) => ViewportPlan | undefined
   sheet: XlsxSheet
   geometry: SheetGeometryResult
+  /** Live view geometry keyed by canonical case-folded sheet name. */
+  sparklineViews?: ReadonlyMap<string, SparklineViewState>
   identity: CacheIdentity
   /** Float64 logical origin of the pane. */
   origin: { x: number; y: number }
@@ -351,6 +354,7 @@ export class SheetTileRenderer {
       let result: ReturnType<typeof renderSheetViewport>
       try {
         result = renderSheetViewport(frame.sheet, ctx, frame.geometry, viewport, frame.assets, {
+          sparklineViews: frame.sparklineViews,
           colors: frame.colors, preparedPlan: plan, profile: this.profile, owner: frame.identity, cache: frame.layoutCache, merges: frame.merges, frameBudget: budget,
           ...(admission ? { layoutAdmission: admission } : {}), ...(frame.layoutHost ? { layoutHost: frame.layoutHost } : {}),
         })

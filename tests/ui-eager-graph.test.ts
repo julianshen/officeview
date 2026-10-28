@@ -67,6 +67,18 @@ describe('eager import graph', () => {
     for (const id of ['/r/src/pptx/parse.ts', '/r/src/pptx/render.ts', '/r/src/render/paint.ts']) expect(hit(id), id).toBe(false)
   })
 
+  it('rejects a statically imported sparkline painter while allowing the lazy module boundary', () => {
+    const hit = (id: string) => forbiddenEager({ 'index.js': { modules: [id], imports: [], dynamicImports: [] } }, EAGER_FORBIDDEN).length > 0
+    expect(hit('/repo/src/xlsx/sparklines/paint.ts')).toBe(true)
+    expect(hit('/repo/src/xlsx/sparklines/geometry.ts')).toBe(true)
+    for (const id of ['/repo/src/xlsx/sparklines/model.ts', '/repo/src/xlsx/sparklines/parseGroups.ts', '/repo/src/xlsx/sparklines/resolve.ts']) expect(hit(id), id).toBe(false)
+    const renderImport: ModuleMap = {
+      'index.js': { modules: ['/repo/src/index.ts'], imports: ['render.js'], dynamicImports: [] },
+      'render.js': { modules: ['/repo/src/xlsx/render.ts', '/repo/src/xlsx/sparklines/paint.ts'], imports: [], dynamicImports: [] },
+    }
+    expect(forbiddenEager(renderImport, EAGER_FORBIDDEN)).toContain('/repo/src/xlsx/sparklines/paint.ts')
+  })
+
   // The built module map (OV_MODULE_MAP=1 bun run build) is optional; the post-build check-eager gate always runs.
   const moduleMapFile = join(__dirname, '..', 'dist', '.module-map.json')
   it.skipIf(!existsSync(moduleMapFile))('src/slideshow and src/pptx/appearance are not in the eager graph (skipped: no dist/.module-map.json)', () => {

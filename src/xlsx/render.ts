@@ -27,6 +27,7 @@ import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout } from './view/textLayout'
 import { CELL_FONT_STACK, cellFontString } from './cellFont'
+import { paintSparklinesIn } from './sparklineLoader'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -263,6 +264,12 @@ function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): Stati
   for (const r of sheet.mergeRanges ?? []) {
     if (validMerge(r)) { maxRow = Math.max(maxRow, r.maxRow); maxCol = Math.max(maxCol, r.maxCol) }
   }
+  for (const [row, columns] of sheet.resolvedSparklines ?? []) {
+    for (const col of columns.keys()) {
+      if (!isValidCoordinate(row, col)) continue
+      maxRow = Math.max(maxRow, row); maxCol = Math.max(maxCol, col)
+    }
+  }
   const limits: StaticExportLimit[] = []
   if (maxRow + 1 > rows) limits.push({ code: 'large-export-limit', resource: 'rows', requested: maxRow + 1, limit: rows, message: `Row ${maxRow + 1} is beyond the ${rows}-row static grid; render a bounded viewport instead` })
   if (maxCol + 1 > cols) limits.push({ code: 'large-export-limit', resource: 'cols', requested: maxCol + 1, limit: cols, message: `Column ${maxCol + 1} is beyond the ${cols}-column static grid; render a bounded viewport instead` })
@@ -295,6 +302,9 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
   // Merged ranges are part of the painted grid even where only the anchor is populated.
   for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
+  for (const [row, columns] of sheet.resolvedSparklines ?? []) {
+    for (const col of columns.keys()) if (isValidCoordinate(row, col)) maxCol = Math.max(maxCol, col)
+  }
   // Real spreadsheets declare column formatting far wider than the used range
   // (a sheet with data in A1:C10 may carry <col max="1025"/>). Sizing the grid
   // from such a declared range alone produced a 66,000px canvas and threw, so
@@ -328,6 +338,11 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   }
   if (inconsistent) diagnostics.push({ code: 'inconsistent-row-coordinate', message: `${inconsistent} cell(s) carry a reference outside their row record; placed by the cell reference` })
   for (const r of merges) maxRow = Math.max(maxRow, r.maxRow)
+  for (const [row, columns] of sheet.resolvedSparklines ?? []) {
+    for (const col of columns.keys()) {
+      if (isValidCoordinate(row, col)) { maxRow = Math.max(maxRow, row); break }
+    }
+  }
   const nRows = Math.min(Math.max(maxRow + 1, drawing ? (sheet.drawingMarkers?.maxRow ?? 0) + 1 : 1), MAX_GRID_ROWS)
   const rowHeightsPx = new Array<number>(nRows).fill(DEFAULT_ROW_PX)
   // Duplicate records for one index are invalid OOXML (rows without `r` currently
@@ -715,6 +730,10 @@ export function renderSheet(
   viewport?: SheetViewport,
 ): void {
   const m = metrics ?? computeMetrics(sheet)
+  // Sparkline snapping uses the caller's actual canvas scale. Deriving it here
+  // avoids exposing another positional argument on the public renderSheet API.
+  const transform = typeof ctx.getTransform === 'function' ? ctx.getTransform() ?? { a: 1, b: 0 } : { a: 1, b: 0 }
+  const sparklineScale = Math.hypot(transform.a, transform.b) || 1
   const { colWidthsPx, rowHeightsPx } = m
   const limits = staticAdmission(sheet, m, viewport)
   if (limits.length) throw new StaticExportLimitError(limits)
@@ -794,6 +813,20 @@ export function renderSheet(
       const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
+    }
+  }
+  if (sheet.resolvedSparklines?.size) {
+    const painted = paintSparklinesIn(ctx, sheet, (row, col) => {
+      if (row < 0 || row >= rowHeightsPx.length || col < 0 || col >= colWidthsPx.length) return undefined
+      const merge = merges.anchorAt(row, col)
+      const x = colX[col], y = rowY[row]
+      const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[col]
+      const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[row]
+      return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
+    }, { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }, { zoom: sparklineScale, dpr: 1 })
+    if (!painted) {
+      const diagnostics = (sheet.diagnostics ??= [])
+      if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
     }
   }
   for (const layout of laidOut) {

@@ -79,7 +79,8 @@ it('keeps the README worker bootstrap in a Vite production consumer (worker.form
     // a cycle through the entry is the WebKit hazard.
     expect(chunkCycles(graph).filter(cycle => cycle.includes(worker!))).toEqual([])
 
-    const main = files.find(name => /^index-.*\.js$/.test(name))
+    const html = await readFile(join(consumer, 'dist/index.html'), 'utf8')
+    const main = html.match(/src=["']\/assets\/([^"']+\.js)["']/)?.[1]
     expect(main).toBeDefined()
     const mainCode = await readFile(join(assets, main!), 'utf8')
     // The unused named import is tree-shaken: no officeview code or chunk reaches main.

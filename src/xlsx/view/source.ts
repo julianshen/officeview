@@ -200,6 +200,24 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
         if (cell.dynamicArray) dynamic.push({ row: cell.row, col: cell.col })
       }
     }
+    // A resolved sparkline is visible worksheet content even when its host has
+    // no stored cell record; include it in range-aware navigation and queries.
+    for (const [row, hosts] of sheet.resolvedSparklines ?? []) {
+      for (const col of hosts.keys()) {
+        if (!isValidCoordinate(row, col)) continue
+        r0 = Math.min(r0, row); r1 = Math.max(r1, row)
+        c0 = Math.min(c0, col); c1 = Math.max(c1, col)
+      }
+    }
+    // A merged sparkline host occupies its full merged cell. Keep the used-range
+    // extension narrow: unrelated merge ranges do not change navigation bounds.
+    for (const merge of sheet.mergeRanges ?? []) {
+      if (!isValidCoordinate(merge.minRow, merge.minCol) || !isValidCoordinate(merge.maxRow, merge.maxCol)
+        || merge.minRow > merge.maxRow || merge.minCol > merge.maxCol
+        || !sheet.resolvedSparklines?.get(merge.minRow)?.has(merge.minCol)) continue
+      r0 = Math.min(r0, merge.minRow); r1 = Math.max(r1, merge.maxRow)
+      c0 = Math.min(c0, merge.minCol); c1 = Math.max(c1, merge.maxCol)
+    }
     this.dynamicAnchors = dynamic
     this.extent = Object.freeze(r1 < 0 ? { rows: MAX_ROWS, cols: MAX_COLS } : { rows: MAX_ROWS, cols: MAX_COLS, used: { r0, r1, c0, c1 } })
   }

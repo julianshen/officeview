@@ -48,6 +48,7 @@ export const EAGER_FORBIDDEN: readonly RegExp[] = [
   // The chart engine is lazy (spec 6.1); chartLoader, chartModel and the placeholder painter stay eager.
   /src\/charts\//,
   /src\/xlsx\/chart\.ts(?:$|\?)/,
+  /src\/xlsx\/sparklines\/(?!model\.ts(?:$|\?)|parseGroups\.ts(?:$|\?)|resolve\.ts(?:$|\?))/,
   // The slideshow and the slide appearance enrichment are lazy (slideshow spec 8).
   /src\/slideshow\//,
   /src\/pptx\/appearance\//,
