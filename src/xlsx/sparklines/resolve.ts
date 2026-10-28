@@ -364,7 +364,8 @@ export function resolveWorkbookSparklines(sheets: XlsxSheet[], policy: { cached:
   })
   resolveSparklineDataSheets(adapters, policy)
   for (let i = 0; i < sheets.length; i++) {
-    sheets[i].resolvedSparklines = adapters[i].resolvedSparklines
+    if (adapters[i].resolvedSparklines) sheets[i].resolvedSparklines = adapters[i].resolvedSparklines
+    else delete sheets[i].resolvedSparklines
     if (adapters[i].diagnostics) sheets[i].diagnostics = adapters[i].diagnostics as XlsxSheet['diagnostics']
   }
 }

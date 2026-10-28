@@ -580,7 +580,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * sheet's groups, then run the same synchronous resolver as resident XLSX.
    * The worker owns both the metadata and every page read (including cross-sheet
    * ranges); the receiver grant is checked before any point arrays are built. */
-  async readSparklines(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<SheetSparklines> {
+  async readSparklines(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, replyEnvelopeBytes = 1024): Promise<SheetSparklines> {
     const groups = this.sheet.metadata.sparklineGroups ?? []
     const sourceDiagnostics = this.sheet.metadata.sparklineDiagnostics ?? []
     if (!groups.length) return { sparklines: [], groups: [], diagnostics: sourceDiagnostics.slice(0, 64).map(item => ({ ...item, message: item.message.slice(0, 256) })) }
@@ -614,14 +614,16 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const groupTreeBytes = sparklinePayloadTreeBytes(groups)
     const baseBound = points * 8 + axisPoints * 8 + sparkCount * 96 + groups.length * 256 + 64 * 256 * 2
     const metadataBound = points * 64 + sparkCount * 512 + dataNameUnits * 2 + Math.max(0, groupTreeBytes - groups.length * 256) + 64 * 640
-    const estimated = baseBound + metadataBound + 1024 // final reply envelope and ownership stamps
+    const estimated = baseBound + metadataBound + replyEnvelopeBytes
     // Worker-only snapshot structures coexist with the wire result while it is
     // resolved. Reserve them before constructing coordinate sets or cell maps.
     const preparationBytes = estimated + (points + axisPoints) * 512
     if (!Number.isSafeInteger(preparationBytes) || estimated > grantBytes || memory && !memory.set(preparationBytes)) {
       return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline data exceeds the receiver memory grant' }] }
     }
-    const boundedSourceDiagnostics = sourceDiagnostics.slice(0, 64).map(item => ({ ...item, message: item.message.slice(0, 256) }))
+    // Keep room within the 64-entry host cap for resolver diagnostics generated
+    // by the snapshot (missing data, incomplete groups, unsupported axes).
+    const boundedSourceDiagnostics = sourceDiagnostics.slice(0, 48).map(item => ({ ...item, message: item.message.slice(0, 256) }))
     const stores = new Map<string, PagedXlsxSheetAdapter>()
     const sheetFor = (sheet: PagedSheet): PagedXlsxSheetAdapter => {
       let store = stores.get(sheet.sheetId)
@@ -654,6 +656,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         await new Promise<void>(resolve => setTimeout(resolve, 0))
       }
     }
+    const pendingSheetIds = new Set<string>()
     for (const sheet of sheets) {
       const coords = requested.get(sheet.sheetId)
       if (!coords) continue
@@ -668,7 +671,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
           const cell = read.cell
           result.set(key, { ...cell, row, col, ref: formatA1({ row, col }) })
         } else if (read.kind === 'unknown' || read.kind === 'error') {
-          return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is not fully available in the worker' }] }
+          pendingSheetIds.add(sheet.sheetId)
+          return { sparklines: [], groups: [], pendingSheetIds: [...pendingSheetIds], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'Sparkline data is not fully available in the worker' }] }
         }
         if (++visited % 128 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0))
       }
@@ -705,7 +709,9 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     const diagnostics = (hostModel.diagnostics ?? []).slice(0, 64).map(item => ({ ...item, message: item.message.slice(0, 256) }))
     const actualBytes = sparklinePayloadTreeBytes({ sparklines: output, groups: outputGroups, diagnostics })
-    if (actualBytes > grantBytes || memory && !memory.set(actualBytes)) {
+    // The final WorkerReply adds owner, diagnostics and replyBytes after this
+    // source result; the kernel passes its exact payload-free envelope bound.
+    if (actualBytes + replyEnvelopeBytes > grantBytes || memory && !memory.set(actualBytes + replyEnvelopeBytes)) {
       return { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline data exceeds the receiver memory grant' }] }
     }
     return { sparklines: output, groups: outputGroups, diagnostics }

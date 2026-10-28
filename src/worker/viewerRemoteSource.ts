@@ -239,7 +239,10 @@ export class RemoteWorkbook implements WorkbookSource {
       request: (command, signal) => this.request(command, signal), nextRequestId: () => this.nextRequestId(),
       release: reply => this.mainLedger.settle(reply),
       changed: (sheetId, hosts) => {
-        this.sparklineChanges.set(sheetId, [...hosts])
+        const previous = this.sparklineChanges.get(sheetId) ?? []
+        const union = new Map(previous.map(host => [`${host.row}:${host.col}`, host]))
+        for (const host of hosts) union.set(`${host.row}:${host.col}`, host)
+        this.sparklineChanges.set(sheetId, [...union.values()])
         this.notify()
       },
     }, MAIN_THREAD_BUDGETS[this.profile] / 4)
@@ -469,9 +472,11 @@ export class RemoteWorkbook implements WorkbookSource {
   /** `reservation`: a 'replies' owner admitted for this reply before the command
    * was sent; it ends exactly when the reply's own charge starts (never both). */
   async request<K extends RemoteKind>(command: CommandOf<K>, signal?: AbortSignal, progress?: (completed: number, total: number) => void, reservation?: string): Promise<Settled<K>> {
-    if (this.closed) return CLOSED
-    if (signal?.aborted) return CANCELLED
     const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
+    const sparklineRead = head.kind === 'read' && head.query?.op === 'sparklines'
+    const sparklineGrant = sparklineRead ? `sparkline-grant:${head.requestId}` : undefined
+    if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); return CLOSED }
+    if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); return CANCELLED }
     const key = head.kind === 'read' ? `read:${head.query?.op}` : head.kind
     const scope = JSON.stringify([head.owner.docId, 'sheetId' in head.owner ? head.owner.sheetId : null, key])
     this.latestQueries.set(scope, head.requestId)
@@ -486,7 +491,8 @@ export class RemoteWorkbook implements WorkbookSource {
     if (sparklines) {
       const grantBytes = sparklines.query.op === 'sparklines' ? sparklines.query.grantBytes : undefined
       const owner = `sparkline-grant:${head.requestId}`
-      if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner) || this.client.isPending(head.requestId)) return CLOSED
+      if (this.client.isPending(head.requestId)) return CLOSED
+      if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
       grant = owner
     } else if (drawings) {
       // A duplicate id must not touch the credit of the read that owns it.

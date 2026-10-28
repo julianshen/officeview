@@ -2418,7 +2418,7 @@ export class DocumentSession {
    * a scan page is capped at MAX_SCAN_PAGE and continues a resident iterator. */
   /** `retain` (FC-T2): takes over a finished result's worker share so it ends
    * after the kernel posted the reply carrying it (or ended without one). */
-  async read(owner: CacheIdentity, query: SourceReadQuery, signal: AbortSignal, retain?: (release: () => void) => void): Promise<SourceReadResult | { kind: 'stale' } | { kind: 'cancelled' }> {
+  async read(owner: CacheIdentity, query: SourceReadQuery, signal: AbortSignal, retain?: (release: () => void) => void, replyEnvelopeBytes = 1024): Promise<SourceReadResult | { kind: 'stale' } | { kind: 'cancelled' }> {
     if (!this.isCurrent(owner)) return { kind: 'stale' }
     const store = this.store(owner.sheetId)
     const options = { signal, stamp: { ...store.stamp } }
@@ -2446,7 +2446,7 @@ export class DocumentSession {
           if (!Number.isSafeInteger(query.grantBytes) || query.grantBytes <= 0) {
             result = { op: 'sparklines', result: { sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported', feature: 'sparkline-resource-limit', message: 'Sparkline transfer requires a receiver grant' }] } }
           } else {
-            const work = this.source.store(owner.sheetId).readSparklines?.(options, query.grantBytes, charge)
+            const work = this.source.store(owner.sheetId).readSparklines?.(options, query.grantBytes, charge, replyEnvelopeBytes)
               ?? Promise.resolve({ sparklines: [], groups: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'sparkline-unavailable', message: 'This source cannot resolve sparklines' }] })
             raw = work
             void work.then(() => { drained = true }, () => { drained = true })

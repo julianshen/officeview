@@ -274,6 +274,8 @@ export default function InteractiveSheetDoc(props: InteractiveSheetDocProps): Re
 
 interface SheetEntry {
   sheet: XlsxSheet
+  /** Generation of the worker-resolved sparkline map read by the tile painter. */
+  sparklineGen: number
   revision: number
   /** Worker-backed sheets: generation of the merged ranges the geometry holds. */
   structureGen: number
@@ -467,7 +469,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   /** A sheet entry built off to the side: nothing is charged, held or published. */
   interface Candidate {
-    sheetId: string; sheet: XlsxSheet; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
+    sheetId: string; sheet: XlsxSheet; sparklineGen: number; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
     order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
     built: SheetGeometry & { readonly chargeBytes?: number }
     /** Exactly what publishing charges (the entry charge functions). */
@@ -479,12 +481,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const prepareEntry = (sheetId: string, override?: SessionSizes): { entry: SheetEntry } | { candidate: Candidate } => {
     const index = sheetIds.indexOf(sheetId)
     let sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
-    if (remote && remote.layout(sheetId).hasSparklines) sheet = sheetWithSparklines(sheet, remote.sparklines(sheetId))
+    const sparklineContent = remote && remote.layout(sheetId).hasSparklines ? remote.sparklines(sheetId) : null
+    const sparklineGen = sparklineContent?.gen ?? 0
+    if (sparklineContent) sheet = sheetWithSparklines(sheet, sparklineContent)
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
-    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen) return { entry: previous }
+    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen && previous.sparklineGen === sparklineGen) return { entry: previous }
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
       // that changed since are still applied, to the view already shown.
@@ -510,12 +514,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
     const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
-    return { candidate: { sheetId, sheet, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
+    return { candidate: { sheetId, sheet, sparklineGen, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
    * retires the previous entry on the next display commit. */
   const publishEntry = (candidate: Candidate, resizeGen: number): SheetEntry => {
-    const { sheetId, sheet, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
+    const { sheetId, sheet, sparklineGen, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
     bindOverflowCache(built, overflowFor())
     // A resident geometry is charged for its lifetime: the row projection (it
     // keeps its own copied segments; the build's row axis is dropped), the
@@ -534,7 +538,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
@@ -820,27 +824,31 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // The pool (and its admission) exists before the pane surface is sized.
     const renderer = rendererFor()
     const changedSparkHosts = remote?.takeSparklineChanges(activeSheetId) ?? []
-    if (changedSparkHosts.length) renderer.cache.invalidate(key => {
-      if (!entry) return false
-      if (key.identity.sheetId !== activeSheetId) return false
-      const tile = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
-      for (const host of changedSparkHosts) {
-        const merge = entry.sheet.mergeRanges.find(range => range.minRow === host.row && range.minCol === host.col)
-        const r0 = merge?.minRow ?? host.row, r1 = merge?.maxRow ?? host.row
-        const c0 = merge?.minCol ?? host.col, c1 = merge?.maxCol ?? host.col
-        if (r1 - r0 > 10000) return true
-        let x0 = entry.metrics.cols.start(c0), x1 = entry.metrics.cols.start(c1) + entry.metrics.cols.size(c1)
-        if (x1 < x0) [x0, x1] = [x1, x0]
+    if (changedSparkHosts.length && entry) {
+      // Resolve paged merge extents once per changed host, outside the per-tile
+      // predicate; shell sheet.mergeRanges is empty on the worker path.
+      const changedBoxes = changedSparkHosts.map(host => {
+        const merge = entry.geometry.merges.query({ r0: host.row, r1: host.row, c0: host.col, c1: host.col }, { limit: 1 }).items[0]
+        const anchored = merge?.minRow === host.row && merge.minCol === host.col ? merge : undefined
+        const r0 = anchored?.minRow ?? host.row, r1 = anchored?.maxRow ?? host.row
+        const c0 = anchored?.minCol ?? host.col, c1 = anchored?.maxCol ?? host.col
+        if (r1 - r0 > 10000) return null
+        const x0 = Math.min(entry.metrics.cols.start(c0), entry.metrics.cols.start(c1))
+        const x1 = Math.max(entry.metrics.cols.start(c0) + entry.metrics.cols.size(c0), entry.metrics.cols.start(c1) + entry.metrics.cols.size(c1))
         let y0 = Number.POSITIVE_INFINITY, y1 = Number.NEGATIVE_INFINITY
         for (let sourceRow = r0; sourceRow <= r1; sourceRow++) {
           const slot = entry.metrics.order.sourceToDisplay(sourceRow)
           const top = entry.metrics.rows.start(slot), bottom = top + entry.metrics.rows.size(slot)
-          y0 = Math.min(y0, top); y1 = Math.max(y1, bottom)
+          if (bottom > top) { y0 = Math.min(y0, top); y1 = Math.max(y1, bottom) }
         }
-        if (tile.x < x1 && x0 < tile.x + tile.width && tile.y < y1 && y0 < tile.y + tile.height) return true
-      }
-      return false
-    })
+        return y1 > y0 && x1 > x0 ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null
+      })
+      renderer.cache.invalidate(key => {
+        if (key.identity.sheetId !== activeSheetId) return false
+        const tile = tileLogicalBox(key.col, key.row, key.zoom, key.dpr)
+        return changedBoxes.some(box => !box || (tile.x < box.x + box.width && box.x < tile.x + tile.width && tile.y < box.y + box.height && box.y < tile.y + tile.height))
+      })
+    }
     if (sparklineViewKeyRef.current !== sparklineViewKey) {
       renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
       sparklineViewKeyRef.current = sparklineViewKey
@@ -1828,10 +1836,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
+              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', activeSparklines ? sparklineNotices(activeSparklines).join(' ') : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }

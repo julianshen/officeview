@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { RemoteSparklineCache, sparklineNotices, type SparklineHost } from '../src/worker/viewerRemoteSparklines'
 import { initialIdentity, transferablesOf } from '../src/worker/viewerProtocol'
-import type { WorkerReply, SheetSparklines } from '../src/xlsx/view/contracts'
+import type { WorkerCommand, WorkerReply, SheetSparklines } from '../src/xlsx/view/contracts'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
@@ -11,6 +11,8 @@ import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { SPARKLINE_CASES } from '../scripts/sparkline-refs/cases'
 import { rebuildResolvedSparklines } from '../src/worker/viewerRemoteSparklines'
 import { ViewerKernel } from '../src/worker/viewerKernel'
+import { ViewerClient } from '../src/worker/viewerClient'
+import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 
 const microtask = () => new Promise(resolve => setTimeout(resolve, 0))
 const fixtureBytes = (name: string) => new Uint8Array(readFileSync(resolve(process.cwd(), `tests/fixtures/xlsx-sparklines/${name}.xlsx`)))
@@ -19,13 +21,13 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
   try {
     await session.done
     const source = createPagedWorkbookSource(session)
-    const output: Record<string, ReturnType<typeof rebuildResolvedSparklines>> = {}
+    const output: Record<string, { resolved: ReturnType<typeof rebuildResolvedSparklines>; diagnostics: unknown }> = {}
     const charges: number[] = []
     for (const sheet of source.sheets) {
       const store = source.store(sheet.sheetId)
       const chargeStart = charges.length
       const result = await store.readSparklines!({ signal: new AbortController().signal, stamp: store.stamp }, 64 * 1024 * 1024, { set: bytes => { charges.push(bytes); return true } })
-      output[sheet.name] = rebuildResolvedSparklines(result)
+      output[sheet.name] = { resolved: rebuildResolvedSparklines(result), diagnostics: result.diagnostics }
       if (charges.length > chargeStart) expect(charges.at(-1)!, `${sheet.name} preflight covers final reply`).toBeLessThanOrEqual(charges[chargeStart]!)
     }
     await source.release()
@@ -34,6 +36,129 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
 }
 
 describe('paged sparkline transfer cache', () => {
+  it('uses the RemoteWorkbook ledger for grant adoption, abort settlement, and early refund', async () => {
+    const listeners = new Set<(event: MessageEvent) => void>()
+    let deliver: ((reply: WorkerReply<'read'>) => void) | undefined
+    const port = {
+      postMessage(command: { kind: string; requestId: string; owner: unknown }, _transfer: Transferable[]) {
+        if (command.kind !== 'read') return
+        deliver = reply => { for (const listener of listeners) listener({ data: reply } as MessageEvent) }
+      },
+      addEventListener(_type: string, listener: (event: MessageEvent) => void) { listeners.add(listener) },
+      removeEventListener(_type: string, listener: (event: MessageEvent) => void) { listeners.delete(listener) },
+    }
+    const client = new ViewerClient(port as never, 'spark-ledger')
+    const remote = new RemoteWorkbook(client, { docId: 'spark-ledger', valuePolicy: 'cached', sheets: [{ sheetId: 's', name: 'S' }], diagnostics: [], layouts: new Map([['s', { rowOverrides: [], colOverrides: [], hidden: [], hasSparklines: true }]]) })
+    const owner = remote.identity('s')
+    const grant = (requestId: string) => remote.mainLedger.set('replies', `sparkline-grant:${requestId}`, 4096)
+    const command = (requestId: string) => ({ kind: 'read' as const, requestId, owner, query: { op: 'sparklines' as const, grantBytes: 4096 } })
+    const abortedId = 'aborted-before-send', abortBeforeSend = new AbortController()
+    abortBeforeSend.abort(); grant(abortedId)
+    expect(await remote.request(command(abortedId), abortBeforeSend.signal)).toBeTypeOf('symbol')
+    expect(remote.mainLedger.ownerBytes('replies', `sparkline-grant:${abortedId}`)).toBe(0)
+
+    const adoptedId = 'adopt-and-settle'; grant(adoptedId)
+    const adoptedPromise = remote.request(command(adoptedId))
+    await microtask()
+    const adopted = { kind: 'complete', commandKind: 'read', requestId: adoptedId, owner, diagnostics: [], replyBytes: 512,
+      result: { kind: 'read', result: { op: 'sparklines', result: { sparklines: [], groups: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>
+    deliver!(adopted)
+    const received = await adoptedPromise
+    expect(remote.mainLedger.snapshot().byPool.sparklines).toBeGreaterThan(0)
+    remote.mainLedger.settle(received as WorkerReply)
+    expect(remote.mainLedger.snapshot().byPool.sparklines).toBe(0)
+
+    const cancelledId = 'cancel-after-send'; grant(cancelledId)
+    const abortAfterSend = new AbortController(), cancelledPromise = remote.request(command(cancelledId), abortAfterSend.signal)
+    await microtask(); abortAfterSend.abort()
+    expect(await cancelledPromise).toBeTypeOf('symbol')
+    const late = { kind: 'complete', commandKind: 'read', requestId: cancelledId, owner, diagnostics: [], replyBytes: 512,
+      result: { kind: 'read', result: { op: 'sparklines', result: { sparklines: [], groups: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>
+    deliver!(late)
+    await microtask()
+    await microtask()
+    expect(remote.mainLedger.snapshot().byPool.sparklines).toBe(0)
+    expect(remote.mainLedger.ownerBytes('replies', `sparkline-grant:${cancelledId}`)).toBe(0)
+    await remote.close()
+  })
+
+  it('returns the real RemoteWorkbook sparkline pool to zero on stale, cancel, quota, eviction, invalidation, and close', async () => {
+    const listeners = new Set<(event: MessageEvent) => void>(), held: Array<() => void> = []
+    let blockNext = false, quotaNext = false, hostRow = 0
+    const group = { type: 'line', lineWeightPt: 0.75, displayEmptyCellsAs: 'gap', markers: false, high: false, low: false, first: false, last: false, negative: false, displayXAxis: false, displayHidden: false, dateAxis: false, rightToLeft: false, minAxisType: 'individual', maxAxisType: 'individual', colors: {}, sparklines: [] }
+    const data: SheetSparklines = { sparklines: [{ host: { row: 0, col: 9 }, dataSheet: 'S', sourceRows: [0], groupIndex: 0, values: new Float64Array([7]), bridged: [], firstIndex: 0, lastIndex: 0, highIndices: [], lowIndices: [], min: 7, max: 7 }], groups: [group as SheetSparklines['groups'][number]], diagnostics: [] }
+    let port!: { postMessage(command: WorkerCommand): void; addEventListener(_type: string, listener: (event: MessageEvent) => void): void; removeEventListener(_type: string, listener: (event: MessageEvent) => void): void }
+    port = {
+      postMessage(command) {
+        const respond = () => {
+          let out: unknown
+          if (command.kind === 'close') out = { kind: 'complete', commandKind: 'close', requestId: command.requestId, owner: { docId: command.docId }, diagnostics: [], result: { kind: 'close' } }
+          else if (command.kind === 'read' && command.query.op === 'sparklines') out = quotaNext
+            ? { kind: 'quota', commandKind: 'read', requestId: command.requestId, owner: command.owner, resource: 'memory', requiredBytes: 8192, limitBytes: 4096, diagnostics: [] }
+            : { kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: command.owner, replyBytes: 128, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result: { ...data, sparklines: data.sparklines.map(spark => ({ ...spark, host: { ...spark.host, row: hostRow } })) } } } }
+          else out = { kind: 'error', commandKind: command.kind, requestId: command.requestId, owner: 'owner' in command ? command.owner : { docId: 'remote-cache' }, code: 'unsupported', retryable: false, diagnostics: [] }
+          quotaNext = false
+          for (const listener of listeners) listener({ data: out } as MessageEvent)
+        }
+        if (blockNext) { blockNext = false; held.push(respond) }
+        else setTimeout(respond, 0)
+      },
+      addEventListener(_type, listener) { listeners.add(listener) },
+      removeEventListener(_type, listener) { listeners.delete(listener) },
+    }
+    const client = new ViewerClient(port as never, 'spark-cache')
+    const open = { docId: 'remote-cache', valuePolicy: 'cached' as const, sheets: [{ sheetId: 'a', name: 'S' }, { sheetId: 'b', name: 'S2' }, { sheetId: 'c', name: 'S3' }], diagnostics: [], layouts: new Map([
+      ['a', { rowOverrides: [], colOverrides: [], hidden: [], hasSparklines: true }], ['b', { rowOverrides: [], colOverrides: [], hidden: [], hasSparklines: true }], ['c', { rowOverrides: [], colOverrides: [], hidden: [], hasSparklines: true }],
+    ]) }
+    const remote = new RemoteWorkbook(client, open)
+    const internals = remote as unknown as { completed: Set<string>; structures: Map<string, { gen: number; merges: never[]; state: 'done' }>; identities: Map<string, ReturnType<RemoteWorkbook['identity']>>; sparklineCache: RemoteSparklineCache }
+    for (const id of ['a', 'b', 'c']) { internals.completed.add(id); internals.structures.set(id, { gen: 0, merges: [], state: 'done' }) }
+    Object.defineProperty(internals.sparklineCache, 'budgetBytes', { value: 1000 })
+    const bytes = () => remote.mainLedger.snapshot().byPool.sparklines
+    const waitReady = async (id: string) => { remote.sparklines(id); await new Promise(resolve => setTimeout(resolve, 5)); return remote.sparklines(id) }
+
+    expect((await waitReady('a')).state).toBe('ready')
+    expect(bytes()).toBeGreaterThan(0)
+    const beforeOwner = remote.identity('a')
+    hostRow = 1
+    internals.identities.set('a', { ...beforeOwner, valueGen: beforeOwner.valueGen + 1 })
+    expect((await waitReady('a')).state).toBe('ready')
+    expect(remote.takeSparklineChanges('a')).toEqual(expect.arrayContaining([{ row: 0, col: 9 }, { row: 1, col: 9 }]))
+    internals.sparklineCache.invalidate('a')
+    expect(bytes()).toBe(0)
+
+    quotaNext = true
+    expect((await waitReady('b')).state).toBe('failed')
+    expect(bytes()).toBe(0)
+
+    blockNext = true
+    remote.sparklines('a')
+    await microtask()
+    const old = remote.identity('a')
+    internals.identities.set('a', { ...old, valueGen: old.valueGen + 1 })
+    held.splice(0).forEach(respond => respond())
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(bytes()).toBe(0)
+
+    // A cancelled in-flight request may still reply; the request boundary
+    // settles that late reply without retaining its main-ledger lease.
+    blockNext = true
+    remote.sparklines('a')
+    await microtask()
+    internals.sparklineCache.invalidate('a')
+    held.splice(0).forEach(respond => respond())
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(bytes()).toBe(0)
+
+    internals.identities.set('a', old)
+    expect((await waitReady('a')).state).toBe('ready')
+    const oneEntry = bytes()
+    expect((await waitReady('c')).state).toBe('ready') // C evicts A under the 1,000-byte cache cap.
+    expect(bytes()).toBe(oneEntry)
+    await remote.close()
+    expect(bytes()).toBe(0)
+  })
+
   it('does not request until a receiver grant is available', async () => {
     const requests: unknown[] = []
     const host: SparklineHost = {
@@ -46,6 +171,94 @@ describe('paged sparkline transfer cache', () => {
     expect(cache.get('sheet').state).toBe('waiting')
     await microtask()
     expect(requests).toEqual([])
+    cache.close()
+  })
+
+  it('retries refused grants and makes non-retryable request errors terminal once', async () => {
+    let grants = 0, requests = 0
+    const identity = initialIdentity('doc', 'sheet')
+    const host: SparklineHost = {
+      identity: () => identity, loadState: () => ({ completeness: 'complete' }), hasSparklines: () => true,
+      grant: () => ++grants === 1 ? null : 4096, releaseGrant: () => {}, admitDecoded: () => null, release: () => {},
+      request: async () => { requests++; return { kind: 'error', commandKind: 'read', requestId: '1', owner: identity, code: 'unsupported', retryable: false, diagnostics: [] } as WorkerReply<'read'> },
+      nextRequestId: () => `${grants}`, changed: () => {},
+    }
+    const cache = new RemoteSparklineCache(host)
+    cache.get('sheet')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(grants).toBeGreaterThan(1)
+    expect(requests).toBe(1)
+    expect(cache.get('sheet')).toMatchObject({ state: 'failed', diagnostics: [{ feature: 'sparkline-read-failed' }] })
+    cache.close()
+  })
+
+  it('clears stale resolved data and notifies host tiles when get observes a new value owner', async () => {
+    const first = initialIdentity('doc', 'sheet')
+    let owner = first, serial = 0
+    const hosts: { row: number; col: number }[][] = []
+    const result: SheetSparklines = { sparklines: [{ host: { row: 4, col: 3 }, dataSheet: 'sheet', sourceRows: [0], groupIndex: 0, values: new Float64Array([1]), bridged: [], firstIndex: 0, lastIndex: 0, highIndices: [], lowIndices: [], min: 1, max: 1 }], groups: [{ type: 'line', lineWeightPt: 0.75, displayEmptyCellsAs: 'gap', markers: false, high: false, low: false, first: false, last: false, negative: false, displayXAxis: false, displayHidden: false, dateAxis: false, rightToLeft: false, minAxisType: 'individual', maxAxisType: 'individual', colors: {}, sparklines: [] }], diagnostics: [] }
+    const host: SparklineHost = {
+      identity: () => owner, loadState: () => ({ completeness: 'complete' }), hasSparklines: () => true, grant: () => 4096,
+      releaseGrant: () => {}, admitDecoded: () => () => {}, release: () => {}, nextRequestId: () => `${++serial}`,
+      changed: (_id, changed) => hosts.push([...changed]),
+      request: async command => ({ kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: command.owner, replyBytes: 128, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result } } } as WorkerReply<'read'>),
+    }
+    const cache = new RemoteSparklineCache(host)
+    cache.get('sheet'); await microtask()
+    expect(cache.get('sheet').resolved).toBeTruthy()
+    hosts.length = 0
+    owner = { ...first, valueGen: first.valueGen + 1 }
+    expect(cache.get('sheet')).toMatchObject({ state: 'loading', resolved: undefined, gen: 2 })
+    expect(hosts.some(list => list.length === 1 && list[0].row === 4 && list[0].col === 3)).toBe(true)
+    cache.close()
+  })
+
+  it('waits through a referenced sheet import and retries the sparkline snapshot after it completes', async () => {
+    const identity = initialIdentity('doc', 'host')
+    let dataState: 'loading' | 'complete' = 'loading', requests = 0, ids = 0
+    const group = { type: 'line' as const, lineWeightPt: 0.75, displayEmptyCellsAs: 'gap' as const, markers: false, high: false, low: false, first: false, last: false, negative: false, displayXAxis: false, displayHidden: false, dateAxis: false, rightToLeft: false, minAxisType: 'individual' as const, maxAxisType: 'individual' as const, colors: {}, sparklines: [] }
+    const resolved: SheetSparklines = { sparklines: [{ host: { row: 0, col: 9 }, dataSheet: 'Data', sourceRows: [0], groupIndex: 0, values: new Float64Array([7]), bridged: [], firstIndex: 0, lastIndex: 0, highIndices: [], lowIndices: [], min: 7, max: 7 }], groups: [group], diagnostics: [] }
+    const host: SparklineHost = {
+      identity: () => identity, loadState: id => ({ completeness: id === 'data' ? dataState : 'complete' }), hasSparklines: () => true,
+      grant: () => 4096, releaseGrant: () => {}, admitDecoded: () => () => {}, release: () => {}, nextRequestId: () => `${++ids}`, changed: () => {},
+      request: async command => {
+        requests++
+        const result = dataState === 'loading' ? { sparklines: [], groups: [], pendingSheetIds: ['data'], diagnostics: [{ kind: 'unsupported' as const, feature: 'sparkline-data-unavailable', message: 'waiting for data sheet' }] } : resolved
+        return { kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: identity, replyBytes: 128, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result } } } as WorkerReply<'read'>
+      },
+    }
+    const cache = new RemoteSparklineCache(host)
+    expect(cache.get('host').state).toBe('loading')
+    await microtask()
+    expect(cache.get('host').state).toBe('waiting')
+    expect(cache.get('host').diagnostics).toEqual([])
+    // Stay in loading beyond the former 20 × 250 ms retry window: it must not
+    // become a terminal unavailable result while this referenced sheet imports.
+    await new Promise(resolve => setTimeout(resolve, 5200))
+    expect(cache.get('host').state).toBe('waiting')
+    dataState = 'complete'
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(requests).toBeGreaterThan(20)
+    expect(cache.get('host')).toMatchObject({ state: 'ready', resolved: expect.any(Map) })
+    cache.close()
+  }, 12_000)
+
+  it('ends a referenced sheet that failed import with one bounded diagnostic', async () => {
+    const identity = initialIdentity('doc', 'host')
+    const host: SparklineHost = {
+      identity: () => identity, loadState: id => ({ completeness: id === 'data' ? 'incomplete' : 'complete' }), hasSparklines: () => true,
+      grant: () => 4096, releaseGrant: () => {}, admitDecoded: () => null, release: () => {}, nextRequestId: () => 'failed-import', changed: () => {},
+      request: async command => ({ kind: 'complete', commandKind: 'read', requestId: command.requestId, owner: identity, diagnostics: [], result: { kind: 'read', result: { op: 'sparklines', result: {
+        sparklines: [], groups: [], pendingSheetIds: ['data'], diagnostics: [
+          { kind: 'unsupported', feature: 'other', message: 'other source warning' },
+          { kind: 'unsupported', feature: 'sparkline-data-unavailable', message: 'source sheet failed' },
+        ],
+      } } } } as WorkerReply<'read'>),
+    }
+    const cache = new RemoteSparklineCache(host)
+    cache.get('host'); await microtask()
+    expect(cache.get('host')).toMatchObject({ state: 'failed', diagnostics: [{ feature: 'sparkline-data-unavailable', message: 'source sheet failed' }] })
+    expect(cache.get('host').diagnostics).toHaveLength(1)
     cache.close()
   })
 
@@ -80,7 +293,7 @@ describe('paged sparkline transfer cache', () => {
       const bytes = fixtureBytes(fixture)
       const resident = await parseXlsx(await OfficePackage.load(bytes), { valuePolicy: 'cached' })
       const { output } = await resolvePaged(bytes, `spark-worker-parity-${fixture}`)
-      expect(output, fixture).toEqual(Object.fromEntries(resident.sheets.map(sheet => [sheet.name, sheet.resolvedSparklines])))
+      expect(output, fixture).toEqual(Object.fromEntries(resident.sheets.map(sheet => [sheet.name, { resolved: sheet.resolvedSparklines, diagnostics: sheet.diagnostics ?? [] }])))
     }
   })
 
@@ -115,8 +328,6 @@ describe('paged sparkline transfer cache', () => {
       expect(held).toBeGreaterThan(0)
       structuredClone(result, { transfer: originals })
       expect(originals.every(buffer => buffer.byteLength === 0)).toBe(true)
-      held = 0 // WorkerSession releases this share after the postMessage sink.
-      expect(held).toBe(0)
       await source.release()
     } finally { await session.release() }
   })

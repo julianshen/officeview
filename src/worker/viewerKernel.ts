@@ -566,7 +566,7 @@ export class ViewerKernel {
         }
         const session = this.current(command.owner)
         if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
-        const out = await session.read(command.owner, command.query, signal, retain)
+        const out = await session.read(command.owner, command.query, signal, retain, command.query.op === 'sparklines' ? replyLimitEnvelope(command) : undefined)
         if ('kind' in out) {
           return out.kind === 'cancelled' ? reply(command, command.owner, { kind: 'cancelled' })
             : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])

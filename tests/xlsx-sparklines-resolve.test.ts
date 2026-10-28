@@ -46,6 +46,13 @@ const at = (sheet: XlsxSheet, host: string): ResolvedSparkline | undefined => { 
 const withGroups = (sheet: XlsxSheet, ...groups: XlsxSparklineGroup[]): XlsxSheet => ({ ...sheet, sparklineGroups: groups })
 
 describe('resolveWorkbookSparklines', () => {
+  it('removes a stale resident resolved map when a later value policy yields no sparklines', () => {
+    const sheet = sheetOf('S', [[1]])
+    sheet.resolvedSparklines = new Map([[0, new Map([[0, {} as ResolvedSparkline]])]])
+    resolve([sheet], true)
+    expect(Object.prototype.hasOwnProperty.call(sheet, 'resolvedSparklines')).toBe(false)
+  })
+
   it('row and column ranges in reading order', () => {
     const sheet = withGroups(sheetOf('S', [[1, 2, 3, 'x'], [4], [5], [6]]), groupOf([spark('F1', 'A1:C1'), spark('F2', 'A1:A4')]))
     resolve([sheet])

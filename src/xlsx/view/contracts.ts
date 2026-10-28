@@ -210,7 +210,7 @@ export interface SourceStore {
    * sizes it to its working set and refuses (a diagnostic) what does not fit. */
   readDrawings?(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings>
   /** S3: resolves this sheet's sparkline groups from worker-owned cell stores. */
-  readSparklines?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<SheetSparklines>
+  readSparklines?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, replyEnvelopeBytes?: number): Promise<SheetSparklines>
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
@@ -235,6 +235,8 @@ export interface SheetSparklines {
   sparklines: TransferredSparkline[]
   groups: XlsxSparklineGroup[]
   diagnostics: SparklineDiagnostic[]
+  /** Referenced sheet pages that were still loading when this snapshot ran. */
+  pendingSheetIds?: string[]
 }
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,
