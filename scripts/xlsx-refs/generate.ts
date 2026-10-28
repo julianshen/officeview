@@ -121,9 +121,9 @@ function drawingXml(c: RefCase): string {
     const fb = timeline ? fallback(text, '1536700', '749300', '3340100', '1346200') : fallback(text, '2286000', '101600', '1828800', '2238375')
     // Controls occupy separate regions of A1:L18 and avoid the saved pivot cells G1:H6.
     const colFrom = timeline ? 7 : 3, colTo = timeline ? 11 : 5
-    const rowFrom = timeline ? 6 : 0, rowTo = timeline ? 11 : scrolledSlicer ? 3 : 13
-    const colOffFrom = timeline ? 787400 : 12700, rowOffFrom = timeline ? 38100 : scrolledSlicer ? 0 : 101600
-    const colOffTo = timeline ? 508000 : 444500, rowOffTo = timeline ? 139700 : scrolledSlicer ? 57150 : 28575
+    const rowFrom = timeline ? 7 : 0, rowTo = timeline ? 15 : scrolledSlicer ? 6 : 13
+    const colOffFrom = timeline ? 787400 : 12700, rowOffFrom = timeline ? 0 : scrolledSlicer ? 0 : 101600
+    const colOffTo = timeline ? 508000 : 444500, rowOffTo = timeline ? 0 : scrolledSlicer ? 0 : 28575
     return `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${colFrom}</xdr:col><xdr:colOff>${colOffFrom}</xdr:colOff><xdr:row>${rowFrom}</xdr:row><xdr:rowOff>${rowOffFrom}</xdr:rowOff></xdr:from><xdr:to><xdr:col>${colTo}</xdr:col><xdr:colOff>${colOffTo}</xdr:colOff><xdr:row>${rowTo}</xdr:row><xdr:rowOff>${rowOffTo}</xdr:rowOff></xdr:to><mc:AlternateContent xmlns:mc="${NS.mc}">${choice}<mc:Fallback>${fb}</mc:Fallback></mc:AlternateContent><xdr:clientData/></xdr:twoCellAnchor>`
   }
   return `${XML}<xdr:wsDr xmlns:xdr="${NS.xdr}" xmlns:a="${NS.a}">${anchor('slicer')}${anchor('timeline')}</xdr:wsDr>`

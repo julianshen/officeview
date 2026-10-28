@@ -197,18 +197,33 @@ describe('pivot reference workbook generator', () => {
   })
 
   it('makes the scrolled slicer viewport shorter than its four item rows', async () => {
-    // Excel-authored recipe R1 sets slicer rowHeight=209550 EMU (22 px at 96 dpi); the sheet default is 15 pt = 190500 EMU per row.
+    // Capture tests/fixtures/xlsx-pivots/refs/slicer-light1.png is 1 px/pt: border-to-first-item=23 pt, item pitch=19 pt.
     const c = REF_CASES.find(item => item.id === 'slicer-scrolled')!
     const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
     const slicer = attributesOf(await zip.file('xl/slicers/slicer1.xml')!.async('text'), 'slicer')
-    const reference = await JSZip.loadAsync(readFileSync('tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx'))
-    const itemHeightEmu = Number(attributesOf(await reference.file('xl/slicers/slicer1.xml')!.async('text'), 'slicer').rowHeight)
     const anchor = drawingAnchors(await zip.file('xl/drawings/drawing1.xml')!.async('text'))[0]
-    const anchorHeightEmu = (anchor.to.row - anchor.from.row) * 190500 + anchor.to.rowOff - anchor.from.rowOff
+    // A1's defaultRowHeight=15 pt; this anchor has zero offsets, so row intervals convert directly to points.
+    const anchorHeightPt = (anchor.to.row - anchor.from.row) * 15 + (anchor.to.rowOff - anchor.from.rowOff) / 12700
     expect(slicer.startItem).toBe('2')
-    expect(Number(slicer.rowHeight)).toBe(itemHeightEmu)
-    expect(anchorHeightEmu).toBeGreaterThanOrEqual(3 * itemHeightEmu)
-    expect(anchorHeightEmu).toBeLessThan(4 * itemHeightEmu)
+    expect(anchor.from.row).toBe(0)
+    expect(anchor.from.rowOff).toBe(0)
+    expect(anchor.to.row).toBe(6)
+    expect(anchor.to.rowOff).toBe(0)
+    expect(anchorHeightPt).toBe(90)
+    expect(anchorHeightPt).toBeGreaterThanOrEqual(23 + 3 * 19)
+    expect(anchorHeightPt).toBeLessThan(23 + 4 * 19)
+  })
+
+  it('gives the timeline 120 pt of vertical space', async () => {
+    const c = REF_CASES.find(item => item.id === 'timeline-light1-months')!
+    const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+    const timeline = drawingAnchors(await zip.file('xl/drawings/drawing1.xml')!.async('text'))[1]
+    // A1's defaultRowHeight is 15 pt; row 7 to row 15 provides eight full row intervals.
+    expect(timeline.from.row).toBe(7)
+    expect(timeline.from.rowOff).toBe(0)
+    expect(timeline.to.row).toBe(15)
+    expect(timeline.to.rowOff).toBe(0)
+    expect((timeline.to.row - timeline.from.row) * 15).toBe(120)
   })
 
   it('shows an unreferenced Product cache item in the no-data slicer case', async () => {
