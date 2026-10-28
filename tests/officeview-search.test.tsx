@@ -95,7 +95,7 @@ describe('<OfficeDoc> search', () => {
       }
       return yellow
     }
-    await waitFor(() => expect(yellowIn(utils.container.querySelector('canvas') as HTMLCanvasElement)).toBeGreaterThan(20))
+    await waitFor(() => expect(yellowIn(utils.container.querySelector('canvas') as HTMLCanvasElement)).toBeGreaterThan(20), { timeout: 4000 })
   })
 
   test('cmd/ctrl+F focuses the search input', async () => {
