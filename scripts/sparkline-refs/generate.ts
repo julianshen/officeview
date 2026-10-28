@@ -180,6 +180,9 @@ export async function buildCaseWorkbook(c: SparklineCase, bordered: boolean): Pr
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }
 
+/** Committed fixtures this generator does not write (xlsxwriter-case.py). */
+const EXTERNAL_FIXTURES = new Set(['xlsxwriter-written.xlsx'])
+
 export const FIXTURE_DIR = fileURLToPath(new URL('../../tests/fixtures/xlsx-sparklines/', import.meta.url))
 
 async function main() {
@@ -190,7 +193,8 @@ async function main() {
     wanted.add(name)
     writeFileSync(resolve(FIXTURE_DIR, name), await buildCaseWorkbook(c, bordered))
   }
-  for (const f of readdirSync(FIXTURE_DIR)) if (f.endsWith('.xlsx') && !wanted.has(f)) rmSync(resolve(FIXTURE_DIR, f))
+  // Stale case workbooks are removed; fixtures written by other tools (EXTERNAL_FIXTURES) are never touched.
+  for (const f of readdirSync(FIXTURE_DIR)) if (f.endsWith('.xlsx') && !wanted.has(f) && !EXTERNAL_FIXTURES.has(f)) rmSync(resolve(FIXTURE_DIR, f))
   console.log(`wrote ${wanted.size} workbooks to ${FIXTURE_DIR}`)
 }
 

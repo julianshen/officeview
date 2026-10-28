@@ -214,8 +214,8 @@ describe('XLSX sparkline references (Stage 2: column and win/loss)', () => {
 })
 
 describe('XLSX sparkline references (Stage 3: date axis and right-to-left)', () => {
-  it('there are 8 Stage 3 cases, each verified with a Cases row and complete references', () => {
-    expect(stage3Cases.map(c => c.id)).toEqual(['date-uneven', 'date-unsorted', 'date-missing-range', 'date-length-mismatch', 'date-text', 'rtl-line', 'rtl-hl-fl', 'rtl-column'])
+  it('there are 9 Stage 3 cases, each verified with a Cases row and complete references', () => {
+    expect(stage3Cases.map(c => c.id)).toEqual(['date-uneven', 'date-unsorted', 'date-missing-range', 'date-length-mismatch', 'date-text', 'date-fractional', 'rtl-line', 'rtl-hl-fl', 'rtl-column'])
     for (const c of stage3Cases) {
       const entry = table.get(c.id)
       expect(entry, c.id).toBeDefined()
@@ -276,6 +276,13 @@ describe('XLSX sparkline references (Stage 3: date axis and right-to-left)', () 
         const sp = inRow(s, 1)
         sp.values = [4, 7, 3, 9, 2, 8, 5, 6]
         sp.axis = { positions: [0, 1, 3, 10, 11, 20, 21, 30].map(o => (o + 0.5) / 31), slot: 1 / 31 }
+      })
+    }, 60_000)
+    it('fractional date serials placed at time-of-day positions must fail the whole-day slot tolerance', async () => {
+      await fails('date-fractional', s => {
+        const dates = [45000, 45000.25, 45000.5, 45001.75, 45002, 45003.5, 45004.1, 45005]
+        const slot = 1 / 6
+        inRow(s, 2).axis = { positions: dates.map(date => (date - 45000 + 0.5) * slot), slot }
       })
     }, 60_000)
     it('right-to-left off: line, colours and bars unmirrored', async () => {

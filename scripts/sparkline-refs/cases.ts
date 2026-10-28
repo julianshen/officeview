@@ -127,6 +127,9 @@ const UNSORTED: number[] = [45010, 45000, 45003, 45030, 45001, 45020, 45011, 450
 /** A dated group: `type`-specific attrs plus dateAxis, dates in `dateRow`, one sparkline per data row. */
 const dated = (attrs: CaseGroup['attrs'], rows: number[], dateRow: number, colours: CaseGroup['colours'] = DISTINCT): CaseGroup =>
   ({ ...group({ ...attrs, dateAxis: 1 }, rowSparklines(rows), colours), dateRange: rowArea(dateRow) })
+const FRACTIONAL: number[] = [45000, 45000.25, 45000.5, 45001.75, 45002, 45003.5, 45004.1, 45005] // timestamps over five days
+const SAME_DAY_REVERSED: number[] = [45000.5, 45000.25, 45000, 45001, 45002, 45003, 45004, 45005] // day-45000 times run backwards in cell order
+const INTRADAY: number[] = [45000.1, 45000.2, 45000.25, 45000.4, 45000.5, 45000.7, 45000.75, 45000.9] // all within one day
 const RTL = { displayEmptyCellsAs: 'gap', rightToLeft: 1 }
 const WL_TINY: CaseValue[] = [1e-16, -1e-16, 1, -1, 1e-16, 0.5, -1e-16, 2]
 
@@ -359,6 +362,15 @@ export const SPARKLINE_CASES: readonly SparklineCase[] = [
     cells: [...rowsBlock([D, D]), ...rowOf(7, UNEVEN.map((v, i) => i === 2 ? 'n/a' : v)), ...rowOf(8, UNEVEN.map((v, i) => i === 4 ? null : v))], groups: [
       dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [1], 7),
       dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [2], 8),
+    ],
+  }),
+  stage3('date-fractional', 'Date axis on fractional serials (times of day): mixed timestamps over five days as a line with markers (row 1) and as columns (row 2); all eight dates within one day (row 3); date-uneven shifted by half a day (row 4); same-day times in reverse cell order (row 5, dates row 10): does the line leave day 45000 from the latest time (value 4) or the last cell (value 3).', {
+    cells: [...rowsBlock([D, D, D, D, D]), ...rowOf(7, FRACTIONAL), ...rowOf(8, INTRADAY), ...rowOf(9, UNEVEN.map(d => d + 0.5)), ...rowOf(10, SAME_DAY_REVERSED)], groups: [
+      dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [1], 7),
+      dated(COL, [2], 7),
+      dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [3], 8),
+      dated(COL, [4], 9),
+      dated({ displayEmptyCellsAs: 'gap', markers: 1 }, [5], 10),
     ],
   }),
   stage3('rtl-line', 'rightToLeft="1" line with markers (row 1); with a date axis on uneven dates (row 2, dates row 7); empty cells under span (row 3).', {

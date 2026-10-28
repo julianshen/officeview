@@ -539,6 +539,18 @@ describe('resolveWorkbookSparklines', () => {
       const text = await open('date-text')
       expect(entry(text, 'J1')!.values).toEqual([4, 7, 9, 2, 8, 5, 6])
       expect(entry(text, 'J2')!).toMatchObject({ values: [4, 7, 3, 9, 8, 5, 6], min: 3 })
+      const fractional = await open('date-fractional')
+      const fractionalLine = entry(fractional, 'J1')!
+      expect(fractionalLine.values.slice(0, 3)).toEqual([4, 7, 3])
+      const fractionalSlot = 1 / 6
+      expect(fractionalLine.axis).toEqual({ positions: [0.5, 0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5].map(day => day * fractionalSlot), slot: fractionalSlot })
+      const intraday = entry(fractional, 'J3')!
+      expect(intraday.values).toEqual([4, 7, 3, 9, 2, 8, 5, 6])
+      expect(intraday.axis).toEqual({ positions: Array(8).fill(0.5), slot: 1 })
+      expect(entry(fractional, 'J4')!.axis).toEqual(entry(uneven, 'J1')!.axis)
+      // Row 5: day-45000 times run backwards in cell order (12:00, 06:00, 00:00 → 4, 7, 3). Excel orders them by time,
+      // not by cell (the line leaves the day from 4), so the plotted order is 3, 7, 4.
+      expect(entry(fractional, 'J5')!.values.slice(0, 4)).toEqual([3, 7, 4, 9])
       const missing = await open('date-missing-range')
       expect(missing.sheets[0].resolvedSparklines).toBeUndefined()
       expect(missing.sheets[0].diagnostics ?? []).toEqual([])
