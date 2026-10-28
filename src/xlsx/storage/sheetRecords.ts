@@ -407,18 +407,20 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   const sparkDiagnostics: SparklineDiagnostic[] = []
   const sparkAttrNames = new Set(['type', 'lineWeight', 'displayEmptyCellsAs', 'markers', 'high', 'low', 'first', 'last', 'negative', 'displayXAxis', 'displayHidden', 'dateAxis', 'rightToLeft', 'minAxisType', 'maxAxisType', 'manualMin', 'manualMax'])
   const colorAttrNames = new Set(['rgb', 'theme', 'indexed', 'tint', 'auto'])
+  /** The eight colour elements parseSparklineGroups reads; any other `color*` name is never captured (PR #49 review). */
+  const sparkColorNames = new Set(['colorSeries', 'colorNegative', 'colorAxis', 'colorMarkers', 'colorFirst', 'colorLast', 'colorHigh', 'colorLow'])
   const sparkDiagnostic = (feature: string, message: string) => {
     if (!sparkDiagnostics.some(item => item.feature === feature && item.message === message)) sparkDiagnostics.push({ kind: 'unsupported', feature, message })
   }
   const childAllowed = (parent: SparkFrame, local: string, uri: string | undefined): boolean => {
     if (parent.local === 'sparklineGroups') return local === 'sparklineGroup' && uri === X14_SPARKLINE_NS
-    if (parent.local === 'sparklineGroup') return (uri === X14_SPARKLINE_NS && (local === 'sparklines' || local.startsWith('color'))) || (uri === XM_SPARKLINE_NS && local === 'f')
+    if (parent.local === 'sparklineGroup') return (uri === X14_SPARKLINE_NS && (local === 'sparklines' || sparkColorNames.has(local))) || (uri === XM_SPARKLINE_NS && local === 'f')
     if (parent.local === 'sparklines') return local === 'sparkline' && uri === X14_SPARKLINE_NS
     if (parent.local === 'sparkline') return uri === XM_SPARKLINE_NS && (local === 'f' || local === 'sqref')
     return false
   }
   const singletonSparkChild = (parent: SparkFrame, local: string, uri: string | undefined): boolean =>
-    (parent.local === 'sparklineGroup' && (local === 'sparklines' || local.startsWith('color') || (uri === XM_SPARKLINE_NS && local === 'f')))
+    (parent.local === 'sparklineGroup' && (local === 'sparklines' || sparkColorNames.has(local) || (uri === XM_SPARKLINE_NS && local === 'f')))
     || (parent.local === 'sparkline' && uri === XM_SPARKLINE_NS && (local === 'f' || local === 'sqref'))
   const attachSparkChild = (parent: SparkFrame, child: SparkFrame) => {
     const list = parent.children.get(child.local) ?? []
@@ -587,7 +589,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
           }
           if (!skip && !(parent.local === 'sparklineGroups' && local === 'sparklineGroup' && !group)) {
             const node: XmlNode = { '@attrs': {} }
-            const allowedAttrs = local === 'sparklineGroup' ? sparkAttrNames : local.startsWith('color') ? colorAttrNames : undefined
+            const allowedAttrs = local === 'sparklineGroup' ? sparkAttrNames : sparkColorNames.has(local) ? colorAttrNames : undefined
             if (allowedAttrs) {
               const attrs = node['@attrs'] as Record<string, string>
               for (let i = 0; i < count; i++) {

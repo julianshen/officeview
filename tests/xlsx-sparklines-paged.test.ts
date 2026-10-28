@@ -69,6 +69,35 @@ async function resolvePaged(bytes: Uint8Array, docId: string) {
 }
 
 describe('paged sparkline transfer cache', () => {
+  it('never captures colour-like elements other than the eight sparkline colours', async () => {
+    const zip = await JSZip.loadAsync(fixtureBytes('line-basic'))
+    const path = 'xl/worksheets/sheet1.xml'
+    const unknown = Array.from({ length: 2_000 }, (_, i) => `<x14:colorIgnored${i} rgb="FFFF0000"/>`).join('')
+    zip.file(path, (await zip.file(path)!.async('string')).replace('<x14:sparklines>', `${unknown}<x14:sparklines>`))
+    const bytes = await zip.generateAsync({ type: 'uint8array' })
+    const resident = await parseXlsx(await OfficePackage.load(bytes))
+    const captured: XmlNode[] = []
+    const parseGroups = sparklineGroupsParser.parseSparklineGroups
+    const spy = vi.spyOn(sparklineGroupsParser, 'parseSparklineGroups').mockImplementation((node, color, diagnostics) => {
+      captured.push(node)
+      return parseGroups(node, color, diagnostics)
+    })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(bytes).buffer as ArrayBuffer]) }, { docId: 'spark-unknown-colours', profile: 'D' })
+    try {
+      await session.done
+      const source = createPagedWorkbookSource(session), sheet = source.sheets[0]
+      const store = source.store(sheet.sheetId) as unknown as { sheet: { metadata: { sparklineGroups: XlsxSparklineGroup[] } } }
+      expect(store.sheet.metadata.sparklineGroups).toEqual(resident.sheets[0].sparklineGroups)
+      const root = captured.at(-1)!
+      const group = (Array.isArray(root.sparklineGroup) ? root.sparklineGroup[0] : root.sparklineGroup) as XmlNode
+      expect(Object.keys(group).filter(key => key.startsWith('colorIgnored'))).toEqual([])
+      await source.release()
+    } finally {
+      spy.mockRestore()
+      await session.release()
+    }
+  })
+
   it('bounds duplicate sparkline singleton children and matches the resident first-match parse', async () => {
     const zip = await JSZip.loadAsync(fixtureBytes('line-basic'))
     const path = 'xl/worksheets/sheet1.xml'
