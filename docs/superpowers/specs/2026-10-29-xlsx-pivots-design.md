@@ -8,6 +8,7 @@
   - AGY-3's first point is rejected: an unknown function keeps the cell's saved value (`docs/formula-compatibility.md`), so `GETPIVOTDATA` does not show `#NAME?` on open.
 - Round 2: agy APPROVE. Codex resolved CODEX-1 to -8 and raised R2-1 and R2-2, addressed in draft 4.
 - Round 3: codex resolved R2-2; R2-1 was partial (the per-tile guarantee), addressed in draft 5.
+- Round 4: codex APPROVE. Both reviewers approve draft 5; awaiting owner approval.
 **Date:** 2026-10-29 · **Baseline:** `main` @ `ba8abf83` (v0.10.0).
 **Decision marks:**
 - **[owner]** is a decision the owner made.
