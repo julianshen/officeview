@@ -28,6 +28,7 @@ import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
 import { cellFontFamily as cellFaceFamily, cellFontString } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
+import { paintPivotButtonsIn } from './pivotLoader'
 import { isTableStyleEngineLoaded, regionStylesFor } from './tableStyleLoader'
 
 export interface GridMetrics {
@@ -770,7 +771,7 @@ export function renderSheet(
   const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
   const measured = textMeasurer(ctx)
   const regionStyles = regionStylesFor(sheet)
-  if (!isTableStyleEngineLoaded() && sheet.tables?.some(table => Boolean(table.styleInfo?.name))) {
+  if (!isTableStyleEngineLoaded() && (sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length)) {
     const diagnostics = (sheet.diagnostics ??= [])
     if (!diagnostics.some(d => d.feature === 'table-style-engine-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'table-style-engine-unavailable', message: 'Table styles could not be loaded; table cells paint with their stored formatting only' })
   }
@@ -877,15 +878,17 @@ export function renderSheet(
       laidOut.push(layout)
     }
   }
+  const cellBox = (row: number, col: number) => {
+    if (row < 0 || row >= rowHeightsPx.length || col < 0 || col >= colWidthsPx.length) return undefined
+    const merge = merges.anchorAt(row, col)
+    const x = colX[col], y = rowY[row]
+    const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[col]
+    const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[row]
+    return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
+  }
+  const grid = { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }
   if (sheet.resolvedSparklines?.size) {
-    const painted = paintSparklinesIn(ctx, sheet, (row, col) => {
-      if (row < 0 || row >= rowHeightsPx.length || col < 0 || col >= colWidthsPx.length) return undefined
-      const merge = merges.anchorAt(row, col)
-      const x = colX[col], y = rowY[row]
-      const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[col]
-      const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[row]
-      return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
-    }, { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }, { zoom: sparklineScale, dpr: 1 })
+    const painted = paintSparklinesIn(ctx, sheet, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
     if (!painted) {
       const diagnostics = (sheet.diagnostics ??= [])
       if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
@@ -929,6 +932,8 @@ export function renderSheet(
   ctx.stroke()
   // Explicit formatting wins over both gridlines and neighboring cell fills.
   for (const paint of paintBorders) paint()
+  // Page mode and export draw the pivot buttons Excel prints (§7.10).
+  if (sheet.pivotRegions?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
   paintSheetDrawings(sheet, sheet.drawings ?? [], ctx, prepared)
   } finally { ctx.restore() }
 }
@@ -1131,7 +1136,7 @@ export function layoutCellBody(
       ctx.fillStyle = color
       ctx.font = font
       // One indent level is one maximum digit width (measured, Excel 16.114).
-      const indentPx = (style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? sheet.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
+      const indentPx = style?.indentPx ?? (style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? sheet.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
       out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow, indentPx), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.

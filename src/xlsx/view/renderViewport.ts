@@ -9,11 +9,12 @@ import type { XlsxCell, XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
-import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission } from './textLayout'
+import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission, type Rect } from './textLayout'
 import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
+import { paintPivotButtonsIn } from '../pivotLoader'
 import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
 import type { ResolvedSparkline } from '../sparklines/resolve'
 import { belowDetail } from './viewport'
@@ -231,7 +232,7 @@ export function renderSheetViewport(
           if (seen.has(key)) continue
           const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
           if (merge && (merge.minRow !== row || merge.minCol !== col)) continue
-          const style = regionStyles.styleAt(row, col, undefined)
+          const style = regionStyles.styleAt(row, col, undefined, 'screen')
           if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) continue
           const x = geometry.metrics.cols.start(col)
           let y = geometry.metrics.rows.start(slot)
@@ -252,12 +253,12 @@ export function renderSheetViewport(
     }
     const cellPlacements: CellPlacement[] = plan.kind === 'detail'
       ? [...plan.cells.map(item => {
-        const style = regionStyles?.styleAt(item.source.row, item.source.col, item.cell.style) ?? item.cell.style
+        const style = regionStyles?.styleAt(item.source.row, item.source.col, item.cell.style, 'screen') ?? item.cell.style
         return style === item.cell.style ? item : { ...item, cell: { ...item.cell, ...(style ? { style } : { style: undefined }) } }
       }), ...regionCells]
       : []
     const activePlacement = plan.active ? (() => {
-      const style = regionStyles?.styleAt(plan.active!.source.row, plan.active!.source.col, plan.active!.cell.style) ?? plan.active!.cell.style
+      const style = regionStyles?.styleAt(plan.active!.source.row, plan.active!.source.col, plan.active!.cell.style, 'screen') ?? plan.active!.cell.style
       return style === plan.active!.cell.style ? plan.active! : { ...plan.active!, cell: { ...plan.active!.cell, ...(style ? { style } : { style: undefined }) } }
     })() : undefined
     let records: CellLayout[] = [], active: CellLayout | undefined
@@ -305,7 +306,11 @@ export function renderSheetViewport(
     const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
     for (const record of records) replay(record, 'fill')
     if (extraActive) replay(extraActive, 'fill')
-    if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready') {
+    // The source window this tile shows and each source cell's logical box (merges
+    // spanned), shared by the sparkline and pivot-button passes.
+    let sourceWindow: { r0: number; c0: number; r1: number; c1: number } | undefined
+    let sourceRect: ((row: number, col: number) => Rect | undefined) | undefined
+    if (plan.kind === 'detail' && geometry?.kind === 'ready' && (sheet.resolvedSparklines?.size || sheet.pivotRegions?.length)) {
       const metrics = geometry.metrics
       const endX = Math.max(vx, vx + width - Number.EPSILON), endY = Math.max(vy, vy + height - Number.EPSILON)
       // Tile boxes may extend past the finite worksheet domain. Clamp only the
@@ -315,39 +320,40 @@ export function renderSheetViewport(
       const cornerB = metrics.logicalPointToSource(insideEnd(endX, metrics.cols.totalCss()), insideEnd(endY, metrics.rows.totalCss()))
       const colA = metrics.cols.locate(vx), colB = metrics.cols.locate(insideEnd(endX, metrics.cols.totalCss()))
       if (cornerA && cornerB && colA !== null && colB !== null) {
-        const r0 = Math.min(cornerA.row, cornerB.row), r1 = Math.max(cornerA.row, cornerB.row)
-        const c0 = Math.min(colA, colB), c1 = Math.max(colA, colB)
-        ctx.save()
-        ctx.translate(-vx, -vy)
-        let painted: boolean
-        const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
-        try { painted = paintSparklinesIn(ctx, sheet, (row, col) => {
-            const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
-            if (merge) {
-              const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
-              const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
-              const row0 = Math.min(firstSlot, lastSlot), row1 = Math.max(firstSlot, lastSlot)
-              const x = geometry.metrics.cols.start(merge.minCol), y = geometry.metrics.rows.start(row0)
-              const rect = {
-                x, y,
-                width: geometry.metrics.cols.start(merge.maxCol + 1) - x,
-                height: geometry.metrics.rows.start(row1 + 1) - y,
-              }
-              if (!(rect.width > 0 && rect.height > 0)
-                || belowDetail(rect.width, viewport.zoom * viewport.deviceScale)
-                || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
-              return rect
+        sourceWindow = { r0: Math.min(cornerA.row, cornerB.row), c0: Math.min(colA, colB), r1: Math.max(cornerA.row, cornerB.row), c1: Math.max(colA, colB) }
+        sourceRect = (row, col) => {
+          const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+          if (merge) {
+            const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
+            const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
+            const row0 = Math.min(firstSlot, lastSlot), row1 = Math.max(firstSlot, lastSlot)
+            const x = geometry.metrics.cols.start(merge.minCol), y = geometry.metrics.rows.start(row0)
+            const rect = {
+              x, y,
+              width: geometry.metrics.cols.start(merge.maxCol + 1) - x,
+              height: geometry.metrics.rows.start(row1 + 1) - y,
             }
-            const first = geometry.metrics.sourceCellToLogical({ row, col })
-            if (!first) return undefined
-            if (belowDetail(first.width, viewport.zoom * viewport.deviceScale) || belowDetail(first.height, viewport.zoom * viewport.deviceScale)) return undefined
-            return first
-          }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates)
-        } finally { ctx.restore() }
-        if (!painted) {
-          const diagnostics = (sheet.diagnostics ??= [])
-          if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
+            if (!(rect.width > 0 && rect.height > 0)
+              || belowDetail(rect.width, viewport.zoom * viewport.deviceScale)
+              || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
+            return rect
+          }
+          const first = geometry.metrics.sourceCellToLogical({ row, col })
+          if (!first) return undefined
+          if (belowDetail(first.width, viewport.zoom * viewport.deviceScale) || belowDetail(first.height, viewport.zoom * viewport.deviceScale)) return undefined
+          return first
         }
+      }
+    }
+    if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready' && sourceWindow && sourceRect) {
+      ctx.save()
+      ctx.translate(-vx, -vy)
+      let painted: boolean
+      const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
+      try { painted = paintSparklinesIn(ctx, sheet, sourceRect, sourceWindow, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates) } finally { ctx.restore() }
+      if (!painted) {
+        const diagnostics = (sheet.diagnostics ??= [])
+        if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
       }
     }
     for (const record of records) replay(record, 'content')
@@ -388,6 +394,12 @@ export function renderSheetViewport(
       }
       ctx.stroke()
       for (const paint of paintBorders) paint()
+      // The viewer draws the pivot buttons Excel shows on screen (§7.10).
+      if (sheet.pivotRegions?.length && sourceWindow && sourceRect) {
+        ctx.save()
+        ctx.translate(-vx, -vy)
+        try { paintPivotButtonsIn(ctx, sheet, sourceRect, sourceWindow, 'screen') } finally { ctx.restore() }
+      }
       if (plan.drawings.length) {
         // Rebase each top-level placement by the Float64 pane origin (EMU) instead
         // of translating the canvas by worksheet coordinates: near the last row

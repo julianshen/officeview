@@ -2,6 +2,7 @@
 import type { XlsxSheet } from './types'
 import type { RegionStyleLayer } from './tableStyles/regionLayer'
 import { sheetHasRegionStyles } from './pivots/stub'
+import { ensurePivotEngine, pivotEngine } from './pivotLoader'
 
 type RegionFactory = (sheet: XlsxSheet) => RegionStyleLayer | undefined
 let factory: RegionFactory | undefined
@@ -15,6 +16,8 @@ export function preloadTableStyles(): Promise<void> { return load() }
 export async function ensureTableStyleEngine(sheets: readonly XlsxSheet[]): Promise<void> {
   if (!sheets.some(sheetHasRegionStyles)) return
   try { await preloadTableStyles() } catch { return }
+  // Pivot regions join the layer from the pivots chunk; a failed load leaves the tables.
+  await ensurePivotEngine(sheets)
   for (const sheet of sheets) {
     if (!sheetHasRegionStyles(sheet)) continue
     if (sheet.regionStylesResolved) continue
@@ -31,6 +34,7 @@ export function regionStylesFor(sheet: XlsxSheet): RegionStyleLayer | undefined 
   if (sheet.regionStylesResolved) return sheet.regionStyles
   if (!factory) return undefined
   sheet.regionStyles = factory(sheet)
-  sheet.regionStylesResolved = true
+  // Without the pivots chunk a pivot sheet's layer is tables-only: not final.
+  sheet.regionStylesResolved = !sheet.pivotTables?.length || pivotEngine() !== undefined
   return sheet.regionStyles
 }

@@ -2,23 +2,38 @@
 import { parseStylesExtras } from './parseStylesExtras'
 import { builtinTableStyle } from './builtins'
 import { orderRoles, resolveRoleStyle } from './resolve'
-import type { RoleRef, SheetRect, StylesExtras, TableStyleDef, TableStyleDiagnostic, TableStyleElementType } from './model'
+import type { DxfStyle, RoleRef, SheetRect, StylesExtras, TableStyleDef, TableStyleDiagnostic, TableStyleElementType } from './model'
 import type { TableMetadata } from '../formula/types'
 import type { ThemeContext } from '../../drawing/style'
 import type { XlsxCellStyle, XlsxSheet } from '../types'
 import { parseThemeContext } from '../../drawing/style'
 import { registerTableStyleEngine } from '../tableStyleLoader'
+import { pivotEngine } from '../pivotLoader'
 import { MAX_COLS, MAX_ROWS } from '../view/coordinates'
 import {
   MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_LAYER_BASE_BYTES,
   REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES,
 } from '../view/contracts'
 
+/** Page mode and export draw what Excel prints; the interactive viewer what it shows on screen (§7.10). */
+export type RegionStyleMode = 'screen' | 'print'
 export interface RegionStyleLayer {
   readonly rects: readonly SheetRect[]
   /** Conservative retained-size estimate; independent of the table's cell count. */
   readonly retainedBytes: number
-  styleAt(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined
+  /** `mode` (default print) matters only beside pivot ± buttons, which move compact labels. */
+  styleAt(row: number, col: number, own: XlsxCellStyle | undefined, mode?: RegionStyleMode): XlsxCellStyle | undefined
+}
+/** What one cell of a styled region layers: roles in ascending precedence, then
+ * dxf overrides (a pivot's `formats`, named by `overrideKey` for the memo), and
+ * a layout indent that replaces the cell's own. */
+export interface RegionCell { roles: readonly RoleRef[]; overrides?: readonly DxfStyle[]; overrideKey?: string; indentPx?: number }
+/** A styled table or pivot: its bounds, its style and its per-cell layering. */
+export interface StyleRegion {
+  readonly rects: readonly SheetRect[]
+  readonly def: TableStyleDef
+  readonly retainedBytes: number
+  cell(row: number, col: number, mode: RegionStyleMode): RegionCell
 }
 export type RegionStyleTable = Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>
 
@@ -30,7 +45,8 @@ function band(element: TableStyleElementType, rect: SheetRect, row: number, col:
   return { element, edges: { top: row === rect.minRow, bottom: row === rect.maxRow, left: col === rect.minCol, right: col === rect.maxCol } }
 }
 
-function stripeBand(start: number, index: number, first: number, second: number): [number, number] {
+/** The `[first, last]` rows (or columns) of the stripe holding `index`, for stripes of `first` and `second` lines from `start`. */
+export function stripeBand(start: number, index: number, first: number, second: number): [number, number] {
   const period = first + second
   const periods = Math.floor(index / period)
   const remainder = index % period
@@ -83,8 +99,9 @@ export function tableCellRoles(table: RegionStyleTable, row: number, col: number
   return out
 }
 
-export function buildTableRegions(tables: readonly RegionStyleTable[], extras: StylesExtras, theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
-  const regions = tables.flatMap(table => {
+/** Table regions for `tables` (unknown and unplaceable styles reported and skipped). */
+export function tableStyleRegions(tables: readonly RegionStyleTable[], extras: StylesExtras, report?: (diagnostic: TableStyleDiagnostic) => void): StyleRegion[] {
+  return tables.flatMap(table => {
     const name = table.styleInfo?.name
     if (!name || table.extent.rows < 1 || table.extent.cols < 1) return []
     // A named custom style intentionally replaces a built-in with the same name.
@@ -96,26 +113,38 @@ export function buildTableRegions(tables: readonly RegionStyleTable[], extras: S
     }
     const rect: SheetRect = { minRow: table.extent.firstRow, minCol: table.extent.firstCol, maxRow: table.extent.firstRow + table.extent.rows - 1, maxCol: table.extent.firstCol + table.extent.cols - 1 }
     if (![rect.minRow, rect.minCol, rect.maxRow, rect.maxCol].every(Number.isSafeInteger) || rect.minRow < 0 || rect.minCol < 0 || rect.maxRow >= MAX_ROWS || rect.maxCol >= MAX_COLS) return []
-    return [{ table, def, rect }]
+    return [{ rects: [rect], def, retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES, cell: (row: number, col: number) => ({ roles: orderRoles(tableCellRoles(table, row, col, def), 'table') }) }]
   })
+}
+
+export function buildTableRegions(tables: readonly RegionStyleTable[], extras: StylesExtras, theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
+  return composeRegionLayer(tableStyleRegions(tables, extras, report), theme, report)
+}
+
+const inRect = (rect: SheetRect, row: number, col: number) => row >= rect.minRow && row <= rect.maxRow && col >= rect.minCol && col <= rect.maxCol
+
+/** One paint layer over styled tables and pivots (they never overlap in Excel; the first match wins). */
+export function composeRegionLayer(regions: readonly StyleRegion[], theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
   if (!regions.length) return undefined
-  const rects = regions.map(region => region.rect)
-  const memo = new Map<typeof regions[number], Map<string, Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>>>()
+  const rects = regions.flatMap(region => region.rects)
+  const memo = new Map<StyleRegion, Map<string, Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>>>()
   let memoEntries = 0
   return {
     rects,
-    get retainedBytes() { return REGION_STYLE_LAYER_BASE_BYTES + regions.length * REGION_STYLE_REGION_ESTIMATE_BYTES + memoEntries * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES },
-    styleAt(row, col, own) {
-      const region = regions.find(candidate => row >= candidate.rect.minRow && row <= candidate.rect.maxRow && col >= candidate.rect.minCol && col <= candidate.rect.maxCol)
+    get retainedBytes() { return REGION_STYLE_LAYER_BASE_BYTES + regions.reduce((sum, region) => sum + region.retainedBytes, 0) + memoEntries * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES },
+    styleAt(row, col, own, mode = 'print') {
+      const region = regions.find(candidate => candidate.rects.some(rect => inRect(rect, row, col)))
       if (!region) return own
-      const roles = orderRoles(tableCellRoles(region.table, row, col, region.def), 'table')
-      const signature = roles.map(role => typeof role === 'string' ? role : `${role.element}:${+role.edges.top}${+role.edges.bottom}${+role.edges.left}${+role.edges.right}`).join('|')
+      const { roles, overrides, overrideKey, indentPx } = region.cell(row, col, mode)
+      if (!roles.length && !overrides?.length && indentPx === undefined) return own
+      const signature = `${roles.map(role => typeof role === 'string' ? role : `${role.element}:${+role.edges.top}${+role.edges.bottom}${+role.edges.left}${+role.edges.right}`).join('|')}#${overrideKey ?? ''}@${indentPx ?? ''}`
       let bySignature = memo.get(region)
       if (!bySignature) memo.set(region, bySignature = new Map())
       const byOwn = bySignature.get(signature)
       if (byOwn?.has(own)) return byOwn.get(own)
       const scratch: TableStyleDiagnostic[] = []
-      const style = roles.length ? resolveRoleStyle(region.def, roles, own, theme, scratch) : own
+      let style = roles.length || overrides?.length ? resolveRoleStyle(region.def, roles, own, theme, scratch, overrides) : own
+      if (indentPx !== undefined) style = { ...(style ?? { numFmtId: 0 }), indentPx, ...(style?.horizontal === undefined || style.horizontal === 'general' ? { horizontal: 'left' } : {}) }
       for (const diagnostic of scratch) report?.(diagnostic)
       if (memoEntries >= MAX_REGION_STYLE_MEMO_ENTRIES) {
         memo.clear()
@@ -133,14 +162,17 @@ export function buildTableRegions(tables: readonly RegionStyleTable[], extras: S
 }
 
 export function regionStylesFromSource(sheet: XlsxSheet): RegionStyleLayer | undefined {
-  if (!sheet.tables?.length) return undefined
+  if (!sheet.tables?.length && !sheet.pivotTables?.length) return undefined
   const source = sheet.tableStyleSource
   const extras: StylesExtras = source ? parseStylesExtras(source.root, source.colors) : { dxfs: [], tableStyles: new Map(), slicerStyles: new Map() }
   const report = (diagnostic: TableStyleDiagnostic) => {
     const list = (sheet.diagnostics ??= []) as TableStyleDiagnostic[]
     if (!list.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) list.push(diagnostic)
   }
-  return buildTableRegions(sheet.tables, extras, sheet.drawingTheme ?? parseThemeContext(), report)
+  const theme = sheet.drawingTheme ?? parseThemeContext()
+  // Pivot regions come from the lazy pivots chunk once it is loaded (tableStyleLoader waits for it).
+  const pivots = sheet.pivotTables?.length ? pivotEngine()?.regions(sheet, extras, theme, report) ?? [] : []
+  return composeRegionLayer([...tableStyleRegions(sheet.tables ?? [], extras, report), ...pivots], theme, report)
 }
 
 registerTableStyleEngine(regionStylesFromSource)

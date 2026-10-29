@@ -31,6 +31,7 @@ import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SP
 import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
 import { resolveWorkbookSparklines } from './sparklines/resolve'
 import { controlIds, parsePivotRegion, PIVOT_PART_MAX_BYTES, type ControlPartRef } from './pivots/stub'
+import { attachPivotTables } from './pivotLoader'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -484,6 +485,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   // Completeness first: any failed discovery keeps the inventory
   // unavailable even when zero declarations were observed. Only a fully
   // inspected workbook with no tableParts declarations is complete [].
+  // Resident pivot definitions load here, from the lazy pivots chunk (Ruling AD).
+  await attachPivotTables(pkg, sheets)
   const tables: TableMetadata[] | undefined = !tableInventoryComplete
     ? undefined
     : declaredTableParts === 0
@@ -524,7 +527,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
   }
   for (const sheet of sheets) {
-    if (sheet.tables?.some(table => Boolean(table.styleInfo?.name)) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
+    if ((sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
   }
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)

@@ -1,0 +1,168 @@
+/**
+ * Pivot buttons (spec §6.6, §7.10): where the filter arrows, ± buttons and
+ * page-field dropdowns go, and their painters. Lazy chunk `pivots`. Page mode
+ * and export draw what Excel prints (no dropdowns, ± only with `printDrill`);
+ * the interactive viewer draws what Excel shows on screen (`showHeaders`,
+ * `showDrill`, each field's `showDropDowns`). Stage 3 reuses the placements as
+ * hit targets.
+ *
+ * Geometry, Excel 16.114 at 1 px per pt (docs/validation/xlsx-pivots.md
+ * "Compact indent and buttons"), scaled here by CSS px per pt:
+ * - ± : a 7 × 7 box at x 6–12, vertically centred; border #AAB5C9 top/left and
+ *   #8A9EBF bottom/right, fill #EAECEC→#D9D9D9 (flat mid #E2E3E3 [approx]),
+ *   a 3-px #3D4E7C plus/minus (refs/pivot-collapsed-item.png);
+ * - dropdown: 15 × 14, flush with the cell's right and bottom edges, #FDFDFD
+ *   with a 1-px #738A93 border; arrow rows 7/5/3/1 from 5 below the box top,
+ *   ≈ #828282 (refs/measure-field-buttons.png);
+ * - compact labels beside ± buttons start at 15 + 10 × level from the cell's
+ *   left edge (refs/pivot-values-on-rows.png); subtotal and grand-total labels
+ *   keep the cell's own placement.
+ * Placement rules read from the fixtures' `pivotButton="1"` xfs and the
+ * references: compact form has one Row Labels and one Column Labels dropdown;
+ * outline and tabular one per field header (the Values field included); a page
+ * field's dropdown is on its value cell (its xf marks the label cell).
+ */
+import type { XlsxSheet } from '../types'
+import type { Rect } from '../view/textLayout'
+import type { RegionStyleMode } from '../tableStyles/regionLayer'
+import { PIVOT_VALUES_FIELD, type PivotTableDefinition } from './model'
+import { savedPivotLayout, sharesColumn, type SavedPivotLayout } from './savedLayout'
+
+export interface ButtonPlacement {
+  row: number
+  col: number
+  /** `expand` is the + of a collapsed item, `collapse` the − of an expanded one. */
+  kind: 'filter' | 'expand' | 'collapse' | 'page'
+  /** Pivot-field index (`-2` for the Values field). */
+  field: number
+  /** The item's pivot-field item index (±), or the page field's selected item. */
+  item?: number
+}
+
+export const PX_PER_PT = 96 / 72
+/** render.ts PADDING_L: the text inset every cell adds after its indent. */
+const CELL_PADDING_PX = 3
+
+/** Items at `level` of an axis have children worth a ± when a real field lies deeper. */
+const expandable = (fields: readonly number[], level: number) => fields[level] !== PIVOT_VALUES_FIELD && fields.slice(level + 1).some(field => field !== PIVOT_VALUES_FIELD)
+const drillShown = (def: PivotTableDefinition, mode: RegionStyleMode) => mode === 'screen' ? def.showDrill : def.printDrill
+const dropDowns = (def: PivotTableDefinition, field: number) => field === PIVOT_VALUES_FIELD || def.fields[field]?.showDropDowns !== false
+
+export function pivotButtons(def: PivotTableDefinition, mode: RegionStyleMode, layout = savedPivotLayout(def)): ButtonPlacement[] {
+  if (!layout) return []
+  const out: ButtonPlacement[] = []
+  const { rect, dataRow0, dataCol0, itemRow0, labelCol } = layout
+  if (mode === 'screen') {
+    if (def.showHeaders) {
+      // Row labels: one dropdown per label column, for the first field shown there.
+      const header = dataRow0 - 1
+      if (header >= rect.minRow) labelCol.forEach((col, level) => {
+        const field = def.rowFields[level]!
+        if (labelCol.indexOf(col) === level && dropDowns(def, field)) out.push({ row: header, col, kind: 'filter', field })
+      })
+      // Column labels: one "Column Labels" dropdown in compact form, else one per field.
+      const fields = def.colFields
+      if (fields.length && fields.slice(0, -1).every(field => sharesColumn(def, field))) {
+        const field = fields.find(candidate => candidate !== PIVOT_VALUES_FIELD)
+        if (field !== undefined && dropDowns(def, field)) out.push({ row: rect.minRow, col: dataCol0, kind: 'filter', field })
+      } else fields.forEach((field, k) => { if (dropDowns(def, field) && dataCol0 + k <= rect.maxCol) out.push({ row: rect.minRow, col: dataCol0 + k, kind: 'filter', field }) })
+    }
+    for (const page of layout.pages) {
+      if (dropDowns(def, page.field.fld)) out.push({ row: page.row, col: page.col + 1, kind: 'page', field: page.field.fld, ...(page.field.item !== undefined ? { item: page.field.item } : {}) })
+    }
+  }
+  if (drillShown(def, mode)) {
+    const drill = (fields: readonly number[], row: number, col: number, level: number, item: number | undefined) => {
+      if (!expandable(fields, level) || item === undefined || item < 0) return
+      const field = fields[level]!
+      out.push({ row, col, kind: def.fields[field]?.items?.[item]?.showDetails === false ? 'expand' : 'collapse', field, item })
+    }
+    layout.rows.forEach((line, n) => {
+      if (line.type !== 'data') return
+      for (let level = line.first; level < line.items.length; level++) drill(def.rowFields, dataRow0 + n, labelCol[level] ?? rect.minCol, level, line.items[level])
+    })
+    layout.cols.forEach((line, n) => {
+      if (line.type !== 'data') return
+      for (let level = line.first; level < line.items.length; level++) if (itemRow0 + level < dataRow0) drill(def.colFields, itemRow0 + level, dataCol0 + n, level, line.items[level])
+    })
+  }
+  return out.sort((a, b) => a.row - b.row || a.col - b.col)
+}
+
+/** The compact-label indent (CSS px, ahead of the cell padding) for each row-label
+ * cell of a data line in a column that carries ± buttons in `mode`; undefined elsewhere. */
+export function compactLabelIndents(layout: SavedPivotLayout): (row: number, col: number, mode: RegionStyleMode) => number | undefined {
+  const { def, labelCol, dataRow0, dataCol0 } = layout
+  const firstLevel = new Map<number, number>(), gutter = new Set<number>()
+  labelCol.forEach((col, level) => {
+    if (!firstLevel.has(col)) firstLevel.set(col, level)
+    if (expandable(def.rowFields, level)) gutter.add(col)
+  })
+  return (row, col, mode) => {
+    if (row < dataRow0 || col >= dataCol0 || !gutter.has(col) || !drillShown(def, mode)) return undefined
+    const line = layout.rows[row - dataRow0]
+    if (line?.type !== 'data') return undefined
+    let level = -1
+    for (let k = line.first; k < line.items.length; k++) if (labelCol[k] === col) level = k
+    if (level < 0) return undefined
+    return (15 + 10 * (level - firstLevel.get(col)!)) * PX_PER_PT - CELL_PADDING_PX
+  }
+}
+
+function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean): void {
+  const size = Math.round(7 * PX_PER_PT)
+  const x = Math.round(rect.x + 6 * PX_PER_PT), y = Math.round(rect.y + (rect.height - size) / 2)
+  ctx.fillStyle = '#E2E3E3'
+  ctx.fillRect(x + 1, y + 1, size - 2, size - 2)
+  // Corners stay open, as Excel's rounded box leaves them.
+  ctx.fillStyle = '#AAB5C9'
+  ctx.fillRect(x, y + 1, 1, size - 2)
+  ctx.fillRect(x + 1, y, size - 2, 1)
+  ctx.fillStyle = '#8A9EBF'
+  ctx.fillRect(x + size - 1, y + 1, 1, size - 2)
+  ctx.fillRect(x + 1, y + size - 1, size - 2, 1)
+  const stroke = Math.max(1, Math.round(PX_PER_PT)), arm = Math.round(3 * PX_PER_PT)
+  const cx = x + Math.floor((size - stroke) / 2), cy = y + Math.floor((size - stroke) / 2)
+  const start = x + Math.floor((size - arm) / 2)
+  ctx.fillStyle = '#3D4E7C'
+  ctx.fillRect(start, cy, arm, stroke)
+  if (expand) ctx.fillRect(cx, y + Math.floor((size - arm) / 2), stroke, arm)
+}
+
+function paintDropdown(ctx: CanvasRenderingContext2D, rect: Rect): void {
+  const w = Math.round(15 * PX_PER_PT), h = Math.round(14 * PX_PER_PT)
+  const x = Math.round(rect.x + rect.width) - w, y = Math.round(rect.y + rect.height) - h
+  ctx.fillStyle = '#738A93'
+  ctx.fillRect(x, y, w, h)
+  ctx.fillStyle = '#FDFDFD'
+  ctx.fillRect(x + 1, y + 1, w - 2, h - 2)
+  const cx = x + w / 2, top = y + 5 * PX_PER_PT
+  ctx.fillStyle = '#828282'
+  ctx.beginPath()
+  ctx.moveTo(cx - 3.5 * PX_PER_PT, top)
+  ctx.lineTo(cx + 3.5 * PX_PER_PT, top)
+  ctx.lineTo(cx, top + 4 * PX_PER_PT)
+  ctx.closePath()
+  ctx.fill()
+}
+
+// Definitions are immutable once loaded: placements are computed once per mode.
+const placements = new WeakMap<PivotTableDefinition, Partial<Record<RegionStyleMode, ButtonPlacement[]>>>()
+
+export function paintPivotButtons(ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cellRect: (row: number, col: number) => Rect | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, mode: RegionStyleMode): void {
+  for (const def of sheet.pivotTables ?? []) {
+    let byMode = placements.get(def)
+    if (!byMode) placements.set(def, byMode = {})
+    const list = byMode[mode] ??= pivotButtons(def, mode)
+    for (const button of list) {
+      if (button.row < visible.r0 || button.row > visible.r1 || button.col < visible.c0 || button.col > visible.c1) continue
+      const rect = cellRect(button.row, button.col)
+      if (!rect) continue
+      ctx.save()
+      try {
+        if (button.kind === 'expand' || button.kind === 'collapse') paintDrill(ctx, rect, button.kind === 'expand')
+        else paintDropdown(ctx, rect)
+      } finally { ctx.restore() }
+    }
+  }
+}

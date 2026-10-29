@@ -150,6 +150,9 @@ function applyDxf(layer: Layer, dxf: DxfStyle, edges: BandEdges, theme: ThemeCon
  * - own borders win per side; an own number format other than General wins;
  *   alignment is always the cell's.
  * Every property the cell's format does not set comes from the style.
+ *
+ * `overrides` (a pivot's `formats` dxfs, in document order) layer over every
+ * role and under the cell's own format; each is a one-cell band.
  */
 export function resolveRoleStyle(
   def: TableStyleDef,
@@ -157,12 +160,14 @@ export function resolveRoleStyle(
   own: XlsxCellStyle | undefined,
   theme: ThemeContext | undefined,
   diagnostics?: TableStyleDiagnostic[],
+  overrides: readonly DxfStyle[] = [],
 ): XlsxCellStyle {
   const layer: Layer = { font: {}, borders: {} }
   for (const role of roles) {
     const element = def.elements[roleElement(role)]
     if (element) applyDxf(layer, element.dxf, typeof role === 'string' ? ALL_EDGES : role.edges, theme, def.name, diagnostics)
   }
+  for (const dxf of overrides) applyDxf(layer, dxf, ALL_EDGES, theme, def.name, diagnostics)
   const out: XlsxCellStyle = own ? { ...own } : { numFmtId: 0 }
   delete out.ownFont
   for (const key of ['fontName', 'fontSizePt', 'bold', 'italic', 'underline', 'strike', 'color'] as const) {

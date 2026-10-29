@@ -82,6 +82,9 @@ export interface XlsxCellStyle {
   fontName?: string
   /** alignment@indent level (> 0); one level is one maximum digit width. */
   indent?: number
+  /** A layout-derived indent in CSS px that replaces `indent` × MDW (pivot
+   * compact labels beside their ± buttons; never parsed from a file). */
+  indentPx?: number
   /** The xf names a font other than the Normal one (fontId ≠ 0): its font wins
    * over a table or pivot style. Excel ignores applyFont/applyFill there
    * (measure-apply-flags, docs/validation/xlsx-pivots.md). */
@@ -168,6 +171,8 @@ export interface XlsxSheet {
   pivotRegions?: import('./pivots/stub').PivotRegionRef[]
   slicerRefs?: import('./pivots/stub').ControlPartRef[]
   timelineRefs?: import('./pivots/stub').ControlPartRef[]
+  /** Resident pivot definitions, loaded at parse time from the lazy pivots chunk (structured-cloneable). */
+  pivotTables?: import('./pivots/model').PivotTableDefinition[]
   workbookIndex?: number
   kind?: 'worksheet' | 'other'
   /** Excel column pixel model (workbook MDW, sheet default width); absent:
