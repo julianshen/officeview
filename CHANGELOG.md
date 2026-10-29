@@ -20,9 +20,17 @@ in git history.
     compact indent and Excel's buttons. The interactive viewer draws the ± and field dropdowns; page mode and export
     draw what Excel prints.
   - Slicers and timelines are drawn per style, with item states, columns, scroll position, timeline level and
-    selection. Pivot charts link to their pivot and, like Excel for Mac, draw no field buttons.
-  - Everything works in every spreadsheet view, including large workbooks opened through the viewer worker. The code
-    is lazy chunks loaded only for workbooks that need them.
+    selection.
+  - Pivot charts keep their link to the pivot table but draw no field buttons. Excel for Mac draws no pivot-chart
+    field buttons, and neither do we; Excel for Windows does, and we have no Windows reference to match yet.
+  - The page viewer, print and PNG/PDF export, the interactive viewer and large workbooks opened through the viewer
+    worker draw the same styles and pivot `formats`, and say why a pivot is not styled. In the worker each
+    pivot, pivot cache, slicer and timeline part is read up to 8 MiB on desktop and 4 MiB on mobile; a pivot over
+    that limit shows its cells with their stored formatting, and says so.
+  - A pivot whose saved layout is missing or invalid also shows its cells with their stored formatting, with a
+    diagnostic, and never stops the rest of the workbook from rendering.
+  - The code is lazy chunks, loaded only for workbooks that need them, in the viewer worker too: a large workbook
+    without a styled table, pivot, slicer or timeline loads none of it.
   - Pivot interaction (expand and collapse, filter, sort, field list) and clicking slicers and timelines come in
     later releases.
 - **Excel reference comparison for tables, pivots, slicers and timelines.** `bun scripts/pivot-compare.ts --stage 1`

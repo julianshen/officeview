@@ -7,6 +7,19 @@ Reference: Excel for Mac 16.114, UI language Traditional Chinese (zh-TW).
 
 `src/index.ts` statically imports the shared `office-worker` chunk containing `parse.ts` and `pivots/stub.ts`, so the stub is loaded eagerly. The repository's `eager-budget.ts` convention measures only `dist/index.js`; it does not include that static dependency. Using the same Node zlib gzip measurement for both artifacts, base `b7fff618` was **35,954 B** for `dist/index.js` and **365,128 B** for the `office-worker` chunk. At Task 4 HEAD `359eba83`, the figures were **35,955 B** and **366,084 B**. After fix round 1, they are **35,957 B** and **366,813 B**. Final deltas versus `b7fff618`: `dist/index.js` **+3 B**; `office-worker` **+1,685 B**. The existing index-only eager ceiling remains 38,720 B; Task 4's index delta remains within 1,200 B. Content-hashed chunk names can cause small run-to-run size variance.
 
+## Eager budget (Stage 1, final)
+
+Measured after the final-review fix batch (2026-10-30), base `ba8abf83` (the branch base) against the fix-batch head, each built with `OV_MODULE_MAP=1 bun run build` in its own tree:
+
+| Artifact | Measure | Base `ba8abf83` | Head | Growth |
+|---|---|---|---|---|
+| `dist/index.js` | Node zlib (`eager-budget.ts`) | 35,954 B | 35,969 B | +15 B |
+| `office-worker-*.js` | Node zlib, default level | 365,128 B | 371,876 B | **+6,748 B** |
+| `office-worker-*.js` | `gzip -9` | 361,679 B | 368,467 B | **+6,788 B** |
+| `office-worker-*.js` | vite report | 365.15 kB | 371.89 kB | +6.74 kB |
+
+Ruling N: `index.js` statically imports the shared `office-worker` chunk, so its growth is eager too, though `eager-budget.ts` measures `index.js` only (35,969 B, under the 38,720 B ceiling). The Stage 1 growth of the shared chunk is **+6.7 kB gzip** across the branch, not only Task 4's +1,685 B above; flag it in the Stage 1 PR. The table-style built-ins and the styles-extras parser stay out of it and out of the paged worker chunks' static closure (`check-eager.ts` checks both).
+
 ## Corpus (Task 1)
 
 `scripts/fetch-corpus.ts` fetches these into `corpus/` (gitignored):
