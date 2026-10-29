@@ -81,6 +81,8 @@ export interface PagedWorkbook {
   /** The package behind the import, for on-demand bounded part reads (S13.2:
    * a sheet's drawing content is read when the viewer asks for it). */
   readonly parts: { readonly src: RangeSource; readonly inventory: ZipInventory; readonly signal: AbortSignal }
+  /** This session's per-part cap for pivot, cache, slicer and timeline parts (Ruling AP). */
+  readonly pivotPartBytes: number
 }
 export interface PagedImportOptions {
   docId: string
@@ -228,7 +230,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
   const workbook: PagedWorkbook = {
     docId: options.docId, store, sheets, diagnostics: [], completeness: 'loading', loadEvaluatedFormulas: 0,
     changed: () => changedPromise, formatting: DEFAULT_FORMATTING,
-    parts: { src, inventory, signal },
+    parts: { src, inventory, signal }, pivotPartBytes: limits.paged.pivotPartBytes,
   }
   const stamp: SourceStamp = { docId: options.docId, sheetId: sheets[0]?.sheetId ?? '', valueGen: 0 }
   const plannedParts = ['xl/workbook.xml', 'xl/_rels/workbook.xml.rels', sstPath, metadataPath, ...sheets.map((s) => s.partPath)]
@@ -490,10 +492,10 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         const out: string[] = []
         for (const ref of refs ?? []) {
           const controlEntry = inventory.find(ref.partPath)
-          if (!controlEntry || controlEntry.uncompressedSize > PIVOT_PART_MAX_BYTES) continue
+          if (!controlEntry || controlEntry.uncompressedSize > limits.paged.pivotPartBytes) continue
           plan(controlEntry.name)
           try {
-            const text = utf8.decode(await readPartPrefixBytes(src, controlEntry, PIVOT_PART_MAX_BYTES, partOpts(controlEntry.name, PIVOT_PART_MAX_BYTES)))
+            const text = utf8.decode(await readPartPrefixBytes(src, controlEntry, limits.paged.pivotPartBytes, partOpts(controlEntry.name, limits.paged.pivotPartBytes)))
             out.push(...controlStyleNames(text, containerName, itemName))
           } catch (error) {
             if (isPackageError(error) && error.code === 'cancelled') throw error
@@ -507,14 +509,15 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         if (!rel.type.endsWith('/pivotTable')) continue
         const partPath = resolvePartTarget(sheet.partPath, rel.target)
         const pivotEntry = inventory.find(partPath)
-        const pivotTooLarge = Boolean(pivotEntry && pivotEntry.uncompressedSize > PIVOT_PART_MAX_BYTES)
+        const pivotTooLarge = Boolean(pivotEntry && pivotEntry.uncompressedSize > limits.paged.pivotPartBytes)
         if (pivotTooLarge) {
-          ;(sheet.metadata.pivotDiagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-part-too-large', message: `Pivot part ${partPath} exceeds the ${PIVOT_PART_MAX_BYTES}-byte part limit`, partPath })
+          ;(sheet.metadata.pivotDiagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-part-too-large', message: `Pivot part ${partPath} exceeds the ${limits.paged.pivotPartBytes}-byte part limit`, partPath })
         }
         let text: string | undefined
         if (pivotEntry) {
           plan(partPath)
           try {
+            // The location scan reads a prefix only, as the resident parser does (stub.ts parsePivotRegion).
             text = utf8.decode(await readPartPrefixBytes(src, pivotEntry, PIVOT_PART_MAX_BYTES, partOpts(partPath, PIVOT_PART_MAX_BYTES)))
           } catch (error) {
             if (isPackageError(error) && error.code === 'cancelled') throw error

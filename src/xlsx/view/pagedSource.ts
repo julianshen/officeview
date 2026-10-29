@@ -557,7 +557,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
       const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds, slicerIds: meta.slicerRelationshipIds, timelineIds: meta.timelineRelationshipIds, stylesExtras: this.workbook.tableStyleExtras },
-        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
+        geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes, this.workbook.pivotPartBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
       nodes.record(sheetId, parsed.nodes)
       // The payload now has its owner: the read's share stops holding its chart storage (D0). The retained entry
       // or the reply owns those bytes; the document facet keeps a retained chart's charge until the entry ends.
@@ -629,7 +629,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const pivotRegions = this.sheet.metadata.pivotRegions ?? []
     const parts = pivotRegions.length ? await (async () => {
       const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
-      return readPagedPivotDisplayParts(this.workbook.parts, { sheetId: this.sheet.sheetId, sheetName: this.sheet.name, pivotRegions: new Map([[this.sheet.name, pivotRegions]]) }, profile, options.signal, memory)
+      return readPagedPivotDisplayParts(this.workbook.parts, { sheetId: this.sheet.sheetId, sheetName: this.sheet.name, pivotRegions: new Map([[this.sheet.name, pivotRegions]]) }, profile, options.signal, memory, this.workbook.pivotPartBytes)
     })() : { pivotTables: [], diagnostics: [] }
     const displayDiagnostics = [...new Map([...(this.sheet.metadata.pivotDiagnostics ?? []), ...parts.diagnostics].map(item => [`${item.feature}:${'partPath' in item && item.partPath ? item.partPath : item.message}`, item])).values()]
     diagnostics.push(...displayDiagnostics)

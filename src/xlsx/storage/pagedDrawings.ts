@@ -35,7 +35,6 @@ import { classifyPart } from './admission'
 import { importLimitsFor } from './importSession'
 import type { PivotRegionRef } from '../pivots/stub'
 import type { PivotTableDefinition } from '../pivots/model'
-import { PIVOT_PART_MAX_BYTES } from '../pivots/stub'
 import type { SheetControls } from '../pivots/slicers/model'
 import type { StylesExtras } from '../tableStyles/model'
 
@@ -104,12 +103,12 @@ export interface PagedDrawingLimits {
   maxParts: number
   /** Binary bytes the payload may carry to the main thread. */
   payloadBytes: number
-  /** Independent cap for pivot, slicer and timeline definition parts (Ruling AL). */
+  /** Independent cap for pivot, slicer and timeline definition parts (Rulings AL, AP: the profile's `paged.pivotPartBytes`). */
   pivotPartBytes: number
 }
-export function pagedDrawingLimits(profile: ProfileId, payloadBytes = drawingPayloadBudget(profile)): PagedDrawingLimits {
+export function pagedDrawingLimits(profile: ProfileId, payloadBytes = drawingPayloadBudget(profile), pivotPartBytes = importLimitsFor(profile).paged.pivotPartBytes): PagedDrawingLimits {
   const object = importLimitsFor(profile).object
-  return { partBytes: object.drawingPartBytes, mediaBytes: payloadBytes, readBytes: payloadBytes + 4 * object.drawingPartBytes, maxParts: object.entries, payloadBytes, pivotPartBytes: PIVOT_PART_MAX_BYTES }
+  return { partBytes: object.drawingPartBytes, mediaBytes: payloadBytes, readBytes: payloadBytes + 4 * object.drawingPartBytes, maxParts: object.entries, payloadBytes, pivotPartBytes }
 }
 
 export interface PagedDrawingSheet {
@@ -269,8 +268,8 @@ class RangePackage extends OfficePackage {
 /** Resolve one sheet's pivot definitions through the same bounded package reader as drawings. */
 export async function readPagedPivotDisplayParts(source: { src: RangeSource; inventory: ZipInventory }, input: {
   sheetId: string; sheetName: string; pivotRegions: ReadonlyMap<string, readonly PivotRegionRef[]>
-}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'diagnostics'>> {
-  const limits = pagedDrawingLimits(profile)
+}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory, pivotPartBytes?: number): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'diagnostics'>> {
+  const limits = pagedDrawingLimits(profile, undefined, pivotPartBytes)
   const pkg = new RangePackage(source.src, source.inventory, limits, signal, memory, profile)
   const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
   let pivotTables: PivotTableDefinition[] = []

@@ -5,6 +5,8 @@ export const X14_SLICER_NS = 'http://schemas.microsoft.com/office/spreadsheetml/
 export const X15_TIMELINE_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main'
 export const SLICER_EXTENSION_URI = '{A8765BA9-456A-4dab-B4F3-ACF838C121DE}'
 export const TIMELINE_EXTENSION_URI = '{7E03D99C-DC04-49d9-9315-930204A7B6E9}'
+/** The prefix of a pivot table part that the location scan reads (resident parse and paged import). The paged
+ * worker's cap on whole pivot, cache, slicer and timeline parts is the profile's `paged.pivotPartBytes` (Ruling AP). */
 export const PIVOT_PART_MAX_BYTES = 64 * 1024
 
 export interface PivotRegionRef { partPath: string; ref: string; name?: string; styleName?: string }

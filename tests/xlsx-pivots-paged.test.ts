@@ -479,7 +479,8 @@ describe('paged pivot display descriptors', () => {
     const rootEnd = original.indexOf('>')
     archive.file(path!, `${original.slice(0, rootEnd + 1)}<!--${' '.repeat(70 * 1024)}-->${original.slice(rootEnd + 1)}`)
     const inflated = new Uint8Array(await archive.generateAsync({ type: 'uint8array' }))
-    const session = await openImportSession({ kind: 'blob', blob: new Blob([inflated]) }, { docId: `pivot-cap-${fixture}`, profile: 'D' })
+    // A small injected cap (Ruling AP: the profile cap is 8 MiB desktop, 4 MiB mobile).
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([inflated]) }, { docId: `pivot-cap-${fixture}`, profile: 'D', limits: { paged: { pivotPartBytes: 64 * 1024 } } })
     await session.done
     const source = createPagedWorkbookSource(session)
     try {
@@ -491,6 +492,48 @@ describe('paged pivot display descriptors', () => {
       const pivotDiagnostics = result.diagnostics.filter(diagnostic => ('feature' in diagnostic && diagnostic.feature === 'pivot-part-too-large' || 'code' in diagnostic && diagnostic.code === 'pivot-part-too-large')
         && (('partPath' in diagnostic && diagnostic.partPath?.endsWith(path!.split('/').pop()!)) || ('partId' in diagnostic && diagnostic.partId?.endsWith(path!.split('/').pop()!))))
       expect(pivotDiagnostics).toHaveLength(1)
+    } finally { await source.release(); await session.release() }
+  })
+
+  it.each([
+    ['pivot-layout-compact', /xl\/pivotTables\/pivotTable[^/]*\.xml$/i],
+    ['pivot-layout-compact', /xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/i],
+  ] as const)('reads pivot parts past 64 KiB under the profile cap (Ruling AP; %s)', async (fixture, pathPattern) => {
+    const archive = await JSZip.loadAsync(bytes(fixture))
+    const path = Object.keys(archive.files).find(name => pathPattern.test(name))!
+    const original = await archive.file(path)!.async('string')
+    // Grown at its end, as a long saved layout or a large shared-item list grows a part: the location stays near the start.
+    const close = original.lastIndexOf('</')
+    archive.file(path, `${original.slice(0, close)}<!--${' '.repeat(1024 * 1024)}-->${original.slice(close)}`)
+    const inflated = new Uint8Array(await archive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))
+    for (const profile of ['D', 'M'] as const) {
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([inflated]) }, { docId: `pivot-profile-cap-${profile}`, profile })
+      await session.done
+      const source = createPagedWorkbookSource(session)
+      try {
+        const sheet = source.sheets.find(item => item.name !== 'Data') ?? source.sheets[0]!, store = source.store(sheet.sheetId)
+        const result = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 4 * 1024 * 1024, { set: () => true }, profile)
+        expect(result.diagnostics.filter(item => item.feature === 'pivot-part-too-large')).toEqual([])
+        expect(result.pivotTables).toHaveLength(1)
+      } finally { await source.release(); await session.release() }
+    }
+  }, 60_000)
+
+  it('keeps the receiver grant as the bound on what a large pivot part sends to main', async () => {
+    const archive = await JSZip.loadAsync(bytes('pivot-layout-compact'))
+    const path = Object.keys(archive.files).find(name => /pivotTables\/pivotTable1\.xml$/.test(name))!
+    const original = await archive.file(path)!.async('string')
+    const close = original.lastIndexOf('</')
+    archive.file(path, `${original.slice(0, close)}<!--${' '.repeat(1024 * 1024)}-->${original.slice(close)}`)
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([new Uint8Array(await archive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))]) }, { docId: 'pivot-profile-grant', profile: 'D' })
+    await session.done
+    const source = createPagedWorkbookSource(session)
+    try {
+      const store = source.store(source.sheets[0]!.sheetId)
+      const result = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 512, { set: () => true })
+      expect(result.pivotTables).toEqual([])
+      expect(result.diagnostics.map(item => item.feature)).toContain('pivot-display-reply-limit')
+      expect(result.requiredBytes).toBeGreaterThan(512)
     } finally { await source.release(); await session.release() }
   })
 

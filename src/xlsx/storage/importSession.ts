@@ -53,6 +53,8 @@ export interface ImportLimits {
     minFreeStorageBytes: number
     /** Per sheet: merges, table parts, drawing references and array formulas each (S1.2). */
     structuralRecords: number
+    /** Per pivot table, pivot cache, slicer or timeline part the worker reads (Ruling AP: the drawing-part cap). */
+    pivotPartBytes: number
   }
   spool: { memoryLimitBytes: number; hardMemoryCapBytes: number; sniffPrefixBytes: number }
 }
@@ -93,6 +95,7 @@ const DESKTOP: ImportLimits = {
     drawingPartEnvelopeBytes: 128 * MiB,
     minFreeStorageBytes: 64 * MiB,
     structuralRecords: 1_048_576,
+    pivotPartBytes: 8 * MiB,
   },
   spool: { memoryLimitBytes: 32 * MiB, hardMemoryCapBytes: 64 * MiB, sniffPrefixBytes: 64 * KiB },
 }
@@ -123,6 +126,7 @@ const MOBILE: ImportLimits = {
     sharedStringsBytes: 256 * MiB,
     entries: 2048,
     drawingPartEnvelopeBytes: 64 * MiB,
+    pivotPartBytes: 4 * MiB,
   },
   spool: { memoryLimitBytes: 16 * MiB, hardMemoryCapBytes: 32 * MiB, sniffPrefixBytes: 64 * KiB },
 }
