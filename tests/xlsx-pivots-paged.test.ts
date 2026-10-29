@@ -5,6 +5,7 @@ import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
 import { describe, expect, it, vi } from 'vitest'
 import type { CacheIdentity, RemotePivotDisplay, SourceStore, WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
+import { PIVOT_FORMAT_MEMO_BYTES } from '../src/xlsx/view/contracts'
 import type { XlsxSheet } from '../src/xlsx/types'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
@@ -683,6 +684,40 @@ describe('paged pivot display descriptors', () => {
     expect(released).toBe(3)
     expect(failing.get('s').diagnostics).toContainEqual(expect.objectContaining({ feature: 'pivot-display-read-failed' }))
     failing.close()
+  })
+
+  it('charges each formatted pivot\'s overrides memo to the layer, and refuses what does not fit (codex re-review)', async () => {
+    const resident = await residentPivotSheet(bytes('pivot-formats-override'))
+    const formatted = resident.pivotTables![0]!
+    expect(formatted.formats.length).toBeGreaterThan(0)
+    const plain = { ...formatted, formats: [] }
+    const admitted = async (pivotTables: RemotePivotDisplay['pivotTables'], headroom = Infinity) => {
+      const owner: CacheIdentity = { docId: `memo-${pivotTables.length}-${headroom}`, sheetId: 's', valueGen: 1, fontGen: 0, viewGen: 0 }
+      const payload: RemotePivotDisplay = { sheetId: 's', stamp: owner, pivotTables, pivotStyles: [], pivotDxfs: [{ id: 0, dxf: { fill: { pattern: 'solid', bg: { rgb: 'FFFFE699' } } } }], diagnostics: [] }
+      const reply = { kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 64,
+        result: { kind: 'read', result: { op: 'pivotDisplay', result: payload } } } as unknown as WorkerReply<'read'>
+      let charged = 0
+      const cache = new RemoteRegionStyleCache({
+        identity: () => owner, hasRegionStyles: () => false, hasPivotDisplay: () => true, loadState: () => ({ completeness: 'complete' }),
+        grant: () => 4096, releaseGrant: () => {}, request: async () => reply, nextRequestId: () => 'r', release: () => {},
+        admitLayer: (_sheet, _request, bytes) => { if (bytes > headroom) return null; charged = bytes; return () => { charged = 0 } }, changed: () => {},
+      }, 256 * 1024 * 1024, 'pivotDisplay')
+      let state = cache.get('s')
+      for (let i = 0; i < 500 && state.state !== 'ready' && state.state !== 'failed'; i++) { await new Promise(resolveTick => setTimeout(resolveTick, 2)); state = cache.get('s') }
+      const out = { state: state.state, charged, retained: cache.retainedBytes, features: state.diagnostics.map(item => item.feature) }
+      cache.close()
+      return out
+    }
+    const one = await admitted([formatted]), eight = await admitted(Array(8).fill(formatted)), eightPlain = await admitted(Array(8).fill(plain))
+    expect(one.state).toBe('ready')
+    expect(eight.charged - eightPlain.charged).toBe(8 * PIVOT_FORMAT_MEMO_BYTES)
+    expect(eight.charged - one.charged).toBeGreaterThanOrEqual(7 * PIVOT_FORMAT_MEMO_BYTES)
+    expect(eight.retained).toBeGreaterThanOrEqual(eight.charged)
+    // Headroom for the plain layer but not for the memos: refused, never over-retained.
+    const refused = await admitted(Array(8).fill(formatted), eightPlain.charged + PIVOT_FORMAT_MEMO_BYTES)
+    expect(refused.state).toBe('failed')
+    expect(refused.features).toContain('pivot-display-reply-limit')
+    expect(refused.charged).toBe(0)
   })
 
   it('uses pivot-display diagnostics when the receiver cannot admit its decoded layer', async () => {

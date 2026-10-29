@@ -19,18 +19,15 @@ import type { DxfStyle, StylesExtras, TableStyleDef, TableStyleDiagnostic } from
 import type { StyleRegion } from '../tableStyles/regionLayer'
 import { builtinTableStyle } from '../tableStyles/builtins'
 import { orderRoles } from '../tableStyles/resolve'
-import { REGION_STYLE_REGION_ESTIMATE_BYTES } from '../view/contracts'
+import { PIVOT_FORMAT_MEMO_BYTES, PIVOT_FORMAT_MEMO_ENTRIES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../view/contracts'
 import { MAX_COLS } from '../view/coordinates'
 import { PIVOT_VALUES_FIELD, type PivotArea, type PivotTableDefinition } from './model'
-import { savedPivotLayout, savedPivotRoles, type PivotLine, type SavedPivotLayout } from './savedLayout'
+import { PARENT_BAND_ENTRIES_PER_LINE, savedPivotLayout, savedPivotRoles, type PivotLine, type SavedPivotLayout } from './savedLayout'
 import { compactLabelIndents } from './buttons'
 
 const NO_STYLE: TableStyleDef = { name: '', pivot: true, table: false, elements: {} }
 /** Retained per saved line: the resolved item vector and its bookkeeping. */
 const LINE_ESTIMATE_BYTES = 64
-/** Cells whose `formats` overrides are kept, and the estimate per kept cell (its key, list and joined ids). */
-const FORMAT_MEMO_ENTRIES = 4_096
-const FORMAT_MEMO_ENTRY_ESTIMATE_BYTES = 128
 
 /** A pivot cell's coordinates: the field items it stands for, its data field, and what kind of cell it is. */
 interface PivotCellCoordinates {
@@ -199,10 +196,13 @@ export function pivotStyleRegions(sheet: XlsxSheet, extras: StylesExtras, _theme
       style = undefined
     }
     if (def.conditionalFormats.length) report({ kind: 'unsupported', feature: 'pivot-conditional-format', message: `Pivot table "${def.name}" has ${def.conditionalFormats.length} conditional format(s); they are not shown.` })
-    const layout = savedPivotLayout(def)
+    const why: { tooDeep?: boolean } = {}
+    const layout = savedPivotLayout(def, why)
     const roles = savedPivotRoles(def, style, layout)
     if (!layout || !roles) {
-      report({ kind: 'unsupported', feature: 'pivot-layout-unavailable', message: `Pivot table "${def.name}" has no usable saved layout; its cells paint with their stored formatting only.` })
+      report({ kind: 'unsupported', feature: 'pivot-layout-unavailable', message: why.tooDeep
+        ? `Pivot table "${def.name}" nests its row fields too deeply over too many rows for the styling limit (${PARENT_BAND_ENTRIES_PER_LINE} label bands per row); its cells paint with their stored formatting only.`
+        : `Pivot table "${def.name}" has no usable saved layout; its cells paint with their stored formatting only.` })
       return []
     }
     let skipped = 0
@@ -222,7 +222,7 @@ export function pivotStyleRegions(sheet: XlsxSheet, extras: StylesExtras, _theme
       if (overridesMemo.has(key)) return overridesMemo.get(key)
       const hits = formatsAt(row, col)
       const out = hits.length ? { overrides: hits.map(hit => hit.dxf), overrideKey: hits.map(hit => hit.n).join(',') } : undefined
-      if (overridesMemo.size >= FORMAT_MEMO_ENTRIES) overridesMemo.clear()
+      if (overridesMemo.size >= PIVOT_FORMAT_MEMO_ENTRIES) overridesMemo.clear()
       overridesMemo.set(key, out)
       return out
     }
@@ -233,7 +233,7 @@ export function pivotStyleRegions(sheet: XlsxSheet, extras: StylesExtras, _theme
       def: style ?? NO_STYLE,
       kind: 'pivot' as const,
       retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES + (layout.rows.length + layout.cols.length) * LINE_ESTIMATE_BYTES
-        + (formats.length ? FORMAT_MEMO_ENTRIES * FORMAT_MEMO_ENTRY_ESTIMATE_BYTES : 0),
+        + (formats.length ? PIVOT_FORMAT_MEMO_BYTES : 0),
       cell(row, col, mode) {
         const hits = formats.length ? overridesAt(row, col) : undefined
         const indentPx = indent(row, col, mode)

@@ -17,6 +17,8 @@ import { ensureTableStyleEngine, registerTableStyleEngine, regionStylesFor } fro
 import { regionStylesFromSource } from '../src/xlsx/tableStyles/regionLayer'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { paintPivotButtons } from '../src/xlsx/pivots/buttons'
+import { pivotStyleRegions } from '../src/xlsx/pivots/regions'
+import { parseThemeContext } from '../src/drawing/style'
 import type { XlsxSheet } from '../src/xlsx/types'
 import type { PivotTableDefinition } from '../src/xlsx/pivots/model'
 import { controlIds, MAX_CONTROL_IDS } from '../src/xlsx/pivots/stub'
@@ -86,8 +88,14 @@ describe('C1: a hostile pivot definition fails closed', () => {
       unsupported: [],
     }
     const started = performance.now()
-    expect(savedPivotLayout(def)).toBeUndefined()
+    const why: { tooDeep?: boolean } = {}
+    expect(savedPivotLayout(def, why)).toBeUndefined()
     expect(performance.now() - started).toBeLessThan(2_000)
+    expect(why.tooDeep).toBe(true)
+    // A reachable, fail-closed styling limit (34 or more nested tabular row fields over long tails): it says so.
+    const reports: string[] = []
+    pivotStyleRegions({ name: 'Deep', rows: [], pivotTables: [def] } as unknown as XlsxSheet, { dxfs: [], tableStyles: new Map(), slicerStyles: new Map() }, parseThemeContext(), d => reports.push(`${d.feature}: ${d.message}`))
+    expect(reports.some(line => line.startsWith('pivot-layout-unavailable:') && line.includes('styling limit'))).toBe(true)
     // The same axis with a short tail is an ordinary tabular pivot and lays out.
     const short = { ...def, rowItems: def.rowItems!.slice(0, 3), location: { ...def.location, ref: 'A3:B6' } }
     expect(savedPivotLayout(short)?.parentBands.get(2)?.length).toBe(D - 1)

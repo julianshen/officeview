@@ -19,6 +19,11 @@ export const MAX_PAGED_TABLE_STYLE_DEFS_BYTES = 2 * 1024 * 1024
 /** Distinct `formats` dxfs one pivot-display reply carries (styles.xml holds at most MAX_DXFS = 65,536). */
 export const MAX_PIVOT_DISPLAY_DXFS = 4_096
 export const MAX_REGION_STYLE_MEMO_ENTRIES = 4_096
+/** A pivot with `formats` keeps its overrides for at most this many cells (pivots/regions.ts), at this estimate each;
+ * the receiver charges the allowance once per formatted pivot. */
+export const PIVOT_FORMAT_MEMO_ENTRIES = 4_096
+export const PIVOT_FORMAT_MEMO_ENTRY_ESTIMATE_BYTES = 128
+export const PIVOT_FORMAT_MEMO_BYTES = PIVOT_FORMAT_MEMO_ENTRIES * PIVOT_FORMAT_MEMO_ENTRY_ESTIMATE_BYTES
 export const REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES = 1_024
 export const REGION_STYLE_LAYER_BASE_BYTES = 4_096
 export const REGION_STYLE_REGION_ESTIMATE_BYTES = 512

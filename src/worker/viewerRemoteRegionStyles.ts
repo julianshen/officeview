@@ -2,7 +2,7 @@ import type { CacheIdentity, RemotePivotDisplay, RemoteRegionStyles, WorkerReply
 import type { RegionStyleLayer } from '../xlsx/tableStyles/regionLayer'
 import type { DxfStyle, TableStyleDiagnostic } from '../xlsx/tableStyles/model'
 import type { CommandOf } from './viewerProtocol'
-import { REGION_STYLE_LAYER_BASE_BYTES, MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../xlsx/view/contracts'
+import { PIVOT_FORMAT_MEMO_BYTES, REGION_STYLE_LAYER_BASE_BYTES, MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../xlsx/view/contracts'
 
 const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
 const RETRY_MS = 250
@@ -49,6 +49,14 @@ const empty = (): PagedRegionStyleState => ({ state: 'waiting', gen: 0, diagnost
 
 /** Tables and pivots the payload lays out, and the pivot styles it carries. */
 const layerCountOf = (payload: RemoteRegionStyles | RemotePivotDisplay) => 'pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : payload.tables.length
+/** The decoded layer's admission and retained charge: the shared style memo, each region, and each formatted
+ * pivot's own overrides memo (pivots/regions.ts, PIVOT_FORMAT_MEMO_BYTES). */
+function layerBytesOf(payload: RemoteRegionStyles | RemotePivotDisplay): number {
+  const count = layerCountOf(payload)
+  if (!count) return 0
+  const formatted = 'pivotTables' in payload ? payload.pivotTables.filter(def => def.formats.some(format => format.action === 'formatting' && format.dxfId !== undefined)).length : 0
+  return layerBytesFor(count) + formatted * PIVOT_FORMAT_MEMO_BYTES
+}
 
 function unpack(reply: WorkerReply<'read'>, op: 'regionStyles' | 'pivotDisplay'): RemoteRegionStyles | RemotePivotDisplay | undefined {
   if (reply.kind !== 'complete' || reply.result.kind !== 'read' || reply.result.result.op !== op) return undefined
@@ -123,8 +131,7 @@ export class RemoteRegionStyleCache {
     return kind === 'reply-limit' ? 'Table style metadata exceeds the receiver cache budget.' : 'Table style metadata could not be loaded.'
   }
   private async buildLayer(sheetId: string, entry: Entry, requestId: string, payload: RemoteRegionStyles | RemotePivotDisplay, seq: number, reply?: WorkerReply<'read'>, releaseReply?: () => void): Promise<void> {
-    const layerCount = layerCountOf(payload)
-    const layerBytes = layerCount ? layerBytesFor(layerCount) : 0
+    const layerBytes = layerBytesOf(payload)
     if (layerBytes && !this.makeRoom(entry, layerBytes + (reply ? reply.replyBytes ?? 0 : 0))) {
       if (reply) releaseReply?.()
       entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit') }]
@@ -242,8 +249,7 @@ export class RemoteRegionStyleCache {
     if (!Number.isSafeInteger(out.replyBytes) || (out.replyBytes ?? -1) < 0) {
       releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} reply had no valid byte estimate.`) }]; this.deferChanged(sheetId); return
     }
-    const layerCount = layerCountOf(payload)
-    const layerBytes = layerCount ? layerBytesFor(layerCount) : 0
+    const layerBytes = layerBytesOf(payload)
     if (!this.makeRoom(entry, (out.replyBytes ?? 0) + layerBytes)) {
       releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit') }]; this.deferChanged(sheetId); return
     }

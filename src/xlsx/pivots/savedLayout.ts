@@ -74,7 +74,7 @@ export interface SavedPivotLayout {
 export interface ParentBand { level: number; col: number; line: number; last: number }
 
 /** Parent-band entries allowed per saved row line, plus a fixed allowance (see savedPivotLayout). */
-const PARENT_BAND_ENTRIES_PER_LINE = 32
+export const PARENT_BAND_ENTRIES_PER_LINE = 32
 const PARENT_BAND_ENTRIES_BASE = 65_536
 
 const CELL = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,6})$/
@@ -111,7 +111,7 @@ export function sharesColumn(def: PivotTableDefinition, field: number): boolean 
 
 /** The saved layout, or undefined when it cannot be laid out: no `rowItems`/
  * `colItems`, an invalid index (Ruling AC), or saved items that do not fill the location. */
-export function savedPivotLayout(def: PivotTableDefinition): SavedPivotLayout | undefined {
+export function savedPivotLayout(def: PivotTableDefinition, why?: { tooDeep?: boolean }): SavedPivotLayout | undefined {
   if (!def.rowItems || !def.colItems || def.unsupported.some(entry => entry.startsWith('invalid-index:'))) return undefined
   const rect = locationRect(def.location.ref)
   const { firstHeaderRow, firstDataRow, firstDataCol } = def.location
@@ -141,8 +141,9 @@ export function savedPivotLayout(def: PivotTableDefinition): SavedPivotLayout | 
     rects.push({ minRow: row, minCol: col, maxRow: row, maxCol: col + 1 })
   })
   const parentBands = new Map<number, ParentBand[]>()
-  // Each line lies in at most one parent band per level, so a real pivot stores lines × (depth - 1) entries;
-  // a definition that would store more is not laid out (a hostile deep, long axis would be quadratic).
+  // Each line lies in at most one parent band per level, so a pivot stores lines × (depth - 1) entries. Past the
+  // budget the layout is not drawn: a hostile deep, long axis would be quadratic. A real tabular pivot with 34 or
+  // more nested row fields and long tails can reach it too: that is a fail-closed styling limit (`why.tooDeep`).
   let budget = PARENT_BAND_ENTRIES_PER_LINE * rows.length + PARENT_BAND_ENTRIES_BASE
   for (let n = 0; n < rows.length; n++) {
     const line = rows[n]!
@@ -150,7 +151,7 @@ export function savedPivotLayout(def: PivotTableDefinition): SavedPivotLayout | 
     for (let level = line.first; level < line.items.length - 1; level++) {
       let last = n
       while (last + 1 < rows.length && rows[last + 1]!.first > level && rows[last + 1]!.type !== 'grand' && rows[last + 1]!.type !== 'blank') last++
-      if ((budget -= last - n + 1) < 0) return undefined
+      if ((budget -= last - n + 1) < 0) { if (why) why.tooDeep = true; return undefined }
       const parent = { level, col: labelCol[level] ?? rect.minCol, line: n, last }
       for (let k = n; k <= last; k++) {
         const list = parentBands.get(k)
