@@ -962,9 +962,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       // The same canonical display text the cell paints (authored formats, semantics).
       textOf: (cell, sheetId, allocation) => {
         const sheetEntry = byId.get(sheetId)
-        const styled = sheetEntry && cellAt(sheetEntry, cell)
-        // Worker-backed cells carry a style id; the workbook table resolves it.
-        return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell, allocation) : String(cell.value ?? '')
+        if (!sheetEntry) return String(cell.value ?? '')
+        const styled = cellAt(sheetEntry, cell)
+        // The style paint and copy use: a styled table or pivot region resolved over the cell's own.
+        const style = styleForCell(sheetEntry, { row: cell.row, col: cell.col, styleIndex: cell.styleIndex, style: styled?.style })
+        return cellDisplayText(sheetEntry.sheet, { value: (styled ?? cell).value, style }, allocation)
       },
     }
     runArgs.current = { input, query, options }
