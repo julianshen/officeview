@@ -131,3 +131,49 @@ describe('C1: the region factory and the button pass fail closed', () => {
     expect(sheet.diagnostics?.filter(item => item.feature === 'pivot-buttons-failed')).toHaveLength(1)
   })
 })
+
+describe('I5: styleAt cost does not grow with the <format> count', () => {
+  /** pivot-formats-override with `count` formats of dxf 0, each over one (Values, Region, Product, Year) combination. */
+  async function formatted(count: number, elsewhere = false) {
+    const doc = await parseXlsx(await OfficePackage.load(fixture('pivot-formats-override')))
+    const sheet = pivotSheet(doc.sheets)
+    await ensureTableStyleEngine(doc.sheets)
+    const def = sheet.pivotTables![0]!
+    const base = def.formats[0]!
+    const reference = (field: number, x: number) => ({ ...base.pivotArea.references[0]!, field, x: [x] })
+    def.formats = Array.from({ length: count }, (_, k) => ({
+      ...base,
+      pivotArea: { ...base.pivotArea, references: elsewhere && k > 0
+        // Formats over items this window does not show (a long pivot's other rows).
+        ? [...base.pivotArea.references.slice(0, 1), reference(0, 4 + k)]
+        : [reference(-2, k % 2), reference(0, (k >> 1) % 4), reference(1, (k >> 3) % 3), reference(2, Math.floor(k / 24) % 3)] },
+    }))
+    sheet.regionStyles = undefined
+    sheet.regionStylesResolved = false
+    const layer = regionStylesFor(sheet)!
+    const own = new Map(sheet.rows.flatMap(row => row.cells.map(cell => [`${cell.row}:${cell.col}`, cell.style] as const)))
+    return { layer, own }
+  }
+  const pass = ({ layer, own }: Awaited<ReturnType<typeof formatted>>, passes: number) => {
+    const started = performance.now()
+    for (let k = 0; k < passes; k++) for (let row = 2; row <= 21; row++) for (let col = 0; col <= 8; col++) layer.styleAt(row, col, own.get(`${row}:${col}`), 'screen')
+    return performance.now() - started
+  }
+
+  test('1 vs 200 formats, 199 of them over cells elsewhere', async () => {
+    const one = await formatted(1), many = await formatted(200, true)
+    expect(many.layer.styleAt(6, 1, undefined, 'screen')?.fillColor).toBe('FFFFE699')
+    pass(one, 20); pass(many, 20)
+    const small = pass(one, 200), large = pass(many, 200)
+    expect(large).toBeLessThan(2 * small + 50)
+  })
+
+  test('1 vs 200 formats over the pivot', async () => {
+    const one = await formatted(1), many = await formatted(200)
+    // The 200 formats cover all 48 data cells of the four-field grid; the first format still paints B7.
+    expect(many.layer.styleAt(6, 1, undefined, 'screen')?.fillColor).toBe('FFFFE699')
+    pass(one, 20); pass(many, 20) // warm both
+    const small = pass(one, 200), large = pass(many, 200)
+    expect(large).toBeLessThan(2 * small + 50)
+  })
+})
