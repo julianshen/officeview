@@ -79,10 +79,10 @@ interface Styles {
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
    * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
   numFmts: Map<number, string | null>
-  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string }>
+  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string; underline?: XlsxCellStyle['underline']; strike?: boolean }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean; indent?: number; applyFont?: boolean; applyFill?: boolean }>
 }
 
 /** Excel's own limit on a custom number-format code (UTF-16 units). Excel
@@ -90,6 +90,14 @@ interface Styles {
  * docs/formula-compatibility.md); every formatter therefore parses at most
  * this much per authored cell code. */
 export const MAX_FORMAT_CODE_UNITS = 255
+
+const OFF = new Set(['0', 'false'])
+const UNDERLINES = new Set(['single', 'double', 'singleAccounting', 'doubleAccounting'])
+/** `<u/>` is single; `none` and unknown values are no underline. */
+function fontUnderline(val: unknown): XlsxCellStyle['underline'] {
+  const v = val === undefined ? 'single' : String(val)
+  return UNDERLINES.has(v) ? v as XlsxCellStyle['underline'] : undefined
+}
 
 async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
@@ -118,6 +126,8 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       sizePt: f['sz'] !== undefined ? parseFloat(attrs(asNode(f['sz'])).val ?? '11') : undefined,
       color: colorOf(asNode(f['color'])),
       name: attrs(asNode(f['name'])).val as string | undefined,
+      underline: f['u'] !== undefined ? fontUnderline(attrs(asNode(f['u'])).val) : undefined,
+      strike: f['strike'] !== undefined && !OFF.has(String(attrs(asNode(f['strike'])).val)) ? true : undefined,
     }
     styles.fonts.push(font)
   }
@@ -154,6 +164,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       const vertical = typeof align.vertical === 'string' && align.vertical !== '' ? align.vertical : undefined
       const wrapText = align.wrapText === '1' || align.wrapText === 'true' ? true : align.wrapText === '0' || align.wrapText === 'false' ? false : undefined
       const shrinkToFit = align.shrinkToFit === '1' || align.shrinkToFit === 'true' ? true : align.shrinkToFit === '0' || align.shrinkToFit === 'false' ? false : undefined
+      const indent = Number(align.indent)
       styles.xfs.push({
         numFmtId: parseInt(a.numFmtId ?? '0', 10),
         fontId: parseInt(a.fontId ?? '0', 10),
@@ -164,6 +175,9 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
         vertical,
         wrapText,
         shrinkToFit,
+        ...(Number.isInteger(indent) && indent > 0 && indent <= 250 ? { indent } : {}),
+        ...(a.applyFont === '1' || a.applyFont === 'true' ? { applyFont: true } : {}),
+        ...(a.applyFill === '1' || a.applyFill === 'true' ? { applyFill: true } : {}),
       })
     }
   }
@@ -209,6 +223,12 @@ export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxC
     vertical: xf.vertical,
     wrapText: xf.wrapText,
     ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
+    ...(font?.underline ? { underline: font.underline } : {}),
+    ...(font?.strike ? { strike: true } : {}),
+    ...(font?.name ? { fontName: font.name } : {}),
+    ...(xf.indent ? { indent: xf.indent } : {}),
+    ...(xf.applyFont ? { applyFont: true } : {}),
+    ...(xf.applyFill ? { applyFill: true } : {}),
   }
 }
 

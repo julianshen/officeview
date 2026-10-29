@@ -246,7 +246,7 @@ export function autoFitRowCandidates(visible: Iterable<number>, known: Iterable<
   return [...seen]
 }
 /** The painter's font string for a cell style (render.ts layoutCellBody). */
-export function cellFont(style: { bold?: boolean; italic?: boolean; fontSizePt?: number } | undefined): { font: string; sizePx: number } {
+export function cellFont(style: { bold?: boolean; italic?: boolean; fontSizePt?: number; fontName?: string } | undefined): { font: string; sizePx: number } {
   const sizePt = style?.fontSizePt ?? 10
   return { font: cellFontString(style, sizePt), sizePx: sizePt * 96 / 72 }
 }

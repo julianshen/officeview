@@ -72,6 +72,17 @@ export interface XlsxCellStyle {
   wrapText?: boolean
   /** alignment@shrinkToFit as authored (ignored when wrapping). Absent stays undefined. */
   shrinkToFit?: boolean
+  /** Font underline as authored (`<u/>` is single); absent or `none` stays undefined. */
+  underline?: 'single' | 'double' | 'singleAccounting' | 'doubleAccounting'
+  /** Font strikethrough; absent or off stays undefined. */
+  strike?: boolean
+  /** Font face name as authored (painted ahead of the cell font stack). */
+  fontName?: string
+  /** alignment@indent level (> 0); one level is one maximum digit width. */
+  indent?: number
+  /** The xf's applyFont/applyFill: its font/fill wins over a table or pivot style (Task 3 measurement). */
+  applyFont?: boolean
+  applyFill?: boolean
 }
 
 export interface XlsxRow {

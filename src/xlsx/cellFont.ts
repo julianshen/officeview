@@ -6,7 +6,15 @@
  */
 export const CELL_FONT_STACK = '"Calibri", Carlito, Arial, Helvetica, "Liberation Sans", sans-serif'
 
+/** The font-family list for a cell face: an authored name goes ahead of the
+ * stack (so a missing face still falls back deterministically); Calibri and an
+ * absent name are the stack itself. */
+export function cellFontFamily(name: string | undefined): string {
+  const face = name?.replace(/["\\;{}]/g, '').trim()
+  return !face || face === 'Calibri' ? CELL_FONT_STACK : `"${face}", ${CELL_FONT_STACK}`
+}
+
 /** The canvas font string of a cell style at `sizePt`. */
-export function cellFontString(style: { bold?: boolean; italic?: boolean } | undefined, sizePt: number): string {
-  return `${style?.italic ? 'italic ' : ''}${style?.bold ? 'bold ' : ''}${sizePt}pt ${CELL_FONT_STACK}`
+export function cellFontString(style: { bold?: boolean; italic?: boolean; fontName?: string } | undefined, sizePt: number): string {
+  return `${style?.italic ? 'italic ' : ''}${style?.bold ? 'bold ' : ''}${sizePt}pt ${cellFontFamily(style?.fontName)}`
 }

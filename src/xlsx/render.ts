@@ -25,8 +25,8 @@ export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type O
 import { RectangleIndex } from './view/structure'
 import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
-import type { CellBodyLayout } from './view/textLayout'
-import { CELL_FONT_STACK, cellFontString } from './cellFont'
+import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
+import { cellFontFamily as cellFaceFamily, cellFontString } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
 
 export interface GridMetrics {
@@ -80,7 +80,7 @@ export function cellTextRotation(rotation: number | undefined): { radians: numbe
  * metric-compatible Carlito, then common sans faces with the same metrics in
  * every context, then the generic.
  */
-const cellFontFamily = (family: string): string => family === 'Calibri' ? CELL_FONT_STACK : family
+const cellFontFamily = (family: string): string => cellFaceFamily(family)
 /** Calibri (= Carlito) advance widths for U+0020..U+007E in 1/2048 em, regular
  * and bold: Excel's own layout metrics for its default face, so '#' overflow
  * follows what Excel shows even where the fallback face is wider. */
@@ -146,17 +146,22 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
  * Layout and paint are separate so the viewer can cache the layout (computed
  * in a box at the origin) and replay it; the static path runs both back to back
  * at absolute coordinates, exactly as before. */
-function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
+function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance, indentPx = 0): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
   const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
   const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? defaultHorizontal : style.horizontal
   const vertical = style?.vertical ?? 'center'
   const wrap = style?.wrapText ?? !!stacked
+  const fontFamily = style?.fontName ?? 'Calibri'
+  // alignment@indent (left, right, distributed) narrows the box the text is
+  // fitted and aligned in, from the aligned side; the clip stays the cell.
+  const indent = !stacked && !radians && (horizontal === 'left' || horizontal === 'right' || horizontal === 'distributed') ? Math.min(indentPx, Math.max(0, w - PADDING_L - PADDING_R - 1)) : 0
+  const box = { x: horizontal === 'right' ? x : x + indent, y, w: w - indent, h }
   const body: PptxTextBody = { direction: stacked ? 'wordArtVertRtl' : 'horz', anchor: 't', wrap,
     insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0,
-    paragraphs: [{ runs: [{ text, fontSizePt: style?.fontSizePt ?? 10, fontFamily: 'Calibri', bold: style?.bold, italic: style?.italic, color }], align: 'left', level: 0,
-      defaultProperties: { fontSizePt: style?.fontSizePt ?? 10, fontFamily: 'Calibri', bold: style?.bold, italic: style?.italic, color }, wrapWhitespace: true,
+    paragraphs: [{ runs: [{ text, fontSizePt: style?.fontSizePt ?? 10, fontFamily, bold: style?.bold, italic: style?.italic, color }], align: 'left', level: 0,
+      defaultProperties: { fontSizePt: style?.fontSizePt ?? 10, fontFamily, bold: style?.bold, italic: style?.italic, color }, wrapWhitespace: true,
       ...(stacked ? {} : { wordLineSpacing: { rule: 'auto', value: 240 } }) }] }
   ctx.save()
   try {
@@ -170,7 +175,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
       layout = layoutTextBody(body, w, h, measure)
     } else {
       const cosine = Math.abs(Math.cos(radians)), sine = Math.abs(Math.sin(radians))
-      const innerW = Math.max(1, w - PADDING_L - PADDING_R), innerH = Math.max(1, h - 2 * PADDING_L)
+      const innerW = Math.max(1, box.w - PADDING_L - PADDING_R), innerH = Math.max(1, h - 2 * PADDING_L)
       const maxFlow = Math.min(cosine > 1e-10 ? innerW / cosine : Infinity, sine > 1e-10 ? innerH / sine : Infinity)
       const advance = measure(text, body.paragraphs[0].runs[0]).width
       const metrics = measure('Mg', body.paragraphs[0].runs[0])
@@ -199,7 +204,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
       layout = chosen ?? rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
     }
     const bounds = textLayoutBounds(layout, measure)
-    const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
+    const placed = alignedLayout(layout, bounds, box, horizontal, vertical)
     // One unwrapped, unrotated line may run into empty neighbours (S13); the
     // clip widens by the room it needs, up to the allowance.
     let clipX0 = x, clipX1 = x + w
@@ -1068,7 +1073,9 @@ export function layoutCellBody(
     if (explicit) {
       ctx.fillStyle = color
       ctx.font = font
-      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow), font }
+      // One indent level is one maximum digit width (measured, Excel 16.114).
+      const indentPx = (style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
+      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow, indentPx), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.
       ctx.font = font
@@ -1084,6 +1091,7 @@ export function layoutCellBody(
       const band = overflowBand(x, w, tx, textW, overflow)
       if (band) out.text.clipX = band
     }
+    if (style?.underline || style?.strike) out.text.decoration = { ...(style.underline ? { underline: style.underline } : {}), ...(style.strike ? { strike: true } : {}), sizePx: (style.fontSizePt ?? 10) * 96 / 72 }
   }
   if (cell.style?.borders) out.borders = cell.style.borders
   if (cell.style?.borderColors) out.borderColors = cell.style.borderColors
@@ -1169,8 +1177,13 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
       ctx.clip()
       ctx.textBaseline = 'alphabetic'
       ctx.fillText(text.text, text.tx, text.ty)
+      if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
       ctx.restore()
-    } else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
+    } else {
+      ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty)
+      if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
+    }
+    if (text.kind === 'layout' && text.decoration && !text.stacked) paintLayoutDecoration(ctx, text, x, w)
   }
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders
@@ -1211,6 +1224,46 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
     draw('bottom', x, y + hh, x + w, y + hh)
     ctx.lineWidth = 1
   }
+}
+
+/** Underline and strikethrough of one run of text whose baseline starts at
+ * (tx, ty) and spans `width`, in the current transform. Accounting underlines
+ * sit below the descenders and span the cell box [cellX, cellX + cellW]. */
+function paintDecoration(ctx: CanvasRenderingContext2D, d: CellTextDecoration, tx: number, ty: number, width: number, cellX?: number, cellW?: number): void {
+  const t = Math.max(1, Math.round(d.sizePx / 16))
+  const line = (x0: number, w: number, y: number) => ctx.fillRect(x0, Math.round(y), w, t)
+  if (d.strike) line(tx, width, ty - d.sizePx * 0.27)
+  if (!d.underline) return
+  const accounting = d.underline === 'singleAccounting' || d.underline === 'doubleAccounting'
+  const x0 = accounting && cellX !== undefined && cellW !== undefined ? cellX + 1 : tx
+  const w = accounting && cellX !== undefined && cellW !== undefined ? Math.max(0, cellW - 2) : width
+  const y = ty + Math.max(1, Math.round(d.sizePx * (accounting ? 0.22 : 0.11)))
+  line(x0, w, y)
+  if (d.underline === 'double' || d.underline === 'doubleAccounting') line(x0, w, y + 2 * t)
+}
+/** Decorations of a laid-out (aligned, wrapped or rotated) cell text: each
+ * segment in its own baseline frame, clipped as the text is. Accounting
+ * underlines span the cell only when the text is unrotated. */
+function paintLayoutDecoration(ctx: CanvasRenderingContext2D, text: Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }>, cellX: number, cellW: number): void {
+  const d = text.decoration!
+  ctx.save()
+  try {
+    ctx.beginPath()
+    ctx.rect(text.clip.x, text.clip.y, text.clip.width, text.clip.height)
+    ctx.clip()
+    for (const line of text.layout.lines) for (const segment of line.segments) {
+      if (segment.text === '\n' || segment.width <= 0) continue
+      const m = segment.transform ?? { a: 1, b: 0, c: 0, d: 1, e: segment.x, f: line.baseline }
+      if (!text.rotation && m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1) {
+        paintDecoration(ctx, d, m.e, m.f, segment.width, cellX, cellW)
+        continue
+      }
+      ctx.save()
+      ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f)
+      paintDecoration(ctx, d, 0, 0, segment.width)
+      ctx.restore()
+    }
+  } finally { ctx.restore() }
 }
 
 /** Excel's border line styles (ECMA-376 ST_BorderStyle) at 100% zoom. */
