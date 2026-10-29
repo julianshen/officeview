@@ -10,6 +10,26 @@ in git history.
 
 ## [Unreleased]
 
+### Added
+
+- **Excel table and pivot table styles, slicers and timelines (view-only).**
+  - Excel tables now draw in their table styles: the 60 built-ins and custom styles, with the header, totals,
+    first/last column and stripe flags. Cell formats layer over the style as in Excel, and as in Excel there are no
+    gridlines inside a pivot and none under a filled table or pivot cell.
+  - Pivot tables are shown as saved, in their pivot styles (84 built-ins and custom), with `formats` overrides, the
+    compact indent and Excel's buttons. The interactive viewer draws the ± and field dropdowns; page mode and export
+    draw what Excel prints.
+  - Slicers and timelines are drawn per style, with item states, columns, scroll position, timeline level and
+    selection. Pivot charts link to their pivot and, like Excel for Mac, draw no field buttons.
+  - Everything works in every spreadsheet view, including large workbooks opened through the viewer worker. The code
+    is lazy chunks loaded only for workbooks that need them.
+  - Pivot interaction (expand and collapse, filter, sort, field list) and clicking slicers and timelines come in
+    later releases.
+- **Excel reference comparison for tables, pivots, slicers and timelines.** `bun scripts/pivot-compare.ts --stage 1`
+  compares the viewer with Excel for Mac 16.114 captures of every built-in table, pivot, slicer and timeline style
+  and of the pivot layouts; 237 of 239 cases pass. Per-case tolerances and the known differences are in
+  `docs/validation/xlsx-pivots.md`.
+
 ## [0.10.0] - 2026-10-28
 
 Excel sparklines: line, column and win/loss sparklines drawn in their cells,

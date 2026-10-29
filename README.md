@@ -881,7 +881,7 @@ cross-origin frame cannot reach its parent's `<iframe>` element.
 
 **Word (.docx)** — paragraphs and runs (bold/italic/underline/strike/size/color/highlight), alignment incl. justify, indents, spacing, line spacing, page size and margins, section breaks, pagination, hyperlinks, embedded images (inline **and** floating/anchored, incl. `behindDoc`), tables (spans, vertical merges across rows *and* page breaks, shading, borders, per-row heights, `w:vAlign`, repeating header rows), headers/footers on every page with live `PAGE`/`NUMPAGES` fields, `w:titlePg` first-page variants, and list numbering (decimal, bullet, alphabetic, roman, nested levels) with hanging indents.
 
-**Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out. Charts (see [Charts](#charts)) and line, column and win/loss sparklines (see [Sparklines](#sparklines)) are drawn in place.
+**Excel (.xlsx)** — sheets, shared and inline strings, numbers/booleans, styles (fonts, fills, borders, number formats incl. percent, thousands, date serials), custom column widths and row heights, and merged cells painted across their full range with interior gridlines masked out. Charts (see [Charts](#charts)), line, column and win/loss sparklines (see [Sparklines](#sparklines)), and table and pivot table styles, slicers and timelines (see [Tables](#tables)) are drawn in place.
 
 **PowerPoint (.pptx)** — slides, shapes (rect/roundRect/ellipse) with fills, outlines and rotation, text bodies (runs with color/bold/italic/typeface, alignment, insets, vertical anchor, wrapping), embedded pictures with `a:srcRect` cropping, and tables (`a:tbl` grid, `gridSpan`/`rowSpan`/merges, cell fills, banding and first-row styling resolved from `tableStyles.xml`). Slide backgrounds (solid, gradient, pattern, picture and theme `bgRef`, inherited slide → layout → master) and the master's and layout's non-placeholder artwork (logos, bands, honouring `showMasterSp`) are attached by a lazily loaded enrichment step that `getPaintables` (and so `<OfficeDoc>`, print and the worker) runs before painting. A host that calls the low-level `renderSlide` directly sees the slides without them unless it first awaits `enrichSlideAppearance(doc)`, which is exported for that purpose and loads its code on demand.
 
@@ -1035,6 +1035,62 @@ the resident one. Still unverified, or known to differ:
 
 The measurements, cases and scope record are in
 [`docs/validation/xlsx-sparklines.md`](docs/validation/xlsx-sparklines.md).
+
+## Tables
+
+Excel tables (ListObjects) and pivot tables are drawn in their table styles. Slicers and timelines are drawn too. All
+of this appears in the page viewer, in print and PNG/PDF export, in the interactive viewer, and in large workbooks
+opened through the viewer worker. The style engine and the pivot code are lazy chunks, loaded only when a workbook
+has a styled table, a pivot, a slicer or a timeline.
+
+- **Table styles:**
+  - the 60 built-in styles (Light 1–21, Medium 1–28, Dark 1–11) and custom `tableStyles`;
+  - the header and totals rows, the first and last column, and row and column stripes, per the table's flags.
+
+  A cell's own fill, font and borders draw over the style, as Excel layers them. A filled table cell hides its
+  gridlines, as in Excel.
+- **Pivot tables** are shown as saved. Their cells are the ones in the file, not recomputed. Drawn:
+  - the 84 built-in pivot styles and custom styles, with the style flags and the pivot's `formats` overrides;
+  - compact, outline and tabular forms, with the compact indent;
+  - no gridlines inside the pivot.
+
+  Buttons follow the view. The interactive viewer draws what Excel shows on screen: the ± buttons and the field and
+  page-field dropdowns. Page mode and export draw what Excel prints: no dropdowns, and ± only when "print expand/collapse
+  buttons" is set.
+
+  A pivot whose saved layout cannot be read shows its saved cells with their own formatting, and adds a diagnostic.
+- **Slicers and timelines** are drawn in their anchors, per slicer or timeline style:
+  - slicers: item states (selected, unselected, no data), columns and the scroll position;
+  - timelines: the level, the selected periods and the scrollbar.
+- **Pivot charts** are drawn from the chart's saved data. Like Excel for Mac, the viewer draws no PivotChart field
+  buttons.
+
+Pivots, slicers and timelines are view-only in this release. Expanding and collapsing, filtering, sorting, the field
+list, and clicking slicers and timelines are planned for later releases.
+
+Hosts that call the low-level `renderSheet` directly must first `await preloadTableStyles()`. Without it, table and
+pivot cells paint with their stored formatting only, and a `table-style-engine-unavailable` diagnostic is added to
+`sheet.diagnostics`. `getPaintables`, and so `<OfficeDoc>`, loads the styles itself.
+
+### Validation and limits
+
+The reference suite was checked by pixel comparison against Excel for Mac 16.114 at 1 px per point. It covers every
+built-in table and pivot style, the table flags, the pivot layouts and options, every slicer and timeline style, and
+two window screenshots with the dropdowns. Each reference is captured from Excel's own rendering and compared with
+the interactive viewer at 75 %. Cell text is masked, because Excel draws Calibri and the viewer its own font stack.
+237 of the 239 comparisons pass within an anti-aliasing tolerance.
+
+Still unverified, or known to differ:
+
+- A workbook without a theme part: Excel draws its current default theme, and the viewer its fallback colours.
+- Slicer and timeline header icons (multi-select, clear filter) are not drawn.
+- Timeline period spacing and bar shading are approximate: Excel spaces periods by calendar length and shades the bar
+  with a gradient. Timeline labels are in English, where Excel uses its UI language.
+- Double borders, such as some styles' grand-total line, blur at zooms below 100 %.
+- PivotChart field buttons, as drawn by Excel for Windows, are not drawn.
+- Gridlines under a plain cell fill outside tables and pivots still show; Excel hides them.
+
+Measurements and the per-case results are in [`docs/validation/xlsx-pivots.md`](docs/validation/xlsx-pivots.md).
 
 ## Selecting and copying
 
