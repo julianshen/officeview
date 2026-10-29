@@ -279,7 +279,7 @@ interface SheetEntry {
   /** Generation of the worker-resolved sparkline map read by the tile painter. */
   sparklineGen: number
   /** Generation of the worker-resolved table-style layer. */
-  regionStyleGen: number
+  regionStyleGen: string
   revision: number
   /** Worker-backed sheets: generation of the merged ranges the geometry holds. */
   structureGen: number
@@ -488,7 +488,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   /** A sheet entry built off to the side: nothing is charged, held or published. */
   interface Candidate {
-    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: number; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
+    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
     order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
     built: SheetGeometry & { readonly chargeBytes?: number }
     /** Exactly what publishing charges (the entry charge functions). */
@@ -500,9 +500,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const prepareEntry = (sheetId: string, override?: SessionSizes): { entry: SheetEntry } | { candidate: Candidate } => {
     const index = sheetIds.indexOf(sheetId)
     let sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
-    const regionStyleContent = remote && (remote.layout(sheetId).hasPivotDisplay || remote.layout(sheetId).hasRegionStyles) ? remote.pivotDisplay(sheetId) : null
-    const regionStyleGen = regionStyleContent?.gen ?? 0
-    if (regionStyleContent) sheet = sheetWithRegionStyles(sheet, regionStyleContent)
+    const layout = remote?.layout(sheetId)
+    const regionStyleContents = remote && layout ? [
+      ...(layout.hasRegionStyles ? [remote.regionStyles(sheetId)] : []),
+      ...(layout.hasPivotDisplay ? [remote.pivotDisplay(sheetId)] : []),
+    ] : []
+    const regionStyleGen = JSON.stringify(regionStyleContents.map(content => content.gen))
+    for (const content of regionStyleContents) sheet = sheetWithRegionStyles(sheet, content)
     const sparklineContent = remote && remote.layout(sheetId).hasSparklines ? remote.sparklines(sheetId) : null
     const sparklineGen = sparklineContent?.gen ?? 0
     if (sparklineContent) sheet = sheetWithSparklines(sheet, sparklineContent)

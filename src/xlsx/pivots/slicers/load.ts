@@ -92,17 +92,30 @@ export async function loadSheetControls(pkg: PackageReader, request: SheetContro
       }
       return nodes
     }
-    for (const node of await parts(request.slicerIds, '/slicer', 'slicer')) for (const part of parseSlicerPart(node)) {
+    const slicerParts = (await parts(request.slicerIds, '/slicer', 'slicer')).flatMap(parseSlicerPart)
+    const timelineParts = (await parts(request.timelineIds, '/timeline', 'timeline')).flatMap(parseTimelinePart)
+    // Match the paged importer: a referenced custom control style beyond the
+    // ordinary style window is selected before parsing, while unused styles
+    // remain capped. This keeps resident and paged control pixels identical.
+    const preferredStyles = new Set([
+      ...slicerParts.map(part => part.style ?? workbook.extras.defaultSlicerStyle ?? 'SlicerStyleLight1'),
+      ...timelineParts.map(part => part.style ?? 'TimeSlicerStyleLight1'),
+    ])
+    const extras = request.styles
+      ? parseStylesExtras(request.styles.root, request.styles.colors, preferredStyles, preferredStyles)
+      : workbook.extras
+    const controlsWorkbook = extras === workbook.extras ? workbook : { ...workbook, extras }
+    for (const part of slicerParts) {
       if (out.slicers.has(part.name)) continue
-      const style = slicerAppearance(part.style ?? workbook.extras.defaultSlicerStyle, workbook.extras, request.theme, report)
-      const built = buildSlicerModel(part, workbook.slicerCaches.get(part.cache), workbook.pivotCaches, style)
+      const style = slicerAppearance(part.style ?? controlsWorkbook.extras.defaultSlicerStyle, controlsWorkbook.extras, request.theme, report)
+      const built = buildSlicerModel(part, controlsWorkbook.slicerCaches.get(part.cache), controlsWorkbook.pivotCaches, style)
       built.diagnostics.forEach(report)
       if (built.model) out.slicers.set(part.name, built.model)
     }
-    for (const node of await parts(request.timelineIds, '/timeline', 'timeline')) for (const part of parseTimelinePart(node)) {
+    for (const part of timelineParts) {
       if (out.timelines.has(part.name)) continue
-      const style = timelineAppearance(part.style, workbook.extras, request.theme, report)
-      const built = buildTimelineModel(part, workbook.timelineCaches.get(part.cache), workbook.pivotCaches, style)
+      const style = timelineAppearance(part.style, controlsWorkbook.extras, request.theme, report)
+      const built = buildTimelineModel(part, controlsWorkbook.timelineCaches.get(part.cache), controlsWorkbook.pivotCaches, style)
       built.diagnostics.forEach(report)
       if (built.model) out.timelines.set(part.name, built.model)
     }

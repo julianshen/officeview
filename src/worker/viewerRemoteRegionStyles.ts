@@ -20,13 +20,25 @@ export interface RegionStyleHost {
   hasRegionStyles(sheetId: string): boolean
   hasPivotDisplay?(sheetId: string): boolean
   loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete' }
-  grant(sheetId: string, requestId: string, minimumBytes?: number): number | null
+  grant(sheetId: string, requestId: string, minimumBytes?: number, op?: 'regionStyles' | 'pivotDisplay'): number | null
   releaseGrant(requestId: string): void
   request(command: CommandOf<'read'>, signal?: AbortSignal): Promise<WorkerReply<'read'> | symbol>
   nextRequestId(): string
   release(reply: WorkerReply<'read'>): void
   admitLayer(sheetId: string, requestId: string, bytes: number): (() => void) | null
   changed(sheetId: string, reason?: 'updated' | 'evicted'): void
+}
+
+/** Tables and pivots are separate bounded reads; their non-overlapping layers share one paint entry. */
+export function mergeRegionStyleLayers(...layers: Array<RegionStyleLayer | undefined>): RegionStyleLayer | undefined {
+  const retained = layers.filter((layer): layer is RegionStyleLayer => Boolean(layer))
+  if (!retained.length) return undefined
+  if (retained.length === 1) return retained[0]
+  return {
+    rects: retained.flatMap(layer => layer.rects),
+    get retainedBytes() { return retained.reduce((sum, layer) => sum + layer.retainedBytes, 0) },
+    styleAt(row, col, own, mode) { return retained.reduce((style, layer) => layer.styleAt(row, col, style, mode), own) },
+  }
 }
 interface Entry { state: PagedRegionStyleState['state']; gen: number; owner?: CacheIdentity; seq: number; attempts: number; grantFloor?: number; sizeRetryAttempted?: boolean; payload?: RemoteRegionStyles | RemotePivotDisplay; layer?: RegionStyleLayer; layerReady?: boolean; reply?: WorkerReply<'read'>; releaseReply?: () => void; replyBytes: number; layerBytes: number; layerRelease?: () => void; controller?: AbortController; timer?: ReturnType<typeof setTimeout>; layerPending?: boolean; diagnostics: PagedRegionStyleState['diagnostics'] }
 const empty = (): PagedRegionStyleState => ({ state: 'waiting', gen: 0, diagnostics: [] })
@@ -160,7 +172,7 @@ export class RemoteRegionStyleCache {
   }
   private async load(sheetId: string, entry: Entry): Promise<void> {
     if (this.closed) return
-    const requestId = this.host.nextRequestId(), owner = this.host.identity(sheetId), grantBytes = this.host.grant(sheetId, requestId, entry.grantFloor)
+    const requestId = this.host.nextRequestId(), owner = this.host.identity(sheetId), grantBytes = this.host.grant(sheetId, requestId, entry.grantFloor, this.op)
     entry.attempts++
     if (grantBytes === null) { this.retry(sheetId, entry, entry.seq); return }
     entry.grantFloor = undefined
@@ -227,7 +239,10 @@ export function sheetWithRegionStyles<T extends { tables?: unknown[]; regionStyl
   const diagnostics = [...(sheet.diagnostics ?? [])]
   for (const diagnostic of state.diagnostics) if (!diagnostics.some(found => found.feature === diagnostic.feature && found.message === diagnostic.message)) diagnostics.push(diagnostic)
   if (state.state !== 'ready' || !state.payload) return { ...sheet, diagnostics } as T
-  return { ...sheet, tables: state.payload.tables.map(item => item.table), ...('pivotTables' in state.payload ? { pivotTables: state.payload.pivotTables } : {}), regionStyles: state.layer, regionStylesResolved: true, diagnostics } as T
+  const tables = 'pivotTables' in state.payload ? (sheet.tables ?? []) : state.payload.tables.map(item => item.table)
+  const priorPivotTables = (sheet as T & { pivotTables?: unknown[] }).pivotTables
+  const pivotTables = 'pivotTables' in state.payload ? state.payload.pivotTables : priorPivotTables
+  return { ...sheet, tables, ...(pivotTables ? { pivotTables } : {}), regionStyles: mergeRegionStyleLayers(sheet.regionStyles, state.layer), regionStylesResolved: true, diagnostics } as T
 }
 
 /** Drop the display entry's reference when its decoded role cache is evicted. */

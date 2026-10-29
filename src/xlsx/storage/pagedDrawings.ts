@@ -279,7 +279,11 @@ export async function readPagedPivotDisplayParts(source: { src: RangeSource; inv
       const parsed = await (await import('../pivots/load')).loadPivotWorkbook(pkg, input.pivotRegions)
       pivotTables = parsed.tables.filter(table => table.sheet === input.sheetName)
       const sheetParts = new Set(input.pivotRegions.get(input.sheetName)?.map(region => region.partPath) ?? [])
-      diagnostics.push(...parsed.diagnostics.filter(diagnostic => Boolean(diagnostic.partPath && sheetParts.has(diagnostic.partPath))))
+      const cacheParts = new Set(pivotTables.map(table => table.cachePartPath).filter((partPath): partPath is string => Boolean(partPath)))
+      diagnostics.push(...parsed.diagnostics.filter(diagnostic =>
+        diagnostic.feature === 'pivot-cache-refs-unreadable'
+        || Boolean(diagnostic.partPath && (sheetParts.has(diagnostic.partPath) || cacheParts.has(diagnostic.partPath))),
+      ))
     }
   } catch (cause) {
     if (signal.aborted) throw aborted(signal)

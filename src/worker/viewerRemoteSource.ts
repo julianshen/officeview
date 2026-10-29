@@ -260,17 +260,15 @@ export class RemoteWorkbook implements WorkbookSource {
     }, MAIN_THREAD_BUDGETS[this.profile] / 4)
     const regionStyleHost: RegionStyleHost = {
       identity: sheetId => this.identity(sheetId), hasRegionStyles: sheetId => this.layout(sheetId).hasRegionStyles === true,
-      hasPivotDisplay: sheetId => this.layout(sheetId).hasPivotDisplay === true || this.layout(sheetId).hasRegionStyles === true,
+      hasPivotDisplay: sheetId => this.layout(sheetId).hasPivotDisplay === true,
       loadState: sheetId => this.loadState(sheetId),
-      grant: (sheetId, requestId, minimumBytes) => {
+      grant: (sheetId, requestId, minimumBytes, op = 'regionStyles') => {
         const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
         const layout = this.layout(sheetId)
-        const tableCount = Math.min(MAX_REGION_STYLE_TABLES, layout.regionStyleTableCount ?? 1)
-        // Pivot definitions and referenced pivot/control style definitions have
-        // their own serialized payload. Reserve 64 KiB per pivot or
-        // control in addition to the table-style descriptor bound; retry remains
-        // available for larger authored definitions.
-        const pivotItems = (layout.pivotTableCount ?? 0) + (layout.pivotControlCount ?? 0)
+        const tableCount = op === 'regionStyles' ? Math.min(MAX_REGION_STYLE_TABLES, layout.regionStyleTableCount ?? 1) : 0
+        // Pivot-display replies carry only pivot definitions and their table
+        // style definitions; slicer/timeline styles use the drawing read.
+        const pivotItems = op === 'pivotDisplay' ? layout.pivotTableCount ?? 0 : 0
         const planned = REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE + pivotItems * 65_536
         const limit = Math.min(headroom, Math.max(planned, minimumBytes ?? 0)), owner = `region-style-grant:${requestId}`
         if (!Number.isSafeInteger(limit) || limit < Math.max(4096, minimumBytes ?? 0) || this.mainLedger.ownerBytes('replies', owner) > 0) return null

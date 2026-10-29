@@ -570,8 +570,11 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       if (sheet.metadata.skippedCells) {
         workbook.diagnostics.push({ code: 'cells-outside-sheet', message: `${sheet.metadata.skippedCells} cells outside the sheet grid were ignored`, partId: sheet.partPath })
       }
-      sheet.state = 'complete'
-      const completeSheets = sheets.filter(candidate => candidate.state === 'complete')
+      // Include this candidate when choosing referenced styles, but keep its
+      // public state loading until the priority re-parse and cache replacement
+      // have both settled. A concurrent display read must not observe stale
+      // style extras under a `complete` state.
+      const completeSheets = sheets.filter(candidate => candidate === sheet || candidate.state === 'complete')
       const referencedTableStyles = new Set(completeSheets.flatMap(candidate => [
         ...(candidate.tables?.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)) ?? []),
         ...(candidate.metadata.pivotRegions?.map(region => region.styleName).filter((name): name is string => Boolean(name)) ?? []),
@@ -589,6 +592,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         for (const name of referencedTableStyles) prioritizedTableStyleNames.add(name)
         for (const name of referencedSlicerStyles) prioritizedSlicerStyleNames.add(name)
       }
+      sheet.state = 'complete'
       pulse()
     }
     progress('done')
