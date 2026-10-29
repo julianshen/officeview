@@ -7,7 +7,7 @@ import type { WorkbookFormatting } from '../view/contracts'
 import { DEFAULT_FORMATTING, workbookFormattingWithColorContext } from './pagedFormatting'
 import type { Completeness, ProfileId, SourceFailure, SourceHandle, SourceStamp, WorkerDiagnostic } from '../view/contracts'
 import { PackageError, isPackageError, throwIfAborted } from '../../core/package-error'
-import { blobRangeSource, openPart, readPartBytes, readZipInventory, type RangeSource, type ZipInventory } from '../../core/zip-stream'
+import { blobRangeSource, openPart, readPartBytes, readPartPrefixBytes, readZipInventory, type RangeSource, type ZipInventory } from '../../core/zip-stream'
 import { tokenizeBytes } from '../../core/xml-stream'
 import { attrs, getChildren, parseXml } from '../../core/xml'
 import { resolvePartTarget } from '../../drawing/parts'
@@ -463,10 +463,10 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         const partPath = resolvePartTarget(sheet.partPath, rel.target)
         const pivotEntry = inventory.find(partPath)
         let text: string | undefined
-        if (pivotEntry && pivotEntry.uncompressedSize <= PIVOT_PART_MAX_BYTES) {
+        if (pivotEntry) {
           plan(partPath)
           try {
-            text = utf8.decode(await readPartBytes(src, pivotEntry, PIVOT_PART_MAX_BYTES, partOpts(partPath, PIVOT_PART_MAX_BYTES)))
+            text = utf8.decode(await readPartPrefixBytes(src, pivotEntry, PIVOT_PART_MAX_BYTES, partOpts(partPath, PIVOT_PART_MAX_BYTES)))
           } catch (error) {
             if (isPackageError(error) && error.code === 'cancelled') throw error
           } finally { ledger.drainQueue() }

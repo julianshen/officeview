@@ -351,7 +351,9 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
       }
       const slash = sheetPath.lastIndexOf('/')
       const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
-      const wsRels = await pkg.xml(wsRelsPath)
+      let wsRels: XmlNode | undefined
+      let wsRelsUnreadable = false
+      try { wsRels = await pkg.xml(wsRelsPath) } catch { wsRelsUnreadable = true }
       const wsRelTargets = new Map<string, { target: string; type: string }>()
       if (wsRels) {
         for (const rel of getChildren(wsRels, 'Relationship')) {
@@ -362,6 +364,13 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         }
       }
       const controls = controlIds(wsRoot)
+      const sheet = sheets[i]!
+      if (wsRelsUnreadable) {
+        (sheet.diagnostics ??= []).push({
+          kind: 'unsupported', feature: 'pivot-control-refs-unreadable',
+          message: `Worksheet relationships could not be read from ${wsRelsPath}`,
+        })
+      }
       const resolveControls = (ids: string[], suffix: string): ControlPartRef[] | undefined => {
         const refs = ids.flatMap(id => {
           const rel = wsRelTargets.get(id)
@@ -370,14 +379,13 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         })
         return refs.length ? refs : undefined
       }
-      const sheet = sheets[i]!
       sheet.slicerRefs = resolveControls(controls.slicerIds, '/slicer')
       sheet.timelineRefs = resolveControls(controls.timelineIds, '/timeline')
       for (const rel of wsRelTargets.values()) {
         if (!rel.type.endsWith('/pivotTable')) continue
         const partPath = resolvePartTarget(sheetPath, rel.target)
         try {
-          const parsed = parsePivotRegion(await pkg.boundedText(partPath, PIVOT_PART_MAX_BYTES), partPath)
+          const parsed = parsePivotRegion(await pkg.prefixText(partPath, PIVOT_PART_MAX_BYTES), partPath)
           if (parsed.region) (sheet.pivotRegions ??= []).push(parsed.region)
           else if (parsed.unreadable) (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}` })
         } catch {
@@ -389,6 +397,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
         continue
       }
       declaredTableParts += tablePartDecls.length
+      if (wsRelsUnreadable) tableInventoryComplete = false
       for (const rid of tablePartDecls) {
         // A declaration without a required relationship id cannot resolve.
         if (rid === undefined) {

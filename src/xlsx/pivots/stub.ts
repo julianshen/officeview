@@ -21,20 +21,37 @@ export function sheetHasRegionStyles(sheet: XlsxSheet): boolean {
   return Boolean(sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotRegions?.length || sheet.slicerRefs?.length || sheet.timelineRefs?.length)
 }
 
+function cellCoords(cell: string): { row: number; col: number } | undefined {
+  const m = /^\$?([A-Z]{1,3})\$?([1-9][0-9]*)$/.exec(cell)
+  if (!m) return undefined
+  const col = [...m[1]].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0)
+  const row = Number(m[2])
+  return col <= 16384 && row <= 1048576 ? { row, col } : undefined
+}
+
 function validRef(ref: string): boolean {
-  const cell = '\\$?[A-Z]{1,3}\\$?[1-9][0-9]*'
-  const range = new RegExp(`^${cell}(?::${cell})?$`)
-  if (!range.test(ref)) return false
-  const cols = ref.replace(/\$?[0-9]+/g, '').split(':')
-  const rows = ref.match(/\$?([0-9]+)/g) ?? []
-  const colNum = (s: string) => [...s.replace(/\$/g, '')].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0)
-  return cols.every(s => colNum(s) <= 16384) && rows.every(s => Number(s.replace(/\$/g, '')) <= 1048576)
+  const parts = ref.split(':')
+  if (parts.length < 1 || parts.length > 2) return false
+  const start = cellCoords(parts[0]), end = cellCoords(parts[1] ?? parts[0])
+  return Boolean(start && end && start.row <= end.row && start.col <= end.col)
 }
 
 function attr(raw: string, name: string): string | undefined {
-  const escaped = name
-  const m = new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(["'])(.*?)\\1`, 's').exec(raw)
+  const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(["'])(.*?)\\1`, 's').exec(raw)
   return m?.[2]
+}
+
+function decodeXmlEntities(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);/gi, (entity) => {
+    const named: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" }
+    const known = named[entity.toLowerCase()]
+    if (known !== undefined) return known
+    const hex = /^&#x([\da-f]+);$/i.exec(entity)
+    const decimal = /^&#(\d+);$/.exec(entity)
+    const codePoint = hex ? Number.parseInt(hex[1], 16) : decimal ? Number.parseInt(decimal[1], 10) : NaN
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ? String.fromCodePoint(codePoint) : entity
+  })
 }
 
 /** Bounded scan: never constructs an XML tree for a pivot definition. */
@@ -45,7 +62,8 @@ export function parsePivotRegion(text: string | undefined, partPath: string): { 
   if (!root || !loc) return { unreadable: true }
   const ref = attr(loc[1], 'ref')
   if (!ref || !validRef(ref)) return { unreadable: true }
-  const name = attr(root[1], 'name')
+  const rawName = attr(root[1], 'name')
+  const name = rawName === undefined ? undefined : decodeXmlEntities(rawName)
   return { region: { partPath, ref, ...(name ? { name } : {}) }, unreadable: false }
 }
 

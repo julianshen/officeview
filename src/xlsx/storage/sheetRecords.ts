@@ -16,6 +16,7 @@ import { registerNamespaceAware, type XmlNode } from '../../core/xml'
 import type { SheetColorContext } from '../sheetColors'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 import { MAX_POINTS_PER_SHEET, MAX_POINTS_PER_SPARKLINE, MAX_SPARKLINES_PER_GROUP, MAX_SPARKLINE_GROUPS_PER_SHEET, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, XM_SPARKLINE_NS, parseSparklineGroups } from '../sparklines/parseGroups'
+import { SLICER_EXTENSION_URI, TIMELINE_EXTENSION_URI, X14_SLICER_NS, X15_TIMELINE_NS } from '../pivots/stub'
 import { parseA1Area } from '../ranges'
 
 export interface AdmissionCounters {
@@ -414,10 +415,6 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   const colorAttrNames = new Set(['rgb', 'theme', 'indexed', 'tint', 'auto'])
   /** The eight colour elements parseSparklineGroups reads; any other `color*` name is never captured (PR #49 review). */
   const sparkColorNames = new Set(['colorSeries', 'colorNegative', 'colorAxis', 'colorMarkers', 'colorFirst', 'colorLast', 'colorHigh', 'colorLow'])
-  const SLICER_EXT = '{A8765BA9-456A-4dab-B4F3-ACF838C121DE}'
-  const TIMELINE_EXT = '{7E03D99C-DC04-49d9-9315-930204A7B6E9}'
-  const X14_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
-  const X15_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main'
   const sparkDiagnostic = (feature: string, message: string) => {
     if (!sparkDiagnostics.some(item => item.feature === feature && item.message === message)) sparkDiagnostics.push({ kind: 'unsupported', feature, message })
   }
@@ -556,14 +553,14 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         && nsStack[1] === nsGrandparent
 
       const nsFrame: NsFrame = { local, uri, scope, ...(extensionUri !== undefined ? { extensionUri } : {}) }
-      const inSlicerExt = local === 'slicer' && uri === X14_NS && nsParent?.local === 'slicerList' && nsParent.uri === X14_NS
+      const inSlicerExt = local === 'slicer' && uri === X14_SLICER_NS && nsParent?.local === 'slicerList' && nsParent.uri === X14_SLICER_NS
         && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
         && nsStack[1]?.local === 'extLst' && nsStack[1]?.uri === SPREADSHEETML_NS
-        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === SLICER_EXT
-      const inTimelineExt = local === 'timelineRef' && uri === X15_NS && nsParent?.local === 'timelineRefs' && nsParent.uri === X15_NS
+        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === SLICER_EXTENSION_URI
+      const inTimelineExt = local === 'timelineRef' && uri === X15_TIMELINE_NS && nsParent?.local === 'timelineRefs' && nsParent.uri === X15_TIMELINE_NS
         && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
         && nsStack[1]?.local === 'extLst' && nsStack[1]?.uri === SPREADSHEETML_NS
-        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === TIMELINE_EXT
+        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === TIMELINE_EXTENSION_URI
       if (inSlicerExt || inTimelineExt) {
         const id = attrMap(names, values, count).id
         if (id) {

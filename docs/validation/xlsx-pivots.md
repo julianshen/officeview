@@ -1,11 +1,11 @@
 # XLSX pivot tables, tables, slicers and timelines — validation record
 
-## Eager budget (Task 4)
-
-Built at base `dc3a5d05` and with the Task 4 changes using `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts`: base eager gzip **35,954 B**, Task 4 eager gzip **35,955 B**, measured delta **+1 B** (within the 1,200 B delta and 38,720 B ceiling). The content-hashed chunk names account for small rebuild variance; `src/xlsx/pivots/stub.ts` is the only eager pivot module.
-
 Spec: `docs/superpowers/specs/2026-10-29-xlsx-pivots-design.md`. Plan: `docs/superpowers/plans/2026-10-29-xlsx-pivots.md`.
 Reference: Excel for Mac 16.114, UI language Traditional Chinese (zh-TW).
+
+## Eager budget (Task 4)
+
+`src/index.ts` statically imports the shared `office-worker` chunk containing `parse.ts` and `pivots/stub.ts`, so the stub is loaded eagerly. The repository's `eager-budget.ts` convention measures only `dist/index.js`; it does not include that static dependency. Using the same Node zlib gzip measurement for both artifacts, base `b7fff618` was **35,954 B** for `dist/index.js` and **365,128 B** for the `office-worker` chunk. At Task 4 HEAD `359eba83`, the figures were **35,955 B** and **366,084 B**. After fix round 1, they are **35,957 B** and **366,813 B**. Final deltas versus `b7fff618`: `dist/index.js` **+3 B**; `office-worker` **+1,685 B**. The existing index-only eager ceiling remains 38,720 B; Task 4's index delta remains within 1,200 B. Content-hashed chunk names can cause small run-to-run size variance.
 
 ## Corpus (Task 1)
 
