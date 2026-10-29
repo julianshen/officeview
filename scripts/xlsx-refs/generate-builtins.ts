@@ -2,6 +2,7 @@
  * Generator script for built-in table, pivot, slicer and timeline styles (Task 6).
  *
  * Source for table/pivot styles: ECMA-376 Part 1 presetTableStyles.xml as shipped by Apache POI.
+ * Provenance: https://raw.githubusercontent.com/apache/poi/trunk/poi-ooxml/src/main/resources/org/apache/poi/xssf/usermodel/presetTableStyles.xml
  * Note: in presetTableStyles.xml, TableStyle dxfId is 1-based, while PivotStyle dxfId is 0-based.
  *
  * Slicer/timeline styles are not in ECMA-376; they are derived from Task 3 reference captures
@@ -14,38 +15,22 @@
  *   src/xlsx/tableStyles/builtins/index.ts
  *   tests/fixtures/xlsx-pivots/table-styles-digest.json
  *
- * Run with: bun scripts/xlsx-refs/generate-builtins.ts [path-to-presetTableStyles.xml]
+ * Run with: bun scripts/xlsx-refs/generate-builtins.ts <path-to-presetTableStyles.xml>
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { XMLParser } from 'fast-xml-parser'
 import type { ColorSpec, DxfStyle, TableStyleElementType } from '../../src/xlsx/tableStyles/model'
 
-const DEFAULT_CACHE_PATH = resolve(process.cwd(), '.tmp/presetTableStyles.xml')
-const SCRATCH_PATH = '/private/tmp/claude-501/-Users-julianshen-prj-officeview/aa69b0c3-1aa3-4cfb-b283-9e7808c48e7e/scratchpad/pv/presetTableStyles.xml'
-const POI_URL = 'https://raw.githubusercontent.com/apache/poi/trunk/poi-ooxml/src/main/resources/org/apache/poi/xssf/usermodel/presetTableStyles.xml'
-
-async function ensureXml(cliPath?: string): Promise<string> {
-  if (cliPath && existsSync(cliPath)) {
-    return readFileSync(cliPath, 'utf8')
+function loadXml(cliPath?: string): string {
+  const path = cliPath ?? process.env.PRESET_TABLE_STYLES_XML
+  if (!path || !existsSync(path)) {
+    console.error(
+      'Error: path to ECMA-376 presetTableStyles.xml (e.g. Apache POI poi-ooxml resource) must be provided via CLI argument or PRESET_TABLE_STYLES_XML environment variable.',
+    )
+    process.exit(1)
   }
-  const envPath = process.env.PRESET_TABLE_STYLES_XML
-  if (envPath && existsSync(envPath)) {
-    return readFileSync(envPath, 'utf8')
-  }
-  if (existsSync(SCRATCH_PATH)) {
-    return readFileSync(SCRATCH_PATH, 'utf8')
-  }
-  if (existsSync(DEFAULT_CACHE_PATH)) {
-    return readFileSync(DEFAULT_CACHE_PATH, 'utf8')
-  }
-  console.log(`Downloading presetTableStyles.xml from ${POI_URL}...`)
-  const res = await fetch(POI_URL)
-  if (!res.ok) throw new Error(`Failed to download presetTableStyles.xml: ${res.statusText}`)
-  const xml = await res.text()
-  mkdirSync(dirname(DEFAULT_CACHE_PATH), { recursive: true })
-  writeFileSync(DEFAULT_CACHE_PATH, xml, 'utf8')
-  return xml
+  return readFileSync(path, 'utf8')
 }
 
 function parseColor(node: Record<string, unknown> | undefined): ColorSpec | undefined {
@@ -599,7 +584,7 @@ const slicerOther2Table: TableStyleDef = {
 const slicerOther2Slicer: SlicerStyleDef = {
   name: 'SlicerStyleOther2',
   elements: {
-    // [measure] refs/slicer-other2.png (flat approx of gradient AAC2E3..CBDFF6): fill #C2D8F1, border #999999
+    // [approx] vertical gradient in Excel (AAC2E3..CBDFF6): flat mid-fill #C2D8F1, border #999999
     selectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFC2D8F1' }),
@@ -607,7 +592,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
-    // [measure] refs/slicer-other2.png (flat approx of gradient EBEDF0..F8F9FA): fill #F4F5F7, border #CCCCCC
+    // [approx] vertical gradient in Excel (EBEDF0..F8F9FA): flat mid-fill #F4F5F7, border #CCCCCC
     unselectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFF4F5F7' }),
@@ -674,9 +659,9 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
     pivot: false,
     table: false,
     elements: {
-      // [measure] refs/timeline-light\${index}-months.png: frame border in style accent
+      // [measure] refs/timeline-light\${index}-months.png: frame border in style accent (1 px line anti-aliased in capture)
       wholeTable: { dxf: { border: thinBorder({ theme }) } },
-      // [measure] refs/timeline-light\${index}-months.png: header separator in style accent
+      // [measure] refs/timeline-light\${index}-months.png: header separator in style accent (1 px line anti-aliased in capture)
       headerRow: {
         dxf: {
           font: { bold: true, color: { theme: 1 } },
@@ -691,11 +676,11 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
     name,
     elements: {
       // [approx] vertical gradient in Excel: top B9CEE5, bottom 5489C2; flat mid-sample ~#8FB1D6
-      // [measure] refs/timeline-light\${index}-months.png: dark text on white background
+      // [measure] refs/timeline-light\${index}-months.png: period labels #909090 on white (year labels #989898)
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.4 }),
-          font: { color: { theme: 1 } },
+          font: { color: { rgb: 'FF909090' } },
         },
       },
       // [estimate: entire timeline period is selected in captures]
@@ -719,9 +704,9 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
     pivot: false,
     table: false,
     elements: {
-      // [measure] refs/timeline-dark\${index}-months.png: frame border in style accent
+      // [measure] refs/timeline-dark\${index}-months.png: frame border in style accent (1 px line anti-aliased in capture)
       wholeTable: { dxf: { border: thinBorder({ theme }) } },
-      // [measure] refs/timeline-dark\${index}-months.png: header separator in style accent
+      // [measure] refs/timeline-dark\${index}-months.png: header separator in style accent (1 px line anti-aliased in capture)
       headerRow: {
         dxf: {
           font: { bold: true, color: { theme: 1 } },
@@ -736,11 +721,11 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
     name,
     elements: {
       // [approx] vertical gradient in Excel: top 4C84BF, bottom 214468; flat mid-sample ~#39699A
-      // [measure] refs/timeline-dark\${index}-months.png: dark text on white background (not white text)
+      // [measure] refs/timeline-dark\${index}-months.png: period labels #909090 on white (year labels #989898)
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: -0.2 }),
-          font: { color: { theme: 1 } },
+          font: { color: { rgb: 'FF909090' } },
         },
       },
       // [estimate: entire timeline period is selected in captures]
@@ -826,7 +811,7 @@ export function builtinSlicerStyle(name: string): SlicerStyleDef | undefined {
 }
 
 export async function generateBuiltins(cliXmlPath?: string): Promise<void> {
-  const xml = await ensureXml(cliXmlPath)
+  const xml = loadXml(cliXmlPath)
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
   const parsed = parser.parse(xml)
 

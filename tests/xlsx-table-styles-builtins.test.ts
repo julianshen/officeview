@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { gzipSync } from 'node:zlib'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { builtinTableStyle, builtinSlicerStyle } from '../src/xlsx/tableStyles/builtins'
 import type { ColorSpec, DxfStyle } from '../src/xlsx/tableStyles/model'
 
@@ -149,6 +150,7 @@ describe('built-in table, pivot, slicer and timeline styles', () => {
       expect(items?.name).toBe(name)
       expect(items?.elements.selectedItemWithData).toBeDefined()
       expect(items?.elements.unselectedItemWithData).toBeDefined()
+      expect(items?.elements.selectedItemWithData?.dxf.font?.color).toEqual({ rgb: 'FF909090' })
     }
 
     expect(builtinTableStyle('TimeSlicerStyleOther1')).toBeUndefined()
@@ -211,13 +213,28 @@ describe('built-in table, pivot, slicer and timeline styles', () => {
     }
   })
 
-  it('reports the gzip size of the builtins sources and enforces <= 12 KB budget', () => {
-    const tableSrc = readFileSync(resolve(process.cwd(), 'src/xlsx/tableStyles/builtins/table.ts'))
-    const pivotSrc = readFileSync(resolve(process.cwd(), 'src/xlsx/tableStyles/builtins/pivot.ts'))
-    const slicerSrc = readFileSync(resolve(process.cwd(), 'src/xlsx/tableStyles/builtins/slicer.ts'))
-    const indexSrc = readFileSync(resolve(process.cwd(), 'src/xlsx/tableStyles/builtins/index.ts'))
-    const combinedGzip = gzipSync(Buffer.concat([tableSrc, pivotSrc, slicerSrc, indexSrc])).length
-    console.log(`[Task 6] Built-in styles source gzip size: ${combinedGzip} B (budget: 12,288 B)`)
-    expect(combinedGzip).toBeLessThanOrEqual(12288)
+  it('reports the gzip size of the minified builtins bundle (Ruling S) and enforces <= 12 KB budget', () => {
+    const entryPath = resolve(process.cwd(), 'src/xlsx/tableStyles/builtins/index.ts')
+    // Bundle with esbuild (Ruling S) in a clean node process to bypass jsdom realm pollution
+    const bundled = execFileSync(
+      process.execPath,
+      [
+        '-e',
+        `
+        const esbuild = require('esbuild');
+        esbuild.build({
+          entryPoints: [process.argv[1]],
+          bundle: true,
+          minify: true,
+          write: false,
+        }).then(r => process.stdout.write(r.outputFiles[0].contents));
+        `,
+        entryPath,
+      ],
+      { maxBuffer: 10 * 1024 * 1024 },
+    )
+    const bundledGzip = gzipSync(bundled).length
+    console.log(`[Task 6 Ruling S] Built-in styles minified bundle gzip size: ${bundledGzip} B (budget: 12,288 B)`)
+    expect(bundledGzip).toBeLessThanOrEqual(12288)
   })
 })

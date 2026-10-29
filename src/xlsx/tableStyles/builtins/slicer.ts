@@ -319,7 +319,7 @@ const slicerOther2Table: TableStyleDef = {
 const slicerOther2Slicer: SlicerStyleDef = {
   name: 'SlicerStyleOther2',
   elements: {
-    // [measure] refs/slicer-other2.png (flat approx of gradient AAC2E3..CBDFF6): fill #C2D8F1, border #999999
+    // [approx] vertical gradient in Excel (AAC2E3..CBDFF6): flat mid-fill #C2D8F1, border #999999
     selectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFC2D8F1' }),
@@ -327,7 +327,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
-    // [measure] refs/slicer-other2.png (flat approx of gradient EBEDF0..F8F9FA): fill #F4F5F7, border #CCCCCC
+    // [approx] vertical gradient in Excel (EBEDF0..F8F9FA): flat mid-fill #F4F5F7, border #CCCCCC
     unselectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFF4F5F7' }),
@@ -394,9 +394,9 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
     pivot: false,
     table: false,
     elements: {
-      // [measure] refs/timeline-light${index}-months.png: frame border in style accent
+      // [measure] refs/timeline-light${index}-months.png: frame border in style accent (1 px line anti-aliased in capture)
       wholeTable: { dxf: { border: thinBorder({ theme }) } },
-      // [measure] refs/timeline-light${index}-months.png: header separator in style accent
+      // [measure] refs/timeline-light${index}-months.png: header separator in style accent (1 px line anti-aliased in capture)
       headerRow: {
         dxf: {
           font: { bold: true, color: { theme: 1 } },
@@ -411,11 +411,11 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
     name,
     elements: {
       // [approx] vertical gradient in Excel: top B9CEE5, bottom 5489C2; flat mid-sample ~#8FB1D6
-      // [measure] refs/timeline-light${index}-months.png: dark text on white background
+      // [measure] refs/timeline-light${index}-months.png: period labels #909090 on white (year labels #989898)
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.4 }),
-          font: { color: { theme: 1 } },
+          font: { color: { rgb: 'FF909090' } },
         },
       },
       // [estimate: entire timeline period is selected in captures]
@@ -439,9 +439,9 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
     pivot: false,
     table: false,
     elements: {
-      // [measure] refs/timeline-dark${index}-months.png: frame border in style accent
+      // [measure] refs/timeline-dark${index}-months.png: frame border in style accent (1 px line anti-aliased in capture)
       wholeTable: { dxf: { border: thinBorder({ theme }) } },
-      // [measure] refs/timeline-dark${index}-months.png: header separator in style accent
+      // [measure] refs/timeline-dark${index}-months.png: header separator in style accent (1 px line anti-aliased in capture)
       headerRow: {
         dxf: {
           font: { bold: true, color: { theme: 1 } },
@@ -456,11 +456,11 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
     name,
     elements: {
       // [approx] vertical gradient in Excel: top 4C84BF, bottom 214468; flat mid-sample ~#39699A
-      // [measure] refs/timeline-dark${index}-months.png: dark text on white background (not white text)
+      // [measure] refs/timeline-dark${index}-months.png: period labels #909090 on white (year labels #989898)
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: -0.2 }),
-          font: { color: { theme: 1 } },
+          font: { color: { rgb: 'FF909090' } },
         },
       },
       // [estimate: entire timeline period is selected in captures]
