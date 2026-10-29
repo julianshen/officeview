@@ -4,7 +4,9 @@
  * Every case renders through the interactive viewport painter at 75 % and is compared with Excel for Mac's capture
  * under the tolerance in docs/validation/xlsx-pivots.md (Cases table); scripts/pivot-compare.ts holds the method.
  * Cases marked *unverified* there are skipped and must carry a reason. Negative controls perturb the parsed model and
- * must FAIL the same tolerances, so the masks are shown not to hide what the comparison is for.
+ * must FAIL the same tolerances, so the masks are shown not to hide what the comparison is for. (The `showDrill`
+ * control found one: text masks used to follow the viewer's own indent, so a pivot drawn without its ± buttons masked
+ * Excel's away too. Masks now never cover a cell where the saved definition puts a ± button.)
  *
  * The pixel comparison runs on macOS only, like the slideshow goldens: the masks follow the cell text the host's font
  * stack lays out (spills and indents), and the tolerances were fitted on the Mac that holds the references. A Linux

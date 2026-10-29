@@ -4,7 +4,8 @@
 //
 // For every case of stage ≤ N (default 1), renders the case workbook through the interactive viewport painter and
 // compares it with Excel's capture under tests/fixtures/xlsx-pivots/refs/ (or --refs), with the tolerance and status
-// of its row in the Cases table of docs/validation/xlsx-pivots.md. A missing or unusable reference FAILS the case
+// of its row in the Cases table of docs/validation/xlsx-pivots.md (read by sparkline-compare's `readCaseTable`, whose
+// id pattern also admits the table's `---` rule row; `readPivotCaseTable` drops it). A missing or unusable reference FAILS the case
 // unless the doc marks it *unverified*. Prints `<id>: pass|fail|unverified meanAbs rowMax strong row (tol …)` per
 // case and a total line; `--out` writes <id>.ref.png, <id>.ours.png and <id>.diff.png (the compared block, masks
 // applied); `--fit` also prints each compared case's Cases row with its tolerance fitted as measured + 0.002 / 0.010 /
