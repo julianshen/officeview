@@ -147,8 +147,8 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 ### Compact indent and buttons (screen, 100%, Calibri 11)
 - **Compact text position.** With ± buttons shown, label text starts at **15 + 10 × level px** from the cell's left edge: level 0 at 15, level 1 at 25, level 2 at 35 (`pivot-values-on-rows`).
 - **± button.** A 7 × 7 px box at x = 6–12, vertically centred in a 15 px row, drawn for the item levels that have children.
-- **Field dropdown button** (Row Labels, Column Labels and page field), measured from `refs/measure-field-buttons.png`. This is a window screenshot of `pivot-page-field.xlsx` at 100% on a 1× display, cropped to A1:I10; the sidecar records the method. In the crop the Column Labels button box is at x 154–168, y 30–43:
-  - box: 15 × 14 px, flush with the cell's right and bottom edges, fill #FDFDFD, 1 px border #738A93;
+- **Field dropdown button** (Row Labels, Column Labels and page field), measured from `refs/measure-field-buttons.png`. This is a window screenshot of `pivot-page-field.xlsx` at 100% on a 1× display, cropped to A1:I10; the sidecar records the method. In the crop the Column Labels button box is at x 154–168, y 29–43 (border rows included):
+  - box: 15 × 15 px, flush with the cell's right and bottom edges, fill #FDFDFD, 1 px border #738A93;
   - arrow: a downward triangle 7 px wide and 4 rows tall (7, 5, 3, 1), centred, starting 5 px below the box top, colour ≈ #828282.
 
 ### Slicer geometry (`slicer-light1`, SlicerStyleLight1, 1 px per pt)
@@ -196,7 +196,7 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 
 ### Pivot field dropdowns, follow-up (Task 10; window screenshot of `pivot-layout-outline`, 100%, 1×)
 - **Values header.** Outline form with Values on the column axis: Year, Region and Product show a dropdown; the Values header shows none, although Excel writes the `pivotButton` format on that cell too.
-- **Box height follows the row.** Here the Year box is 15 × 15 px (border y 347–361, x 470–484; arrow rows 6 px below the top border). In `measure-field-buttons` it is 15 × 14. The box height is the smaller of 15 px and the row's pixel height.
+- **Box size.** Here the Year box is 15 × 15 px (border y 347–361, x 470–484; arrow rows 6 px below the top border), the same as in `measure-field-buttons` (re-counted: border y 29–43; the first reading of 15 × 14 left out the top border row). Both pivots use 15 pt rows, so the box fills the row. A box in a shorter row is not measured; the renderer uses the smaller of 15 px and the row's pixel height.
 
 ### Pivot chart field buttons (Task 11; `pivot-chart-buttons-*`)
 - **How the files are made.** `scripts/xlsx-refs/build-pivot-charts.ts`. The seed `recipes/pivot-chart-seed.xlsx` is `pivot-layout-compact.xlsx` with a clustered column chart over the pivot range A3:C10, made through AppleScript (`make new chart object`, `set source data`). Excel saves it as a PivotChart: `c:pivotSource`, `c14:pivotOptions` (`dropZoneFilter`, `dropZoneCategories`, `dropZoneData`, `dropZoneSeries`, `dropZonesVisible`) and `c16:pivotOptions16` (`showExpandCollapseFieldButtons`). Seven variants edit those flags and Excel re-saves each; Excel writes only the flags that are on.
