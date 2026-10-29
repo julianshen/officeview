@@ -44,8 +44,16 @@ export function rangeRect(ref: string): SheetRect | undefined {
 
 const inside = (r: SheetRect, row: number, col: number) => row >= r.minRow && row <= r.maxRow && col >= r.minCol && col <= r.maxCol
 
+/**
+ * The per-sheet guard painters check before building a rule (spec §8 hot path): a sheet with no pivot and no table
+ * pays these few property reads and nothing else, with no allocation and no style lookup.
+ */
+export const mayHaveRegionGrid = (sheet: XlsxSheet): boolean =>
+  Boolean(sheet.pivotTables?.length || sheet.pivotRegions?.length || sheet.tables?.length || sheet.regionStyles)
+
 /** The sheet's gridline rule, or undefined when it has no pivot and no styled region. `own` is a cell's own style. */
 export function regionGrid(sheet: XlsxSheet, own: (row: number, col: number) => XlsxCellStyle | undefined): RegionGrid | undefined {
+  if (!mayHaveRegionGrid(sheet)) return undefined
   const pivots: SheetRect[] = []
   for (const ref of [...sheet.pivotTables?.map(def => def.location.ref) ?? [], ...sheet.pivotRegions?.map(region => region.ref) ?? []]) {
     const rect = ref && rangeRect(ref)
