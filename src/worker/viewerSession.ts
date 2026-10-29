@@ -189,6 +189,9 @@ export interface WorkbookSource {
   hasSparklines?(sheetId: string): boolean
   hasRegionStyles?(sheetId: string): boolean
   regionStyleTableCount?(sheetId: string): number
+  hasPivotDisplay?(sheetId: string): boolean
+  pivotTableCount?(sheetId: string): number
+  pivotControlCount?(sheetId: string): number
   store(sheetId: string): SourceStore
   geometry(sheetId: string): SheetGeometry
   /** Coverage this backend can never resolve (e.g. the interim adapter before
@@ -2413,6 +2416,9 @@ export class DocumentSession {
       ...(this.source.hasSparklines ? { hasSparklines: this.source.hasSparklines(sheetId) } : {}),
       ...(this.source.hasRegionStyles ? { hasRegionStyles: this.source.hasRegionStyles(sheetId) } : {}),
       ...(this.source.regionStyleTableCount ? { regionStyleTableCount: this.source.regionStyleTableCount(sheetId) } : {}),
+      ...(this.source.hasPivotDisplay ? { hasPivotDisplay: this.source.hasPivotDisplay(sheetId) } : {}),
+      ...(this.source.pivotTableCount ? { pivotTableCount: this.source.pivotTableCount(sheetId) } : {}),
+      ...(this.source.pivotControlCount ? { pivotControlCount: this.source.pivotControlCount(sheetId) } : {}),
       ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
     }
   }
@@ -2468,6 +2474,22 @@ export class DocumentSession {
           }
           result = { op: 'regionStyles', result: payload }
         } finally { if (retain) retain(() => charge.release()); else charge.release() }
+        break
+      }
+      case 'pivotDisplay': {
+        const charge = this.charge()
+        let raw: Promise<unknown> | undefined, drained = false
+        const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
+        try {
+          const work = store.readPivotDisplay?.(options, query.grantBytes, charge, this.options.profile ?? 'D') ?? Promise.resolve({
+            sheetId: owner.sheetId, stamp: store.stamp, tables: [], pivotTables: [], slicers: [], timelines: [],
+            diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: 'This source cannot resolve pivot display metadata.' }],
+          })
+          raw = work
+          void work.then(() => { drained = true }, () => { drained = true })
+          const payload = await work
+          result = { op: 'pivotDisplay', result: payload }
+        } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break

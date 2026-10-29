@@ -395,7 +395,7 @@ export function renderSheetViewport(
       ctx.stroke()
       for (const paint of paintBorders) paint()
       // The viewer draws the pivot buttons Excel shows on screen (§7.10).
-      if (sheet.pivotRegions?.length && sourceWindow && sourceRect) {
+      if ((sheet.pivotRegions?.length || sheet.pivotTables?.length) && sourceWindow && sourceRect) {
         ctx.save()
         ctx.translate(-vx, -vy)
         try { paintPivotButtonsIn(ctx, sheet, sourceRect, sourceWindow, 'screen') } finally { ctx.restore() }

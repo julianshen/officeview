@@ -208,10 +208,12 @@ export class ViewerKernel {
     // owner (also <= the envelope).
     const grantedSparklines = command.kind === 'read' && command.query?.op === 'sparklines'
     const grantedRegionStyles = command.kind === 'read' && command.query?.op === 'regionStyles'
+    const grantedPivotDisplay = command.kind === 'read' && command.query?.op === 'pivotDisplay'
     const sparklineLimit = command.kind === 'read' && command.query?.op === 'sparklines' ? command.query.grantBytes : undefined
     const regionStyleLimit = command.kind === 'read' && command.query?.op === 'regionStyles' ? command.query.grantBytes : undefined
-    const limit = command.kind === 'read' && command.query?.op === 'drawings' ? command.query.replyByteLimit : sparklineLimit ?? regionStyleLimit
-    let checked = grantedSparklines || grantedRegionStyles || limit !== undefined
+    const pivotDisplayLimit = command.kind === 'read' && command.query?.op === 'pivotDisplay' ? command.query.grantBytes : undefined
+    const limit = command.kind === 'read' && command.query?.op === 'drawings' ? command.query.replyByteLimit : sparklineLimit ?? regionStyleLimit ?? pivotDisplayLimit
+    let checked = grantedSparklines || grantedRegionStyles || grantedPivotDisplay || limit !== undefined
     // Worker shares of a finished result (its outgoing clone) end only once the
     // reply carrying it was posted, or once this command ended without it.
     const outgoing: (() => void)[] = []
@@ -247,10 +249,10 @@ export class ViewerKernel {
       // An over-long id cannot be answered within any bound; no client sends one.
       if (typeof command.requestId !== 'string' || command.requestId.length > MAX_REQUEST_ID_UNITS) return
       if (command.kind === 'cancel') { emit(this.cancel(command)); return }
-      if ((grantedSparklines || grantedRegionStyles) && limit === undefined) {
+      if ((grantedSparklines || grantedRegionStyles || grantedPivotDisplay) && limit === undefined) {
         checked = false
         const sparkline = grantedSparklines
-        emit(errorReply(command, capturedOwner(command) as never, 'resource-limit', false, [{ code: sparkline ? 'sparkline-grant-required' : 'table-style-grant-required', message: sparkline ? 'Sparkline reads require a receiver byte grant' : 'Table style reads require a receiver byte grant' }]), true)
+        emit(errorReply(command, capturedOwner(command) as never, 'resource-limit', false, [{ code: sparkline ? 'sparkline-grant-required' : grantedPivotDisplay ? 'pivot-display-grant-required' : 'table-style-grant-required', message: sparkline ? 'Sparkline reads require a receiver byte grant' : grantedPivotDisplay ? 'Pivot display reads require a receiver byte grant' : 'Table style reads require a receiver byte grant' }]), true)
         return
       }
       if (this.inflight.has(command.requestId)) {
@@ -569,7 +571,7 @@ export class ViewerKernel {
         }
         const session = this.current(command.owner)
         if (!session) return errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])
-        const out = await session.read(command.owner, command.query, signal, retain, command.query.op === 'sparklines' || command.query.op === 'regionStyles' ? replyLimitEnvelope(command) : undefined)
+        const out = await session.read(command.owner, command.query, signal, retain, command.query.op === 'sparklines' || command.query.op === 'regionStyles' || command.query.op === 'pivotDisplay' ? replyLimitEnvelope(command) : undefined)
         if ('kind' in out) {
           return out.kind === 'cancelled' ? reply(command, command.owner, { kind: 'cancelled' })
             : errorReply(command, command.owner, 'stale-source', true, [{ code: 'stale-owner', message: 'Command owner is not the current committed view' }])

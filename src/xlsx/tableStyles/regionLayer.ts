@@ -121,6 +121,12 @@ export function buildTableRegions(tables: readonly RegionStyleTable[], extras: S
   return composeRegionLayer(tableStyleRegions(tables, extras, report), theme, report)
 }
 
+/** Build the same composed layer from transferred descriptors on a paged sheet. */
+export function buildSheetRegionLayer(sheet: XlsxSheet, extras: StylesExtras, theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
+  const pivots = sheet.pivotTables?.length ? pivotEngine()?.regions(sheet, extras, theme, report ?? (() => {})) ?? [] : []
+  return composeRegionLayer([...tableStyleRegions(sheet.tables ?? [], extras, report), ...pivots], theme, report)
+}
+
 const inRect = (rect: SheetRect, row: number, col: number) => row >= rect.minRow && row <= rect.maxRow && col >= rect.minCol && col <= rect.maxCol
 
 /** One paint layer over styled tables and pivots (they never overlap in Excel; the first match wins). */

@@ -314,13 +314,17 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     }
     let sparklineColorContext: SheetColorContext = {}
     let tableStylesTheme: ThemeContext | undefined
+    let stylesTextForPriority: string | undefined, themeTextForPriority: string | undefined
+    const prioritizedTableStyleNames = new Set<string>()
     try {
       const stylesText = inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined
+      stylesTextForPriority = stylesText
       // The theme colours both cell styles and sparkline groups; an unreadable theme keeps the Office default.
       let themeText: string | undefined
       if (themePath && inventory.find(themePath)) {
         try { themeText = await readPlanned(themePath) } catch (error) { if (isPackageError(error) && error.code === 'cancelled') throw error }
       }
+      themeTextForPriority = themeText
       const parsedFormatting = await workbookFormattingWithColorContext(workbookRoot, stylesText, themeText)
       workbook.formatting = parsedFormatting.formatting
       sparklineColorContext = parsedFormatting.colorContext
@@ -474,6 +478,10 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         if (!rel.type.endsWith('/pivotTable')) continue
         const partPath = resolvePartTarget(sheet.partPath, rel.target)
         const pivotEntry = inventory.find(partPath)
+        const pivotTooLarge = Boolean(pivotEntry && pivotEntry.uncompressedSize > PIVOT_PART_MAX_BYTES)
+        if (pivotTooLarge) {
+          ;(sheet.metadata.pivotDiagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-part-too-large', message: `Pivot part ${partPath} exceeds the ${PIVOT_PART_MAX_BYTES}-byte part limit`, partPath })
+        }
         let text: string | undefined
         if (pivotEntry) {
           plan(partPath)
@@ -534,6 +542,12 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         workbook.diagnostics.push({ code: 'cells-outside-sheet', message: `${sheet.metadata.skippedCells} cells outside the sheet grid were ignored`, partId: sheet.partPath })
       }
       sheet.state = 'complete'
+      const referencedTableStyles = new Set(sheets.filter(candidate => candidate.state === 'complete').flatMap(candidate => candidate.tables?.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)) ?? []))
+      if (stylesTextForPriority !== undefined && [...referencedTableStyles].some(name => !prioritizedTableStyleNames.has(name) && !/^(?:Table|Pivot)Style(?:Light|Medium|Dark)\d+$/.test(name) && !workbook.tableStyleDefs?.has(name))) {
+        const prioritized = await workbookFormattingWithColorContext(workbookRoot, stylesTextForPriority, themeTextForPriority, referencedTableStyles)
+        workbook.tableStyleDefs = prioritized.tableStyleDefs
+        for (const name of referencedTableStyles) prioritizedTableStyleNames.add(name)
+      }
       pulse()
     }
     progress('done')

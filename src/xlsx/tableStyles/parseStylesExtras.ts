@@ -131,11 +131,17 @@ function x14Ext(root: XmlNode, local: string): XmlNode[] {
   return out
 }
 
-export function parseStylesExtras(stylesRoot: XmlNode, colorContext: SheetColorContext): StylesExtras {
+export function parseStylesExtras(stylesRoot: XmlNode, colorContext: SheetColorContext, preferredTableStyleNames: ReadonlySet<string> = new Set()): StylesExtras {
   const dxfs = parseDxfList(first(stylesRoot, 'dxfs'), colorContext)
   const tableStyles = new Map<string, TableStyleDef>()
   const stylesNode = first(stylesRoot, 'tableStyles')
-  for (const styleNode of getChildren(stylesNode, 'tableStyle').slice(0, MAX_TABLE_STYLES)) {
+  const allTableStyleNodes = getChildren(stylesNode, 'tableStyle')
+  // Referenced styles are selected before the ordinary file-order window. This
+  // lets paged import recover a table's style even when unused definitions fill
+  // the retained cap before that definition appears in styles.xml.
+  const preferredNodes = allTableStyleNodes.filter(node => preferredTableStyleNames.has(attrs(node).name ?? ''))
+  const ordinaryNodes = allTableStyleNodes.slice(0, MAX_TABLE_STYLES).filter(node => !preferredTableStyleNames.has(attrs(node).name ?? ''))
+  for (const styleNode of [...preferredNodes, ...ordinaryNodes]) {
     const a = attrs(styleNode)
     if (!a.name || tableStyles.has(a.name)) continue
     const def: TableStyleDef = { name: a.name, pivot: !isOff(a.pivot), table: !isOff(a.table), elements: {} }

@@ -44,7 +44,7 @@ import { initialIdentity, initialWorkbookOwner, reply, visibilityFromDisplayBits
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
 import { RemoteSparklineCache, type PagedSheetSparklines, type SparklineChangeReason } from './viewerRemoteSparklines'
-import { RemoteRegionStyleCache, type PagedRegionStyleState } from './viewerRemoteRegionStyles'
+import { RemoteRegionStyleCache, type PagedRegionStyleState, type RegionStyleHost } from './viewerRemoteRegionStyles'
 import { MAX_REGION_STYLE_TABLES, REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE, REGION_STYLE_REPLY_OVERHEAD_BYTES } from '../xlsx/view/contracts'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
@@ -198,6 +198,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly drawingCache: RemoteDrawingCache
   private readonly sparklineCache: RemoteSparklineCache
   private readonly regionStyleCache: RemoteRegionStyleCache
+  private readonly pivotDisplayCache: RemoteRegionStyleCache
   private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
   private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
@@ -257,12 +258,14 @@ export class RemoteWorkbook implements WorkbookSource {
         this.notify()
       },
     }, MAIN_THREAD_BUDGETS[this.profile] / 4)
-    this.regionStyleCache = new RemoteRegionStyleCache({
+    const regionStyleHost: RegionStyleHost = {
       identity: sheetId => this.identity(sheetId), hasRegionStyles: sheetId => this.layout(sheetId).hasRegionStyles === true,
+      hasPivotDisplay: sheetId => this.layout(sheetId).hasPivotDisplay === true || this.layout(sheetId).hasRegionStyles === true,
       loadState: sheetId => this.loadState(sheetId),
       grant: (sheetId, requestId, minimumBytes) => {
         const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
-        const tableCount = Math.min(MAX_REGION_STYLE_TABLES, this.layout(sheetId).regionStyleTableCount ?? 1)
+        const layout = this.layout(sheetId)
+        const tableCount = Math.min(MAX_REGION_STYLE_TABLES, (layout.regionStyleTableCount ?? 1) + (layout.pivotTableCount ?? 0) + (layout.pivotControlCount ?? 0))
         const planned = REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE
         const limit = Math.min(headroom, Math.max(planned, minimumBytes ?? 0)), owner = `region-style-grant:${requestId}`
         if (!Number.isSafeInteger(limit) || limit < Math.max(4096, minimumBytes ?? 0) || this.mainLedger.ownerBytes('replies', owner) > 0) return null
@@ -283,13 +286,16 @@ export class RemoteWorkbook implements WorkbookSource {
         if (reason === 'evicted') { for (const listener of this.regionStyleEvictionListeners) listener(sheetId); this.notify(); return }
         (this.merges(sheetId) as { gen: number }).gen++; this.notify()
       },
-    }, MAIN_THREAD_BUDGETS[this.profile] / 4)
+    }
+    this.regionStyleCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4)
+    this.pivotDisplayCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4, 'pivotDisplay')
   }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
   regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
-  closeSheet(sheetId: string): void { this.regionStyleCache.closeSheet(sheetId) }
+  pivotDisplay(sheetId: string): PagedRegionStyleState { return this.pivotDisplayCache.get(sheetId) }
+  closeSheet(sheetId: string): void { this.regionStyleCache.closeSheet(sheetId); this.pivotDisplayCache.closeSheet(sheetId) }
   subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
     this.regionStyleEvictionListeners.add(listener)
@@ -525,7 +531,7 @@ export class RemoteWorkbook implements WorkbookSource {
     const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
     const sparklineRead = head.kind === 'read' && head.query?.op === 'sparklines'
     const sparklineGrant = sparklineRead ? `sparkline-grant:${head.requestId}` : undefined
-    const regionStyleRead = head.kind === 'read' && head.query?.op === 'regionStyles'
+    const regionStyleRead = head.kind === 'read' && (head.query?.op === 'regionStyles' || head.query?.op === 'pivotDisplay')
     const regionStyleGrant = regionStyleRead ? `region-style-grant:${head.requestId}` : undefined
     if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); return CLOSED }
     if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); return CANCELLED }
@@ -539,7 +545,7 @@ export class RemoteWorkbook implements WorkbookSource {
     // worker never posts a reply over it; see drawingGrant.
     const drawings = key === 'read:drawings' ? command as CommandOf<'read'> : undefined
     const sparklines = key === 'read:sparklines' ? command as CommandOf<'read'> : undefined
-    const regionStyles = key === 'read:regionStyles' ? command as CommandOf<'read'> : undefined
+    const regionStyles = key === 'read:regionStyles' || key === 'read:pivotDisplay' ? command as CommandOf<'read'> : undefined
     let grant: string | undefined
     if (sparklines) {
       const grantBytes = sparklines.query.op === 'sparklines' ? sparklines.query.grantBytes : undefined
@@ -548,7 +554,7 @@ export class RemoteWorkbook implements WorkbookSource {
       if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
       grant = owner
     } else if (regionStyles) {
-      const grantBytes = regionStyles.query.op === 'regionStyles' ? regionStyles.query.grantBytes : undefined
+      const grantBytes = regionStyles.query.op === 'regionStyles' || regionStyles.query.op === 'pivotDisplay' ? regionStyles.query.grantBytes : undefined
       const owner = `region-style-grant:${head.requestId}`
       if (this.client.isPending(head.requestId)) { this.mainLedger.release('replies', owner); return CLOSED }
       if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
@@ -864,6 +870,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.drawingCache.close()
     this.sparklineCache.close()
     this.regionStyleCache.close()
+    this.pivotDisplayCache.close()
     this.regionStyleEvictionListeners.clear()
     this.sparklineChanges.clear()
     this.overflow?.cache.close()

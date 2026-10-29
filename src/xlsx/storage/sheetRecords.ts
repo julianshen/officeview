@@ -318,6 +318,7 @@ export interface SheetMetadata {
   slicerRelationshipIds: string[]
   timelineRelationshipIds: string[]
   pivotRegions?: import('../pivots/stub').PivotRegionRef[]
+  pivotDiagnostics?: import('../pivots/model').PivotDiagnostic[]
   slicerRefs?: import('../pivots/stub').ControlPartRef[]
   timelineRefs?: import('../pivots/stub').ControlPartRef[]
   drawingRefs: number

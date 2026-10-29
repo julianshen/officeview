@@ -933,7 +933,7 @@ export function renderSheet(
   // Explicit formatting wins over both gridlines and neighboring cell fills.
   for (const paint of paintBorders) paint()
   // Page mode and export draw the pivot buttons Excel prints (§7.10).
-  if (sheet.pivotRegions?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
+  if (sheet.pivotRegions?.length || sheet.pivotTables?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
   paintSheetDrawings(sheet, sheet.drawings ?? [], ctx, prepared)
   } finally { ctx.restore() }
 }

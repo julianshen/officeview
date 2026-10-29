@@ -13,7 +13,7 @@
 import { defaultColumnWidthPx } from '../columnWidth'
 import type {
   AuthoritativeCell, CellRead, ColumnEntry, ColumnQuery, DrawingAnchor, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
-  RangeCompletion, ReadOptions, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
+  RangeCompletion, ReadOptions, RemotePivotDisplay, SheetSparklines, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
   SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, WorkerDiagnostic,
 } from './contracts'
 import { resolveDrawingAnchors } from './drawingBounds'
@@ -43,7 +43,7 @@ import type { XlsxSparklineGroup } from '../sparklines/model'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
-import { MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
+import { MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE, type RemoteRegionStyles } from './contracts'
 import { builtinTableStyle } from '../tableStyles/builtins'
 import { estimatePayloadBytes } from './payloadBytes'
 
@@ -556,7 +556,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
-      const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds },
+      const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds, slicerIds: meta.slicerRelationshipIds, timelineIds: meta.timelineRelationshipIds },
         geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
       nodes.record(sheetId, parsed.nodes)
       // The payload now has its owner: the read's share stops holding its chart storage (D0). The retained entry
@@ -613,6 +613,48 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const bytes = estimatePayloadBytes(result) + REGION_STYLE_REPLY_OVERHEAD_BYTES
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes || (memory && !memory.set(bytes))) {
       diagnostics.splice(0, diagnostics.length, { kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
+      return empty(bytes)
+    }
+    return result
+  }
+
+  /** S13: worker-owned pivot/control parts become bounded descriptors; the receiver builds display roles/buttons. */
+  async readPivotDisplay(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile: ProfileId = 'D'): Promise<RemotePivotDisplay> {
+    const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
+    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: [], slicers: [], timelines: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
+    const error = this.guard(options)
+    if (error) { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: error.message }); return empty() }
+    if (this.sheet.state !== 'complete') { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: 'Pivot display metadata is unavailable until the sheet structure is complete.' }); return empty() }
+    if (!Number.isSafeInteger(grantBytes) || grantBytes <= 0) { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-reply-limit', message: 'Pivot display metadata exceeds the receiver grant.' }); return empty() }
+    const tableItems: RemotePivotDisplay['tables'][number][] = []
+    const named = this.sheet.tables?.filter(table => Boolean(table.styleInfo?.name)) ?? []
+    if (named.length > MAX_REGION_STYLE_TABLES) { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-reply-limit', message: 'Pivot display metadata exceeds the receiver grant.' }); return empty() }
+    for (const table of named) {
+      const name = table.styleInfo!.name!, def = this.workbook.tableStyleDefs?.get(name) ?? builtinTableStyle(name)
+      if (def?.table) tableItems.push({ table: { id: table.id, displayName: table.displayName, sheetId: table.sheetId, extent: table.extent, headerRowCount: table.headerRowCount, totalsRowCount: table.totalsRowCount, styleInfo: table.styleInfo }, def })
+      else diagnostics.push({ kind: 'unsupported', feature: 'table-style-unknown', message: `Table "${table.displayName}" uses unknown table style "${name}"; stored cell formatting is used.` })
+    }
+    const pivotRegions = new Map(this.workbook.sheets.flatMap(sheet => sheet.metadata.pivotRegions?.length ? [[sheet.name, sheet.metadata.pivotRegions] as const] : []))
+    const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
+    const parts = await readPagedPivotDisplayParts(this.workbook.parts, {
+      sheetId: this.sheet.sheetId, sheetName: this.sheet.name, sheetPath: this.sheet.partPath, pivotRegions,
+      slicerIds: this.sheet.metadata.slicerRelationshipIds, timelineIds: this.sheet.metadata.timelineRelationshipIds,
+      ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
+    }, profile, options.signal, memory)
+    const displayDiagnostics = [...new Map([...(this.sheet.metadata.pivotDiagnostics ?? []), ...parts.diagnostics].map(item => [`${item.feature}:${item.message}:${'partPath' in item ? item.partPath ?? '' : ''}`, item])).values()]
+    diagnostics.push(...displayDiagnostics)
+    const result: RemotePivotDisplay = {
+      sheetId: this.sheet.sheetId, stamp: this.stamp, tables: tableItems, ...parts,
+      diagnostics,
+      ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
+    }
+    const bytes = estimatePayloadBytes(result) + REGION_STYLE_REPLY_OVERHEAD_BYTES
+    if (tableItems.some(item => estimatePayloadBytes(item) > REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE)) {
+      diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-reply-limit', message: 'A table-style descriptor exceeds its 32 KiB per-table transfer bound.' })
+      return empty(bytes)
+    }
+    if (!Number.isSafeInteger(bytes) || bytes > grantBytes || (memory && !memory.set(bytes))) {
+      diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-reply-limit', message: 'Pivot display metadata exceeds the receiver grant.' })
       return empty(bytes)
     }
     return result
@@ -1173,6 +1215,9 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
     hasRegionStyles(sheetId) { return Boolean(find(sheetId).tables?.some(table => table.styleInfo?.name)) },
     regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
+    hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length || sheet.metadata.slicerRelationshipIds.length || sheet.metadata.timelineRelationshipIds.length || sheet.tables?.some(table => table.styleInfo?.name)) },
+    pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
+    pivotControlCount(sheetId) { const sheet = find(sheetId); return sheet.metadata.slicerRelationshipIds.length + sheet.metadata.timelineRelationshipIds.length },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)

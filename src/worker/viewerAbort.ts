@@ -50,6 +50,10 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
       options.signal,
       () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], cells: new Int32Array(), diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: error.message }] }),
     ) } satisfies Pick<SourceStore, 'readRegionStyles'> : {}),
+    ...(store.readPivotDisplay ? { readPivotDisplay: (options, grantBytes, memory, profile) => read(
+      () => store.readPivotDisplay!(options, grantBytes, memory, profile), options.signal,
+      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], pivotTables: [], slicers: [], timelines: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: error.message }] }),
+    ) } satisfies Pick<SourceStore, 'readPivotDisplay'> : {}),
     queryColumn: (request, options) => read(() => store.queryColumn(request, options), options.signal, page),
     queryOverview: (request, options) => read(() => store.queryOverview(request, options), options.signal, page),
     queryStructural: (rect, options) => read(() => store.queryStructural(rect, options), options.signal, () => ({ stamp: store.stamp, completeness: 'incomplete', merges: [], tables: [], spills: [], drawings: [], missing: [rect], error })),

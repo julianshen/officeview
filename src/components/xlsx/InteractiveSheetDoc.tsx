@@ -500,7 +500,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const prepareEntry = (sheetId: string, override?: SessionSizes): { entry: SheetEntry } | { candidate: Candidate } => {
     const index = sheetIds.indexOf(sheetId)
     let sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
-    const regionStyleContent = remote && remote.layout(sheetId).hasRegionStyles ? remote.regionStyles(sheetId) : null
+    const regionStyleContent = remote && (remote.layout(sheetId).hasPivotDisplay || remote.layout(sheetId).hasRegionStyles) ? remote.pivotDisplay(sheetId) : null
     const regionStyleGen = regionStyleContent?.gen ?? 0
     if (regionStyleContent) sheet = sheetWithRegionStyles(sheet, regionStyleContent)
     const sparklineContent = remote && remote.layout(sheetId).hasSparklines ? remote.sparklines(sheetId) : null
@@ -931,7 +931,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const cellAt = (sheetEntry: SheetEntry, at: SourceCell): XlsxCell | undefined => sheetEntry.geometry.cellsOf(at.row)?.find(cell => cell.col === at.col)
   const styleForCell = (sheetEntry: SheetEntry, cell: Pick<XlsxCell, 'row' | 'col' | 'styleIndex'> & { style?: XlsxCell['style'] }): import('../../xlsx/types').XlsxCellStyle | undefined => {
     const own = remote ? remote.styleOf(cell.styleIndex) : cell.style
-    return sheetEntry.sheet.regionStyles?.styleAt(cell.row, cell.col, own) ?? own
+    return sheetEntry.sheet.regionStyles?.styleAt(cell.row, cell.col, own, 'screen') ?? own
   }
   const findInput = (): FindInput => ({
     owner: ownerOf(),

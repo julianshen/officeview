@@ -6,6 +6,8 @@ import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow 
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 import type { TableMetadata } from '../formula/types'
 import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
+import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
+import type { SlicerModel, TimelineModel } from '../pivots/slicers/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
 export const MAX_REGION_STYLE_TABLES = 512
@@ -231,6 +233,8 @@ export interface SourceStore {
   readSparklines?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, replyEnvelopeBytes?: number): Promise<SheetSparklines>
   /** S8: bounded table-style descriptors for the receiving region-style layer. */
   readRegionStyles?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles>
+  /** S13: clone-safe table/pivot/control descriptors for the main-thread display layer. */
+  readPivotDisplay?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile?: ProfileId): Promise<RemotePivotDisplay>
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
@@ -269,6 +273,19 @@ export interface RemoteRegionStyles {
   cells?: Int32Array
   diagnostics: readonly TableStyleDiagnostic[]
   /** Exact worker estimate when the current receiver grant was insufficient. */
+  requiredBytes?: number
+}
+
+/** S13 receiver-granted descriptors. Roles, buttons and drawing controls are composed on the main thread. */
+export interface RemotePivotDisplay {
+  sheetId: string
+  stamp: SourceStamp
+  tables: RemoteRegionStyles['tables']
+  pivotTables: readonly PivotTableDefinition[]
+  slicers: readonly SlicerModel[]
+  timelines: readonly TimelineModel[]
+  theme?: ThemeContext
+  diagnostics: readonly (TableStyleDiagnostic | PivotDiagnostic)[]
   requiredBytes?: number
 }
 
@@ -539,6 +556,8 @@ export type SourceReadQuery =
   | { op: 'sparklines'; grantBytes: number }
   /** S8: receiver-granted table region styles. */
   | { op: 'regionStyles'; grantBytes: number }
+  /** S13 receiver-granted pivot/control descriptors. */
+  | { op: 'pivotDisplay'; grantBytes: number }
   /** S10.2: operation range detection (sort admission includes the structural
    * guard) run next to the store, so a paged sheet is not scanned strip by
    * strip across the worker boundary. Same detectors, same outcome. */
@@ -556,6 +575,7 @@ export type SourceReadResult =
   | { op: 'drawings'; result: SheetDrawings }
   | { op: 'sparklines'; result: SheetSparklines }
   | { op: 'regionStyles'; result: RemoteRegionStyles }
+  | { op: 'pivotDisplay'; result: RemotePivotDisplay }
   | { op: 'detectRange'; detection: RangeDetection }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
@@ -590,6 +610,10 @@ export interface SheetLayout {
   hasRegionStyles?: boolean
   /** Number of table descriptors a bounded regionStyles read may return. */
   regionStyleTableCount?: number
+  /** S13 metadata-only fast path; absent/false has no pivot display work. */
+  hasPivotDisplay?: boolean
+  pivotTableCount?: number
+  pivotControlCount?: number
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }

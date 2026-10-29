@@ -23,6 +23,10 @@ function load(): Promise<typeof import('./pivots/index')> {
   return pending ??= import('./pivots/index').catch(error => { pending = undefined; throw error })
 }
 export function pivotEngine(): PivotEngine | undefined { return engine }
+/** Resolve paged control descriptors with the same lazy parser used by resident drawings. */
+export async function resolveSheetControls(pkg: PackageReader, request: SheetControlsRequest): Promise<SheetControls | undefined> {
+  try { await load(); return await engine?.sheetControls(pkg, request) } catch { return undefined }
+}
 /** Ruling AH: a sheet's slicers and timelines need the chunk too (a slicer may sit on a sheet without a pivot). */
 export function ensurePivotEngine(sheets: readonly XlsxSheet[]): Promise<void> {
   return sheets.some(sheet => sheet.pivotTables?.length || sheet.slicerRefs?.length || sheet.timelineRefs?.length) ? load().then(() => {}, () => {}) : Promise.resolve()
