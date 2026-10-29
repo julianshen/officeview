@@ -13,7 +13,7 @@ import type { OverflowCapture } from './overflowProof'
  * as an unhandled exception.
  */
 import { DEFAULT_COLUMN_METRICS, columnWidthPx } from '../columnWidth'
-import type { XlsxCell, XlsxDrawing, XlsxMergeRange, XlsxSheet } from '../types'
+import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxSheet } from '../types'
 import type { DrawingContentShape } from '../../drawing/content'
 import type {
   AxisMetrics, AxisRun, AxisSizeInterval, AxisWindow, CacheIdentity, CompactSourceRowSet, CompleteViewportContent, Completeness, IntervalSet, LogicalCellBox,
@@ -928,6 +928,121 @@ function detailPlan(geometry: SheetGeometry, viewport: LogicalViewport, limits: 
     return coarse(`more than ${limits.tile.records} records in one ${TILE_DEVICE_PX}-device-pixel tile`)
   }
   return done(drawings)
+}
+
+/** The region style layer as the viewport needs it (tableStyles/regionLayer.ts). */
+export interface RegionSurfaceStyles {
+  readonly rects: readonly { minRow: number; maxRow: number; minCol: number; maxCol: number }[]
+  styleAt(row: number, col: number, own: XlsxCellStyle | undefined, mode?: 'print' | 'screen'): XlsxCellStyle | undefined
+}
+export type RegionSurfaceAdmission =
+  | { kind: 'detail'; cells: CellPlacement[]; plan: ViewportDetail }
+  | { kind: 'coarse'; plan: ViewportCoarse }
+
+/**
+ * Synthetic styled surfaces of a detail plan (PR #55 P2): the empty cells of styled
+ * table/pivot regions that paint a fill or border, admitted as records like the
+ * planner's real cells. They are enumerated on detail rows x detail columns only
+ * (sub-detail runs stay summarized in `plan.coarse`), plus the anchor of every merge
+ * in `plan.merges` whose merged box meets the pane, at its merged bounds, so a
+ * styled merge keeps its paint when only a covered part is visible. Order is
+ * (first containing rect, display slot, column), the order of a rect-by-rect walk.
+ *
+ * The plan has already charged its records to `frameBudget` (planViewport, or the
+ * tile host before handing in a prepared plan). Surfaces join the same caps the
+ * planner used: per frame, the budgeted tile cap and what the budget had left, then
+ * per 512-device-pixel tile. Over a cap, the result is the planner's own coarse
+ * frame (same diagnostics, groups and active record) and the plan's charge is
+ * refunded, as a coarse plan charges nothing. Enumeration stops one past the cap.
+ */
+export function admitRegionSurfaces(
+  plan: ViewportDetail,
+  geometry: SheetGeometry,
+  viewport: LogicalViewport,
+  styles: RegionSurfaceStyles,
+  seen: Set<string>,
+  profile: ViewportProfile = 'D',
+  frameBudget?: FrameBudget,
+): RegionSurfaceAdmission {
+  const base = VIEWPORT_DETAIL_LIMITS[profile]
+  const scale = detailScale(viewport)
+  const { metrics } = geometry
+  const { x: vx, y: vy, width, height } = viewport.box
+  const charged = plan.work.records
+  const limit = frameBudget ? Math.max(0, Math.min(base.records, base.tile.records, frameBudget.records + charged)) : base.records
+  const allowance = limit - charged
+  const qualifies = (style: XlsxCellStyle | undefined): style is XlsxCellStyle => Boolean(style && (style.fillColor || Object.keys(style.borders ?? {}).length))
+  const out: Array<{ placement: CellPlacement; rect: number; slot: number }> = []
+  let over = false
+  const push = (placement: CellPlacement, rect: number, slot: number) => {
+    if (out.length >= allowance) { over = true; return }
+    out.push({ placement, rect, slot })
+  }
+  const rowRuns = [...metrics.rows.visibleBetween(vy, vy + height).runs].filter(run => !belowDetail(run.sizeCss, scale))
+  const colRuns = [...metrics.cols.visibleBetween(vx, vx + width).runs].filter(run => !belowDetail(run.sizeCss, scale))
+  const rects = styles.rects
+  for (let index = 0; index < rects.length && !over; index++) {
+    const rect = rects[index]
+    for (const run of rowRuns) for (let slot = run.start; slot <= run.end && !over; slot++) {
+      const row = metrics.order.displayToSource(slot)
+      if (row < rect.minRow || row > rect.maxRow) continue
+      for (const colRun of colRuns) for (let col = Math.max(rect.minCol, colRun.start); col <= Math.min(rect.maxCol, colRun.end) && !over; col++) {
+        const key = `${row}:${col}`
+        if (seen.has(key)) continue
+        const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+        if (merge && (merge.minRow !== row || merge.minCol !== col)) continue
+        const style = styles.styleAt(row, col, undefined, 'screen')
+        if (!qualifies(style)) continue
+        const x = metrics.cols.start(col)
+        let y = metrics.rows.start(slot)
+        let cellWidth = metrics.cols.size(col), cellHeight = metrics.rows.size(slot)
+        if (merge) {
+          cellWidth = metrics.cols.start(merge.maxCol + 1) - x
+          const lastSlot = metrics.order.sourceToDisplay(merge.maxRow)
+          const firstSlot = metrics.order.sourceToDisplay(merge.minRow)
+          const top = metrics.rows.start(Math.min(firstSlot, lastSlot))
+          y = top
+          cellHeight = metrics.rows.start(Math.max(firstSlot, lastSlot) + 1) - top
+        }
+        const cell: XlsxCell = { ref: '', row, col, value: null, styleIndex: 0, style }
+        push({ cell, source: { row, col }, x, y, width: cellWidth, height: cellHeight }, index, slot)
+        seen.add(key)
+      }
+    }
+  }
+  // Anchors of merges reaching into the pane from outside the enumerated window.
+  // Reordered-band merges are not in plan.merges: the planner paints those per cell.
+  let anchors = false
+  for (const merge of plan.merges) {
+    if (over) break
+    const range = merge.range, key = `${range.minRow}:${range.minCol}`
+    if (seen.has(key) || !(merge.width > 0 && merge.height > 0)) continue
+    if (!(merge.x < vx + width && merge.x + merge.width > vx && merge.y < vy + height && merge.y + merge.height > vy)) continue
+    const index = rects.findIndex(rect => range.minRow >= rect.minRow && range.minRow <= rect.maxRow && range.minCol >= rect.minCol && range.minCol <= rect.maxCol)
+    if (index < 0) continue
+    const style = styles.styleAt(range.minRow, range.minCol, undefined, 'screen')
+    if (!qualifies(style)) continue
+    const cell: XlsxCell = { ref: '', row: range.minRow, col: range.minCol, value: null, styleIndex: 0, style }
+    push({ cell, source: { row: range.minRow, col: range.minCol }, x: merge.x, y: merge.y, width: merge.width, height: merge.height, merge: range }, index, metrics.order.sourceToDisplay(range.minRow))
+    seen.add(key)
+    anchors = true
+  }
+  // Stable: the window walk already emits in this order.
+  if (anchors) out.sort((a, b) => a.rect - b.rect || a.slot - b.slot || a.placement.source.col - b.placement.source.col)
+  const cells = out.map(item => item.placement)
+  const degrade = (message: string): RegionSurfaceAdmission => {
+    if (frameBudget) { frameBudget.records += charged; frameBudget.gridlines += plan.work.gridlines }
+    const extent = plan.extent
+    const groups = coarseGroups(metrics, [{ rows: { start: Math.max(0, vy), end: Math.min(extent.height, vy + height) }, cols: { start: Math.max(0, vx), end: Math.min(extent.width, vx + width) } }], scale, base.overviewGroups)
+    const work = { ...plan.work, records: 0, overviewGroups: groups.length }
+    return { kind: 'coarse', plan: { kind: 'coarse', diagnostics: [...geometry.diagnostics, { code: 'detail-limit', message }], groups, extent, work, ...(plan.active ? { active: plan.active } : {}) } }
+  }
+  if (over) return degrade(`more than ${limit} cell records in the frame`)
+  if (cells.length && tileOverflow([...plan.cells, ...cells], viewport, scale, base.tile.records)) {
+    return degrade(`more than ${base.tile.records} records in one ${TILE_DEVICE_PX}-device-pixel tile`)
+  }
+  if (frameBudget) frameBudget.records -= cells.length
+  return { kind: 'detail', cells, plan: cells.length ? { ...plan, work: { ...plan.work, records: charged + cells.length } } : plan }
 }
 
 // ---------------------------------------------------------------------------

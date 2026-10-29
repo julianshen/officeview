@@ -5,10 +5,10 @@ import type { CanvasColors } from '../../components/canvasColors'
  * eagerly, never reaches the viewport planner; only the interactive sheet
  * viewport (lazy chunk) and tests import it.
  */
-import type { XlsxCell, XlsxSheet } from '../types'
+import type { XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
-import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometry, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
+import { COARSE_NOTICE, admitRegionSurfaces, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometry, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
 import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission, type Rect } from './textLayout'
 import { cellDisplayText, layoutCellBody, paintCellLayout, paintCoveredLines, paintSheetDrawings, spillSpan, spreadsheetColor, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
@@ -192,7 +192,7 @@ export function renderSheetViewport(
   prepared?: RenderSheetAssets,
   options: ViewportPaintOptions = {},
 ): ViewportPaintResult {
-  const plan = options.preparedPlan ?? planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
+  const planned = options.preparedPlan ?? planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
   const { x: vx, y: vy, width, height } = viewport.box
   const paintable = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
   const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
@@ -210,48 +210,24 @@ export function renderSheetViewport(
       ctx.fillRect(0, 0, width, height)
       if (options.watermark) paintWatermark(ctx, { widthPx: width, heightPx: height }, options.watermark)
     }
-    if (plan.kind === 'pending' || plan.kind === 'diagnostic') {
-      if (paintable) notice(VIEWPORT_NOTICE[plan.kind])
-      return { kind: plan.kind, diagnostics: plan.diagnostics, records: [], coarse: [], work: emptyWork() }
+    if (planned.kind === 'pending' || planned.kind === 'diagnostic') {
+      if (paintable) notice(VIEWPORT_NOTICE[planned.kind])
+      return { kind: planned.kind, diagnostics: planned.diagnostics, records: [], coarse: [], work: emptyWork() }
     }
-    const work = plan.work
-    const built = cache.stats.built, reused = cache.stats.reused
     // The host lays a cell out in a box at the origin: records are box-relative.
     const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
     const regionStyles = regionStylesFor(sheet)
-    const regionCells: CellPlacement[] | undefined = regionStyles ? [] : undefined
-    if (plan.kind === 'detail' && geometry?.kind === 'ready' && regionStyles && regionCells) {
-      const seen = new Set(plan.cells.map(item => `${item.source.row}:${item.source.col}`))
-      if (plan.active) seen.add(`${plan.active.source.row}:${plan.active.source.col}`)
-      const rowRuns = geometry.metrics.rows.visibleBetween(vy, vy + height).runs
-      const colRuns = geometry.metrics.cols.visibleBetween(vx, vx + width).runs
-      for (const rect of regionStyles.rects) for (const run of rowRuns) for (let slot = run.start; slot <= run.end; slot++) {
-        const row = geometry.metrics.order.displayToSource(slot)
-        if (row < rect.minRow || row > rect.maxRow) continue
-        for (const colRun of colRuns) for (let col = Math.max(rect.minCol, colRun.start); col <= Math.min(rect.maxCol, colRun.end); col++) {
-          const key = `${row}:${col}`
-          if (seen.has(key)) continue
-          const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
-          if (merge && (merge.minRow !== row || merge.minCol !== col)) continue
-          const style = regionStyles.styleAt(row, col, undefined, 'screen')
-          if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) continue
-          const x = geometry.metrics.cols.start(col)
-          let y = geometry.metrics.rows.start(slot)
-          let cellWidth = geometry.metrics.cols.size(col), cellHeight = geometry.metrics.rows.size(slot)
-          if (merge) {
-            cellWidth = geometry.metrics.cols.start(merge.maxCol + 1) - x
-            const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
-            const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
-            const top = geometry.metrics.rows.start(Math.min(firstSlot, lastSlot))
-            y = top
-            cellHeight = geometry.metrics.rows.start(Math.max(firstSlot, lastSlot) + 1) - top
-          }
-          const cell: XlsxCell = { ref: '', row, col, value: null, styleIndex: 0, style }
-          regionCells.push({ cell, source: { row, col }, x, y, width: cellWidth, height: cellHeight })
-          seen.add(key)
-        }
-      }
-    }
+    // Styled empty cells are records too: admitted against the planner's caps,
+    // degrading the frame to its coarse summary when they do not fit.
+    const admitted = planned.kind === 'detail' && geometry?.kind === 'ready' && regionStyles ? admitRegionSurfaces(planned, geometry, viewport, regionStyles, (() => {
+      const seen = new Set(planned.cells.map(item => `${item.source.row}:${item.source.col}`))
+      if (planned.active) seen.add(`${planned.active.source.row}:${planned.active.source.col}`)
+      return seen
+    })(), options.profile, options.frameBudget) : undefined
+    const plan = admitted?.plan ?? planned
+    const regionCells: CellPlacement[] | undefined = regionStyles ? admitted?.kind === 'detail' ? admitted.cells : [] : undefined
+    const work = plan.work
+    const built = cache.stats.built, reused = cache.stats.reused
     // Spec §8: a sheet without styled regions pays an undefined check here, never a per-tile copy.
     const cellPlacements: readonly CellPlacement[] = plan.kind !== 'detail' ? [] : !regionStyles ? plan.cells
       : [...plan.cells.map(item => {
