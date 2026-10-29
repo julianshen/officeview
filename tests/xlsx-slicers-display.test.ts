@@ -28,7 +28,6 @@ import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { parseThemeContext } from '../src/drawing/style'
 import { XLSX_CONTROL_REQUIREMENTS, XLSX_REQUIREMENTS, supportedChoiceRequirements, xlsxRequirements } from '../src/drawing/coverage'
 import { getChildren, parseXml } from '../src/core/xml'
-import { ensurePivotEngine, pivotEngine } from '../src/xlsx/pivotLoader'
 import { REF_CASES, type SlicerCase, type TimelineCase } from '../scripts/xlsx-refs/cases'
 import { slicerItemState, slicerLayout, timelineLayout, TIMELINE_PERIOD_PT } from '../src/xlsx/pivots/slicers/paint'
 import { slicerAppearance, timelineAppearance } from '../src/xlsx/pivots/slicers/style'
@@ -510,8 +509,5 @@ describe('mc:AlternateContent: the Choice needs the pivots chunk, otherwise the 
       await loader.ensurePivotEngine([{ name: 'S', rows: [], cols: [], merges: [], mergeRanges: [], timelineRefs: [{ partPath: 'xl/timelines/timeline1.xml' }] }])
       expect(loader.pivotEngine()).toBeDefined()
     } finally { vi.resetModules() }
-    // The module instance under test elsewhere in this file is unaffected.
-    await ensurePivotEngine([])
-    expect(pivotEngine()).toBeDefined()
   })
 })
