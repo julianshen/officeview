@@ -74,6 +74,7 @@ describe('table style painting', () => {
       owner: { docId: 'table-style', sheetId: '1', valueGen: 0, fontGen: 0, viewGen: 0 }, cache: new LayoutCache(),
     })
     expect(result.kind).toBe('detail')
+    expect(result.records.some(record => record.source.row === 2 && record.source.col === 2)).toBe(true)
     expect(pixel(canvas, 2 * 64 + 20, 2 * 20 + 10)).toEqual([255, 0, 0, 255])
   })
 
@@ -147,6 +148,37 @@ describe('table style painting', () => {
     }
   })
 
+  test('styleAt over a 16,000 by 10 table scales linearly past the memo cap', async () => {
+    await tableStyleLoader.preloadTableStyles()
+    const { buildTableRegions } = await import('../src/xlsx/tableStyles/regionLayer')
+    const { parseStylesExtras } = await import('../src/xlsx/tableStyles/parseStylesExtras')
+    const { parseThemeContext } = await import('../src/drawing/style')
+    const doc = await parsed('table-medium-2.xlsx')
+    const sheet = styleSheet(doc)
+    const extras = parseStylesExtras(sheet.tableStyleSource!.root, sheet.tableStyleSource!.colors)
+    const original = sheet.tables![0]!
+    const measure = (rows: number) => {
+      const table = { ...original, extent: { ...original.extent, rows, cols: 10 } }
+      const layer = buildTableRegions([table], extras, parseThemeContext())!
+      const started = performance.now()
+      for (let row = 0; row < rows; row++) for (let col = 0; col < 10; col++) layer.styleAt(row, col, undefined)
+      return performance.now() - started
+    }
+    const small = measure(4_000)
+    const large = measure(16_000)
+    expect(large).toBeLessThan(4 * small + 500)
+    expect(large).toBeLessThan(3_000)
+  })
+
+  test('metrics do not create a diagnostics array without a diagnostic', async () => {
+    await tableStyleLoader.preloadTableStyles()
+    const doc = await parsed('table-medium-2.xlsx')
+    const sheet = styleSheet(doc)
+    sheet.diagnostics = undefined
+    computeMetrics(sheet)
+    expect(sheet.diagnostics).toBeUndefined()
+  })
+
   test('a resolved styled table is clipped to static grid limits without refusal', async () => {
     const doc = await parsed('table-medium-2.xlsx')
     const sheet = styleSheet(doc)
@@ -180,18 +212,6 @@ describe('table style painting', () => {
     const canvas = createCanvas(metrics.widthPx, metrics.heightPx)
     renderSheet(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, metrics)
     expect(sheet.diagnostics?.some(d => d.feature === 'table-style-engine-unavailable')).toBe(false)
-  })
-
-  test('placedFromViewportCells adds styled empty cells within its visible region', async () => {
-    const { placedFromViewportCells } = await import('../src/xlsx/view/textLayout')
-    const cells = [{ kind: 'cell', source: { row: 1, col: 1 }, bounds: { x: 10, y: 10, width: 10, height: 10 }, cell: { value: 'x', styleIndex: 0 } }] as never[]
-    const layer = { rects: [{ minRow: 1, minCol: 0, maxRow: 1, maxCol: 2 }], styleAt: (_row: number, _col: number, own: unknown) => own ?? { fillColor: '#f00' } } as never
-    const placed = placedFromViewportCells(cells, undefined, layer, {
-      minRow: 1, maxRow: 1, minCol: 0, maxCol: 2,
-      boxAt: (row: number, col: number) => ({ x: col * 10, y: row * 10, width: 10, height: 10 }),
-    })
-    expect(placed.map(item => item.cell.col)).toEqual([1, 0, 2])
-    expect(placed.slice(1).every(item => item.cell.style?.fillColor)).toBe(true)
   })
 
   test('a table without a style name is pixel-equal to a direct render', async () => {

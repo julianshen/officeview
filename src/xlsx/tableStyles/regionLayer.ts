@@ -72,7 +72,7 @@ export function tableCellRoles(table: TableMetadata, row: number, col: number, d
   return out
 }
 
-export function buildTableRegions(tables: readonly TableMetadata[], extras: StylesExtras, theme: ThemeContext, diagnostics?: TableStyleDiagnostic[]): RegionStyleLayer | undefined {
+export function buildTableRegions(tables: readonly TableMetadata[], extras: StylesExtras, theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
   const regions = tables.flatMap(table => {
     const name = table.styleInfo?.name
     if (!name || table.extent.rows < 1 || table.extent.cols < 1) return []
@@ -80,9 +80,7 @@ export function buildTableRegions(tables: readonly TableMetadata[], extras: Styl
     const def = extras.tableStyles.get(name) ?? builtinTableStyle(name)
     if (!def || !def.table) {
       const message = `Table "${table.displayName}" uses unknown table style "${name}"; stored cell formatting is used.`
-      if (!diagnostics?.some(diagnostic => diagnostic.feature === 'table-style-unknown' && diagnostic.message === message)) {
-        diagnostics?.push({ kind: 'unsupported', feature: 'table-style-unknown', message })
-      }
+      report?.({ kind: 'unsupported', feature: 'table-style-unknown', message })
       return []
     }
     const rect: SheetRect = { minRow: table.extent.firstRow, minCol: table.extent.firstCol, maxRow: table.extent.firstRow + table.extent.rows - 1, maxCol: table.extent.firstCol + table.extent.cols - 1 }
@@ -102,10 +100,17 @@ export function buildTableRegions(tables: readonly TableMetadata[], extras: Styl
       const byOwn = memo.get(key)
       if (byOwn?.has(own)) return byOwn.get(own)
       const roles = orderRoles(tableCellRoles(region.table, row, col, region.def), 'table')
-      const style = roles.length ? resolveRoleStyle(region.def, roles, own, theme, diagnostics) : own
-      if (memo.size >= MAX_MEMO_CELLS) memo.delete(memo.keys().next().value!)
-      const entries = byOwn ?? new Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>()
-      if (!byOwn) memo.set(key, entries)
+      const scratch: TableStyleDiagnostic[] = []
+      const style = roles.length ? resolveRoleStyle(region.def, roles, own, theme, scratch) : own
+      for (const diagnostic of scratch) report?.(diagnostic)
+      let entries = byOwn
+      if (!entries) {
+        // Delete in batches: Map iterator deletion leaves tombstones in some
+        // engines, making per-cell FIFO eviction quadratic for large tables.
+        if (memo.size >= MAX_MEMO_CELLS) memo.clear()
+        entries = new Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>()
+        memo.set(key, entries)
+      }
       entries.set(own, style)
       return style
     },
@@ -116,8 +121,11 @@ export function regionStylesFromSource(sheet: XlsxSheet): RegionStyleLayer | und
   if (!sheet.tables?.length) return undefined
   const source = sheet.tableStyleSource
   const extras: StylesExtras = source ? parseStylesExtras(source.root, source.colors) : { dxfs: [], tableStyles: new Map(), slicerStyles: new Map() }
-  const diagnostics = (sheet.diagnostics ??= []) as TableStyleDiagnostic[]
-  return buildTableRegions(sheet.tables, extras, sheet.drawingTheme ?? parseThemeContext(), diagnostics)
+  const report = (diagnostic: TableStyleDiagnostic) => {
+    const list = (sheet.diagnostics ??= []) as TableStyleDiagnostic[]
+    if (!list.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) list.push(diagnostic)
+  }
+  return buildTableRegions(sheet.tables, extras, sheet.drawingTheme ?? parseThemeContext(), report)
 }
 
 registerTableStyleEngine(regionStylesFromSource)
