@@ -808,41 +808,8 @@ export function renderSheet(
   const laidOut: CellBodyLayout[] = []
   let paintRows: readonly XlsxRow[] = sheet.rows
   // Styled empty table cells are real paint surfaces. Add them only where no
-  // source cell exists, and only within the already admitted static grid.
-  if (regionStyles) {
-    const augmented = sheet.rows.map(row => ({ ...row, cells: [...row.cells] }))
-    const rowRecords = new Map<number, XlsxRow>()
-    for (const row of augmented) if (!rowRecords.has(row.index)) rowRecords.set(row.index, row)
-    const occupied = new Map<number, Set<number>>()
-    for (const row of sheet.rows) for (const cell of row.cells) {
-      const source = cellSourceRow(row, cell)
-      let cols = occupied.get(source)
-      if (!cols) occupied.set(source, cols = new Set())
-      cols.add(cell.col)
-    }
-    const appended: XlsxRow[] = []
-    for (const rect of regionStyles.rects) {
-      const r0 = Math.max(0, rect.minRow), r1 = Math.min(rowHeightsPx.length - 1, rect.maxRow)
-      const c0 = Math.max(0, rect.minCol), c1 = Math.min(colWidthsPx.length - 1, rect.maxCol)
-      for (let source = r0; source <= r1; source++) {
-        let row = rowRecords.get(source)
-        if (!row) {
-          row = { index: source, cells: [], hidden: false }
-          rowRecords.set(source, row); appended.push(row)
-        }
-        let cols = occupied.get(source)
-        if (!cols) occupied.set(source, cols = new Set())
-        for (let col = c0; col <= c1; col++) {
-          if (cols.has(col)) continue
-          const style = regionStyles.styleAt(source, col, undefined)
-          if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) continue
-          row.cells.push({ ref: '', row: source, col, value: null, styleIndex: 0, style })
-          cols.add(col)
-        }
-      }
-    }
-    paintRows = [...augmented, ...appended]
-  }
+  // source cell exists, and only where this request paints (see syntheticRegionRows).
+  if (regionStyles) paintRows = syntheticRegionRows(sheet.rows, regionStyles, ranges, colX, rowY, edges, vp)
   for (const row of paintRows) {
     // A malformed row may name many source rows. Partition once so occupancy
     // construction never rescans the container for each source row.
@@ -950,6 +917,122 @@ export function renderSheet(
   if (sheet.pivotRegions?.length || sheet.pivotTables?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
   paintSheetDrawings(sheet, sheet.drawings ?? [], ctx, prepared)
   } finally { ctx.restore() }
+}
+
+/** @internal Work done by syntheticRegionRows, for allocation-bound tests only. */
+export const syntheticCellWork = { created: 0, rowsCopied: 0 }
+
+/** The bands [starts[i], starts[i + 1]) of i in [0, n) that meet the open interval
+ * (from, to), as an inclusive index range (first > last when none do). `starts`
+ * holds n + 1 nondecreasing prefix sums. */
+function bandWindow(starts: readonly number[], n: number, from: number, to: number): [number, number] {
+  let lo = 0, hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid + 1] > from) hi = mid; else lo = mid + 1 }
+  const first = lo
+  lo = 0; hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid] < to) lo = mid + 1; else hi = mid }
+  return [first, lo - 1]
+}
+
+/** Ascending over ([lo, hi] ∪ extra) ∩ [a, b]; `extra` is sorted and unique. */
+function eachAscending(a: number, b: number, lo: number, hi: number, extra: readonly number[] | undefined, visit: (i: number) => void): void {
+  const s = Math.max(a, lo), e = Math.min(b, hi)
+  const n = extra?.length ?? 0
+  let k = 0
+  if (s <= e) {
+    for (; k < n && extra![k] < s; k++) if (extra![k] >= a) visit(extra![k])
+    for (let i = s; i <= e; i++) visit(i)
+    while (k < n && extra![k] <= e) k++
+  }
+  for (; k < n && extra![k] <= b; k++) if (extra![k] >= a) visit(extra![k])
+}
+
+/**
+ * The rows to paint with a synthetic cell for each empty styled region cell this
+ * request can paint (PR #55 P1). The paint loop keeps a cell only when its own box,
+ * widened to its merge when it anchors one, meets the viewport; so the cells needed
+ * are the region's cells in the window rows × window columns, plus anchors outside
+ * the window whose merged box reaches in. Nothing else is widened: a cell whose own
+ * box misses the page is culled with its borders, and a synthetic cell holds no
+ * value, so it never blocks a neighbour's text overflow. The traversal visits the
+ * kept cells in the order a whole-region walk would (rows by rect, then ascending),
+ * so paint order, and with it every pixel, is unchanged. Only rows that gain a cell
+ * are copied; the rest are passed through.
+ */
+function syntheticRegionRows(
+  rows: readonly XlsxRow[],
+  regionStyles: RegionStyleLayer,
+  ranges: readonly XlsxMergeRange[],
+  colX: readonly number[],
+  rowY: readonly number[],
+  edges: { row(index: number): number; col(index: number): number },
+  vp: SheetViewport,
+): readonly XlsxRow[] {
+  const nRows = rowY.length - 1, nCols = colX.length - 1
+  const [wr0, wr1] = bandWindow(rowY, nRows, vp.y, vp.y + vp.height)
+  const [wc0, wc1] = bandWindow(colX, nCols, vp.x, vp.x + vp.width)
+  // Merge anchors outside the window whose merged box meets the viewport, by row.
+  const anchorCols = new Map<number, number[]>()
+  for (const r of ranges) {
+    const row = r.minRow, col = r.minCol
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row >= nRows || col >= nCols) continue
+    if (row >= wr0 && row <= wr1 && col >= wc0 && col <= wc1) continue
+    const x = colX[col], y = rowY[row]
+    const w = edges.col(r.maxCol + 1) - x, h = edges.row(r.maxRow + 1) - y
+    if (!(w > 0 && h > 0) || !(x < vp.x + vp.width && x + w > vp.x && y < vp.y + vp.height && y + h > vp.y)) continue
+    let cols = anchorCols.get(row)
+    if (!cols) anchorCols.set(row, cols = [])
+    cols.push(col)
+  }
+  for (const [row, cols] of anchorCols) anchorCols.set(row, [...new Set(cols)].sort((a, b) => a - b))
+  const anchorRows = [...anchorCols.keys()].sort((a, b) => a - b)
+  const wanted = (source: number) => (source >= wr0 && source <= wr1) || anchorCols.has(source)
+
+  const rowRecords = new Map<number, XlsxRow>()
+  for (const row of rows) if (wanted(row.index) && !rowRecords.has(row.index)) rowRecords.set(row.index, row)
+  const occupied = new Map<number, Set<number>>()
+  for (const row of rows) for (const cell of row.cells) {
+    const source = cellSourceRow(row, cell)
+    if (!wanted(source)) continue
+    let cols = occupied.get(source)
+    if (!cols) occupied.set(source, cols = new Set())
+    cols.add(cell.col)
+  }
+  const copies = new Map<XlsxRow, XlsxRow>()
+  const writable = new Set<XlsxRow>()
+  const appended: XlsxRow[] = []
+  for (const rect of regionStyles.rects) {
+    const r0 = Math.max(0, rect.minRow), r1 = Math.min(nRows - 1, rect.maxRow)
+    const c0 = Math.max(0, rect.minCol), c1 = Math.min(nCols - 1, rect.maxCol)
+    eachAscending(r0, r1, wr0, wr1, anchorRows, source => {
+      // A new row is recorded on its first visit, as the whole-region walk did, so
+      // appended rows keep their relative paint order.
+      let row = rowRecords.get(source)
+      if (!row) {
+        row = { index: source, cells: [], hidden: false }
+        rowRecords.set(source, row); appended.push(row); writable.add(row)
+      }
+      let cols = occupied.get(source)
+      if (!cols) occupied.set(source, cols = new Set())
+      const inRows = source >= wr0 && source <= wr1
+      eachAscending(c0, c1, inRows ? wc0 : 1, inRows ? wc1 : 0, anchorCols.get(source), col => {
+        if (cols!.has(col)) return
+        const style = regionStyles.styleAt(source, col, undefined)
+        if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) return
+        if (!writable.has(row!)) {
+          const copy = { ...row!, cells: [...row!.cells] }
+          copies.set(row!, copy); rowRecords.set(source, copy); writable.add(copy)
+          syntheticCellWork.rowsCopied++
+          row = copy
+        }
+        row!.cells.push({ ref: '', row: source, col, value: null, styleIndex: 0, style })
+        syntheticCellWork.created++
+        cols!.add(col)
+      })
+    })
+  }
+  if (!copies.size && !appended.length) return rows
+  return (copies.size ? rows.map(row => copies.get(row) ?? row) : rows).concat(appended)
 }
 
 /** Static admission (spec §11.5, plan S2.3), always recomputed from the sheet and
