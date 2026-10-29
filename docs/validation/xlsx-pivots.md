@@ -84,3 +84,84 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 - **Capture route:** still untested; Task 3 records it.
 - **Recipe R1** (`tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx`) is an Excel-saved pivot with a Product slicer (Apples and Cherries selected) and a Date timeline (all periods), built through UI scripting.
 - An Excel-authored slicer and timeline template (recipe R1, built by the orchestrator through Excel UI scripting) is the structural reference for them.
+
+## Stage 1 references and measurements (Task 3, 2026-10-29, Excel 16.114)
+
+### How the references are made
+- **Pivots (96 cases).** `recipes/pivot-seed.xlsx` was created once through Excel's Data menu (Summarize with PivotTable). It has rows Region › Product, column Year, values Sum of Sales and Sum of Units, compact form, Calibri 11, and English captions set through AppleScript. `scripts/xlsx-refs/build-pivots.ts` opens the seed for each case, reshapes it through the AppleScript pivot dictionary, refreshes and saves, then checks the saved `pivotTableStyleInfo` against the case.
+  - The pivot style must be set through `table style2`; `table style` reads back but is not saved.
+  - The first seed was made in Excel's zh-TW defaults (新細明體 12, Chinese captions) and was rebuilt.
+  - Two strings stay localized because Excel ignores writes to them:
+    - the column grand-total headers ("Sum of Sales 的加總");
+    - the page field's "(全部)" (All).
+- **Custom style, precedence and cell-override inputs.** `scripts/xlsx-refs/style-inputs.ts` derives these from the seed, and `build-pivots.ts --measure` has Excel re-save them.
+- **Tables, slicers and timelines** come from the XML generator. Excel opens them without repair; the totals-row table needed `totalsRowLabel`/`totalsRowFunction` and `SUBTOTAL` cells.
+- **Captures.** `scripts/xlsx-refs/capture-all.ts` uses `copy picture`, screen appearance, 1 px per pt.
+  - A pivot is captured from A1 to the bottom-right corner of its saved `location`.
+  - `copy picture` includes slicer and timeline shapes and the ± buttons. It leaves out field dropdown buttons, which were measured from a window screenshot at 100% zoom; the screen is also 1 px per pt.
+  - Screen gridlines give the cell geometry, so pivots have no bordered twins.
+- **Duplicate check.** Identical images across cases are expected only where a case equals the default (table flag defaults, `pivot-layout-compact`, `pivot-subtotals-top` and `pivot-light-16`, and light1/months).
+  - The check caught timeline "Other1/2". These are not Excel timeline styles (Excel has Light1–6 and Dark1–6) and were removed.
+  - It also caught slicer variants hidden under the timeline; the controls were re-laid out.
+
+### What Excel writes into pivot cells' `s=` (spec §3)
+- **Neutral formats only.** No pivot-style colour or font is ever written into cells. There are four formats:
+  - `pivotButton="1"`, on the cells that show a field dropdown;
+  - left-aligned, for item labels;
+  - left-aligned with `indent=<level>`, for compact-form child items;
+  - plain, for values.
+- **Field buttons.** Compact form has them on the Row Labels and Column Labels cells; outline and tabular forms have one on each field header.
+- **Indent.** The compact-form indent is stored as the cell's alignment `indent`; outline and tabular forms write none.
+- **Formats override.** A format applied to a pivot cell is written twice: as a pivot `<format dxfId>` with a `pivotArea`, and as the cell's own `s=` (fill applied).
+
+### A cell's own `s=` over the pivot style (spec §6.5 [measure] — confirmed)
+- `measure-cell-override` gives three cells a fill and a bold red font through `s=` alone, with no `formats` entry: a subheading label (A6), a value (C7) and a grand-total cell (B22).
+- Excel draws the cell's fill and font over the pivot style in all three. The style still supplies any property the cell's format does not set.
+
+### Element precedence (spec §6.5) — `measure-precedence`
+- **Method.** Custom style `OfficeViewPrecedence` gives every element a distinct fill; the colours are in `recipes/pivot-precedence-colors.json`. All style-info flags are on. The winner is read at each cell; `>` means "wins where both apply".
+- **Header rows:**
+  - firstHeaderCell (A3:A4) > headerRow;
+  - firstColumnSubheading and secondColumnSubheading (column-item rows 4 and 5) > headerRow;
+  - on row 3, headerRow > lastColumn;
+  - on rows 4–5, lastColumn > column subheadings.
+- **Body:**
+  - totalRow > lastColumn and firstColumn (on the whole grand-total row);
+  - lastColumn > firstRowSubheading > firstColumn > row stripes;
+  - firstColumn > row stripes;
+  - row stripes > column stripes, which never show.
+  - wholeTable is beaten everywhere.
+- **Stripes.** Subheading rows count toward the stripe alternation: the first item row under a subheading takes secondRowStripe.
+- **Not shown by this layout:** subtotal rows and columns, and blankRow. They need a subtotals-bottom or blank-line variant if Stage 2 relies on them.
+
+### Compact indent and buttons (screen, 100%, Calibri 11)
+- **Compact text position.** With ± buttons shown, label text starts at **15 + 10 × level px** from the cell's left edge: level 0 at 15, level 1 at 25, level 2 at 35 (`pivot-values-on-rows`).
+- **± button.** A 7 × 7 px box at x = 6–12, vertically centred in a 15 px row, drawn for the item levels that have children.
+- **Field dropdown button** (Row Labels, Column Labels and page field):
+  - box: 15 × 14 px, flush with the cell's right and bottom edges, fill #FDFDFD, 1 px border #738A93;
+  - arrow: a downward triangle 7 px wide and 4 rows tall (7, 5, 3, 1), centred, starting 5 px below the box top, colour ≈ #828282.
+
+### Slicer geometry (`slicer-light1`, SlicerStyleLight1, 1 px per pt)
+- **Frame.** 1 px border #4F81BD on all sides.
+- **Header.** The caption ("Product", bold) sits on white. A 1 px #4F81BD separator lies 19 px below the top border, and the first item starts 4 px below it, so the top border to the first item's top is 23 px. The multi-select and clear-filter icons sit at the header's right.
+- **Items.**
+  - 17 px tall including a 1 px border, with a 2 px gap, so the pitch is 19 px;
+  - inset 6 px from the frame on the left and right;
+  - text starts 8 px inside the item.
+- **Item states:**
+  - selected with data: fill #B8CCE4, border #9A9A9A;
+  - not selected with data: fill white, border #CCCCCC;
+  - no data (`slicer-no-data`, `showNoDataItems="1"`): grey text, shown after the items with data.
+- **Scrolled** (`slicer-scrolled`, 90 pt tall, 4 items, `startItem=2`). Excel draws a vertical scrollbar (a grey rounded thumb) at the right edge. It also **clamps `startItem`** so the last item fills the view: with 3 visible rows of 4 items, it shows items 1–3 (Dates, Cherries, Bananas), not from item 2.
+
+### Timeline geometry (120 pt anchor; `timeline-light1-months`, `timeline-dark2-days`)
+- **Frame.** 1 px border in the style's accent colour (Light1 #5887BF, Dark2 #C25956); the frame fills the anchor (121 px rows 105–225 in the capture).
+- **Header.** The caption ("Date") and the clear-filter icon sit at the top. A 1 px accent separator lies 22 px below the top border.
+- **Rows below the header, in order:**
+  - the selection label ("All Periods") at left, with the level picker at right;
+  - the year label;
+  - the period labels (month or day numbers);
+  - the time bar.
+- **Time bar.** 13 px tall, filled with a vertical gradient from the style's light tint to its dark shade (Light1 #B9CEE5 → #5489C2; Dark2 #C3544B → #6A2521) and divided per period. It is inset 6 px from the frame on the left, with a grey selection handle at the left end.
+- **Scrollbar.** 7 px tall, 5 px below the bar; grey thumb #BCBCBC on a pale accent track.
+- **Text.** Labels are drawn in Excel's UI language, not stored in the file: the zh-TW captures show 所有週期, 月 and 天, and 1月…. Comparisons must mask timeline text or treat it as locale-dependent.
