@@ -143,6 +143,12 @@ export interface XlsxSheet {
   semantics?: ResolvedSemantics
   /** Stable workbook identity (original order, never a filtered index). */
   sheetId?: string
+  /** Tables owned by this sheet (also present in the document-wide inventory). */
+  tables?: TableMetadata[]
+  /** Bounded pivot/control region references used by region-style rendering. */
+  pivotRegions?: import('./pivots/stub').PivotRegionRef[]
+  slicerRefs?: import('./pivots/stub').ControlPartRef[]
+  timelineRefs?: import('./pivots/stub').ControlPartRef[]
   workbookIndex?: number
   kind?: 'worksheet' | 'other'
   /** Excel column pixel model (workbook MDW, sheet default width); absent:

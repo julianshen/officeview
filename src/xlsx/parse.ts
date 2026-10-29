@@ -30,6 +30,7 @@ import { PackageError } from '../core/package-error'
 import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
 import { resolveWorkbookSparklines } from './sparklines/resolve'
+import { controlIds, parsePivotRegion, PIVOT_PART_MAX_BYTES, type ControlPartRef } from './pivots/stub'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -348,11 +349,6 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
           tablePartDecls.push(typeof rid === 'string' && rid !== '' ? rid : undefined)
         }
       }
-      if (tablePartDecls.length === 0) {
-        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
-        continue
-      }
-      declaredTableParts += tablePartDecls.length
       const slash = sheetPath.lastIndexOf('/')
       const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
       const wsRels = await pkg.xml(wsRelsPath)
@@ -365,6 +361,34 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
           }
         }
       }
+      const controls = controlIds(wsRoot)
+      const resolveControls = (ids: string[], suffix: string): ControlPartRef[] | undefined => {
+        const refs = ids.flatMap(id => {
+          const rel = wsRelTargets.get(id)
+          if (!rel || !rel.type.endsWith(suffix)) return []
+          return [{ partPath: resolvePartTarget(sheetPath, rel.target) }]
+        })
+        return refs.length ? refs : undefined
+      }
+      const sheet = sheets[i]!
+      sheet.slicerRefs = resolveControls(controls.slicerIds, '/slicer')
+      sheet.timelineRefs = resolveControls(controls.timelineIds, '/timeline')
+      for (const rel of wsRelTargets.values()) {
+        if (!rel.type.endsWith('/pivotTable')) continue
+        const partPath = resolvePartTarget(sheetPath, rel.target)
+        try {
+          const parsed = parsePivotRegion(await pkg.boundedText(partPath, PIVOT_PART_MAX_BYTES), partPath)
+          if (parsed.region) (sheet.pivotRegions ??= []).push(parsed.region)
+          else if (parsed.unreadable) (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}` })
+        } catch {
+          (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}` })
+        }
+      }
+      if (tablePartDecls.length === 0) {
+        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
+        continue
+      }
+      declaredTableParts += tablePartDecls.length
       for (const rid of tablePartDecls) {
         // A declaration without a required relationship id cannot resolve.
         if (rid === undefined) {
@@ -404,6 +428,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
             continue
           }
           resolvedTables.push(meta)
+          ;(sheet.tables ??= []).push(meta)
         } catch {
           // An unreadable table part leaves the inventory unavailable;
           // usable cells are preserved below.

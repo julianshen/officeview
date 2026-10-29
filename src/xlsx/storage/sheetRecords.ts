@@ -314,6 +314,11 @@ export interface SheetMetadata {
   format?: { baseColWidth?: number; defaultColWidth?: number }
   merges: string[]
   tablePartIds: (string | undefined)[]
+  slicerRelationshipIds: string[]
+  timelineRelationshipIds: string[]
+  pivotRegions?: import('../pivots/stub').PivotRegionRef[]
+  slicerRefs?: import('../pivots/stub').ControlPartRef[]
+  timelineRefs?: import('../pivots/stub').ControlPartRef[]
   drawingRefs: number
   drawingIds: (string | undefined)[]
   /** `<legacyDrawing r:id>` (VML) references, painted by the drawing content
@@ -409,6 +414,10 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
   const colorAttrNames = new Set(['rgb', 'theme', 'indexed', 'tint', 'auto'])
   /** The eight colour elements parseSparklineGroups reads; any other `color*` name is never captured (PR #49 review). */
   const sparkColorNames = new Set(['colorSeries', 'colorNegative', 'colorAxis', 'colorMarkers', 'colorFirst', 'colorLast', 'colorHigh', 'colorLow'])
+  const SLICER_EXT = '{A8765BA9-456A-4dab-B4F3-ACF838C121DE}'
+  const TIMELINE_EXT = '{7E03D99C-DC04-49d9-9315-930204A7B6E9}'
+  const X14_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
+  const X15_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main'
   const sparkDiagnostic = (feature: string, message: string) => {
     if (!sparkDiagnostics.some(item => item.feature === feature && item.message === message)) sparkDiagnostics.push({ kind: 'unsupported', feature, message })
   }
@@ -547,6 +556,22 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         && nsStack[1] === nsGrandparent
 
       const nsFrame: NsFrame = { local, uri, scope, ...(extensionUri !== undefined ? { extensionUri } : {}) }
+      const inSlicerExt = local === 'slicer' && uri === X14_NS && nsParent?.local === 'slicerList' && nsParent.uri === X14_NS
+        && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
+        && nsStack[1]?.local === 'extLst' && nsStack[1]?.uri === SPREADSHEETML_NS
+        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === SLICER_EXT
+      const inTimelineExt = local === 'timelineRef' && uri === X15_NS && nsParent?.local === 'timelineRefs' && nsParent.uri === X15_NS
+        && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
+        && nsStack[1]?.local === 'extLst' && nsStack[1]?.uri === SPREADSHEETML_NS
+        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === TIMELINE_EXT
+      if (inSlicerExt || inTimelineExt) {
+        const id = attrMap(names, values, count).id
+        if (id) {
+          const ids = inSlicerExt ? meta.slicerRelationshipIds : meta.timelineRelationshipIds
+          bounded(ids, inSlicerExt ? 'slicer references' : 'timeline references')
+          ids.push(id)
+        }
+      }
       if (isSparklineExtension && captureRootDepth < 0) {
         aggregateRoot ??= { '@attrs': {} }
         aggregateScope ??= scope
@@ -857,7 +882,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
 }
 
 export function newSheetMetadata(): SheetMetadata {
-  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], drawingRefs: 0, drawingIds: [], structuralIncomplete: [], skippedCells: 0 }
+  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], slicerRelationshipIds: [], timelineRelationshipIds: [], drawingRefs: 0, drawingIds: [], structuralIncomplete: [], skippedCells: 0 }
 }
 
 /** Streams a drawing part's top-level anchors into placement-only parts (S3.3):

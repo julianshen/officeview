@@ -260,6 +260,7 @@ export interface TableMetadata {
   headerRowCount: 0 | 1
   totalsRowCount: 0 | 1
   columns: readonly { id: string; name: string; index: number }[]
+  styleInfo?: import('../pivots/stub').TableStyleInfo
 }
 export interface CalcSettings {
   calcMode: 'auto' | 'manual' | 'autoNoTable'

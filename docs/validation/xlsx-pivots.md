@@ -1,5 +1,9 @@
 # XLSX pivot tables, tables, slicers and timelines — validation record
 
+## Eager budget (Task 4)
+
+Built at base `dc3a5d05` and with the Task 4 changes using `OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts`: base eager gzip **35,954 B**, Task 4 eager gzip **35,955 B**, measured delta **+1 B** (within the 1,200 B delta and 38,720 B ceiling). The content-hashed chunk names account for small rebuild variance; `src/xlsx/pivots/stub.ts` is the only eager pivot module.
+
 Spec: `docs/superpowers/specs/2026-10-29-xlsx-pivots-design.md`. Plan: `docs/superpowers/plans/2026-10-29-xlsx-pivots.md`.
 Reference: Excel for Mac 16.114, UI language Traditional Chinese (zh-TW).
 

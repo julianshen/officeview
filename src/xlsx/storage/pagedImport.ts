@@ -15,6 +15,7 @@ import { dynamicMetadataIndices } from '../metadata'
 import { isTablePartSource, parseTableMetadata } from '../formula/tables'
 import type { TableMetadata } from '../formula/types'
 import type { XlsxDrawingAnchors } from '../types'
+import { PIVOT_PART_MAX_BYTES, parsePivotRegion, type ControlPartRef } from '../pivots/stub'
 import { anchorId, anchorRecord } from '../anchorRecords'
 import type { SheetColorContext } from '../sheetColors'
 import {
@@ -448,6 +449,32 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       if (state.sortState) declaredEntry.worksheetSortState = state.sortState
       const wsRels = await worksheetRels(sheet, readPlanned)
       sheet.tables = await resolveTables(sheet, wsRels, declaredEntry, declaredBudget, readPlanned)
+      const resolveControlRefs = (ids: string[], suffix: string): ControlPartRef[] | undefined => {
+        const refs = ids.flatMap(id => {
+          const rel = wsRels?.get(id)
+          return rel?.type.endsWith(suffix) ? [{ partPath: resolvePartTarget(sheet.partPath, rel.target) }] : []
+        })
+        return refs.length ? refs : undefined
+      }
+      sheet.metadata.slicerRefs = resolveControlRefs(sheet.metadata.slicerRelationshipIds, '/slicer')
+      sheet.metadata.timelineRefs = resolveControlRefs(sheet.metadata.timelineRelationshipIds, '/timeline')
+      for (const rel of wsRels?.values() ?? []) {
+        if (!rel.type.endsWith('/pivotTable')) continue
+        const partPath = resolvePartTarget(sheet.partPath, rel.target)
+        const pivotEntry = inventory.find(partPath)
+        let text: string | undefined
+        if (pivotEntry && pivotEntry.uncompressedSize <= PIVOT_PART_MAX_BYTES) {
+          plan(partPath)
+          try {
+            text = utf8.decode(await readPartBytes(src, pivotEntry, PIVOT_PART_MAX_BYTES, partOpts(partPath, PIVOT_PART_MAX_BYTES)))
+          } catch (error) {
+            if (isPackageError(error) && error.code === 'cancelled') throw error
+          } finally { ledger.drainQueue() }
+        }
+        const parsed = parsePivotRegion(text, partPath)
+        if (parsed.region) (sheet.metadata.pivotRegions ??= []).push(parsed.region)
+        else workbook.diagnostics.push({ code: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}`, partId: partPath })
+      }
       // Placement-only anchor records (S3.3), as drawing.ts reads them: an
       // unresolvable or unreadable part counts unresolved, never "no anchors".
       const anchoredParts = new Set<string>()
