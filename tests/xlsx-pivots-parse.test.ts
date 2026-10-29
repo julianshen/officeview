@@ -216,7 +216,7 @@ describe('pivot definition parsers', () => {
         + '<cacheField name="K2" databaseField="0"><fieldGroup base="0"><discretePr count="2"><x v="1"/><x/></discretePr><groupItems count="2"><s v="Group1"/><s v="Group2"/></groupItems></fieldGroup></cacheField></cacheFields>',
       table: `${LOCATION}<pivotFields count="3"><pivotField axis="axisRow" sortType="descending"><items count="2"><item x="0"/><item x="1"/></items>`
         + '<autoSortScope><pivotArea dataOnly="0" outline="0" fieldPosition="0"><references count="1"><reference field="4294967294" count="1" selected="0"><x v="0"/></reference></references></pivotArea></autoSortScope></pivotField>'
-        + '<pivotField dataField="1"/><pivotField/></pivotFields>'
+        + '<pivotField dataField="1"/><pivotField/></pivotFields><dataFields count="1"><dataField fld="1"/></dataFields>'
         + '<conditionalFormats count="1"><conditionalFormat scope="data" type="row" priority="2"><pivotAreas count="1"><pivotArea type="data" outline="0" collapsedLevelsAreSubtotals="1" fieldPosition="0"><references count="1"><reference field="0" count="1" selected="0"><x v="1"/></reference></references></pivotArea></pivotAreas></conditionalFormat></conditionalFormats>'
         + '<filters count="3">'
         + '<filter fld="0" type="captionBeginsWith" evalOrder="-1" id="1" stringValue1="a"><autoFilter ref="A1"><filterColumn colId="0"><customFilters><customFilter val="a*"/></customFilters></filterColumn></autoFilter></filter>'
@@ -362,6 +362,8 @@ describe('pivot definition parsers', () => {
       ['autoSortScope field beyond the fields', FIELDS.replace('<item t="default"/></items>', '<item t="default"/></items><autoSortScope><pivotArea field="99"><references count="1"><reference field="99" count="1"><x/></reference></references></pivotArea></autoSortScope>'), 'pivotField[0].autoSortScope.field'],
       ['chart format reference field beyond the fields', `${FIELDS}<chartFormats count="1"><chartFormat chart="0" format="0"><pivotArea><references count="1"><reference field="7" count="1"><x/></reference></references></pivotArea></chartFormat></chartFormats>`, 'chartFormat[0].pivotArea.reference[0].field'],
       ['conditional format area field beyond the fields', `${FIELDS}<conditionalFormats count="1"><conditionalFormat priority="1"><pivotAreas count="1"><pivotArea field="-3"/></pivotAreas></conditionalFormat></conditionalFormats>`, 'conditionalFormat[0].pivotArea[0].field'],
+      ['Values in a format area without data fields', `${FIELDS}<formats count="1"><format dxfId="0"><pivotArea field="-2" type="button"/></format></formats>`, 'format[0].pivotArea.field'],
+      ['a Values reference without data fields', `${FIELDS}<formats count="1"><format dxfId="0"><pivotArea><references count="1"><reference field="4294967294" count="1"><x/></reference></references></pivotArea></format></formats>`, 'format[0].pivotArea.reference[0].field'],
       ['base item beyond the base field items', `${FIELDS}<dataFields count="1"><dataField fld="1" showDataAs="difference" baseField="0" baseItem="3"/></dataFields>`, 'dataField[0].baseItem'],
     ])('fails closed on %s', async (_, table, where) => {
       const book = await run(table)
@@ -374,6 +376,13 @@ describe('pivot definition parsers', () => {
       const book = await run(`${FIELDS}<dataFields count="2"><dataField fld="1"><extLst><ext uri="{E15A36E0-9728-4e99-A89B-3F7291B0FE68}"><x14:dataField xmlns:x14="${X14}" sourceField="0"/></ext></extLst></dataField><dataField fld="1"/></dataFields>`
         + '<formats count="1"><format dxfId="0"><pivotArea field="-2" type="button"><references count="2"><reference field="4294967294" count="1"><x v="1"/></reference><reference field="0" count="1"><x/></reference></references></pivotArea></format></formats>')
       expect(book.tables[0].dataFields.map(dataFieldSource)).toEqual([0, 1])
+      expect(invalidOf(book)).toEqual([])
+      expect(book.diagnostics).toEqual([])
+    })
+
+    it('validates the effective data field, not an overridden fld', async () => {
+      const book = await run(`${FIELDS}<dataFields count="1"><dataField fld="99"><extLst><ext uri="{E15A36E0-9728-4e99-A89B-3F7291B0FE68}"><x14:dataField xmlns:x14="${X14}" sourceField="0"/></ext></extLst></dataField></dataFields>`)
+      expect(dataFieldSource(book.tables[0].dataFields[0])).toBe(0)
       expect(invalidOf(book)).toEqual([])
       expect(book.diagnostics).toEqual([])
     })

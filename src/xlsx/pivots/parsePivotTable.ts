@@ -11,7 +11,7 @@
 import { attrs, getChild, getChildren, type XmlNode } from '../../core/xml'
 import type { PivotRegionRef } from './stub'
 import {
-  PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD,
+  dataFieldSource, PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD,
   type PivotArea, type PivotAreaReference, type PivotAxis, type PivotAxisItem, type PivotCacheDefinition, type PivotDataField, type PivotDiagnostic,
   type PivotField, type PivotFieldItem, type PivotFilter, type PivotFilterColumn, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition,
 } from './model'
@@ -359,10 +359,10 @@ const X14_USES_BASE_FIELD: readonly string[] = ['percentOfParent', 'percentOfRun
  * - `rowItems`/`colItems` `x` at level `r + j`: that axis field's `items` (data fields for -2); `i`: a data field.
  *   A grand line's `x` is a placeholder and only has to be non-negative;
  * - `pageField`: `fld` a pivot field, `item` one of its items;
- * - `dataField`: `fld` and x14 `sourceField` pivot fields; `baseField`/`baseItem` where showDataAs uses them,
+ * - `dataField`: the effective field (`dataFieldSource`: x14 `sourceField`, else `fld`) a pivot field; `baseField`/`baseItem` where showDataAs uses them,
  *   keeping the previous/next sentinels;
  * - every pivot area (formats, conditional and chart formats, `autoSortScope`): `pivotArea@field` and
- *   `reference@field` a pivot field or -2 (Values). A reference's `x` indices are deferred: with `byPosition`
+ *   `reference@field` a pivot field, or -2 (Values) when the table has data fields. A reference's `x` indices are deferred: with `byPosition`
  *   they count visible positions and with `relative` they are offsets, so their domain depends on the layout,
  *   and a Values reference's `x` names data fields; Stage 2's area matching resolves them in context;
  * - cache `fieldGroup`: `base`/`par` cache fields, `discretePr` group items.
@@ -416,7 +416,8 @@ export function validateIndices(table: PivotTableDefinition, cache: PivotCacheDe
     if (!isField(page.fld)) bad(`pageField[${n}].fld`)
     else if (page.item !== undefined && page.item >= itemCount(page.fld)) bad(`pageField[${n}].item`)
   })
-  const areaField = (f: number) => f === PIVOT_VALUES_FIELD || isField(f)
+  // Values (-2, written 4294967294 on references) is a legal area field only when the table has data fields.
+  const areaField = (f: number) => f === PIVOT_VALUES_FIELD ? table.dataFields.length > 0 : isField(f)
   const area = (where: string, a: PivotArea | undefined) => {
     if (!a) return
     if (a.field !== undefined && !areaField(a.field)) bad(`${where}.field`)
@@ -427,8 +428,8 @@ export function validateIndices(table: PivotTableDefinition, cache: PivotCacheDe
   table.conditionalFormats.forEach((format, n) => format.pivotAreas.forEach((a, k) => area(`conditionalFormat[${n}].pivotArea[${k}]`, a)))
   table.chartFormats.forEach((format, n) => area(`chartFormat[${n}].pivotArea`, format.pivotArea))
   table.dataFields.forEach((data, n) => {
-    if (!isField(data.fld)) bad(`dataField[${n}].fld`)
-    if (data.x14?.sourceField !== undefined && !isField(data.x14.sourceField)) bad(`dataField[${n}].x14.sourceField`)
+    // The effective field: a present x14 sourceField overrides fld (MS-XLSX), so fld is checked only without one.
+    if (!isField(dataFieldSource(data))) bad(data.x14?.sourceField !== undefined ? `dataField[${n}].x14.sourceField` : `dataField[${n}].fld`)
     const showAs = data.x14?.pivotShowAs
     if (!USES_BASE_FIELD.includes(data.showDataAs) && !(showAs && X14_USES_BASE_FIELD.includes(showAs))) return
     if (!isField(data.baseField)) return bad(`dataField[${n}].baseField`)
