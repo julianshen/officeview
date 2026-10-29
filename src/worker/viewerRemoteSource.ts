@@ -298,7 +298,6 @@ export class RemoteWorkbook implements WorkbookSource {
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
   regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
   pivotDisplay(sheetId: string): PagedRegionStyleState { return this.pivotDisplayCache.get(sheetId) }
-  closeSheet(sheetId: string): void { this.regionStyleCache.closeSheet(sheetId); this.pivotDisplayCache.closeSheet(sheetId) }
   subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
     this.regionStyleEvictionListeners.add(listener)

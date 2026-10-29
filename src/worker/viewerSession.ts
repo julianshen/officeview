@@ -191,7 +191,6 @@ export interface WorkbookSource {
   regionStyleTableCount?(sheetId: string): number
   hasPivotDisplay?(sheetId: string): boolean
   pivotTableCount?(sheetId: string): number
-  pivotControlCount?(sheetId: string): number
   store(sheetId: string): SourceStore
   geometry(sheetId: string): SheetGeometry
   /** Coverage this backend can never resolve (e.g. the interim adapter before
@@ -2418,7 +2417,6 @@ export class DocumentSession {
       ...(this.source.regionStyleTableCount ? { regionStyleTableCount: this.source.regionStyleTableCount(sheetId) } : {}),
       ...(this.source.hasPivotDisplay ? { hasPivotDisplay: this.source.hasPivotDisplay(sheetId) } : {}),
       ...(this.source.pivotTableCount ? { pivotTableCount: this.source.pivotTableCount(sheetId) } : {}),
-      ...(this.source.pivotControlCount ? { pivotControlCount: this.source.pivotControlCount(sheetId) } : {}),
       ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
     }
   }
@@ -2469,7 +2467,7 @@ export class DocumentSession {
         const charge = this.charge()
         try {
           const payload = await store.readRegionStyles?.(options, query.grantBytes, charge) ?? {
-            sheetId: owner.sheetId, stamp: store.stamp, tables: [], cells: new Int32Array(),
+            sheetId: owner.sheetId, stamp: store.stamp, tables: [],
             diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: 'This source cannot resolve table styles.' }],
           }
           result = { op: 'regionStyles', result: payload }
@@ -2482,7 +2480,7 @@ export class DocumentSession {
         const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
         try {
           const work = store.readPivotDisplay?.(options, query.grantBytes, charge, this.options.profile ?? 'D') ?? Promise.resolve({
-            sheetId: owner.sheetId, stamp: store.stamp, tables: [], pivotTables: [], pivotStyles: [],
+            sheetId: owner.sheetId, stamp: store.stamp, pivotTables: [], pivotStyles: [],
             diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: 'This source cannot resolve pivot display metadata.' }],
           })
           raw = work

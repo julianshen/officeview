@@ -179,7 +179,7 @@ describe('paged pivot display descriptors', () => {
   it('forwards the active profile through the interruptible store wrapper', async () => {
     const stamp = { docId: 'profile-forward', sheetId: 'sheet-1', valueGen: 0 }
     let received: string | undefined
-    const payload: RemotePivotDisplay = { sheetId: stamp.sheetId, stamp, tables: [], pivotTables: [], pivotStyles: [], diagnostics: [] }
+    const payload: RemotePivotDisplay = { sheetId: stamp.sheetId, stamp, pivotTables: [], pivotStyles: [], diagnostics: [] }
     const store = {
       stamp, extent: { rows: 1, cols: 1 }, valuePolicy: 'cached',
       readPivotDisplay: async (_options: unknown, _grantBytes: number, _memory: unknown, profile?: string) => { received = profile; return payload },
@@ -651,7 +651,7 @@ describe('paged pivot display descriptors', () => {
     let currentOwner = { ...owner }
     let released = 0, resolve!: (value: WorkerReply<'read'>) => void
     const success = (stamp = currentOwner) => ({ kind: 'complete', commandKind: 'read', requestId: 'r', owner: stamp, diagnostics: [], replyBytes: 64,
-      result: { kind: 'read', result: { op: 'pivotDisplay', result: { sheetId: 's', stamp, tables: [], pivotTables: [], pivotStyles: [], diagnostics: [] } } } }) as unknown as WorkerReply<'read'>
+      result: { kind: 'read', result: { op: 'pivotDisplay', result: { sheetId: 's', stamp, pivotTables: [], pivotStyles: [], diagnostics: [] } } } }) as unknown as WorkerReply<'read'>
     const cache = new RemoteRegionStyleCache({
       identity: () => currentOwner, hasRegionStyles: () => false, hasPivotDisplay: () => true, loadState: () => ({ completeness: 'complete' }),
       grant: () => 4096, releaseGrant: () => {}, request: () => new Promise<WorkerReply<'read'>>(done => { resolve = done }),
@@ -665,7 +665,7 @@ describe('paged pivot display descriptors', () => {
     expect(released).toBe(1)
     resolve(success(currentOwner))
     await new Promise(resolveTick => setTimeout(resolveTick, 0))
-    cache.closeSheet('s')
+    cache.invalidate('s')
     expect(released).toBe(2)
     cache.close()
 
@@ -683,7 +683,7 @@ describe('paged pivot display descriptors', () => {
 
   it('uses pivot-display diagnostics when the receiver cannot admit its decoded layer', async () => {
     const owner: CacheIdentity = { docId: 'pivot-cache-budget', sheetId: 's', valueGen: 1, fontGen: 0, viewGen: 0 }
-    const payload: RemotePivotDisplay = { sheetId: 's', stamp: owner, tables: [], pivotTables: [], pivotStyles: [{ name: 'custom', table: false, pivot: true, elements: {} }], diagnostics: [] }
+    const payload: RemotePivotDisplay = { sheetId: 's', stamp: owner, pivotTables: [], pivotStyles: [{ name: 'custom', table: false, pivot: true, elements: {} }], diagnostics: [] }
     const reply = { kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 64,
       result: { kind: 'read', result: { op: 'pivotDisplay', result: payload } } } as unknown as WorkerReply<'read'>
     const cache = new RemoteRegionStyleCache({

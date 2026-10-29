@@ -81,7 +81,7 @@ describe('paged table-style transfer', () => {
       }
       const theme = source.result.theme!
       const probeTable = { ...source.result.tables[0]!.table }
-      const sizes = allNames.map(name => estimatePayloadBytes({ sheetId: sheet.sheetId, stamp, tables: [{ table: { ...probeTable, styleInfo: { ...probeTable.styleInfo, name } }, def: builtinTableStyle(name)! }], theme, cells: new Int32Array(), diagnostics: [] }))
+      const sizes = allNames.map(name => estimatePayloadBytes({ sheetId: sheet.sheetId, stamp, tables: [{ table: { ...probeTable, styleInfo: { ...probeTable.styleInfo, name } }, def: builtinTableStyle(name)! }], theme, diagnostics: [] }))
       const maximum = Math.max(...sizes)
       expect(maximum).toBeLessThan(REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE)
       const tableNames = allNames.filter(name => name.startsWith('TableStyle'))
@@ -116,7 +116,7 @@ describe('paged table-style transfer', () => {
       for (let i = 0; i < 100 && remote.regionStyles(sheetId).state !== 'ready' && remote.regionStyles(sheetId).state !== 'failed'; i++) await new Promise(resolve => setTimeout(resolve, 2))
       const state = remote.regionStyles(sheetId)
       expect(state.state).toBe('ready')
-      expect(state.payload?.tables[0]?.def.elements.wholeTable?.dxf.font?.name).toBe(longFontName)
+      expect((state.payload as RemoteRegionStyles | undefined)?.tables[0]?.def.elements.wholeTable?.dxf.font?.name).toBe(longFontName)
       expect(remote.stats.commands['read:regionStyles']).toBe(2)
     } finally { await remote.close(); await pagedSource.release(); await session.release() }
   })
@@ -158,7 +158,7 @@ describe('paged table-style transfer', () => {
     const owner: CacheIdentity = { docId: 'cache', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
     const regionTables: RemoteRegionStyles['tables'] = [{ table: { id: 't', displayName: 'T', sheetId: 's', extent: { sheetId: 's', firstRow: 0, firstCol: 0, rows: 5, cols: 2 }, headerRowCount: 1, totalsRowCount: 0, styleInfo: { name: 'TableStyleMedium2', showFirstColumn: false, showLastColumn: false, showRowStripes: true, showColumnStripes: false } }, def: builtinTableStyle('TableStyleMedium2')! }]
     const response = (stamp = owner): WorkerReply<'read'> => ({ kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 128,
-      result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp, tables: regionTables, cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>)
+      result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp, tables: regionTables, diagnostics: [] } } } } as unknown as WorkerReply<'read'>)
     const host = {
       identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' as const }), grant: () => 4096, releaseGrant: () => {},
       request: async () => response(), nextRequestId: () => 'r', release: () => { released++ },
@@ -170,7 +170,7 @@ describe('paged table-style transfer', () => {
     expect(cache.get('s').state).toBe('ready')
     expect(cache.get('s').layer?.rects).toHaveLength(1)
     expect(released).toBe(0); expect(decoded).toBeGreaterThan(0)
-    cache.closeSheet('s')
+    cache.invalidate('s')
     expect(released).toBe(1); expect(decoded).toBe(0)
     cache.get('s')
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -184,7 +184,7 @@ describe('paged table-style transfer', () => {
     const cache = new RemoteRegionStyleCache({
       identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' }), grant: () => 4096, releaseGrant: () => {},
       request: async () => ({ kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 64,
-        result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>),
+        result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>),
       nextRequestId: () => 'r', release: () => { released++ }, admitLayer: () => () => {}, changed: () => { changed++; throw new Error('observer') },
     }, 4096)
     cache.get('s')
@@ -201,7 +201,7 @@ describe('paged table-style transfer', () => {
     let released = 0
     const old: CacheIdentity = { ...owner, valueGen: 1 }
     const reply = { kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 128,
-      result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: old, tables: [], cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>
+      result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: old, tables: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>
     const cache = new RemoteRegionStyleCache({ identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' }), grant: () => 4096, releaseGrant: () => {}, request: async () => reply, nextRequestId: () => 'r', release: () => { released++ }, admitLayer: () => () => {}, changed: () => {} }, 8 * 1024 * 1024)
     cache.get('s'); await new Promise(resolve => setTimeout(resolve, 0))
     expect(released).toBe(1)
@@ -220,7 +220,7 @@ describe('paged table-style transfer', () => {
         requests++
         const stamp = command.owner as CacheIdentity
         return { kind: 'complete', commandKind: 'read', requestId: 'generation', owner: stamp, diagnostics: [], replyBytes: 128,
-          result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp, tables, cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>
+          result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp, tables, diagnostics: [] } } } } as unknown as WorkerReply<'read'>
       },
       nextRequestId: () => 'generation', release: () => {}, admitLayer: () => () => {}, changed: () => { changes++ },
     }, 8 * 1024 * 1024)
@@ -249,20 +249,20 @@ describe('paged table-style transfer', () => {
     } finally { cache.close() }
   })
 
-  it('aborts a pending read and releases its receiver grant on sheet close', async () => {
+  it('aborts a pending read and releases its receiver grant on invalidation', async () => {
     const owner: CacheIdentity = { docId: 'abort', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
     let grantHeld = true
     const cache = new RemoteRegionStyleCache({ identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' }), grant: () => 4096, releaseGrant: () => { grantHeld = false },
       request: (_command, signal) => new Promise(resolve => signal!.addEventListener('abort', () => { grantHeld = false; resolve(Symbol('cancelled')) }, { once: true })),
       nextRequestId: () => 'r', release: () => {}, admitLayer: () => () => {}, changed: () => {} }, 8 * 1024 * 1024)
     cache.get('s'); await Promise.resolve()
-    cache.closeSheet('s'); await new Promise(resolve => setTimeout(resolve, 0))
+    cache.invalidate('s'); await new Promise(resolve => setTimeout(resolve, 0))
     expect(grantHeld).toBe(false)
     expect(cache.retainedEntries).toBe(0)
     cache.close()
   })
 
-  it('sends a real RemoteWorkbook grant and settles a late reply after sheet close', async () => {
+  it('sends a real RemoteWorkbook grant and settles a late reply after its entry is dropped', async () => {
     const listeners = new Set<(event: MessageEvent) => void>()
     let read: Extract<WorkerCommand, { kind: 'read' }> | undefined
     const port = {
@@ -280,8 +280,9 @@ describe('paged table-style transfer', () => {
     if (read?.query.op !== 'regionStyles') throw new Error('region-style read was not dispatched')
     const grant = read.query.grantBytes
     expect(grant).toBeGreaterThan(0)
-    remote.closeSheet('s')
-    const payload: RemoteRegionStyles = { sheetId: 's', stamp: read.owner, tables: [], cells: new Int32Array(), diagnostics: [] }
+    // The viewer drops an entry by owner change or eviction (there is no per-sheet close); invalidate is that path.
+    ;(remote as unknown as { regionStyleCache: RemoteRegionStyleCache }).regionStyleCache.invalidate('s')
+    const payload: RemoteRegionStyles = { sheetId: 's', stamp: read.owner, tables: [], diagnostics: [] }
     const reply = { kind: 'complete', commandKind: 'read', requestId: read.requestId, owner: read.owner, diagnostics: [], replyBytes: 128,
       result: { kind: 'read', result: { op: 'regionStyles', result: payload } } } as unknown as WorkerReply<'read'>
     for (const listener of listeners) listener({ data: reply } as MessageEvent)
@@ -300,7 +301,7 @@ describe('paged table-style transfer', () => {
       grant: () => 4096, releaseGrant: () => {}, nextRequestId: () => `r${requests}`,
       request: async (command: { owner: CacheIdentity }) => {
         requests++
-        const payload: RemoteRegionStyles = { sheetId: command.owner.sheetId, stamp: command.owner, tables: [table(command.owner.sheetId)], cells: new Int32Array(), diagnostics: [] }
+        const payload: RemoteRegionStyles = { sheetId: command.owner.sheetId, stamp: command.owner, tables: [table(command.owner.sheetId)], diagnostics: [] }
         return { kind: 'complete', commandKind: 'read', requestId: `r${requests}`, owner: command.owner, diagnostics: [], replyBytes: 128,
           result: { kind: 'read', result: { op: 'regionStyles', result: payload } } } as unknown as WorkerReply<'read'>
       },
@@ -333,7 +334,7 @@ describe('paged table-style transfer', () => {
     const owner: CacheIdentity = { docId: 'retry', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
     let grants = 0, requests = 0
     const retry = new RemoteRegionStyleCache({ identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' }), grant: () => ++grants === 1 ? null : 4096, releaseGrant: () => {},
-      request: async () => { requests++; return requests === 1 ? ({ kind: 'error', commandKind: 'read', requestId: 'retry', owner, code: 'stale-source', retryable: true, diagnostics: [] } as unknown as WorkerReply<'read'>) : ({ kind: 'complete', commandKind: 'read', requestId: 'retry', owner, diagnostics: [], replyBytes: 64, result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>) },
+      request: async () => { requests++; return requests === 1 ? ({ kind: 'error', commandKind: 'read', requestId: 'retry', owner, code: 'stale-source', retryable: true, diagnostics: [] } as unknown as WorkerReply<'read'>) : ({ kind: 'complete', commandKind: 'read', requestId: 'retry', owner, diagnostics: [], replyBytes: 64, result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>) },
       nextRequestId: () => 'retry', release: () => {}, admitLayer: () => () => {}, changed: () => {} }, 8 * 1024 * 1024)
     retry.get('s')
     await new Promise(resolve => setTimeout(resolve, 900))
@@ -348,7 +349,7 @@ describe('paged table-style transfer', () => {
     try {
       const owner: CacheIdentity = { docId: 'cancel-timeout', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
       let requests = 0
-      const success = (): WorkerReply<'read'> => ({ kind: 'complete', commandKind: 'read', requestId: `r${requests}`, owner, diagnostics: [], replyBytes: 64, result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>)
+      const success = (): WorkerReply<'read'> => ({ kind: 'complete', commandKind: 'read', requestId: `r${requests}`, owner, diagnostics: [], replyBytes: 64, result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>)
       const cache = new RemoteRegionStyleCache({ identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' }), grant: () => 4096, releaseGrant: () => {},
         request: (_command, signal) => {
           requests++
@@ -469,7 +470,7 @@ describe('paged table-style transfer', () => {
       for (let i = 0; i < 100 && remote.regionStyles(sheetId).state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 2))
       const state = remote.regionStyles(sheetId)
       expect(state.state).toBe('ready')
-      expect(state.payload?.tables).toHaveLength(1)
+      expect((state.payload as RemoteRegionStyles | undefined)?.tables).toHaveLength(1)
       expect(state.layer?.rects.length).toBeGreaterThan(0)
       const resident = (await parseXlsx(await OfficePackage.load(input), { valuePolicy: 'cached' })).sheets[0]!
       await tableStyleLoader.ensureTableStyleEngine([resident])
@@ -512,7 +513,7 @@ describe('paged table-style transfer', () => {
       const owner: CacheIdentity = { docId: 'incomplete-style', sheetId: 's', valueGen: 0, fontGen: 0, viewGen: 0 }
       let requests = 0, released = 0
       const complete: WorkerReply<'read'> = { kind: 'complete', commandKind: 'read', requestId: 'r2', owner, diagnostics: [], replyBytes: 64,
-        result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], cells: new Int32Array(), diagnostics: [] } } } } as unknown as WorkerReply<'read'>
+        result: { kind: 'read', result: { op: 'regionStyles', result: { sheetId: 's', stamp: owner, tables: [], diagnostics: [] } } } } as unknown as WorkerReply<'read'>
       const cache = new RemoteRegionStyleCache({ identity: () => owner, hasRegionStyles: () => true, loadState: () => ({ completeness: 'complete' }), grant: () => 4096, releaseGrant: () => {},
         request: async () => ++requests === 1
           ? ({ kind: 'incomplete', commandKind: 'read', requestId: 'r1', owner, missing: [], diagnostics: [] } as unknown as WorkerReply<'read'>)

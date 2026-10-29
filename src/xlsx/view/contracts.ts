@@ -270,8 +270,6 @@ export interface RemoteRegionStyles {
   stamp: SourceStamp
   tables: readonly { table: Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>; def: TableStyleDef }[]
   theme?: ThemeContext
-  /** Reserved for future per-cell pivot region styles; empty for tables. */
-  cells?: Int32Array
   diagnostics: readonly TableStyleDiagnostic[]
   /** Exact worker estimate when the current receiver grant was insufficient. */
   requiredBytes?: number
@@ -281,7 +279,6 @@ export interface RemoteRegionStyles {
 export interface RemotePivotDisplay {
   sheetId: string
   stamp: SourceStamp
-  tables: RemoteRegionStyles['tables']
   pivotTables: readonly PivotTableDefinition[]
   pivotStyles: readonly TableStyleDef[]
   /** The styles.xml dxfs the pivots' `formats` name, by dxfId (bounded; counted in the reply estimate). */
@@ -615,7 +612,6 @@ export interface SheetLayout {
   /** S13 metadata-only fast path; absent/false has no pivot display work. */
   hasPivotDisplay?: boolean
   pivotTableCount?: number
-  pivotControlCount?: number
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }

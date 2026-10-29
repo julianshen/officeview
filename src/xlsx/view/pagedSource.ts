@@ -582,7 +582,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * The receiver grants the complete bounded payload before it is published. */
   async readRegionStyles(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles> {
     const diagnostics: RemoteRegionStyles['diagnostics'][number][] = []
-    const empty = (requiredBytes?: number): RemoteRegionStyles => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], cells: new Int32Array(), diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
+    const empty = (requiredBytes?: number): RemoteRegionStyles => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
     const error = this.guard(options)
     if (error) {
       diagnostics.push({ kind: 'unsupported', feature: 'table-style-read-failed', message: error.message })
@@ -610,7 +610,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       }
       tables.push({ table: { id: table.id, displayName: table.displayName, sheetId: table.sheetId, extent: table.extent, headerRowCount: table.headerRowCount, totalsRowCount: table.totalsRowCount, styleInfo: table.styleInfo }, def })
     }
-    const result: RemoteRegionStyles = { sheetId: this.sheet.sheetId, stamp: this.stamp, tables, ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}), cells: new Int32Array(), diagnostics }
+    const result: RemoteRegionStyles = { sheetId: this.sheet.sheetId, stamp: this.stamp, tables, ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}), diagnostics }
     const bytes = estimatePayloadBytes(result) + REGION_STYLE_REPLY_OVERHEAD_BYTES
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes || (memory && !memory.set(bytes))) {
       diagnostics.splice(0, diagnostics.length, { kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
@@ -622,7 +622,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   /** S13: worker-owned pivot/control parts become bounded descriptors; the receiver builds display roles/buttons. */
   async readPivotDisplay(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile: ProfileId = 'D'): Promise<RemotePivotDisplay> {
     const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
-    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: [], pivotStyles: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
+    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, pivotTables: [], pivotStyles: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
     const error = this.guard(options)
     if (error) { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: error.message }); return empty() }
     if (this.sheet.state !== 'complete') { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: 'Pivot display metadata is unavailable until the sheet structure is complete.' }); return empty() }
@@ -647,7 +647,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     // retains the workbook's original style extras; these are not display-layer
     // descriptors and must not inflate the pivot-display reply.
     const result: RemotePivotDisplay = {
-      sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: parts.pivotTables, pivotStyles,
+      sheetId: this.sheet.sheetId, stamp: this.stamp, pivotTables: parts.pivotTables, pivotStyles,
       ...(pivotDxfs.length ? { pivotDxfs } : {}),
       diagnostics,
       ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
@@ -1217,7 +1217,6 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
     hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
     pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
-    pivotControlCount(sheetId) { const sheet = find(sheetId); return sheet.metadata.slicerRelationshipIds.length + sheet.metadata.timelineRelationshipIds.length },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)

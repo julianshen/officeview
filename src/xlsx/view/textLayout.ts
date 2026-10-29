@@ -12,7 +12,6 @@ import type { XlsxCell, XlsxCellStyle, XlsxMergeRange } from '../types'
 import type { PptxTextBody } from '../../pptx/types'
 import type { TextLayout } from '../../drawing/text-layout'
 import type { CacheIdentity, ViewportCell } from './contracts'
-import type { RegionStyleLayer } from '../tableStyles/regionLayer'
 import { MAX_COLS, type CellId, type SourceCell } from './coordinates'
 import { graphemes } from '../../core/text-recording'
 
@@ -365,13 +364,12 @@ function plainClip(dx: number, text: { tx: number; width: number; clipX?: { x0: 
 /** Store-path detail cells as host cells at their logical boxes: resolved and
  * permanently unavailable values only (unknown/error records stay placeholders,
  * never text). `styleOf` resolves a style index when the caller has styles. */
-export function placedFromViewportCells(cells: readonly ViewportCell[], styleOf?: (styleIndex: number) => XlsxCellStyle | undefined, regionStyles?: RegionStyleLayer): PlacedCell[] {
+export function placedFromViewportCells(cells: readonly ViewportCell[], styleOf?: (styleIndex: number) => XlsxCellStyle | undefined): PlacedCell[] {
   const out: PlacedCell[] = []
   for (const item of cells) {
     if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
     const source = item.cell
-    const own = styleOf?.(source.styleIndex)
-    const style = regionStyles?.styleAt(item.source.row, item.source.col, own) ?? own
+    const style = styleOf?.(source.styleIndex)
     const cell: XlsxCell = {
       ref: '', row: item.source.row, col: item.source.col, value: item.kind === 'unavailable' ? null : source.value, styleIndex: source.styleIndex,
       ...(source.hasCachedValue !== undefined ? { hasCachedValue: source.hasCachedValue } : {}),

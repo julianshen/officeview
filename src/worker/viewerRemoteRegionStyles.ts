@@ -47,6 +47,9 @@ export function mergeRegionStyleLayers(...layers: Array<RegionStyleLayer | undef
 interface Entry { state: PagedRegionStyleState['state']; gen: number; owner?: CacheIdentity; seq: number; attempts: number; grantFloor?: number; sizeRetryAttempted?: boolean; payload?: RemoteRegionStyles | RemotePivotDisplay; layer?: RegionStyleLayer; layerReady?: boolean; reply?: WorkerReply<'read'>; releaseReply?: () => void; replyBytes: number; layerBytes: number; layerRelease?: () => void; controller?: AbortController; timer?: ReturnType<typeof setTimeout>; layerPending?: boolean; diagnostics: PagedRegionStyleState['diagnostics'] }
 const empty = (): PagedRegionStyleState => ({ state: 'waiting', gen: 0, diagnostics: [] })
 
+/** Tables and pivots the payload lays out, and the pivot styles it carries. */
+const layerCountOf = (payload: RemoteRegionStyles | RemotePivotDisplay) => 'pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : payload.tables.length
+
 function unpack(reply: WorkerReply<'read'>, op: 'regionStyles' | 'pivotDisplay'): RemoteRegionStyles | RemotePivotDisplay | undefined {
   if (reply.kind !== 'complete' || reply.result.kind !== 'read' || reply.result.result.op !== op) return undefined
   return reply.result.result.result
@@ -65,13 +68,12 @@ export class RemoteRegionStyleCache {
     const owner = this.host.identity(sheetId)
     if (entry.owner && !sameOwner(entry.owner, owner)) { this.reset(entry); entry.gen++; this.deferChanged(sheetId) }
     if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
-    else if (entry.state === 'ready' && entry.payload && (entry.payload.tables.length || ('pivotTables' in entry.payload && entry.payload.pivotTables.length)) && !entry.layerReady && !entry.layerPending) void this.rebuildLayer(sheetId, entry)
+    else if (entry.state === 'ready' && entry.payload && layerCountOf(entry.payload) && !entry.layerReady && !entry.layerPending) void this.rebuildLayer(sheetId, entry)
     return entry
   }
   get retainedEntries(): number { return [...this.entries.values()].filter(entry => entry.state === 'ready').length }
   get retainedBytes(): number { return [...this.entries.values()].reduce((n, e) => n + e.replyBytes + e.layerBytes, 0) }
   invalidate(sheetId: string): void { const entry = this.entries.get(sheetId); if (!entry) return; this.reset(entry); entry.gen++; this.deferChanged(sheetId) }
-  closeSheet(sheetId: string): void { this.invalidate(sheetId); this.entries.delete(sheetId) }
   close(): void { if (this.closed) return; this.closed = true; for (const entry of this.entries.values()) this.reset(entry); this.entries.clear() }
   private reset(entry: Entry): void {
     entry.seq++; entry.controller?.abort(); entry.controller = undefined
@@ -121,7 +123,7 @@ export class RemoteRegionStyleCache {
     return kind === 'reply-limit' ? 'Table style metadata exceeds the receiver cache budget.' : 'Table style metadata could not be loaded.'
   }
   private async buildLayer(sheetId: string, entry: Entry, requestId: string, payload: RemoteRegionStyles | RemotePivotDisplay, seq: number, reply?: WorkerReply<'read'>, releaseReply?: () => void): Promise<void> {
-    const layerCount = payload.tables.length + ('pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : 0)
+    const layerCount = layerCountOf(payload)
     const layerBytes = layerCount ? layerBytesFor(layerCount) : 0
     if (layerBytes && !this.makeRoom(entry, layerBytes + (reply ? reply.replyBytes ?? 0 : 0))) {
       if (reply) releaseReply?.()
@@ -148,14 +150,15 @@ export class RemoteRegionStyleCache {
         const { preloadTableStyles } = await import('../xlsx/tableStyleLoader')
         await preloadTableStyles()
         const { buildSheetRegionLayer } = await import('../xlsx/tableStyles/regionLayer')
-        const tableStyles = new Map(payload.tables.map(item => [item.def.name, item.def]))
+        const tables = 'tables' in payload ? payload.tables : []
+        const tableStyles = new Map(tables.map(item => [item.def.name, item.def]))
         if ('pivotStyles' in payload) for (const def of payload.pivotStyles) tableStyles.set(def.name, def)
         const slicerStyles = new Map()
         // The pivots' `formats` dxfs at their styles.xml ids (a sparse list, as regions.ts indexes it).
         const dxfs: DxfStyle[] = []
         if ('pivotDxfs' in payload) for (const { id, dxf } of payload.pivotDxfs ?? []) if (Number.isSafeInteger(id) && id >= 0 && id < MAX_DXF_ID) dxfs[id] = dxf
         const extras = { dxfs, tableStyles, slicerStyles }
-        const sheet = { name: sheetId, tables: payload.tables.map(item => item.table), ...('pivotTables' in payload ? { pivotTables: payload.pivotTables } : {}) } as import('../xlsx/types').XlsxSheet
+        const sheet = { name: sheetId, tables: tables.map(item => item.table), ...('pivotTables' in payload ? { pivotTables: payload.pivotTables } : {}) } as import('../xlsx/types').XlsxSheet
         if (sheet.pivotTables?.length) await (await import('../xlsx/pivotLoader')).ensurePivotEngine([sheet])
         layer = buildSheetRegionLayer(sheet, extras, payload.theme ?? (await import('../drawing/style')).parseThemeContext(), report)
       }
@@ -239,7 +242,7 @@ export class RemoteRegionStyleCache {
     if (!Number.isSafeInteger(out.replyBytes) || (out.replyBytes ?? -1) < 0) {
       releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} reply had no valid byte estimate.`) }]; this.deferChanged(sheetId); return
     }
-    const layerCount = payload.tables.length + ('pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : 0)
+    const layerCount = layerCountOf(payload)
     const layerBytes = layerCount ? layerBytesFor(layerCount) : 0
     if (!this.makeRoom(entry, (out.replyBytes ?? 0) + layerBytes)) {
       releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit') }]; this.deferChanged(sheetId); return

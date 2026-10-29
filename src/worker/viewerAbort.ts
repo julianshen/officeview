@@ -48,11 +48,11 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
     ...(store.readRegionStyles ? { readRegionStyles: (options, grantBytes, memory) => read(
       () => store.readRegionStyles!(options, grantBytes, memory),
       options.signal,
-      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], cells: new Int32Array(), diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: error.message }] }),
+      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: error.message }] }),
     ) } satisfies Pick<SourceStore, 'readRegionStyles'> : {}),
     ...(store.readPivotDisplay ? { readPivotDisplay: (options, grantBytes, memory, profile) => read(
       () => store.readPivotDisplay!(options, grantBytes, memory, profile), options.signal,
-      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], pivotTables: [], pivotStyles: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: error.message }] }),
+      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, pivotTables: [], pivotStyles: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: error.message }] }),
     ) } satisfies Pick<SourceStore, 'readPivotDisplay'> : {}),
     queryColumn: (request, options) => read(() => store.queryColumn(request, options), options.signal, page),
     queryOverview: (request, options) => read(() => store.queryOverview(request, options), options.signal, page),

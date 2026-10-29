@@ -1,7 +1,8 @@
 /**
  * Resolves a workbook's pivot parts into a PivotWorkbook (spec §3, §6.2). Lazy
- * chunk `pivots`: runs after `parseXlsx` on the resident path (never inside it)
- * and over `RangePackage` in the worker. Records are not read in Stage 1.
+ * chunk `pivots`: `parseXlsx` awaits it on the resident path, once the sheets
+ * locate a pivot (Ruling AD: attachPivotTables), and the worker runs it over
+ * `RangePackage`. Records are not read in Stage 1.
  *
  * Failure policy, per part:
  * - workbook `pivotCaches` unreadable: diagnostic; each table falls back to its own cache relationship;
