@@ -147,7 +147,9 @@ function boundedBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8A
 }
 
 /** Prefix counterpart to boundedBytes; aborts upstream inflation once enough
- * decompressed bytes have been observed, without caching a partial part. */
+ * decompressed bytes have been observed, without caching a partial part.
+ * Uses the same JSZip 3.10 internals as boundedBytes; if they change, the
+ * patching throws and callers fail closed (an unreadable diagnostic). */
 function prefixBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) return Promise.reject(new RangeError('maxBytes must be a positive safe integer'))
   return new Promise((resolve, reject) => {
