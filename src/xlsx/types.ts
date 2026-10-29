@@ -80,9 +80,8 @@ export interface XlsxCellStyle {
   fontName?: string
   /** alignment@indent level (> 0); one level is one maximum digit width. */
   indent?: number
-  /** The xf's applyFont/applyFill: its font/fill wins over a table or pivot style (Task 3 measurement). */
+  /** The xf's applyFont: its font wins over a table or pivot style (Task 3 measurement). */
   applyFont?: boolean
-  applyFill?: boolean
 }
 
 export interface XlsxRow {

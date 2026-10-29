@@ -125,7 +125,7 @@ describe('resolveRoleStyle: own s= layering (measure-cell-override)', () => {
     const cells = doc.sheets.flatMap(s => s.rows.flatMap(r => r.cells))
     const own = cells.find(c => c.styleIndex === 4)!.style!
     const neutral = cells.find(c => c.styleIndex === 2)!.style!
-    expect(own).toMatchObject({ applyFont: true, applyFill: true, bold: true, color: 'FFC00000', fillColor: 'FF92D050' })
+    expect(own).toMatchObject({ applyFont: true, bold: true, color: 'FFC00000', fillColor: 'FF92D050' })
     // Excel drew the cell's fill and bold red font over the style; the style's
     // borders (wholeTable), which the format does not set, still show.
     const resolved = resolveRoleStyle(def, ['wholeTable', 'firstRowSubheading'], own, theme)

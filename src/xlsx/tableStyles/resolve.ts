@@ -158,7 +158,6 @@ export function resolveRoleStyle(
   }
   const out: XlsxCellStyle = own ? { ...own } : { numFmtId: 0 }
   delete out.applyFont
-  delete out.applyFill
   for (const key of ['fontName', 'fontSizePt', 'bold', 'italic', 'underline', 'strike', 'color'] as const) {
     const value = layer.font[key]
     if (value === undefined || (own?.applyFont && own[key] !== undefined)) continue
