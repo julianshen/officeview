@@ -122,6 +122,12 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 - `measure-cell-override` gives three cells a fill and a bold red font through `s=` alone, with no `formats` entry: a subheading label (A6), a value (C7) and a grand-total cell (B22).
 - Excel draws the cell's fill and font over the pivot style in all three. The style still supplies any property the cell's format does not set.
 
+### `applyFill` / `applyFont` over a table style (Task 5; `measure-apply-flags`, TableStyleMedium2)
+- `measure-apply-flags.xlsx` is `table-medium-2` with extra xfs: a green fill or a bold red font with the apply flag absent, `"0"` and `"1"`, plus a `none` fill with `applyFill="1"` on a banded row.
+- Excel draws the own fill and font in every flag case, including the header row: **it ignores the apply flags when it layers a cell over a table or pivot style.**
+- A `none` fill with `applyFill="1"` keeps the band fill, so an own fill wins only when its pattern is not `none`. Cells on xf 0 (fontId 0) keep the header's white bold, so an own font wins only when it is not the Normal font.
+- The generated table fixtures do not link `xl/styles.xml` (no workbook relationship and no content-type override). Excel then ignores the stylesheet and repairs any cell with `s` above 0. This workbook adds both links.
+
 ### Element precedence (spec §6.5) — `measure-precedence`
 - **Method.** Custom style `OfficeViewPrecedence` gives every element a distinct fill; the colours are in `recipes/pivot-precedence-colors.json`. All style-info flags are on. The winner is read at each cell; `>` means "wins where both apply".
 - **Header rows:**

@@ -1,0 +1,10 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Data",
+  "source": "measure-apply-flags.xlsx",
+  "range": "A1:E6",
+  "capturedAt": "2026-10-29"
+}
