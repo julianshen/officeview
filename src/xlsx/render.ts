@@ -19,7 +19,7 @@ import { BUILTIN_DATE_FORMATS, formatBuiltinDate } from './builtinDate'
 import { BUILTIN_EXTENDED_FORMATS, NO_SECTION, formatColor, formatExtended, negativeDateOverflow } from './cellFormat'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
-import { MAX_COLS, MAX_ROWS, isValidCoordinate } from './view/coordinates'
+import { MAX_COLS, isValidCoordinate } from './view/coordinates'
 import { NO_OVERFLOW, alignmentOverflows, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
@@ -28,7 +28,7 @@ import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
 import { cellFontFamily as cellFaceFamily, cellFontString } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
-import { regionStylesFor } from './tableStyleLoader'
+import { isTableStyleEngineLoaded, regionStylesFor } from './tableStyleLoader'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -254,13 +254,6 @@ function validMerge(r: XlsxMergeRange): boolean {
   return isValidCoordinate(r.minRow, r.minCol) && isValidCoordinate(r.maxRow, r.maxCol) && r.minRow <= r.maxRow && r.minCol <= r.maxCol
 }
 
-function validStyledTable(table: NonNullable<XlsxSheet['tables']>[number]): boolean {
-  const { firstRow, firstCol, rows, cols } = table.extent
-  const maxRow = firstRow + rows - 1, maxCol = firstCol + cols - 1
-  return Boolean(table.styleInfo?.name) && [firstRow, firstCol, rows, cols, maxRow, maxCol].every(Number.isSafeInteger)
-    && firstRow >= 0 && firstCol >= 0 && rows > 0 && cols > 0 && maxRow < MAX_ROWS && maxCol < MAX_COLS
-}
-
 /** Populated cells and merge extents the retained static grid cannot place. Before
  * this check the renderer drew cells at `rowY[row] ?? 0` / `colX[col] ?? 0`, i.e.
  * over A1, and clipped merges to the bitmap edge. */
@@ -277,9 +270,9 @@ function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): Stati
   for (const r of sheet.mergeRanges ?? []) {
     if (validMerge(r)) { maxRow = Math.max(maxRow, r.maxRow); maxCol = Math.max(maxCol, r.maxCol) }
   }
-  for (const table of sheet.tables ?? []) if (validStyledTable(table)) {
-    maxRow = Math.max(maxRow, table.extent.firstRow + table.extent.rows - 1)
-    maxCol = Math.max(maxCol, table.extent.firstCol + table.extent.cols - 1)
+  for (const rect of regionStylesFor(sheet)?.rects ?? []) {
+    maxRow = Math.max(maxRow, Math.min(rows - 1, rect.maxRow))
+    maxCol = Math.max(maxCol, Math.min(cols - 1, rect.maxCol))
   }
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
@@ -319,7 +312,8 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
   // Merged ranges are part of the painted grid even where only the anchor is populated.
   for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
-  for (const table of sheet.tables ?? []) if (validStyledTable(table)) maxCol = Math.max(maxCol, table.extent.firstCol + table.extent.cols - 1)
+  const styleRegions = regionStylesFor(sheet)?.rects ?? []
+  for (const rect of styleRegions) maxCol = Math.max(maxCol, Math.min(MAX_GRID_COLS - 1, rect.maxCol))
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) if (isValidCoordinate(row, col)) maxCol = Math.max(maxCol, col)
   }
@@ -356,7 +350,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   }
   if (inconsistent) diagnostics.push({ code: 'inconsistent-row-coordinate', message: `${inconsistent} cell(s) carry a reference outside their row record; placed by the cell reference` })
   for (const r of merges) maxRow = Math.max(maxRow, r.maxRow)
-  for (const table of sheet.tables ?? []) if (validStyledTable(table)) maxRow = Math.max(maxRow, table.extent.firstRow + table.extent.rows - 1)
+  for (const rect of styleRegions) maxRow = Math.max(maxRow, Math.min(MAX_GRID_ROWS - 1, rect.maxRow))
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
       if (isValidCoordinate(row, col)) { maxRow = Math.max(maxRow, row); break }
@@ -386,6 +380,11 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
       ...(diagnostics.length ? { diagnostics } : {}),
     }
   }
+  const clippedStyleRegions = styleRegions.filter(rect => rect.maxRow >= MAX_GRID_ROWS || rect.maxCol >= MAX_GRID_COLS)
+  if (clippedStyleRegions.length) diagnostics.push({
+    code: 'table-style-region-clipped',
+    message: `${clippedStyleRegions.length} resolved table style region(s) extend beyond the static grid and were clipped to ${MAX_GRID_ROWS} rows by ${MAX_GRID_COLS} columns`,
+  })
   if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras([]) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
@@ -771,7 +770,7 @@ export function renderSheet(
   const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
   const measured = textMeasurer(ctx)
   const regionStyles = regionStylesFor(sheet)
-  if (!regionStyles && sheet.tables?.some(table => Boolean(table.styleInfo?.name))) {
+  if (!isTableStyleEngineLoaded() && sheet.tables?.some(table => Boolean(table.styleInfo?.name))) {
     const diagnostics = (sheet.diagnostics ??= [])
     if (!diagnostics.some(d => d.feature === 'table-style-engine-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'table-style-engine-unavailable', message: 'Table styles could not be loaded; table cells paint with their stored formatting only' })
   }

@@ -17,14 +17,20 @@ export async function ensureTableStyleEngine(sheets: readonly XlsxSheet[]): Prom
   try { await preloadTableStyles() } catch { return }
   for (const sheet of sheets) {
     if (!sheetHasRegionStyles(sheet)) continue
-    sheet.regionStyles ??= factory?.(sheet)
+    if (sheet.regionStylesResolved) continue
+    sheet.regionStyles = factory?.(sheet)
+    sheet.regionStylesResolved = true
   }
 }
+
+export function isTableStyleEngineLoaded(): boolean { return factory !== undefined }
 
 /** Synchronous static renderer access: only a prior preload/getPaintables call can enable it. */
 export function regionStylesFor(sheet: XlsxSheet): RegionStyleLayer | undefined {
   if (!sheetHasRegionStyles(sheet)) return undefined
-  if (sheet.regionStyles) return sheet.regionStyles
+  if (sheet.regionStylesResolved) return sheet.regionStyles
   if (!factory) return undefined
-  return sheet.regionStyles = factory(sheet)
+  sheet.regionStyles = factory(sheet)
+  sheet.regionStylesResolved = true
+  return sheet.regionStyles
 }

@@ -75,7 +75,7 @@ function asNode(v: unknown): XmlNode {
 
 interface Styles {
   colorContext: SheetColorContext
-  /** Only the bounded table-style subtrees are retained for the later lazy painter. */
+  /** Only the table-style subtrees are retained for the later lazy painter. */
   tableStyleSource?: import('./tableStyles/model').TableStyleSource
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;

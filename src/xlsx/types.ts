@@ -162,6 +162,8 @@ export interface XlsxSheet {
   /** Lazy table-style source and resolved paint layer (resident rendering only). */
   tableStyleSource?: TableStyleSource
   regionStyles?: RegionStyleLayer
+  /** True once the lazy region-style engine resolved this sheet, including no-match results. */
+  regionStylesResolved?: boolean
   /** Bounded pivot/control region references used by region-style rendering. */
   pivotRegions?: import('./pivots/stub').PivotRegionRef[]
   slicerRefs?: import('./pivots/stub').ControlPartRef[]

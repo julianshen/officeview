@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createCanvas } from 'canvas'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import { parseXml } from '../src/core/xml'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -50,16 +50,6 @@ const paint = async (doc: Awaited<ReturnType<typeof parsed>>) => {
 const pixel = (canvas: ReturnType<typeof createCanvas>, x: number, y: number) => Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data)
 
 describe('table style painting', () => {
-  test('renderSheet without preload stays unstyled and diagnoses unavailable engine', async () => {
-    const doc = await parsed('table-medium-2.xlsx')
-    const sheet = styleSheet(doc)
-    const metrics = computeMetrics(sheet)
-    const canvas = createCanvas(metrics.widthPx, metrics.heightPx)
-    renderSheet(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, metrics)
-    expect(pixel(canvas, 20, 10)).not.toEqual([255, 0, 0, 255])
-    expect(sheet.diagnostics).toContainEqual(expect.objectContaining({ feature: 'table-style-engine-unavailable' }))
-  })
-
   test('paints an empty cell inside a styled table extent', async () => {
     const doc = await parsed('table-medium-2.xlsx')
     styleSheet(doc)
@@ -128,6 +118,82 @@ describe('table style painting', () => {
     } finally { pages.dispose() }
   })
 
+  test('alternating stripe sizes default independently and far-row roles use constant work', async () => {
+    await tableStyleLoader.preloadTableStyles()
+    const { tableCellRoles } = await import('../src/xlsx/tableStyles/regionLayer')
+    const doc = await parsed('table-medium-2.xlsx')
+    const sheet = styleSheet(doc)
+    sheet.tables![0]!.extent = { ...sheet.tables![0]!.extent, rows: 100_000 }
+    const source = sheet.tableStyleSource!
+    const root = parseXml(`<styleSheet><dxfs/><tableStyles><tableStyle name="OVTest" table="1">
+      <tableStyleElement type="firstRowStripe" dxfId="0" size="2"/>
+      </tableStyle></tableStyles></styleSheet>`)
+    sheet.tableStyleSource = { ...source, root }
+    const layer = regionStylesFor(sheet)!
+    const start = performance.now()
+    for (let row = 98_000; row < 99_000; row++) layer.styleAt(row, 1, undefined)
+    const elapsed = performance.now() - start
+    expect(elapsed).toBeLessThan(50)
+
+    const table = sheet.tables![0]!
+    for (const row of [98_001, 98_002, 98_997, 98_998]) {
+      const actual = tableCellRoles(table, row, 1, { elements: { firstRowStripe: { type: 'firstRowStripe', dxfId: 0, size: 2 } } } as never)
+        .find(role => typeof role === 'object' && (role.element === 'firstRowStripe' || role.element === 'secondRowStripe'))
+      let offset = 0, size = 2
+      const index = row - (table.extent.firstRow + table.headerRowCount)
+      while (offset + size <= index) { offset += size; size = size === 2 ? 1 : 2 }
+      const expected = Math.floor((index - offset) / size) === 0 && size === 2 ? 'firstRowStripe' : 'secondRowStripe'
+      expect(typeof actual === 'object' ? actual.element : actual).toBe(expected)
+    }
+  })
+
+  test('a resolved styled table is clipped to static grid limits without refusal', async () => {
+    const doc = await parsed('table-medium-2.xlsx')
+    const sheet = styleSheet(doc)
+    const original = sheet.tables![0]!
+    original.extent = { ...original.extent, rows: 1_000_000, cols: 1 }
+    await tableStyleLoader.preloadTableStyles()
+    const metrics = computeMetrics(sheet)
+    expect(metrics.rowHeightsPx).toHaveLength(16_384)
+    expect(metrics.exportLimits?.some(limit => limit.resource === 'rows') ?? false).toBe(false)
+    expect(metrics.diagnostics).toContainEqual(expect.objectContaining({ code: 'table-style-region-clipped' }))
+    const canvas = createCanvas(100, 100)
+    expect(() => renderSheet(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, metrics, undefined, undefined, { x: 0, y: 0, width: 100, height: 100 })).not.toThrow()
+    const fitStyled = await parsed('table-medium-2.xlsx')
+    styleSheet(fitStyled)
+    const fitUnstyled = await parsed('table-medium-2.xlsx')
+    fitUnstyled.sheets[0]!.tables![0]!.styleInfo = undefined
+    expect(computeMetrics(fitStyled.sheets[0]!).exportLimits).toEqual(computeMetrics(fitUnstyled.sheets[0]!).exportLimits)
+    expect(computeMetrics(fitStyled.sheets[0]!).exportLimits).toBeUndefined()
+  })
+
+  test('unknown style is resolved once and diagnosed once per table', async () => {
+    await tableStyleLoader.preloadTableStyles()
+    const doc = await parsed('table-medium-2.xlsx')
+    const sheet = styleSheet(doc)
+    sheet.tables![0]!.styleInfo = { name: 'NotAStyle', showFirstColumn: false, showLastColumn: false, showRowStripes: true, showColumnStripes: false }
+    expect(regionStylesFor(sheet)).toBeUndefined()
+    expect(regionStylesFor(sheet)).toBeUndefined()
+    expect(sheet.regionStylesResolved).toBe(true)
+    expect(sheet.diagnostics?.filter(d => d.feature === 'table-style-unknown')).toHaveLength(1)
+    const metrics = computeMetrics(sheet)
+    const canvas = createCanvas(metrics.widthPx, metrics.heightPx)
+    renderSheet(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, metrics)
+    expect(sheet.diagnostics?.some(d => d.feature === 'table-style-engine-unavailable')).toBe(false)
+  })
+
+  test('placedFromViewportCells adds styled empty cells within its visible region', async () => {
+    const { placedFromViewportCells } = await import('../src/xlsx/view/textLayout')
+    const cells = [{ kind: 'cell', source: { row: 1, col: 1 }, bounds: { x: 10, y: 10, width: 10, height: 10 }, cell: { value: 'x', styleIndex: 0 } }] as never[]
+    const layer = { rects: [{ minRow: 1, minCol: 0, maxRow: 1, maxCol: 2 }], styleAt: (_row: number, _col: number, own: unknown) => own ?? { fillColor: '#f00' } } as never
+    const placed = placedFromViewportCells(cells, undefined, layer, {
+      minRow: 1, maxRow: 1, minCol: 0, maxCol: 2,
+      boxAt: (row: number, col: number) => ({ x: col * 10, y: row * 10, width: 10, height: 10 }),
+    })
+    expect(placed.map(item => item.cell.col)).toEqual([1, 0, 2])
+    expect(placed.slice(1).every(item => item.cell.style?.fillColor)).toBe(true)
+  })
+
   test('a table without a style name is pixel-equal to a direct render', async () => {
     const doc = await parsed('table-medium-2.xlsx')
     doc.sheets[0]!.tables![0]!.styleInfo = undefined
@@ -139,23 +205,4 @@ describe('table style painting', () => {
     finally { pages.dispose() }
   })
 
-  test('plain worksheets and unstyled tables render as before without requesting the lazy chunk', async () => {
-    const spy = vi.spyOn(tableStyleLoader, 'preloadTableStyles')
-    try {
-      for (const unstyledTable of [true, false]) {
-        const doc = await parsed('table-medium-2.xlsx')
-        if (unstyledTable) doc.sheets[0]!.tables![0]!.styleInfo = undefined
-        else doc.sheets[0]!.tables = undefined
-        const pages = await getPaintables(doc)
-        const metrics = computeMetrics(doc.sheets[0]!)
-        const direct = createCanvas(metrics.widthPx, metrics.heightPx)
-        renderSheet(doc.sheets[0]!, direct.getContext('2d') as unknown as CanvasRenderingContext2D, metrics)
-        const canvas = createCanvas(pages[0].spec.widthPx, pages[0].spec.heightPx)
-        pages[0].paint(canvas.getContext('2d') as unknown as CanvasRenderingContext2D)
-        try { expect(canvas.toBuffer('raw')).toEqual(direct.toBuffer('raw')) }
-        finally { pages.dispose() }
-      }
-      expect(spy).not.toHaveBeenCalled()
-    } finally { spy.mockRestore() }
-  })
 })

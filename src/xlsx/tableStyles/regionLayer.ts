@@ -20,12 +20,12 @@ function band(element: TableStyleElementType, rect: SheetRect, row: number, col:
 }
 
 function stripeBand(start: number, index: number, first: number, second: number): [number, number] {
-  let offset = 0, size = first, remaining = index
-  while (remaining >= size && size > 0) {
-    remaining -= size
-    offset += size
-    size = size === first ? second : first
-  }
+  const period = first + second
+  const periods = Math.floor(index / period)
+  const remainder = index % period
+  const inFirst = remainder < first
+  const offset = periods * period + (inFirst ? 0 : first)
+  const size = inFirst ? first : second
   return [start + offset, start + offset + size - 1]
 }
 
@@ -47,9 +47,9 @@ export function tableCellRoles(table: TableMetadata, row: number, col: number, d
   // SpreadsheetML stripes alternate sized bands. Each size is read from its
   // matching style element; absent sizes default to one row/column.
   const rowFirst = Math.max(1, Math.min(dataLastRow - dataFirstRow + 1, def?.elements.firstRowStripe?.size ?? 1))
-  const rowSecond = Math.max(1, Math.min(dataLastRow - dataFirstRow + 1, def?.elements.secondRowStripe?.size ?? rowFirst))
+  const rowSecond = Math.max(1, Math.min(dataLastRow - dataFirstRow + 1, def?.elements.secondRowStripe?.size ?? 1))
   const colFirst = Math.max(1, Math.min(dataLastCol - dataFirstCol + 1, def?.elements.firstColumnStripe?.size ?? 1))
-  const colSecond = Math.max(1, Math.min(dataLastCol - dataFirstCol + 1, def?.elements.secondColumnStripe?.size ?? colFirst))
+  const colSecond = Math.max(1, Math.min(dataLastCol - dataFirstCol + 1, def?.elements.secondColumnStripe?.size ?? 1))
   const info = table.styleInfo
   if (info?.showRowStripes && dataCell) {
     const [lo, hi] = stripeBand(dataFirstRow, row - dataFirstRow, rowFirst, rowSecond)
@@ -78,7 +78,13 @@ export function buildTableRegions(tables: readonly TableMetadata[], extras: Styl
     if (!name || table.extent.rows < 1 || table.extent.cols < 1) return []
     // A named custom style intentionally replaces a built-in with the same name.
     const def = extras.tableStyles.get(name) ?? builtinTableStyle(name)
-    if (!def || !def.table) return []
+    if (!def || !def.table) {
+      const message = `Table "${table.displayName}" uses unknown table style "${name}"; stored cell formatting is used.`
+      if (!diagnostics?.some(diagnostic => diagnostic.feature === 'table-style-unknown' && diagnostic.message === message)) {
+        diagnostics?.push({ kind: 'unsupported', feature: 'table-style-unknown', message })
+      }
+      return []
+    }
     const rect: SheetRect = { minRow: table.extent.firstRow, minCol: table.extent.firstCol, maxRow: table.extent.firstRow + table.extent.rows - 1, maxCol: table.extent.firstCol + table.extent.cols - 1 }
     if (![rect.minRow, rect.minCol, rect.maxRow, rect.maxCol].every(Number.isSafeInteger) || rect.minRow < 0 || rect.minCol < 0 || rect.maxRow >= MAX_ROWS || rect.maxCol >= MAX_COLS) return []
     return [{ table, def, rect }]
@@ -110,7 +116,7 @@ export function regionStylesFromSource(sheet: XlsxSheet): RegionStyleLayer | und
   if (!sheet.tables?.length) return undefined
   const source = sheet.tableStyleSource
   const extras: StylesExtras = source ? parseStylesExtras(source.root, source.colors) : { dxfs: [], tableStyles: new Map(), slicerStyles: new Map() }
-  const diagnostics = sheet.diagnostics as TableStyleDiagnostic[] | undefined
+  const diagnostics = (sheet.diagnostics ??= []) as TableStyleDiagnostic[]
   return buildTableRegions(sheet.tables, extras, sheet.drawingTheme ?? parseThemeContext(), diagnostics)
 }
 

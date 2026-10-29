@@ -18,6 +18,12 @@ import { graphemes } from '../../core/text-recording'
 
 export interface Rect { x: number; y: number; width: number; height: number }
 
+/** Optional bounded geometry for synthesizing style-only cells in a viewport. */
+export interface RegionPlacementWindow {
+  minRow: number; maxRow: number; minCol: number; maxCol: number
+  boxAt(row: number, col: number): { x: number; y: number; width: number; height: number } | null
+}
+
 /** Box-relative paint data of one cell body, computed by the host in a box whose
  * top-left is (x, y). The static renderer computes it at absolute sheet
  * coordinates and paints immediately; the viewer computes it at the origin,
@@ -365,8 +371,9 @@ function plainClip(dx: number, text: { tx: number; width: number; clipX?: { x0: 
 /** Store-path detail cells as host cells at their logical boxes: resolved and
  * permanently unavailable values only (unknown/error records stay placeholders,
  * never text). `styleOf` resolves a style index when the caller has styles. */
-export function placedFromViewportCells(cells: readonly ViewportCell[], styleOf?: (styleIndex: number) => XlsxCellStyle | undefined, regionStyles?: RegionStyleLayer): PlacedCell[] {
+export function placedFromViewportCells(cells: readonly ViewportCell[], styleOf?: (styleIndex: number) => XlsxCellStyle | undefined, regionStyles?: RegionStyleLayer, regionWindow?: RegionPlacementWindow): PlacedCell[] {
   const out: PlacedCell[] = []
+  const seen = new Set<string>()
   for (const item of cells) {
     if (item.kind !== 'cell' && item.kind !== 'unavailable') continue
     const source = item.cell
@@ -380,6 +387,24 @@ export function placedFromViewportCells(cells: readonly ViewportCell[], styleOf?
       ...(style ? { style } : {}),
     }
     out.push({ cell, source: item.source, x: item.bounds.x, y: item.bounds.y, width: item.bounds.width, height: item.bounds.height })
+    seen.add(`${item.source.row}:${item.source.col}`)
+  }
+  if (regionStyles && regionWindow) {
+    for (const rect of regionStyles.rects) {
+      const minRow = Math.max(rect.minRow, regionWindow.minRow), maxRow = Math.min(rect.maxRow, regionWindow.maxRow)
+      const minCol = Math.max(rect.minCol, regionWindow.minCol), maxCol = Math.min(rect.maxCol, regionWindow.maxCol)
+      for (let row = minRow; row <= maxRow; row++) for (let col = minCol; col <= maxCol; col++) {
+        const key = `${row}:${col}`
+        if (seen.has(key)) continue
+        const style = regionStyles.styleAt(row, col, undefined)
+        if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) continue
+        const bounds = regionWindow.boxAt(row, col)
+        if (!bounds || !(bounds.width > 0 && bounds.height > 0)) continue
+        const cell: XlsxCell = { ref: '', row, col, value: null, styleIndex: 0, style }
+        out.push({ cell, source: { row, col }, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
+        seen.add(key)
+      }
+    }
   }
   return out
 }
