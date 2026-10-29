@@ -21,7 +21,7 @@ import { parseThemeContext } from '../src/drawing/style'
 import { XLSX_CONTROL_REQUIREMENTS, XLSX_REQUIREMENTS, supportedChoiceRequirements, xlsxRequirements } from '../src/drawing/coverage'
 import { getChildren, parseXml } from '../src/core/xml'
 import { REF_CASES, type SlicerCase, type TimelineCase } from '../scripts/xlsx-refs/cases'
-import { slicerItemState, slicerLayout, timelineLayout, TIMELINE_PERIOD_PT } from '../src/xlsx/pivots/slicers/paint'
+import { paintSlicer, paintTimeline, slicerItemState, slicerLayout, timelineLayout, TIMELINE_PERIOD_PT } from '../src/xlsx/pivots/slicers/paint'
 import { slicerAppearance, timelineAppearance } from '../src/xlsx/pivots/slicers/style'
 import type { SlicerModel, TimelineModel, XlsxControlContent } from '../src/xlsx/pivots/slicers/model'
 import type { StylesExtras } from '../src/xlsx/tableStyles/model'
@@ -564,5 +564,42 @@ describe('mc:AlternateContent: the Choice needs the pivots chunk, otherwise the 
       await loader.ensurePivotEngine([{ name: 'S', rows: [], cols: [], merges: [], mergeRanges: [], timelineRefs: [{ partPath: 'xl/timelines/timeline1.xml' }] }])
       expect(loader.pivotEngine()).toBeDefined()
     } finally { vi.resetModules() }
+  })
+})
+
+describe('control chrome at 1 px per pt (Task 14 comparison findings)', () => {
+  /** A control painted at 75 % (1 device px per pt) into `box` (device px), as the comparison renders it. */
+  const at75 = (paint: (ctx: CanvasRenderingContext2D, box: { x: number; y: number; width: number; height: number }) => void, box: { x: number; y: number; width: number; height: number }) => {
+    const canvas = createCanvas(240, 240), ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, 240, 240)
+    ctx.setTransform(0.75, 0, 0, 0.75, 0, 0)
+    paint(ctx as unknown as CanvasRenderingContext2D, { x: box.x / 0.75, y: box.y / 0.75, width: box.width / 0.75, height: box.height / 0.75 })
+    const data = ctx.getImageData(0, 0, 240, 240).data
+    return (x: number, y: number) => hex([data[(y * 240 + x) * 4]!, data[(y * 240 + x) * 4 + 1]!, data[(y * 240 + x) * 4 + 2]!])
+  }
+
+  test('the slicer frame covers every pixel its anchor touches; the separator stops 7 pt inside it (refs/slicer-light1.png)', async () => {
+    const doc = await parse(fixture('slicer-light1'))
+    const model = slicerModel(controls(doc.sheets[0]!).slicer)
+    // refs/slicer-light1.png: the anchor spans y 8 to 197.25 and the bottom border is row 197; the frame is
+    // x 186–325 and the separator (y 27) x 193–318. Here the box starts at (10, 8).
+    const px = at75((ctx, box) => paintSlicer(ctx, model, box, 96 / 72), { x: 10, y: 8, width: 140, height: 189.25 })
+    expect(px(60, 197)).toBe('4F81BD')
+    expect(px(60, 198)).toBe('FFFFFF')
+    expect(px(10 + 7, 27)).toBe('4F81BD')
+    expect(px(10 + 132, 27)).toBe('4F81BD')
+    expect(px(10 + 6, 27)).toBe('FFFFFF')
+    expect(px(10 + 133, 27)).toBe('FFFFFF')
+  })
+
+  test('the timeline separator spans the bar\'s columns, 6 pt in on the left and 7 on the right (refs/timeline-light1-months.png)', async () => {
+    const doc = await parse(fixture('timeline-light1-months'))
+    const model = timelineModel(controls(doc.sheets[0]!).timeline)
+    // refs/timeline-light1-months.png: frame x 450–649, separator (y 127) x 456–642. Here the box starts at (10, 10).
+    const px = at75((ctx, box) => paintTimeline(ctx, model, box, 96 / 72), { x: 10, y: 10, width: 200, height: 121 })
+    expect(px(10 + 6, 10 + 22)).toBe('4F81BD')
+    expect(px(10 + 192, 10 + 22)).toBe('4F81BD')
+    expect(px(10 + 3, 10 + 22)).toBe('FFFFFF')
+    expect(px(10 + 196, 10 + 22)).toBe('FFFFFF')
   })
 })

@@ -22,6 +22,8 @@
  * - a line whose deepest item has children is a row subheading for its level
  *   across the whole row (compact, outline); in tabular form a parent item is a
  *   subheading in its own label column, from its line to its last child line;
+ * - the grand-total lines are one totalRow band (pivot-values-on-rows: one
+ *   line above its two grand rows, none between them);
  * - every subtotal line is its own band (adjacent lines are two bands); in a
  *   tabular parent's label column its top edge is inner, so the parent's
  *   bottom line shows there;
@@ -211,7 +213,8 @@ export function savedPivotRoles(def: PivotTableDefinition, style?: TableStyleDef
       }
       if (!rowLine) return out
       const level = rowLine.items.length - 1
-      if (rowLine.type === 'grand') out.push(band('totalRow', row, rect.minCol, row, rect.maxCol, row, col))
+      // The grand-total lines are one band (refs/pivot-values-on-rows.png: no line between its two grand rows).
+      if (rowLine.type === 'grand') out.push(band('totalRow', bodyRowEnd + 1, rect.minCol, rect.maxRow, rect.maxCol, row, col))
       else if (rowLine.type === 'blank') out.push(band('blankRow', row, rect.minCol, row, rect.maxCol, row, col))
       else if (isSubtotal(rowLine.type)) {
         const role = band(nth(level, 'SubtotalRow'), row, rect.minCol, row, rect.maxCol, row, col)

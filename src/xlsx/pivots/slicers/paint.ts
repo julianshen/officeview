@@ -27,6 +27,8 @@ export const SLICER_PT = {
   captionX: 7, captionBaseline: 13,
   /** Items: 6 in from the frame, 2 apart (rows and columns), text 8 into the item, rounded corners. */
   inset: 6, gap: 2, textX: 8, textRight: 4, radius: 3,
+  /** The header separator stops this far inside the frame on each side. */
+  separatorInset: 7,
   /** The last row ends at least 6 above the bottom border. */
   bottom: 6,
   /** Scrollbar: items end 20 inside the frame; the 8 wide thumb ends 8 inside it. */
@@ -197,14 +199,29 @@ export function timelineLayout(m: TimelineModel, box: Box, scale: number): Timel
 
 // ---------------------------------------------------------------- device-space drawing
 
-interface Device { x(v: number): number; y(v: number): number; k: number; snapped: boolean }
+interface Device { x(v: number): number; y(v: number): number; k: number; snapped: boolean
+  /** Unrounded device coordinates. */
+  rx(v: number): number; ry(v: number): number }
 interface Rect { x0: number; y0: number; x1: number; y1: number }
 function deviceOf(ctx: CanvasRenderingContext2D): Device {
   const t = typeof ctx.getTransform === 'function' ? ctx.getTransform() : undefined
-  if (t && t.b === 0 && t.c === 0 && t.a > 0 && t.d > 0 && Math.abs(t.a - t.d) < 1e-9) return { x: v => Math.round(t.a * v + t.e), y: v => Math.round(t.d * v + t.f), k: t.a, snapped: true }
-  return { x: v => v, y: v => v, k: 1, snapped: false }
+  if (t && t.b === 0 && t.c === 0 && t.a > 0 && t.d > 0 && Math.abs(t.a - t.d) < 1e-9) {
+    const rx = (v: number) => t.a * v + t.e, ry = (v: number) => t.d * v + t.f
+    return { x: v => Math.round(rx(v)), y: v => Math.round(ry(v)), rx, ry, k: t.a, snapped: true }
+  }
+  return { x: v => v, y: v => v, rx: v => v, ry: v => v, k: 1, snapped: false }
 }
 const rectOf = (d: Device, b: Box): Rect => ({ x0: d.x(b.x), y0: d.y(b.y), x1: d.x(b.x + b.width), y1: d.y(b.y + b.height) })
+/**
+ * The frame's device box: its right and bottom borders lie on the last pixel the anchor touches. A slicer
+ * anchored from y 8 to y 197.25 at 1 px per pt has its bottom border on row 197 (refs/slicer-light1.png, frame
+ * y 8–197), not on the last whole row. (No capture has a fractional top or left edge; those keep rounding.)
+ */
+function frameOf(d: Device, b: Box): Rect {
+  if (!d.snapped) return rectOf(d, b)
+  const hi = (v: number) => Math.ceil(v - 1e-6)
+  return { x0: d.x(b.x), y0: d.y(b.y), x1: hi(d.rx(b.x + b.width)), y1: hi(d.ry(b.y + b.height)) }
+}
 function fill(ctx: CanvasRenderingContext2D, r: Rect, colour: string): void {
   if (r.x1 <= r.x0 || r.y1 <= r.y0) return
   ctx.fillStyle = colour
@@ -259,14 +276,16 @@ export function paintSlicer(ctx: CanvasRenderingContext2D, m: SlicerModel, box: 
   ctx.save()
   try {
     if (d.snapped) ctx.setTransform(1, 0, 0, 1, 0, 0)
-    const f = rectOf(d, box), lw = Math.max(1, Math.round(d.k))
+    const f = frameOf(d, box), lw = Math.max(1, Math.round(d.k))
     if (f.x1 <= f.x0 || f.y1 <= f.y0) return
     clipTo(ctx, f)
     fill(ctx, f, a.background)
     if (layout.separatorY !== undefined && layout.caption) {
       const sep = d.y(layout.separatorY)
       fill(ctx, { ...f, y1: sep }, a.header.fill)
-      fill(ctx, { ...f, y0: sep, y1: sep + lw }, a.header.separator)
+      // The separator stops 7 pt inside the frame on both sides (refs/slicer-light1.png: x 193–318 in the
+      // frame x 186–325, every slicer style).
+      fill(ctx, { x0: d.x(box.x + P.separatorInset * scale), x1: d.x(box.x + box.width - P.separatorInset * scale), y0: sep, y1: sep + lw }, a.header.separator)
       text(ctx, d, m.caption ?? m.name, layout.caption.x, layout.caption.baseline, { colour: a.header.text, bold: a.header.bold, pt: P.fontPt, family: a.fontFamily }, scale, familyCss, { ...f, y1: sep })
     }
     const radius = P.radius * scale * d.k
@@ -289,7 +308,7 @@ export function paintTimeline(ctx: CanvasRenderingContext2D, m: TimelineModel, b
   ctx.save()
   try {
     if (d.snapped) ctx.setTransform(1, 0, 0, 1, 0, 0)
-    const f = rectOf(d, box), lw = Math.max(1, Math.round(d.k))
+    const f = frameOf(d, box), lw = Math.max(1, Math.round(d.k))
     if (f.x1 <= f.x0 || f.y1 <= f.y0) return
     clipTo(ctx, f)
     fill(ctx, f, a.background)
@@ -297,7 +316,9 @@ export function paintTimeline(ctx: CanvasRenderingContext2D, m: TimelineModel, b
       text(ctx, d, value, x, baseline, { colour, bold, pt, family: a.fontFamily, ...(align ? { align } : {}) }, scale, familyCss, f)
     if (layout.separatorY !== undefined && layout.caption) {
       const sep = d.y(layout.separatorY)
-      fill(ctx, { ...f, y0: sep, y1: sep + lw }, a.header.separator)
+      // The separator spans the bar's columns, 6 pt in on the left and 7 on the right (refs/timeline-light1-months.png:
+      // x 456–642 in the frame x 450–649).
+      fill(ctx, { x0: d.x(layout.bar.x), x1: d.x(layout.bar.x + layout.bar.width), y0: sep, y1: sep + lw }, a.header.separator)
       label(m.caption ?? m.name, layout.caption.x, layout.caption.baseline, a.header.text, P.captionPt, a.header.bold)
     }
     if (layout.selectionLabel) label(layout.selectionLabel.text, layout.selectionLabel.x, layout.selectionLabel.baseline, a.selectionLabel)

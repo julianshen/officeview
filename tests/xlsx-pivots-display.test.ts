@@ -478,3 +478,10 @@ describe('Stage 1 comparison findings (Task 14, docs/validation/xlsx-pivots.md "
     expect(styleOf(dark2, 'B7')?.borderColors?.bottom).toBe('FFC1E5F5')
   })
 })
+
+test('the grand-total lines are one totalRow band (refs/pivot-values-on-rows.png: no line between its two grand rows)', async () => {
+  const { def } = await load('pivot-values-on-rows')
+  const rows = [def.rowItems!.length - 2, def.rowItems!.length - 1].map(n => n + at('A5').row)
+  expect(band(def, rows[0]!, 1, 'totalRow')).toEqual({ top: true, bottom: false, left: false, right: false })
+  expect(band(def, rows[1]!, 1, 'totalRow')).toEqual({ top: false, bottom: true, left: false, right: false })
+})
