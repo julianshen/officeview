@@ -377,7 +377,7 @@ export function renderSheetViewport(
         spills.push({ x0: span.x0 + dx, x1: span.x1 + dx, y0: record.logicalBounds.y, y1: record.logicalBounds.y + record.logicalBounds.height })
       }
       // Pivot interiors and filled styled-region cells hide their gridlines (regionGrid.ts). A sheet with
-      // no pivot and no table pays only the guard: no allocation, no style lookup (spec §8 hot path).
+      // no pivot and no styled table pays only the guard: no allocation, no style lookup (spec §8 hot path).
       const region = geometry?.kind === 'ready' && mayHaveRegionGrid(sheet) ? viewportRegionLines(sheet, geometry, yTop, yBottom, xLeft, xRight) : undefined
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])

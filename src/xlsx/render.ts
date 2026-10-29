@@ -912,7 +912,7 @@ export function renderSheet(
   // Excel also hides a vertical gridline under text spilling across it.
   const spills = spillBands(laidOut)
   // Pivot interiors and filled styled-region cells hide theirs, or cover them with the fill (regionGrid.ts); a
-  // sheet with no pivot and no table pays only the guard (spec §8).
+  // sheet with no pivot and no styled table pays only the guard (spec §8).
   const region = mayHaveRegionGrid(sheet) ? staticRegionLines(sheet, colX, rowY, colWidthsPx.length, rowHeightsPx.length) : undefined
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]

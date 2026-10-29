@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Spec §8 hot path (Task 14 fix round 1): a sheet with no pivot and no table pays one guard per paint for the
+ * Spec §8 hot path (Task 14 fix round 1): a sheet with no pivot and no styled table pays one guard per paint for the
  * styled-region gridline rule (src/xlsx/regionGrid.ts), never the rule itself (its callback, arrays and
  * regionStylesFor lookup). Both painters are checked, with a styled sheet as the positive control.
  */
@@ -42,6 +42,17 @@ describe('the styled-region gridline rule costs a plain sheet only its guard', (
     expect(mayHaveRegionGrid(sheet)).toBe(false)
     paintBoth(sheet)
     // regionGrid is where the rule allocates and calls regionStylesFor; behind the guard it is never reached.
+    expect(regionGrid).not.toHaveBeenCalled()
+  })
+
+  test('a sheet whose only table has no style name pays only the guard too', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(readFileSync(fileURLToPath(new URL('./fixtures/xlsx-pivots/table-medium-2.xlsx', import.meta.url)))))
+    const sheet = doc.sheets.find(s => s.tables?.length)!
+    sheet.tables = sheet.tables!.map(table => ({ ...table, styleInfo: undefined }))
+    await ensureTableStyleEngine(doc.sheets)
+    expect(sheet.regionStyles).toBeUndefined()
+    expect(mayHaveRegionGrid(sheet)).toBe(false)
+    paintBoth(sheet)
     expect(regionGrid).not.toHaveBeenCalled()
   })
 
