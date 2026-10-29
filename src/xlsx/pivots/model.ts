@@ -248,7 +248,13 @@ export interface PivotDataField {
   /** Kept as written, including the previous/next sentinels 1048828 and 1048829. */
   baseItem: number
   numFmtId?: number
+  /** x14 `dataField`. `sourceField`, when present, overrides `fld` (MS-XLSX); read the field through `dataFieldSource`. */
   x14?: { pivotShowAs?: PivotShowAsX14; sourceField?: number }
+}
+
+/** The pivot field a data field aggregates: x14 `sourceField` when present, else `fld`. Consumers use this, never `fld` directly. */
+export function dataFieldSource(field: PivotDataField): number {
+  return field.x14?.sourceField ?? field.fld
 }
 
 export type PivotAreaType = 'none' | 'normal' | 'data' | 'all' | 'origin' | 'button' | 'topEnd' | 'topRight'

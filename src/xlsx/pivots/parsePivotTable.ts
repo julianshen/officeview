@@ -359,9 +359,13 @@ const X14_USES_BASE_FIELD: readonly string[] = ['percentOfParent', 'percentOfRun
  * - `rowItems`/`colItems` `x` at level `r + j`: that axis field's `items` (data fields for -2); `i`: a data field.
  *   A grand line's `x` is a placeholder and only has to be non-negative;
  * - `pageField`: `fld` a pivot field, `item` one of its items;
- * - `dataField`: `fld` a pivot field; `baseField`/`baseItem` where showDataAs uses them, keeping the previous/next sentinels;
+ * - `dataField`: `fld` and x14 `sourceField` pivot fields; `baseField`/`baseItem` where showDataAs uses them,
+ *   keeping the previous/next sentinels;
+ * - every pivot area (formats, conditional and chart formats, `autoSortScope`): `pivotArea@field` and
+ *   `reference@field` a pivot field or -2 (Values). A reference's `x` indices are deferred: with `byPosition`
+ *   they count visible positions and with `relative` they are offsets, so their domain depends on the layout,
+ *   and a Values reference's `x` names data fields; Stage 2's area matching resolves them in context;
  * - cache `fieldGroup`: `base`/`par` cache fields, `discretePr` group items.
- * Pivot-area reference indices are not checked: their meaning depends on `byPosition`/`relative`.
  */
 export function validateIndices(table: PivotTableDefinition, cache: PivotCacheDefinition | undefined): string[] {
   const out: string[] = []
@@ -412,8 +416,19 @@ export function validateIndices(table: PivotTableDefinition, cache: PivotCacheDe
     if (!isField(page.fld)) bad(`pageField[${n}].fld`)
     else if (page.item !== undefined && page.item >= itemCount(page.fld)) bad(`pageField[${n}].item`)
   })
+  const areaField = (f: number) => f === PIVOT_VALUES_FIELD || isField(f)
+  const area = (where: string, a: PivotArea | undefined) => {
+    if (!a) return
+    if (a.field !== undefined && !areaField(a.field)) bad(`${where}.field`)
+    a.references.forEach((ref, j) => { if (ref.field !== undefined && !areaField(ref.field)) bad(`${where}.reference[${j}].field`) })
+  }
+  table.fields.forEach((field, f) => area(`pivotField[${f}].autoSortScope`, field.autoSortScope))
+  table.formats.forEach((format, n) => area(`format[${n}].pivotArea`, format.pivotArea))
+  table.conditionalFormats.forEach((format, n) => format.pivotAreas.forEach((a, k) => area(`conditionalFormat[${n}].pivotArea[${k}]`, a)))
+  table.chartFormats.forEach((format, n) => area(`chartFormat[${n}].pivotArea`, format.pivotArea))
   table.dataFields.forEach((data, n) => {
     if (!isField(data.fld)) bad(`dataField[${n}].fld`)
+    if (data.x14?.sourceField !== undefined && !isField(data.x14.sourceField)) bad(`dataField[${n}].x14.sourceField`)
     const showAs = data.x14?.pivotShowAs
     if (!USES_BASE_FIELD.includes(data.showDataAs) && !(showAs && X14_USES_BASE_FIELD.includes(showAs))) return
     if (!isField(data.baseField)) return bad(`dataField[${n}].baseField`)

@@ -8,7 +8,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { PivotRegionRef } from '../src/xlsx/pivots/stub'
 import { loadPivotWorkbook, type PackageReader } from '../src/xlsx/pivots/load'
 import { MAX_UNSUPPORTED_ENTRIES, UNSUPPORTED_TRUNCATED } from '../src/xlsx/pivots/parseCacheDefinition'
-import { PIVOT_BASE_ITEM_DEFAULT, PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD, type PivotWorkbook } from '../src/xlsx/pivots/model'
+import { dataFieldSource, PIVOT_BASE_ITEM_DEFAULT, PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD, type PivotWorkbook } from '../src/xlsx/pivots/model'
 
 const root = process.cwd()
 const corpusFiles = readdirSync(resolve(root, 'corpus')).filter(f => /pivot/i.test(f) && f.endsWith('.xlsx')).map(f => `corpus/${f}`)
@@ -56,6 +56,7 @@ function synthetic(opts: { cacheAttrs?: string; cache: string; tableAttrs?: stri
 const loadSynthetic = (opts: Parameters<typeof synthetic>[0]) => loadPivotWorkbook(synthetic(opts), new Map([['S', [region]]]))
 const SOURCE = '<cacheSource type="worksheet"><worksheetSource ref="A1:B5" sheet="Data"/></cacheSource>'
 const TWO_FIELDS = `${SOURCE}<cacheFields count="2"><cacheField name="K" numFmtId="0"><sharedItems count="2"><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="V" numFmtId="0"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" minValue="1" maxValue="2"/></cacheField></cacheFields>`
+const X14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 const LOCATION = '<location ref="A3:B6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/>'
 
 describe('pivot definition parsers', () => {
@@ -355,12 +356,26 @@ describe('pivot definition parsers', () => {
       ['page field on Values', `${FIELDS}<pageFields count="1"><pageField fld="-2"/></pageFields>`, 'pageField[0].fld'],
       ['data field beyond the fields', `${FIELDS}<dataFields count="1"><dataField fld="3"/></dataFields>`, 'dataField[0].fld'],
       ['base field beyond the fields', `${FIELDS}<dataFields count="1"><dataField fld="1" showDataAs="runTotal" baseField="5"/></dataFields>`, 'dataField[0].baseField'],
+      ['x14 sourceField beyond the fields', `${FIELDS}<dataFields count="1"><dataField fld="1"><extLst><ext uri="{E15A36E0-9728-4e99-A89B-3F7291B0FE68}"><x14:dataField xmlns:x14="${X14}" sourceField="99" pivotShowAs="rankAscending"/></ext></extLst></dataField></dataFields>`, 'dataField[0].x14.sourceField'],
+      ['format area field beyond the fields', `${FIELDS}<formats count="1"><format dxfId="0"><pivotArea field="99"/></format></formats>`, 'format[0].pivotArea.field'],
+      ['format reference field beyond the fields', `${FIELDS}<formats count="1"><format dxfId="0"><pivotArea><references count="1"><reference field="99" count="1"><x v="99"/></reference></references></pivotArea></format></formats>`, 'format[0].pivotArea.reference[0].field'],
+      ['autoSortScope field beyond the fields', FIELDS.replace('<item t="default"/></items>', '<item t="default"/></items><autoSortScope><pivotArea field="99"><references count="1"><reference field="99" count="1"><x/></reference></references></pivotArea></autoSortScope>'), 'pivotField[0].autoSortScope.field'],
+      ['chart format reference field beyond the fields', `${FIELDS}<chartFormats count="1"><chartFormat chart="0" format="0"><pivotArea><references count="1"><reference field="7" count="1"><x/></reference></references></pivotArea></chartFormat></chartFormats>`, 'chartFormat[0].pivotArea.reference[0].field'],
+      ['conditional format area field beyond the fields', `${FIELDS}<conditionalFormats count="1"><conditionalFormat priority="1"><pivotAreas count="1"><pivotArea field="-3"/></pivotAreas></conditionalFormat></conditionalFormats>`, 'conditionalFormat[0].pivotArea[0].field'],
       ['base item beyond the base field items', `${FIELDS}<dataFields count="1"><dataField fld="1" showDataAs="difference" baseField="0" baseItem="3"/></dataFields>`, 'dataField[0].baseItem'],
     ])('fails closed on %s', async (_, table, where) => {
       const book = await run(table)
       expect(book.tables).toHaveLength(1)
       expect(invalidOf(book)).toContain(`invalid-index:${where}`)
       expect(book.diagnostics).toContainEqual(expect.objectContaining({ kind: 'parse', feature: 'pivot-definition-invalid', partPath: 'xl/pivotTables/pivotTable1.xml' }))
+    })
+
+    it('uses x14 sourceField as the effective data field and accepts Values in pivot areas', async () => {
+      const book = await run(`${FIELDS}<dataFields count="2"><dataField fld="1"><extLst><ext uri="{E15A36E0-9728-4e99-A89B-3F7291B0FE68}"><x14:dataField xmlns:x14="${X14}" sourceField="0"/></ext></extLst></dataField><dataField fld="1"/></dataFields>`
+        + '<formats count="1"><format dxfId="0"><pivotArea field="-2" type="button"><references count="2"><reference field="4294967294" count="1"><x v="1"/></reference><reference field="0" count="1"><x/></reference></references></pivotArea></format></formats>')
+      expect(book.tables[0].dataFields.map(dataFieldSource)).toEqual([0, 1])
+      expect(invalidOf(book)).toEqual([])
+      expect(book.diagnostics).toEqual([])
     })
 
     it('keeps the previous/next sentinels and ignores inert base fields', async () => {
