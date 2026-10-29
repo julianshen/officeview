@@ -219,8 +219,8 @@ export function renderSheetViewport(
     // The host lays a cell out in a box at the origin: records are box-relative.
     const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
     const regionStyles = regionStylesFor(sheet)
-    const regionCells: CellPlacement[] = []
-    if (plan.kind === 'detail' && geometry?.kind === 'ready' && regionStyles) {
+    const regionCells: CellPlacement[] | undefined = regionStyles ? [] : undefined
+    if (plan.kind === 'detail' && geometry?.kind === 'ready' && regionStyles && regionCells) {
       const seen = new Set(plan.cells.map(item => `${item.source.row}:${item.source.col}`))
       if (plan.active) seen.add(`${plan.active.source.row}:${plan.active.source.col}`)
       const rowRuns = geometry.metrics.rows.visibleBetween(vy, vy + height).runs
@@ -252,12 +252,12 @@ export function renderSheetViewport(
         }
       }
     }
-    const cellPlacements: CellPlacement[] = plan.kind === 'detail'
-      ? [...plan.cells.map(item => {
-        const style = regionStyles?.styleAt(item.source.row, item.source.col, item.cell.style, 'screen') ?? item.cell.style
+    // Spec §8: a sheet without styled regions pays an undefined check here, never a per-tile copy.
+    const cellPlacements: readonly CellPlacement[] = plan.kind !== 'detail' ? [] : !regionStyles ? plan.cells
+      : [...plan.cells.map(item => {
+        const style = regionStyles.styleAt(item.source.row, item.source.col, item.cell.style, 'screen') ?? item.cell.style
         return style === item.cell.style ? item : { ...item, cell: { ...item.cell, ...(style ? { style } : { style: undefined }) } }
-      }), ...regionCells]
-      : []
+      }), ...regionCells ?? []]
     const activePlacement = plan.active ? (() => {
       const style = regionStyles?.styleAt(plan.active!.source.row, plan.active!.source.col, plan.active!.cell.style, 'screen') ?? plan.active!.cell.style
       return style === plan.active!.cell.style ? plan.active! : { ...plan.active!, cell: { ...plan.active!.cell, ...(style ? { style } : { style: undefined }) } }

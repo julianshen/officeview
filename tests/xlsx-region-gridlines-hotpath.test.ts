@@ -14,7 +14,14 @@ vi.mock('../src/xlsx/regionGrid', async importOriginal => {
   return { ...original, regionGrid: vi.fn(original.regionGrid) }
 })
 
+vi.mock('../src/xlsx/view/textLayout', async importOriginal => {
+  const original = await importOriginal<typeof import('../src/xlsx/view/textLayout')>()
+  return { ...original, buildCellRecords: vi.fn(original.buildCellRecords) }
+})
+
 const { regionGrid, mayHaveRegionGrid } = await import('../src/xlsx/regionGrid')
+const { buildCellRecords } = await import('../src/xlsx/view/textLayout')
+const { planViewport } = await import('../src/xlsx/view/viewport')
 const { ensureTableStyleEngine } = await import('../src/xlsx/tableStyleLoader')
 const { computeMetrics, renderSheet } = await import('../src/xlsx/render')
 const { buildSheetGeometry } = await import('../src/xlsx/view/viewport')
@@ -34,7 +41,17 @@ function paintBoth(sheet: Sheet): void {
   }
 }
 
-afterEach(() => { vi.mocked(regionGrid).mockClear() })
+afterEach(() => { vi.mocked(regionGrid).mockClear(); vi.mocked(buildCellRecords).mockClear() })
+
+/** The placements the viewport painter lays out for one tile of `sheet`, and the plan's own cells. */
+function tilePlacements(sheet: Sheet) {
+  const geometry = buildSheetGeometry(sheet)
+  const viewport = { box: { x: 0, y: 0, width: 200, height: 100 }, zoom: 1, deviceScale: 1 }
+  const plan = planViewport(geometry, viewport)
+  expect(plan.kind).toBe('detail')
+  renderSheetViewport(sheet, createCanvas(200, 100).getContext('2d') as never, geometry, viewport, {}, { cache: new LayoutCache(), preparedPlan: plan })
+  return { placed: vi.mocked(buildCellRecords).mock.calls.at(-1)![0], cells: plan.kind === 'detail' ? plan.cells : [] }
+}
 
 describe('the styled-region gridline rule costs a plain sheet only its guard', () => {
   test('no pivot, no table: neither painter builds the rule or looks up region styles for it', () => {
@@ -43,6 +60,20 @@ describe('the styled-region gridline rule costs a plain sheet only its guard', (
     paintBoth(sheet)
     // regionGrid is where the rule allocates and calls regionStylesFor; behind the guard it is never reached.
     expect(regionGrid).not.toHaveBeenCalled()
+  })
+
+  test('a plain sheet lays out the plan\'s own cells: no per-tile copy (final review M1)', () => {
+    const sheet: Sheet = { name: 'Plain', rows: [{ index: 0, cells: [{ ref: 'A1', row: 0, col: 0, value: 1, styleIndex: 0, style: { numFmtId: 0, fillColor: 'FFFFFF00' } }] }], cols: [], merges: [], mergeRanges: [] } as unknown as Sheet
+    const { placed, cells } = tilePlacements(sheet)
+    expect(cells.length).toBeGreaterThan(0)
+    expect(placed).toBe(cells)
+  })
+
+  test('control: a pivot sheet lays out region-styled copies', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(readFileSync(fileURLToPath(new URL('./fixtures/xlsx-pivots/pivot-light-16.xlsx', import.meta.url)))))
+    await ensureTableStyleEngine(doc.sheets)
+    const { placed, cells } = tilePlacements(doc.sheets.find(s => s.pivotTables?.length)!)
+    expect(placed).not.toBe(cells)
   })
 
   test('a sheet whose only table has no style name pays only the guard too', async () => {
