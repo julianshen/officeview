@@ -146,6 +146,7 @@ export function pivotStyleRegions(sheet: XlsxSheet, extras: StylesExtras, _theme
     return [{
       rects: roles.rects,
       def: style ?? NO_STYLE,
+      kind: 'pivot' as const,
       retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES + (layout.rows.length + layout.cols.length) * LINE_ESTIMATE_BYTES,
       cell(row, col, mode) {
         const hits = formats.filter(format => format.match(row, col))

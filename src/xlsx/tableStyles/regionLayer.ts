@@ -1,7 +1,7 @@
 /** Lazy resident worksheet table-style composition. */
 import { parseStylesExtras } from './parseStylesExtras'
 import { builtinTableStyle } from './builtins'
-import { orderRoles, resolveRoleStyle } from './resolve'
+import { borderRanks, orderRoles, resolveRoleStyle, type Side } from './resolve'
 import type { DxfStyle, RoleRef, SheetRect, StylesExtras, TableStyleDef, TableStyleDiagnostic, TableStyleElementType } from './model'
 import type { TableMetadata } from '../formula/types'
 import type { ThemeContext } from '../../drawing/style'
@@ -32,6 +32,8 @@ export interface RegionCell { roles: readonly RoleRef[]; overrides?: readonly Dx
 export interface StyleRegion {
   readonly rects: readonly SheetRect[]
   readonly def: TableStyleDef
+  /** Which precedence its roles follow; it decides whose line wins on an edge two cells share. */
+  readonly kind: 'pivot' | 'table'
   readonly retainedBytes: number
   cell(row: number, col: number, mode: RegionStyleMode): RegionCell
 }
@@ -113,7 +115,7 @@ export function tableStyleRegions(tables: readonly RegionStyleTable[], extras: S
     }
     const rect: SheetRect = { minRow: table.extent.firstRow, minCol: table.extent.firstCol, maxRow: table.extent.firstRow + table.extent.rows - 1, maxCol: table.extent.firstCol + table.extent.cols - 1 }
     if (![rect.minRow, rect.minCol, rect.maxRow, rect.maxCol].every(Number.isSafeInteger) || rect.minRow < 0 || rect.minCol < 0 || rect.maxRow >= MAX_ROWS || rect.maxCol >= MAX_COLS) return []
-    return [{ rects: [rect], def, retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES, cell: (row: number, col: number) => ({ roles: orderRoles(tableCellRoles(table, row, col, def), 'table') }) }]
+    return [{ rects: [rect], def, kind: 'table' as const, retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES, cell: (row: number, col: number) => ({ roles: orderRoles(tableCellRoles(table, row, col, def), 'table') }) }]
   })
 }
 
@@ -134,6 +136,8 @@ export function composeRegionLayer(regions: readonly StyleRegion[], theme: Theme
   if (!regions.length) return undefined
   const rects = regions.flatMap(region => region.rects)
   const memo = new Map<StyleRegion, Map<string, Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>>>()
+  // Styles with a shared edge taken from a neighbour, by base style and the edges taken.
+  let shared = new WeakMap<XlsxCellStyle, Map<string, XlsxCellStyle>>()
   let memoEntries = 0
   return {
     rects,
@@ -141,31 +145,75 @@ export function composeRegionLayer(regions: readonly StyleRegion[], theme: Theme
     styleAt(row, col, own, mode = 'print') {
       const region = regions.find(candidate => candidate.rects.some(rect => inRect(rect, row, col)))
       if (!region) return own
-      const { roles, overrides, overrideKey, indentPx } = region.cell(row, col, mode)
-      if (!roles.length && !overrides?.length && indentPx === undefined) return own
-      const signature = `${roles.map(role => typeof role === 'string' ? role : `${role.element}:${+role.edges.top}${+role.edges.bottom}${+role.edges.left}${+role.edges.right}`).join('|')}#${overrideKey ?? ''}@${indentPx ?? ''}`
-      let bySignature = memo.get(region)
-      if (!bySignature) memo.set(region, bySignature = new Map())
-      const byOwn = bySignature.get(signature)
-      if (byOwn?.has(own)) return byOwn.get(own)
-      const scratch: TableStyleDiagnostic[] = []
-      let style = roles.length || overrides?.length ? resolveRoleStyle(region.def, roles, own, theme, scratch, overrides) : own
-      if (indentPx !== undefined) style = { ...(style ?? { numFmtId: 0 }), indentPx, ...(style?.horizontal === undefined || style.horizontal === 'general' ? { horizontal: 'left' } : {}) }
-      for (const diagnostic of scratch) report?.(diagnostic)
-      if (memoEntries >= MAX_REGION_STYLE_MEMO_ENTRIES) {
-        memo.clear()
-        memoEntries = 0
-        bySignature = new Map()
-        memo.set(region, bySignature)
+      const cell = region.cell(row, col, mode)
+      const style = resolved(region, cell, own)
+      if (!cell.roles.length && !cell.overrides?.length) return style
+      // An edge two cells share shows one line: Excel draws the one of the higher-precedence element
+      // (refs/pivot-light-3.png: the header row's #E97132 bottom over the next row's #FBE3D6 inner line;
+      // refs/pivot-dark-2.png: a row subheading's bottom over the stripe below).
+      const ranks = borderRanks(region.def, cell.roles, region.kind, cell.overrides)
+      let changed: Partial<Record<Side, { style: string; color?: string } | null>> | undefined
+      for (const [side, dr, dc, opposite] of SHARED_EDGES) {
+        if (own?.borders?.[side]) continue
+        const r = row + dr, c = col + dc
+        if (!region.rects.some(rect => inRect(rect, r, c))) continue
+        const next = region.cell(r, c, mode)
+        if (borderRanks(region.def, next.roles, region.kind, next.overrides)[opposite] <= ranks[side]) continue
+        const line = resolved(region, next, undefined)
+        const lineStyle = line?.borders?.[opposite]
+        ;(changed ??= {})[side] = lineStyle ? { style: lineStyle, ...(line?.borderColors?.[opposite] ? { color: line.borderColors[opposite] } : {}) } : null
       }
-      let entries = bySignature.get(signature)
-      if (!entries) bySignature.set(signature, entries = new Map())
-      entries.set(own, style)
-      memoEntries++
-      return style
+      if (!changed) return style
+      const key = JSON.stringify(changed)
+      let byKey = shared.get(style ?? NO_OWN)
+      if (!byKey) shared.set(style ?? NO_OWN, byKey = new Map())
+      const hit = byKey.get(key)
+      if (hit) return hit
+      const borders = { ...style?.borders }, colors = { ...style?.borderColors }
+      for (const [side, line] of Object.entries(changed) as Array<[Side, { style: string; color?: string } | null]>) {
+        if (!line) { delete borders[side]; delete colors[side]; continue }
+        borders[side] = line.style
+        if (line.color) colors[side] = line.color
+        else delete colors[side]
+      }
+      const out: XlsxCellStyle = { ...(style ?? { numFmtId: 0 }), borders }
+      if (Object.keys(colors).length) out.borderColors = colors
+      else delete out.borderColors
+      byKey.set(key, out)
+      return out
     },
   }
+  /** One cell's roles layered over `own`, memoized by role signature and own style. */
+  function resolved(region: StyleRegion, cell: RegionCell, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined {
+    const { roles, overrides, overrideKey, indentPx } = cell
+    if (!roles.length && !overrides?.length && indentPx === undefined) return own
+    const signature = `${roles.map(role => typeof role === 'string' ? role : `${role.element}:${+role.edges.top}${+role.edges.bottom}${+role.edges.left}${+role.edges.right}`).join('|')}#${overrideKey ?? ''}@${indentPx ?? ''}`
+    let bySignature = memo.get(region)
+    if (!bySignature) memo.set(region, bySignature = new Map())
+    const byOwn = bySignature.get(signature)
+    if (byOwn?.has(own)) return byOwn.get(own)
+    const scratch: TableStyleDiagnostic[] = []
+    let style = roles.length || overrides?.length ? resolveRoleStyle(region.def, roles, own, theme, scratch, overrides) : own
+    if (indentPx !== undefined) style = { ...(style ?? { numFmtId: 0 }), indentPx, ...(style?.horizontal === undefined || style.horizontal === 'general' ? { horizontal: 'left' } : {}) }
+    for (const diagnostic of scratch) report?.(diagnostic)
+    if (memoEntries >= MAX_REGION_STYLE_MEMO_ENTRIES) {
+      memo.clear()
+      shared = new WeakMap()
+      memoEntries = 0
+      bySignature = new Map()
+      memo.set(region, bySignature)
+    }
+    let entries = bySignature.get(signature)
+    if (!entries) bySignature.set(signature, entries = new Map())
+    entries.set(own, style)
+    memoEntries++
+    return style
+  }
 }
+
+/** Each side, the neighbour across it and that neighbour's side on the shared edge. */
+const SHARED_EDGES: ReadonlyArray<readonly [Side, number, number, Side]> = [['top', -1, 0, 'bottom'], ['bottom', 1, 0, 'top'], ['left', 0, -1, 'right'], ['right', 0, 1, 'left']]
+const NO_OWN: XlsxCellStyle = { numFmtId: 0 }
 
 export function regionStylesFromSource(sheet: XlsxSheet): RegionStyleLayer | undefined {
   if (!sheet.tables?.length && !sheet.pivotTables?.length) return undefined

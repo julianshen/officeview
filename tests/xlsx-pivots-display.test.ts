@@ -97,13 +97,16 @@ describe('savedPivotRoles: the standard compact pivot (refs/measure-precedence.p
   test('exact roles of representative cells, ascending precedence', async () => {
     const { def } = await load('measure-precedence')
     const cell = (address: string) => { const { row, col } = at(address); return elements(def, row, col) }
-    expect(cell('A3')).toEqual(['wholeTable', 'headerRow', 'firstHeaderCell'])
+    // firstColumn spans the header rows too, under headerRow and firstHeaderCell (refs/pivot-light-9.png:
+    // its right line at x 77 through rows 3–5; refs/pivot-medium-23.png: its fill in A3:A5).
+    expect(cell('A3')).toEqual(['wholeTable', 'firstColumn', 'headerRow', 'firstHeaderCell'])
     // Ruling AE: the top header row never carries lastColumn (H3 shows headerRow).
     expect(cell('H3')).toEqual(['wholeTable', 'headerRow'])
     expect(cell('B4')).toEqual(['wholeTable', 'headerRow', 'firstColumnSubheading'])
     expect(cell('H4')).toEqual(['wholeTable', 'headerRow', 'lastColumn'])
-    // A5 ("Row Labels") is headerRow only: firstHeaderCell stops above it.
-    expect(cell('A5')).toEqual(['wholeTable', 'headerRow'])
+    // A5 ("Row Labels"): firstHeaderCell stops above it; headerRow wins its fill (refs/measure-precedence.png).
+    expect(cell('A5')).toEqual(['wholeTable', 'firstColumn', 'headerRow'])
+    expect(winner(def, at('A5').row, at('A5').col)).toBe('headerRow')
     expect(cell('B5')).toEqual(['wholeTable', 'headerRow', 'secondColumnSubheading'])
     // Subheading rows count toward the stripe alternation (East = stripe 1).
     expect(cell('A6')).toEqual(['wholeTable', 'firstRowStripe', 'firstColumn', 'firstRowSubheading'])
@@ -446,5 +449,32 @@ describe('compact indent (refs/pivot-values-on-rows.png: text at 15 + 10 × leve
     }
     // Print draws no ± buttons: labels keep the cell's own indent (level × MDW).
     expect(layer.styleAt(at('A6').row, 0, cellAt(at('A6').row).style, 'print')?.indentPx).toBeUndefined()
+  })
+})
+
+describe('Stage 1 comparison findings (Task 14, docs/validation/xlsx-pivots.md "Cases")', () => {
+  const styleOf = (sheet: XlsxSheet, address: string) => {
+    const { row, col } = at(address)
+    const own = sheet.rows.flatMap(r => r.cells).find(cell => cell.row === row && cell.col === col)?.style
+    return regionStylesFor(sheet)!.styleAt(row, col, own, 'screen')
+  }
+
+  test('firstColumn fills the header rows where headerRow has no fill (refs/pivot-medium-23.png: A3:A5 and A7 #83CCEB, B4 the header)', async () => {
+    const { sheet } = await load('pivot-medium-23')
+    for (const address of ['A3', 'A4', 'A5']) expect(styleOf(sheet, address)?.fillColor, address).toBe(styleOf(sheet, 'A7')?.fillColor)
+    expect(styleOf(sheet, 'B5')?.fillColor).not.toBe(styleOf(sheet, 'A7')?.fillColor)
+  })
+
+  test('a shared edge shows the higher-precedence element\'s line in both cells', async () => {
+    // refs/pivot-light-3.png y 75: the header row's bottom #E97132 runs under every column, not the
+    // next row's #FBE3D6 inner line (wholeTable).
+    const light3 = (await load('pivot-light-3')).sheet
+    expect(styleOf(light3, 'B5')?.borderColors?.bottom).toBe('FFE97132')
+    expect(styleOf(light3, 'B6')?.borderColors?.top).toBe('FFE97132')
+    // refs/pivot-dark-2.png y 90: the East subheading's bottom #46B1E1 (ref #44B3E1) over the row below.
+    const dark2 = (await load('pivot-dark-2')).sheet
+    expect(styleOf(dark2, 'B7')?.borderColors?.top).toBe(styleOf(dark2, 'B6')?.borderColors?.bottom)
+    // An equal-precedence edge keeps each cell's own line (B7 bottom is the wholeTable inner line).
+    expect(styleOf(dark2, 'B7')?.borderColors?.bottom).toBe('FFC1E5F5')
   })
 })

@@ -14,7 +14,11 @@
  *   per level over the item columns, the leaf level included;
  * - lastColumn is the grand-total columns from the column-item rows down, never
  *   the top header row (Ruling AE), and through the grand-total row;
- * - firstColumn is the row-label columns from the first data row down;
+ * - firstColumn is the row-label columns over the location's whole height,
+ *   header rows included, under headerRow and firstHeaderCell there
+ *   (refs/pivot-light-9.png: its right line at x 77 runs through rows 3–5;
+ *   refs/pivot-medium-23.png: its #83CCEB fill in A3:A5, where headerRow has
+ *   none; refs/measure-precedence.png: headerRow still wins A5);
  * - a line whose deepest item has children is a row subheading for its level
  *   across the whole row (compact, outline); in tabular form a parent item is a
  *   subheading in its own label column, from its line to its last child line;
@@ -186,6 +190,7 @@ export function savedPivotRoles(def: PivotTableDefinition, style?: TableStyleDef
       const line = col >= dataCol0 ? cols[col - dataCol0] : undefined
       if (line?.type === 'grand' && info?.showLastColumn && row >= Math.max(itemRow0, rect.minRow + 1)) out.push(band('lastColumn', Math.max(itemRow0, rect.minRow + 1), grandCol0, rect.maxRow, rect.maxCol, row, col))
       if (line && isSubtotal(line.type) && row >= itemRow0) out.push(band(nth(line.items.length - 1, 'SubtotalColumn'), itemRow0, col, rect.maxRow, col, row, col))
+      if (info?.showRowHeaders && col < dataCol0) out.push(band('firstColumn', rect.minRow, rect.minCol, rect.maxRow, dataCol0 - 1, row, col))
       if (row < dataRow0) {
         if (info?.showColHeaders) out.push(band('headerRow', rect.minRow, rect.minCol, dataRow0 - 1, rect.maxCol, row, col))
         if (info?.showRowHeaders && col < dataCol0 && row < dataRow0 - 1) out.push(band('firstHeaderCell', rect.minRow, rect.minCol, dataRow0 - 2, dataCol0 - 1, row, col))
@@ -204,7 +209,6 @@ export function savedPivotRoles(def: PivotTableDefinition, style?: TableStyleDef
         const [lo, hi] = stripeBand(dataCol0, k, size('firstColumnStripe'), size('secondColumnStripe'))
         out.push(band(k % period < size('firstColumnStripe') ? 'firstColumnStripe' : 'secondColumnStripe', dataRow0, lo, bodyRowEnd, Math.min(hi, bodyColEnd), row, col))
       }
-      if (info?.showRowHeaders && col < dataCol0) out.push(band('firstColumn', dataRow0, rect.minCol, rect.maxRow, dataCol0 - 1, row, col))
       if (!rowLine) return out
       const level = rowLine.items.length - 1
       if (rowLine.type === 'grand') out.push(band('totalRow', row, rect.minCol, row, rect.maxCol, row, col))

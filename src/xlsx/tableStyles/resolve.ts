@@ -66,6 +66,28 @@ export function orderRoles(roles: readonly RoleRef[], kind: 'pivot' | 'table'): 
     .sort((a, b) => order.indexOf(roleElement(a)) - order.indexOf(roleElement(b)))
 }
 
+/**
+ * The precedence of each side's line in one cell: the rank, in its kind's order, of the highest element that
+ * draws that side (a `formats` override ranks above every element), or -1. Ranks compare across the cells of one
+ * region, so two cells sharing an edge can tell whose line Excel draws there (regionLayer.ts).
+ */
+export function borderRanks(def: TableStyleDef, roles: readonly RoleRef[], kind: 'pivot' | 'table', overrides: readonly DxfStyle[] = []): Record<Side, number> {
+  const order = kind === 'pivot' ? PIVOT_STYLE_PRECEDENCE : TABLE_STYLE_PRECEDENCE
+  const out: Record<Side, number> = { left: -1, right: -1, top: -1, bottom: -1 }
+  const visit = (dxf: DxfStyle, edges: BandEdges, rank: number) => {
+    const border = dxf.border
+    if (border) for (const side of ['left', 'right', 'top', 'bottom'] as const) {
+      if (border[edges[side] ? side : side === 'top' || side === 'bottom' ? 'horizontal' : 'vertical']) out[side] = rank
+    }
+  }
+  for (const role of roles) {
+    const element = def.elements[roleElement(role)]
+    if (element) visit(element.dxf, typeof role === 'string' ? ALL_EDGES : role.edges, order.indexOf(roleElement(role)))
+  }
+  overrides.forEach((dxf, n) => visit(dxf, ALL_EDGES, order.length + n))
+  return out
+}
+
 /** A colour spec resolved to 'FFRRGGBB' against the theme (with Excel's tint). */
 export function resolveColorSpec(spec: ColorSpec | undefined, theme: ThemeContext | undefined): string | undefined {
   if (!spec) return undefined
@@ -75,7 +97,7 @@ export function resolveColorSpec(spec: ColorSpec | undefined, theme: ThemeContex
   return resolveSheetColor({ indexed: String(spec.indexed) }, palette)
 }
 
-type Side = 'left' | 'right' | 'top' | 'bottom'
+export type Side = 'left' | 'right' | 'top' | 'bottom'
 interface Layer {
   font: Pick<XlsxCellStyle, 'fontName' | 'fontSizePt' | 'bold' | 'italic' | 'strike' | 'color'> & { underline?: XlsxCellStyle['underline'] | 'none' }
   fill?: { color: string | undefined }
