@@ -12,6 +12,9 @@ import { createCanvas } from 'canvas'
 import { OfficePackage } from '../src/core/zip'
 import { parseXmlOrdered } from '../src/core/xml'
 import { parseXlsxChart } from '../src/charts/parse'
+import { createChartWorkspace } from '../src/charts/workspace'
+import { stringBytes } from '../src/charts/points'
+import type { ChartParseContext } from '../src/charts/context'
 import { paintXlsxChart } from '../src/charts/paint'
 import { layoutChart } from '../src/charts/layout'
 import { parseXlsx } from '../src/xlsx/parse'
@@ -235,6 +238,18 @@ describe('Pivot chart field buttons and ChartModel.pivot (Task 11)', () => {
         },
         showExpandCollapse: false,
       })
+    })
+
+    it('charges the pivot chart name to the chart workspace (final review M6)', () => {
+      const used = (xml: string) => {
+        const workspace = createChartWorkspace('desktop')
+        const model = parseXlsxChart(parseXmlOrdered(xml), undefined, { workspace, profile: 'desktop', partPath: 'chart1.xml' } as unknown as ChartParseContext)!
+        expect(model.refused).toBeFalsy()
+        return workspace.used
+      }
+      const name = 'P'.repeat(100_000)
+      const plain = used(minimalChart())
+      expect(used(minimalChart(`<c:pivotSource><c:name>${name}</c:name><c:fmtId val="0"/></c:pivotSource>`)) - plain).toBeGreaterThanOrEqual(stringBytes(name))
     })
 
     it('defaults fmtId to 0 when omitted', () => {

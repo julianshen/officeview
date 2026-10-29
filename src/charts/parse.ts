@@ -746,6 +746,8 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
   const pivot = readPivotSource(root, chart)
+  // The model keeps the pivot table's name for Stage 3: a hostile multi-megabyte c:pivotSource/c:name is counted.
+  if (pivot) charge(stringBytes(pivot.name))
   const layouts = [plot, child(chart, 'title'), legend]
   for (const node of layouts) if (child(child(node, 'layout'), 'manualLayout')) charge(128)
   if (child(root, 'txPr')) charge(64)
