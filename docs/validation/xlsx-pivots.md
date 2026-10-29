@@ -180,3 +180,12 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 - **Set-up.** Cells G1:G4 hold the same text with alignment `indent` 0, 1, 2 and 3, set through AppleScript `indent level`. Text starts at x = 4, 10, 16 and 22 px.
 - **Result.** One indent level is **6 px**, one maximum-digit width at this scale, not 3 × MDW as the plan guessed. Ruling: the renderer indents `level × MDW` in its own pixel space.
 - **Pivots.** The 10 px per level measured in compact pivots is the pivot's own layout, a separate measurement.
+
+### Pivot field dropdowns, follow-up (Task 10; window screenshot of `pivot-layout-outline`, 100%, 1×)
+- **Values header.** Outline form with Values on the column axis: Year, Region and Product show a dropdown; the Values header shows none, although Excel writes the `pivotButton` format on that cell too.
+- **Box height follows the row.** Here the Year box is 15 × 15 px (border y 347–361, x 470–484; arrow rows 6 px below the top border). In `measure-field-buttons` it is 15 × 14. The box height is the smaller of 15 px and the row's pixel height.
+
+### Pivot chart field buttons (Task 11; `pivot-chart-buttons-*`)
+- **How the files are made.** `scripts/xlsx-refs/build-pivot-charts.ts`. The seed `recipes/pivot-chart-seed.xlsx` is `pivot-layout-compact.xlsx` with a clustered column chart over the pivot range A3:C10, made through AppleScript (`make new chart object`, `set source data`). Excel saves it as a PivotChart: `c:pivotSource`, `c14:pivotOptions` (`dropZoneFilter`, `dropZoneCategories`, `dropZoneData`, `dropZoneSeries`, `dropZonesVisible`) and `c16:pivotOptions16` (`showExpandCollapseFieldButtons`). Seven variants edit those flags and Excel re-saves each; Excel writes only the flags that are on.
+- **Result.** Excel 16.114 for Mac draws no field buttons on a PivotChart, whatever the flags (window screenshot `refs/pivot-chart-buttons-all-window.png`, every flag on). copy picture omits them as well.
+- **Ruling (owner, 2026-10-29).** Match Mac Excel: the viewer parses the pivot link and the flags, draws no chart field buttons and leaves the plot area as for any chart. Windows-style buttons wait for a Windows reference.
