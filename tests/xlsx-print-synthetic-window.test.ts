@@ -3,21 +3,13 @@
  * PR #55 P1: the static painter adds synthetic cells for empty styled table cells.
  * A print page asks renderSheet for one window; synthetic cells are created only
  * there (widened to merge anchors reaching in), never for the whole table per page.
+ * The styled-region gridline rule and the region style of real cells are likewise
+ * looked up only beside what the page shows.
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createCanvas } from 'canvas'
 import { describe, expect, test, vi } from 'vitest'
-
-// The styled-region gridline rule probes styleAt too, across the whole rect for
-// each gridline in the window (parked T7 N4); test (a) switches it off so that the
-// styleAt count is the synthetic-cell probes alone.
-const gridRule = vi.hoisted(() => ({ off: false }))
-vi.mock('../src/xlsx/regionGrid', async importOriginal => {
-  const original = await importOriginal<typeof import('../src/xlsx/regionGrid')>()
-  return { ...original, regionGrid: (...args: Parameters<typeof original.regionGrid>) => gridRule.off ? undefined : original.regionGrid(...args) }
-})
-
 const { OfficePackage } = await import('../src/core/zip')
 const { parseXlsx } = await import('../src/xlsx/parse')
 const { computeMetrics, computePrintMetrics, renderPrintPage, renderSheet, syntheticCellWork } = await import('../src/xlsx/render')
@@ -55,7 +47,7 @@ function countSyntheticProbes(sheet: XlsxSheet) {
   const layer = regionStylesFor(sheet)!
   expect(layer).toBeDefined()
   const spy = vi.spyOn(layer, 'styleAt')
-  return { probes: () => spy.mock.calls.filter(call => call[2] === undefined).length, reset: () => spy.mockClear() }
+  return { probes: () => spy.mock.calls.filter(call => call[2] === undefined).length, calls: () => spy.mock.calls.length, reset: () => spy.mockClear() }
 }
 
 describe('static print pages create synthetic styled cells for their own window only', () => {
@@ -66,25 +58,27 @@ describe('static print pages create synthetic styled cells for their own window 
     expect(m.colWidthsPx.length).toBeGreaterThanOrEqual(1000)
     const print = computePrintMetrics(sheet, m, 96)
     const counter = countSyntheticProbes(sheet)
-    gridRule.off = true
-    try {
-      for (const [pageCol, pageRow] of [[0, 0], [3, 7], [print.pagesWide - 1, print.pagesTall - 1]] as const) {
-        counter.reset()
-        const before = { ...syntheticCellWork }
-        const x = pageCol * print.printable.width / print.scale, y = pageRow * print.printable.height / print.scale
-        const window = meeting(m.colWidthsPx, x, x + print.printable.width / print.scale) * meeting(m.rowHeightsPx, y, y + print.printable.height / print.scale)
-        const canvas = createCanvas(print.paperPx.width, print.paperPx.height)
-        renderPrintPage(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, m, print, pageCol, pageRow)
-        expect(counter.probes()).toBeGreaterThan(0)
-        // One page's cells, not the table's million (c94cbe8c probed 998,999 per page).
-        expect(counter.probes()).toBeLessThanOrEqual(window)
-        const created = syntheticCellWork.created - before.created
-        expect(created).toBeGreaterThan(0)
-        expect(created).toBeLessThanOrEqual(window)
-        // Only rows that gain a synthetic cell are copied: at most the two real ones.
-        expect(syntheticCellWork.rowsCopied - before.rowsCopied).toBeLessThanOrEqual(2)
-      }
-    } finally { gridRule.off = false }
+    for (const [pageCol, pageRow] of [[0, 0], [3, 7], [print.pagesWide - 1, print.pagesTall - 1]] as const) {
+      counter.reset()
+      const before = { ...syntheticCellWork }
+      const x = pageCol * print.printable.width / print.scale, y = pageRow * print.printable.height / print.scale
+      const pageCols = meeting(m.colWidthsPx, x, x + print.printable.width / print.scale), pageRows = meeting(m.rowHeightsPx, y, y + print.printable.height / print.scale)
+      const window = pageCols * pageRows
+      const canvas = createCanvas(print.paperPx.width, print.paperPx.height)
+      renderPrintPage(sheet, canvas.getContext('2d') as unknown as CanvasRenderingContext2D, m, print, pageCol, pageRow)
+      expect(counter.probes()).toBeGreaterThan(0)
+      // Every style lookup this page makes: synthetic probes, the painted cells'
+      // region style and the gridline rule's cells beside the page's lines, each
+      // bounded by the window widened one band per side. c94cbe8c made 998,999
+      // synthetic probes per page; 248ddb0e still made ~57k gridline lookups and
+      // one per header cell.
+      expect(counter.calls()).toBeLessThanOrEqual(4 * (pageCols + 2) * (pageRows + 2))
+      const created = syntheticCellWork.created - before.created
+      expect(created).toBeGreaterThan(0)
+      expect(created).toBeLessThanOrEqual(window)
+      // Only rows that gain a synthetic cell are copied: at most the two real ones.
+      expect(syntheticCellWork.rowsCopied - before.rowsCopied).toBeLessThanOrEqual(2)
+    }
   })
 })
 
@@ -102,13 +96,39 @@ describe('a page window paints exactly what the full sheet paints there', () => 
     // Page windows by real edges: the first starts inside the merge (column F, row 9),
     // the second inside the banded body below it, the third at A1 with the header.
     const at = (col: number, row: number, dx: number, dy: number, width: number, height: number) => ({ x: edge(m.colWidthsPx, col) + dx, y: edge(m.rowHeightsPx, row) + dy, width, height })
-    for (const vp of [at(5, 8, 31, 9, 300, 200), at(4, 15, 7, 3, 250, 240), at(0, 0, 0, 0, 200, 100)]) {
-      const before = syntheticCellWork.created
+    const pageOf = (vp: { x: number; y: number; width: number; height: number }) => {
       const page = createCanvas(vp.width, vp.height)
       renderSheet(sheet, page.getContext('2d') as unknown as CanvasRenderingContext2D, m, undefined, undefined, vp)
-      expect(crop(page, 0, 0, vp.width, vp.height).equals(crop(full, vp.x, vp.y, vp.width, vp.height))).toBe(true)
+      return page
+    }
+    for (const vp of [at(5, 8, 31, 9, 300, 200), at(4, 15, 7, 3, 250, 240), at(0, 0, 0, 0, 200, 100)]) {
+      const before = syntheticCellWork.created
+      const page = pageOf(vp)
+      expect({ vp, same: crop(page, 0, 0, vp.width, vp.height).equals(crop(full, vp.x, vp.y, vp.width, vp.height)) }).toEqual({ vp, same: true })
       // The window's cells plus the merge anchor reaching in from outside it.
       expect(syntheticCellWork.created - before).toBeLessThanOrEqual(meeting(m.colWidthsPx, vp.x, vp.x + vp.width) * meeting(m.rowHeightsPx, vp.y, vp.y + vp.height) + 1)
+    }
+    // Pages exactly on cell edges, where the region gridline rule must still consult
+    // the off-page cells beside the edge lines. The only pixels allowed to differ are
+    // the line crossings on the edge row and column: an off-page cell's border stroke
+    // reaches half a pixel into the page there and the static cull drops that cell
+    // (pre-existing since c94cbe8c; see pr55-p1-report.md, follow-up). A wrong band
+    // span would differ along the edge between crossings.
+    const colEdges = new Set(m.colWidthsPx.map((_, index) => edge(m.colWidthsPx, index)))
+    const rowEdges = new Set(m.rowHeightsPx.map((_, index) => edge(m.rowHeightsPx, index)))
+    for (const vp of [at(2, 3, 0, 0, edge(m.colWidthsPx, 9) - edge(m.colWidthsPx, 2), edge(m.rowHeightsPx, 20) - edge(m.rowHeightsPx, 3)), at(1, 9, 0, 0, edge(m.colWidthsPx, 5) - edge(m.colWidthsPx, 1), edge(m.rowHeightsPx, 39) - edge(m.rowHeightsPx, 9))]) {
+      const a = pageOf(vp).getContext('2d').getImageData(0, 0, vp.width, vp.height).data
+      const b = full.getContext('2d').getImageData(vp.x, vp.y, vp.width, vp.height).data
+      const stray: Array<[number, number]> = []
+      let differing = 0
+      for (let i = 0; i < a.length; i += 4) {
+        if (a[i] === b[i] && a[i + 1] === b[i + 1] && a[i + 2] === b[i + 2] && a[i + 3] === b[i + 3]) continue
+        differing++
+        const px = (i / 4) % vp.width, py = Math.floor(i / 4 / vp.width)
+        if (!((py === 0 && colEdges.has(vp.x + px)) || (px === 0 && rowEdges.has(vp.y + py)))) stray.push([px, py])
+      }
+      expect({ vp, stray }).toEqual({ vp, stray: [] })
+      expect(differing).toBeLessThan(vp.width / 64 + vp.height / 20 + 2)
     }
   })
 })

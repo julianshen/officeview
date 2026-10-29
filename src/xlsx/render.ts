@@ -827,25 +827,27 @@ export function renderSheet(
       return textOverflowAllowance(input, cell.col)
     }
     for (const cell of row.cells) {
-      const styledCell = regionStyledCell(regionStyles, cell)
       // Only coordinates inside the grid have geometry; admission refused any
       // populated cell beyond it that this request needs, so nothing here falls
       // back to the origin. An explicit cell reference names its own row.
-      const source = cellSourceRow(row, styledCell)
+      const source = cellSourceRow(row, cell)
       if (!Number.isInteger(source) || source < 0 || source >= rowHeightsPx.length) continue
-      if (!Number.isInteger(styledCell.col) || styledCell.col < 0 || styledCell.col >= colWidthsPx.length) continue
+      if (!Number.isInteger(cell.col) || cell.col < 0 || cell.col >= colWidthsPx.length) continue
       const y = rowY[source]
       const h = rowHeightsPx[source]
       const bottom = Math.max(y + h, rowBottom.get(source) ?? Number.NEGATIVE_INFINITY)
       if (bottom <= vp.y || y >= vp.y + vp.height) continue
-      if (merges.covers(styledCell.row, styledCell.col)) continue // inside a merge, not its anchor — nothing to paint
-      const rng = merges.anchorAt(styledCell.row, styledCell.col)
+      if (merges.covers(cell.row, cell.col)) continue // inside a merge, not its anchor — nothing to paint
+      const rng = merges.anchorAt(cell.row, cell.col)
       // geometry: anchor cells expand across their merge range
-      const x = colX[styledCell.col]
-      const w = rng ? edges.col(rng.maxCol + 1) - x : colWidthsPx[styledCell.col]
+      const x = colX[cell.col]
+      const w = rng ? edges.col(rng.maxCol + 1) - x : colWidthsPx[cell.col]
       const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
+      // The region layer is consulted only for cells this request paints; it
+      // changes the style alone, never the coordinates culled above.
+      const styledCell = regionStyledCell(regionStyles, cell)
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
       const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source))
@@ -887,7 +889,9 @@ export function renderSheet(
   const spills = spillBands(laidOut)
   // Pivot interiors and filled styled-region cells hide theirs, or cover them with the fill (regionGrid.ts); a
   // sheet with no pivot and no styled table pays only the guard (spec §8).
-  const region = mayHaveRegionGrid(sheet) ? staticRegionLines(sheet, colX, rowY, colWidthsPx.length, rowHeightsPx.length) : undefined
+  // The rule is asked only about cells beside the part of each line this request
+  // can show (see staticRegionLines), never along the whole table.
+  const region = mayHaveRegionGrid(sheet) ? staticRegionLines(sheet, colX, rowY, colWidthsPx.length, rowHeightsPx.length, vp) : undefined
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]
     const open = withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)
@@ -1496,11 +1500,22 @@ export function paintCoveredLines(ctx: CanvasRenderingContext2D, covered: Readon
     ctx.stroke()
   }
 }
-/** The static painter's styled-region gridline rule over the whole grid (see viewportRegionLines). */
-function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], cols: number, rows: number):
+/**
+ * The static painter's styled-region gridline rule (see viewportRegionLines), asked
+ * only along the part of each line the viewport can show (PR #55 P1 follow-up).
+ * A line segment [a, b] strokes [a + 0.5, b + 0.5] across the line, so hiding or
+ * covering the band of cell k changes pixels only when (starts[k] + 0.5,
+ * starts[k + 1] + 0.5) meets the viewport; bands within 1px of it on either side
+ * are kept, the rest change nothing but off-page geometry. Each kept band still
+ * consults the cells on both sides of the line, so a line on the page edge sees
+ * its off-page neighbour. Whole-sheet paints keep every band.
+ */
+function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], cols: number, rows: number, vp: SheetViewport):
   { lines(segments: Array<[number, number]>, line: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
   const lineRule = regionGrid(sheet, ownStyleLookup(sheet))
   if (!lineRule) return undefined
+  const rowSpan = bandWindow(rowY, rows, vp.y - 1, vp.y + vp.height + 1)
+  const colSpan = bandWindow(colX, cols, vp.x - 1, vp.x + vp.width + 1)
   const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
   return {
     covered,
@@ -1509,7 +1524,8 @@ function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], col
       const starts = vertical ? rowY : colX, count = vertical ? rows : cols
       for (const r of lineRule.rects) {
         if (vertical ? line < r.minCol || line > r.maxCol + 1 : line < r.minRow || line > r.maxRow + 1) continue
-        for (let k = Math.max(0, vertical ? r.minRow : r.minCol), to = Math.min(count - 1, vertical ? r.maxRow : r.maxCol); k <= to; k++) {
+        const [from, until] = vertical ? rowSpan : colSpan
+        for (let k = Math.max(0, from, vertical ? r.minRow : r.minCol), to = Math.min(count - 1, until, vertical ? r.maxRow : r.maxCol); k <= to; k++) {
           const rule = vertical ? lineRule.line(k, line - 1, k, line) : lineRule.line(line - 1, k, line, k)
           if (rule === undefined) continue
           hidden.push([starts[k], starts[k + 1]])
