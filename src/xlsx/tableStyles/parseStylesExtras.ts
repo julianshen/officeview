@@ -5,8 +5,8 @@
  * the eager parseStyles. Callers: the resident style engine (regionLayer.ts) and
  * control loader (pivots/slicers/load.ts), and the paged importer through a
  * dynamic import (storage/pagedFormatting.ts), only when styles.xml defines a
- * custom table or slicer style, or when a sheet completes whose pivot, slicer,
- * timeline or non-built-in table style name needs it.
+ * custom table or slicer style, or when the first sheet with a pivot, slicer or
+ * timeline, or a table with a non-built-in style name, completes.
  */
 import { attrs, elementChildren, elementNamespaceUri, getChildren, type XmlNode } from '../../core/xml'
 import { applyTint, type SheetColorContext } from '../sheetColors'

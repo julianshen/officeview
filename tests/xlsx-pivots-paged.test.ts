@@ -579,6 +579,7 @@ describe('paged pivot display descriptors', () => {
     ['table-medium-2', 0],
     ['pivot-layout-compact', 1],
     ['pivot-custom-style', 1],
+    ['slicer-light1', 1],
   ] as const)('parses the styles extras in the paged worker only when a sheet needs them (I4; %s)', async (name, calls) => {
     const spy = vi.spyOn(stylesExtrasParser, 'parseStylesExtras')
     try {
@@ -589,7 +590,10 @@ describe('paged pivot display descriptors', () => {
       try {
         const sheet = source.sheets.find(item => item.name !== 'Data') ?? source.sheets[0]!, store = source.store(sheet.sheetId)
         const options = { signal: new AbortController().signal, stamp: store.stamp }
-        if (name === 'table-medium-2') {
+        if (name === 'slicer-light1') {
+          // A slicer sheet loads the extras, so a default slicer style in styles.xml applies as on the resident path.
+          expect(session.workbook.tableStyleExtras).toBeDefined()
+        } else if (name === 'table-medium-2') {
           // The built-in style still resolves, from the lazily loaded built-ins.
           const styles = await store.readRegionStyles!(options, 1024 * 1024, { set: () => true })
           expect(styles.tables.map(item => item.def.name)).toEqual(['TableStyleMedium2'])

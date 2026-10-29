@@ -588,8 +588,9 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       ]))
       const needsPreferredStyles = [...referencedTableStyles].some(name => !prioritizedTableStyleNames.has(name) && !/^(?:Table|Pivot)Style(?:Light|Medium|Dark)\d+$/.test(name) && !workbook.tableStyleDefs?.has(name))
         || [...referencedSlicerStyles].some(name => !prioritizedSlicerStyleNames.has(name) && !workbook.tableStyleExtras?.slicerStyles.has(name))
-      // The styles extras load lazily (spec §6.2): a pivot's `formats` need the dxfs even under a built-in style.
-      const needsExtras = !workbook.tableStyleExtras && Boolean(sheet.metadata.pivotRegions?.length)
+      // The styles extras load lazily (spec §6.2), for the first sheet with a pivot, a slicer or a timeline: a pivot's
+      // `formats` need the dxfs even under a built-in style, and a slicer without its own style takes the default.
+      const needsExtras = !workbook.tableStyleExtras && Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.slicerRefs?.length || sheet.metadata.timelineRefs?.length)
       if (stylesTextForPriority !== undefined && (needsPreferredStyles || needsExtras)) {
         const prioritized = await workbookFormattingWithColorContext(workbookRoot, stylesTextForPriority, themeTextForPriority, referencedTableStyles, referencedSlicerStyles, 'always')
         workbook.tableStyleDefs = prioritized.tableStyleDefs
