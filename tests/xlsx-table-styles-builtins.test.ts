@@ -125,10 +125,17 @@ describe('built-in table, pivot, slicer and timeline styles', () => {
       expect(items?.elements.unselectedItemWithData).toBeDefined()
       expect(items?.elements.selectedItemWithNoData).toBeDefined()
       expect(items?.elements.unselectedItemWithNoData).toBeDefined()
+      expect(items?.elements.hoveredSelectedItemWithData).toBeDefined()
+      expect(items?.elements.hoveredUnselectedItemWithData).toBeDefined()
+      expect(items?.elements.hoveredSelectedItemWithNoData).toBeDefined()
+      expect(items?.elements.hoveredUnselectedItemWithNoData).toBeDefined()
       for (const [elType, el] of Object.entries(items!.elements)) {
         assertValidDxfColors(el.dxf, `${name}.${elType}`)
       }
     }
+
+    const other1Frame = builtinTableStyle('SlicerStyleOther1')
+    expect(other1Frame?.elements.headerRow?.dxf.border?.bottom?.color).toEqual({ rgb: 'FFA6A6A6' })
 
     for (const name of TIMELINE_NAMES) {
       const frame = builtinTableStyle(name)
@@ -150,6 +157,58 @@ describe('built-in table, pivot, slicer and timeline styles', () => {
     expect(builtinSlicerStyle('TimeSlicerStyleOther2')).toBeUndefined()
     expect(builtinSlicerStyle('TableStyleMedium2')).toBeUndefined()
     expect(builtinTableStyle('NonExistentStyle')).toBeUndefined()
+  })
+
+  it('preserves explicit border clear (style: none) on PivotStyleMedium15 headerRow and totalRow', () => {
+    const style = builtinTableStyle('PivotStyleMedium15')
+    expect(style).toBeDefined()
+    const headerRow = style?.elements.headerRow?.dxf
+    expect(headerRow).toBeDefined()
+    expect(headerRow?.border?.vertical).toEqual({ style: 'none' })
+    expect(headerRow?.border?.left).toEqual({ style: 'none' })
+    expect(headerRow?.border?.right).toEqual({ style: 'none' })
+
+    const totalRow = style?.elements.totalRow?.dxf
+    expect(totalRow).toBeDefined()
+    expect(totalRow?.border?.vertical).toEqual({ style: 'none' })
+    expect(totalRow?.border?.left).toEqual({ style: 'none' })
+    expect(totalRow?.border?.right).toEqual({ style: 'none' })
+
+    // Also check PivotStyleMedium21
+    const style21 = builtinTableStyle('PivotStyleMedium21')
+    expect(style21?.elements.headerRow?.dxf.border?.left).toEqual({ style: 'none' })
+    expect(style21?.elements.headerRow?.dxf.border?.vertical).toEqual({ style: 'none' })
+  })
+
+  it('verifies element count and every border side for all 144 styles against committed digest', () => {
+    const digestPath = resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/table-styles-digest.json')
+    const digest = JSON.parse(readFileSync(digestPath, 'utf8')) as Record<string, {
+      elementCount: number
+      borders: Record<string, Record<string, string>>
+    }>
+
+    const allNames = [...TABLE_NAMES, ...PIVOT_NAMES]
+    expect(Object.keys(digest).sort()).toEqual([...allNames].sort())
+
+    for (const name of allNames) {
+      const def = builtinTableStyle(name)
+      expect(def, `${name} resolves`).toBeDefined()
+      const d = digest[name]
+      expect(d, `${name} in digest`).toBeDefined()
+      expect(Object.keys(def!.elements).length, `${name} elementCount`).toBe(d.elementCount)
+
+      const elements = def!.elements
+      for (const [elType, expectedBorders] of Object.entries(d.borders)) {
+        const el = elements[elType as keyof typeof elements]
+        expect(el, `${name}.${elType} element exists`).toBeDefined()
+        const border = el?.dxf.border
+        expect(border, `${name}.${elType} has border`).toBeDefined()
+        for (const [side, expectedStyle] of Object.entries(expectedBorders)) {
+          const sideBorder = border?.[side as keyof typeof border]
+          expect(sideBorder?.style, `${name}.${elType}.${side} style`).toBe(expectedStyle)
+        }
+      }
+    }
   })
 
   it('reports the gzip size of the builtins sources and enforces <= 12 KB budget', () => {

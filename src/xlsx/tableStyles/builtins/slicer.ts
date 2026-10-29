@@ -1,7 +1,11 @@
 /**
  * Built-in Excel slicer and timeline styles.
  * Derived from Task 3 reference captures (tests/fixtures/xlsx-pivots/refs/).
- * Annotated with [measure] tags for reference IDs and measured colors.
+ *
+ * Annotations:
+ *   [measure] <ref id> - value measured directly from the referenced capture
+ *   [approx] - approximation of complex appearance (e.g. flat fill for vertical gradient)
+ *   [estimate] - state not visible in still captures, estimated based on theme convention
  */
 import type { ColorSpec, DxfStyle, SlicerStyleDef, TableStyleDef } from '../model'
 
@@ -17,14 +21,6 @@ const solidFill = (bg: ColorSpec): NonNullable<DxfStyle['fill']> => ({
   pattern: 'solid',
   bg,
 })
-
-// [measure] refs/slicer-light1.png through refs/slicer-light6.png:
-// Frame border is 1 px in accent colour (themes 4 to 9).
-// Header caption on white background with 1 px accent separator at bottom.
-// Selected item has solid accent tint 0.6 fill with #999999 border.
-// Unselected item has white fill with #CCCCCC border.
-// [measure] refs/slicer-no-data.png:
-// Item with no data has white fill with #E0E0E0 border and #828282 text.
 
 function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
@@ -66,7 +62,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { theme: 1 } },
         },
       },
-      // [measure] refs/slicer-no-data.png: selected no-data item pale accent tint 0.8, border #E0E0E0, text #828282
+      // [estimate: not visible in still captures] selected no-data pale accent tint 0.8
       selectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.8 }),
@@ -82,6 +78,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { rgb: 'FF828282' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.5 }),
@@ -89,6 +86,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.85 }),
@@ -96,6 +94,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.85 }),
@@ -103,6 +102,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { rgb: 'FF828282' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithNoData: {
         dxf: {
           fill: solidFill({ rgb: 'FFF5F5F5' }),
@@ -114,11 +114,6 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
   }
   return { tableDef, slicerDef }
 }
-
-// [measure] refs/slicer-dark1.png through refs/slicer-dark6.png:
-// Frame border is 1 px in accent colour (themes 4 to 9).
-// Selected item has solid accent fill and border with bold white text.
-// Unselected item has silver fill #C0C0C0 and border #C0C0C0 with dark text.
 
 function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
@@ -160,6 +155,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: not visible in still captures]
       selectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.4 }),
@@ -167,6 +163,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { rgb: 'FFE0E0E0' } },
         },
       },
+      // [estimate: not visible in still captures]
       unselectedItemWithNoData: {
         dxf: {
           fill: solidFill({ rgb: 'FFD4D4D4' }),
@@ -174,6 +171,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { rgb: 'FF828282' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: -0.15 }),
@@ -181,6 +179,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { bold: true, color: { theme: 0 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithData: {
         dxf: {
           fill: solidFill({ rgb: 'FFD0D0D0' }),
@@ -188,6 +187,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.3 }),
@@ -195,6 +195,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { rgb: 'FFE0E0E0' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithNoData: {
         dxf: {
           fill: solidFill({ rgb: 'FFE0E0E0' }),
@@ -207,21 +208,20 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
   return { tableDef, slicerDef }
 }
 
-// [measure] refs/slicer-other1.png:
-// Frame border #808080.
-// Selected item has fill #BFBFBF, border #999999.
-// Unselected item has fill white, border #CCCCCC.
+// [measure] refs/slicer-other1.png: frame border #808080, header separator #A6A6A6
 const slicerOther1Table: TableStyleDef = {
   name: 'SlicerStyleOther1',
   pivot: false,
   table: false,
   elements: {
+    // [measure] refs/slicer-other1.png: frame border #808080
     wholeTable: { dxf: { border: thinBorder({ rgb: 'FF808080' }) } },
+    // [measure] refs/slicer-other1.png: header separator #A6A6A6 (sampled y=27)
     headerRow: {
       dxf: {
         font: { bold: true, color: { theme: 1 } },
         fill: solidFill({ rgb: 'FFFFFFFF' }),
-        border: { bottom: { style: 'thin', color: { rgb: 'FF808080' } } },
+        border: { bottom: { style: 'thin', color: { rgb: 'FFA6A6A6' } } },
       },
     },
   },
@@ -230,6 +230,7 @@ const slicerOther1Table: TableStyleDef = {
 const slicerOther1Slicer: SlicerStyleDef = {
   name: 'SlicerStyleOther1',
   elements: {
+    // [measure] refs/slicer-other1.png: solid fill #BFBFBF, border #999999
     selectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFBFBFBF' }),
@@ -237,6 +238,7 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [measure] refs/slicer-other1.png: white fill, border #CCCCCC
     unselectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -244,6 +246,7 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [estimate: not visible in still captures]
     selectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFD4D4D4' }),
@@ -251,6 +254,7 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: not visible in still captures]
     unselectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -258,19 +262,50 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFB0B0B0' }),
+        border: thinBorder({ rgb: 'FF999999' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFE8E8E8' }),
+        border: thinBorder({ rgb: 'FFCCCCCC' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFC8C8C8' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFF5F5F5' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
   },
 }
 
-// [measure] refs/slicer-other2.png:
-// Frame border Accent 1 #4F81BD.
-// Selected item has fill #C2D8F1, border #999999.
-// Unselected item has fill #F4F5F7, border #CCCCCC.
+// [measure] refs/slicer-other2.png: frame border Accent 1 #4F81BD
 const slicerOther2Table: TableStyleDef = {
   name: 'SlicerStyleOther2',
   pivot: false,
   table: false,
   elements: {
+    // [measure] refs/slicer-other2.png: frame border Accent 1 #4F81BD
     wholeTable: { dxf: { border: thinBorder({ theme: 4 }) } },
+    // [measure] refs/slicer-other2.png: header separator Accent 1 #4F81BD
     headerRow: {
       dxf: {
         font: { bold: true, color: { theme: 1 } },
@@ -284,6 +319,7 @@ const slicerOther2Table: TableStyleDef = {
 const slicerOther2Slicer: SlicerStyleDef = {
   name: 'SlicerStyleOther2',
   elements: {
+    // [measure] refs/slicer-other2.png (flat approx of gradient AAC2E3..CBDFF6): fill #C2D8F1, border #999999
     selectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFC2D8F1' }),
@@ -291,6 +327,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [measure] refs/slicer-other2.png (flat approx of gradient EBEDF0..F8F9FA): fill #F4F5F7, border #CCCCCC
     unselectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFF4F5F7' }),
@@ -298,6 +335,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [estimate: not visible in still captures]
     selectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFE2EAF5' }),
@@ -305,6 +343,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: not visible in still captures]
     unselectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -312,12 +351,41 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFB0CCED' }),
+        border: thinBorder({ rgb: 'FF999999' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFE8EEF7' }),
+        border: thinBorder({ rgb: 'FFCCCCCC' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFD0DFF0' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFF5F7FA' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
   },
 }
 
-// [measure] refs/timeline-light1-months.png through refs/timeline-light6-months.png:
-// Timeline frame border in accent colour (themes 4 to 9).
-// Time bar light accent tint fill #8FB1D6, dark shade border.
 function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
   const name = `TimeSlicerStyleLight${index}`
@@ -342,14 +410,15 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
   const slicerDef: SlicerStyleDef = {
     name,
     elements: {
-      // [measure] refs/timeline-light${index}-months.png: selected period bar light accent fill
+      // [approx] vertical gradient in Excel: top B9CEE5, bottom 5489C2; flat mid-sample ~#8FB1D6
+      // [measure] refs/timeline-light${index}-months.png: dark text on white background
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.4 }),
-          border: thinBorder({ theme }),
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: entire timeline period is selected in captures]
       unselectedItemWithData: {
         dxf: {
           fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -362,9 +431,6 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
   return { tableDef, slicerDef }
 }
 
-// [measure] refs/timeline-dark1-months.png through refs/timeline-dark6-months.png:
-// Timeline frame border in accent colour (themes 4 to 9).
-// Time bar dark accent shade fill #39699A.
 function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
   const name = `TimeSlicerStyleDark${index}`
@@ -389,14 +455,15 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
   const slicerDef: SlicerStyleDef = {
     name,
     elements: {
-      // [measure] refs/timeline-dark${index}-months.png: selected period bar dark accent shade fill
+      // [approx] vertical gradient in Excel: top 4C84BF, bottom 214468; flat mid-sample ~#39699A
+      // [measure] refs/timeline-dark${index}-months.png: dark text on white background (not white text)
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: -0.2 }),
-          border: thinBorder({ theme }),
-          font: { color: { theme: 0 } },
+          font: { color: { theme: 1 } },
         },
       },
+      // [estimate: entire timeline period is selected in captures]
       unselectedItemWithData: {
         dxf: {
           fill: solidFill({ rgb: 'FFFFFFFF' }),

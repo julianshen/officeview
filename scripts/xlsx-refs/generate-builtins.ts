@@ -1,33 +1,50 @@
 /**
  * Generator script for built-in table, pivot, slicer and timeline styles (Task 6).
  *
- * Reads ECMA-376 Part 1 presetTableStyles.xml (from local scratchpad or POI repo)
- * and generates compact representations for:
+ * Source for table/pivot styles: ECMA-376 Part 1 presetTableStyles.xml as shipped by Apache POI.
+ * Note: in presetTableStyles.xml, TableStyle dxfId is 1-based, while PivotStyle dxfId is 0-based.
+ *
+ * Slicer/timeline styles are not in ECMA-376; they are derived from Task 3 reference captures
+ * in tests/fixtures/xlsx-pivots/refs/.
+ *
+ * Generates:
  *   src/xlsx/tableStyles/builtins/table.ts
  *   src/xlsx/tableStyles/builtins/pivot.ts
  *   src/xlsx/tableStyles/builtins/slicer.ts
  *   src/xlsx/tableStyles/builtins/index.ts
+ *   tests/fixtures/xlsx-pivots/table-styles-digest.json
  *
- * Run with: bun scripts/xlsx-refs/generate-builtins.ts
+ * Run with: bun scripts/xlsx-refs/generate-builtins.ts [path-to-presetTableStyles.xml]
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { XMLParser } from 'fast-xml-parser'
 import type { ColorSpec, DxfStyle, TableStyleElementType } from '../../src/xlsx/tableStyles/model'
 
+const DEFAULT_CACHE_PATH = resolve(process.cwd(), '.tmp/presetTableStyles.xml')
 const SCRATCH_PATH = '/private/tmp/claude-501/-Users-julianshen-prj-officeview/aa69b0c3-1aa3-4cfb-b283-9e7808c48e7e/scratchpad/pv/presetTableStyles.xml'
 const POI_URL = 'https://raw.githubusercontent.com/apache/poi/trunk/poi-ooxml/src/main/resources/org/apache/poi/xssf/usermodel/presetTableStyles.xml'
 
-async function ensureXml(): Promise<string> {
+async function ensureXml(cliPath?: string): Promise<string> {
+  if (cliPath && existsSync(cliPath)) {
+    return readFileSync(cliPath, 'utf8')
+  }
+  const envPath = process.env.PRESET_TABLE_STYLES_XML
+  if (envPath && existsSync(envPath)) {
+    return readFileSync(envPath, 'utf8')
+  }
   if (existsSync(SCRATCH_PATH)) {
     return readFileSync(SCRATCH_PATH, 'utf8')
+  }
+  if (existsSync(DEFAULT_CACHE_PATH)) {
+    return readFileSync(DEFAULT_CACHE_PATH, 'utf8')
   }
   console.log(`Downloading presetTableStyles.xml from ${POI_URL}...`)
   const res = await fetch(POI_URL)
   if (!res.ok) throw new Error(`Failed to download presetTableStyles.xml: ${res.statusText}`)
   const xml = await res.text()
-  mkdirSync(dirname(SCRATCH_PATH), { recursive: true })
-  writeFileSync(SCRATCH_PATH, xml, 'utf8')
+  mkdirSync(dirname(DEFAULT_CACHE_PATH), { recursive: true })
+  writeFileSync(DEFAULT_CACHE_PATH, xml, 'utf8')
   return xml
 }
 
@@ -72,10 +89,15 @@ function parseDxfNode(dxf: Record<string, unknown> | undefined): DxfStyle {
     const bNode = dxf.border as Record<string, unknown>
     const border: NonNullable<DxfStyle['border']> = {}
     for (const side of ['left', 'right', 'top', 'bottom', 'horizontal', 'vertical'] as const) {
-      const s = bNode[side] as Record<string, unknown> | undefined
-      if (s && s['@_style']) {
-        const c = parseColor(s.color as Record<string, unknown> | undefined)
-        border[side] = c ? { style: s['@_style'] as string, color: c } : { style: s['@_style'] as string }
+      if (bNode[side] !== undefined) {
+        const s = bNode[side] as Record<string, unknown> | string
+        if (typeof s === 'object' && s !== null && s['@_style']) {
+          const c = parseColor(s.color as Record<string, unknown> | undefined)
+          border[side] = c ? { style: s['@_style'] as string, color: c } : { style: s['@_style'] as string }
+        } else {
+          // Empty element (e.g. <left/>) inside dxf border is an explicit clear
+          border[side] = { style: 'none' }
+        }
       }
     }
     if (Object.keys(border).length) res.border = border
@@ -121,6 +143,8 @@ const ELEMENT_TYPE_INDEX = new Map<TableStyleElementType, number>(
 interface ExtractedStyle {
   name: string
   elements: [number, number][] // [typeIndex, dxfIndex]
+  rawElementCount: number
+  borders: Partial<Record<TableStyleElementType, Partial<Record<string, string>>>>
 }
 
 function extractAllStyles(parsed: Record<string, any>): {
@@ -153,6 +177,8 @@ function extractAllStyles(parsed: Record<string, any>): {
     const parsedDxfs = rawDxfs.map(parseDxfNode)
     const elements: [number, number][] = []
     const rawElements = Array.isArray(ts.tableStyleElement) ? ts.tableStyleElement : [ts.tableStyleElement]
+    const borders: Partial<Record<TableStyleElementType, Partial<Record<string, string>>>> = {}
+
     for (const el of rawElements) {
       const type = el['@_type'] as TableStyleElementType
       const typeIdx = ELEMENT_TYPE_INDEX.get(type)
@@ -161,13 +187,31 @@ function extractAllStyles(parsed: Record<string, any>): {
       const rawId = parseInt(el['@_dxfId'], 10)
       const id = isTable ? rawId - 1 : rawId
       const dxf = parsedDxfs[id]
-      if (dxf) elements.push([typeIdx, getDxfIndex(dxf)])
+      if (dxf) {
+        elements.push([typeIdx, getDxfIndex(dxf)])
+        if (dxf.border) {
+          const sideMap: Partial<Record<string, string>> = {}
+          for (const [side, b] of Object.entries(dxf.border)) {
+            if (b?.style) sideMap[side] = b.style
+          }
+          if (Object.keys(sideMap).length > 0) {
+            borders[type] = sideMap
+          }
+        }
+      }
+    }
+
+    const item: ExtractedStyle = {
+      name,
+      elements,
+      rawElementCount: rawElements.length,
+      borders,
     }
 
     if (isTable) {
-      tableStyles.push({ name, elements })
+      tableStyles.push(item)
     } else {
-      pivotStyles.push({ name, elements })
+      pivotStyles.push(item)
     }
   }
 
@@ -182,7 +226,8 @@ function generateTableTs(dxfList: DxfStyle[], tableStyles: ExtractedStyle[]): st
 
   return `/**
  * Built-in Excel table styles (TableStyleLight1-21, TableStyleMedium1-28, TableStyleDark1-11).
- * Transcribed from ECMA-376 Part 1 presetTableStyles.xml.
+ * Transcribed from ECMA-376 presetTableStyles.xml as shipped by Apache POI.
+ * Note: TableStyle dxfId is 1-based in presetTableStyles.xml.
  */
 import type { DxfStyle, TableStyleDef, TableStyleElementType } from '../model'
 
@@ -212,7 +257,8 @@ function generatePivotTs(pivotStyles: ExtractedStyle[]): string {
 
   return `/**
  * Built-in Excel pivot styles (PivotStyleLight1-28, PivotStyleMedium1-28, PivotStyleDark1-28).
- * Transcribed from ECMA-376 Part 1 presetTableStyles.xml.
+ * Transcribed from ECMA-376 presetTableStyles.xml as shipped by Apache POI.
+ * Note: PivotStyle dxfId is 0-based in presetTableStyles.xml.
  */
 import type { DxfStyle, TableStyleDef, TableStyleElementType } from '../model'
 import { DXFS, ELEMENT_TYPES } from './table'
@@ -235,7 +281,11 @@ function generateSlicerTs(): string {
   return `/**
  * Built-in Excel slicer and timeline styles.
  * Derived from Task 3 reference captures (tests/fixtures/xlsx-pivots/refs/).
- * Annotated with [measure] tags for reference IDs and measured colors.
+ *
+ * Annotations:
+ *   [measure] <ref id> - value measured directly from the referenced capture
+ *   [approx] - approximation of complex appearance (e.g. flat fill for vertical gradient)
+ *   [estimate] - state not visible in still captures, estimated based on theme convention
  */
 import type { ColorSpec, DxfStyle, SlicerStyleDef, TableStyleDef } from '../model'
 
@@ -251,14 +301,6 @@ const solidFill = (bg: ColorSpec): NonNullable<DxfStyle['fill']> => ({
   pattern: 'solid',
   bg,
 })
-
-// [measure] refs/slicer-light1.png through refs/slicer-light6.png:
-// Frame border is 1 px in accent colour (themes 4 to 9).
-// Header caption on white background with 1 px accent separator at bottom.
-// Selected item has solid accent tint 0.6 fill with #999999 border.
-// Unselected item has white fill with #CCCCCC border.
-// [measure] refs/slicer-no-data.png:
-// Item with no data has white fill with #E0E0E0 border and #828282 text.
 
 function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
@@ -300,7 +342,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { theme: 1 } },
         },
       },
-      // [measure] refs/slicer-no-data.png: selected no-data item pale accent tint 0.8, border #E0E0E0, text #828282
+      // [estimate: not visible in still captures] selected no-data pale accent tint 0.8
       selectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.8 }),
@@ -316,6 +358,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { rgb: 'FF828282' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.5 }),
@@ -323,6 +366,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.85 }),
@@ -330,6 +374,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.85 }),
@@ -337,6 +382,7 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
           font: { color: { rgb: 'FF828282' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithNoData: {
         dxf: {
           fill: solidFill({ rgb: 'FFF5F5F5' }),
@@ -348,11 +394,6 @@ function makeSlicerLightStyle(index: number): { tableDef: TableStyleDef; slicerD
   }
   return { tableDef, slicerDef }
 }
-
-// [measure] refs/slicer-dark1.png through refs/slicer-dark6.png:
-// Frame border is 1 px in accent colour (themes 4 to 9).
-// Selected item has solid accent fill and border with bold white text.
-// Unselected item has silver fill #C0C0C0 and border #C0C0C0 with dark text.
 
 function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
@@ -394,6 +435,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: not visible in still captures]
       selectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.4 }),
@@ -401,6 +443,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { rgb: 'FFE0E0E0' } },
         },
       },
+      // [estimate: not visible in still captures]
       unselectedItemWithNoData: {
         dxf: {
           fill: solidFill({ rgb: 'FFD4D4D4' }),
@@ -408,6 +451,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { rgb: 'FF828282' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: -0.15 }),
@@ -415,6 +459,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { bold: true, color: { theme: 0 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithData: {
         dxf: {
           fill: solidFill({ rgb: 'FFD0D0D0' }),
@@ -422,6 +467,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredSelectedItemWithNoData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.3 }),
@@ -429,6 +475,7 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
           font: { color: { rgb: 'FFE0E0E0' } },
         },
       },
+      // [estimate: hover state not measurable from still captures]
       hoveredUnselectedItemWithNoData: {
         dxf: {
           fill: solidFill({ rgb: 'FFE0E0E0' }),
@@ -441,21 +488,20 @@ function makeSlicerDarkStyle(index: number): { tableDef: TableStyleDef; slicerDe
   return { tableDef, slicerDef }
 }
 
-// [measure] refs/slicer-other1.png:
-// Frame border #808080.
-// Selected item has fill #BFBFBF, border #999999.
-// Unselected item has fill white, border #CCCCCC.
+// [measure] refs/slicer-other1.png: frame border #808080, header separator #A6A6A6
 const slicerOther1Table: TableStyleDef = {
   name: 'SlicerStyleOther1',
   pivot: false,
   table: false,
   elements: {
+    // [measure] refs/slicer-other1.png: frame border #808080
     wholeTable: { dxf: { border: thinBorder({ rgb: 'FF808080' }) } },
+    // [measure] refs/slicer-other1.png: header separator #A6A6A6 (sampled y=27)
     headerRow: {
       dxf: {
         font: { bold: true, color: { theme: 1 } },
         fill: solidFill({ rgb: 'FFFFFFFF' }),
-        border: { bottom: { style: 'thin', color: { rgb: 'FF808080' } } },
+        border: { bottom: { style: 'thin', color: { rgb: 'FFA6A6A6' } } },
       },
     },
   },
@@ -464,6 +510,7 @@ const slicerOther1Table: TableStyleDef = {
 const slicerOther1Slicer: SlicerStyleDef = {
   name: 'SlicerStyleOther1',
   elements: {
+    // [measure] refs/slicer-other1.png: solid fill #BFBFBF, border #999999
     selectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFBFBFBF' }),
@@ -471,6 +518,7 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [measure] refs/slicer-other1.png: white fill, border #CCCCCC
     unselectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -478,6 +526,7 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [estimate: not visible in still captures]
     selectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFD4D4D4' }),
@@ -485,6 +534,7 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: not visible in still captures]
     unselectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -492,19 +542,50 @@ const slicerOther1Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFB0B0B0' }),
+        border: thinBorder({ rgb: 'FF999999' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFE8E8E8' }),
+        border: thinBorder({ rgb: 'FFCCCCCC' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFC8C8C8' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFF5F5F5' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
   },
 }
 
-// [measure] refs/slicer-other2.png:
-// Frame border Accent 1 #4F81BD.
-// Selected item has fill #C2D8F1, border #999999.
-// Unselected item has fill #F4F5F7, border #CCCCCC.
+// [measure] refs/slicer-other2.png: frame border Accent 1 #4F81BD
 const slicerOther2Table: TableStyleDef = {
   name: 'SlicerStyleOther2',
   pivot: false,
   table: false,
   elements: {
+    // [measure] refs/slicer-other2.png: frame border Accent 1 #4F81BD
     wholeTable: { dxf: { border: thinBorder({ theme: 4 }) } },
+    // [measure] refs/slicer-other2.png: header separator Accent 1 #4F81BD
     headerRow: {
       dxf: {
         font: { bold: true, color: { theme: 1 } },
@@ -518,6 +599,7 @@ const slicerOther2Table: TableStyleDef = {
 const slicerOther2Slicer: SlicerStyleDef = {
   name: 'SlicerStyleOther2',
   elements: {
+    // [measure] refs/slicer-other2.png (flat approx of gradient AAC2E3..CBDFF6): fill #C2D8F1, border #999999
     selectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFC2D8F1' }),
@@ -525,6 +607,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [measure] refs/slicer-other2.png (flat approx of gradient EBEDF0..F8F9FA): fill #F4F5F7, border #CCCCCC
     unselectedItemWithData: {
       dxf: {
         fill: solidFill({ rgb: 'FFF4F5F7' }),
@@ -532,6 +615,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { theme: 1 } },
       },
     },
+    // [estimate: not visible in still captures]
     selectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFE2EAF5' }),
@@ -539,6 +623,7 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: not visible in still captures]
     unselectedItemWithNoData: {
       dxf: {
         fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -546,12 +631,41 @@ const slicerOther2Slicer: SlicerStyleDef = {
         font: { color: { rgb: 'FF828282' } },
       },
     },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFB0CCED' }),
+        border: thinBorder({ rgb: 'FF999999' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFE8EEF7' }),
+        border: thinBorder({ rgb: 'FFCCCCCC' }),
+        font: { color: { theme: 1 } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredSelectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFD0DFF0' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
+    // [estimate: hover state not measurable from still captures]
+    hoveredUnselectedItemWithNoData: {
+      dxf: {
+        fill: solidFill({ rgb: 'FFF5F7FA' }),
+        border: thinBorder({ rgb: 'FFE0E0E0' }),
+        font: { color: { rgb: 'FF828282' } },
+      },
+    },
   },
 }
 
-// [measure] refs/timeline-light1-months.png through refs/timeline-light6-months.png:
-// Timeline frame border in accent colour (themes 4 to 9).
-// Time bar light accent tint fill #8FB1D6, dark shade border.
 function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
   const name = \`TimeSlicerStyleLight\${index}\`
@@ -576,14 +690,15 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
   const slicerDef: SlicerStyleDef = {
     name,
     elements: {
-      // [measure] refs/timeline-light\${index}-months.png: selected period bar light accent fill
+      // [approx] vertical gradient in Excel: top B9CEE5, bottom 5489C2; flat mid-sample ~#8FB1D6
+      // [measure] refs/timeline-light\${index}-months.png: dark text on white background
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: 0.4 }),
-          border: thinBorder({ theme }),
           font: { color: { theme: 1 } },
         },
       },
+      // [estimate: entire timeline period is selected in captures]
       unselectedItemWithData: {
         dxf: {
           fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -596,9 +711,6 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
   return { tableDef, slicerDef }
 }
 
-// [measure] refs/timeline-dark1-months.png through refs/timeline-dark6-months.png:
-// Timeline frame border in accent colour (themes 4 to 9).
-// Time bar dark accent shade fill #39699A.
 function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicerDef: SlicerStyleDef } {
   const theme = 3 + index
   const name = \`TimeSlicerStyleDark\${index}\`
@@ -623,14 +735,15 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
   const slicerDef: SlicerStyleDef = {
     name,
     elements: {
-      // [measure] refs/timeline-dark\${index}-months.png: selected period bar dark accent shade fill
+      // [approx] vertical gradient in Excel: top 4C84BF, bottom 214468; flat mid-sample ~#39699A
+      // [measure] refs/timeline-dark\${index}-months.png: dark text on white background (not white text)
       selectedItemWithData: {
         dxf: {
           fill: solidFill({ theme, tint: -0.2 }),
-          border: thinBorder({ theme }),
-          font: { color: { theme: 0 } },
+          font: { color: { theme: 1 } },
         },
       },
+      // [estimate: entire timeline period is selected in captures]
       unselectedItemWithData: {
         dxf: {
           fill: solidFill({ rgb: 'FFFFFFFF' }),
@@ -712,8 +825,8 @@ export function builtinSlicerStyle(name: string): SlicerStyleDef | undefined {
 `
 }
 
-export async function generateBuiltins(): Promise<void> {
-  const xml = await ensureXml()
+export async function generateBuiltins(cliXmlPath?: string): Promise<void> {
+  const xml = await ensureXml(cliXmlPath)
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
   const parsed = parser.parse(xml)
 
@@ -738,9 +851,22 @@ export async function generateBuiltins(): Promise<void> {
   const indexTs = generateIndexTs()
   writeFileSync(resolve(outDir, 'index.ts'), indexTs, 'utf8')
   console.log(`wrote ${resolve(outDir, 'index.ts')} (${indexTs.length} bytes)`)
+
+  // Emit table-styles-digest.json for test assertions against dropped sides or mismatched element counts
+  const digest: Record<string, { elementCount: number; borders: Partial<Record<TableStyleElementType, Partial<Record<string, string>>>> }> = {}
+  for (const s of [...tableStyles, ...pivotStyles]) {
+    digest[s.name] = {
+      elementCount: s.rawElementCount,
+      borders: s.borders,
+    }
+  }
+  const digestPath = resolve(import.meta.dir, '../../tests/fixtures/xlsx-pivots/table-styles-digest.json')
+  mkdirSync(dirname(digestPath), { recursive: true })
+  writeFileSync(digestPath, JSON.stringify(digest, null, 2), 'utf8')
+  console.log(`wrote ${digestPath} (${Object.keys(digest).length} styles)`)
 }
 
 if (import.meta.main) {
-  await generateBuiltins()
+  await generateBuiltins(process.argv[2])
   console.log('Done generating built-in styles.')
 }
