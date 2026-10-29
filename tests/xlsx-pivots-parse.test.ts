@@ -7,6 +7,7 @@ import { parseXml, parseXmlOrdered } from '../src/core/xml'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { PivotRegionRef } from '../src/xlsx/pivots/stub'
 import { loadPivotWorkbook, type PackageReader } from '../src/xlsx/pivots/load'
+import { MAX_UNSUPPORTED_ENTRIES, UNSUPPORTED_TRUNCATED } from '../src/xlsx/pivots/parseCacheDefinition'
 import { PIVOT_BASE_ITEM_DEFAULT, PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD, type PivotWorkbook } from '../src/xlsx/pivots/model'
 
 const root = process.cwd()
@@ -204,6 +205,48 @@ describe('pivot definition parsers', () => {
     expect(t.dataFields[2]).toMatchObject({ subtotal: 'average', numFmtId: 10, x14: { pivotShowAs: 'percentOfParentRow' } })
     expect(t.fields[0].items![1]).toMatchObject({ x: 1, showDetails: false, hidden: true, name: 'Bee' })
     expect(t.unsupported).toEqual([])
+  })
+
+  it('reads filters, conditional formats, sort scope and discrete grouping', async () => {
+    const book = await loadSynthetic({
+      cache: `${SOURCE}<cacheFields count="3"><cacheField name="K"><sharedItems count="2"><s v="a"/><s v="b"/></sharedItems></cacheField>`
+        + '<cacheField name="V"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" minValue="1" maxValue="2"/></cacheField>'
+        + '<cacheField name="K2" databaseField="0"><fieldGroup base="0"><discretePr count="2"><x v="1"/><x/></discretePr><groupItems count="2"><s v="Group1"/><s v="Group2"/></groupItems></fieldGroup></cacheField></cacheFields>',
+      table: `${LOCATION}<pivotFields count="3"><pivotField axis="axisRow" sortType="descending"><items count="2"><item x="0"/><item x="1"/></items>`
+        + '<autoSortScope><pivotArea dataOnly="0" outline="0" fieldPosition="0"><references count="1"><reference field="4294967294" count="1" selected="0"><x v="0"/></reference></references></pivotArea></autoSortScope></pivotField>'
+        + '<pivotField dataField="1"/><pivotField/></pivotFields>'
+        + '<conditionalFormats count="1"><conditionalFormat scope="data" type="row" priority="2"><pivotAreas count="1"><pivotArea type="data" outline="0" collapsedLevelsAreSubtotals="1" fieldPosition="0"><references count="1"><reference field="0" count="1" selected="0"><x v="1"/></reference></references></pivotArea></pivotAreas></conditionalFormat></conditionalFormats>'
+        + '<filters count="3">'
+        + '<filter fld="0" type="captionBeginsWith" evalOrder="-1" id="1" stringValue1="a"><autoFilter ref="A1"><filterColumn colId="0"><customFilters><customFilter val="a*"/></customFilters></filterColumn></autoFilter></filter>'
+        + '<filter fld="0" type="count" id="2" iMeasureFld="0"><autoFilter ref="A1"><filterColumn colId="0"><top10 val="3" filterVal="3"/></filterColumn></autoFilter></filter>'
+        + '<filter fld="0" type="thisMonth" evalOrder="1" id="3"><autoFilter ref="A1"><filterColumn colId="0"><dynamicFilter type="thisMonth"/></filterColumn></autoFilter></filter>'
+        + '</filters>',
+    })
+    const t = book.tables[0], cache = book.caches.get(7)!
+    expect(cache.fields[2]).toMatchObject({ databaseField: false, fieldGroup: { base: 0, discretePr: [1, 0], groupItems: [{ type: 'string', value: 'Group1' }, { type: 'string', value: 'Group2' }] } })
+    expect(t.fields[0].autoSortScope).toMatchObject({ dataOnly: false, outline: false, fieldPosition: 0, references: [{ field: PIVOT_VALUES_FIELD, count: 1, selected: false, x: [0] }] })
+    expect(t.conditionalFormats).toEqual([{ scope: 'data', type: 'row', priority: 2, pivotAreas: [expect.objectContaining({ type: 'data', outline: false, collapsedLevelsAreSubtotals: true, references: [expect.objectContaining({ field: 0, x: [1] })] })] }])
+    expect(t.filters).toEqual([
+      { fld: 0, type: 'captionBeginsWith', evalOrder: -1, id: 1, stringValue1: 'a', autoFilter: { ref: 'A1', columns: [{ colId: 0, hiddenButton: false, showButton: true, customFilters: { and: false, filters: [{ operator: 'equal', val: 'a*' }] } }] } },
+      { fld: 0, type: 'count', evalOrder: 0, id: 2, iMeasureFld: 0, autoFilter: { ref: 'A1', columns: [{ colId: 0, hiddenButton: false, showButton: true, top10: { top: true, percent: false, val: 3, filterVal: 3 } }] } },
+      { fld: 0, type: 'thisMonth', evalOrder: 1, id: 3, autoFilter: { ref: 'A1', columns: [{ colId: 0, hiddenButton: false, showButton: true, dynamicFilter: { type: 'thisMonth' } }] } },
+    ])
+    expect(t.unsupported).toEqual([])
+  })
+
+  it('bounds the unsupported list and does not mistake prototype names for known attributes', async () => {
+    const bad = Array.from({ length: MAX_UNSUPPORTED_ENTRIES + 50 }, (_, i) => `<n v="bad${i}"/>`).join('')
+    const book = await loadSynthetic({
+      cache: `${SOURCE}<cacheFields count="1"><cacheField name="K" valueOf="1"><sharedItems count="${MAX_UNSUPPORTED_ENTRIES + 50}">${bad}</sharedItems></cacheField></cacheFields>`,
+      table: `${LOCATION}<pivotFields count="1"><pivotField toString="1"/></pivotFields>`,
+    })
+    const cache = book.caches.get(7)!
+    expect(cache.fields[0].sharedItems!.items).toHaveLength(MAX_UNSUPPORTED_ENTRIES + 50)
+    expect(cache.unsupported).toHaveLength(MAX_UNSUPPORTED_ENTRIES + 1)
+    // fast-xml-parser may rename prototype names (valueOf → __valueOf); either way the attribute is recorded, never taken as known.
+    expect(cache.unsupported.filter(e => /^cacheField@(__)?valueOf$/.test(e))).toHaveLength(1)
+    expect(cache.unsupported.at(-1)).toBe(UNSUPPORTED_TRUNCATED)
+    expect(book.tables[0].unsupported.filter(e => /^pivotField@(__)?toString$/.test(e))).toHaveLength(1)
   })
 
   it('parses a part without rowItems as rowItems undefined (Review Focus 5)', async () => {

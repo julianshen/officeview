@@ -44,10 +44,17 @@ export const optOneOf = <T extends string>(values: readonly T[]): Reader<T | und
 /** Prefix-stripped bookkeeping attributes every writer may add: `mc:Ignorable`, `xr:uid` and friends. */
 const BOOKKEEPING = new Set(['Ignorable', 'uid'])
 
-/** Deduplicated record of unmodelled constructs. */
+/** Entries kept per part; a part with more (say, a million malformed items) ends with one truncation marker. */
+export const MAX_UNSUPPORTED_ENTRIES = 256
+export const UNSUPPORTED_TRUNCATED = 'unsupported(truncated)'
+
+/** Deduplicated, bounded record of unmodelled constructs. */
 export class Unsupported {
   private readonly seen = new Set<string>()
-  add(entry: string): void { this.seen.add(entry) }
+  add(entry: string): void {
+    if (this.seen.size < MAX_UNSUPPORTED_ENTRIES) this.seen.add(entry)
+    else if (!this.seen.has(entry)) this.seen.add(UNSUPPORTED_TRUNCATED)
+  }
   list(): string[] { return [...this.seen] }
 }
 
@@ -61,7 +68,7 @@ export function readAttrs<S extends Record<string, Reader<unknown>>>(node: XmlNo
     const value = spec[key](raw, () => u.add(`${el}@${key}=${String(raw).slice(0, 40)}`))
     if (value !== undefined) out[key] = value
   }
-  for (const key of Object.keys(a)) if (!(key in spec) && !known.includes(key) && !BOOKKEEPING.has(key)) u.add(`${el}@${key}`)
+  for (const key of Object.keys(a)) if (!Object.prototype.hasOwnProperty.call(spec, key) && !known.includes(key) && !BOOKKEEPING.has(key)) u.add(`${el}@${key}`)
   return out as Read<S>
 }
 
