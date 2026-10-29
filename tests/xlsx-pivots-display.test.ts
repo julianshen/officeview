@@ -485,3 +485,21 @@ test('the grand-total lines are one totalRow band (refs/pivot-values-on-rows.png
   expect(band(def, rows[0]!, 1, 'totalRow')).toEqual({ top: true, bottom: false, left: false, right: false })
   expect(band(def, rows[1]!, 1, 'totalRow')).toEqual({ top: false, bottom: true, left: false, right: false })
 })
+
+test('buttons snap to device pixels: at 75 % the ± box is 7 × 7 px at x 6–12, as Excel draws it at 1 px per pt (refs/pivot-collapsed-item.png)', async () => {
+  const { sheet } = await load('pivot-collapsed-item')
+  const geometry = buildSheetGeometry(sheet)
+  expect(geometry.kind).toBe('ready')
+  if (geometry.kind !== 'ready') return
+  const canvas = createCanvas(200, 120), ctx = canvas.getContext('2d')
+  ctx.scale(0.75, 0.75)
+  renderSheetViewport(sheet, ctx as never, geometry, { box: { x: 0, y: 0, width: 200 / 0.75, height: 120 / 0.75 }, zoom: 0.75, deviceScale: 1 }, {}, { cache: new LayoutCache() })
+  // East (A6): the row is 15 device px from y 75; the box is centred, rows 79–85.
+  const top = Math.round(geometry.metrics.rows.start(5) * 0.75) + 4
+  expect(pixel(canvas, 6, top + 3)).toBe('AAB5C9') // left border
+  expect(pixel(canvas, 12, top + 3)).toBe('8A9EBF') // right border
+  expect(pixel(canvas, 9, top)).toBe('AAB5C9') // top border
+  expect(pixel(canvas, 9, top + 6)).toBe('8A9EBF') // bottom border
+  expect(pixel(canvas, 5, top + 3)).not.toBe('AAB5C9')
+  expect(pixel(canvas, 13, top + 3)).not.toBe('8A9EBF')
+})

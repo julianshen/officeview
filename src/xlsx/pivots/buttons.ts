@@ -117,9 +117,9 @@ export function compactLabelIndents(layout: SavedPivotLayout): (row: number, col
   }
 }
 
-function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean): void {
-  const size = Math.round(7 * PX_PER_PT)
-  const x = Math.round(rect.x + 6 * PX_PER_PT), y = Math.round(rect.y + (rect.height - size) / 2)
+function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean, ppt = PX_PER_PT): void {
+  const size = Math.round(7 * ppt)
+  const x = Math.round(rect.x + 6 * ppt), y = Math.round(rect.y + (rect.height - size) / 2)
   ctx.fillStyle = '#E2E3E3'
   ctx.fillRect(x + 1, y + 1, size - 2, size - 2)
   // Corners stay open, as Excel's rounded box leaves them.
@@ -129,7 +129,7 @@ function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean):
   ctx.fillStyle = '#8A9EBF'
   ctx.fillRect(x + size - 1, y + 1, 1, size - 2)
   ctx.fillRect(x + 1, y + size - 1, size - 2, 1)
-  const stroke = Math.max(1, Math.round(PX_PER_PT)), arm = Math.round(3 * PX_PER_PT)
+  const stroke = Math.max(1, Math.round(ppt)), arm = Math.round(3 * ppt)
   const cx = x + Math.floor((size - stroke) / 2), cy = y + Math.floor((size - stroke) / 2)
   const start = x + Math.floor((size - arm) / 2)
   ctx.fillStyle = '#3D4E7C'
@@ -137,26 +137,38 @@ function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean):
   if (expand) ctx.fillRect(cx, y + Math.floor((size - arm) / 2), stroke, arm)
 }
 
-/** The dropdown box in `rect`: 15 pt wide, as tall as the row up to 15 pt, flush right and bottom. */
-export function dropdownBox(rect: Rect): Rect {
-  const width = Math.round(15 * PX_PER_PT), height = Math.max(1, Math.min(width, Math.round(rect.height)))
+/** The dropdown box in `rect`: 15 pt wide, as tall as the row up to 15 pt, flush right and bottom (`ppt` px per pt). */
+export function dropdownBox(rect: Rect, ppt = PX_PER_PT): Rect {
+  const width = Math.round(15 * ppt), height = Math.max(1, Math.min(width, Math.round(rect.height)))
   return { x: Math.round(rect.x + rect.width) - width, y: Math.round(rect.y + rect.height) - height, width, height }
 }
 
-function paintDropdown(ctx: CanvasRenderingContext2D, rect: Rect): void {
-  const { x, y, width: w, height: h } = dropdownBox(rect)
+function paintDropdown(ctx: CanvasRenderingContext2D, rect: Rect, ppt = PX_PER_PT): void {
+  const { x, y, width: w, height: h } = dropdownBox(rect, ppt)
   ctx.fillStyle = '#738A93'
   ctx.fillRect(x, y, w, h)
   ctx.fillStyle = '#FDFDFD'
   ctx.fillRect(x + 1, y + 1, w - 2, h - 2)
-  const cx = x + w / 2, top = y + 6 * PX_PER_PT
+  const cx = x + w / 2, top = y + 6 * ppt
   ctx.fillStyle = '#828282'
   ctx.beginPath()
-  ctx.moveTo(cx - 3.5 * PX_PER_PT, top)
-  ctx.lineTo(cx + 3.5 * PX_PER_PT, top)
-  ctx.lineTo(cx, top + 4 * PX_PER_PT)
+  ctx.moveTo(cx - 3.5 * ppt, top)
+  ctx.lineTo(cx + 3.5 * ppt, top)
+  ctx.lineTo(cx, top + 4 * ppt)
   ctx.closePath()
   ctx.fill()
+}
+
+/**
+ * Buttons snap to device pixels: under an axis-aligned uniform transform (zoom × DPR) they are drawn in device
+ * space at that many px per pt, so at 75 % the ± box is Excel's crisp 7 × 7 px at 1 px per pt (refs/pivot-*.png)
+ * instead of a resampled 9 CSS px one. Other transforms paint in CSS px as before.
+ */
+function deviceSpace(ctx: CanvasRenderingContext2D, rect: Rect): { rect: Rect; ppt: number } | undefined {
+  const t = typeof ctx.getTransform === 'function' ? ctx.getTransform() : undefined
+  if (!t || t.b !== 0 || t.c !== 0 || !(t.a > 0) || Math.abs(t.a - t.d) > 1e-9 || (t.a === 1 && Number.isInteger(t.e) && Number.isInteger(t.f))) return undefined
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  return { rect: { x: t.a * rect.x + t.e, y: t.d * rect.y + t.f, width: t.a * rect.width, height: t.d * rect.height }, ppt: PX_PER_PT * t.a }
 }
 
 // Definitions are immutable once loaded: placements are computed once per mode.
@@ -173,8 +185,10 @@ export function paintPivotButtons(ctx: CanvasRenderingContext2D, sheet: XlsxShee
       if (!rect) continue
       ctx.save()
       try {
-        if (button.kind === 'expand' || button.kind === 'collapse') paintDrill(ctx, rect, button.kind === 'expand')
-        else paintDropdown(ctx, rect)
+        const device = deviceSpace(ctx, rect)
+        const r = device?.rect ?? rect, ppt = device?.ppt ?? PX_PER_PT
+        if (button.kind === 'expand' || button.kind === 'collapse') paintDrill(ctx, r, button.kind === 'expand', ppt)
+        else paintDropdown(ctx, r, ppt)
       } finally { ctx.restore() }
     }
   }
