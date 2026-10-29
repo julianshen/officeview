@@ -409,6 +409,14 @@ describe('pivot buttons (§7.10)', () => {
     expect(pixel(live, dropLeft + 10, y(2))).toBe('738A93')
     expect(pixel(live, dropLeft + 10, y(2) + 2)).toBe('FDFDFD')
     expect(pixel(live, dropLeft + 3, dropMid - 4)).toBe('FDFDFD')
+    // The arrow: rows 7/5/3/1 pt wide from 6 pt below the top border, ≈ #828282 at its
+    // centre (shot-pivot-layout-outline: rows 353–356 under the border at 347). The box
+    // is 15 pt wide, so the arrow's centre is 7.5 pt in; background above and below it.
+    const arrowX = dropLeft + Math.round(15 * PX_PER_PT) / 2, arrowTop = y(2) + Math.round(6 * PX_PER_PT)
+    const ink = pixel(live, arrowX, arrowTop)
+    expect([0, 2, 4].every(i => Math.abs(parseInt(ink.slice(i, i + 2), 16) - 0x82) <= 16), `arrow top row ${ink}`).toBe(true)
+    expect(pixel(live, arrowX, arrowTop - 1)).toBe('FDFDFD')
+    expect(pixel(live, arrowX, arrowTop + Math.ceil(4 * PX_PER_PT) + 1)).toBe('FDFDFD')
     expect(pixel(still, dropLeft, dropMid)).not.toBe('738A93')
     expect(pixel(live, plusLeft, plusTop + 3)).toBe('AAB5C9')
     expect(pixel(still, plusLeft, plusTop + 3)).not.toBe('AAB5C9')
