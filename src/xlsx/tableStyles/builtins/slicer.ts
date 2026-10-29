@@ -410,19 +410,20 @@ function makeTimelineLightStyle(index: number): { tableDef: TableStyleDef; slice
   const slicerDef: SlicerStyleDef = {
     name,
     elements: {
-      // [approx] vertical gradient in Excel: top B9CEE5, bottom 5489C2; flat mid-sample ~#8FB1D6
+      // [approx] vertical gradient in Excel: top B9CEE5, bottom 5489C2; flat at the gradient's centre row (y 190):
+      // tint 0.37 gives #90B0D5 for #8FB1D6 (Light1) and #C0D496 for #C1D396 (Light3) (refs/measure-timeline-selection.png)
       // [measure] refs/timeline-light${index}-months.png: period labels #909090 on white (year labels #989898)
       selectedItemWithData: {
         dxf: {
-          fill: solidFill({ theme, tint: 0.4 }),
+          fill: solidFill({ theme, tint: 0.37 }),
           font: { color: { rgb: 'FF909090' } },
         },
       },
-      // [estimate: entire timeline period is selected in captures]
+      // [measure] refs/measure-timeline-selection.png (Light1): unselected periods flat #DADADA, no border
+      // (the same grey for every timeline style is an [estimate] beyond Light1)
       unselectedItemWithData: {
         dxf: {
-          fill: solidFill({ rgb: 'FFFFFFFF' }),
-          border: thinBorder({ rgb: 'FFE0E0E0' }),
+          fill: solidFill({ rgb: 'FFDADADA' }),
           font: { color: { theme: 1 } },
         },
       },
@@ -463,11 +464,11 @@ function makeTimelineDarkStyle(index: number): { tableDef: TableStyleDef; slicer
           font: { color: { rgb: 'FF909090' } },
         },
       },
-      // [estimate: entire timeline period is selected in captures]
+      // [measure] refs/measure-timeline-selection.png (Light1): unselected periods flat #DADADA, no border
+      // (the same grey for every timeline style is an [estimate] beyond Light1)
       unselectedItemWithData: {
         dxf: {
-          fill: solidFill({ rgb: 'FFFFFFFF' }),
-          border: thinBorder({ rgb: 'FFE0E0E0' }),
+          fill: solidFill({ rgb: 'FFDADADA' }),
           font: { color: { theme: 1 } },
         },
       },

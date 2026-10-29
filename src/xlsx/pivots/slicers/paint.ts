@@ -39,7 +39,7 @@ const SLICER_THUMB = '#BCBCBC'
 export const TIMELINE_PT = {
   separator: 22, captionX: 6, captionBaseline: 15,
   labelX: 6, selectionBaseline: 38, levelRight: 10, yearBaseline: 56, periodBaseline: 74,
-  barTop: 78, barHeight: 13, barLeft: 6, barRight: 7, handle: 5,
+  barTop: 78, barHeight: 13, barLeft: 6, barRight: 7,
   trackGap: 6, trackHeight: 5, thumbHeight: 7,
   /** [estimate] Caption and labels: the captions draw Excel's UI font, here the theme's body font. */
   captionPt: 12, labelPt: 11,
@@ -125,9 +125,17 @@ function groupLabel(level: TimelineLevel, t: number): string | undefined {
   const { y, m } = ymd(t)
   return level === 'years' ? undefined : level === 'days' ? `${MONTHS[m]} ${y}` : String(y)
 }
-function formatDate(level: TimelineLevel, t: number): string {
+/** A date in the selection label, without its year. */
+function formatPeriod(level: TimelineLevel, t: number): string {
   const { y, m, d } = ymd(t)
-  return level === 'years' ? String(y) : level === 'quarters' ? `Q${Math.floor(m / 3) + 1} ${y}` : level === 'months' ? `${MONTHS[m]} ${y}` : `${MONTHS[m]} ${d}, ${y}`
+  return level === 'years' ? String(y) : level === 'quarters' ? `Q${Math.floor(m / 3) + 1}` : level === 'months' ? MONTHS[m]! : `${MONTHS[m]} ${d}`
+}
+/** Excel's selection label, year first ("2024 3月 - 5月" in the zh-TW capture → "2024 MAR - MAY"). */
+function selectionText(level: TimelineLevel, start: number, end: number): string {
+  const a = ymd(start).y, b = ymd(end).y, single = periodStart(level, start) === periodStart(level, end)
+  if (level === 'years') return single ? String(a) : `${a} - ${b}`
+  if (single) return `${a} ${formatPeriod(level, start)}`
+  return a === b ? `${a} ${formatPeriod(level, start)} - ${formatPeriod(level, end)}` : `${a} ${formatPeriod(level, start)} - ${b} ${formatPeriod(level, end)}`
 }
 
 export interface TimelinePeriod { index: number; start: number; x: number; width: number; selected: boolean; label: string; group?: string }
@@ -146,7 +154,6 @@ export interface TimelineLayout {
   first: number
   /** The periods in view, left to right. */
   periods: TimelinePeriod[]
-  handles: Box[]
   track?: Box
   thumb?: Box
 }
@@ -170,27 +177,19 @@ export function timelineLayout(m: TimelineModel, box: Box, scale: number): Timel
     const group = groupLabel(m.level, start)
     periods.push({ index, start, x: bar.x + k * pitch, width: pitch, selected, label: periodLabel(m.level, start), ...(group !== undefined && (previous === undefined || groupLabel(m.level, previous) !== group) ? { group } : {}) })
   }
-  // Selection handles: grey 5 pt tabs just outside an explicit selection (the cache state's <selection>). All
-  // Periods (no selection) draws none: every re-captured reference shows a bare bar there. The tabs' size and
-  // place come from the earlier captures, whose invalid packages made Excel draw them around the whole range.
-  const handles: Box[] = []
-  if (sel) {
-    const from = Math.max(0, periodIndex(m.level, origin, sel.start)), to = Math.min(total - 1, periodIndex(m.level, origin, sel.end))
-    const leftX = bar.x + (from - first) * pitch - P.handle * s, rightX = bar.x + (to + 1 - first) * pitch
-    if (leftX + P.handle * s > bar.x - P.handle * s && leftX < bar.x + bar.width) handles.push({ x: leftX, y: bar.y, width: P.handle * s, height: bar.height })
-    if (rightX >= bar.x && rightX < bar.x + bar.width) handles.push({ x: rightX, y: bar.y, width: P.handle * s, height: bar.height })
-  }
+  // No selection handles (Ruling AK): Excel draws none in a static capture, with or without a selection
+  // (refs/timeline-*.png, refs/measure-timeline-selection.png).
   const track = show.scrollbar ? { x: bar.x, y: bar.y + bar.height + P.trackGap * s, width: bar.width, height: P.trackHeight * s } : undefined
   const fraction = inView / total
   const thumb = track && fraction < 1 ? { x: bar.x + bar.width * first / total, y: track.y - s, width: Math.max(2 * s, bar.width * fraction), height: P.thumbHeight * s } : undefined
-  const selectionText = sel ? (periodStart(m.level, sel.start) === periodStart(m.level, sel.end) ? formatDate(m.level, sel.start) : `${formatDate(m.level, sel.start)} - ${formatDate(m.level, sel.end)}`) : 'All Periods'
+  const label = sel ? selectionText(m.level, sel.start, sel.end) : 'All Periods'
   return {
     ...(show.header ? { separatorY: box.y + P.separator * s, caption: { x: box.x + P.captionX * s, baseline: box.y + P.captionBaseline * s } } : {}),
-    ...(show.selectionLabel ? { selectionLabel: { x: box.x + P.labelX * s, baseline: box.y + P.selectionBaseline * s, text: selectionText } } : {}),
+    ...(show.selectionLabel ? { selectionLabel: { x: box.x + P.labelX * s, baseline: box.y + P.selectionBaseline * s, text: label } } : {}),
     ...(show.timeLevel ? { level: { right: box.x + box.width - P.levelRight * s, baseline: box.y + P.selectionBaseline * s, text: LEVEL_LABEL[m.level] } } : {}),
     yearBaseline: box.y + P.yearBaseline * s,
     periodBaseline: box.y + P.periodBaseline * s,
-    bar, pitch, total, first, periods, handles,
+    bar, pitch, total, first, periods,
     ...(track ? { track } : {}),
     ...(thumb ? { thumb } : {}),
   }
@@ -316,7 +315,9 @@ export function paintTimeline(ctx: CanvasRenderingContext2D, m: TimelineModel, b
       if (period.group !== undefined) label(period.group, period.x + scale, layout.yearBaseline, a.yearLabel)
       label(period.label, period.x + 2 * scale, layout.periodBaseline, periodColour)
     }
-    // The bar: selected periods flat [approx] (Excel: a vertical gradient), unselected white, accent dividers.
+    // The bar: selected periods flat [approx] (Excel: a vertical gradient), unselected #DADADA. The 1 px divider
+    // closing a period is accent tint 0.4 after a selected one and background after an unselected one
+    // (refs/measure-timeline-selection.png: white at 495/533, #95B3D7 at 573/612).
     const bar = rectOf(d, layout.bar)
     ctx.save()
     try {
@@ -327,10 +328,9 @@ export function paintTimeline(ctx: CanvasRenderingContext2D, m: TimelineModel, b
       }
       for (const period of layout.periods.slice(0, -1)) {
         const x = d.x(period.x + period.width)
-        fill(ctx, { x0: x, y0: bar.y0, x1: x + lw, y1: bar.y1 }, a.divider)
+        fill(ctx, { x0: x, y0: bar.y0, x1: x + lw, y1: bar.y1 }, period.selected ? a.divider : a.background)
       }
     } finally { ctx.restore() }
-    for (const handle of layout.handles) fill(ctx, rectOf(d, handle), a.handle)
     if (layout.track) fill(ctx, rectOf(d, layout.track), a.track)
     if (layout.thumb) {
       const t = rectOf(d, layout.thumb)

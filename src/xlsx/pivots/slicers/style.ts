@@ -22,11 +22,12 @@ export const DEFAULT_TIMELINE_STYLE = 'TimeSlicerStyleLight1'
 const ITEM_STATES: readonly SlicerItemState[] = ['selectedItemWithData', 'unselectedItemWithData', 'selectedItemWithNoData', 'unselectedItemWithNoData']
 
 /** Timeline parts no SlicerStyleDef element names, read from the references (docs/validation/xlsx-pivots.md
- * "Timeline geometry"): handle #9E9E9E, thumb #AFB3B7 with a #BCBCBC edge, year labels #989898 (darkest glyph
- * pixel), level picker ≈ #A1A1A1 [measure, refs/timeline-light1-months.png]. The divider, scrollbar track and
- * selection label follow the frame accent: tint 0.4 (#95B3D7 light1, #DA9694 dark2) and tint 0.8 (#DAE4F1,
- * #F1DBDA) [measure]; the label's shade (tint −0.25) is an [estimate] from anti-aliased zh-TW glyphs. */
-const TIMELINE_FIXED = { handle: '#9E9E9E', thumb: '#AFB3B7', thumbEdge: '#BCBCBC', yearLabel: '#989898', timeLevel: '#A1A1A1' }
+ * "Timeline geometry"): thumb #AFB3B7 with a #BCBCBC edge, year labels #989898 (darkest glyph pixel), level picker
+ * ≈ #A1A1A1 [measure, refs/timeline-light1-months.png]. The divider after a selected period, the scrollbar track and
+ * the selection label follow the frame accent: tint 0.4 (#95B3D7 light1, #DA9694 dark2), tint 0.8 (#DAE4F1, #F1DBDA)
+ * and tint −0.25 [measure]. The label's darkest glyph pixels are that shade at one coverage: #376092 at 90 % over white
+ * is #4B709D (measure-timeline-selection), at 84 % #577AA4 (light1-months); #E36C09 at 90 % is #E47820 (dark6). */
+const TIMELINE_FIXED = { thumb: '#AFB3B7', thumbEdge: '#BCBCBC', yearLabel: '#989898', timeLevel: '#A1A1A1' }
 
 const hex = (argb: string | undefined): string | undefined => argb && /^[0-9A-F]{8}$/i.test(argb) ? `#${argb.slice(2).toUpperCase()}` : undefined
 const colour = (spec: ColorSpec | undefined, theme: ThemeContext): string | undefined => hex(resolveColorSpec(spec, theme))
@@ -111,7 +112,6 @@ export function timelineAppearance(name: string | undefined, extras: StylesExtra
       selected: s.items.selectedItemWithData.fill,
       unselected: { fill: s.items.unselectedItemWithData.fill, border: s.items.unselectedItemWithData.border },
       divider: tinted(0.4),
-      handle: TIMELINE_FIXED.handle,
       track: tinted(0.8),
       thumb: TIMELINE_FIXED.thumb,
       thumbEdge: TIMELINE_FIXED.thumbEdge,

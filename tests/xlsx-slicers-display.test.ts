@@ -320,8 +320,6 @@ describe('timeline paint matches the Excel references at the measured points', (
     // visible share of the bar: 187 / 39 of 12 periods). All Periods has no selection handle: x 451–455 is white.
     const excel = timelineLayout(timelineModel(drawing), { x: 450, y: 105, width: 200, height: 121 }, 1)
     expect(excel.bar).toEqual({ x: 456, y: 183, width: 187, height: 13 })
-    expect(excel.handles).toEqual([])
-    expect(layout.handles).toEqual([])
     expect(excel.periods.slice(0, 4).map(period => period.x + period.width)).toEqual([495, 534, 573, 612])
     expect(excel.track).toEqual({ x: 456, y: 202, width: 187, height: 5 })
     expect(excel.thumb).toMatchObject({ x: 456, y: 201, height: 7 })
@@ -371,38 +369,74 @@ describe('timeline paint matches the Excel references at the measured points', (
   }, 30_000)
 })
 
-describe('an explicit timeline selection', () => {
-  // No reference has an explicit selection (every case is All Periods). The handles' size and place come from the
-  // earlier captures (.superpowers/…/t12-evidence/timeline-*.old.png), whose invalid packages made Excel draw them
-  // around the whole range: 5 pt grips just outside the span, as tall as the bar (left 451–455; right 494–498 for
-  // the single year). Painted flat in the grip's centre-line grey #9E9E9E [approx].
-  const withSelection = async () => parse(await edited(fixture('timeline-light1-months'), {
-    'xl/timelineCaches/timelineCache1.xml': text => text.replace('filterType="unknown"><bounds', 'filterType="dateBetween"><selection startDate="2024-03-01T00:00:00" endDate="2024-04-30T00:00:00"/><bounds'),
-  }))
+describe('an explicit timeline selection (refs/measure-timeline-selection.png, Ruling AK)', () => {
+  // measure-timeline-selection.xlsx is timeline-light1-months with <selection startDate="2024-03-01"
+  // endDate="2024-05-31"/> (filterType="dateBetween"). Excel draws the selected months as the style's bar, the others
+  // flat #DADADA, no selection handles, and the label "2024 3月 - 5月" (zh-TW UI; English here: "2024 MAR - MAY").
+  const F = { x: 450, y: 105 }
+  const load = async () => {
+    const doc = await parse(fixture('measure-timeline-selection'))
+    const sheet = doc.sheets[0]!, drawing = controls(sheet).timeline!
+    return { doc, sheet, drawing, model: timelineModel(drawing) }
+  }
+  /** Ink extent and darkest pixel of a region on a white background. */
+  function inkBounds(p: Pixels, x0: number, y0: number, x1: number, y1: number) {
+    let left = Infinity, bottom = -Infinity
+    for (let y = Math.floor(y0); y <= Math.floor(y1); y++) for (let x = Math.floor(x0); x <= Math.floor(x1); x++) {
+      const [r, g, b] = rgb(p, x, y)
+      if (765 - r - g - b > 30) { left = Math.min(left, x); bottom = Math.max(bottom, y) }
+    }
+    return { left, bottom, ink: ink(p, x0, y0, x1, y1, [255, 255, 255]) }
+  }
+  /** Whether `ink` is `colour` drawn at one coverage α over white, within ±3 per channel (glyph pixels rarely cover fully). */
+  function coverageOf(inkColour: readonly number[], colour: readonly number[]): { alpha: number; fits: boolean } {
+    const channels = [0, 1, 2].filter(c => 255 - colour[c]! > 40)
+    const alpha = channels.reduce((sum, c) => sum + (255 - inkColour[c]!) / (255 - colour[c]!), 0) / channels.length
+    return { alpha, fits: [0, 1, 2].every(c => Math.abs(255 - alpha * (255 - colour[c]!) - inkColour[c]!) <= 3) }
+  }
 
-  test('selects the periods it covers and puts a handle at each end', async () => {
-    const doc = await withSelection()
-    const drawing = controls(doc.sheets[0]!).timeline!
-    const model = timelineModel(drawing)
-    expect(model.selection).toEqual({ start: Date.UTC(2024, 2, 1), end: Date.UTC(2024, 3, 30) })
+  test('the selection covers March to May; no handles; Excel\'s year-first label', async () => {
+    const { model } = await load()
+    expect(model.selection).toEqual({ start: Date.UTC(2024, 2, 1), end: Date.UTC(2024, 4, 31) })
     const excel = timelineLayout(model, { x: 450, y: 105, width: 200, height: 121 }, 1)
-    expect(excel.periods.map(period => [period.label, period.selected])).toEqual([['JAN', false], ['FEB', false], ['MAR', true], ['APR', true], ['MAY', false], ['JUN', false]])
-    expect(excel.handles).toEqual([{ x: 456 + 2 * 39 - 5, y: 183, width: 5, height: 13 }, { x: 456 + 4 * 39, y: 183, width: 5, height: 13 }])
-    expect(excel.selectionLabel?.text).toBe('MAR 2024 - APR 2024')
+    expect(excel.periods.map(period => [period.label, period.selected])).toEqual([['JAN', false], ['FEB', false], ['MAR', true], ['APR', true], ['MAY', true], ['JUN', false]])
+    expect(excel).not.toHaveProperty('handles')
+    expect(excel.selectionLabel).toEqual({ x: 456, baseline: 143, text: '2024 MAR - MAY' })
   })
 
-  test('paints selected periods in the selected fill, the others white, and the handles grey', async () => {
-    const doc = await withSelection()
-    const sheet = doc.sheets[0]!
-    const drawing = controls(sheet).timeline!
-    const model = timelineModel(drawing), box = boxOf(drawing), layout = timelineLayout(model, box, PX)
-    const pixels = await renderPixels(doc, sheet)
-    const mid = layout.bar.y + layout.bar.height / 2
-    const centre = (period: (typeof layout.periods)[number]) => rgb(pixels, period.x + period.width / 2, mid)
-    expectNear('selected period (MAR)', centre(layout.periods[2]!), parseHex(model.appearance!.selected), 0)
-    expectNear('unselected period (JAN)', centre(layout.periods[0]!), parseHex(model.appearance!.unselected.fill), 0)
-    for (const handle of layout.handles) expectNear('handle', rgb(pixels, handle.x + handle.width / 2, mid), [0x9E, 0x9E, 0x9E], 0)
-  })
+  test('unselected and selected periods, dividers and the label match the reference (±3)', async () => {
+    const { doc, sheet, drawing, model } = await load()
+    const box = boxOf(drawing), layout = timelineLayout(model, box, PX)
+    const [actual, ref] = await Promise.all([renderPixels(doc, sheet), refPixels('measure-timeline-selection')])
+    const midY = layout.bar.y + layout.bar.height / 2, refMid = F.y + 85
+    const period = (k: number) => layout.periods[k]!
+    // Unselected JAN and FEB: flat #DADADA (x 456–494, 496–532).
+    expectNear('unselected JAN', rgb(actual, period(0).x + period(0).width / 2, midY), rgb(ref, 475, refMid))
+    expectNear('unselected FEB', rgb(actual, period(1).x + period(1).width / 2, midY), rgb(ref, 514, refMid))
+    // Selected MAR and APR: the bar's gradient at its centre row (y 190, #8FB1D6), flat here [approx].
+    expectNear('selected MAR', rgb(actual, period(2).x + period(2).width / 2, midY), rgb(ref, 553, refMid))
+    expectNear('selected APR', rgb(actual, period(3).x + period(3).width / 2, midY), rgb(ref, 592, refMid))
+    // Dividers close each period: background after an unselected one (x 495), accent tint 0.4 after a selected one (573, 612).
+    const divider = (k: number) => rgb(actual, period(k).x + period(k).width + 0.5, midY)
+    expectNear('divider after JAN', divider(0), rgb(ref, 495, refMid))
+    expectNear('divider after MAR', divider(2), rgb(ref, 573, refMid))
+    expectNear('divider after APR', divider(3), rgb(ref, 612, refMid))
+    // No handle: the strip left of the bar is background (x 451–455).
+    expectNear('no left handle', rgb(actual, layout.bar.x - 2.5 * PX, midY), rgb(ref, F.x + 3, refMid))
+    // The label: ink from x 456 (6 pt in) down to row 142 (its baseline 38 pt below the top border). Its colour is
+    // accent tint −0.25 (#376092); the reference's darkest glyph pixel #4B709D is that colour at one coverage (90 %).
+    const label = inkBounds(actual, box.x + 2 * PX, box.y + 25 * PX, box.x + 120 * PX, box.y + 43 * PX)
+    const refLabel = inkBounds(ref, F.x + 2, F.y + 25, F.x + 120, F.y + 43)
+    expect(refLabel.left - F.x).toBe(6)
+    expect(refLabel.bottom - F.y).toBe(37)
+    expect(Math.abs((label.left - box.x) / PX - (refLabel.left - F.x))).toBeLessThanOrEqual(3)
+    expect(Math.abs((label.bottom - box.y) / PX - (refLabel.bottom - F.y))).toBeLessThanOrEqual(3)
+    const colour = parseHex(model.appearance!.selectionLabel)
+    expectNear('label colour', colour, [0x37, 0x60, 0x92])
+    const refFit = coverageOf(refLabel.ink, colour), fit = coverageOf(label.ink, colour)
+    expect(refFit.fits, `reference label ink ${hex(refLabel.ink)} is #376092 at α ${refFit.alpha.toFixed(2)}`).toBe(true)
+    expect(fit.fits, `rendered label ink ${hex(label.ink)} is #376092 at α ${fit.alpha.toFixed(2)}`).toBe(true)
+  }, 30_000)
 })
 
 describe('slicer straddling tiles paints identically at 175%/DPR2 (Review Focus 4)', () => {

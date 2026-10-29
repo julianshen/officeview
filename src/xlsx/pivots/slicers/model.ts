@@ -60,11 +60,12 @@ export interface TimelineAppearance {
   /** Period labels (months, quarters, days) and the year row above them. */
   periodLabel: string
   yearLabel: string
-  /** Time bar: selected periods (flat [approx] for Excel's vertical gradient), unselected periods and dividers. */
+  /** Time bar: selected periods (flat [approx] for Excel's vertical gradient), unselected periods, and the divider
+   * after a selected period (after an unselected one it is the background). Static timelines draw no selection
+   * handles (Ruling AK). */
   selected: string
   unselected: { fill: string; border: string }
   divider: string
-  handle: string
   /** Horizontal scrollbar: pale accent track, grey thumb with a lighter edge. */
   track: string
   thumb: string
