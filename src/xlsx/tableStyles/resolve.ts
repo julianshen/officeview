@@ -138,13 +138,18 @@ function applyDxf(layer: Layer, dxf: DxfStyle, edges: BandEdges, theme: ThemeCon
 /**
  * The final style of one cell: `roles` (ascending precedence; a bare element
  * is a one-cell band) layered property by property, then the cell's own `s=`
- * format over that. Own layering follows the Task 3 measurement
- * (`measure-cell-override`): where the cell's xf applies its font
- * (applyFont="1") or its fill (applyFill="1"), those win; "0" or an absent
- * flag yields to the style, alike for font and fill. Every property the
- * cell's format does not set comes from the style. A dxf underline `none`
- * clears a lower element's underline. Own borders win per side; an own number format other than
- * General wins; alignment is always the cell's.
+ * format over that. Own layering follows Excel 16.114
+ * (`measure-cell-override`, `measure-apply-flags`), which ignores the xf's
+ * applyFont/applyFill here:
+ * - fill: an own fill whose pattern is not none wins; a none fill never
+ *   clears the style's fill;
+ * - font: an xf naming a font other than Normal's (fontId ≠ 0, `ownFont`)
+ *   wins for every property its font states; fontId 0 yields all of them;
+ * - a dxf underline `none` clears a lower element's underline unless the own
+ *   font states one;
+ * - own borders win per side; an own number format other than General wins;
+ *   alignment is always the cell's.
+ * Every property the cell's format does not set comes from the style.
  */
 export function resolveRoleStyle(
   def: TableStyleDef,
@@ -159,15 +164,14 @@ export function resolveRoleStyle(
     if (element) applyDxf(layer, element.dxf, typeof role === 'string' ? ALL_EDGES : role.edges, theme, def.name, diagnostics)
   }
   const out: XlsxCellStyle = own ? { ...own } : { numFmtId: 0 }
-  delete out.applyFont
-  delete out.applyFill
+  delete out.ownFont
   for (const key of ['fontName', 'fontSizePt', 'bold', 'italic', 'underline', 'strike', 'color'] as const) {
     const value = layer.font[key]
-    if (value === undefined || (own?.applyFont && own[key] !== undefined)) continue
+    if (value === undefined || (own?.ownFont && own[key] !== undefined)) continue
     if (value === 'none') delete out.underline
     else (out as unknown as Record<string, unknown>)[key] = value
   }
-  if (layer.fill && !(own?.applyFill && own.fillColor !== undefined)) {
+  if (layer.fill && own?.fillColor === undefined) {
     if (layer.fill.color === undefined) delete out.fillColor
     else out.fillColor = layer.fill.color
   }

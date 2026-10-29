@@ -82,7 +82,7 @@ interface Styles {
   fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string; underline?: XlsxCellStyle['underline']; strike?: boolean }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean; indent?: number; applyFont?: boolean; applyFill?: boolean }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean; indent?: number }>
 }
 
 /** Excel's own limit on a custom number-format code (UTF-16 units). Excel
@@ -176,8 +176,6 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
         wrapText,
         shrinkToFit,
         ...(Number.isInteger(indent) && indent > 0 && indent <= 250 ? { indent } : {}),
-        ...(a.applyFont === '1' || a.applyFont === 'true' ? { applyFont: true } : {}),
-        ...(a.applyFill === '1' || a.applyFill === 'true' ? { applyFill: true } : {}),
       })
     }
   }
@@ -227,8 +225,7 @@ export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxC
     ...(font?.strike ? { strike: true } : {}),
     ...(font?.name ? { fontName: font.name } : {}),
     ...(xf.indent ? { indent: xf.indent } : {}),
-    ...(xf.applyFont ? { applyFont: true } : {}),
-    ...(xf.applyFill ? { applyFill: true } : {}),
+    ...(xf.fontId !== 0 ? { ownFont: true as const } : {}),
   }
 }
 

@@ -80,10 +80,10 @@ export interface XlsxCellStyle {
   fontName?: string
   /** alignment@indent level (> 0); one level is one maximum digit width. */
   indent?: number
-  /** The xf's applyFont/applyFill, present only when "1": that font/fill wins
-   * over a table or pivot style (Task 3 measurement); "0" or absent yields. */
-  applyFont?: boolean
-  applyFill?: boolean
+  /** The xf names a font other than the Normal one (fontId ≠ 0): its font wins
+   * over a table or pivot style. Excel ignores applyFont/applyFill there
+   * (measure-apply-flags, docs/validation/xlsx-pivots.md). */
+  ownFont?: true
 }
 
 export interface XlsxRow {

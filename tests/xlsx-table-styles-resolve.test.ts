@@ -119,20 +119,20 @@ describe('resolveRoleStyle borders', () => {
 })
 
 describe('resolveRoleStyle: own s= layering (measure-cell-override)', () => {
-  test("the cell's applied font and fill win; what its format does not set comes from the style", async () => {
+  test("the cell's own font and fill win; what its format does not set comes from the style", async () => {
     const extras = await extrasOf('pivot-custom-style.xlsx')
     const def = extras.tableStyles.get('OfficeViewPivot')!
     const doc = await parseXlsx(await OfficePackage.load(readFileSync(fixturePath('measure-cell-override.xlsx'))))
     const cells = doc.sheets.flatMap(s => s.rows.flatMap(r => r.cells))
     const own = cells.find(c => c.styleIndex === 4)!.style!
     const neutral = cells.find(c => c.styleIndex === 2)!.style!
-    expect(own).toMatchObject({ applyFont: true, bold: true, color: 'FFC00000', fillColor: 'FF92D050' })
+    expect(own).toMatchObject({ ownFont: true, bold: true, color: 'FFC00000', fillColor: 'FF92D050' })
     // Excel drew the cell's fill and bold red font over the style; the style's
     // borders (wholeTable), which the format does not set, still show.
     const resolved = resolveRoleStyle(def, ['wholeTable', 'firstRowSubheading'], own, theme)
     expect(resolved).toMatchObject({ bold: true, color: 'FFC00000', fillColor: 'FF92D050', italic: false })
     expect(resolved.borders).toEqual({ left: 'thin', right: 'thin', top: 'thin', bottom: 'thin' })
-    expect(resolved.applyFont).toBeUndefined()
+    expect(resolved.ownFont).toBeUndefined()
     // A neutral pivot format (font 0, no fill, left-aligned) leaves the style's
     // font and fill, and keeps its own alignment.
     const header = resolveRoleStyle(def, ['wholeTable', 'headerRow'], neutral, theme)
@@ -141,17 +141,33 @@ describe('resolveRoleStyle: own s= layering (measure-cell-override)', () => {
     expect(sub).toMatchObject({ bold: true, italic: true, fillColor: 'FFFCE4D6', fontSizePt: 11 })
   })
 
-  test('an own fill wins only where its xf applies it (applyFill="1"); applyFill="0" or absent yields to the style', async () => {
-    const def: TableStyleDef = { name: 'F', pivot: true, table: true, elements: { headerRow: { dxf: { fill: { pattern: 'solid', bg: { rgb: 'FF1F4E78' } } } } } }
-    expect(resolveRoleStyle(def, ['headerRow'], { numFmtId: 0, fillColor: 'FF92D050', applyFill: true }, theme).fillColor).toBe('FF92D050')
-    expect(resolveRoleStyle(def, ['headerRow'], { numFmtId: 0, fillColor: 'FF92D050' }, theme).fillColor).toBe('FF1F4E78')
-    // Parsed: the same filled xf with applyFill="1", "0" and absent.
-    const styles = '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF92D050"/></patternFill></fill></fills>'
-      + '<cellXfs count="3"><xf numFmtId="0" fillId="2" applyFill="1"/><xf numFmtId="0" fillId="2" applyFill="0"/><xf numFmtId="0" fillId="2"/></cellXfs>'
-    const sheetData = '<row r="1"><c r="A1" s="0"><v>1</v></c><c r="B1" s="1"><v>1</v></c><c r="C1" s="2"><v>1</v></c></row>'
-    const cells = (await parseXlsx(await OfficePackage.load(xlsxBytes({ sheetData, styles })))).sheets[0].rows[0].cells
-    expect(cells.map(c => c.style?.fillColor)).toEqual(['FF92D050', 'FF92D050', 'FF92D050'])
-    expect(cells.map(c => resolveRoleStyle(def, ['headerRow'], c.style, theme).fillColor)).toEqual(['FF92D050', 'FF1F4E78', 'FF1F4E78'])
+  // measure-apply-flags (Excel 16.114, TableStyleMedium2): Excel ignores
+  // applyFill/applyFont when it layers a cell xf over a table or pivot style.
+  const flagStyles = (xfs: string) => '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFF0000"/><name val="Calibri"/></font></fonts>'
+    + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF92D050"/></patternFill></fill></fills>'
+    + `<cellXfs>${xfs}</cellXfs>`
+  async function cellsWith(xfs: string[]) {
+    const sheetData = `<row r="1">${xfs.map((_, i) => `<c r="${String.fromCharCode(65 + i)}1" s="${i}"><v>1</v></c>`).join('')}</row>`
+    return (await parseXlsx(await OfficePackage.load(xlsxBytes({ sheetData, styles: flagStyles(xfs.join('')) })))).sheets[0].rows[0].cells
+  }
+  const banded: TableStyleDef = { name: 'Band', pivot: true, table: true, elements: {
+    headerRow: { dxf: { font: { bold: true, color: { rgb: 'FFFFFFFF' } }, fill: { pattern: 'solid', bg: { rgb: 'FF4472C4' } } } },
+    firstRowStripe: { dxf: { fill: { pattern: 'solid', bg: { rgb: 'FFD9E1F2' } } } },
+  } }
+
+  test('an own fill wins with applyFill absent, "0" or "1"; a none fill with applyFill="1" keeps the style fill', async () => {
+    const cells = await cellsWith(['<xf fillId="2"/>', '<xf fillId="2" applyFill="0"/>', '<xf fillId="2" applyFill="1"/>', '<xf fillId="0" applyFill="1"/>'])
+    expect(cells.map(c => resolveRoleStyle(banded, ['firstRowStripe'], c.style, theme).fillColor))
+      .toEqual(['FF92D050', 'FF92D050', 'FF92D050', 'FFD9E1F2'])
+  })
+
+  test('a non-Normal font (fontId ≠ 0) wins with applyFont absent, "0" or "1"; fontId 0 yields to the style', async () => {
+    const cells = await cellsWith(['<xf fontId="1"/>', '<xf fontId="1" applyFont="0"/>', '<xf fontId="1" applyFont="1"/>', '<xf fontId="0" applyFont="1"/>', '<xf fontId="0"/>'])
+    expect(cells.map(c => c.style?.ownFont)).toEqual([true, true, true, undefined, undefined])
+    const header = cells.map(c => resolveRoleStyle(banded, ['headerRow'], c.style, theme))
+    for (const style of header.slice(0, 3)) expect(style).toMatchObject({ bold: true, color: 'FFFF0000' })
+    for (const style of header.slice(3)) expect(style).toMatchObject({ bold: true, color: 'FFFFFFFF' })
+    expect(header.some(style => 'ownFont' in style)).toBe(false)
   })
 
   test('own borders win per side; an own number format other than General wins', () => {
@@ -184,8 +200,8 @@ describe('resolveRoleStyle fills and fonts', () => {
     const cleared = resolveRoleStyle(def, ['wholeTable', 'headerRow'], { numFmtId: 0, underline: 'single' }, theme)
     expect(cleared.underline).toBeUndefined()
     expect('underline' in cleared).toBe(false)
-    // A cell whose xf applies its own font keeps its own underline.
-    expect(resolveRoleStyle(def, ['wholeTable', 'headerRow'], { numFmtId: 0, underline: 'single', applyFont: true }, theme).underline).toBe('single')
+    // A cell whose own (non-Normal) font states an underline keeps it.
+    expect(resolveRoleStyle(def, ['wholeTable', 'headerRow'], { numFmtId: 0, underline: 'single', ownFont: true }, theme).underline).toBe('single')
   })
 
   test('a non-solid pattern fill is painted as its foreground colour, with a diagnostic', () => {
