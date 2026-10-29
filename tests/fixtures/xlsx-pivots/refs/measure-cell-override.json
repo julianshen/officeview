@@ -1,0 +1,10 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Pivot",
+  "source": "measure-cell-override.xlsx",
+  "range": "A1:I22",
+  "capturedAt": "2026-10-29"
+}

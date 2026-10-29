@@ -46,6 +46,23 @@ export function reshapeLines(spec: PivotCase, p: string, ws: string): string[] {
   return lines
 }
 
+/** Markers each option leaves in the saved pivot definition (or sheet): Excel can ignore an AppleScript setting
+ * without an error, so every case is checked against what was saved. */
+export function expectedMarkers(spec: PivotCase): RegExp[] {
+  const o = spec.options
+  const markers: RegExp[] = []
+  if (spec.layout !== 'compact' || o.repeatLabels) markers.push(/<pivotField [^>]*compact="0"/)
+  if (spec.layout === 'tabular' || o.repeatLabels) markers.push(/<pivotField [^>]*outline="0"/)
+  if (o.subtotalTop === false) markers.push(/<pivotField [^>]*subtotalTop="0"/)
+  if (o.grandTotals === false) markers.push(/ rowGrandTotals="0"/, / colGrandTotals="0"/)
+  if (o.dataOnRows) markers.push(/ dataOnRows="1"/)
+  if (o.collapsed) markers.push(/<item [^>]*sd="0"/)
+  if (o.pageField) markers.push(/<pageFields count="1">/)
+  if (o.repeatLabels) markers.push(/fillDownLabels="1"/)
+  if (o.formatsOverride) markers.push(/<formats count="1">/)
+  return markers
+}
+
 export function buildPivotCase(c: RefCase): string {
   const out = join(PIVOT_DIR, `${c.id}.xlsx`)
   const work = join(PIVOT_DIR, `.${c.id}.seed.xlsx`)
@@ -65,6 +82,7 @@ export function buildPivotCase(c: RefCase): string {
   const style = /<pivotTableStyleInfo name="([^"]+)"/.exec(saved)?.[1]
   const expected = savedStyleName(c.spec as PivotCase)
   if (style !== expected) throw new Error(`${c.id}: saved style ${style}, expected ${expected}`)
+  for (const marker of expectedMarkers(c.spec as PivotCase)) if (!marker.test(saved)) throw new Error(`${c.id}: saved pivot lacks ${marker}`)
   return out
 }
 

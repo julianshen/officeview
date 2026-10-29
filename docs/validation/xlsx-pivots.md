@@ -98,7 +98,7 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 - **Tables, slicers and timelines** come from the XML generator. Excel opens them without repair; the totals-row table needed `totalsRowLabel`/`totalsRowFunction` and `SUBTOTAL` cells.
 - **Captures.** `scripts/xlsx-refs/capture-all.ts` uses `copy picture`, screen appearance, 1 px per pt.
   - A pivot is captured from A1 to the bottom-right corner of its saved `location`.
-  - `copy picture` includes slicer and timeline shapes and the ± buttons. It leaves out field dropdown buttons, which were measured from a window screenshot at 100% zoom; the screen is also 1 px per pt.
+  - `copy picture` includes slicer and timeline shapes and the ± buttons. It leaves out field dropdown buttons, which were measured from a window screenshot at 100% zoom (`refs/measure-field-buttons.png`); the screen is also 1 px per pt.
   - Screen gridlines give the cell geometry, so pivots have no bordered twins.
 - **Duplicate check.** Identical images across cases are expected only where a case equals the default (table flag defaults, `pivot-layout-compact`, `pivot-subtotals-top` and `pivot-light-16`, and light1/months).
   - The check caught timeline "Other1/2". These are not Excel timeline styles (Excel has Light1–6 and Dark1–6) and were removed.
@@ -137,7 +137,7 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 ### Compact indent and buttons (screen, 100%, Calibri 11)
 - **Compact text position.** With ± buttons shown, label text starts at **15 + 10 × level px** from the cell's left edge: level 0 at 15, level 1 at 25, level 2 at 35 (`pivot-values-on-rows`).
 - **± button.** A 7 × 7 px box at x = 6–12, vertically centred in a 15 px row, drawn for the item levels that have children.
-- **Field dropdown button** (Row Labels, Column Labels and page field):
+- **Field dropdown button** (Row Labels, Column Labels and page field), measured from `refs/measure-field-buttons.png`. This is a window screenshot of `pivot-page-field.xlsx` at 100% on a 1× display, cropped to A1:I10; the sidecar records the method. In the crop the Column Labels button box is at x 154–168, y 30–43:
   - box: 15 × 14 px, flush with the cell's right and bottom edges, fill #FDFDFD, 1 px border #738A93;
   - arrow: a downward triangle 7 px wide and 4 rows tall (7, 5, 3, 1), centred, starting 5 px below the box top, colour ≈ #828282.
 

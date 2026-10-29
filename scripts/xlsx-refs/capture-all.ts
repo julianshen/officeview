@@ -40,8 +40,9 @@ if (import.meta.main) {
   for (const c of REF_CASES) {
     if ((kind && c.kind !== kind) || (only && c.id !== only)) continue
     const file = join(FIXTURES, `${c.id}.xlsx`)
-    if (!existsSync(file)) { console.log(`missing ${c.id}.xlsx (build it first)`); continue }
-    if (skipExisting && existsSync(join(REFS, `${c.id}.json`))) continue
+    // A missing workbook is an error, never a smaller reference set; a case is skipped only when complete.
+    if (!existsSync(file)) throw new Error(`missing ${c.id}.xlsx (build it first)`)
+    if (skipExisting && existsSync(join(REFS, `${c.id}.png`)) && existsSync(join(REFS, `${c.id}.json`))) continue
     const range = captureRange(c, file)
     capture(file, c.sheet, range, join(REFS, `${c.id}.png`), { appearance: c.appearance })
     closeWorkbook(`${c.id}.xlsx`, false)
