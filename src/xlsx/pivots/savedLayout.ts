@@ -18,7 +18,9 @@
  * - a line whose deepest item has children is a row subheading for its level
  *   across the whole row (compact, outline); in tabular form a parent item is a
  *   subheading in its own label column, from its line to its last child line;
- * - every subtotal line is its own band (adjacent lines are two bands);
+ * - every subtotal line is its own band (adjacent lines are two bands); in a
+ *   tabular parent's label column its top edge is inner, so the parent's
+ *   bottom line shows there;
  * - stripes alternate from the first data row, subheading lines included;
  * - page fields sit above the location, one blank row between.
  * Unmeasured, from ECMA-376 §18.10 / §18.8.40: second and third subtotal rows,
@@ -207,7 +209,14 @@ export function savedPivotRoles(def: PivotTableDefinition, style?: TableStyleDef
       const level = rowLine.items.length - 1
       if (rowLine.type === 'grand') out.push(band('totalRow', row, rect.minCol, row, rect.maxCol, row, col))
       else if (rowLine.type === 'blank') out.push(band('blankRow', row, rect.minCol, row, rect.maxCol, row, col))
-      else if (isSubtotal(rowLine.type)) out.push(band(nth(level, 'SubtotalRow'), row, rect.minCol, row, rect.maxCol, row, col))
+      else if (isSubtotal(rowLine.type)) {
+        const role = band(nth(level, 'SubtotalRow'), row, rect.minCol, row, rect.maxCol, row, col)
+        // Under a tabular parent's label band the band's bottom edge is kept: the
+        // subtotal's top is no outer edge in that column (refs/pivot-layout-tabular.png:
+        // #44B3E1 under A8, #156082 from column B on).
+        if (typeof role !== 'string' && info?.showRowHeaders && col < dataCol0 && layout.parentBands.get(n - 1)?.some(parent => parent.col === col && parent.last === n - 1)) role.edges.top = false
+        out.push(role)
+      }
       else if (info?.showRowHeaders && level >= 0 && level < leafLevel) out.push(band(nth(level, 'RowSubheading'), row, rect.minCol, row, rect.maxCol, row, col))
       // A tabular parent: its label column, from its line through its last child line.
       if (info?.showRowHeaders && col < dataCol0) for (const parent of layout.parentBands.get(n) ?? []) {

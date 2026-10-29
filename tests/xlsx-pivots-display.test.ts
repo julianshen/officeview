@@ -186,6 +186,27 @@ describe('savedPivotRoles: subtotals, levels and forms', () => {
     expect(winner(def, 8, 0)).toBe('firstSubtotalRow') // "East 合計"
   })
 
+  test('tabular form: the parent label\'s bottom edge is kept above its subtotal line (refs/pivot-layout-tabular.png)', async () => {
+    const { doc, sheet, def } = await load('pivot-layout-tabular')
+    // The A8/A9 edge is #44B3E1 (the subheading's line) in column A and #156082
+    // (the subtotal row's top line) from column B on: the subtotal's top is no outer edge in A.
+    expect(band(def, 8, 0, 'firstSubtotalRow')).toEqual({ top: false, bottom: true, left: true, right: false })
+    expect(band(def, 8, 1, 'firstSubtotalRow')).toEqual({ top: true, bottom: true, left: false, right: false })
+    const index = doc.sheets.indexOf(sheet)
+    const pages = await getPaintables(doc)
+    const canvas = createCanvas(pages[index]!.spec.widthPx, pages[index]!.spec.heightPx)
+    try { pages[index]!.paint(canvas.getContext('2d') as unknown as CanvasRenderingContext2D) } finally { pages.dispose() }
+    const m = computeMetrics(sheet)
+    const edge = m.rowHeightsPx.slice(0, 8).reduce((a, b) => a + b, 0)
+    const mid = (col: number) => m.colWidthsPx.slice(0, col).reduce((a, b) => a + b, 0) + m.colWidthsPx[col]! / 2
+    // Theme tints resolve within a few RGB levels of Excel's (#46B1E1 here for #44B3E1).
+    const near = (actual: string, expected: string) => [0, 2, 4].every(i => Math.abs(parseInt(actual.slice(i, i + 2), 16) - parseInt(expected.slice(i, i + 2), 16)) <= 3)
+    for (const [col, colour] of [[0, '44B3E1'], [1, '156082'], [4, '156082']] as const) {
+      const actual = pixel(canvas, mid(col), edge)
+      expect(near(actual, colour), `col ${col}: ${actual} vs ${colour}`).toBe(true)
+    }
+  })
+
   test('outline form: a parent item row is a whole-row subheading (refs/pivot-layout-outline.png)', async () => {
     const { def } = await load('pivot-layout-outline')
     for (const col of [0, 1, 5, 9]) expect(winner(def, 5, col), `col ${col}`).toBe(col >= 8 ? 'lastColumn' : 'firstRowSubheading')
@@ -317,6 +338,23 @@ describe('pivot buttons (§7.10)', () => {
       { row: 10, col: 0, kind: 'collapse', field: 0, item: 2 },
       { row: 14, col: 0, kind: 'collapse', field: 0, item: 3 },
     ])
+  })
+
+  test('showDataDropDown off hides every dropdown and keeps the ± buttons; showHeaders hides only the field-header ones', async () => {
+    const page = await load('pivot-page-field')
+    page.def.showDataDropDown = false
+    expect(pivotButtons(page.def, 'screen')).toEqual([])
+    const outline = await load('pivot-layout-outline')
+    outline.def.showDataDropDown = false
+    expect(sorted(pivotButtons(outline.def, 'screen'))).toEqual([
+      { row: 5, col: 0, kind: 'collapse', field: 0, item: 0 },
+      { row: 9, col: 0, kind: 'collapse', field: 0, item: 1 },
+      { row: 13, col: 0, kind: 'collapse', field: 0, item: 2 },
+      { row: 17, col: 0, kind: 'collapse', field: 0, item: 3 },
+    ])
+    const headers = await load('pivot-page-field')
+    headers.def.showHeaders = false
+    expect(pivotButtons(headers.def, 'screen')).toEqual([{ row: 0, col: 1, kind: 'page', field: 1 }])
   })
 
   test('print: no dropdowns; ± only when printDrill is set', async () => {

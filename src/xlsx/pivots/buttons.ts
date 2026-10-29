@@ -2,9 +2,13 @@
  * Pivot buttons (spec §6.6, §7.10): where the filter arrows, ± buttons and
  * page-field dropdowns go, and their painters. Lazy chunk `pivots`. Page mode
  * and export draw what Excel prints (no dropdowns, ± only with `printDrill`);
- * the interactive viewer draws what Excel shows on screen (`showHeaders`,
- * `showDrill`, each field's `showDropDowns`). Stage 3 reuses the placements as
- * hit targets.
+ * the interactive viewer draws what Excel shows on screen. Each ECMA-376
+ * §18.10.1.73 gate applies once: `showDataDropDown` (all field dropdowns,
+ * page fields included), `showHeaders` (the row/column field headers and their
+ * dropdowns), each field's `showDropDowns`; `showDrill` (screen) and
+ * `printDrill` (print) the ± buttons, independent of the dropdown flags. The
+ * x14 extension has no button flag (`hideValuesRow` hides a row, not a
+ * button). Stage 3 reuses the placements as hit targets.
  *
  * Geometry, Excel 16.114 at 1 px per pt (docs/validation/xlsx-pivots.md
  * "Compact indent and buttons"), scaled here by CSS px per pt:
@@ -52,7 +56,7 @@ export function pivotButtons(def: PivotTableDefinition, mode: RegionStyleMode, l
   if (!layout) return []
   const out: ButtonPlacement[] = []
   const { rect, dataRow0, dataCol0, itemRow0, labelCol } = layout
-  if (mode === 'screen') {
+  if (mode === 'screen' && def.showDataDropDown) {
     if (def.showHeaders) {
       // Row labels: one dropdown per label column, for the first field shown there.
       const header = dataRow0 - 1
