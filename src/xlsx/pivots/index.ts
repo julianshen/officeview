@@ -2,7 +2,9 @@
 import { registerPivotEngine } from '../pivotLoader'
 import { pivotStyleRegions } from './regions'
 import { paintPivotButtons } from './buttons'
+import { loadSheetControls } from './slicers/load'
+import { paintControl } from './slicers/paint'
 
 export { loadPivotWorkbook } from './load'
 
-registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons })
+registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl })

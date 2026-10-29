@@ -111,6 +111,8 @@ export type DrawingContent<Paragraph = ContentParagraph, Text = never> =
       heightEmu: number
     }
   | { kind: 'xlsxChart'; chart: XlsxChartModel }
+  /** A worksheet slicer or timeline frame (xlsx only), painted by the lazy pivots chunk. */
+  | import('../xlsx/pivots/slicers/model').XlsxControlContent
   | {
       kind: 'textbox'
       paragraphs: Paragraph[]

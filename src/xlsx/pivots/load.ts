@@ -40,7 +40,7 @@ const relsPathFor = (owner: string): string => {
 }
 
 /** Internal relationship targets of `owner`, by id, keeping only `typeSuffix` types. Unreadable rels read as none. */
-async function relationships(pkg: PackageReader, owner: string, typeSuffix: string): Promise<Map<string, string>> {
+export async function relationships(pkg: PackageReader, owner: string, typeSuffix: string): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   let rels: XmlNode | undefined
   try { rels = await pkg.xml(relsPathFor(owner)) } catch { return out }
@@ -52,7 +52,7 @@ async function relationships(pkg: PackageReader, owner: string, typeSuffix: stri
 }
 
 /** Workbook `pivotCaches`: cacheId → cache definition part. */
-async function workbookCaches(pkg: PackageReader, diagnostics: PivotDiagnostic[]): Promise<Map<number, string>> {
+export async function workbookCaches(pkg: PackageReader, diagnostics: PivotDiagnostic[]): Promise<Map<number, string>> {
   const out = new Map<number, string>()
   let workbook: XmlNode | undefined
   try { workbook = await pkg.xml(WORKBOOK) } catch { workbook = undefined }

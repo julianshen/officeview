@@ -28,7 +28,7 @@ import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
 import { cellFontFamily as cellFaceFamily, cellFontString } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
-import { paintPivotButtonsIn } from './pivotLoader'
+import { paintControlIn, paintPivotButtonsIn } from './pivotLoader'
 import { isTableStyleEngineLoaded, regionStylesFor } from './tableStyleLoader'
 
 export interface GridMetrics {
@@ -1353,6 +1353,10 @@ export function paintSheetDrawings(sheet: XlsxSheet, drawings: readonly XlsxDraw
     images: prepared?.images,
     paintContent(node, context, w, h) {
       if (!node.content) return
+      if (node.content.kind === 'slicer' || node.content.kind === 'timeline') {
+        paintControlIn(context, node.content, w, h, family => JSON.stringify(prepared?.resolveFont?.(family) ?? family))
+        return
+      }
       paintDrawingContent(node.content, context, w, h, {
         assets: prepared,
         fontFamilyCss: family => JSON.stringify(prepared?.resolveFont?.(family) ?? family),

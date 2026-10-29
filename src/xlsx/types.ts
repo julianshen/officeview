@@ -18,7 +18,7 @@ import type { DeclaredSheetFilters } from './view/declaredFilters'
 import type { RegionStyleLayer } from './tableStyles/regionLayer'
 import type { TableStyleSource } from './tableStyles/model'
 
-export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean; /** An authored fallback's original feature (spec 6.6). */ feature?: 'chart' | 'ChartEx' }
+export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean; /** An authored fallback's original feature (spec 6.6). */ feature?: 'chart' | 'ChartEx' | 'slicer' | 'timeline' }
 export interface XlsxDrawing extends SceneNode<PptxTextBody, SceneImage> {
   source: XlsxDrawingSource
   children?: XlsxDrawing[]

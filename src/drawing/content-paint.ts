@@ -109,6 +109,8 @@ export function paintDrawingContent<Paragraph, Text>(drawing: DrawingContent<Par
       finally { ctx.restore() }
     }
   }
+  // Slicers and timelines are worksheet content: the xlsx renderer paints them through the lazy pivots chunk.
+  else if (drawing.kind === 'slicer' || drawing.kind === 'timeline') return
   else {
     if (drawing.fill) {
       ctx.fillStyle = `#${drawing.fill}`

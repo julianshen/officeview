@@ -31,7 +31,7 @@ import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SP
 import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
 import { resolveWorkbookSparklines } from './sparklines/resolve'
 import { controlIds, parsePivotRegion, PIVOT_PART_MAX_BYTES, type ControlPartRef } from './pivots/stub'
-import { attachPivotTables } from './pivotLoader'
+import { attachPivotTables, loadSheetControls } from './pivotLoader'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -78,6 +78,8 @@ interface Styles {
   colorContext: SheetColorContext
   /** Only the table-style subtrees are retained for the later lazy painter. */
   tableStyleSource?: import('./tableStyles/model').TableStyleSource
+  /** The whole styleSheet, read at parse time only, for custom slicer and timeline styles (x14 extLst). */
+  styleSheet?: import('./tableStyles/model').TableStyleSource
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
    * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
@@ -114,6 +116,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
   }
   styles.colorContext = colorContext
   const stylesNode = getChildren(root, 'styleSheet')[0] ?? root
+  styles.styleSheet = { root: stylesNode, colors: colorContext }
   const dxfsNode = getChildren(stylesNode, 'dxfs')[0]
   const tableStylesNode = getChildren(stylesNode, 'tableStyles')[0]
   if (dxfsNode || tableStylesNode) {
@@ -784,7 +787,9 @@ async function parseSheet(
     rowsByIndex.set(row.index, row)
     sheet.rows.push(row)
   }
-  await parseWorksheetDrawings(pkg, sheet, path, data, theme)
+  // Slicer and timeline frames take their AlternateContent Choice only with these resolved (Task 12).
+  const controls = await loadSheetControls(pkg, sheet, path, root, theme, styles.styleSheet)
+  await parseWorksheetDrawings(pkg, sheet, path, data, theme, undefined, controls)
   return sheet
 }
 
