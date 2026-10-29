@@ -1,0 +1,10 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Data",
+  "source": "measure-indent.xlsx",
+  "range": "G1:G4",
+  "capturedAt": "2026-10-29"
+}

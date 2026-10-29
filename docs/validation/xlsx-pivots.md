@@ -169,3 +169,8 @@ Reproduced by `bun scripts/xlsx-refs/probe-pivots.ts <out-dir>`, except B.
 - **Time bar.** 13 px tall, filled with a vertical gradient from the style's light tint to its dark shade (Light1 #B9CEE5 → #5489C2; Dark2 #C3544B → #6A2521) and divided per period. It is inset 6 px from the frame on the left, with a grey selection handle at the left end.
 - **Scrollbar.** 7 px tall, 5 px below the bar; grey thumb #BCBCBC on a pale accent track.
 - **Text.** Labels are drawn in Excel's UI language, not stored in the file: the zh-TW captures show 所有週期, 月 and 天, and 1月…. Comparisons must mask timeline text or treat it as locale-dependent.
+
+### Cell indent (Task 5 input; `measure-indent`, Calibri 11, 1 px per pt)
+- **Set-up.** Cells G1:G4 hold the same text with alignment `indent` 0, 1, 2 and 3, set through AppleScript `indent level`. Text starts at x = 4, 10, 16 and 22 px.
+- **Result.** One indent level is **6 px**, one maximum-digit width at this scale, not 3 × MDW as the plan guessed. Ruling: the renderer indents `level × MDW` in its own pixel space.
+- **Pivots.** The 10 px per level measured in compact pivots is the pivot's own layout, a separate measurement.
