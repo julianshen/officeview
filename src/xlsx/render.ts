@@ -31,6 +31,7 @@ import { paintSparklinesIn } from './sparklineLoader'
 import { paintControlIn, paintPivotButtonsIn } from './pivotLoader'
 import { intersectInterval, mayHaveRegionGrid, regionGrid, subtractIntervals } from './regionGrid'
 import { isTableStyleEngineLoaded, regionStylesFor } from './tableStyleLoader'
+import type { RegionStyleLayer } from './tableStyles/regionLayer'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -741,6 +742,13 @@ export interface SheetViewport {
   width: number
   height: number
 }
+/** The cell as the static painter lays it out: its own style resolved through the
+ * sheet's resident pivot/table region layer (print mode). Shared with the corpus
+ * recording check so its expected spans use the bold, colour and indent painted. */
+export function regionStyledCell(regionStyles: RegionStyleLayer | undefined, cell: XlsxCell): XlsxCell {
+  const resolvedStyle = regionStyles?.styleAt(cell.row, cell.col, cell.style) ?? cell.style
+  return resolvedStyle === cell.style ? cell : { ...cell, style: resolvedStyle }
+}
 export function renderSheet(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
@@ -852,8 +860,7 @@ export function renderSheet(
       return textOverflowAllowance(input, cell.col)
     }
     for (const cell of row.cells) {
-      const resolvedStyle = regionStyles?.styleAt(cell.row, cell.col, cell.style) ?? cell.style
-      const styledCell = resolvedStyle === cell.style ? cell : { ...cell, style: resolvedStyle }
+      const styledCell = regionStyledCell(regionStyles, cell)
       // Only coordinates inside the grid have geometry; admission refused any
       // populated cell beyond it that this request needs, so nothing here falls
       // back to the origin. An explicit cell reference names its own row.

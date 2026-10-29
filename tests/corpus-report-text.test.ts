@@ -10,6 +10,8 @@ import { buildTextIndex, type TextIndex } from '../src/core/search'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../src/xlsx/types'
 import { RECORD_TEXT } from '../src/core/text-recording'
 import { hasRecordingLoss, measureXlsxTextCoverage } from '../scripts/corpus-report-text'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
 
 const context = () => createCanvas(4, 4).getContext('2d') as unknown as CanvasRenderingContext2D
 const cell = (row: number, col: number, value: XlsxCell['value'], style?: XlsxCell['style']): XlsxCell => ({ ref: `${String.fromCharCode(65 + col)}${row + 1}`, row, col, value, styleIndex: 0, ...(style ? { style } : {}) })
@@ -427,5 +429,34 @@ describe('QUALITY effective geometry controls', () => {
     expect(result.excluded.some(e => e.reason === 'collapsed')).toBe(false)
     expect(result.diagnostics.join(' ')).toMatch(/invalid effective.*geometry/)
     expect(hasRecordingLoss(result)).toBe(true)
+  })
+})
+
+describe('region-resolved pivot and table-style text', () => {
+  const regionFixture = async (name: string): Promise<XlsxDocument> =>
+    parseXlsx(await OfficePackage.load(readFileSync(join(process.cwd(), 'tests/fixtures/xlsx-pivots', `${name}.xlsx`))))
+  const regionSheet = (doc: XlsxDocument) => doc.sheets.findIndex(s => s.pivotTables?.length || s.tables?.some(t => t.styleInfo?.name))
+  // The painter draws pivot headers bold and compact row labels indented from the
+  // resident region layer; the expected side must lay out the same resolved style.
+  it.each(['pivot-layout-compact', 'table-medium-2'])('matches every %s cell span drawn with its region style', async name => {
+    const doc = await regionFixture(name)
+    const r = await measured(doc)
+    const unit = r.sheets[regionSheet(doc)]!
+    expect(unit.coverage.string.expected).toBeGreaterThan(0)
+    expect(unit.coverage.string.matched).toBe(unit.coverage.string.expected)
+    expect(unit.coverage.other.matched).toBe(unit.coverage.other.expected)
+    expect(r.matchedSpans).toBe(r.expectedSpans)
+    expect(hasRecordingLoss(r)).toBe(false)
+  })
+  it('still degrades when a pivot cell loses its text', async () => {
+    const doc = await regionFixture('pivot-layout-compact')
+    const target = doc.sheets[regionSheet(doc)]!
+    const strings = target.rows.flatMap(row => row.cells).filter(c => typeof c.value === 'string').map(c => c.value as string)
+    const lost = new Set(strings)
+    const r = await measured(doc, p => p.map((page, i) => i === regionSheet(doc) ? omit([page], text => lost.has(text))[0]! : page))
+    const unit = r.sheets[regionSheet(doc)]!
+    expect(unit.coverage.string.expected).toBeGreaterThan(0)
+    expect(unit.coverage.string.matched).toBe(0)
+    expect(hasRecordingLoss(r)).toBe(true)
   })
 })
