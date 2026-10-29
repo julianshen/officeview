@@ -170,13 +170,16 @@ export function timelineLayout(m: TimelineModel, box: Box, scale: number): Timel
     const group = groupLabel(m.level, start)
     periods.push({ index, start, x: bar.x + k * pitch, width: pitch, selected, label: periodLabel(m.level, start), ...(group !== undefined && (previous === undefined || groupLabel(m.level, previous) !== group) ? { group } : {}) })
   }
-  // Selection handles: grey 5 pt tabs just outside the selected span (All Periods: the whole range).
-  const from = sel ? Math.max(0, periodIndex(m.level, origin, sel.start)) : 0
-  const to = sel ? Math.min(total - 1, periodIndex(m.level, origin, sel.end)) : total - 1
+  // Selection handles: grey 5 pt tabs just outside an explicit selection (the cache state's <selection>). All
+  // Periods (no selection) draws none: every re-captured reference shows a bare bar there. The tabs' size and
+  // place come from the earlier captures, whose invalid packages made Excel draw them around the whole range.
   const handles: Box[] = []
-  const leftX = bar.x + (from - first) * pitch - P.handle * s, rightX = bar.x + (to + 1 - first) * pitch
-  if (leftX + P.handle * s > bar.x - P.handle * s && leftX < bar.x + bar.width) handles.push({ x: leftX, y: bar.y, width: P.handle * s, height: bar.height })
-  if (rightX >= bar.x && rightX < bar.x + bar.width) handles.push({ x: rightX, y: bar.y, width: P.handle * s, height: bar.height })
+  if (sel) {
+    const from = Math.max(0, periodIndex(m.level, origin, sel.start)), to = Math.min(total - 1, periodIndex(m.level, origin, sel.end))
+    const leftX = bar.x + (from - first) * pitch - P.handle * s, rightX = bar.x + (to + 1 - first) * pitch
+    if (leftX + P.handle * s > bar.x - P.handle * s && leftX < bar.x + bar.width) handles.push({ x: leftX, y: bar.y, width: P.handle * s, height: bar.height })
+    if (rightX >= bar.x && rightX < bar.x + bar.width) handles.push({ x: rightX, y: bar.y, width: P.handle * s, height: bar.height })
+  }
   const track = show.scrollbar ? { x: bar.x, y: bar.y + bar.height + P.trackGap * s, width: bar.width, height: P.trackHeight * s } : undefined
   const fraction = inView / total
   const thumb = track && fraction < 1 ? { x: bar.x + bar.width * first / total, y: track.y - s, width: Math.max(2 * s, bar.width * fraction), height: P.thumbHeight * s } : undefined

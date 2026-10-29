@@ -316,11 +316,12 @@ describe('timeline paint matches the Excel references at the measured points', (
     expect(layout.periods).toHaveLength(6)
     expect(layout.periods.every(period => period.selected)).toBe(true)
     // Laid out on the reference's own box at 1 px per pt (x 450–649, y 105–225), the layout lands on the capture's
-    // pixels: bar 456–642 and 183–195, handle 451–455, dividers 495/534/573/612, track 202–206, thumb 201–207 and
-    // 456–528 (the visible share of the bar: 187 / 39 of 12 periods).
+    // pixels: bar 456–642 and 183–195, dividers 495/534/573/612, track 202–206, thumb 201–207 and 456–528 (the
+    // visible share of the bar: 187 / 39 of 12 periods). All Periods has no selection handle: x 451–455 is white.
     const excel = timelineLayout(timelineModel(drawing), { x: 450, y: 105, width: 200, height: 121 }, 1)
     expect(excel.bar).toEqual({ x: 456, y: 183, width: 187, height: 13 })
-    expect(excel.handles[0]).toEqual({ x: 451, y: 183, width: 5, height: 13 })
+    expect(excel.handles).toEqual([])
+    expect(layout.handles).toEqual([])
     expect(excel.periods.slice(0, 4).map(period => period.x + period.width)).toEqual([495, 534, 573, 612])
     expect(excel.track).toEqual({ x: 456, y: 202, width: 187, height: 5 })
     expect(excel.thumb).toMatchObject({ x: 456, y: 201, height: 7 })
@@ -329,7 +330,7 @@ describe('timeline paint matches the Excel references at the measured points', (
     expect(TIMELINE_PERIOD_PT.days).toBe(21)
   })
 
-  test.each(['timeline-light1-months', 'timeline-dark2-days', 'timeline-light3-years'])('%s: frame, header, bar, handle, scrollbar and label colours', async (id) => {
+  test.each(['timeline-light1-months', 'timeline-dark2-days', 'timeline-light3-years'])('%s: frame, header, bar, scrollbar and label colours; no selection handle for All Periods', async (id) => {
     const doc = await parse(fixture(id))
     const sheet = doc.sheets[0]!
     const drawing = controls(sheet).timeline!
@@ -345,10 +346,13 @@ describe('timeline paint matches the Excel references at the measured points', (
     const top = rgb(ref, F.x + 20, F.y + 78), bottom = rgb(ref, F.x + 20, F.y + 90), bar = at(layout.bar.x + 14 * PX, layout.bar.y + layout.bar.height / 2)
     for (let c = 0; c < 3; c++) expect(bar[c]!, `${id} bar channel ${c}: ${hex(bar)} within ${hex(top)}…${hex(bottom)}`).toBeGreaterThanOrEqual(Math.min(top[c]!, bottom[c]!) - 3)
     for (let c = 0; c < 3; c++) expect(bar[c]!).toBeLessThanOrEqual(Math.max(top[c]!, bottom[c]!) + 3)
-    // Selection handle at x 451–455: Excel draws a textured grip (#C1C1C1 → #6C6C6C with light lines), painted flat
-    // [approx] in its centre-line grey #9E9E9E, compared on that line (y 190). Scrollbar track (pale accent) at y 202–206.
-    const handle = layout.handles[0]!
-    expectNear(`${id} selection handle`, at(handle.x + handle.width / 2, handle.y + handle.height / 2), rgb(ref, F.x + 3, F.y + 85))
+    // No selection (All Periods): no handle beside the bar. The strip x 451–455 left of the bar is background, and
+    // so is the strip after the single 2024 block at the years level (x 494–498). Scrollbar track at y 202–206.
+    expectNear(`${id} no left handle`, at(layout.bar.x - 2.5 * PX, layout.bar.y + layout.bar.height / 2), rgb(ref, F.x + 3, F.y + 85))
+    if (model.level === 'years') {
+      const end = layout.periods[0]!.x + layout.periods[0]!.width
+      expectNear(`${id} no right handle`, at(end + 2.5 * PX, layout.bar.y + layout.bar.height / 2), rgb(ref, F.x + 6 + TIMELINE_PERIOD_PT.years + 2, F.y + 85))
+    }
     expectNear(`${id} scrollbar track`, at(layout.track!.x + layout.track!.width - 10 * PX, layout.track!.y + layout.track!.height / 2), rgb(ref, F.x + 182, F.y + 99))
     if (layout.thumb && model.level === 'months') {
       // Thumb #AFB3B7 (x 456–528 at the months level).
@@ -365,6 +369,40 @@ describe('timeline paint matches the Excel references at the measured points', (
     expectNear(`${id} period labels`, periodRow(actual, box.x + 6 * PX, box.y + 62 * PX, box.x + box.width - 8 * PX, box.y + 76 * PX), periodRow(ref, F.x + 6, F.y + 62, F.x + 198, F.y + 76))
     if (model.level !== 'years') expectNear(`${id} year label`, periodRow(actual, box.x + 6 * PX, box.y + 45 * PX, box.x + 60 * PX, box.y + 59 * PX), periodRow(ref, F.x + 6, F.y + 45, F.x + 60, F.y + 59))
   }, 30_000)
+})
+
+describe('an explicit timeline selection', () => {
+  // No reference has an explicit selection (every case is All Periods). The handles' size and place come from the
+  // earlier captures (.superpowers/…/t12-evidence/timeline-*.old.png), whose invalid packages made Excel draw them
+  // around the whole range: 5 pt grips just outside the span, as tall as the bar (left 451–455; right 494–498 for
+  // the single year). Painted flat in the grip's centre-line grey #9E9E9E [approx].
+  const withSelection = async () => parse(await edited(fixture('timeline-light1-months'), {
+    'xl/timelineCaches/timelineCache1.xml': text => text.replace('filterType="unknown"><bounds', 'filterType="dateBetween"><selection startDate="2024-03-01T00:00:00" endDate="2024-04-30T00:00:00"/><bounds'),
+  }))
+
+  test('selects the periods it covers and puts a handle at each end', async () => {
+    const doc = await withSelection()
+    const drawing = controls(doc.sheets[0]!).timeline!
+    const model = timelineModel(drawing)
+    expect(model.selection).toEqual({ start: Date.UTC(2024, 2, 1), end: Date.UTC(2024, 3, 30) })
+    const excel = timelineLayout(model, { x: 450, y: 105, width: 200, height: 121 }, 1)
+    expect(excel.periods.map(period => [period.label, period.selected])).toEqual([['JAN', false], ['FEB', false], ['MAR', true], ['APR', true], ['MAY', false], ['JUN', false]])
+    expect(excel.handles).toEqual([{ x: 456 + 2 * 39 - 5, y: 183, width: 5, height: 13 }, { x: 456 + 4 * 39, y: 183, width: 5, height: 13 }])
+    expect(excel.selectionLabel?.text).toBe('MAR 2024 - APR 2024')
+  })
+
+  test('paints selected periods in the selected fill, the others white, and the handles grey', async () => {
+    const doc = await withSelection()
+    const sheet = doc.sheets[0]!
+    const drawing = controls(sheet).timeline!
+    const model = timelineModel(drawing), box = boxOf(drawing), layout = timelineLayout(model, box, PX)
+    const pixels = await renderPixels(doc, sheet)
+    const mid = layout.bar.y + layout.bar.height / 2
+    const centre = (period: (typeof layout.periods)[number]) => rgb(pixels, period.x + period.width / 2, mid)
+    expectNear('selected period (MAR)', centre(layout.periods[2]!), parseHex(model.appearance!.selected), 0)
+    expectNear('unselected period (JAN)', centre(layout.periods[0]!), parseHex(model.appearance!.unselected.fill), 0)
+    for (const handle of layout.handles) expectNear('handle', rgb(pixels, handle.x + handle.width / 2, mid), [0x9E, 0x9E, 0x9E], 0)
+  })
 })
 
 describe('slicer straddling tiles paints identically at 175%/DPR2 (Review Focus 4)', () => {
