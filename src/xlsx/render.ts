@@ -29,6 +29,7 @@ import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
 import { cellFontFamily as cellFaceFamily, cellFontString } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
 import { paintControlIn, paintPivotButtonsIn } from './pivotLoader'
+import { intersectInterval, regionGrid, subtractIntervals } from './regionGrid'
 import { isTableStyleEngineLoaded, regionStylesFor } from './tableStyleLoader'
 
 export interface GridMetrics {
@@ -910,9 +911,28 @@ export function renderSheet(
   const c0 = firstCol < 0 ? 0 : firstCol, c1 = lastCol < 0 ? colWidthsPx.length : lastCol
   // Excel also hides a vertical gridline under text spilling across it.
   const spills = spillBands(laidOut)
+  // Pivot interiors and filled styled-region cells hide theirs, or cover them
+  // with the fill (regionGrid.ts); covered spans are painted after the grid.
+  const lineRule = regionGrid(sheet, ownStyleLookup(sheet))
+  const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
+  const regionLines = (segments: Array<[number, number]>, line: number, vertical: boolean): Array<[number, number]> => {
+    if (!lineRule) return segments
+    const hidden: Array<[number, number]> = []
+    const starts = vertical ? rowY : colX, count = vertical ? rowHeightsPx.length : colWidthsPx.length
+    for (const r of lineRule.rects) {
+      if (vertical ? line < r.minCol || line > r.maxCol + 1 : line < r.minRow || line > r.maxRow + 1) continue
+      for (let k = Math.max(0, vertical ? r.minRow : r.minCol), to = Math.min(count - 1, vertical ? r.maxRow : r.maxCol); k <= to; k++) {
+        const rule = vertical ? lineRule.line(k, line - 1, k, line) : lineRule.line(line - 1, k, line, k)
+        if (rule === undefined) continue
+        hidden.push([starts[k], starts[k + 1]])
+        if (rule) covered.push({ color: spreadsheetColor(rule), vertical, at: vertical ? colX[line] : rowY[line], segments: intersectInterval(segments, starts[k], starts[k + 1]) })
+      }
+    }
+    return subtractIntervals(segments, hidden)
+  }
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]
-    for (const [y1, y2] of withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)) {
+    for (const [y1, y2] of regionLines(withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills), c, true)) {
       if (y2 <= vp.y || y1 >= vp.y + vp.height) continue
       ctx.moveTo(x + 0.5, y1 + 0.5)
       ctx.lineTo(x + 0.5, y2 + 0.5)
@@ -923,13 +943,14 @@ export function renderSheet(
   const r0 = firstRow < 0 ? 0 : firstRow, r1 = lastRow < 0 ? rowHeightsPx.length : lastRow
   for (let r = r0; r <= r1; r++) {
     const y = rowY[r]
-    for (const [x1, x2] of visibleSegments(r, ranges, colX, gridWidth, false)) {
+    for (const [x1, x2] of regionLines(visibleSegments(r, ranges, colX, gridWidth, false), r, false)) {
       if (x2 <= vp.x || x1 >= vp.x + vp.width) continue
       ctx.moveTo(x1 + 0.5, y + 0.5)
       ctx.lineTo(x2 + 0.5, y + 0.5)
     }
   }
   ctx.stroke()
+  paintCoveredLines(ctx, covered)
   // Explicit formatting wins over both gridlines and neighboring cell fills.
   for (const paint of paintBorders) paint()
   // Page mode and export draw the pivot buttons Excel prints (§7.10).
@@ -1385,6 +1406,30 @@ export function spillSpan(body: CellBodyLayout): { x0: number; x1: number } | un
   }
   if (x0 >= body.x && x1 <= body.x + body.w) return undefined
   return { x0: Math.min(x0, body.x), x1: Math.max(x1, body.x + body.w) }
+}
+/** @internal Gridline spans a region cell's fill covers (regionGrid.ts), stroked like gridlines in that fill. */
+export function paintCoveredLines(ctx: CanvasRenderingContext2D, covered: ReadonlyArray<{ color: string; vertical: boolean; at: number; segments: ReadonlyArray<readonly [number, number]> }>, origin: { x: number; y: number } = { x: 0, y: 0 }): void {
+  for (const line of covered) {
+    if (!line.segments.length) continue
+    ctx.strokeStyle = line.color
+    ctx.beginPath()
+    for (const [a, b] of line.segments) {
+      if (line.vertical) { ctx.moveTo(line.at - origin.x + 0.5, a - origin.y + 0.5); ctx.lineTo(line.at - origin.x + 0.5, b - origin.y + 0.5) }
+      else { ctx.moveTo(a - origin.x + 0.5, line.at - origin.y + 0.5); ctx.lineTo(b - origin.x + 0.5, line.at - origin.y + 0.5) }
+    }
+    ctx.stroke()
+  }
+}
+/** A cell's own style by source coordinates, indexed on first use. */
+function ownStyleLookup(sheet: XlsxSheet): (row: number, col: number) => XlsxCellStyle | undefined {
+  let index: Map<number, XlsxCellStyle | undefined> | undefined
+  return (row, col) => {
+    if (!index) {
+      index = new Map()
+      for (const r of sheet.rows) for (const c of r.cells) index.set(cellSourceRow(r, c) * MAX_COLS + c.col, c.style)
+    }
+    return index.get(row * MAX_COLS + col)
+  }
 }
 /** Spill bands of laid-out bodies, with the rows they occupy. */
 function spillBands(bodies: readonly CellBodyLayout[]): Array<{ x0: number; x1: number; y0: number; y1: number }> {

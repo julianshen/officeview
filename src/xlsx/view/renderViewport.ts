@@ -10,11 +10,12 @@ import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contrac
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
 import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission, type Rect } from './textLayout'
-import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
+import { cellDisplayText, layoutCellBody, paintCellLayout, paintCoveredLines, paintSheetDrawings, spillSpan, spreadsheetColor, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
 import { paintPivotButtonsIn } from '../pivotLoader'
+import { intersectInterval, regionGrid, subtractIntervals } from '../regionGrid'
 import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
 import type { ResolvedSparkline } from '../sparklines/resolve'
 import { belowDetail } from './viewport'
@@ -375,10 +376,44 @@ export function renderSheetViewport(
         const dx = record.logicalBounds.x - record.body.x
         spills.push({ x0: span.x0 + dx, x1: span.x1 + dx, y0: record.logicalBounds.y, y1: record.logicalBounds.y + record.logicalBounds.height })
       }
+      // Pivot interiors and filled styled-region cells hide their gridlines (regionGrid.ts):
+      // checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles.
+      const lineRule = geometry?.kind === 'ready' ? regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style) : undefined
+      const lineRows: Array<{ source: number; y0: number; y1: number }> = [], lineCols: Array<{ col: number; x0: number; x1: number }> = []
+      if (lineRule && geometry?.kind === 'ready') {
+        const { rows, cols, order } = geometry.metrics
+        for (const run of rows.visibleBetween(yTop, yBottom).runs) for (let slot = run.start; slot <= run.end; slot++) {
+          const source = order.displayToSource(slot)
+          if (lineRule.rects.some(r => source >= r.minRow && source <= r.maxRow)) lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot) })
+        }
+        for (const run of cols.visibleBetween(xLeft, xRight).runs) for (let col = run.start; col <= run.end; col++) {
+          if (lineRule.rects.some(r => col >= r.minCol && col <= r.maxCol)) lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col) })
+        }
+      }
+      const neighbours = (axis: 'rows' | 'cols', at: number): [number, number] | undefined => {
+        if (geometry?.kind !== 'ready') return undefined
+        const metrics = geometry.metrics, after = metrics[axis].locate(at), before = at >= 0.5 ? metrics[axis].locate(at - 0.5) : null
+        if (after === null || before === null || before === after) return undefined
+        return axis === 'cols' ? [before, after] : [metrics.order.displayToSource(before), metrics.order.displayToSource(after)]
+      }
+      const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
+      const regionLines = (segments: Array<[number, number]>, at: number, vertical: boolean): Array<[number, number]> => {
+        const pair = (vertical ? lineRows : lineCols).length ? neighbours(vertical ? 'cols' : 'rows', at) : undefined
+        if (!pair) return segments
+        const hidden: Array<[number, number]> = []
+        for (const span of vertical ? lineRows : lineCols) {
+          const rule = 'source' in span ? lineRule!.line(span.source, pair[0], span.source, pair[1]) : lineRule!.line(pair[0], span.col, pair[1], span.col)
+          if (rule === undefined) continue
+          const from = 'source' in span ? span.y0 : span.x0, to = 'source' in span ? span.y1 : span.x1
+          hidden.push([from, to])
+          if (rule) covered.push({ color: spreadsheetColor(rule), vertical, at, segments: intersectInterval(segments, from, to) })
+        }
+        return subtractIntervals(segments, hidden)
+      }
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
         for (const band of spills) if (band.x0 < x && x < band.x1) hidden.push([band.y0, band.y1])
-        for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
+        for (const [y1, y2] of regionLines(openSegments(yTop, yBottom, hidden), x, true)) {
           work.gridlineSpans++
           ctx.moveTo(x - vx + 0.5, y1 - vy + 0.5)
           ctx.lineTo(x - vx + 0.5, y2 - vy + 0.5)
@@ -386,13 +421,14 @@ export function renderSheetViewport(
       }
       for (const y of plan.rowLines) {
         const hidden = plan.merges.filter(merge => merge.y < y && y < merge.y + merge.height).map(merge => [merge.x, merge.x + merge.width] as [number, number])
-        for (const [x1, x2] of openSegments(xLeft, xRight, hidden)) {
+        for (const [x1, x2] of regionLines(openSegments(xLeft, xRight, hidden), y, false)) {
           work.gridlineSpans++
           ctx.moveTo(x1 - vx + 0.5, y - vy + 0.5)
           ctx.lineTo(x2 - vx + 0.5, y - vy + 0.5)
         }
       }
       ctx.stroke()
+      paintCoveredLines(ctx, covered, { x: vx, y: vy })
       for (const paint of paintBorders) paint()
       // The viewer draws the pivot buttons Excel shows on screen (§7.10).
       if ((sheet.pivotRegions?.length || sheet.pivotTables?.length) && sourceWindow && sourceRect) {
