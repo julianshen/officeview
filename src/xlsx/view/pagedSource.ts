@@ -43,7 +43,7 @@ import type { XlsxSparklineGroup } from '../sparklines/model'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
-import type { RemoteRegionStyles } from './contracts'
+import { MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
 import { builtinTableStyle } from '../tableStyles/builtins'
 import { estimatePayloadBytes } from './payloadBytes'
 
@@ -595,7 +595,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     const named = this.sheet.tables?.filter(table => Boolean(table.styleInfo?.name)) ?? []
     if (!named.length) return empty()
-    if (!Number.isSafeInteger(grantBytes) || grantBytes <= 0 || named.length > 512) {
+    if (!Number.isSafeInteger(grantBytes) || grantBytes <= 0 || named.length > MAX_REGION_STYLE_TABLES) {
       diagnostics.push({ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
       return empty()
     }
@@ -610,7 +610,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       tables.push({ table: { id: table.id, displayName: table.displayName, sheetId: table.sheetId, extent: table.extent, headerRowCount: table.headerRowCount, totalsRowCount: table.totalsRowCount, styleInfo: table.styleInfo }, def })
     }
     const result: RemoteRegionStyles = { sheetId: this.sheet.sheetId, stamp: this.stamp, tables, ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}), cells: new Int32Array(), diagnostics }
-    const bytes = estimatePayloadBytes(result) + 512
+    const bytes = estimatePayloadBytes(result) + REGION_STYLE_REPLY_OVERHEAD_BYTES
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes || (memory && !memory.set(bytes))) {
       diagnostics.splice(0, diagnostics.length, { kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
       return empty()
@@ -1172,6 +1172,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
     hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
     hasRegionStyles(sheetId) { return Boolean(find(sheetId).tables?.some(table => table.styleInfo?.name)) },
+    regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)

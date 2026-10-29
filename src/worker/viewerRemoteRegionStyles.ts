@@ -1,8 +1,13 @@
 import type { CacheIdentity, RemoteRegionStyles, WorkerReply } from '../xlsx/view/contracts'
 import type { RegionStyleLayer } from '../xlsx/tableStyles/regionLayer'
 import type { CommandOf } from './viewerProtocol'
+import { REGION_STYLE_LAYER_BASE_BYTES, MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../xlsx/view/contracts'
 
-const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
+const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen && a.fontGen === b.fontGen && a.viewGen === b.viewGen
+const RETRY_MS = 250
+const MAX_ATTEMPTS = 20
+const READ_TIMEOUT_MS = 10_000
+const layerBytesFor = (tableCount: number) => REGION_STYLE_LAYER_BASE_BYTES + tableCount * REGION_STYLE_REGION_ESTIMATE_BYTES + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES
 export interface PagedRegionStyleState {
   readonly state: 'waiting' | 'loading' | 'ready' | 'failed'
   readonly gen: number
@@ -14,15 +19,15 @@ export interface RegionStyleHost {
   identity(sheetId: string): CacheIdentity
   hasRegionStyles(sheetId: string): boolean
   loadState(sheetId: string): { completeness: 'complete' | 'loading' | 'incomplete' }
-  grant(requestId: string): number | null
+  grant(sheetId: string, requestId: string): number | null
   releaseGrant(requestId: string): void
   request(command: CommandOf<'read'>, signal?: AbortSignal): Promise<WorkerReply<'read'> | symbol>
   nextRequestId(): string
   release(reply: WorkerReply<'read'>): void
   admitLayer(sheetId: string, requestId: string, bytes: number): (() => void) | null
-  changed(sheetId: string): void
+  changed(sheetId: string, reason?: 'updated' | 'evicted'): void
 }
-interface Entry { state: PagedRegionStyleState['state']; gen: number; owner?: CacheIdentity; seq: number; payload?: RemoteRegionStyles; layer?: RegionStyleLayer; reply?: WorkerReply<'read'>; replyBytes: number; layerBytes: number; layerRelease?: () => void; controller?: AbortController; diagnostics: RemoteRegionStyles['diagnostics'] }
+interface Entry { state: PagedRegionStyleState['state']; gen: number; owner?: CacheIdentity; seq: number; attempts: number; payload?: RemoteRegionStyles; layer?: RegionStyleLayer; layerReady?: boolean; reply?: WorkerReply<'read'>; releaseReply?: () => void; replyBytes: number; layerBytes: number; layerRelease?: () => void; controller?: AbortController; timer?: ReturnType<typeof setTimeout>; layerPending?: boolean; diagnostics: RemoteRegionStyles['diagnostics'] }
 const empty = (): PagedRegionStyleState => ({ state: 'waiting', gen: 0, diagnostics: [] })
 
 function unpack(reply: WorkerReply<'read'>): RemoteRegionStyles | undefined {
@@ -38,78 +43,153 @@ export class RemoteRegionStyleCache {
   get(sheetId: string): PagedRegionStyleState {
     if (!this.host.hasRegionStyles(sheetId)) return empty()
     let entry = this.entries.get(sheetId)
-    if (!entry) this.entries.set(sheetId, entry = { state: 'waiting', gen: 0, seq: 0, replyBytes: 0, layerBytes: 0, diagnostics: [] })
+    if (!entry) this.entries.set(sheetId, entry = { state: 'waiting', gen: 0, seq: 0, attempts: 0, replyBytes: 0, layerBytes: 0, diagnostics: [] })
     this.entries.delete(sheetId); this.entries.set(sheetId, entry)
     const owner = this.host.identity(sheetId)
-    if (entry.owner && !sameOwner(entry.owner, owner)) { this.reset(entry); entry.gen++ }
-    if (entry.state === 'waiting' && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
+    if (entry.owner && !sameOwner(entry.owner, owner)) { this.reset(entry); entry.gen++; this.deferChanged(sheetId) }
+    if (entry.state === 'waiting' && !entry.timer && this.host.loadState(sheetId).completeness === 'complete') void this.load(sheetId, entry)
+    else if (entry.state === 'ready' && entry.payload?.tables.length && !entry.layerReady && !entry.layerPending) void this.rebuildLayer(sheetId, entry)
     return entry
   }
   get retainedEntries(): number { return [...this.entries.values()].filter(entry => entry.state === 'ready').length }
   get retainedBytes(): number { return [...this.entries.values()].reduce((n, e) => n + e.replyBytes + e.layerBytes, 0) }
-  invalidate(sheetId: string): void { const entry = this.entries.get(sheetId); if (!entry) return; this.reset(entry); entry.gen++; this.host.changed(sheetId) }
+  invalidate(sheetId: string): void { const entry = this.entries.get(sheetId); if (!entry) return; this.reset(entry); entry.gen++; this.deferChanged(sheetId) }
   closeSheet(sheetId: string): void { this.invalidate(sheetId); this.entries.delete(sheetId) }
   close(): void { if (this.closed) return; this.closed = true; for (const entry of this.entries.values()) this.reset(entry); this.entries.clear() }
   private reset(entry: Entry): void {
     entry.seq++; entry.controller?.abort(); entry.controller = undefined
-    if (entry.reply) this.host.release(entry.reply)
+    if (entry.timer) clearTimeout(entry.timer); entry.timer = undefined
+    entry.releaseReply?.()
     entry.layerRelease?.(); entry.layerRelease = undefined
-    entry.reply = undefined; entry.layer = undefined; entry.payload = undefined; entry.owner = undefined; entry.replyBytes = 0; entry.layerBytes = 0
+    entry.reply = undefined; entry.releaseReply = undefined; entry.layer = undefined; entry.layerReady = false; entry.payload = undefined; entry.owner = undefined; entry.replyBytes = 0; entry.layerBytes = 0; entry.layerPending = false; entry.attempts = 0
     entry.state = 'waiting'; entry.diagnostics = []
   }
-  private async load(sheetId: string, entry: Entry): Promise<void> {
-    if (this.closed) return
-    const requestId = this.host.nextRequestId(), owner = this.host.identity(sheetId), grantBytes = this.host.grant(requestId)
-    if (grantBytes === null) { entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds available receiver memory.' }]; this.host.changed(sheetId); return }
-    const seq = ++entry.seq, controller = entry.controller = new AbortController()
-    entry.owner = owner; entry.state = 'loading'
-    let out: WorkerReply<'read'> | symbol
-    try { out = await this.host.request({ kind: 'read', requestId, owner, query: { op: 'regionStyles', grantBytes } }, controller.signal) }
-    catch (cause) { this.host.releaseGrant(requestId); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Table style read failed' }]; this.host.changed(sheetId); return }
-    if (this.closed || entry.seq !== seq || this.entries.get(sheetId) !== entry) { if (typeof out === 'object') this.host.release(out); return }
-    entry.controller = undefined
-    if (typeof out !== 'object') { entry.state = 'waiting'; return }
-    const payload = unpack(out)
-    if (!payload) {
-      this.host.release(out)
-      entry.state = 'failed'
-      entry.diagnostics = [{ kind: 'unsupported', feature: out.kind === 'quota' ? 'table-style-reply-limit' : 'table-style-read-failed', message: out.kind === 'quota' ? 'Table style metadata exceeds available receiver memory.' : out.kind === 'error' ? out.diagnostics[0]?.message ?? `Table style read failed (${out.code})` : 'Table style read did not complete.' }]
-      entry.gen++; this.host.changed(sheetId); return
+  private deferChanged(sheetId: string, reason: 'updated' | 'evicted' = 'updated'): void {
+    queueMicrotask(() => { if (!this.closed) { try { this.host.changed(sheetId, reason) } catch { /* observer failures must not change cache ownership */ } } })
+  }
+  private retry(sheetId: string, entry: Entry, seq: number): void {
+    if (entry.attempts >= MAX_ATTEMPTS) {
+      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table style metadata could not be loaded after repeated attempts.' }]
+      this.deferChanged(sheetId); return
     }
-    if (!sameOwner(out.owner as CacheIdentity, owner) || !sameOwner(owner, this.host.identity(sheetId))
-      || payload.sheetId !== sheetId || payload.stamp.docId !== owner.docId || payload.stamp.sheetId !== sheetId || payload.stamp.valueGen !== owner.valueGen) {
-      this.host.release(out); entry.state = 'waiting'; this.host.changed(sheetId); return
+    const delay = Math.min(4_000, RETRY_MS * 2 ** Math.max(0, entry.attempts - 1))
+    entry.state = 'waiting'
+    entry.timer = setTimeout(() => { entry.timer = undefined; if (!this.closed && entry.seq === seq) void this.load(sheetId, entry) }, delay)
+  }
+  private evictDecoded(sheetId: string, entry: Entry): void {
+    entry.layerRelease?.(); entry.layerRelease = undefined
+    entry.layer = undefined; entry.layerReady = false; entry.layerBytes = 0; entry.gen++
+    this.deferChanged(sheetId, 'evicted')
+  }
+  private makeRoom(current: Entry, needed: number): boolean {
+    for (const [id, other] of this.entries) {
+      if (this.retainedBytes + needed <= this.budgetBytes) break
+      if (other === current || other.state !== 'ready' || !other.layer) continue
+      this.evictDecoded(id, other)
     }
-    if (payload.diagnostics.some(d => d.feature === 'table-style-reply-limit')) {
-      this.host.release(out); entry.state = 'failed'; entry.diagnostics = payload.diagnostics; entry.gen++; this.host.changed(sheetId); return
+    for (const [id, other] of this.entries) {
+      if (this.retainedBytes + needed <= this.budgetBytes) break
+      if (other === current || other.state !== 'ready') continue
+      this.reset(other); other.gen++
+      this.deferChanged(id, 'evicted')
+    }
+    return this.retainedBytes + needed <= this.budgetBytes
+  }
+  private async buildLayer(sheetId: string, entry: Entry, requestId: string, payload: RemoteRegionStyles, seq: number, reply?: WorkerReply<'read'>, releaseReply?: () => void): Promise<void> {
+    const layerBytes = payload.tables.length ? layerBytesFor(payload.tables.length) : 0
+    if (layerBytes && !this.makeRoom(entry, layerBytes + (reply ? reply.replyBytes ?? 0 : entry.replyBytes))) {
+      if (reply) releaseReply?.()
+      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver cache budget.' }]
+      this.deferChanged(sheetId); return
     }
     let layerRelease: (() => void) | undefined
     try {
-      const decodedBytes = payload.tables.length ? 6_400_000 + payload.tables.length * 2048 : 0
-      const replyBytes = out.replyBytes ?? 0
-      if (!Number.isSafeInteger(replyBytes) || replyBytes < 0 || this.retainedBytes + replyBytes + decodedBytes > this.budgetBytes) {
-        this.host.release(out); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver cache budget.' }]; this.host.changed(sheetId); return
-      }
       let layer: RegionStyleLayer | undefined
-      if (decodedBytes > 0) {
-        const admittedLayer = this.host.admitLayer(sheetId, requestId, decodedBytes)
-        if (!admittedLayer) { this.host.release(out); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the main-thread cache budget.' }]; this.host.changed(sheetId); return }
-        layerRelease = admittedLayer
+      if (layerBytes) {
+        layerRelease = this.host.admitLayer(sheetId, requestId, layerBytes) ?? undefined
+        if (!layerRelease) {
+          if (reply) releaseReply?.()
+          entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the main-thread cache budget.' }]
+          this.deferChanged(sheetId); return
+        }
         const { preloadTableStyles } = await import('../xlsx/tableStyleLoader')
         await preloadTableStyles()
         const { buildTableRegions } = await import('../xlsx/tableStyles/regionLayer')
         const extras = { dxfs: [], tableStyles: new Map(payload.tables.map(item => [item.def.name, item.def])), slicerStyles: new Map() }
         layer = buildTableRegions(payload.tables.map(item => item.table), extras, payload.theme ?? (await import('../drawing/style')).parseThemeContext())
       }
-      // The source owner may have changed while the lazy engine was loading.
-      if (this.closed || entry.seq !== seq || !sameOwner(owner, this.host.identity(sheetId))) { layerRelease?.(); layerRelease = undefined; this.host.release(out); entry.state = 'waiting'; return }
-      entry.payload = payload; entry.layer = layer; entry.reply = out; entry.replyBytes = replyBytes; entry.layerBytes = decodedBytes; entry.layerRelease = layerRelease
+      if (this.closed || entry.seq !== seq || !sameOwner(entry.owner ?? this.host.identity(sheetId), this.host.identity(sheetId))) {
+        layerRelease?.(); layerRelease = undefined; if (reply) releaseReply?.()
+        if (!this.closed && entry.seq === seq) this.retry(sheetId, entry, seq)
+        return
+      }
+      if (reply) { entry.reply = reply; entry.releaseReply = releaseReply; entry.replyBytes = reply.replyBytes ?? 0; entry.payload = payload; entry.owner = this.host.identity(sheetId) }
+      entry.layer = layer; entry.layerBytes = layerBytes; entry.layerRelease = layerRelease; entry.layerReady = true; entry.layerPending = false
       layerRelease = undefined
-      entry.diagnostics = payload.diagnostics; entry.state = 'ready'; entry.gen++
-      this.host.changed(sheetId)
+      entry.diagnostics = payload.diagnostics; entry.state = 'ready'; entry.gen++; entry.attempts = 0
+      this.deferChanged(sheetId)
     } catch (cause) {
-      layerRelease?.(); this.host.release(out); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Table style engine failed to load' }]; this.host.changed(sheetId)
+      layerRelease?.()
+      if (reply) releaseReply?.()
+      if (entry.reply === reply) { entry.reply = undefined; entry.releaseReply = undefined; entry.replyBytes = 0; entry.payload = undefined }
+      entry.layer = undefined; entry.layerReady = false; entry.layerBytes = 0; entry.layerRelease = undefined; entry.layerPending = false
+      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Table style engine failed to load' }]
+      this.deferChanged(sheetId)
     }
+  }
+  private async rebuildLayer(sheetId: string, entry: Entry): Promise<void> {
+    if (this.closed || !entry.payload || entry.layerPending) return
+    entry.layerPending = true
+    const seq = entry.seq, payload = entry.payload, requestId = `region-style-layer:${sheetId}:${seq}:${entry.gen}`
+    await this.buildLayer(sheetId, entry, requestId, payload, seq)
+  }
+  private async load(sheetId: string, entry: Entry): Promise<void> {
+    if (this.closed) return
+    const requestId = this.host.nextRequestId(), owner = this.host.identity(sheetId), grantBytes = this.host.grant(sheetId, requestId)
+    entry.attempts++
+    if (grantBytes === null) { this.retry(sheetId, entry, entry.seq); return }
+    const seq = ++entry.seq, controller = entry.controller = new AbortController()
+    entry.owner = owner; entry.state = 'loading'
+    let out: WorkerReply<'read'> | symbol
+    const timeout = setTimeout(() => controller.abort(), READ_TIMEOUT_MS)
+    try { out = await this.host.request({ kind: 'read', requestId, owner, query: { op: 'regionStyles', grantBytes } }, controller.signal) }
+    catch (cause) { clearTimeout(timeout); this.host.releaseGrant(requestId); if (entry.seq === seq) this.retry(sheetId, entry, seq); return }
+    clearTimeout(timeout)
+    const releaseOnce = (() => { let released = false; return () => { if (released) return; released = true; if (typeof out === 'object') this.host.release(out) } })()
+    if (this.closed || entry.seq !== seq || this.entries.get(sheetId) !== entry) { releaseOnce(); return }
+    entry.controller = undefined
+    if (typeof out !== 'object') { this.retry(sheetId, entry, seq); return }
+    if (out.kind === 'error') {
+      releaseOnce()
+      if (out.retryable || out.code === 'stale-source' || out.code === 'cancelled') this.retry(sheetId, entry, seq)
+      else { entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: out.diagnostics[0]?.message ?? `Table style read failed (${out.code})` }]; this.deferChanged(sheetId) }
+      return
+    }
+    if (out.kind === 'quota') {
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' }]; entry.gen++; this.deferChanged(sheetId); return
+    }
+    const payload = unpack(out)
+    if (!payload) {
+      releaseOnce()
+      entry.state = 'failed'
+      entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table style read did not complete.' }]
+      entry.gen++; this.deferChanged(sheetId); return
+    }
+    if (!sameOwner(out.owner as CacheIdentity, owner) || !sameOwner(owner, this.host.identity(sheetId))
+      || payload.sheetId !== sheetId || payload.stamp.docId !== owner.docId || payload.stamp.sheetId !== sheetId || payload.stamp.valueGen !== owner.valueGen) {
+      releaseOnce(); this.retry(sheetId, entry, seq); return
+    }
+    if (payload.diagnostics.some(d => d.feature === 'table-style-reply-limit')) {
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = payload.diagnostics; entry.gen++; this.deferChanged(sheetId); return
+    }
+    if (!Number.isSafeInteger(out.replyBytes) || (out.replyBytes ?? -1) < 0) {
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table style reply had no valid byte estimate.' }]; this.deferChanged(sheetId); return
+    }
+    const layerBytes = payload.tables.length ? layerBytesFor(payload.tables.length) : 0
+    if (!this.makeRoom(entry, (out.replyBytes ?? 0) + layerBytes)) {
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver cache budget.' }]; this.deferChanged(sheetId); return
+    }
+    await this.buildLayer(sheetId, entry, requestId, payload, seq, out, releaseOnce)
   }
 }
 
@@ -119,4 +199,10 @@ export function sheetWithRegionStyles<T extends { tables?: unknown[]; regionStyl
   for (const diagnostic of state.diagnostics) if (!diagnostics.some(found => found.feature === diagnostic.feature && found.message === diagnostic.message)) diagnostics.push(diagnostic)
   if (state.state !== 'ready' || !state.payload) return { ...sheet, diagnostics } as T
   return { ...sheet, tables: state.payload.tables.map(item => item.table), regionStyles: state.layer, regionStylesResolved: true, diagnostics } as T
+}
+
+/** Drop the display entry's reference when its decoded role cache is evicted. */
+export function sheetWithoutRegionStyles<T extends { regionStyles?: RegionStyleLayer }>(sheet: T): T {
+  if (!sheet.regionStyles) return sheet
+  return { ...sheet, regionStyles: undefined } as T
 }

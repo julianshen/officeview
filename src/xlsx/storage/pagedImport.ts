@@ -19,8 +19,6 @@ import { PIVOT_PART_MAX_BYTES, parsePivotRegion, type ControlPartRef } from '../
 import { anchorId, anchorRecord } from '../anchorRecords'
 import type { SheetColorContext } from '../sheetColors'
 import type { ThemeContext } from '../../drawing/style'
-import type { XmlNode } from '../../core/xml'
-import { parseStylesExtras } from '../tableStyles/parseStylesExtras'
 import type { TableStyleDef } from '../tableStyles/model'
 import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
@@ -315,7 +313,6 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       }
     }
     let sparklineColorContext: SheetColorContext = {}
-    let tableStylesRoot: XmlNode | undefined
     let tableStylesTheme: ThemeContext | undefined
     try {
       const stylesText = inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined
@@ -327,11 +324,12 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       const parsedFormatting = await workbookFormattingWithColorContext(workbookRoot, stylesText, themeText)
       workbook.formatting = parsedFormatting.formatting
       sparklineColorContext = parsedFormatting.colorContext
-      if (stylesText !== undefined) tableStylesRoot = parseXml(stylesText)
+      workbook.tableStyleDefs = parsedFormatting.tableStyleDefs
       if (themeText !== undefined) {
         const { parseThemeContext } = await import('../../drawing/style')
         tableStylesTheme = parseThemeContext(themeText)
       }
+      workbook.tableStyleTheme = tableStylesTheme
     } catch (error) {
       if (isPackageError(error) && error.code === 'cancelled') throw error
       // parse.ts tolerates an unreadable styles part: cells keep General format.
@@ -537,15 +535,6 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       }
       sheet.state = 'complete'
       pulse()
-    }
-    const styleNames = new Set(sheets.flatMap(sheet => sheet.tables?.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)) ?? []))
-    if (styleNames.size) {
-      const extras = tableStylesRoot ? parseStylesExtras(tableStylesRoot, sparklineColorContext) : undefined
-      workbook.tableStyleDefs = new Map([...styleNames].flatMap(name => {
-        const def = extras?.tableStyles.get(name)
-        return def ? [[name, def] as const] : []
-      }))
-      workbook.tableStyleTheme = tableStylesTheme
     }
     progress('done')
     return { kind: 'complete', stamp }

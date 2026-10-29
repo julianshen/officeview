@@ -7,6 +7,18 @@ import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/mode
 import type { TableMetadata } from '../formula/types'
 import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 
+/** Shared bounds for paged table-style descriptors and decoded role caches. */
+export const MAX_REGION_STYLE_TABLES = 512
+export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 4_096
+export const REGION_STYLE_REPLY_OVERHEAD_BYTES = 1_024
+export const MAX_REGION_STYLE_MEMO_ENTRIES = 4_096
+export const REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES = 512
+export const REGION_STYLE_LAYER_BASE_BYTES = 4_096
+export const REGION_STYLE_REGION_ESTIMATE_BYTES = 512
+export const REGION_STYLE_LAYER_MAX_BYTES = REGION_STYLE_LAYER_BASE_BYTES
+  + MAX_REGION_STYLE_TABLES * REGION_STYLE_REGION_ESTIMATE_BYTES
+  + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES
+
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
 export const MAX_OVERVIEW_GROUPS_DESKTOP = 2048
 export const MAX_OVERVIEW_GROUPS_MOBILE = 1024
@@ -570,6 +582,8 @@ export interface SheetLayout {
   hasSparklines?: boolean
   /** S8: table metadata fast path; absent/false has no per-frame style work. */
   hasRegionStyles?: boolean
+  /** Number of table descriptors a bounded regionStyles read may return. */
+  regionStyleTableCount?: number
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }

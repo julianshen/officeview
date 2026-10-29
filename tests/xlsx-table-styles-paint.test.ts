@@ -170,6 +170,19 @@ describe('table style painting', () => {
     expect(large).toBeLessThan(3_000)
   })
 
+  test('a 20,000 by 10 table keeps its memo within the documented per-layer bound', async () => {
+    await tableStyleLoader.preloadTableStyles()
+    const { buildTableRegions, REGION_STYLE_LAYER_MAX_BYTES } = await import('../src/xlsx/tableStyles/regionLayer')
+    const { parseStylesExtras } = await import('../src/xlsx/tableStyles/parseStylesExtras')
+    const { parseThemeContext } = await import('../src/drawing/style')
+    const doc = await parsed('table-medium-2.xlsx')
+    const sheet = styleSheet(doc), extras = parseStylesExtras(sheet.tableStyleSource!.root, sheet.tableStyleSource!.colors)
+    const table = { ...sheet.tables![0]!, extent: { ...sheet.tables![0]!.extent, rows: 20_000, cols: 10 } }
+    const layer = buildTableRegions([table], extras, parseThemeContext())!
+    for (let row = 0; row < 20_000; row++) for (let col = 0; col < 10; col++) layer.styleAt(row, col, undefined)
+    expect(layer.retainedBytes).toBeLessThanOrEqual(REGION_STYLE_LAYER_MAX_BYTES)
+  })
+
   test('metrics do not create a diagnostics array without a diagnostic', async () => {
     await tableStyleLoader.preloadTableStyles()
     const doc = await parsed('table-medium-2.xlsx')

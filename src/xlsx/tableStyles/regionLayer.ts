@@ -9,12 +9,22 @@ import type { XlsxCellStyle, XlsxSheet } from '../types'
 import { parseThemeContext } from '../../drawing/style'
 import { registerTableStyleEngine } from '../tableStyleLoader'
 import { MAX_COLS, MAX_ROWS } from '../view/coordinates'
+import {
+  MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_LAYER_BASE_BYTES,
+  REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES,
+} from '../view/contracts'
 
 export interface RegionStyleLayer {
   readonly rects: readonly SheetRect[]
+  /** Conservative retained-size estimate; independent of the table's cell count. */
+  readonly retainedBytes: number
   styleAt(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined
 }
 export type RegionStyleTable = Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>
+
+/** A bounded cache stores at most 4,096 role/own-style pairs at the 512 B
+ * estimate, plus 4 KiB fixed overhead and 512 B per region. */
+export { MAX_REGION_STYLE_MEMO_ENTRIES, MAX_REGION_STYLE_TABLES, REGION_STYLE_LAYER_BASE_BYTES, REGION_STYLE_LAYER_MAX_BYTES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../view/contracts'
 
 function band(element: TableStyleElementType, rect: SheetRect, row: number, col: number): RoleRef {
   return { element, edges: { top: row === rect.minRow, bottom: row === rect.maxRow, left: col === rect.minCol, right: col === rect.maxCol } }
@@ -90,29 +100,33 @@ export function buildTableRegions(tables: readonly RegionStyleTable[], extras: S
   })
   if (!regions.length) return undefined
   const rects = regions.map(region => region.rect)
-  const memo = new Map<string, Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>>()
-  const MAX_MEMO_CELLS = 50_000
+  const memo = new Map<typeof regions[number], Map<string, Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>>>()
+  let memoEntries = 0
   return {
     rects,
+    get retainedBytes() { return REGION_STYLE_LAYER_BASE_BYTES + regions.length * REGION_STYLE_REGION_ESTIMATE_BYTES + memoEntries * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES },
     styleAt(row, col, own) {
       const region = regions.find(candidate => row >= candidate.rect.minRow && row <= candidate.rect.maxRow && col >= candidate.rect.minCol && col <= candidate.rect.maxCol)
       if (!region) return own
-      const key = `${row}:${col}`
-      const byOwn = memo.get(key)
-      if (byOwn?.has(own)) return byOwn.get(own)
       const roles = orderRoles(tableCellRoles(region.table, row, col, region.def), 'table')
+      const signature = roles.map(role => typeof role === 'string' ? role : `${role.element}:${+role.edges.top}${+role.edges.bottom}${+role.edges.left}${+role.edges.right}`).join('|')
+      let bySignature = memo.get(region)
+      if (!bySignature) memo.set(region, bySignature = new Map())
+      const byOwn = bySignature.get(signature)
+      if (byOwn?.has(own)) return byOwn.get(own)
       const scratch: TableStyleDiagnostic[] = []
       const style = roles.length ? resolveRoleStyle(region.def, roles, own, theme, scratch) : own
       for (const diagnostic of scratch) report?.(diagnostic)
-      let entries = byOwn
-      if (!entries) {
-        // Delete in batches: Map iterator deletion leaves tombstones in some
-        // engines, making per-cell FIFO eviction quadratic for large tables.
-        if (memo.size >= MAX_MEMO_CELLS) memo.clear()
-        entries = new Map<XlsxCellStyle | undefined, XlsxCellStyle | undefined>()
-        memo.set(key, entries)
+      if (memoEntries >= MAX_REGION_STYLE_MEMO_ENTRIES) {
+        memo.clear()
+        memoEntries = 0
+        bySignature = new Map()
+        memo.set(region, bySignature)
       }
+      let entries = bySignature.get(signature)
+      if (!entries) bySignature.set(signature, entries = new Map())
       entries.set(own, style)
+      memoEntries++
       return style
     },
   }

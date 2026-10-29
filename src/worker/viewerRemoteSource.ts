@@ -45,6 +45,7 @@ import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
 import { RemoteSparklineCache, type PagedSheetSparklines, type SparklineChangeReason } from './viewerRemoteSparklines'
 import { RemoteRegionStyleCache, type PagedRegionStyleState } from './viewerRemoteRegionStyles'
+import { MAX_REGION_STYLE_TABLES, REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE, REGION_STYLE_REPLY_OVERHEAD_BYTES } from '../xlsx/view/contracts'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
@@ -199,6 +200,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly regionStyleCache: RemoteRegionStyleCache
   private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
+  private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -258,9 +260,10 @@ export class RemoteWorkbook implements WorkbookSource {
     this.regionStyleCache = new RemoteRegionStyleCache({
       identity: sheetId => this.identity(sheetId), hasRegionStyles: sheetId => this.layout(sheetId).hasRegionStyles === true,
       loadState: sheetId => this.loadState(sheetId),
-      grant: requestId => {
+      grant: (sheetId, requestId) => {
         const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
-        const limit = Math.min(headroom, MAIN_THREAD_BUDGETS[this.profile] / 4), owner = `region-style-grant:${requestId}`
+        const tableCount = Math.min(MAX_REGION_STYLE_TABLES, this.layout(sheetId).regionStyleTableCount ?? 1)
+        const limit = Math.min(headroom, REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE), owner = `region-style-grant:${requestId}`
         if (!Number.isSafeInteger(limit) || limit < 4096 || this.mainLedger.ownerBytes('replies', owner) > 0) return null
         this.mainLedger.set('replies', owner, limit)
         return limit
@@ -275,7 +278,10 @@ export class RemoteWorkbook implements WorkbookSource {
         let held = true
         return () => { if (held) { held = false; this.mainLedger.release('layout', owner) } }
       },
-      changed: sheetId => { (this.merges(sheetId) as { gen: number }).gen++; this.notify() },
+      changed: (sheetId, reason = 'updated') => {
+        if (reason === 'evicted') { for (const listener of this.regionStyleEvictionListeners) listener(sheetId); this.notify(); return }
+        (this.merges(sheetId) as { gen: number }).gen++; this.notify()
+      },
     }, MAIN_THREAD_BUDGETS[this.profile] / 4)
   }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
@@ -283,6 +289,11 @@ export class RemoteWorkbook implements WorkbookSource {
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
   regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
   closeSheet(sheetId: string): void { this.regionStyleCache.closeSheet(sheetId) }
+  subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
+    if (this.closed) return () => {}
+    this.regionStyleEvictionListeners.add(listener)
+    return () => { this.regionStyleEvictionListeners.delete(listener) }
+  }
   subscribeSparklineEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
     this.sparklineEvictionListeners.add(listener)
@@ -852,6 +863,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.drawingCache.close()
     this.sparklineCache.close()
     this.regionStyleCache.close()
+    this.regionStyleEvictionListeners.clear()
     this.sparklineChanges.clear()
     this.overflow?.cache.close()
     this.overflow = undefined

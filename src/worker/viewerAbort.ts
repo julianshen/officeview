@@ -45,6 +45,11 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
         () => unavailableDrawings(error.message, error),
       ),
     } satisfies Pick<SourceStore, 'readDrawings'> : {}),
+    ...(store.readRegionStyles ? { readRegionStyles: (options, grantBytes, memory) => read(
+      () => store.readRegionStyles!(options, grantBytes, memory),
+      options.signal,
+      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], cells: new Int32Array(), diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: error.message }] }),
+    ) } satisfies Pick<SourceStore, 'readRegionStyles'> : {}),
     queryColumn: (request, options) => read(() => store.queryColumn(request, options), options.signal, page),
     queryOverview: (request, options) => read(() => store.queryOverview(request, options), options.signal, page),
     queryStructural: (rect, options) => read(() => store.queryStructural(rect, options), options.signal, () => ({ stamp: store.stamp, completeness: 'incomplete', merges: [], tables: [], spills: [], drawings: [], missing: [rect], error })),

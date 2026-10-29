@@ -86,7 +86,7 @@ import { warnIfStylesMissing } from '../styleWarning'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { documentWithSparklines, sheetWithSparklines, sheetWithoutResolvedSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
-import { sheetWithRegionStyles } from '../../worker/viewerRemoteRegionStyles'
+import { sheetWithRegionStyles, sheetWithoutRegionStyles } from '../../worker/viewerRemoteRegionStyles'
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
@@ -278,6 +278,8 @@ interface SheetEntry {
   sheet: XlsxSheet
   /** Generation of the worker-resolved sparkline map read by the tile painter. */
   sparklineGen: number
+  /** Generation of the worker-resolved table-style layer. */
+  regionStyleGen: number
   revision: number
   /** Worker-backed sheets: generation of the merged ranges the geometry holds. */
   structureGen: number
@@ -392,6 +394,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
   useEffect(() => remote?.subscribe(() => setLoadTick(tick => tick + 1)), [remote])
+  useEffect(() => {
+    if (!remote) return
+    return remote.subscribeRegionStyleEvictions(sheetId => {
+      const retained = entries.get(sheetId)
+      if (retained) retained.sheet = sheetWithoutRegionStyles(retained.sheet)
+    })
+  }, [remote, entries])
   // Tiles painted under an older worker layout/merge generation are stale (§10.1).
   const structureGens = useRef(new Map<string, number>()).current
   // View-only session sizes per sheet (spec §5.6): they outlive scroll, zoom,
@@ -479,7 +488,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   /** A sheet entry built off to the side: nothing is charged, held or published. */
   interface Candidate {
-    sheetId: string; sheet: XlsxSheet; sparklineGen: number; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
+    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: number; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
     order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
     built: SheetGeometry & { readonly chargeBytes?: number }
     /** Exactly what publishing charges (the entry charge functions). */
@@ -492,6 +501,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const index = sheetIds.indexOf(sheetId)
     let sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
     const regionStyleContent = remote && remote.layout(sheetId).hasRegionStyles ? remote.regionStyles(sheetId) : null
+    const regionStyleGen = regionStyleContent?.gen ?? 0
     if (regionStyleContent) sheet = sheetWithRegionStyles(sheet, regionStyleContent)
     const sparklineContent = remote && remote.layout(sheetId).hasSparklines ? remote.sparklines(sheetId) : null
     const sparklineGen = sparklineContent?.gen ?? 0
@@ -500,11 +510,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const previous = entries.get(sheetId)
     const structureGen = remote ? remote.merges(sheetId).gen : 0
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
-    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen && previous.sparklineGen === sparklineGen) return { entry: previous }
+    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen && previous.sparklineGen === sparklineGen && previous.regionStyleGen === regionStyleGen) return { entry: previous }
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
       // that changed since are still applied, to the view already shown.
-      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen && previous.sparklineGen === sparklineGen) return { entry: previous }
+      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen && previous.sparklineGen === sparklineGen && previous.regionStyleGen === regionStyleGen) return { entry: previous }
       input = previous.input
     }
     // A rebuild for session sizes alone keeps the view buffers it already shows
@@ -526,12 +536,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
     const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
-    return { candidate: { sheetId, sheet, sparklineGen, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
+    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
    * retires the previous entry on the next display commit. */
   const publishEntry = (candidate: Candidate, resizeGen: number): SheetEntry => {
-    const { sheetId, sheet, sparklineGen, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
+    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
     bindOverflowCache(built, overflowFor())
     // A resident geometry is charged for its lifetime: the row projection (it
     // keeps its own copied segments; the build's row axis is dropped), the
@@ -550,7 +560,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, sparklineGen, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
@@ -919,7 +929,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }), [remote])
   useEffect(() => () => finder.dispose(), [finder])
   const cellAt = (sheetEntry: SheetEntry, at: SourceCell): XlsxCell | undefined => sheetEntry.geometry.cellsOf(at.row)?.find(cell => cell.col === at.col)
-  const styleForCell = (sheetEntry: SheetEntry, cell: Pick<XlsxCell, 'row' | 'col' | 'styleIndex' | 'style'>): import('../../xlsx/types').XlsxCellStyle | undefined => {
+  const styleForCell = (sheetEntry: SheetEntry, cell: Pick<XlsxCell, 'row' | 'col' | 'styleIndex'> & { style?: XlsxCell['style'] }): import('../../xlsx/types').XlsxCellStyle | undefined => {
     const own = remote ? remote.styleOf(cell.styleIndex) : cell.style
     return sheetEntry.sheet.regionStyles?.styleAt(cell.row, cell.col, own) ?? own
   }
@@ -1287,7 +1297,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         selection, order: entry.view.order, visibility: entry.view.visibility, columns,
         allowed: () => current.current.allowCopy, signal: abort.signal, admitBytes: bytes => admit(columnBytes + bytes),
         retainBytes: (targets, bytes, commit) => { mainLedger.adoptWhileReachable('copy', copyOwner, 'document', targets, bytes, commit); held -= bytes }, onPending: () => { if (live.current && token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
-        format: (cell, allocation) => { const sourceCell = cellAt(entry, cell); const style = sourceCell ? styleForCell(entry, sourceCell) : remote ? remote.styleOf(cell.styleIndex) : undefined; return cellDisplayText(entry.sheet, { value: cell.value, style }, allocation) },
+        format: (cell, allocation) => { const style = styleForCell(entry, { ...cell, style: cellAt(entry, cell)?.style }); return cellDisplayText(entry.sheet, { value: cell.value, style }, allocation) },
       })
       if (!live.current || token !== copyToken.current) return
       setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')

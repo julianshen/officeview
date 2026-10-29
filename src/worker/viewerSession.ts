@@ -188,6 +188,7 @@ export interface WorkbookSource {
   readonly sheets: readonly { sheetId: string; name: string }[]
   hasSparklines?(sheetId: string): boolean
   hasRegionStyles?(sheetId: string): boolean
+  regionStyleTableCount?(sheetId: string): number
   store(sheetId: string): SourceStore
   geometry(sheetId: string): SheetGeometry
   /** Coverage this backend can never resolve (e.g. the interim adapter before
@@ -2411,6 +2412,7 @@ export class DocumentSession {
       ...(used ? { used: { ...used } } : {}),
       ...(this.source.hasSparklines ? { hasSparklines: this.source.hasSparklines(sheetId) } : {}),
       ...(this.source.hasRegionStyles ? { hasRegionStyles: this.source.hasRegionStyles(sheetId) } : {}),
+      ...(this.source.regionStyleTableCount ? { regionStyleTableCount: this.source.regionStyleTableCount(sheetId) } : {}),
       ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
     }
   }
