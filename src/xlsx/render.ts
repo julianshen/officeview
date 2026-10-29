@@ -3,7 +3,7 @@
  * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
  * height 15pt (20px). Cell geometry is fixed; no reflow needed.
  */
-import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxSheet } from './types'
+import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type { PptxTextBody } from '../pptx/types'
 import { layoutTextBody, type MeasureText, type TextLayout } from '../drawing/text-layout'
 import { resolveColor } from '../core/color'
@@ -19,7 +19,7 @@ import { BUILTIN_DATE_FORMATS, formatBuiltinDate } from './builtinDate'
 import { BUILTIN_EXTENDED_FORMATS, NO_SECTION, formatColor, formatExtended, negativeDateOverflow } from './cellFormat'
 import type { ResolvedSemantics } from './formula/types'
 import type { WorkerDiagnostic } from './view/contracts'
-import { MAX_COLS, isValidCoordinate } from './view/coordinates'
+import { MAX_COLS, MAX_ROWS, isValidCoordinate } from './view/coordinates'
 import { NO_OVERFLOW, alignmentOverflows, rowOverflowFromCells, textOverflowAllowance, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type OverflowAllowance, type RowOverflowInput } from './view/textOverflow'
 import { RectangleIndex } from './view/structure'
@@ -28,6 +28,7 @@ import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
 import { cellFontFamily as cellFaceFamily, cellFontString } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
+import { regionStylesFor } from './tableStyleLoader'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -253,6 +254,13 @@ function validMerge(r: XlsxMergeRange): boolean {
   return isValidCoordinate(r.minRow, r.minCol) && isValidCoordinate(r.maxRow, r.maxCol) && r.minRow <= r.maxRow && r.minCol <= r.maxCol
 }
 
+function validStyledTable(table: NonNullable<XlsxSheet['tables']>[number]): boolean {
+  const { firstRow, firstCol, rows, cols } = table.extent
+  const maxRow = firstRow + rows - 1, maxCol = firstCol + cols - 1
+  return Boolean(table.styleInfo?.name) && [firstRow, firstCol, rows, cols, maxRow, maxCol].every(Number.isSafeInteger)
+    && firstRow >= 0 && firstCol >= 0 && rows > 0 && cols > 0 && maxRow < MAX_ROWS && maxCol < MAX_COLS
+}
+
 /** Populated cells and merge extents the retained static grid cannot place. Before
  * this check the renderer drew cells at `rowY[row] ?? 0` / `colX[col] ?? 0`, i.e.
  * over A1, and clipped merges to the bitmap edge. */
@@ -268,6 +276,10 @@ function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): Stati
   }
   for (const r of sheet.mergeRanges ?? []) {
     if (validMerge(r)) { maxRow = Math.max(maxRow, r.maxRow); maxCol = Math.max(maxCol, r.maxCol) }
+  }
+  for (const table of sheet.tables ?? []) if (validStyledTable(table)) {
+    maxRow = Math.max(maxRow, table.extent.firstRow + table.extent.rows - 1)
+    maxCol = Math.max(maxCol, table.extent.firstCol + table.extent.cols - 1)
   }
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
@@ -307,6 +319,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
   // Merged ranges are part of the painted grid even where only the anchor is populated.
   for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
+  for (const table of sheet.tables ?? []) if (validStyledTable(table)) maxCol = Math.max(maxCol, table.extent.firstCol + table.extent.cols - 1)
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) if (isValidCoordinate(row, col)) maxCol = Math.max(maxCol, col)
   }
@@ -343,6 +356,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   }
   if (inconsistent) diagnostics.push({ code: 'inconsistent-row-coordinate', message: `${inconsistent} cell(s) carry a reference outside their row record; placed by the cell reference` })
   for (const r of merges) maxRow = Math.max(maxRow, r.maxRow)
+  for (const table of sheet.tables ?? []) if (validStyledTable(table)) maxRow = Math.max(maxRow, table.extent.firstRow + table.extent.rows - 1)
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
       if (isValidCoordinate(row, col)) { maxRow = Math.max(maxRow, row); break }
@@ -756,6 +770,11 @@ export function renderSheet(
   // measurement is cached by face+text.
   const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
   const measured = textMeasurer(ctx)
+  const regionStyles = regionStylesFor(sheet)
+  if (!regionStyles && sheet.tables?.some(table => Boolean(table.styleInfo?.name))) {
+    const diagnostics = (sheet.diagnostics ??= [])
+    if (!diagnostics.some(d => d.feature === 'table-style-engine-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'table-style-engine-unavailable', message: 'Table styles could not be loaded; table cells paint with their stored formatting only' })
+  }
   if (viewport) ctx.translate(-vp.x, -vp.y)
   const intersects = (x: number, y: number, w: number, h: number): boolean =>
     x < vp.x + vp.width && x + w > vp.x && y < vp.y + vp.height && y + h > vp.y
@@ -778,7 +797,44 @@ export function renderSheet(
   }
   const extent = { width: m.widthPx, height: m.heightPx }
   const laidOut: CellBodyLayout[] = []
-  for (const row of sheet.rows) {
+  let paintRows: readonly XlsxRow[] = sheet.rows
+  // Styled empty table cells are real paint surfaces. Add them only where no
+  // source cell exists, and only within the already admitted static grid.
+  if (regionStyles) {
+    const augmented = sheet.rows.map(row => ({ ...row, cells: [...row.cells] }))
+    const rowRecords = new Map<number, XlsxRow>()
+    for (const row of augmented) if (!rowRecords.has(row.index)) rowRecords.set(row.index, row)
+    const occupied = new Map<number, Set<number>>()
+    for (const row of sheet.rows) for (const cell of row.cells) {
+      const source = cellSourceRow(row, cell)
+      let cols = occupied.get(source)
+      if (!cols) occupied.set(source, cols = new Set())
+      cols.add(cell.col)
+    }
+    const appended: XlsxRow[] = []
+    for (const rect of regionStyles.rects) {
+      const r0 = Math.max(0, rect.minRow), r1 = Math.min(rowHeightsPx.length - 1, rect.maxRow)
+      const c0 = Math.max(0, rect.minCol), c1 = Math.min(colWidthsPx.length - 1, rect.maxCol)
+      for (let source = r0; source <= r1; source++) {
+        let row = rowRecords.get(source)
+        if (!row) {
+          row = { index: source, cells: [], hidden: false }
+          rowRecords.set(source, row); appended.push(row)
+        }
+        let cols = occupied.get(source)
+        if (!cols) occupied.set(source, cols = new Set())
+        for (let col = c0; col <= c1; col++) {
+          if (cols.has(col)) continue
+          const style = regionStyles.styleAt(source, col, undefined)
+          if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) continue
+          row.cells.push({ ref: '', row: source, col, value: null, styleIndex: 0, style })
+          cols.add(col)
+        }
+      }
+    }
+    paintRows = [...augmented, ...appended]
+  }
+  for (const row of paintRows) {
     // A malformed row may name many source rows. Partition once so occupancy
     // construction never rescans the container for each source row.
     const sourceCells = new Map<number, XlsxCell[]>()
@@ -789,33 +845,35 @@ export function renderSheet(
       cells.push(cell)
     }
     const rowOverflow = new Map<number, RowOverflowInput>()
-    const overflowFor = (cell: XlsxCell, source: number): OverflowAllowance => {
-      let input = rowOverflow.get(source)
-      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(sourceCells.get(source)!, merges.inRow(source), edges.col, MAX_COLS - 1))
+    const overflowFor = (cell: XlsxCell, sourceRow: number): OverflowAllowance => {
+      let input = rowOverflow.get(sourceRow)
+      if (!input) rowOverflow.set(sourceRow, input = rowOverflowFromCells(sourceCells.get(sourceRow)!, merges.inRow(sourceRow), edges.col, MAX_COLS - 1))
       return textOverflowAllowance(input, cell.col)
     }
     for (const cell of row.cells) {
+      const resolvedStyle = regionStyles?.styleAt(cell.row, cell.col, cell.style) ?? cell.style
+      const styledCell = resolvedStyle === cell.style ? cell : { ...cell, style: resolvedStyle }
       // Only coordinates inside the grid have geometry; admission refused any
       // populated cell beyond it that this request needs, so nothing here falls
       // back to the origin. An explicit cell reference names its own row.
-      const source = cellSourceRow(row, cell)
+      const source = cellSourceRow(row, styledCell)
       if (!Number.isInteger(source) || source < 0 || source >= rowHeightsPx.length) continue
-      if (!Number.isInteger(cell.col) || cell.col < 0 || cell.col >= colWidthsPx.length) continue
+      if (!Number.isInteger(styledCell.col) || styledCell.col < 0 || styledCell.col >= colWidthsPx.length) continue
       const y = rowY[source]
       const h = rowHeightsPx[source]
       const bottom = Math.max(y + h, rowBottom.get(source) ?? Number.NEGATIVE_INFINITY)
       if (bottom <= vp.y || y >= vp.y + vp.height) continue
-      if (merges.covers(cell.row, cell.col)) continue // inside a merge, not its anchor — nothing to paint
-      const rng = merges.anchorAt(cell.row, cell.col)
+      if (merges.covers(styledCell.row, styledCell.col)) continue // inside a merge, not its anchor — nothing to paint
+      const rng = merges.anchorAt(styledCell.row, styledCell.col)
       // geometry: anchor cells expand across their merge range
-      const x = colX[cell.col]
-      const w = rng ? edges.col(rng.maxCol + 1) - x : colWidthsPx[cell.col]
+      const x = colX[styledCell.col]
+      const w = rng ? edges.col(rng.maxCol + 1) - x : colWidthsPx[styledCell.col]
       const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
-      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
+      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source))
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }

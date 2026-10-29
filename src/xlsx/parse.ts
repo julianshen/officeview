@@ -75,6 +75,8 @@ function asNode(v: unknown): XmlNode {
 
 interface Styles {
   colorContext: SheetColorContext
+  /** Only the bounded table-style subtrees are retained for the later lazy painter. */
+  tableStyleSource?: import('./tableStyles/model').TableStyleSource
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
    * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
@@ -110,6 +112,15 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
     ...(indexed ? { indexed: getChildren(indexed, 'rgbColor').map(node => String(attrs(node).rgb ?? '')) } : {}),
   }
   styles.colorContext = colorContext
+  const stylesNode = getChildren(root, 'styleSheet')[0] ?? root
+  const dxfsNode = getChildren(stylesNode, 'dxfs')[0]
+  const tableStylesNode = getChildren(stylesNode, 'tableStyles')[0]
+  if (dxfsNode || tableStylesNode) {
+    styles.tableStyleSource = {
+      root: { ...(dxfsNode ? { dxfs: dxfsNode } : {}), ...(tableStylesNode ? { tableStyles: tableStylesNode } : {}) },
+      colors: colorContext,
+    }
+  }
   const colorOf = (node: XmlNode | undefined) => node ? resolveSheetColor(attrs(node), colorContext) : undefined
   for (const numFmtsN of getChildren(root, 'numFmts')) {
     for (const nf of getChildren(numFmtsN, 'numFmt')) {
@@ -511,6 +522,9 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     semantics,
     cellStyles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
+  }
+  for (const sheet of sheets) {
+    if (sheet.tables?.some(table => Boolean(table.styleInfo?.name)) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
   }
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)

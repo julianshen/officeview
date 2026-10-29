@@ -15,6 +15,8 @@ import type {
   WorkbookSheetIdentity,
 } from './formula/types'
 import type { DeclaredSheetFilters } from './view/declaredFilters'
+import type { RegionStyleLayer } from './tableStyles/regionLayer'
+import type { TableStyleSource } from './tableStyles/model'
 
 export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean; /** An authored fallback's original feature (spec 6.6). */ feature?: 'chart' | 'ChartEx' }
 export interface XlsxDrawing extends SceneNode<PptxTextBody, SceneImage> {
@@ -157,6 +159,9 @@ export interface XlsxSheet {
   sheetId?: string
   /** Tables owned by this sheet (also present in the document-wide inventory). */
   tables?: TableMetadata[]
+  /** Lazy table-style source and resolved paint layer (resident rendering only). */
+  tableStyleSource?: TableStyleSource
+  regionStyles?: RegionStyleLayer
   /** Bounded pivot/control region references used by region-style rendering. */
   pivotRegions?: import('./pivots/stub').PivotRegionRef[]
   slicerRefs?: import('./pivots/stub').ControlPartRef[]

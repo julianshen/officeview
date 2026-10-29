@@ -17,6 +17,7 @@ import type { ContentImageAsset, DrawingContent, DrawingContentShape } from '../
 import type { XlsxDocument, XlsxSheet } from '../xlsx/types'
 import { CHART_ENGINE_UNAVAILABLE, ensureChartEngine, ensureChartPainter, hasXlsxCharts, loadChartModule, type ChartReceiverLease } from '../xlsx/chartLoader'
 import { ensureSparklinePainter } from '../xlsx/sparklineLoader'
+import { ensureTableStyleEngine } from '../xlsx/tableStyleLoader'
 import type { PptxDocument } from '../pptx/types'
 import type { DrawingCoverageEntry } from '../drawing/coverage'
 import type { ImageSelection } from '../core/svg'
@@ -415,6 +416,7 @@ export function getPaintables(
         const drawings = doc.sheets.flatMap(sheet => sheet.drawings ?? [])
         charts = await ensureChartPainter(drawings, chartReceiver(doc, options))
         await ensureSparklinePainter(doc.sheets)
+        await ensureTableStyleEngine(doc.sheets)
         const indexed = doc.images ?? []
         decoded = await decodeImageAssets([...indexed, ...cached], options?.decodeImage)
         const decodedByObject = new Map(cached.map((image, index) => [image, decoded[indexed.length + index]]))

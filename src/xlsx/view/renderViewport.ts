@@ -5,7 +5,7 @@ import type { CanvasColors } from '../../components/canvasColors'
  * eagerly, never reaches the viewport planner; only the interactive sheet
  * viewport (lazy chunk) and tests import it.
  */
-import type { XlsxSheet } from '../types'
+import type { XlsxCell, XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
@@ -17,6 +17,8 @@ import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
 import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
 import type { ResolvedSparkline } from '../sparklines/resolve'
 import { belowDetail } from './viewport'
+import type { CellPlacement } from './viewport'
+import { regionStylesFor } from '../tableStyleLoader'
 
 /** The host side of canonical records (spec §11.2): the same formatting and text
  * layout the static renderer uses, laid out in a box at the origin. Measurement
@@ -214,11 +216,55 @@ export function renderSheetViewport(
     const built = cache.stats.built, reused = cache.stats.reused
     // The host lays a cell out in a box at the origin: records are box-relative.
     const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
+    const regionStyles = regionStylesFor(sheet)
+    const regionCells: CellPlacement[] = []
+    if (plan.kind === 'detail' && geometry?.kind === 'ready' && regionStyles) {
+      const seen = new Set(plan.cells.map(item => `${item.source.row}:${item.source.col}`))
+      if (plan.active) seen.add(`${plan.active.source.row}:${plan.active.source.col}`)
+      const rowRuns = geometry.metrics.rows.visibleBetween(vy, vy + height).runs
+      const colRuns = geometry.metrics.cols.visibleBetween(vx, vx + width).runs
+      for (const rect of regionStyles.rects) for (const run of rowRuns) for (let slot = run.start; slot <= run.end; slot++) {
+        const row = geometry.metrics.order.displayToSource(slot)
+        if (row < rect.minRow || row > rect.maxRow) continue
+        for (const colRun of colRuns) for (let col = Math.max(rect.minCol, colRun.start); col <= Math.min(rect.maxCol, colRun.end); col++) {
+          const key = `${row}:${col}`
+          if (seen.has(key)) continue
+          const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+          if (merge && (merge.minRow !== row || merge.minCol !== col)) continue
+          const style = regionStyles.styleAt(row, col, undefined)
+          if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) continue
+          const x = geometry.metrics.cols.start(col)
+          let y = geometry.metrics.rows.start(slot)
+          let cellWidth = geometry.metrics.cols.size(col), cellHeight = geometry.metrics.rows.size(slot)
+          if (merge) {
+            cellWidth = geometry.metrics.cols.start(merge.maxCol + 1) - x
+            const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
+            const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
+            const top = geometry.metrics.rows.start(Math.min(firstSlot, lastSlot))
+            y = top
+            cellHeight = geometry.metrics.rows.start(Math.max(firstSlot, lastSlot) + 1) - top
+          }
+          const cell: XlsxCell = { ref: '', row, col, value: null, styleIndex: 0, style }
+          regionCells.push({ cell, source: { row, col }, x, y, width: cellWidth, height: cellHeight })
+          seen.add(key)
+        }
+      }
+    }
+    const cellPlacements: CellPlacement[] = plan.kind === 'detail'
+      ? [...plan.cells.map(item => {
+        const style = regionStyles?.styleAt(item.source.row, item.source.col, item.cell.style) ?? item.cell.style
+        return style === item.cell.style ? item : { ...item, cell: { ...item.cell, ...(style ? { style } : { style: undefined }) } }
+      }), ...regionCells]
+      : []
+    const activePlacement = plan.active ? (() => {
+      const style = regionStyles?.styleAt(plan.active!.source.row, plan.active!.source.col, plan.active!.cell.style) ?? plan.active!.cell.style
+      return style === plan.active!.cell.style ? plan.active! : { ...plan.active!, cell: { ...plan.active!.cell, ...(style ? { style } : { style: undefined }) } }
+    })() : undefined
     let records: CellLayout[] = [], active: CellLayout | undefined
     if (options.layoutAdmission) cache.beginBatch(options.layoutAdmission)
     try {
-      records = plan.kind === 'detail' ? buildCellRecords(plan.cells, owner, host, cache) : []
-      active = plan.active ? buildCellRecords([plan.active], owner, host, cache)[0] : undefined
+      records = plan.kind === 'detail' ? buildCellRecords(cellPlacements, owner, host, cache) : []
+      active = activePlacement ? buildCellRecords([activePlacement], owner, host, cache)[0] : undefined
     } catch (error) {
       if (!(error instanceof LayoutAdmissionError)) throw error
       // Declared resource outcome: a pending-tone summary and one notice,

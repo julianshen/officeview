@@ -4,6 +4,8 @@
  * lazy modules beside it (parseStylesExtras.ts, resolve.ts).
  */
 import type { XlsxCellStyle } from '../types'
+import type { XmlNode } from '../../core/xml'
+import type { SheetColorContext } from '../sheetColors'
 
 /** ECMA-376 Part 1 §18.18.83 ST_TableStyleType. */
 export type TableStyleElementType =
@@ -70,5 +72,11 @@ export interface StylesExtras {
  * position) is a band of one cell: every edge is outer. */
 export interface BandEdges { top: boolean; bottom: boolean; left: boolean; right: boolean }
 export type RoleRef = TableStyleElementType | { element: TableStyleElementType; edges: BandEdges }
+
+/** Inclusive, zero-based worksheet bounds for a styled region. */
+export interface SheetRect { minRow: number; minCol: number; maxRow: number; maxCol: number }
+
+/** Minimal styles.xml source retained only for sheets with a named table style. */
+export interface TableStyleSource { root: XmlNode; colors: SheetColorContext }
 
 export interface TableStyleDiagnostic { kind: 'approximate' | 'unsupported'; feature: string; message: string }
