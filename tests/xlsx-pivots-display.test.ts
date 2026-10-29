@@ -21,7 +21,7 @@ import { LayoutCache } from '../src/xlsx/view/textLayout'
 import { orderRoles } from '../src/xlsx/tableStyles/resolve'
 import type { RoleRef, TableStyleElementType } from '../src/xlsx/tableStyles/model'
 import { savedPivotRoles } from '../src/xlsx/pivots/savedLayout'
-import { pivotButtons, type ButtonPlacement } from '../src/xlsx/pivots/buttons'
+import { dropdownBox, pivotButtons, type ButtonPlacement } from '../src/xlsx/pivots/buttons'
 import type { PivotTableDefinition } from '../src/xlsx/pivots/model'
 import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
 
@@ -315,11 +315,12 @@ describe('pivot buttons (§7.10)', () => {
   test('screen: outline and tabular forms have one dropdown per field header plus the ± buttons', async () => {
     for (const name of ['pivot-layout-outline', 'pivot-layout-tabular']) {
       const { def } = await load(name)
-      // pivotButton="1" xfs: C3 (Year), D3 (Values), A5 (Region), B5 (Product);
-      // ⊖ on East, North, South and West in column A (refs/<name>.png).
+      // Dropdowns on Year (C3), Region (A5) and Product (B5), none on Values (D3)
+      // although its xf carries pivotButton="1" (Ruling AF2,
+      // t10-excel/shot-pivot-layout-outline.png); ⊖ on East, North, South and
+      // West in column A (refs/<name>.png).
       expect(sorted(pivotButtons(def, 'screen')), name).toEqual([
         { row: 2, col: 2, kind: 'filter', field: 2 },
-        { row: 2, col: 3, kind: 'filter', field: -2 },
         { row: 4, col: 0, kind: 'filter', field: 0 },
         { row: 4, col: 1, kind: 'filter', field: 1 },
         { row: 5, col: 0, kind: 'collapse', field: 0, item: 0 },
@@ -355,6 +356,16 @@ describe('pivot buttons (§7.10)', () => {
     const headers = await load('pivot-page-field')
     headers.def.showHeaders = false
     expect(pivotButtons(headers.def, 'screen')).toEqual([{ row: 0, col: 1, kind: 'page', field: 1 }])
+  })
+
+  test('the dropdown box is 15 pt wide and as tall as the row up to 15 pt', () => {
+    const w = Math.round(15 * PX_PER_PT)
+    // A 15-pt row (20 px): 15 × 15 (t10-excel/shot-pivot-layout-outline.png, border y 347–361).
+    expect(dropdownBox({ x: 100, y: 40, width: 80, height: 20 })).toEqual({ x: 180 - w, y: 40, width: w, height: 20 })
+    // A shorter row: the box takes the row's height, still flush right and bottom.
+    expect(dropdownBox({ x: 100, y: 40, width: 80, height: 16 })).toEqual({ x: 180 - w, y: 40, width: w, height: 16 })
+    // A taller row: still 15 pt, at the bottom.
+    expect(dropdownBox({ x: 100, y: 40, width: 80, height: 40 })).toEqual({ x: 180 - w, y: 60, width: w, height: 20 })
   })
 
   test('print: no dropdowns; ± only when printDrill is set', async () => {
@@ -394,6 +405,9 @@ describe('pivot buttons (§7.10)', () => {
     expect(result.kind).toBe('detail')
 
     expect(pixel(live, dropLeft, dropMid)).toBe('738A93')
+    // 15 × 15 pt in a 15-pt row: the top border lies on the row's first pixel (shot-pivot-layout-outline).
+    expect(pixel(live, dropLeft + 10, y(2))).toBe('738A93')
+    expect(pixel(live, dropLeft + 10, y(2) + 2)).toBe('FDFDFD')
     expect(pixel(live, dropLeft + 3, dropMid - 4)).toBe('FDFDFD')
     expect(pixel(still, dropLeft, dropMid)).not.toBe('738A93')
     expect(pixel(live, plusLeft, plusTop + 3)).toBe('AAB5C9')

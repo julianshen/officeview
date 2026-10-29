@@ -15,16 +15,19 @@
  * - ± : a 7 × 7 box at x 6–12, vertically centred; border #AAB5C9 top/left and
  *   #8A9EBF bottom/right, fill #EAECEC→#D9D9D9 (flat mid #E2E3E3 [approx]),
  *   a 3-px #3D4E7C plus/minus (refs/pivot-collapsed-item.png);
- * - dropdown: 15 × 14, flush with the cell's right and bottom edges, #FDFDFD
- *   with a 1-px #738A93 border; arrow rows 7/5/3/1 from 5 below the box top,
- *   ≈ #828282 (refs/measure-field-buttons.png);
+ * - dropdown: 15 wide and as tall as the row up to 15 (15 × 15 in a 15-pt row:
+ *   t10-excel/shot-pivot-layout-outline.png, border y 347–361 on the row's top
+ *   gridline; measure-field-buttons recounts the same, y 29–43), flush with the
+ *   cell's right and bottom edges, #FDFDFD with a 1-px #738A93 border; arrow
+ *   rows 7/5/3/1 from 6 below the top border, ≈ #828282;
  * - compact labels beside ± buttons start at 15 + 10 × level from the cell's
  *   left edge (refs/pivot-values-on-rows.png); subtotal and grand-total labels
  *   keep the cell's own placement.
  * Placement rules read from the fixtures' `pivotButton="1"` xfs and the
  * references: compact form has one Row Labels and one Column Labels dropdown;
- * outline and tabular one per field header (the Values field included); a page
- * field's dropdown is on its value cell (its xf marks the label cell).
+ * outline and tabular one per field header except the Values field's (Ruling
+ * AF2: the window screenshot shows none there, despite its pivotButton xf); a
+ * page field's dropdown is on its value cell (its xf marks the label cell).
  */
 import type { XlsxSheet } from '../types'
 import type { Rect } from '../view/textLayout'
@@ -50,7 +53,8 @@ const CELL_PADDING_PX = 3
 /** Items at `level` of an axis have children worth a ± when a real field lies deeper. */
 const expandable = (fields: readonly number[], level: number) => fields[level] !== PIVOT_VALUES_FIELD && fields.slice(level + 1).some(field => field !== PIVOT_VALUES_FIELD)
 const drillShown = (def: PivotTableDefinition, mode: RegionStyleMode) => mode === 'screen' ? def.showDrill : def.printDrill
-const dropDowns = (def: PivotTableDefinition, field: number) => field === PIVOT_VALUES_FIELD || def.fields[field]?.showDropDowns !== false
+/** Ruling AF2: the Values field header has no dropdown, although Excel writes its pivotButton xf. */
+const dropDowns = (def: PivotTableDefinition, field: number) => field !== PIVOT_VALUES_FIELD && def.fields[field]?.showDropDowns !== false
 
 export function pivotButtons(def: PivotTableDefinition, mode: RegionStyleMode, layout = savedPivotLayout(def)): ButtonPlacement[] {
   if (!layout) return []
@@ -133,14 +137,19 @@ function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean):
   if (expand) ctx.fillRect(cx, y + Math.floor((size - arm) / 2), stroke, arm)
 }
 
+/** The dropdown box in `rect`: 15 pt wide, as tall as the row up to 15 pt, flush right and bottom. */
+export function dropdownBox(rect: Rect): Rect {
+  const width = Math.round(15 * PX_PER_PT), height = Math.max(1, Math.min(width, Math.round(rect.height)))
+  return { x: Math.round(rect.x + rect.width) - width, y: Math.round(rect.y + rect.height) - height, width, height }
+}
+
 function paintDropdown(ctx: CanvasRenderingContext2D, rect: Rect): void {
-  const w = Math.round(15 * PX_PER_PT), h = Math.round(14 * PX_PER_PT)
-  const x = Math.round(rect.x + rect.width) - w, y = Math.round(rect.y + rect.height) - h
+  const { x, y, width: w, height: h } = dropdownBox(rect)
   ctx.fillStyle = '#738A93'
   ctx.fillRect(x, y, w, h)
   ctx.fillStyle = '#FDFDFD'
   ctx.fillRect(x + 1, y + 1, w - 2, h - 2)
-  const cx = x + w / 2, top = y + 5 * PX_PER_PT
+  const cx = x + w / 2, top = y + 6 * PX_PER_PT
   ctx.fillStyle = '#828282'
   ctx.beginPath()
   ctx.moveTo(cx - 3.5 * PX_PER_PT, top)
