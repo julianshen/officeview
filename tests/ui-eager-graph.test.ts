@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { eagerModules, forbiddenEager, EAGER_FORBIDDEN, type ModuleMap } from './helpers/eager-graph'
+import { eagerModules, forbiddenEager, pagedWorkerViolations, EAGER_FORBIDDEN, type ModuleMap } from './helpers/eager-graph'
 
 const MOTION = '/node_modules/motion/dist/es/index.mjs'
 
@@ -13,6 +13,32 @@ function synthetic(): ModuleMap {
     'b.js': { modules: ['/repo/src/components/paged/PagedChrome.tsx', '/repo/src/components/viewerControls.tsx'], imports: ['index.js'], dynamicImports: [] },
   }
 }
+
+describe('paged worker closure (final review I4)', () => {
+  const map = (pagedImports: string[]): ModuleMap => ({
+    'index.js': { modules: ['/r/src/index.ts'], imports: [], dynamicImports: ['viewerLargeSource.js', 'pagedImport.js'] },
+    'viewerLargeSource.js': { modules: ['/r/src/xlsx/view/pagedSource.ts'], imports: ['shared.js'], dynamicImports: ['builtins.js'] },
+    'pagedImport.js': { modules: ['/r/src/xlsx/storage/pagedImport.ts'], imports: pagedImports, dynamicImports: ['extras.js'] },
+    'shared.js': { modules: ['/r/src/xlsx/view/contracts.ts'], imports: [], dynamicImports: [] },
+    'builtins.js': { modules: ['/r/src/xlsx/tableStyles/builtins/index.ts', '/r/src/xlsx/tableStyles/builtins/table.ts'], imports: [], dynamicImports: [] },
+    'extras.js': { modules: ['/r/src/xlsx/tableStyles/parseStylesExtras.ts'], imports: [], dynamicImports: [] },
+  })
+  it('allows the style chunks behind dynamic imports', () => {
+    expect(pagedWorkerViolations(map([]))).toEqual({ roots: ['viewerLargeSource.js', 'pagedImport.js'], missing: [], bad: [] })
+  })
+  it('flags a static import of the built-ins or the extras parser (mutation)', () => {
+    const bad = pagedWorkerViolations(map(['extras.js', 'builtins.js'])).bad
+    expect(bad.map(item => item.chunk)).toEqual(['pagedImport.js', 'pagedImport.js', 'pagedImport.js'])
+    expect(bad.map(item => item.module).sort()).toEqual([
+      '/r/src/xlsx/tableStyles/builtins/index.ts', '/r/src/xlsx/tableStyles/builtins/table.ts', '/r/src/xlsx/tableStyles/parseStylesExtras.ts',
+    ])
+  })
+  it('names a paged root missing from the map', () => {
+    const partial = map([])
+    delete partial['pagedImport.js']
+    expect(pagedWorkerViolations(partial).missing).toHaveLength(1)
+  })
+})
 
 describe('eager import graph', () => {
   it('eagerModules follows static imports only', () => {

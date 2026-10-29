@@ -44,7 +44,6 @@ import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
 import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
-import { builtinTableStyle } from '../tableStyles/builtins'
 import { estimatePayloadBytes } from './payloadBytes'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
@@ -600,6 +599,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       return empty()
     }
     const tables: Array<RemoteRegionStyles['tables'][number]> = []
+    // The built-in definitions load with the first styled table (spec §6.2), never with the paged worker.
+    const { builtinTableStyle } = await import('../tableStyles/builtins')
     for (const table of named) {
       const name = table.styleInfo!.name!
       const def = this.workbook.tableStyleDefs?.get(name) ?? builtinTableStyle(name)

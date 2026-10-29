@@ -1,8 +1,12 @@
 /**
  * styles.xml extras for table, pivot and slicer styles (spec §6.5): the
  * differential formats (`dxfs`), custom `tableStyles` and their defaults, and
- * the x14 slicer styles with their own x14 `dxfs`. Lazy chunk: only tests and
- * the lazy style engine call this; the eager parseStyles never does.
+ * the x14 slicer styles with their own x14 `dxfs`. Lazy chunk, never parsed by
+ * the eager parseStyles. Callers: the resident style engine (regionLayer.ts) and
+ * control loader (pivots/slicers/load.ts), and the paged importer through a
+ * dynamic import (storage/pagedFormatting.ts), only when styles.xml defines a
+ * custom table or slicer style, or when a sheet completes whose pivot, slicer,
+ * timeline or non-built-in table style name needs it.
  */
 import { attrs, elementChildren, elementNamespaceUri, getChildren, type XmlNode } from '../../core/xml'
 import { applyTint, type SheetColorContext } from '../sheetColors'

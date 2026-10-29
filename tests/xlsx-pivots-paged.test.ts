@@ -575,6 +575,32 @@ describe('paged pivot display descriptors', () => {
   })
 
 
+  it.each([
+    ['table-medium-2', 0],
+    ['pivot-layout-compact', 1],
+    ['pivot-custom-style', 1],
+  ] as const)('parses the styles extras in the paged worker only when a sheet needs them (I4; %s)', async (name, calls) => {
+    const spy = vi.spyOn(stylesExtrasParser, 'parseStylesExtras')
+    try {
+      const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes(name)]) }, { docId: `extras-lazy-${name}`, profile: 'D' })
+      await session.done
+      expect(spy).toHaveBeenCalledTimes(calls)
+      const source = createPagedWorkbookSource(session)
+      try {
+        const sheet = source.sheets.find(item => item.name !== 'Data') ?? source.sheets[0]!, store = source.store(sheet.sheetId)
+        const options = { signal: new AbortController().signal, stamp: store.stamp }
+        if (name === 'table-medium-2') {
+          // The built-in style still resolves, from the lazily loaded built-ins.
+          const styles = await store.readRegionStyles!(options, 1024 * 1024, { set: () => true })
+          expect(styles.tables.map(item => item.def.name)).toEqual(['TableStyleMedium2'])
+        } else {
+          const display = await store.readPivotDisplay!(options, 4 * 1024 * 1024, { set: () => true })
+          expect(display.pivotTables).toHaveLength(1)
+        }
+      } finally { await source.release(); await session.release() }
+    } finally { spy.mockRestore() }
+  })
+
   describe('main-thread layer parity with the resident path (final review I1, I2)', () => {
     // pivot-formats-override: one <format> (dxf 0, #FFE699 fill) over B7, which Excel also writes into B7's own s=.
     // Removing that s= leaves the <format> as the only source of the fill, as a non-Excel writer saves it.
