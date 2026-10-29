@@ -4,6 +4,8 @@ import type { RangeDetection } from './rangeDetection'
 import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
+import type { TableMetadata } from '../formula/types'
+import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
 export const MAX_OVERVIEW_GROUPS_DESKTOP = 2048
@@ -211,6 +213,8 @@ export interface SourceStore {
   readDrawings?(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings>
   /** S3: resolves this sheet's sparkline groups from worker-owned cell stores. */
   readSparklines?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, replyEnvelopeBytes?: number): Promise<SheetSparklines>
+  /** S8: bounded table-style descriptors for the receiving region-style layer. */
+  readRegionStyles?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles>
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
@@ -237,6 +241,17 @@ export interface SheetSparklines {
   diagnostics: SparklineDiagnostic[]
   /** Referenced sheet pages that were still loading when this snapshot ran. */
   pendingSheetIds?: string[]
+}
+
+/** Worker-resolved table style definitions, bounded by the receiver's grant. */
+export interface RemoteRegionStyles {
+  sheetId: string
+  stamp: SourceStamp
+  tables: readonly { table: Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>; def: TableStyleDef }[]
+  theme?: ThemeContext
+  /** Reserved for future per-cell pivot region styles; empty for tables. */
+  cells?: Int32Array
+  diagnostics: readonly TableStyleDiagnostic[]
 }
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,
@@ -504,6 +519,8 @@ export type SourceReadQuery =
   | { op: 'drawings'; replyByteLimit?: number }
   /** S3: receiver-granted sparkline resolution; sheet id is on the read owner. */
   | { op: 'sparklines'; grantBytes: number }
+  /** S8: receiver-granted table region styles. */
+  | { op: 'regionStyles'; grantBytes: number }
   /** S10.2: operation range detection (sort admission includes the structural
    * guard) run next to the store, so a paged sheet is not scanned strip by
    * strip across the worker boundary. Same detectors, same outcome. */
@@ -520,6 +537,7 @@ export type SourceReadResult =
   | { op: 'releaseScan'; released: boolean }
   | { op: 'drawings'; result: SheetDrawings }
   | { op: 'sparklines'; result: SheetSparklines }
+  | { op: 'regionStyles'; result: RemoteRegionStyles }
   | { op: 'detectRange'; detection: RangeDetection }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
@@ -550,6 +568,8 @@ export interface SheetLayout {
   /** S3: metadata-only fast path; false lets sheets without sparklines avoid
    * any per-frame preparation or worker request. */
   hasSparklines?: boolean
+  /** S8: table metadata fast path; absent/false has no per-frame style work. */
+  hasRegionStyles?: boolean
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }

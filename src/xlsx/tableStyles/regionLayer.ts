@@ -14,6 +14,7 @@ export interface RegionStyleLayer {
   readonly rects: readonly SheetRect[]
   styleAt(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined
 }
+export type RegionStyleTable = Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>
 
 function band(element: TableStyleElementType, rect: SheetRect, row: number, col: number): RoleRef {
   return { element, edges: { top: row === rect.minRow, bottom: row === rect.maxRow, left: col === rect.minCol, right: col === rect.maxCol } }
@@ -30,7 +31,7 @@ function stripeBand(start: number, index: number, first: number, second: number)
 }
 
 /** Roles use source coordinates and carry the actual outer edges of each band. */
-export function tableCellRoles(table: TableMetadata, row: number, col: number, def?: TableStyleDef): RoleRef[] {
+export function tableCellRoles(table: RegionStyleTable, row: number, col: number, def?: TableStyleDef): RoleRef[] {
   const { firstRow, firstCol, rows, cols } = table.extent
   if (![firstRow, firstCol, rows, cols, row, col].every(Number.isSafeInteger) || firstRow < 0 || firstCol < 0 || rows < 1 || cols < 1) return []
   const lastRow = firstRow + rows - 1, lastCol = firstCol + cols - 1
@@ -72,7 +73,7 @@ export function tableCellRoles(table: TableMetadata, row: number, col: number, d
   return out
 }
 
-export function buildTableRegions(tables: readonly TableMetadata[], extras: StylesExtras, theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
+export function buildTableRegions(tables: readonly RegionStyleTable[], extras: StylesExtras, theme: ThemeContext, report?: (diagnostic: TableStyleDiagnostic) => void): RegionStyleLayer | undefined {
   const regions = tables.flatMap(table => {
     const name = table.styleInfo?.name
     if (!name || table.extent.rows < 1 || table.extent.cols < 1) return []

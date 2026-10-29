@@ -86,6 +86,7 @@ import { warnIfStylesMissing } from '../styleWarning'
 import { isRemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { documentWithDrawings, drawingNotices, sheetWithDrawings } from '../../worker/viewerRemoteDrawings'
 import { documentWithSparklines, sheetWithSparklines, sheetWithoutResolvedSparklines, sparklineNotices } from '../../worker/viewerRemoteSparklines'
+import { sheetWithRegionStyles } from '../../worker/viewerRemoteRegionStyles'
 import { pagedSheetGeometry } from './pagedGeometry'
 import type { LedgerHold } from '../../xlsx/view/mainLedger'
 import { DisplayHolds } from './displayHolds'
@@ -490,6 +491,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const prepareEntry = (sheetId: string, override?: SessionSizes): { entry: SheetEntry } | { candidate: Candidate } => {
     const index = sheetIds.indexOf(sheetId)
     let sheet = remote ? sheetWithDrawings(doc.sheets[index], remote.drawings(sheetId)) : doc.sheets[index]
+    const regionStyleContent = remote && remote.layout(sheetId).hasRegionStyles ? remote.regionStyles(sheetId) : null
+    if (regionStyleContent) sheet = sheetWithRegionStyles(sheet, regionStyleContent)
     const sparklineContent = remote && remote.layout(sheetId).hasSparklines ? remote.sparklines(sheetId) : null
     const sparklineGen = sparklineContent?.gen ?? 0
     if (sparklineContent) sheet = sheetWithSparklines(sheet, sparklineContent)
@@ -916,6 +919,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }), [remote])
   useEffect(() => () => finder.dispose(), [finder])
   const cellAt = (sheetEntry: SheetEntry, at: SourceCell): XlsxCell | undefined => sheetEntry.geometry.cellsOf(at.row)?.find(cell => cell.col === at.col)
+  const styleForCell = (sheetEntry: SheetEntry, cell: Pick<XlsxCell, 'row' | 'col' | 'styleIndex' | 'style'>): import('../../xlsx/types').XlsxCellStyle | undefined => {
+    const own = remote ? remote.styleOf(cell.styleIndex) : cell.style
+    return sheetEntry.sheet.regionStyles?.styleAt(cell.row, cell.col, own) ?? own
+  }
   const findInput = (): FindInput => ({
     owner: ownerOf(),
     sheets: remote ? [] : sheetIds.map(sheetId => {
@@ -943,7 +950,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const sheetEntry = byId.get(sheetId)
         const styled = sheetEntry && cellAt(sheetEntry, cell)
         // Worker-backed cells carry a style id; the workbook table resolves it.
-        if (sheetEntry && !styled && remote) return cellDisplayText(sheetEntry.sheet, { value: cell.value, style: remote.styleOf(cell.styleIndex) }, allocation)
+        if (sheetEntry && !styled && remote) return cellDisplayText(sheetEntry.sheet, { value: cell.value, style: styleForCell(sheetEntry, cell) }, allocation)
         return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell, allocation) : String(cell.value ?? '')
       },
     }
@@ -1280,7 +1287,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         selection, order: entry.view.order, visibility: entry.view.visibility, columns,
         allowed: () => current.current.allowCopy, signal: abort.signal, admitBytes: bytes => admit(columnBytes + bytes),
         retainBytes: (targets, bytes, commit) => { mainLedger.adoptWhileReachable('copy', copyOwner, 'document', targets, bytes, commit); held -= bytes }, onPending: () => { if (live.current && token === copyToken.current) setAnnouncement('Copy is waiting for values; cancel to stop.') },
-        format: (cell, allocation) => { const style = remote ? remote.styleOf(cell.styleIndex) : cellAt(entry, cell)?.style; return cellDisplayText(entry.sheet, { value: cell.value, style }, allocation) },
+        format: (cell, allocation) => { const sourceCell = cellAt(entry, cell); const style = sourceCell ? styleForCell(entry, sourceCell) : remote ? remote.styleOf(cell.styleIndex) : undefined; return cellDisplayText(entry.sheet, { value: cell.value, style }, allocation) },
       })
       if (!live.current || token !== copyToken.current) return
       setAnnouncement(result.kind === 'copied' ? 'Selection copied.' : result.kind === 'refused' ? result.message : result.kind === 'stale' ? 'Source or view changed; copy again.' : 'Copy cancelled.')

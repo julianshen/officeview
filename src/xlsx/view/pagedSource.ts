@@ -43,6 +43,9 @@ import type { XlsxSparklineGroup } from '../sparklines/model'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
+import type { RemoteRegionStyles } from './contracts'
+import { builtinTableStyle } from '../tableStyles/builtins'
+import { estimatePayloadBytes } from './payloadBytes'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
 
@@ -574,6 +577,45 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       options.signal.removeEventListener('abort', abort)
       this.workbook.parts.signal.removeEventListener('abort', abort)
     }
+  }
+
+  /** S8: transfer only the table descriptors and definitions this sheet uses.
+   * The receiver grants the complete bounded payload before it is published. */
+  async readRegionStyles(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles> {
+    const diagnostics: RemoteRegionStyles['diagnostics'][number][] = []
+    const empty = (): RemoteRegionStyles => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], cells: new Int32Array(), diagnostics })
+    const error = this.guard(options)
+    if (error) {
+      diagnostics.push({ kind: 'unsupported', feature: 'table-style-read-failed', message: error.message })
+      return empty()
+    }
+    if (this.sheet.state !== 'complete') {
+      diagnostics.push({ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table styles are not available until the sheet structure is complete.' })
+      return empty()
+    }
+    const named = this.sheet.tables?.filter(table => Boolean(table.styleInfo?.name)) ?? []
+    if (!named.length) return empty()
+    if (!Number.isSafeInteger(grantBytes) || grantBytes <= 0 || named.length > 512) {
+      diagnostics.push({ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
+      return empty()
+    }
+    const tables: Array<RemoteRegionStyles['tables'][number]> = []
+    for (const table of named) {
+      const name = table.styleInfo!.name!
+      const def = this.workbook.tableStyleDefs?.get(name) ?? builtinTableStyle(name)
+      if (!def?.table) {
+        diagnostics.push({ kind: 'unsupported', feature: 'table-style-unknown', message: `Table "${table.displayName}" uses unknown table style "${name}"; stored cell formatting is used.` })
+        continue
+      }
+      tables.push({ table: { id: table.id, displayName: table.displayName, sheetId: table.sheetId, extent: table.extent, headerRowCount: table.headerRowCount, totalsRowCount: table.totalsRowCount, styleInfo: table.styleInfo }, def })
+    }
+    const result: RemoteRegionStyles = { sheetId: this.sheet.sheetId, stamp: this.stamp, tables, ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}), cells: new Int32Array(), diagnostics }
+    const bytes = estimatePayloadBytes(result) + 512
+    if (!Number.isSafeInteger(bytes) || bytes > grantBytes || (memory && !memory.set(bytes))) {
+      diagnostics.splice(0, diagnostics.length, { kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
+      return empty()
+    }
+    return result
   }
 
   /** S3: asynchronously snapshot only the source cells referenced by this
@@ -1129,6 +1171,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     },
     sheets: Object.freeze(workbook.sheets.map(s => Object.freeze({ sheetId: s.sheetId, name: s.name }))),
     hasSparklines(sheetId) { return Boolean(find(sheetId).metadata.sparklineGroups?.length) },
+    hasRegionStyles(sheetId) { return Boolean(find(sheetId).tables?.some(table => table.styleInfo?.name)) },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)

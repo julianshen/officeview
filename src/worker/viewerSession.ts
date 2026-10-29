@@ -187,6 +187,7 @@ export interface WorkbookSource {
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
   hasSparklines?(sheetId: string): boolean
+  hasRegionStyles?(sheetId: string): boolean
   store(sheetId: string): SourceStore
   geometry(sheetId: string): SheetGeometry
   /** Coverage this backend can never resolve (e.g. the interim adapter before
@@ -2409,6 +2410,7 @@ export class DocumentSession {
       ...(geometry.hiddenCols?.length ? { hiddenCols: geometry.hiddenCols.map(interval => ({ ...interval })) } : {}),
       ...(used ? { used: { ...used } } : {}),
       ...(this.source.hasSparklines ? { hasSparklines: this.source.hasSparklines(sheetId) } : {}),
+      ...(this.source.hasRegionStyles ? { hasRegionStyles: this.source.hasRegionStyles(sheetId) } : {}),
       ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
     }
   }
@@ -2453,6 +2455,17 @@ export class DocumentSession {
             result = { op: 'sparklines', result: await work }
           }
         } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
+        break
+      }
+      case 'regionStyles': {
+        const charge = this.charge()
+        try {
+          const payload = await store.readRegionStyles?.(options, query.grantBytes, charge) ?? {
+            sheetId: owner.sheetId, stamp: store.stamp, tables: [], cells: new Int32Array(),
+            diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: 'This source cannot resolve table styles.' }],
+          }
+          result = { op: 'regionStyles', result: payload }
+        } finally { if (retain) retain(() => charge.release()); else charge.release() }
         break
       }
       case 'cell': result = { op: 'cell', read: await store.readCell(query.at, options) }; break
