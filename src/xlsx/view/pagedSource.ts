@@ -43,7 +43,7 @@ import type { XlsxSparklineGroup } from '../sparklines/model'
 import { loadChartModule } from '../chartLoader'
 import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
-import { MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
+import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
 import { builtinTableStyle } from '../tableStyles/builtins'
 import { estimatePayloadBytes } from './payloadBytes'
 
@@ -635,11 +635,19 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     diagnostics.push(...displayDiagnostics)
     const pivotStyleNames = new Set(parts.pivotTables.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)))
     const pivotStyles = [...pivotStyleNames].flatMap(name => { const style = this.workbook.tableStyleDefs?.get(name); return style ? [style] : [] })
+    // The dxfs the pivots' `formats` apply (resident regions.ts reads them from the same styles.xml list).
+    const dxfIds = new Set<number>()
+    for (const table of parts.pivotTables) for (const format of table.formats) {
+      if (format.action === 'formatting' && format.dxfId !== undefined && dxfIds.size < MAX_PIVOT_DISPLAY_DXFS) dxfIds.add(format.dxfId)
+    }
+    const dxfList = this.workbook.tableStyleExtras?.dxfs ?? []
+    const pivotDxfs = [...dxfIds].flatMap(id => { const dxf = dxfList[id]; return dxf ? [{ id, dxf }] : [] })
     // Slicer and timeline appearance is resolved while reading drawings, which
     // retains the workbook's original style extras; these are not display-layer
     // descriptors and must not inflate the pivot-display reply.
     const result: RemotePivotDisplay = {
       sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: parts.pivotTables, pivotStyles,
+      ...(pivotDxfs.length ? { pivotDxfs } : {}),
       diagnostics,
       ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
     }

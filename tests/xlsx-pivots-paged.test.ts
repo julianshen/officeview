@@ -43,6 +43,43 @@ function pixels(sheet: Parameters<typeof computeMetrics>[0]): Buffer {
   return Buffer.from(canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data.buffer)
 }
 
+
+/** The paged path end to end: worker import and pivot-display read, then the main-thread layer build. */
+async function pagedPivotLayer(input: Uint8Array<ArrayBuffer>, docId: string): Promise<{ payload: RemotePivotDisplay; layer?: XlsxSheet['regionStyles']; diagnostics: readonly { feature: string }[] }> {
+  const session = await openImportSession({ kind: 'blob', blob: new Blob([input]) }, { docId, profile: 'D' })
+  await session.done
+  const source = createPagedWorkbookSource(session)
+  try {
+    const sheet = source.sheets.find(item => item.name === 'Pivot') ?? source.sheets[0]!, store = source.store(sheet.sheetId)
+    const payload = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 4 * 1024 * 1024, { set: () => true })
+    const owner: CacheIdentity = { docId: store.stamp.docId, sheetId: store.stamp.sheetId, valueGen: store.stamp.valueGen, fontGen: 0, viewGen: 0 }
+    const reply = { kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 64,
+      result: { kind: 'read', result: { op: 'pivotDisplay', result: payload } } } as unknown as WorkerReply<'read'>
+    const cache = new RemoteRegionStyleCache({
+      identity: () => owner, hasRegionStyles: () => false, hasPivotDisplay: () => true, loadState: () => ({ completeness: 'complete' }),
+      grant: () => 4 * 1024 * 1024, releaseGrant: () => {}, request: async () => reply, nextRequestId: () => 'r', release: () => {},
+      admitLayer: () => () => {}, changed: () => {},
+    }, 64 * 1024 * 1024, 'pivotDisplay')
+    let state = cache.get(payload.sheetId)
+    for (let i = 0; i < 500 && state.state !== 'ready' && state.state !== 'failed'; i++) { await new Promise(resolveTick => setTimeout(resolveTick, 2)); state = cache.get(payload.sheetId) }
+    expect(state.state).toBe('ready')
+    // The state is the live entry, which close() resets.
+    const out = { payload, layer: state.layer, diagnostics: [...state.diagnostics] }
+    cache.close()
+    return out
+  } finally { await source.release(); await session.release() }
+}
+async function residentPivotSheet(input: Uint8Array): Promise<XlsxSheet> {
+  const doc = await parseXlsx(await OfficePackage.load(input))
+  await ensureTableStyleEngine(doc.sheets)
+  return doc.sheets.find(sheet => sheet.pivotTables?.length)!
+}
+async function editPackage(name: string, edits: Record<string, (xml: string) => string>): Promise<Uint8Array<ArrayBuffer>> {
+  const archive = await JSZip.loadAsync(bytes(name))
+  for (const [path, edit] of Object.entries(edits)) archive.file(path, edit(await archive.file(path)!.async('string')))
+  return new Uint8Array(await archive.generateAsync({ type: 'uint8array' }))
+}
+
 describe('paged pivot display descriptors', () => {
   it('memoizes resident control style reparses per package and preferred-name set', async () => {
     const pkg = await OfficePackage.load(bytes('slicer-light1'))
@@ -535,6 +572,52 @@ describe('paged pivot display descriptors', () => {
       expect(result.diagnostics.map(item => item.feature)).toContain('pivot-display-reply-limit')
       expect(result.requiredBytes).toBeGreaterThan(512)
     } finally { await source.release(); await session.release() }
+  })
+
+
+  describe('main-thread layer parity with the resident path (final review I1, I2)', () => {
+    // pivot-formats-override: one <format> (dxf 0, #FFE699 fill) over B7, which Excel also writes into B7's own s=.
+    // Removing that s= leaves the <format> as the only source of the fill, as a non-Excel writer saves it.
+    const ownStyleRemoved = (xml: string) => xml.replace('<c r="B7" s="5">', '<c r="B7">')
+    const border = (xml: string) => xml.replace('<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFE699"/></patternFill></fill></dxf>',
+      '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFE699"/></patternFill></fill><border><bottom style="thick"><color rgb="FFFF0000"/></bottom></border></dxf>')
+    const cells = (sheet: XlsxSheet) => {
+      const byKey = new Map(sheet.rows.flatMap(row => row.cells.map(cell => [`${cell.row}:${cell.col}`, cell.style] as const)))
+      const out: Array<{ row: number; col: number; own: XlsxSheet['rows'][number]['cells'][number]['style'] }> = []
+      for (let row = 2; row <= 22; row++) for (let col = 0; col <= 8; col++) out.push({ row, col, own: byKey.get(`${row}:${col}`) })
+      return out
+    }
+
+    it.each([
+      ['the format dxf only', { 'xl/worksheets/sheet1.xml': ownStyleRemoved }],
+      ['a format dxf with a border', { 'xl/worksheets/sheet1.xml': ownStyleRemoved, 'xl/styles.xml': border }],
+    ] as const)('paints %s the same paged as resident', async (name, edits) => {
+      const input = await editPackage('pivot-formats-override', edits)
+      const resident = await residentPivotSheet(input)
+      const paged = await pagedPivotLayer(input, `pivot-formats-${name}`)
+      const residentLayer = resident.regionStyles!, pagedLayer = paged.layer!
+      expect(residentLayer.styleAt(6, 1, undefined, 'screen')?.fillColor).toBe('FFFFE699')
+      for (const { row, col, own } of cells(resident)) {
+        for (const own2 of [own, undefined]) expect(pagedLayer.styleAt(row, col, own2, 'screen'), `${row}:${col}`).toEqual(residentLayer.styleAt(row, col, own2, 'screen'))
+      }
+      expect(paged.payload.pivotDxfs?.map(item => item.id)).toEqual([0])
+      if (name.includes('border')) {
+        expect(pagedLayer.styleAt(6, 1, undefined, 'screen')?.borders?.bottom).toBe('thick')
+        // The shared-edge rule: the cell below shows the format's line on its top edge.
+        expect(pagedLayer.styleAt(7, 1, undefined, 'screen')?.borders?.top).toBe('thick')
+      }
+    }, 30_000)
+
+    it('reports the layer diagnostics paged as resident (unknown style, no saved layout)', async () => {
+      const input = await editPackage('pivot-formats-override', {
+        'xl/pivotTables/pivotTable1.xml': xml => xml.replace(/<pivotTableStyleInfo name="[^"]*"/, '<pivotTableStyleInfo name="NoSuchStyle"').replace(/<rowItems\b[\s\S]*?<\/rowItems>/, ''),
+      })
+      const resident = await residentPivotSheet(input)
+      const paged = await pagedPivotLayer(input, 'pivot-diagnostics-parity')
+      const features = (list: readonly { feature: string }[]) => [...new Set(list.map(item => item.feature))].filter(feature => feature.startsWith('pivot-') || feature.startsWith('table-style-')).sort()
+      expect(features(resident.diagnostics ?? [])).toEqual(expect.arrayContaining(['pivot-layout-unavailable', 'pivot-style-unknown']))
+      expect(features(paged.diagnostics)).toEqual(features(resident.diagnostics ?? []))
+    }, 30_000)
   })
 
   it('releases retained descriptors on sheet-owner change and close, and settles error replies', async () => {

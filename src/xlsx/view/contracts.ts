@@ -5,7 +5,7 @@ import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 import type { TableMetadata } from '../formula/types'
-import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
+import type { DxfStyle, TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
@@ -16,6 +16,8 @@ export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 32_768
 export const REGION_STYLE_REPLY_OVERHEAD_BYTES = 1_024
 /** Retained custom styles parsed from styles.xml are capped independently of source size. */
 export const MAX_PAGED_TABLE_STYLE_DEFS_BYTES = 2 * 1024 * 1024
+/** Distinct `formats` dxfs one pivot-display reply carries (styles.xml holds at most MAX_DXFS = 65,536). */
+export const MAX_PIVOT_DISPLAY_DXFS = 4_096
 export const MAX_REGION_STYLE_MEMO_ENTRIES = 4_096
 export const REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES = 1_024
 export const REGION_STYLE_LAYER_BASE_BYTES = 4_096
@@ -282,6 +284,8 @@ export interface RemotePivotDisplay {
   tables: RemoteRegionStyles['tables']
   pivotTables: readonly PivotTableDefinition[]
   pivotStyles: readonly TableStyleDef[]
+  /** The styles.xml dxfs the pivots' `formats` name, by dxfId (bounded; counted in the reply estimate). */
+  pivotDxfs?: readonly { id: number; dxf: DxfStyle }[]
   theme?: ThemeContext
   diagnostics: readonly (TableStyleDiagnostic | PivotDiagnostic)[]
   requiredBytes?: number

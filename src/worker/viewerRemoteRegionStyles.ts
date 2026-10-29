@@ -1,5 +1,6 @@
 import type { CacheIdentity, RemotePivotDisplay, RemoteRegionStyles, WorkerReply } from '../xlsx/view/contracts'
 import type { RegionStyleLayer } from '../xlsx/tableStyles/regionLayer'
+import type { DxfStyle, TableStyleDiagnostic } from '../xlsx/tableStyles/model'
 import type { CommandOf } from './viewerProtocol'
 import { REGION_STYLE_LAYER_BASE_BYTES, MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../xlsx/view/contracts'
 
@@ -7,6 +8,9 @@ const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId &&
 const RETRY_MS = 250
 const MAX_ATTEMPTS = 20
 const READ_TIMEOUT_MS = 10_000
+/** styles.xml dxf ids stop at parseStylesExtras' MAX_DXFS (65,536). */
+const MAX_DXF_ID = 65_536
+const MAX_LAYER_DIAGNOSTICS = 64
 const layerBytesFor = (tableCount: number) => REGION_STYLE_LAYER_BASE_BYTES + tableCount * REGION_STYLE_REGION_ESTIMATE_BYTES + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES
 export interface PagedRegionStyleState {
   readonly state: 'waiting' | 'loading' | 'ready' | 'failed'
@@ -125,6 +129,13 @@ export class RemoteRegionStyleCache {
       this.deferChanged(sheetId); return
     }
     let layerRelease: (() => void) | undefined
+    // What building (and later painting) the layer reports joins the worker's diagnostics, as the resident
+    // factory adds them to the sheet's (bounded, de-duplicated).
+    const diagnostics: Array<PagedRegionStyleState['diagnostics'][number]> = [...payload.diagnostics]
+    const report = (diagnostic: TableStyleDiagnostic) => {
+      if (diagnostics.length >= MAX_LAYER_DIAGNOSTICS || diagnostics.some(item => item.feature === diagnostic.feature && item.message === diagnostic.message)) return
+      diagnostics.push(diagnostic)
+    }
     try {
       let layer: RegionStyleLayer | undefined
       if (layerBytes) {
@@ -140,10 +151,13 @@ export class RemoteRegionStyleCache {
         const tableStyles = new Map(payload.tables.map(item => [item.def.name, item.def]))
         if ('pivotStyles' in payload) for (const def of payload.pivotStyles) tableStyles.set(def.name, def)
         const slicerStyles = new Map()
-        const extras = { dxfs: [], tableStyles, slicerStyles }
+        // The pivots' `formats` dxfs at their styles.xml ids (a sparse list, as regions.ts indexes it).
+        const dxfs: DxfStyle[] = []
+        if ('pivotDxfs' in payload) for (const { id, dxf } of payload.pivotDxfs ?? []) if (Number.isSafeInteger(id) && id >= 0 && id < MAX_DXF_ID) dxfs[id] = dxf
+        const extras = { dxfs, tableStyles, slicerStyles }
         const sheet = { name: sheetId, tables: payload.tables.map(item => item.table), ...('pivotTables' in payload ? { pivotTables: payload.pivotTables } : {}) } as import('../xlsx/types').XlsxSheet
         if (sheet.pivotTables?.length) await (await import('../xlsx/pivotLoader')).ensurePivotEngine([sheet])
-        layer = buildSheetRegionLayer(sheet, extras, payload.theme ?? (await import('../drawing/style')).parseThemeContext())
+        layer = buildSheetRegionLayer(sheet, extras, payload.theme ?? (await import('../drawing/style')).parseThemeContext(), report)
       }
       if (this.closed || entry.seq !== seq || !sameOwner(entry.owner ?? this.host.identity(sheetId), this.host.identity(sheetId))) {
         layerRelease?.(); layerRelease = undefined; if (reply) releaseReply?.()
@@ -153,7 +167,7 @@ export class RemoteRegionStyleCache {
       if (reply) { entry.reply = reply; entry.releaseReply = releaseReply; entry.replyBytes = reply.replyBytes ?? 0; entry.payload = payload; entry.owner = this.host.identity(sheetId) }
       entry.layer = layer; entry.layerBytes = layerBytes; entry.layerRelease = layerRelease; entry.layerReady = true; entry.layerPending = false
       layerRelease = undefined
-      entry.diagnostics = payload.diagnostics; entry.state = 'ready'; entry.gen++; entry.attempts = 0; entry.grantFloor = undefined; entry.sizeRetryAttempted = false
+      entry.diagnostics = diagnostics; entry.state = 'ready'; entry.gen++; entry.attempts = 0; entry.grantFloor = undefined; entry.sizeRetryAttempted = false
       this.deferChanged(sheetId)
     } catch (cause) {
       layerRelease?.()
