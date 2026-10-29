@@ -1,0 +1,11 @@
+{
+  "excelVersion": "16.114",
+  "route": "copy-picture",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Report",
+  "source": "measure-timeline-selection.xlsx",
+  "range": "A1:L18",
+  "note": "timeline-light1-months with an explicit timelineCache <selection> 2024-03-01..2024-05-31 (filterType dateBetween).",
+  "capturedAt": "2026-10-29"
+}
