@@ -960,7 +960,6 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         const sheetEntry = byId.get(sheetId)
         const styled = sheetEntry && cellAt(sheetEntry, cell)
         // Worker-backed cells carry a style id; the workbook table resolves it.
-        if (sheetEntry && !styled && remote) return cellDisplayText(sheetEntry.sheet, { value: cell.value, style: styleForCell(sheetEntry, cell) }, allocation)
         return sheetEntry ? cellDisplayText(sheetEntry.sheet, styled ?? cell, allocation) : String(cell.value ?? '')
       },
     }

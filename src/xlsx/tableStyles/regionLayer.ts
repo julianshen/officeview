@@ -22,7 +22,7 @@ export interface RegionStyleLayer {
 }
 export type RegionStyleTable = Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>
 
-/** A bounded cache stores at most 4,096 role/own-style pairs at the 512 B
+/** A bounded cache stores at most 4,096 role/own-style pairs at the 1,024 B
  * estimate, plus 4 KiB fixed overhead and 512 B per region. */
 export { MAX_REGION_STYLE_MEMO_ENTRIES, MAX_REGION_STYLE_TABLES, REGION_STYLE_LAYER_BASE_BYTES, REGION_STYLE_LAYER_MAX_BYTES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../view/contracts'
 

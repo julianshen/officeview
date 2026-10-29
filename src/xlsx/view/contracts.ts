@@ -9,10 +9,14 @@ import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
 export const MAX_REGION_STYLE_TABLES = 512
-export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 4_096
+/** Largest built-in descriptor measured at 8,614 B over all 144 table/pivot names
+ * (including table metadata and the default theme); 16 KiB leaves 1.9x headroom. */
+export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 16_384
 export const REGION_STYLE_REPLY_OVERHEAD_BYTES = 1_024
+/** Retained custom styles parsed from styles.xml are capped independently of source size. */
+export const MAX_PAGED_TABLE_STYLE_DEFS_BYTES = 2 * 1024 * 1024
 export const MAX_REGION_STYLE_MEMO_ENTRIES = 4_096
-export const REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES = 512
+export const REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES = 1_024
 export const REGION_STYLE_LAYER_BASE_BYTES = 4_096
 export const REGION_STYLE_REGION_ESTIMATE_BYTES = 512
 export const REGION_STYLE_LAYER_MAX_BYTES = REGION_STYLE_LAYER_BASE_BYTES
@@ -264,6 +268,8 @@ export interface RemoteRegionStyles {
   /** Reserved for future per-cell pivot region styles; empty for tables. */
   cells?: Int32Array
   diagnostics: readonly TableStyleDiagnostic[]
+  /** Exact worker estimate when the current receiver grant was insufficient. */
+  requiredBytes?: number
 }
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,

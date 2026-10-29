@@ -583,7 +583,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
    * The receiver grants the complete bounded payload before it is published. */
   async readRegionStyles(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles> {
     const diagnostics: RemoteRegionStyles['diagnostics'][number][] = []
-    const empty = (): RemoteRegionStyles => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], cells: new Int32Array(), diagnostics })
+    const empty = (requiredBytes?: number): RemoteRegionStyles => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], cells: new Int32Array(), diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
     const error = this.guard(options)
     if (error) {
       diagnostics.push({ kind: 'unsupported', feature: 'table-style-read-failed', message: error.message })
@@ -613,7 +613,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     const bytes = estimatePayloadBytes(result) + REGION_STYLE_REPLY_OVERHEAD_BYTES
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes || (memory && !memory.set(bytes))) {
       diagnostics.splice(0, diagnostics.length, { kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' })
-      return empty()
+      return empty(bytes)
     }
     return result
   }

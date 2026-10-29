@@ -13,6 +13,8 @@ import type { WorkbookFormatting } from '../view/contracts'
 import type { SheetColorContext } from '../sheetColors'
 import { parseStylesExtras } from '../tableStyles/parseStylesExtras'
 import type { TableStyleDef } from '../tableStyles/model'
+import { estimatePayloadBytes } from '../view/payloadBytes'
+import { MAX_PAGED_TABLE_STYLE_DEFS_BYTES } from '../view/contracts'
 
 export const DEFAULT_FORMATTING: WorkbookFormatting = Object.freeze({ dateSystem: '1900', styles: Object.freeze([]) })
 
@@ -29,7 +31,15 @@ export async function workbookFormattingWithColorContext(workbookRoot: XmlNode, 
   if (stylesText === undefined) return { formatting: { dateSystem, styles: [] }, colorContext: palette ? { theme: palette } : {}, tableStyleDefs: new Map() }
   const root = parseXml(stylesText)
   const styles = await parseStyles({ xml: async (path: string) => path === 'xl/styles.xml' ? root : undefined } as unknown as OfficePackage, palette)
-  const tableStyleDefs = parseStylesExtras(root, styles.colorContext).tableStyles
+  const parsedTableStyleDefs = parseStylesExtras(root, styles.colorContext).tableStyles
+  const tableStyleDefs = new Map<string, TableStyleDef>()
+  let retainedTableStyleBytes = 0
+  for (const [name, def] of parsedTableStyleDefs) {
+    const bytes = estimatePayloadBytes(def) + 32 + name.length * 2
+    if (retainedTableStyleBytes + bytes > MAX_PAGED_TABLE_STYLE_DEFS_BYTES) continue
+    retainedTableStyleBytes += bytes
+    tableStyleDefs.set(name, def)
+  }
   const digitWidth = workbookDigitWidth(styles)
   return {
     formatting: { dateSystem, styles: styles.xfs.map(xf => resolveXfStyle(styles, xf)), ...(digitWidth !== 7 ? { maxDigitWidthPx: digitWidth } : {}) },

@@ -260,11 +260,12 @@ export class RemoteWorkbook implements WorkbookSource {
     this.regionStyleCache = new RemoteRegionStyleCache({
       identity: sheetId => this.identity(sheetId), hasRegionStyles: sheetId => this.layout(sheetId).hasRegionStyles === true,
       loadState: sheetId => this.loadState(sheetId),
-      grant: (sheetId, requestId) => {
+      grant: (sheetId, requestId, minimumBytes) => {
         const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
         const tableCount = Math.min(MAX_REGION_STYLE_TABLES, this.layout(sheetId).regionStyleTableCount ?? 1)
-        const limit = Math.min(headroom, REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE), owner = `region-style-grant:${requestId}`
-        if (!Number.isSafeInteger(limit) || limit < 4096 || this.mainLedger.ownerBytes('replies', owner) > 0) return null
+        const planned = REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE
+        const limit = Math.min(headroom, Math.max(planned, minimumBytes ?? 0)), owner = `region-style-grant:${requestId}`
+        if (!Number.isSafeInteger(limit) || limit < Math.max(4096, minimumBytes ?? 0) || this.mainLedger.ownerBytes('replies', owner) > 0) return null
         this.mainLedger.set('replies', owner, limit)
         return limit
       },
