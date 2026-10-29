@@ -112,7 +112,8 @@ describe('pivot definition parsers', () => {
   it('tells shared item lists from inline record values', async () => {
     const { book } = await loadFile('tests/fixtures/xlsx-pivots/pivot-layout-compact.xlsx')
     const [region, , year, sales] = book.caches.get(2045)!.fields
-    expect(region.sharedItems).toMatchObject({ inline: false, count: 4, containsString: true, containsNumber: false })
+    expect(region.sharedItems).toMatchObject({ inline: false, containsString: true, containsNumber: false })
+    expect(region.sharedItems).not.toHaveProperty('count')
     expect(region.sharedItems!.items).toEqual([{ type: 'string', value: 'South' }, { type: 'string', value: 'North' }, { type: 'string', value: 'West' }, { type: 'string', value: 'East' }])
     expect(year.sharedItems).toMatchObject({ inline: false, containsInteger: true, minValue: 2022, maxValue: 2024 })
     expect(year.sharedItems!.items).toEqual([{ type: 'number', value: 2022 }, { type: 'number', value: 2024 }, { type: 'number', value: 2023 }])
@@ -186,7 +187,7 @@ describe('pivot definition parsers', () => {
     expect(day.fieldGroup!.groupItems![0]).toEqual({ type: 'string', value: '<5/12/2015' })
     expect(month.fieldGroup).toMatchObject({ base: 0, rangePr: { groupBy: 'months' } })
     expect(month.sharedItems).toBeUndefined()
-    expect(lo.tables[0].chartFormats[0]).toMatchObject({ chart: 0, format: 1, series: true, pivotArea: { type: 'data', outline: false, references: [{ field: PIVOT_VALUES_FIELD, count: 1, selected: false, x: [0] }] } })
+    expect(lo.tables[0].chartFormats[0]).toMatchObject({ chart: 0, format: 1, series: true, pivotArea: { type: 'data', outline: false, references: [{ field: PIVOT_VALUES_FIELD, selected: false, x: [0] }] } })
 
     const repeat = (await loadFile('tests/fixtures/xlsx-pivots/pivot-repeat-labels.xlsx')).book.tables[0]
     expect(repeat.fields.some(f => f.x14?.fillDownLabels)).toBe(true)
@@ -224,7 +225,7 @@ describe('pivot definition parsers', () => {
     })
     const t = book.tables[0], cache = book.caches.get(7)!
     expect(cache.fields[2]).toMatchObject({ databaseField: false, fieldGroup: { base: 0, discretePr: [1, 0], groupItems: [{ type: 'string', value: 'Group1' }, { type: 'string', value: 'Group2' }] } })
-    expect(t.fields[0].autoSortScope).toMatchObject({ dataOnly: false, outline: false, fieldPosition: 0, references: [{ field: PIVOT_VALUES_FIELD, count: 1, selected: false, x: [0] }] })
+    expect(t.fields[0].autoSortScope).toMatchObject({ dataOnly: false, outline: false, fieldPosition: 0, references: [{ field: PIVOT_VALUES_FIELD, selected: false, x: [0] }] })
     expect(t.conditionalFormats).toEqual([{ scope: 'data', type: 'row', priority: 2, pivotAreas: [expect.objectContaining({ type: 'data', outline: false, collapsedLevelsAreSubtotals: true, references: [expect.objectContaining({ field: 0, x: [1] })] })] }])
     expect(t.filters).toEqual([
       { fld: 0, type: 'captionBeginsWith', evalOrder: -1, id: 1, stringValue1: 'a', autoFilter: { ref: 'A1', columns: [{ colId: 0, hiddenButton: false, showButton: true, customFilters: { and: false, filters: [{ operator: 'equal', val: 'a*' }] } }] } },
@@ -317,6 +318,81 @@ describe('pivot definition parsers', () => {
     const book = await loadPivotWorkbook(parts, new Map([['S', [region]]]))
     expect(book.tables[0].cachePartPath).toBe('xl/pivotCache/pivotCacheDefinition1.xml')
     expect(book.caches.get(7)?.fields).toHaveLength(2)
-    expect(book.diagnostics).toEqual([])
+    expect(book.tables[0].unsupported).toEqual([])
+    expect(book.diagnostics).toEqual([expect.objectContaining({ kind: 'parse', feature: 'pivot-cache-mapping-recovered', partPath: 'xl/pivotTables/pivotTable1.xml' })])
+  })
+
+  describe('index validation (ruling AC)', () => {
+    const FIELDS = `${LOCATION}<pivotFields count="3"><pivotField axis="axisRow"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>`
+      + '<pivotField dataField="1"/><pivotField axis="axisPage"><items count="2"><item x="0"/><item x="1"/></items></pivotField></pivotFields>'
+    const CACHE3 = `${SOURCE}<cacheFields count="3"><cacheField name="K"><sharedItems count="2"><s v="a"/><s v="b"/></sharedItems></cacheField>`
+      + '<cacheField name="V"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1"/></cacheField>'
+      + '<cacheField name="P"><sharedItems count="2"><s v="p"/><s v="q"/></sharedItems></cacheField></cacheFields>'
+    const DATA2 = '<dataFields count="2"><dataField fld="1"/><dataField name="B" fld="1"/></dataFields>'
+    const run = (table: string, cache = CACHE3) => loadSynthetic({ cache, table })
+    const invalidOf = (book: PivotWorkbook) => book.tables[0].unsupported.filter(e => e.startsWith('invalid-index:'))
+
+    it('accepts a well-formed table with Values on columns', async () => {
+      const book = await run(`${FIELDS}<rowFields count="1"><field x="0"/></rowFields><rowItems count="3"><i><x/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>`
+        + '<colFields count="1"><field x="-2"/></colFields><colItems count="2"><i><x/></i><i i="1"><x v="1"/></i></colItems>'
+        + `<pageFields count="1"><pageField fld="2" item="1" hier="-1"/></pageFields>${DATA2}`)
+      expect(invalidOf(book)).toEqual([])
+      expect(book.diagnostics).toEqual([])
+    })
+
+    it.each([
+      ['pivot item x beyond the shared items', FIELDS.replace('<item x="1"/>', '<item x="2"/>'), 'pivotField[0].item[1].x'],
+      ['row field beyond the fields', `${FIELDS}<rowFields count="1"><field x="3"/></rowFields>`, 'rowFields[0]'],
+      ['negative row field', `${FIELDS}<rowFields count="1"><field x="-1"/></rowFields>`, 'rowFields[0]'],
+      ['Values on both axes', `${FIELDS}<rowFields count="1"><field x="-2"/></rowFields><colFields count="1"><field x="-2"/></colFields>${DATA2}`, 'colFields[0]'],
+      ['Values without data fields', `${FIELDS}<colFields count="1"><field x="-2"/></colFields>`, 'colFields[0]'],
+      ['axis item x beyond the field items', `${FIELDS}<rowFields count="1"><field x="0"/></rowFields><rowItems count="1"><i><x v="3"/></i></rowItems>`, 'rowItems[0].x[0]'],
+      ['negative axis item x', `${FIELDS}<rowFields count="1"><field x="0"/></rowFields><rowItems count="1"><i><x v="-1"/></i></rowItems>`, 'rowItems[0].x[0]'],
+      ['axis item x beyond the axis levels', `${FIELDS}<rowFields count="1"><field x="0"/></rowFields><rowItems count="1"><i r="1"><x/></i></rowItems>`, 'rowItems[0].x[0]'],
+      ['Values axis item beyond the data fields', `${FIELDS}<colFields count="1"><field x="-2"/></colFields><colItems count="1"><i><x v="2"/></i></colItems>${DATA2}`, 'colItems[0].x[0]'],
+      ['axis item i beyond the data fields', `${FIELDS}<rowFields count="1"><field x="0"/></rowFields><rowItems count="1"><i i="2"><x/></i></rowItems>${DATA2}`, 'rowItems[0].i'],
+      ['page field item beyond its items', `${FIELDS}<pageFields count="1"><pageField fld="2" item="2"/></pageFields>`, 'pageField[0].item'],
+      ['page field on Values', `${FIELDS}<pageFields count="1"><pageField fld="-2"/></pageFields>`, 'pageField[0].fld'],
+      ['data field beyond the fields', `${FIELDS}<dataFields count="1"><dataField fld="3"/></dataFields>`, 'dataField[0].fld'],
+      ['base field beyond the fields', `${FIELDS}<dataFields count="1"><dataField fld="1" showDataAs="runTotal" baseField="5"/></dataFields>`, 'dataField[0].baseField'],
+      ['base item beyond the base field items', `${FIELDS}<dataFields count="1"><dataField fld="1" showDataAs="difference" baseField="0" baseItem="3"/></dataFields>`, 'dataField[0].baseItem'],
+    ])('fails closed on %s', async (_, table, where) => {
+      const book = await run(table)
+      expect(book.tables).toHaveLength(1)
+      expect(invalidOf(book)).toContain(`invalid-index:${where}`)
+      expect(book.diagnostics).toContainEqual(expect.objectContaining({ kind: 'parse', feature: 'pivot-definition-invalid', partPath: 'xl/pivotTables/pivotTable1.xml' }))
+    })
+
+    it('keeps the previous/next sentinels and ignores inert base fields', async () => {
+      const book = await run(`${FIELDS}<dataFields count="3"><dataField fld="1" showDataAs="difference" baseField="0" baseItem="1048828"/>`
+        + '<dataField fld="1" showDataAs="percent" baseField="0" baseItem="1048829"/><dataField fld="1" baseField="1" baseItem="0"/></dataFields>')
+      expect(invalidOf(book)).toEqual([])
+    })
+
+    it('checks cache grouping indices and the field count', async () => {
+      const grouped = await run(`${LOCATION}<pivotFields count="2"><pivotField/><pivotField/></pivotFields>`,
+        `${SOURCE}<cacheFields count="2"><cacheField name="K"><sharedItems count="1"><s v="a"/></sharedItems></cacheField>`
+        + '<cacheField name="G" databaseField="0"><fieldGroup base="4"><discretePr count="1"><x v="1"/></discretePr><groupItems count="1"><s v="g"/></groupItems></fieldGroup></cacheField></cacheFields>')
+      expect(invalidOf(grouped)).toEqual(expect.arrayContaining(['invalid-index:cache.fieldGroup[1].base', 'invalid-index:cache.fieldGroup[1].discretePr[0]']))
+      const short = await run(`${LOCATION}<pivotFields count="1"><pivotField/></pivotFields>`)
+      expect(invalidOf(short)).toEqual(['invalid-index:pivotFields'])
+    })
+  })
+
+  it('reports declared counts that disagree with the children, which win', async () => {
+    const book = await loadSynthetic({
+      cache: `${SOURCE}<cacheFields count="1"><cacheField name="K"><sharedItems count="999999999"><s v="a"/></sharedItems></cacheField></cacheFields>`,
+      table: `${LOCATION}<pivotFields count="3"><pivotField><items count="7"><item x="0"/></items></pivotField></pivotFields><rowItems count="0"><i/></rowItems>`,
+    })
+    expect(book.caches.get(7)!.fields[0].sharedItems!.items).toHaveLength(1)
+    expect(book.caches.get(7)!.fields[0].sharedItems).not.toHaveProperty('count')
+    expect(book.tables[0].fields).toHaveLength(1)
+    expect(book.tables[0].rowItems).toHaveLength(1)
+    expect(book.diagnostics.filter(d => d.feature === 'pivot-count-mismatch').map(d => d.message).sort()).toEqual([
+      'items in xl/pivotTables/pivotTable1.xml declares count 7 but has 1',
+      'pivotFields in xl/pivotTables/pivotTable1.xml declares count 3 but has 1',
+      'rowItems in xl/pivotTables/pivotTable1.xml declares count 0 but has 1',
+      'sharedItems in xl/pivotCache/pivotCacheDefinition1.xml declares count 999999999 but has 1',
+    ])
   })
 })

@@ -59,7 +59,6 @@ export interface PivotSharedItems {
   maxValue?: number
   minDate?: string
   maxDate?: string
-  count?: number
   /** No item list: the field's records carry values inline (`n`, `s`, `d`, …) instead of `x` indices into `items`. */
   inline: boolean
   /** Document order, which is the index space of record `x` values. */
@@ -256,7 +255,6 @@ export type PivotAreaType = 'none' | 'normal' | 'data' | 'all' | 'origin' | 'but
 export interface PivotAreaReference {
   /** Field index; the Values field is normalised from 4294967294 to -2. */
   field?: number
-  count?: number
   selected: boolean
   byPosition: boolean
   relative: boolean

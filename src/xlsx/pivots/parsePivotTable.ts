@@ -10,13 +10,14 @@
  */
 import { attrs, getChild, getChildren, type XmlNode } from '../../core/xml'
 import type { PivotRegionRef } from './stub'
-import type {
-  PivotArea, PivotAreaReference, PivotAxis, PivotAxisItem, PivotDataField, PivotDiagnostic, PivotField, PivotFieldItem,
-  PivotFilter, PivotFilterColumn, PivotItemType, PivotSubtotalFunction, PivotTableDefinition,
+import {
+  PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD,
+  type PivotArea, type PivotAreaReference, type PivotAxis, type PivotAxisItem, type PivotCacheDefinition, type PivotDataField, type PivotDiagnostic,
+  type PivotField, type PivotFieldItem, type PivotFilter, type PivotFilterColumn, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition,
 } from './model'
 import {
-  bool, checkChildren, double, int, oneOf, optBool, optDouble, optInt, optOneOf, optUint, readAttrs, readExtensions, readIndices,
-  str, uint, Unsupported,
+  bool, checkChildren, checkCount, countDiagnostics, double, int, oneOf, optBool, optDouble, optInt, optOneOf, optUint, pushDiagnostic,
+  readAttrs, readExtensions, readIndices, readList, str, uint, Unsupported,
 } from './parseCacheDefinition'
 
 export const X14_PIVOT_TABLE_EXT = '{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}'
@@ -57,17 +58,19 @@ function readArea(node: XmlNode, u: Unsupported): PivotArea {
   readExtensions(node, {}, [], u)
   const refs = getChild(node, 'references')
   if (refs) {
-    readAttrs(refs, 'references', {}, u, ['count'])
+    readList(refs, 'references', getChildren(refs, 'reference').length, u)
     checkChildren(refs, 'references', ['reference'], u)
   }
   const references = getChildren(refs, 'reference').map((ref): PivotAreaReference => {
     const r = readAttrs(ref, 'reference', {
-      field: optUint, count: optUint, selected: bool(true), byPosition: bool(false), relative: bool(false), defaultSubtotal: bool(false),
-    }, u, SUBTOTAL_ATTRS)
+      field: optUint, selected: bool(true), byPosition: bool(false), relative: bool(false), defaultSubtotal: bool(false),
+    }, u, ['count', ...SUBTOTAL_ATTRS])
     checkChildren(ref, 'reference', ['x'], u)
     readExtensions(ref, {}, [], u)
     const field = r.field === VALUES_FIELD_UNSIGNED ? -2 : r.field
-    return { ...r, ...(field !== undefined ? { field } : {}), subtotals: subtotalsOf(ref, 'reference', u), x: readIndices(ref, 'reference', u) }
+    const x = readIndices(ref, 'reference', u)
+    checkCount(ref, 'reference', x.length, u)
+    return { ...r, ...(field !== undefined ? { field } : {}), subtotals: subtotalsOf(ref, 'reference', u), x }
   })
   return { ...a, references }
 }
@@ -106,9 +109,9 @@ function readField(node: XmlNode, u: Unsupported): PivotField {
   const field: PivotField = { ...a, subtotals: subtotalsOf(node, 'pivotField', u) }
   const items = getChild(node, 'items')
   if (items) {
-    readAttrs(items, 'items', {}, u, ['count'])
     checkChildren(items, 'items', ['item'], u)
     field.items = getChildren(items, 'item').map(item => readFieldItem(item, u))
+    readList(items, 'items', field.items.length, u)
   }
   const scope = getChild(getChild(node, 'autoSortScope'), 'pivotArea')
   if (scope) field.autoSortScope = readArea(scope, u)
@@ -124,7 +127,7 @@ function readField(node: XmlNode, u: Unsupported): PivotField {
 /** `rowFields`/`colFields`: signed field indices (-2 is the Values field). An unreadable entry is recorded and dropped. */
 function readAxisFields(node: XmlNode | undefined, el: string, u: Unsupported): number[] {
   if (!node) return []
-  readAttrs(node, el, {}, u, ['count'])
+  readList(node, el, getChildren(node, 'field').length, u)
   checkChildren(node, el, ['field'], u)
   return getChildren(node, 'field').flatMap(f => {
     const x = readAttrs(f, 'field', { x: optInt }, u).x
@@ -135,12 +138,12 @@ function readAxisFields(node: XmlNode | undefined, el: string, u: Unsupported): 
 
 function readAxisItems(node: XmlNode | undefined, el: string, u: Unsupported): PivotAxisItem[] | undefined {
   if (!node) return undefined
-  readAttrs(node, el, {}, u, ['count'])
+  readList(node, el, getChildren(node, 'i').length, u)
   checkChildren(node, el, ['i'], u)
   return getChildren(node, 'i').map(i => {
     const a = readAttrs(i, 'i', { t: oneOf(ITEM_TYPES, 'data'), r: uint(0), i: uint(0) }, u)
     checkChildren(i, 'i', ['x'], u)
-    return { type: a.t, r: a.r, i: a.i, x: readIndices(i, 'i', u, true) }
+    return { type: a.t, r: a.r, i: a.i, x: readIndices(i, 'i', u, 'x') }
   })
 }
 
@@ -254,7 +257,7 @@ export function parsePivotTable(root: XmlNode, ctx: { sheet: string; region: Piv
   const list = (name: string, child: string) => {
     const node = getChild(root, name)
     if (node) {
-      readAttrs(node, name, {}, u, ['count'])
+      readList(node, name, getChildren(node, child).length, u)
       checkChildren(node, name, [child], u)
     }
     return getChildren(node, child)
@@ -289,7 +292,12 @@ export function parsePivotTable(root: XmlNode, ctx: { sheet: string; region: Piv
       }, u)
       checkChildren(node, 'conditionalFormat', ['pivotAreas'], u)
       readExtensions(node, {}, [], u)
-      return { ...c, pivotAreas: getChildren(getChild(node, 'pivotAreas'), 'pivotArea').map(area => readArea(area, u)) }
+      const areas = getChild(node, 'pivotAreas')
+      if (areas) {
+        readList(areas, 'pivotAreas', getChildren(areas, 'pivotArea').length, u)
+        checkChildren(areas, 'pivotAreas', ['pivotArea'], u)
+      }
+      return { ...c, pivotAreas: getChildren(areas, 'pivotArea').map(area => readArea(area, u)) }
     }),
     chartFormats: list('chartFormats', 'chartFormat').map(node => {
       const c = readAttrs(node, 'chartFormat', { chart: uint(0), format: uint(0), series: bool(false) }, u)
@@ -331,10 +339,87 @@ export function parsePivotTable(root: XmlNode, ctx: { sheet: string; region: Piv
     },
   }, [], u)
   table.unsupported = u.list()
+  countDiagnostics(u, partPath, diagnostics)
   return table
 }
 
-/** Adds a diagnostic unless one with the same feature and message is already there. */
-export function pushDiagnostic(out: PivotDiagnostic[], d: PivotDiagnostic): void {
-  if (!out.some(item => item.feature === d.feature && item.message === d.message)) out.push(d)
+
+/** Invalid-index entries kept per table; the first one is named in the diagnostic. */
+const MAX_INVALID_INDICES = 32
+/** showDataAs modes that read `baseField`/`baseItem` (the rest leave them inert, often written as 0/0 against an item-less field). */
+const USES_BASE_ITEM: readonly PivotDataField['showDataAs'][] = ['difference', 'percent', 'percentDiff']
+const USES_BASE_FIELD: readonly PivotDataField['showDataAs'][] = [...USES_BASE_ITEM, 'runTotal']
+const X14_USES_BASE_FIELD: readonly string[] = ['percentOfParent', 'percentOfRunningTotal', 'rankAscending', 'rankDescending']
+
+/**
+ * Index references checked against their field's domain once the cache is resolved (ruling AC). Returns
+ * `invalid-index:<where>` entries; any entry makes the table display-only (§7.6), never laid out.
+ * - pivotField item `x`: the cache field's group items, else its shared items;
+ * - `rowFields`/`colFields`: a pivot field, or -2 (Values) at most once across both axes and only with data fields;
+ * - `rowItems`/`colItems` `x` at level `r + j`: that axis field's `items` (data fields for -2); `i`: a data field.
+ *   A grand line's `x` is a placeholder and only has to be non-negative;
+ * - `pageField`: `fld` a pivot field, `item` one of its items;
+ * - `dataField`: `fld` a pivot field; `baseField`/`baseItem` where showDataAs uses them, keeping the previous/next sentinels;
+ * - cache `fieldGroup`: `base`/`par` cache fields, `discretePr` group items.
+ * Pivot-area reference indices are not checked: their meaning depends on `byPosition`/`relative`.
+ */
+export function validateIndices(table: PivotTableDefinition, cache: PivotCacheDefinition | undefined): string[] {
+  const out: string[] = []
+  const bad = (where: string) => { if (out.length < MAX_INVALID_INDICES) out.push(`invalid-index:${where}`) }
+  const nFields = table.fields.length
+  const isField = (f: number) => Number.isInteger(f) && f >= 0 && f < nFields
+  const itemCount = (f: number) => table.fields[f]?.items?.length ?? 0
+  if (cache && cache.fields.length !== nFields) bad('pivotFields')
+  if (cache) {
+    cache.fields.forEach((cf, f) => {
+      const group = cf.fieldGroup
+      if (!group) return
+      if (group.base !== undefined && group.base >= cache.fields.length) bad(`cache.fieldGroup[${f}].base`)
+      if (group.par !== undefined && group.par >= cache.fields.length) bad(`cache.fieldGroup[${f}].par`)
+      const groups = group.groupItems?.length ?? 0
+      group.discretePr?.forEach((x, k) => { if (x >= groups) bad(`cache.fieldGroup[${f}].discretePr[${k}]`) })
+    })
+    table.fields.forEach((field, f) => {
+      const cf = cache.fields[f]
+      if (!cf || !field.items) return
+      const domain = cf.fieldGroup?.groupItems?.length ?? cf.sharedItems?.items.length ?? 0
+      field.items.forEach((item, k) => { if (item.x !== undefined && item.x >= domain) bad(`pivotField[${f}].item[${k}].x`) })
+    })
+  }
+  let values = 0
+  const axisFields = (name: string, list: readonly number[]) => list.forEach((x, j) => {
+    if (x === PIVOT_VALUES_FIELD) {
+      if (++values > 1 || table.dataFields.length === 0) bad(`${name}[${j}]`)
+    } else if (!isField(x)) bad(`${name}[${j}]`)
+  })
+  axisFields('rowFields', table.rowFields)
+  axisFields('colFields', table.colFields)
+  const dataCount = Math.max(1, table.dataFields.length)
+  const axisItems = (name: string, items: readonly PivotAxisItem[] | undefined, axis: readonly number[]) => items?.forEach((line, n) => {
+    if (line.i >= dataCount) bad(`${name}[${n}].i`)
+    line.x.forEach((x, j) => {
+      const level = line.r + j
+      if (x < 0) return bad(`${name}[${n}].x[${j}]`)
+      if (line.type === 'grand') return
+      const f = axis[level]
+      const domain = f === undefined ? 0 : f === PIVOT_VALUES_FIELD ? table.dataFields.length : itemCount(f)
+      if (x >= domain) bad(`${name}[${n}].x[${j}]`)
+    })
+  })
+  axisItems('rowItems', table.rowItems, table.rowFields)
+  axisItems('colItems', table.colItems, table.colFields)
+  table.pageFields.forEach((page, n) => {
+    if (!isField(page.fld)) bad(`pageField[${n}].fld`)
+    else if (page.item !== undefined && page.item >= itemCount(page.fld)) bad(`pageField[${n}].item`)
+  })
+  table.dataFields.forEach((data, n) => {
+    if (!isField(data.fld)) bad(`dataField[${n}].fld`)
+    const showAs = data.x14?.pivotShowAs
+    if (!USES_BASE_FIELD.includes(data.showDataAs) && !(showAs && X14_USES_BASE_FIELD.includes(showAs))) return
+    if (!isField(data.baseField)) return bad(`dataField[${n}].baseField`)
+    if (!USES_BASE_ITEM.includes(data.showDataAs)) return
+    const sentinel = data.baseItem === PIVOT_BASE_ITEM_PREVIOUS || data.baseItem === PIVOT_BASE_ITEM_NEXT
+    if (!sentinel && data.baseItem >= itemCount(data.baseField)) bad(`dataField[${n}].baseItem`)
+  })
+  return out
 }

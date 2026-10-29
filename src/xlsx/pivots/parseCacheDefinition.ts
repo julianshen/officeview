@@ -7,7 +7,7 @@
  * (`<s/><m/><n/>`) are indexed by document position, which the grouped tree loses.
  */
 import { attrs, elementChildren, getChild, getChildren, orderedChildren, type XmlNode } from '../../core/xml'
-import type { PivotCacheDefinition, PivotCacheField, PivotCacheItem, PivotCacheSource, PivotFieldGroup, PivotSharedItems } from './model'
+import type { PivotCacheDefinition, PivotCacheField, PivotCacheItem, PivotCacheSource, PivotDiagnostic, PivotFieldGroup, PivotSharedItems } from './model'
 
 // ---------------------------------------------------------------- shared attribute readers (also used by parsePivotTable)
 
@@ -48,9 +48,14 @@ const BOOKKEEPING = new Set(['Ignorable', 'uid'])
 export const MAX_UNSUPPORTED_ENTRIES = 256
 export const UNSUPPORTED_TRUNCATED = 'unsupported(truncated)'
 
-/** Deduplicated, bounded record of unmodelled constructs. */
+/** Deduplicated, bounded record of unmodelled constructs, plus the part's declared-count mismatches. */
 export class Unsupported {
   private readonly seen = new Set<string>()
+  /** First mismatch per element name (so bounded by the schema's element names). */
+  readonly countMismatches = new Map<string, { declared: number; actual: number }>()
+  countMismatch(el: string, declared: number, actual: number): void {
+    if (!this.countMismatches.has(el)) this.countMismatches.set(el, { declared, actual })
+  }
   add(entry: string): void {
     if (this.seen.size < MAX_UNSUPPORTED_ENTRIES) this.seen.add(entry)
     else if (!this.seen.has(entry)) this.seen.add(UNSUPPORTED_TRUNCATED)
@@ -72,6 +77,33 @@ export function readAttrs<S extends Record<string, Reader<unknown>>>(node: XmlNo
   return out as Read<S>
 }
 
+/** A declared `count` that disagrees with the `actual` children read is reported; the children win and the count is not kept. */
+export function checkCount(node: XmlNode, el: string, actual: number, u: Unsupported): void {
+  const raw = attrs(node).count
+  if (raw === undefined) return
+  const declared = parseUint(raw)
+  if (declared === undefined) u.add(`${el}@count=${raw.slice(0, 40)}`)
+  else if (declared !== actual) u.countMismatch(el, declared, actual)
+}
+
+/** A list container: its only attribute is `count`. */
+export function readList(node: XmlNode, el: string, actual: number, u: Unsupported): void {
+  readAttrs(node, el, {}, u, ['count'])
+  checkCount(node, el, actual, u)
+}
+
+/** Adds a diagnostic unless one with the same feature and message is already there. */
+export function pushDiagnostic(out: PivotDiagnostic[], d: PivotDiagnostic): void {
+  if (!out.some(item => item.feature === d.feature && item.message === d.message)) out.push(d)
+}
+
+/** `pivot-count-mismatch` diagnostics for a part's recorded mismatches. */
+export function countDiagnostics(u: Unsupported, partPath: string, out: PivotDiagnostic[]): void {
+  for (const [el, { declared, actual }] of u.countMismatches) {
+    pushDiagnostic(out, { kind: 'parse', feature: 'pivot-count-mismatch', message: `${el} in ${partPath} declares count ${declared} but has ${actual}`, partPath })
+  }
+}
+
 /** Records child elements outside `known` (`extLst` is always known; callers read it through `readExtensions`). */
 export function checkChildren(node: XmlNode, el: string, known: readonly string[], u: Unsupported): void {
   for (const [name] of elementChildren(node)) if (name !== 'extLst' && !known.includes(name)) u.add(`${el}/${name}`)
@@ -87,9 +119,13 @@ export function readExtensions(node: XmlNode, handlers: Record<string, (ext: Xml
   }
 }
 
-/** Indices from `<x v=".."/>` children (`v` defaults to 0 where the schema allows, else required). */
-export function readIndices(node: XmlNode | undefined, el: string, u: Unsupported, signed = false): number[] {
-  return getChildren(node, 'x').map(x => readAttrs(x, `${el}/x`, { v: signed ? int(0) : uint(0) }, u).v)
+/**
+ * Indices from `<x v=".."/>` children. CT_Index (`discretePr`, pivot-area references) is an unsignedInt;
+ * CT_X (`rowItems`/`colItems`) is an xsd:int defaulting to 0 per the schema, and the loader rejects a
+ * negative one as an invalid index (`validateIndices`).
+ */
+export function readIndices(node: XmlNode | undefined, el: string, u: Unsupported, kind: 'index' | 'x' = 'index'): number[] {
+  return getChildren(node, 'x').map(x => readAttrs(x, `${el}/x`, { v: kind === 'x' ? int(0) : uint(0) }, u).v)
 }
 
 // ---------------------------------------------------------------- cache definition
@@ -136,9 +172,10 @@ function readSharedItems(node: XmlNode, u: Unsupported): PivotSharedItems {
   const a = readAttrs(node, 'sharedItems', {
     containsSemiMixedTypes: bool(true), containsNonDate: bool(true), containsDate: bool(false), containsString: bool(true),
     containsBlank: bool(false), containsMixedTypes: bool(false), containsNumber: bool(false), containsInteger: bool(false),
-    minValue: optDouble, maxValue: optDouble, minDate: str, maxDate: str, count: optUint, longText: bool(false),
-  }, u)
+    minValue: optDouble, maxValue: optDouble, minDate: str, maxDate: str, longText: bool(false),
+  }, u, ['count'])
   const items = readItems(node, u)
+  checkCount(node, 'sharedItems', items.length, u)
   return { ...a, inline: items.length === 0, items }
 }
 
@@ -153,13 +190,13 @@ function readFieldGroup(node: XmlNode, u: Unsupported): PivotFieldGroup {
   }, u)
   const discrete = getChild(node, 'discretePr')
   if (discrete) {
-    readAttrs(discrete, 'discretePr', {}, u, ['count'])
     group.discretePr = readIndices(discrete, 'discretePr', u)
+    readList(discrete, 'discretePr', group.discretePr.length, u)
   }
   const groupItems = getChild(node, 'groupItems')
   if (groupItems) {
-    readAttrs(groupItems, 'groupItems', {}, u, ['count'])
     group.groupItems = readItems(groupItems, u)
+    readList(groupItems, 'groupItems', group.groupItems.length, u)
   }
   return group
 }
@@ -207,7 +244,7 @@ function readSource(node: XmlNode | undefined, u: Unsupported): PivotCacheSource
  * Parses one cache definition. `cacheId` comes from the workbook's `pivotCaches`;
  * `recordsPartPath` is resolved by the loader from the root's `r:id`.
  */
-export function parseCacheDefinition(root: XmlNode, cacheId: number, partPath: string): PivotCacheDefinition {
+export function parseCacheDefinition(root: XmlNode, cacheId: number, partPath: string, diagnostics: PivotDiagnostic[]): PivotCacheDefinition {
   const u = new Unsupported()
   const a = readAttrs(root, 'pivotCacheDefinition', {
     invalid: bool(false), saveData: bool(true), refreshOnLoad: bool(false), optimizeMemory: bool(false), enableRefresh: bool(true),
@@ -219,7 +256,7 @@ export function parseCacheDefinition(root: XmlNode, cacheId: number, partPath: s
   checkChildren(root, 'pivotCacheDefinition', ['cacheSource', 'cacheFields', ...OLAP_CHILDREN], u)
   const fieldsNode = getChild(root, 'cacheFields')
   if (!fieldsNode) u.add('pivotCacheDefinition/cacheFields(missing)')
-  else readAttrs(fieldsNode, 'cacheFields', {}, u, ['count'])
+  else readList(fieldsNode, 'cacheFields', getChildren(fieldsNode, 'cacheField').length, u)
   const { tupleCache, ...rest } = a
   const cache: PivotCacheDefinition = {
     cacheId, partPath, ...rest,
@@ -239,5 +276,6 @@ export function parseCacheDefinition(root: XmlNode, cacheId: number, partPath: s
     },
   }, [DATA_SOURCE_CLEAN_EXT], u)
   cache.unsupported = u.list()
+  countDiagnostics(u, partPath, diagnostics)
   return cache
 }

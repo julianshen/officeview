@@ -7,14 +7,18 @@
  * - workbook `pivotCaches` unreadable: diagnostic; each table falls back to its own cache relationship;
  * - definition missing, malformed XML, or no usable `location`/`cacheId`: diagnostic, table skipped;
  * - cache missing or malformed: diagnostic, table kept without a cache entry (display needs only the definition);
+ * - cache found only through the definition's relationship: `pivot-cache-mapping-recovered`, table kept;
+ * - an index outside its field's domain (`validateIndices`): `invalid-index:<where>` in `unsupported` plus
+ *   `pivot-definition-invalid`, table kept display-only;
+ * - a declared `count` that disagrees with the children: `pivot-count-mismatch`, the children win;
  * - unknown constructs in either part: recorded in `PivotTableDefinition.unsupported`, table kept.
  */
 import { attrs, getChild, getChildren, type XmlNode } from '../../core/xml'
 import { resolvePartTarget } from '../../drawing/parts'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition, PivotWorkbook } from './model'
 import type { PivotRegionRef } from './stub'
-import { parseCacheDefinition } from './parseCacheDefinition'
-import { parsePivotTable, pushDiagnostic } from './parsePivotTable'
+import { parseCacheDefinition, pushDiagnostic } from './parseCacheDefinition'
+import { parsePivotTable, validateIndices } from './parsePivotTable'
 
 /**
  * The part access both `OfficePackage` and the worker's `RangePackage` provide.
@@ -86,7 +90,7 @@ export async function loadPivotWorkbook(pkg: PackageReader, regions: ReadonlyMap
           pushDiagnostic(diagnostics, { kind: 'parse', feature: 'pivot-cache-unreadable', message: `Pivot cache definition could not be read from ${partPath}`, partPath })
           return undefined
         }
-        const cache = parseCacheDefinition(root, cacheId, partPath)
+        const cache = parseCacheDefinition(root, cacheId, partPath, diagnostics)
         const relId = attrs(root).id
         const records = relId === undefined ? undefined : (await relationships(pkg, partPath, '/pivotCacheRecords')).get(relId)
         if (records) cache.recordsPartPath = records
@@ -108,16 +112,26 @@ export async function loadPivotWorkbook(pkg: PackageReader, regions: ReadonlyMap
       }
       const table = parsePivotTable(root, { sheet, region }, diagnostics)
       if (!table) continue
-      const cachePath = cacheParts.get(table.cacheId) ?? [...(await relationships(pkg, partPath, '/pivotCacheDefinition')).values()][0]
+      let cachePath = cacheParts.get(table.cacheId)
+      if (!cachePath) {
+        cachePath = [...(await relationships(pkg, partPath, '/pivotCacheDefinition')).values()][0]
+        if (cachePath) pushDiagnostic(diagnostics, { kind: 'parse', feature: 'pivot-cache-mapping-recovered', message: `Pivot cache ${table.cacheId} is not in the workbook's pivotCaches; recovered from ${partPath}'s relationship`, partPath })
+      }
+      let cache: PivotCacheDefinition | undefined
       if (cachePath) {
         table.cachePartPath = cachePath
-        const cache = await loadCache(cachePath, table.cacheId)
+        cache = await loadCache(cachePath, table.cacheId)
         if (cache) {
           if (!caches.has(table.cacheId)) caches.set(table.cacheId, cache)
           if (cache.unsupported.length) table.unsupported = [...new Set([...table.unsupported, ...cache.unsupported.map(entry => `cache:${entry}`)])]
         }
       } else {
         pushDiagnostic(diagnostics, { kind: 'parse', feature: 'pivot-cache-unreadable', message: `Pivot cache ${table.cacheId} has no definition part (${partPath})`, partPath })
+      }
+      const invalid = validateIndices(table, cache)
+      if (invalid.length) {
+        table.unsupported = [...new Set([...table.unsupported, ...invalid])]
+        pushDiagnostic(diagnostics, { kind: 'parse', feature: 'pivot-definition-invalid', message: `Pivot table ${partPath} has ${invalid.length} index reference(s) outside their field (first: ${invalid[0].slice('invalid-index:'.length)})`, partPath })
       }
       tables.push(table)
     }
