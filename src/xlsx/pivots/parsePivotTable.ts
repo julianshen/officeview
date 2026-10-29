@@ -355,9 +355,11 @@ const X14_USES_BASE_FIELD: readonly string[] = ['percentOfParent', 'percentOfRun
  * Index references checked against their field's domain once the cache is resolved (ruling AC). Returns
  * `invalid-index:<where>` entries; any entry makes the table display-only (§7.6), never laid out.
  * - pivotField item `x`: the cache field's group items, else its shared items;
- * - `rowFields`/`colFields`: a pivot field, or -2 (Values) at most once across both axes and only with data fields;
+ * - `rowFields`/`colFields`: a pivot field, each at most once across both axes, or -2 (Values) at most once and only
+ *   with data fields;
  * - `rowItems`/`colItems` `x` at level `r + j`: that axis field's `items` (data fields for -2); `i`: a data field.
- *   A grand line's `x` is a placeholder and only has to be non-negative;
+ *   `r + x.length` never passes the axis depth (one level on an empty axis). A grand line's `x` is a placeholder
+ *   and only has to be non-negative;
  * - `pageField`: `fld` a pivot field, `item` one of its items;
  * - `dataField`: the effective field (`dataFieldSource`: x14 `sourceField`, else `fld`) a pivot field; `baseField`/`baseItem` where showDataAs uses them,
  *   keeping the previous/next sentinels;
@@ -391,16 +393,23 @@ export function validateIndices(table: PivotTableDefinition, cache: PivotCacheDe
     })
   }
   let values = 0
+  // A field sits on the axes at most once (Excel moves, never copies, a field): a repeat would let a
+  // line's item vector grow with the axis list instead of the field count.
+  const onAxis = new Set<number>()
   const axisFields = (name: string, list: readonly number[]) => list.forEach((x, j) => {
     if (x === PIVOT_VALUES_FIELD) {
       if (++values > 1 || table.dataFields.length === 0) bad(`${name}[${j}]`)
-    } else if (!isField(x)) bad(`${name}[${j}]`)
+    } else if (!isField(x) || onAxis.has(x)) bad(`${name}[${j}]`)
+    else onAxis.add(x)
   })
   axisFields('rowFields', table.rowFields)
   axisFields('colFields', table.colFields)
   const dataCount = Math.max(1, table.dataFields.length)
   const axisItems = (name: string, items: readonly PivotAxisItem[] | undefined, axis: readonly number[]) => items?.forEach((line, n) => {
     if (line.i >= dataCount) bad(`${name}[${n}].i`)
+    // A line writes levels r … r + x.length - 1 of the axis; a grand line's placeholder `<x/>` is legal on an
+    // empty axis. Each `x` of any other line past the depth is reported below; a grand line, or a bare `r`, here.
+    if (line.r + line.x.length > Math.max(1, axis.length) && (line.type === 'grand' || !line.x.length)) return bad(`${name}[${n}].x`)
     line.x.forEach((x, j) => {
       const level = line.r + j
       if (x < 0) return bad(`${name}[${n}].x[${j}]`)

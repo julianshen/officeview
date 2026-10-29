@@ -1,0 +1,133 @@
+// @vitest-environment node
+/**
+ * Final-review hardening (final-review.md C1, I5, I6): a hostile pivot
+ * definition fails closed per sheet, the region factory and the button pass
+ * never throw through paint, `<format>` count does not scale `styleAt`, and
+ * resident control ids are de-duplicated and capped.
+ */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { createCanvas } from 'canvas'
+import JSZip from 'jszip'
+import { afterEach, describe, expect, test } from 'vitest'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { getPaintables } from '../src/render/paint'
+import { ensureTableStyleEngine, registerTableStyleEngine, regionStylesFor } from '../src/xlsx/tableStyleLoader'
+import { regionStylesFromSource } from '../src/xlsx/tableStyles/regionLayer'
+import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
+import { paintPivotButtons } from '../src/xlsx/pivots/buttons'
+import type { XlsxSheet } from '../src/xlsx/types'
+import type { PivotTableDefinition } from '../src/xlsx/pivots/model'
+
+const fixture = (name: string) => readFileSync(fileURLToPath(new URL(`./fixtures/xlsx-pivots/${name}.xlsx`, import.meta.url)))
+const PIVOT_PART = 'xl/pivotTables/pivotTable1.xml'
+
+/** pivot-layout-compact with its pivot part rewritten by `edit`. */
+async function withPivotPart(edit: (xml: string) => string): Promise<Uint8Array> {
+  const zip = await JSZip.loadAsync(fixture('pivot-layout-compact'))
+  zip.file(PIVOT_PART, edit(await zip.file(PIVOT_PART)!.async('string')))
+  return zip.generateAsync({ type: 'uint8array' })
+}
+const pivotSheet = (sheets: readonly XlsxSheet[]) => sheets.find(sheet => sheet.pivotRegions?.length)!
+
+describe('C1: a hostile pivot definition fails closed', () => {
+  const N = 150_000
+  // The reviewer's case: one field repeated N times on the row axis, and a first row line N levels deep.
+  const repeated = (xml: string) => xml
+    .replace(/<rowFields count="2">[\s\S]*?<\/rowFields>/, `<rowFields count="${N}">${'<field x="0"/>'.repeat(N)}</rowFields>`)
+    .replace('<rowItems count="17"><i><x/></i>', `<rowItems count="17"><i>${'<x/>'.repeat(N)}</i>`)
+  // A grand line's placeholder list N long: the axis is two deep.
+  const deepGrand = (xml: string) => xml.replace('<i t="grand"><x/></i></rowItems>', `<i t="grand">${'<x/>'.repeat(N)}</i></rowItems>`)
+
+  for (const [name, edit] of [['a field repeated on the row axis', repeated], ['a grand line past the axis depth', deepGrand]] as const) {
+    test(`${name}: invalid-index, no layout, and every sheet still paints`, async () => {
+      const doc = await parseXlsx(await OfficePackage.load(await withPivotPart(edit)))
+      const sheet = pivotSheet(doc.sheets)
+      const def = sheet.pivotTables![0]!
+      const pages = await getPaintables(doc)
+      try {
+        expect(pages).toHaveLength(doc.sheets.length)
+        for (const page of pages) {
+          const canvas = createCanvas(Math.min(page.spec.widthPx, 400), Math.min(page.spec.heightPx, 400))
+          expect(() => page.paint(canvas.getContext('2d') as unknown as CanvasRenderingContext2D)).not.toThrow()
+        }
+      } finally { pages.dispose() }
+      expect(def.unsupported.some(entry => entry.startsWith('invalid-index:rowFields') || entry.startsWith('invalid-index:rowItems'))).toBe(true)
+      expect(savedPivotLayout(def)).toBeUndefined()
+      expect(sheet.regionStylesResolved).toBe(true)
+      expect(sheet.diagnostics?.map(item => item.feature)).toContain('pivot-layout-unavailable')
+    }, 60_000)
+  }
+
+  test('a real compact pivot still validates and lays out', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(fixture('pivot-layout-compact')))
+    const def = pivotSheet(doc.sheets).pivotTables![0]!
+    expect(def.unsupported.filter(entry => entry.startsWith('invalid-index:'))).toEqual([])
+    expect(savedPivotLayout(def)).toBeDefined()
+  })
+
+  test('a deep, long tabular axis of distinct fields is not laid out (parent bands stay linear)', async () => {
+    // D distinct tabular row fields, one data line through all of them, then M lines one level above the
+    // leaf: every level's parent band would cover all M lines (D × M entries).
+    const doc = await parseXlsx(await OfficePackage.load(fixture('pivot-layout-compact')))
+    const real = pivotSheet(doc.sheets).pivotTables![0]!
+    const D = 2_000, M = 20_000
+    const def: PivotTableDefinition = {
+      ...real,
+      fields: Array.from({ length: D }, () => ({ ...real.fields[0]!, compact: false, outline: false })),
+      rowFields: Array.from({ length: D }, (_, f) => f),
+      rowItems: [{ type: 'data', r: 0, i: 0, x: Array(D).fill(0) }, ...Array.from({ length: M }, () => ({ type: 'data' as const, r: D - 1, i: 0, x: [0] }))],
+      colFields: [],
+      colItems: [{ type: 'data', r: 0, i: 0, x: [] }],
+      location: { ...real.location, ref: `A3:B${4 + M}`, firstHeaderRow: 1, firstDataRow: 1, firstDataCol: 1 },
+      unsupported: [],
+    }
+    const started = performance.now()
+    expect(savedPivotLayout(def)).toBeUndefined()
+    expect(performance.now() - started).toBeLessThan(2_000)
+    // The same axis with a short tail is an ordinary tabular pivot and lays out.
+    const short = { ...def, rowItems: def.rowItems!.slice(0, 3), location: { ...def.location, ref: 'A3:B6' } }
+    expect(savedPivotLayout(short)?.parentBands.get(2)?.length).toBe(D - 1)
+  })
+})
+
+describe('C1: the region factory and the button pass fail closed', () => {
+  afterEach(() => registerTableStyleEngine(regionStylesFromSource))
+
+  test('a throwing factory leaves its sheet unstyled with one diagnostic; other sheets still paint', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(fixture('pivot-layout-compact')))
+    const sheet = pivotSheet(doc.sheets)
+    await ensureTableStyleEngine([])
+    registerTableStyleEngine(() => { throw new Error('boom') })
+    await expect(ensureTableStyleEngine(doc.sheets)).resolves.toBeUndefined()
+    expect(sheet.regionStyles).toBeUndefined()
+    expect(sheet.regionStylesResolved).toBe(true)
+    expect(sheet.diagnostics?.filter(item => item.feature.startsWith('pivot-display-failed'))).toHaveLength(1)
+    // The synchronous accessor fails closed too, once.
+    sheet.regionStylesResolved = false
+    expect(() => regionStylesFor(sheet)).not.toThrow()
+    expect(sheet.regionStylesResolved).toBe(true)
+    expect(sheet.diagnostics?.filter(item => item.feature === 'pivot-display-failed')).toHaveLength(1)
+    const pages = await getPaintables(doc)
+    try {
+      for (const page of pages) {
+        const canvas = createCanvas(Math.min(page.spec.widthPx, 400), Math.min(page.spec.heightPx, 400))
+        expect(() => page.paint(canvas.getContext('2d') as unknown as CanvasRenderingContext2D)).not.toThrow()
+      }
+    } finally { pages.dispose() }
+  })
+
+  test('a definition whose button placement throws paints no buttons, once, with one diagnostic', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(fixture('pivot-layout-compact')))
+    const sheet = pivotSheet(doc.sheets)
+    const def = sheet.pivotTables![0]!
+    let reads = 0
+    Object.defineProperty(def, 'location', { get() { reads++; throw new Error('boom') } })
+    const ctx = createCanvas(200, 200).getContext('2d') as unknown as CanvasRenderingContext2D
+    const rect = () => ({ x: 0, y: 0, width: 20, height: 20 })
+    for (let tile = 0; tile < 3; tile++) expect(() => paintPivotButtons(ctx, sheet, rect, { r0: 0, c0: 0, r1: 40, c1: 20 }, 'screen')).not.toThrow()
+    expect(reads).toBe(1)
+    expect(sheet.diagnostics?.filter(item => item.feature === 'pivot-buttons-failed')).toHaveLength(1)
+  })
+})

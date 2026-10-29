@@ -21,8 +21,23 @@ export async function ensureTableStyleEngine(sheets: readonly XlsxSheet[]): Prom
   for (const sheet of sheets) {
     if (!sheetHasRegionStyles(sheet)) continue
     if (sheet.regionStylesResolved) continue
-    sheet.regionStyles = factory?.(sheet)
+    sheet.regionStyles = build(sheet)
     sheet.regionStylesResolved = true
+  }
+}
+
+/** The factory, failing closed per sheet: a throw leaves that sheet unstyled with one diagnostic, never the workbook. */
+function build(sheet: XlsxSheet): RegionStyleLayer | undefined {
+  try { return factory?.(sheet) } catch (cause) {
+    const pivot = Boolean(sheet.pivotTables?.length)
+    const feature = pivot ? 'pivot-display-failed' : 'table-style-failed'
+    const detail = cause instanceof Error ? `: ${cause.message.slice(0, 128)}` : ''
+    const list = (sheet.diagnostics ??= [])
+    if (!list.some(item => item.feature === feature)) {
+      list.push({ kind: 'unsupported', feature, message: `${pivot ? 'Pivot' : 'Table'} styles of "${sheet.name}" could not be built${detail}; cells paint with their stored formatting only.` })
+    }
+    sheet.regionStylesResolved = true
+    return undefined
   }
 }
 
@@ -33,8 +48,8 @@ export function regionStylesFor(sheet: XlsxSheet): RegionStyleLayer | undefined 
   if (!sheetHasRegionStyles(sheet)) return undefined
   if (sheet.regionStylesResolved) return sheet.regionStyles
   if (!factory) return undefined
-  sheet.regionStyles = factory(sheet)
-  // Without the pivots chunk a pivot sheet's layer is tables-only: not final.
-  sheet.regionStylesResolved = !sheet.pivotTables?.length || pivotEngine() !== undefined
+  sheet.regionStyles = build(sheet)
+  // Without the pivots chunk a pivot sheet's layer is tables-only: not final. A failed build is final.
+  sheet.regionStylesResolved ||= !sheet.pivotTables?.length || pivotEngine() !== undefined
   return sheet.regionStyles
 }

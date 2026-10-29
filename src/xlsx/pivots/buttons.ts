@@ -176,11 +176,21 @@ function deviceSpace(ctx: CanvasRenderingContext2D, rect: Rect): { rect: Rect; p
 // Definitions are immutable once loaded: placements are computed once per mode.
 const placements = new WeakMap<PivotTableDefinition, Partial<Record<RegionStyleMode, ButtonPlacement[]>>>()
 
+/** A definition whose placement throws paints no buttons (cached, so it is not retried per tile), with one diagnostic. */
+function placeButtons(sheet: XlsxSheet, def: PivotTableDefinition, mode: RegionStyleMode): ButtonPlacement[] {
+  try { return pivotButtons(def, mode) } catch {
+    const list = (sheet.diagnostics ??= [])
+    const message = `Pivot table "${String(def.name).slice(0, 128)}": its buttons could not be placed and are not shown.`
+    if (!list.some(item => item.feature === 'pivot-buttons-failed' && item.message === message)) list.push({ kind: 'unsupported', feature: 'pivot-buttons-failed', message })
+    return []
+  }
+}
+
 export function paintPivotButtons(ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cellRect: (row: number, col: number) => Rect | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, mode: RegionStyleMode): void {
   for (const def of sheet.pivotTables ?? []) {
     let byMode = placements.get(def)
     if (!byMode) placements.set(def, byMode = {})
-    const list = byMode[mode] ??= pivotButtons(def, mode)
+    const list = byMode[mode] ??= placeButtons(sheet, def, mode)
     for (const button of list) {
       if (button.row < visible.r0 || button.row > visible.r1 || button.col < visible.c0 || button.col > visible.c1) continue
       const rect = cellRect(button.row, button.col)

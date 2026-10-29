@@ -73,6 +73,10 @@ export interface SavedPivotLayout {
 /** A parent item's label band: `col`, lines `line` … `last`. */
 export interface ParentBand { level: number; col: number; line: number; last: number }
 
+/** Parent-band entries allowed per saved row line, plus a fixed allowance (see savedPivotLayout). */
+const PARENT_BAND_ENTRIES_PER_LINE = 32
+const PARENT_BAND_ENTRIES_BASE = 65_536
+
 const CELL = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,6})$/
 function locationRect(ref: string): SheetRect | undefined {
   const [from, to = from] = ref.split(':')
@@ -89,7 +93,8 @@ function axisLines(items: readonly PivotAxisItem[]): PivotLine[] {
     const first = Math.max(0, item.r)
     const resolved = previous.slice(0, first)
     while (resolved.length < first) resolved.push(-1)
-    resolved.push(...item.x)
+    // A loop, not a spread: a spread passes every index as a call argument.
+    for (const x of item.x) resolved.push(x)
     if (item.type !== 'grand') previous = resolved
     return { type: item.type, first, items: item.type === 'grand' ? [] : resolved, data: item.i }
   })
@@ -136,11 +141,16 @@ export function savedPivotLayout(def: PivotTableDefinition): SavedPivotLayout | 
     rects.push({ minRow: row, minCol: col, maxRow: row, maxCol: col + 1 })
   })
   const parentBands = new Map<number, ParentBand[]>()
-  rows.forEach((line, n) => {
-    if (line.type !== 'data') return
+  // Each line lies in at most one parent band per level, so a real pivot stores lines × (depth - 1) entries;
+  // a definition that would store more is not laid out (a hostile deep, long axis would be quadratic).
+  let budget = PARENT_BAND_ENTRIES_PER_LINE * rows.length + PARENT_BAND_ENTRIES_BASE
+  for (let n = 0; n < rows.length; n++) {
+    const line = rows[n]!
+    if (line.type !== 'data') continue
     for (let level = line.first; level < line.items.length - 1; level++) {
       let last = n
       while (last + 1 < rows.length && rows[last + 1]!.first > level && rows[last + 1]!.type !== 'grand' && rows[last + 1]!.type !== 'blank') last++
+      if ((budget -= last - n + 1) < 0) return undefined
       const parent = { level, col: labelCol[level] ?? rect.minCol, line: n, last }
       for (let k = n; k <= last; k++) {
         const list = parentBands.get(k)
@@ -148,7 +158,7 @@ export function savedPivotLayout(def: PivotTableDefinition): SavedPivotLayout | 
         else parentBands.set(k, [parent])
       }
     }
-  })
+  }
   return {
     def, rect, rects, itemRow0: rect.minRow + firstHeaderRow, dataRow0, dataCol0, rows, cols, labelCol, pages,
     bodyRowEnd: dataRow0 + firstGrand(rows) - 1, bodyColEnd: dataCol0 + firstGrand(cols) - 1, parentBands,
