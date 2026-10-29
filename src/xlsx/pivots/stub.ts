@@ -72,10 +72,16 @@ export function parsePivotRegion(text: string | undefined, partPath: string): { 
   return { region: { partPath, ref, ...(name ? { name } : {}), ...(styleName ? { styleName } : {}) }, unreadable: false }
 }
 
+/** Distinct slicer or timeline relationship ids read per worksheet (each names a part of up to 256 controls). */
+export const MAX_CONTROL_IDS = 1_024
+
+/** The worksheet's slicer and timeline relationship ids, de-duplicated and capped (a repeated id would read its part again). */
 export function controlIds(root: XmlNode | undefined): { slicerIds: string[]; timelineIds: string[] } {
-  const slicerIds: string[] = [], timelineIds: string[] = []
+  const slicers = new Set<string>(), timelines = new Set<string>()
+  const add = (set: Set<string>, id: unknown) => { if (typeof id === 'string' && id !== '' && set.size < MAX_CONTROL_IDS) set.add(id) }
+  const result = () => ({ slicerIds: [...slicers], timelineIds: [...timelines] })
   const data = root && (getChildren(root, 'worksheet')[0] ?? root)
-  if (!data) return { slicerIds, timelineIds }
+  if (!data) return result()
   const main = elementNamespaceUri(data)
   for (const extList of getChildren(data, 'extLst')) {
     if (elementNamespaceUri(extList) !== main) continue
@@ -84,19 +90,13 @@ export function controlIds(root: XmlNode | undefined): { slicerIds: string[]; ti
       const uri = attrs(ext).uri
       for (const node of getChildren(ext, 'slicerList')) {
         if (uri !== SLICER_EXTENSION_URI || elementNamespaceUri(node) !== X14_SLICER_NS) continue
-        for (const slicer of getChildren(node, 'slicer')) {
-          const id = attrs(slicer).id
-          if (typeof id === 'string' && id !== '') slicerIds.push(id)
-        }
+        for (const slicer of getChildren(node, 'slicer')) add(slicers, attrs(slicer).id)
       }
       for (const node of getChildren(ext, 'timelineRefs')) {
         if (uri !== TIMELINE_EXTENSION_URI || elementNamespaceUri(node) !== X15_TIMELINE_NS) continue
-        for (const ref of getChildren(node, 'timelineRef')) {
-          const id = attrs(ref).id
-          if (typeof id === 'string' && id !== '') timelineIds.push(id)
-        }
+        for (const ref of getChildren(node, 'timelineRef')) add(timelines, attrs(ref).id)
       }
     }
   }
-  return { slicerIds, timelineIds }
+  return result()
 }

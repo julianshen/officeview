@@ -19,6 +19,8 @@ import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { paintPivotButtons } from '../src/xlsx/pivots/buttons'
 import type { XlsxSheet } from '../src/xlsx/types'
 import type { PivotTableDefinition } from '../src/xlsx/pivots/model'
+import { controlIds, MAX_CONTROL_IDS } from '../src/xlsx/pivots/stub'
+import { parseXml } from '../src/core/xml'
 
 const fixture = (name: string) => readFileSync(fileURLToPath(new URL(`./fixtures/xlsx-pivots/${name}.xlsx`, import.meta.url)))
 const PIVOT_PART = 'xl/pivotTables/pivotTable1.xml'
@@ -175,5 +177,30 @@ describe('I5: styleAt cost does not grow with the <format> count', () => {
     pass(one, 20); pass(many, 20) // warm both
     const small = pass(one, 200), large = pass(many, 200)
     expect(large).toBeLessThan(2 * small + 50)
+  })
+})
+
+describe('I6: resident slicer and timeline ids are de-duplicated and capped', () => {
+  test('20,000 copies of one slicer id read its part once', async () => {
+    const zip = await JSZip.loadAsync(fixture('slicer-light1'))
+    const path = 'xl/worksheets/sheet1.xml'
+    const xml = await zip.file(path)!.async('string')
+    zip.file(path, xml.replace('<x14:slicer r:id="rId3"/>', '<x14:slicer r:id="rId3"/>'.repeat(20_000)))
+    const input = await zip.generateAsync({ type: 'uint8array' })
+    expect(controlIds(parseXml(await (await JSZip.loadAsync(input)).file(path)!.async('string'))).slicerIds).toEqual(['rId3'])
+    const reference = await parseXlsx(await OfficePackage.load(fixture('slicer-light1')))
+    const started = performance.now()
+    const doc = await parseXlsx(await OfficePackage.load(input))
+    expect(performance.now() - started).toBeLessThan(2_000)
+    const frames = (sheet: XlsxSheet) => (sheet.drawings ?? []).filter(drawing => JSON.stringify(drawing).includes('"slicer"')).length
+    expect(frames(doc.sheets[0]!)).toBe(frames(reference.sheets[0]!))
+    expect(doc.sheets[0]!.slicerRefs).toHaveLength(1)
+  })
+
+  test('distinct ids are capped', () => {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    const slicers = Array.from({ length: MAX_CONTROL_IDS + 10 }, (_, k) => `<x14:slicer r:id="rId${k}"/>`).join('')
+    const root = parseXml(`<worksheet ${ns}><extLst><ext uri="{A8765BA9-456A-4dab-B4F3-ACF838C121DE}"><x14:slicerList>${slicers}</x14:slicerList></ext></extLst></worksheet>`)
+    expect(controlIds(root).slicerIds).toHaveLength(MAX_CONTROL_IDS)
   })
 })

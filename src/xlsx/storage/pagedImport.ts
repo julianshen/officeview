@@ -480,7 +480,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       const wsRels = await worksheetRels(sheet, readPlanned)
       sheet.tables = await resolveTables(sheet, wsRels, declaredEntry, declaredBudget, readPlanned)
       const resolveControlRefs = (ids: string[], suffix: string): ControlPartRef[] | undefined => {
-        const refs = ids.flatMap(id => {
+        const refs = [...new Set(ids)].flatMap(id => {
           const rel = wsRels?.get(id)
           return rel?.type.endsWith(suffix) ? [{ partPath: resolvePartTarget(sheet.partPath, rel.target) }] : []
         })

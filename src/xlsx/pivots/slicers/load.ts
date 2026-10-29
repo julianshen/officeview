@@ -101,7 +101,8 @@ export async function loadSheetControls(pkg: PackageReader, request: SheetContro
     const parts = async (ids: readonly string[], type: string, kind: 'slicer' | 'timeline') => {
       const rels = await relationships(pkg, request.sheetPath, type)
       const nodes: XmlNode[] = []
-      for (const id of ids) {
+      // Each part once, however often the worksheet names it (the paged ids are not de-duplicated).
+      for (const id of new Set(ids)) {
         const path = rels.get(id), node = path ? await read(pkg, path, false, request.signal) : undefined
         if (node) nodes.push(node)
         else report({ kind: 'parse', feature: `${kind}-part-unreadable`, message: `The ${kind} part of relationship ${id} could not be read from ${request.sheetPath}` })
