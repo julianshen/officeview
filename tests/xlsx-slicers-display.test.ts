@@ -6,14 +6,6 @@
  * appearance) and the measurement in docs/validation/xlsx-pivots.md
  * ("Slicer geometry", "Timeline geometry").
  *
- * Theme. The generator's xl/theme/theme1.xml lists one entry in each fmtScheme
- * style list (the schema requires three), so Excel discards it and draws with
- * the Office theme of `defaultThemeVersion="124226"` (accent1 #4F81BD, accent2
- * #C0504D …): every slicer, timeline and pivot colour in these captures comes
- * from that palette, not from the file's all-#4472C4 accents. The renderer
- * honours the file's theme, so the pixel comparisons load each case with the
- * theme Excel actually used — the Excel-saved theme of recipe R1
- * (recipes/r1-slicer-timeline.xlsx, same defaultThemeVersion).
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -41,11 +33,6 @@ const refPath = (name: string) => fileURLToPath(new URL(`./fixtures/xlsx-pivots/
 const fixture = (name: string) => readFileSync(fixturePath(name))
 const r1 = () => readFileSync(fileURLToPath(new URL('./fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx', import.meta.url)))
 
-let excelThemeXml: string | undefined
-async function excelTheme(): Promise<string> {
-  excelThemeXml ??= await (await JSZip.loadAsync(r1())).file('xl/theme/theme1.xml')!.async('string')
-  return excelThemeXml
-}
 /** A case's bytes with edits applied (path → new text, or null to delete the part). */
 async function edited(bytes: Uint8Array, edits: Record<string, string | null | ((text: string) => string)>): Promise<Uint8Array> {
   const zip = await JSZip.loadAsync(bytes)
@@ -54,10 +41,6 @@ async function edited(bytes: Uint8Array, edits: Record<string, string | null | (
     else zip.file(path, typeof edit === 'function' ? edit(await zip.file(path)!.async('string')) : edit)
   }
   return zip.generateAsync({ type: 'uint8array' })
-}
-/** The case as Excel drew it: the file's (discarded) theme replaced by the one Excel used. */
-async function asExcelDrewIt(name: string): Promise<Uint8Array> {
-  return edited(fixture(name), { 'xl/theme/theme1.xml': await excelTheme() })
 }
 async function parse(bytes: Uint8Array): Promise<XlsxDocument> { return parseXlsx(await OfficePackage.load(bytes)) }
 function controlOf<K extends XlsxControlContent['kind']>(drawing: XlsxDrawing | undefined, kind: K): Extract<XlsxControlContent, { kind: K }> | undefined {
@@ -161,7 +144,7 @@ describe('every slicer and timeline reference case parses into a control drawing
 })
 
 describe('item states map to style elements (Rulings A, Q, R)', () => {
-  const theme = async () => parseThemeContext(await excelTheme())
+  const theme = async () => parseThemeContext(await (await JSZip.loadAsync(r1())).file('xl/theme/theme1.xml')!.async('string'))
   const noExtras: StylesExtras = { dxfs: [], tableStyles: new Map(), slicerStyles: new Map() }
 
   test('selected/unselected × with/without data → the four SlicerStyleElement states (hover is never painted)', () => {
@@ -235,7 +218,7 @@ describe('slicer paint matches the Excel references at the measured points (±3 
   }
 
   test('geometry: 23 pt from the top border to the first item, a 19 pt pitch of 17 pt items, 6 pt insets (refs/slicer-light1.png)', async () => {
-    const doc = await parse(await asExcelDrewIt('slicer-light1'))
+    const doc = await parse(fixture('slicer-light1'))
     const drawing = controls(doc.sheets[0]!).slicer!
     const box = boxOf(drawing), layout = slicerLayout(slicerModel(drawing), box, PX)
     expect(layout.separatorY! - box.y).toBeCloseTo(19 * PX, 5)
@@ -254,7 +237,7 @@ describe('slicer paint matches the Excel references at the measured points (±3 
   })
 
   test('geometry: slicer-scrolled clamps startItem 2 to 1 so the last item fills the view, and narrows the items beside a scrollbar', async () => {
-    const doc = await parse(await asExcelDrewIt('slicer-scrolled'))
+    const doc = await parse(fixture('slicer-scrolled'))
     const drawing = controls(doc.sheets[0]!).slicer!
     const model = slicerModel(drawing), box = boxOf(drawing), layout = slicerLayout(model, box, PX)
     // refs/slicer-scrolled.png: 3 visible rows of 4 items show Dates, Cherries, Bananas.
@@ -272,7 +255,7 @@ describe('slicer paint matches the Excel references at the measured points (±3 
   })
 
   test.each(['slicer-light1', 'slicer-dark1', 'slicer-light2', 'slicer-dark6', 'slicer-other1', 'slicer-no-data', 'slicer-two-column', 'slicer-scrolled'])('%s: frame, header, item fills, borders and text colour', async (id) => {
-    const doc = await parse(await asExcelDrewIt(id))
+    const doc = await parse(fixture(id))
     const sheet = doc.sheets[0]!
     const drawing = controls(sheet).slicer!
     const model = slicerModel(drawing), box = boxOf(drawing), layout = slicerLayout(model, box, PX)
@@ -311,7 +294,7 @@ describe('timeline paint matches the Excel references at the measured points', (
   const F = { x: 450, y: 105 }
 
   test('geometry: separator 22 pt down, the 13 pt bar 78 pt down and 6 pt in, the scrollbar 5 pt under it (refs/timeline-light1-months.png)', async () => {
-    const doc = await parse(await asExcelDrewIt('timeline-light1-months'))
+    const doc = await parse(fixture('timeline-light1-months'))
     const drawing = controls(doc.sheets[0]!).timeline!
     const box = boxOf(drawing), layout = timelineLayout(timelineModel(drawing), box, PX)
     expect(layout.separatorY! - box.y).toBeCloseTo(22 * PX, 5)
@@ -347,7 +330,7 @@ describe('timeline paint matches the Excel references at the measured points', (
   })
 
   test.each(['timeline-light1-months', 'timeline-dark2-days', 'timeline-light3-years'])('%s: frame, header, bar, handle, scrollbar and label colours', async (id) => {
-    const doc = await parse(await asExcelDrewIt(id))
+    const doc = await parse(fixture(id))
     const sheet = doc.sheets[0]!
     const drawing = controls(sheet).timeline!
     const model = timelineModel(drawing), box = boxOf(drawing), layout = timelineLayout(model, box, PX)
@@ -386,7 +369,7 @@ describe('timeline paint matches the Excel references at the measured points', (
 
 describe('slicer straddling tiles paints identically at 175%/DPR2 (Review Focus 4)', () => {
   test('left and right tiles split through the slicer equal one wide surface', async () => {
-    const doc = await parse(await asExcelDrewIt('slicer-light1'))
+    const doc = await parse(fixture('slicer-light1'))
     const sheet = doc.sheets[0]!
     const drawing = controls(sheet).slicer!
     const box = boxOf(drawing)

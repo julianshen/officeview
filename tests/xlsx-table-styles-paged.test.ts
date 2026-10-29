@@ -52,6 +52,18 @@ function render(sheet: Parameters<typeof computeMetrics>[0]): Buffer {
 }
 
 describe('paged table-style transfer', () => {
+  it('includes the generated Office theme in the bounded region-style grant', async () => {
+    const source = await remoteLayer('table-medium-2')
+    try {
+      const store = source.store
+      const grant = REGION_STYLE_REPLY_OVERHEAD_BYTES + REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE
+      const result = await store.readRegionStyles!({ signal: new AbortController().signal, stamp: store.stamp }, grant, { set: () => true })
+      expect(result.theme).toBeDefined()
+      expect(result.tables).toHaveLength(1)
+      expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'table-style-reply-limit' }))
+    } finally { await source.release(); await source.session.release() }
+  })
+
   it('round-trips every built-in table style within the receiver-computed descriptor grant', async () => {
     const files = ['table.ts', 'pivot.ts']
     const allNames = [...new Set(files.flatMap(file => [...readFileSync(resolve(process.cwd(), `src/xlsx/tableStyles/builtins/${file}`), 'utf8').matchAll(/\"((?:Table|Pivot)Style(?:Light|Medium|Dark)\d+)\":/g)].map(match => match[1])))]

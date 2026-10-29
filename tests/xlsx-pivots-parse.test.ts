@@ -70,8 +70,8 @@ describe('pivot definition parsers', () => {
       const cache = book.caches.get(table.cacheId)
       expect(cache, `cache ${table.cacheId}`).toBeDefined()
       expect(table.fields.length).toBe(cache!.fields.length)
-      // Excel, LibreOffice and POI write nothing outside the model; only the hand-written slicer/timeline XML does (its table-level subtotalTop).
-      if (!/(slicer|timeline)-/.test(path)) expect(table.unsupported).toEqual([])
+      // Generated control tables omit the non-ECMA table-level subtotalTop.
+      expect(table.unsupported, path).toEqual([])
     }
   })
 

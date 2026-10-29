@@ -22,6 +22,22 @@ function subtree(xml: string, name: string): string {
   return xml.slice(start, end + name.length + 3)
 }
 
+function directChildCount(xml: string, name: string): number {
+  const block = subtree(xml, name)
+  const inner = block.slice(block.indexOf('>') + 1, block.lastIndexOf('<'))
+  let depth = 0
+  let count = 0
+  for (const match of inner.matchAll(/<\/?[\w:.-]+[^>]*>/g)) {
+    const token = match[0]
+    if (token.startsWith('</')) depth--
+    else {
+      if (depth === 0) count++
+      if (!token.endsWith('/>')) depth++
+    }
+  }
+  return count
+}
+
 function namespaceDeclarations(xml: string): string[] {
   return [...xml.matchAll(/\bxmlns(?::([\w.-]+))?="([^"]+)"/g)].map(match => `${match[1] ?? ''}=${match[2]}`)
 }
@@ -56,6 +72,40 @@ function drawingAnchors(xml: string) {
 }
 
 describe('pivot reference workbook generator', () => {
+  it('writes self-describing themes, styles links and conforming pivot definitions for every XML case', async () => {
+    const expectedThemes = new Map([
+      ['control', readFileSync('tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx')],
+      ['table', readFileSync('tests/fixtures/xlsx-pivots/recipes/pivot-seed.xlsx')],
+    ])
+    for (const c of REF_CASES.filter(item => item.build === 'xml')) {
+      const zip = await JSZip.loadAsync(await buildCaseWorkbook(c))
+      const themeBytes = await zip.file('xl/theme/theme1.xml')!.async('nodebuffer')
+      const themeSource = c.kind === 'slicer' || c.kind === 'timeline' ? expectedThemes.get('control')! : expectedThemes.get('table')!
+      const sourceZip = await JSZip.loadAsync(themeSource)
+      expect(themeBytes, `${c.id} theme matches its Excel-saved source`).toEqual(await sourceZip.file('xl/theme/theme1.xml')!.async('nodebuffer'))
+      const theme = themeBytes.toString('utf8')
+      for (const list of ['fillStyleLst', 'lnStyleLst', 'effectStyleLst', 'bgFillStyleLst']) {
+        expect(directChildCount(theme, 'a:' + list), `${c.id} ${list}`).toBeGreaterThanOrEqual(3)
+
+      }
+      const accent1 = /<a:accent1\b[^>]*>[\s\S]*?<a:(?:srgbClr|sysClr)\b[^>]*val="([A-Fa-f0-9]+)"/.exec(theme)?.[1]
+      expect(accent1?.toUpperCase(), `${c.id} accent1`).toBe(c.kind === 'table' ? '156082' : '4F81BD')
+
+      const workbook = await zip.file('xl/workbook.xml')!.async('text')
+      expect(workbook, c.id).toContain(c.kind === 'table' ? 'defaultThemeVersion="202300"' : 'defaultThemeVersion="124226"')
+      const workbookRels = await zip.file('xl/_rels/workbook.xml.rels')!.async('text')
+      expect(workbookRels, `${c.id} styles relationship`).toContain('Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"')
+      expect(workbookRels, `${c.id} theme relationship`).toContain('Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"')
+      const contentTypes = await zip.file('[Content_Types].xml')!.async('text')
+      expect(contentTypes, `${c.id} styles override`).toContain('PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"')
+      expect(contentTypes, `${c.id} theme override`).toContain('PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"')
+      for (const path of Object.keys(zip.files).filter(name => /^xl\/pivotTables\/pivotTable\d+\.xml$/.test(name))) {
+        const pivot = await zip.file(path)!.async('text')
+        expect(pivot, `${c.id} ${path}`).not.toMatch(/<pivotTableDefinition\b[^>]*\bsubtotalTop=/)
+      }
+    }
+  })
+
   it('includes the full Stage 1 style and control matrix', () => {
     expect(REF_CASES.filter(c => c.kind === 'table' && c.id.startsWith('table-light-')).length
       + REF_CASES.filter(c => c.kind === 'table' && c.id.startsWith('table-medium-')).length

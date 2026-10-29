@@ -9,9 +9,9 @@ import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
 export const MAX_REGION_STYLE_TABLES = 512
-/** Largest built-in descriptor measured at 8,614 B over all 144 table/pivot names
- * (including table metadata and the default theme); 16 KiB leaves 1.9x headroom. */
-export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 16_384
+/** Largest built-in table-style payload measured across all 144 table/pivot names
+ * with generated Office 2023 theme and table metadata: 25,154 B; 32 KiB leaves 1.3x headroom. */
+export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 32_768
 export const REGION_STYLE_REPLY_OVERHEAD_BYTES = 1_024
 /** Retained custom styles parsed from styles.xml are capped independently of source size. */
 export const MAX_PAGED_TABLE_STYLE_DEFS_BYTES = 2 * 1024 * 1024

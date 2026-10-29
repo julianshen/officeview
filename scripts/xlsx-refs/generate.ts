@@ -1,5 +1,5 @@
 /** Deterministic raw SpreadsheetML cases for pivot/table/control reference captures. */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { REF_CASES, type RefCase, type SlicerCase, type TableCase, type TimelineCase } from './cases'
@@ -35,6 +35,26 @@ const NS = {
 }
 const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 const ZIP_DATE = new Date(Date.UTC(2026, 0, 1))
+const invokedScript = process.argv[1] && /scripts[\\/]xlsx-refs[\\/]generate\.(?:ts|js)$/.test(process.argv[1])
+  ? resolve(process.argv[1])
+  : resolve(process.cwd(), 'scripts/xlsx-refs/generate.ts')
+const REPO_ROOT = resolve(dirname(invokedScript), '../..')
+export const FIXTURE_DIR = resolve(REPO_ROOT, 'tests/fixtures/xlsx-pivots')
+let themePartsPromise: Promise<{ control: Uint8Array; table: Uint8Array }> | undefined
+async function sourceThemeParts(): Promise<{ control: Uint8Array; table: Uint8Array }> {
+  themePartsPromise ??= (async () => {
+    const themeFrom = async (recipe: string) => {
+      const source = await JSZip.loadAsync(readFileSync(resolve(REPO_ROOT, recipe)))
+      return source.file('xl/theme/theme1.xml')!.async('uint8array')
+    }
+    const [control, table] = await Promise.all([
+      themeFrom('tests/fixtures/xlsx-pivots/recipes/r1-slicer-timeline.xlsx'),
+      themeFrom('tests/fixtures/xlsx-pivots/recipes/pivot-seed.xlsx'),
+    ])
+    return { control, table }
+  })()
+  return themePartsPromise
+}
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 export interface SourceRow { region: string; product: string; year: number; date: number; sales: number; units: number }
@@ -192,12 +212,12 @@ function pivotParts(c: RefCase): Record<string, string> {
     'xl/pivotCache/pivotCacheDefinition1.xml': `${XML}<pivotCacheDefinition xmlns="${NS.main}" xmlns:r="${NS.rel}" r:id="rId1" createdVersion="8" refreshedVersion="8" minRefreshableVersion="3" recordCount="${values.length}" saveData="1"><cacheSource type="worksheet"><worksheetSource ref="A1:E${values.length + 1}" sheet="Data"/></cacheSource><cacheFields count="5">${cacheFields}</cacheFields>${x14Cache}</pivotCacheDefinition>`,
     'xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels': `${XML}<Relationships xmlns="${NS.pkg}"><Relationship Id="rId1" Type="${NS.cacheRecordsRel}" Target="pivotCacheRecords1.xml"/></Relationships>`,
     'xl/pivotCache/pivotCacheRecords1.xml': `${XML}<pivotCacheRecords xmlns="${NS.main}" count="${values.length}">${records}</pivotCacheRecords>`,
-    'xl/pivotTables/pivotTable1.xml': `${XML}<pivotTableDefinition xmlns="${NS.main}" xmlns:r="${NS.rel}" name="PivotTable1" cacheId="1" dataCaption="Values" compact="1" outline="1" subtotalTop="1" updatedVersion="8" minRefreshableVersion="5" createdVersion="8" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" useAutoFormatting="1" itemPrintTitles="1" indent="0" outlineData="1" multipleFieldFilters="0"><location ref="G1:H6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="5">${fields}</pivotFields><rowFields count="1"><field x="0"/></rowFields><rowItems count="5">${rowItems}</rowItems><colItems count="1"><i/></colItems><dataFields count="1"><dataField name="Sum of Sales" fld="3" subtotal="sum"/></dataFields><pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="1" showColStripes="0"/>${pivotTableExt}</pivotTableDefinition>`,
+    'xl/pivotTables/pivotTable1.xml': `${XML}<pivotTableDefinition xmlns="${NS.main}" xmlns:r="${NS.rel}" name="PivotTable1" cacheId="1" dataCaption="Values" compact="1" outline="1" updatedVersion="8" minRefreshableVersion="5" createdVersion="8" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" useAutoFormatting="1" itemPrintTitles="1" indent="0" outlineData="1" multipleFieldFilters="0"><location ref="G1:H6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="5">${fields}</pivotFields><rowFields count="1"><field x="0"/></rowFields><rowItems count="5">${rowItems}</rowItems><colItems count="1"><i/></colItems><dataFields count="1"><dataField name="Sum of Sales" fld="3" subtotal="sum"/></dataFields><pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="1" showColStripes="0"/>${pivotTableExt}</pivotTableDefinition>`,
     'xl/pivotTables/_rels/pivotTable1.xml.rels': `${XML}<Relationships xmlns="${NS.pkg}"><Relationship Id="rId1" Type="${NS.pivotCacheRel}" Target="../pivotCache/pivotCacheDefinition1.xml"/></Relationships>`,
   }
 }
 
-function workbookFiles(c: RefCase): Record<string, string> {
+function workbookFiles(c: RefCase, themeParts: { control: Uint8Array; table: Uint8Array }): Record<string, string | Uint8Array> {
   const tableCase = c.kind === 'table' ? c.spec as TableCase : undefined
   const control = c.kind === 'slicer' || c.kind === 'timeline'
   const controlXml = control ? controlParts(c) : {}
@@ -221,6 +241,8 @@ function workbookFiles(c: RefCase): Record<string, string> {
   ].join('') : [
     '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
     '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>',
+    '<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>',
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
     ...(tableCase ? ['<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>'] : []),
   ].join('')
   const mainSheet = c.kind === 'table' ? 'Data' : 'Report'
@@ -242,7 +264,7 @@ function workbookFiles(c: RefCase): Record<string, string> {
   })
   const workbookRels = control
     ? `<Relationship Id="rId8" Type="${NS.rel}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rId3" Type="${NS.pivotCacheRel}" Target="pivotCache/pivotCacheDefinition1.xml"/><Relationship Id="rId7" Type="${NS.rel}/styles" Target="styles.xml"/><Relationship Id="rId2" Type="${NS.rel}/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId1" Type="${NS.rel}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId6" Type="${NS.rel}/theme" Target="theme/theme1.xml"/><Relationship Id="rId5" Type="${NS.timelineCacheRel}" Target="timelineCaches/timelineCache1.xml"/><Relationship Id="rId4" Type="${NS.slicerCacheRel}" Target="slicerCaches/slicerCache1.xml"/>`
-    : sourceSheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${NS.rel}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')
+    : sourceSheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${NS.rel}/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('') + `<Relationship Id="rId${sourceSheets.length + 1}" Type="${NS.rel}/theme" Target="theme/theme1.xml"/><Relationship Id="rId${sourceSheets.length + 2}" Type="${NS.rel}/styles" Target="styles.xml"/>`
   const workbookExt = control ? `<extLst><ext uri="{BBE1A952-AA13-448e-AADC-164F8A28A991}" xmlns:x14="${NS.x14}"><x14:slicerCaches><x14:slicerCache r:id="rId4"/></x14:slicerCaches></ext><ext uri="{79F54976-1DA5-4618-B147-4CDE4B953A38}" xmlns:x14="${NS.x14}"><x14:workbookPr/></ext><ext uri="{D0CA8CA8-9F24-4464-BF8E-62219DCF47F9}" xmlns:x15="${NS.x15}"><x15:timelineCacheRefs><x15:timelineCacheRef r:id="rId5"/></x15:timelineCacheRefs></ext></extLst>` : ''
   return {
     '[Content_Types].xml': `${XML}<Types xmlns="${NS.content}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${contentOverrides}</Types>`,
@@ -251,14 +273,14 @@ function workbookFiles(c: RefCase): Record<string, string> {
       : `${XML}<Relationships xmlns="${NS.pkg}"><Relationship Id="rId1" Type="${NS.rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
     'xl/workbook.xml': control
       ? `${XML}<workbook xmlns="${NS.main}" xmlns:r="${NS.rel}" xmlns:mc="${NS.mc}" mc:Ignorable="x15 xr xr6 xr10 xr2" xmlns:x15="${NS.x15}" xmlns:xr="${NS.xr}" xmlns:xr6="${NS.xr6}" xmlns:xr10="${NS.xr10}" xmlns:xr2="${NS.xr2}"><fileVersion appName="xl" lastEdited="7" lowestEdited="4" rupBuild="11011"/><workbookPr defaultThemeVersion="124226"/><mc:AlternateContent xmlns:mc="${NS.mc}"><mc:Choice Requires="x15"><x15ac:absPath url="/" xmlns:x15ac="${NS.x15ac}"/></mc:Choice></mc:AlternateContent><xr:revisionPtr revIDLastSave="0" documentId="8_{00000000-0000-0000-0000-000000000000}" xr6:coauthVersionLast="47" xr6:coauthVersionMax="47" xr10:uidLastSave="{00000000-0000-0000-0000-000000000000}"/><bookViews><workbookView xWindow="240" yWindow="600" windowWidth="16100" windowHeight="9660" xr2:uid="{00000000-000D-0000-FFFF-FFFF00000000}"/></bookViews><sheets><sheet name="Report" sheetId="2" r:id="rId1"/><sheet name="Data" sheetId="1" r:id="rId2"/></sheets><definedNames><definedName name="NativeTimeline_Date">#N/A</definedName><definedName name="Slicer_Product">#N/A</definedName></definedNames><calcPr calcId="124519"/><pivotCaches><pivotCache cacheId="1" r:id="rId3"/></pivotCaches>${workbookExt}</workbook>`
-      : `${XML}<workbook xmlns="${NS.main}" xmlns:r="${NS.rel}"><workbookPr/><sheets>${sourceSheets.map((name, i) => `<sheet name="${name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
+      : `${XML}<workbook xmlns="${NS.main}" xmlns:r="${NS.rel}"><workbookPr defaultThemeVersion="202300"/><sheets>${sourceSheets.map((name, i) => `<sheet name="${name}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
     'xl/_rels/workbook.xml.rels': `${XML}<Relationships xmlns="${NS.pkg}">${workbookRels}</Relationships>`,
     ...(control ? {
       'xl/sharedStrings.xml': `${XML}<sst xmlns="${NS.main}" count="0" uniqueCount="0"/>`,
-      'xl/theme/theme1.xml': `${XML}<a:theme xmlns:a="${NS.a}" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>${Array.from({ length: 6 }, (_, i) => `<a:accent${i + 1}><a:srgbClr val="4472C4"/></a:accent${i + 1}>`).join('')}<a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`,
       'docProps/core.xml': `${XML}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>OfficeView</dc:creator><cp:lastModifiedBy>OfficeView</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">2026-10-29T00:00:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2026-10-29T00:00:00Z</dcterms:modified></cp:coreProperties>`,
       'docProps/app.xml': `${XML}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Microsoft Excel</Application><DocSecurity>0</DocSecurity><ScaleCrop>false</ScaleCrop><HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>工作表</vt:lpstr></vt:variant><vt:variant><vt:i4>2</vt:i4></vt:variant></vt:vector></HeadingPairs><TitlesOfParts><vt:vector size="2" baseType="lpstr"><vt:lpstr>Report</vt:lpstr><vt:lpstr>Data</vt:lpstr></vt:vector></TitlesOfParts><Company/><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged><AppVersion>16.114</AppVersion></Properties>`,
     } : {}),
+    'xl/theme/theme1.xml': control ? themeParts.control : themeParts.table,
     'xl/styles.xml': `${XML}<styleSheet xmlns="${NS.main}"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${tableCase?.custom ? '<dxfs count="1"><dxf><font><b/><color rgb="FFFF0000"/></font><fill><patternFill patternType="solid"><bgColor rgb="FFFFFF00"/></patternFill></fill></dxf></dxfs><tableStyles count="1" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"><tableStyle name="OfficeViewCustom" pivot="0" table="1" count="2"><tableStyleElement type="wholeTable" dxfId="0"/><tableStyleElement type="headerRow" dxfId="0"/></tableStyle></tableStyles>' : '<dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>'}</styleSheet>`,
     ...sheetFiles,
     ...(tableCase ? { 'xl/tables/table1.xml': tableXml(tableCase) } : {}),
@@ -270,15 +292,11 @@ function workbookFiles(c: RefCase): Record<string, string> {
 export async function buildCaseWorkbook(c: RefCase): Promise<Uint8Array> {
   if (c.build !== 'xml') throw new Error(`case ${c.id} is Excel-built and must be generated by the Excel reference runner`)
   const zip = new JSZip()
-  for (const [path, content] of Object.entries(workbookFiles(c))) zip.file(path, content, { date: ZIP_DATE, createFolders: false })
+  for (const [path, content] of Object.entries(workbookFiles(c, await sourceThemeParts()))) zip.file(path, content, { date: ZIP_DATE, createFolders: false })
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }
 
 /** Files written by this tool when invoked directly; output is deterministic. */
-const invokedScript = process.argv[1] && /scripts[\\/]xlsx-refs[\\/]generate\.(?:ts|js)$/.test(process.argv[1])
-  ? resolve(process.argv[1])
-  : resolve(process.cwd(), 'scripts/xlsx-refs/generate.ts')
-export const FIXTURE_DIR = resolve(dirname(invokedScript), '../../tests/fixtures/xlsx-pivots')
 export async function writeFixtures(): Promise<number> {
   mkdirSync(FIXTURE_DIR, { recursive: true })
   let count = 0
