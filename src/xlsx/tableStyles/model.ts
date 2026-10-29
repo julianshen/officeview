@@ -26,7 +26,8 @@ export type DxfBorderSide = 'left' | 'right' | 'top' | 'bottom' | 'horizontal' |
 
 /** A differential format (`<dxf>`): only what it sets is present. */
 export interface DxfStyle {
-  font?: { name?: string; sizePt?: number; bold?: boolean; italic?: boolean; underline?: XlsxCellStyle['underline']; strike?: boolean; color?: ColorSpec }
+  /** `underline: 'none'` is an explicit clear of a lower element's underline. */
+  font?: { name?: string; sizePt?: number; bold?: boolean; italic?: boolean; underline?: XlsxCellStyle['underline'] | 'none'; strike?: boolean; color?: ColorSpec }
   /** In a dxf a solid fill's colour is `bg` (fgColor is the pattern colour). */
   fill?: { pattern?: string; fg?: ColorSpec; bg?: ColorSpec }
   /** `horizontal`/`vertical` are the element band's inner lines (§18.8.40). */

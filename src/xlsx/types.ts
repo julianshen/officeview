@@ -80,8 +80,10 @@ export interface XlsxCellStyle {
   fontName?: string
   /** alignment@indent level (> 0); one level is one maximum digit width. */
   indent?: number
-  /** The xf's applyFont: its font wins over a table or pivot style (Task 3 measurement). */
+  /** The xf's applyFont/applyFill, present only when "1": that font/fill wins
+   * over a table or pivot style (Task 3 measurement); "0" or absent yields. */
   applyFont?: boolean
+  applyFill?: boolean
 }
 
 export interface XlsxRow {
@@ -164,6 +166,9 @@ export interface XlsxSheet {
   /** Excel column pixel model (workbook MDW, sheet default width); absent:
    * Calibri 11 (MDW 7px, 64px default). */
   columnMetrics?: import('./columnWidth').ColumnMetrics
+  /** Paged shell sheets: the workbook's maximum digit width (indent unit) when
+   * not 7 px. Resident sheets carry it in columnMetrics instead. */
+  maxDigitWidthPx?: number
   rows: XlsxRow[]
   cols: XlsxColumnSpec[]
   merges: string[]

@@ -6,7 +6,6 @@
  */
 import { attrs, elementChildren, elementNamespaceUri, getChildren, type XmlNode } from '../../core/xml'
 import { applyTint, type SheetColorContext } from '../sheetColors'
-import type { XlsxCellStyle } from '../types'
 import type { ColorSpec, DxfBorderSide, DxfStyle, SlicerStyleDef, SlicerStyleElementType, StylesExtras, TableStyleDef, TableStyleElementType } from './model'
 
 export const X14_MAIN_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
@@ -81,9 +80,9 @@ export function parseDxf(node: XmlNode, colors: SheetColorContext): DxfStyle {
     if (strike !== undefined) font.strike = strike
     const u = first(fontNode, 'u')
     if (u) {
-      // `none` (and anything unknown) sets nothing.
+      // `none` is an explicit clear; anything unknown sets nothing.
       const val = attrs(u).val ?? 'single'
-      if (UNDERLINES.has(val)) font.underline = val as XlsxCellStyle['underline']
+      if (UNDERLINES.has(val) || val === 'none') font.underline = val as NonNullable<DxfStyle['font']>['underline']
     }
     const color = colorSpec(first(fontNode, 'color'), colors)
     if (color) font.color = color

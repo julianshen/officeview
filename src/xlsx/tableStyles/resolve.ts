@@ -77,7 +77,7 @@ export function resolveColorSpec(spec: ColorSpec | undefined, theme: ThemeContex
 
 type Side = 'left' | 'right' | 'top' | 'bottom'
 interface Layer {
-  font: Pick<XlsxCellStyle, 'fontName' | 'fontSizePt' | 'bold' | 'italic' | 'underline' | 'strike' | 'color'>
+  font: Pick<XlsxCellStyle, 'fontName' | 'fontSizePt' | 'bold' | 'italic' | 'strike' | 'color'> & { underline?: XlsxCellStyle['underline'] | 'none' }
   fill?: { color: string | undefined }
   borders: Partial<Record<Side, { style: string; color?: string }>>
   numFmt?: { id: number; code?: string }
@@ -139,9 +139,11 @@ function applyDxf(layer: Layer, dxf: DxfStyle, edges: BandEdges, theme: ThemeCon
  * The final style of one cell: `roles` (ascending precedence; a bare element
  * is a one-cell band) layered property by property, then the cell's own `s=`
  * format over that. Own layering follows the Task 3 measurement
- * (`measure-cell-override`): where the cell's xf applies a font (applyFont)
- * or a fill, those win; every property the cell's format does not set comes
- * from the style. Own borders win per side; an own number format other than
+ * (`measure-cell-override`): where the cell's xf applies its font
+ * (applyFont="1") or its fill (applyFill="1"), those win; "0" or an absent
+ * flag yields to the style, alike for font and fill. Every property the
+ * cell's format does not set comes from the style. A dxf underline `none`
+ * clears a lower element's underline. Own borders win per side; an own number format other than
  * General wins; alignment is always the cell's.
  */
 export function resolveRoleStyle(
@@ -158,12 +160,14 @@ export function resolveRoleStyle(
   }
   const out: XlsxCellStyle = own ? { ...own } : { numFmtId: 0 }
   delete out.applyFont
+  delete out.applyFill
   for (const key of ['fontName', 'fontSizePt', 'bold', 'italic', 'underline', 'strike', 'color'] as const) {
     const value = layer.font[key]
     if (value === undefined || (own?.applyFont && own[key] !== undefined)) continue
-    ;(out as unknown as Record<string, unknown>)[key] = value
+    if (value === 'none') delete out.underline
+    else (out as unknown as Record<string, unknown>)[key] = value
   }
-  if (layer.fill && own?.fillColor === undefined) {
+  if (layer.fill && !(own?.applyFill && own.fillColor !== undefined)) {
     if (layer.fill.color === undefined) delete out.fillColor
     else out.fillColor = layer.fill.color
   }

@@ -12,6 +12,7 @@ import { parseXml } from '../src/core/xml'
 import { OfficePackage } from '../src/core/zip'
 import { parseThemeContext } from '../src/drawing/style'
 import { parseXlsx } from '../src/xlsx/parse'
+import { xlsxBytes } from './helpers/xlsx-package'
 import { resolveSheetColor } from '../src/xlsx/sheetColors'
 import { parseStylesExtras } from '../src/xlsx/tableStyles/parseStylesExtras'
 import { orderRoles, PIVOT_STYLE_PRECEDENCE, resolveRoleStyle } from '../src/xlsx/tableStyles/resolve'
@@ -140,6 +141,19 @@ describe('resolveRoleStyle: own s= layering (measure-cell-override)', () => {
     expect(sub).toMatchObject({ bold: true, italic: true, fillColor: 'FFFCE4D6', fontSizePt: 11 })
   })
 
+  test('an own fill wins only where its xf applies it (applyFill="1"); applyFill="0" or absent yields to the style', async () => {
+    const def: TableStyleDef = { name: 'F', pivot: true, table: true, elements: { headerRow: { dxf: { fill: { pattern: 'solid', bg: { rgb: 'FF1F4E78' } } } } } }
+    expect(resolveRoleStyle(def, ['headerRow'], { numFmtId: 0, fillColor: 'FF92D050', applyFill: true }, theme).fillColor).toBe('FF92D050')
+    expect(resolveRoleStyle(def, ['headerRow'], { numFmtId: 0, fillColor: 'FF92D050' }, theme).fillColor).toBe('FF1F4E78')
+    // Parsed: the same filled xf with applyFill="1", "0" and absent.
+    const styles = '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF92D050"/></patternFill></fill></fills>'
+      + '<cellXfs count="3"><xf numFmtId="0" fillId="2" applyFill="1"/><xf numFmtId="0" fillId="2" applyFill="0"/><xf numFmtId="0" fillId="2"/></cellXfs>'
+    const sheetData = '<row r="1"><c r="A1" s="0"><v>1</v></c><c r="B1" s="1"><v>1</v></c><c r="C1" s="2"><v>1</v></c></row>'
+    const cells = (await parseXlsx(await OfficePackage.load(xlsxBytes({ sheetData, styles })))).sheets[0].rows[0].cells
+    expect(cells.map(c => c.style?.fillColor)).toEqual(['FF92D050', 'FF92D050', 'FF92D050'])
+    expect(cells.map(c => resolveRoleStyle(def, ['headerRow'], c.style, theme).fillColor)).toEqual(['FF92D050', 'FF1F4E78', 'FF1F4E78'])
+  })
+
   test('own borders win per side; an own number format other than General wins', () => {
     const def: TableStyleDef = { name: 'N', pivot: true, table: true, elements: { wholeTable: { dxf: { border: { top: { style: 'thin' }, bottom: { style: 'thin' } }, numFmt: { id: 164, code: '0.0' } } } } }
     const r = resolveRoleStyle(def, ['wholeTable'], { numFmtId: 0, borders: { top: 'double' } }, theme)
@@ -159,6 +173,19 @@ describe('resolveRoleStyle fills and fonts', () => {
       fontName: 'Arial', fontSizePt: 14, underline: 'double', strike: true,
       fillColor: resolveSheetColor({ theme: '4', tint: '0.5' }, { theme: theme.palette }),
     })
+  })
+
+  test('a dxf underline val="none" clears a lower element\'s underline', () => {
+    const extras = extrasFrom(`<dxfs count="2"><dxf><font><u val="double"/></font></dxf><dxf><font><u val="none"/></font></dxf></dxfs>
+      <tableStyles count="1"><tableStyle name="U"><tableStyleElement type="wholeTable" dxfId="0"/><tableStyleElement type="headerRow" dxfId="1"/></tableStyle></tableStyles>`)
+    const def = extras.tableStyles.get('U')!
+    expect(def.elements.headerRow!.dxf.font).toEqual({ underline: 'none' })
+    expect(resolveRoleStyle(def, ['wholeTable'], undefined, theme).underline).toBe('double')
+    const cleared = resolveRoleStyle(def, ['wholeTable', 'headerRow'], { numFmtId: 0, underline: 'single' }, theme)
+    expect(cleared.underline).toBeUndefined()
+    expect('underline' in cleared).toBe(false)
+    // A cell whose xf applies its own font keeps its own underline.
+    expect(resolveRoleStyle(def, ['wholeTable', 'headerRow'], { numFmtId: 0, underline: 'single', applyFont: true }, theme).underline).toBe('single')
   })
 
   test('a non-solid pattern fill is painted as its foreground colour, with a diagnostic', () => {

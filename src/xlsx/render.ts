@@ -1074,7 +1074,7 @@ export function layoutCellBody(
       ctx.fillStyle = color
       ctx.font = font
       // One indent level is one maximum digit width (measured, Excel 16.114).
-      const indentPx = (style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
+      const indentPx = (style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? sheet.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
       out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow, indentPx), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.
