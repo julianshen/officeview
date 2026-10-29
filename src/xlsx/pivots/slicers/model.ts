@@ -109,4 +109,6 @@ export interface SheetControlsRequest {
   timelineIds: readonly string[]
   theme: import('../../../drawing/style').ThemeContext
   styles?: import('../../tableStyles/model').TableStyleSource
+  stylesExtras?: import('../../tableStyles/model').StylesExtras
+  signal?: AbortSignal
 }

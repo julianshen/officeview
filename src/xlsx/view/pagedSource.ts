@@ -556,7 +556,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       const { loadPagedSheetDrawings, pagedDrawingLimits } = await import('../storage/pagedDrawings')
       const geometry = buildGeometry(meta.rowHeights.map(h => ({ index: h.row, heightPt: h.heightPt })), meta.cols, meta.hiddenRows, { hiddenCols: true, columns: pagedColumns(this.workbook, meta) })
       const nodes = this.drawingState.nodes, sheetId = this.sheet.sheetId
-      const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds, slicerIds: meta.slicerRelationshipIds, timelineIds: meta.timelineRelationshipIds },
+      const parsed = await loadPagedSheetDrawings(this.workbook.parts, { name: this.sheet.name, partPath: this.sheet.partPath, drawingIds: meta.drawingIds, legacyDrawingIds: meta.legacyDrawingIds, slicerIds: meta.slicerRelationshipIds, timelineIds: meta.timelineRelationshipIds, stylesExtras: this.workbook.tableStyleExtras },
         geometry, pagedDrawingLimits(profile, this.drawingState.payloadBytes), controller.signal, { memory, profile, chartDocument: this.drawingState.charts ??= {}, startNodes: nodes.start(sheetId), fillCharts: (drawings, owner, names, admit, workspace) => this.fillCharts(drawings, owner, controller.signal, names, admit, workspace as ChartWorkspace | undefined) })
       nodes.record(sheetId, parsed.nodes)
       // The payload now has its owner: the read's share stops holding its chart storage (D0). The retained entry
@@ -621,7 +621,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   /** S13: worker-owned pivot/control parts become bounded descriptors; the receiver builds display roles/buttons. */
   async readPivotDisplay(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile: ProfileId = 'D'): Promise<RemotePivotDisplay> {
     const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
-    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: [], slicers: [], timelines: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
+    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: [], pivotStyles: [], slicerStyles: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
     const error = this.guard(options)
     if (error) { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: error.message }); return empty() }
     if (this.sheet.state !== 'complete') { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: 'Pivot display metadata is unavailable until the sheet structure is complete.' }); return empty() }
@@ -634,17 +634,19 @@ export class PagedXlsxSheetAdapter implements SourceStore {
       if (def?.table) tableItems.push({ table: { id: table.id, displayName: table.displayName, sheetId: table.sheetId, extent: table.extent, headerRowCount: table.headerRowCount, totalsRowCount: table.totalsRowCount, styleInfo: table.styleInfo }, def })
       else diagnostics.push({ kind: 'unsupported', feature: 'table-style-unknown', message: `Table "${table.displayName}" uses unknown table style "${name}"; stored cell formatting is used.` })
     }
-    const pivotRegions = new Map(this.workbook.sheets.flatMap(sheet => sheet.metadata.pivotRegions?.length ? [[sheet.name, sheet.metadata.pivotRegions] as const] : []))
-    const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
-    const parts = await readPagedPivotDisplayParts(this.workbook.parts, {
-      sheetId: this.sheet.sheetId, sheetName: this.sheet.name, sheetPath: this.sheet.partPath, pivotRegions,
-      slicerIds: this.sheet.metadata.slicerRelationshipIds, timelineIds: this.sheet.metadata.timelineRelationshipIds,
-      ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
-    }, profile, options.signal, memory)
-    const displayDiagnostics = [...new Map([...(this.sheet.metadata.pivotDiagnostics ?? []), ...parts.diagnostics].map(item => [`${item.feature}:${item.message}:${'partPath' in item ? item.partPath ?? '' : ''}`, item])).values()]
+    const pivotRegions = this.sheet.metadata.pivotRegions ?? []
+    const parts = pivotRegions.length ? await (async () => {
+      const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
+      return readPagedPivotDisplayParts(this.workbook.parts, { sheetId: this.sheet.sheetId, sheetName: this.sheet.name, pivotRegions: new Map([[this.sheet.name, pivotRegions]]) }, profile, options.signal, memory)
+    })() : { pivotTables: [], diagnostics: [] }
+    const displayDiagnostics = [...new Map([...(this.sheet.metadata.pivotDiagnostics ?? []), ...parts.diagnostics].map(item => [`${item.feature}:${'partPath' in item && item.partPath ? item.partPath : item.message}`, item])).values()]
     diagnostics.push(...displayDiagnostics)
+    const controlStyleNames = new Set([...(this.sheet.metadata.slicerStyleNames ?? []), ...(this.sheet.metadata.timelineStyleNames ?? [])])
+    const pivotStyleNames = new Set([...parts.pivotTables.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)), ...controlStyleNames])
+    const pivotStyles = [...pivotStyleNames].flatMap(name => { const style = this.workbook.tableStyleDefs?.get(name); return style ? [style] : [] })
+    const slicerStyles = [...controlStyleNames].flatMap(name => { const style = this.workbook.tableStyleExtras?.slicerStyles.get(name); return style ? [style] : [] })
     const result: RemotePivotDisplay = {
-      sheetId: this.sheet.sheetId, stamp: this.stamp, tables: tableItems, ...parts,
+      sheetId: this.sheet.sheetId, stamp: this.stamp, tables: tableItems, pivotTables: parts.pivotTables, pivotStyles, slicerStyles,
       diagnostics,
       ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
     }

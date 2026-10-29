@@ -25,7 +25,7 @@ describe('eager pivot/control detection stub', () => {
   it('detects pivot locations on resident and paged paths', async () => {
     const bytes = fixture('pivot-page-field')
     const objectDoc = await resident(bytes)
-    expect(objectDoc.sheets[0].pivotRegions).toEqual([{ partPath: 'xl/pivotTables/pivotTable1.xml', ref: 'A3:I10', name: '樞紐分析表2' }])
+    expect(objectDoc.sheets[0].pivotRegions).toEqual([{ partPath: 'xl/pivotTables/pivotTable1.xml', ref: 'A3:I10', name: '樞紐分析表2', styleName: 'PivotStyleLight16' }])
 
     const result = await paged(bytes, 'pivot-stub-resident-paged')
     try {

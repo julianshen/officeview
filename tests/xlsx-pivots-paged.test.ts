@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { createCanvas } from 'canvas'
 import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
-import type { CacheIdentity, RemotePivotDisplay, SourceStore, WorkerReply } from '../src/xlsx/view/contracts'
+import type { CacheIdentity, RemotePivotDisplay, SourceStore, WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
 import { RemoteRegionStyleCache } from '../src/worker/viewerRemoteRegionStyles'
@@ -26,6 +26,10 @@ import { validateOverflowProof } from '../src/xlsx/view/viewportOverflow'
 import { formatA1 } from '../src/xlsx/view/coordinates'
 import { emptyWork, type ViewportPlan } from '../src/xlsx/view/viewport'
 import { interruptibleStore } from '../src/worker/viewerAbort'
+import { resolveSheetControls } from '../src/xlsx/pivotLoader'
+import { PackageError } from '../src/core/package-error'
+import type { PackageReader } from '../src/xlsx/pivots/load'
+import { parseThemeContext } from '../src/drawing/style'
 
 const bytes = (name: string) => new Uint8Array(readFileSync(resolve(process.cwd(), `tests/fixtures/xlsx-pivots/${name}.xlsx`)))
 function pixels(sheet: Parameters<typeof computeMetrics>[0]): Buffer {
@@ -35,10 +39,54 @@ function pixels(sheet: Parameters<typeof computeMetrics>[0]): Buffer {
 }
 
 describe('paged pivot display descriptors', () => {
+  it('ships a pivot custom style even when it is defined after the retained style cap', async () => {
+    const archive = await JSZip.loadAsync(bytes('pivot-custom-style'))
+    const stylesPath = 'xl/styles.xml', stylesText = await archive.file(stylesPath)!.async('string')
+    const match = /<tableStyles\b([^>]*)>([\s\S]*?)<\/tableStyles>/.exec(stylesText)!
+    const style = match[2]!.match(/<tableStyle\b[\s\S]*?<\/tableStyle>/)![0]
+    const unused = Array.from({ length: 4096 }, (_, i) => `<tableStyle name="Unused${i}${'x'.repeat(300)}" pivot="1" table="1"><tableStyleElement type="wholeTable" dxfId="0"/></tableStyle>`).join('')
+    archive.file(stylesPath, stylesText.replace(match[0], `<tableStyles${match[1]}>${unused}${style}</tableStyles>`))
+    const input = new Uint8Array(await archive.generateAsync({ type: 'uint8array' }))
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([input]) }, { docId: 'pivot-custom-style-cap', profile: 'D' })
+    await session.done
+    const source = createPagedWorkbookSource(session)
+    try {
+      const store = source.store(source.sheets[0]!.sheetId)
+      const display = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 1024 * 1024, { set: () => true })
+      expect((display as unknown as { pivotStyles?: Array<{ name: string }> }).pivotStyles?.map(item => item.name)).toContain('OfficeViewPivot')
+    } finally { await source.release(); await session.release() }
+  })
+
+  it('prioritizes and applies a referenced custom slicer style on the paged drawings path', async () => {
+    const archive = await JSZip.loadAsync(bytes('slicer-light1'))
+    const stylesPath = 'xl/styles.xml', styles = await archive.file(stylesPath)!.async('string')
+    const x14 = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
+    const extension = `<extLst><ext uri="{EB79DEF2-80B8-43e5-95BD-54CBDDF9020C}"><x14:dxfs xmlns:x14="${x14}" count="1"><x14:dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill></x14:dxf></x14:dxfs><x14:slicerStyles xmlns:x14="${x14}" defaultSlicerStyle="LateSlicer"><x14:slicerStyle name="LateSlicer"><x14:slicerStyleElements><x14:slicerStyleElement type="unselectedItemWithData" dxfId="0"/></x14:slicerStyleElements></x14:slicerStyle></x14:slicerStyles></ext></extLst>`
+    archive.file(stylesPath, styles.replace('</styleSheet>', `${extension}</styleSheet>`))
+    const slicerPath = Object.keys(archive.files).find(path => /^xl\/slicers\/slicer[^/]*\.xml$/.test(path))!
+    archive.file(slicerPath, (await archive.file(slicerPath)!.async('string')).replace('style="SlicerStyleLight1"', 'style="LateSlicer"'))
+    const input = new Uint8Array(await archive.generateAsync({ type: 'uint8array' }))
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([input]) }, { docId: 'custom-slicer-style', profile: 'D' })
+    await session.done
+    const source = createPagedWorkbookSource(session)
+    try {
+      const sheet = source.sheets[0]!, store = source.store(sheet.sheetId)
+      expect(session.workbook.tableStyleExtras?.slicerStyles.has('LateSlicer')).toBe(true)
+      const drawings = await store.readDrawings!({ signal: new AbortController().signal, stamp: store.stamp }, 'D', { set: () => true })
+      expect(drawings.drawings.some(drawing => drawing.content?.kind === 'slicer')).toBe(true)
+      const resident = await parseXlsx(await OfficePackage.load(input), { valuePolicy: 'cached' })
+      await ensurePivotEngine(resident.sheets)
+      const residentSheet = resident.sheets[0]!
+      const pagedSheet = { ...residentSheet, drawings: [...drawings.drawings] }
+      expect(pixels(pagedSheet)).toEqual(pixels(residentSheet))
+      expect(pixels(pagedSheet)).not.toEqual(pixels({ ...residentSheet, drawings: [] }))
+    } finally { await source.release(); await session.release() }
+  })
+
   it('forwards the active profile through the interruptible store wrapper', async () => {
     const stamp = { docId: 'profile-forward', sheetId: 'sheet-1', valueGen: 0 }
     let received: string | undefined
-    const payload: RemotePivotDisplay = { sheetId: stamp.sheetId, stamp, tables: [], pivotTables: [], slicers: [], timelines: [], diagnostics: [] }
+    const payload: RemotePivotDisplay = { sheetId: stamp.sheetId, stamp, tables: [], pivotTables: [], pivotStyles: [], slicerStyles: [], diagnostics: [] }
     const store = {
       stamp, extent: { rows: 1, cols: 1 }, valuePolicy: 'cached',
       readPivotDisplay: async (_options: unknown, _grantBytes: number, _memory: unknown, profile?: string) => { received = profile; return payload },
@@ -62,8 +110,8 @@ describe('paged pivot display descriptors', () => {
       const result = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 1024 * 1024, { set: () => true })
       expect(result.pivotTables.length).toBeGreaterThan(0)
       expect('buttons' in result).toBe(false)
-      expect(result.slicers).toEqual([])
-      expect(result.timelines).toEqual([])
+      expect(result.pivotStyles).toEqual([])
+      expect(result.slicerStyles).toEqual([])
       expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'pivot-display-reply-limit' }))
     } finally {
       await source.release()
@@ -71,10 +119,7 @@ describe('paged pivot display descriptors', () => {
     }
   })
 
-  it.each([
-    ['slicer-light1', 'slicers'],
-    ['timeline-light1-months', 'timelines'],
-  ] as const)('resolves %s controls in the worker display descriptor', async (name, key) => {
+  it.each(['slicer-light1', 'timeline-light1-months'] as const)('keeps %s controls out of the pivot display payload', async name => {
     const input = bytes(name)
     const session = await openImportSession({ kind: 'blob', blob: new Blob([input]) }, { docId: `pivot-display-${name}`, profile: 'D' })
     await session.done
@@ -83,7 +128,8 @@ describe('paged pivot display descriptors', () => {
       const sheet = source.sheets[0]!, store = source.store(sheet.sheetId)
       expect(source.hasPivotDisplay?.(sheet.sheetId)).toBe(true)
       const result = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 1024 * 1024, { set: () => true })
-      expect(result[key].length).toBeGreaterThan(0)
+      expect('slicers' in result).toBe(false)
+      expect('timelines' in result).toBe(false)
       expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'pivot-display-reply-limit' }))
     } finally { await source.release(); await session.release() }
   })
@@ -114,13 +160,15 @@ describe('paged pivot display descriptors', () => {
     } finally { await source.release(); await session.release() }
   })
 
-  it.each(['pivot-layout-compact', 'slicer-light1', 'timeline-light1-months'])('matches resident pixels through paged worker descriptors and drawings for %s', async name => {
+  it.each(['pivot-layout-compact', 'pivot-custom-style', 'slicer-light1', 'timeline-light1-months'])('matches resident pixels through paged worker descriptors and drawings for %s', async name => {
     const input = bytes(name)
     const session = await openImportSession({ kind: 'blob', blob: new Blob([input]) }, { docId: `pivot-pixels-${name}`, profile: 'D' })
     await session.done
     const pagedSource = createPagedWorkbookSource(session)
     const kernel = new ViewerKernel({ parse: async () => { throw new Error('expected supplied paged source') }, openSource: async () => pagedSource }, { yield: async () => {} })
-    const client = new ViewerClient(connectInProcess(kernel), `pivot-pixels-${name}`)
+    const inProcess = connectInProcess(kernel), posted: WorkerCommand[] = []
+    const port = { ...inProcess, postMessage(message: unknown, transfer: Transferable[]) { posted.push(message as WorkerCommand); inProcess.postMessage(message, transfer) } }
+    const client = new ViewerClient(port, `pivot-pixels-${name}`)
     const opened = await openRemoteWorkbook(client, `pivot-pixels-${name}`, new Blob([input]), 'D')
     if (!('layouts' in opened)) throw new Error('paged workbook did not open')
     const remote = new RemoteWorkbook(client, opened), sheetId = remote.sheets[0]!.sheetId
@@ -130,6 +178,7 @@ describe('paged pivot display descriptors', () => {
       for (let i = 0; i < 200 && !['ready', 'failed'].includes(remote.pivotDisplay(sheetId).state); i++) await new Promise(resolveTick => setTimeout(resolveTick, 2))
       const display = remote.pivotDisplay(sheetId)
       expect(display.state, 'worker descriptor cache').toBe('ready')
+      expect(posted.filter(command => command.kind === 'read' && command.query.op === 'pivotDisplay')).toHaveLength(1)
       remote.drawings(sheetId)
       for (let i = 0; i < 200 && !['ready', 'failed'].includes(remote.drawings(sheetId).state); i++) await new Promise(resolveTick => setTimeout(resolveTick, 2))
       expect(remote.drawings(sheetId).state, 'worker drawing/control cache').toBe('ready')
@@ -161,13 +210,18 @@ describe('paged pivot display descriptors', () => {
       })
       const axes = remote.geometry(sheetId), extent = { width: axes.cols.totalCss(), height: axes.rows.totalCss() }
       const plan: Extract<ViewportPlan, { kind: 'detail' }> = { kind: 'detail', cells, merges: (result.merges ?? []).map(merge => ({ range: merge.range, ...merge.bounds })), drawings: [...remote.drawings(sheetId).drawings], rowLines: result.rowLines ?? [], colLines: result.colLines ?? [], extent, diagnostics: [], coarse: result.coarse ?? [], work: result.work ?? emptyWork() }
-      const paint = (sheet: typeof pagedSheet) => {
+      const paint = (sheet: typeof pagedSheet, drawings: typeof plan.drawings) => {
         const canvas = createCanvas(window.box.width, window.box.height)
         const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D
-        renderSheetViewport(sheet, ctx, geometry, window, undefined, { preparedPlan: plan })
+        renderSheetViewport(sheet, ctx, geometry, window, undefined, { preparedPlan: { ...plan, drawings } })
         return Buffer.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data.buffer)
       }
-      expect(paint(pagedSheet)).toEqual(paint(residentSheet))
+      const pagedPixels = paint(pagedSheet, remote.drawings(sheetId).drawings)
+      const residentPixels = paint(residentSheet, residentSheet.drawings ?? [])
+      expect(pagedPixels).toEqual(residentPixels)
+      expect(pagedPixels).not.toEqual(Buffer.alloc(pagedPixels.length))
+      const withoutLayer = { ...residentSheet, pivotRegions: undefined, pivotTables: undefined, regionStyles: undefined, drawings: [] }
+      expect(pagedPixels).not.toEqual(paint(withoutLayer, []))
       remote.mainLedger.settle(viewport)
     } finally { await remote.close(); await pagedSource.release(); await session.release() }
   })
@@ -186,9 +240,36 @@ describe('paged pivot display descriptors', () => {
     } finally { await source.release(); await session.release() }
   })
 
+  it('does not read or leak another sheet over-cap pivot parts into this sheet display', async () => {
+    const archive = await JSZip.loadAsync(bytes('pivot-layout-compact'))
+    const pivotPath = Object.keys(archive.files).find(path => /^xl\/pivotTables\/pivotTable[^/]*\.xml$/.test(path))!
+    const xml = await archive.file(pivotPath)!.async('string'), rootEnd = xml.indexOf('>')
+    archive.file(pivotPath, `${xml.slice(0, rootEnd + 1)}<!--${' '.repeat(70 * 1024)}-->${xml.slice(rootEnd + 1)}`)
+    const input = new Uint8Array(await archive.generateAsync({ type: 'uint8array' }))
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([input]) }, { docId: 'pivot-sheet-isolation', profile: 'D' })
+    await session.done
+    const source = createPagedWorkbookSource(session)
+    try {
+      const data = source.sheets.find(sheet => sheet.name === 'Data')!
+      const store = source.store(data.sheetId), rangeSource = session.workbook.parts.src
+      const entry = session.workbook.parts.inventory.find(pivotPath)!
+      let touchedPivot = false
+      const read = rangeSource.read.bind(rangeSource)
+      rangeSource.read = async (start, end, signal) => {
+        if (start < entry.rangeEnd && end > entry.localHeaderOffset) touchedPivot = true
+        return read(start, end, signal)
+      }
+      const result = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 4 * 1024 * 1024, { set: () => true })
+      expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ feature: 'pivot-part-too-large', partPath: pivotPath }))
+      expect(touchedPivot).toBe(false)
+    } finally { await source.release(); await session.release() }
+  })
+
   it.each([
     ['pivot-layout-compact', /xl\/pivotTables\/pivotTable[^/]*\.xml$/i, /<pivotTableDefinition\b/],
+    ['pivot-layout-compact', /xl\/pivotCache\/pivotCacheDefinition[^/]*\.xml$/i, /<pivotCacheDefinition\b/],
     ['slicer-light1', /xl\/slicerCaches\/slicerCache[^/]*\.xml$/i, /<slicerCacheDefinition\b/],
+    ['timeline-light1-months', /xl\/timelines\/timeline[^/]*\.xml$/i, /<timeline\b/],
   ] as const)('reports pivot-part-too-large for over-cap package parts (%s)', async (fixture, pathPattern, rootPattern) => {
     const archive = await JSZip.loadAsync(bytes(fixture))
     const path = Object.keys(archive.files).find(name => pathPattern.test(name))
@@ -203,8 +284,13 @@ describe('paged pivot display descriptors', () => {
     const source = createPagedWorkbookSource(session)
     try {
       const sheet = source.sheets[0]!, store = source.store(sheet.sheetId)
-      const result = await store.readPivotDisplay!({ signal: new AbortController().signal, stamp: store.stamp }, 4 * 1024 * 1024, { set: () => true })
-      expect(result.diagnostics).toContainEqual(expect.objectContaining({ feature: 'pivot-part-too-large' }))
+      const options = { signal: new AbortController().signal, stamp: store.stamp }
+      const result = /slicerCaches|timelines/.test(pathPattern.source)
+        ? await store.readDrawings!(options, 'D', { set: () => true })
+        : await store.readPivotDisplay!(options, 4 * 1024 * 1024, { set: () => true })
+      const pivotDiagnostics = result.diagnostics.filter(diagnostic => ('feature' in diagnostic && diagnostic.feature === 'pivot-part-too-large' || 'code' in diagnostic && diagnostic.code === 'pivot-part-too-large')
+        && (('partPath' in diagnostic && diagnostic.partPath?.endsWith(path!.split('/').pop()!)) || ('partId' in diagnostic && diagnostic.partId?.endsWith(path!.split('/').pop()!))))
+      expect(pivotDiagnostics).toHaveLength(1)
     } finally { await source.release(); await session.release() }
   })
 
@@ -213,7 +299,7 @@ describe('paged pivot display descriptors', () => {
     let currentOwner = { ...owner }
     let released = 0, resolve!: (value: WorkerReply<'read'>) => void
     const success = (stamp = currentOwner) => ({ kind: 'complete', commandKind: 'read', requestId: 'r', owner: stamp, diagnostics: [], replyBytes: 64,
-      result: { kind: 'read', result: { op: 'pivotDisplay', result: { sheetId: 's', stamp, tables: [], pivotTables: [], slicers: [], timelines: [], diagnostics: [] } } } }) as unknown as WorkerReply<'read'>
+      result: { kind: 'read', result: { op: 'pivotDisplay', result: { sheetId: 's', stamp, tables: [], pivotTables: [], pivotStyles: [], slicerStyles: [], diagnostics: [] } } } }) as unknown as WorkerReply<'read'>
     const cache = new RemoteRegionStyleCache({
       identity: () => currentOwner, hasRegionStyles: () => false, hasPivotDisplay: () => true, loadState: () => ({ completeness: 'complete' }),
       grant: () => 4096, releaseGrant: () => {}, request: () => new Promise<WorkerReply<'read'>>(done => { resolve = done }),
@@ -239,6 +325,30 @@ describe('paged pivot display descriptors', () => {
     failing.get('s')
     await new Promise(resolveTick => setTimeout(resolveTick, 0))
     expect(released).toBe(3)
+    expect(failing.get('s').diagnostics).toContainEqual(expect.objectContaining({ feature: 'pivot-display-read-failed' }))
     failing.close()
+  })
+
+  it('uses pivot-display diagnostics when the receiver cannot admit its decoded layer', async () => {
+    const owner: CacheIdentity = { docId: 'pivot-cache-budget', sheetId: 's', valueGen: 1, fontGen: 0, viewGen: 0 }
+    const payload: RemotePivotDisplay = { sheetId: 's', stamp: owner, tables: [], pivotTables: [], pivotStyles: [{ name: 'custom', table: false, pivot: true, elements: {} }], slicerStyles: [], diagnostics: [] }
+    const reply = { kind: 'complete', commandKind: 'read', requestId: 'r', owner, diagnostics: [], replyBytes: 64,
+      result: { kind: 'read', result: { op: 'pivotDisplay', result: payload } } } as unknown as WorkerReply<'read'>
+    const cache = new RemoteRegionStyleCache({
+      identity: () => owner, hasRegionStyles: () => false, hasPivotDisplay: () => true, loadState: () => ({ completeness: 'complete' }),
+      grant: () => 4096, releaseGrant: () => {}, request: async () => reply, nextRequestId: () => 'r', release: () => {},
+      admitLayer: () => null, changed: () => {},
+    }, 4096, 'pivotDisplay')
+    cache.get('s')
+    await new Promise(resolveTick => setTimeout(resolveTick, 0))
+    expect(cache.get('s').diagnostics).toContainEqual(expect.objectContaining({ feature: 'pivot-display-reply-limit' }))
+    cache.close()
+  })
+
+  it('propagates a control-part cancellation instead of converting it to missing controls', async () => {
+    const controller = new AbortController()
+    const pkg = { xml: async () => { controller.abort(); throw new PackageError('cancelled', 'cancelled') }, xmlOrdered: async () => undefined } as unknown as PackageReader
+    await expect(resolveSheetControls(pkg, { sheetPath: 'xl/worksheets/sheet1.xml', slicerIds: ['rId1'], timelineIds: [], theme: parseThemeContext(), signal: controller.signal }))
+      .rejects.toMatchObject({ code: 'cancelled' })
   })
 })

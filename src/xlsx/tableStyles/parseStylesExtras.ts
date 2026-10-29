@@ -131,7 +131,7 @@ function x14Ext(root: XmlNode, local: string): XmlNode[] {
   return out
 }
 
-export function parseStylesExtras(stylesRoot: XmlNode, colorContext: SheetColorContext, preferredTableStyleNames: ReadonlySet<string> = new Set()): StylesExtras {
+export function parseStylesExtras(stylesRoot: XmlNode, colorContext: SheetColorContext, preferredTableStyleNames: ReadonlySet<string> = new Set(), preferredSlicerStyleNames: ReadonlySet<string> = new Set()): StylesExtras {
   const dxfs = parseDxfList(first(stylesRoot, 'dxfs'), colorContext)
   const tableStyles = new Map<string, TableStyleDef>()
   const stylesNode = first(stylesRoot, 'tableStyles')
@@ -160,7 +160,10 @@ export function parseStylesExtras(stylesRoot: XmlNode, colorContext: SheetColorC
   const slicerDxfs = parseDxfList(x14Ext(stylesRoot, 'dxfs')[0], colorContext)
   const slicerStyles = new Map<string, SlicerStyleDef>()
   const slicerList = x14Ext(stylesRoot, 'slicerStyles')[0]
-  for (const styleNode of getChildren(slicerList, 'slicerStyle').slice(0, MAX_TABLE_STYLES)) {
+  const allSlicerStyleNodes = getChildren(slicerList, 'slicerStyle')
+  const preferredSlicerNodes = allSlicerStyleNodes.filter(node => preferredSlicerStyleNames.has(attrs(node).name ?? ''))
+  const ordinarySlicerNodes = allSlicerStyleNodes.slice(0, MAX_TABLE_STYLES).filter(node => !preferredSlicerStyleNames.has(attrs(node).name ?? ''))
+  for (const styleNode of [...preferredSlicerNodes, ...ordinarySlicerNodes]) {
     const name = attrs(styleNode).name
     if (!name || slicerStyles.has(name)) continue
     const def: SlicerStyleDef = { name, elements: {} }

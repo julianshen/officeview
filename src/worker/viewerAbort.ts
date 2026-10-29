@@ -52,7 +52,7 @@ export function interruptibleStore(store: SourceStore, observeWork?: (work: Prom
     ) } satisfies Pick<SourceStore, 'readRegionStyles'> : {}),
     ...(store.readPivotDisplay ? { readPivotDisplay: (options, grantBytes, memory, profile) => read(
       () => store.readPivotDisplay!(options, grantBytes, memory, profile), options.signal,
-      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], pivotTables: [], slicers: [], timelines: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: error.message }] }),
+      () => ({ sheetId: store.stamp.sheetId, stamp: store.stamp, tables: [], pivotTables: [], pivotStyles: [], slicerStyles: [], diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: error.message }] }),
     ) } satisfies Pick<SourceStore, 'readPivotDisplay'> : {}),
     queryColumn: (request, options) => read(() => store.queryColumn(request, options), options.signal, page),
     queryOverview: (request, options) => read(() => store.queryOverview(request, options), options.signal, page),

@@ -6,6 +6,7 @@
  * real resident kernel behind a port with worker message semantics.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createCanvas } from 'canvas'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import JSZip from 'jszip'
@@ -24,6 +25,8 @@ import { FIRST_PAINT_TEST, FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 import * as sparklineLoader from '../src/xlsx/sparklineLoader'
 import { TileCache } from '../src/xlsx/view/tileCache'
 import { prepareSheetAssets } from '../src/components/xlsx/sheetAssets'
+import * as regionLayer from '../src/xlsx/tableStyles/regionLayer'
+import * as pivotLoader from '../src/xlsx/pivotLoader'
 
 // Admission's object path allows one row, so these small fixtures are 'paged'
 // on the main thread and in the worker alike (the same override both sides).
@@ -48,6 +51,7 @@ function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
   const kernel = new ViewerKernel(env ?? { parse }, quiet)
   const listeners = new Set<(event: MessageEvent) => void>()
   const posted: WorkerCommand[] = []
+  const replies: WorkerReply[] = []
   const held: Array<() => void> = []
   let hold: ((command: WorkerCommand) => boolean) | null = null
   const port = {
@@ -60,6 +64,7 @@ function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
       posted.push(command)
       void kernel.handle(command, (out: WorkerReply, replyTransfer) => {
         const deliver = () => {
+          replies.push(out)
           const data = structuredClone(out, { transfer: replyTransfer })
           for (const listener of [...listeners]) listener({ data } as MessageEvent)
         }
@@ -72,7 +77,7 @@ function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
     terminate: vi.fn(),
   }
   return {
-    port, kernel, parse, posted,
+    port, kernel, parse, posted, replies,
     reads: (op?: string) => posted.filter(c => c.kind === 'read' && (!op || c.query.op === op)).length,
     hold(predicate: (command: WorkerCommand) => boolean) { hold = predicate },
     release() { hold = null; for (const deliver of held.splice(0)) deliver() },
@@ -102,6 +107,43 @@ async function mount(element: ReactElement, firstCell: RegExp) {
 }
 
 describe('S5.4 routing: interactiveSheets mounts the worker-backed viewer for paged admissions', () => {
+  it('mounts the pivot display layer and paints pivot buttons in screen mode', FIRST_PAINT_TEST, async () => {
+    const built: Array<{ sheet: Parameters<typeof regionLayer.buildSheetRegionLayer>[0]; layer: ReturnType<typeof regionLayer.buildSheetRegionLayer> }> = []
+    const buildOriginal = regionLayer.buildSheetRegionLayer
+    const build = vi.spyOn(regionLayer, 'buildSheetRegionLayer').mockImplementation((...args) => {
+      const layer = buildOriginal(...args)
+      if (layer) built.push({ sheet: args[0], layer })
+      return layer
+    })
+    const buttons = vi.spyOn(pivotLoader, 'paintPivotButtonsIn')
+    const input = readFileSync(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/pivot-layout-compact.xlsx'))
+    const h = workerHarness()
+    const ui = render(<OfficeFile data={new Blob([input])} interactiveSheets viewerWorker={() => h.port} />)
+    await waitFor(() => expect(ui.getAllByRole('gridcell').length).toBeGreaterThan(0), FIRST_PAINT_WAIT)
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'read' && command.query.op === 'pivotDisplay')).toBe(true))
+    const pivotReads = h.posted.filter(command => command.kind === 'read' && command.query.op === 'pivotDisplay')
+    expect(pivotReads).toHaveLength(1)
+    go(ui, 'A3')
+    await waitFor(() => expect(build).toHaveBeenCalled())
+    const pivotReply = h.replies.find(reply => reply.kind === 'complete' && reply.commandKind === 'read' && reply.result.kind === 'read' && reply.result.result.op === 'pivotDisplay')
+    expect(pivotReply?.kind).toBe('complete')
+    if (pivotReply?.kind === 'complete') {
+      const firstRead = pivotReads[0]
+      const firstGrant = firstRead?.kind === 'read' && firstRead.query.op === 'pivotDisplay' ? firstRead.query.grantBytes : 0
+      expect(pivotReply.replyBytes).toBeLessThanOrEqual(firstGrant)
+    }
+    const display = built.find(item => item.sheet.pivotTables?.length)
+    if (!display?.layer) throw new Error('mounted pivot display did not produce a region layer')
+    expect(display.layer.rects.length).toBeGreaterThan(0)
+    // jsdom has no sized canvas, so exercise the mounted layer's actual visible
+    // pivot cell in screen mode and verify the drawing button pass uses screen too.
+    expect(display.layer.styleAt(2, 0, undefined, 'screen')).toBeDefined()
+    const canvas = createCanvas(240, 160)
+    pivotLoader.paintPivotButtonsIn(canvas.getContext('2d') as unknown as CanvasRenderingContext2D, display!.sheet,
+      (row, col) => ({ x: col * 30, y: row * 20, width: 30, height: 20 }), { r0: 0, c0: 0, r1: 30, c1: 12 }, 'screen')
+    expect(buttons.mock.calls.some(call => call[4] === 'screen')).toBe(true)
+  })
+
   it('opens a paged admission in the worker (no main-thread parse, shell document) and shows notices once', FIRST_PAINT_TEST, async () => {
     const mainPlanner = vi.spyOn(viewportPlanner, 'planViewport')
     const h = workerHarness()

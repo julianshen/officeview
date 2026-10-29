@@ -70,7 +70,7 @@ export class RemoteRegionStyleCache {
   }
   private retry(sheetId: string, entry: Entry, seq: number): void {
     if (entry.attempts >= MAX_ATTEMPTS) {
-      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table style metadata could not be loaded after repeated attempts.' }]
+      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} metadata could not be loaded after repeated attempts.`) }]
       this.deferChanged(sheetId); return
     }
     const delay = Math.min(4_000, RETRY_MS * 2 ** Math.max(0, entry.attempts - 1))
@@ -96,12 +96,20 @@ export class RemoteRegionStyleCache {
     }
     return this.retainedBytes + needed <= this.budgetBytes
   }
+  private diagnosticFeature(kind: 'read-failed' | 'reply-limit'): string {
+    return this.op === 'pivotDisplay' ? `pivot-display-${kind}` : `table-style-${kind}`
+  }
+  private diagnosticMessage(kind: 'read-failed' | 'reply-limit', detail?: string): string {
+    if (detail) return detail
+    if (this.op === 'pivotDisplay') return kind === 'reply-limit' ? 'Pivot display metadata exceeds the receiver cache budget.' : 'Pivot display metadata could not be loaded.'
+    return kind === 'reply-limit' ? 'Table style metadata exceeds the receiver cache budget.' : 'Table style metadata could not be loaded.'
+  }
   private async buildLayer(sheetId: string, entry: Entry, requestId: string, payload: RemoteRegionStyles | RemotePivotDisplay, seq: number, reply?: WorkerReply<'read'>, releaseReply?: () => void): Promise<void> {
-    const layerCount = payload.tables.length + ('pivotTables' in payload ? payload.pivotTables.length : 0)
+    const layerCount = payload.tables.length + ('pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : 0)
     const layerBytes = layerCount ? layerBytesFor(layerCount) : 0
     if (layerBytes && !this.makeRoom(entry, layerBytes + (reply ? reply.replyBytes ?? 0 : 0))) {
       if (reply) releaseReply?.()
-      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver cache budget.' }]
+      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit') }]
       this.deferChanged(sheetId); return
     }
     let layerRelease: (() => void) | undefined
@@ -111,13 +119,16 @@ export class RemoteRegionStyleCache {
         layerRelease = this.host.admitLayer(sheetId, requestId, layerBytes) ?? undefined
         if (!layerRelease) {
           if (reply) releaseReply?.()
-          entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the main-thread cache budget.' }]
+          entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} metadata exceeds the main-thread cache budget.`) }]
           this.deferChanged(sheetId); return
         }
         const { preloadTableStyles } = await import('../xlsx/tableStyleLoader')
         await preloadTableStyles()
         const { buildSheetRegionLayer } = await import('../xlsx/tableStyles/regionLayer')
-        const extras = { dxfs: [], tableStyles: new Map(payload.tables.map(item => [item.def.name, item.def])), slicerStyles: new Map() }
+        const tableStyles = new Map(payload.tables.map(item => [item.def.name, item.def]))
+        if ('pivotStyles' in payload) for (const def of payload.pivotStyles) tableStyles.set(def.name, def)
+        const slicerStyles = new Map('slicerStyles' in payload ? payload.slicerStyles.map(def => [def.name, def] as const) : [])
+        const extras = { dxfs: [], tableStyles, slicerStyles }
         const sheet = { name: sheetId, tables: payload.tables.map(item => item.table), ...('pivotTables' in payload ? { pivotTables: payload.pivotTables } : {}) } as import('../xlsx/types').XlsxSheet
         if (sheet.pivotTables?.length) await (await import('../xlsx/pivotLoader')).ensurePivotEngine([sheet])
         layer = buildSheetRegionLayer(sheet, extras, payload.theme ?? (await import('../drawing/style')).parseThemeContext())
@@ -137,7 +148,7 @@ export class RemoteRegionStyleCache {
       if (reply) releaseReply?.()
       if (entry.reply === reply) { entry.reply = undefined; entry.releaseReply = undefined; entry.replyBytes = 0; entry.payload = undefined }
       entry.layer = undefined; entry.layerReady = false; entry.layerBytes = 0; entry.layerRelease = undefined; entry.layerPending = false
-      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Table style engine failed to load' }]
+      entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', cause instanceof Error ? cause.message.slice(0, 256) : undefined) }]
       this.deferChanged(sheetId)
     }
   }
@@ -172,17 +183,17 @@ export class RemoteRegionStyleCache {
     if (out.kind === 'error') {
       releaseOnce()
       if (out.retryable || out.code === 'stale-source' || out.code === 'cancelled') this.retry(sheetId, entry, seq)
-      else { entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: out.diagnostics[0]?.message ?? `Table style read failed (${out.code})` }]; this.deferChanged(sheetId) }
+      else { entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: out.diagnostics[0]?.message ?? `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} read failed (${out.code})` }]; this.deferChanged(sheetId) }
       return
     }
     if (out.kind === 'quota') {
-      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver grant.' }]; entry.gen++; this.deferChanged(sheetId); return
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} metadata exceeds the receiver grant.`) }]; entry.gen++; this.deferChanged(sheetId); return
     }
     const payload = unpack(out, this.op)
     if (!payload) {
       releaseOnce()
       entry.state = 'failed'
-      entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table style read did not complete.' }]
+      entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} read did not complete.`) }]
       entry.gen++; this.deferChanged(sheetId); return
     }
     if (!sameOwner(out.owner as CacheIdentity, owner) || !sameOwner(owner, this.host.identity(sheetId))
@@ -200,12 +211,12 @@ export class RemoteRegionStyleCache {
       entry.state = 'failed'; entry.diagnostics = payload.diagnostics; entry.gen++; this.deferChanged(sheetId); return
     }
     if (!Number.isSafeInteger(out.replyBytes) || (out.replyBytes ?? -1) < 0) {
-      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-read-failed', message: 'Table style reply had no valid byte estimate.' }]; this.deferChanged(sheetId); return
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} reply had no valid byte estimate.`) }]; this.deferChanged(sheetId); return
     }
-    const layerCount = payload.tables.length + ('pivotTables' in payload ? payload.pivotTables.length : 0)
+    const layerCount = payload.tables.length + ('pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : 0)
     const layerBytes = layerCount ? layerBytesFor(layerCount) : 0
     if (!this.makeRoom(entry, (out.replyBytes ?? 0) + layerBytes)) {
-      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: 'table-style-reply-limit', message: 'Table style metadata exceeds the receiver cache budget.' }]; this.deferChanged(sheetId); return
+      releaseOnce(); entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit') }]; this.deferChanged(sheetId); return
     }
     await this.buildLayer(sheetId, entry, requestId, payload, seq, out, releaseOnce)
   }

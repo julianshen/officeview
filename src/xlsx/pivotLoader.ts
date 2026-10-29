@@ -9,6 +9,7 @@ import type { PackageReader } from './pivots/load'
 import type { RegionStyleMode, StyleRegion } from './tableStyles/regionLayer'
 import type { StylesExtras, TableStyleDiagnostic, TableStyleSource } from './tableStyles/model'
 import type { ThemeContext } from '../drawing/style'
+import { PackageError, isPackageError } from '../core/package-error'
 
 export interface PivotEngine {
   regions(sheet: XlsxSheet, extras: StylesExtras, theme: ThemeContext, report: (diagnostic: TableStyleDiagnostic) => void): StyleRegion[]
@@ -25,7 +26,18 @@ function load(): Promise<typeof import('./pivots/index')> {
 export function pivotEngine(): PivotEngine | undefined { return engine }
 /** Resolve paged control descriptors with the same lazy parser used by resident drawings. */
 export async function resolveSheetControls(pkg: PackageReader, request: SheetControlsRequest): Promise<SheetControls | undefined> {
-  try { await load(); return await engine?.sheetControls(pkg, request) } catch { return undefined }
+  if (request.signal?.aborted) throw new PackageError('cancelled', 'operation cancelled', request.sheetPath)
+  try {
+    await load()
+    const result = await engine?.sheetControls(pkg, request)
+    if (request.signal?.aborted) throw new PackageError('cancelled', 'operation cancelled', request.sheetPath)
+    return result
+  } catch (cause) {
+    if (request.signal?.aborted || (isPackageError(cause) && cause.code === 'cancelled') || (cause instanceof Error && cause.name === 'AbortError')) {
+      throw request.signal?.aborted ? new PackageError('cancelled', 'operation cancelled', request.sheetPath) : cause
+    }
+    return undefined
+  }
 }
 /** Ruling AH: a sheet's slicers and timelines need the chunk too (a slicer may sit on a sheet without a pivot). */
 export function ensurePivotEngine(sheets: readonly XlsxSheet[]): Promise<void> {

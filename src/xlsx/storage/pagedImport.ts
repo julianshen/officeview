@@ -20,6 +20,7 @@ import { anchorId, anchorRecord } from '../anchorRecords'
 import type { SheetColorContext } from '../sheetColors'
 import type { ThemeContext } from '../../drawing/style'
 import type { TableStyleDef } from '../tableStyles/model'
+import type { StylesExtras } from '../tableStyles/model'
 import {
   collectDeclaredTable, createDeclaredBudget, declaredContainerBuilder, declaredSheetBuilder, hasDeclaredFiltering, type DeclaredSheetFilters,
 } from '../view/declaredFilters'
@@ -74,6 +75,8 @@ export interface PagedWorkbook {
   formatting: WorkbookFormatting
   /** Only the custom definitions named by this workbook's tables are retained. */
   tableStyleDefs?: ReadonlyMap<string, TableStyleDef>
+  /** Referenced table/pivot and slicer styles survive the same bounded retention pass. */
+  tableStyleExtras?: StylesExtras
   tableStyleTheme?: ThemeContext
   /** The package behind the import, for on-demand bounded part reads (S13.2:
    * a sheet's drawing content is read when the viewer asks for it). */
@@ -109,6 +112,14 @@ let swept = false
 const STORED_PER_COMPRESSED_BYTE = 6
 const SMALL_PART_BYTES = 4 * MiB
 const utf8 = new TextDecoder()
+
+function controlStyleNames(text: string | undefined, containerName: 'slicers' | 'timelines', itemName: 'slicer' | 'timeline'): string[] {
+  if (!text) return []
+  try {
+    const root = parseXml(text), container = getChildren(root, containerName)[0] ?? root
+    return [...new Set(getChildren(container, itemName).map(node => attrs(node).style).filter((name): name is string => Boolean(name)))].slice(0, 256)
+  } catch { return [] }
+}
 
 function asFailure(error: unknown): SourceFailure {
   if (error instanceof PackageError) return { code: error.code, retryable: error.code === 'storage-error' || error.code === 'quota' || error.code === 'cancelled', message: error.message }
@@ -315,7 +326,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
     let sparklineColorContext: SheetColorContext = {}
     let tableStylesTheme: ThemeContext | undefined
     let stylesTextForPriority: string | undefined, themeTextForPriority: string | undefined
-    const prioritizedTableStyleNames = new Set<string>()
+    const prioritizedTableStyleNames = new Set<string>(), prioritizedSlicerStyleNames = new Set<string>()
     try {
       const stylesText = inventory.find('xl/styles.xml') ? await readPlanned('xl/styles.xml') : undefined
       stylesTextForPriority = stylesText
@@ -329,6 +340,7 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       workbook.formatting = parsedFormatting.formatting
       sparklineColorContext = parsedFormatting.colorContext
       workbook.tableStyleDefs = parsedFormatting.tableStyleDefs
+      workbook.tableStyleExtras = parsedFormatting.tableStyleExtras
       if (themeText !== undefined) {
         const { parseThemeContext } = await import('../../drawing/style')
         tableStylesTheme = parseThemeContext(themeText)
@@ -474,6 +486,23 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
       }
       sheet.metadata.slicerRefs = resolveControlRefs(sheet.metadata.slicerRelationshipIds, '/slicer')
       sheet.metadata.timelineRefs = resolveControlRefs(sheet.metadata.timelineRelationshipIds, '/timeline')
+      const readControlStyles = async (refs: readonly ControlPartRef[] | undefined, containerName: 'slicers' | 'timelines', itemName: 'slicer' | 'timeline') => {
+        const out: string[] = []
+        for (const ref of refs ?? []) {
+          const controlEntry = inventory.find(ref.partPath)
+          if (!controlEntry || controlEntry.uncompressedSize > PIVOT_PART_MAX_BYTES) continue
+          plan(controlEntry.name)
+          try {
+            const text = utf8.decode(await readPartPrefixBytes(src, controlEntry, PIVOT_PART_MAX_BYTES, partOpts(controlEntry.name, PIVOT_PART_MAX_BYTES)))
+            out.push(...controlStyleNames(text, containerName, itemName))
+          } catch (error) {
+            if (isPackageError(error) && error.code === 'cancelled') throw error
+          } finally { ledger.drainQueue() }
+        }
+        return [...new Set(out)].slice(0, 256)
+      }
+      sheet.metadata.slicerStyleNames = await readControlStyles(sheet.metadata.slicerRefs, 'slicers', 'slicer')
+      sheet.metadata.timelineStyleNames = await readControlStyles(sheet.metadata.timelineRefs, 'timelines', 'timeline')
       for (const rel of wsRels?.values() ?? []) {
         if (!rel.type.endsWith('/pivotTable')) continue
         const partPath = resolvePartTarget(sheet.partPath, rel.target)
@@ -542,11 +571,23 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         workbook.diagnostics.push({ code: 'cells-outside-sheet', message: `${sheet.metadata.skippedCells} cells outside the sheet grid were ignored`, partId: sheet.partPath })
       }
       sheet.state = 'complete'
-      const referencedTableStyles = new Set(sheets.filter(candidate => candidate.state === 'complete').flatMap(candidate => candidate.tables?.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)) ?? []))
-      if (stylesTextForPriority !== undefined && [...referencedTableStyles].some(name => !prioritizedTableStyleNames.has(name) && !/^(?:Table|Pivot)Style(?:Light|Medium|Dark)\d+$/.test(name) && !workbook.tableStyleDefs?.has(name))) {
-        const prioritized = await workbookFormattingWithColorContext(workbookRoot, stylesTextForPriority, themeTextForPriority, referencedTableStyles)
+      const completeSheets = sheets.filter(candidate => candidate.state === 'complete')
+      const referencedTableStyles = new Set(completeSheets.flatMap(candidate => [
+        ...(candidate.tables?.map(table => table.styleInfo?.name).filter((name): name is string => Boolean(name)) ?? []),
+        ...(candidate.metadata.pivotRegions?.map(region => region.styleName).filter((name): name is string => Boolean(name)) ?? []),
+        ...(candidate.metadata.slicerStyleNames ?? []), ...(candidate.metadata.timelineStyleNames ?? []),
+      ]))
+      const referencedSlicerStyles = new Set(completeSheets.flatMap(candidate => [
+        ...(candidate.metadata.slicerStyleNames ?? []), ...(candidate.metadata.timelineStyleNames ?? []),
+      ]))
+      const needsPreferredStyles = [...referencedTableStyles].some(name => !prioritizedTableStyleNames.has(name) && !/^(?:Table|Pivot)Style(?:Light|Medium|Dark)\d+$/.test(name) && !workbook.tableStyleDefs?.has(name))
+        || [...referencedSlicerStyles].some(name => !prioritizedSlicerStyleNames.has(name) && !workbook.tableStyleExtras?.slicerStyles.has(name))
+      if (stylesTextForPriority !== undefined && needsPreferredStyles) {
+        const prioritized = await workbookFormattingWithColorContext(workbookRoot, stylesTextForPriority, themeTextForPriority, referencedTableStyles, referencedSlicerStyles)
         workbook.tableStyleDefs = prioritized.tableStyleDefs
+        workbook.tableStyleExtras = prioritized.tableStyleExtras
         for (const name of referencedTableStyles) prioritizedTableStyleNames.add(name)
+        for (const name of referencedSlicerStyles) prioritizedSlicerStyleNames.add(name)
       }
       pulse()
     }

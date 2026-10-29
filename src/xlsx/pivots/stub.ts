@@ -7,7 +7,7 @@ export const SLICER_EXTENSION_URI = '{A8765BA9-456A-4dab-B4F3-ACF838C121DE}'
 export const TIMELINE_EXTENSION_URI = '{7E03D99C-DC04-49d9-9315-930204A7B6E9}'
 export const PIVOT_PART_MAX_BYTES = 64 * 1024
 
-export interface PivotRegionRef { partPath: string; ref: string; name?: string }
+export interface PivotRegionRef { partPath: string; ref: string; name?: string; styleName?: string }
 export interface ControlPartRef { partPath: string; anchorId?: string }
 export interface TableStyleInfo {
   name?: string
@@ -64,7 +64,10 @@ export function parsePivotRegion(text: string | undefined, partPath: string): { 
   if (!ref || !validRef(ref)) return { unreadable: true }
   const rawName = attr(root[1], 'name')
   const name = rawName === undefined ? undefined : decodeXmlEntities(rawName)
-  return { region: { partPath, ref, ...(name ? { name } : {}) }, unreadable: false }
+  const style = /<(?:[A-Za-z_][\w.-]*:)?pivotTableStyleInfo\b([^>]*)>/s.exec(text)
+  const rawStyleName = style ? attr(style[1], 'name') : undefined
+  const styleName = rawStyleName === undefined ? undefined : decodeXmlEntities(rawStyleName)
+  return { region: { partPath, ref, ...(name ? { name } : {}), ...(styleName ? { styleName } : {}) }, unreadable: false }
 }
 
 export function controlIds(root: XmlNode | undefined): { slicerIds: string[]; timelineIds: string[] } {

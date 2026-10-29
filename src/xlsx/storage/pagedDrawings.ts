@@ -35,10 +35,9 @@ import { classifyPart } from './admission'
 import { importLimitsFor } from './importSession'
 import type { PivotRegionRef } from '../pivots/stub'
 import type { PivotTableDefinition } from '../pivots/model'
-import type { TableStyleSource } from '../tableStyles/model'
-import { resolveSheetControls } from '../pivotLoader'
 import { PIVOT_PART_MAX_BYTES } from '../pivots/stub'
 import type { SheetControls } from '../pivots/slicers/model'
+import type { StylesExtras } from '../tableStyles/model'
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 /** Refused parts named one by one in diagnostics; the rest are counted. */
@@ -120,6 +119,7 @@ export interface PagedDrawingSheet {
   legacyDrawingIds?: readonly (string | undefined)[]
   slicerIds?: readonly string[]
   timelineIds?: readonly string[]
+  stylesExtras?: StylesExtras
 }
 
 const utf8 = new TextDecoder()
@@ -266,35 +266,28 @@ class RangePackage extends OfficePackage {
   }
 }
 
-/** Resolve one sheet's clone-safe pivot/control descriptors through the same bounded package reader as drawings. */
+/** Resolve one sheet's pivot definitions through the same bounded package reader as drawings. */
 export async function readPagedPivotDisplayParts(source: { src: RangeSource; inventory: ZipInventory }, input: {
-  sheetId: string; sheetName: string; sheetPath: string; pivotRegions: ReadonlyMap<string, readonly PivotRegionRef[]>
-  slicerIds: readonly string[]; timelineIds: readonly string[]; theme?: ThemeContext; styles?: TableStyleSource
-}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'slicers' | 'timelines' | 'diagnostics'>> {
+  sheetId: string; sheetName: string; pivotRegions: ReadonlyMap<string, readonly PivotRegionRef[]>
+}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'diagnostics'>> {
   const limits = pagedDrawingLimits(profile)
   const pkg = new RangePackage(source.src, source.inventory, limits, signal, memory, profile)
   const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
-  let pivotTables: PivotTableDefinition[] = [], slicers: RemotePivotDisplay['slicers'][number][] = [], timelines: RemotePivotDisplay['timelines'][number][] = []
+  let pivotTables: PivotTableDefinition[] = []
   try {
     if (input.pivotRegions.size) {
       const parsed = await (await import('../pivots/load')).loadPivotWorkbook(pkg, input.pivotRegions)
       pivotTables = parsed.tables.filter(table => table.sheet === input.sheetName)
-      diagnostics.push(...parsed.diagnostics)
-    }
-    if (input.slicerIds.length || input.timelineIds.length) {
-      const controls = await resolveSheetControls(pkg, { sheetPath: input.sheetPath, slicerIds: input.slicerIds, timelineIds: input.timelineIds, theme: input.theme ?? parseThemeContext(), ...(input.styles ? { styles: input.styles } : {}) })
-      if (controls) {
-        slicers = [...controls.slicers.values()]
-        timelines = [...controls.timelines.values()]
-        diagnostics.push(...controls.diagnostics)
-      } else diagnostics.push({ kind: 'unsupported', feature: 'slicer-engine-unavailable', message: 'Slicers and timelines could not be loaded; their fallback shapes are shown' })
+      const sheetParts = new Set(input.pivotRegions.get(input.sheetName)?.map(region => region.partPath) ?? [])
+      diagnostics.push(...parsed.diagnostics.filter(diagnostic => Boolean(diagnostic.partPath && sheetParts.has(diagnostic.partPath))))
     }
   } catch (cause) {
     if (signal.aborted) throw aborted(signal)
-    diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Pivot display metadata could not be read' })
+    const partPath = input.pivotRegions.get(input.sheetName)?.[0]?.partPath
+    diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Pivot display metadata could not be read', ...(partPath ? { partPath } : {}) })
   }
   diagnostics.push(...pkg.finish().map(item => ({ kind: 'unsupported' as const, feature: item.code, message: item.message, partPath: item.partId })))
-  return { pivotTables, slicers, timelines, diagnostics }
+  return { pivotTables, diagnostics }
 }
 
 /**
@@ -366,7 +359,8 @@ async function readPagedSheetDrawings(pkg: RangePackage, sheet: PagedDrawingShee
   const axes = placementAxes(geometry)
   let controls: SheetControls | undefined
   if (sheet.slicerIds?.length || sheet.timelineIds?.length) {
-    controls = await resolveSheetControls(pkg, { sheetPath: sheet.partPath, slicerIds: sheet.slicerIds ?? [], timelineIds: sheet.timelineIds ?? [], theme })
+    const { resolveSheetControls } = await import('../pivotLoader')
+    controls = await resolveSheetControls(pkg, { sheetPath: sheet.partPath, slicerIds: sheet.slicerIds ?? [], timelineIds: sheet.timelineIds ?? [], theme, stylesExtras: sheet.stylesExtras, signal })
   }
   const parsed = parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) }, controls)
   // A pool refusal ends the read at once; the parse it leaves behind reads no parts and reserves no nodes.

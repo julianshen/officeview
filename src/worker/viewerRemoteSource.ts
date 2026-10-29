@@ -265,8 +265,13 @@ export class RemoteWorkbook implements WorkbookSource {
       grant: (sheetId, requestId, minimumBytes) => {
         const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
         const layout = this.layout(sheetId)
-        const tableCount = Math.min(MAX_REGION_STYLE_TABLES, (layout.regionStyleTableCount ?? 1) + (layout.pivotTableCount ?? 0) + (layout.pivotControlCount ?? 0))
-        const planned = REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE
+        const tableCount = Math.min(MAX_REGION_STYLE_TABLES, layout.regionStyleTableCount ?? 1)
+        // Pivot definitions and referenced pivot/control style definitions have
+        // their own serialized payload. Reserve 64 KiB per pivot or
+        // control in addition to the table-style descriptor bound; retry remains
+        // available for larger authored definitions.
+        const pivotItems = (layout.pivotTableCount ?? 0) + (layout.pivotControlCount ?? 0)
+        const planned = REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE + pivotItems * 65_536
         const limit = Math.min(headroom, Math.max(planned, minimumBytes ?? 0)), owner = `region-style-grant:${requestId}`
         if (!Number.isSafeInteger(limit) || limit < Math.max(4096, minimumBytes ?? 0) || this.mainLedger.ownerBytes('replies', owner) > 0) return null
         this.mainLedger.set('replies', owner, limit)

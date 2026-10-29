@@ -12,6 +12,7 @@
  * diagnostic (`slicer-*` / `timeline-*`). Never throws.
  */
 import type { XmlNode } from '../../../core/xml'
+import { PackageError, isPackageError } from '../../../core/package-error'
 import { parseStylesExtras } from '../../tableStyles/parseStylesExtras'
 import type { StylesExtras } from '../../tableStyles/model'
 import { parseCacheDefinition } from '../parseCacheDefinition'
@@ -35,8 +36,11 @@ interface WorkbookControls {
 }
 const books = new WeakMap<PackageReader, Promise<WorkbookControls>>()
 
-async function read(pkg: PackageReader, path: string, ordered = false): Promise<XmlNode | undefined> {
-  try { return ordered ? await pkg.xmlOrdered(path) : await pkg.xml(path) } catch { return undefined }
+function cancellation(cause: unknown, signal?: AbortSignal): boolean {
+  return Boolean(signal?.aborted || (isPackageError(cause) && cause.code === 'cancelled') || (cause instanceof Error && cause.name === 'AbortError'))
+}
+async function read(pkg: PackageReader, path: string, ordered = false, signal?: AbortSignal): Promise<XmlNode | undefined> {
+  try { return ordered ? await pkg.xmlOrdered(path) : await pkg.xml(path) } catch (cause) { if (cancellation(cause, signal)) throw cause; return undefined }
 }
 
 async function workbookControls(pkg: PackageReader, request: SheetControlsRequest): Promise<WorkbookControls> {
@@ -44,16 +48,16 @@ async function workbookControls(pkg: PackageReader, request: SheetControlsReques
   // Slicer and timeline cache parts are found by their workbook relationship types (the x14 slicerCaches /
   // x15 timelineCacheRefs lists name the same relationships).
   for (const path of [...(await relationships(pkg, WORKBOOK, '/slicerCache')).values()].slice(0, MAX_CONTROL_CACHES)) {
-    const cache = parseSlicerCache(await read(pkg, path))
+    const cache = parseSlicerCache(await read(pkg, path, false, request.signal))
     if (cache && !slicerCaches.has(cache.name)) slicerCaches.set(cache.name, cache)
   }
   for (const path of [...(await relationships(pkg, WORKBOOK, '/timelineCache')).values()].slice(0, MAX_CONTROL_CACHES)) {
-    const cache = parseTimelineCache(await read(pkg, path))
+    const cache = parseTimelineCache(await read(pkg, path, false, request.signal))
     if (cache && !timelineCaches.has(cache.name)) timelineCaches.set(cache.name, cache)
   }
   if (slicerCaches.size || timelineCaches.size) {
     for (const [cacheId, path] of [...(await workbookCaches(pkg, [])).entries()].slice(0, MAX_CONTROL_CACHES)) {
-      const root = await read(pkg, path, true)
+      const root = await read(pkg, path, true, request.signal)
       if (!root) continue
       const cache = parseCacheDefinition(root, cacheId, path, [])
       const id = cache.x14?.pivotCacheId
@@ -61,7 +65,9 @@ async function workbookControls(pkg: PackageReader, request: SheetControlsReques
     }
   }
   let extras: StylesExtras = { dxfs: [], tableStyles: new Map(), slicerStyles: new Map() }
-  if (request.styles) { try { extras = parseStylesExtras(request.styles.root, request.styles.colors) } catch { /* built-in styles only */ } }
+  if (request.stylesExtras) extras = request.stylesExtras
+  else if (request.styles) { try { extras = parseStylesExtras(request.styles.root, request.styles.colors) } catch { /* built-in styles only */ } }
+  if (request.signal?.aborted) throw new PackageError('cancelled', 'operation cancelled', request.sheetPath)
   return { slicerCaches, timelineCaches, pivotCaches, extras }
 }
 
@@ -71,14 +77,16 @@ export async function loadSheetControls(pkg: PackageReader, request: SheetContro
     if (!out.diagnostics.some(d => d.feature === diagnostic.feature && d.message === diagnostic.message)) out.diagnostics.push(diagnostic)
   }
   try {
+    if (request.signal?.aborted) throw new PackageError('cancelled', 'operation cancelled', request.sheetPath)
     let book = books.get(pkg)
     if (!book) { book = workbookControls(pkg, request); books.set(pkg, book) }
     const workbook = await book
+    if (request.signal?.aborted) throw new PackageError('cancelled', 'operation cancelled', request.sheetPath)
     const parts = async (ids: readonly string[], type: string, kind: 'slicer' | 'timeline') => {
       const rels = await relationships(pkg, request.sheetPath, type)
       const nodes: XmlNode[] = []
       for (const id of ids) {
-        const path = rels.get(id), node = path ? await read(pkg, path) : undefined
+        const path = rels.get(id), node = path ? await read(pkg, path, false, request.signal) : undefined
         if (node) nodes.push(node)
         else report({ kind: 'parse', feature: `${kind}-part-unreadable`, message: `The ${kind} part of relationship ${id} could not be read from ${request.sheetPath}` })
       }
@@ -98,7 +106,8 @@ export async function loadSheetControls(pkg: PackageReader, request: SheetContro
       built.diagnostics.forEach(report)
       if (built.model) out.timelines.set(part.name, built.model)
     }
-  } catch {
+  } catch (cause) {
+    if (cancellation(cause, request.signal)) throw cause
     report({ kind: 'parse', feature: 'slicer-controls-unreadable', message: `Slicers and timelines of ${request.sheetPath} could not be read; their fallback shapes are shown` })
   }
   return out

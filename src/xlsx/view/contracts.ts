@@ -5,14 +5,13 @@ import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 import type { TableMetadata } from '../formula/types'
-import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
+import type { SlicerStyleDef, TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
-import type { SlicerModel, TimelineModel } from '../pivots/slicers/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
 export const MAX_REGION_STYLE_TABLES = 512
-/** Largest built-in table-style payload measured across all 144 table/pivot names
- * with generated Office 2023 theme and table metadata: 25,154 B; 32 KiB leaves 1.3x headroom. */
+/** Largest built-in table-style descriptor measured across all 144 table/pivot
+ * names: 25,154 B excluding the shared workbook theme; 32 KiB leaves 1.3x headroom. */
 export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 32_768
 export const REGION_STYLE_REPLY_OVERHEAD_BYTES = 1_024
 /** Retained custom styles parsed from styles.xml are capped independently of source size. */
@@ -282,8 +281,8 @@ export interface RemotePivotDisplay {
   stamp: SourceStamp
   tables: RemoteRegionStyles['tables']
   pivotTables: readonly PivotTableDefinition[]
-  slicers: readonly SlicerModel[]
-  timelines: readonly TimelineModel[]
+  pivotStyles: readonly TableStyleDef[]
+  slicerStyles: readonly SlicerStyleDef[]
   theme?: ThemeContext
   diagnostics: readonly (TableStyleDiagnostic | PivotDiagnostic)[]
   requiredBytes?: number
