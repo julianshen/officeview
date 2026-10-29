@@ -621,7 +621,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   /** S13: worker-owned pivot/control parts become bounded descriptors; the receiver builds display roles/buttons. */
   async readPivotDisplay(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile: ProfileId = 'D'): Promise<RemotePivotDisplay> {
     const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
-    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: [], pivotStyles: [], slicerStyles: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
+    const empty = (requiredBytes?: number): RemotePivotDisplay => ({ sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: [], pivotStyles: [], diagnostics, ...(requiredBytes === undefined ? {} : { requiredBytes }) })
     const error = this.guard(options)
     if (error) { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: error.message }); return empty() }
     if (this.sheet.state !== 'complete') { diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: 'Pivot display metadata is unavailable until the sheet structure is complete.' }); return empty() }
@@ -638,9 +638,8 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     // Slicer and timeline appearance is resolved while reading drawings, which
     // retains the workbook's original style extras; these are not display-layer
     // descriptors and must not inflate the pivot-display reply.
-    const slicerStyles: RemotePivotDisplay['slicerStyles'] = []
     const result: RemotePivotDisplay = {
-      sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: parts.pivotTables, pivotStyles, slicerStyles,
+      sheetId: this.sheet.sheetId, stamp: this.stamp, tables: [], pivotTables: parts.pivotTables, pivotStyles,
       diagnostics,
       ...(this.workbook.tableStyleTheme ? { theme: this.workbook.tableStyleTheme } : {}),
     }

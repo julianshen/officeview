@@ -5,7 +5,7 @@ import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 import type { TableMetadata } from '../formula/types'
-import type { SlicerStyleDef, TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
+import type { TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
@@ -282,7 +282,6 @@ export interface RemotePivotDisplay {
   tables: RemoteRegionStyles['tables']
   pivotTables: readonly PivotTableDefinition[]
   pivotStyles: readonly TableStyleDef[]
-  slicerStyles: readonly SlicerStyleDef[]
   theme?: ThemeContext
   diagnostics: readonly (TableStyleDiagnostic | PivotDiagnostic)[]
   requiredBytes?: number

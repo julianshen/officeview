@@ -18,7 +18,7 @@ export interface TableStyleInfo {
 }
 
 export function sheetHasRegionStyles(sheet: XlsxSheet): boolean {
-  return Boolean(sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotRegions?.length || sheet.slicerRefs?.length || sheet.timelineRefs?.length)
+  return Boolean(sheet.regionStyles || sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotRegions?.length || sheet.pivotTables?.length || sheet.slicerRefs?.length || sheet.timelineRefs?.length)
 }
 
 function cellCoords(cell: string): { row: number; col: number } | undefined {

@@ -139,7 +139,7 @@ export class RemoteRegionStyleCache {
         const { buildSheetRegionLayer } = await import('../xlsx/tableStyles/regionLayer')
         const tableStyles = new Map(payload.tables.map(item => [item.def.name, item.def]))
         if ('pivotStyles' in payload) for (const def of payload.pivotStyles) tableStyles.set(def.name, def)
-        const slicerStyles = new Map('slicerStyles' in payload ? payload.slicerStyles.map(def => [def.name, def] as const) : [])
+        const slicerStyles = new Map()
         const extras = { dxfs: [], tableStyles, slicerStyles }
         const sheet = { name: sheetId, tables: payload.tables.map(item => item.table), ...('pivotTables' in payload ? { pivotTables: payload.pivotTables } : {}) } as import('../xlsx/types').XlsxSheet
         if (sheet.pivotTables?.length) await (await import('../xlsx/pivotLoader')).ensurePivotEngine([sheet])

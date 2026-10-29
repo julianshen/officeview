@@ -2482,7 +2482,7 @@ export class DocumentSession {
         const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
         try {
           const work = store.readPivotDisplay?.(options, query.grantBytes, charge, this.options.profile ?? 'D') ?? Promise.resolve({
-            sheetId: owner.sheetId, stamp: store.stamp, tables: [], pivotTables: [], pivotStyles: [], slicerStyles: [],
+            sheetId: owner.sheetId, stamp: store.stamp, tables: [], pivotTables: [], pivotStyles: [],
             diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: 'This source cannot resolve pivot display metadata.' }],
           })
           raw = work

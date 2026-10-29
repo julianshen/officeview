@@ -310,7 +310,7 @@ export function renderSheetViewport(
     // spanned), shared by the sparkline and pivot-button passes.
     let sourceWindow: { r0: number; c0: number; r1: number; c1: number } | undefined
     let sourceRect: ((row: number, col: number) => Rect | undefined) | undefined
-    if (plan.kind === 'detail' && geometry?.kind === 'ready' && (sheet.resolvedSparklines?.size || sheet.pivotRegions?.length)) {
+    if (plan.kind === 'detail' && geometry?.kind === 'ready' && (sheet.resolvedSparklines?.size || sheet.pivotRegions?.length || sheet.pivotTables?.length)) {
       const metrics = geometry.metrics
       const endX = Math.max(vx, vx + width - Number.EPSILON), endY = Math.max(vy, vy + height - Number.EPSILON)
       // Tile boxes may extend past the finite worksheet domain. Clamp only the

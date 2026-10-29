@@ -15,6 +15,7 @@ import type { XmlNode } from '../../../core/xml'
 import { PackageError, isPackageError } from '../../../core/package-error'
 import { parseStylesExtras } from '../../tableStyles/parseStylesExtras'
 import type { StylesExtras } from '../../tableStyles/model'
+import type { TableStyleSource } from '../../tableStyles/model'
 import { parseCacheDefinition } from '../parseCacheDefinition'
 import { relationships, workbookCaches, type PackageReader } from '../load'
 import type { PivotCacheDefinition } from '../model'
@@ -35,6 +36,21 @@ interface WorkbookControls {
   extras: StylesExtras
 }
 const books = new WeakMap<PackageReader, Promise<WorkbookControls>>()
+const preferredExtras = new WeakMap<PackageReader, WeakMap<TableStyleSource, Map<string, StylesExtras>>>()
+
+function extrasForPreferredStyles(pkg: PackageReader, source: TableStyleSource, names: ReadonlySet<string>): StylesExtras {
+  let sources = preferredExtras.get(pkg)
+  if (!sources) { sources = new WeakMap(); preferredExtras.set(pkg, sources) }
+  let byNames = sources.get(source)
+  if (!byNames) { byNames = new Map(); sources.set(source, byNames) }
+  const key = JSON.stringify([...names].sort())
+  let extras = byNames.get(key)
+  if (!extras) {
+    extras = parseStylesExtras(source.root, source.colors, names, names)
+    byNames.set(key, extras)
+  }
+  return extras
+}
 
 function cancellation(cause: unknown, signal?: AbortSignal): boolean {
   return Boolean(signal?.aborted || (isPackageError(cause) && cause.code === 'cancelled') || (cause instanceof Error && cause.name === 'AbortError'))
@@ -102,7 +118,7 @@ export async function loadSheetControls(pkg: PackageReader, request: SheetContro
       ...timelineParts.map(part => part.style ?? 'TimeSlicerStyleLight1'),
     ])
     const extras = request.styles
-      ? parseStylesExtras(request.styles.root, request.styles.colors, preferredStyles, preferredStyles)
+      ? extrasForPreferredStyles(pkg, request.styles, preferredStyles)
       : workbook.extras
     const controlsWorkbook = extras === workbook.extras ? workbook : { ...workbook, extras }
     for (const part of slicerParts) {
