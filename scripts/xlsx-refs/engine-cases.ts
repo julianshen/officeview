@@ -873,7 +873,8 @@ sortCase('collation-ascending', ['collation', 'collation-space-pair'], t => only
 sortCase('collation-descending', ['collation', 'collation-space-pair'], t => onlyRows(t, 'Code'), 'Code', F.Code, 'descending')
 add('sort-error-item', 'sort-filter-group', 21, ['sort-label', 'error-item'], S({
   route: 'applescript',
-  lines: t => [`set formula of range "A${ERROR_ROW}" of ${t.data} to "=NA()"`, `set value of range "D${ERROR_ROW}" of ${t.data} to 100`, source(t, ERROR_ROW),
+  // Column A is "@"-formatted in the seed, where a formula would stay literal text: reset the cell first.
+  lines: t => [`set number format of range "A${ERROR_ROW}" of ${t.data} to "General"`, `set formula of range "A${ERROR_ROW}" of ${t.data} to "=NA()"`, `set value of range "D${ERROR_ROW}" of ${t.data} to 100`, source(t, ERROR_ROW),
     autoSort(t, 'Region', 'ascending', 'Region')],
   markers: [fieldAttr(F.Region, 'sortType', 'ascending')], cacheMarkers: [/<e v="#N\/A"\/>/], measures: 'where an error item sorts among text items',
 }))
@@ -997,7 +998,7 @@ dateGroup('years-quarters-months', ['years', 'quarters', 'months'], {
 dateGroup('out-of-range', ['years'], { start: 43831, end: 45291, measures: '§5.1 out-of-range labels "<2020/1/1" and ">2023/12/31" (groups.ts refuses them)' })
 const numberGroup = (id: string, start: number, end: number, by: number, measures?: string) =>
   add(`group-number-${id}`, 'sort-filter-group', 21, ['number-group', ...(id !== 'range' ? ['group-out-of-range'] : [])], S({
-    route: 'applescript', lines: t => [...onlyRows(t, 'Units'), `group ${groupCell(t, 'Units')} start ${start} end ${end} by ${by}`],
+    route: 'applescript', lines: t => [...onlyRows(t, 'Units'), `group ${groupCell(t, 'Units')} start (${start}) end (${end}) by ${by}`],
     markers: [rowField(F.Units)], cacheMarkers: [/<rangePr [^>]*groupInterval="/],
     fallback: 'xml', xmlPrep: t => onlyRows(t, 'Units'), xmlEdit: p => groupNumbers(p, start, end, by), probe: 'group', measures,
   }))
