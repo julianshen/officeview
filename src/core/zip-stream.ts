@@ -39,6 +39,8 @@ export interface PartReadOptions {
   signal: AbortSignal; budget: ExpandedBudget; verifyCrc?: boolean /* default true */
   rangeReadBytes?: number /* default 262144 (spec 256 KiB input chunk) */
   outputBufferBytes?: number /* default 65536, max 262144; bounds expansion per step */
+  /** Internal prefix mode: stop after this many expanded bytes when the part is larger. */
+  stopAfterOutputBytes?: number
 }
 
 const SIG_LOCAL = 0x04034b50
@@ -358,7 +360,11 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
   const part = entry.name
   const signal = opts.signal
   const rangeReadBytes = checkBufferSize(opts.rangeReadBytes ?? DEFAULT_RANGE_READ, Number.MAX_SAFE_INTEGER, 'rangeReadBytes')
-  const out = new Uint8Array(checkBufferSize(opts.outputBufferBytes ?? DEFAULT_OUTPUT, MAX_OUTPUT, 'outputBufferBytes'))
+  const outputBufferBytes = checkBufferSize(opts.outputBufferBytes ?? DEFAULT_OUTPUT, MAX_OUTPUT, 'outputBufferBytes')
+  const stopAfter = opts.stopAfterOutputBytes
+  if (stopAfter !== undefined) checkBufferSize(stopAfter, Number.MAX_SAFE_INTEGER, 'stopAfterOutputBytes')
+  const prefixMode = stopAfter !== undefined && entry.uncompressedSize > stopAfter
+  const out = new Uint8Array(Math.min(outputBufferBytes, prefixMode ? stopAfter! : outputBufferBytes))
   const verifyCrc = opts.verifyCrc !== false
   throwIfAborted(signal, part)
 
@@ -395,10 +401,12 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
       throwIfAborted(signal, part)
       pos = end
       for (let at = 0; at < chunk.length; at += out.length) {
-        const n = Math.min(out.length, chunk.length - at)
+        const remaining = prefixMode ? stopAfter! - produced : out.length
+        const n = Math.min(out.length, chunk.length - at, remaining)
         out.set(chunk.subarray(at, at + n))
         accept(n)
         yield out.subarray(0, n)
+        if (prefixMode && produced >= stopAfter!) return
         throwIfAborted(signal, part)
       }
     }
@@ -421,7 +429,8 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
           readPos = end
           inPos = 0
         }
-        const step = await inflater.step(input, inPos, out)
+        const available = prefixMode ? Math.min(out.length, stopAfter! - produced) : out.length
+        const step = await inflater.step(input, inPos, out.subarray(0, available))
         throwIfAborted(signal, part)
         checkStep(step, inPos, input.length, out.length, part)
         inPos += step.inConsumed
@@ -429,6 +438,7 @@ export async function* openPart(src: RangeSource, entry: ZipEntryInfo, opts: Par
         if (step.outProduced > 0) {
           accept(step.outProduced)
           yield out.subarray(0, step.outProduced)
+          if (prefixMode && produced >= stopAfter!) return
         }
         if (step.status === 'end') break
         wantsInput = step.status === 'need-input'
@@ -463,4 +473,20 @@ export async function readPartBytes(src: RangeSource, entry: ZipEntryInfo, maxBy
     at += chunk.length
   }
   return result
+}
+
+/** Inflate at most maxBytes and stop immediately when the prefix is complete. */
+export async function readPartPrefixBytes(src: RangeSource, entry: ZipEntryInfo, maxBytes: number, opts: PartReadOptions): Promise<Uint8Array> {
+  checkBufferSize(maxBytes, Number.MAX_SAFE_INTEGER, 'maxBytes')
+  if (entry.uncompressedSize <= maxBytes) return readPartBytes(src, entry, maxBytes, opts)
+  const parts: Uint8Array[] = []
+  let length = 0
+  for await (const chunk of openPart(src, entry, { ...opts, stopAfterOutputBytes: maxBytes })) {
+    parts.push(chunk.slice())
+    length += chunk.length
+  }
+  const out = new Uint8Array(length)
+  let offset = 0
+  for (const part of parts) { out.set(part, offset); offset += part.length }
+  return out
 }

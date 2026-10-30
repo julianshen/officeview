@@ -5,7 +5,7 @@ import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../co
 import { sniffImageMime } from '../core/images'
 import { findSvgBlip, looksLikeSvg, scanSelfContainedSvg, svgCandidate, svgStateCandidate, type ImageSelection, type SvgCandidate, type SvgVerdict } from '../core/svg'
 import { parseGeometry } from '../drawing/geometry'
-import { XLSX_REQUIREMENTS, chartChoiceFeature, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage, type DrawingCoverageEntry } from '../drawing/coverage'
+import { XLSX_REQUIREMENTS, chartChoiceFeature, controlChoiceFeature, controlKind, coverageIssueMatchesEntry, supportedChoiceRequirements, xlsxNodeCoverage, xlsxRequirements, type DrawingCoverageEntry } from '../drawing/coverage'
 import { attemptedMalformedRelationshipIssue, cardChart, chartCard, markExhausted, malformedRelationshipAttempt, prepareCompatibleDrawingContent, prepareDrawingContent, reserveDrawingContent } from '../drawing/content'
 import { contentDiagnostic, drawingPartContext, DOCUMENT_DRAWING_NODE_LIMIT, DRAWING_GROUP_DEPTH, partRelationships, referencedPart, reserveDrawingNode } from '../drawing/parts'
 import { parseGroupShapeProperties, resolveDrawingStyle, type DrawingStyle, type ThemeContext } from '../drawing/style'
@@ -13,6 +13,7 @@ import { parseTextBody, textFontDefaults } from '../drawing/text-parse'
 import { parseVmlContainer, type VmlNode } from '../drawing/vml'
 import type { XlsxDrawing, XlsxDrawingAnchors, XlsxSheet } from './types'
 import type { XlsxChartModel } from './chartModel'
+import type { SheetControls, XlsxControlContent } from './pivots/slicers/model'
 import { loadChartModule } from './chartLoader'
 import { ANCHOR_ELEMENTS, DRAWING_ROOT, anchorId, anchorRecord, rootLocalName } from './anchorRecords'
 
@@ -157,6 +158,28 @@ const contentTheme = (theme: ThemeContext) => ({ colors: new Map(Object.entries(
 // still win (a placeholder follows).
 const contentAdapters = (theme: ThemeContext, pkg: OfficePackage) => ({ chartContext: drawingPartContext(pkg).chart, parseDiagramText: (body: XmlNode, shape: XmlNode) => parseTextBody(body, theme, undefined, textFontDefaults(getChildren(shape, 'style')[0], theme)), parseParagraph: (p: XmlNode) => parseTextBody({ p }, theme).paragraphs[0] })
 
+/**
+ * The worksheet's slicers and timelines while its drawings parse (Task 12), resolved by the lazy pivots chunk
+ * beforehand. Present only then: a slicer or timeline Choice is understood with them, else its Fallback is taken.
+ */
+const controlsFor = new WeakMap<OfficePackage, SheetControls>()
+/** A slicer or timeline frame's content: the named control the chunk resolved, else undefined. */
+function controlContent(pkg: OfficePackage, graphicData: XmlNode | undefined): XlsxControlContent | undefined {
+  const controls = controlsFor.get(pkg), kind = controls && controlKind(graphicData)
+  if (!kind) return undefined
+  const name = attrs(child(graphicData, kind === 'slicer' ? 'slicer' : 'timeslicer')).name
+  const slicer = kind === 'slicer' && name ? controls.slicers.get(name) : undefined
+  if (slicer) return { kind: 'slicer', slicer }
+  const timeline = kind === 'timeline' && name ? controls.timelines.get(name) : undefined
+  return timeline ? { kind: 'timeline', timeline } : undefined
+}
+/** The Choice's requirement set: the control prefixes count only for a Choice that is a slicer/timeline frame. */
+function choiceRequirements(pkg: OfficePackage, choice: XmlNode): readonly string[] {
+  if (!controlsFor.has(pkg)) return XLSX_REQUIREMENTS
+  const objects = orderedChildren(choice).filter(([name]) => name !== '#text')
+  return xlsxRequirements(objects.length > 0 && objects.every(([name, node]) => name === 'graphicFrame' && controlKind(child(child(node, 'graphic'), 'graphicData')) !== undefined))
+}
+
 /** Whether a graphic frame names a chart part (directly or inside a compatibility branch). */
 function referencesChart(node: XmlNode, depth = 0): boolean {
   if (depth > 8) return false
@@ -200,7 +223,7 @@ async function selectedAlternative(pkg: OfficePackage, owner: string, alternate:
   const failed = new Set<(typeof diagnostics)[number]>()
   const discardFailed = () => { for (let i = diagnostics.length - 1; i >= 0; i--) if (failed.has(diagnostics[i])) diagnostics.splice(i, 1) }
   for (const choice of getChildren(alternate, 'Choice')) {
-    if (!supportedChoiceRequirements(choice, XLSX_REQUIREMENTS).supported) continue
+    if (!supportedChoiceRequirements(choice, choiceRequirements(pkg, choice)).supported) continue
     const before = diagnostics.length
     if (await branchAvailable(pkg, owner, choice, theme, depth + 1, carrier)) { discardFailed(); return { branch: choice, mode: 'choice' } }
     for (const diagnostic of diagnostics.slice(before)) failed.add(diagnostic)
@@ -371,6 +394,12 @@ async function branchAvailable(pkg: OfficePackage, owner: string, node: XmlNode,
   for (const [name, descendant] of orderedChildren(node)) {
     if (name === '#text') continue
     if (name === 'sp' || name === 'pic' || name === 'grpSp' || name === 'cxnSp') { selected = true; continue }
+    // A slicer/timeline frame is available only when the pivots chunk resolved that control (Task 12).
+    if ((name === 'slicer' || name === 'timeslicer') && controlKind(node)) {
+      if (controlContent(pkg, node)) selected = true
+      else failed = true
+      continue
+    }
     if (name === 'AlternateContent') {
       if (await selectedAlternative(pkg, owner, descendant, theme, depth + 1, carrier)) selected = true
       else failed = true
@@ -565,6 +594,8 @@ async function parseObject(pkg: OfficePackage, owner: string, name: string, node
     await imageFor(pkg, owner, node, result, selections)
   } else if (name === 'pic') await imageFor(pkg, owner, node, result, selections)
   else if (name === 'graphicFrame' || name === 'contentPart') {
+    const control = name === 'graphicFrame' ? controlContent(pkg, child(child(node, 'graphic'), 'graphicData')) : undefined
+    if (control) { result.content = control; return result }
     const palette = contentTheme(theme), adapters = contentAdapters(theme, pkg)
     const graphic = child(child(node, 'graphic'), 'graphicData')
     const carrier = name === 'contentPart' ? { ...(parentCarrier ? { '@attrs': attrs(parentCarrier) } : {}), contentPart: node } : graphic
@@ -613,7 +644,7 @@ async function parseObjects(pkg: OfficePackage, owner: string, container: XmlNod
       if (selected?.unusable) for (const drawing of branch) if (drawing.content?.kind === 'xlsxChart') drawing.source.reason = `chart-fallback-unusable: ${drawing.content.chart.unsupported}`
       const carry = (drawings: XlsxDrawing[]): void => { for (const drawing of drawings) { if (drawing.image) drawing.chartFallback = selected!.chartFallback; carry(drawing.children ?? []) } }
       if (selected?.chartFallback) carry(branch)
-      const original = selected?.mode === 'fallback' ? chartChoiceFeature(node) : undefined
+      const original = selected?.mode === 'fallback' ? chartChoiceFeature(node) ?? controlChoiceFeature(node) : undefined
       if (original) for (const drawing of branch) drawing.source.feature = original
       // A selected chart Choice keeps its usable fallback for a refusal once its data is read (spec 6.3).
       // The whole branch is the unit: every object it produced gives way together.
@@ -652,8 +683,20 @@ function collectAnchorRecords(drawingRoot: XmlNode, owner: string, anchors: Xlsx
   }
 }
 
-/** Resolve each worksheet-owned drawing relationship and retain anchor order. */
-export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext, offsets?: AnchorOffsets): Promise<void> {
+/** Resolve each worksheet-owned drawing relationship and retain anchor order. `controls`: the sheet's slicers
+ * and timelines, when the lazy pivots chunk resolved them (their frames then take the Choice, else the Fallback). */
+export async function parseWorksheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext, offsets?: AnchorOffsets, controls?: SheetControls): Promise<void> {
+  const previous = controlsFor.get(pkg)
+  if (controls) controlsFor.set(pkg, controls)
+  else controlsFor.delete(pkg)
+  try { await parseSheetDrawings(pkg, sheet, worksheetPath, root, theme, offsets) }
+  finally {
+    if (previous) controlsFor.set(pkg, previous)
+    else controlsFor.delete(pkg)
+  }
+}
+
+async function parseSheetDrawings(pkg: OfficePackage, sheet: XlsxSheet, worksheetPath: string, root: XmlNode, theme: ThemeContext, offsets?: AnchorOffsets): Promise<void> {
   const context = drawingPartContext(pkg), start = context.diagnostics.length
   const imageSelections = new Map<string, ImageSelection>()
   sheet.drawingCoverage = []

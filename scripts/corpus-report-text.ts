@@ -1,6 +1,7 @@
 import { createRecordingContext, type TextIndex, type TextSpan } from '../src/core/search'
 import type { Paintable } from '../src/render/paint'
-import { computeMetrics, layoutCellBody, paintCellLayout, textMeasurer, mergeEdges, rowOverflowFromCells, textOverflowAllowance } from '../src/xlsx/render'
+import { computeMetrics, layoutCellBody, paintCellLayout, regionStyledCell, textMeasurer, mergeEdges, rowOverflowFromCells, textOverflowAllowance } from '../src/xlsx/render'
+import { regionStylesFor } from '../src/xlsx/tableStyleLoader'
 import { cellSourceRow } from '../src/xlsx/view/sheetCells'
 import { NO_OVERFLOW, type RowOverflowInput } from '../src/xlsx/view/textOverflow'
 import { RectangleIndex } from '../src/xlsx/view/structure'
@@ -109,6 +110,8 @@ export function measureXlsxTextCoverage(doc: XlsxDocument, pages: readonly Paint
     if (!limits.length && paintable && (paintable.spec.widthPx !== m.widthPx || paintable.spec.heightPx !== m.heightPx)) diagnose(unit, 'unavailable static page geometry correspondence', 'unavailable')
     const expected: Array<{ span: TextSpan; stratum: Stratum }> = []
     const measured = textMeasurer(context), edges = mergeEdges(sheet, m, x, y), merges = mergesFor(sheet.mergeRanges ?? [])
+    // The resident region layer renderSheet paints with: pivot/table-style bold, colour and indent.
+    const regionStyles = regionStylesFor(sheet)
     const rowBottom = new Map<number, number>()
     for (const range of sheet.mergeRanges ?? []) {
       const bottom = edges.row(range.maxRow + 1)
@@ -150,7 +153,7 @@ export function measureXlsxTextCoverage(doc: XlsxDocument, pages: readonly Paint
         context.save()
         try {
           context.textAlign = 'left'; context.textBaseline = 'alphabetic'
-          const body = layoutCellBody(context, sheet, cell, left, top, w, height, measured, range ? NO_OVERFLOW : textOverflowAllowance(input!, cell.col))
+          const body = layoutCellBody(context, sheet, regionStyledCell(regionStyles, cell), left, top, w, height, measured, range ? NO_OVERFLOW : textOverflowAllowance(input!, cell.col))
           result.formattedExpectedChars += chars(body.formattedText)
           const spans: TextSpan[] = []
           paintCellLayout(createRecordingContext(context, spans), body, { width: m.widthPx, height: m.heightPx }, 'content')

@@ -1,0 +1,3563 @@
+{
+  "TableStyleMedium28": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium27": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium26": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium25": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium24": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium23": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium22": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "TableStyleMedium21": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium20": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium19": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium18": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium17": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium16": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium15": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium14": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium13": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium12": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium11": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium10": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium9": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium8": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thick"
+      },
+      "totalRow": {
+        "top": "thick"
+      }
+    }
+  },
+  "TableStyleMedium7": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium6": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium5": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium4": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium3": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium2": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleMedium1": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight21": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight20": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight19": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight18": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight17": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight16": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight15": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleLight14": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight13": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight12": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight11": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight10": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight9": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight8": {
+    "elementCount": 9,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin"
+      },
+      "secondRowStripe": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin"
+      }
+    }
+  },
+  "TableStyleLight7": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleLight6": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleLight5": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleLight4": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleLight3": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleLight2": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleLight1": {
+    "elementCount": 7,
+    "borders": {
+      "wholeTable": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      }
+    }
+  },
+  "TableStyleDark11": {
+    "elementCount": 7,
+    "borders": {
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleDark10": {
+    "elementCount": 7,
+    "borders": {
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleDark9": {
+    "elementCount": 7,
+    "borders": {
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleDark8": {
+    "elementCount": 7,
+    "borders": {
+      "totalRow": {
+        "top": "double"
+      }
+    }
+  },
+  "TableStyleDark7": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "TableStyleDark6": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "TableStyleDark5": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "TableStyleDark4": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "TableStyleDark3": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "TableStyleDark2": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "TableStyleDark1": {
+    "elementCount": 7,
+    "borders": {
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      },
+      "firstColumn": {
+        "right": "medium"
+      },
+      "lastColumn": {
+        "left": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium28": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium27": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium26": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium25": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium24": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium23": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium22": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium21": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium20": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium19": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium18": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium17": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium16": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium15": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "totalRow": {
+        "left": "none",
+        "right": "none",
+        "vertical": "none"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium14": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium13": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium12": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium11": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium10": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium9": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium8": {
+    "elementCount": 12,
+    "borders": {
+      "headerRow": {
+        "top": "medium"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "medium"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "medium",
+        "right": "medium"
+      },
+      "firstSubtotalColumn": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleMedium7": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium6": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium5": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium4": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium3": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium2": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleMedium1": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "top": "double"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight28": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight27": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight26": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight25": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight24": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight23": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight22": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin"
+      }
+    }
+  },
+  "PivotStyleLight21": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight20": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight19": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight18": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight17": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight16": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight15": {
+    "elementCount": 11,
+    "borders": {
+      "headerRow": {
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight14": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "thirdColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight13": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "thirdColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight12": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "thirdColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight11": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "thirdColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight10": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "thirdColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight9": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "thirdColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight8": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium",
+        "horizontal": "thin"
+      },
+      "totalRow": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "firstColumn": {
+        "right": "thin"
+      },
+      "firstRowStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstSubtotalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight7": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight6": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight5": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight4": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight3": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight2": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleLight1": {
+    "elementCount": 11,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "totalRow": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin",
+        "horizontal": "thin",
+        "vertical": "thin"
+      },
+      "pageFieldLabels": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldValues": {
+        "top": "thin",
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark28": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark27": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark26": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark25": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark24": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark23": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark22": {
+    "elementCount": 12,
+    "borders": {
+      "wholeTable": {
+        "vertical": "thin"
+      },
+      "headerRow": {
+        "bottom": "medium"
+      },
+      "totalRow": {
+        "top": "medium"
+      }
+    }
+  },
+  "PivotStyleDark21": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark20": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark19": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark18": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark17": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark16": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark15": {
+    "elementCount": 11,
+    "borders": {
+      "firstRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalColumn": {
+        "left": "thin",
+        "right": "thin",
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnSubheading": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "bottom": "thin"
+      }
+    }
+  },
+  "PivotStyleDark14": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark13": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark12": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark11": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark10": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark9": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark8": {
+    "elementCount": 13,
+    "borders": {
+      "wholeTable": {
+        "left": "medium",
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "secondRowStripe": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "firstColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "secondColumnSubheading": {
+        "top": "medium"
+      },
+      "thirdColumnSubheading": {
+        "top": "medium"
+      },
+      "firstRowSubheading": {
+        "bottom": "medium"
+      },
+      "pageFieldLabels": {
+        "left": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      },
+      "pageFieldValues": {
+        "right": "medium",
+        "top": "medium",
+        "bottom": "medium"
+      }
+    }
+  },
+  "PivotStyleDark7": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  },
+  "PivotStyleDark6": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  },
+  "PivotStyleDark5": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  },
+  "PivotStyleDark4": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  },
+  "PivotStyleDark3": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  },
+  "PivotStyleDark2": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  },
+  "PivotStyleDark1": {
+    "elementCount": 10,
+    "borders": {
+      "wholeTable": {
+        "horizontal": "thin"
+      },
+      "headerRow": {
+        "bottom": "thin",
+        "horizontal": "thin"
+      },
+      "secondColumnStripe": {
+        "left": "thin",
+        "right": "thin"
+      },
+      "firstSubtotalRow": {
+        "bottom": "thin"
+      },
+      "firstRowSubheading": {
+        "top": "thin",
+        "bottom": "thin"
+      },
+      "pageFieldLabels": {
+        "horizontal": "thin"
+      },
+      "pageFieldValues": {
+        "horizontal": "thin"
+      }
+    }
+  }
+}

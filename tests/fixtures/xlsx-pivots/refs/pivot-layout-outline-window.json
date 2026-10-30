@@ -1,0 +1,11 @@
+{
+  "excelVersion": "16.114",
+  "route": "window-screenshot",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Pivot",
+  "source": "pivot-layout-outline.xlsx",
+  "range": "A1:J22",
+  "method": "Cropped on 2026-10-30 (Task 14) from the Task 10 window screenshot .superpowers/sdd/2026-10-29-xlsx-pivots/t10-excel/shot-pivot-layout-outline.png (Excel at 100% zoom, selection at L30, full-screen screencapture on a 1x display, 1 px per pt): x 277-1045, y 318-647, the cells A1:J22 from one pixel inside A1's top-left gridline through J22's right and bottom gridlines, as measure-field-buttons. No new capture.",
+  "capturedAt": "2026-10-29"
+}

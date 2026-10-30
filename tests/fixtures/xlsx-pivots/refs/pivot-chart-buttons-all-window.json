@@ -1,0 +1,10 @@
+{
+  "excelVersion": "16.114",
+  "route": "window-screenshot",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Pivot",
+  "source": "pivot-chart-buttons-all.xlsx",
+  "note": "Excel for Mac at 100% on a 1x display; every c14:pivotOptions dropZone flag and c16 showExpandCollapseFieldButtons is on, and no field button is drawn.",
+  "capturedAt": "2026-10-29"
+}

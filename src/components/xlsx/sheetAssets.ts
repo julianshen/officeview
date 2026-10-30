@@ -20,6 +20,8 @@ import type { ProfileId } from '../../xlsx/view/contracts'
 import type { RenderSheetAssets } from '../../xlsx/render'
 import { ensureChartPainter, hasXlsxCharts, type ChartReceiverLease } from '../../xlsx/chartLoader'
 import { ensureSparklinePainter } from '../../xlsx/sparklineLoader'
+import { ensureTableStyleEngine } from '../../xlsx/tableStyleLoader'
+import { sheetHasRegionStyles } from '../../xlsx/pivots/stub'
 import { acquireFonts } from '../../core/fonts/register'
 import { withFallbackFonts } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
@@ -241,6 +243,7 @@ export function prepareSheetAssets(doc: XlsxDocument, options: SheetAssetsOption
       // A paged sheet gets this shell only after its worker-resolved cache was
       // admitted; sheets without groups stay on the undefined-check path.
       if (sheet?.resolvedSparklines?.size) await ensureSparklinePainter([sheet])
+      if (sheet && sheetHasRegionStyles(sheet)) await ensureTableStyleEngine([sheet])
       let decodedBytes = 0, refused = 0
       // Keyed by the original picture, so overlapping leases share one decode.
       const take = (original: ImageCandidates): Promise<CanvasImageSource | undefined> | undefined => {

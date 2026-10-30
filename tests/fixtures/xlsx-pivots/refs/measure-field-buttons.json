@@ -1,0 +1,11 @@
+{
+  "excelVersion": "16.114",
+  "route": "window-screenshot",
+  "appearance": "screen",
+  "pxPerPt": 1,
+  "sheet": "Pivot",
+  "source": "pivot-page-field.xlsx",
+  "range": "A1:I10",
+  "method": "Opened in Excel at 100% zoom, selection moved to K30, full-screen screencapture on a 1x display (1 px per pt), cropped to the sheet cells A1:I10. copy picture omits field dropdown buttons, so they are measured here.",
+  "capturedAt": "2026-10-29"
+}

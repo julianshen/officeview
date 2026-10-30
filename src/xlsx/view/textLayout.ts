@@ -21,6 +21,9 @@ export interface Rect { x: number; y: number; width: number; height: number }
  * top-left is (x, y). The static renderer computes it at absolute sheet
  * coordinates and paints immediately; the viewer computes it at the origin,
  * caches it, and replays it under a tile-local translation. */
+/** Font underline and strikethrough of painted cell text, with the painted size in px. */
+export interface CellTextDecoration { underline?: XlsxCellStyle['underline']; strike?: boolean; sizePx: number }
+
 export interface CellBodyLayout {
   x: number; y: number; w: number; h: number
   fill?: string
@@ -29,9 +32,9 @@ export interface CellBodyLayout {
   text?:
     | { kind: 'plain'; text: string; font: string; color: string; tx: number; ty: number; width: number
       /** Horizontal clip where blocked neighbours stop overflow (S13); absent: unclipped. */
-      clipX?: { x0: number; x1: number } }
+      clipX?: { x0: number; x1: number }; decoration?: CellTextDecoration }
     | { kind: 'layout'; text: string; font: string; color: string; body: PptxTextBody; layout: TextLayout; clip: Rect;
-      rotation?: number; stacked?: boolean; wrap: boolean; lines: number }
+      rotation?: number; stacked?: boolean; wrap: boolean; lines: number; decoration?: CellTextDecoration }
   borders?: XlsxCellStyle['borders']
   borderColors?: XlsxCellStyle['borderColors']
 }
@@ -273,6 +276,8 @@ export function estimateLayoutBytes(key: string, body: CellBodyLayout): number {
   return bytes
 }
 
+/** The whole style is the key (JSON), so every field — underline, strike,
+ * fontName and indent included — keys the layout cache with no list to keep. */
 const styleKeys = new WeakMap<XlsxCellStyle, string>()
 function styleKey(style: XlsxCellStyle | undefined): string {
   if (!style) return ''

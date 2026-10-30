@@ -10,7 +10,7 @@ export interface DrawingCoverageEntry {
   feature: string
   status: 'native' | 'fallback' | 'unsupported' | 'malformed'
   /** Actual payload consumed by this static renderer, independent of MC branch. */
-  selectedRepresentation: 'native-shape' | 'picture' | 'raster-fallback' | 'cached-diagram' | 'chart' | 'chart-placeholder' | 'inkml' | 'textbox' | 'table' | 'group' | 'text-only' | 'blank' | 'none' | 'unverified'
+  selectedRepresentation: 'native-shape' | 'picture' | 'raster-fallback' | 'cached-diagram' | 'chart' | 'chart-placeholder' | 'inkml' | 'textbox' | 'table' | 'group' | 'text-only' | 'blank' | 'none' | 'unverified' | 'slicer' | 'timeline'
   representation: 'native' | 'choice' | 'fallback'
   reason?: string
   /** Why the retained paint assessment is inconclusive; source failure remains in reason. */
@@ -45,6 +45,11 @@ export function chartChoiceFeature(node: XmlNode): 'chart' | 'ChartEx' | undefin
   }
   return undefined
 }
+/** The original feature of an AlternateContent whose Choice holds a slicer or timeline frame. */
+export function controlChoiceFeature(node: XmlNode): 'slicer' | 'timeline' | undefined {
+  for (const choice of getChildren(node, 'Choice')) { const kind = controlKind(findGraphicData(choice)); if (kind) return kind }
+  return undefined
+}
 function findGraphicData(node: XmlNode, depth = 0): XmlNode | undefined {
   for (const [name, child] of orderedChildren(node)) {
     if (name === 'graphicData') return child
@@ -56,6 +61,7 @@ function findGraphicData(node: XmlNode, depth = 0): XmlNode | undefined {
 }
 export const featureOfKind = (content: DrawingContent<unknown, unknown> | undefined) => content?.kind === 'xlsxChart' ? content.chart.feature ?? 'chart' : content?.kind
 export function contentRepresentation<Paragraph, Text>(content: DrawingContent<Paragraph, Text>): DrawingCoverageEntry['selectedRepresentation'] {
+  if (content.kind === 'slicer' || content.kind === 'timeline') return content.kind
   if (content.kind === 'diagram' && content.textOnly) return 'text-only'
   const kind = content.kind
   return kind === 'diagram' ? 'cached-diagram' : kind === 'xlsxChart' ? (content.chart.unsupported ? 'chart-placeholder' : 'chart') : kind === 'ink' ? 'inkml' : kind === 'textbox' ? 'textbox' : 'none'
@@ -103,12 +109,28 @@ const knownNamespaceUris: Record<string, string> = {
   wps: 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape',
   wpg: 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
   wpc: 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
+  a14: 'http://schemas.microsoft.com/office/drawing/2010/main',
+  sle: 'http://schemas.microsoft.com/office/drawing/2010/slicer',
+  sle15: 'http://schemas.microsoft.com/office/drawing/2012/slicer',
+  tsle: 'http://schemas.microsoft.com/office/drawing/2012/timeslicer',
 }
 
 /** Each consumer's understood mc:Choice requirements; ChartEx Choices (matched by URI: the 2014 part namespace and the 2015/9/8, 2015/10/21 and 2016/5/10 Requires namespaces of the native fixtures) are attempted through the lazy chart engine (spec 6.2). */
 export const DRAWING_REQUIREMENTS = ['a', 'p', 'c', 'dgm', 'dsp', 'ink', 'cx', 'cx1', 'cx2', 'cx4']
 export const XLSX_REQUIREMENTS = ['a', 'xdr', 'c', 'dgm', 'dsp', 'ink', 'cx', 'cx1', 'cx2', 'cx4']
 export const DOCX_REQUIREMENTS = ['w', 'a', 'c', 'dgm', 'dsp', 'ink', 'wpi', 'wps', 'wpg', 'wpc', 'wp', 'pic', 'cx', 'cx1', 'cx2', 'cx4']
+/** Slicer and timeline frames (spec §3, Task 12): Excel's pivot-slicer Choices require `a14`, table slicers `sle15`,
+ * timelines `tsle`. Understood only once the lazy pivots chunk resolved the sheet's controls, and only for a
+ * Choice whose payload is such a frame (an `a14` equation or shape Choice keeps its Fallback). */
+export const XLSX_CONTROL_REQUIREMENTS = ['a14', 'sle', 'sle15', 'tsle']
+/** The per-call worksheet requirement set: with or without the slicer/timeline capability. */
+export const xlsxRequirements = (controls: boolean): readonly string[] => controls ? [...XLSX_REQUIREMENTS, ...XLSX_CONTROL_REQUIREMENTS] : XLSX_REQUIREMENTS
+const SLICER_URIS = new Set(['http://schemas.microsoft.com/office/drawing/2010/slicer', 'http://schemas.microsoft.com/office/drawing/2012/slicer'])
+/** A graphicData holding a slicer (`sle:slicer`) or timeline (`tsle:timeslicer`) frame. */
+export function controlKind(graphicData: XmlNode | undefined): 'slicer' | 'timeline' | undefined {
+  const uri = attrs(graphicData).uri
+  return uri === 'http://schemas.microsoft.com/office/drawing/2012/timeslicer' ? 'timeline' : uri !== undefined && SLICER_URIS.has(uri) ? 'slicer' : undefined
+}
 /** MC Requires identifies namespace URIs, not the lexical prefix spelling. */
 export function supportedChoiceRequirements(choice: XmlNode, supported: readonly string[]): { supported: boolean; unknown?: string } {
   const allowedUris = new Set(supported.map(prefix => knownNamespaceUris[prefix]).filter(Boolean))

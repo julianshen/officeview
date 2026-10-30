@@ -6,7 +6,7 @@
 import { attrs, getChildren, orderedChildren, textOf, type XmlNode } from '../core/xml'
 import { parseDrawingColor, resolveDrawingColor, type ThemeContext } from '../drawing/style'
 import type { ChartParseContext } from './context'
-import type { ChartDiagnostic, ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPoints, ChartRange, ChartSeries } from './model'
+import type { ChartDiagnostic, ChartManualLayout, ChartTextStyle, ChartAxis, ChartAxisBinding, ChartFamily, ChartGroup, ChartModel, ChartPivotSource, ChartPoints, ChartRange, ChartSeries } from './model'
 import { PointWriter, knownError, pointBytes, stringBytes } from './points'
 import { ChartRefusal, adoptChartModel, modelOwner } from './own'
 import { admitChartModel } from './axisBinding'
@@ -378,6 +378,35 @@ function dispNaAsBlank(chart: XmlNode): boolean | undefined {
   return undefined
 }
 
+const PIVOT_OPTIONS_URI = '{781A3756-C4B2-4CAC-9D66-4F8BD8637D16}'
+const PIVOT_OPTIONS16_URI = '{E28EC0CA-F0BB-4C9C-879D-F8772B89E7AC}'
+
+/** Read pivot chart link and button options from c:pivotSource and x14/c16 extensions. */
+function readPivotSource(root: XmlNode, chart: XmlNode): ChartPivotSource | undefined {
+  const pivotSource = child(root, 'pivotSource') ?? child(chart, 'pivotSource')
+  if (!pivotSource) return undefined
+  const name = textOf(child(pivotSource, 'name'))
+  const fmtId = finite(val(child(pivotSource, 'fmtId'))) ?? 0
+  let pivotOptions: XmlNode | undefined
+  let pivotOptions16: XmlNode | undefined
+  for (const list of [child(root, 'extLst'), child(chart, 'extLst')]) {
+    for (const ext of getChildren(list, 'ext')) {
+      const u = attrs(ext).uri?.toUpperCase()
+      if (u === PIVOT_OPTIONS_URI) pivotOptions ??= child(ext, 'pivotOptions')
+      else if (u === PIVOT_OPTIONS16_URI) pivotOptions16 ??= child(ext, 'pivotOptions16')
+    }
+  }
+  const dropZones = {
+    filter: bool(child(pivotOptions, 'dropZoneFilter'), false),
+    categories: bool(child(pivotOptions, 'dropZoneCategories'), false),
+    data: bool(child(pivotOptions, 'dropZoneData'), false),
+    series: bool(child(pivotOptions, 'dropZoneSeries'), false),
+    visible: bool(child(pivotOptions, 'dropZonesVisible'), false),
+  }
+  const showExpandCollapse = bool(child(pivotOptions16, 'showExpandCollapseFieldButtons'), false)
+  return { name, fmtId, dropZones, showExpandCollapse }
+}
+
 /** Read one chart part. `undefined` for a part that is not a chart document. */
 /** `_context` is the chart's parse context (F0 threads it; A1a/D0 consume it). */
 export function parseXlsxChart(root: XmlNode, theme: ThemeContext | undefined, context?: ChartParseContext): ChartModel | undefined {
@@ -716,6 +745,9 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
   const legendDeleted = deleted.size ? Uint32Array.from([...deleted].sort((a, b) => a - b)) : undefined
   const blanks = val(child(chart, 'dispBlanksAs'))
   const naAsBlank = dispNaAsBlank(chart)
+  const pivot = readPivotSource(root, chart)
+  // The model keeps the pivot table's name for Stage 3: a hostile multi-megabyte c:pivotSource/c:name is counted.
+  if (pivot) charge(stringBytes(pivot.name))
   const layouts = [plot, child(chart, 'title'), legend]
   for (const node of layouts) if (child(child(node, 'layout'), 'manualLayout')) charge(128)
   if (child(root, 'txPr')) charge(64)
@@ -756,6 +788,7 @@ function readChart(root: XmlNode, chart: XmlNode, plot: XmlNode, theme: ThemeCon
     ...(chartAreaDefault ? { chartAreaDefault } : {}),
     fontFamily: minorFont,
     fontSizePt: sizeRaw !== undefined ? Math.max(6, Math.min(72, sizeRaw / 100)) : 10,
+    ...(pivot ? { pivot } : {}),
     ...(unsupported ? { unsupported } : {}),
     ...(truncated || cut.truncated ? { truncated: true } : {}),
     ...(titleDiagnostics.length || contourClips.length ? { diagnostics: [...titleDiagnostics, ...contourClips.map(grid => { const d = contourGridDiagnostic(grid); charge(stringBytes(d.code) + stringBytes(d.reason)); return d })] } : {}),

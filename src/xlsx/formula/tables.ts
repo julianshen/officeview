@@ -112,6 +112,15 @@ export function parseTableMetadata(
   if (headerRowCount === undefined) return undefined
   const totalsRowCount = parseCount(a.totalsRowCount, 0)
   if (totalsRowCount === undefined) return undefined
+  const tsi = getChildren(table, 'tableStyleInfo')[0]
+  const tsia = tsi ? attrs(tsi) : undefined
+  const styleInfo = tsia ? {
+    ...(typeof tsia.name === 'string' && tsia.name !== '' ? { name: tsia.name } : {}),
+    showFirstColumn: tsia.showFirstColumn === '1' || tsia.showFirstColumn === 'true',
+    showLastColumn: tsia.showLastColumn === '1' || tsia.showLastColumn === 'true',
+    showRowStripes: tsia.showRowStripes === '1' || tsia.showRowStripes === 'true',
+    showColumnStripes: tsia.showColumnStripes === '1' || tsia.showColumnStripes === 'true',
+  } : undefined
   // Every CT_TableColumn carries required id and name together at its
   // original position. A column missing either essential field invalidates
   // the whole table part: fields are rejected, never filtered or shifted.
@@ -136,6 +145,7 @@ export function parseTableMetadata(
     headerRowCount,
     totalsRowCount,
     columns,
+    ...(styleInfo ? { styleInfo } : {}),
   }
 }
 

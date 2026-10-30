@@ -3,7 +3,7 @@
  * Layout mimics Excel defaults: default col width 8.43 chars (~64px), row
  * height 15pt (20px). Cell geometry is fixed; no reflow needed.
  */
-import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxSheet } from './types'
+import type { XlsxCell, XlsxCellStyle, XlsxDrawing, XlsxMergeRange, XlsxRow, XlsxSheet } from './types'
 import type { PptxTextBody } from '../pptx/types'
 import { layoutTextBody, type MeasureText, type TextLayout } from '../drawing/text-layout'
 import { resolveColor } from '../core/color'
@@ -25,9 +25,13 @@ export { textOverflowAllowance, rowOverflowFromCells, cellBlocksOverflow, type O
 import { RectangleIndex } from './view/structure'
 import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
-import type { CellBodyLayout } from './view/textLayout'
-import { CELL_FONT_STACK, cellFontString } from './cellFont'
+import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
+import { cellFaceAvailable, cellFontFamily as cellFaceFamily, cellFontString, isCalibriFace } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
+import { paintControlIn, paintPivotButtonsIn } from './pivotLoader'
+import { intersectInterval, mayHaveRegionGrid, regionGrid, subtractIntervals } from './regionGrid'
+import { isTableStyleEngineLoaded, regionStylesFor } from './tableStyleLoader'
+import type { RegionStyleLayer } from './tableStyles/regionLayer'
 
 export interface GridMetrics {
   colWidthsPx: number[]
@@ -80,7 +84,7 @@ export function cellTextRotation(rotation: number | undefined): { radians: numbe
  * metric-compatible Carlito, then common sans faces with the same metrics in
  * every context, then the generic.
  */
-const cellFontFamily = (family: string): string => family === 'Calibri' ? CELL_FONT_STACK : family
+const cellFontFamily = (family: string): string => cellFaceFamily(family)
 /** Calibri (= Carlito) advance widths for U+0020..U+007E in 1/2048 em, regular
  * and bold: Excel's own layout metrics for its default face, so '#' overflow
  * follows what Excel shows even where the fallback face is wider. */
@@ -140,23 +144,39 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
   return { ...layout, lines: layout.lines.map(line => ({ ...line, segments: line.segments.map(segment => ({ ...segment,
     transform: segment.transform ? { ...segment.transform, e: segment.transform.e + dx, f: segment.transform.f + dy } : { a: 1, b: 0, c: 0, d: 1, e: segment.x + dx, f: line.baseline + dy } })) })) }
 }
+/** The indent layoutCellText applies to a cell `w` wide: alignment@indent narrows the box
+ * on the aligned side for left, right and distributed text, never for rotated or stacked
+ * text, and leaves at least one pixel of interior. layoutCellBody fits, shrinks and
+ * '#'-fills numbers against the same narrowed width (PR #55 r4). */
+function textIndent(style: XlsxCellStyle | undefined, numeric: boolean, center: boolean, w: number, indentPx: number): number {
+  if (!(indentPx > 0)) return 0
+  const mapped = cellTextRotation(style?.textRotation)
+  if (mapped && ('stacked' in mapped || ('radians' in mapped && mapped.radians))) return 0
+  const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? numeric ? 'right' : center ? 'center' : 'left' : style.horizontal
+  return horizontal === 'left' || horizontal === 'right' || horizontal === 'distributed' ? Math.min(indentPx, Math.max(0, w - PADDING_L - PADDING_R - 1)) : 0
+}
 /** Wrapped text chooses a measured local multiline box that fits its rotated
  * cell interior. No-wrap or physically oversized text keeps authored font size
  * and clips to the cell; source remains complete, with clip-aware indexing.
  * Layout and paint are separate so the viewer can cache the layout (computed
  * in a box at the origin) and replay it; the static path runs both back to back
  * at absolute coordinates, exactly as before. */
-function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
+function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: XlsxCellStyle | undefined, numeric: boolean, x: number, y: number, w: number, h: number, color: string, center = false, overflow?: OverflowAllowance, indentPx = 0): Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }> {
   const mapped = cellTextRotation(style?.textRotation), stacked = mapped && 'stacked' in mapped
   const radians = mapped && 'radians' in mapped ? mapped.radians : 0
   const defaultHorizontal = numeric ? 'right' : center ? 'center' : 'left'
   const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? defaultHorizontal : style.horizontal
   const vertical = style?.vertical ?? 'center'
   const wrap = style?.wrapText ?? !!stacked
+  const fontFamily = style?.fontName ?? 'Calibri'
+  // alignment@indent (left, right, distributed) narrows the box the text is
+  // fitted and aligned in, from the aligned side; the clip stays the cell.
+  const indent = textIndent(style, numeric, center, w, indentPx)
+  const box = { x: horizontal === 'right' ? x : x + indent, y, w: w - indent, h }
   const body: PptxTextBody = { direction: stacked ? 'wordArtVertRtl' : 'horz', anchor: 't', wrap,
     insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0,
-    paragraphs: [{ runs: [{ text, fontSizePt: style?.fontSizePt ?? 10, fontFamily: 'Calibri', bold: style?.bold, italic: style?.italic, color }], align: 'left', level: 0,
-      defaultProperties: { fontSizePt: style?.fontSizePt ?? 10, fontFamily: 'Calibri', bold: style?.bold, italic: style?.italic, color }, wrapWhitespace: true,
+    paragraphs: [{ runs: [{ text, fontSizePt: style?.fontSizePt ?? 10, fontFamily, bold: style?.bold, italic: style?.italic, color }], align: 'left', level: 0,
+      defaultProperties: { fontSizePt: style?.fontSizePt ?? 10, fontFamily, bold: style?.bold, italic: style?.italic, color }, wrapWhitespace: true,
       ...(stacked ? {} : { wordLineSpacing: { rule: 'auto', value: 240 } }) }] }
   ctx.save()
   try {
@@ -170,7 +190,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
       layout = layoutTextBody(body, w, h, measure)
     } else {
       const cosine = Math.abs(Math.cos(radians)), sine = Math.abs(Math.sin(radians))
-      const innerW = Math.max(1, w - PADDING_L - PADDING_R), innerH = Math.max(1, h - 2 * PADDING_L)
+      const innerW = Math.max(1, box.w - PADDING_L - PADDING_R), innerH = Math.max(1, h - 2 * PADDING_L)
       const maxFlow = Math.min(cosine > 1e-10 ? innerW / cosine : Infinity, sine > 1e-10 ? innerH / sine : Infinity)
       const advance = measure(text, body.paragraphs[0].runs[0]).width
       const metrics = measure('Mg', body.paragraphs[0].runs[0])
@@ -199,7 +219,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
       layout = chosen ?? rotatedLayout(layoutTextBody(body, widths[0], h, measure), radians)
     }
     const bounds = textLayoutBounds(layout, measure)
-    const placed = alignedLayout(layout, bounds, { x, y, w, h }, horizontal, vertical)
+    const placed = alignedLayout(layout, bounds, box, horizontal, vertical)
     // One unwrapped, unrotated line may run into empty neighbours (S13); the
     // clip widens by the room it needs, up to the allowance.
     let clipX0 = x, clipX1 = x + w
@@ -264,6 +284,10 @@ function gridCoverageLimits(sheet: XlsxSheet, rows: number, cols: number): Stati
   for (const r of sheet.mergeRanges ?? []) {
     if (validMerge(r)) { maxRow = Math.max(maxRow, r.maxRow); maxCol = Math.max(maxCol, r.maxCol) }
   }
+  for (const rect of regionStylesFor(sheet)?.rects ?? []) {
+    maxRow = Math.max(maxRow, Math.min(rows - 1, rect.maxRow))
+    maxCol = Math.max(maxCol, Math.min(cols - 1, rect.maxCol))
+  }
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
       if (!isValidCoordinate(row, col)) continue
@@ -302,6 +326,8 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   for (const row of sheet.rows) for (const c of row.cells) maxCol = Math.max(maxCol, c.col)
   // Merged ranges are part of the painted grid even where only the anchor is populated.
   for (const r of merges) maxCol = Math.max(maxCol, r.maxCol)
+  const styleRegions = regionStylesFor(sheet)?.rects ?? []
+  for (const rect of styleRegions) maxCol = Math.max(maxCol, Math.min(MAX_GRID_COLS - 1, rect.maxCol))
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) if (isValidCoordinate(row, col)) maxCol = Math.max(maxCol, col)
   }
@@ -338,6 +364,7 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
   }
   if (inconsistent) diagnostics.push({ code: 'inconsistent-row-coordinate', message: `${inconsistent} cell(s) carry a reference outside their row record; placed by the cell reference` })
   for (const r of merges) maxRow = Math.max(maxRow, r.maxRow)
+  for (const rect of styleRegions) maxRow = Math.max(maxRow, Math.min(MAX_GRID_ROWS - 1, rect.maxRow))
   for (const [row, columns] of sheet.resolvedSparklines ?? []) {
     for (const col of columns.keys()) {
       if (isValidCoordinate(row, col)) { maxRow = Math.max(maxRow, row); break }
@@ -367,6 +394,11 @@ export function computeMetrics(sheet: XlsxSheet): GridMetrics {
       ...(diagnostics.length ? { diagnostics } : {}),
     }
   }
+  const clippedStyleRegions = styleRegions.filter(rect => rect.maxRow >= MAX_GRID_ROWS || rect.maxCol >= MAX_GRID_COLS)
+  if (clippedStyleRegions.length) diagnostics.push({
+    code: 'table-style-region-clipped',
+    message: `${clippedStyleRegions.length} resolved table style region(s) extend beyond the static grid and were clipped to ${MAX_GRID_ROWS} rows by ${MAX_GRID_COLS} columns`,
+  })
   if (!drawing) return { colWidthsPx, rowHeightsPx, widthPx: gridWidth, heightPx: gridHeight, ...extras([]) }
   const visual = transformedDrawingBounds(sheet.drawings!)
   const requested = { right: Math.max(gridWidth, visual.right), bottom: Math.max(gridHeight, visual.bottom) }
@@ -721,6 +753,13 @@ export interface SheetViewport {
   width: number
   height: number
 }
+/** The cell as the static painter lays it out: its own style resolved through the
+ * sheet's resident pivot/table region layer (print mode). Shared with the corpus
+ * recording check so its expected spans use the bold, colour and indent painted. */
+export function regionStyledCell(regionStyles: RegionStyleLayer | undefined, cell: XlsxCell): XlsxCell {
+  const resolvedStyle = regionStyles?.styleAt(cell.row, cell.col, cell.style) ?? cell.style
+  return resolvedStyle === cell.style ? cell : { ...cell, style: resolvedStyle }
+}
 export function renderSheet(
   sheet: XlsxSheet,
   ctx: CanvasRenderingContext2D,
@@ -751,6 +790,11 @@ export function renderSheet(
   // measurement is cached by face+text.
   const vp = viewport ?? { x: 0, y: 0, width: m.widthPx, height: m.heightPx }
   const measured = textMeasurer(ctx)
+  const regionStyles = regionStylesFor(sheet)
+  if (!isTableStyleEngineLoaded() && (sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length)) {
+    const diagnostics = (sheet.diagnostics ??= [])
+    if (!diagnostics.some(d => d.feature === 'table-style-engine-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'table-style-engine-unavailable', message: 'Table styles could not be loaded; table cells paint with their stored formatting only' })
+  }
   if (viewport) ctx.translate(-vp.x, -vp.y)
   const intersects = (x: number, y: number, w: number, h: number): boolean =>
     x < vp.x + vp.width && x + w > vp.x && y < vp.y + vp.height && y + h > vp.y
@@ -773,7 +817,11 @@ export function renderSheet(
   }
   const extent = { width: m.widthPx, height: m.heightPx }
   const laidOut: CellBodyLayout[] = []
-  for (const row of sheet.rows) {
+  let paintRows: readonly XlsxRow[] = sheet.rows
+  // Styled empty table cells are real paint surfaces. Add them only where no
+  // source cell exists, and only where this request paints (see syntheticRegionRows).
+  if (regionStyles) paintRows = syntheticRegionRows(sheet.rows, regionStyles, ranges, colX, rowY, edges, vp)
+  for (const row of paintRows) {
     // A malformed row may name many source rows. Partition once so occupancy
     // construction never rescans the container for each source row.
     const sourceCells = new Map<number, XlsxCell[]>()
@@ -784,9 +832,9 @@ export function renderSheet(
       cells.push(cell)
     }
     const rowOverflow = new Map<number, RowOverflowInput>()
-    const overflowFor = (cell: XlsxCell, source: number): OverflowAllowance => {
-      let input = rowOverflow.get(source)
-      if (!input) rowOverflow.set(source, input = rowOverflowFromCells(sourceCells.get(source)!, merges.inRow(source), edges.col, MAX_COLS - 1))
+    const overflowFor = (cell: XlsxCell, sourceRow: number): OverflowAllowance => {
+      let input = rowOverflow.get(sourceRow)
+      if (!input) rowOverflow.set(sourceRow, input = rowOverflowFromCells(sourceCells.get(sourceRow)!, merges.inRow(sourceRow), edges.col, MAX_COLS - 1))
       return textOverflowAllowance(input, cell.col)
     }
     for (const cell of row.cells) {
@@ -808,22 +856,27 @@ export function renderSheet(
       const hh = rng ? edges.row(rng.maxRow + 1) - y : h
       // Collapsed (authored-hidden) rows/columns produce no fill or text (spec §5.3).
       if (!(w > 0 && hh > 0) || !intersects(x, y, w, hh)) continue
+      // The region layer is consulted only for cells this request paints; it
+      // changes the style alone, never the coordinates culled above.
+      const styledCell = regionStyledCell(regionStyles, cell)
       // Fills go down now; text after every fill, so overflow into an empty
       // formatted neighbour stays visible (Excel draws it over the fill).
-      const layout = layoutCellBody(ctx, sheet, cell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(cell, source))
+      const layout = layoutCellBody(ctx, sheet, styledCell, x, y, w, hh, measured, rng ? NO_OVERFLOW : overflowFor(styledCell, source))
       paintCellLayout(ctx, layout, extent, 'fill')
       laidOut.push(layout)
     }
   }
+  const cellBox = (row: number, col: number) => {
+    if (row < 0 || row >= rowHeightsPx.length || col < 0 || col >= colWidthsPx.length) return undefined
+    const merge = merges.anchorAt(row, col)
+    const x = colX[col], y = rowY[row]
+    const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[col]
+    const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[row]
+    return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
+  }
+  const grid = { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }
   if (sheet.resolvedSparklines?.size) {
-    const painted = paintSparklinesIn(ctx, sheet, (row, col) => {
-      if (row < 0 || row >= rowHeightsPx.length || col < 0 || col >= colWidthsPx.length) return undefined
-      const merge = merges.anchorAt(row, col)
-      const x = colX[col], y = rowY[row]
-      const w = merge ? edges.col(merge.maxCol + 1) - x : colWidthsPx[col]
-      const h = merge ? edges.row(merge.maxRow + 1) - y : rowHeightsPx[row]
-      return intersects(x, y, w, h) ? { x, y, width: w, height: h } : undefined
-    }, { r0: 0, c0: 0, r1: rowHeightsPx.length - 1, c1: colWidthsPx.length - 1 }, { zoom: sparklineScale, dpr: 1 })
+    const painted = paintSparklinesIn(ctx, sheet, cellBox, grid, { zoom: sparklineScale, dpr: 1 })
     if (!painted) {
       const diagnostics = (sheet.diagnostics ??= [])
       if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
@@ -845,9 +898,15 @@ export function renderSheet(
   const c0 = firstCol < 0 ? 0 : firstCol, c1 = lastCol < 0 ? colWidthsPx.length : lastCol
   // Excel also hides a vertical gridline under text spilling across it.
   const spills = spillBands(laidOut)
+  // Pivot interiors and filled styled-region cells hide theirs, or cover them with the fill (regionGrid.ts); a
+  // sheet with no pivot and no styled table pays only the guard (spec §8).
+  // The rule is asked only about cells beside the part of each line this request
+  // can show (see staticRegionLines), never along the whole table.
+  const region = mayHaveRegionGrid(sheet) ? staticRegionLines(sheet, colX, rowY, colWidthsPx.length, rowHeightsPx.length, vp) : undefined
   for (let c = c0; c <= c1; c++) {
     const x = colX[c]
-    for (const [y1, y2] of withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)) {
+    const open = withoutSpills(visibleSegments(c, ranges, rowY, gridHeight, true), x, spills)
+    for (const [y1, y2] of region ? region.lines(open, c, true) : open) {
       if (y2 <= vp.y || y1 >= vp.y + vp.height) continue
       ctx.moveTo(x + 0.5, y1 + 0.5)
       ctx.lineTo(x + 0.5, y2 + 0.5)
@@ -858,17 +917,137 @@ export function renderSheet(
   const r0 = firstRow < 0 ? 0 : firstRow, r1 = lastRow < 0 ? rowHeightsPx.length : lastRow
   for (let r = r0; r <= r1; r++) {
     const y = rowY[r]
-    for (const [x1, x2] of visibleSegments(r, ranges, colX, gridWidth, false)) {
+    const open = visibleSegments(r, ranges, colX, gridWidth, false)
+    for (const [x1, x2] of region ? region.lines(open, r, false) : open) {
       if (x2 <= vp.x || x1 >= vp.x + vp.width) continue
       ctx.moveTo(x1 + 0.5, y + 0.5)
       ctx.lineTo(x2 + 0.5, y + 0.5)
     }
   }
   ctx.stroke()
+  if (region) paintCoveredLines(ctx, region.covered)
   // Explicit formatting wins over both gridlines and neighboring cell fills.
   for (const paint of paintBorders) paint()
+  // Page mode and export draw the pivot buttons Excel prints (§7.10).
+  if (sheet.pivotRegions?.length || sheet.pivotTables?.length) paintPivotButtonsIn(ctx, sheet, cellBox, grid, 'print')
   paintSheetDrawings(sheet, sheet.drawings ?? [], ctx, prepared)
   } finally { ctx.restore() }
+}
+
+/** @internal Work done by syntheticRegionRows, for allocation-bound tests only. */
+export const syntheticCellWork = { created: 0, rowsCopied: 0 }
+
+/** The bands [starts[i], starts[i + 1]) of i in [0, n) that meet the open interval
+ * (from, to), as an inclusive index range (first > last when none do). `starts`
+ * holds n + 1 nondecreasing prefix sums. */
+function bandWindow(starts: readonly number[], n: number, from: number, to: number): [number, number] {
+  let lo = 0, hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid + 1] > from) hi = mid; else lo = mid + 1 }
+  const first = lo
+  lo = 0; hi = n
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid] < to) lo = mid + 1; else hi = mid }
+  return [first, lo - 1]
+}
+
+/** Ascending over ([lo, hi] ∪ extra) ∩ [a, b]; `extra` is sorted and unique. */
+function eachAscending(a: number, b: number, lo: number, hi: number, extra: readonly number[] | undefined, visit: (i: number) => void): void {
+  const s = Math.max(a, lo), e = Math.min(b, hi)
+  const n = extra?.length ?? 0
+  let k = 0
+  if (s <= e) {
+    for (; k < n && extra![k] < s; k++) if (extra![k] >= a) visit(extra![k])
+    for (let i = s; i <= e; i++) visit(i)
+    while (k < n && extra![k] <= e) k++
+  }
+  for (; k < n && extra![k] <= b; k++) if (extra![k] >= a) visit(extra![k])
+}
+
+/**
+ * The rows to paint with a synthetic cell for each empty styled region cell this
+ * request can paint (PR #55 P1). The paint loop keeps a cell only when its own box,
+ * widened to its merge when it anchors one, meets the viewport; so the cells needed
+ * are the region's cells in the window rows × window columns, plus anchors outside
+ * the window whose merged box reaches in. Nothing else is widened: a cell whose own
+ * box misses the page is culled with its borders, and a synthetic cell holds no
+ * value, so it never blocks a neighbour's text overflow. The traversal visits the
+ * kept cells in the order a whole-region walk would (rows by rect, then ascending),
+ * so paint order, and with it every pixel, is unchanged. Only rows that gain a cell
+ * are copied; the rest are passed through.
+ */
+function syntheticRegionRows(
+  rows: readonly XlsxRow[],
+  regionStyles: RegionStyleLayer,
+  ranges: readonly XlsxMergeRange[],
+  colX: readonly number[],
+  rowY: readonly number[],
+  edges: { row(index: number): number; col(index: number): number },
+  vp: SheetViewport,
+): readonly XlsxRow[] {
+  const nRows = rowY.length - 1, nCols = colX.length - 1
+  const [wr0, wr1] = bandWindow(rowY, nRows, vp.y, vp.y + vp.height)
+  const [wc0, wc1] = bandWindow(colX, nCols, vp.x, vp.x + vp.width)
+  // Merge anchors outside the window whose merged box meets the viewport, by row.
+  const anchorCols = new Map<number, number[]>()
+  for (const r of ranges) {
+    const row = r.minRow, col = r.minCol
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row >= nRows || col >= nCols) continue
+    if (row >= wr0 && row <= wr1 && col >= wc0 && col <= wc1) continue
+    const x = colX[col], y = rowY[row]
+    const w = edges.col(r.maxCol + 1) - x, h = edges.row(r.maxRow + 1) - y
+    if (!(w > 0 && h > 0) || !(x < vp.x + vp.width && x + w > vp.x && y < vp.y + vp.height && y + h > vp.y)) continue
+    let cols = anchorCols.get(row)
+    if (!cols) anchorCols.set(row, cols = [])
+    cols.push(col)
+  }
+  for (const [row, cols] of anchorCols) anchorCols.set(row, [...new Set(cols)].sort((a, b) => a - b))
+  const anchorRows = [...anchorCols.keys()].sort((a, b) => a - b)
+  const wanted = (source: number) => (source >= wr0 && source <= wr1) || anchorCols.has(source)
+
+  const rowRecords = new Map<number, XlsxRow>()
+  for (const row of rows) if (wanted(row.index) && !rowRecords.has(row.index)) rowRecords.set(row.index, row)
+  const occupied = new Map<number, Set<number>>()
+  for (const row of rows) for (const cell of row.cells) {
+    const source = cellSourceRow(row, cell)
+    if (!wanted(source)) continue
+    let cols = occupied.get(source)
+    if (!cols) occupied.set(source, cols = new Set())
+    cols.add(cell.col)
+  }
+  const copies = new Map<XlsxRow, XlsxRow>()
+  const writable = new Set<XlsxRow>()
+  const appended: XlsxRow[] = []
+  for (const rect of regionStyles.rects) {
+    const r0 = Math.max(0, rect.minRow), r1 = Math.min(nRows - 1, rect.maxRow)
+    const c0 = Math.max(0, rect.minCol), c1 = Math.min(nCols - 1, rect.maxCol)
+    eachAscending(r0, r1, wr0, wr1, anchorRows, source => {
+      // A new row is recorded on its first visit, as the whole-region walk did, so
+      // appended rows keep their relative paint order.
+      let row = rowRecords.get(source)
+      if (!row) {
+        row = { index: source, cells: [], hidden: false }
+        rowRecords.set(source, row); appended.push(row); writable.add(row)
+      }
+      let cols = occupied.get(source)
+      if (!cols) occupied.set(source, cols = new Set())
+      const inRows = source >= wr0 && source <= wr1
+      eachAscending(c0, c1, inRows ? wc0 : 1, inRows ? wc1 : 0, anchorCols.get(source), col => {
+        if (cols!.has(col)) return
+        const style = regionStyles.styleAt(source, col, undefined)
+        if (!style || (!style.fillColor && !Object.keys(style.borders ?? {}).length)) return
+        if (!writable.has(row!)) {
+          const copy = { ...row!, cells: [...row!.cells] }
+          copies.set(row!, copy); rowRecords.set(source, copy); writable.add(copy)
+          syntheticCellWork.rowsCopied++
+          row = copy
+        }
+        row!.cells.push({ ref: '', row: source, col, value: null, styleIndex: 0, style })
+        syntheticCellWork.created++
+        cols!.add(col)
+      })
+    })
+  }
+  if (!copies.size && !appended.length) return rows
+  return (copies.size ? rows.map(row => copies.get(row) ?? row) : rows).concat(appended)
 }
 
 /** Static admission (spec §11.5, plan S2.3), always recomputed from the sheet and
@@ -1016,12 +1195,31 @@ export function layoutCellBody(
   const fontAt = (sizePt: number) => cellFontString(cell.style, sizePt)
   const baseSize = cell.style?.fontSizePt ?? 10
   const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
-  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  // OOXML often authors default alignment fields on every cell. Those
+  // retain ordinary placement; real alignment/wrapping/rotation needs
+  // the measured local layout (including explicit no-wrap for255).
+  const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
+    || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
+    || cell.style?.wrapText === true || rotated
+  const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
+  // One indent level is one maximum digit width (measured, Excel 16.114).
+  const indentPx = cell.style?.indentPx ?? (cell.style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? sheet.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
+  // The laid-out text sits in the indented box, so General fitting, '#' overflow and
+  // shrink-to-fit measure against that same width (the non-indented rules, applied to it:
+  // Excel's indented overflow is unmeasured).
+  const indent = explicit ? textIndent(cell.style, typeof cell.value === 'number', isCenter, w, indentPx) : 0
+  const inner = Math.max(0, w - PADDING_L - PADDING_R - indent)
   const shrinkable = cell.style?.shrinkToFit === true && cell.style.wrapText !== true && !rotated
   let font = fontAt(baseSize), fontSize = baseSize
   // Excel decides fit with its Calibri metrics; a wider fallback face must not
   // turn a value Excel shows into '#' (its paint is then fitted below).
-  const excelFits = (text: string): boolean => (calibriWidth(text, fontSize, cell.style?.bold) ?? Infinity) <= inner + EXCEL_FIT_TOLERANCE_PX
+  // Calibri metrics stand in for Excel's whenever the cell is not measured in its own
+  // face: a Calibri or default cell, or an authored face this host lacks (it paints in
+  // the fallback stack). An available authored face (Courier New, Arial…) is measured
+  // in itself, so a value it cannot fit shows '#' even where Calibri would fit it.
+  let lenient: boolean | undefined
+  const excelFits = (text: string): boolean => (lenient ??= isCalibriFace(cell.style?.fontName) || !cellFaceAvailable(ctx, cell.style?.fontName))
+    && (calibriWidth(text, fontSize, cell.style?.bold) ?? Infinity) <= inner + EXCEL_FIT_TOLERANCE_PX
   // Shrink-to-fit keeps full General precision and scales the font instead.
   const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
   let generalNoFit = false
@@ -1043,7 +1241,7 @@ export function layoutCellBody(
       }
     }
   }
-  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit, excelFits, allocation)
+  const text = numericOverflowText(cell, formatted, font, w - indent, measured, generalNoFit, excelFits, allocation)
   if (text === formatted && typeof cell.value === 'number' && !cell.valueIsError && !rotated && cell.style?.wrapText !== true && measured(font, text) > inner && excelFits(text)) {
     // Excel shows it in full; the fallback face is wider, so fit the paint to
     // the cell (as shrink-to-fit would) instead of spilling a number.
@@ -1058,17 +1256,10 @@ export function layoutCellBody(
     // A colour section ([Red], [Color n]) overrides the font colour.
     const code = displayFormatCode(cell.style)
     const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code, allocation) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')
-    // OOXML often authors default alignment fields on every cell. Those
-    // retain ordinary placement; real alignment/wrapping/rotation needs
-    // the measured local layout (including explicit no-wrap for255).
-    const explicit = (style?.horizontal !== undefined && style.horizontal !== 'general')
-      || (style?.vertical !== undefined && style.vertical !== 'bottom')
-      || style?.wrapText === true || rotated
-    const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
     if (explicit) {
       ctx.fillStyle = color
       ctx.font = font
-      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow), font }
+      out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow, indentPx), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.
       ctx.font = font
@@ -1084,6 +1275,7 @@ export function layoutCellBody(
       const band = overflowBand(x, w, tx, textW, overflow)
       if (band) out.text.clipX = band
     }
+    if (style?.underline || style?.strike) out.text.decoration = { ...(style.underline ? { underline: style.underline } : {}), ...(style.strike ? { strike: true } : {}), sizePx: (style.fontSizePt ?? 10) * 96 / 72 }
   }
   if (cell.style?.borders) out.borders = cell.style.borders
   if (cell.style?.borderColors) out.borderColors = cell.style.borderColors
@@ -1169,8 +1361,13 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
       ctx.clip()
       ctx.textBaseline = 'alphabetic'
       ctx.fillText(text.text, text.tx, text.ty)
+      if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
       ctx.restore()
-    } else { ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty) }
+    } else {
+      ctx.textBaseline = 'alphabetic'; ctx.fillText(text.text, text.tx, text.ty)
+      if (text.decoration) paintDecoration(ctx, text.decoration, text.tx, text.ty, text.width, x, w)
+    }
+    if (text.kind === 'layout' && text.decoration && !text.stacked) paintLayoutDecoration(ctx, text, x, w)
   }
   // borders (anchor draws the merged rect's outline)
   const b = layout.borders
@@ -1213,6 +1410,46 @@ export function paintCellLayout(ctx: CanvasRenderingContext2D, layout: CellBodyL
   }
 }
 
+/** Underline and strikethrough of one run of text whose baseline starts at
+ * (tx, ty) and spans `width`, in the current transform. Accounting underlines
+ * sit below the descenders and span the cell box [cellX, cellX + cellW]. */
+function paintDecoration(ctx: CanvasRenderingContext2D, d: CellTextDecoration, tx: number, ty: number, width: number, cellX?: number, cellW?: number): void {
+  const t = Math.max(1, Math.round(d.sizePx / 16))
+  const line = (x0: number, w: number, y: number) => ctx.fillRect(x0, Math.round(y), w, t)
+  if (d.strike) line(tx, width, ty - d.sizePx * 0.27)
+  if (!d.underline) return
+  const accounting = d.underline === 'singleAccounting' || d.underline === 'doubleAccounting'
+  const x0 = accounting && cellX !== undefined && cellW !== undefined ? cellX + 1 : tx
+  const w = accounting && cellX !== undefined && cellW !== undefined ? Math.max(0, cellW - 2) : width
+  const y = ty + Math.max(1, Math.round(d.sizePx * (accounting ? 0.22 : 0.11)))
+  line(x0, w, y)
+  if (d.underline === 'double' || d.underline === 'doubleAccounting') line(x0, w, y + 2 * t)
+}
+/** Decorations of a laid-out (aligned, wrapped or rotated) cell text: each
+ * segment in its own baseline frame, clipped as the text is. Accounting
+ * underlines span the cell only when the text is unrotated. */
+function paintLayoutDecoration(ctx: CanvasRenderingContext2D, text: Extract<NonNullable<CellBodyLayout['text']>, { kind: 'layout' }>, cellX: number, cellW: number): void {
+  const d = text.decoration!
+  ctx.save()
+  try {
+    ctx.beginPath()
+    ctx.rect(text.clip.x, text.clip.y, text.clip.width, text.clip.height)
+    ctx.clip()
+    for (const line of text.layout.lines) for (const segment of line.segments) {
+      if (segment.text === '\n' || segment.width <= 0) continue
+      const m = segment.transform ?? { a: 1, b: 0, c: 0, d: 1, e: segment.x, f: line.baseline }
+      if (!text.rotation && m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1) {
+        paintDecoration(ctx, d, m.e, m.f, segment.width, cellX, cellW)
+        continue
+      }
+      ctx.save()
+      ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f)
+      paintDecoration(ctx, d, 0, 0, segment.width)
+      ctx.restore()
+    }
+  } finally { ctx.restore() }
+}
+
 /** Excel's border line styles (ECMA-376 ST_BorderStyle) at 100% zoom. */
 const BORDER_STYLES: Record<string, { width: number; dash?: number[]; double?: boolean }> = {
   thin: { width: 1 },
@@ -1238,6 +1475,10 @@ export function paintSheetDrawings(sheet: XlsxSheet, drawings: readonly XlsxDraw
     images: prepared?.images,
     paintContent(node, context, w, h) {
       if (!node.content) return
+      if (node.content.kind === 'slicer' || node.content.kind === 'timeline') {
+        paintControlIn(context, node.content, w, h, family => JSON.stringify(prepared?.resolveFont?.(family) ?? family))
+        return
+      }
       paintDrawingContent(node.content, context, w, h, {
         assets: prepared,
         fontFamilyCss: family => JSON.stringify(prepared?.resolveFont?.(family) ?? family),
@@ -1266,6 +1507,66 @@ export function spillSpan(body: CellBodyLayout): { x0: number; x1: number } | un
   }
   if (x0 >= body.x && x1 <= body.x + body.w) return undefined
   return { x0: Math.min(x0, body.x), x1: Math.max(x1, body.x + body.w) }
+}
+/** @internal Gridline spans a region cell's fill covers (regionGrid.ts), stroked like gridlines in that fill. */
+export function paintCoveredLines(ctx: CanvasRenderingContext2D, covered: ReadonlyArray<{ color: string; vertical: boolean; at: number; segments: ReadonlyArray<readonly [number, number]> }>, origin: { x: number; y: number } = { x: 0, y: 0 }): void {
+  for (const line of covered) {
+    if (!line.segments.length) continue
+    ctx.strokeStyle = line.color
+    ctx.beginPath()
+    for (const [a, b] of line.segments) {
+      if (line.vertical) { ctx.moveTo(line.at - origin.x + 0.5, a - origin.y + 0.5); ctx.lineTo(line.at - origin.x + 0.5, b - origin.y + 0.5) }
+      else { ctx.moveTo(a - origin.x + 0.5, line.at - origin.y + 0.5); ctx.lineTo(b - origin.x + 0.5, line.at - origin.y + 0.5) }
+    }
+    ctx.stroke()
+  }
+}
+/**
+ * The static painter's styled-region gridline rule (see viewportRegionLines), asked
+ * only along the part of each line the viewport can show (PR #55 P1 follow-up).
+ * A line segment [a, b] strokes [a + 0.5, b + 0.5] across the line, so hiding or
+ * covering the band of cell k changes pixels only when (starts[k] + 0.5,
+ * starts[k + 1] + 0.5) meets the viewport; bands within 1px of it on either side
+ * are kept, the rest change nothing but off-page geometry. Each kept band still
+ * consults the cells on both sides of the line, so a line on the page edge sees
+ * its off-page neighbour. Whole-sheet paints keep every band.
+ */
+function staticRegionLines(sheet: XlsxSheet, colX: number[], rowY: number[], cols: number, rows: number, vp: SheetViewport):
+  { lines(segments: Array<[number, number]>, line: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
+  const lineRule = regionGrid(sheet, ownStyleLookup(sheet))
+  if (!lineRule) return undefined
+  const rowSpan = bandWindow(rowY, rows, vp.y - 1, vp.y + vp.height + 1)
+  const colSpan = bandWindow(colX, cols, vp.x - 1, vp.x + vp.width + 1)
+  const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
+  return {
+    covered,
+    lines(segments, line, vertical) {
+      const hidden: Array<[number, number]> = []
+      const starts = vertical ? rowY : colX, count = vertical ? rows : cols
+      for (const r of lineRule.rects) {
+        if (vertical ? line < r.minCol || line > r.maxCol + 1 : line < r.minRow || line > r.maxRow + 1) continue
+        const [from, until] = vertical ? rowSpan : colSpan
+        for (let k = Math.max(0, from, vertical ? r.minRow : r.minCol), to = Math.min(count - 1, until, vertical ? r.maxRow : r.maxCol); k <= to; k++) {
+          const rule = vertical ? lineRule.line(k, line - 1, k, line) : lineRule.line(line - 1, k, line, k)
+          if (rule === undefined) continue
+          hidden.push([starts[k], starts[k + 1]])
+          if (rule) covered.push({ color: spreadsheetColor(rule), vertical, at: vertical ? colX[line] : rowY[line], segments: intersectInterval(segments, starts[k], starts[k + 1]) })
+        }
+      }
+      return subtractIntervals(segments, hidden)
+    },
+  }
+}
+/** A cell's own style by source coordinates, indexed on first use. */
+function ownStyleLookup(sheet: XlsxSheet): (row: number, col: number) => XlsxCellStyle | undefined {
+  let index: Map<number, XlsxCellStyle | undefined> | undefined
+  return (row, col) => {
+    if (!index) {
+      index = new Map()
+      for (const r of sheet.rows) for (const c of r.cells) index.set(cellSourceRow(r, c) * MAX_COLS + c.col, c.style)
+    }
+    return index.get(row * MAX_COLS + col)
+  }
 }
 /** Spill bands of laid-out bodies, with the rows they occupy. */
 function spillBands(bodies: readonly CellBodyLayout[]): Array<{ x0: number; x1: number; y0: number; y1: number }> {

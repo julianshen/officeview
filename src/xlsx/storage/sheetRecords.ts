@@ -16,6 +16,7 @@ import { registerNamespaceAware, type XmlNode } from '../../core/xml'
 import type { SheetColorContext } from '../sheetColors'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
 import { MAX_POINTS_PER_SHEET, MAX_POINTS_PER_SPARKLINE, MAX_SPARKLINES_PER_GROUP, MAX_SPARKLINE_GROUPS_PER_SHEET, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, XM_SPARKLINE_NS, parseSparklineGroups } from '../sparklines/parseGroups'
+import { SLICER_EXTENSION_URI, TIMELINE_EXTENSION_URI, X14_SLICER_NS, X15_TIMELINE_NS } from '../pivots/stub'
 import { parseA1Area } from '../ranges'
 
 export interface AdmissionCounters {
@@ -314,6 +315,14 @@ export interface SheetMetadata {
   format?: { baseColWidth?: number; defaultColWidth?: number }
   merges: string[]
   tablePartIds: (string | undefined)[]
+  slicerRelationshipIds: string[]
+  timelineRelationshipIds: string[]
+  pivotRegions?: import('../pivots/stub').PivotRegionRef[]
+  pivotDiagnostics?: import('../pivots/model').PivotDiagnostic[]
+  slicerStyleNames?: string[]
+  timelineStyleNames?: string[]
+  slicerRefs?: import('../pivots/stub').ControlPartRef[]
+  timelineRefs?: import('../pivots/stub').ControlPartRef[]
   drawingRefs: number
   drawingIds: (string | undefined)[]
   /** `<legacyDrawing r:id>` (VML) references, painted by the drawing content
@@ -547,6 +556,22 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
         && nsStack[1] === nsGrandparent
 
       const nsFrame: NsFrame = { local, uri, scope, ...(extensionUri !== undefined ? { extensionUri } : {}) }
+      const inSlicerExt = local === 'slicer' && uri === X14_SLICER_NS && nsParent?.local === 'slicerList' && nsParent.uri === X14_SLICER_NS
+        && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
+        && nsStack[1]?.local === 'extLst' && nsStack[1]?.uri === SPREADSHEETML_NS
+        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === SLICER_EXTENSION_URI
+      const inTimelineExt = local === 'timelineRef' && uri === X15_TIMELINE_NS && nsParent?.local === 'timelineRefs' && nsParent.uri === X15_TIMELINE_NS
+        && nsStack[0]?.local === 'worksheet' && nsStack[0]?.uri === SPREADSHEETML_NS
+        && nsStack[1]?.local === 'extLst' && nsStack[1]?.uri === SPREADSHEETML_NS
+        && nsStack[nsDepth - 2]?.local === 'ext' && nsStack[nsDepth - 2]?.uri === SPREADSHEETML_NS && nsStack[nsDepth - 2]?.extensionUri === TIMELINE_EXTENSION_URI
+      if (inSlicerExt || inTimelineExt) {
+        const id = attrMap(names, values, count).id
+        if (id) {
+          const ids = inSlicerExt ? meta.slicerRelationshipIds : meta.timelineRelationshipIds
+          bounded(ids, inSlicerExt ? 'slicer references' : 'timeline references')
+          ids.push(id)
+        }
+      }
       if (isSparklineExtension && captureRootDepth < 0) {
         aggregateRoot ??= { '@attrs': {} }
         aggregateScope ??= scope
@@ -857,7 +882,7 @@ export function sheetRecordEvents(meta: SheetMetadata, options: SheetRecordOptio
 }
 
 export function newSheetMetadata(): SheetMetadata {
-  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], drawingRefs: 0, drawingIds: [], structuralIncomplete: [], skippedCells: 0 }
+  return { rowHeights: [], hiddenRows: [], cols: [], merges: [], tablePartIds: [], slicerRelationshipIds: [], timelineRelationshipIds: [], drawingRefs: 0, drawingIds: [], structuralIncomplete: [], skippedCells: 0 }
 }
 
 /** Streams a drawing part's top-level anchors into placement-only parts (S3.3):

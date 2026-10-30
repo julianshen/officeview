@@ -27,12 +27,16 @@ import type { XlsxDrawing, XlsxSheet } from '../types'
 import { hasXlsxCharts, loadChartModule } from '../chartLoader'
 import { parseDefinedNames } from '../formula/names'
 import type { DefinedNameMetadata } from '../formula/types'
-import type { DrawingMemory, ProfileId, SheetDrawings, WorkerDiagnostic } from '../view/contracts'
+import type { DrawingMemory, ProfileId, RemotePivotDisplay, SheetDrawings, WorkerDiagnostic } from '../view/contracts'
 import { placementAxes } from '../view/drawingBounds'
 import { DRAWING_MEMORY_REFUSED, DRAWING_NODE_BUDGET, DRAWING_PART_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from '../view/drawingPayload'
 import type { SheetGeometry } from '../../worker/viewerSession'
 import { classifyPart } from './admission'
 import { importLimitsFor } from './importSession'
+import type { PivotRegionRef } from '../pivots/stub'
+import type { PivotTableDefinition } from '../pivots/model'
+import type { SheetControls } from '../pivots/slicers/model'
+import type { StylesExtras } from '../tableStyles/model'
 
 const R_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 /** Refused parts named one by one in diagnostics; the rest are counted. */
@@ -99,10 +103,12 @@ export interface PagedDrawingLimits {
   maxParts: number
   /** Binary bytes the payload may carry to the main thread. */
   payloadBytes: number
+  /** Independent cap for pivot, slicer and timeline definition parts (Rulings AL, AP: the profile's `paged.pivotPartBytes`). */
+  pivotPartBytes: number
 }
-export function pagedDrawingLimits(profile: ProfileId, payloadBytes = drawingPayloadBudget(profile)): PagedDrawingLimits {
+export function pagedDrawingLimits(profile: ProfileId, payloadBytes = drawingPayloadBudget(profile), pivotPartBytes = importLimitsFor(profile).paged.pivotPartBytes): PagedDrawingLimits {
   const object = importLimitsFor(profile).object
-  return { partBytes: object.drawingPartBytes, mediaBytes: payloadBytes, readBytes: payloadBytes + 4 * object.drawingPartBytes, maxParts: object.entries, payloadBytes }
+  return { partBytes: object.drawingPartBytes, mediaBytes: payloadBytes, readBytes: payloadBytes + 4 * object.drawingPartBytes, maxParts: object.entries, payloadBytes, pivotPartBytes }
 }
 
 export interface PagedDrawingSheet {
@@ -110,6 +116,9 @@ export interface PagedDrawingSheet {
   partPath: string
   drawingIds: readonly (string | undefined)[]
   legacyDrawingIds?: readonly (string | undefined)[]
+  slicerIds?: readonly string[]
+  timelineIds?: readonly string[]
+  stylesExtras?: StylesExtras
 }
 
 const utf8 = new TextDecoder()
@@ -121,6 +130,7 @@ class RangePackage extends OfficePackage {
   private readBytes = 0
   private partsRead = 0
   private refusals = 0
+  private pivotRefusals = 0
   /** Charged working-set estimate (inflated parts, their text, parsed trees). */
   workingSet = 0
   /** A chart fill's live scratch (its cell maps and typed arrays): part of every admission until the fill ends. */
@@ -148,12 +158,18 @@ class RangePackage extends OfficePackage {
     super(new JSZip())
     this.chartProfile = profile === 'M' ? 'mobile' : 'desktop'
   }
-  private cap(path: string): number { return classifyPart(path).cls === 'media' ? this.limits.mediaBytes : this.limits.partBytes }
+  private isPivotPart(path: string): boolean { return /\/(?:pivotTables|pivotCache|slicerCaches|slicers|timelineCaches|timelines)\//i.test(`/${path}`) }
+  private cap(path: string): number { return this.isPivotPart(path) ? this.limits.pivotPartBytes : classifyPart(path).cls === 'media' ? this.limits.mediaBytes : this.limits.partBytes }
   private refuse(path: string, reason: string): void {
-    if (++this.refusals <= NAMED_REFUSALS) this.diagnostics.push({ code: DRAWING_PART_REFUSED, message: `Drawing part ${path} is not shown in the large-file view: ${reason}`, partId: path })
+    const pivot = this.isPivotPart(path)
+    if (pivot) {
+      if (++this.pivotRefusals <= NAMED_REFUSALS) this.diagnostics.push({ code: 'pivot-part-too-large', message: `Pivot/control part ${path} was not read: ${reason}`, partId: path })
+    }
+    else if (++this.refusals <= NAMED_REFUSALS) this.diagnostics.push({ code: DRAWING_PART_REFUSED, message: `Drawing part ${path} is not shown in the large-file view: ${reason}`, partId: path })
   }
   finish(): WorkerDiagnostic[] {
     if (this.refusals > NAMED_REFUSALS) this.diagnostics.push({ code: DRAWING_PART_REFUSED, message: `${this.refusals - NAMED_REFUSALS} more drawing parts are not shown in the large-file view` })
+    if (this.pivotRefusals > NAMED_REFUSALS) this.diagnostics.push({ code: 'pivot-part-too-large', message: `${this.pivotRefusals - NAMED_REFUSALS} additional pivot/control parts exceed their part cap` })
     return this.diagnostics
   }
   /** Present and within its own cap (a part beyond it reads as absent). */
@@ -249,6 +265,34 @@ class RangePackage extends OfficePackage {
   }
 }
 
+/** Resolve one sheet's pivot definitions through the same bounded package reader as drawings. */
+export async function readPagedPivotDisplayParts(source: { src: RangeSource; inventory: ZipInventory }, input: {
+  sheetId: string; sheetName: string; pivotRegions: ReadonlyMap<string, readonly PivotRegionRef[]>
+}, profile: ProfileId, signal: AbortSignal, memory?: DrawingMemory, pivotPartBytes?: number): Promise<Pick<RemotePivotDisplay, 'pivotTables' | 'diagnostics'>> {
+  const limits = pagedDrawingLimits(profile, undefined, pivotPartBytes)
+  const pkg = new RangePackage(source.src, source.inventory, limits, signal, memory, profile)
+  const diagnostics: RemotePivotDisplay['diagnostics'][number][] = []
+  let pivotTables: PivotTableDefinition[] = []
+  try {
+    if (input.pivotRegions.size) {
+      const parsed = await (await import('../pivots/load')).loadPivotWorkbook(pkg, input.pivotRegions)
+      pivotTables = parsed.tables.filter(table => table.sheet === input.sheetName)
+      const sheetParts = new Set(input.pivotRegions.get(input.sheetName)?.map(region => region.partPath) ?? [])
+      const cacheParts = new Set(pivotTables.map(table => table.cachePartPath).filter((partPath): partPath is string => Boolean(partPath)))
+      diagnostics.push(...parsed.diagnostics.filter(diagnostic =>
+        diagnostic.feature === 'pivot-cache-refs-unreadable'
+        || Boolean(diagnostic.partPath && (sheetParts.has(diagnostic.partPath) || cacheParts.has(diagnostic.partPath))),
+      ))
+    }
+  } catch (cause) {
+    if (signal.aborted) throw aborted(signal)
+    const partPath = input.pivotRegions.get(input.sheetName)?.[0]?.partPath
+    diagnostics.push({ kind: 'unsupported', feature: 'pivot-display-read-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Pivot display metadata could not be read', ...(partPath ? { partPath } : {}) })
+  }
+  diagnostics.push(...pkg.finish().map(item => ({ kind: 'unsupported' as const, feature: item.code, message: item.message, partPath: item.partId })))
+  return { pivotTables, diagnostics }
+}
+
 /**
  * A chart read's transient decode work (charts/read.ts: the crossing reservation, one chunk's text) on a
  * part this package already admitted with its full UTF-16 text (`read`: 3x the inflated size): those bytes
@@ -316,7 +360,12 @@ async function readPagedSheetDrawings(pkg: RangePackage, sheet: PagedDrawingShee
   const worksheet = getChildren(root, 'worksheet')[0] ?? root
   const shell: XlsxSheet = { name: sheet.name, sourcePartPath: sheet.partPath, rows: [], cols: [], merges: [], mergeRanges: [] }
   const axes = placementAxes(geometry)
-  const parsed = parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) })
+  let controls: SheetControls | undefined
+  if (sheet.slicerIds?.length || sheet.timelineIds?.length) {
+    const { resolveSheetControls } = await import('../pivotLoader')
+    controls = await resolveSheetControls(pkg, { sheetPath: sheet.partPath, slicerIds: sheet.slicerIds ?? [], timelineIds: sheet.timelineIds ?? [], theme, stylesExtras: sheet.stylesExtras, signal })
+  }
+  const parsed = parseWorksheetDrawings(pkg, shell, sheet.partPath, worksheet, theme, { col: index => axes.cols.start(index), row: index => axes.rows.start(index) }, controls)
   // A pool refusal ends the read at once; the parse it leaves behind reads no parts and reserves no nodes.
   parsed.catch(() => {})
   await Promise.race([parsed, pkg.refusal])

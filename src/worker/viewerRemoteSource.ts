@@ -44,6 +44,8 @@ import { initialIdentity, initialWorkbookOwner, reply, visibilityFromDisplayBits
 import type { SheetGeometry, WorkbookSource } from './viewerSession'
 import { RemoteDrawingCache, type PagedSheetDrawings } from './viewerRemoteDrawings'
 import { RemoteSparklineCache, type PagedSheetSparklines, type SparklineChangeReason } from './viewerRemoteSparklines'
+import { RemoteRegionStyleCache, type PagedRegionStyleState, type RegionStyleHost } from './viewerRemoteRegionStyles'
+import { MAX_REGION_STYLE_TABLES, REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE, REGION_STYLE_REPLY_OVERHEAD_BYTES } from '../xlsx/view/contracts'
 import { DRAWING_MEMORY_REFUSED, drawingPayloadBudget, unavailableDrawings } from '../xlsx/view/drawingPayload'
 import { admitDrawingOwners } from '../xlsx/view/drawingOwners'
 import { FindError, workbookFindKey, type FindOptions, type FindPage, type FindSession } from '../xlsx/view/find'
@@ -195,8 +197,11 @@ export class RemoteWorkbook implements WorkbookSource {
   /** S13.2: each sheet's drawing content, read once its structure is complete. */
   private readonly drawingCache: RemoteDrawingCache
   private readonly sparklineCache: RemoteSparklineCache
+  private readonly regionStyleCache: RemoteRegionStyleCache
+  private readonly pivotDisplayCache: RemoteRegionStyleCache
   private readonly sparklineChanges = new Map<string, Array<{ row: number; col: number }>>()
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
+  private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
 
   constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
@@ -253,10 +258,51 @@ export class RemoteWorkbook implements WorkbookSource {
         this.notify()
       },
     }, MAIN_THREAD_BUDGETS[this.profile] / 4)
+    const regionStyleHost: RegionStyleHost = {
+      identity: sheetId => this.identity(sheetId), hasRegionStyles: sheetId => this.layout(sheetId).hasRegionStyles === true,
+      hasPivotDisplay: sheetId => this.layout(sheetId).hasPivotDisplay === true,
+      loadState: sheetId => this.loadState(sheetId),
+      grant: (sheetId, requestId, minimumBytes, op = 'regionStyles') => {
+        const headroom = MAIN_THREAD_BUDGETS[this.profile] - this.mainLedger.bytes
+        const layout = this.layout(sheetId)
+        const tableCount = op === 'regionStyles' ? Math.min(MAX_REGION_STYLE_TABLES, layout.regionStyleTableCount ?? 1) : 0
+        // Pivot-display replies carry only pivot definitions and their table
+        // style definitions; slicer/timeline styles use the drawing read.
+        const pivotItems = op === 'pivotDisplay' ? layout.pivotTableCount ?? 0 : 0
+        const planned = REGION_STYLE_REPLY_OVERHEAD_BYTES + tableCount * REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE + pivotItems * 65_536
+        const limit = Math.min(headroom, Math.max(planned, minimumBytes ?? 0)), owner = `region-style-grant:${requestId}`
+        if (!Number.isSafeInteger(limit) || limit < Math.max(4096, minimumBytes ?? 0) || this.mainLedger.ownerBytes('replies', owner) > 0) return null
+        this.mainLedger.set('replies', owner, limit)
+        return limit
+      },
+      releaseGrant: requestId => this.mainLedger.release('replies', `region-style-grant:${requestId}`),
+      request: (command, signal) => this.request(command, signal), nextRequestId: () => this.nextRequestId(),
+      release: reply => this.mainLedger.settle(reply),
+      admitLayer: (sheetId, requestId, bytes) => {
+        const owner = `region-style-layer:${sheetId}:${requestId}`
+        if (!Number.isSafeInteger(bytes) || bytes <= 0 || this.mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[this.profile]) return null
+        this.mainLedger.set('layout', owner, bytes)
+        let held = true
+        return () => { if (held) { held = false; this.mainLedger.release('layout', owner) } }
+      },
+      changed: (sheetId, reason = 'updated') => {
+        if (reason === 'evicted') { for (const listener of this.regionStyleEvictionListeners) listener(sheetId); this.notify(); return }
+        (this.merges(sheetId) as { gen: number }).gen++; this.notify()
+      },
+    }
+    this.regionStyleCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4)
+    this.pivotDisplayCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4, 'pivotDisplay')
   }
   /** S13.2: the sheet's drawing content (viewerRemoteDrawings.ts). */
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
+  regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
+  pivotDisplay(sheetId: string): PagedRegionStyleState { return this.pivotDisplayCache.get(sheetId) }
+  subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
+    if (this.closed) return () => {}
+    this.regionStyleEvictionListeners.add(listener)
+    return () => { this.regionStyleEvictionListeners.delete(listener) }
+  }
   subscribeSparklineEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
     this.sparklineEvictionListeners.add(listener)
@@ -487,8 +533,10 @@ export class RemoteWorkbook implements WorkbookSource {
     const head = command as unknown as { kind: K; requestId: string; owner: CacheIdentity | WorkbookOwner; query?: { op: string } }
     const sparklineRead = head.kind === 'read' && head.query?.op === 'sparklines'
     const sparklineGrant = sparklineRead ? `sparkline-grant:${head.requestId}` : undefined
-    if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); return CLOSED }
-    if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); return CANCELLED }
+    const regionStyleRead = head.kind === 'read' && (head.query?.op === 'regionStyles' || head.query?.op === 'pivotDisplay')
+    const regionStyleGrant = regionStyleRead ? `region-style-grant:${head.requestId}` : undefined
+    if (this.closed) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); return CLOSED }
+    if (signal?.aborted) { if (sparklineGrant) this.mainLedger.release('replies', sparklineGrant); if (regionStyleGrant) this.mainLedger.release('replies', regionStyleGrant); return CANCELLED }
     const key = head.kind === 'read' ? `read:${head.query?.op}` : head.kind
     const scope = JSON.stringify([head.owner.docId, 'sheetId' in head.owner ? head.owner.sheetId : null, key])
     this.latestQueries.set(scope, head.requestId)
@@ -499,11 +547,18 @@ export class RemoteWorkbook implements WorkbookSource {
     // worker never posts a reply over it; see drawingGrant.
     const drawings = key === 'read:drawings' ? command as CommandOf<'read'> : undefined
     const sparklines = key === 'read:sparklines' ? command as CommandOf<'read'> : undefined
+    const regionStyles = key === 'read:regionStyles' || key === 'read:pivotDisplay' ? command as CommandOf<'read'> : undefined
     let grant: string | undefined
     if (sparklines) {
       const grantBytes = sparklines.query.op === 'sparklines' ? sparklines.query.grantBytes : undefined
       const owner = `sparkline-grant:${head.requestId}`
       if (this.client.isPending(head.requestId)) return CLOSED
+      if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
+      grant = owner
+    } else if (regionStyles) {
+      const grantBytes = regionStyles.query.op === 'regionStyles' || regionStyles.query.op === 'pivotDisplay' ? regionStyles.query.grantBytes : undefined
+      const owner = `region-style-grant:${head.requestId}`
+      if (this.client.isPending(head.requestId)) { this.mainLedger.release('replies', owner); return CLOSED }
       if (!Number.isSafeInteger(grantBytes) || grantBytes !== this.mainLedger.ownerBytes('replies', owner)) { this.mainLedger.release('replies', owner); return CLOSED }
       grant = owner
     } else if (drawings) {
@@ -538,8 +593,9 @@ export class RemoteWorkbook implements WorkbookSource {
         // links were made; the existing cache displays this typed refusal.
         return { ...reply, result: { kind: 'read', result: { op: 'drawings', result: unavailableDrawings(DRAWING_MEMORY_MESSAGE, { code: 'resource-limit', retryable: false, message: DRAWING_MEMORY_MESSAGE }, DRAWING_MEMORY_REFUSED) } } } as WorkerReply<K>
       }
-      this.capture(reply, scope, !drawings && !sparklines)
+      this.capture(reply, scope, !drawings && !sparklines && !regionStyles)
       if (sparklines && signal?.aborted) this.mainLedger.settle(reply)
+      if (regionStyles && signal?.aborted) this.mainLedger.settle(reply)
       return reply
     }, error => {
       // A grant is refunded only when the command provably never left: a
@@ -815,6 +871,9 @@ export class RemoteWorkbook implements WorkbookSource {
     for (const entry of this.structures.values()) if (entry.timer) clearTimeout(entry.timer)
     this.drawingCache.close()
     this.sparklineCache.close()
+    this.regionStyleCache.close()
+    this.pivotDisplayCache.close()
+    this.regionStyleEvictionListeners.clear()
     this.sparklineChanges.clear()
     this.overflow?.cache.close()
     this.overflow = undefined

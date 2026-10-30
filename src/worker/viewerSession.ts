@@ -1,5 +1,6 @@
 import { ViewportOverflowCollector } from '../xlsx/view/viewportOverflow'
 import type { XlsxFrozenPane } from '../xlsx/frozenPane'
+import type { XlsxCellStyle } from '../xlsx/types'
 import { controlStructure, controlSourceStore, controlView } from '../xlsx/view/mainControlMemory'
 import type { AllocationContext } from '../xlsx/view/allocationAccount'
 /**
@@ -187,6 +188,10 @@ export interface WorkbookSource {
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
   hasSparklines?(sheetId: string): boolean
+  hasRegionStyles?(sheetId: string): boolean
+  regionStyleTableCount?(sheetId: string): number
+  hasPivotDisplay?(sheetId: string): boolean
+  pivotTableCount?(sheetId: string): number
   store(sheetId: string): SourceStore
   geometry(sheetId: string): SheetGeometry
   /** Coverage this backend can never resolve (e.g. the interim adapter before
@@ -207,8 +212,9 @@ export interface WorkbookSource {
   declaredFilters?(): readonly DeclaredSheetFilters[]
   /** S5.4: style table and date system of a source whose cells carry style ids only. */
   formatting?(): WorkbookFormatting
-  /** The canonical logical display text, without materializing cell layouts. */
-  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation): string
+  /** The canonical logical display text, without materializing cell layouts. `region` resolves a styled
+   * table/pivot region over the cell's own style, as the viewer paints it (worker Find). */
+  displayText?(cell: AuthoritativeCell, sheetId: string, allocation?: FormatAllocation, region?: RegionStyleResolver): string
   release(): Promise<void>
 }
 
@@ -666,6 +672,8 @@ class GuardHalt extends Error {
 /** One operation's share of the document pool's transient ledger; `set` is
  * absolute and false when the bytes cannot be admitted. */
 interface Charge { set(bytes: number): boolean; release(): void; adopt?(targets: readonly object[], bytes: number, held?: boolean): void }
+/** A decoded region style layer as Find needs it (tableStyles/regionLayer.ts). */
+export interface RegionStyleResolver { styleAt(row: number, col: number, own: XlsxCellStyle | undefined, mode?: 'print' | 'screen'): XlsxCellStyle | undefined }
 /** Abandons a guard whose scratch buffer could not be admitted. */
 class QuotaHalt extends Error {
   constructor(readonly requiredBytes: number) { super('quota') }
@@ -706,6 +714,8 @@ export class DocumentSession {
     key: string; cursor?: string; engine?: WorkbookFind; controller: AbortController;
     charge: Charge; unpins: (() => void)[]; busy: boolean; stopped: boolean;
     emittedBytes: number; formattedHitBytes: number; diagnosticBytes: number; producers: number; drained: boolean; bytes: number; incomplete: Set<string>;
+    /** Region style descriptors and decoded layers this search formats with (released with it). */
+    regionCharges: Charge[];
   }
   /** Stopped searches still waiting on producers that ignored their abort. */
   private readonly parkedSearches = new Set<NonNullable<DocumentSession['searchState']>>()
@@ -2244,7 +2254,7 @@ export class DocumentSession {
       if (!state || state.key !== key || state.cursor !== cursor || state.busy) return { kind: 'error', error: failure('invalid-cursor', 'Search cursor expired or does not belong to this query') }
     } else {
       this.stopSearch()
-      state = { key, controller: new AbortController(), charge: this.charge(), unpins: [], busy: false, stopped: false, emittedBytes: 0, formattedHitBytes: 0, diagnosticBytes: 0, producers: 0, drained: false, bytes: 0, incomplete: new Set() }
+      state = { key, controller: new AbortController(), charge: this.charge(), unpins: [], busy: false, stopped: false, emittedBytes: 0, formattedHitBytes: 0, diagnosticBytes: 0, producers: 0, drained: false, bytes: 0, incomplete: new Set(), regionCharges: [] }
       this.searchState = state
     }
     const current = state!
@@ -2260,6 +2270,7 @@ export class DocumentSession {
         current.bytes = 2 * budget + 32 * FIND_HIT_BUFFER_BUDGET
         if (!current.charge.set(current.bytes)) { this.stopSearch(current); return this.refusal(current.bytes) }
         const sheets: FindSheetInput[] = []
+        const regions = new Map<string, RegionStyleResolver>()
         for (const { sheetId } of this.source.sheets) {
           if (query.sheetIds && !query.sheetIds.includes(sheetId)) continue
           // Importing sheets remain searchable. A nonblocking structural probe
@@ -2277,6 +2288,10 @@ export class DocumentSession {
           if (!current.charge.set(current.bytes)) { this.stopSearch(current); return this.refusal(current.bytes) }
           const visibility = await this.queryVisibility(view, geometry, signal)
           if (current.stopped || signal.aborted) return { kind: 'cancelled' }
+          // A styled table or pivot formats its cells as the viewer paints them (resident Find does the same).
+          const region = await this.findRegionStyles(sheetId, current, signal)
+          if (current.stopped || signal.aborted) return { kind: 'cancelled' }
+          if (region) regions.set(sheetId, region)
           sheets.push({ sheetId, identity: view.identity, order: view.order, visibility,
             isColumnVisible: col => geometry.cols.size(col) > 0,
             store: boundedQueryStore(store, budget / 2, bytes => {
@@ -2313,7 +2328,7 @@ export class DocumentSession {
               current.charge.set(current.bytes)
             },
           },
-          ...(this.source.displayText ? { textOf: (cell, id, allocation) => this.source.displayText!(cell, id, allocation) } : {}),
+          ...(this.source.displayText ? { textOf: (cell, id, allocation) => this.source.displayText!(cell, id, allocation, regions.get(id)) } : {}),
         })
       }
       if (signal.aborted) { this.stopSearch(current); return { kind: 'cancelled' } }
@@ -2355,6 +2370,42 @@ export class DocumentSession {
       if (current.stopped) this.drainSearch(current)
     }
   }
+  /**
+   * The region layer one search formats a sheet with: the sheet's styled tables and pivots, read through the
+   * same bounded descriptors the viewer decodes (regionStyles and pivotDisplay reads) and built by the same lazy
+   * module, so Find matches the text the viewer paints. Only a sheet with styled tables or pivots loads style
+   * code. Descriptors and the decoded layer are charged to this search and released with it; a descriptor over
+   * the search budget, or a refused charge, leaves the sheet formatted by its own styles.
+   */
+  private async findRegionStyles(sheetId: string, current: NonNullable<DocumentSession['searchState']>, signal: AbortSignal): Promise<RegionStyleResolver | undefined> {
+    const tables = this.source.hasRegionStyles?.(sheetId) ?? false, pivots = this.source.hasPivotDisplay?.(sheetId) ?? false
+    if (!tables && !pivots) return undefined
+    const store = this.source.store(sheetId)
+    const options = { signal, stamp: store.stamp }
+    const grant = WORKER_QUERY_BYTES[this.options.profile ?? 'D']
+    const charged = () => { const charge = this.charge(); current.regionCharges.push(charge); return charge }
+    try {
+      const payloads = [
+        ...(tables && store.readRegionStyles ? [await store.readRegionStyles(options, grant, charged())] : []),
+        ...(pivots && store.readPivotDisplay ? [await store.readPivotDisplay(options, grant, charged(), this.options.profile ?? 'D')] : []),
+      ].filter(payload => ('pivotTables' in payload ? payload.pivotTables.length : payload.tables.length) > 0)
+      if (!payloads.length || signal.aborted || current.stopped) return undefined
+      const remote = await import('../xlsx/tableStyles/remoteLayer')
+      const layers: RegionStyleResolver[] = []
+      for (const payload of payloads) {
+        const charge = charged()
+        if (!charge.set(await remote.decodedRegionLayerBytes(payload))) continue
+        const layer = await remote.buildRemoteRegionLayer(sheetId, payload, () => {})
+        if (layer) layers.push(layer)
+      }
+      if (!layers.length) return undefined
+      // Tables, then pivots: the order the viewer merges them in (mergeRegionStyleLayers).
+      return { styleAt: (row, col, own, mode) => layers.reduce((style, layer) => layer.styleAt(row, col, style, mode), own) }
+    } catch {
+      // A style layer that cannot be read or built leaves Find with the cells' own formats.
+      return undefined
+    }
+  }
   private stopSearch(state = this.searchState): void {
     if (!state || state.stopped) return
     state.stopped = true
@@ -2378,6 +2429,7 @@ export class DocumentSession {
     }
     state.drained = true
     this.parkedSearches.delete(state)
+    for (const charge of state.regionCharges.splice(0)) charge.release()
     if (state.diagnosticBytes && !this.sourceReleased) {
       // A closed pool cannot resize shares: retain its conservative old charge
       // until the actual source close ends, rather than refunding live bytes.
@@ -2409,6 +2461,10 @@ export class DocumentSession {
       ...(geometry.hiddenCols?.length ? { hiddenCols: geometry.hiddenCols.map(interval => ({ ...interval })) } : {}),
       ...(used ? { used: { ...used } } : {}),
       ...(this.source.hasSparklines ? { hasSparklines: this.source.hasSparklines(sheetId) } : {}),
+      ...(this.source.hasRegionStyles ? { hasRegionStyles: this.source.hasRegionStyles(sheetId) } : {}),
+      ...(this.source.regionStyleTableCount ? { regionStyleTableCount: this.source.regionStyleTableCount(sheetId) } : {}),
+      ...(this.source.hasPivotDisplay ? { hasPivotDisplay: this.source.hasPivotDisplay(sheetId) } : {}),
+      ...(this.source.pivotTableCount ? { pivotTableCount: this.source.pivotTableCount(sheetId) } : {}),
       ...(geometry.frozen ? { frozen: { ...geometry.frozen } } : {}),
     }
   }
@@ -2452,6 +2508,33 @@ export class DocumentSession {
             void work.then(() => { drained = true }, () => { drained = true })
             result = { op: 'sparklines', result: await work }
           }
+        } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
+        break
+      }
+      case 'regionStyles': {
+        const charge = this.charge()
+        try {
+          const payload = await store.readRegionStyles?.(options, query.grantBytes, charge) ?? {
+            sheetId: owner.sheetId, stamp: store.stamp, tables: [],
+            diagnostics: [{ kind: 'unsupported' as const, feature: 'table-style-read-failed', message: 'This source cannot resolve table styles.' }],
+          }
+          result = { op: 'regionStyles', result: payload }
+        } finally { if (retain) retain(() => charge.release()); else charge.release() }
+        break
+      }
+      case 'pivotDisplay': {
+        const charge = this.charge()
+        let raw: Promise<unknown> | undefined, drained = false
+        const handOff = () => { if (retain) retain(() => charge.release()); else charge.release() }
+        try {
+          const work = store.readPivotDisplay?.(options, query.grantBytes, charge, this.options.profile ?? 'D') ?? Promise.resolve({
+            sheetId: owner.sheetId, stamp: store.stamp, pivotTables: [], pivotStyles: [],
+            diagnostics: [{ kind: 'unsupported' as const, feature: 'pivot-display-read-failed', message: 'This source cannot resolve pivot display metadata.' }],
+          })
+          raw = work
+          void work.then(() => { drained = true }, () => { drained = true })
+          const payload = await work
+          result = { op: 'pivotDisplay', result: payload }
         } finally { if (!raw || drained) handOff(); else void raw.then(handOff, handOff) }
         break
       }

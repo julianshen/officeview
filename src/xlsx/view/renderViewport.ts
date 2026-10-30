@@ -5,18 +5,22 @@ import type { CanvasColors } from '../../components/canvasColors'
  * eagerly, never reaches the viewport planner; only the interactive sheet
  * viewport (lazy chunk) and tests import it.
  */
-import type { XlsxSheet } from '../types'
+import type { XlsxCell, XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
-import { COARSE_NOTICE, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
-import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission } from './textLayout'
-import { cellDisplayText, layoutCellBody, paintCellLayout, paintSheetDrawings, spillSpan, textMeasurer, type RenderSheetAssets } from '../render'
+import { COARSE_NOTICE, admitRegionSurfaces, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometry, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
+import { buildCellRecords, LayoutAdmissionError, LayoutCache, type CellLayout, type CellLayoutHost, type LayoutAdmission, type Rect } from './textLayout'
+import { cellDisplayText, layoutCellBody, paintCellLayout, paintCoveredLines, paintSheetDrawings, spillSpan, spreadsheetColor, textMeasurer, type RenderSheetAssets } from '../render'
 import { paintWatermark, type ResolvedWatermark, type WatermarkOptions } from '../../core/watermark'
 import { CSS_PX_PER_INCH, EMU_PER_INCH } from '../../core/geometry'
 import { paintSparklinesIn, type SparklineCandidates } from '../sparklineLoader'
+import { paintPivotButtonsIn } from '../pivotLoader'
+import { intersectInterval, mayHaveRegionGrid, regionGrid, subtractIntervals } from '../regionGrid'
 import type { IntervalSet, RowOrder, RowVisibility } from './contracts'
 import type { ResolvedSparkline } from '../sparklines/resolve'
 import { belowDetail } from './viewport'
+import type { CellPlacement } from './viewport'
+import { regionStylesFor } from '../tableStyleLoader'
 
 /** The host side of canonical records (spec §11.2): the same formatting and text
  * layout the static renderer uses, laid out in a box at the origin. Measurement
@@ -188,7 +192,7 @@ export function renderSheetViewport(
   prepared?: RenderSheetAssets,
   options: ViewportPaintOptions = {},
 ): ViewportPaintResult {
-  const plan = options.preparedPlan ?? planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
+  const planned = options.preparedPlan ?? planViewport(geometry, viewport, options.profile, { activeCell: options.activeCell, merges: options.merges, frameBudget: options.frameBudget })
   const { x: vx, y: vy, width, height } = viewport.box
   const paintable = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
   const owner = options.owner ?? { docId: '', sheetId: sheet.sheetId ?? sheet.name, valueGen: 0, fontGen: 0, viewGen: 0 }
@@ -206,19 +210,39 @@ export function renderSheetViewport(
       ctx.fillRect(0, 0, width, height)
       if (options.watermark) paintWatermark(ctx, { widthPx: width, heightPx: height }, options.watermark)
     }
-    if (plan.kind === 'pending' || plan.kind === 'diagnostic') {
-      if (paintable) notice(VIEWPORT_NOTICE[plan.kind])
-      return { kind: plan.kind, diagnostics: plan.diagnostics, records: [], coarse: [], work: emptyWork() }
+    if (planned.kind === 'pending' || planned.kind === 'diagnostic') {
+      if (paintable) notice(VIEWPORT_NOTICE[planned.kind])
+      return { kind: planned.kind, diagnostics: planned.diagnostics, records: [], coarse: [], work: emptyWork() }
     }
-    const work = plan.work
-    const built = cache.stats.built, reused = cache.stats.reused
     // The host lays a cell out in a box at the origin: records are box-relative.
     const host = options.layoutHost ?? createCellLayoutHost(ctx, sheet)
+    const regionStyles = regionStylesFor(sheet)
+    // Styled empty cells are records too: admitted against the planner's caps,
+    // degrading the frame to its coarse summary when they do not fit.
+    const admitted = planned.kind === 'detail' && geometry?.kind === 'ready' && regionStyles ? admitRegionSurfaces(planned, geometry, viewport, regionStyles, (() => {
+      const seen = new Set(planned.cells.map(item => `${item.source.row}:${item.source.col}`))
+      if (planned.active) seen.add(`${planned.active.source.row}:${planned.active.source.col}`)
+      return seen
+    })(), options.profile, options.frameBudget) : undefined
+    const plan = admitted?.plan ?? planned
+    const regionCells: CellPlacement[] | undefined = regionStyles ? admitted?.kind === 'detail' ? admitted.cells : [] : undefined
+    const work = plan.work
+    const built = cache.stats.built, reused = cache.stats.reused
+    // Spec §8: a sheet without styled regions pays an undefined check here, never a per-tile copy.
+    const cellPlacements: readonly CellPlacement[] = plan.kind !== 'detail' ? [] : !regionStyles ? plan.cells
+      : [...plan.cells.map(item => {
+        const style = regionStyles.styleAt(item.source.row, item.source.col, item.cell.style, 'screen') ?? item.cell.style
+        return style === item.cell.style ? item : { ...item, cell: { ...item.cell, ...(style ? { style } : { style: undefined }) } }
+      }), ...regionCells ?? []]
+    const activePlacement = plan.active ? (() => {
+      const style = regionStyles?.styleAt(plan.active!.source.row, plan.active!.source.col, plan.active!.cell.style, 'screen') ?? plan.active!.cell.style
+      return style === plan.active!.cell.style ? plan.active! : { ...plan.active!, cell: { ...plan.active!.cell, ...(style ? { style } : { style: undefined }) } }
+    })() : undefined
     let records: CellLayout[] = [], active: CellLayout | undefined
     if (options.layoutAdmission) cache.beginBatch(options.layoutAdmission)
     try {
-      records = plan.kind === 'detail' ? buildCellRecords(plan.cells, owner, host, cache) : []
-      active = plan.active ? buildCellRecords([plan.active], owner, host, cache)[0] : undefined
+      records = plan.kind === 'detail' ? buildCellRecords(cellPlacements, owner, host, cache) : []
+      active = activePlacement ? buildCellRecords([activePlacement], owner, host, cache)[0] : undefined
     } catch (error) {
       if (!(error instanceof LayoutAdmissionError)) throw error
       // Declared resource outcome: a pending-tone summary and one notice,
@@ -259,7 +283,11 @@ export function renderSheetViewport(
     const extraActive = active && !records.some(record => record.id === active.id) ? active : undefined
     for (const record of records) replay(record, 'fill')
     if (extraActive) replay(extraActive, 'fill')
-    if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready') {
+    // The source window this tile shows and each source cell's logical box (merges
+    // spanned), shared by the sparkline and pivot-button passes.
+    let sourceWindow: { r0: number; c0: number; r1: number; c1: number } | undefined
+    let sourceRect: ((row: number, col: number) => Rect | undefined) | undefined
+    if (plan.kind === 'detail' && geometry?.kind === 'ready' && (sheet.resolvedSparklines?.size || sheet.pivotRegions?.length || sheet.pivotTables?.length)) {
       const metrics = geometry.metrics
       const endX = Math.max(vx, vx + width - Number.EPSILON), endY = Math.max(vy, vy + height - Number.EPSILON)
       // Tile boxes may extend past the finite worksheet domain. Clamp only the
@@ -269,39 +297,40 @@ export function renderSheetViewport(
       const cornerB = metrics.logicalPointToSource(insideEnd(endX, metrics.cols.totalCss()), insideEnd(endY, metrics.rows.totalCss()))
       const colA = metrics.cols.locate(vx), colB = metrics.cols.locate(insideEnd(endX, metrics.cols.totalCss()))
       if (cornerA && cornerB && colA !== null && colB !== null) {
-        const r0 = Math.min(cornerA.row, cornerB.row), r1 = Math.max(cornerA.row, cornerB.row)
-        const c0 = Math.min(colA, colB), c1 = Math.max(colA, colB)
-        ctx.save()
-        ctx.translate(-vx, -vy)
-        let painted: boolean
-        const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
-        try { painted = paintSparklinesIn(ctx, sheet, (row, col) => {
-            const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
-            if (merge) {
-              const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
-              const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
-              const row0 = Math.min(firstSlot, lastSlot), row1 = Math.max(firstSlot, lastSlot)
-              const x = geometry.metrics.cols.start(merge.minCol), y = geometry.metrics.rows.start(row0)
-              const rect = {
-                x, y,
-                width: geometry.metrics.cols.start(merge.maxCol + 1) - x,
-                height: geometry.metrics.rows.start(row1 + 1) - y,
-              }
-              if (!(rect.width > 0 && rect.height > 0)
-                || belowDetail(rect.width, viewport.zoom * viewport.deviceScale)
-                || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
-              return rect
+        sourceWindow = { r0: Math.min(cornerA.row, cornerB.row), c0: Math.min(colA, colB), r1: Math.max(cornerA.row, cornerB.row), c1: Math.max(colA, colB) }
+        sourceRect = (row, col) => {
+          const merge = geometry.merges.query({ r0: row, r1: row, c0: col, c1: col }, { limit: 1 }).items[0]
+          if (merge) {
+            const firstSlot = geometry.metrics.order.sourceToDisplay(merge.minRow)
+            const lastSlot = geometry.metrics.order.sourceToDisplay(merge.maxRow)
+            const row0 = Math.min(firstSlot, lastSlot), row1 = Math.max(firstSlot, lastSlot)
+            const x = geometry.metrics.cols.start(merge.minCol), y = geometry.metrics.rows.start(row0)
+            const rect = {
+              x, y,
+              width: geometry.metrics.cols.start(merge.maxCol + 1) - x,
+              height: geometry.metrics.rows.start(row1 + 1) - y,
             }
-            const first = geometry.metrics.sourceCellToLogical({ row, col })
-            if (!first) return undefined
-            if (belowDetail(first.width, viewport.zoom * viewport.deviceScale) || belowDetail(first.height, viewport.zoom * viewport.deviceScale)) return undefined
-            return first
-          }, { r0, c0, r1, c1 }, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates)
-        } finally { ctx.restore() }
-        if (!painted) {
-          const diagnostics = (sheet.diagnostics ??= [])
-          if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
+            if (!(rect.width > 0 && rect.height > 0)
+              || belowDetail(rect.width, viewport.zoom * viewport.deviceScale)
+              || belowDetail(rect.height, viewport.zoom * viewport.deviceScale)) return undefined
+            return rect
+          }
+          const first = geometry.metrics.sourceCellToLogical({ row, col })
+          if (!first) return undefined
+          if (belowDetail(first.width, viewport.zoom * viewport.deviceScale) || belowDetail(first.height, viewport.zoom * viewport.deviceScale)) return undefined
+          return first
         }
+      }
+    }
+    if (plan.kind === 'detail' && sheet.resolvedSparklines?.size && geometry?.kind === 'ready' && sourceWindow && sourceRect) {
+      ctx.save()
+      ctx.translate(-vx, -vy)
+      let painted: boolean
+      const candidates = viewportSparklineCandidates(sheet, geometry, viewport, plan, options.sparklineViews)
+      try { painted = paintSparklinesIn(ctx, sheet, sourceRect, sourceWindow, { zoom: viewport.zoom, dpr: viewport.deviceScale, output: 'device' }, candidates) } finally { ctx.restore() }
+      if (!painted) {
+        const diagnostics = (sheet.diagnostics ??= [])
+        if (!diagnostics.some(d => d.feature === 'sparkline-painter-unavailable')) diagnostics.push({ kind: 'unsupported', feature: 'sparkline-painter-unavailable', message: 'The sparkline painter could not be loaded' })
       }
     }
     for (const record of records) replay(record, 'content')
@@ -323,10 +352,14 @@ export function renderSheetViewport(
         const dx = record.logicalBounds.x - record.body.x
         spills.push({ x0: span.x0 + dx, x1: span.x1 + dx, y0: record.logicalBounds.y, y1: record.logicalBounds.y + record.logicalBounds.height })
       }
+      // Pivot interiors and filled styled-region cells hide their gridlines (regionGrid.ts). A sheet with
+      // no pivot and no styled table pays only the guard: no allocation, no style lookup (spec §8 hot path).
+      const region = geometry?.kind === 'ready' && mayHaveRegionGrid(sheet) ? viewportRegionLines(sheet, geometry, yTop, yBottom, xLeft, xRight, viewport.zoom * viewport.deviceScale) : undefined
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
         for (const band of spills) if (band.x0 < x && x < band.x1) hidden.push([band.y0, band.y1])
-        for (const [y1, y2] of openSegments(yTop, yBottom, hidden)) {
+        const open = openSegments(yTop, yBottom, hidden)
+        for (const [y1, y2] of region ? region.lines(open, x, true) : open) {
           work.gridlineSpans++
           ctx.moveTo(x - vx + 0.5, y1 - vy + 0.5)
           ctx.lineTo(x - vx + 0.5, y2 - vy + 0.5)
@@ -334,14 +367,22 @@ export function renderSheetViewport(
       }
       for (const y of plan.rowLines) {
         const hidden = plan.merges.filter(merge => merge.y < y && y < merge.y + merge.height).map(merge => [merge.x, merge.x + merge.width] as [number, number])
-        for (const [x1, x2] of openSegments(xLeft, xRight, hidden)) {
+        const open = openSegments(xLeft, xRight, hidden)
+        for (const [x1, x2] of region ? region.lines(open, y, false) : open) {
           work.gridlineSpans++
           ctx.moveTo(x1 - vx + 0.5, y - vy + 0.5)
           ctx.lineTo(x2 - vx + 0.5, y - vy + 0.5)
         }
       }
       ctx.stroke()
+      if (region) paintCoveredLines(ctx, region.covered, { x: vx, y: vy })
       for (const paint of paintBorders) paint()
+      // The viewer draws the pivot buttons Excel shows on screen (§7.10).
+      if ((sheet.pivotRegions?.length || sheet.pivotTables?.length) && sourceWindow && sourceRect) {
+        ctx.save()
+        ctx.translate(-vx, -vy)
+        try { paintPivotButtonsIn(ctx, sheet, sourceRect, sourceWindow, 'screen') } finally { ctx.restore() }
+      }
       if (plan.drawings.length) {
         // Rebase each top-level placement by the Float64 pane origin (EMU) instead
         // of translating the canvas by worksheet coordinates: near the last row
@@ -372,6 +413,84 @@ export function renderSheetViewport(
     // The batch's uncached bodies are released once the tile is painted.
     if (options.layoutAdmission) cache.endBatch()
     ctx.restore()
+  }
+}
+
+/** The styled-region gridline rule over one tile's visible rows and columns: per gridline, the segments left to
+ * stroke, and the spans a region fill covers (collected in `covered`). Undefined without a rule. Lines are
+ * checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles.
+ *
+ * The rule is decided for every row (column) exactly as before, but its style work is bounded by the plan and
+ * the region classes, never by the source rows or columns a few pixels hold (PR #55 r7). Detail runs ask the
+ * rule cell by cell. A sub-detail run the planner summarizes asks it through the layer's class keys
+ * (RegionGrid.keyedLine): one style resolution per (row class, column class) pair, a cell's own fill read from
+ * its stored cell, and a cell the layer cannot classify (a pivot with `formats`) resolved by itself. What is
+ * left per summarized row is the per-row segment the paint needs anyway. */
+function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number, scale: number):
+  { lines(segments: Array<[number, number]>, at: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
+  const lineRule = regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style)
+  if (!lineRule) return undefined
+  const { rows, cols, order } = geometry.metrics
+  const rects = lineRule.rects
+  /** `keyed`: a summarized row (column), decided through class keys; its key and (rows) stored cells. */
+  type RowSpan = { source: number; y0: number; y1: number; keyed?: { key: string | undefined; cells: readonly XlsxCell[] | undefined } }
+  type ColSpan = { col: number; x0: number; x1: number; keyed?: { key: string | undefined } }
+  const lineRows: RowSpan[] = [], lineCols: ColSpan[] = []
+  for (const run of rows.visibleBetween(yTop, yBottom).runs) {
+    const summarized = belowDetail(run.sizeCss, scale)
+    for (let slot = run.start; slot <= run.end; slot++) {
+      const source = order.displayToSource(slot)
+      if (!rects.some(r => source >= r.minRow && source <= r.maxRow)) continue
+      lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot), ...(summarized ? { keyed: { key: lineRule.rowKey(source), cells: geometry.cellsOf(source) } } : {}) })
+    }
+  }
+  for (const run of cols.visibleBetween(xLeft, xRight).runs) {
+    const summarized = belowDetail(run.sizeCss, scale)
+    for (let col = run.start; col <= run.end; col++) {
+      if (!rects.some(r => col >= r.minCol && col <= r.maxCol)) continue
+      lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col), ...(summarized ? { keyed: { key: lineRule.colKey(col) } } : {}) })
+    }
+  }
+  const neighbours = (axis: 'rows' | 'cols', at: number): [number, number] | undefined => {
+    const after = geometry.metrics[axis].locate(at), before = at >= 0.5 ? geometry.metrics[axis].locate(at - 0.5) : null
+    if (after === null || before === null || before === after) return undefined
+    return axis === 'cols' ? [before, after] : [order.displayToSource(before), order.displayToSource(after)]
+  }
+  const styleIn = (cells: readonly XlsxCell[] | undefined, col: number) => cells?.find(cell => cell.col === col)?.style
+  const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
+  return {
+    covered,
+    lines(segments, at, vertical) {
+      const pair = (vertical ? lineRows : lineCols).length ? neighbours(vertical ? 'cols' : 'rows', at) : undefined
+      if (!pair) return segments
+      const hidden: Array<[number, number]> = []
+      // Keys of the line's own two columns (rows), and for a horizontal line its two rows' stored cells.
+      let pairKeys: [string | undefined, string | undefined] | undefined, pairCells: [readonly XlsxCell[] | undefined, readonly XlsxCell[] | undefined] | undefined
+      for (const span of vertical ? lineRows : lineCols) {
+        let rule: string | null | undefined
+        if ('source' in span) {
+          if (span.keyed) {
+            pairKeys ??= [lineRule.colKey(pair[0]), lineRule.colKey(pair[1])]
+            const { key, cells } = span.keyed
+            rule = lineRule.keyedLine(
+              { row: span.source, col: pair[0], rowKey: key, colKey: pairKeys[0], own: styleIn(cells, pair[0]) },
+              { row: span.source, col: pair[1], rowKey: key, colKey: pairKeys[1], own: styleIn(cells, pair[1]) })
+          } else rule = lineRule.line(span.source, pair[0], span.source, pair[1])
+        } else if (span.keyed) {
+          pairKeys ??= [lineRule.rowKey(pair[0]), lineRule.rowKey(pair[1])]
+          pairCells ??= [geometry.cellsOf(pair[0]), geometry.cellsOf(pair[1])]
+          const key = span.keyed.key
+          rule = lineRule.keyedLine(
+            { row: pair[0], col: span.col, rowKey: pairKeys[0], colKey: key, own: styleIn(pairCells[0], span.col) },
+            { row: pair[1], col: span.col, rowKey: pairKeys[1], colKey: key, own: styleIn(pairCells[1], span.col) })
+        } else rule = lineRule.line(pair[0], span.col, pair[1], span.col)
+        if (rule === undefined) continue
+        const from = 'source' in span ? span.y0 : span.x0, to = 'source' in span ? span.y1 : span.x1
+        hidden.push([from, to])
+        if (rule) covered.push({ color: spreadsheetColor(rule), vertical, at, segments: intersectInterval(segments, from, to) })
+      }
+      return subtractIntervals(segments, hidden)
+    },
   }
 }
 

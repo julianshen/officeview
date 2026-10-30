@@ -73,6 +73,15 @@ export class OfficePackage {
     return bytes && new TextDecoder().decode(bytes)
   }
 
+  /** Read only the first maxBytes of a part. Unlike boundedText this succeeds
+   * for larger parts and stops JSZip's inflater as soon as the prefix arrives. */
+  async prefixText(path: string, maxBytes: number): Promise<string | undefined> {
+    const f = this.zip.file(path)
+    if (!f) return undefined
+    const bytes = await prefixBytes(f, maxBytes)
+    return new TextDecoder().decode(bytes)
+  }
+
   /** Read a part and parse it as XML. Cached. */
   async xml(path: string): Promise<XmlNode | undefined> {
     const cacheKey = `xml:${path}`
@@ -133,6 +142,69 @@ function boundedBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8A
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length }
       chunks.length = 0
       resolve(bytes)
+    }).resume()
+  })
+}
+
+/** Prefix counterpart to boundedBytes; aborts upstream inflation once enough
+ * decompressed bytes have been observed, without caching a partial part.
+ * Uses the same JSZip 3.10 internals as boundedBytes; if they change, the
+ * patching throws and callers fail closed (an unreadable diagnostic). */
+function prefixBytes(file: JSZip.JSZipObject, maxBytes: number): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) return Promise.reject(new RangeError('maxBytes must be a positive safe integer'))
+  return new Promise((resolve, reject) => {
+    const stream = (file as unknown as { internalStream(type: 'uint8array'): JSZip.JSZipStreamHelper<Uint8Array> }).internalStream('uint8array')
+    const chunks: Uint8Array[] = []
+    let length = 0
+    let stopping = false
+    let settled = false
+    const STOP = new Error('part prefix complete')
+    type Worker = { previous?: Worker; push: (...args: unknown[]) => unknown; end: () => unknown; error: (error: Error) => unknown }
+    const last = (stream as unknown as { _worker: Worker })._worker
+    let source = last
+    while (source.previous) source = source.previous
+    const push = source.push.bind(source), end = source.end.bind(source)
+    const join = () => {
+      const out = new Uint8Array(length)
+      let offset = 0
+      for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.length }
+      chunks.length = 0
+      return out
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      chunks.length = 0
+      reject(error)
+      last.error(error instanceof Error ? error : new Error(String(error)))
+    }
+    source.push = (...args) => {
+      try { return push(...args) } catch (error) {
+        if (error === STOP) {
+          stopping = true
+          last.error(STOP)
+          if (!settled) { settled = true; resolve(join()) }
+          return
+        }
+        fail(error)
+      }
+    }
+    source.end = () => {
+      try { return end() } catch (error) { fail(error) }
+    }
+    stream.on('data', (chunk: Uint8Array) => {
+      const take = Math.min(maxBytes - length, chunk.length)
+      if (take > 0) { chunks.push(chunk.subarray(0, take)); length += take }
+      if (length === maxBytes) throw STOP
+    }).on('error', (error: Error) => {
+      if (stopping || settled) return
+      settled = true
+      chunks.length = 0
+      reject(error)
+    }).on('end', () => {
+      if (settled) return
+      settled = true
+      resolve(join())
     }).resume()
   })
 }

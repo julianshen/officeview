@@ -4,6 +4,41 @@ import type { RangeDetection } from './rangeDetection'
 import type { FindPage } from './find'
 import type { CellId, DisplaySlot, SourceCell, SourceCol, SourceRect, SourceRow } from './coordinates'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/model'
+import type { TableMetadata } from '../formula/types'
+import type { DxfStyle, TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
+import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
+
+/** Shared bounds for paged table-style descriptors and decoded role caches. */
+export const MAX_REGION_STYLE_TABLES = 512
+/** Largest built-in table-style descriptor measured across all 144 table/pivot
+ * names: 25,154 B excluding the shared workbook theme; 32 KiB leaves 1.3x headroom. */
+export const REGION_STYLE_DESCRIPTOR_MAX_BYTES_PER_TABLE = 32_768
+export const REGION_STYLE_REPLY_OVERHEAD_BYTES = 1_024
+/** Retained custom styles parsed from styles.xml are capped independently of source size. */
+export const MAX_PAGED_TABLE_STYLE_DEFS_BYTES = 2 * 1024 * 1024
+/** Distinct `formats` dxfs one pivot-display reply carries (styles.xml holds at most MAX_DXFS = 65,536). */
+export const MAX_PIVOT_DISPLAY_DXFS = 4_096
+export const MAX_REGION_STYLE_MEMO_ENTRIES = 4_096
+/** A pivot with `formats` keeps its overrides for at most this many cells (pivots/regions.ts), at this estimate each;
+ * the receiver charges the allowance once per formatted pivot. */
+export const PIVOT_FORMAT_MEMO_ENTRIES = 4_096
+export const PIVOT_FORMAT_MEMO_ENTRY_ESTIMATE_BYTES = 128
+export const PIVOT_FORMAT_MEMO_BYTES = PIVOT_FORMAT_MEMO_ENTRIES * PIVOT_FORMAT_MEMO_ENTRY_ESTIMATE_BYTES
+export const REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES = 1_024
+export const REGION_STYLE_LAYER_BASE_BYTES = 4_096
+export const REGION_STYLE_REGION_ESTIMATE_BYTES = 512
+export const REGION_STYLE_LAYER_MAX_BYTES = REGION_STYLE_LAYER_BASE_BYTES
+  + MAX_REGION_STYLE_TABLES * REGION_STYLE_REGION_ESTIMATE_BYTES
+  + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES
+/** The fixed part of a decoded region layer's charge (receiver and worker Find alike): the shared style
+ * memo, each table/pivot region and pivot style, and each formatted pivot's own overrides memo
+ * (pivots/regions.ts). A pivot's saved layout is added by tableStyles/remoteLayer.ts. */
+export function regionLayerFixedBytes(payload: RemoteRegionStyles | RemotePivotDisplay): number {
+  const count = 'pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : payload.tables.length
+  if (!count) return 0
+  const formatted = 'pivotTables' in payload ? payload.pivotTables.filter(def => def.formats.some(format => format.action === 'formatting' && format.dxfId !== undefined)).length : 0
+  return REGION_STYLE_LAYER_BASE_BYTES + count * REGION_STYLE_REGION_ESTIMATE_BYTES + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES + formatted * PIVOT_FORMAT_MEMO_BYTES
+}
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
 export const MAX_OVERVIEW_GROUPS_DESKTOP = 2048
@@ -211,6 +246,10 @@ export interface SourceStore {
   readDrawings?(options: ReadOptions, profile: ProfileId, memory?: DrawingMemory): Promise<SheetDrawings>
   /** S3: resolves this sheet's sparkline groups from worker-owned cell stores. */
   readSparklines?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, replyEnvelopeBytes?: number): Promise<SheetSparklines>
+  /** S8: bounded table-style descriptors for the receiving region-style layer. */
+  readRegionStyles?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory): Promise<RemoteRegionStyles>
+  /** S13: clone-safe table/pivot/control descriptors for the main-thread display layer. */
+  readPivotDisplay?(options: ReadOptions, grantBytes: number, memory?: DrawingMemory, profile?: ProfileId): Promise<RemotePivotDisplay>
 }
 /** Absolute transient bytes of one drawing read; false when they cannot be admitted. */
 export interface DrawingMemory { set(bytes: number): boolean }
@@ -237,6 +276,30 @@ export interface SheetSparklines {
   diagnostics: SparklineDiagnostic[]
   /** Referenced sheet pages that were still loading when this snapshot ran. */
   pendingSheetIds?: string[]
+}
+
+/** Worker-resolved table style definitions, bounded by the receiver's grant. */
+export interface RemoteRegionStyles {
+  sheetId: string
+  stamp: SourceStamp
+  tables: readonly { table: Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>; def: TableStyleDef }[]
+  theme?: ThemeContext
+  diagnostics: readonly TableStyleDiagnostic[]
+  /** Exact worker estimate when the current receiver grant was insufficient. */
+  requiredBytes?: number
+}
+
+/** S13 receiver-granted descriptors. Roles, buttons and drawing controls are composed on the main thread. */
+export interface RemotePivotDisplay {
+  sheetId: string
+  stamp: SourceStamp
+  pivotTables: readonly PivotTableDefinition[]
+  pivotStyles: readonly TableStyleDef[]
+  /** The styles.xml dxfs the pivots' `formats` name, by dxfId (bounded; counted in the reply estimate). */
+  pivotDxfs?: readonly { id: number; dxf: DxfStyle }[]
+  theme?: ThemeContext
+  diagnostics: readonly (TableStyleDiagnostic | PivotDiagnostic)[]
+  requiredBytes?: number
 }
 
 /** S13.2: one sheet's paintable drawings as the resident parser produces them,
@@ -504,6 +567,10 @@ export type SourceReadQuery =
   | { op: 'drawings'; replyByteLimit?: number }
   /** S3: receiver-granted sparkline resolution; sheet id is on the read owner. */
   | { op: 'sparklines'; grantBytes: number }
+  /** S8: receiver-granted table region styles. */
+  | { op: 'regionStyles'; grantBytes: number }
+  /** S13 receiver-granted pivot/control descriptors. */
+  | { op: 'pivotDisplay'; grantBytes: number }
   /** S10.2: operation range detection (sort admission includes the structural
    * guard) run next to the store, so a paged sheet is not scanned strip by
    * strip across the worker boundary. Same detectors, same outcome. */
@@ -520,6 +587,8 @@ export type SourceReadResult =
   | { op: 'releaseScan'; released: boolean }
   | { op: 'drawings'; result: SheetDrawings }
   | { op: 'sparklines'; result: SheetSparklines }
+  | { op: 'regionStyles'; result: RemoteRegionStyles }
+  | { op: 'pivotDisplay'; result: RemotePivotDisplay }
   | { op: 'detectRange'; detection: RangeDetection }
 /** S5.4: resolved cell styles (indexed by cell styleIndex) and the date system
  * of a paged workbook, published with open so worker-backed cells format like
@@ -550,6 +619,13 @@ export interface SheetLayout {
   /** S3: metadata-only fast path; false lets sheets without sparklines avoid
    * any per-frame preparation or worker request. */
   hasSparklines?: boolean
+  /** S8: table metadata fast path; absent/false has no per-frame style work. */
+  hasRegionStyles?: boolean
+  /** Number of table descriptors a bounded regionStyles read may return. */
+  regionStyleTableCount?: number
+  /** S13 metadata-only fast path; absent/false has no pivot display work. */
+  hasPivotDisplay?: boolean
+  pivotTableCount?: number
   /** Authored frozen panes. */
   frozen?: { rows: number; cols: number; topRow?: number; leftCol?: number }
 }

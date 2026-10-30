@@ -1,0 +1,309 @@
+/**
+ * The saved pivot layout (spec §3, §6.5): `location` and the saved
+ * `rowItems`/`colItems` mapped onto sheet cells, and each cell's style roles.
+ * Lazy chunk `pivots`. Nothing here recomputes a layout: it reads the one Excel
+ * saved, and a definition whose indices are invalid is never laid out (§7.6,
+ * Ruling AC).
+ *
+ * Measured (Excel 16.114, docs/validation/xlsx-pivots.md "Element precedence";
+ * refs/measure-precedence.png, pivot-subtotals-bottom, pivot-values-on-rows,
+ * pivot-layout-outline, pivot-layout-tabular, pivot-page-field):
+ * - headerRow is every row above the first data row; firstHeaderCell is the
+ *   row-label columns of those rows except the last (the "Row Labels" row);
+ * - the column-item rows (from `firstHeaderRow`) carry one column subheading
+ *   per level over the item columns, the leaf level included;
+ * - lastColumn is the grand-total columns from the column-item rows down, never
+ *   the top header row (Ruling AE), and through the grand-total row;
+ * - firstColumn is the row-label columns over the location's whole height,
+ *   header rows included, under headerRow and firstHeaderCell there
+ *   (refs/pivot-light-9.png: its right line at x 77 runs through rows 3–5;
+ *   refs/pivot-medium-23.png: its #83CCEB fill in A3:A5, where headerRow has
+ *   none; refs/measure-precedence.png: headerRow still wins A5);
+ * - a line whose deepest item has children is a row subheading for its level
+ *   across the whole row (compact, outline); in tabular form a parent item is a
+ *   subheading in its own label column, from its line to its last child line;
+ * - the grand-total lines are one totalRow band (pivot-values-on-rows: one
+ *   line above its two grand rows, none between them);
+ * - every subtotal line is its own band (adjacent lines are two bands); in a
+ *   tabular parent's label column its top edge is inner, so the parent's
+ *   bottom line shows there;
+ * - stripes alternate from the first data row, subheading lines included;
+ * - page fields sit above the location, one blank row between.
+ * Unmeasured, from ECMA-376 §18.10 / §18.8.40: second and third subtotal rows,
+ * subtotal columns, blankRow, the style-info flag gating (showRowHeaders →
+ * firstColumn, firstHeaderCell and row subheadings; showColHeaders → headerRow
+ * and column subheadings), and more than one page field.
+ */
+import type { BandEdges, RoleRef, SheetRect, TableStyleDef, TableStyleElementType } from '../tableStyles/model'
+import { stripeBand } from '../tableStyles/regionLayer'
+import { PIVOT_VALUES_FIELD, type PivotAxisItem, type PivotItemType, type PivotPageField, type PivotTableDefinition } from './model'
+
+/** One saved `rowItems`/`colItems` line with its leading repeats resolved. */
+export interface PivotLine {
+  type: PivotItemType
+  /** The first level this line writes (`r`); its deepest level is `items.length - 1`. */
+  first: number
+  /** Pivot-field item index per level, 0 … deepest (-1 where nothing precedes a repeat). */
+  items: number[]
+  /** `i`: the data-field index on the axis carrying the Values field. */
+  data: number
+}
+export interface PivotPageCell { row: number; col: number; field: PivotPageField }
+export interface SavedPivotLayout {
+  def: PivotTableDefinition
+  rect: SheetRect
+  /** The location plus each page field's label/value pair. */
+  rects: SheetRect[]
+  /** Rows: first column-item row, first data row; first data column. */
+  itemRow0: number
+  dataRow0: number
+  dataCol0: number
+  rows: PivotLine[]
+  cols: PivotLine[]
+  /** Sheet column of each row-field level's labels. */
+  labelCol: number[]
+  /** Page fields' label cells (the value is the next column). */
+  pages: PivotPageCell[]
+  /** Last data row / column before the grand totals. */
+  bodyRowEnd: number
+  bodyColEnd: number
+  /** Tabular parents (an item sharing its line with its first child), by every line their band covers. */
+  parentBands: Map<number, ParentBand[]>
+}
+/** A parent item's label band: `col`, lines `line` … `last`. */
+export interface ParentBand { level: number; col: number; line: number; last: number }
+
+/** Parent-band entries allowed per saved row line, plus a fixed allowance (see savedPivotLayout). */
+export const PARENT_BAND_ENTRIES_PER_LINE = 32
+const PARENT_BAND_ENTRIES_BASE = 65_536
+
+const CELL = /^\$?([A-Z]{1,3})\$?([1-9]\d{0,6})$/
+function locationRect(ref: string): SheetRect | undefined {
+  const [from, to = from] = ref.split(':')
+  const a = CELL.exec(from ?? ''), b = CELL.exec(to)
+  if (!a || !b) return undefined
+  const col = (letters: string) => [...letters].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1
+  const rect = { minRow: Number(a[2]) - 1, minCol: col(a[1]!), maxRow: Number(b[2]) - 1, maxCol: col(b[1]!) }
+  return rect.minRow <= rect.maxRow && rect.minCol <= rect.maxCol ? rect : undefined
+}
+
+function axisLines(items: readonly PivotAxisItem[]): PivotLine[] {
+  let previous: number[] = []
+  return items.map(item => {
+    const first = Math.max(0, item.r)
+    const resolved = previous.slice(0, first)
+    while (resolved.length < first) resolved.push(-1)
+    // A loop, not a spread: a spread passes every index as a call argument.
+    for (const x of item.x) resolved.push(x)
+    if (item.type !== 'grand') previous = resolved
+    return { type: item.type, first, items: item.type === 'grand' ? [] : resolved, data: item.i }
+  })
+}
+
+const isSubtotal = (type: PivotItemType) => type !== 'data' && type !== 'grand' && type !== 'blank'
+
+/** Whether the field after `field` shares its label column (compact form). */
+export function sharesColumn(def: PivotTableDefinition, field: number): boolean {
+  if (field === PIVOT_VALUES_FIELD) return def.compactData && def.outlineData
+  const f = def.fields[field]
+  return Boolean(f && f.compact && f.outline)
+}
+
+/** The saved layout, or undefined when it cannot be laid out: no `rowItems`/
+ * `colItems`, an invalid index (Ruling AC), or saved items that do not fill the location. */
+export function savedPivotLayout(def: PivotTableDefinition, why?: { tooDeep?: boolean }): SavedPivotLayout | undefined {
+  if (!def.rowItems || !def.colItems || def.unsupported.some(entry => entry.startsWith('invalid-index:'))) return undefined
+  const rect = locationRect(def.location.ref)
+  const { firstHeaderRow, firstDataRow, firstDataCol } = def.location
+  if (!rect || !(firstHeaderRow >= 0 && firstHeaderRow <= firstDataRow && firstDataCol >= 0)) return undefined
+  const bodyRows = rect.maxRow - rect.minRow + 1 - firstDataRow, bodyCols = rect.maxCol - rect.minCol + 1 - firstDataCol
+  // An axis with nothing on it saves one empty line (`<i/>`) and may leave no body cells.
+  const fits = (lines: number, cells: number) => lines === cells || (cells === 0 && lines <= 1)
+  if (bodyRows < 0 || bodyCols < 0 || !fits(def.rowItems.length, bodyRows) || !fits(def.colItems.length, bodyCols)) return undefined
+  const dataRow0 = rect.minRow + firstDataRow, dataCol0 = rect.minCol + firstDataCol
+  const rows = axisLines(def.rowItems).slice(0, bodyRows), cols = axisLines(def.colItems).slice(0, bodyCols)
+  const labelCol: number[] = []
+  def.rowFields.forEach((_field, level) => {
+    const previous = labelCol[level - 1]
+    labelCol.push(previous === undefined ? rect.minCol : Math.min(previous + (sharesColumn(def, def.rowFields[level - 1]!) ? 0 : 1), Math.max(rect.minCol, dataCol0 - 1)))
+  })
+  const firstGrand = (lines: PivotLine[]) => { const n = lines.findIndex(line => line.type === 'grand'); return n < 0 ? lines.length : n }
+  const pages: PivotPageCell[] = []
+  const rects: SheetRect[] = [rect]
+  const pageRows = def.location.rowPageCount || def.pageFields.length, pageCols = def.location.colPageCount || 1
+  def.pageFields.forEach((field, k) => {
+    // "Down, then over" by default; `pageOverThenDown` fills across first. A blank row separates them from the table.
+    const i = def.pageOverThenDown ? Math.floor(k / pageCols) : k % pageRows
+    const j = def.pageOverThenDown ? k % pageCols : Math.floor(k / pageRows)
+    const row = rect.minRow - 1 - pageRows + i, col = rect.minCol + 3 * j
+    if (row < 0 || i >= pageRows) return
+    pages.push({ row, col, field })
+    rects.push({ minRow: row, minCol: col, maxRow: row, maxCol: col + 1 })
+  })
+  const parentBands = new Map<number, ParentBand[]>()
+  // Each line lies in at most one parent band per level, so a pivot stores lines × (depth - 1) entries. Past the
+  // budget the layout is not drawn: a hostile deep, long axis would be quadratic. A real tabular pivot with 34 or
+  // more nested row fields and long tails can reach it too: that is a fail-closed styling limit (`why.tooDeep`).
+  let budget = PARENT_BAND_ENTRIES_PER_LINE * rows.length + PARENT_BAND_ENTRIES_BASE
+  for (let n = 0; n < rows.length; n++) {
+    const line = rows[n]!
+    if (line.type !== 'data') continue
+    for (let level = line.first; level < line.items.length - 1; level++) {
+      let last = n
+      while (last + 1 < rows.length && rows[last + 1]!.first > level && rows[last + 1]!.type !== 'grand' && rows[last + 1]!.type !== 'blank') last++
+      if ((budget -= last - n + 1) < 0) { if (why) why.tooDeep = true; return undefined }
+      const parent = { level, col: labelCol[level] ?? rect.minCol, line: n, last }
+      for (let k = n; k <= last; k++) {
+        const list = parentBands.get(k)
+        if (list) list.push(parent)
+        else parentBands.set(k, [parent])
+      }
+    }
+  }
+  return {
+    def, rect, rects, itemRow0: rect.minRow + firstHeaderRow, dataRow0, dataCol0, rows, cols, labelCol, pages,
+    bodyRowEnd: dataRow0 + firstGrand(rows) - 1, bodyColEnd: dataCol0 + firstGrand(cols) - 1, parentBands,
+  }
+}
+
+/** Retained per saved line: the line record and its bookkeeping, before its item vector. */
+export const SAVED_LINE_ESTIMATE_BYTES = 64
+/** Per resolved item-vector slot, per parent-band reference, per parent band, and per line holding bands. */
+const VECTOR_SLOT_BYTES = 8, BAND_REFERENCE_BYTES = 8, PARENT_BAND_BYTES = 48, BAND_LIST_BYTES = 64
+/** The layout record with its location rect and its fixed arrays (rows, cols, labelCol, pages, rects, parentBands). */
+const LAYOUT_BASE_BYTES = 512
+/** Per row field: its labelCol slot. Per page field: its page cell, its rect and their two array slots. */
+const LABEL_COL_BYTES = 8, PAGE_FIELD_BYTES = 144
+
+/**
+ * What savedPivotLayout(def) retains (PR #55 P2): the layout record and its fixed arrays,
+ * one labelCol slot per row field, one page cell and rect per page field, every saved
+ * line with its resolved item vector, and the parent-band lists, estimated from the
+ * definition alone with no allocation, so a receiver can reserve it before building.
+ * Every per-field count is the definition's own (an upper bound: the build skips page fields
+ * whose row would fall above the sheet or past the location's page-row count). It walks the same parent-band loop as savedPivotLayout
+ * as a count, over every saved line (an upper bound when the location keeps fewer); past
+ * the parent-band budget the layout is not built and only the rest is counted.
+ */
+export function savedPivotLayoutBytes(def: PivotTableDefinition): number {
+  const rows = def.rowItems, cols = def.colItems
+  if (!rows || !cols) return 0
+  const vectorLength = (item: PivotAxisItem) => item.type === 'grand' ? 0 : Math.max(0, item.r) + item.x.length
+  let bytes = LAYOUT_BASE_BYTES + LABEL_COL_BYTES * def.rowFields.length + PAGE_FIELD_BYTES * def.pageFields.length
+  for (const item of rows) bytes += SAVED_LINE_ESTIMATE_BYTES + VECTOR_SLOT_BYTES * vectorLength(item)
+  for (const item of cols) bytes += SAVED_LINE_ESTIMATE_BYTES + VECTOR_SLOT_BYTES * vectorLength(item)
+  let budget = PARENT_BAND_ENTRIES_PER_LINE * rows.length + PARENT_BAND_ENTRIES_BASE
+  let references = 0, bands = 0
+  for (let n = 0; n < rows.length; n++) {
+    const line = rows[n]!
+    if (line.type !== 'data') continue
+    const first = Math.max(0, line.r)
+    for (let level = first; level < vectorLength(line) - 1; level++) {
+      let last = n
+      while (last + 1 < rows.length && Math.max(0, rows[last + 1]!.r) > level && rows[last + 1]!.type !== 'grand' && rows[last + 1]!.type !== 'blank') last++
+      if ((budget -= last - n + 1) < 0) return bytes
+      bands++
+      references += last - n + 1
+    }
+  }
+  return bytes + bands * PARENT_BAND_BYTES + references * BAND_REFERENCE_BYTES + Math.min(rows.length, references) * BAND_LIST_BYTES
+}
+
+const NTH = ['first', 'second', 'third'] as const
+const nth = (level: number, kind: 'SubtotalRow' | 'SubtotalColumn' | 'RowSubheading' | 'ColumnSubheading') =>
+  `${NTH[Math.min(2, Math.max(0, level))]}${kind}` as TableStyleElementType
+
+export interface SavedPivotRoles {
+  /** The saved location (wholeTable). */
+  rect: SheetRect
+  /** Every painted rectangle: the location and the page fields. */
+  rects: SheetRect[]
+  roleAt(row: number, col: number): RoleRef[]
+  /** A row's class: roleAt(row, col) for two rows of one class gives the same elements at every column (edges
+   * aside). Header and page rows are their own class; body rows share one by line type, level, stripe and the
+   * tabular parent bands they lie in. */
+  rowClass(row: number): string
+}
+
+/** Each cell's style roles from the saved layout, with the bands their borders
+ * follow (Ruling AE); `style` supplies stripe sizes. Undefined when the layout
+ * cannot be laid out: the cells then keep their own `s=` (pivot-layout-unavailable). */
+export function savedPivotRoles(def: PivotTableDefinition, style?: TableStyleDef, layout = savedPivotLayout(def)): SavedPivotRoles | undefined {
+  if (!layout) return undefined
+  const { rect, dataRow0, dataCol0, itemRow0, rows, cols, bodyRowEnd, bodyColEnd } = layout
+  const info = def.styleInfo
+  const leafLevel = def.rowFields.length - 1
+  const band = (element: TableStyleElementType, minRow: number, minCol: number, maxRow: number, maxCol: number, row: number, col: number): RoleRef => {
+    const edges: BandEdges = { top: row === minRow, bottom: row === maxRow, left: col === minCol, right: col === maxCol }
+    return { element, edges }
+  }
+  const size = (type: TableStyleElementType) => Math.max(1, style?.elements[type]?.size ?? 1)
+  const grandCol0 = bodyColEnd + 1
+  return {
+    rect,
+    rects: layout.rects,
+    rowClass(row) {
+      if (layout.pages.some(cell => cell.row === row)) return `p${row}`
+      if (row < rect.minRow || row > rect.maxRow) return 'o'
+      if (row < dataRow0) return `h${row}`
+      const n = row - dataRow0, rowLine = rows[n]
+      let key = `b${+(row >= Math.max(itemRow0, rect.minRow + 1))}${+(row >= itemRow0)}${+(row <= bodyRowEnd)}`
+      if (info?.showRowStripes && row <= bodyRowEnd) key += n % (size('firstRowStripe') + size('secondRowStripe')) < size('firstRowStripe') ? 's1' : 's2'
+      if (!rowLine) return `${key}-`
+      const level = rowLine.items.length - 1
+      if (rowLine.type === 'grand') key += 'G'
+      else if (rowLine.type === 'blank') key += 'B'
+      else if (isSubtotal(rowLine.type)) key += `S${nth(level, 'SubtotalRow')}`
+      else if (info?.showRowHeaders && level >= 0 && level < leafLevel) key += `R${level}`
+      if (info?.showRowHeaders) for (const parent of layout.parentBands.get(n) ?? []) key += `|${parent.col}:${parent.level}`
+      return key
+    },
+    roleAt(row, col) {
+      const page = layout.pages.find(cell => cell.row === row && (cell.col === col || cell.col + 1 === col))
+      if (page) return [band(page.col === col ? 'pageFieldLabels' : 'pageFieldValues', row, col, row, col, row, col)]
+      if (row < rect.minRow || row > rect.maxRow || col < rect.minCol || col > rect.maxCol) return []
+      const out: RoleRef[] = [band('wholeTable', rect.minRow, rect.minCol, rect.maxRow, rect.maxCol, row, col)]
+      const line = col >= dataCol0 ? cols[col - dataCol0] : undefined
+      if (line?.type === 'grand' && info?.showLastColumn && row >= Math.max(itemRow0, rect.minRow + 1)) out.push(band('lastColumn', Math.max(itemRow0, rect.minRow + 1), grandCol0, rect.maxRow, rect.maxCol, row, col))
+      if (line && isSubtotal(line.type) && row >= itemRow0) out.push(band(nth(line.items.length - 1, 'SubtotalColumn'), itemRow0, col, rect.maxRow, col, row, col))
+      if (info?.showRowHeaders && col < dataCol0) out.push(band('firstColumn', rect.minRow, rect.minCol, rect.maxRow, dataCol0 - 1, row, col))
+      if (row < dataRow0) {
+        if (info?.showColHeaders) out.push(band('headerRow', rect.minRow, rect.minCol, dataRow0 - 1, rect.maxCol, row, col))
+        if (info?.showRowHeaders && col < dataCol0 && row < dataRow0 - 1) out.push(band('firstHeaderCell', rect.minRow, rect.minCol, dataRow0 - 2, dataCol0 - 1, row, col))
+        const level = row - itemRow0
+        if (info?.showColHeaders && line && line.type !== 'grand' && level >= 0 && level < def.colFields.length) out.push(band(nth(level, 'ColumnSubheading'), row, dataCol0, row, Math.max(dataCol0, grandCol0 - 1), row, col))
+        return out
+      }
+      const n = row - dataRow0, rowLine = rows[n]
+      if (info?.showRowStripes && row <= bodyRowEnd) {
+        const first = size('firstRowStripe'), period = first + size('secondRowStripe')
+        const [lo, hi] = stripeBand(dataRow0, n, first, size('secondRowStripe'))
+        out.push(band(n % period < first ? 'firstRowStripe' : 'secondRowStripe', lo, rect.minCol, Math.min(hi, bodyRowEnd), rect.maxCol, row, col))
+      }
+      if (info?.showColStripes && row <= bodyRowEnd && col >= dataCol0 && col <= bodyColEnd) {
+        const k = col - dataCol0, period = size('firstColumnStripe') + size('secondColumnStripe')
+        const [lo, hi] = stripeBand(dataCol0, k, size('firstColumnStripe'), size('secondColumnStripe'))
+        out.push(band(k % period < size('firstColumnStripe') ? 'firstColumnStripe' : 'secondColumnStripe', dataRow0, lo, bodyRowEnd, Math.min(hi, bodyColEnd), row, col))
+      }
+      if (!rowLine) return out
+      const level = rowLine.items.length - 1
+      // The grand-total lines are one band (refs/pivot-values-on-rows.png: no line between its two grand rows).
+      if (rowLine.type === 'grand') out.push(band('totalRow', bodyRowEnd + 1, rect.minCol, rect.maxRow, rect.maxCol, row, col))
+      else if (rowLine.type === 'blank') out.push(band('blankRow', row, rect.minCol, row, rect.maxCol, row, col))
+      else if (isSubtotal(rowLine.type)) {
+        const role = band(nth(level, 'SubtotalRow'), row, rect.minCol, row, rect.maxCol, row, col)
+        // Under a tabular parent's label band the band's bottom edge is kept: the
+        // subtotal's top is no outer edge in that column (refs/pivot-layout-tabular.png:
+        // #44B3E1 under A8, #156082 from column B on).
+        if (typeof role !== 'string' && info?.showRowHeaders && col < dataCol0 && layout.parentBands.get(n - 1)?.some(parent => parent.col === col && parent.last === n - 1)) role.edges.top = false
+        out.push(role)
+      }
+      else if (info?.showRowHeaders && level >= 0 && level < leafLevel) out.push(band(nth(level, 'RowSubheading'), row, rect.minCol, row, rect.maxCol, row, col))
+      // A tabular parent: its label column, from its line through its last child line.
+      if (info?.showRowHeaders && col < dataCol0) for (const parent of layout.parentBands.get(n) ?? []) {
+        if (parent.col === col) out.push(band(nth(parent.level, 'RowSubheading'), dataRow0 + parent.line, col, dataRow0 + parent.last, col, row, col))
+      }
+      return out
+    },
+  }
+}

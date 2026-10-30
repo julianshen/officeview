@@ -48,8 +48,35 @@ export const EAGER_FORBIDDEN: readonly RegExp[] = [
   // The chart engine is lazy (spec 6.1); chartLoader, chartModel and the placeholder painter stay eager.
   /src\/charts\//,
   /src\/xlsx\/chart\.ts(?:$|\?)/,
+  /src\/xlsx\/tableStyles\//,
+  /src\/xlsx\/pivots\/(?!stub\.ts(?:$|\?))/,
   /src\/xlsx\/sparklines\/(?!model\.ts(?:$|\?)|parseGroups\.ts(?:$|\?)|resolve\.ts(?:$|\?))/,
   // The slideshow and the slide appearance enrichment are lazy (slideshow spec 8).
   /src\/slideshow\//,
   /src\/pptx\/appearance\//,
 ]
+
+// The paged worker's chunks (spec §1.5, §6.2): a large workbook loads the table-style
+// built-ins and the styles-extras parser only for a styled table, pivot, slicer or timeline,
+// so neither may sit in the static closure of the chunks every paged open loads.
+export const PAGED_WORKER_ROOTS: readonly RegExp[] = [
+  /src\/xlsx\/view\/pagedSource\.ts(?:$|\?)/,
+  /src\/xlsx\/storage\/pagedImport\.ts(?:$|\?)/,
+]
+export const PAGED_WORKER_FORBIDDEN: readonly RegExp[] = [
+  /src\/xlsx\/tableStyles\/builtins(?:\/|\.ts(?:$|\?))/,
+  /src\/xlsx\/tableStyles\/parseStylesExtras\.ts(?:$|\?)/,
+]
+
+/** Each chunk holding a paged-worker root, with the forbidden modules in its static closure. */
+export function pagedWorkerViolations(map: ModuleMap): { roots: string[]; missing: string[]; bad: Array<{ chunk: string; module: string }> } {
+  const norm = (id: string) => id.replace(/\\/g, '/')
+  const holds = (file: string, rule: RegExp) => map[file]!.modules.some(id => rule.test(norm(id)))
+  const roots = Object.keys(map).filter(file => PAGED_WORKER_ROOTS.some(rule => holds(file, rule)))
+  const missing = PAGED_WORKER_ROOTS.filter(rule => !roots.some(file => holds(file, rule))).map(rule => rule.source)
+  const bad: Array<{ chunk: string; module: string }> = []
+  for (const chunk of roots) {
+    for (const module of eagerModules(map, chunk)) if (PAGED_WORKER_FORBIDDEN.some(rule => rule.test(norm(module)))) bad.push({ chunk, module })
+  }
+  return { roots, missing, bad }
+}

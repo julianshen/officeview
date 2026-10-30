@@ -1,4 +1,5 @@
 /** Parse XLSX parts into the XlsxDocument model. */
+import { admittedFormatCode } from './formatCodeLimit'
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
 import { attrs, elementNamespaceUri, getChildren, textOf, type XmlNode } from '../core/xml'
@@ -30,6 +31,8 @@ import { PackageError } from '../core/package-error'
 import { parseSparklineGroups, SPARKLINE_EXTENSION_URI, SPREADSHEETML_NS, X14_SPARKLINE_NS, MAX_POINTS_PER_SHEET, MAX_SPARKLINE_GROUPS_PER_SHEET } from './sparklines/parseGroups'
 import type { SparklineDiagnostic, XlsxSparklineGroup } from './sparklines/model'
 import { resolveWorkbookSparklines } from './sparklines/resolve'
+import { controlIds, parsePivotRegion, PIVOT_PART_MAX_BYTES, type ControlPartRef } from './pivots/stub'
+import { attachPivotTables, loadSheetControls } from './pivotLoader'
 
 /** Convert "A1" / "BC23" to 0-based [row, col]. */
 export function parseRef(ref: string): [number, number] {
@@ -74,21 +77,29 @@ function asNode(v: unknown): XmlNode {
 
 interface Styles {
   colorContext: SheetColorContext
+  /** Only the table-style subtrees are retained for the later lazy painter. */
+  tableStyleSource?: import('./tableStyles/model').TableStyleSource
+  /** The whole styleSheet, read at parse time only, for custom slicer and timeline styles (x14 extLst). */
+  styleSheet?: import('./tableStyles/model').TableStyleSource
   numFmtIds: number[]
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
    * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
   numFmts: Map<number, string | null>
-  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string }>
+  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string; underline?: XlsxCellStyle['underline']; strike?: boolean; underlineOff?: true; strikeOff?: true }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
-  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean }>
+  xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean; indent?: number }>
 }
 
-/** Excel's own limit on a custom number-format code (UTF-16 units). Excel
- * refuses longer codes, so an authored one is shown as General (documented in
- * docs/formula-compatibility.md); every formatter therefore parses at most
- * this much per authored cell code. */
-export const MAX_FORMAT_CODE_UNITS = 255
+export { MAX_FORMAT_CODE_UNITS } from './formatCodeLimit'
+
+const OFF = new Set(['0', 'false'])
+const UNDERLINES = new Set(['single', 'double', 'singleAccounting', 'doubleAccounting'])
+/** `<u/>` is single; `none` and unknown values are no underline. */
+function fontUnderline(val: unknown): XlsxCellStyle['underline'] {
+  const v = val === undefined ? 'single' : String(val)
+  return UNDERLINES.has(v) ? v as XlsxCellStyle['underline'] : undefined
+}
 
 async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<string, string>>): Promise<Styles> {
   const root = await pkg.xml('xl/styles.xml')
@@ -101,13 +112,23 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
     ...(indexed ? { indexed: getChildren(indexed, 'rgbColor').map(node => String(attrs(node).rgb ?? '')) } : {}),
   }
   styles.colorContext = colorContext
+  const stylesNode = getChildren(root, 'styleSheet')[0] ?? root
+  styles.styleSheet = { root: stylesNode, colors: colorContext }
+  const dxfsNode = getChildren(stylesNode, 'dxfs')[0]
+  const tableStylesNode = getChildren(stylesNode, 'tableStyles')[0]
+  if (dxfsNode || tableStylesNode) {
+    styles.tableStyleSource = {
+      root: { ...(dxfsNode ? { dxfs: dxfsNode } : {}), ...(tableStylesNode ? { tableStyles: tableStylesNode } : {}) },
+      colors: colorContext,
+    }
+  }
   const colorOf = (node: XmlNode | undefined) => node ? resolveSheetColor(attrs(node), colorContext) : undefined
   for (const numFmtsN of getChildren(root, 'numFmts')) {
     for (const nf of getChildren(numFmtsN, 'numFmt')) {
       const a = attrs(nf)
       const id = parseInt(a.numFmtId ?? '', 10)
       const code = typeof a.formatCode === 'string' ? a.formatCode : undefined
-      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code.length > MAX_FORMAT_CODE_UNITS ? null : code)
+      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, admittedFormatCode(code))
     }
   }
   for (const f of getChildren(root, 'fonts').flatMap((n) => getChildren(n, 'font'))) {
@@ -117,6 +138,12 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       sizePt: f['sz'] !== undefined ? parseFloat(attrs(asNode(f['sz'])).val ?? '11') : undefined,
       color: colorOf(asNode(f['color'])),
       name: attrs(asNode(f['name'])).val as string | undefined,
+      underline: f['u'] !== undefined ? fontUnderline(attrs(asNode(f['u'])).val) : undefined,
+      strike: f['strike'] !== undefined && !OFF.has(String(attrs(asNode(f['strike'])).val)) ? true : undefined,
+      // An authored `<u val="none"/>` or `<strike val="0"/>` states the decoration off: kept
+      // apart from an absent element so an own font can clear a table/pivot style's decoration.
+      ...(f['u'] !== undefined && fontUnderline(attrs(asNode(f['u'])).val) === undefined ? { underlineOff: true as const } : {}),
+      ...(f['strike'] !== undefined && OFF.has(String(attrs(asNode(f['strike'])).val)) ? { strikeOff: true as const } : {}),
     }
     styles.fonts.push(font)
   }
@@ -153,6 +180,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       const vertical = typeof align.vertical === 'string' && align.vertical !== '' ? align.vertical : undefined
       const wrapText = align.wrapText === '1' || align.wrapText === 'true' ? true : align.wrapText === '0' || align.wrapText === 'false' ? false : undefined
       const shrinkToFit = align.shrinkToFit === '1' || align.shrinkToFit === 'true' ? true : align.shrinkToFit === '0' || align.shrinkToFit === 'false' ? false : undefined
+      const indent = Number(align.indent)
       styles.xfs.push({
         numFmtId: parseInt(a.numFmtId ?? '0', 10),
         fontId: parseInt(a.fontId ?? '0', 10),
@@ -163,6 +191,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
         vertical,
         wrapText,
         shrinkToFit,
+        ...(Number.isInteger(indent) && indent > 0 && indent <= 250 ? { indent } : {}),
       })
     }
   }
@@ -208,6 +237,12 @@ export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxC
     vertical: xf.vertical,
     wrapText: xf.wrapText,
     ...(xf.shrinkToFit !== undefined ? { shrinkToFit: xf.shrinkToFit } : {}),
+    ...(font?.underline ? { underline: font.underline } : {}),
+    ...(font?.strike ? { strike: true } : {}),
+    ...(font?.name ? { fontName: font.name } : {}),
+    ...(xf.indent ? { indent: xf.indent } : {}),
+    ...(xf.fontId !== 0 ? { ownFont: true as const } : {}),
+    ...(xf.fontId !== 0 && (font?.underlineOff || font?.strikeOff) ? { fontCleared: { ...(font.underlineOff ? { underline: true as const } : {}), ...(font.strikeOff ? { strike: true as const } : {}) } } : {}),
   }
 }
 
@@ -348,14 +383,11 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
           tablePartDecls.push(typeof rid === 'string' && rid !== '' ? rid : undefined)
         }
       }
-      if (tablePartDecls.length === 0) {
-        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
-        continue
-      }
-      declaredTableParts += tablePartDecls.length
       const slash = sheetPath.lastIndexOf('/')
       const wsRelsPath = `${slash < 0 ? '' : `${sheetPath.slice(0, slash)}/`}_rels/${slash < 0 ? sheetPath : sheetPath.slice(slash + 1)}.rels`
-      const wsRels = await pkg.xml(wsRelsPath)
+      let wsRels: XmlNode | undefined
+      let wsRelsUnreadable = false
+      try { wsRels = await pkg.xml(wsRelsPath) } catch { wsRelsUnreadable = true }
       const wsRelTargets = new Map<string, { target: string; type: string }>()
       if (wsRels) {
         for (const rel of getChildren(wsRels, 'Relationship')) {
@@ -365,6 +397,41 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
           }
         }
       }
+      const controls = controlIds(wsRoot)
+      const sheet = sheets[i]!
+      if (wsRelsUnreadable) {
+        (sheet.diagnostics ??= []).push({
+          kind: 'unsupported', feature: 'pivot-control-refs-unreadable',
+          message: `Worksheet relationships could not be read from ${wsRelsPath}`,
+        })
+      }
+      const resolveControls = (ids: string[], suffix: string): ControlPartRef[] | undefined => {
+        const refs = ids.flatMap(id => {
+          const rel = wsRelTargets.get(id)
+          if (!rel || !rel.type.endsWith(suffix)) return []
+          return [{ partPath: resolvePartTarget(sheetPath, rel.target) }]
+        })
+        return refs.length ? refs : undefined
+      }
+      sheet.slicerRefs = resolveControls(controls.slicerIds, '/slicer')
+      sheet.timelineRefs = resolveControls(controls.timelineIds, '/timeline')
+      for (const rel of wsRelTargets.values()) {
+        if (!rel.type.endsWith('/pivotTable')) continue
+        const partPath = resolvePartTarget(sheetPath, rel.target)
+        try {
+          const parsed = parsePivotRegion(await pkg.prefixText(partPath, PIVOT_PART_MAX_BYTES), partPath)
+          if (parsed.region) (sheet.pivotRegions ??= []).push(parsed.region)
+          else if (parsed.unreadable) (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}` })
+        } catch {
+          (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}` })
+        }
+      }
+      if (tablePartDecls.length === 0) {
+        if (hasDeclaredFiltering(sheetEntry)) declaredFilters.push(sheetEntry)
+        continue
+      }
+      declaredTableParts += tablePartDecls.length
+      if (wsRelsUnreadable) tableInventoryComplete = false
       for (const rid of tablePartDecls) {
         // A declaration without a required relationship id cannot resolve.
         if (rid === undefined) {
@@ -404,6 +471,7 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
             continue
           }
           resolvedTables.push(meta)
+          ;(sheet.tables ??= []).push(meta)
         } catch {
           // An unreadable table part leaves the inventory unavailable;
           // usable cells are preserved below.
@@ -422,6 +490,8 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
   // Completeness first: any failed discovery keeps the inventory
   // unavailable even when zero declarations were observed. Only a fully
   // inspected workbook with no tableParts declarations is complete [].
+  // Resident pivot definitions load here, from the lazy pivots chunk (Ruling AD).
+  await attachPivotTables(pkg, sheets)
   const tables: TableMetadata[] | undefined = !tableInventoryComplete
     ? undefined
     : declaredTableParts === 0
@@ -460,6 +530,9 @@ export async function parseXlsx(pkg: OfficePackage, options: ParseXlsxOptions = 
     semantics,
     cellStyles: styles.xfs.map(xf => resolveXfStyle(styles, xf)),
     ...(declaredFilters.length > 0 ? { declaredFilters } : {}),
+  }
+  for (const sheet of sheets) {
+    if ((sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotTables?.length) && styles.tableStyleSource) sheet.tableStyleSource = styles.tableStyleSource
   }
   initializeSavedSpills(doc)
   if (options.valuePolicy === 'cached') markSavedValuesOnly(doc)
@@ -716,7 +789,9 @@ async function parseSheet(
     rowsByIndex.set(row.index, row)
     sheet.rows.push(row)
   }
-  await parseWorksheetDrawings(pkg, sheet, path, data, theme)
+  // Slicer and timeline frames take their AlternateContent Choice only with these resolved (Task 12).
+  const controls = await loadSheetControls(pkg, sheet, path, root, theme, styles.styleSheet)
+  await parseWorksheetDrawings(pkg, sheet, path, data, theme, undefined, controls)
   return sheet
 }
 

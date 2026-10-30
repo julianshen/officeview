@@ -330,7 +330,26 @@ export interface ChartExGroup extends ChartGroup {
   }
 }
 
+/**
+ * Pivot chart linkage and field button options (Stage 1 / Stage 3; spec §4).
+ * Parsed from c:pivotSource and x14/c16 extensions.
+ */
+export interface ChartPivotSource {
+  name: string
+  fmtId: number
+  dropZones: {
+    filter: boolean
+    categories: boolean
+    data: boolean
+    series: boolean
+    visible: boolean
+  }
+  showExpandCollapse: boolean
+}
+
 export interface ChartModel {
+  /** Pivot chart linkage and field button options (Stage 1 / Stage 3; spec §4). */
+  pivot?: ChartPivotSource
   /** Immutable, transferable stage-1 domains, ticks and label strings. */
   preparedAxes?: import('./prepare').PreparedAxes
   plotLayout?: ChartManualLayout

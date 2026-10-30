@@ -65,6 +65,16 @@ const lo = (file: string, commit: string, probe: string): CorpusEntry => ({
   probe,
 })
 
+// LibreOffice Calc xlsx test data (pivot tables and table styles; pivots spec §9).
+const LO_CALC = '6dd1649aadd8a119dff12fbbdc9b2925195ab0cb'
+const loCalc = (path: string, probe: string): CorpusEntry => ({
+  name: `lo-calc-${path.split('/').pop()}`,
+  url: `https://raw.githubusercontent.com/LibreOffice/core/${LO_CALC}/sc/qa/unit/data/xlsx/${path}`,
+  source: 'LibreOffice/core',
+  license: 'MPL-2.0 (LibreOffice test data; see docs/validation/xlsx-pivots.md)',
+  probe,
+})
+
 export const CORPUS: CorpusEntry[] = [
   // ---- DOCX ----
   poi('document/Bug66263-table.docx', 'tables in a real Word-produced file'),
@@ -118,6 +128,31 @@ export const CORPUS: CorpusEntry[] = [
   lo('tdf123684.pptx', '943a534ac7cb3df513583e226c986dafd8ba246b', 'master bgRef 1003 and six non-placeholder artwork nodes'),
   lo('ooxtheme.pptx', 'cd08835d1bd9274412c7326db32fb3752bc94fb3', 'ten non-placeholder master artwork nodes'),
   lo('tdf93868.pptx', 'f3d1ac75c4b7fa63022e54a9cbff46ba99535076', 'master gradient background and two non-placeholder shapes'),
+  // Pivot tables and table styles (pivots spec §9; no public slicer or timeline files exist).
+  poi('spreadsheet/ExcelPivotTableSample.xlsx', 'Excel-written pivot table'),
+  poi('spreadsheet/ExcelTables.xlsx', 'Excel tables with styles'),
+  poi('spreadsheet/tableStyle.xlsx', 'table style info'),
+  loCalc('pivot/Pivot2_Row_Compact.xlsx', 'pivot: two row fields, compact form'),
+  loCalc('pivot/Pivot2_Row_Grand_Subtotals.xlsx', 'pivot: two row fields, grand totals and subtotals'),
+  loCalc('pivot/Pivot3_Column_Grand_Subtotals.xlsx', 'pivot: column field, grand totals and subtotals'),
+  loCalc('pivot/Pivot4_Column_Grand_Subtotals_SortDescending.xlsx', 'pivot: descending sort'),
+  loCalc('pivottable_outline_mode.xlsx', 'pivot: outline form'),
+  loCalc('pivottable_tabular_mode.xlsx', 'pivot: tabular form'),
+  loCalc('pivottable_rowcolpage_field_filter.xlsx', 'pivot: row, column and page field filters'),
+  loCalc('pivottable_date_field_filter.xlsx', 'pivot: date field filter'),
+  loCalc('pivot_dark1.xlsx', 'pivot: PivotStyleDark1'),
+  loCalc('pivot-table/pivotcompact.xlsx', 'pivot: compact layout'),
+  loCalc('pivot-table/two-data-fields.xlsx', 'pivot: two data fields (Values pseudo-field)'),
+  loCalc('pivot-table/calcfields.xlsx', 'pivot: calculated fields'),
+  loCalc('pivot-table/shared-dategroup.xlsx', 'pivot: shared date grouping'),
+  loCalc('pivot-table/shared-numgroup.xlsx', 'pivot: numeric range grouping'),
+  loCalc('pivot-table/PivotTableFormatsSubTotals.xlsx', 'pivot: formats on subtotals'),
+  loCalc('pivot-table/PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx', 'pivot: formats dxf on data area'),
+  loCalc('pivot-table/PivotTableWithNoSourceData.xlsx', 'pivot: no source data (saveData)'),
+  loCalc('PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx', 'pivot: stale cache vs source'),
+  loCalc('TableStyleTest.xlsx', 'table styles'),
+  loCalc('tableStyleInnerBorders.xlsx', 'table style inner borders'),
+  loCalc('tdf162963_TableWithTotalsEnabled.xlsx', 'table with totals row'),
 ]
 
 const CORPUS_DIR = join(import.meta.dir, '..', 'corpus')

@@ -10,6 +10,34 @@ in git history.
 
 ## [Unreleased]
 
+### Added
+
+- **Excel table and pivot table styles, slicers and timelines (view-only).**
+  - Excel tables now draw in their table styles: the 60 built-ins and custom styles, with the header, totals,
+    first/last column and stripe flags. Cell formats layer over the style as in Excel, and as in Excel there are no
+    gridlines inside a pivot and none under a filled table or pivot cell.
+  - Pivot tables are shown as saved, in their pivot styles (84 built-ins and custom), with `formats` overrides, the
+    compact indent and Excel's buttons. The interactive viewer draws the ± and field dropdowns; page mode and export
+    draw what Excel prints.
+  - Slicers and timelines are drawn per style, with item states, columns, scroll position, timeline level and
+    selection.
+  - Pivot charts keep their link to the pivot table but draw no field buttons. Excel for Mac draws no pivot-chart
+    field buttons, and neither do we; Excel for Windows does, and we have no Windows reference to match yet.
+  - The page viewer, print and PNG/PDF export, the interactive viewer and large workbooks opened through the viewer
+    worker draw the same styles and pivot `formats`, and say why a pivot is not styled. In the worker each
+    pivot, pivot cache, slicer and timeline part is read up to 8 MiB on desktop and 4 MiB on mobile; a pivot over
+    that limit shows its cells with their stored formatting, and says so.
+  - A pivot whose saved layout is missing or invalid also shows its cells with their stored formatting, with a
+    diagnostic, and never stops the rest of the workbook from rendering.
+  - The code is lazy chunks, loaded only for workbooks that need them, in the viewer worker too: a large workbook
+    without a styled table, pivot, slicer or timeline loads none of it.
+  - Pivot interaction (expand and collapse, filter, sort, field list) and clicking slicers and timelines come in
+    later releases.
+- **Excel reference comparison for tables, pivots, slicers and timelines.** `bun scripts/pivot-compare.ts --stage 1`
+  compares the viewer with Excel for Mac 16.114 captures of every built-in table, pivot, slicer and timeline style
+  and of the pivot layouts; 237 of 239 cases pass. Per-case tolerances and the known differences are in
+  `docs/validation/xlsx-pivots.md`.
+
 ## [0.10.0] - 2026-10-28
 
 Excel sparklines: line, column and win/loss sparklines drawn in their cells,

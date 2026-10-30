@@ -15,8 +15,10 @@ import type {
   WorkbookSheetIdentity,
 } from './formula/types'
 import type { DeclaredSheetFilters } from './view/declaredFilters'
+import type { RegionStyleLayer } from './tableStyles/regionLayer'
+import type { TableStyleSource } from './tableStyles/model'
 
-export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean; /** An authored fallback's original feature (spec 6.6). */ feature?: 'chart' | 'ChartEx' }
+export interface XlsxDrawingSource { partPath: string; treePath: string; element: string; id?: string; name?: string; referenceId?: string; representation: 'native' | 'choice' | 'fallback'; reason?: string; emptySelection?: boolean; /** An authored fallback's original feature (spec 6.6). */ feature?: 'chart' | 'ChartEx' | 'slicer' | 'timeline' }
 export interface XlsxDrawing extends SceneNode<PptxTextBody, SceneImage> {
   source: XlsxDrawingSource
   children?: XlsxDrawing[]
@@ -72,6 +74,25 @@ export interface XlsxCellStyle {
   wrapText?: boolean
   /** alignment@shrinkToFit as authored (ignored when wrapping). Absent stays undefined. */
   shrinkToFit?: boolean
+  /** Font underline as authored (`<u/>` is single); absent or `none` stays undefined. */
+  underline?: 'single' | 'double' | 'singleAccounting' | 'doubleAccounting'
+  /** Font strikethrough; absent or off stays undefined. */
+  strike?: boolean
+  /** Font face name as authored (painted ahead of the cell font stack). */
+  fontName?: string
+  /** alignment@indent level (> 0); one level is one maximum digit width. */
+  indent?: number
+  /** A layout-derived indent in CSS px that replaces `indent` × MDW (pivot
+   * compact labels beside their ± buttons; never parsed from a file). */
+  indentPx?: number
+  /** The xf names a font other than the Normal one (fontId ≠ 0): its font wins
+   * over a table or pivot style. Excel ignores applyFont/applyFill there
+   * (measure-apply-flags, docs/validation/xlsx-pivots.md). */
+  ownFont?: true
+  /** Decorations an own font (`ownFont`) states off: `<u val="none"/>`, `<strike val="0"/>`.
+   * Painting ignores it (absent and off paint alike); a table or pivot style's underline or
+   * strike does not reach the cell through it (tableStyles/resolve.ts). */
+  fontCleared?: { underline?: true; strike?: true }
 }
 
 export interface XlsxRow {
@@ -143,11 +164,27 @@ export interface XlsxSheet {
   semantics?: ResolvedSemantics
   /** Stable workbook identity (original order, never a filtered index). */
   sheetId?: string
+  /** Tables owned by this sheet (also present in the document-wide inventory). */
+  tables?: TableMetadata[]
+  /** Lazy table-style source and resolved paint layer (resident rendering only). */
+  tableStyleSource?: TableStyleSource
+  regionStyles?: RegionStyleLayer
+  /** True once the lazy region-style engine resolved this sheet, including no-match results. */
+  regionStylesResolved?: boolean
+  /** Bounded pivot/control region references used by region-style rendering. */
+  pivotRegions?: import('./pivots/stub').PivotRegionRef[]
+  slicerRefs?: import('./pivots/stub').ControlPartRef[]
+  timelineRefs?: import('./pivots/stub').ControlPartRef[]
+  /** Resident pivot definitions, loaded at parse time from the lazy pivots chunk (structured-cloneable). */
+  pivotTables?: import('./pivots/model').PivotTableDefinition[]
   workbookIndex?: number
   kind?: 'worksheet' | 'other'
   /** Excel column pixel model (workbook MDW, sheet default width); absent:
    * Calibri 11 (MDW 7px, 64px default). */
   columnMetrics?: import('./columnWidth').ColumnMetrics
+  /** Paged shell sheets: the workbook's maximum digit width (indent unit) when
+   * not 7 px. Resident sheets carry it in columnMetrics instead. */
+  maxDigitWidthPx?: number
   rows: XlsxRow[]
   cols: XlsxColumnSpec[]
   merges: string[]

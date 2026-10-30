@@ -54,6 +54,14 @@ function lazyPagedChunks(): Plugin {
         '/src/components/fileName.ts',
         // The chart engine (DOCX/PPTX/XLSX charts), loaded by xlsx/chartLoader's dynamic import.
         '/src/charts/index.ts',
+        // The pivot, table-style and slicer/timeline engines (xlsx/pivotLoader, tableStyleLoader, pagedSource, pagedDrawings, pagedFormatting).
+        '/src/xlsx/pivots/index.ts',
+        '/src/xlsx/pivots/load.ts',
+        '/src/xlsx/storage/pagedDrawings.ts',
+        '/src/xlsx/tableStyles/regionLayer.ts',
+        '/src/xlsx/tableStyles/parseStylesExtras.ts',
+        // The decoded remote region layer (viewerRemoteRegionStyles, worker Find).
+        '/src/xlsx/tableStyles/remoteLayer.ts',
         // Slide appearance enrichment (getPaintables' dynamic import) and the slideshow chunk.
         '/src/pptx/appearance/index.ts',
         '/src/slideshow/index.ts',
