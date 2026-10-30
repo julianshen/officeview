@@ -75,6 +75,28 @@ function fixture(values: Array<number | string | null>, data: DataFieldState[] =
 }
 
 describe('pivot value aggregation', () => {
+  it('keeps normal all-sum cells identical when a twin show-as field selects the general path', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 },
+      { type: 'data', first: 0, items: [1], data: 0 },
+    ]
+    const fast = fixture([10, 20, 30], [
+      { field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Fast' },
+    ], rows, [0, 1, 0])
+    const general = fixture([10, 20, 30], [
+      { field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Normal twin' },
+      { field: 1, fn: 'sum', showAs: 'percentOfTotal', baseField: -1, baseItem: 1048832, name: 'General-path twin' },
+    ], rows, [0, 1, 0])
+    const fastResult = computeValues(fast.store, fast.cache, fast.def, fast.view, fast.axes)
+    const generalResult = computeValues(general.store, general.cache, general.def, general.view, general.axes)
+    expect(fastResult.ok).toBe(true)
+    expect(generalResult.ok).toBe(true)
+    if (!fastResult.ok || !generalResult.ok) return
+    expect(rows.map((_, row) => fastResult.value.get(row, 0, 0))).toEqual(
+      rows.map((_, row) => generalResult.value.get(row, 0, 0)),
+    )
+  })
+
   it('computes all 11 data functions over numbers, text and missing records', () => {
     const data = dataFunctions.map(fn => ({ field: 1, fn, showAs: 'normal' as const, baseField: -1, baseItem: 1048832, name: fn }))
     const { store, cache, def, view, axes } = fixture([2, 4, 'x', null, -3], data, [{ type: 'data', first: 0, items: [0], data: 0 }])

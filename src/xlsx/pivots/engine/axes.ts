@@ -168,7 +168,9 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
   const root = newNode()
   const nodes: Node[] = []
   const nodeOf = new Map<number | string, number>()
-  const recordNode = new Uint32Array(store.count).fill(NO_LINE)
+  // Reuse the output key buffer to hold node ids during grouping, then rewrite
+  // ids to leaf line numbers in place after the line traversal.
+  const recordKey = new Uint32Array(store.count).fill(NO_LINE)
   const tuple: number[] = [], levels = real.length
   for (let r = 0; r < store.count; r++) {
     if (!passes[r]) continue
@@ -194,7 +196,7 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
       if (table) table[hash] = id
       else nodeOf.set(key, id)
     }
-    recordNode[r] = id
+    recordKey[r] = id
   }
 
   const lines: PivotLine[] = []
@@ -255,7 +257,6 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     else push('grand', [], 0)
   }
 
-  const key = new Uint32Array(store.count).fill(NO_LINE)
-  for (let r = 0; r < store.count; r++) if (recordNode[r] !== NO_LINE) key[r] = nodes[recordNode[r]!]!.leaf
-  return { ok: true, value: { lines, key } }
+  for (let r = 0; r < store.count; r++) if (recordKey[r] !== NO_LINE) recordKey[r] = nodes[recordKey[r]!]!.leaf
+  return { ok: true, value: { lines, key: recordKey } }
 }

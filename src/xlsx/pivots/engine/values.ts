@@ -249,7 +249,14 @@ function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes):
     rows.push(rowShared && d > 0 ? rows[0]! : lists(axes.rows, rowLineIndex, 'rows', d))
     cols.push(colShared && d > 0 ? cols[0]! : lists(axes.cols, colLineIndex, 'cols', d))
   }
-  for (let record = 0; record < store.count; record++) for (let d = 0; d < view.data.length; d++) {
+  if (rowShared && colShared) {
+    const rowList = rows[0]!, colList = cols[0]!
+    for (let record = 0; record < store.count; record++) {
+      const row = axes.rowKey[record]!, col = axes.colKey[record]!
+      if (rowList.offsets[row] === rowList.offsets[row + 1] || colList.offsets[col] === colList.offsets[col + 1])
+        return invalid(`record ${record} has no value-carrying row or column line`)
+    }
+  } else for (let record = 0; record < store.count; record++) for (let d = 0; d < view.data.length; d++) {
     const row = axes.rowKey[record]!, col = axes.colKey[record]!
     if (rows[d]!.offsets[row] === rows[d]!.offsets[row + 1] || cols[d]!.offsets[col] === cols[d]!.offsets[col + 1])
       return invalid(`record ${record} has no value-carrying row or column line`)
@@ -338,16 +345,24 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     const commonTargets = !view.rows.includes(PIVOT_VALUES_FIELD) && !view.cols.includes(PIVOT_VALUES_FIELD)
     if (commonTargets) {
       const dataValues = new Float64Array(dataCount), dataNumeric = new Uint8Array(dataCount)
+      const inlineColumns = sourceColumns.map(column => column?.kind === 'inline' ? column : undefined)
       const rowList = recordTargets.value.rows[0]!, colList = recordTargets.value.cols[0]!
       for (let record = 0; record < store.count; record++) {
         const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
         for (let d = 0; d < dataCount; d++) {
           const field = view.data[d]!.field
-          if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
-          if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
-          if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
-          dataNumeric[d] = +(scratch.kind === 'number')
-          dataValues[d] = scratch.value
+          const inline = inlineColumns[d]
+          const tag = inline?.tag[record]
+          if (inline && (tag === VALUE_TAG.number || tag === VALUE_TAG.date)) {
+            dataNumeric[d] = 1
+            dataValues[d] = inline.num[record]!
+          } else {
+            if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
+            if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+            if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+            dataNumeric[d] = +(scratch.kind === 'number')
+            dataValues[d] = scratch.value
+          }
         }
         const rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
         const colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
