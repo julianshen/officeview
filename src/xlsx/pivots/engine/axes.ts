@@ -22,6 +22,8 @@
  * Unmeasured (Task 15 cases decide): named subtotals (one line per function in schema order, always at the bottom),
  * blank rows (one `blank` line after each item block of a field with a deeper field), an item with no records under
  * `showAll` (its line alone in tabular form), whether another field's hidden item drops an item (taken as above).
+ * Refused as `pivot-engine-unmeasured` until measured: `mergeItem`, a hidden item on a field on no axis or page, and
+ * a collapsed item above the Values field.
  */
 import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDiagnostic, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition } from '../model'
 import type { PivotLine } from '../savedLayout'
@@ -36,6 +38,8 @@ const fail = (kind: PivotDiagnostic['kind'], feature: string, message: string): 
 /** Sorting, label/value/date/top-10 filters and grouping are Task 21; calculated items are decided by Task 22. */
 const pending = (message: string) => fail('unsupported', 'pivot-engine-pending', message)
 const invalid = (message: string) => fail('parse', 'pivot-definition-invalid', message)
+/** Behaviour Excel has not been measured on yet (Task 15 adds the cases); the pivot stays display-only. */
+const unmeasured = (message: string) => fail('unsupported', 'pivot-engine-unmeasured', message)
 
 /** The subtotal lines a field's items get: its named functions, else the default subtotal, else none. */
 export function subtotalTypes(field: FieldState): PivotItemType[] {
@@ -89,12 +93,22 @@ function itemMap(def: PivotTableDefinition, cache: PivotCacheDefinition, field: 
 
 export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState): EngineResult<PivotAxes> {
   if (view.filters.length) return pending('pivot filters (label, value, date, top 10) are not computed yet')
+  // Merged labels are unmeasured: fail closed until Task 15 has an Excel case.
+  if (def.mergeItem) return unmeasured('merged item labels (mergeItem) are not measured yet')
+  // Calculated fields are Task 22's, on an axis, a page or as data.
+  for (const field of [...view.rows, ...view.cols, ...view.pages.map(page => page.field), ...view.data.map(data => data.field)]) {
+    const cacheField = cache.fields[field]
+    if (cacheField && (cacheField.formula !== undefined || (!cacheField.databaseField && !cacheField.fieldGroup))) return pending(`field ${field} is a calculated field`)
+  }
   const axisFields = [...view.rows, ...view.cols].filter(field => field !== PIVOT_VALUES_FIELD)
   if ([...view.rows, ...view.cols].filter(field => field === PIVOT_VALUES_FIELD).length > 1) return invalid('the Values field is on more than one axis level')
   const pageFields = view.pages.map(page => page.field)
   const used = new Set([...axisFields, ...pageFields])
   if (used.size !== axisFields.length + pageFields.length) return invalid('a field is used on more than one axis')
-  view.fields.forEach((field, index) => { if (field.hidden.includes(true)) used.add(index) })
+  // Whether a hidden item on a field on no axis or page filters records is unmeasured (a slicer on a field outside the
+  // pivot may store its selection that way): fail closed until Task 15 has an Excel case.
+  const offAxis = view.fields.findIndex((field, index) => field.hidden.includes(true) && !used.has(index))
+  if (offAxis >= 0) return unmeasured(`field ${offAxis} is on no axis but has hidden items`)
   for (const field of used) {
     const state = view.fields[field], cacheField = cache.fields[field]
     if (!state || !cacheField || !def.fields[field]) return invalid(`field ${field} does not exist`)
@@ -105,7 +119,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     if (state.sortType !== 'manual' || state.autoSortScope) return pending(`field ${field} is sorted`)
   }
 
-  // Record filter: every used field's hidden items and each page's selection.
+  // Record filter: the hidden items of every row, column and page field, and each page's selection.
   const maps = new Map<number, ItemMap>()
   const filters: Array<{ index: Uint32Array; allow: Uint8Array }> = []
   for (const field of used) {
@@ -142,7 +156,7 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
   const sizes = real.map(({ field }) => maps.get(field)!.size)
   const collapses = real.map(({ field, level }) => hasFieldAfter(fields, level) && view.fields[field]!.collapsed.includes(true) ? view.fields[field]!.collapsed : undefined)
   if (real.some(({ level }, k) => level < valuesLevel && collapses[k]))
-    return fail('unsupported', 'pivot-engine-unmeasured', 'a collapsed item above the Values field is not measured yet')
+    return unmeasured('a collapsed item above the Values field is not measured yet')
 
   // One pass over the records: each passing record's tuple of pivot item indices (cut after a collapsed item) is
   // hashed to a number in mixed radix (item + 1 per level, 0 past the cut), or to a string past 2^53. A small

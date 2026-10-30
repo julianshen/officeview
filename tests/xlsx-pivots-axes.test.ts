@@ -17,7 +17,7 @@ import { savedPivotLayout, savedPivotRoles, type PivotLine } from '../src/xlsx/p
 import { pivotButtons } from '../src/xlsx/pivots/buttons'
 import type { PivotCacheDefinition, PivotItemType, PivotTableDefinition } from '../src/xlsx/pivots/model'
 import type { XlsxSheet } from '../src/xlsx/types'
-import { decodeRecords, RECORD_LIMITS, type RecordStore } from '../src/xlsx/pivots/engine/records'
+import { decodeRecords, isoToSerial, RECORD_LIMITS, type RecordStore } from '../src/xlsx/pivots/engine/records'
 import { initialViewState, type FieldState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
 import { computeAxes, lineCarriesValues, NO_LINE, type PivotAxes } from '../src/xlsx/pivots/engine/axes'
 import { liveDefinition, placeCells, type PivotCellValue, type PivotLayout, type PivotValueGrid } from '../src/xlsx/pivots/engine/place'
@@ -26,7 +26,7 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.ur
 const CORPUS = resolve(process.cwd(), 'corpus')
 const MANIFEST = resolve(FIXTURES, 'engine/manifest.json')
 
-interface Loaded { file: string; sheet: XlsxSheet; def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore }
+interface Loaded { file: string; sheet: XlsxSheet; def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; date1904: boolean }
 async function* once(bytes: Uint8Array): AsyncIterable<Uint8Array> { yield bytes }
 async function loadAll(path: string): Promise<Loaded[]> {
   const pkg = await OfficePackage.load(new Uint8Array(readFileSync(path)))
@@ -41,7 +41,7 @@ async function loadAll(path: string): Promise<Loaded[]> {
     const bytes = await pkg.bytes(cache.recordsPartPath)
     const result = await decodeRecords(once(bytes!), cache, RECORD_LIMITS.D, date1904)
     if (!result.ok) throw new Error(`${path}: ${result.diagnostic.message}`)
-    out.push({ file: path, sheet: doc.sheets.find(sheet => sheet.name === def.sheet)!, def, cache, store: result.store })
+    out.push({ file: path, sheet: doc.sheets.find(sheet => sheet.name === def.sheet)!, def, cache, store: result.store, date1904 })
   }
   return out
 }
@@ -150,7 +150,7 @@ describe('Task 17 behaviours', () => {
       const axes = okAxes(p), saved = savedPivotLayout(p.def)!
       expect(axes.rows, name).toEqual(saved.rows)
       expect(axes.cols, name).toEqual(saved.cols)
-      const layout = placeCells(p.def, initialViewState(p.def, p.cache), p.cache, axes, blankGrid)
+      const layout = placeCells(p.def, initialViewState(p.def, p.cache), p.cache, axes, blankGrid, { date1904: p.date1904 })
       // Each row field's labels sit in its saved label column.
       axes.rows.forEach((line, n) => {
         if (line.type !== 'data') return
@@ -245,7 +245,7 @@ describe('Task 17 behaviours', () => {
     for (const name of REFERENCES) {
       const p = (await load(resolve(FIXTURES, name)))[0]!
       const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
-      const layout = placeCells(p.def, view, p.cache, axes, blankGrid)
+      const layout = placeCells(p.def, view, p.cache, axes, blankGrid, { date1904: p.date1904 })
       const live = liveDefinition(p.def, view, axes, layout)
       expect(live.rowItems, name).toEqual(p.def.rowItems)
       expect(live.colItems, name).toEqual(p.def.colItems)
@@ -265,7 +265,7 @@ describe('Task 17 behaviours', () => {
     const view = initialViewState(p.def, p.cache)
     const changed = withFields(view, { 0: { collapsed: view.fields[0]!.collapsed.map((_, k) => k === 0) } })
     const axes = okAxes(p, changed)
-    const live = liveDefinition(p.def, changed, axes, placeCells(p.def, changed, p.cache, axes, blankGrid))
+    const live = liveDefinition(p.def, changed, axes, placeCells(p.def, changed, p.cache, axes, blankGrid, { date1904: p.date1904 }))
     expect(live.location).toEqual(collapsed.def.location)
     expect(live.rowItems).toEqual(collapsed.def.rowItems)
     expect(live.fields[0]!.items![0]!.showDetails).toBe(false)
@@ -293,16 +293,16 @@ describe('Task 17 behaviours', () => {
     for (const name of REFERENCES) {
       const p = (await load(resolve(FIXTURES, name)))[0]!
       const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
-      const layout = placeCells(p.def, view, p.cache, axes, blankGrid)
+      const layout = placeCells(p.def, view, p.cache, axes, blankGrid, { date1904: p.date1904 })
       const saved = savedPivotLayout(p.def)!
       expect(layout.rect, name).toEqual(saved.rect)
       expect(labelDiffs(p, layout), name).toEqual([])
       // These references are zh-TW: their default subtotal and total captions are implicit.
       expect(layout.captionsUnverified, name).toBe(layout.cells.some(cell => cell.caption === 'implicit'))
       // With the saved caption slots supplied, every caption is the saved text and none is unverified.
-      const withSaved = placeCells(p.def, view, p.cache, axes, blankGrid, (row, col) => {
-        const value = savedCell(p.sheet, row, col)
-        return value.kind === 'text' ? value.value : undefined
+      const withSaved = placeCells(p.def, view, p.cache, axes, blankGrid, {
+        date1904: p.date1904,
+        savedCaption: (row, col) => { const value = savedCell(p.sheet, row, col); return value.kind === 'text' ? value.value : undefined },
       })
       expect(withSaved.captionsUnverified, name).toBe(false)
       expect(labelDiffs(p, withSaved), name).toEqual([])
@@ -314,7 +314,7 @@ describe('Task 17 behaviours', () => {
     for (const name of REFERENCES) {
       const p = (await load(resolve(FIXTURES, name)))[0]!
       const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
-      const layout = placeCells(p.def, view, p.cache, axes, asked)
+      const layout = placeCells(p.def, view, p.cache, axes, asked, { date1904: p.date1904 })
       const saved = savedPivotLayout(p.def)!
       const at = new Map(layout.cells.map(cell => [`${cell.row},${cell.col}`, cell]))
       const valuesOnRows = view.rows.includes(-2)
@@ -338,7 +338,7 @@ describe('Task 17 behaviours', () => {
     const expected: PivotLine[] = []
     for (let region = 0; region < 4; region++) expected.push(...saved.slice(4 * region, 4 * region + 4), L('blank', 0, [region]))
     expect(axes.rows).toEqual([...expected, G()])
-    const layout = placeCells(p.def, view, p.cache, axes, { get: () => ({ kind: 'number', value: 1 }) })
+    const layout = placeCells(p.def, view, p.cache, axes, { get: () => ({ kind: 'number', value: 1 }) }, { date1904: p.date1904 })
     const blankRow = layout.rect.minRow + p.def.location.firstDataRow + 4
     expect(layout.cells.filter(cell => cell.row === blankRow)).toEqual([])
     expect(layout.rect.maxRow).toBe(savedPivotLayout(p.def)!.rect.maxRow + 4)
@@ -353,17 +353,65 @@ describe('unmeasured layout paths', () => {
     expect(result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }).toEqual({ kind: 'unsupported', feature: 'pivot-engine-unmeasured' })
   })
 
-  it('mergeItem merges a tabular parent label over its child lines and a column item over its columns', async () => {
-    // Unmeasured: no reference sets mergeItem. Without it there are no merges.
+  const unmeasured = (result: ReturnType<typeof computeAxes>) => result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }
+  const UNMEASURED = { kind: 'unsupported', feature: 'pivot-engine-unmeasured' }
+
+  it('mergeItem fails closed until measured (Task 15)', async () => {
     const p = await ref('pivot-layout-tabular')
-    const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
-    expect(placeCells(p.def, view, p.cache, axes, blankGrid).merges).toEqual([])
-    const merged = placeCells({ ...p.def, mergeItem: true }, view, p.cache, axes, blankGrid).merges
-    // A6:A8 (East over its three products) … A18:A20 (West); C4:D4, E4:F4, G4:H4 (each year over its two data fields).
-    expect(merged).toEqual([
-      ...[5, 9, 13, 17].map(row => ({ minRow: row, maxRow: row + 2, minCol: 0, maxCol: 0 })),
-      ...[2, 4, 6].map(col => ({ minRow: 3, maxRow: 3, minCol: col, maxCol: col + 1 })),
+    expect(axesOf(p).ok).toBe(true)
+    const merged = { ...p.def, mergeItem: true }
+    expect(unmeasured(computeAxes(p.store, p.cache, merged, initialViewState(merged, p.cache)))).toEqual(UNMEASURED)
+  })
+
+  it('a hidden item on a field on no axis or page fails closed until measured (Task 15)', async () => {
+    // Sales (field 3) is on no axis; hiding anything there would filter records by a rule Excel has not shown us.
+    const p = await ref('pivot-layout-compact')
+    const view = initialViewState(p.def, p.cache)
+    expect(unmeasured(axesOf(p, withFields(view, { 3: { hidden: [true] } })))).toEqual(UNMEASURED)
+    // Hidden items on row, column and page fields still filter (covered above): the same edit on Year computes.
+    expect(axesOf(p, withFields(view, { 2: { hidden: [true, false, false, false] } })).ok).toBe(true)
+  })
+})
+
+describe('fix round 1', () => {
+  it('date items are serials in the workbook date system (1904 as well as 1900)', async () => {
+    // Year's shared items replaced by dates: the item labels must follow the date system the caller states.
+    const p = await ref('pivot-layout-compact')
+    const dates = ['2022-03-01T00:00:00', '2024-03-01T00:00:00', '2023-03-01T00:00:00']
+    const cache: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 2
+      ? { ...field, sharedItems: { ...field.sharedItems!, items: dates.map(value => ({ type: 'date' as const, value })) } } : field) }
+    const view = initialViewState(p.def, cache), axes = okAxes({ ...p, cache }, view)
+    const label = (date1904: boolean) => placeCells(p.def, view, cache, axes, blankGrid, { date1904 }).cells.find(cell => cell.row === 3 && cell.col === 1)?.value
+    // B4 holds the first year item (x=0, 2022-03-01).
+    expect(label(false)).toEqual({ kind: 'number', value: isoToSerial(dates[0]!, false) })
+    expect(label(true)).toEqual({ kind: 'number', value: isoToSerial(dates[0]!, true) })
+    expect(isoToSerial(dates[0]!, false) - isoToSerial(dates[0]!, true)).toBe(1462)
+  })
+
+  it('liveDefinition materializes the items of a field saved without an items list when the view edits it', async () => {
+    const p = await ref('pivot-layout-compact')
+    // Region saved with no items list (other writers): its pivot items are the cache's shared-item order.
+    const def: PivotTableDefinition = { ...p.def, fields: p.def.fields.map((field, k) => k === 0 ? (({ items: _items, ...rest }) => rest)(field) : field) }
+    const saved = initialViewState(def, p.cache)
+    expect(saved.fields[0]!.hidden).toEqual([false, false, false, false])
+    // Hide North (cache item 1) and collapse West (cache item 2).
+    const edited = withFields(saved, { 0: { hidden: [false, true, false, false], collapsed: [false, false, true, false] } })
+    const axes = computeAxes(p.store, p.cache, def, edited)
+    if (!axes.ok) throw new Error(axes.diagnostic.message)
+    const live = liveDefinition(def, edited, axes.value, placeCells(def, edited, p.cache, axes.value, blankGrid, { date1904: false }))
+    expect(live.fields[0]!.items?.map(item => [item.type, item.x, item.hidden, item.showDetails])).toEqual([
+      ['data', 0, false, true], ['data', 1, true, true], ['data', 2, false, false], ['data', 3, false, true], ['default', undefined, false, true],
     ])
+    // The live definition read back gives the same view and the same axes.
+    const reread = initialViewState(live, p.cache)
+    expect(reread.fields[0]).toEqual(edited.fields[0] && { ...edited.fields[0], hidden: [...edited.fields[0].hidden, false], collapsed: [...edited.fields[0].collapsed, false] })
+    const again = computeAxes(p.store, p.cache, live, reread)
+    if (!again.ok) throw new Error(again.diagnostic.message)
+    expect(again.value.rows).toEqual(axes.value.rows)
+    expect(again.value.cols).toEqual(axes.value.cols)
+    // An unedited field without items stays without items.
+    const untouched = liveDefinition(def, saved, okAxes({ ...p, def }, saved), placeCells(def, saved, p.cache, okAxes({ ...p, def }, saved), blankGrid, { date1904: false }))
+    expect(untouched.fields[0]!.items).toBeUndefined()
   })
 })
 
@@ -379,6 +427,12 @@ describe('features owned by Task 21 are pending', () => {
     const grouped: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 2 ? { ...field, fieldGroup: { base: 2, rangePr: { autoStart: true, autoEnd: true, groupBy: 'range', groupInterval: 1 } } } : field) }
     const result = computeAxes(p.store, grouped, p.def, view)
     expect(pending(result)).toEqual(expected)
+    // Calculated fields belong to Task 22, on an axis or as data.
+    const calculated: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 4 ? { ...field, databaseField: false, formula: 'Sales*2', sharedItems: undefined } : field) }
+    expect(pending(computeAxes(p.store, calculated, p.def, view))).toEqual(expected)
+    expect(pending(computeAxes(p.store, calculated, p.def, { ...view, cols: [-2, 4] }))).toEqual(expected)
+    const formulaOnly: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 1 ? { ...field, formula: 'Sales' } : field) }
+    expect(pending(computeAxes(p.store, formulaOnly, p.def, view))).toEqual(expected)
     // A sort on a field off every axis changes nothing.
     expect(axesOf(p, withFields(view, { 3: { sortType: 'ascending' } })).ok).toBe(true)
   })
@@ -388,8 +442,9 @@ describe('features owned by Task 21 are pending', () => {
  * recorded here and in the task report, never tuned toward. */
 const CORPUS_STATUS: Record<string, string[]> = {
   'poi-ExcelPivotTableSample.xlsx': ['equal', 'equal'],
-  // Collabora-written: its Values-only column items are seven `<i/>` with i=0, where Excel writes x=k, i=k.
-  'lo-calc-calcfields.xlsx': ['disagrees'],
+  // Calculated data fields (Task 22). Collabora-written: its Values-only column items are seven `<i/>` with i=0,
+  // where Excel writes x=k, i=k, so it would disagree once computed.
+  'lo-calc-calcfields.xlsx': ['pending'],
   'lo-calc-pivot_dark1.xlsx': ['equal'],
   'lo-calc-Pivot2_Row_Compact.xlsx': ['equal'],
   'lo-calc-Pivot2_Row_Grand_Subtotals.xlsx': ['equal'],
@@ -399,9 +454,9 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx': ['equal'],
   'lo-calc-pivottable_date_field_filter.xlsx': ['pending'],
   'lo-calc-pivottable_outline_mode.xlsx': ['equal'],
-  // Field 6, on no axis, hides the only item of record 0; the saved layout shows record 0 anyway (the file's
-  // naming, "Sum - Amount" and "Data", is LibreOffice's). The engine applies a hidden item on any field.
-  'lo-calc-pivottable_rowcolpage_field_filter.xlsx': ['disagrees'],
+  // Field 6, on no axis, has a hidden item: unmeasured, so it fails closed. (Its saved layout shows the record that
+  // item would exclude; the file's naming, "Sum - Amount" and "Data", is LibreOffice's.)
+  'lo-calc-pivottable_rowcolpage_field_filter.xlsx': ['unmeasured'],
   'lo-calc-pivottable_tabular_mode.xlsx': ['equal'],
   'lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx': ['equal'],
   'lo-calc-PivotTableFormatsSubTotals.xlsx': ['equal'],
@@ -415,14 +470,18 @@ describe.skipIf(!existsSync(resolve(CORPUS, 'poi-ExcelPivotTableSample.xlsx')))(
     const statuses: string[] = []
     for (const p of await load(resolve(CORPUS, file))) {
       const result = axesOf(p)
-      if (!result.ok) { expect(result.diagnostic.feature).toBe(ENGINE_PENDING); statuses.push('pending'); continue }
+      if (!result.ok) {
+        const status = ({ [ENGINE_PENDING]: 'pending', 'pivot-engine-unmeasured': 'unmeasured' } as Record<string, string>)[result.diagnostic.feature]
+        statuses.push(status ?? result.diagnostic.feature)
+        continue
+      }
       const saved = savedPivotLayout(p.def)!
       const equal = JSON.stringify([result.value.rows, result.value.cols]) === JSON.stringify([saved.rows, saved.cols])
       statuses.push(equal ? 'equal' : 'disagrees')
       if (!equal) continue
       // Where the lines agree, the labels, captions and location agree too.
       const view = initialViewState(p.def, p.cache)
-      const layout = placeCells(p.def, view, p.cache, result.value, blankGrid)
+      const layout = placeCells(p.def, view, p.cache, result.value, blankGrid, { date1904: p.date1904 })
       expect(labelDiffs(p, layout), `${file} ${p.def.name}`).toEqual([])
       expect(liveDefinition(p.def, view, result.value, layout).location, `${file} ${p.def.name}`).toEqual(p.def.location)
     }
@@ -448,7 +507,7 @@ async function checkManifestCase(entry: ManifestCase) {
   const saved = savedPivotLayout(p.def)!
   expect(axes.rows).toEqual(saved.rows)
   expect(axes.cols).toEqual(saved.cols)
-  const layout = placeCells(p.def, view, p.cache, axes, blankGrid)
+  const layout = placeCells(p.def, view, p.cache, axes, blankGrid, { date1904: p.date1904 })
   expect(liveDefinition(p.def, view, axes, layout).location).toEqual(p.def.location)
   expect(labelDiffs(p, layout)).toEqual([])
 }

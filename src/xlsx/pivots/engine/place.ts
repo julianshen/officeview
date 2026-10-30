@@ -21,7 +21,8 @@
  * - page fields sit above the location, one blank row between (savedPivotLayout's placement).
  * Captions follow the Stage 2 caption ruling: an explicit name in the definition, else the saved text for the slot
  * (`savedCaption`), else Excel's English default marked `caption: 'implicit'` with `captionsUnverified` set.
- * Unmeasured: merged labels (`mergeItem`), named-subtotal captions, `showHeaders` off, an empty pivot.
+ * Unmeasured: named-subtotal captions, `showHeaders` off, an empty pivot. Merged labels (`mergeItem`) are refused by
+ * computeAxes until measured.
  */
 import type { SheetRect } from '../../tableStyles/model'
 import {
@@ -38,6 +39,9 @@ export type PivotCellValue = { kind: 'empty' } | { kind: 'number'; value: number
 export interface PivotValueGrid { get(rowLine: number, colLine: number, data: number): PivotCellValue }
 export interface PivotLayoutCell { row: number; col: number; value: PivotCellValue; numFmtId?: number; caption?: 'implicit' }
 export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean }
+/** Ruling S2-J: the workbook's date system is explicit (the cache does not know it). `savedCaption` is the saved text
+ * of a caption slot, for the saved state only (Stage 2 caption ruling). */
+export interface PlaceOptions { date1904: boolean; savedCaption?: (row: number, col: number) => string | undefined }
 
 const FUNCTION_NAMES: Record<string, string> = {
   sum: 'Sum', count: 'Count', average: 'Average', max: 'Max', min: 'Min', product: 'Product', countNums: 'Count',
@@ -108,7 +112,8 @@ const implicit = (english: string): Label => ({ value: { kind: 'text', value: en
 const labelText = (label: Label) => label.value.kind === 'empty' ? '' : String(label.value.value)
 
 export function placeCells(def: PivotTableDefinition, view: PivotViewState, cache: PivotCacheDefinition, axes: PivotAxes, values: PivotValueGrid,
-  savedCaption?: (row: number, col: number) => string | undefined): PivotLayout {
+  options: PlaceOptions): PivotLayout {
+  const { date1904, savedCaption } = options
   const geo = geometry(def, view, axes)
   const { rect, dataRow0, dataCol0, itemRow0, labelCol } = geo
   const cells = new Map<string, PivotLayoutCell>()
@@ -139,8 +144,8 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
     switch (value.type) {
       case 'missing': return implicit('(blank)')
       case 'number': return { value: { kind: 'number', value: value.value }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
-      // Date items show as serials in the field's number format (lo-calc-pivot_dark1); the 1900 date system is assumed.
-      case 'date': return { value: { kind: 'number', value: isoToSerial(value.value, false) }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
+      // Date items show as serials in the field's number format (lo-calc-pivot_dark1), in the workbook's date system.
+      case 'date': return { value: { kind: 'number', value: isoToSerial(value.value, date1904) }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
       case 'boolean': return text(value.value ? 'TRUE' : 'FALSE')
       case 'error': return { value: { kind: 'error', value: value.value } }
       case 'string': return text(value.value)
@@ -244,36 +249,12 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   }
 
   const list = [...cells.values()].sort((a, b) => a.row - b.row || a.col - b.col)
-  return { rect, axes, cells: list, merges: def.mergeItem ? mergedLabels(def, view, geo, axes) : [], captionsUnverified: list.some(cell => cell.caption === 'implicit') }
+  // Merged labels (`mergeItem`) are unmeasured: computeAxes refuses such a pivot (pivot-engine-unmeasured) until Task 15.
+  return { rect, axes, cells: list, merges: [], captionsUnverified: list.some(cell => cell.caption === 'implicit') }
 }
 
-/** `mergeItem`: a parent item's label merged over the lines it shares with its children — down its label column
- * (tabular) and across its column-item row. Unmeasured: a parent with its own line (compact, outline) holds no merge. */
-function mergedLabels(def: PivotTableDefinition, view: PivotViewState, geo: Geometry, axes: PivotAxes): SheetRect[] {
-  const merges: SheetRect[] = []
-  const spans = (lines: PivotLine[], level: number, at: (start: number, end: number) => void) => {
-    for (let n = 0; n < lines.length; n++) {
-      const line = lines[n]!
-      if (line.type !== 'data' || level < line.first || level >= line.items.length - 1) continue
-      let end = n
-      while (end + 1 < lines.length && lines[end + 1]!.type === 'data' && lines[end + 1]!.first > level) end++
-      if (end > n) at(n, end)
-    }
-  }
-  view.rows.forEach((field, level) => {
-    if (shares(def, view, field)) return
-    spans(axes.rows, level, (start, end) => merges.push({ minRow: geo.dataRow0 + start, maxRow: geo.dataRow0 + end, minCol: geo.labelCol[level]!, maxCol: geo.labelCol[level]! }))
-  })
-  view.cols.forEach((_, level) => {
-    const row = geo.itemRow0 + level
-    if (row >= geo.dataRow0) return
-    spans(axes.cols, level, (start, end) => merges.push({ minRow: row, maxRow: row, minCol: geo.dataCol0 + start, maxCol: geo.dataCol0 + end }))
-  })
-  return merges
-}
-
-const subtotalItem = (type: PivotFieldItem['type']): PivotFieldItem => ({
-  type, hidden: false, char: false, showDetails: true, calculated: false, missing: false, childItems: false, expanded: false, drillAcross: false,
+const fieldItem = (type: PivotFieldItem['type'], x?: number): PivotFieldItem => ({
+  type, ...(x !== undefined ? { x } : {}), hidden: false, char: false, showDetails: true, calculated: false, missing: false, childItems: false, expanded: false, drillAcross: false,
 })
 const sameList = <T>(a: readonly T[], b: readonly T[]) => a.length === b.length && a.every((v, k) => v === b[k])
 const encode = (lines: PivotLine[]): PivotAxisItem[] => lines.map(line => ({
@@ -293,9 +274,16 @@ export function liveDefinition(def: PivotTableDefinition, view: PivotViewState, 
     if (!state) return field
     const page = view.pages.find(candidate => candidate.field === index)
     const multi = page && page.selected !== 'all' && page.selected.length > 1 ? page.selected : undefined
-    let items = field.items?.map((item, k) => ({ ...item, hidden: multi ? item.type === 'data' && !multi.includes(k) : state.hidden[k] ?? item.hidden, showDetails: !(state.collapsed[k] ?? !item.showDetails) }))
     const subtotalsChanged = state.defaultSubtotal !== field.defaultSubtotal || !sameList(state.subtotals, field.subtotals)
-    if (items && subtotalsChanged) items = [...items.filter(item => item.type === 'data'), ...subtotalTypes(state).map(subtotalItem)]
+    // A field saved without an items list (other writers) has the cache's shared-item order as its pivot items, one
+    // state slot per shared item (initialViewState); an edit to it materializes that list so the edit is saved.
+    const edited = Boolean(multi) || state.hidden.includes(true) || state.collapsed.includes(true)
+    const source = field.items ?? (edited ? [
+      ...state.hidden.map((_, x) => fieldItem('data', x)),
+      ...subtotalTypes(state).map(type => fieldItem(type)),
+    ] : undefined)
+    let items = source?.map((item, k) => ({ ...item, hidden: multi ? item.type === 'data' && !multi.includes(k) : state.hidden[k] ?? item.hidden, showDetails: !(state.collapsed[k] ?? !item.showDetails) }))
+    if (items && field.items && subtotalsChanged) items = [...items.filter(item => item.type === 'data'), ...subtotalTypes(state).map(type => fieldItem(type))]
     const { axis: _axis, x14: _x14, autoSortScope: _scope, ...rest } = field
     const axis = axisOf(index) ?? (field.axis === 'axisValues' ? field.axis : undefined)
     const x14 = field.x14 || state.fillDownLabels !== fillDefault ? { fillDownLabels: state.fillDownLabels, ignore: field.x14?.ignore ?? false } : undefined
