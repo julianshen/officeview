@@ -10,7 +10,8 @@ import type { PivotCellValue, PivotValueGrid } from './place'
 import type { PivotViewState } from './view'
 
 const MAX_ACCUMULATOR_BYTES = 128 * 1024 * 1024
-const ACC_BYTES_PER_SLOT = 57
+// One computeValues call is capped at 128 MiB, one quarter of the 512 MiB
+// desktop worker pool, leaving room for axes, source pages and other worker jobs.
 const OUTPUT_BYTES_PER_SLOT = 9
 const TOTAL_SHOW_AS = new Set(['percentOfTotal', 'percentOfRow', 'percentOfCol', 'index', 'percentOfParent', 'percentOfParentRow', 'percentOfParentCol', 'runTotal', 'percentOfRunningTotal'])
 
@@ -22,14 +23,14 @@ const invalid = (message: string) => ({ ok: false as const, diagnostic: { kind: 
 
 interface Accumulator {
   records: Uint8Array
-  nonEmpty: Uint32Array
-  numeric: Uint32Array
-  sum: Float64Array
-  product: Float64Array
-  mean: Float64Array
-  m2: Float64Array
-  min: Float64Array
-  max: Float64Array
+  nonEmpty?: Uint32Array
+  numeric?: Uint32Array
+  sum?: Float64Array
+  product?: Float64Array
+  mean?: Float64Array
+  m2?: Float64Array
+  min?: Float64Array
+  max?: Float64Array
 }
 
 // Keep the record loop's aggregation dispatch numeric and monomorphic. The
@@ -60,32 +61,70 @@ function subtotalFnCode(type: PivotItemType, fallback: ValueFnCode): ValueFnCode
   }
 }
 
-function accumulator(size: number): Accumulator {
-  const product = new Float64Array(size); product.fill(1)
-  const min = new Float64Array(size); min.fill(Number.POSITIVE_INFINITY)
-  const max = new Float64Array(size); max.fill(Number.NEGATIVE_INFINITY)
-  return {
-    records: new Uint8Array(size), nonEmpty: new Uint32Array(size), numeric: new Uint32Array(size),
-    sum: new Float64Array(size), product, mean: new Float64Array(size), m2: new Float64Array(size), min, max,
+function accumulatorBytes(fn: ValueFnCode): number {
+  switch (fn) {
+    case VALUE_FN.sum: return 9
+    case VALUE_FN.count: case VALUE_FN.countNums: return 5
+    case VALUE_FN.average: case VALUE_FN.max: case VALUE_FN.min: case VALUE_FN.product: return 13
+    default: return 21 // records byte, numeric count, Welford mean and M2
   }
+}
+
+function accumulator(size: number, fn: ValueFnCode): Accumulator {
+  const result: Accumulator = { records: new Uint8Array(size) }
+  switch (fn) {
+    case VALUE_FN.sum: result.sum = new Float64Array(size); break
+    case VALUE_FN.count: result.nonEmpty = new Uint32Array(size); break
+    case VALUE_FN.countNums: result.numeric = new Uint32Array(size); break
+    case VALUE_FN.average:
+      result.sum = new Float64Array(size); result.numeric = new Uint32Array(size); break
+    case VALUE_FN.max:
+      result.max = new Float64Array(size); result.max.fill(Number.NEGATIVE_INFINITY)
+      result.numeric = new Uint32Array(size); break
+    case VALUE_FN.min:
+      result.min = new Float64Array(size); result.min.fill(Number.POSITIVE_INFINITY)
+      result.numeric = new Uint32Array(size); break
+    case VALUE_FN.product:
+      result.product = new Float64Array(size); result.product.fill(1)
+      result.numeric = new Uint32Array(size); break
+    default:
+      result.mean = new Float64Array(size); result.m2 = new Float64Array(size); result.numeric = new Uint32Array(size)
+  }
+  return result
+}
+
+type AccumulatorBank = Array<Accumulator | undefined>
+function accumulatorBank(size: number, functions: readonly (readonly number[])[]): AccumulatorBank[] {
+  return functions.map(codes => {
+    const bank: AccumulatorBank = new Array(11)
+    for (const code of codes) bank[code] = accumulator(size, code as ValueFnCode)
+    return bank
+  })
+}
+
+function accumulatorBankBytes(size: number, functions: readonly (readonly number[])[]): number {
+  let bytes = 0
+  for (const codes of functions) for (const code of codes) bytes += size * accumulatorBytes(code as ValueFnCode)
+  return bytes
 }
 
 function add(acc: Accumulator, at: number, value: ReadValue, fn: ValueFnCode): void {
   acc.records[at] = 1
   if (value.kind === 'missing') return
-  if (fn === VALUE_FN.count) { acc.nonEmpty[at]++; return }
+  if (fn === VALUE_FN.count) { acc.nonEmpty![at]++; return }
   if (value.kind !== 'number') return
-  if (fn === VALUE_FN.sum || fn === VALUE_FN.average) acc.sum[at] += value.value
+  if (fn === VALUE_FN.sum || fn === VALUE_FN.average) acc.sum![at] += value.value
   if (fn === VALUE_FN.sum) return
-  if (fn === VALUE_FN.countNums) { acc.numeric[at]++; return }
-  if (fn === VALUE_FN.max) { acc.numeric[at]++; if (value.value > acc.max[at]!) acc.max[at] = value.value; return }
-  if (fn === VALUE_FN.min) { acc.numeric[at]++; if (value.value < acc.min[at]!) acc.min[at] = value.value; return }
-  if (fn === VALUE_FN.product) { acc.numeric[at]++; acc.product[at] *= value.value; return }
-  const n = ++acc.numeric[at]
-  const delta = value.value - acc.mean[at]!
-  acc.mean[at] += delta / n
+  if (fn === VALUE_FN.average) { acc.numeric![at]++; return }
+  if (fn === VALUE_FN.countNums) { acc.numeric![at]++; return }
+  if (fn === VALUE_FN.max) { acc.numeric![at]++; if (value.value > acc.max![at]!) acc.max![at] = value.value; return }
+  if (fn === VALUE_FN.min) { acc.numeric![at]++; if (value.value < acc.min![at]!) acc.min![at] = value.value; return }
+  if (fn === VALUE_FN.product) { acc.numeric![at]++; acc.product![at] *= value.value; return }
+  const n = ++acc.numeric![at]
+  const delta = value.value - acc.mean![at]!
+  acc.mean![at] += delta / n
   if (fn === VALUE_FN.stdDev || fn === VALUE_FN.stdDevp || fn === VALUE_FN.var || fn === VALUE_FN.varp)
-    acc.m2[at] += delta * (value.value - acc.mean[at]!)
+    acc.m2![at] += delta * (value.value - acc.mean![at]!)
 }
 
 interface ReadValue { kind: 'missing' | 'other' | 'error' | 'date-unmeasured' | 'number'; value: number }
@@ -115,21 +154,21 @@ function readValue(column: RecordColumn | undefined, sharedItems: readonly impor
   return true
 }
 
-function valueOf(acc: Accumulator, at: number, fn: PivotDataFunction): number | undefined {
-  const count = acc.numeric[at]!
+function valueOf(acc: Accumulator, at: number, fn: ValueFnCode): number | undefined {
+  const count = acc.numeric?.[at] ?? 0
   if (!acc.records[at]) return undefined
   switch (fn) {
-    case 'sum': return acc.sum[at]!
-    case 'count': return acc.nonEmpty[at]!
-    case 'countNums': return count
-    case 'average': return count ? acc.sum[at]! / count : Number.NaN
-    case 'max': return count ? acc.max[at]! : Number.NaN
-    case 'min': return count ? acc.min[at]! : Number.NaN
-    case 'product': return count ? acc.product[at]! : Number.NaN
-    case 'stdDev': return count > 1 ? Math.sqrt(acc.m2[at]! / (count - 1)) : Number.NaN
-    case 'stdDevp': return count ? Math.sqrt(acc.m2[at]! / count) : Number.NaN
-    case 'var': return count > 1 ? acc.m2[at]! / (count - 1) : Number.NaN
-    case 'varp': return count ? acc.m2[at]! / count : Number.NaN
+    case VALUE_FN.sum: return acc.sum![at]!
+    case VALUE_FN.count: return acc.nonEmpty![at]!
+    case VALUE_FN.countNums: return count
+    case VALUE_FN.average: return count ? acc.sum![at]! / count : Number.NaN
+    case VALUE_FN.max: return count ? acc.max![at]! : Number.NaN
+    case VALUE_FN.min: return count ? acc.min![at]! : Number.NaN
+    case VALUE_FN.product: return count ? acc.product![at]! : Number.NaN
+    case VALUE_FN.stdDev: return count > 1 ? Math.sqrt(acc.m2![at]! / (count - 1)) : Number.NaN
+    case VALUE_FN.stdDevp: return count ? Math.sqrt(acc.m2![at]! / count) : Number.NaN
+    case VALUE_FN.var: return count > 1 ? acc.m2![at]! / (count - 1) : Number.NaN
+    case VALUE_FN.varp: return count ? acc.m2![at]! / count : Number.NaN
   }
 }
 
@@ -225,23 +264,37 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
 
   const rowCount = axes.rows.length, colCount = axes.cols.length, dataCount = view.data.length
   const gridSize = rowCount * colCount * dataCount
-  const rowTotalSize = rowCount * dataCount, colTotalSize = colCount * dataCount
-  const estimatedSlots = gridSize + rowTotalSize + colTotalSize + dataCount
-  // Include the per-line target lists and prefix-index map; their JS overhead dominates when a pivot has many lines.
+  const gridCellCount = rowCount * colCount
+  // Reject clearly oversized requests before scanning lines to discover the
+  // active function banks. Every accumulator cell needs at least one byte of
+  // presence plus a four-byte count; output and target structures remain.
   const targetBytes = (rowCount + colCount) * (128 + dataCount * 32)
-  const estimatedBytes = estimatedSlots * ACC_BYTES_PER_SLOT + gridSize * OUTPUT_BYTES_PER_SLOT * 2 + targetBytes
+  const minimumBytes = (gridCellCount + rowCount + colCount + 1) * dataCount * 5
+    + gridSize * OUTPUT_BYTES_PER_SLOT * 2 + targetBytes
+  if (!Number.isSafeInteger(minimumBytes) || minimumBytes > MAX_ACCUMULATOR_BYTES)
+    return fail('pivot-values-limit', 'the value grid exceeds its bounded accumulator budget')
+
+  const functions = view.data.map(data => valueFnCode(data.fn))
+  const codesFor = (lines: readonly PivotLine[], d: number) => {
+    const seen = new Uint8Array(11); seen[functions[d]!] = 1
+    for (const line of lines) seen[subtotalFnCode(line.type, functions[d]!)] = 1
+    const codes: number[] = []
+    for (let code = 0; code < seen.length; code++) if (seen[code]) codes.push(code)
+    return codes
+  }
+  const rowCodes = functions.map((_, d) => codesFor(axes.rows, d))
+  const colCodes = functions.map((_, d) => codesFor(axes.cols, d))
+  const gridCodes = functions.map((fn, d) => [...new Set([fn, ...rowCodes[d]!, ...colCodes[d]!])])
+  const grandCodes = functions.map(fn => [fn])
+  // The byte estimate includes per-line target lists and prefix-index maps,
+  // whose JS overhead dominates when a pivot has many lines.
+  const estimatedBytes = accumulatorBankBytes(gridCellCount, gridCodes)
+    + accumulatorBankBytes(rowCount, rowCodes) + accumulatorBankBytes(colCount, colCodes)
+    + accumulatorBankBytes(1, grandCodes) + gridSize * OUTPUT_BYTES_PER_SLOT * 2 + targetBytes
   if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_ACCUMULATOR_BYTES)
     return fail('pivot-values-limit', 'the value grid exceeds its bounded accumulator budget')
 
-  const recordTargets = readTargets(store, view, axes)
-  if (!recordTargets.ok) return recordTargets
-
-  const gridAcc = accumulator(gridSize), rowTotals = accumulator(rowTotalSize), colTotals = accumulator(colTotalSize), grandTotals = accumulator(dataCount)
-  const sourceColumns = view.data.map(data => store.columns[data.field])
-  const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
-  const functions = view.data.map(data => valueFnCode(data.fn))
-  const rowFunctions = new Uint8Array(rowCount * dataCount)
-  const colFunctions = new Uint8Array(colCount * dataCount)
+  const rowFunctions = new Uint8Array(rowCount * dataCount), colFunctions = new Uint8Array(colCount * dataCount)
   const rowNamed = new Uint8Array(rowCount), colNamed = new Uint8Array(colCount)
   for (let row = 0; row < rowCount; row++) {
     const line = axes.rows[row]!
@@ -253,6 +306,14 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     colNamed[col] = +isNamedSubtotal(line.type)
     for (let d = 0; d < dataCount; d++) colFunctions[col * dataCount + d] = subtotalFnCode(line.type, functions[d]!)
   }
+
+  const recordTargets = readTargets(store, view, axes)
+  if (!recordTargets.ok) return recordTargets
+
+  const gridAcc = accumulatorBank(gridCellCount, gridCodes), rowTotals = accumulatorBank(rowCount, rowCodes)
+  const colTotals = accumulatorBank(colCount, colCodes), grandTotals = accumulatorBank(1, grandCodes)
+  const sourceColumns = view.data.map(data => store.columns[data.field])
+  const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
   const valueScratch: ReadValue = { kind: 'missing', value: 0 }
   for (let record = 0; record < store.count; record++) {
     for (let d = 0; d < dataCount; d++) {
@@ -263,12 +324,14 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       const fn = functions[d]!
       const rowTargets = recordTargets.value.rows[d]![axes.rowKey[record]!]!
       const colTargets = recordTargets.value.cols[d]![axes.colKey[record]!]!
-      add(grandTotals, d, valueScratch, fn)
+      add(grandTotals[d]![fn]!, 0, valueScratch, fn)
       for (const row of rowTargets) {
-        add(rowTotals, row * dataCount + d, valueScratch, rowFunctions[row * dataCount + d]! as ValueFnCode)
+        const rowFn = rowFunctions[row * dataCount + d]! as ValueFnCode
+        add(rowTotals[d]![rowFn]!, row, valueScratch, rowFn)
       }
       for (const col of colTargets) {
-        add(colTotals, col * dataCount + d, valueScratch, colFunctions[col * dataCount + d]! as ValueFnCode)
+        const colFn = colFunctions[col * dataCount + d]! as ValueFnCode
+        add(colTotals[d]![colFn]!, col, valueScratch, colFn)
       }
       for (const row of rowTargets) for (const col of colTargets) {
         const isRowNamed = !!rowNamed[row], isColNamed = !!colNamed[col]
@@ -279,7 +342,7 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
         if ((isRowNamed || isColNamed) && view.data[d]!.showAs !== 'normal')
           return unmeasured('show-as applied to a named subtotal is not measured')
         const cellFn = isRowNamed ? rowFn : isColNamed ? colFn : fn
-        add(gridAcc, cellIndex(row, col, d, colCount, dataCount), valueScratch, cellFn)
+        add(gridAcc[d]![cellFn]!, row * colCount + col, valueScratch, cellFn)
       }
     }
   }
@@ -293,7 +356,8 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     if (rowNamed && colNamed && rowFn !== colFn)
       return unmeasured('intersecting row and column named subtotals with different functions are not measured')
     const fn = rowNamed ? rowFn : colNamed ? colFn : view.data[d]!.fn
-    const result = valueOf(gridAcc, at, fn)
+    const fnCode = valueFnCode(fn)
+    const result = valueOf(gridAcc[d]![fnCode]!, row * colCount + col, fnCode)
     if (result === undefined) continue
     if (!Number.isFinite(result)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     raw[at] = result; present[at] = 1
@@ -311,7 +375,10 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   }
 
   const output = raw.slice(), outputPresent = present.slice()
-  const totalValue = (acc: Accumulator, at: number, fn: PivotDataFunction): number | undefined => valueOf(acc, at, fn)
+  const totalValue = (acc: AccumulatorBank[], d: number, at: number): number | undefined => {
+    const fn = functions[d]!
+    return valueOf(acc[d]![fn]!, at, fn)
+  }
   const rowFields = view.rows, colFields = view.cols
   const findBaseLine = (axis: 'rows' | 'cols', current: number, baseField: number, baseItem: number): number | undefined => {
     const fields = axis === 'rows' ? rowFields : colFields, lines = axis === 'rows' ? axes.rows : axes.cols
@@ -374,9 +441,9 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     const data = view.data[d]!, mode = data.showAs as PivotShowDataAs | string
     if (mode === 'normal') continue
     let denominator: number | undefined, numerator = raw[at]!, result: number
-    const rowTotal = totalValue(rowTotals, row * dataCount + d, data.fn)
-    const colTotal = totalValue(colTotals, col * dataCount + d, data.fn)
-    const grandTotal = totalValue(grandTotals, d, data.fn)
+    const rowTotal = totalValue(rowTotals, d, row)
+    const colTotal = totalValue(colTotals, d, col)
+    const grandTotal = totalValue(grandTotals, d, 0)
     if (mode === 'percentOfTotal') denominator = grandTotal
     else if (mode === 'percentOfRow') denominator = rowTotal
     else if (mode === 'percentOfCol') denominator = colTotal
