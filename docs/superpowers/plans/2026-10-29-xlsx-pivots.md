@@ -443,62 +443,382 @@
 
 ---
 
-## Stage 2: engine (PR 2) — refined at stage start
+## Stage 2: engine (PR 2) — refined 2026-10-31
 
-The steps are written in the stage-start revision. `RecordStore` and `PivotViewState` are provisional until the Stage 1 corpus and the Task 3/14 measurements show the real encodings.
+**Revision note.** This refinement replaces the provisional Stage 2 outline. Changes against it:
+- The Excel oracle is built **first** (Task 15), because every **[measure]** item in §5 must come from an Excel reference before it is coded (Global Constraints).
+- The benchmark gate (Task 20) runs as soon as records, axes and values exist, before sorting, filters, grouping and calculated fields are built on TypeScript.
+- The faithfulness check (Task 19) comes before the feature tasks, so each later task proves itself on the oracle.
+- Stage 2 is now Tasks 15–23, so Stages 3–5 are renumbered 24–39.
 
-- **Task 15. Record store (codex).**
-  - `decodeRecords(defn: PivotCacheDefinition, events: XmlEvents, budget: Budget): RecordStore`, columnar: `Uint32Array` item indices per shared field, typed value tables for inline fields.
-  - It is streamed in the worker through `openPart` and `tokenizeBytes`, with per-profile caps (§6.2, AGY-9). Over the cap gives `pivot-records-limit`.
-- **Task 16. Layout engine (Claude opus):**
-  - `computeLayout(store: RecordStore, def: PivotTableDefinition, view: PivotViewState): PivotLayout`
-  - axes and items, collapse, subtotals, grand totals, Values placement, and layout forms (§5.2, §5.7).
-  - `interface PivotViewState { fields: FieldState[]; rows: number[]; cols: number[]; pages: PageState[]; data: DataFieldState[]; filters: FilterState[] }`, initialised from the definition.
-- **Task 17. Aggregation and show-values-as (codex).** The functions and the show-values-as modes of §5.3, with competition or dense rank as measured (AGY-12).
-- **Task 18. Sorting, filters and grouping (agy).** §5.1, §5.4 and §5.5. Dynamic date filters set `unsupported` (CODEX-4).
-- **Task 19. Calculated fields (Claude opus).** A lexer mode for quoted field names (AGY-8), and evaluation through `evaluateFormula` (§5.6). Calculated items set `unsupported`.
-- **Task 20. Faithfulness check (codex).**
-  - `checkSavedLayout(layout: PivotLayout, def: PivotTableDefinition, savedCells: CellReader): { ok: true } | { ok: false; firstDiff: CellDiff }` (§6.4, CODEX-2).
-  - Every corpus pivot and every Excel-built case runs through it.
-- **Task 21. Excel oracle and benchmark (orchestrator).**
-  - Stage 2 engine cases, built by Excel or through recipes, with saved `rowItems`, `colItems` and cells as the oracle.
-  - `bun scripts/pivot-bench.ts`: a 1,000,000-record pivot recomputed in the worker in ≤ 200 ms on desktop (§6.3). If it misses, write the Rust/WASM proposal for the owner.
+**Stage 2 scope rulings [call]:**
+- **Library, tests and benchmark only.** No runtime caller runs the engine in Stage 2. Pivot open, apply and release in the worker are Stage 3 (Task 25). So Stage 2 adds **no diagnostic** at runtime (Global Constraints, "absent, with no diagnostic"). The engine returns its diagnostics as values, and tests assert them.
+- **The engine is exported from `src/xlsx/pivots/index.ts`.** The lazy chunk's growth then shows in `OV_MODULE_MAP=1 bun run build` in this stage, not as a surprise in Stage 3. It must not enter the eager graph.
+- **Not supported in Stage 2, and the engine says so with an `unsupported` result:**
+  - dynamic date filters (CODEX-4), because the month-boundary measurement can't run in this stage;
+  - calculated items, unless Task 15 lands a passing Excel oracle for them (§5.6);
+  - OLAP and data-model caches, and external, consolidation and scenario sources (§7.6).
+- **Captions.** Excel rewrites the default captions in its UI language on refresh (Stage 1 probe C). Caption text comes from the first of these that exists:
+  1. an explicit name in the definition (`rowHeaderCaption`, `colHeaderCaption`, `grandTotalCaption`, `dataField@name`, item `n`, `subtotalCaption`);
+  2. the saved cell text for the same caption slot in the saved state;
+  3. Excel's English default.
+
+  The faithfulness check compares implicit-caption cells for presence only, not text. Task 15 measures which captions Excel localises.
+- **Writer-made files.** A LibreOffice- or POI-written file is that writer's own computation, not Excel's. A faithfulness mismatch there is the fail-closed path working, never a reason to tune the engine. Files without `rowItems`/`colItems` exercise the *unverified* path (§6.4 item 5), which has its own tests.
+- **Caps [call] (§13):**
+
+  | Cap | Desktop | Mobile |
+  |---|---|---|
+  | Record store bytes | 64 MiB | 16 MiB |
+  | Records | 4,000,000 | 1,000,000 |
+  | Unique inline strings per field | 1,048,576 | 262,144 |
+
+  - These sit inside the worker pools of 512 MiB and 256 MiB (`tileCache.ts` `WORKER_BUDGETS`). The desktop cap admits the §6.3 benchmark case: about 32 MB columnar for 1M records × (4 index + 2 value) fields.
+  - The resident path uses the same caps. Its records parts are already bounded at 4 MiB / 2 MiB by `nonDrawingPartBytes`.
+  - Charging to the memory ledgers happens when Stage 3 holds a store. Stage 2 reports `store.bytes` and enforces the caps.
+- **Numbers** are compared to 15 significant digits (§9). Task 15 pins this with a case whose sum depends on addition order.
+
+**Agents [call].**
+- codex implements Tasks 16, 18 and 21. Each is reviewed by a Claude opus subagent, plus agy as a second reviewer.
+  - Task 21 (sort, filter, group) moves from agy to codex. It is the stage's densest wrong-number surface, and agy missed real bugs in Stage 1 reviews.
+  - Task 16's review adds a Claude sonnet reviewer, because it touches worker streaming and memory.
+- A Claude opus subagent implements Tasks 17, 19 and 22, and codex reviews them.
+- agy implements Task 20, the benchmark script, and Claude sonnet reviews it.
+- The orchestrator does Tasks 15 and 23, and codex reviews them.
+
+**Stage 2 review focus** (from spec §10):
+1. **Compact form with several row fields, collapsed items and subtotals at the top.** Line order, subtotal placement and the oracle `rowItems` must agree. Test: Task 17, `compact collapsed subtotal-top lines equal saved rowItems`.
+2. **Show values as with a base item of previous or next, and % of parent total at several levels.** Test: Task 18, `show-as previous/next and parent-total oracles`.
+3. **Date grouping across years with blanks and out-of-range buckets, and a group field used with its base field.** Test: Task 21, `date groups with blanks, out-of-range buckets and base field together`.
+4. **A records part split at every byte boundary, and a store that crosses its cap mid-stream.** Test: Task 16, `1-byte chunks decode identically` and `cap crossed mid-stream gives pivot-records-limit`.
+5. **Writer-made files:**
+   - inline record values;
+   - absent `rowItems`, which is the unverified path;
+   - a calculated field whose name has spaces or quotes, and division by zero inside it.
+
+   Tests: Task 16, Task 19 and Task 22.
+
+### Task 15: Stage 2 Excel oracle (orchestrator; review: codex)
+
+**Files:**
+- Create:
+  - `scripts/xlsx-refs/engine-cases.ts`, the case manifest;
+  - `scripts/xlsx-refs/build-engine.ts`, which drives Excel;
+  - `tests/fixtures/xlsx-pivots/engine/*.xlsx`, Excel's saved outputs;
+  - `tests/fixtures/xlsx-pivots/engine/manifest.json`, which records for each case the features it covers and the task that must pass it;
+  - `docs/validation/xlsx-pivots-recipes-stage2.md`, only if a case needs the owner.
+- Modify: `docs/validation/xlsx-pivots.md`, adding a section "Stage 2 engine oracle and measurements".
+
+**Interfaces:**
+- Produces `manifest.json` entries `{ "case": string, "file": string, "features": string[], "task": 17 | 18 | 19 | 21 | 22, "pivot": string }`. Tasks 17–22 read these entries to pick their oracle cases.
+
+- [ ] **Step 1: Probe the dictionary.** For each reshape below, record whether AppleScript reaches it, with the working incantation, in the validation doc.
+  - Sources: `excel.sdef` (pivot field `function`, `calculation`, `base field`, `base item`, `auto show …`, `auto sort …`, `layout form`, `layout subtotal location`, `layout blank line`, `repeat labels`, `current page`, `hidden items list`, `show detail`; pivot table `row grand`, `column grand`; the `group` command on a pivot range; `pivot filter` elements; `calculated field` / `calculated item` elements).
+  - Unreachable reshapes take the §11 route: hand-edit the Excel-saved seed's definition XML, open it in Excel, run `refresh table` (probe B: automation-opened files don't refresh on their own), and save.
+  - Cases Excel repairs, or will not recompute, go into one recipe batch for the owner, delivered once.
+- [ ] **Step 2: Seed.** Derive `recipes/engine-seed.xlsx` from `recipes/pivot-seed.xlsx`: write a richer source through AppleScript (`set value of range`), point the pivot at it, then refresh. Columns:
+  - Region and Product (text);
+  - Date, spanning 2019–2024, with blanks;
+  - Channel, with a number and a text item;
+  - Sales, with ties, blanks, one `#N/A` and negatives;
+  - Units.
+
+  Each case changes only what it tests.
+- [ ] **Step 3: Build the cases.** At least these groups; each row is one or more saved files:
+
+  | Group (task) | Cases |
+  |---|---|
+  | Layout (17) | compact, outline and tabular, each with 3 row fields; collapsed items; subtotals top and bottom; grand totals row-only, column-only and off; Values on rows and on columns with 2 data fields; blank rows; repeat labels; named subtotals (sum + count + average) |
+  | Data quirks (17, 18) | blank items, an error in a value, mixed number and text items in a row field, a hidden item, page field single and multiple |
+  | Values (18) | each of the 11 functions; each show-as mode, including previous and next base items, % of parent at 2 levels, rank with ties, running total, index, and % difference with a zero base; an addition-order case for the 15-digit rule |
+  | Sort, filter, group (21) | sort ascending and descending with numbers, text and blanks; custom lists (month and weekday names); sort by value within groups; label filters (wildcard, between); value filter; top 10 by count, percent and sum, with ties; date filter between; date groups (years, quarters, months) with blanks and out-of-range start and end; a number range group; a manual group; a group field with its base field |
+  | Calculated (22) | a calculated field with spaces in the name and division by zero; one calculated-item case, which decides §5.6 |
+- [ ] **Step 4: Answer the [measure] items.** Read them off the cases and record each in the validation doc with its case:
+  - §5.1: error propagation; the out-of-range labels.
+  - §5.2:
+    - whether filters on other fields hide items;
+    - `subtotalTop` placement per form.
+  - §5.3:
+    - totals from records;
+    - filtered items excluded;
+    - rank ties, competition or dense;
+    - `#DIV/0!` and `errorCaption`.
+  - §5.4: type order; custom lists.
+  - §5.5: top-10 ties.
+  - Captions: which are localised.
+  - Display precision.
+- [ ] **Step 5: Commit.** Commit the fixtures, the manifest, the scripts and the doc. Hand the owner the recipe batch once, if there is one. Engine tasks may proceed meanwhile: their recipe cases stay `pending` in the manifest.
+
+### Task 16: Record store (codex; review: Claude opus + agy + Claude sonnet)
+
+**Files:**
+- Create: `src/xlsx/pivots/engine/records.ts`.
+- Test: `tests/xlsx-pivots-records.test.ts`.
+
+**Interfaces:**
+- Consumes `PivotCacheDefinition` from `src/xlsx/pivots/model.ts`, `XmlEvents` and `tokenizeBytes` from `src/core/xml-stream.ts`, and `ProfileId`.
+- Produces:
+```ts
+export interface RecordLimits { maxBytes: number; maxRecords: number; maxInlineStrings: number }
+export const RECORD_LIMITS: Readonly<Record<ProfileId, RecordLimits>>   // values: the caps table above
+export type RecordColumn =
+  | { kind: 'shared'; index: Uint32Array }                          // into sharedItems.items
+  | { kind: 'inline'; tag: Uint8Array; num: Float64Array; text: string[]; textIndex: Uint32Array }
+export const VALUE_TAG: { missing: 0; number: 1; boolean: 2; error: 3; string: 4; date: 5 }
+export interface RecordStore { readonly count: number; readonly columns: ReadonlyArray<RecordColumn | undefined>; readonly bytes: number }
+export type RecordResult = { ok: true; store: RecordStore } | { ok: false; diagnostic: PivotDiagnostic }
+export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, date1904: boolean): { events: XmlEvents; finish(): RecordResult }
+export function decodeRecords(source: AsyncIterable<Uint8Array>, cache: PivotCacheDefinition, limits: RecordLimits, date1904: boolean, signal?: AbortSignal): Promise<RecordResult>
+export function isoToSerial(iso: string, date1904: boolean): number   // reuse the codebase's date helper if one exists
+```
+- `columns` is indexed by cache field. A field with `databaseField="0"` (calculated or derived group fields) has `undefined`. Records carry one child per *database* field, in cache-field order: corpus `calcfields.xlsx` has 8 fields and 3 children; `shared-numgroup.xlsx` has 10 and 10.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `decodes shared and inline columns`: the POI sample, `two-data-fields` and `shared-numgroup` give the right indices and values.
+  - `1-byte chunks decode identically`.
+  - `calculated fields have no column`.
+  - `x out of range gives pivot-records parse`.
+  - `child count mismatch gives pivot-records parse`.
+  - `an inline value in a shared field gives pivot-records parse`.
+  - `cap crossed mid-stream gives pivot-records-limit`, for both maxBytes and maxRecords; the stream is not read to its end.
+  - `dates decode to serials in 1900 and 1904 systems`.
+  - `bytes equals the typed-array byteLengths plus string estimate`.
+  - `resident bytes and worker openPart stream give equal stores`, through the paged package in node.
+- [ ] **Step 2: Run them; they fail.** `npx vitest run tests/xlsx-pivots-records.test.ts`.
+- [ ] **Step 3: Implement.**
+  - Columns grow by doubling and are trimmed at `finish`.
+  - Attribute arrays are reused by the tokenizer, so the decoder copies values and never keeps the arrays.
+- [ ] **Step 4: Run them; they pass.** Then run `npx tsc --noEmit -p .`.
+- [ ] **Step 5: Commit.** Codex leaves the changes uncommitted, and the orchestrator commits them by path.
+
+### Task 17: Axes and layout to cells (Claude opus; review: codex)
+
+**Files:**
+- Create:
+  - `src/xlsx/pivots/engine/view.ts`;
+  - `src/xlsx/pivots/engine/axes.ts`;
+  - `src/xlsx/pivots/engine/place.ts`.
+- Test: `tests/xlsx-pivots-axes.test.ts`.
+
+**Interfaces:**
+- Consumes `RecordStore` (Task 16), and `PivotLine` and `SavedPivotLayout` from `savedLayout.ts`.
+- Produces:
+```ts
+export interface FieldState { hidden: readonly boolean[]; collapsed: readonly boolean[]; sortType: PivotFieldSortType; autoSortScope?: PivotArea;
+  defaultSubtotal: boolean; subtotals: readonly PivotSubtotalFunction[]; subtotalTop: boolean; compact: boolean; outline: boolean;
+  insertBlankRow: boolean; fillDownLabels: boolean; showAll: boolean }
+export interface PageState { field: number; selected: readonly number[] | 'all' }
+export interface DataFieldState { field: number; fn: PivotDataFunction; showAs: PivotShowDataAs | PivotShowAsX14; baseField: number; baseItem: number; name: string; numFmtId?: number }
+export interface PivotViewState { rows: readonly number[]; cols: readonly number[]; pages: readonly PageState[]; data: readonly DataFieldState[]; fields: readonly FieldState[]; filters: readonly PivotFilter[] }
+export function initialViewState(def: PivotTableDefinition, cache: PivotCacheDefinition): PivotViewState
+export interface PivotAxes { rows: PivotLine[]; cols: PivotLine[]; rowKey: Uint32Array; colKey: Uint32Array }   // per record: its leaf line, or NO_LINE
+export const NO_LINE = 0xffffffff
+export type EngineResult<T> = { ok: true; value: T } | { ok: false; diagnostic: PivotDiagnostic }
+export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState): EngineResult<PivotAxes>
+export type PivotCellValue = { kind: 'empty' } | { kind: 'number'; value: number } | { kind: 'text'; value: string } | { kind: 'error'; value: string }
+export interface PivotValueGrid { get(rowLine: number, colLine: number, data: number): PivotCellValue }
+export interface PivotLayoutCell { row: number; col: number; value: PivotCellValue; numFmtId?: number; caption?: 'implicit' }
+export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[] }
+export function placeCells(def: PivotTableDefinition, view: PivotViewState, cache: PivotCacheDefinition, axes: PivotAxes, values: PivotValueGrid, savedCaption?: (row: number, col: number) => string | undefined): PivotLayout
+```
+- Order in this task: `items` order, `manual` only. Visibility: `h` and page-field selections only. Sorting, label, value, date and top-10 filters, and grouping are Task 21. For each of those, `computeAxes` returns `{ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-engine-pending', … } }` until Task 21 replaces it.
+
+- [ ] **Step 1: Write the failing tests.** The oracle is every manifest case with `task: 17`, plus the Stage 1 references (`tests/fixtures/xlsx-pivots/pivot-*.xlsx`) and the corpus files with `rowItems`. Their `computeAxes` lines must deep-equal `savedPivotLayout(def).rows/cols`.
+  - `compact collapsed subtotal-top lines equal saved rowItems`.
+  - `outline and tabular lines and label columns equal saved`.
+  - `values on rows and on columns place the Values level`.
+  - `items with no data are dropped unless showAll`.
+  - `hidden items and page selections`.
+  - `named subtotals add one line per function`.
+  - `placeCells puts labels, captions and blank rows where the saved cells are`. This compares every non-value cell's text or `caption: 'implicit'` with the saved sheet cells.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.** Records map to leaf lines by one pass over the store, keyed by the tuple of row-field item indices. The tuple is hashed into a `Map` built per call.
+- [ ] **Step 4: Run them; they pass.** Then run tsc.
+- [ ] **Step 5: Commit.**
+
+### Task 18: Values — aggregation and show-values-as (codex; review: Claude opus + agy)
+
+**Files:**
+- Create:
+  - `src/xlsx/pivots/engine/values.ts`;
+  - `src/xlsx/pivots/engine/compute.ts`.
+- Test: `tests/xlsx-pivots-values.test.ts`.
+
+**Interfaces:**
+- Consumes `PivotAxes` and `PivotValueGrid` (Task 17).
+- Produces:
+```ts
+export function computeValues(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid>
+export function computePivot(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState, savedCaption?: (row: number, col: number) => string | undefined): EngineResult<PivotLayout>
+```
+- **Rules:**
+  - Subtotals and grand totals aggregate the records under them, never the subtotals (§5.3, as measured in Task 15).
+  - Show-as is a post-pass over the aggregated grid.
+  - Ties, `#DIV/0!` and `errorCaption` follow Task 15's measurements, cited in comments.
+
+- [ ] **Step 1: Write the failing tests.**
+  - The 11 functions on a hand-built store, with expected values computed independently.
+  - Every manifest case with `task: 18`: `computePivot`'s value cells equal the saved cells to 15 significant digits.
+  - `show-as previous/next and parent-total oracles`.
+  - `rank ties per measurement`.
+  - `average grand total is the mean of records`.
+  - `error in a value propagates per measurement`.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.** Aggregation is one pass over the records into `Float64Array` accumulators: (row line × col line × data field), plus the totals ancestors. Variance uses Welford's method.
+- [ ] **Step 4: Run them; they pass.** Then run tsc.
+- [ ] **Step 5: Commit.**
+
+### Task 19: Faithfulness check (Claude opus; review: codex)
+
+**Files:**
+- Create: `src/xlsx/pivots/engine/faithful.ts`.
+- Test: `tests/xlsx-pivots-faithful.test.ts`.
+
+**Interfaces:**
+- Produces:
+```ts
+export type SavedCell = { kind: 'number'; value: number } | { kind: 'text'; value: string } | { kind: 'bool'; value: boolean } | { kind: 'error'; value: string }
+export type CellReader = (row: number, col: number) => SavedCell | undefined
+export interface CellDiff { row: number; col: number; expected?: SavedCell; actual: PivotCellValue | 'line'; reason: string }
+export type FaithfulResult = { status: 'ok' } | { status: 'mismatch'; firstDiff: CellDiff } | { status: 'unverified'; reason: 'no-row-items' | 'no-col-items' | 'cells-missing' | 'cells-predate-records' | 'unsupported'; detail?: string }
+export function checkSavedLayout(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, saved: CellReader): FaithfulResult
+export function sheetCellReader(sheet: XlsxSheet): CellReader          // resident
+```
+- **Method:**
+  1. Compute the saved state.
+  2. Compare its lines with `rowItems`/`colItems`.
+  3. Compare every cell in `location` (§6.4): numbers to 15 significant digits, text exactly, implicit captions for presence.
+  4. If the engine returns `unsupported`, the result is `unverified`, with `reason: 'unsupported'` and the feature as `detail`.
+- `cells-predate-records` is reported when the cache's `recordCount` differs from the store's count. **[call]** No reliable save timestamp exists to compare with `refreshedDate`, so other staleness shows as `mismatch`, which also fails closed.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `every Excel-made fixture is ok or unverified with a named pending task`.
+  - `a one-cell edit is a mismatch naming that cell`.
+  - `absent rowItems is unverified`.
+  - `LibreOffice files are ok, mismatch or unverified, never throw`, which records each file's status in a snapshot table.
+  - `paged CellReader equals resident`, through the paged sheet shell used in `tests/xlsx-pivots-paged.test.ts`.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.** Add `pagedCellReader`, matching the paged shell's cell access.
+- [ ] **Step 4: Run them; they pass.** Then run tsc.
+- [ ] **Step 5: Commit.**
+
+### Task 20: Benchmark gate (agy; review: Claude sonnet; the orchestrator runs the gate)
+
+**Files:**
+- Create: `scripts/pivot-bench.ts`.
+- Modify: `docs/validation/xlsx-pivots.md`, adding a "Benchmark" section.
+
+- [ ] **Step 1: Write the script.** It builds a synthetic cache and a records part:
+  - 1,000,000 records;
+  - row fields with cardinalities 10, 50 and 200;
+  - a column field with cardinality 12;
+  - two numeric data fields.
+
+  It then runs:
+  - `decodeRecords` over the part, reported separately;
+  - `computeAxes` + `computeValues`, 2 warm-up runs, then the median of 7, inside a `Worker` (Bun's `new Worker`);
+  - peak `store.bytes`.
+
+  Output is JSON plus a line `GATE PASS|FAIL median=<ms> (≤ 200)`.
+- [ ] **Step 2: Run the gate.** The orchestrator runs it on the development machine and records the numbers in the doc. **On FAIL, stop the stage.** Write the Rust/WASM proposal (§6.3) with the measured numbers, a profile of where the time goes, and the costs; the owner decides. This is the one planned stop in Stage 2.
+- [ ] **Step 3: Commit.**
+
+### Task 21: Sorting, filters and grouping (codex; review: Claude opus + agy)
+
+**Files:**
+- Create:
+  - `src/xlsx/pivots/engine/sort.ts`;
+  - `src/xlsx/pivots/engine/filters.ts`;
+  - `src/xlsx/pivots/engine/groups.ts`.
+- Modify: `src/xlsx/pivots/engine/axes.ts`, replacing the `pivot-engine-pending` results.
+- Test: `tests/xlsx-pivots-sort-filter-group.test.ts`.
+
+**Interfaces:**
+- Produces `groupColumn(store: RecordStore, cache: PivotCacheDefinition, field: number): EngineResult<Uint32Array>`, which gives group item indices per record for a `fieldGroup` field (`rangePr` by date part or number interval, or `discretePr`).
+- `computeAxes` gains:
+  - sort: `sortType` and `autoSortScope`, with custom lists as measured;
+  - filters in `evalOrder`: label, value, date (fixed dates only) and top 10.
+- Dynamic date filters give `unsupported` / `pivot-filter-dynamic-date` (CODEX-4).
+
+- [ ] **Step 1: Write the failing tests.**
+  - Every manifest case with `task: 21` passes `checkSavedLayout`.
+  - `date groups with blanks, out-of-range buckets and base field together`.
+  - `type order: numbers, text, blanks per measurement`.
+  - `top 10 ties per measurement`.
+  - `label filter wildcards and case`.
+  - `dynamic date filter is unsupported`.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them; they pass.** Then run tsc.
+- [ ] **Step 5: Commit.**
+
+### Task 22: Calculated fields (Claude opus; review: codex)
+
+**Files:**
+- Create: `src/xlsx/pivots/engine/calculated.ts`.
+- Modify:
+  - `src/xlsx/formula/lexer.ts`, adding a pivot-formula mode (AGY-8);
+  - `src/xlsx/pivots/engine/values.ts`.
+- Test: `tests/xlsx-pivots-calculated.test.ts`.
+
+**Interfaces:**
+- The lexer gains a mode flag, off by default: a quoted run not followed by `!` lexes as a name.
+- `calculatedValue(formula: string, sums: (field: number) => number): PivotCellValue | 'unsupported'` evaluates through `evaluateFormula` with the field names bound as names.
+- A calculated field is evaluated per cell after aggregation, from the sums (§5.6).
+- Calculated items: implemented only if Task 15's oracle case passes; otherwise `unsupported` / `pivot-calculated-item`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - Manifest cases with `task: 22`, and corpus `calcfields.xlsx` (`checkSavedLayout`).
+  - `quoted names with spaces and quotes`.
+  - `division by zero gives #DIV/0! per measurement`.
+  - `an unsupported function makes the pivot unsupported`.
+  - `lexer default mode unchanged`: the existing formula tests still pass.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them; they pass.** Then run tsc and `npx vitest run tests/formula*`.
+- [ ] **Step 5: Commit.**
+
+### Task 23: Stage 2 verification (orchestrator; review: codex)
+
+- [ ] **Step 1:** Run every manifest case through `checkSavedLayout`. Each is `ok`, or `unverified` with a stated reason in the doc. No case may be `mismatch`.
+- [ ] **Step 2:** Run the full gates, the eager gates (`OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts`) and the lazy-chunk growth report. Also run the benchmark again.
+- [ ] **Step 3:** Update `docs/validation/xlsx-pivots.md` and `CHANGELOG.md` (Unreleased: engine, no user-visible change). Open the PR, trigger the Codex bot, wait for CI, then ask the owner to merge.
 
 ## Stage 3: in-table interaction (PR 3) — refined at stage start
 
-- **Task 22. Value overlay and `valueGen` (codex).**
+- **Task 24. Value overlay and `valueGen` (codex).**
   - `ValueOverlay` on `ObjectXlsxSheetAdapter` and `PagedXlsxSheetAdapter`, covering cells, extent and merges (§7.9, AGY-4, AGY-6).
   - A live `valueGen` for pivot sheets.
   - Sheet sort and filter are disabled across pivots.
-- **Task 23. Worker pivot protocol (codex):**
+- **Task 25. Worker pivot protocol (codex):**
   - open, apply with an identity and revision, and release (§6.8, CODEX-5);
   - leases on the shared store.
-- **Task 24. Buttons as controls (Claude opus):**
+- **Task 26. Buttons as controls (Claude opus):**
   - DOM hit targets from `ButtonPlacement`;
   - expand and collapse;
   - filter menus, reusing `FilterDropdown` and `ConditionEditor`;
   - sort, page fields, and Reset to saved view (AGY-11).
-- **Task 25. Overlap rule and autofit (agy).** §7.1, and §7.8 with the measured autofit.
-- **Task 26. Pivot charts follow (Claude opus).**
+- **Task 27. Overlap rule and autofit (agy).** §7.1, and §7.8 with the measured autofit.
+- **Task 28. Pivot charts follow (Claude opus).**
   - Series and category mapping from the current layout (CODEX-3), and a refill through `fillChartRanges` and `succeedChartModel`.
   - Unverified mappings disable interaction.
-- **Task 27. Dependent values (codex):**
+- **Task 29. Dependent values (codex):**
   - a `GETPIVOTDATA` registration hook (AGY-3);
   - recompute of the dependency set on the resident path;
   - stale marking on the paged path and under the `cached` value policy (§7.5).
-- **Task 28. `refreshOnLoad` refresh path (codex).** §7.7, including `saveData="0"` (CODEX-R2-2).
-- **Task 29. Stage 3 Excel interaction oracle and verification (orchestrator).**
+- **Task 30. `refreshOnLoad` refresh path (codex).** §7.7, including `saveData="0"` (CODEX-R2-2).
+- **Task 31. Stage 3 Excel interaction oracle and verification (orchestrator).**
 
 ## Stage 4: field list and values (PR 4) — refined at stage start
 
-- **Task 30. Field-list panel (Claude opus).** Side panel and bottom sheet, drag plus a keyboard/menu alternative (§6.7).
-- **Task 31. Value field settings dialog (agy).**
-- **Task 32. Group dialog and regrouping (codex).**
-- **Task 33. Stage 4 oracle and verification (orchestrator).**
+- **Task 32. Field-list panel (Claude opus).** Side panel and bottom sheet, drag plus a keyboard/menu alternative (§6.7).
+- **Task 33. Value field settings dialog (agy).**
+- **Task 34. Group dialog and regrouping (codex).**
+- **Task 35. Stage 4 oracle and verification (orchestrator).**
 
 ## Stage 5: slicer and timeline interaction (PR 5) — refined at stage start
 
-- **Task 34. Slicer controls (Claude opus).** Click, Ctrl/⌘-click, the Multi-Select toggle (AGY-7), clear, and cross-filter states (§7.2).
-- **Task 35. Timeline controls (codex).** Period select by click or drag, and level changes.
-- **Task 36. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`.
-- **Task 37. Stage 5 oracle, verification and the final whole-feature review (orchestrator).**
+- **Task 36. Slicer controls (Claude opus).** Click, Ctrl/⌘-click, the Multi-Select toggle (AGY-7), clear, and cross-filter states (§7.2).
+- **Task 37. Timeline controls (codex).** Period select by click or drag, and level changes.
+- **Task 38. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`.
+- **Task 39. Stage 5 oracle, verification and the final whole-feature review (orchestrator).**
