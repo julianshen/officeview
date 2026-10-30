@@ -2,7 +2,7 @@
 import { tokenizeBytes, type XmlEvents } from '../../../core/xml-stream'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotValue } from '../model'
 import type { ProfileId } from '../../view/contracts'
-import { dateSerial } from '../../formula/serial'
+import { daysFromCivil } from '../../formula/serial'
 
 export interface RecordLimits { maxBytes: number; maxRecords: number; maxInlineStrings: number }
 export const RECORD_LIMITS: Readonly<Record<ProfileId, RecordLimits>> = Object.freeze({
@@ -24,28 +24,27 @@ const limitError = (message: string): PivotDiagnostic => ({ kind: 'unsupported',
 class StopRecords extends Error {}
 type InlineValue = { tag: number; num: number; text?: string }
 
-function valueFrom(kind: string, raw: string | undefined, date1904: boolean): PivotValue {
+function valueFrom(kind: string, raw: string | undefined, date1904: boolean, fail: (message: string) => never): PivotValue {
   if (kind === 'm') return { type: 'missing' }
-  if (raw === undefined) throw new StopRecords('record value is missing its v attribute')
+  if (raw === undefined) fail('record value is missing its v attribute')
   if (kind === 'n') {
-    if (!/^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[Ee][+-]?\d+)?$/.test(raw)) throw new StopRecords('record number is invalid')
+    if (!/^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[Ee][+-]?\d+)?$/.test(raw)) fail('record number is invalid')
     const value = Number(raw)
-    if (!Number.isFinite(value)) throw new StopRecords('record number is invalid')
+    if (!Number.isFinite(value)) fail('record number is invalid')
     return { type: 'number', value }
   }
   if (kind === 'b') {
     if (raw === '1' || raw === 'true') return { type: 'boolean', value: true }
     if (raw === '0' || raw === 'false') return { type: 'boolean', value: false }
-    throw new StopRecords('record boolean is invalid')
+    fail('record boolean is invalid')
   }
   if (kind === 'e') return { type: 'error', value: raw }
   if (kind === 's') return { type: 'string', value: raw }
   if (kind === 'd') {
-    const value = isoToSerial(raw, date1904)
-    if (!Number.isFinite(value)) throw new StopRecords('record date is invalid')
+    if (!Number.isFinite(isoToSerial(raw, date1904))) fail('record date is invalid')
     return { type: 'date', value: raw }
   }
-  throw new StopRecords(`unknown record value element ${kind}`)
+  fail(`unknown record value element ${kind}`)
 }
 
 /** Convert SpreadsheetML ISO dateTime to an Excel serial, preserving the time fraction. */
@@ -59,8 +58,13 @@ export function isoToSerial(iso: string, date1904: boolean): number {
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
   const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
   if (day < 1 || day > monthDays[month - 1]!) return Number.NaN
-  const base = dateSerial(year, month, day, date1904 ? '1904' : '1900')
-  if (typeof base !== 'number' || !Number.isFinite(base)) return Number.NaN
+  const epoch = date1904 ? daysFromCivil(1904, 1, 1) : daysFromCivil(1899, 12, 30)
+  const dayOffset = daysFromCivil(year, month, day) - epoch
+  if (dayOffset < 0) return Number.NaN
+  // Excel's 1900 system reserves serial 0 for the 1899-12-30 time-only day.
+  // Shift the January–February 1900 civil dates down one slot; serial 60 is
+  // consequently reserved for Excel's fictitious 1900-02-29, and March 1 is 61.
+  const daySerial = !date1904 && year === 1900 && month < 3 ? dayOffset - 1 : dayOffset
   let fraction = (hour * 3600 + minute * 60 + second) / 86400
   if (m[7]) fraction += Number(`0.${m[7]}`) / 86400
   if (m[8]) {
@@ -69,10 +73,9 @@ export function isoToSerial(iso: string, date1904: boolean): number {
     const offset = (zoneHours * 60 + zoneMinutes) * (m[8] === '+' ? 1 : -1)
     fraction -= offset / 1440
   }
-  let serial = base + fraction
-  if (serial < 0 && date1904) return Number.NaN
-  // dateSerial owns the workbook date system's day offset; timezone rollover
-  // across a civil day uses the same serial arithmetic.
+  let serial = daySerial + fraction
+  if (serial < 0) return Number.NaN
+  // Time-zone rollover across a civil day uses the same serial arithmetic.
   return serial
 }
 
@@ -194,7 +197,7 @@ export function recordEvents(cache: PivotCacheDefinition, limits: RecordLimits, 
           row.push(index)
         } else {
           if (col.kind !== 'inline') fail('inline value appears in a shared field')
-          const value: PivotValue = valueFrom(rawKind, raw, date1904)
+          const value: PivotValue = valueFrom(rawKind, raw, date1904, fail)
           const tagValue = value.type === 'missing' ? VALUE_TAG.missing : value.type === 'number' ? VALUE_TAG.number : value.type === 'boolean' ? VALUE_TAG.boolean : value.type === 'error' ? VALUE_TAG.error : value.type === 'string' ? VALUE_TAG.string : VALUE_TAG.date
           const inline: InlineValue = { tag: tagValue, num: value.type === 'number' ? value.value : value.type === 'boolean' ? Number(value.value) : value.type === 'date' ? isoToSerial(value.value, date1904) : 0 }
           if (value.type === 'string' || value.type === 'error') inline.text = value.value

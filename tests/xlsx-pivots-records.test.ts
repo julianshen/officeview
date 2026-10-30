@@ -94,9 +94,30 @@ describe('pivot cache record store', () => {
   })
 
   it('converts ISO dates to the workbook 1900 and 1904 serial systems', () => {
+    expect(isoToSerial('1899-12-30T10:00:00', false)).toBeCloseTo(10 / 24)
+    expect(isoToSerial('1899-12-31T00:00:00', false)).toBe(1)
+    expect(isoToSerial('1900-01-01T00:00:00', false)).toBe(1)
+    expect(isoToSerial('1900-02-28T00:00:00', false)).toBe(59)
     expect(isoToSerial('1900-03-01T12:00:00', false)).toBe(61.5)
     expect(isoToSerial('1904-01-01T06:00:00', true)).toBe(0.25)
     expect(isoToSerial('bad', false)).toBeNaN()
+    expect(isoToSerial('1899-12-29T23:59:59', false)).toBeNaN()
+  })
+
+  it('fails closed on date values before the 1900 epoch', async () => {
+    const result = await decode('<pivotCacheRecords><r><d v="1899-12-29T23:59:59"/></r></pivotCacheRecords>', [field('Date', true)])
+    expect(result).toMatchObject({ ok: false, diagnostic: { kind: 'parse', feature: 'pivot-records', message: 'record date is invalid' } })
+  })
+
+  it.each([
+    ['bad number', '<n v="nope"/>', 'record number is invalid'],
+    ['bad boolean', '<b v="maybe"/>', 'record boolean is invalid'],
+    ['bad date', '<d v="2023-02-29T00:00:00"/>', 'record date is invalid'],
+    ['missing value', '<n/>', 'record value is missing its v attribute'],
+    ['unknown value kind', '<z v="x"/>', 'unknown record value element z'],
+  ])('returns a specific parse diagnostic for %s', async (_label, child, message) => {
+    const result = await decode(`<pivotCacheRecords><r>${child}</r></pivotCacheRecords>`, [field('V', true)])
+    expect(result).toMatchObject({ ok: false, diagnostic: { kind: 'parse', feature: 'pivot-records', message } })
   })
 
   it('stores inline date values as serials under both workbook date systems', async () => {
