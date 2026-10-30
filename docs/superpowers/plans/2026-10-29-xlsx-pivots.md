@@ -529,9 +529,9 @@
   | Group (task) | Cases |
   |---|---|
   | Layout (17) | compact, outline and tabular, each with 3 row fields; collapsed items; subtotals top and bottom; grand totals row-only, column-only and off; Values on rows and on columns with 2 data fields; blank rows; repeat labels; named subtotals (sum + count + average) |
-  | Data quirks (17, 18) | blank items, an error in a value, mixed number and text items in a row field, a hidden item, page field single and multiple; **cross-field visibility:** a hidden item, a page selection and a label filter on one field that each leave an item of another row or column field with no records (with and without `showAll`) |
+  | Data quirks (17, 18) | blank items, an error in a value, mixed number and text items in a row field, a hidden item, page field single and multiple; **cross-field visibility:** a hidden item and a page selection on one field that each leave an item of another row or column field with no records (with and without `showAll`) |
   | Values (18) | each of the 11 functions; each show-as mode, including previous and next base items, % of parent at 2 levels, rank with ties, running total, index, and % difference with a zero base; an addition-order case for the 15-digit rule |
-  | Sort, filter, group (21) | sort ascending and descending with numbers, text and blanks; custom lists (month and weekday names); sort by value within groups; label filters (wildcard, between); value filter; top 10 by count, percent and sum, with ties; date filter between; date groups (years, quarters, months) with blanks and out-of-range start and end; a number range group; a manual group; a group field with its base field |
+  | Sort, filter, group (21) | sort ascending and descending with numbers, text and blanks; custom lists (month and weekday names); sort by value within groups; label filters (wildcard, between); a **cross-field** label filter on one field that leaves an item of another field with no records (with and without `showAll`, manifest `task: 21`); value filter; top 10 by count, percent and sum, with ties; date filter between; date groups (years, quarters, months) with blanks and out-of-range start and end; a number range group; a manual group; a group field with its base field |
   | Calculated (22) | a calculated field with spaces in the name and division by zero; one calculated-item case, which decides §5.6 |
 - [ ] **Step 4: Answer the [measure] items.** Read them off the cases and record each in the validation doc with its case:
   - §5.1: error propagation; the out-of-range labels.
@@ -690,8 +690,10 @@ export type CellReader = (row: number, col: number) => SavedCell | undefined
 export interface CellDiff { row: number; col: number; expected?: SavedCell; actual: PivotCellValue | 'line'; reason: string }
 export type FaithfulResult = { status: 'ok' } | { status: 'mismatch'; firstDiff: CellDiff } | { status: 'unverified'; reason: 'no-row-items' | 'no-col-items' | 'cells-missing' | 'cells-predate-records' | 'unsupported'; detail?: string }
 export function checkSavedLayout(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, saved: CellReader): FaithfulResult
-/** §7.6 gate before any decode: absent records part, unsupported source type or OLAP cache. */
-export function engineEligibility(cache: PivotCacheDefinition, def: PivotTableDefinition): { ok: true } | { ok: false; diagnostic: PivotDiagnostic }
+/** §7.6 gate before any decode: absent records part, unsupported source type or OLAP cache. A `refreshOnLoad` pivot whose
+ * in-workbook source the caller can read takes the §7.7 route instead: `refresh: true` tells the caller (Task 30) to build the
+ * store from the source range, not from the records part. Stage 2 has no source reader, so its callers pass `sourceReadable: false`. */
+export function engineEligibility(cache: PivotCacheDefinition, def: PivotTableDefinition, opts: { sourceReadable: boolean }): { ok: true; refresh: boolean } | { ok: false; diagnostic: PivotDiagnostic }
 export function sheetCellReader(sheet: XlsxSheet): CellReader          // resident
 ```
 - **Method:**
@@ -707,7 +709,7 @@ export function sheetCellReader(sheet: XlsxSheet): CellReader          // reside
   - `absent rowItems is unverified` and `absent colItems is unverified` (when the pivot has a column axis).
   - `missing or incomplete saved cells is unverified (cells-missing)`.
   - `recordCount differing from the store is unverified (cells-predate-records)`.
-  - The §7.6 refusals, each a typed result with its feature, never a throw: `saveData="0"` (no records part: the caller gets `pivot-records-absent` before any check), an external / consolidation / scenario source and an OLAP cache (`pivot-source-unsupported`), and an unknown definition construct (`def.unsupported` non-empty → `unverified`, `reason: 'unsupported'`). Each built by editing an Excel-made fixture's XML.
+  - The §7.6 refusals, each a typed result with its feature, never a throw: `saveData="0"` without `refreshOnLoad`, or with `refreshOnLoad` and `sourceReadable: false` (`pivot-records-absent` from `engineEligibility`); `refreshOnLoad` + `saveData="0"` with `sourceReadable: true` gives `{ ok: true, refresh: true }` (§7.7, CODEX-R2-2); an external / consolidation / scenario source and an OLAP cache (`pivot-source-unsupported`), and an unknown definition construct (`def.unsupported` non-empty → `unverified`, `reason: 'unsupported'`). Each built by editing an Excel-made fixture's XML.
   - `a refused pivot's display is unchanged`: `savedPivotRoles` and the sheet cells are identical before and after the check.
   - `LibreOffice files are ok, mismatch or unverified, never throw`, which records each file's status in a snapshot table.
   - `paged CellReader equals resident`, through the paged sheet shell used in `tests/xlsx-pivots-paged.test.ts`.
@@ -806,6 +808,7 @@ export function sheetCellReader(sheet: XlsxSheet): CellReader          // reside
   - A live `valueGen` for pivot sheets.
   - Sheet sort and filter are disabled across pivots.
 - **Task 25. Worker pivot protocol (codex):**
+  - an apply whose layout has `captionsUnverified` is not committed: it returns a `pivot-caption-locale` refusal, the saved cells stay shown, and a test pins it (and the behaviour once a locale rule is supplied);
   - open, apply with an identity and revision, and release (§6.8, CODEX-5);
   - leases on the shared store.
 - **Task 26. Buttons as controls (Claude opus):**
