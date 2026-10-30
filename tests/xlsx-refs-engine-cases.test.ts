@@ -210,7 +210,7 @@ describe('engine case xml edits', async () => {
     const edit = (id: string) => ENGINE_CASES.find(c => c.id === id)!.xmlEdit!({ ...seedFor(id) })
     const named = edit('layout-named-subtotals-compact').pivot
     expect(named).toMatch(fieldAttr(F.Region, 'defaultSubtotal', '0'))
-    expect(named).toMatch(/<item t="sum"\/><item t="count"\/><item t="avg"\/><\/items>/)
+    expect(named).toMatch(/<item t="sum"\/><item t="countA"\/><item t="avg"\/><\/items>/)
     const calcItem = edit('calc-item')
     expect(calcItem.cache).toMatch(/<sharedItems [^>]*><s v="Apples"\/>[\s\S]*<s v="Apples and Bananas"\/><\/sharedItems>/)
     expect(calcItem.cache).toMatch(/<\/cacheFields><calculatedItems count="1">/)

@@ -477,8 +477,9 @@ function top10Filter(pivot: string, fld: number, measure: number, type: 'count' 
   return addFilter(pivot, fld, type, `<top10 val="${val}"${type === 'percent' ? ' percent="1"' : ''}/>`, { iMeasureFld: String(measure) })
 }
 /** Named subtotals on a field: the `*Subtotal` flags and one `<item t=…>` per function instead of the default. */
-function setNamedSubtotals(pivot: string, index: number, kinds: ReadonlyArray<'sum' | 'count' | 'avg'>): string {
-  const attr = { sum: 'sumSubtotal', count: 'countSubtotal', avg: 'avgSubtotal' } as const
+// AppleScript's `count subtotal` is Excel's Count (COUNTA): it writes countASubtotal and `<item t="countA"/>` (probed).
+function setNamedSubtotals(pivot: string, index: number, kinds: ReadonlyArray<'sum' | 'countA' | 'avg'>): string {
+  const attr = { sum: 'sumSubtotal', countA: 'countASubtotal', avg: 'avgSubtotal' } as const
   pivot = editPivotField(pivot, index, { defaultSubtotal: '0', ...Object.fromEntries(kinds.map(k => [attr[k], '1'])) })
   const items = fieldItems(pivot, index).filter(item => !/\bt="default"/.test(item))
   return setFieldItems(pivot, index, [...items, ...kinds.map(k => `<item t="${k}"/>`)])
@@ -686,8 +687,8 @@ for (const f of ['tabular', 'outline'] as const) {
 for (const f of ['compact', 'tabular'] as const) {
   add(`layout-named-subtotals-${f}`, 'layout', 17, ['named-subtotals', 'subtotal-sum', 'subtotal-count', 'subtotal-average', `layout-${f}`], S({
     route: 'applescript', lines: t => [...(f === 'compact' ? [] : [form(t, f)]), ...namedSubtotals(t, 'Region', ['sum subtotal', 'count subtotal', 'average subtotal'])],
-    markers: [fieldAttr(F.Region, 'sumSubtotal', '1'), fieldAttr(F.Region, 'countSubtotal', '1'), fieldAttr(F.Region, 'avgSubtotal', '1')],
-    fallback: 'xml', xmlPrep: t => f === 'compact' ? [] : [form(t, f)], xmlEdit: p => ({ ...p, pivot: setNamedSubtotals(p.pivot, F.Region, ['sum', 'count', 'avg']) }),
+    markers: [fieldAttr(F.Region, 'sumSubtotal', '1'), fieldAttr(F.Region, 'countASubtotal', '1'), fieldAttr(F.Region, 'avgSubtotal', '1')],
+    fallback: 'xml', xmlPrep: t => f === 'compact' ? [] : [form(t, f)], xmlEdit: p => ({ ...p, pivot: setNamedSubtotals(p.pivot, F.Region, ['sum', 'countA', 'avg']) }),
     probe: 'set-subtotals', measures: 'named-subtotal lines (order, placement, captions)',
   }))
 }
@@ -842,16 +843,16 @@ x14ShowAs('rank-descending-ties', ['rankDescending', 'rank-ties'], UNITS, 'rankD
 x14ShowAs('rank-ascending', ['rankAscending'], SALES, 'rankAscending', F.Product, () => [])
 add('values-showas-on-named-subtotals', 'values', 18, ['show-as', 'percentOfTotal', 'named-subtotals'], S({
   route: 'applescript', lines: t => [...namedSubtotals(t, 'Region', ['sum subtotal', 'count subtotal', 'average subtotal']), calc(t, SALES, 'percent of total')],
-  markers: [fieldAttr(F.Region, 'countSubtotal', '1'), dataAttr('showDataAs="percentOfTotal"')],
-  fallback: 'xml', xmlEdit: p => ({ ...p, pivot: editDataField(setNamedSubtotals(p.pivot, F.Region, ['sum', 'count', 'avg']), SALES, { showDataAs: 'percentOfTotal' }) }),
+  markers: [fieldAttr(F.Region, 'countASubtotal', '1'), dataAttr('showDataAs="percentOfTotal"')],
+  fallback: 'xml', xmlEdit: p => ({ ...p, pivot: editDataField(setNamedSubtotals(p.pivot, F.Region, ['sum', 'countA', 'avg']), SALES, { showDataAs: 'percentOfTotal' }) }),
   probe: 'set-subtotals', measures: 'show-as applied to named subtotal lines (values.ts refuses it)',
 }))
 add('values-named-subtotals-intersecting', 'values', 18, ['named-subtotals', 'column-subtotals', 'intersecting-subtotals'], S({
   route: 'applescript',
   lines: t => [toCols(t, 'Channel'), `set position of ${field(t, 'Channel')} to 2`, ...namedSubtotals(t, 'Region', ['sum subtotal', 'count subtotal']), ...namedSubtotals(t, 'Year', ['average subtotal'])],
-  markers: [/<colFields count="3">/, fieldAttr(F.Region, 'countSubtotal', '1'), fieldAttr(F.Year, 'avgSubtotal', '1')],
+  markers: [/<colFields count="3">/, fieldAttr(F.Region, 'countASubtotal', '1'), fieldAttr(F.Year, 'avgSubtotal', '1')],
   fallback: 'xml', xmlPrep: t => [toCols(t, 'Channel'), `set position of ${field(t, 'Channel')} to 2`],
-  xmlEdit: p => ({ ...p, pivot: setNamedSubtotals(setNamedSubtotals(p.pivot, F.Region, ['sum', 'count']), F.Year, ['avg']) }),
+  xmlEdit: p => ({ ...p, pivot: setNamedSubtotals(setNamedSubtotals(p.pivot, F.Region, ['sum', 'countA']), F.Year, ['avg']) }),
   probe: 'set-subtotals', measures: 'row and column named subtotals with different functions at their intersection',
 }))
 
@@ -1060,8 +1061,8 @@ calcCase('show-as', ['calc-show-as', 'percentOfTotal'], [['Double Sales', '=Sale
   extra: [dataAttr('showDataAs="percentOfTotal"')],
 })
 calcCase('named-subtotals', ['named-subtotals'], [['Double Sales', '=Sales*2']], {
-  after: t => namedSubtotals(t, 'Region', ['sum subtotal', 'count subtotal']), edit: p => ({ ...p, pivot: setNamedSubtotals(p.pivot, F.Region, ['sum', 'count']) }),
-  extra: [fieldAttr(F.Region, 'countSubtotal', '1')], measures: 'a named subtotal of a calculated data field',
+  after: t => namedSubtotals(t, 'Region', ['sum subtotal', 'count subtotal']), edit: p => ({ ...p, pivot: setNamedSubtotals(p.pivot, F.Region, ['sum', 'countA']) }),
+  extra: [fieldAttr(F.Region, 'countASubtotal', '1')], measures: 'a named subtotal of a calculated data field',
 })
 calcCase('value-sort', ['sort-by-value'], [['Double Sales', '=Sales*2']], {
   after: (t, data) => [autoSort(t, 'Region', 'descending', data)], edit: p => ({ ...p, pivot: editPivotField(p.pivot, F.Region, { sortType: 'descending' }) }),
