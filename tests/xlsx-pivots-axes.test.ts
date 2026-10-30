@@ -397,12 +397,14 @@ describe('Task 21 behaviours and remaining gates', () => {
     const grouped: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 2 ? { ...field, fieldGroup: { base: 2, rangePr: { autoStart: true, autoEnd: true, groupBy: 'range', groupInterval: 1 } } } : field) }
     const result = computeAxes(p.store, grouped, p.def, view)
     expect(pending(result)).toEqual({ kind: 'parse', feature: 'pivot-definition-invalid' })
-    // Calculated fields belong to Task 22, on an axis or as data.
+    // Calculated fields (Task 22) are evaluated as data only; on an axis or page they are unsupported.
     const calculated: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 4 ? { ...field, databaseField: false, formula: 'Sales*2', sharedItems: undefined } : field) }
-    expect(pending(computeAxes(p.store, calculated, p.def, view))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
-    expect(pending(computeAxes(p.store, calculated, p.def, { ...view, cols: [-2, 4] }))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
+    expect(computeAxes(p.store, calculated, p.def, view).ok).toBe(true)
+    expect(pending(computeAxes(p.store, calculated, p.def, { ...view, cols: [-2, 4] }))).toEqual({ kind: 'unsupported', feature: 'pivot-calculated-field' })
     const formulaOnly: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 1 ? { ...field, formula: 'Sales' } : field) }
-    expect(pending(computeAxes(p.store, formulaOnly, p.def, view))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
+    expect(pending(computeAxes(p.store, formulaOnly, p.def, view))).toEqual({ kind: 'unsupported', feature: 'pivot-calculated-field' })
+    const noFormula: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 4 ? { ...field, databaseField: false, sharedItems: undefined } : field) }
+    expect(pending(computeAxes(p.store, noFormula, p.def, view))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
     // A sort on a field off every axis changes nothing.
     expect(axesOf(p, withFields(view, { 3: { sortType: 'ascending' } })).ok).toBe(true)
   })
@@ -413,8 +415,8 @@ describe('Task 21 behaviours and remaining gates', () => {
 const CORPUS_STATUS: Record<string, string[]> = {
   'poi-ExcelPivotTableSample.xlsx': ['equal', 'equal'],
   // Calculated data fields (Task 22). Collabora-written: its Values-only column items are seven `<i/>` with i=0,
-  // where Excel writes x=k, i=k, so it would disagree once computed.
-  'lo-calc-calcfields.xlsx': ['pending'],
+  // where Excel writes x=k, i=k, so the computed lines disagree (the writer's own output, not tuned toward).
+  'lo-calc-calcfields.xlsx': ['disagrees'],
   'lo-calc-pivot_dark1.xlsx': ['equal'],
   'lo-calc-Pivot2_Row_Compact.xlsx': ['equal'],
   'lo-calc-Pivot2_Row_Grand_Subtotals.xlsx': ['equal'],

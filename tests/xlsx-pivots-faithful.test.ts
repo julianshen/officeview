@@ -405,7 +405,7 @@ describe('paged CellReader equals resident', () => {
 /** Each corpus pivot's status. Writer = workbook.xml `fileVersion@appName` ("xl" is Excel, "Calc" LibreOffice/Collabora).
  * LibreOffice and POI files are their writer's computation: their status is recorded here, never tuned toward. A
  * mismatch on an Excel-made file would be an engine bug (reported in the task report). */
-const PENDING = 'unverified:unsupported:pivot-engine-pending', UNMEASURED = 'unverified:unsupported:pivot-engine-unmeasured'
+const UNMEASURED = 'unverified:unsupported:pivot-engine-unmeasured'
 const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-Pivot2_Row_Compact.xlsx': ['xl', 'ok'],
   'lo-calc-Pivot2_Row_Grand_Subtotals.xlsx': ['xl', 'ok'],
@@ -417,8 +417,9 @@ const CORPUS_STATUS: Record<string, string[]> = {
   // worksheetSource r:id: the source is another workbook (§7.6).
   'lo-calc-PivotTableWithNoSourceData.xlsx': ['xl', 'refused:pivot-source-unsupported'],
   'lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx': ['xl', 'ok'],
-  // Collabora-written; a calculated data field (Task 22).
-  'lo-calc-calcfields.xlsx': ['Calc', PENDING],
+  // Collabora-written, not an oracle. Calculated data fields (Task 22): Field4 `2/0` uses no field and Field5 refers to
+  // a calculated field, both unmeasured (S2-M); Collabora shows #VALUE! for both.
+  'lo-calc-calcfields.xlsx': ['Calc', UNMEASURED],
   // Count subtotals/grand totals from records are unmeasured (Task 15).
   'lo-calc-pivot_dark1.xlsx': ['xl', UNMEASURED],
   'lo-calc-pivotcompact.xlsx': ['xl', 'ok'],

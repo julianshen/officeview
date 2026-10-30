@@ -7,7 +7,8 @@ import type { PivotLine } from '../savedLayout'
 import { lineCarriesValues, NO_LINE, type EngineResult, type PivotAxes } from './axes'
 import { VALUE_TAG, type RecordColumn, type RecordStore } from './records'
 import type { PivotCellValue, PivotValueGrid } from './place'
-import type { PivotViewState } from './view'
+import type { DataFieldState, PivotViewState } from './view'
+import { calculatedValue, compileCalculatedField, type CalculatedField } from './calculated'
 
 const MAX_ACCUMULATOR_BYTES = 128 * 1024 * 1024
 // One computeValues call is capped at 128 MiB, one quarter of the 512 MiB
@@ -178,6 +179,7 @@ export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, 
   if (!view.data[dataIndex] || keys.length !== store.count || passes.length !== store.count)
     return invalid('filter aggregate inputs do not match the pivot view')
   const data = view.data[dataIndex]!, sourceField = data.field
+  if (cache.fields[sourceField]?.formula !== undefined) return unmeasured(`a filter or sort by calculated data field ${dataIndex} is not measured`)
   const column = store.columns[sourceField], shared = cache.fields[sourceField]?.sharedItems?.items
   const fn = valueFnCode(functionOverride ?? data.fn), acc = accumulator(keyCount, fn), present = new Uint8Array(keyCount)
   const scratch: ReadValue = { kind: 'missing', value: 0 }
@@ -299,8 +301,97 @@ function cellIndex(row: number, col: number, data: number, colCount: number, dat
   return (row * colCount + col) * dataCount + data
 }
 
-/** One-pass aggregation of source records, followed by the show-as calculation. */
-export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _def: PivotTableDefinition,
+/** One-pass aggregation of source records, followed by the show-as calculation; calculated data fields are the
+ * formula over each cell's field sums (calculated.ts). */
+export function computeValues(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition,
+  view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid> {
+  return view.data.some(data => cache.fields[data.field]?.formula !== undefined)
+    ? computeCalculatedValues(store, cache, def, view, axes)
+    : computeSourceValues(store, cache, def, view, axes)
+}
+
+const sumOf = (data: DataFieldState, field: number): DataFieldState => ({ ...data, field, fn: 'sum', showAs: 'normal' })
+
+/**
+ * Calculated data fields (spec §5.6). Each slot's cells are its formula over the sums of the fields it names, in the
+ * same cell: one all-sum pass per named field (same data slots, so Values-axis lines keep their slot), plus one pass
+ * for the other data fields. Fails closed (S2-M) where Excel's rule is unmeasured: show-as or a function other than
+ * sum on the calculated field, a named subtotal line, a text-valued named field, a value-carrying cell without
+ * records, and an error or text result (division by zero's `#DIV/0!` or `errorCaption`).
+ */
+function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition,
+  view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid> {
+  const compiled: Array<CalculatedField | undefined> = []
+  for (let d = 0; d < view.data.length; d++) {
+    const data = view.data[d]!, formula = cache.fields[data.field]?.formula
+    if (formula === undefined) continue
+    if (data.fn !== 'sum') return unmeasured(`calculated data field ${d} with function ${data.fn} is not measured`)
+    if (data.showAs !== 'normal') return unmeasured(`show-as on calculated data field ${d} is not measured`)
+    const field = compileCalculatedField(formula, cache, data.field)
+    if (!field.ok) return field
+    compiled[d] = field.value
+  }
+  if ([...axes.rows, ...axes.cols].some(line => isNamedSubtotal(line.type)))
+    return unmeasured('a named subtotal of a calculated data field is not measured')
+  const referenced = [...new Set(compiled.flatMap(field => field?.fields ?? []))]
+  for (const field of referenced) {
+    const column = store.columns[field], items = cache.fields[field]?.sharedItems?.items
+    if (!column) return invalid(`calculated field source ${field} has no record column`)
+    const text = column.kind === 'shared'
+      ? items?.some(item => item.type === 'string' || item.type === 'boolean')
+      : column.tag.some(tag => tag === VALUE_TAG.string || tag === VALUE_TAG.boolean)
+    if (text) return unmeasured(`field ${field} has text values; their sum in a calculated field is not measured`)
+  }
+  const gridSize = axes.rows.length * axes.cols.length * view.data.length
+  if (!Number.isSafeInteger(gridSize) || (referenced.length + 1) * gridSize * OUTPUT_BYTES_PER_SLOT * 2 > MAX_ACCUMULATOR_BYTES)
+    return fail('pivot-values-limit', 'the calculated value grids exceed their bounded accumulator budget')
+
+  const base = computeSourceValues(store, cache, def, { ...view, data: view.data.map((data, d) => compiled[d] ? sumOf(data, compiled[d]!.fields[0]!) : data) }, axes)
+  if (!base.ok) return base
+  const sums = new Map<number, PivotValueGrid>()
+  for (const field of referenced) {
+    const grid = computeSourceValues(store, cache, def, { ...view, data: view.data.map(data => sumOf(data, field)) }, axes)
+    if (!grid.ok) return grid
+    sums.set(field, grid.value)
+  }
+
+  const rowCount = axes.rows.length, colCount = axes.cols.length, dataCount = view.data.length
+  const values = new Float64Array(gridSize), present = new Uint8Array(gridSize)
+  const onRows = view.rows.includes(PIVOT_VALUES_FIELD), onCols = view.cols.includes(PIVOT_VALUES_FIELD)
+  const colCarries = axes.cols.map(line => lineCarriesValues(view, 'cols', line))
+  for (let row = 0; row < rowCount; row++) {
+    if (!lineCarriesValues(view, 'rows', axes.rows[row]!)) continue
+    for (let col = 0; col < colCount; col++) {
+      if (!colCarries[col]) continue
+      const d = onRows ? axes.rows[row]!.data : onCols ? axes.cols[col]!.data : 0
+      const field = compiled[d]
+      if (!field) continue
+      if (sums.get(field.fields[0]!)!.get(row, col, d).kind === 'empty')
+        return unmeasured('a calculated cell without records is not measured')
+      const value = calculatedValue(field, source => {
+        const sum = sums.get(source)!.get(row, col, d)
+        return sum.kind === 'number' ? sum.value : 0
+      })
+      if (value === 'unsupported') return fail('pivot-calculated-field', `calculated data field ${d} uses a construct the formula engine lacks`)
+      if (value.kind !== 'number') return unmeasured(`calculated data field ${d} gives ${value.kind} ${value.kind === 'empty' ? '' : value.value}; its display is not measured`)
+      const at = cellIndex(row, col, d, colCount, dataCount)
+      values[at] = value.value; present[at] = 1
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      get(row, col, data): PivotCellValue {
+        if (!compiled[data]) return base.value.get(row, col, data)
+        if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row >= rowCount || col >= colCount) return { kind: 'empty' }
+        const at = cellIndex(row, col, data, colCount, dataCount)
+        return present[at] ? { kind: 'number', value: values[at]! } : { kind: 'empty' }
+      },
+    },
+  }
+}
+
+function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _def: PivotTableDefinition,
   view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid> {
   if (!view.data.length) return { ok: true, value: { get: () => ({ kind: 'empty' }) } }
   if (cache.olap || cache.source.type !== 'worksheet') return fail('pivot-engine-pending', 'OLAP and non-worksheet sources are not computed')

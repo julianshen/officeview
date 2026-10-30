@@ -40,7 +40,7 @@ export const NO_LINE = 0xffffffff
 export type EngineResult<T> = { ok: true; value: T } | { ok: false; diagnostic: PivotDiagnostic }
 
 const fail = (kind: PivotDiagnostic['kind'], feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind, feature, message } })
-/** Calculated items are decided by Task 22. */
+/** Constructs no task has implemented yet. */
 const pending = (message: string) => fail('unsupported', 'pivot-engine-pending', message)
 const invalid = (message: string) => fail('parse', 'pivot-definition-invalid', message)
 /** Behaviour Excel has not been measured on yet (Task 15 adds the cases); the pivot stays display-only. */
@@ -104,10 +104,13 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   // dataOnRows is false (the default). A Values field on columns preserves the
   // observed two-data-field geometry.
   if (def.gridDropZones && view.cols.length === 0) return unmeasured('classic pivot layout (gridDropZones) geometry is not modelled')
-  // Calculated fields are Task 22's, on an axis, a page or as data.
+  // A calculated field is evaluated as data only (values.ts, calculated.ts): Excel does not place one on an axis or page.
+  for (const field of [...view.rows, ...view.cols, ...view.pages.map(page => page.field)]) {
+    if (cache.fields[field]?.formula !== undefined) return fail('unsupported', 'pivot-calculated-field', `calculated field ${field} on an axis or page is not supported`)
+  }
   for (const field of [...view.rows, ...view.cols, ...view.pages.map(page => page.field), ...view.data.map(data => data.field)]) {
     const cacheField = cache.fields[field]
-    if (cacheField && (cacheField.formula !== undefined || (!cacheField.databaseField && !cacheField.fieldGroup))) return pending(`field ${field} is a calculated field`)
+    if (cacheField && cacheField.formula === undefined && !cacheField.databaseField && !cacheField.fieldGroup) return pending(`field ${field} has no records and no formula`)
   }
   const axisFields = [...view.rows, ...view.cols].filter(field => field !== PIVOT_VALUES_FIELD)
   if ([...view.rows, ...view.cols].filter(field => field === PIVOT_VALUES_FIELD).length > 1) return invalid('the Values field is on more than one axis level')
@@ -125,7 +128,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   for (const field of used) {
     const state = view.fields[field], cacheField = cache.fields[field]
     if (!state || !cacheField || !def.fields[field]) return invalid(`field ${field} does not exist`)
-    if (def.fields[field]!.items?.some(item => item.calculated) || cacheField.sharedItems?.items.some(item => item.calculated)) return pending(`field ${field} has calculated items`)
+    if (def.fields[field]!.items?.some(item => item.calculated) || cacheField.sharedItems?.items.some(item => item.calculated)) return fail('unsupported', 'pivot-calculated-item', `field ${field} has calculated items (no Excel oracle, spec §5.6)`)
     // Sorting changes the layout only on rows and columns (a page field's order is its dropdown's).
     if (!axisFields.includes(field)) continue
   }
