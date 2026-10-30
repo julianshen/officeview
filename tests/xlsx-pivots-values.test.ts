@@ -3,13 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
-import { loadPivotWorkbook } from '../src/xlsx/pivots/load'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import type { PivotAxes } from '../src/xlsx/pivots/engine/axes'
 import { computeValues } from '../src/xlsx/pivots/engine/values'
-import { decodeRecords, RECORD_LIMITS, VALUE_TAG, type RecordStore } from '../src/xlsx/pivots/engine/records'
+import { VALUE_TAG, type RecordStore } from '../src/xlsx/pivots/engine/records'
+import { loadAll, savedCell, type Loaded } from './helpers/xlsx-pivots-load'
 import type { PivotCacheDefinition, PivotTableDefinition } from '../src/xlsx/pivots/model'
 import type { DataFieldState, FieldState, PivotViewState } from '../src/xlsx/pivots/engine/view'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
@@ -18,38 +16,12 @@ import type { PivotCellValue, PlaceOptions } from '../src/xlsx/pivots/engine/pla
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const MANIFEST = resolve(FIXTURES, 'engine/manifest.json')
-interface Loaded { file: string; sheet: { rows: Array<{ index: number; cells: Array<{ col: number; value: unknown; valueIsError?: boolean }> }> }; def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; date1904: boolean }
-async function* once(bytes: Uint8Array): AsyncIterable<Uint8Array> { yield bytes }
-async function loadAll(path: string): Promise<Loaded[]> {
-  const pkg = await OfficePackage.load(new Uint8Array(readFileSync(path)))
-  const doc = await parseXlsx(pkg)
-  const regions = new Map(doc.sheets.filter(sheet => sheet.pivotRegions?.length).map(sheet => [sheet.name, sheet.pivotRegions!]))
-  const workbook = await loadPivotWorkbook(pkg, regions)
-  const date1904 = doc.sheets[0]?.semantics?.dateSystem === '1904'
-  const out: Loaded[] = []
-  for (const def of workbook.tables) {
-    const cache = workbook.caches.get(def.cacheId)
-    if (!cache?.recordsPartPath) continue
-    const bytes = await pkg.bytes(cache.recordsPartPath)
-    const result = await decodeRecords(once(bytes!), cache, RECORD_LIMITS.D, date1904)
-    if (!result.ok) throw new Error(`${path}: ${result.diagnostic.message}`)
-    out.push({ file: path, sheet: doc.sheets.find(sheet => sheet.name === def.sheet)!, def, cache, store: result.store, date1904 })
-  }
-  return out
-}
 const referenceNames = readdirSync(FIXTURES).filter(name => /^pivot-.*\.xlsx$/.test(name)).sort()
 const loadedReferences = new Map<string, Promise<Loaded[]>>()
 const loadReference = (name: string) => {
   let value = loadedReferences.get(name)
-  if (!value) loadedReferences.set(name, value = loadAll(resolve(FIXTURES, name)))
+  if (!value) loadedReferences.set(name, value = loadAll(resolve(FIXTURES, name), 'skip'))
   return value
-}
-function savedCell(sheet: Loaded['sheet'], row: number, col: number): PivotCellValue {
-  const cell = sheet.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
-  if (!cell || cell.value === null || cell.value === '') return { kind: 'empty' }
-  if (cell.valueIsError) return { kind: 'error', value: String(cell.value) }
-  if (typeof cell.value === 'number') return { kind: 'number', value: cell.value }
-  return { kind: 'text', value: String(cell.value) }
 }
 const optionsOf = (p: Loaded): PlaceOptions => ({ date1904: p.date1904 })
 function expectSavedValues(p: Loaded, layout: { cells: Array<{ row: number; col: number; value: PivotCellValue }> }): void {
@@ -435,7 +407,7 @@ describe('computePivot composition and Excel saved values', () => {
       const raw = JSON.parse(readFileSync(MANIFEST, 'utf8')) as { cases?: Array<{ task: number; status?: string; file: string; pivot: string }> } | Array<{ task: number; status?: string; file: string; pivot: string }>
       const cases = Array.isArray(raw) ? raw : raw.cases ?? []
       for (const entry of cases.filter(item => item.task === 18 && item.status !== 'pending')) {
-        const loaded = await loadAll(resolve(FIXTURES, entry.file))
+        const loaded = await loadAll(resolve(FIXTURES, entry.file), 'skip')
         const p = loaded.find(candidate => candidate.def.name === entry.pivot)
         if (!p) throw new Error(`${entry.file}: no pivot named ${entry.pivot}`)
         const result = computePivot(p.store, p.cache, p.def, initialViewState(p.def, p.cache), optionsOf(p))

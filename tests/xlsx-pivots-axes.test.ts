@@ -10,14 +10,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { OfficePackage } from '../src/core/zip'
-import { parseXlsx } from '../src/xlsx/parse'
-import { loadPivotWorkbook } from '../src/xlsx/pivots/load'
 import { savedPivotLayout, savedPivotRoles, type PivotLine } from '../src/xlsx/pivots/savedLayout'
 import { pivotButtons } from '../src/xlsx/pivots/buttons'
 import type { PivotCacheDefinition, PivotItemType, PivotTableDefinition } from '../src/xlsx/pivots/model'
-import type { XlsxSheet } from '../src/xlsx/types'
-import { decodeRecords, isoToSerial, RECORD_LIMITS, type RecordStore } from '../src/xlsx/pivots/engine/records'
+import { isoToSerial } from '../src/xlsx/pivots/engine/records'
+import { loadAll, savedCell, type Loaded } from './helpers/xlsx-pivots-load'
 import { initialViewState, type FieldState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
 import { computeAxes, lineCarriesValues, NO_LINE, type PivotAxes } from '../src/xlsx/pivots/engine/axes'
 import { liveDefinition, placeCells, type PivotCellValue, type PivotLayout, type PivotValueGrid } from '../src/xlsx/pivots/engine/place'
@@ -26,25 +23,6 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.ur
 const CORPUS = resolve(process.cwd(), 'corpus')
 const MANIFEST = resolve(FIXTURES, 'engine/manifest.json')
 
-interface Loaded { file: string; sheet: XlsxSheet; def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; date1904: boolean }
-async function* once(bytes: Uint8Array): AsyncIterable<Uint8Array> { yield bytes }
-async function loadAll(path: string): Promise<Loaded[]> {
-  const pkg = await OfficePackage.load(new Uint8Array(readFileSync(path)))
-  const doc = await parseXlsx(pkg)
-  const regions = new Map(doc.sheets.filter(sheet => sheet.pivotRegions?.length).map(sheet => [sheet.name, sheet.pivotRegions!]))
-  const workbook = await loadPivotWorkbook(pkg, regions)
-  const date1904 = doc.sheets[0]?.semantics?.dateSystem === '1904'
-  const out: Loaded[] = []
-  for (const def of workbook.tables) {
-    const cache = workbook.caches.get(def.cacheId)
-    if (!cache?.recordsPartPath) throw new Error(`${path}: ${def.name} has no records part`)
-    const bytes = await pkg.bytes(cache.recordsPartPath)
-    const result = await decodeRecords(once(bytes!), cache, RECORD_LIMITS.D, date1904)
-    if (!result.ok) throw new Error(`${path}: ${result.diagnostic.message}`)
-    out.push({ file: path, sheet: doc.sheets.find(sheet => sheet.name === def.sheet)!, def, cache, store: result.store, date1904 })
-  }
-  return out
-}
 const cached = new Map<string, Promise<Loaded[]>>()
 const load = (path: string) => { let p = cached.get(path); if (!p) cached.set(path, p = loadAll(path)); return p }
 const ref = async (name: string) => (await load(resolve(FIXTURES, `${name}.xlsx`)))[0]!
@@ -64,14 +42,6 @@ const L = (type: PivotItemType, first: number, items: number[], data = 0): Pivot
 const G = (data = 0): PivotLine => L('grand', 0, [], data)
 const blankGrid: PivotValueGrid = { get: () => ({ kind: 'empty' }) }
 
-/** A saved sheet cell as a layout value ('empty' for no value). */
-function savedCell(sheet: XlsxSheet, row: number, col: number): PivotCellValue {
-  const cell = sheet.rows.find(r => r.index === row)?.cells.find(c => c.col === col)
-  if (!cell || cell.value === null || cell.value === '') return { kind: 'empty' }
-  if (cell.valueIsError) return { kind: 'error', value: String(cell.value) }
-  if (typeof cell.value === 'number') return { kind: 'number', value: cell.value }
-  return { kind: 'text', value: String(cell.value) }
-}
 /** Every non-value cell of the layout (location and page fields) against the saved sheet: text and numbers equal,
  * an implicit caption only where the saved sheet holds text. Returns the differences. */
 function labelDiffs(p: Loaded, layout: PivotLayout): string[] {
