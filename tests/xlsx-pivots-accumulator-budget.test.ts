@@ -66,12 +66,10 @@ describe('pivot accumulator budget', () => {
       ],
     }
 
-    const started = performance.now()
     const axes = computeAxes(store, cache, def, view)
     expect(axes.ok).toBe(true)
     if (!axes.ok) return
     const grid = computeValues(store, cache, def, view, axes.value)
-    const elapsedMs = performance.now() - started
     expect(grid.ok).toBe(true)
     if (!grid.ok) return
 
@@ -81,12 +79,6 @@ describe('pivot accumulator budget', () => {
     expect(grandCol).toBeGreaterThanOrEqual(0)
     expect(grid.value.get(grandRow, grandCol, 0)).toEqual({ kind: 'number', value: values1.sum })
     expect(grid.value.get(grandRow, grandCol, 1)).toEqual({ kind: 'number', value: values2.sum })
-    const rows = axes.value.rows.length, cols = axes.value.cols.length, gridSlots = rows * cols * 2
-    const targetBytes = (rows + cols) * (128 + 2 * 32)
-    const outputBytes = gridSlots * 18
-    const beforeBytes = (gridSlots + rows * 2 + cols * 2 + 2) * 57 + outputBytes + targetBytes
-    const afterBytes = (rows * cols * 2 + rows * 2 + cols * 2 + 2) * 9 + outputBytes + targetBytes
-    console.info(`S2-Q spec-shaped test: rows=${rows}, cols=${cols}, gridSlots=${gridSlots}, accumulatorBytesPerSumCell=57->9, estimatedWorkspaceBytes=${beforeBytes}->${afterBytes}, elapsedMs=${elapsedMs.toFixed(2)}`)
   })
 
   it('refuses a value grid whose estimated workspace exceeds the cap', () => {

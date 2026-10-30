@@ -124,7 +124,7 @@ function add(acc: Accumulator, present: Uint8Array, at: number, value: ReadValue
     acc.m2![at] += delta * (value.value - acc.mean![at]!)
 }
 
-interface ReadValue { kind: 'missing' | 'other' | 'error' | 'date-unmeasured' | 'number'; value: number }
+interface ReadValue { kind: 'missing' | 'other' | 'error' | 'date-unmeasured' | 'non-finite' | 'number'; value: number }
 function readValue(column: RecordColumn | undefined, sharedItems: readonly import('../model').PivotCacheItem[] | undefined,
   row: number, into: ReadValue): boolean {
   if (!column) return false
@@ -133,7 +133,7 @@ function readValue(column: RecordColumn | undefined, sharedItems: readonly impor
     if (!item) return false
     switch (item.type) {
       case 'missing': into.kind = 'missing'; break
-      case 'number': into.kind = 'number'; into.value = item.value; break
+      case 'number': into.value = item.value; into.kind = Number.isFinite(item.value) ? 'number' : 'non-finite'; break
       case 'date': into.kind = 'date-unmeasured'; break
       case 'error': into.kind = 'error'; break
       case 'string': case 'boolean': into.kind = 'other'; break
@@ -143,7 +143,10 @@ function readValue(column: RecordColumn | undefined, sharedItems: readonly impor
   const tag = column.tag[row]
   switch (tag) {
     case VALUE_TAG.missing: into.kind = 'missing'; break
-    case VALUE_TAG.number: case VALUE_TAG.date: into.kind = 'number'; into.value = column.num[row]!; break
+    case VALUE_TAG.number: case VALUE_TAG.date:
+      into.value = column.num[row]!
+      into.kind = Number.isFinite(into.value) ? 'number' : 'non-finite'
+      break
     case VALUE_TAG.boolean: case VALUE_TAG.string: into.kind = 'other'; break
     case VALUE_TAG.error: into.kind = 'error'; break
     default: return false
@@ -282,7 +285,10 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   // Reject clearly oversized requests before scanning lines to discover the
   // active function banks. Every accumulator cell needs at least one byte of
   // presence plus a four-byte count; output and target structures remain.
-  const targetBytes = (rowCount + colCount) * (128 + dataCount * 32)
+  const targetDepth = Math.max(view.rows.length, view.cols.length)
+  // Per target/data field, cover retained Int32 indices and the temporary
+  // number[] used to build them; deeper axes retain more ancestor targets.
+  const targetBytes = (rowCount + colCount) * (128 + dataCount * Math.max(32, (targetDepth + 3) * 12))
   const minimumBytes = (gridCellCount + rowCount + colCount + 1) * dataCount * 5
     + gridSize * OUTPUT_BYTES_PER_SLOT * 2 + targetBytes
   if (!Number.isSafeInteger(minimumBytes) || minimumBytes > MAX_ACCUMULATOR_BYTES)
@@ -336,6 +342,8 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     && colBankCodes.length === 1 && colBankCodes[0] === VALUE_FN.sum
     && grandBankCodes.length === 1 && grandBankCodes[0] === VALUE_FN.sum
   const normalOnly = view.data.every(data => data.showAs === 'normal')
+  if (sumOnly && !normalOnly && (rowNamed.includes(1) || colNamed.includes(1)))
+    return unmeasured('show-as applied to a named subtotal is not measured')
   if (sumOnly && normalOnly) {
     // NaN is a private empty-cell sentinel (record values are finite); this
     // folds sum presence into the value array and keeps the hot update to one
@@ -362,7 +370,10 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
             if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
             dataNumeric[d] = +(scratch.kind === 'number')
             dataValues[d] = scratch.value
+            if (scratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
           }
+          if (dataNumeric[d] && !Number.isFinite(dataValues[d]!))
+            return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
         }
         const rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
         const colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
@@ -386,6 +397,7 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
           if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
           if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
           if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+          if (scratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
           const numeric = scratch.kind === 'number', value = scratch.value
           const rowList = recordTargets.value.rows[d]!, rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
           const colList = recordTargets.value.cols[d]!, colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!

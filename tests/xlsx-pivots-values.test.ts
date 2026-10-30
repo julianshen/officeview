@@ -75,6 +75,31 @@ function fixture(values: Array<number | string | null>, data: DataFieldState[] =
 }
 
 describe('pivot value aggregation', () => {
+  it('refuses non-normal show-as on a named sum subtotal', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0, 0], data: 0 },
+      { type: 'data', first: 1, items: [0, 1], data: 0 },
+      { type: 'sum', first: 0, items: [0], data: 0 },
+      { type: 'data', first: 0, items: [1, 0], data: 0 },
+      { type: 'data', first: 1, items: [1, 1], data: 0 },
+      { type: 'sum', first: 0, items: [1], data: 0 },
+    ]
+    const f = fixture([1, 2, 3, 4], [
+      { field: 1, fn: 'sum', showAs: 'percentOfTotal', baseField: -1, baseItem: 1048832, name: '' },
+    ], rows, [0, 0, 1, 1])
+    f.view.rows = [0, 0]
+    f.view.fields = [{ ...fieldState, subtotals: ['sum'] }, fieldState]
+    const axes = { ...f.axes, rowKey: Uint32Array.from([0, 1, 3, 4]) }
+    const result = computeValues(f.store, f.cache, f.def, f.view, axes)
+    expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+  })
+
+  it('fails closed for non-finite inline values that would collide with the NaN empty sentinel', () => {
+    const f = fixture([Number.NaN], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }])
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+  })
+
   it('keeps normal all-sum cells identical when a twin show-as field selects the general path', () => {
     const rows: PivotAxes['rows'] = [
       { type: 'data', first: 0, items: [0], data: 0 },
