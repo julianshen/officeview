@@ -25,7 +25,18 @@ export interface RegionGrid {
    * usual, null when hidden, otherwise the fill (raw style colour) that covers it.
    */
   line(rowA: number, colA: number, rowB: number, colB: number): string | null | undefined
+  /** The row (column) class keys of the region layer (RegionStyleLayer.rowKey), or undefined. */
+  rowKey(row: number): string | undefined
+  colKey(col: number): string | undefined
+  /**
+   * line() for cells described by their class keys and own style, resolving one representative per key pair
+   * instead of each cell (PR #55 r7): the same answer, since a cell's fill is its own fill or else a function of
+   * its keys. A cell without keys is resolved by itself.
+   */
+  keyedLine(a: KeyedCell, b: KeyedCell): string | null | undefined
 }
+/** A cell for RegionGrid.keyedLine: its coordinates, class keys and own style. */
+export interface KeyedCell { row: number; col: number; rowKey: string | undefined; colKey: string | undefined; own: XlsxCellStyle | undefined }
 
 const A1 = /^\$?([A-Z]{1,3})\$?(\d{1,7})$/
 function cell(ref: string): [number, number] | undefined {
@@ -75,14 +86,29 @@ export function regionGrid(sheet: XlsxSheet, own: (row: number, col: number) => 
     if (value === undefined) memo.set(key, value = styles.styleAt(row, col, own(row, col))?.fillColor ?? '')
     return value
   }
+  // One resolution per (row key, column key); a cell's own fill wins over it (tableStyles/resolve.ts).
+  const byKeys = new Map<string, string>()
+  const keyedFill = (cell: KeyedCell): string => {
+    if (!styles || !regions.some(r => inside(r, cell.row, cell.col))) return ''
+    if (cell.own?.fillColor !== undefined) return cell.own.fillColor
+    if (cell.rowKey === undefined || cell.colKey === undefined) return fill(cell.row, cell.col)
+    const key = `${cell.rowKey}\u0000${cell.colKey}`
+    let value = byKeys.get(key)
+    if (value === undefined) byKeys.set(key, value = styles.styleAt(cell.row, cell.col, undefined)?.fillColor ?? '')
+    return value
+  }
+  const decide = (fillA: () => string, fillB: () => string, rowA: number, colA: number, rowB: number, colB: number): string | null | undefined => {
+    if (fillB()) return null
+    const covering = fillA()
+    if (covering) return covering
+    return pivots.some(p => inside(p, rowA, colA) && inside(p, rowB, colB)) ? null : undefined
+  }
   return {
     rects: [...pivots, ...regions],
-    line: (rowA, colA, rowB, colB) => {
-      if (fill(rowB, colB)) return null
-      const covering = fill(rowA, colA)
-      if (covering) return covering
-      return pivots.some(p => inside(p, rowA, colA) && inside(p, rowB, colB)) ? null : undefined
-    },
+    line: (rowA, colA, rowB, colB) => decide(() => fill(rowA, colA), () => fill(rowB, colB), rowA, colA, rowB, colB),
+    rowKey: row => styles?.rowKey?.(row),
+    colKey: col => styles?.colKey?.(col),
+    keyedLine: (a, b) => decide(() => keyedFill(a), () => keyedFill(b), a.row, a.col, b.row, b.col),
   }
 }
 

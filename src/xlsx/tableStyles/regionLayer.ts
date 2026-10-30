@@ -23,6 +23,14 @@ export interface RegionStyleLayer {
   readonly retainedBytes: number
   /** `mode` (default print) matters only beside pivot ± buttons, which move compact labels. */
   styleAt(row: number, col: number, own: XlsxCellStyle | undefined, mode?: RegionStyleMode): XlsxCellStyle | undefined
+  /**
+   * Row and column class keys (PR #55 r7): two cells with equal keys and no own fill resolve to the same fill,
+   * so a caller may resolve one representative per key pair. Undefined where the layer cannot classify (a pivot
+   * with `formats`, whose overrides follow its items): the caller resolves that cell itself. Keys encode which
+   * region and rectangle the row or column meets, so a key pair also decides region membership.
+   */
+  rowKey?(row: number): string | undefined
+  colKey?(col: number): string | undefined
 }
 /** What one cell of a styled region layers: roles in ascending precedence, then
  * dxf overrides (a pivot's `formats`, named by `overrideKey` for the memo), and
@@ -36,6 +44,10 @@ export interface StyleRegion {
   readonly kind: 'pivot' | 'table'
   readonly retainedBytes: number
   cell(row: number, col: number, mode: RegionStyleMode): RegionCell
+  /** A cell's roles and overrides (hence its fill) are a function of (rowClass, colClass) inside the region;
+   * absent when they are not (RegionStyleLayer.rowKey). */
+  rowClass?(row: number): string
+  colClass?(col: number): string
 }
 export type RegionStyleTable = Pick<TableMetadata, 'id' | 'displayName' | 'sheetId' | 'extent' | 'headerRowCount' | 'totalsRowCount' | 'styleInfo'>
 
@@ -101,6 +113,32 @@ export function tableCellRoles(table: RegionStyleTable, row: number, col: number
   return out
 }
 
+/** The row and column classes of a table cell: every role tableCellRoles gives a cell, edges aside, is a function
+ * of the pair (fills never depend on band edges). Rows: header, total, or data with its row-stripe element;
+ * columns: first, last, and the column-stripe element. */
+export function tableRowClass(table: RegionStyleTable, row: number, def?: TableStyleDef): string {
+  const { firstRow, rows } = table.extent
+  const lastRow = firstRow + rows - 1
+  const dataFirstRow = firstRow + table.headerRowCount, dataLastRow = lastRow - table.totalsRowCount
+  if (row < dataFirstRow) return 'h'
+  if (row > dataLastRow) return 't'
+  if (!table.styleInfo?.showRowStripes) return 'd'
+  const first = Math.max(1, Math.min(dataLastRow - dataFirstRow + 1, def?.elements.firstRowStripe?.size ?? 1))
+  const second = Math.max(1, Math.min(dataLastRow - dataFirstRow + 1, def?.elements.secondRowStripe?.size ?? 1))
+  return (row - dataFirstRow) % (first + second) < first ? 'd1' : 'd2'
+}
+export function tableColClass(table: RegionStyleTable, col: number, def?: TableStyleDef): string {
+  const { firstCol, cols } = table.extent
+  const lastCol = firstCol + cols - 1
+  let key = `${col === firstCol ? 'f' : ''}${col === lastCol ? 'l' : ''}`
+  if (table.styleInfo?.showColumnStripes) {
+    const first = Math.max(1, Math.min(cols, def?.elements.firstColumnStripe?.size ?? 1))
+    const second = Math.max(1, Math.min(cols, def?.elements.secondColumnStripe?.size ?? 1))
+    key += (col - firstCol) % (first + second) < first ? 's1' : 's2'
+  }
+  return key
+}
+
 /** Table regions for `tables` (unknown and unplaceable styles reported and skipped). */
 export function tableStyleRegions(tables: readonly RegionStyleTable[], extras: StylesExtras, report?: (diagnostic: TableStyleDiagnostic) => void): StyleRegion[] {
   return tables.flatMap(table => {
@@ -115,7 +153,8 @@ export function tableStyleRegions(tables: readonly RegionStyleTable[], extras: S
     }
     const rect: SheetRect = { minRow: table.extent.firstRow, minCol: table.extent.firstCol, maxRow: table.extent.firstRow + table.extent.rows - 1, maxCol: table.extent.firstCol + table.extent.cols - 1 }
     if (![rect.minRow, rect.minCol, rect.maxRow, rect.maxCol].every(Number.isSafeInteger) || rect.minRow < 0 || rect.minCol < 0 || rect.maxRow >= MAX_ROWS || rect.maxCol >= MAX_COLS) return []
-    return [{ rects: [rect], def, kind: 'table' as const, retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES, cell: (row: number, col: number) => ({ roles: orderRoles(tableCellRoles(table, row, col, def), 'table') }) }]
+    return [{ rects: [rect], def, kind: 'table' as const, retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES, cell: (row: number, col: number) => ({ roles: orderRoles(tableCellRoles(table, row, col, def), 'table') }),
+      rowClass: (row: number) => tableRowClass(table, row, def), colClass: (col: number) => tableColClass(table, col, def) }]
   })
 }
 
@@ -139,8 +178,24 @@ export function composeRegionLayer(regions: readonly StyleRegion[], theme: Theme
   // Styles with a shared edge taken from a neighbour, by base style and the edges taken.
   let shared = new WeakMap<XlsxCellStyle, Map<string, XlsxCellStyle>>()
   let memoEntries = 0
+  /** Per region that the row (column) meets: its index, the rectangles it meets and its class. */
+  const axisKey = (index: number, row: boolean): string | undefined => {
+    const parts: string[] = []
+    for (let i = 0; i < regions.length; i++) {
+      const region = regions[i]!
+      let bits = ''
+      region.rects.forEach((rect, k) => { if (row ? index >= rect.minRow && index <= rect.maxRow : index >= rect.minCol && index <= rect.maxCol) bits += `${k},` })
+      if (!bits) continue
+      const classify = row ? region.rowClass : region.colClass
+      if (!classify) return undefined
+      parts.push(`${i}.${bits}.${classify(index)}`)
+    }
+    return parts.join('|')
+  }
   return {
     rects,
+    rowKey: row => axisKey(row, true),
+    colKey: col => axisKey(col, false),
     get retainedBytes() { return REGION_STYLE_LAYER_BASE_BYTES + regions.reduce((sum, region) => sum + region.retainedBytes, 0) + memoEntries * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES },
     styleAt(row, col, own, mode = 'print') {
       const region = regions.find(candidate => candidate.rects.some(rect => inRect(rect, row, col)))

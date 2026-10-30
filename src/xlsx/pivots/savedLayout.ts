@@ -219,6 +219,10 @@ export interface SavedPivotRoles {
   /** Every painted rectangle: the location and the page fields. */
   rects: SheetRect[]
   roleAt(row: number, col: number): RoleRef[]
+  /** A row's class: roleAt(row, col) for two rows of one class gives the same elements at every column (edges
+   * aside). Header and page rows are their own class; body rows share one by line type, level, stripe and the
+   * tabular parent bands they lie in. */
+  rowClass(row: number): string
 }
 
 /** Each cell's style roles from the saved layout, with the bands their borders
@@ -238,6 +242,22 @@ export function savedPivotRoles(def: PivotTableDefinition, style?: TableStyleDef
   return {
     rect,
     rects: layout.rects,
+    rowClass(row) {
+      if (layout.pages.some(cell => cell.row === row)) return `p${row}`
+      if (row < rect.minRow || row > rect.maxRow) return 'o'
+      if (row < dataRow0) return `h${row}`
+      const n = row - dataRow0, rowLine = rows[n]
+      let key = `b${+(row >= Math.max(itemRow0, rect.minRow + 1))}${+(row >= itemRow0)}${+(row <= bodyRowEnd)}`
+      if (info?.showRowStripes && row <= bodyRowEnd) key += n % (size('firstRowStripe') + size('secondRowStripe')) < size('firstRowStripe') ? 's1' : 's2'
+      if (!rowLine) return `${key}-`
+      const level = rowLine.items.length - 1
+      if (rowLine.type === 'grand') key += 'G'
+      else if (rowLine.type === 'blank') key += 'B'
+      else if (isSubtotal(rowLine.type)) key += `S${nth(level, 'SubtotalRow')}`
+      else if (info?.showRowHeaders && level >= 0 && level < leafLevel) key += `R${level}`
+      if (info?.showRowHeaders) for (const parent of layout.parentBands.get(n) ?? []) key += `|${parent.col}:${parent.level}`
+      return key
+    },
     roleAt(row, col) {
       const page = layout.pages.find(cell => cell.row === row && (cell.col === col || cell.col + 1 === col))
       if (page) return [band(page.col === col ? 'pageFieldLabels' : 'pageFieldValues', row, col, row, col, row, col)]

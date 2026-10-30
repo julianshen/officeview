@@ -53,7 +53,7 @@ function paint(sheet: XlsxSheet, box: LogicalViewport['box']) {
 afterEach(() => vi.restoreAllMocks())
 
 describe.each(['rows', 'cols'] as const)('a mixed plan of normal and sub-detail %s', axis => {
-  it('consults the region along detail lines only, and keeps the detail suppression', async () => {
+  it('bounds its region lookups by the row and column classes, and keeps the detail suppression', async () => {
     const sheet = await tinyTable(axis)
     const geometry = buildSheetGeometry(sheet)
     expect(geometry.kind).toBe('ready')
@@ -70,7 +70,7 @@ describe.each(['rows', 'cols'] as const)('a mixed plan of normal and sub-detail 
     const mixed = paint(sheet, box)
     expect(mixed.plan.kind === 'detail' && mixed.plan.coarse.length).toBeGreaterThan(0)
     expect(mixed.result.kind).toBe('detail')
-    // Bounded by the plan's detail lines (a handful of rows x columns), not the 3,000 summarized ones.
+    // Bounded by the class pairs (header, two stripes x a few columns), not the 3,000 summarized rows.
     // 124f6089: more than 3,000 lookups per crossing gridline.
     expect(lookups.mock.calls.length).toBeLessThan(500)
 
@@ -85,34 +85,101 @@ describe.each(['rows', 'cols'] as const)('a mixed plan of normal and sub-detail 
   }, 60_000)
 })
 
+/** pivot-formats-override with its location reaching row 330; rows 30-329 are 1 px (summarized at zoom 1). */
+async function longPivotSheet() {
+  await preloadTableStyles()
+  const doc = await parseXlsx(await OfficePackage.load(pivotFixture))
+  const sheet = doc.sheets.find(item => item.pivotTables?.length)!
+  const def = sheet.pivotTables![0]!
+  const [from] = def.location.ref.split(':')
+  def.location = { ...def.location, ref: `${from}:I330` }
+  const known = new Set(sheet.rows.map(row => row.index))
+  for (let r = 30; r < 330; r++) if (!known.has(r)) sheet.rows.push({ index: r, cells: [], heightPt: 0.75 })
+  sheet.rows.sort((a, b) => a.index - b.index)
+  const geometry = buildSheetGeometry(sheet)
+  if (geometry.kind !== 'ready') throw new Error('geometry')
+  expect(belowDetail(geometry.metrics.rows.size(100), 1)).toBe(true)
+  const box = { x: 0, y: 0, width: Math.ceil(geometry.metrics.cols.start(10)) + 20, height: Math.ceil(geometry.metrics.rows.start(330)) + 10 }
+  const layer = regionStylesFor(sheet)
+  const lookups = layer ? vi.spyOn(layer, 'styleAt') : undefined
+  const { canvas, plan } = paint(sheet, box)
+  expect(plan.kind === 'detail' && plan.coarse.length).toBeGreaterThan(0)
+  if (lookups) expect(lookups.mock.calls.length).toBeLessThan(500)
+  const y = Math.round((geometry.metrics.rows.start(30) + geometry.metrics.rows.start(330)) / 2)
+  return { at: (px: number) => Array.from(canvas.getContext('2d').getImageData(px, y, 1, 1).data), geometry }
+}
+
 describe('a summarized run inside a pivot', () => {
-  it('keeps its interior gridlines hidden, decided from the pivot rectangle', async () => {
-    await preloadTableStyles()
-    const doc = await parseXlsx(await OfficePackage.load(pivotFixture))
-    const sheet = doc.sheets.find(item => item.pivotTables?.length)!
-    const def = sheet.pivotTables![0]!
-    // The pivot's location reaches 300 rows further down; rows 30… are 1 px, below detail at zoom 1.
-    const [from] = def.location.ref.split(':')
-    def.location = { ...def.location, ref: `${from}:I330` }
-    const known = new Set(sheet.rows.map(row => row.index))
-    for (let r = 30; r < 330; r++) if (!known.has(r)) sheet.rows.push({ index: r, cells: [], heightPt: 0.75 })
-    sheet.rows.sort((a, b) => a.index - b.index)
-    const geometry = buildSheetGeometry(sheet)
-    expect(geometry.kind).toBe('ready')
-    if (geometry.kind !== 'ready') return
-    expect(belowDetail(geometry.metrics.rows.size(100), 1)).toBe(true)
-    const box = { x: 0, y: 0, width: 600, height: Math.ceil(geometry.metrics.rows.start(330)) + 10 }
-    const layer = regionStylesFor(sheet)
-    const lookups = layer ? vi.spyOn(layer, 'styleAt') : undefined
-    const { canvas, plan } = paint(sheet, box)
-    expect(plan.kind === 'detail' && plan.coarse.length).toBeGreaterThan(0)
-    // The gridline between columns B and C, halfway down the summarized rows.
-    const x = Math.round(geometry.metrics.cols.start(2)), y = Math.round((geometry.metrics.rows.start(30) + geometry.metrics.rows.start(330)) / 2)
-    const at = (px: number) => Array.from(canvas.getContext('2d').getImageData(px, y, 1, 1).data)
-    // 6906332c: the summarized run was skipped and the line drawn through the pivot.
+  it('keeps its interior gridlines hidden', async () => {
+    const { at, geometry } = await longPivotSheet()
+    // B|C, halfway down the summarized rows. 6906332c: the run was skipped and the line drawn through the pivot.
+    const x = Math.round(geometry.metrics.cols.start(2))
     expect(at(x)).toEqual(at(x + 4))
-    // Decided once per gridline from the rectangle: no per-row lookups for the 300 summarized rows.
-    if (lookups) expect(lookups.mock.calls.length).toBeLessThan(500)
+  }, 60_000)
+
+  it("keeps the pivot's outer edge", async () => {
+    const { at, geometry } = await longPivotSheet()
+    // I|J, the right edge of A3:I330: one neighbour only is inside, so the line stays (regionGrid.ts).
+    // e6bec43b: hidden by rectangle containment, coarse fill [236,239,243].
+    expect(at(Math.round(geometry.metrics.cols.start(9)))).toEqual([208, 208, 208, 255])
   }, 60_000)
 })
 
+describe('a long summarized run inside a banded table', () => {
+  it('keeps the gridlines of its unfilled stripes and hides those under filled ones', async () => {
+    const sheet = await tinyTable('rows')
+    const geometry = buildSheetGeometry(sheet)
+    if (geometry.kind !== 'ready') throw new Error('geometry')
+    const layer = regionStylesFor(sheet)!
+    const box = { x: 0, y: 0, width: 400, height: Math.ceil(geometry.metrics.rows.start(TINY + 2)) + 20 }
+    const lookups = vi.spyOn(layer, 'styleAt')
+    const { canvas, plan } = paint(sheet, box)
+    expect(plan.kind === 'detail' && plan.coarse.length).toBeGreaterThan(0)
+    expect(lookups.mock.calls.length).toBeLessThan(500)
+    lookups.mockRestore()
+    // B|C at each summarized row's second pixel: gridline grey exactly where the row's stripe has no fill.
+    const x = Math.round(geometry.metrics.cols.start(2))
+    const column = canvas.getContext('2d').getImageData(x, 0, 1, box.height).data
+    let grey = 0, wrong = 0
+    for (let row = 2; row < TINY + 2; row++) {
+      const y = Math.round(geometry.metrics.rows.start(row)) + 1
+      const isGrey = column[y * 4] === 208 && column[y * 4 + 1] === 208 && column[y * 4 + 2] === 208
+      const filled = Boolean(layer.styleAt(row, 2, undefined)?.fillColor)
+      if (isGrey) grey++
+      if (isGrey === filled) wrong++
+    }
+    // e6bec43b: none grey (hidden by rectangle); 124f6089 and now: the unfilled half of the 3,000 rows.
+    expect(wrong).toBe(0)
+    expect(grey).toBe(TINY / 2)
+  }, 60_000)
+})
+
+describe('region class keys', () => {
+  it('equal row and column keys resolve to the same fill, on every styled fixture sheet', async () => {
+    const { readdirSync } = await import('node:fs')
+    const { ensureTableStyleEngine } = await import('../src/xlsx/tableStyleLoader')
+    const dir = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
+    let checked = 0, keyed = 0
+    for (const name of readdirSync(dir).filter(file => file.endsWith('.xlsx'))) {
+      const doc = await parseXlsx(await OfficePackage.load(readFileSync(dir + name)))
+      await ensureTableStyleEngine(doc.sheets)
+      for (const sheet of doc.sheets) {
+        const layer = sheet.regionStyles
+        if (!layer) continue
+        const seen = new Map<string, string>()
+        for (const rect of layer.rects) for (let row = rect.minRow; row <= Math.min(rect.maxRow, rect.minRow + 60); row++) for (let col = rect.minCol; col <= Math.min(rect.maxCol, rect.minCol + 30); col++) {
+          const rowKey = layer.rowKey?.(row), colKey = layer.colKey?.(col)
+          checked++
+          if (rowKey === undefined || colKey === undefined) continue
+          keyed++
+          const fill = layer.styleAt(row, col, undefined)?.fillColor ?? ''
+          const key = `${rowKey}\u0000${colKey}`
+          if (!seen.has(key)) seen.set(key, fill)
+          expect({ name, sheet: sheet.name, row, col, fill }).toEqual({ name, sheet: sheet.name, row, col, fill: seen.get(key) })
+        }
+      }
+    }
+    expect(keyed).toBeGreaterThan(1000)
+    expect(checked).toBeGreaterThanOrEqual(keyed)
+  }, 120_000)
+})

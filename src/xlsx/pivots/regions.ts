@@ -230,6 +230,8 @@ export function pivotStyleRegions(sheet: XlsxSheet, extras: StylesExtras, _theme
       rects: roles.rects,
       def: style ?? NO_STYLE,
       kind: 'pivot' as const,
+      // `formats` follow the items of each line: no row class then, and callers resolve those cells one by one.
+      ...(formats.length ? {} : { rowClass: (row: number) => roles.rowClass(row), colClass: (col: number) => `${col}` }),
       // The saved layout the closures below retain: lines, item vectors and parent bands.
       retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES + savedPivotLayoutBytes(def)
         + (formats.length ? PIVOT_FORMAT_MEMO_BYTES : 0),

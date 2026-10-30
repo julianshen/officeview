@@ -39,6 +39,9 @@ export function mergeRegionStyleLayers(...layers: Array<RegionStyleLayer | undef
     rects: retained.flatMap(layer => layer.rects),
     get retainedBytes() { return retained.reduce((sum, layer) => sum + layer.retainedBytes, 0) },
     styleAt(row, col, own, mode) { return retained.reduce((style, layer) => layer.styleAt(row, col, style, mode), own) },
+    // Each layer's key, in merge order; one layer without keys leaves the cell to per-cell resolution.
+    rowKey(row) { const keys = retained.map(layer => layer.rowKey?.(row)); return keys.some(key => key === undefined) ? undefined : keys.join('/') },
+    colKey(col) { const keys = retained.map(layer => layer.colKey?.(col)); return keys.some(key => key === undefined) ? undefined : keys.join('/') },
   }
 }
 interface Entry { state: PagedRegionStyleState['state']; gen: number; owner?: CacheIdentity; seq: number; attempts: number; grantFloor?: number; sizeRetryAttempted?: boolean; payload?: RemoteRegionStyles | RemotePivotDisplay; layer?: RegionStyleLayer; layerReady?: boolean; reply?: WorkerReply<'read'>; releaseReply?: () => void; replyBytes: number; layerBytes: number; layerRelease?: () => void; controller?: AbortController; timer?: ReturnType<typeof setTimeout>; layerPending?: boolean; diagnostics: PagedRegionStyleState['diagnostics'] }

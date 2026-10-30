@@ -5,7 +5,7 @@ import type { CanvasColors } from '../../components/canvasColors'
  * eagerly, never reaches the viewport planner; only the interactive sheet
  * viewport (lazy chunk) and tests import it.
  */
-import type { XlsxSheet } from '../types'
+import type { XlsxCell, XlsxSheet } from '../types'
 import type { CacheIdentity, LogicalViewport, WorkerDiagnostic } from './contracts'
 import type { SourceCell } from './coordinates'
 import { COARSE_NOTICE, admitRegionSurfaces, emptyWork, planViewport, type CoarseGroup, type FrameBudget, type MergeQueryCache, type SheetGeometry, type SheetGeometryResult, type ViewportPlan, type ViewportProfile, type ViewportWork } from './viewport'
@@ -416,50 +416,39 @@ export function renderSheetViewport(
   }
 }
 
-/** A summarized (sub-detail) run of at most this many rows or columns is still decided cell by cell. */
-const REGION_RUN_CELLS = 32
-
 /** The styled-region gridline rule over one tile's visible rows and columns: per gridline, the segments left to
  * stroke, and the spans a region fill covers (collected in `covered`). Undefined without a rule. Lines are
  * checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles.
  *
- * Work is bounded by the plan, never by the source rows or columns a few pixels hold (PR #55 r7). Detail runs
- * are decided cell by cell. A sub-detail run the planner summarizes is decided cell by cell only while it holds
- * at most REGION_RUN_CELLS indexes (as before, so ordinary zoomed-out frames paint unchanged); a longer one is
- * decided once per gridline from the region rectangles: the segment across it is hidden when the run lies wholly
- * inside a styled table or pivot rectangle that holds the cell on either side of the line. That reads every
- * region cell as one that hides its gridlines (a pivot body, a filled band), the choice that keeps "no
- * gridlines inside pivots and under filled table cells" for a span too dense to show any one row; an unfilled
- * stripe inside a long summarized run therefore loses its line too. */
+ * The rule is decided for every row (column) exactly as before, but its style work is bounded by the plan and
+ * the region classes, never by the source rows or columns a few pixels hold (PR #55 r7). Detail runs ask the
+ * rule cell by cell. A sub-detail run the planner summarizes asks it through the layer's class keys
+ * (RegionGrid.keyedLine): one style resolution per (row class, column class) pair, a cell's own fill read from
+ * its stored cell, and a cell the layer cannot classify (a pivot with `formats`) resolved by itself. What is
+ * left per summarized row is the per-row segment the paint needs anyway. */
 function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number, scale: number):
   { lines(segments: Array<[number, number]>, at: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
   const lineRule = regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style)
   if (!lineRule) return undefined
   const { rows, cols, order } = geometry.metrics
   const rects = lineRule.rects
-  type Span = { source: number; y0: number; y1: number } | { col: number; x0: number; x1: number } | { lo: number; hi: number; from: number; to: number }
-  const lineRows: Span[] = [], lineCols: Span[] = []
-  const meets = (lo: number, hi: number, rowAxis: boolean) => rects.some(r => rowAxis ? hi >= r.minRow && lo <= r.maxRow : hi >= r.minCol && lo <= r.maxCol)
+  /** `keyed`: a summarized row (column), decided through class keys; its key and (rows) stored cells. */
+  type RowSpan = { source: number; y0: number; y1: number; keyed?: { key: string | undefined; cells: readonly XlsxCell[] | undefined } }
+  type ColSpan = { col: number; x0: number; x1: number; keyed?: { key: string | undefined } }
+  const lineRows: RowSpan[] = [], lineCols: ColSpan[] = []
   for (const run of rows.visibleBetween(yTop, yBottom).runs) {
-    if (belowDetail(run.sizeCss, scale) && run.end - run.start + 1 > REGION_RUN_CELLS) {
-      // The source rows a run of display slots can hold: its own slots, widened by any reordered band it meets.
-      let lo = run.start, hi = run.end
-      for (const band of order.bands) if (band.r0 <= run.end && band.r1 >= run.start) { lo = Math.min(lo, band.r0); hi = Math.max(hi, band.r1) }
-      if (meets(lo, hi, true)) lineRows.push({ lo, hi, from: run.startCss, to: run.startCss + (run.end - run.start + 1) * run.sizeCss })
-      continue
-    }
+    const summarized = belowDetail(run.sizeCss, scale)
     for (let slot = run.start; slot <= run.end; slot++) {
       const source = order.displayToSource(slot)
-      if (rects.some(r => source >= r.minRow && source <= r.maxRow)) lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot) })
+      if (!rects.some(r => source >= r.minRow && source <= r.maxRow)) continue
+      lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot), ...(summarized ? { keyed: { key: lineRule.rowKey(source), cells: geometry.cellsOf(source) } } : {}) })
     }
   }
   for (const run of cols.visibleBetween(xLeft, xRight).runs) {
-    if (belowDetail(run.sizeCss, scale) && run.end - run.start + 1 > REGION_RUN_CELLS) {
-      if (meets(run.start, run.end, false)) lineCols.push({ lo: run.start, hi: run.end, from: run.startCss, to: run.startCss + (run.end - run.start + 1) * run.sizeCss })
-      continue
-    }
+    const summarized = belowDetail(run.sizeCss, scale)
     for (let col = run.start; col <= run.end; col++) {
-      if (rects.some(r => col >= r.minCol && col <= r.maxCol)) lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col) })
+      if (!rects.some(r => col >= r.minCol && col <= r.maxCol)) continue
+      lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col), ...(summarized ? { keyed: { key: lineRule.colKey(col) } } : {}) })
     }
   }
   const neighbours = (axis: 'rows' | 'cols', at: number): [number, number] | undefined => {
@@ -467,10 +456,7 @@ function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: nu
     if (after === null || before === null || before === after) return undefined
     return axis === 'cols' ? [before, after] : [order.displayToSource(before), order.displayToSource(after)]
   }
-  /** A summarized run [lo, hi] along the line, the cells either side at `pair` across it: hidden by a region holding both. */
-  const runHidden = (lo: number, hi: number, pair: [number, number], vertical: boolean) => rects.some(r => vertical
-    ? lo >= r.minRow && hi <= r.maxRow && pair.some(col => col >= r.minCol && col <= r.maxCol)
-    : lo >= r.minCol && hi <= r.maxCol && pair.some(row => row >= r.minRow && row <= r.maxRow))
+  const styleIn = (cells: readonly XlsxCell[] | undefined, col: number) => cells?.find(cell => cell.col === col)?.style
   const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
   return {
     covered,
@@ -478,12 +464,26 @@ function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: nu
       const pair = (vertical ? lineRows : lineCols).length ? neighbours(vertical ? 'cols' : 'rows', at) : undefined
       if (!pair) return segments
       const hidden: Array<[number, number]> = []
+      // Keys of the line's own two columns (rows), and for a horizontal line its two rows' stored cells.
+      let pairKeys: [string | undefined, string | undefined] | undefined, pairCells: [readonly XlsxCell[] | undefined, readonly XlsxCell[] | undefined] | undefined
       for (const span of vertical ? lineRows : lineCols) {
-        if ('lo' in span) {
-          if (runHidden(span.lo, span.hi, pair, vertical)) hidden.push([span.from, span.to])
-          continue
-        }
-        const rule = 'source' in span ? lineRule.line(span.source, pair[0], span.source, pair[1]) : lineRule.line(pair[0], span.col, pair[1], span.col)
+        let rule: string | null | undefined
+        if ('source' in span) {
+          if (span.keyed) {
+            pairKeys ??= [lineRule.colKey(pair[0]), lineRule.colKey(pair[1])]
+            const { key, cells } = span.keyed
+            rule = lineRule.keyedLine(
+              { row: span.source, col: pair[0], rowKey: key, colKey: pairKeys[0], own: styleIn(cells, pair[0]) },
+              { row: span.source, col: pair[1], rowKey: key, colKey: pairKeys[1], own: styleIn(cells, pair[1]) })
+          } else rule = lineRule.line(span.source, pair[0], span.source, pair[1])
+        } else if (span.keyed) {
+          pairKeys ??= [lineRule.rowKey(pair[0]), lineRule.rowKey(pair[1])]
+          pairCells ??= [geometry.cellsOf(pair[0]), geometry.cellsOf(pair[1])]
+          const key = span.keyed.key
+          rule = lineRule.keyedLine(
+            { row: pair[0], col: span.col, rowKey: pairKeys[0], colKey: key, own: styleIn(pairCells[0], span.col) },
+            { row: pair[1], col: span.col, rowKey: pairKeys[1], colKey: key, own: styleIn(pairCells[1], span.col) })
+        } else rule = lineRule.line(pair[0], span.col, pair[1], span.col)
         if (rule === undefined) continue
         const from = 'source' in span ? span.y0 : span.x0, to = 'source' in span ? span.y1 : span.x1
         hidden.push([from, to])
