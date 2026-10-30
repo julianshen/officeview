@@ -80,4 +80,29 @@ describe('decoded pivot layer admission includes the saved layout', () => {
     expect(refused.charged).toBe(0)
     expect(refused.features).toContain('pivot-display-reply-limit')
   }, 60_000)
+
+  it('charges a pivot with many page fields and few lines for its page cells and rects', async () => {
+    const base = await longPivot(10)
+    const fields = 5_000
+    // One page row above the location (A3 leaves row 1 free): every page field is laid out, across.
+    const def: PivotTableDefinition = { ...base, pageFields: Array.from({ length: fields }, (_, k) => ({ fld: k % 2 })), location: { ...base.location, rowPageCount: 1, colPageCount: fields } }
+    const layout = savedPivotLayout(def)
+    expect(layout).toBeDefined()
+    expect(layout!.pages).toHaveLength(fields)
+    expect(layout!.rects).toHaveLength(fields + 1)
+    const withoutPages = savedPivotLayoutBytes({ ...def, pageFields: [] })
+    const layoutBytes = savedPivotLayoutBytes(def)
+    // 0f9ba776 counted lines and bands only: the same estimate with or without page fields.
+    expect(layoutBytes - withoutPages).toBeGreaterThanOrEqual(fields * 104)
+    const fixed = REGION_STYLE_LAYER_BASE_BYTES + REGION_STYLE_REGION_ESTIMATE_BYTES + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES + PIVOT_FORMAT_MEMO_BYTES
+    const ready = await admit(def)
+    expect(ready.state).toBe('ready')
+    expect(ready.charged).toBe(fixed + layoutBytes)
+    expect(ready.layerBytes).toBeLessThanOrEqual(ready.charged)
+    // Room for everything but the page fields: refused before building.
+    const refused = await admit(def, fixed + withoutPages + 1024)
+    expect(refused.state).toBe('failed')
+    expect(refused.charged).toBe(0)
+    expect(refused.features).toContain('pivot-display-reply-limit')
+  }, 60_000)
 })

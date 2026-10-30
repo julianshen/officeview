@@ -170,20 +170,26 @@ export function savedPivotLayout(def: PivotTableDefinition, why?: { tooDeep?: bo
 export const SAVED_LINE_ESTIMATE_BYTES = 64
 /** Per resolved item-vector slot, per parent-band reference, per parent band, and per line holding bands. */
 const VECTOR_SLOT_BYTES = 8, BAND_REFERENCE_BYTES = 8, PARENT_BAND_BYTES = 48, BAND_LIST_BYTES = 64
+/** The layout record with its location rect and its fixed arrays (rows, cols, labelCol, pages, rects, parentBands). */
+const LAYOUT_BASE_BYTES = 512
+/** Per row field: its labelCol slot. Per page field: its page cell, its rect and their two array slots. */
+const LABEL_COL_BYTES = 8, PAGE_FIELD_BYTES = 144
 
 /**
- * What savedPivotLayout(def) retains (PR #55 P2): every saved line with its resolved
- * item vector, and the parent-band lists, estimated from the definition alone with
- * no allocation, so a receiver can reserve it before building. It walks the same
- * parent-band loop as savedPivotLayout as a count, over every saved line (an upper
- * bound when the location keeps fewer); past the parent-band budget the layout is
- * not built and only its lines are counted.
+ * What savedPivotLayout(def) retains (PR #55 P2): the layout record and its fixed arrays,
+ * one labelCol slot per row field, one page cell and rect per page field, every saved
+ * line with its resolved item vector, and the parent-band lists, estimated from the
+ * definition alone with no allocation, so a receiver can reserve it before building.
+ * Every per-field count is the definition's own (an upper bound: page fields outside the
+ * sheet are skipped by the build). It walks the same parent-band loop as savedPivotLayout
+ * as a count, over every saved line (an upper bound when the location keeps fewer); past
+ * the parent-band budget the layout is not built and only the rest is counted.
  */
 export function savedPivotLayoutBytes(def: PivotTableDefinition): number {
   const rows = def.rowItems, cols = def.colItems
   if (!rows || !cols) return 0
   const vectorLength = (item: PivotAxisItem) => item.type === 'grand' ? 0 : Math.max(0, item.r) + item.x.length
-  let bytes = 0
+  let bytes = LAYOUT_BASE_BYTES + LABEL_COL_BYTES * def.rowFields.length + PAGE_FIELD_BYTES * def.pageFields.length
   for (const item of rows) bytes += SAVED_LINE_ESTIMATE_BYTES + VECTOR_SLOT_BYTES * vectorLength(item)
   for (const item of cols) bytes += SAVED_LINE_ESTIMATE_BYTES + VECTOR_SLOT_BYTES * vectorLength(item)
   let budget = PARENT_BAND_ENTRIES_PER_LINE * rows.length + PARENT_BAND_ENTRIES_BASE
