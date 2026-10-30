@@ -14,17 +14,29 @@
  *   children (pivot-subtotals-bottom, pivot-layout-tabular, lo-calc-Pivot3_Column_Grand_Subtotals), one line per
  *   data field when the Values field lies deeper on the same axis (pivot-values-on-rows);
  * - a collapsed item (`sd="0"`) with a deeper non-Values field is one line and hides its children (pivot-collapsed-item);
+ *   with the Values field deeper (last on rows, outline form) it is its own line, then one line per data field with
+ *   the levels between left unfilled (-1) and `r` at the Values level, and no subtotal lines (Task 15
+ *   layout-collapsed-item-above-values: <i><x/></i>, <i r="2"><x/></i>, <i r="2" i="1"><x v="1"/></i>);
+ * - an item shown only by its field's `showAll` (no records under it) lists the next field's visible items under it
+ *   (Task 15 quirk-cross-hidden-item-showall: Central, whose records are all a hidden product, keeps Apples, Bananas
+ *   and Cherries), refused when one of those items has no passing record anywhere (not measured);
  * - the Values field is an axis level whose items are the data fields; grand totals are one line per data field
  *   when it is on the axis (pivot-values-on-rows), and need a non-Values field on the axis (lo-calc-two-data-fields);
  *   `rowGrandTotals` gates the row axis's grand line and `colGrandTotals` the column axis's (lo-calc-Pivot2_Row_Compact,
  *   lo-calc-Pivot3_Column_Grand_Subtotals);
- * - each line's `first` (`r`) is the levels it shares with the previous non-grand line, at most all but its last.
+ * - each line's `first` (`r`) is the levels it shares with the previous non-grand line (an unfilled level counts as
+ *   shared), at most all but its last.
+ * - another field's hidden item or page selection drops an item it leaves without records (Task 15
+ *   quirk-cross-hidden-item, quirk-page-single, quirk-page-multiple), unless its field has `showAll`
+ *   (quirk-page-single-showall, quirk-cross-hidden-item-showall).
  * Unmeasured (Task 15 cases decide): named subtotals (one line per function in schema order, always at the bottom),
- * blank rows (one `blank` line after each item block of a field with a deeper field), an item with no records under
- * `showAll` (its line alone in tabular form), whether another field's hidden item drops an item (taken as above).
- * Refused as `pivot-engine-unmeasured` until measured: `mergeItem`, a hidden item on a field on no axis or page, a
- * collapsed item above Values, mixed-type/custom-list/non-ASCII sort order, nested/value-sort ties, cross-field
- * `showAll` visibility and out-of-range group captions. Dynamic date filters use the dedicated feature refusal.
+ * blank rows (one `blank` line after each item block of a field with a deeper field), a showAll item with no records
+ * whose next field has no visible item (its line alone in tabular form).
+ * Refused as `pivot-engine-unmeasured` until measured: `mergeItem` outside tabular fields with totals only after
+ * outer items, classic layout without a column field beyond one data field with row fields, a hidden item on a field
+ * on no axis or page, a collapsed item above Values on columns, in tabular form or above a Values level that is not
+ * the last, mixed-type/custom-list/non-ASCII sort order, nested/value-sort ties, cross-field filter visibility with
+ * `showAll` and out-of-range group captions. Dynamic date filters use the dedicated feature refusal.
  */
 import { PIVOT_VALUES_FIELD, type PivotCacheDefinition, type PivotDiagnostic, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition, type PivotValue } from '../model'
 import type { PivotLine } from '../savedLayout'
@@ -98,12 +110,11 @@ function itemMap(def: PivotTableDefinition, cache: PivotCacheDefinition, field: 
 
 export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, view: PivotViewState): EngineResult<PivotAxes> {
   if (view.filters.some(isDynamicDateFilter)) return fail('unsupported', 'pivot-filter-dynamic-date', 'dynamic date filters depend on the current date and are not implemented')
-  // Merged labels are unmeasured: fail closed until Task 15 has an Excel case.
-  if (def.mergeItem) return unmeasured('merged item labels (mergeItem) are not measured yet')
-  // With no column-axis field, classic layout shifts the row header even when
-  // dataOnRows is false (the default). A Values field on columns preserves the
-  // observed two-data-field geometry.
-  if (def.gridDropZones && view.cols.length === 0) return unmeasured('classic pivot layout (gridDropZones) geometry is not modelled')
+  // Classic layout with no column-axis field is measured for one data field with row fields
+  // (layout-classic-single-data; placeCells' geometry). A Values field on columns keeps the
+  // observed two-data-field geometry (lo-calc-two-data-fields, layout-classic-two-data).
+  if (def.gridDropZones && view.cols.length === 0 && !(view.data.length === 1 && view.rows.length > 0))
+    return unmeasured('classic pivot layout (gridDropZones) without a column field is measured for one data field with row fields only')
   // A calculated field is evaluated as data only (values.ts, calculated.ts): Excel does not place one on an axis or page.
   for (const field of [...view.rows, ...view.cols, ...view.pages.map(page => page.field)]) {
     if (cache.fields[field]?.formula !== undefined) return fail('unsupported', 'pivot-calculated-field', `calculated field ${field} on an axis or page is not supported`)
@@ -276,7 +287,24 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   if (!rows.ok) return rows
   const cols = axis(store, def, view, 'cols', maps, passes, sortedOrders, allowedByField)
   if (!cols.ok) return cols
+  if (def.mergeItem && !mergeMeasured(view, rows.value.lines, cols.value.lines))
+    return unmeasured('merged item labels (mergeItem) are measured for tabular axis fields with totals only after outer items')
   return { ok: true, value: { rows: rows.value.lines, cols: cols.value.lines, rowKey: rows.value.key, colKey: cols.value.key } }
+}
+
+/** The `mergeItem` shape Task 15 layout-merge-labels measures: tabular row and column fields with no repeated labels,
+ * blank rows or collapsed items, the Values field (if any) last on columns, row totals only after the outermost
+ * items (default subtotal) and column totals only as the grand total. */
+function mergeMeasured(view: PivotViewState, rows: readonly PivotLine[], cols: readonly PivotLine[]): boolean {
+  if (view.rows.includes(PIVOT_VALUES_FIELD)) return false
+  if (view.cols.includes(PIVOT_VALUES_FIELD) && view.cols.indexOf(PIVOT_VALUES_FIELD) !== view.cols.length - 1) return false
+  for (const field of [...view.rows, ...view.cols]) {
+    if (field === PIVOT_VALUES_FIELD) continue
+    const state = view.fields[field]!
+    if (state.outline || state.fillDownLabels || state.insertBlankRow || state.collapsed.includes(true)) return false
+  }
+  return rows.every(line => line.type === 'data' || line.type === 'grand' || (line.type === 'default' && line.items.length === 1))
+    && cols.every(line => line.type === 'data' || line.type === 'grand')
 }
 
 function fieldValues(cache: PivotCacheDefinition, field: number): PivotValue[] {
@@ -325,8 +353,14 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
   const toPivot = real.map(({ field }) => maps.get(field)!.toPivot)
   const groupedLevels = real.map(({ field }) => maps.get(field)!.grouped === true)
   const collapses = real.map(({ field, level }) => hasFieldAfter(fields, level) && view.fields[field]!.collapsed.includes(true) ? view.fields[field]!.collapsed : undefined)
-  if (real.some(({ level }, k) => level < valuesLevel && collapses[k]))
-    return unmeasured('a collapsed item above the Values field is not measured yet')
+  // A collapsed item above the Values field: measured on rows, outline form, Values last (layout-collapsed-item-above-values).
+  for (let k = 0; k < real.length; k++) {
+    const { field, level } = real[k]!
+    if (!(level < valuesLevel && collapses[k])) continue
+    if (which !== 'rows') return unmeasured('a collapsed item above the Values field on columns is not measured')
+    if (valuesLevel !== fields.length - 1) return unmeasured('a collapsed item above the Values field is measured with Values as the last row level only')
+    if (!view.fields[field]!.outline) return unmeasured('a collapsed item above the Values field is measured in outline form only')
+  }
 
   // One pass over the records: each passing record's tuple of pivot item indices (cut after a collapsed item) is
   // hashed to a number in mixed radix (item + 1 per level, 0 past the cut), or to a string past 2^53. A small
@@ -374,7 +408,9 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
   let previous: number[] = []
   const push = (type: PivotItemType, items: number[], data: number) => {
     let shared = 0
+    // An unfilled level (-1, under a collapsed item above Values) counts as shared: Excel writes r past it.
     while (shared < previous.length && shared < items.length && previous[shared] === items[shared]) shared++
+    if (shared === previous.length) while (shared < items.length && items[shared] === -1) shared++
     lines.push({ type, first: type === 'grand' ? 0 : Math.min(shared, Math.max(0, items.length - 1)), items: type === 'grand' ? [] : items, data: Math.max(0, data) })
     if (type !== 'grand') previous = items
     return lines.length - 1
@@ -402,14 +438,32 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     const deeper = hasFieldAfter(fields, level), last = level === fields.length - 1
     const rank = sortedOrders.get(field)
     const rankOf = ranks.get(field)
-    const children = state.showAll
-      ? (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item] && (allowedByField.get(field)?.has(item) ?? true))
-      : [...(node?.children.keys() ?? [])].sort((a, b) => rankOf ? (rankOf.get(a) ?? a) - (rankOf.get(b) ?? b) : a - b)
+    // With no node (an item shown by showAll with no records above), the field's visible items show
+    // (quirk-cross-hidden-item-showall), provided each has passing records somewhere (else unmeasured).
+    let children: number[]
+    if (node && !state.showAll) children = [...node.children.keys()].sort((a, b) => rankOf ? (rankOf.get(a) ?? a) - (rankOf.get(b) ?? b) : a - b)
+    else {
+      children = (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item] && (allowedByField.get(field)?.has(item) ?? true))
+      if (!node && !state.showAll) {
+        const present = itemsWithRecords(field)
+        const missing = children.find(item => !present.has(item))
+        if (missing !== undefined) { refusal ??= `an item without records under showAll lists field ${field} item ${missing}, which no passing record has`; return }
+      }
+    }
     for (const item of children) {
       const child = node?.children.get(item)
       const items = [...path, item]
       if (last) { visit(level + 1, items, child, data); continue }
-      if (deeper && state.collapsed[item]) {
+      if (deeper && state.collapsed[item] && valuesLevel > level) {
+        // Collapsed above Values (gated above: rows, outline, Values last): its own line, then one line per data
+        // field with the levels between unfilled; no subtotal lines (layout-collapsed-item-above-values).
+        push('data', items, data)
+        const padded = [...items]
+        while (padded.length < valuesLevel) padded.push(-1)
+        let leaf = NO_LINE
+        for (let d = 0; d < dataCount; d++) { const line = push('data', [...padded, d], d); if (d === 0) leaf = line }
+        if (child && child.leaf === NO_LINE) child.leaf = leaf
+      } else if (deeper && state.collapsed[item]) {
         const line = push('data', items, data)
         if (child && child.leaf === NO_LINE) child.leaf = line
       } else {
@@ -426,7 +480,21 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
       if (deeper && which === 'rows' && state.insertBlankRow) push('blank', items, data)
     }
   }
+  // Pivot items with at least one passing record, per field (built on first use: only under a record-less showAll item).
+  let refusal: string | undefined
+  const withRecords = new Map<number, Set<number>>()
+  const itemsWithRecords = (field: number) => {
+    let present = withRecords.get(field)
+    if (!present) {
+      present = new Set()
+      const map = maps.get(field)!
+      for (let r = 0; r < store.count; r++) if (passes[r]) { const item = pivotItemAt(map, r); if (item !== undefined && item >= 0) present.add(item) }
+      withRecords.set(field, present)
+    }
+    return present
+  }
   visit(0, [], root, -1)
+  if (refusal !== undefined) return unmeasured(refusal)
   if (real.length && (which === 'rows' ? def.rowGrandTotals : def.colGrandTotals)) {
     if (valuesLevel >= 0) for (let d = 0; d < dataCount; d++) push('grand', [], d)
     else push('grand', [], 0)

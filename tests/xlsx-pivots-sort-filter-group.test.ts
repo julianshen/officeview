@@ -245,7 +245,12 @@ describe('Task 21 sort, filters and group mapping', () => {
     const classic = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 1], [1, 2])
     classic.def.gridDropZones = true
     classic.def.dataOnRows = false
-    expect(result(classic)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured', message: 'classic pivot layout (gridDropZones) geometry is not modelled' } })
+    // One data field with row fields is measured (fix round B1, Task 15 layout-classic-single-data); other
+    // shapes without a column field stay refused, e.g. two data fields (Values on rows).
+    expect(result(classic).ok).toBe(true)
+    classic.view.data = [classic.view.data[0]!, classic.view.data[0]!]
+    classic.view.rows = [...classic.view.rows, -2]
+    expect(result(classic)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured', message: 'classic pivot layout (gridDropZones) without a column field is measured for one data field with row fields only' } })
 
     const ordinary = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 0], [1, 2])
     ordinary.cache.fields.push({ databaseField: true, sharedItems: { inline: false, items: [{ type: 'string', value: 'X' }, { type: 'string', value: 'Y' }] } } as never)

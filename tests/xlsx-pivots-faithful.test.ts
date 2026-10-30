@@ -423,8 +423,9 @@ const CORPUS_STATUS: Record<string, string[]> = {
   // Count subtotals/grand totals from records are unmeasured (Task 15).
   'lo-calc-pivot_dark1.xlsx': ['xl', UNMEASURED],
   'lo-calc-pivotcompact.xlsx': ['xl', 'ok'],
-  // Field 3 is sorted (Task 21).
-  'lo-calc-pivottable_date_field_filter.xlsx': ['xl', UNMEASURED],
+  // Classic layout with no column field and one data field: measured in fix round B1 (Task 15
+  // layout-classic-single-data); its saved cells now agree.
+  'lo-calc-pivottable_date_field_filter.xlsx': ['xl', 'ok'],
   'lo-calc-pivottable_outline_mode.xlsx': ['xl', 'ok'],
   // Field 6, on no axis, has a hidden item (Task 15 cross-field measurement).
   'lo-calc-pivottable_rowcolpage_field_filter.xlsx': ['xl', UNMEASURED],

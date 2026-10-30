@@ -18,6 +18,9 @@ import { loadAll, savedCell, type Loaded } from './helpers/xlsx-pivots-load'
 import { initialViewState, type FieldState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
 import { computeAxes, lineCarriesValues, NO_LINE, type PivotAxes } from '../src/xlsx/pivots/engine/axes'
 import { liveDefinition, placeCells, type PivotCellValue, type PivotLayout, type PivotValueGrid } from '../src/xlsx/pivots/engine/place'
+import { checkSavedLayout, sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
+import { computePivot } from '../src/xlsx/pivots/engine/compute'
+import type { SheetRect } from '../src/xlsx/tableStyles/model'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const CORPUS = resolve(process.cwd(), 'corpus')
@@ -316,30 +319,125 @@ describe('Task 17 behaviours', () => {
 })
 
 describe('unmeasured layout paths', () => {
-  it('a collapsed item above the Values field is unsupported until measured', async () => {
-    const p = await ref('pivot-values-on-rows')
-    const view = initialViewState(p.def, p.cache)
-    const result = axesOf(p, withFields(view, { 0: { collapsed: view.fields[0]!.collapsed.map((_, k) => k === 0) } }))
-    expect(result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }).toEqual({ kind: 'unsupported', feature: 'pivot-engine-unmeasured' })
-  })
-
   const unmeasured = (result: ReturnType<typeof computeAxes>) => result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }
   const UNMEASURED = { kind: 'unsupported', feature: 'pivot-engine-unmeasured' }
 
-  it('mergeItem fails closed until measured (Task 15)', async () => {
-    const p = await ref('pivot-layout-tabular')
-    expect(axesOf(p).ok).toBe(true)
-    const merged = { ...p.def, mergeItem: true }
-    expect(unmeasured(computeAxes(p.store, p.cache, merged, initialViewState(merged, p.cache)))).toEqual(UNMEASURED)
-  })
-
   it('a hidden item on a field on no axis or page fails closed until measured (Task 15)', async () => {
     // Sales (field 3) is on no axis; hiding anything there would filter records by a rule Excel has not shown us.
+    // (quirk-off-axis-hidden-item: Excel itself drops a field's hidden items when it leaves every axis.)
     const p = await ref('pivot-layout-compact')
     const view = initialViewState(p.def, p.cache)
     expect(unmeasured(axesOf(p, withFields(view, { 3: { hidden: [true] } })))).toEqual(UNMEASURED)
     // Hidden items on row, column and page fields still filter (covered above): the same edit on Year computes.
     expect(axesOf(p, withFields(view, { 2: { hidden: [true, false, false, false] } })).ok).toBe(true)
+  })
+})
+
+/** Fix round B1: rules read off the Task 15 Excel cases (tests/fixtures/xlsx-pivots/engine/*.xlsx). */
+describe('fix round B1: layout rules measured on the Excel oracle', () => {
+  const engine = async (name: string) => (await load(resolve(FIXTURES, 'engine', `${name}.xlsx`)))[0]!
+  const refusal = (result: ReturnType<typeof computeAxes>) => result.ok ? undefined : `${result.diagnostic.feature}: ${result.diagnostic.message}`
+  const layoutOf = (p: Loaded, view: PivotViewState = initialViewState(p.def, p.cache)) => placeCells(p.def, view, p.cache, okAxes(p, view), blankGrid, { date1904: p.date1904 })
+  const at = (layout: PivotLayout, row: number, col: number) => layout.cells.find(cell => cell.row === row && cell.col === col)
+
+  it('hideValuesRow hides the Values row in outline and tabular form, not only compact', async () => {
+    // layout-outline-three-rows / layout-tabular-three-rows: Values alone on columns, compactData off, hideValuesRow:
+    // Excel saves A3:E60 with firstHeaderRow 0 and firstDataRow 1 (57 lines under one header row).
+    for (const name of ['layout-outline-three-rows', 'layout-tabular-three-rows']) {
+      const p = await engine(name)
+      expect(p.def.compactData, name).toBe(false)
+      const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
+      const layout = placeCells(p.def, view, p.cache, axes, blankGrid, { date1904: p.date1904 })
+      expect(liveDefinition(p.def, view, axes, layout).location, name).toEqual({ ref: 'A3:E60', firstHeaderRow: 0, firstDataRow: 1, firstDataCol: 3, rowPageCount: 0, colPageCount: 0 })
+      expect(labelDiffs(p, layout), name).toEqual([])
+    }
+  })
+
+  it('classic layout with no column field and one data field: data name top-left, a Total header over the values', async () => {
+    // layout-classic-single-data: A3 "Sum of Sales", A4 "Row Labels", B4 "合計" (Excel's Total), data from row 5;
+    // location A3:B23, firstHeaderRow 2, firstDataRow 2, firstDataCol 1.
+    const p = await engine('layout-classic-single-data')
+    expect(p.def.gridDropZones).toBe(true)
+    const layout = layoutOf(p)
+    expect(layout.rect).toEqual({ minRow: 2, minCol: 0, maxRow: 22, maxCol: 1 })
+    expect(at(layout, 2, 0)?.value).toEqual({ kind: 'text', value: 'Sum of Sales' })
+    expect(at(layout, 3, 0)?.value).toEqual({ kind: 'text', value: 'Row Labels' })
+    expect(at(layout, 3, 1)).toEqual({ row: 3, col: 1, value: { kind: 'text', value: 'Total' }, caption: 'implicit' })
+    // Classic without a column field stays refused where no case measures it: two data fields (Values on rows).
+    const view = initialViewState(p.def, p.cache)
+    const two = { ...view, rows: [...view.rows, -2], data: [view.data[0]!, { ...view.data[0]!, field: 4, name: '' }] }
+    expect(refusal(axesOf(p, two))).toBe('pivot-engine-unmeasured: classic pivot layout (gridDropZones) without a column field is measured for one data field with row fields only')
+    expect(refusal(axesOf(p, { ...view, rows: [] }))).toBe('pivot-engine-unmeasured: classic pivot layout (gridDropZones) without a column field is measured for one data field with row fields only')
+  })
+
+  it('a collapsed item above the Values field: its own line, one line per data field, no subtotal', async () => {
+    // layout-collapsed-item-above-values (rows Region, Product, Values; East collapsed): <i><x/></i>, then
+    // <i r="2"><x/></i> and <i r="2" i="1"><x v="1"/></i>: the Product level is left unfilled, r is the Values level,
+    // and East has no "East Sum of Sales" subtotal lines (sheet rows 5–7, then North).
+    const p = await engine('layout-collapsed-item-above-values')
+    const axes = okAxes(p)
+    expect(axes.rows.slice(0, 4)).toEqual([L('data', 0, [0]), L('data', 2, [0, -1, 0], 0), L('data', 2, [0, -1, 1], 1), L('data', 0, [1])])
+    // East's records map to its first data-field line.
+    const region = p.store.columns[0]!
+    if (region.kind !== 'shared') throw new Error('shared column expected')
+    const eastX = p.def.fields[0]!.items![0]!.x
+    expect(p.cache.fields[0]!.sharedItems!.items[eastX!]).toEqual({ type: 'string', value: 'East' })
+    let eastRecords = 0
+    for (let r = 0; r < p.store.count; r++) if (region.index[r] === eastX) { eastRecords++; expect(axes.rowKey[r]).toBe(1) }
+    expect(eastRecords).toBeGreaterThan(0)
+    // The same rule on the Stage 1 values-on-rows reference (same fields): collapsing its first region.
+    const rows = await ref('pivot-values-on-rows')
+    const view = initialViewState(rows.def, rows.cache)
+    const collapsed = withFields(view, { 0: { collapsed: view.fields[0]!.collapsed.map((_, k) => k === 0) } })
+    const live = okAxes(rows, collapsed), saved = savedPivotLayout(rows.def)!.rows
+    const next = saved.findIndex(line => line.type === 'data' && line.items.length === 1 && line.items[0] !== 0)
+    expect(live.rows).toEqual([L('data', 0, [0]), L('data', 2, [0, -1, 0], 0), L('data', 2, [0, -1, 1], 1), ...saved.slice(next)])
+    // Unmeasured variants stay refused: a tabular collapsed field, Values not the last row level, columns.
+    const tabular = withFields(collapsed, { 0: { outline: false, compact: false } })
+    expect(refusal(axesOf(rows, tabular))).toBe('pivot-engine-unmeasured: a collapsed item above the Values field is measured in outline form only')
+    expect(refusal(axesOf(rows, { ...collapsed, rows: [0, -2, 1] }))).toBe('pivot-engine-unmeasured: a collapsed item above the Values field is measured with Values as the last row level only')
+    expect(refusal(axesOf(rows, { ...collapsed, rows: [2], cols: [0, 1, -2] }))).toBe('pivot-engine-unmeasured: a collapsed item above the Values field on columns is not measured')
+  })
+
+  it('mergeItem: each outer label merged over its block, total captions across the label columns', async () => {
+    // layout-merge-labels (tabular Region, Product; columns Year, Values): A6:A8 East over its three products, A9:B9
+    // "East 合計", A24:B24 the grand total, C4:D4 2022 over its two data fields, I4:I5 the grand-total column caption.
+    const p = await engine('layout-merge-labels')
+    const merges = [...layoutOf(p).merges].sort(byRect)
+    expect(merges).toEqual(savedMerges(p))
+    expect(merges).toContainEqual({ minRow: 5, minCol: 0, maxRow: 7, maxCol: 0 })
+    expect(merges).toContainEqual({ minRow: 8, minCol: 0, maxRow: 8, maxCol: 1 })
+    expect(merges).toContainEqual({ minRow: 3, minCol: 2, maxRow: 3, maxCol: 3 })
+    expect(merges).toContainEqual({ minRow: 3, minCol: 8, maxRow: 4, maxCol: 8 })
+    // Central has one product: no single-cell merge.
+    expect(merges).not.toContainEqual({ minRow: 21, minCol: 0, maxRow: 21, maxCol: 0 })
+    // The Stage 1 tabular reference (same shape) with mergeItem computes; without it there are no merges.
+    const tabular = await ref('pivot-layout-tabular')
+    expect(layoutOf(tabular).merges).toEqual([])
+    const merged = { ...tabular, def: { ...tabular.def, mergeItem: true } }
+    expect(layoutOf(merged).merges.length).toBe(4 + 4 + 1 + 3 + 2)
+    // Unmeasured shapes stay refused: compact/outline fields (own parent lines).
+    const compact = await ref('pivot-layout-compact')
+    const compactMerged = { ...compact.def, mergeItem: true }
+    expect(refusal(computeAxes(compact.store, compact.cache, compactMerged, initialViewState(compactMerged, compact.cache))))
+      .toBe('pivot-engine-unmeasured: merged item labels (mergeItem) are measured for tabular axis fields with totals only after outer items')
+  })
+
+  it('an item shown by showAll with no records lists the visible items of the next field', async () => {
+    // quirk-cross-hidden-item-showall: Region showAll, Product's Elderberries hidden. Central's only records are
+    // Elderberries, yet Excel keeps Central (showAll) and lists Apples, Bananas, Cherries under it (rowItems 16–19).
+    const p = await engine('quirk-cross-hidden-item-showall')
+    const axes = okAxes(p)
+    expect(axes.rows.slice(16)).toEqual([L('data', 0, [4]), L('data', 1, [4, 0]), L('data', 1, [4, 1]), L('data', 1, [4, 2]), G()])
+    expect(axes.rows).toEqual(savedPivotLayout(p.def)!.rows)
+    // Without showAll Central goes (quirk-cross-hidden-item).
+    const plain = await engine('quirk-cross-hidden-item')
+    expect(okAxes(plain).rows.some(line => line.items[0] === 4)).toBe(false)
+    // Whether such a parent lists an item no passing record has is not measured: hiding East..West leaves
+    // Apples..Cherries without records anywhere, so the case fails closed.
+    const view = initialViewState(p.def, p.cache)
+    const none = withFields(view, { 0: { hidden: view.fields[0]!.hidden.map((_, k) => k < 4) } })
+    expect(refusal(axesOf(p, none))).toBe('pivot-engine-unmeasured: an item without records under showAll lists field 1 item 0, which no passing record has')
   })
 })
 
@@ -424,7 +522,9 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx': ['equal'],
   'lo-calc-pivotcompact.xlsx': ['equal'],
   'lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx': ['equal'],
-  'lo-calc-pivottable_date_field_filter.xlsx': ['unmeasured'],
+  // Classic layout, no column field, one data field: refused until fix round B1 measured that geometry
+  // (layout-classic-single-data); its location (firstHeaderRow 2) and labels now agree too.
+  'lo-calc-pivottable_date_field_filter.xlsx': ['equal'],
   'lo-calc-pivottable_outline_mode.xlsx': ['equal'],
   // Field 6, on no axis, has a hidden item: unmeasured, so it fails closed. (Its saved layout shows the record that
   // item would exclude; the file's naming, "Sum - Amount" and "Data", is LibreOffice's.)
@@ -473,6 +573,13 @@ async function manifestPivot(entry: ManifestCase): Promise<Loaded> {
   if (!p) throw new Error(`${entry.case}: no pivot named ${entry.pivot} in ${entry.file}`)
   return p
 }
+const byRect = (a: SheetRect, b: SheetRect) => a.minRow - b.minRow || a.minCol - b.minCol || a.maxRow - b.maxRow || a.maxCol - b.maxCol
+/** The saved sheet's merged ranges inside the pivot's location and page-field cells, sorted. */
+function savedMerges(p: Loaded): SheetRect[] {
+  const rects = savedPivotLayout(p.def)!.rects
+  return (p.sheet.mergeRanges ?? []).filter(m => rects.some(r => m.minRow >= r.minRow && m.maxRow <= r.maxRow && m.minCol >= r.minCol && m.maxCol <= r.maxCol))
+    .map(({ minRow, minCol, maxRow, maxCol }) => ({ minRow, minCol, maxRow, maxCol })).sort(byRect)
+}
 async function checkManifestCase(entry: ManifestCase) {
   const p = await manifestPivot(entry)
   const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
@@ -482,6 +589,38 @@ async function checkManifestCase(entry: ManifestCase) {
   const layout = placeCells(p.def, view, p.cache, axes, blankGrid, { date1904: p.date1904 })
   expect(liveDefinition(p.def, view, axes, layout).location).toEqual(p.def.location)
   expect(labelDiffs(p, layout)).toEqual([])
+  // Merged labels (mergeItem): the layout's merges are exactly the saved sheet's merged ranges in the pivot.
+  expect([...layout.merges].sort(byRect)).toEqual(savedMerges(p))
+}
+
+/** Ruling S2-AA: task-17 manifest cases the engine still refuses, each with its exact refusal and why Excel's file
+ * does not settle it. Empty after fix round B1: every task-17 case computes. */
+const TASK17_REFUSED: Record<string, { message: string; why: string }> = {}
+/** Task-17 cases whose lines, location, labels and merges equal Excel's, but whose value cells still differ in lane
+ * A's files (values.ts): case → the exact first difference checkSavedLayout reports. */
+const TASK17_LANE_A: Record<string, { cell: string; reason: string; why: string }> = {
+  // Record 43 (West, Online, 2022) has Sales missing: Excel leaves the Sum of Sales cell blank (R21C2) while Units
+  // shows 57; values.ts's sum turns a cell whose only values are missing into 0. The aggregation rule is lane A's.
+  'quirk-blank-and-mixed-row-items': { cell: 'R21C2', reason: 'the engine places a value the saved cell does not have', why: 'a sum over missing values only is blank in Excel' },
+}
+async function checkManifestStatus(entry: ManifestCase) {
+  const p = await manifestPivot(entry)
+  const refused = TASK17_REFUSED[entry.case]
+  const result = checkSavedLayout(p.store, p.cache, p.def, sheetCellReader(p.sheet), { date1904: p.date1904 })
+  if (refused) {
+    const computed = computePivot(p.store, p.cache, p.def, initialViewState(p.def, p.cache), { date1904: p.date1904 })
+    expect(computed.ok ? undefined : computed.diagnostic.message).toBe(refused.message)
+    expect(result.status).toBe('unverified')
+    return
+  }
+  await checkManifestCase(entry)
+  const laneA = TASK17_LANE_A[entry.case]
+  if (laneA) {
+    expect(result.status === 'mismatch' ? { cell: `R${result.firstDiff.row + 1}C${result.firstDiff.col + 1}`, reason: result.firstDiff.reason } : result)
+      .toEqual({ cell: laneA.cell, reason: laneA.reason })
+    return
+  }
+  expect(result).toEqual({ status: 'ok' })
 }
 
 describe('Task 15 Excel oracle: manifest cases with task 17', () => {
@@ -493,7 +632,10 @@ describe('Task 15 Excel oracle: manifest cases with task 17', () => {
     it.skip('SKIPPED: the manifest has no runnable task-17 case (all pending)', () => {})
     return
   }
-  it.each(task17.map(entry => [entry.case, entry] as const))('%s', async (_name, entry) => checkManifestCase(entry))
+  it.each(task17.map(entry => [entry.case, entry] as const))('%s', async (_name, entry) => checkManifestStatus(entry))
+  it('the refusal and lane-A maps name task-17 cases only', () => {
+    for (const name of [...Object.keys(TASK17_REFUSED), ...Object.keys(TASK17_LANE_A)]) expect(task17.map(entry => entry.case)).toContain(name)
+  })
 })
 
 describe('cross-field visibility: an item left without records by another field\'s hidden item or page selection follows the measurement', () => {
