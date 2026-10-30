@@ -16,7 +16,8 @@
  * - Implicit captions (Excel's default captions, localised by Excel) are compared for presence as text only.
  */
 import type { SheetRect } from '../../tableStyles/model'
-import type { ReadOptions, SourceStore } from '../../view/contracts'
+import type { ProfileId, ReadOptions, SourceStore } from '../../view/contracts'
+import { MAIN_THREAD_BUDGETS } from '../../view/tileCache'
 import type { XlsxCell, XlsxSheet } from '../../types'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition } from '../model'
 import { savedPivotLayout, type PivotLine } from '../savedLayout'
@@ -27,13 +28,14 @@ import { initialViewState } from './view'
 
 export type SavedCell = { kind: 'number'; value: number } | { kind: 'text'; value: string } | { kind: 'bool'; value: boolean } | { kind: 'error'; value: string }
 /** A saved sheet cell, or undefined for no value. `incomplete` marks a reader that could not read every cell it
- * covers (a failed or cancelled paged read): the check then reports `cells-missing` instead of trusting its blanks. */
-export type CellReader = ((row: number, col: number) => SavedCell | undefined) & { readonly incomplete?: true }
+ * covers: 'read-failed' (a failed or cancelled paged read) gives `cells-missing`, 'over-cap' (more cells than the
+ * paged reader may retain) gives `cells-over-cap`; the check never trusts such a reader's blanks. */
+export type CellReader = ((row: number, col: number) => SavedCell | undefined) & { readonly incomplete?: 'read-failed' | 'over-cap' }
 export interface CellDiff { row: number; col: number; expected?: SavedCell; actual: PivotCellValue | 'line'; reason: string }
 export type FaithfulResult =
   | { status: 'ok' }
   | { status: 'mismatch'; firstDiff: CellDiff }
-  | { status: 'unverified'; reason: 'no-row-items' | 'no-col-items' | 'cells-missing' | 'cells-predate-records' | 'unsupported'; detail?: string }
+  | { status: 'unverified'; reason: 'no-row-items' | 'no-col-items' | 'cells-missing' | 'cells-over-cap' | 'cells-predate-records' | 'unsupported'; detail?: string }
 /** The workbook's date system: the cache does not know it (Ruling S2-J). */
 export interface FaithfulOptions { date1904: boolean }
 
@@ -64,6 +66,8 @@ export function engineEligibility(cache: PivotCacheDefinition, def: PivotTableDe
 const sameLine = (a: PivotLine | undefined, b: PivotLine | undefined) => a !== undefined && b !== undefined && a.type === b.type
   && a.first === b.first && a.data === b.data && a.items.length === b.items.length && a.items.every((item, k) => item === b.items[k])
 const lineText = (line: PivotLine | undefined) => line ? `${line.type} r=${line.first} i=${line.data} [${line.items.join(',')}]` : 'none'
+/** Sheet columns: a cell key is row × SHEET_COLS + col (below 2^53). */
+const SHEET_COLS = 16384
 const inRect = (rect: SheetRect, row: number, col: number) => row >= rect.minRow && row <= rect.maxRow && col >= rect.minCol && col <= rect.maxCol
 /** A computed cell with nothing to show: no cell, an empty value or empty text (an item whose label is ''). */
 const isBlank = (cell: PivotLayoutCell | undefined) => !cell || cell.value.kind === 'empty' || (cell.value.kind === 'text' && cell.value.value === '')
@@ -120,6 +124,7 @@ export function checkSavedLayout(store: RecordStore, cache: PivotCacheDefinition
   const at = new Map<string, PivotLayoutCell>()
   for (const cell of layout.cells) at.set(`${cell.row},${cell.col}`, cell)
   // 3. Completeness: a label the engine places must have a saved cell (see the header ruling).
+  if (saved.incomplete === 'over-cap') return unverified('cells-over-cap', 'the pivot area holds more saved cells than the reader may retain')
   if (saved.incomplete) return unverified('cells-missing', 'the saved cells could not all be read')
   const isValue = (row: number, col: number) => row >= dataRow0 && row <= rect.maxRow && col >= dataCol0 && col <= rect.maxCol
   for (const area of rects) for (let row = area.minRow; row <= area.maxRow; row++) for (let col = area.minCol; col <= area.maxCol; col++) {
@@ -172,30 +177,48 @@ function cellArea(def: PivotTableDefinition): SheetRect | undefined {
   return rects.reduce((box, area) => ({ minRow: Math.min(box.minRow, area.minRow), minCol: Math.min(box.minCol, area.minCol), maxRow: Math.max(box.maxRow, area.maxRow), maxCol: Math.max(box.maxCol, area.maxCol) }))
 }
 
+/** Retained-byte estimate of one cell the paged reader keeps (number-keyed Map entry plus its SavedCell), measured with
+ * `node --expose-gc` on 1,000,000 entries: 99 B for a number cell, 115 B for 8-character text, 259 B for 32-character
+ * text. The estimate rounds each up: 128 B per cell plus 5 B per text character. */
+export const PAGED_CELL_BYTES_ESTIMATE = Object.freeze({ cell: 128, textChar: 5 })
+/** Cap on the cells the paged reader retains, per profile: a quarter of the main-thread budget (tileCache.ts), so a
+ * check never holds more than 16 MiB (D) / 8 MiB (M) of saved cells: about 131,000 / 65,000 number cells. The
+ * reader is transient (dropped when the check returns); a pivot over the cap stays display-only (`cells-over-cap`). */
+export const PAGED_CELL_LIMITS: Readonly<Record<ProfileId, number>> = Object.freeze({ D: MAIN_THREAD_BUDGETS.D / 4, M: MAIN_THREAD_BUDGETS.M / 4 })
+
 /**
  * The paged path's saved cells: the pivot's area read through the worker's `SourceStore.readRows`, page by page, as
- * the paged viewer reads cells, then served synchronously. A page that does not complete, or an `unavailable` cell,
- * makes the reader `incomplete` (never a throw), so the check reports `cells-missing`. A pivot without a saved
- * layout reads nothing: the check refuses it before reading cells.
+ * the paged viewer reads cells, then served synchronously. Never a throw:
+ * - a page that does not complete, or an `unavailable` cell, marks the reader `incomplete: 'read-failed'`, so the
+ *   check reports `cells-missing`;
+ * - retained cells past `maxBytes` (default `PAGED_CELL_LIMITS[profile]`, charged by `PAGED_CELL_BYTES_ESTIMATE`)
+ *   stop the read at once, drop what was kept and mark it `incomplete: 'over-cap'`, so the check reports
+ *   `cells-over-cap`. At most one `readRows` page beyond the cap is ever requested.
+ * A pivot without a saved layout reads nothing: the check refuses it before reading cells.
  */
-export async function pagedCellReader(store: Pick<SourceStore, 'readRows'>, def: PivotTableDefinition, options: ReadOptions): Promise<CellReader> {
+export async function pagedCellReader(store: Pick<SourceStore, 'readRows'>, def: PivotTableDefinition, options: ReadOptions, profile: ProfileId,
+  maxBytes: number = PAGED_CELL_LIMITS[profile]): Promise<CellReader> {
   const area = cellArea(def)
-  const cells = new Map<string, SavedCell>()
-  let incomplete = false
+  let cells = new Map<number, SavedCell>()
+  let incomplete: CellReader['incomplete']
+  let bytes = 0
   if (area) {
     const range = { r0: area.minRow, r1: area.maxRow, c0: area.minCol, c1: area.maxCol }
     let cursor: string | undefined
-    do {
+    read: do {
       const page = await store.readRows(range, cursor, options)
-      if (page.completeness !== 'complete' || page.error) { incomplete = true; break }
+      if (page.completeness !== 'complete' || page.error) { incomplete = 'read-failed'; break }
       for (const item of page.items) for (const cell of item.cells) {
-        if (cell.unavailable) { incomplete = true; continue }
+        if (cell.unavailable) { incomplete = 'read-failed'; continue }
         const value = savedOf(cell.value, cell.valueIsError)
-        if (value) cells.set(`${cell.row},${cell.col}`, value)
+        if (!value) continue
+        bytes += PAGED_CELL_BYTES_ESTIMATE.cell + (value.kind === 'text' || value.kind === 'error' ? PAGED_CELL_BYTES_ESTIMATE.textChar * value.value.length : 0)
+        if (bytes > maxBytes) { incomplete = 'over-cap'; cells = new Map(); break read }
+        cells.set(cell.row * SHEET_COLS + cell.col, value)
       }
       cursor = page.nextCursor
     } while (cursor !== undefined)
   }
-  const reader = (row: number, col: number) => cells.get(`${row},${col}`)
-  return incomplete ? Object.assign(reader, { incomplete: true as const }) : reader
+  const reader = (row: number, col: number) => cells.get(row * SHEET_COLS + col)
+  return incomplete ? Object.assign(reader, { incomplete }) : reader
 }

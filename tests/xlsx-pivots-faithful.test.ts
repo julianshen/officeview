@@ -15,11 +15,13 @@ import { decodeRecords, RECORD_LIMITS } from '../src/xlsx/pivots/engine/records'
 import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
 import {
-  checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader,
+  checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader, PAGED_CELL_BYTES_ESTIMATE, PAGED_CELL_LIMITS,
   type CellReader, type FaithfulResult, type SavedCell,
 } from '../src/xlsx/pivots/engine/faithful'
 import { openImportSession } from '../src/xlsx/storage/pagedImport'
 import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+import type { SourceStore } from '../src/xlsx/view/contracts'
+import { MAIN_THREAD_BUDGETS } from '../src/xlsx/view/tileCache'
 import { decodeParts, loadAll, loadPivotParts, once, type Loaded, type PivotParts } from './helpers/xlsx-pivots-load'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
@@ -98,9 +100,18 @@ describe('mismatch and unverified paths', () => {
     const labelAt = { row: saved.dataRow0, col: saved.rect.minCol }
     const label = check(p, edited(base, { [`${labelAt.row},${labelAt.col}`]: { kind: 'text', value: 'Elsewhere' } }))
     expect(label.status === 'mismatch' && { row: label.firstDiff.row, col: label.firstDiff.col }).toEqual(labelAt)
-    // A difference beyond the 15th significant digit is not a difference.
+    // 15 significant digits: one unit of the 15th digit of this value is 10^(digits - 15).
     const v = (value as { value: number }).value
-    expect(check(p, edited(base, { [`${valueAt.row},${valueAt.col}`]: { kind: 'number', value: v * (1 + 1e-16) } })).status).toBe('ok')
+    const unit = 10 ** (Math.floor(Math.log10(Math.abs(v))) + 1 - 15)
+    const within = v + 0.4 * unit, across = v + 0.6 * unit
+    // Both perturbations are different Numbers; only the second changes the 15th significant digit.
+    expect(within).not.toBe(v)
+    expect(Number(within.toPrecision(15))).toBe(Number(v.toPrecision(15)))
+    expect(Number(across.toPrecision(15))).not.toBe(Number(v.toPrecision(15)))
+    const key = `${valueAt.row},${valueAt.col}`
+    expect(check(p, edited(base, { [key]: { kind: 'number', value: within } })).status).toBe('ok')
+    const crossed = check(p, edited(base, { [key]: { kind: 'number', value: across } }))
+    expect(crossed.status === 'mismatch' && [crossed.firstDiff.row, crossed.firstDiff.col]).toEqual([valueAt.row, valueAt.col])
   })
 
   it('a cleared value cell is a mismatch (a blank saved value means no records), never cells-missing', async () => {
@@ -177,7 +188,7 @@ describe('mismatch and unverified paths', () => {
     // Incomplete: one label cell absent.
     expect(check(p, edited(base, { [`${saved.dataRow0},${saved.rect.minCol}`]: null }))).toMatchObject({ status: 'unverified', reason: 'cells-missing' })
     // Incomplete: a reader that says it could not read every cell (the paged reader on a failed page).
-    const partial: CellReader = Object.assign((row: number, col: number) => base(row, col), { incomplete: true as const })
+    const partial: CellReader = Object.assign((row: number, col: number) => base(row, col), { incomplete: 'read-failed' as const })
     expect(check(p, partial)).toMatchObject({ status: 'unverified', reason: 'cells-missing' })
   })
 
@@ -318,7 +329,7 @@ describe('paged CellReader equals resident', () => {
     try {
       const sheet = source.sheets.find(item => item.name === p.def.sheet)!
       const store = source.store(sheet.sheetId)
-      const paged = await pagedCellReader(store, p.def, { signal: new AbortController().signal, stamp: store.stamp })
+      const paged = await pagedCellReader(store, p.def, { signal: new AbortController().signal, stamp: store.stamp }, 'D')
       expect(paged.incomplete).toBeUndefined()
       const resident = sheetCellReader(p.sheet)
       const saved = savedPivotLayout(p.def)!
@@ -332,10 +343,58 @@ describe('paged CellReader equals resident', () => {
       expect(check(p, paged).status).toBe('ok')
       // A read that cannot complete (here: cancelled) gives an incomplete reader, so the check is cells-missing.
       const aborted = new AbortController(); aborted.abort()
-      const failed = await pagedCellReader(store, p.def, { signal: aborted.signal, stamp: store.stamp })
-      expect(failed.incomplete).toBe(true)
+      const failed = await pagedCellReader(store, p.def, { signal: aborted.signal, stamp: store.stamp }, 'D')
+      expect(failed.incomplete).toBe('read-failed')
       expect(check(p, failed)).toMatchObject({ status: 'unverified', reason: 'cells-missing' })
+      // A cap below the area's cells: the reader stops, keeps nothing, and the check is cells-over-cap.
+      const capped = await pagedCellReader(store, p.def, { signal: new AbortController().signal, stamp: store.stamp }, 'D', PAGED_CELL_BYTES_ESTIMATE.cell * 2)
+      expect(capped.incomplete).toBe('over-cap')
+      expect(check(p, capped)).toMatchObject({ status: 'unverified', reason: 'cells-over-cap' })
     } finally { await source.release(); await session.release() }
+  })
+
+  it('caps the retained cells per profile (a quarter of the main-thread budget)', () => {
+    expect(PAGED_CELL_LIMITS).toEqual({ D: MAIN_THREAD_BUDGETS.D / 4, M: MAIN_THREAD_BUDGETS.M / 4 })
+  })
+
+  it.each(['D', 'M'] as const)('a pivot area over the %s cap is unverified (cells-over-cap) and reading stops at the cap', async profile => {
+    const p = await ref('pivot-layout-compact')
+    // A synthetic pivot: compact's definition with 400,000 data lines, so its area holds far more cells than any cap.
+    const lines = 400_000
+    const anchor = savedPivotLayout(p.def)!.rect
+    const def: PivotTableDefinition = {
+      ...p.def,
+      location: { ...p.def.location, ref: p.def.location.ref.replace(/\d+$/, String(anchor.minRow + p.def.location.firstDataRow + lines)) },
+      rowItems: Array.from({ length: lines }, () => ({ type: 'data' as const, r: 0, i: 0, x: [0] })),
+    }
+    const area = savedPivotLayout(def)!.rect
+    expect((area.maxRow - area.minRow + 1) * (area.maxCol - area.minCol + 1) * PAGED_CELL_BYTES_ESTIMATE.cell).toBeGreaterThan(PAGED_CELL_LIMITS[profile])
+    // A synthetic paged source: every cell of the requested range populated, 1,000 rows per page.
+    const PAGE_ROWS = 1000, stamp = { docId: 'synthetic', sheetId: 's', valueGen: 0 }
+    let served = 0, pages = 0
+    const store: Pick<SourceStore, 'readRows'> = {
+      async readRows(range, cursor) {
+        pages++
+        const r0 = cursor === undefined ? range.r0 : Number(cursor), r1 = Math.min(range.r1, r0 + PAGE_ROWS - 1)
+        const items = []
+        for (let row = r0; row <= r1; row++) {
+          const cells = []
+          for (let col = range.c0; col <= range.c1; col++) cells.push({ id: `${row}:${col}` as never, row, col, value: row * 10 + col, styleIndex: 0 })
+          served += cells.length
+          items.push({ row, cells })
+        }
+        return { items, completeness: 'complete', stamp, ...(r1 < range.r1 ? { nextCursor: String(r1 + 1) } : {}) }
+      },
+    }
+    const reader = await pagedCellReader(store, def, { signal: new AbortController().signal, stamp }, profile)
+    expect(reader.incomplete).toBe('over-cap')
+    expect(reader(area.minRow + 5, area.minCol)).toBeUndefined()
+    // Reading stopped at the cap: at most one page past the cells the cap admits.
+    const capCells = Math.floor(PAGED_CELL_LIMITS[profile] / PAGED_CELL_BYTES_ESTIMATE.cell)
+    const pageCells = PAGE_ROWS * (area.maxCol - area.minCol + 1)
+    expect(served).toBeLessThanOrEqual(capCells + pageCells)
+    expect(pages).toBeLessThan(lines / PAGE_ROWS)
+    expect(check(p, reader)).toMatchObject({ status: 'unverified', reason: 'cells-over-cap' })
   })
 })
 
