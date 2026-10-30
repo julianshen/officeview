@@ -11,14 +11,15 @@ export const CELL_FONT_STACK = '"Calibri", Carlito, Arial, Helvetica, "Liberatio
  * absent name are the stack itself. */
 export function cellFontFamily(name: string | undefined): string {
   const face = cellFace(name)
-  return !face || face === 'Calibri' ? CELL_FONT_STACK : `"${face}", ${CELL_FONT_STACK}`
+  return isCalibriFace(face) ? CELL_FONT_STACK : `"${face}", ${CELL_FONT_STACK}`
 }
 
 /** Whether a cell paints in Calibri, its own or the default (an absent name): the
- * only face whose Excel layout metrics the renderer carries (render.ts calibriWidth). */
+ * only face whose Excel layout metrics the renderer carries (render.ts calibriWidth).
+ * Family names match case-insensitively, as in CSS. */
 export function isCalibriFace(name: string | undefined): boolean {
   const face = cellFace(name)
-  return !face || face === 'Calibri'
+  return !face || face.toLowerCase() === 'calibri'
 }
 
 const cellFace = (name: string | undefined) => name?.replace(/["\\;{}]/g, '').trim()

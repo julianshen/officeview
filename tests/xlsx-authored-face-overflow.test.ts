@@ -54,7 +54,8 @@ describe('Calibri metrics decide overflow unless the cell is measured in its own
 
   it('a Calibri or default-face cell keeps the Calibri fit (76999872), without probing', () => {
     const spy = available({})
-    for (const style of [fixed('Calibri'), fixed()]) expect(lay(style).text).toBe(TEXT)
+    // Font-family names match case-insensitively, as in CSS.
+    for (const style of [fixed('Calibri'), fixed('calibri'), fixed()]) expect(lay(style).text).toBe(TEXT)
     expect(spy).not.toHaveBeenCalled()
   })
 })
