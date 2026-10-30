@@ -808,7 +808,7 @@ export function sheetCellReader(sheet: XlsxSheet): CellReader          // reside
   - A live `valueGen` for pivot sheets.
   - Sheet sort and filter are disabled across pivots.
 - **Task 25. Worker pivot protocol (codex):**
-  - an apply whose layout has `captionsUnverified` is not committed: it returns a `pivot-caption-locale` refusal, the saved cells stay shown, and a test pins it (and the behaviour once a locale rule is supplied);
+  - no layout with `captionsUnverified` is published, from an open or an apply: either returns a `pivot-caption-locale` refusal and the saved cells stay shown. Tests pin the open path, the apply path, and the behaviour once a locale rule is supplied;
   - open, apply with an identity and revision, and release (§6.8, CODEX-5);
   - leases on the shared store.
 - **Task 26. Buttons as controls (Claude opus):**
