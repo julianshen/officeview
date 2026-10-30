@@ -13,7 +13,8 @@ import type { RegionStyleLayer } from './regionLayer'
 const MAX_DXF_ID = 65_536
 
 /** The decoded layer's admission and retained charge: the fixed allowance plus, for pivots, each
- * saved layout (lines, item vectors and parent bands; pivots/savedLayout.ts). */
+ * saved layout (its record, label and page-field arrays, lines, item vectors and parent bands;
+ * savedPivotLayoutBytes in pivots/savedLayout.ts). */
 export async function decodedRegionLayerBytes(payload: RemoteRegionStyles | RemotePivotDisplay): Promise<number> {
   let bytes = regionLayerFixedBytes(payload)
   if (bytes && 'pivotTables' in payload && payload.pivotTables.length) {

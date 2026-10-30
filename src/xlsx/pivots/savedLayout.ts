@@ -180,8 +180,8 @@ const LABEL_COL_BYTES = 8, PAGE_FIELD_BYTES = 144
  * one labelCol slot per row field, one page cell and rect per page field, every saved
  * line with its resolved item vector, and the parent-band lists, estimated from the
  * definition alone with no allocation, so a receiver can reserve it before building.
- * Every per-field count is the definition's own (an upper bound: page fields outside the
- * sheet are skipped by the build). It walks the same parent-band loop as savedPivotLayout
+ * Every per-field count is the definition's own (an upper bound: the build skips page fields
+ * whose row would fall above the sheet or past the location's page-row count). It walks the same parent-band loop as savedPivotLayout
  * as a count, over every saved line (an upper bound when the location keeps fewer); past
  * the parent-band budget the layout is not built and only the rest is counted.
  */
