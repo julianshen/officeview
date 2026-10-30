@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
 import { closeWorkbook, openWorkbook, q, runScript, saveAs, waitFor, workbookNames } from './excel'
 import {
-  ENGINE_CASES, PROBES_TO_CONFIRM, SEED_CACHE_MARKERS, SEED_PIVOT_MARKERS, SOURCE_REF, engineSeedStandIn, seedDataLines, seedSourceLines, xmlDiffSummary,
+  ENGINE_CASES, PROBES_TO_CONFIRM, SEED_CACHE_MARKERS, SEED_PIVOT_MARKERS, SEED_RECORD_MARKERS, SOURCE_REF, engineSeedStandIn, seedDataLines, seedSourceLines, xmlDiffSummary,
   type EngineCase, type EngineRoute, type PivotParts, type Target,
 } from './engine-cases'
 
@@ -38,6 +38,7 @@ const WORK_DIR = join(OUT_DIR, '.work')
 const MANIFEST = join(OUT_DIR, 'manifest.json')
 const RECIPES_DOC = join(ROOT, 'docs/validation/xlsx-pivots-recipes-stage2.md')
 const PIVOT_RE = /^xl\/pivotTables\/pivotTable\d+\.xml$/, CACHE_RE = /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/
+const RECORDS_RE = /^xl\/pivotCache\/pivotCacheRecords\d+\.xml$/
 
 export interface ManifestEntry {
   case: string
@@ -109,6 +110,14 @@ async function verify(file: string, markers: RegExp[], cacheMarkers: RegExp[] = 
   for (const m of absent) if (m.test(parts.pivot)) throw new Error(`saved pivot has ${m}`)
   return parts.pivotPart
 }
+/** Checks the saved records part (text of fields on no axis is inline there, not in the shared items). */
+async function verifyRecords(file: string, markers: RegExp[]): Promise<void> {
+  const zip = await loadZip(file)
+  const part = partName(zip, RECORDS_RE)
+  if (!part) throw new Error(`${relative(ROOT, file)} has no cache records`)
+  const records = await zip.file(part)!.async('string')
+  for (const m of markers) if (!m.test(records)) throw new Error(`saved records lack ${m}`)
+}
 
 // ---- Seed -------------------------------------------------------------------------------------------------------
 
@@ -139,12 +148,13 @@ export async function buildSeed(): Promise<void> {
     throw e
   }
   if (!viaXml) {
-    try { await verify(ENGINE_SEED, SEED_PIVOT_MARKERS, SEED_CACHE_MARKERS); console.log(`built ${relative(ROOT, ENGINE_SEED)} (applescript)`); return }
+    try { await verify(ENGINE_SEED, SEED_PIVOT_MARKERS, SEED_CACHE_MARKERS); await verifyRecords(ENGINE_SEED, SEED_RECORD_MARKERS); console.log(`built ${relative(ROOT, ENGINE_SEED)} (applescript)`); return }
     catch (e) { console.log(`seed: ${message(e)}; taking the xml route`); copyFileSync(ENGINE_SEED, staged) }
   }
   await writeEdited(staged, edited, p => ({ ...p, cache: p.cache.replace(/(<worksheetSource [^>]*ref=")[^"]*"/, `$1${SOURCE_REF}"`) }))
   session(edited, ENGINE_SEED, () => [])
   await verify(ENGINE_SEED, SEED_PIVOT_MARKERS, SEED_CACHE_MARKERS)
+  await verifyRecords(ENGINE_SEED, SEED_RECORD_MARKERS)
   console.log(`built ${relative(ROOT, ENGINE_SEED)} (xml)`)
 }
 

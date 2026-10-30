@@ -185,11 +185,19 @@ describe('engine case manifest', () => {
   })
 })
 
+// Cases whose AppleScript prep changes the cache shape the edit reads: Excel-saved engine-seed.xlsx keeps an off-axis
+// field's text inline (no shared items) until the prep puts the field on an axis, which the stand-in already models.
+const PREPPED_SHAPE = new Set(['quirk-off-axis-hidden-item'])
+
 describe('engine case xml edits', async () => {
-  const seed = await seedParts()
+  const realSeed = await seedParts()
+  const standIn = engineSeedStandIn(await parts(join(RECIPES, 'pivot-seed.xlsx')))
+  const seedFor = (id: string) => PREPPED_SHAPE.has(id) ? standIn : realSeed
+  const seed = realSeed
   const xmlCases = ENGINE_CASES.filter(c => c.xmlEdit)
   it('starts from consistent seed parts', () => expectConsistent(seed))
   it.each(xmlCases.map(c => [c.id, c] as const))('%s: well-formed, consistent and carrying its marker', (_, c) => {
+    const seed = seedFor(c.id)
     const next = c.xmlEdit!({ ...seed })
     expect(next.pivot !== seed.pivot || next.cache !== seed.cache).toBe(true)
     expectConsistent(next)
@@ -199,7 +207,7 @@ describe('engine case xml edits', async () => {
     expect(fresh.length, `${c.id}: no marker added by the edit`).toBeGreaterThan(0)
   })
   it('writes Excel-shaped pieces for the trickier edits', () => {
-    const edit = (id: string) => ENGINE_CASES.find(c => c.id === id)!.xmlEdit!({ ...seed })
+    const edit = (id: string) => ENGINE_CASES.find(c => c.id === id)!.xmlEdit!({ ...seedFor(id) })
     const named = edit('layout-named-subtotals-compact').pivot
     expect(named).toMatch(fieldAttr(F.Region, 'defaultSubtotal', '0'))
     expect(named).toMatch(/<item t="sum"\/><item t="count"\/><item t="avg"\/><\/items>/)

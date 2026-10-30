@@ -298,11 +298,14 @@ export function seedDataLines(data: string): string[] {
 }
 /** Seed step 2: point the pivot at the new source and refresh. */
 export const seedSourceLines = (p: string) => [`set source data of ${p} to "Data!R1C1:R${SOURCE_LAST_ROW}C12"`, `refresh table ${p}`]
-/** What the saved seed must show. */
+/**
+ * What the saved seed must show. Code, Month and Weekday are on no axis, so Excel keeps their text inline in the
+ * records (`<sharedItems/>` stays empty in the definition): their values are checked in the records part.
+ */
 export const SEED_CACHE_MARKERS = [
-  new RegExp(`<worksheetSource [^>]*ref="${SOURCE_REF}"`), /<cacheFields count="12">/, new RegExp(`recordCount="${ENGINE_ROWS.length}"`),
-  /<s v="@x"\/>/, /<s v="-x"\/>/, /<s v="Jan"\/>|<s v="Feb"\/>/, /containsDate="1"/,
+  new RegExp(`<worksheetSource [^>]*ref="${SOURCE_REF}"`), /<cacheFields count="12">/, new RegExp(`recordCount="${ENGINE_ROWS.length}"`), /containsDate="1"/,
 ]
+export const SEED_RECORD_MARKERS = [/<s v="@x"\/>/, /<s v="-x"\/>/, /<s v="Jan"\/>|<s v="Feb"\/>/]
 export const SEED_PIVOT_MARKERS = [/<rowFields count="2"><field x="0"\/><field x="1"\/><\/rowFields>/, /<colFields count="2"><field x="2"\/><field x="-2"\/><\/colFields>/]
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -751,7 +754,9 @@ add('quirk-cross-hidden-item-showall', 'data-quirks', 17, ['hidden-item', 'cross
 add('quirk-off-axis-hidden-item', 'data-quirks', 17, ['hidden-item', 'off-axis-hidden-item'], S({
   route: 'applescript', lines: t => [toRows(t, 'Channel'), hideItem(t, 'Channel', 'Retail'), hide(t, 'Channel')],
   markers: [fieldItem(F.Channel, '[^>]*h="1"')], absent: [rowField(F.Channel)],
-  fallback: 'xml', xmlEdit: p => hideOffAxisItem(p, 'Channel', 'Retail'),
+  // Channel is on no axis in the seed, so Excel keeps its text inline in the records and writes no shared items to
+  // hide: the prep puts it on rows and back, which leaves Excel's shared items in the cache.
+  fallback: 'xml', xmlPrep: t => [toRows(t, 'Channel'), hide(t, 'Channel')], xmlEdit: p => hideOffAxisItem(p, 'Channel', 'Retail'),
   measures: 'does a hidden item on a field on no axis filter records (Central is Retail only)? axes.ts refuses it',
 }))
 add('quirk-dates-1900-rows', 'data-quirks', 17, ['date-items', 'dates-before-1900-03-01', 'time-only'], S({
