@@ -1,0 +1,479 @@
+// @vitest-environment node
+/**
+ * Pivot axes and layout to cells (spec §5.2, §5.7, §6.4; plan Task 17). The oracle is Excel's saved layout:
+ * the Stage 1 references (tests/fixtures/xlsx-pivots/pivot-*.xlsx, Excel 16.114 zh-TW), the Excel-made corpus
+ * files with rowItems, and the Task 15 manifest cases with `task: 17` once that manifest exists. Synthetic view
+ * edits below take their expected lines from the saved cells of the same reference (a blank saved value cell is a
+ * combination with no records).
+ */
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { loadPivotWorkbook } from '../src/xlsx/pivots/load'
+import { savedPivotLayout, savedPivotRoles, type PivotLine } from '../src/xlsx/pivots/savedLayout'
+import { pivotButtons } from '../src/xlsx/pivots/buttons'
+import type { PivotCacheDefinition, PivotItemType, PivotTableDefinition } from '../src/xlsx/pivots/model'
+import type { XlsxSheet } from '../src/xlsx/types'
+import { decodeRecords, RECORD_LIMITS, type RecordStore } from '../src/xlsx/pivots/engine/records'
+import { initialViewState, type FieldState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
+import { computeAxes, lineCarriesValues, NO_LINE, type PivotAxes } from '../src/xlsx/pivots/engine/axes'
+import { liveDefinition, placeCells, type PivotCellValue, type PivotLayout, type PivotValueGrid } from '../src/xlsx/pivots/engine/place'
+
+const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
+const CORPUS = resolve(process.cwd(), 'corpus')
+const MANIFEST = resolve(FIXTURES, 'engine/manifest.json')
+
+interface Loaded { file: string; sheet: XlsxSheet; def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore }
+async function* once(bytes: Uint8Array): AsyncIterable<Uint8Array> { yield bytes }
+async function loadAll(path: string): Promise<Loaded[]> {
+  const pkg = await OfficePackage.load(new Uint8Array(readFileSync(path)))
+  const doc = await parseXlsx(pkg)
+  const regions = new Map(doc.sheets.filter(sheet => sheet.pivotRegions?.length).map(sheet => [sheet.name, sheet.pivotRegions!]))
+  const workbook = await loadPivotWorkbook(pkg, regions)
+  const date1904 = doc.sheets[0]?.semantics?.dateSystem === '1904'
+  const out: Loaded[] = []
+  for (const def of workbook.tables) {
+    const cache = workbook.caches.get(def.cacheId)
+    if (!cache?.recordsPartPath) throw new Error(`${path}: ${def.name} has no records part`)
+    const bytes = await pkg.bytes(cache.recordsPartPath)
+    const result = await decodeRecords(once(bytes!), cache, RECORD_LIMITS.D, date1904)
+    if (!result.ok) throw new Error(`${path}: ${result.diagnostic.message}`)
+    out.push({ file: path, sheet: doc.sheets.find(sheet => sheet.name === def.sheet)!, def, cache, store: result.store })
+  }
+  return out
+}
+const cached = new Map<string, Promise<Loaded[]>>()
+const load = (path: string) => { let p = cached.get(path); if (!p) cached.set(path, p = loadAll(path)); return p }
+const ref = async (name: string) => (await load(resolve(FIXTURES, `${name}.xlsx`)))[0]!
+const REFERENCES = readdirSync(FIXTURES).filter(name => /^pivot-.*\.xlsx$/.test(name)).sort()
+
+const axesOf = (p: Loaded, view: PivotViewState = initialViewState(p.def, p.cache)) => computeAxes(p.store, p.cache, p.def, view)
+function okAxes(p: Loaded, view?: PivotViewState): PivotAxes {
+  const result = axesOf(p, view)
+  if (!result.ok) throw new Error(`${p.file} ${p.def.name}: ${result.diagnostic.feature}: ${result.diagnostic.message}`)
+  return result.value
+}
+/** A view with some fields' state replaced. */
+function withFields(view: PivotViewState, edits: Record<number, Partial<FieldState>>, rest: Partial<PivotViewState> = {}): PivotViewState {
+  return { ...view, ...rest, fields: view.fields.map((field, k) => edits[k] ? { ...field, ...edits[k] } : field) }
+}
+const L = (type: PivotItemType, first: number, items: number[], data = 0): PivotLine => ({ type, first, items, data })
+const G = (data = 0): PivotLine => L('grand', 0, [], data)
+const blankGrid: PivotValueGrid = { get: () => ({ kind: 'empty' }) }
+
+/** A saved sheet cell as a layout value ('empty' for no value). */
+function savedCell(sheet: XlsxSheet, row: number, col: number): PivotCellValue {
+  const cell = sheet.rows.find(r => r.index === row)?.cells.find(c => c.col === col)
+  if (!cell || cell.value === null || cell.value === '') return { kind: 'empty' }
+  if (cell.valueIsError) return { kind: 'error', value: String(cell.value) }
+  if (typeof cell.value === 'number') return { kind: 'number', value: cell.value }
+  return { kind: 'text', value: String(cell.value) }
+}
+/** Every non-value cell of the layout (location and page fields) against the saved sheet: text and numbers equal,
+ * an implicit caption only where the saved sheet holds text. Returns the differences. */
+function labelDiffs(p: Loaded, layout: PivotLayout): string[] {
+  const saved = savedPivotLayout(p.def)!
+  const at = new Map(layout.cells.map(cell => [`${cell.row},${cell.col}`, cell]))
+  const diffs: string[] = []
+  const check = (row: number, col: number) => {
+    if (row >= saved.dataRow0 && row <= saved.rect.maxRow && col >= saved.dataCol0 && col <= saved.rect.maxCol) return
+    const cell = at.get(`${row},${col}`), expected = savedCell(p.sheet, row, col)
+    const actual: PivotCellValue = cell?.value ?? { kind: 'empty' }
+    if (cell?.caption === 'implicit') { if (expected.kind !== 'text') diffs.push(`R${row + 1}C${col + 1}: implicit caption over ${JSON.stringify(expected)}`); return }
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) diffs.push(`R${row + 1}C${col + 1}: ${JSON.stringify(actual)} ≠ saved ${JSON.stringify(expected)}`)
+  }
+  for (const rect of saved.rects) for (let row = rect.minRow; row <= rect.maxRow; row++) for (let col = rect.minCol; col <= rect.maxCol; col++) check(row, col)
+  for (const cell of layout.cells) if (!saved.rects.some(r => cell.row >= r.minRow && cell.row <= r.maxRow && cell.col >= r.minCol && cell.col <= r.maxCol)) diffs.push(`R${cell.row + 1}C${cell.col + 1}: placed outside the saved rectangles`)
+  return diffs
+}
+const ENGINE_PENDING = 'pivot-engine-pending'
+
+describe('computeAxes on the Stage 1 references', () => {
+  it.each(REFERENCES)('%s: lines equal the saved rowItems/colItems', async name => {
+    const p = (await load(resolve(FIXTURES, name)))[0]!
+    const result = axesOf(p)
+    // No Stage 1 reference uses a Task 21 feature: each must compute.
+    expect(result.ok, result.ok ? '' : result.diagnostic.message).toBe(true)
+    if (!result.ok) return
+    const saved = savedPivotLayout(p.def)!
+    expect(result.value.rows).toEqual(saved.rows)
+    expect(result.value.cols).toEqual(saved.cols)
+  })
+
+  it('maps every record to the leaf line of its items', async () => {
+    const p = await ref('pivot-layout-compact')
+    const axes = okAxes(p)
+    const region = p.store.columns[0]!, product = p.store.columns[1]!, year = p.store.columns[2]!
+    if (region.kind !== 'shared' || product.kind !== 'shared' || year.kind !== 'shared') throw new Error('shared columns expected')
+    const pivotItem = (field: number, x: number) => p.def.fields[field]!.items!.findIndex(item => item.x === x)
+    expect(axes.rowKey.length).toBe(p.store.count)
+    for (let r = 0; r < p.store.count; r++) {
+      expect(axes.rows[axes.rowKey[r]!]!.items).toEqual([pivotItem(0, region.index[r]!), pivotItem(1, product.index[r]!)])
+      // Values is the deepest column level: a record's column leaf is the data-field-0 line of its year.
+      expect(axes.cols[axes.colKey[r]!]).toEqual(L('data', 0, [pivotItem(2, year.index[r]!), 0]))
+    }
+  })
+})
+
+describe('Task 17 behaviours', () => {
+  it('compact collapsed subtotal-top lines equal saved rowItems', async () => {
+    const compact = await ref('pivot-layout-compact'), collapsed = await ref('pivot-collapsed-item'), top = await ref('pivot-subtotals-top')
+    for (const p of [compact, collapsed, top]) expect(okAxes(p).rows).toEqual(savedPivotLayout(p.def)!.rows)
+    // The same records with East collapsed in the live view give the collapsed reference's saved lines.
+    const view = initialViewState(compact.def, compact.cache)
+    const live = okAxes(compact, withFields(view, { 0: { collapsed: view.fields[0]!.collapsed.map((_, k) => k === 0) } }))
+    expect(live.rows).toEqual(savedPivotLayout(collapsed.def)!.rows)
+    // Records under the collapsed item map to its line.
+    const east = live.rows.findIndex(line => line.type === 'data' && line.items.length === 1 && line.items[0] === 0)
+    const region = compact.store.columns[0]!
+    if (region.kind !== 'shared') throw new Error('shared column expected')
+    for (let r = 0; r < compact.store.count; r++) if (region.index[r] === 3) expect(live.rowKey[r]).toBe(east)
+    // Subtotals at the bottom (subtotalTop off) give the subtotals-bottom reference's lines.
+    const bottom = await ref('pivot-subtotals-bottom')
+    expect(okAxes(compact, withFields(view, { 0: { subtotalTop: false } })).rows).toEqual(savedPivotLayout(bottom.def)!.rows)
+  })
+
+  it('compact form with three row fields (corpus pivotcompact, Excel-made)', async ({ skip }) => {
+    const path = resolve(CORPUS, 'lo-calc-pivotcompact.xlsx')
+    if (!existsSync(path)) skip('corpus absent')
+    const p = (await load(path))[0]!
+    expect(p.def.rowFields).toHaveLength(3)
+    expect(okAxes(p).rows).toEqual(savedPivotLayout(p.def)!.rows)
+  })
+
+  it('outline and tabular lines and label columns equal saved', async () => {
+    for (const name of ['pivot-layout-outline', 'pivot-layout-tabular', 'pivot-repeat-labels']) {
+      const p = await ref(name)
+      const axes = okAxes(p), saved = savedPivotLayout(p.def)!
+      expect(axes.rows, name).toEqual(saved.rows)
+      expect(axes.cols, name).toEqual(saved.cols)
+      const layout = placeCells(p.def, initialViewState(p.def, p.cache), p.cache, axes, blankGrid)
+      // Each row field's labels sit in its saved label column.
+      axes.rows.forEach((line, n) => {
+        if (line.type !== 'data') return
+        const level = line.items.length - 1
+        const cell = layout.cells.find(c => c.row === saved.dataRow0 + n && c.col < saved.dataCol0 && c.col === saved.labelCol[level])
+        expect(cell, `${name} line ${n}`).toBeDefined()
+      })
+    }
+    // Switching the compact reference's fields to tabular reproduces the tabular reference's lines.
+    const compact = await ref('pivot-layout-compact'), tabular = await ref('pivot-layout-tabular')
+    const view = initialViewState(compact.def, compact.cache)
+    const flat = { compact: false, outline: false }
+    expect(okAxes(compact, withFields(view, { 0: flat, 1: flat, 2: flat })).rows).toEqual(savedPivotLayout(tabular.def)!.rows)
+  })
+
+  it('values on rows and on columns place the Values level', async () => {
+    const rows = await ref('pivot-values-on-rows'), cols = await ref('pivot-layout-compact')
+    const onRows = okAxes(rows)
+    expect(onRows.rows).toEqual(savedPivotLayout(rows.def)!.rows)
+    expect(onRows.cols).toEqual(savedPivotLayout(rows.def)!.cols)
+    // The Values level holds the data-field index as its item, and the line's `data` agrees.
+    for (const line of onRows.rows) if (line.type === 'data' && line.items.length === 3) expect(line.items[2]).toBe(line.data)
+    // Subtotals with Values below them: one bottom line per data field; one grand line per data field.
+    expect(onRows.rows.slice(10, 12)).toEqual([L('default', 0, [0], 0), L('default', 0, [0], 1)])
+    expect(onRows.rows.slice(-2)).toEqual([G(0), G(1)])
+    expect(lineCarriesValues(initialViewState(rows.def, rows.cache), 'rows', onRows.rows[0]!)).toBe(false)
+    const onCols = okAxes(cols)
+    expect(onCols.cols).toEqual(savedPivotLayout(cols.def)!.cols)
+    expect(onCols.cols.slice(0, 2)).toEqual([L('data', 0, [0, 0], 0), L('data', 1, [0, 1], 1)])
+    expect(onCols.cols.slice(-2)).toEqual([G(0), G(1)])
+  })
+
+  // From the compact reference's saved 2024 column (F): East has no Bananas, North and West no Apples.
+  const ONLY_2024_ROWS = [
+    L('data', 0, [0]), L('data', 1, [0, 0]), L('data', 1, [0, 2]),
+    L('data', 0, [1]), L('data', 1, [1, 1]), L('data', 1, [1, 2]),
+    L('data', 0, [2]), L('data', 1, [2, 0]), L('data', 1, [2, 1]), L('data', 1, [2, 2]),
+    L('data', 0, [3]), L('data', 1, [3, 1]), L('data', 1, [3, 2]), G(),
+  ]
+  it('items with no data are dropped unless showAll', async () => {
+    const p = await ref('pivot-layout-compact')
+    const view = initialViewState(p.def, p.cache)
+    // Year items: 0 = 2022, 1 = 2023, 2 = 2024 (pivot item order), 3 = the default subtotal item.
+    const only2024 = withFields(view, { 2: { hidden: [true, true, false, false] } })
+    const axes = okAxes(p, only2024)
+    expect(axes.rows).toEqual(ONLY_2024_ROWS)
+    expect(axes.cols).toEqual([L('data', 0, [2, 0], 0), L('data', 1, [2, 1], 1), G(0), G(1)])
+    // showAll on Product brings its items back under every region; hidden years stay hidden under showAll.
+    const all = okAxes(p, withFields(only2024, { 1: { showAll: true }, 2: { showAll: true, hidden: [true, true, false, false] } }))
+    expect(all.rows).toEqual(savedPivotLayout(p.def)!.rows)
+    expect(all.cols).toEqual(axes.cols)
+    // Records of hidden years have no column line.
+    const year = p.store.columns[2]!
+    if (year.kind !== 'shared') throw new Error('shared column expected')
+    for (let r = 0; r < p.store.count; r++) if (year.index[r] !== 1) expect([axes.rowKey[r], axes.colKey[r]]).toEqual([NO_LINE, NO_LINE])
+  })
+
+  it('hidden items and page selections', async () => {
+    const p = await ref('pivot-layout-compact')
+    const view = initialViewState(p.def, p.cache)
+    // Hide East (pivot item 0): its lines go, its records map to no line, the rest keep their saved lines.
+    const noEast = okAxes(p, withFields(view, { 0: { hidden: [true, false, false, false, false] } }))
+    expect(noEast.rows).toEqual(savedPivotLayout(p.def)!.rows.slice(4))
+    const region = p.store.columns[0]!
+    if (region.kind !== 'shared') throw new Error('shared column expected')
+    for (let r = 0; r < p.store.count; r++) expect(noEast.rowKey[r] === NO_LINE).toBe(region.index[r] === 3)
+    // A single page selection filters records: Year moved to a page with 2024 selected gives the 2024-only rows.
+    const page = okAxes(p, { ...view, cols: [-2], pages: [{ field: 2, selected: [2] }] })
+    expect(page.rows).toEqual(ONLY_2024_ROWS)
+    expect(page.cols).toEqual([L('data', 0, [0], 0), L('data', 0, [1], 1)])
+    // The page-field reference: Product on a page, (All) selected; selecting Bananas keeps exactly its records.
+    const paged = await ref('pivot-page-field')
+    const pagedView = initialViewState(paged.def, paged.cache)
+    expect(pagedView.pages).toEqual([{ field: 1, selected: 'all' }])
+    const bananas = okAxes(paged, { ...pagedView, pages: [{ field: 1, selected: [1] }] })
+    const product = paged.store.columns[1]!
+    if (product.kind !== 'shared') throw new Error('shared column expected')
+    for (let r = 0; r < paged.store.count; r++) expect(bananas.rowKey[r] !== NO_LINE).toBe(product.index[r] === 1)
+  })
+
+  it('cross-field visibility: a page selection leaving an item without records drops it (corpus POI sample, Excel-made)', async ({ skip }) => {
+    const path = resolve(CORPUS, 'poi-ExcelPivotTableSample.xlsx')
+    if (!existsSync(path)) skip('corpus absent')
+    // Tabelle3: Field3 on a page with item 1 hidden; Field1's item 1 then has no records and Excel drops it.
+    const p = (await load(path)).find(candidate => candidate.def.sheet === 'Tabelle3')!
+    expect(p.def.fields[2]!.items!.map(item => item.hidden)).toEqual([false, true, false, false])
+    expect(okAxes(p).rows).toEqual([L('data', 0, [0]), L('data', 0, [2]), G()])
+    expect(okAxes(p).rows).toEqual(savedPivotLayout(p.def)!.rows)
+  })
+
+  it('liveDefinition of the saved state reproduces the saved definition', async () => {
+    for (const name of REFERENCES) {
+      const p = (await load(resolve(FIXTURES, name)))[0]!
+      const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
+      const layout = placeCells(p.def, view, p.cache, axes, blankGrid)
+      const live = liveDefinition(p.def, view, axes, layout)
+      expect(live.rowItems, name).toEqual(p.def.rowItems)
+      expect(live.colItems, name).toEqual(p.def.colItems)
+      expect(live.location, name).toEqual(p.def.location)
+      const want = savedPivotRoles(p.def)!, got = savedPivotRoles(live)!
+      expect(got.rects, name).toEqual(want.rects)
+      for (const rect of want.rects) for (let row = rect.minRow; row <= rect.maxRow; row++) {
+        expect(got.rowClass(row), `${name} row ${row}`).toBe(want.rowClass(row))
+        for (let col = rect.minCol; col <= rect.maxCol; col++) expect(got.roleAt(row, col), `${name} R${row + 1}C${col + 1}`).toEqual(want.roleAt(row, col))
+      }
+      for (const mode of ['screen', 'print'] as const) expect(pivotButtons(live, mode), `${name} ${mode}`).toEqual(pivotButtons(p.def, mode))
+    }
+  })
+
+  it('liveDefinition of a changed view moves the buttons and roles with the lines', async () => {
+    const p = await ref('pivot-layout-compact'), collapsed = await ref('pivot-collapsed-item')
+    const view = initialViewState(p.def, p.cache)
+    const changed = withFields(view, { 0: { collapsed: view.fields[0]!.collapsed.map((_, k) => k === 0) } })
+    const axes = okAxes(p, changed)
+    const live = liveDefinition(p.def, changed, axes, placeCells(p.def, changed, p.cache, axes, blankGrid))
+    expect(live.location).toEqual(collapsed.def.location)
+    expect(live.rowItems).toEqual(collapsed.def.rowItems)
+    expect(live.fields[0]!.items![0]!.showDetails).toBe(false)
+    for (const mode of ['screen', 'print'] as const) expect(pivotButtons(live, mode)).toEqual(pivotButtons(collapsed.def, mode))
+  })
+
+  it('named subtotals add one line per function', async () => {
+    // Unmeasured until Task 15's named-subtotal case: one line per function in schema order, at the bottom even
+    // with subtotalTop (a parent line can hold one value per cell), each with the function as its type.
+    const p = await ref('pivot-layout-compact')
+    const view = withFields(initialViewState(p.def, p.cache), { 0: { defaultSubtotal: false, subtotals: ['sum', 'count', 'avg'] } })
+    const rows = okAxes(p, view).rows
+    const expected: PivotLine[] = []
+    for (let region = 0; region < 4; region++) {
+      expected.push(L('data', 0, [region]), L('data', 1, [region, 0]), L('data', 1, [region, 1]), L('data', 1, [region, 2]))
+      expected.push(L('sum', 0, [region]), L('count', 0, [region]), L('avg', 0, [region]))
+    }
+    expect(rows).toEqual([...expected, G()])
+    // The parent line then carries no values; each function line does.
+    expect(lineCarriesValues(view, 'rows', rows[0]!)).toBe(false)
+    expect(lineCarriesValues(view, 'rows', rows[4]!)).toBe(true)
+  })
+
+  it('placeCells puts labels, captions and blank rows where the saved cells are', async () => {
+    for (const name of REFERENCES) {
+      const p = (await load(resolve(FIXTURES, name)))[0]!
+      const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
+      const layout = placeCells(p.def, view, p.cache, axes, blankGrid)
+      const saved = savedPivotLayout(p.def)!
+      expect(layout.rect, name).toEqual(saved.rect)
+      expect(labelDiffs(p, layout), name).toEqual([])
+      // These references are zh-TW: their default subtotal and total captions are implicit.
+      expect(layout.captionsUnverified, name).toBe(layout.cells.some(cell => cell.caption === 'implicit'))
+      // With the saved caption slots supplied, every caption is the saved text and none is unverified.
+      const withSaved = placeCells(p.def, view, p.cache, axes, blankGrid, (row, col) => {
+        const value = savedCell(p.sheet, row, col)
+        return value.kind === 'text' ? value.value : undefined
+      })
+      expect(withSaved.captionsUnverified, name).toBe(false)
+      expect(labelDiffs(p, withSaved), name).toEqual([])
+    }
+  })
+
+  it('placeCells asks the value grid for every value cell the saved sheet fills', async () => {
+    const asked: PivotValueGrid = { get: (row, col, data) => ({ kind: 'text', value: `${row}/${col}/${data}` }) }
+    for (const name of REFERENCES) {
+      const p = (await load(resolve(FIXTURES, name)))[0]!
+      const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
+      const layout = placeCells(p.def, view, p.cache, axes, asked)
+      const saved = savedPivotLayout(p.def)!
+      const at = new Map(layout.cells.map(cell => [`${cell.row},${cell.col}`, cell]))
+      const valuesOnRows = view.rows.includes(-2)
+      for (let row = saved.dataRow0; row <= saved.rect.maxRow; row++) for (let col = saved.dataCol0; col <= saved.rect.maxCol; col++) {
+        const n = row - saved.dataRow0, m = col - saved.dataCol0
+        const cell = at.get(`${row},${col}`)
+        const carries = lineCarriesValues(view, 'rows', axes.rows[n]!) && lineCarriesValues(view, 'cols', axes.cols[m]!)
+        if (savedCell(p.sheet, row, col).kind !== 'empty') expect(carries, `${name} R${row + 1}C${col + 1}`).toBe(true)
+        const data = valuesOnRows ? axes.rows[n]!.data : axes.cols[m]!.data
+        expect(cell?.value, `${name} R${row + 1}C${col + 1}`).toEqual(carries ? { kind: 'text', value: `${n}/${m}/${data}` } : undefined)
+      }
+    }
+  })
+
+  it('blank rows: insertBlankRow adds a blank line after each item block, with no cells', async () => {
+    // Unmeasured until Task 15's blank-row case: after the item's subtotal, before the next item and the grand total.
+    const p = await ref('pivot-layout-compact')
+    const view = withFields(initialViewState(p.def, p.cache), { 0: { insertBlankRow: true } })
+    const axes = okAxes(p, view)
+    const saved = savedPivotLayout(p.def)!.rows
+    const expected: PivotLine[] = []
+    for (let region = 0; region < 4; region++) expected.push(...saved.slice(4 * region, 4 * region + 4), L('blank', 0, [region]))
+    expect(axes.rows).toEqual([...expected, G()])
+    const layout = placeCells(p.def, view, p.cache, axes, { get: () => ({ kind: 'number', value: 1 }) })
+    const blankRow = layout.rect.minRow + p.def.location.firstDataRow + 4
+    expect(layout.cells.filter(cell => cell.row === blankRow)).toEqual([])
+    expect(layout.rect.maxRow).toBe(savedPivotLayout(p.def)!.rect.maxRow + 4)
+  })
+})
+
+describe('unmeasured layout paths', () => {
+  it('a collapsed item above the Values field is unsupported until measured', async () => {
+    const p = await ref('pivot-values-on-rows')
+    const view = initialViewState(p.def, p.cache)
+    const result = axesOf(p, withFields(view, { 0: { collapsed: view.fields[0]!.collapsed.map((_, k) => k === 0) } }))
+    expect(result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }).toEqual({ kind: 'unsupported', feature: 'pivot-engine-unmeasured' })
+  })
+
+  it('mergeItem merges a tabular parent label over its child lines and a column item over its columns', async () => {
+    // Unmeasured: no reference sets mergeItem. Without it there are no merges.
+    const p = await ref('pivot-layout-tabular')
+    const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
+    expect(placeCells(p.def, view, p.cache, axes, blankGrid).merges).toEqual([])
+    const merged = placeCells({ ...p.def, mergeItem: true }, view, p.cache, axes, blankGrid).merges
+    // A6:A8 (East over its three products) … A18:A20 (West); C4:D4, E4:F4, G4:H4 (each year over its two data fields).
+    expect(merged).toEqual([
+      ...[5, 9, 13, 17].map(row => ({ minRow: row, maxRow: row + 2, minCol: 0, maxCol: 0 })),
+      ...[2, 4, 6].map(col => ({ minRow: 3, maxRow: 3, minCol: col, maxCol: col + 1 })),
+    ])
+  })
+})
+
+describe('features owned by Task 21 are pending', () => {
+  it('sorting, autoSortScope, filters and grouping give pivot-engine-pending', async () => {
+    const p = await ref('pivot-layout-compact')
+    const view = initialViewState(p.def, p.cache)
+    const pending = (result: ReturnType<typeof computeAxes>) => result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }
+    const expected = { kind: 'unsupported', feature: ENGINE_PENDING }
+    expect(pending(axesOf(p, withFields(view, { 0: { sortType: 'descending' } })))).toEqual(expected)
+    expect(pending(axesOf(p, withFields(view, { 1: { autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [] } } })))).toEqual(expected)
+    expect(pending(axesOf(p, { ...view, filters: [{ fld: 0, type: 'captionEqual', evalOrder: 0, id: 1, stringValue1: 'East', autoFilter: { columns: [] } }] }))).toEqual(expected)
+    const grouped: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 2 ? { ...field, fieldGroup: { base: 2, rangePr: { autoStart: true, autoEnd: true, groupBy: 'range', groupInterval: 1 } } } : field) }
+    const result = computeAxes(p.store, grouped, p.def, view)
+    expect(pending(result)).toEqual(expected)
+    // A sort on a field off every axis changes nothing.
+    expect(axesOf(p, withFields(view, { 3: { sortType: 'ascending' } })).ok).toBe(true)
+  })
+})
+
+/** Corpus files with rowItems: each status as the engine finds it. These are writer files: a disagreement is
+ * recorded here and in the task report, never tuned toward. */
+const CORPUS_STATUS: Record<string, string[]> = {
+  'poi-ExcelPivotTableSample.xlsx': ['equal', 'equal'],
+  // Collabora-written: its Values-only column items are seven `<i/>` with i=0, where Excel writes x=k, i=k.
+  'lo-calc-calcfields.xlsx': ['disagrees'],
+  'lo-calc-pivot_dark1.xlsx': ['equal'],
+  'lo-calc-Pivot2_Row_Compact.xlsx': ['equal'],
+  'lo-calc-Pivot2_Row_Grand_Subtotals.xlsx': ['equal'],
+  'lo-calc-Pivot3_Column_Grand_Subtotals.xlsx': ['equal'],
+  'lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx': ['pending'],
+  'lo-calc-pivotcompact.xlsx': ['equal'],
+  'lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx': ['equal'],
+  'lo-calc-pivottable_date_field_filter.xlsx': ['pending'],
+  'lo-calc-pivottable_outline_mode.xlsx': ['equal'],
+  // Field 6, on no axis, hides the only item of record 0; the saved layout shows record 0 anyway (the file's
+  // naming, "Sum - Amount" and "Data", is LibreOffice's). The engine applies a hidden item on any field.
+  'lo-calc-pivottable_rowcolpage_field_filter.xlsx': ['disagrees'],
+  'lo-calc-pivottable_tabular_mode.xlsx': ['equal'],
+  'lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx': ['equal'],
+  'lo-calc-PivotTableFormatsSubTotals.xlsx': ['equal'],
+  'lo-calc-PivotTableWithNoSourceData.xlsx': ['pending'],
+  'lo-calc-shared-dategroup.xlsx': ['pending', 'pending'],
+  'lo-calc-shared-numgroup.xlsx': ['pending', 'pending'],
+  'lo-calc-two-data-fields.xlsx': ['equal'],
+}
+describe.skipIf(!existsSync(resolve(CORPUS, 'poi-ExcelPivotTableSample.xlsx')))('corpus files with rowItems', () => {
+  it.each(Object.keys(CORPUS_STATUS))('%s', async file => {
+    const statuses: string[] = []
+    for (const p of await load(resolve(CORPUS, file))) {
+      const result = axesOf(p)
+      if (!result.ok) { expect(result.diagnostic.feature).toBe(ENGINE_PENDING); statuses.push('pending'); continue }
+      const saved = savedPivotLayout(p.def)!
+      const equal = JSON.stringify([result.value.rows, result.value.cols]) === JSON.stringify([saved.rows, saved.cols])
+      statuses.push(equal ? 'equal' : 'disagrees')
+      if (!equal) continue
+      // Where the lines agree, the labels, captions and location agree too.
+      const view = initialViewState(p.def, p.cache)
+      const layout = placeCells(p.def, view, p.cache, result.value, blankGrid)
+      expect(labelDiffs(p, layout), `${file} ${p.def.name}`).toEqual([])
+      expect(liveDefinition(p.def, view, result.value, layout).location, `${file} ${p.def.name}`).toEqual(p.def.location)
+    }
+    expect(statuses).toEqual(CORPUS_STATUS[file])
+  })
+})
+
+interface ManifestCase { case: string; file: string; features: string[]; task: number; pivot: string; status?: string }
+const manifest: ManifestCase[] | undefined = existsSync(MANIFEST)
+  ? (raw => Array.isArray(raw) ? raw : raw.cases)(JSON.parse(readFileSync(MANIFEST, 'utf8')))
+  : undefined
+const task17 = (manifest ?? []).filter(entry => entry.task === 17 && entry.status !== 'pending')
+async function manifestPivot(entry: ManifestCase): Promise<Loaded> {
+  const local = resolve(FIXTURES, 'engine', entry.file)
+  const all = await load(existsSync(local) ? local : resolve(process.cwd(), entry.file))
+  const p = all.find(candidate => candidate.def.name === entry.pivot)
+  if (!p) throw new Error(`${entry.case}: no pivot named ${entry.pivot} in ${entry.file}`)
+  return p
+}
+async function checkManifestCase(entry: ManifestCase) {
+  const p = await manifestPivot(entry)
+  const view = initialViewState(p.def, p.cache), axes = okAxes(p, view)
+  const saved = savedPivotLayout(p.def)!
+  expect(axes.rows).toEqual(saved.rows)
+  expect(axes.cols).toEqual(saved.cols)
+  const layout = placeCells(p.def, view, p.cache, axes, blankGrid)
+  expect(liveDefinition(p.def, view, axes, layout).location).toEqual(p.def.location)
+  expect(labelDiffs(p, layout)).toEqual([])
+}
+
+describe('Task 15 Excel oracle: manifest cases with task 17', () => {
+  if (!manifest) {
+    it.skip('SKIPPED: tests/fixtures/xlsx-pivots/engine/manifest.json is absent (Task 15 oracle not built); task-17 cases not run', () => {})
+    return
+  }
+  if (!task17.length) {
+    it.skip('SKIPPED: the manifest has no runnable task-17 case (all pending)', () => {})
+    return
+  }
+  it.each(task17.map(entry => [entry.case, entry] as const))('%s', async (_name, entry) => checkManifestCase(entry))
+})
+
+describe('cross-field visibility: an item left without records by another field\'s hidden item or page selection follows the measurement', () => {
+  const crossField = task17.filter(entry => entry.features.some(feature => feature.includes('cross-field')))
+  if (!manifest) {
+    it.skip('SKIPPED: manifest.json absent (Task 15): the cross-field measurement cases are not run', () => {})
+    return
+  }
+  if (!crossField.length) {
+    it.skip('SKIPPED: the manifest has no runnable cross-field task-17 case (all pending)', () => {})
+    return
+  }
+  it.each(crossField.map(entry => [entry.case, entry] as const))('%s', async (_name, entry) => checkManifestCase(entry))
+})
