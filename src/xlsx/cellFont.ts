@@ -27,3 +27,35 @@ const cellFace = (name: string | undefined) => name?.replace(/["\\;{}]/g, '').tr
 export function cellFontString(style: { bold?: boolean; italic?: boolean; fontName?: string } | undefined, sizePt: number): string {
   return `${style?.italic ? 'italic ' : ''}${style?.bold ? 'bold ' : ''}${sizePt}pt ${cellFontFamily(style?.fontName)}`
 }
+
+/** Mixed narrow and wide glyphs, so two different faces measure differently. */
+const FACE_PROBE = 'mmmmmmmmmmlli1WQ@#0.'
+/** Per realm (main thread, each worker): a face's availability does not change per cell. */
+const faceAvailability = new Map<string, boolean>()
+
+/**
+ * Whether an authored cell face draws as itself on this canvas backend, rather than
+ * through the fallback stack: measured once per face (cached), by checking that the
+ * face measures the same ahead of two different generics (a missing face takes each
+ * generic's width). A backend whose generics measure alike gives no signal and reports
+ * unavailable, so the caller keeps its fallback behaviour. A face that only becomes
+ * available later in the session (a loading web font) keeps its first answer.
+ */
+export function cellFaceAvailable(ctx: CanvasRenderingContext2D, name: string | undefined): boolean {
+  const face = cellFace(name)
+  if (!face) return false
+  let known = faceAvailability.get(face)
+  if (known === undefined) faceAvailability.set(face, known = probeFace(ctx, face))
+  return known
+}
+
+function probeFace(ctx: CanvasRenderingContext2D, face: string): boolean {
+  if (typeof ctx.measureText !== 'function') return false
+  const previous = ctx.font
+  try {
+    const width = (stack: string) => { ctx.font = `40px ${stack}`; return ctx.measureText(FACE_PROBE).width }
+    const mono = width('monospace'), serif = width('serif')
+    if (!(mono > 0) || !(serif > 0) || mono === serif) return false
+    return width(`"${face}", monospace`) === width(`"${face}", serif`)
+  } catch { return false } finally { ctx.font = previous }
+}

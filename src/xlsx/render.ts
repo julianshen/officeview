@@ -26,7 +26,7 @@ import { RectangleIndex } from './view/structure'
 import { DEFAULT_COLUMN_METRICS, columnWidthPx } from './columnWidth'
 import { cellSourceRow, drawingExtent } from './view/sheetCells'
 import type { CellBodyLayout, CellTextDecoration } from './view/textLayout'
-import { cellFontFamily as cellFaceFamily, cellFontString, isCalibriFace } from './cellFont'
+import { cellFaceAvailable, cellFontFamily as cellFaceFamily, cellFontString, isCalibriFace } from './cellFont'
 import { paintSparklinesIn } from './sparklineLoader'
 import { paintControlIn, paintPivotButtonsIn } from './pivotLoader'
 import { intersectInterval, mayHaveRegionGrid, regionGrid, subtractIntervals } from './regionGrid'
@@ -1213,10 +1213,13 @@ export function layoutCellBody(
   let font = fontAt(baseSize), fontSize = baseSize
   // Excel decides fit with its Calibri metrics; a wider fallback face must not
   // turn a value Excel shows into '#' (its paint is then fitted below).
-  // Only for a Calibri cell: an authored face (Courier New, Arial…) is measured in that
-  // face, so a value it cannot fit shows '#' even where Calibri would fit it.
-  const calibriFace = isCalibriFace(cell.style?.fontName)
-  const excelFits = (text: string): boolean => calibriFace && (calibriWidth(text, fontSize, cell.style?.bold) ?? Infinity) <= inner + EXCEL_FIT_TOLERANCE_PX
+  // Calibri metrics stand in for Excel's whenever the cell is not measured in its own
+  // face: a Calibri or default cell, or an authored face this host lacks (it paints in
+  // the fallback stack). An available authored face (Courier New, Arial…) is measured
+  // in itself, so a value it cannot fit shows '#' even where Calibri would fit it.
+  let lenient: boolean | undefined
+  const excelFits = (text: string): boolean => (lenient ??= isCalibriFace(cell.style?.fontName) || !cellFaceAvailable(ctx, cell.style?.fontName))
+    && (calibriWidth(text, fontSize, cell.style?.bold) ?? Infinity) <= inner + EXCEL_FIT_TOLERANCE_PX
   // Shrink-to-fit keeps full General precision and scales the font instead.
   const fitsGeneral = !rotated && !shrinkable ? (text: string) => measured(font, text) <= inner : undefined
   let generalNoFit = false
