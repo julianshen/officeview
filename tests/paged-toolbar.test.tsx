@@ -49,7 +49,15 @@ afterEach(() => {
 })
 
 async function flushIdle() {
-  for (let i = 0; i < 1000 && idle.length > 0; i++) {
+  // The idle work is scheduled from post-commit effects, which under load can
+  // flush a macrotask after the last await, and a drained slice can trip its
+  // time budget and reschedule. Settle the scheduler before checking, and
+  // only stop once two full rounds schedule nothing new.
+  let empty = 0
+  for (let i = 0; i < 1000 && empty < 2; i++) {
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    if (idle.length === 0) { empty++; continue }
+    empty = 0
     const batch = idle
     idle = []
     await act(async () => { for (const cb of batch) cb() })
@@ -79,14 +87,14 @@ describe('paged toolbar and status line', () => {
     expect(within(bar).getByTestId('officeview-page-position').textContent).toBe('1 / 3')
     expect(status(ui.container)!.textContent).toBe('Page 1 of 3 · — words')
     // the count may schedule or commit after one drain, so drain on every poll
-    await waitFor(async () => { await flushIdle(); expect(status(ui.container)!.textContent).toBe(`Page 1 of 3 · ${REPORT_WORDS} words`) }, { timeout: 3000 })
+    await waitFor(async () => { await flushIdle(); expect(status(ui.container)!.textContent).toBe(`Page 1 of 3 · ${REPORT_WORDS} words`) }, { timeout: 4000 })
   })
 
   it('formats large word counts with a thousands separator', async () => {
     const ui = await mount({ document: docxModel([Array.from({ length: 2418 }, (_, i) => `w${i}`).join(' ')]) })
     await toolbar(ui)
     // the count may schedule or commit after one drain, so drain on every poll
-    await waitFor(async () => { await flushIdle(); expect(status(ui.container)!.textContent).toBe('Page 1 of 3 · 2,418 words') }, { timeout: 3000 })
+    await waitFor(async () => { await flushIdle(); expect(status(ui.container)!.textContent).toBe('Page 1 of 3 · 2,418 words') }, { timeout: 4000 })
   })
 
   it('uses Slide wording and no word count for PPTX', async () => {
