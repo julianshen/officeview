@@ -1,7 +1,7 @@
 /** Pivot value aggregation and show-values-as post-pass (Stage 2, library only). */
 import {
   PIVOT_BASE_ITEM_DEFAULT, PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD,
-  type PivotCacheDefinition, type PivotDataFunction, type PivotDiagnostic, type PivotShowDataAs, type PivotTableDefinition,
+  type PivotCacheDefinition, type PivotDataFunction, type PivotDiagnostic, type PivotItemType, type PivotShowDataAs, type PivotTableDefinition,
 } from '../model'
 import type { PivotLine } from '../savedLayout'
 import { lineCarriesValues, NO_LINE, type EngineResult, type PivotAxes } from './axes'
@@ -47,7 +47,8 @@ function add(acc: Accumulator, at: number, value: ReadValue, fn: PivotDataFuncti
   if (value.kind === 'missing') return
   if (fn === 'count') { acc.nonEmpty[at]++; return }
   if (value.kind !== 'number') return
-  if (fn === 'sum') { acc.sum[at] += value.value; return }
+  if (fn === 'sum' || fn === 'average') acc.sum[at] += value.value
+  if (fn === 'sum') return
   if (fn === 'countNums') { acc.numeric[at]++; return }
   if (fn === 'max') { acc.numeric[at]++; if (value.value > acc.max[at]!) acc.max[at] = value.value; return }
   if (fn === 'min') { acc.numeric[at]++; if (value.value < acc.min[at]!) acc.min[at] = value.value; return }
@@ -92,15 +93,31 @@ function valueOf(acc: Accumulator, at: number, fn: PivotDataFunction): number | 
     case 'sum': return acc.sum[at]!
     case 'count': return acc.nonEmpty[at]!
     case 'countNums': return count
-    case 'average': return count ? acc.mean[at]! : undefined
-    case 'max': return count ? acc.max[at]! : undefined
-    case 'min': return count ? acc.min[at]! : undefined
-    case 'product': return count ? acc.product[at]! : undefined
+    case 'average': return count ? acc.sum[at]! / count : Number.NaN
+    case 'max': return count ? acc.max[at]! : Number.NaN
+    case 'min': return count ? acc.min[at]! : Number.NaN
+    case 'product': return count ? acc.product[at]! : Number.NaN
     case 'stdDev': return count > 1 ? Math.sqrt(acc.m2[at]! / (count - 1)) : Number.NaN
-    case 'stdDevp': return count ? Math.sqrt(acc.m2[at]! / count) : undefined
+    case 'stdDevp': return count ? Math.sqrt(acc.m2[at]! / count) : Number.NaN
     case 'var': return count > 1 ? acc.m2[at]! / (count - 1) : Number.NaN
-    case 'varp': return count ? acc.m2[at]! / count : undefined
+    case 'varp': return count ? acc.m2[at]! / count : Number.NaN
   }
+}
+
+function subtotalFunction(type: PivotItemType, fallback: PivotDataFunction): PivotDataFunction {
+  switch (type) {
+    case 'sum': case 'max': case 'min': case 'product': case 'stdDev': case 'var': return type
+    case 'avg': return 'average'
+    case 'countA': return 'count'
+    case 'count': return 'countNums'
+    case 'stdDevP': return 'stdDevp'
+    case 'varP': return 'varp'
+    default: return fallback
+  }
+}
+
+function isNamedSubtotal(type: PivotItemType): boolean {
+  return type !== 'data' && type !== 'default' && type !== 'grand' && type !== 'blank'
 }
 
 interface Targets { rows: number[][][]; cols: number[][][] }
@@ -205,15 +222,38 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       const rowTargets = recordTargets.value.rows[d]![axes.rowKey[record]!]!
       const colTargets = recordTargets.value.cols[d]![axes.colKey[record]!]!
       add(grandTotals, d, valueScratch, fn)
-      for (const row of rowTargets) add(rowTotals, row * dataCount + d, valueScratch, fn)
-      for (const col of colTargets) add(colTotals, col * dataCount + d, valueScratch, fn)
-      for (const row of rowTargets) for (const col of colTargets) add(gridAcc, cellIndex(row, col, d, colCount, dataCount), valueScratch, fn)
+      for (const row of rowTargets) {
+        const rowLine = axes.rows[row]!
+        add(rowTotals, row * dataCount + d, valueScratch, subtotalFunction(rowLine.type, fn))
+      }
+      for (const col of colTargets) {
+        const colLine = axes.cols[col]!
+        add(colTotals, col * dataCount + d, valueScratch, subtotalFunction(colLine.type, fn))
+      }
+      for (const row of rowTargets) for (const col of colTargets) {
+        const rowLine = axes.rows[row]!, colLine = axes.cols[col]!
+        const rowNamed = isNamedSubtotal(rowLine.type), colNamed = isNamedSubtotal(colLine.type)
+        const rowFn = subtotalFunction(rowLine.type, fn), colFn = subtotalFunction(colLine.type, fn)
+        if (rowNamed && colNamed && rowFn !== colFn)
+          return unmeasured('intersecting row and column named subtotals with different functions are not measured')
+        if ((rowNamed || colNamed) && view.data[d]!.showAs !== 'normal')
+          return unmeasured('show-as applied to a named subtotal is not measured')
+        const cellFn = rowNamed ? rowFn : colNamed ? colFn : fn
+        add(gridAcc, cellIndex(row, col, d, colCount, dataCount), valueScratch, cellFn)
+      }
     }
   }
 
   const raw = new Float64Array(gridSize), present = new Uint8Array(gridSize)
   for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) for (let d = 0; d < dataCount; d++) {
-    const at = cellIndex(row, col, d, colCount, dataCount), result = valueOf(gridAcc, at, view.data[d]!.fn)
+    const at = cellIndex(row, col, d, colCount, dataCount)
+    const rowType = axes.rows[row]!.type, colType = axes.cols[col]!.type
+    const rowNamed = isNamedSubtotal(rowType), colNamed = isNamedSubtotal(colType)
+    const rowFn = subtotalFunction(rowType, view.data[d]!.fn), colFn = subtotalFunction(colType, view.data[d]!.fn)
+    if (rowNamed && colNamed && rowFn !== colFn)
+      return unmeasured('intersecting row and column named subtotals with different functions are not measured')
+    const fn = rowNamed ? rowFn : colNamed ? colFn : view.data[d]!.fn
+    const result = valueOf(gridAcc, at, fn)
     if (result === undefined) continue
     if (!Number.isFinite(result)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     raw[at] = result; present[at] = 1
@@ -225,6 +265,7 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     || axes.cols.some(line => line.type !== 'data' && line.type !== 'blank')
   for (let d = 0; d < dataCount; d++) {
     if (view.data[d]!.fn === 'sum') continue
+    if (view.data[d]!.fn === 'average' && view.data[d]!.showAs === 'normal') continue
     if (hasTotalLines || TOTAL_SHOW_AS.has(view.data[d]!.showAs))
       return unmeasured(`record-based subtotal/grand-total behavior for ${view.data[d]!.fn} is not measured yet`)
   }
@@ -257,19 +298,30 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   const parentLine = (axis: 'rows' | 'cols', current: number, baseField?: number): number | undefined => {
     const fields = axis === 'rows' ? rowFields : colFields, lines = axis === 'rows' ? axes.rows : axes.cols
     const line = lines[current]!
+    if (line.type === 'grand') return current
     const realLevels = fields.map((field, index) => field === PIVOT_VALUES_FIELD ? -1 : index).filter(index => index >= 0)
-    const level = baseField === undefined ? realLevels[realLevels.length - 2] : realLevels[realLevels.indexOf(fields.indexOf(baseField))]
-    if (level === undefined || level < 0 || level >= line.items.length - 1) return undefined
-    const keep = level + 1
-    const path = line.items.slice(0, keep)
-    // A Values level below the parent is part of the subtotal key: select the same data field's parent subtotal.
-    const valueLevel = fields.indexOf(PIVOT_VALUES_FIELD)
-    if (valueLevel > level && valueLevel < line.items.length) path.push(line.items[valueLevel]!)
+    const visibleLevels = realLevels.filter(index => index < line.items.length)
+    if (!visibleLevels.length) return undefined
+    const selectedOrdinal = baseField === undefined ? visibleLevels.length - 1 : realLevels.indexOf(fields.indexOf(baseField))
+    if (selectedOrdinal < 0 || selectedOrdinal >= visibleLevels.length) return undefined
+    const selectedDepth = selectedOrdinal + 1
+    // At the selected base-field level the item is its own base, so its displayed share is 100%.
+    if (baseField !== undefined && visibleLevels.length === selectedDepth) return current
+    const parentDepth = baseField === undefined ? visibleLevels.length - 1 : selectedDepth
+    if (parentDepth === 0) {
+      const grand = lines.findIndex(candidate => candidate.type === 'grand' && candidate.data === line.data
+        && lineCarriesValues(view, axis, candidate))
+      return grand >= 0 ? grand : undefined
+    }
+    // Use the axis slot before the next real field; this retains a Values-field data item in the parent key.
+    const pathEnd = realLevels[parentDepth]!
+    const path = line.items.slice(0, pathEnd)
     let dataLine: number | undefined
     for (let index = 0; index < lines.length; index++) {
       const candidate = lines[index]!
       if (candidate.items.length !== path.length || candidate.type === 'blank' || !lineCarriesValues(view, axis, candidate)
         || candidate.items.some((value, k) => value !== path[k])) continue
+      if (candidate.data !== line.data) continue
       if (candidate.type === 'default') return index
       if (candidate.type === 'data' && dataLine === undefined) dataLine = index
     }
@@ -322,6 +374,8 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       const axis = rowAxis ? 'rows' : 'cols', current = rowAxis ? row : col
       const base = findBaseLine(axis, current, data.baseField, data.baseItem)
       if (base === undefined) { outputPresent[at] = 0; continue }
+      if (base === current && (mode === 'difference' || mode === 'percentDiff'))
+        return unmeasured('difference-from values for the selected base item are not measured')
       const baseAt = rowAxis ? cellIndex(base, col, d, colCount, dataCount) : cellIndex(row, base, d, colCount, dataCount)
       if (!present[baseAt]) { outputPresent[at] = 0; continue }
       denominator = raw[baseAt]!
@@ -334,7 +388,7 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       let baseField: number | undefined
       if (mode === 'percentOfParent' && data.baseField !== -1) baseField = data.baseField
       const parent = parentLine(axis, axis === 'rows' ? row : col, baseField)
-      if (parent === undefined) { outputPresent[at] = 0; continue }
+      if (parent === undefined) return unmeasured('parent-total behavior for this line has no measured parent')
       const parentAt = axis === 'rows' ? cellIndex(parent, col, d, colCount, dataCount) : cellIndex(row, parent, d, colCount, dataCount)
       if (!present[parentAt]) { outputPresent[at] = 0; continue }
       denominator = raw[parentAt]!
@@ -348,15 +402,19 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       lines.forEach((line, index) => {
         if (line.type !== currentLine.type || line.items.length !== currentLine.items.length || !lineCarriesValues(view, axis, line)) return
         if (currentLine.items.some((item, k) => k !== level && item !== line.items[k])) return
-        if (index <= current) siblings.push(index)
+        siblings.push(index)
       })
-      let cumulative = 0
+      let cumulative = 0, total = 0
       for (const sibling of siblings) {
         const sourceAt = rowAxis ? cellIndex(sibling, col, d, colCount, dataCount) : cellIndex(row, sibling, d, colCount, dataCount)
-        if (present[sourceAt]) cumulative += raw[sourceAt]!
+        if (present[sourceAt]) {
+          total += raw[sourceAt]!
+          if (sibling <= current) cumulative += raw[sourceAt]!
+        }
       }
       if (mode === 'runTotal') { output[at] = cumulative; continue }
-      denominator = cumulative
+      numerator = cumulative
+      denominator = total
     } else return fail('pivot-engine-pending', `show-as mode ${mode} is not implemented`)
 
     if (denominator === undefined) { outputPresent[at] = 0; continue }

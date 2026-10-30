@@ -125,7 +125,7 @@ describe('pivot value aggregation', () => {
     ])
   })
 
-  it('fails closed for unmeasured average subtotal and grand-total semantics', () => {
+  it('aggregates average subtotals and grand totals directly from their records', () => {
     const data = [{ field: 1, fn: 'average' as const, showAs: 'normal' as const, baseField: -1, baseItem: 1048832, name: 'Average' }]
     const rows: PivotAxes['rows'] = [
       { type: 'data', first: 0, items: [0], data: 0 },
@@ -141,7 +141,65 @@ describe('pivot value aggregation', () => {
     view.rows = [0, 0]
     const axes = { rows, cols: [{ type: 'data' as const, first: 0, items: [], data: 0 }], rowKey: Uint32Array.from([1, 2, 5]), colKey: new Uint32Array(3) }
     const result = computeValues(store, cache, def, view, axes)
-    expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.get(3, 0, 0)).toEqual({ kind: 'number', value: 5 })
+      expect(result.value.get(6, 0, 0)).toEqual({ kind: 'number', value: 100 })
+      expect(result.value.get(7, 0, 0)).toEqual({ kind: 'number', value: 110 / 3 })
+    }
+  })
+
+  it('computes an average grand total from the source records', () => {
+    const data = [{ field: 1, fn: 'average' as const, showAs: 'normal' as const, baseField: -1, baseItem: 1048832, name: 'Average' }]
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 },
+      { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    const f = fixture([10, 30, 100], data, rows, [0, 1, 1])
+    const result = computeValues(f.store, f.cache, f.def, f.view, { ...f.axes, rowKey: Uint32Array.from([0, 1, 1]) })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.get(2, 0, 0)).toEqual({ kind: 'number', value: 140 / 3 })
+  })
+
+  it('uses the function named by a subtotal line', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 1, items: [0, 0], data: 0 },
+      { type: 'data', first: 1, items: [0, 1], data: 0 },
+      { type: 'avg', first: 0, items: [0], data: 0 },
+    ]
+    const f = fixture([10, 30], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Sum' }], rows, [0, 1])
+    const view = { ...f.view, rows: [0, 0] }
+    const result = computeValues(f.store, f.cache, f.def, view, f.axes)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.get(2, 0, 0)).toEqual({ kind: 'number', value: 20 })
+  })
+
+  it('matches average to record-order sum divided by count at 15 significant digits', () => {
+    const values = Array.from({ length: 200 }, (_, i) => Math.sin(i * 12.345) * 1e8)
+    const expected = values.reduce((sum, value) => sum + value, 0) / values.length
+    const data = [{ field: 1, fn: 'average' as const, showAs: 'normal' as const, baseField: -1, baseItem: 1048832, name: 'Average' }]
+    const f = fixture(values, data, [{ type: 'data', first: 0, items: [0], data: 0 }])
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const actual = result.value.get(0, 0, 0)
+      expect(actual.kind).toBe('number')
+      if (actual.kind === 'number') expect(Number(actual.value.toPrecision(15))).toBe(Number(expected.toPrecision(15)))
+    }
+  })
+
+  it('fails closed when a record group has no numeric values for numeric aggregates', () => {
+    for (const fn of ['average', 'max', 'min', 'product', 'stdDevp', 'varp'] as const) {
+      const f = fixture(['text', null], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok ? null : result.diagnostic.feature, fn).toBe('pivot-engine-unmeasured')
+    }
+    for (const fn of ['stdDev', 'var'] as const) {
+      const f = fixture([10], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok ? null : result.diagnostic.feature, fn).toBe('pivot-engine-unmeasured')
+    }
   })
 
   it('computes difference from previous and next base items', () => {
@@ -185,6 +243,7 @@ describe('pivot value aggregation', () => {
       { type: 'data', first: 1, items: [0, 0], data: 0 },
       { type: 'data', first: 1, items: [0, 1], data: 0 },
       { type: 'default', first: 0, items: [0], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
     ]
     const parentRow = fixture([20, 30], [{ field: 1, fn: 'sum', showAs: 'percentOfParentRow', baseField: -1, baseItem: 1048832, name: '' }], hierarchy, [0, 1])
     const parentRowView = { ...parentRow.view, rows: [0, 0] }
@@ -251,8 +310,52 @@ describe('pivot value aggregation', () => {
       { kind: 'number', value: 10 }, { kind: 'number', value: 40 }, { kind: 'number', value: 100 },
     ])
     expect([0, 1, 2].map(row => result.value.get(row, 0, 3))).toEqual([
-      { kind: 'number', value: 1 }, { kind: 'number', value: 0.75 }, { kind: 'number', value: 0.6 },
+      { kind: 'number', value: 0.1 }, { kind: 'number', value: 0.4 }, { kind: 'number', value: 1 },
     ])
+  })
+
+  it('uses the grand total as the parent of top-level items and subtotal lines', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 1, items: [0, 0], data: 0 },
+      { type: 'data', first: 1, items: [0, 1], data: 0 },
+      { type: 'default', first: 0, items: [0], data: 0 },
+      { type: 'data', first: 1, items: [1, 0], data: 0 },
+      { type: 'data', first: 1, items: [1, 1], data: 0 },
+      { type: 'default', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    const data = [{ field: 1, fn: 'sum' as const, showAs: 'percentOfParentRow' as const, baseField: -1, baseItem: 1048832, name: '' }]
+    const f = fixture([10, 30, 20, 40], data, rows, [0, 1, 3, 4])
+    const view = { ...f.view, rows: [0, 0] }
+    const result = computeValues(f.store, f.cache, f.def, view, f.axes)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.get(2, 0, 0)).toEqual({ kind: 'number', value: 0.4 })
+      expect(result.value.get(5, 0, 0)).toEqual({ kind: 'number', value: 0.6 })
+    }
+  })
+
+  it('shows 100 percent for an item at the selected parent field level', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 },
+      { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    const data = [{ field: 1, fn: 'sum' as const, showAs: 'percentOfParent' as const, baseField: 0, baseItem: 1048832, name: '' }]
+    const f = fixture([10, 30], data, rows, [0, 1])
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect([result.value.get(0, 0, 0), result.value.get(1, 0, 0)]).toEqual([
+      { kind: 'number', value: 1 }, { kind: 'number', value: 1 },
+    ])
+  })
+
+  it('fails closed on difference-from cells for the selected base item', () => {
+    const data = [{ field: 1, fn: 'sum' as const, showAs: 'difference' as const, baseField: 0, baseItem: 0, name: '' }]
+    const rows: PivotAxes['rows'] = [0, 1].map(x => ({ type: 'data', first: 0, items: [x], data: 0 }))
+    const f = fixture([10, 30], data, rows, [0, 1])
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
   })
 
   it('computes percent of row, percent of column, and index from record-based totals', () => {
