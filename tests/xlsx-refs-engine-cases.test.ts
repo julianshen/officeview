@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { OfficePackage } from '../src/core/zip'
 import {
-  ENGINE_CASES, ENGINE_ROWS, ERROR_ROW, F, SOURCE_LAST_ROW, engineSeedStandIn, fieldAttr, generateEngineRows, rowField, seedDataLines,
+  ENGINE_CASES, ENGINE_ROWS, ERROR_ROW, F, SOURCE_LAST_ROW, engineSeedStandIn, fieldAttr, fieldShowAll, generateEngineRows, rowField, seedDataLines,
   totals, xmlDiffSummary, type EngineRow, type PivotParts,
 } from '../scripts/xlsx-refs/engine-cases'
 
@@ -185,19 +185,11 @@ describe('engine case manifest', () => {
   })
 })
 
-// Cases whose AppleScript prep changes the cache shape the edit reads: Excel-saved engine-seed.xlsx keeps an off-axis
-// field's text inline (no shared items) until the prep puts the field on an axis, which the stand-in already models.
-const PREPPED_SHAPE = new Set(['quirk-off-axis-hidden-item'])
-
 describe('engine case xml edits', async () => {
-  const realSeed = await seedParts()
-  const standIn = engineSeedStandIn(await parts(join(RECIPES, 'pivot-seed.xlsx')))
-  const seedFor = (id: string) => PREPPED_SHAPE.has(id) ? standIn : realSeed
-  const seed = realSeed
+  const seed = await seedParts()
   const xmlCases = ENGINE_CASES.filter(c => c.xmlEdit)
   it('starts from consistent seed parts', () => expectConsistent(seed))
   it.each(xmlCases.map(c => [c.id, c] as const))('%s: well-formed, consistent and carrying its marker', (_, c) => {
-    const seed = seedFor(c.id)
     const next = c.xmlEdit!({ ...seed })
     expect(next.pivot !== seed.pivot || next.cache !== seed.cache).toBe(true)
     expectConsistent(next)
@@ -207,7 +199,7 @@ describe('engine case xml edits', async () => {
     expect(fresh.length, `${c.id}: no marker added by the edit`).toBeGreaterThan(0)
   })
   it('writes Excel-shaped pieces for the trickier edits', () => {
-    const edit = (id: string) => ENGINE_CASES.find(c => c.id === id)!.xmlEdit!({ ...seedFor(id) })
+    const edit = (id: string) => ENGINE_CASES.find(c => c.id === id)!.xmlEdit!({ ...seed })
     const named = edit('layout-named-subtotals-compact').pivot
     expect(named).toMatch(fieldAttr(F.Region, 'defaultSubtotal', '0'))
     expect(named).toMatch(/<item t="sum"\/><item t="countA"\/><item t="avg"\/><\/items>/)
@@ -223,9 +215,11 @@ describe('engine case xml edits', async () => {
     expect(calc.pivot).toMatch(/<dataField name="Sum of Double Price" fld="13"/)
     const filters = edit('filter-label-cross-field-showall').pivot
     expect(filters).toMatch(/showLastColumn="1"\/><filters count="1"><filter fld="1" type="captionBeginsWith" evalOrder="-1" id="\d+" stringValue1="A"><autoFilter ref="A1"><filterColumn colId="0"><customFilters><customFilter val="A\*"\/>/)
-    expect(filters).toMatch(fieldAttr(F.Region, 'showAll', '1'))
-    const offAxis = edit('quirk-off-axis-hidden-item').pivot
-    expect(offAxis).toMatch(/<item h="1" x="\d+"\/>/)
+    expect(filters).toMatch(fieldShowAll(F.Region))
+    const pageMultiple = edit('quirk-page-multiple').pivot
+    expect(pageMultiple).toMatch(fieldAttr(F.Product, 'multipleItemSelectionAllowed', '1'))
+    expect(pageMultiple).toMatch(/<item h="1" x="1"\/>[\s\S]*<item h="1" x="3"\/>/)
+    expect(edit('quirk-error-value').cache).toMatch(new RegExp(`<worksheetSource [^>]*ref="A1:L${ERROR_ROW}"`))
     const x14 = edit('values-showas-rank-descending-ties').pivot
     expect(x14).toMatch(/<dataField name="Sum of Units" fld="4" baseField="0" baseItem="0"><extLst><ext uri="\{E15A36E0-9728-4e99-A89B-3F7291B0FE68\}"[^>]*><x14:dataField pivotShowAs="rankDescending"\/><\/ext><\/extLst><\/dataField>/)
   })

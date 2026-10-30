@@ -260,7 +260,6 @@ const autoShow = (t: Target, name: string, pos: 'top' | 'bottom', count: number,
 const groupCell = (t: Target, name: string) => `(label range of pivot item 1 of ${field(t, name)})`
 const periods = (...on: Array<'months' | 'quarters' | 'years'>) =>
   `{false, false, false, false, ${on.includes('months')}, ${on.includes('quarters')}, ${on.includes('years')}}`
-const source = (t: Target, lastRow: number) => `set source data of ${t.p} to "Data!R1C1:R${lastRow}C12"`
 const makeCalcField = (t: Target, name: string, formula: string) =>
   `make new calculated field at ${t.p} with properties {name:${str(name)}, formula:${str(formula)}}`
 
@@ -567,12 +566,24 @@ function addCalculatedItem(parts: PivotParts): PivotParts {
   items.splice(at < 0 ? items.length : at, 0, `<item f="1" x="${x}"/>`)
   return { pivot: dropAxisItems(setFieldItems(pivot, product, items)), cache }
 }
-/** Hidden item on a field that is on no axis (Channel): an items list over its shared items with Retail hidden. */
-function hideOffAxisItem(parts: PivotParts, name: string, value: string): PivotParts {
-  const index = fieldIndex(parts.cache, name)
-  const values = sharedItemValues(parts.cache, index), hidden = values.indexOf(value)
-  if (hidden < 0) throw new Error(`xml edit: item ${value} of ${name} not found`)
-  return { ...parts, pivot: setFieldItems(parts.pivot, index, [...values.map((_, x) => x === hidden ? `<item h="1" x="${x}"/>` : `<item x="${x}"/>`), '<item t="default"/>']) }
+/** Widens the cache source to rows 1…lastRow (AppleScript cannot set `source data`); Excel refreshes the records. */
+function widenSource(parts: PivotParts, lastRow: number): PivotParts {
+  return { ...parts, cache: parts.cache.replace(/(<worksheetSource [^>]*ref=")[^"]*"/, `$1A1:${LAST_COLUMN}${lastRow}"`) }
+}
+/** A page field with multiple items allowed and `values` hidden (no single `item` selection on the pageField). */
+function hidePageItems(parts: PivotParts, index: number, values: string[]): PivotParts {
+  const shared = sharedItemValues(parts.cache, index)
+  const hidden = new Set(values.map(v => {
+    const x = shared.indexOf(v)
+    if (x < 0) throw new Error(`xml edit: item ${v} of field ${index} not found`)
+    return x
+  }))
+  const items = fieldItems(parts.pivot, index).map(item => {
+    const x = /\sx="(\d+)"/.exec(item)
+    return x && hidden.has(Number(x[1])) ? item.replace('<item ', '<item h="1" ') : item
+  })
+  const pivot = setFieldItems(editPivotField(parts.pivot, index, { multipleItemSelectionAllowed: '1' }), index, items)
+  return { ...parts, pivot: pivot.replace(new RegExp(`(<pageField fld="${index}"[^>]*?) item="\\d+"`), '$1') }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -583,6 +594,8 @@ const ONE_FIELD = String.raw`<pivotField\b(?:[^>]*\/>|[^>]*(?<!\/)>[\s\S]*?<\/pi
 /** The pivotField at `index` matches `inner` (written to follow `<pivotField\b`). */
 export const fieldHas = (index: number, inner: string) => new RegExp(String.raw`<pivotFields\b[^>]*>(?:${ONE_FIELD}){${index}}<pivotField\b${inner}`)
 export const fieldAttr = (index: number, attr: string, value: string) => fieldHas(index, String.raw`[^>]*\s${attr}="${value}"`)
+/** showAll defaults to true: Excel writes showAll="1" by leaving the attribute out (probed). */
+export const fieldShowAll = (index: number) => fieldHas(index, String.raw`(?![^>]*\sshowAll=)[^>]*>`)
 export const fieldItem = (index: number, inner: string) => fieldHas(index, String.raw`[^>]*(?<!\/)>(?:(?!<\/pivotField>)[\s\S])*?<item ${inner}`)
 export const rowField = (index: number) => new RegExp(String.raw`<rowFields\b[^>]*>(?:<field x="-?\d+"\/>)*<field x="${index}"\/>`)
 export const colField = (index: number) => new RegExp(String.raw`<colFields\b[^>]*>(?:<field x="-?\d+"\/>)*<field x="${index}"\/>`)
@@ -658,11 +671,13 @@ for (const [f, where] of [['compact', 'bottom'], ['outline', 'top'], ['outline',
     measures: 'subtotalTop placement per form (§5.2)',
   }))
 }
+// AppleScript's `column grand` is ECMA rowGrandTotals and `row grand` is colGrandTotals (probed: `set column grand
+// … to false` writes rowGrandTotals="0").
 add('layout-grand-totals-row-only', 'layout', 17, ['grand-totals-row-only'], S({
-  route: 'applescript', lines: t => [`set column grand of ${t.p} to false`], markers: [/ colGrandTotals="0"/], absent: [/ rowGrandTotals="0"/],
+  route: 'applescript', lines: t => [`set row grand of ${t.p} to false`], markers: [/ colGrandTotals="0"/], absent: [/ rowGrandTotals="0"/],
 }))
 add('layout-grand-totals-column-only', 'layout', 17, ['grand-totals-column-only'], S({
-  route: 'applescript', lines: t => [`set row grand of ${t.p} to false`], markers: [/ rowGrandTotals="0"/], absent: [/ colGrandTotals="0"/],
+  route: 'applescript', lines: t => [`set column grand of ${t.p} to false`], markers: [/ rowGrandTotals="0"/], absent: [/ colGrandTotals="0"/],
 }))
 add('layout-grand-totals-off', 'layout', 17, ['grand-totals-off'], S({
   route: 'applescript', lines: t => [`set row grand of ${t.p} to false`, `set column grand of ${t.p} to false`], markers: [/ rowGrandTotals="0"/, / colGrandTotals="0"/],
@@ -716,12 +731,12 @@ add('quirk-blank-and-mixed-row-items', 'data-quirks', 17, ['blank-items', 'mixed
   cacheMarkers: [/<cacheField name="Channel"[^>]*><sharedItems [^>]*containsBlank="1"/], measures: 'blank and number items among text items in a row field',
 }))
 add('quirk-error-value', 'data-quirks', 18, ['error-value', 'error-propagation'], S({
-  route: 'applescript', lines: t => [source(t, ERROR_ROW)],
+  route: 'xml', xmlEdit: p => widenSource(p, ERROR_ROW),
   cacheMarkers: [new RegExp(`ref="A1:L${ERROR_ROW}"`), new RegExp(`recordCount="${ENGINE_ROWS.length + 1}"`)],
   markers: [], measures: '§5.1 error propagation into cells, subtotals and grand totals (#N/A in Sales)',
 }))
 add('quirk-error-value-count', 'data-quirks', 18, ['error-value', 'fn-count'], S({
-  route: 'applescript', lines: t => [source(t, ERROR_ROW), fn(t, SALES, 'count')],
+  route: 'xml', xmlPrep: t => [fn(t, SALES, 'count')], xmlEdit: p => widenSource(p, ERROR_ROW),
   cacheMarkers: [new RegExp(`ref="A1:L${ERROR_ROW}"`)], markers: [dataAttr('subtotal="count"')], measures: 'whether Count counts an error record',
 }))
 add('quirk-hidden-row-item', 'data-quirks', 17, ['hidden-item'], S({
@@ -734,13 +749,14 @@ add('quirk-page-single', 'data-quirks', 17, ['page-field', 'page-single', 'cross
 }))
 add('quirk-page-single-showall', 'data-quirks', 17, ['page-field', 'page-single', 'cross-field-visibility', 'show-all'], S({
   route: 'applescript', lines: t => [toPage(t, 'Product'), `set current page of ${field(t, 'Product')} to "Apples"`, showAll(t, 'Region')],
-  markers: [/<pageField [^>]*item="\d+"/, fieldAttr(F.Region, 'showAll', '1')],
+  markers: [/<pageField [^>]*item="\d+"/, fieldShowAll(F.Region)],
   fallback: 'xml', xmlPrep: t => [toPage(t, 'Product'), `set current page of ${field(t, 'Product')} to "Apples"`],
-  xmlEdit: p => ({ ...p, pivot: editPivotField(p.pivot, F.Region, { showAll: '1' }) }),
+  xmlEdit: p => ({ ...p, pivot: editPivotField(p.pivot, F.Region, { showAll: null }) }),
 }))
 add('quirk-page-multiple', 'data-quirks', 17, ['page-field', 'page-multiple'], S({
-  route: 'applescript',
-  lines: t => [toPage(t, 'Product'), `set enable multiple page items of ${field(t, 'Product')} to true`, hideItem(t, 'Product', 'Bananas'), hideItem(t, 'Product', 'Elderberries')],
+  // `set enable multiple page items` is refused (-10006): the prep makes Product a page field, the edit allows
+  // multiple items and hides Bananas and Elderberries.
+  route: 'xml', xmlPrep: t => [toPage(t, 'Product')], xmlEdit: p => hidePageItems(p, F.Product, ['Bananas', 'Elderberries']),
   markers: [fieldAttr(F.Product, 'multipleItemSelectionAllowed', '1'), fieldItem(F.Product, '[^>]*h="1"')],
 }))
 add('quirk-cross-hidden-item', 'data-quirks', 17, ['hidden-item', 'cross-field-visibility'], S({
@@ -749,16 +765,15 @@ add('quirk-cross-hidden-item', 'data-quirks', 17, ['hidden-item', 'cross-field-v
 }))
 add('quirk-cross-hidden-item-showall', 'data-quirks', 17, ['hidden-item', 'cross-field-visibility', 'show-all'], S({
   route: 'applescript', lines: t => [hideItem(t, 'Product', 'Elderberries'), showAll(t, 'Region')],
-  markers: [fieldItem(F.Product, '[^>]*h="1"'), fieldAttr(F.Region, 'showAll', '1')],
-  fallback: 'xml', xmlPrep: t => [hideItem(t, 'Product', 'Elderberries')], xmlEdit: p => ({ ...p, pivot: editPivotField(p.pivot, F.Region, { showAll: '1' }) }),
+  markers: [fieldItem(F.Product, '[^>]*h="1"'), fieldShowAll(F.Region)],
+  fallback: 'xml', xmlPrep: t => [hideItem(t, 'Product', 'Elderberries')], xmlEdit: p => ({ ...p, pivot: editPivotField(p.pivot, F.Region, { showAll: null }) }),
 }))
 add('quirk-off-axis-hidden-item', 'data-quirks', 17, ['hidden-item', 'off-axis-hidden-item'], S({
+  // Measured: when a field leaves every axis Excel drops its hidden items and its shared items, so Excel never writes
+  // an off-axis hidden item. The case records that clearing; axes.ts keeps refusing the state for other writers.
   route: 'applescript', lines: t => [toRows(t, 'Channel'), hideItem(t, 'Channel', 'Retail'), hide(t, 'Channel')],
-  markers: [fieldItem(F.Channel, '[^>]*h="1"')], absent: [rowField(F.Channel)],
-  // Channel is on no axis in the seed, so Excel keeps its text inline in the records and writes no shared items to
-  // hide: the prep puts it on rows and back, which leaves Excel's shared items in the cache.
-  fallback: 'xml', xmlPrep: t => [toRows(t, 'Channel'), hide(t, 'Channel')], xmlEdit: p => hideOffAxisItem(p, 'Channel', 'Retail'),
-  measures: 'does a hidden item on a field on no axis filter records (Central is Retail only)? axes.ts refuses it',
+  markers: [fieldHas(F.Channel, String.raw`(?![^>]*\saxis=)[^>]*\/>`)], absent: [fieldItem(F.Channel, '[^>]*h="1"'), rowField(F.Channel)],
+  measures: 'Excel clears the hidden items of a field that leaves every axis (records unfiltered)',
 }))
 add('quirk-dates-1900-rows', 'data-quirks', 17, ['date-items', 'dates-before-1900-03-01', 'time-only'], S({
   route: 'applescript', lines: t => onlyRows(t, 'Stamp'), markers: [rowCount(1), rowField(F.Stamp)],
@@ -774,9 +789,10 @@ const FUNCTIONS = [
 for (const [id, enumerator, saved] of FUNCTIONS) {
   add(`values-fn-${id}`, 'values', 18, [`fn-${saved}`, 'record-based-totals'], S({
     route: 'applescript', lines: t => [fn(t, SALES, enumerator)],
-    // Sum is the default: Excel writes no subtotal attribute, and keeps the English caption it already has.
+    // Sum is the default: Excel writes no subtotal attribute. Setting the function renames the field with Excel's
+    // localised default caption (zh-TW "加總 - Sales"), so the caption is not a marker.
     ...(saved === 'sum'
-      ? { markers: [/<dataField name="Sum of Sales" fld="3"/], absent: [/<dataField [^>]*fld="3"[^>]*subtotal=/] }
+      ? { markers: [/<dataField [^>]*fld="3"/], absent: [/<dataField [^>]*fld="3"[^>]*subtotal=/] }
       : { markers: [dataAttr(`subtotal="${saved}"`)], fallback: 'xml' as const, xmlEdit: (p: PivotParts) => ({ ...p, pivot: editDataField(p.pivot, SALES, { subtotal: saved }) }) }),
     measures: `${saved} cells, subtotals and grand totals from records (§5.3); single-record cells for sample statistics`,
   }))
@@ -878,11 +894,13 @@ add('sort-custom-list-off', 'sort-filter-group', 21, ['sort-label', 'custom-list
 sortCase('collation-ascending', ['collation', 'collation-space-pair'], t => onlyRows(t, 'Code'), 'Code', F.Code, 'ascending', 'punctuation and "A 1"/"A1" collation')
 sortCase('collation-descending', ['collation', 'collation-space-pair'], t => onlyRows(t, 'Code'), 'Code', F.Code, 'descending')
 add('sort-error-item', 'sort-filter-group', 21, ['sort-label', 'error-item'], S({
-  route: 'applescript',
+  route: 'xml',
   // Column A is "@"-formatted in the seed, where a formula would stay literal text: reset the cell first.
-  lines: t => [`set number format of range "A${ERROR_ROW}" of ${t.data} to "General"`, `set formula of range "A${ERROR_ROW}" of ${t.data} to "=NA()"`, `set value of range "D${ERROR_ROW}" of ${t.data} to 100`, source(t, ERROR_ROW),
+  xmlPrep: t => [`set number format of range "A${ERROR_ROW}" of ${t.data} to "General"`, `set formula of range "A${ERROR_ROW}" of ${t.data} to "=NA()"`, `set value of range "D${ERROR_ROW}" of ${t.data} to 100`,
     autoSort(t, 'Region', 'ascending', 'Region')],
-  markers: [fieldAttr(F.Region, 'sortType', 'ascending')], cacheMarkers: [/<e v="#N\/A"\/>/], measures: 'where an error item sorts among text items',
+  xmlEdit: p => widenSource(p, ERROR_ROW),
+  markers: [fieldAttr(F.Region, 'sortType', 'ascending')], cacheMarkers: [new RegExp(`ref="A1:L${ERROR_ROW}"`), /<e v="#N\/A"\/>/],
+  measures: 'where an error item sorts among text items',
 }))
 const valueSort = (id: string, features: string[], name: string, index: number, data: string, prep: (t: Target) => string[], measures?: string) =>
   add(`sort-value-${id}`, 'sort-filter-group', 21, ['sort-by-value', ...features], S({
@@ -940,8 +958,8 @@ filterCase('label-cross-field', ['label-filter', 'cross-field-visibility'], {
 })
 filterCase('label-cross-field-showall', ['label-filter', 'cross-field-visibility', 'show-all'], {
   prep: t => [showAll(t, 'Region')], script: t => makeFilter(t, 'Product', 'filter type:pivot caption begins with, value1:"A"'),
-  edit: x => labelFilter(editPivotField(x, F.Region, { showAll: '1' }), F.Product, 'captionBeginsWith', 'A'), type: 'captionBeginsWith',
-  extra: [fieldAttr(F.Region, 'showAll', '1')], measures: 'cross-field filter visibility with showAll (axes.ts refuses it)',
+  edit: x => labelFilter(editPivotField(x, F.Region, { showAll: null }), F.Product, 'captionBeginsWith', 'A'), type: 'captionBeginsWith',
+  extra: [fieldShowAll(F.Region)], measures: 'cross-field filter visibility with showAll (axes.ts refuses it)',
 })
 filterCase('value-greater-than', ['value-filter'], {
   script: t => makeFilter(t, 'Region', `filter type:pivot value is greater than, data field:${dataField(t, SALES)}, value1:${T.regionValueGreater}`),
@@ -954,8 +972,8 @@ filterCase('value-between', ['value-filter', 'between'], {
 filterCase('value-showall', ['value-filter', 'show-all'], {
   prep: t => [showAll(t, 'Region')],
   script: t => makeFilter(t, 'Region', `filter type:pivot value is greater than, data field:${dataField(t, SALES)}, value1:${T.regionValueGreater}`),
-  edit: x => valueFilter(editPivotField(x, F.Region, { showAll: '1' }), F.Region, 0, 'valueGreaterThan', T.regionValueGreater), type: 'valueGreaterThan',
-  extra: [fieldAttr(F.Region, 'showAll', '1')], measures: 'showAll + value filter (axes.ts refuses it)',
+  edit: x => valueFilter(editPivotField(x, F.Region, { showAll: null }), F.Region, 0, 'valueGreaterThan', T.regionValueGreater), type: 'valueGreaterThan',
+  extra: [fieldShowAll(F.Region)], measures: 'showAll + value filter (axes.ts refuses it)',
 })
 filterCase('value-nested', ['value-filter', 'nested-filter'], {
   script: t => makeFilter(t, 'Product', `filter type:pivot value is greater than, data field:${dataField(t, SALES)}, value1:${T.productValueGreater}`),
