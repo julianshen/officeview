@@ -166,7 +166,8 @@ function applyDxf(layer: Layer, dxf: DxfStyle, edges: BandEdges, theme: ThemeCon
  * - fill: an own fill whose pattern is not none wins; a none fill never
  *   clears the style's fill;
  * - font: an xf naming a font other than Normal's (fontId ≠ 0, `ownFont`)
- *   wins for every property its font states; fontId 0 yields all of them;
+ *   wins for every property its font states, an authored `<u val="none"/>` or
+ *   `<strike val="0"/>` (`fontCleared`) included; fontId 0 yields all of them;
  * - a dxf underline `none` clears a lower element's underline unless the own
  *   font states one;
  * - own borders win per side; an own number format other than General wins;
@@ -192,9 +193,12 @@ export function resolveRoleStyle(
   for (const dxf of overrides) applyDxf(layer, dxf, ALL_EDGES, theme, def.name, diagnostics)
   const out: XlsxCellStyle = own ? { ...own } : { numFmtId: 0 }
   delete out.ownFont
+  delete out.fontCleared
   for (const key of ['fontName', 'fontSizePt', 'bold', 'italic', 'underline', 'strike', 'color'] as const) {
     const value = layer.font[key]
-    if (value === undefined || (own?.ownFont && own[key] !== undefined)) continue
+    // An own font wins for every property it states, a decoration it states off included.
+    const stated = own?.ownFont && (own[key] !== undefined || ((key === 'underline' || key === 'strike') && own.fontCleared?.[key]))
+    if (value === undefined || stated) continue
     if (value === 'none') delete out.underline
     else (out as unknown as Record<string, unknown>)[key] = value
   }

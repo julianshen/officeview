@@ -89,6 +89,10 @@ export interface XlsxCellStyle {
    * over a table or pivot style. Excel ignores applyFont/applyFill there
    * (measure-apply-flags, docs/validation/xlsx-pivots.md). */
   ownFont?: true
+  /** Decorations an own font (`ownFont`) states off: `<u val="none"/>`, `<strike val="0"/>`.
+   * Painting ignores it (absent and off paint alike); a table or pivot style's underline or
+   * strike does not reach the cell through it (tableStyles/resolve.ts). */
+  fontCleared?: { underline?: true; strike?: true }
 }
 
 export interface XlsxRow {

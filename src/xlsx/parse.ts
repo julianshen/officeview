@@ -84,7 +84,7 @@ interface Styles {
   /** Authored custom number formats (styles.xml <numFmts>), keyed by numFmtId;
    * null marks a code over MAX_FORMAT_CODE_UNITS, which displays as General. */
   numFmts: Map<number, string | null>
-  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string; underline?: XlsxCellStyle['underline']; strike?: boolean }>
+  fonts: Array<{ bold: boolean; italic: boolean; sizePt?: number; color?: string; name?: string; underline?: XlsxCellStyle['underline']; strike?: boolean; underlineOff?: true; strikeOff?: true }>
   fills: Array<{ rgb?: string; pattern?: string }>
   borders: Array<{ left?: string; right?: string; top?: string; bottom?: string; colors?: { left?: string; right?: string; top?: string; bottom?: string } }>
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean; indent?: number }>
@@ -143,6 +143,10 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       name: attrs(asNode(f['name'])).val as string | undefined,
       underline: f['u'] !== undefined ? fontUnderline(attrs(asNode(f['u'])).val) : undefined,
       strike: f['strike'] !== undefined && !OFF.has(String(attrs(asNode(f['strike'])).val)) ? true : undefined,
+      // An authored `<u val="none"/>` or `<strike val="0"/>` states the decoration off: kept
+      // apart from an absent element so an own font can clear a table/pivot style's decoration.
+      ...(f['u'] !== undefined && fontUnderline(attrs(asNode(f['u'])).val) === undefined ? { underlineOff: true as const } : {}),
+      ...(f['strike'] !== undefined && OFF.has(String(attrs(asNode(f['strike'])).val)) ? { strikeOff: true as const } : {}),
     }
     styles.fonts.push(font)
   }
@@ -241,6 +245,7 @@ export function resolveXfStyle(styles: Styles, xf: Styles['xfs'][number]): XlsxC
     ...(font?.name ? { fontName: font.name } : {}),
     ...(xf.indent ? { indent: xf.indent } : {}),
     ...(xf.fontId !== 0 ? { ownFont: true as const } : {}),
+    ...(xf.fontId !== 0 && (font?.underlineOff || font?.strikeOff) ? { fontCleared: { ...(font.underlineOff ? { underline: true as const } : {}), ...(font.strikeOff ? { strike: true as const } : {}) } } : {}),
   }
 }
 
