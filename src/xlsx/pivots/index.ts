@@ -17,8 +17,6 @@ export { liveDefinition, placeCells } from './engine/place'
 export type { PivotCellValue, PivotLayout, PivotLayoutCell, PivotValueGrid, PlaceOptions } from './engine/place'
 export { computePivot } from './engine/compute'
 export { computeValues } from './engine/values'
-export { calculatedValue, compileCalculatedField } from './engine/calculated'
-export type { CalculatedField } from './engine/calculated'
 export { checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader } from './engine/faithful'
 export type { CellDiff, CellReader, FaithfulOptions, FaithfulResult, SavedCell } from './engine/faithful'
 

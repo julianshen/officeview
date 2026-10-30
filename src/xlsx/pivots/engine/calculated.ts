@@ -37,7 +37,12 @@ const CONTEXT_FUNCTIONS = new Set([
 
 const key = (name: string) => name.toUpperCase()
 
-/** Parse a calculated field's formula and bind its names; `self` is the calculated field's cache index. */
+/**
+ * Parse a calculated field's formula and bind its names; `self` is the calculated field's cache index.
+ * Amended contract (ruling S2-V): the brief's `calculatedValue(formula, sums)` is two stages, because binding names
+ * needs the cache: `compileCalculatedField(formula, cache, self)` once, then `calculatedValue(compiled, sums)` per
+ * cell. Both are engine-internal (values.ts); they are not exported from the pivots entry.
+ */
 export function compileCalculatedField(formula: string, cache: PivotCacheDefinition, self: number): EngineResult<CalculatedField> {
   const byName = new Map<string, number>()
   cache.fields.forEach((field, index) => {
