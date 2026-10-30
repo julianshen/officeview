@@ -530,3 +530,43 @@ Status is `pass` (compared within tolerance) or `*unverified*`, with the reason 
 | measure-field-buttons | pass | 0.0033 | 0.0627 | 20 | 0.006 / 0.073 / 23 | window screenshot: screen mode with dropdowns |
 | pivot-layout-outline-window | pass | 0.0020 | 0.0627 | 11 | 0.005 / 0.073 / 14 | window screenshot: screen mode with dropdowns |
 | pivot-chart-buttons-all-window | *unverified* | — | — | — | — | A window screenshot of the chart only, with no cell range. Its pixels belong to the chart renderer. What Stage 1 takes from it, that Excel for Mac draws no PivotChart field buttons (Ruling AI), is asserted by tests/charts-pivot-buttons.test.ts. |
+
+## Stage 2 engine oracle and measurements (Task 15, 2026-10-31, Excel 16.114, zh-TW UI)
+
+### How the oracle is made
+- **Seed.** `recipes/engine-seed.xlsx` is built from `recipes/pivot-seed.xlsx` by `bun scripts/xlsx-refs/build-engine.ts --seed`.
+  - AppleScript writes a 56-record, 12-column source (A1:L57) with blanks, ties, negatives, mixed-type Channel values, punctuation codes, month and weekday names, and a Stamp column of serials 0.5, 1, 59, 60 and 61. Row 58 holds a `#N/A` record outside the source; only the error cases widen the source to it.
+  - The pivot is then pointed at the new source. `set source data` is a syntax error in Excel's dictionary (-2741), so the seed takes the XML route: the `worksheetSource` ref is rewritten, and Excel opens, refreshes and saves the file.
+- **Cases.** `scripts/xlsx-refs/engine-cases.ts` defines 125 cases. `build-engine.ts` copies the seed for each one, applies the case, runs `refresh table`, saves, and checks markers in the saved parts, because Excel can ignore a setting without an error.
+  - 96 cases go through AppleScript. 29 go through the XML route: an optional AppleScript prep, then a part edit, then Excel reopens, refreshes and saves.
+  - Excel opened every XML-route file without a repair prompt, and re-applied filters on refresh. For example, `filter-label-begins-with`'s `rowItems` went from 19 to 9.
+  - No case needed the owner, so there is no Stage 2 recipe batch.
+- **Manifest.** `engine/manifest.json` has one entry per case: `{ case, file, features, task, pivot, route, status }`. `pivot` is the pivot table's `name` attribute, which Excel writes in the UI locale (`樞紐分析表2`).
+
+### Dictionary probes (`--probes`)
+| Reshape | Result |
+|---|---|
+| `set source data of <pivot> to "…"` | refused (syntax error -2741): XML route |
+| `set value of range … to {{…}}`, `set formula`, `set number format` | reached |
+| `set subtotals <field> subtotal index sum subtotal / count subtotal / average subtotal value true` | reached. `count subtotal` is Excel's Count, which writes `countASubtotal="1"` and `<item t="countA"/>` |
+| `set pivot field orientation of data field … to orient as hidden` | reached |
+| `data field N of <pivot>` for an added data field, then `set name` | reached |
+| `set base item … to "(previous)"` / `"(next)"` | reached |
+| `make new pivot filter at <field> with properties {…}` | refused (parameter error -50) for every filter type: XML route |
+| `auto show <field> …` | ignored (no `autoShow` or top-10 filter saved): XML route |
+| `group (label range …) start/end/by/periods` | reached |
+| `make new calculated field` / `make new calculated item` | reached |
+| `set enable multiple page items of <field> to true` | refused (-10006): XML route |
+| `set column grand` / `set row grand` | reached, named the other way round from ECMA: `column grand` is `rowGrandTotals`, `row grand` is `colGrandTotals` |
+
+### What Excel writes (measured from the saved parts)
+- **Dates in the cache (ruling S2-H).** The ISO value is 1899-12-30 + serial, applied uniformly: serials 0.5, 1, 59, 60 and 61 are saved as `1899-12-30T12:00:00`, `1899-12-31T00:00:00`, `1900-02-27`, `1900-02-28` and `1900-03-01`. There is no 1900 leap-year correction in the cache. The fictitious 1900-02-29 is serial 60, written as `1900-02-28`.
+- **Fields on no axis.** Their text stays inline in `pivotCacheRecords` (`<s v="…"/>`), and the definition keeps an empty `<sharedItems/>`.
+  - When a field leaves every axis, Excel drops its hidden items and its shared items. An off-axis hidden item is therefore never written by Excel (`quirk-off-axis-hidden-item`).
+  - The engine still refuses that state in files from other writers.
+- **`showAll`.** True is written by omitting the attribute (the schema default); false is `showAll="0"`.
+- **Data field captions.** Setting a data field's function, even to Sum, renames it with Excel's localised default (`加總 - Sales`). Captions Excel wrote earlier stay as they are. The engine takes captions from the saved `name`.
+- **Named subtotals.** Excel writes the `*Subtotal` flags and one `<item t=…>` per function after the item list. It writes no `defaultSubtotal` attribute and no `default` item.
+
+### Engine results per case
+Filled in by Task 23: each case is `ok`, or `unverified` with the refusal and the reason Excel's file does not settle it.
