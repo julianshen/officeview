@@ -41,7 +41,7 @@ const edited = (base: CellReader, edits: Record<string, SavedCell | null>): Cell
 /** Engine refusals that name the later task which removes them (plan Stage 2). Any other refusal on an Excel-made
  * file is a finding, not a pass. */
 const PENDING_TASK: Record<string, string> = {
-  'pivot-engine-pending': 'Task 21 (sort, filters, grouping) or Task 22 (calculated fields)',
+  'pivot-engine-pending': 'a later task (OLAP or non-worksheet sources, unknown definition constructs, a no-record field without a formula)',
   'pivot-engine-unmeasured': 'Task 15 (Excel oracle measurement)',
 }
 const KNOWN_UNSUPPORTED = new Set(['pivot-filter-dynamic-date'])
