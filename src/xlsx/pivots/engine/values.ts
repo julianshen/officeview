@@ -172,6 +172,34 @@ function valueOf(acc: Accumulator, present: Uint8Array, at: number, fn: ValueFnC
   }
 }
 
+/** Aggregate a data field by caller-provided record keys using the engine's existing accumulator semantics. */
+export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, view: PivotViewState, dataIndex: number,
+  keys: Uint32Array, keyCount: number, passes: Uint8Array, functionOverride?: PivotDataFunction): EngineResult<Array<number | undefined>> {
+  if (!view.data[dataIndex] || keys.length !== store.count || passes.length !== store.count)
+    return invalid('filter aggregate inputs do not match the pivot view')
+  const data = view.data[dataIndex]!, sourceField = data.field
+  const column = store.columns[sourceField], shared = cache.fields[sourceField]?.sharedItems?.items
+  const fn = valueFnCode(functionOverride ?? data.fn), acc = accumulator(keyCount, fn), present = new Uint8Array(keyCount)
+  const scratch: ReadValue = { kind: 'missing', value: 0 }
+  for (let record = 0; record < store.count; record++) {
+    if (!passes[record]) continue
+    const key = keys[record]!
+    if (key >= keyCount) return invalid(`filter aggregate record ${record} has an invalid item key`)
+    if (!readValue(column, shared, record, scratch)) return invalid(`record ${record} has an invalid value in field ${sourceField}`)
+    if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+    if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+    if (scratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+    add(acc, present, key, scratch, fn)
+  }
+  const result = new Array<number | undefined>(keyCount)
+  for (let key = 0; key < keyCount; key++) {
+    const value = valueOf(acc, present, key, fn)
+    if (value !== undefined && !Number.isFinite(value)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+    result[key] = value
+  }
+  return { ok: true, value: result }
+}
+
 function subtotalFunction(type: PivotItemType, fallback: PivotDataFunction): PivotDataFunction {
   switch (type) {
     case 'sum': case 'max': case 'min': case 'product': case 'stdDev': case 'var': return type

@@ -137,7 +137,8 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
     const pivotItem = def.fields[field]?.items?.[item]
     if (pivotItem?.name !== undefined) return text(pivotItem.name)
     const cacheField = cache.fields[field]
-    const value = cacheField?.sharedItems?.items[pivotItem ? pivotItem.x ?? -1 : item]
+    const itemValues = cacheField?.fieldGroup?.groupItems ?? cacheField?.sharedItems?.items
+    const value = itemValues?.[pivotItem ? pivotItem.x ?? -1 : item]
     if (!value) return text('')
     if (value.caption !== undefined) return text(value.caption)
     const numFmtId = def.fields[field]?.numFmtId ?? cacheField?.numFmtId

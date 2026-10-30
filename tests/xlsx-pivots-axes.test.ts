@@ -385,24 +385,24 @@ describe('fix round 1', () => {
   })
 })
 
-describe('features owned by Task 21 are pending', () => {
-  it('sorting, autoSortScope, filters and grouping give pivot-engine-pending', async () => {
+describe('Task 21 behaviours and remaining gates', () => {
+  it('implements sorting and filters, and keeps unmeasured scope/grouping typed', async () => {
     const p = await ref('pivot-layout-compact')
     const view = initialViewState(p.def, p.cache)
     const pending = (result: ReturnType<typeof computeAxes>) => result.ok ? undefined : { kind: result.diagnostic.kind, feature: result.diagnostic.feature }
-    const expected = { kind: 'unsupported', feature: ENGINE_PENDING }
-    expect(pending(axesOf(p, withFields(view, { 0: { sortType: 'descending' } })))).toEqual(expected)
-    expect(pending(axesOf(p, withFields(view, { 1: { autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [] } } })))).toEqual(expected)
-    expect(pending(axesOf(p, { ...view, filters: [{ fld: 0, type: 'captionEqual', evalOrder: 0, id: 1, stringValue1: 'East', autoFilter: { columns: [] } }] }))).toEqual(expected)
+    const expected = { kind: 'unsupported', feature: 'pivot-engine-unmeasured' }
+    expect(axesOf(p, withFields(view, { 0: { sortType: 'descending' } })).ok).toBe(true)
+    expect(pending(axesOf(p, withFields(view, { 0: { autoSortScope: { type: 'normal', dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [] } } })))).toEqual(expected)
+    expect(axesOf(p, { ...view, filters: [{ fld: 0, type: 'captionEqual', evalOrder: 0, id: 1, stringValue1: 'East', autoFilter: { columns: [] } }] }).ok).toBe(true)
     const grouped: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 2 ? { ...field, fieldGroup: { base: 2, rangePr: { autoStart: true, autoEnd: true, groupBy: 'range', groupInterval: 1 } } } : field) }
     const result = computeAxes(p.store, grouped, p.def, view)
-    expect(pending(result)).toEqual(expected)
+    expect(pending(result)).toEqual({ kind: 'parse', feature: 'pivot-definition-invalid' })
     // Calculated fields belong to Task 22, on an axis or as data.
     const calculated: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 4 ? { ...field, databaseField: false, formula: 'Sales*2', sharedItems: undefined } : field) }
-    expect(pending(computeAxes(p.store, calculated, p.def, view))).toEqual(expected)
-    expect(pending(computeAxes(p.store, calculated, p.def, { ...view, cols: [-2, 4] }))).toEqual(expected)
+    expect(pending(computeAxes(p.store, calculated, p.def, view))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
+    expect(pending(computeAxes(p.store, calculated, p.def, { ...view, cols: [-2, 4] }))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
     const formulaOnly: PivotCacheDefinition = { ...p.cache, fields: p.cache.fields.map((field, k) => k === 1 ? { ...field, formula: 'Sales' } : field) }
-    expect(pending(computeAxes(p.store, formulaOnly, p.def, view))).toEqual(expected)
+    expect(pending(computeAxes(p.store, formulaOnly, p.def, view))).toEqual({ kind: 'unsupported', feature: ENGINE_PENDING })
     // A sort on a field off every axis changes nothing.
     expect(axesOf(p, withFields(view, { 3: { sortType: 'ascending' } })).ok).toBe(true)
   })
@@ -419,10 +419,10 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-Pivot2_Row_Compact.xlsx': ['equal'],
   'lo-calc-Pivot2_Row_Grand_Subtotals.xlsx': ['equal'],
   'lo-calc-Pivot3_Column_Grand_Subtotals.xlsx': ['equal'],
-  'lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx': ['pending'],
+  'lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx': ['equal'],
   'lo-calc-pivotcompact.xlsx': ['equal'],
   'lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx': ['equal'],
-  'lo-calc-pivottable_date_field_filter.xlsx': ['pending'],
+  'lo-calc-pivottable_date_field_filter.xlsx': ['unmeasured'],
   'lo-calc-pivottable_outline_mode.xlsx': ['equal'],
   // Field 6, on no axis, has a hidden item: unmeasured, so it fails closed. (Its saved layout shows the record that
   // item would exclude; the file's naming, "Sum - Amount" and "Data", is LibreOffice's.)
@@ -430,9 +430,9 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-pivottable_tabular_mode.xlsx': ['equal'],
   'lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx': ['equal'],
   'lo-calc-PivotTableFormatsSubTotals.xlsx': ['equal'],
-  'lo-calc-PivotTableWithNoSourceData.xlsx': ['pending'],
-  'lo-calc-shared-dategroup.xlsx': ['pending', 'pending'],
-  'lo-calc-shared-numgroup.xlsx': ['pending', 'pending'],
+  'lo-calc-PivotTableWithNoSourceData.xlsx': ['unmeasured'],
+  'lo-calc-shared-dategroup.xlsx': ['equal', 'equal'],
+  'lo-calc-shared-numgroup.xlsx': ['equal', 'equal'],
   'lo-calc-two-data-fields.xlsx': ['equal'],
 }
 describe.skipIf(!existsSync(resolve(CORPUS, 'poi-ExcelPivotTableSample.xlsx')))('corpus files with rowItems', () => {

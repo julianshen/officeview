@@ -43,6 +43,7 @@ const edited = (base: CellReader, edits: Record<string, SavedCell | null>): Cell
 const PENDING_TASK: Record<string, string> = {
   'pivot-engine-pending': 'Task 21 (sort, filters, grouping) or Task 22 (calculated fields)',
   'pivot-engine-unmeasured': 'Task 15 (Excel oracle measurement)',
+  'pivot-filter-dynamic-date': 'Task 21 controller ruling (dynamic date filters are unsupported)',
 }
 const describeResult = (result: FaithfulResult) => result.status === 'mismatch'
   ? `mismatch R${result.firstDiff.row + 1}C${result.firstDiff.col + 1}: ${result.firstDiff.reason}`
@@ -201,8 +202,8 @@ describe('mismatch and unverified paths', () => {
 
   it('an engine refusal is unverified (unsupported) with the feature as detail', async () => {
     const p = await ref('pivot-layout-compact')
-    const view = p.def.fields.map((field, k) => k === 0 ? { ...field, sortType: 'descending' as const } : field)
-    expect(check(p, undefined, { def: { ...p.def, fields: view } })).toEqual({ status: 'unverified', reason: 'unsupported', detail: 'pivot-engine-pending' })
+    const view = p.def.fields.map((field, k) => k === 0 ? { ...field, autoSortScope: { type: 'normal' as const, dataOnly: true, labelOnly: false, grandRow: false, grandCol: false, cacheIndex: false, outline: true, collapsedLevelsAreSubtotals: false, references: [] } } : field)
+    expect(check(p, undefined, { def: { ...p.def, fields: view } })).toEqual({ status: 'unverified', reason: 'unsupported', detail: 'pivot-engine-unmeasured' })
   })
 })
 
@@ -409,7 +410,7 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-Pivot2_Row_Grand_Subtotals.xlsx': ['xl', 'ok'],
   'lo-calc-Pivot3_Column_Grand_Subtotals.xlsx': ['xl', 'ok'],
   // Field 1 is sorted (Task 21).
-  'lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx': ['xl', PENDING],
+  'lo-calc-Pivot4_Column_Grand_Subtotals_SortDescending.xlsx': ['xl', 'ok'],
   'lo-calc-PivotTableCellFormatsTest_7_TwoRowTwoColumnFields_DataColor.xlsx': ['xl', 'ok'],
   'lo-calc-PivotTableFormatsSubTotals.xlsx': ['xl', 'ok'],
   // worksheetSource r:id: the source is another workbook (§7.6).
@@ -421,15 +422,15 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-pivot_dark1.xlsx': ['xl', UNMEASURED],
   'lo-calc-pivotcompact.xlsx': ['xl', 'ok'],
   // Field 3 is sorted (Task 21).
-  'lo-calc-pivottable_date_field_filter.xlsx': ['xl', PENDING],
+  'lo-calc-pivottable_date_field_filter.xlsx': ['xl', UNMEASURED],
   'lo-calc-pivottable_outline_mode.xlsx': ['xl', 'ok'],
   // Field 6, on no axis, has a hidden item (Task 15 cross-field measurement).
   'lo-calc-pivottable_rowcolpage_field_filter.xlsx': ['xl', UNMEASURED],
   // Hidden items filter records: visible totals are unmeasured (Task 15).
   'lo-calc-pivottable_tabular_mode.xlsx': ['xl', UNMEASURED],
   // Date and number grouping (Task 21).
-  'lo-calc-shared-dategroup.xlsx': ['xl', PENDING, PENDING],
-  'lo-calc-shared-numgroup.xlsx': ['xl', PENDING, PENDING],
+  'lo-calc-shared-dategroup.xlsx': ['xl', 'ok', 'ok'],
+  'lo-calc-shared-numgroup.xlsx': ['xl', 'ok', 'ok'],
   // Count subtotals/grand totals from records are unmeasured (Task 15).
   'lo-calc-two-data-fields.xlsx': ['xl', UNMEASURED],
   // A page selection filters records: visible totals are unmeasured (Task 15).
