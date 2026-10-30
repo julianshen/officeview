@@ -4,13 +4,16 @@
  * Receives the cache definition, pivot definition, and raw XML record chunks,
  * streams decodeRecords to build the columnar RecordStore, runs 2 warm-up iterations
  * of computeAxes + computeValues, and then runs 7 timed iterations.
+ *
+ * Untimed Bun.gc(true) is invoked before each sample.
+ * Result shape metrics (rows, cols, non-empty cells, grand totals checksum) are returned.
  */
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
 import { computeAxes } from '../src/xlsx/pivots/engine/axes'
 import { computeValues } from '../src/xlsx/pivots/engine/values'
 import { RECORD_LIMITS, recordEvents } from '../src/xlsx/pivots/engine/records'
 import { tokenizeBytes } from '../src/core/xml-stream'
-import type { PivotCacheDefinition, PivotTableDefinition } from '../src/xlsx/pivots/model'
+import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition } from '../src/xlsx/pivots/model'
 
 interface BenchWorkerPayload {
   cache: PivotCacheDefinition
@@ -27,13 +30,22 @@ export interface BenchSample {
   totalMs: number
 }
 
+export interface BenchShapeReport {
+  rowLines: number
+  colLines: number
+  nonEmptyCells: number
+  grandTotalsChecksum: number
+}
+
 export interface BenchWorkerResponse {
   ok: boolean
+  diagnostic?: PivotDiagnostic
   error?: string
   decodeMs: number
   storeBytes: number
   recordCount: number
   samples: BenchSample[]
+  shape?: BenchShapeReport
 }
 
 declare const self: Worker
@@ -67,7 +79,7 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
   if (!storeRes.ok) {
     self.postMessage({
       ok: false,
-      error: `record decode failed: ${storeRes.diagnostic.message}`,
+      diagnostic: storeRes.diagnostic,
       decodeMs,
       storeBytes: 0,
       recordCount: 0,
@@ -81,11 +93,12 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
 
   // Warm-up runs
   for (let w = 0; w < warmupRuns; w++) {
+    if (typeof Bun !== 'undefined' && typeof Bun.gc === 'function') Bun.gc(true)
     const axesRes = computeAxes(store, cache, def, view)
     if (!axesRes.ok) {
       self.postMessage({
         ok: false,
-        error: `warm-up axes error: ${axesRes.diagnostic.message}`,
+        diagnostic: axesRes.diagnostic,
         decodeMs,
         storeBytes: store.bytes,
         recordCount: store.count,
@@ -97,7 +110,7 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
     if (!valuesRes.ok) {
       self.postMessage({
         ok: false,
-        error: `warm-up values error: ${valuesRes.diagnostic.message}`,
+        diagnostic: valuesRes.diagnostic,
         decodeMs,
         storeBytes: store.bytes,
         recordCount: store.count,
@@ -109,15 +122,19 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
 
   // Timed runs
   const samples: BenchSample[] = []
+  let lastAxes: ReturnType<typeof computeAxes> | undefined
+  let lastValues: ReturnType<typeof computeValues> | undefined
+
   for (let r = 0; r < timedRuns; r++) {
-    const tStart = performance.now()
+    if (typeof Bun !== 'undefined' && typeof Bun.gc === 'function') Bun.gc(true)
+
     const tAxes0 = performance.now()
     const axesRes = computeAxes(store, cache, def, view)
     const axesMs = performance.now() - tAxes0
     if (!axesRes.ok) {
       self.postMessage({
         ok: false,
-        error: `timed axes error on run ${r + 1}: ${axesRes.diagnostic.message}`,
+        diagnostic: axesRes.diagnostic,
         decodeMs,
         storeBytes: store.bytes,
         recordCount: store.count,
@@ -132,7 +149,7 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
     if (!valuesRes.ok) {
       self.postMessage({
         ok: false,
-        error: `timed values error on run ${r + 1}: ${valuesRes.diagnostic.message}`,
+        diagnostic: valuesRes.diagnostic,
         decodeMs,
         storeBytes: store.bytes,
         recordCount: store.count,
@@ -141,13 +158,47 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
       return
     }
 
-    const totalMs = performance.now() - tStart
+    lastAxes = axesRes
+    lastValues = valuesRes
     samples.push({
       run: r + 1,
       axesMs,
       valuesMs,
-      totalMs,
+      totalMs: axesMs + valuesMs,
     })
+  }
+
+  // Inspect shape of final result
+  let shape: BenchShapeReport | undefined
+  if (lastAxes && lastAxes.ok && lastValues && lastValues.ok) {
+    const axes = lastAxes.value
+    const grid = lastValues.value
+    let nonEmptyCells = 0
+    let checksum = 0
+
+    const rowCount = axes.rows.length
+    const colCount = axes.cols.length
+    const dataCount = view.data.length
+
+    for (let r = 0; r < rowCount; r++) {
+      for (let c = 0; c < colCount; c++) {
+        for (let d = 0; d < dataCount; d++) {
+          const cell = grid.get(r, c, d)
+          if (cell.kind === 'number') {
+            nonEmptyCells++
+            // Add grand total line contributions or cell value to checksum
+            checksum += cell.value
+          }
+        }
+      }
+    }
+
+    shape = {
+      rowLines: rowCount,
+      colLines: colCount,
+      nonEmptyCells,
+      grandTotalsChecksum: checksum,
+    }
   }
 
   self.postMessage({
@@ -156,5 +207,6 @@ self.onmessage = async (e: MessageEvent<BenchWorkerPayload>) => {
     storeBytes: store.bytes,
     recordCount: store.count,
     samples,
+    shape,
   } satisfies BenchWorkerResponse)
 }
