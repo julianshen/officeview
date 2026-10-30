@@ -561,6 +561,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
         if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
         if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
         if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+        if (valueScratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
         const numeric = valueScratch.kind === 'number', value = valueScratch.value
         grandPresent[d] = 1
         if (numeric) grandSum[d] += value
@@ -593,6 +594,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
         if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
         if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
         if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+        if (valueScratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
         const fn = functions[d]!
         const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
         const rowList = recordTargets.value.rows[d]!, colList = recordTargets.value.cols[d]!

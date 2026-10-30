@@ -224,6 +224,15 @@ describe('calculated fields in the pivot', () => {
     expect(diagnostic(run(fixture({ 3: "'Unknown'*2" })))).toEqual(CALCULATED)
   })
 
+  it('refuses a non-finite value read on the calculated-field aggregation path', () => {
+    const f = fixture({}, RECORDS, RECORDS.map((_, index) => index === 0 ? Number.NaN : 1))
+    f.view.data = [
+      { ...sumOf(5), fn: 'average' },
+      sumOf(4),
+    ]
+    expect(diagnostic(run(f))).toEqual(UNMEASURED)
+  })
+
   it('fails closed on every unmeasured calculated-field behaviour', () => {
     const f = fixture()
     // Show-as and a function other than sum on the calculated field.

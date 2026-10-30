@@ -100,6 +100,14 @@ describe('pivot value aggregation', () => {
     expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
   })
 
+  it('refuses non-finite values on the general function-bank path', () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const f = fixture([value, 2], [{ field: 1, fn: 'average', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Average' }])
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    }
+  })
+
   it('keeps normal all-sum cells identical when a twin show-as field selects the general path', () => {
     const rows: PivotAxes['rows'] = [
       { type: 'data', first: 0, items: [0], data: 0 },
