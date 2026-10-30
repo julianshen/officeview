@@ -1,5 +1,6 @@
 /** Pure filter predicates shared by computeAxes. */
 import type { PivotFilter, PivotFilterColumn, PivotFilterType, PivotValue } from '../model'
+import { compareEnglishLabels } from './sort'
 
 const CAPTION_TYPES = new Set<PivotFilterType>([
   'captionEqual', 'captionNotEqual', 'captionBeginsWith', 'captionNotBeginsWith', 'captionEndsWith', 'captionNotEndsWith',
@@ -29,6 +30,9 @@ function criterion(filter: PivotFilter, column: PivotFilterColumn | undefined, w
   return values[which - 1]?.val
 }
 function wildcardRegex(pattern: string, mode: 'exact' | 'prefix' | 'contains' | 'suffix'): RegExp {
+  const key = `${mode}\u0000${pattern}`
+  const cached = WILDCARD_CACHE.get(key)
+  if (cached) return cached
   let source = mode === 'contains' || mode === 'suffix' ? '.*' : ''
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i]!
@@ -38,10 +42,15 @@ function wildcardRegex(pattern: string, mode: 'exact' | 'prefix' | 'contains' | 
     else source += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
   if (mode === 'contains' || mode === 'prefix') source += '.*'
-  return new RegExp(`^${source}$`, 'iu')
+  const regex = new RegExp(`^${source}$`, 'isu')
+  if (WILDCARD_CACHE.size >= 128) WILDCARD_CACHE.clear()
+  WILDCARD_CACHE.set(key, regex)
+  return regex
 }
+const WILDCARD_CACHE = new Map<string, RegExp>()
+const printableAscii = (text: string) => /^[\x20-\x7e]*$/u.test(text)
 function captionCompare(label: string, op: PivotFilterType, a: string, b?: string): boolean {
-  const value = label.toLowerCase(), first = a.toLowerCase(), second = b?.toLowerCase()
+  const firstVsLabel = compareEnglishLabels(label, a), secondVsLabel = b === undefined ? undefined : compareEnglishLabels(label, b)
   const glob = wildcardRegex(a, op === 'captionBeginsWith' || op === 'captionNotBeginsWith' ? 'prefix'
     : op === 'captionEndsWith' || op === 'captionNotEndsWith' ? 'suffix'
       : op === 'captionContains' || op === 'captionNotContains' ? 'contains' : 'exact')
@@ -54,37 +63,41 @@ function captionCompare(label: string, op: PivotFilterType, a: string, b?: strin
     case 'captionNotEndsWith': return !glob.test(label)
     case 'captionContains': return glob.test(label)
     case 'captionNotContains': return !glob.test(label)
-    case 'captionGreaterThan': return value > first
-    case 'captionGreaterThanOrEqual': return value >= first
-    case 'captionLessThan': return value < first
-    case 'captionLessThanOrEqual': return value <= first
-    case 'captionBetween': return second !== undefined && value >= first && value <= second
-    case 'captionNotBetween': return second !== undefined && (value < first || value > second)
+    case 'captionGreaterThan': return firstVsLabel > 0
+    case 'captionGreaterThanOrEqual': return firstVsLabel >= 0
+    case 'captionLessThan': return firstVsLabel < 0
+    case 'captionLessThanOrEqual': return firstVsLabel <= 0
+    case 'captionBetween': return secondVsLabel !== undefined && firstVsLabel >= 0 && secondVsLabel <= 0
+    case 'captionNotBetween': return secondVsLabel !== undefined && (firstVsLabel < 0 || secondVsLabel > 0)
     default: return false
   }
 }
 export function matchesLabelFilter(filter: PivotFilter, value: PivotValue | undefined): boolean | undefined {
   if (!isLabelFilter(filter)) return undefined
   const column = filter.autoFilter.columns[0]
-  if (value?.type === 'missing') return column?.filters?.blank ?? false
-  if (!value || value.type === 'error') return undefined
-  const label = value.type === 'number' || value.type === 'boolean' ? String(value.value) : value.value
-  if (column?.filters) return column.filters.values.some(candidate => candidate.toLowerCase() === label.toLowerCase())
+  if (!value || value.type !== 'string' || !printableAscii(value.value)) return undefined
+  const label = value.value
+  if (column?.filters) {
+    if (column.filters.values.some(candidate => !printableAscii(candidate))) return undefined
+    return column.filters.values.some(candidate => compareEnglishLabels(candidate, label) === 0)
+  }
   const a = criterion(filter, column, 1)
   const b = criterion(filter, column, 2)
-  if (a === undefined) return undefined
-  if (column?.customFilters?.filters.length) {
-    const decisions = column.customFilters.filters.map(rule => {
-      if (rule.val === undefined) return false
+  const custom = column?.customFilters?.filters ?? []
+  if ((!custom.length && a === undefined) || (a !== undefined && !printableAscii(a)) || (b !== undefined && !printableAscii(b))) return undefined
+  if (custom.length) {
+    const decisions = custom.map(rule => {
+      if (rule.val === undefined || !printableAscii(rule.val)) return undefined
       const op: Record<string, PivotFilterType> = {
         equal: 'captionEqual', notEqual: 'captionNotEqual', greaterThan: 'captionGreaterThan', greaterThanOrEqual: 'captionGreaterThanOrEqual',
         lessThan: 'captionLessThan', lessThanOrEqual: 'captionLessThanOrEqual',
       }
       return captionCompare(label, op[rule.operator] ?? 'captionEqual', rule.val)
     })
-    return column.customFilters.and ? decisions.every(Boolean) : decisions.some(Boolean)
+    if (decisions.some(decision => decision === undefined)) return undefined
+    return column!.customFilters!.and ? decisions.every(Boolean) : decisions.some(Boolean)
   }
-  return captionCompare(label, filter.type, a, b)
+  return captionCompare(label, filter.type, a!, b)
 }
 
 function asNumber(value: PivotValue | undefined): number | undefined {
@@ -112,11 +125,13 @@ export function matchesValueFilter(filter: PivotFilter, value: number | undefine
 }
 export function matchesDateFilter(filter: PivotFilter, value: PivotValue | undefined): boolean | undefined {
   if (!isDateFilter(filter)) return undefined
-  if (value?.type === 'missing') return false
-  // Cache dates are ISO text; numeric Excel serials need workbook date-system context.
+  // Excel's date-filter caption and day-boundary semantics need an oracle for blanks,
+  // serial numbers and time-bearing values. Only ISO midnight cache dates are settled.
   if (value?.type !== 'date') return undefined
+  const midnight = (iso: string) => /^\d{4}-\d\d-\d\d(?:T00:00:00(?:\.0+)?(?:Z|[+-]00:00)?)?$/u.test(iso)
+  if (!midnight(value.value)) return undefined
   const v = asNumber(value), aValue = criterion(filter, filter.autoFilter.columns[0], 1), bValue = criterion(filter, filter.autoFilter.columns[0], 2)
-  if (v === undefined || aValue === undefined) return undefined
+  if (v === undefined || aValue === undefined || !midnight(aValue) || (bValue !== undefined && !midnight(bValue))) return undefined
   const a = Date.parse(aValue.endsWith('Z') ? aValue : `${aValue}Z`)
   const b = bValue === undefined ? undefined : Date.parse(bValue.endsWith('Z') ? bValue : `${bValue}Z`)
   if (!Number.isFinite(a)) return undefined

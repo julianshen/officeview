@@ -43,14 +43,15 @@ const edited = (base: CellReader, edits: Record<string, SavedCell | null>): Cell
 const PENDING_TASK: Record<string, string> = {
   'pivot-engine-pending': 'Task 21 (sort, filters, grouping) or Task 22 (calculated fields)',
   'pivot-engine-unmeasured': 'Task 15 (Excel oracle measurement)',
-  'pivot-filter-dynamic-date': 'Task 21 controller ruling (dynamic date filters are unsupported)',
 }
+const KNOWN_UNSUPPORTED = new Set(['pivot-filter-dynamic-date'])
 const describeResult = (result: FaithfulResult) => result.status === 'mismatch'
   ? `mismatch R${result.firstDiff.row + 1}C${result.firstDiff.col + 1}: ${result.firstDiff.reason}`
   : result.status === 'unverified' ? `unverified:${result.reason}${result.detail ? `:${result.detail}` : ''}` : 'ok'
 function expectOkOrPending(result: FaithfulResult, where: string) {
   if (result.status === 'ok') return
-  expect(result.status === 'unverified' && result.reason === 'unsupported' && result.detail !== undefined && PENDING_TASK[result.detail] !== undefined,
+  expect(result.status === 'unverified' && result.reason === 'unsupported' && result.detail !== undefined &&
+    (PENDING_TASK[result.detail] !== undefined || KNOWN_UNSUPPORTED.has(result.detail)),
     `${where}: ${describeResult(result)}`).toBe(true)
 }
 

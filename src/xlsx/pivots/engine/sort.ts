@@ -7,6 +7,17 @@ const fail = (message: string): EngineResult<never> => ({
 })
 const MONTHS = new Set(['jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april', 'may', 'jun', 'june', 'jul', 'july', 'aug', 'august', 'sep', 'sept', 'september', 'oct', 'october', 'nov', 'november', 'dec', 'december'])
 const WEEKDAYS = new Set(['sun', 'sunday', 'mon', 'monday', 'tue', 'tues', 'tuesday', 'wed', 'wednesday', 'thu', 'thur', 'thurs', 'thursday', 'fri', 'friday', 'sat', 'saturday'])
+const ENGLISH_LABELS = new Intl.Collator('en', { sensitivity: 'accent' })
+const WORD_PUNCTUATION = /[-']/u
+
+/** Excel's English word sort ignores hyphen/apostrophe within words but keeps unpunctuated spelling first. */
+export function compareEnglishLabels(left: string, right: string): number {
+  const normalized = ENGLISH_LABELS.compare(left.replace(/[-']/gu, ''), right.replace(/[-']/gu, ''))
+  if (normalized) return normalized
+  const leftPunctuated = WORD_PUNCTUATION.test(left), rightPunctuated = WORD_PUNCTUATION.test(right)
+  if (leftPunctuated !== rightPunctuated) return leftPunctuated ? 1 : -1
+  return ENGLISH_LABELS.compare(left, right)
+}
 function category(value: PivotValue): string {
   if (value.type === 'number') return 'number'
   if (value.type === 'date') return 'date'
@@ -18,10 +29,7 @@ function compare(a: PivotValue, b: PivotValue): number | undefined {
   if (a.type !== b.type) return undefined
   if (a.type === 'number' && b.type === 'number') return a.value - b.value
   if (a.type === 'date' && b.type === 'date') return a.value < b.value ? -1 : a.value > b.value ? 1 : 0
-  if (a.type === 'string' && b.type === 'string') {
-    const left = a.value.toLowerCase(), right = b.value.toLowerCase()
-    return left < right ? -1 : left > right ? 1 : 0
-  }
+  if (a.type === 'string' && b.type === 'string') return compareEnglishLabels(a.value, b.value)
   if (a.type === 'missing' && b.type === 'missing') return 0
   if (a.type === 'boolean' && b.type === 'boolean') return Number(a.value) - Number(b.value)
   return undefined
@@ -34,7 +42,7 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
   if (new Set(values.map(category)).size > 1)
     return fail(`mixed-type item order for sorted field ${field} is not measured`)
   if (values.some(value => value.type === 'error')) return fail(`error-item order for sorted field ${field} is not measured`)
-  if (values.some(value => value.type === 'string' && /[^\x00-\x7f]/u.test(value.value)))
+  if (values.some(value => value.type === 'string' && !/^[\x20-\x7e]*$/u.test(value.value)))
     return fail(`non-ASCII text collation for sorted field ${field} is not measured`)
   if (values.some(value => value.type === 'string' && (MONTHS.has(value.value.trim().toLocaleLowerCase()) || WEEKDAYS.has(value.value.trim().toLocaleLowerCase()))))
     return fail(`custom-list order for sorted field ${field} is not measured`)

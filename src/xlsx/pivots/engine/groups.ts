@@ -8,7 +8,7 @@ const fail = (feature: string, message: string): EngineResult<never> => ({
   ok: false, diagnostic: { kind: 'unsupported', feature, message } satisfies PivotDiagnostic,
 })
 const invalid = (message: string): EngineResult<never> => ({
-  ok: false, diagnostic: { kind: 'parse', feature: 'pivot-group-invalid', message },
+  ok: false, diagnostic: { kind: 'parse', feature: 'pivot-definition-invalid', message },
 })
 const unmeasured = (message: string) => fail('pivot-engine-unmeasured', message)
 
@@ -34,14 +34,26 @@ function missingGroup(groupItems: readonly PivotValue[]): number {
 function caption(item: PivotValue): string | undefined {
   return item.type === 'string' || item.type === 'number' ? String(item.value) : undefined
 }
-function rangeLabel(groupItems: readonly PivotValue[], value: number): number {
+function rangeBucket(groupItems: readonly PivotValue[], start: number, end: number, interval: number, value: number): number {
+  if (value < start) return groupItems.findIndex(item => item.type === 'string' && /^\s*</u.test(item.value))
+  if (value > end) return groupItems.findIndex(item => item.type === 'string' && /^\s*>/u.test(item.value))
+  const buckets: Array<{ index: number; start: number; end: number }> = []
   for (let i = 0; i < groupItems.length; i++) {
     const text = caption(groupItems[i]!)
     if (!text) continue
     const match = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*[-–]\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*$/.exec(text)
-    if (match && value >= Number(match[1]) && value <= Number(match[2])) return i
+    if (match) buckets.push({ index: i, start: Number(match[1]), end: Number(match[2]) })
   }
-  return -1
+  buckets.sort((a, b) => a.start - b.start)
+  const count = Math.ceil((end - start) / interval)
+  if (buckets.length !== count) return -1
+  const slot = Math.min(Math.floor((value - start) / interval), count - 1)
+  const bucket = buckets[slot]
+  if (!bucket) return -1
+  const expectedStart = start + slot * interval
+  const tolerance = Math.max(1, Math.abs(expectedStart)) * Number.EPSILON * 8
+  if (Math.abs(bucket.start - expectedStart) > tolerance) return -1
+  return bucket.index
 }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -88,13 +100,12 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     for (let row = 0; row < store.count; row++) {
       const value = sourceValue(store, cache, base, row)
       if (!value) return invalid(`group field ${field} has an invalid base value at record ${row}`)
-      if (value.type === 'missing') {
-        if (blank >= 0) output[row] = blank
-        continue
-      }
       const sourceItem = source.kind === 'shared' ? source.index[row]! : -1
       const group = map[sourceItem]
-      if (group === undefined) return invalid(`group field ${field} has no discrete mapping for base item ${sourceItem}`)
+      if (group === undefined) {
+        if (value.type === 'missing' && blank >= 0) { output[row] = blank; continue }
+        return invalid(`group field ${field} has no discrete mapping for base item ${sourceItem}`)
+      }
       if (group >= groupItems.length) return invalid(`group field ${field} maps outside groupItems`)
       output[row] = group
     }
@@ -113,11 +124,10 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     if (range.groupBy === 'range') {
       if (value.type !== 'number') return unmeasured(`number group field ${field} contains a non-numeric base item`)
       const start = range.startNum, end = range.endNum
-      if (start === undefined || end === undefined || !Number.isFinite(range.groupInterval) || range.groupInterval <= 0)
+      if (start === undefined || end === undefined || !Number.isFinite(start) || !Number.isFinite(end) || end < start ||
+        !Number.isFinite(range.groupInterval) || range.groupInterval <= 0)
         return invalid(`number group field ${field} has invalid range bounds`)
-      if (value.value < start || value.value > end)
-        return unmeasured(`out-of-range number group labels for field ${field} are not measured`)
-      const item = rangeLabel(groupItems, value.value)
+      const item = rangeBucket(groupItems, start, end, range.groupInterval, value.value)
       if (item < 0) return unmeasured(`number group label for ${value.value} in field ${field} is not represented`)
       output[row] = item
       continue

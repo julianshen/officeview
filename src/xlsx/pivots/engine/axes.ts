@@ -113,13 +113,15 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   // Whether a hidden item on a field on no axis or page filters records is unmeasured (a slicer on a field outside the
   // pivot may store its selection that way): fail closed until Task 15 has an Excel case.
   const filterFields = new Set(view.filters.map(filter => filter.fld))
-  const labelFilterFields = new Set(view.filters.filter(isLabelFilter).map(filter => filter.fld))
-  if ([...labelFilterFields].some(source => axisFields.some(target => target !== source && view.fields[target]?.showAll)))
-    return unmeasured('cross-field label-filter visibility with showAll is not measured')
+  if (view.filters.some(filter => axisFields.some(target => target !== filter.fld && view.fields[target]?.showAll)))
+    return unmeasured('cross-field filter visibility with showAll is not measured')
+  // Measured guard: removing this for lo-calc-pivottable_date_field_filter.xlsx leaves its rowItems tuple
+  // unchanged but places Date/Date2/Date3 labels over the saved Sum - Amount header. The axes tuple alone
+  // therefore does not establish that combined hidden-item visibility and a sorted axis are safe to emit.
   const visibilityFields = view.fields.map((state, index) => ({ state, index }))
     .filter(({ state, index }) => axisUsed.has(index) && (state.hidden.includes(true) || view.pages.some(page => page.field === index && page.selected !== 'all')))
   if (visibilityFields.length > 1 && axisFields.some(field => view.fields[field]?.sortType !== 'manual'))
-    return unmeasured('combined hidden-item visibility across multiple sorted fields is not measured')
+    return unmeasured('combined hidden-item visibility across multiple sorted fields disagrees with the saved label layout')
   const used = new Set([...axisUsed, ...filterFields])
   const offAxis = view.fields.findIndex((field, index) => field.hidden.includes(true) && !axisUsed.has(index) && !filterFields.has(index))
   if (offAxis >= 0) return unmeasured(`field ${offAxis} is on no axis but has hidden items`)
@@ -133,7 +135,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
 
   // Record filter: the hidden items of every row, column and page field, and each page's selection.
   const maps = new Map<number, ItemMap>()
-  const filters: Array<{ field: number; map: ItemMap; selected: readonly number[] | 'all'; state: FieldState }> = []
+  const filters: Array<{ field: number; map: ItemMap; selected: ReadonlySet<number> | 'all'; state: FieldState }> = []
   for (const field of used) {
     const column = store.columns[field]
     const map = fieldItemMap(store, def, cache, field)
@@ -144,12 +146,19 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     const selected = view.pages.find(page => page.field === field)?.selected ?? 'all'
     if (selected === 'all' && !state.hidden.includes(true)) continue
     if (column && column.kind !== 'shared' && !cache.fields[field]?.fieldGroup) return unmeasured(`inline field ${field} on an axis needs a measured item map`)
-    filters.push({ field, map: map.value, selected, state })
+    filters.push({ field, map: map.value, selected: selected === 'all' ? 'all' : new Set(selected), state })
   }
   const passes = new Uint8Array(store.count).fill(1)
+  const allowedByField = new Map<number, Set<number>>()
+  const constrainItems = (field: number, next: Set<number>) => {
+    const previous = allowedByField.get(field)
+    if (previous) {
+      for (const item of previous) if (!next.has(item)) previous.delete(item)
+    } else allowedByField.set(field, next)
+  }
   for (const entry of filters) for (let r = 0; r < store.count; r++) {
     const item = pivotItemAt(entry.map, r)
-    if (item === undefined || item < 0 || entry.state.hidden[item] || (entry.selected !== 'all' && !entry.selected.includes(item))) passes[r] = 0
+    if (item === undefined || item < 0 || entry.state.hidden[item] || (entry.selected !== 'all' && !entry.selected.has(item))) passes[r] = 0
   }
 
   // Apply pivot filters in their declared evaluation order. Each accepted filter narrows
@@ -157,29 +166,36 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   for (const filter of [...view.filters].sort((a, b) => a.evalOrder - b.evalOrder)) {
     const map = maps.get(filter.fld)
     if (!map) return invalid(`filter field ${filter.fld} does not exist`)
+    if (isLabelFilter(filter) && def.fields[filter.fld]?.items?.some(item => item.name !== undefined))
+      return unmeasured(`renamed item captions for label filter field ${filter.fld} are not measured`)
     const labels = itemValuesByPivotIndex(fieldValues(cache, filter.fld), def.fields[filter.fld]?.items)
     if (isLabelFilter(filter) || isDateFilter(filter)) {
-      for (let r = 0; r < store.count; r++) {
-        if (!passes[r]) continue
+      const allowed = new Set<number>()
+      for (const item of map.order) {
+        const decision = isLabelFilter(filter) ? matchesLabelFilter(filter, labels[item]) : matchesDateFilter(filter, labels[item])
+        if (decision === undefined) return unmeasured(`${filter.type} criteria or item type for field ${filter.fld} are not measured`)
+        if (decision) allowed.add(item)
+      }
+      constrainItems(filter.fld, allowed)
+      for (let r = 0; r < store.count; r++) if (passes[r]) {
         const item = pivotItemAt(map, r)
         if (item === undefined) return invalid(`record ${r} has no item for filter field ${filter.fld}`)
-        const decision = isLabelFilter(filter) ? matchesLabelFilter(filter, item >= 0 ? labels[item] : undefined)
-          : matchesDateFilter(filter, item >= 0 ? labels[item] : undefined)
-        if (decision === undefined) return unmeasured(`${filter.type} criteria or item type for field ${filter.fld} are not measured`)
-        if (!decision) passes[r] = 0
+        if (!allowed.has(item)) passes[r] = 0
       }
       continue
     }
     if (isValueFilter(filter) || isTop10Filter(filter)) {
       const dataIndex = filter.iMeasureFld
       if (dataIndex === undefined || !view.data[dataIndex]) return invalid(`filter ${filter.id} names a missing data field`)
+      const axis = view.rows.includes(filter.fld) ? view.rows : view.cols.includes(filter.fld) ? view.cols : undefined
+      if (axis && axis.indexOf(filter.fld) > 0) return unmeasured(`nested ${filter.type} filter on field ${filter.fld} needs a parent-group oracle`)
       const keys = new Uint32Array(store.count)
       for (let r = 0; r < store.count; r++) {
         const item = pivotItemAt(map, r)
         keys[r] = item === undefined || item < 0 ? NO_LINE : item
       }
-      const aggregateFn = isTop10Filter(filter) && filter.type === 'count' ? 'count' : isTop10Filter(filter) && filter.type === 'sum' ? 'sum' : undefined
-      const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, map.size, passes, aggregateFn)
+      if (isTop10Filter(filter) && filter.type !== 'count') return unmeasured(`top-10 ${filter.type} thresholds are not measured`)
+      const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, map.size, passes)
       if (!aggregate.ok) return aggregate
       let allowed: Set<number>
       if (isValueFilter(filter)) {
@@ -192,16 +208,19 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
       } else {
         const column = filter.autoFilter.columns[0], top10 = column?.top10
         if (!top10) return unmeasured(`missing top-10 criteria for filter ${filter.id} are not measured`)
-        const percent = filter.type === 'percent' || top10.percent
-        const ranked = aggregate.value.map((value, item) => ({ item, value })).filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
+        if (top10.percent) return unmeasured(`top-10 percent mode for filter ${filter.id} is not measured`)
+        const ranked = map.order.map(item => ({ item, value: aggregate.value[item] })).filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
           .sort((a, b) => (top10.top ? b.value - a.value : a.value - b.value) || a.item - b.item)
-        if (!Number.isFinite(top10.val) || top10.val <= 0 || (percent && top10.val > 100)) return invalid(`top-10 threshold for filter ${filter.id} is outside its valid range`)
-        const count = Math.max(1, Math.min(ranked.length, percent ? Math.ceil(ranked.length * top10.val / 100) : Math.floor(top10.val)))
+        if (!Number.isSafeInteger(top10.val) || top10.val <= 0) return invalid(`top-10 item count for filter ${filter.id} is outside its valid range`)
+        const count = Math.min(ranked.length, top10.val)
         if (ranked.length > count && ranked[count - 1]!.value === ranked[count]!.value)
           return unmeasured(`top-10 threshold ties for filter ${filter.id} are not measured`)
         const threshold = ranked[count - 1]?.value
+        if (top10.filterVal !== undefined && threshold !== undefined && Math.abs(top10.filterVal - threshold) > Math.max(1, Math.abs(threshold)) * 1e-12)
+          return unmeasured(`top-10 saved threshold for filter ${filter.id} disagrees with its item aggregates`)
         allowed = new Set(ranked.filter(entry => threshold !== undefined && (top10.top ? entry.value >= threshold : entry.value <= threshold)).map(entry => entry.item))
       }
+      constrainItems(filter.fld, allowed)
       for (let r = 0; r < store.count; r++) if (passes[r] && !allowed.has(keys[r]!)) passes[r] = 0
       continue
     }
@@ -212,11 +231,18 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   for (const field of axisFields) {
     const state = view.fields[field]!
     const map = maps.get(field)!
+    if ((state.sortType !== 'manual' || state.autoSortScope) && cache.fields[field]?.fieldGroup)
+      return unmeasured(`sorted group field ${field} has no measured group-order rule`)
     if (state.autoSortScope) {
       const fields = view.rows.includes(field) ? view.rows : view.cols
-      const level = fields.indexOf(field), rankBy = def.fields[field]?.rankBy
+      const level = fields.indexOf(field)
       if (level !== 0) return unmeasured(`autoSortScope for nested field ${field} needs an Excel parent-group oracle`)
-      if (rankBy === undefined || !view.data[rankBy]) return unmeasured(`autoSortScope for field ${field} has no measured rankBy data field`)
+      const references = state.autoSortScope.references
+      const values = references.filter(reference => reference.field === PIVOT_VALUES_FIELD)
+      if (references.length !== 1 || values.length !== 1 || values[0]!.x.length !== 1)
+        return unmeasured(`autoSortScope for field ${field} has ambiguous or non-Values pivotArea references`)
+      const dataIndex = values[0]!.x[0]!
+      if (!view.data[dataIndex]) return unmeasured(`autoSortScope for field ${field} references a missing data field`)
       if (state.sortType === 'manual') return unmeasured(`autoSortScope for manually sorted field ${field} is not measured`)
       const keys = new Uint32Array(store.count)
       for (let record = 0; record < store.count; record++) {
@@ -225,7 +251,7 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
         if (passes[record] && (item === undefined || item < 0)) return unmeasured(`autoSortScope field ${field} has an unmapped record item`)
         keys[record] = item === undefined || item < 0 ? NO_LINE : item
       }
-      const aggregate = aggregateByKey(store, cache, view, rankBy, keys, map.size, passes)
+      const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, map.size, passes)
       if (!aggregate.ok) return aggregate
       const scored = map.order.map(item => ({ item, value: aggregate.value[item] }))
         .filter((entry): entry is { item: number; value: number } => entry.value !== undefined)
@@ -243,9 +269,9 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     sortedOrders.set(field, sorted.value)
   }
 
-  const rows = axis(store, def, view, 'rows', maps, passes, sortedOrders)
+  const rows = axis(store, def, view, 'rows', maps, passes, sortedOrders, allowedByField)
   if (!rows.ok) return rows
-  const cols = axis(store, def, view, 'cols', maps, passes, sortedOrders)
+  const cols = axis(store, def, view, 'cols', maps, passes, sortedOrders, allowedByField)
   if (!cols.ok) return cols
   return { ok: true, value: { rows: rows.value.lines, cols: cols.value.lines, rowKey: rows.value.key, colKey: cols.value.key } }
 }
@@ -285,7 +311,7 @@ function pivotItemAt(map: ItemMap, record: number): number | undefined {
   return raw === NO_GROUP ? -1 : map.toPivot[raw]
 }
 
-function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewState, which: 'rows' | 'cols', maps: Map<number, ItemMap>, passes: Uint8Array, sortedOrders: Map<number, readonly number[]>): EngineResult<{ lines: PivotLine[]; key: Uint32Array }> {
+function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewState, which: 'rows' | 'cols', maps: Map<number, ItemMap>, passes: Uint8Array, sortedOrders: Map<number, readonly number[]>, allowedByField: Map<number, Set<number>>): EngineResult<{ lines: PivotLine[]; key: Uint32Array }> {
   const fields = which === 'rows' ? view.rows : view.cols
   const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
   const dataCount = view.data.length
@@ -374,7 +400,7 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     const rank = sortedOrders.get(field)
     const rankOf = ranks.get(field)
     const children = state.showAll
-      ? (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item])
+      ? (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item] && (allowedByField.get(field)?.has(item) ?? true))
       : [...(node?.children.keys() ?? [])].sort((a, b) => rankOf ? (rankOf.get(a) ?? a) - (rankOf.get(b) ?? b) : a - b)
     for (const item of children) {
       const child = node?.children.get(item)
