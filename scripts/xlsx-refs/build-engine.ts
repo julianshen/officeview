@@ -45,6 +45,7 @@ export interface ManifestEntry {
   file: string
   features: string[]
   task: number
+  /** The pivot table's `name` (what the engine tests match `def.name` against); Excel names it in the UI locale. */
   pivot: string
   route: EngineRoute
   status: 'built' | 'pending'
@@ -108,7 +109,14 @@ async function verify(file: string, markers: RegExp[], cacheMarkers: RegExp[] = 
   for (const m of markers) if (!m.test(parts.pivot)) throw new Error(`saved pivot lacks ${m}`)
   for (const m of cacheMarkers) if (!m.test(parts.cache)) throw new Error(`saved cache lacks ${m}`)
   for (const m of absent) if (m.test(parts.pivot)) throw new Error(`saved pivot has ${m}`)
-  return parts.pivotPart
+  return pivotName(parts.pivot)
+}
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+/** The `name` attribute of a saved pivotTableDefinition, entities decoded. */
+export function pivotName(pivot: string): string {
+  const m = /<pivotTableDefinition\b[^>]*?\sname="([^"]*)"/.exec(pivot)
+  if (!m) throw new Error('saved pivot has no name')
+  return m[1]!.replace(/&(amp|lt|gt|quot|apos);|&#(\d+);|&#x([0-9a-fA-F]+);/g, (_, e, d, h) => e ? XML_ENTITIES[e]! : String.fromCodePoint(d ? Number(d) : parseInt(h, 16)))
 }
 /** Checks the saved records part (text of fields on no axis is inline there, not in the shared items). */
 async function verifyRecords(file: string, markers: RegExp[]): Promise<void> {
@@ -177,7 +185,7 @@ async function runRoute(c: EngineCase, route: 'applescript' | 'xml', out: string
 
 export async function buildCase(c: EngineCase, fallback = true): Promise<ManifestEntry> {
   const out = join(OUT_DIR, `${c.id}.xlsx`)
-  const entry = (route: EngineRoute, status: ManifestEntry['status'], pivot = 'xl/pivotTables/pivotTable1.xml', error?: string): ManifestEntry =>
+  const entry = (route: EngineRoute, status: ManifestEntry['status'], pivot = '', error?: string): ManifestEntry =>
     ({ case: c.id, file: relative(ROOT, out), features: c.features, task: c.task, pivot, route, status, ...(c.recipe && status === 'pending' ? { recipe: c.recipe } : {}), ...(error ? { error } : {}) })
   if (c.route === 'recipe') return entry('recipe', 'pending')
   const routes: Array<'applescript' | 'xml'> = c.route === 'xml' ? ['xml'] : ['applescript', ...(fallback && c.fallback === 'xml' ? ['xml' as const] : [])]
