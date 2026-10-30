@@ -1,4 +1,5 @@
 /** Parse XLSX parts into the XlsxDocument model. */
+import { admittedFormatCode } from './formatCodeLimit'
 import type { OfficePackage } from '../core/zip'
 import type { ChartDocumentContext } from '../charts/context'
 import { attrs, elementNamespaceUri, getChildren, textOf, type XmlNode } from '../core/xml'
@@ -90,11 +91,7 @@ interface Styles {
   xfs: Array<{ numFmtId: number; fontId: number; fillId: number; borderId: number; textRotation?: number; horizontal?: string; vertical?: string; wrapText?: boolean; shrinkToFit?: boolean; indent?: number }>
 }
 
-/** Excel's own limit on a custom number-format code (UTF-16 units). Excel
- * refuses longer codes, so an authored one is shown as General (documented in
- * docs/formula-compatibility.md); every formatter therefore parses at most
- * this much per authored cell code. */
-export const MAX_FORMAT_CODE_UNITS = 255
+export { MAX_FORMAT_CODE_UNITS } from './formatCodeLimit'
 
 const OFF = new Set(['0', 'false'])
 const UNDERLINES = new Set(['single', 'double', 'singleAccounting', 'doubleAccounting'])
@@ -131,7 +128,7 @@ async function parseStyles(pkg: OfficePackage, themePalette?: Readonly<Record<st
       const a = attrs(nf)
       const id = parseInt(a.numFmtId ?? '', 10)
       const code = typeof a.formatCode === 'string' ? a.formatCode : undefined
-      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, code.length > MAX_FORMAT_CODE_UNITS ? null : code)
+      if (Number.isFinite(id) && code !== undefined) styles.numFmts.set(id, admittedFormatCode(code))
     }
   }
   for (const f of getChildren(root, 'fonts').flatMap((n) => getChildren(n, 'font'))) {

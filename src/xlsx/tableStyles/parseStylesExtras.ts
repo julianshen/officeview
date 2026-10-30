@@ -10,6 +10,7 @@
  */
 import { attrs, elementChildren, elementNamespaceUri, getChildren, type XmlNode } from '../../core/xml'
 import { applyTint, type SheetColorContext } from '../sheetColors'
+import { admittedFormatCode } from '../formatCodeLimit'
 import type { ColorSpec, DxfBorderSide, DxfStyle, SlicerStyleDef, SlicerStyleElementType, StylesExtras, TableStyleDef, TableStyleElementType } from './model'
 
 export const X14_MAIN_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
@@ -116,7 +117,12 @@ export function parseDxf(node: XmlNode, colors: SheetColorContext): DxfStyle {
   }
   const numFmt = first(node, 'numFmt')
   const id = int(attrs(numFmt).numFmtId)
-  if (numFmt && id !== undefined && id >= 0) dxf.numFmt = typeof attrs(numFmt).formatCode === 'string' ? { id, code: attrs(numFmt).formatCode } : { id }
+  if (numFmt && id !== undefined && id >= 0) {
+    const code = attrs(numFmt).formatCode
+    // An overlong code shows as General, as a cell xf's does (parse.ts).
+    const admitted = typeof code === 'string' ? admittedFormatCode(code) : undefined
+    dxf.numFmt = admitted === null ? { id: 0 } : admitted !== undefined ? { id, code: admitted } : { id }
+  }
   return dxf
 }
 
