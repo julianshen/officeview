@@ -32,6 +32,34 @@ interface Accumulator {
   max: Float64Array
 }
 
+// Keep the record loop's aggregation dispatch numeric and monomorphic. The
+// string-valued PivotDataFunction is useful at the API boundary, but repeated
+// string comparisons for every record/line pair dominate large value scans.
+const VALUE_FN = {
+  average: 0, count: 1, countNums: 2, max: 3, min: 4, product: 5,
+  stdDev: 6, stdDevp: 7, sum: 8, var: 9, varp: 10,
+} as const
+type ValueFnCode = typeof VALUE_FN[keyof typeof VALUE_FN]
+
+function valueFnCode(fn: PivotDataFunction): ValueFnCode { return VALUE_FN[fn] }
+
+function subtotalFnCode(type: PivotItemType, fallback: ValueFnCode): ValueFnCode {
+  switch (type) {
+    case 'sum': return VALUE_FN.sum
+    case 'max': return VALUE_FN.max
+    case 'min': return VALUE_FN.min
+    case 'product': return VALUE_FN.product
+    case 'stdDev': return VALUE_FN.stdDev
+    case 'var': return VALUE_FN.var
+    case 'avg': return VALUE_FN.average
+    case 'countA': return VALUE_FN.count
+    case 'count': return VALUE_FN.countNums
+    case 'stdDevP': return VALUE_FN.stdDevp
+    case 'varP': return VALUE_FN.varp
+    default: return fallback
+  }
+}
+
 function accumulator(size: number): Accumulator {
   const product = new Float64Array(size); product.fill(1)
   const min = new Float64Array(size); min.fill(Number.POSITIVE_INFINITY)
@@ -42,21 +70,22 @@ function accumulator(size: number): Accumulator {
   }
 }
 
-function add(acc: Accumulator, at: number, value: ReadValue, fn: PivotDataFunction): void {
+function add(acc: Accumulator, at: number, value: ReadValue, fn: ValueFnCode): void {
   acc.records[at] = 1
   if (value.kind === 'missing') return
-  if (fn === 'count') { acc.nonEmpty[at]++; return }
+  if (fn === VALUE_FN.count) { acc.nonEmpty[at]++; return }
   if (value.kind !== 'number') return
-  if (fn === 'sum' || fn === 'average') acc.sum[at] += value.value
-  if (fn === 'sum') return
-  if (fn === 'countNums') { acc.numeric[at]++; return }
-  if (fn === 'max') { acc.numeric[at]++; if (value.value > acc.max[at]!) acc.max[at] = value.value; return }
-  if (fn === 'min') { acc.numeric[at]++; if (value.value < acc.min[at]!) acc.min[at] = value.value; return }
-  if (fn === 'product') { acc.numeric[at]++; acc.product[at] *= value.value; return }
+  if (fn === VALUE_FN.sum || fn === VALUE_FN.average) acc.sum[at] += value.value
+  if (fn === VALUE_FN.sum) return
+  if (fn === VALUE_FN.countNums) { acc.numeric[at]++; return }
+  if (fn === VALUE_FN.max) { acc.numeric[at]++; if (value.value > acc.max[at]!) acc.max[at] = value.value; return }
+  if (fn === VALUE_FN.min) { acc.numeric[at]++; if (value.value < acc.min[at]!) acc.min[at] = value.value; return }
+  if (fn === VALUE_FN.product) { acc.numeric[at]++; acc.product[at] *= value.value; return }
   const n = ++acc.numeric[at]
   const delta = value.value - acc.mean[at]!
   acc.mean[at] += delta / n
-  if (fn === 'stdDev' || fn === 'stdDevp' || fn === 'var' || fn === 'varp') acc.m2[at] += delta * (value.value - acc.mean[at]!)
+  if (fn === VALUE_FN.stdDev || fn === VALUE_FN.stdDevp || fn === VALUE_FN.var || fn === VALUE_FN.varp)
+    acc.m2[at] += delta * (value.value - acc.mean[at]!)
 }
 
 interface ReadValue { kind: 'missing' | 'other' | 'error' | 'date-unmeasured' | 'number'; value: number }
@@ -210,7 +239,20 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   const gridAcc = accumulator(gridSize), rowTotals = accumulator(rowTotalSize), colTotals = accumulator(colTotalSize), grandTotals = accumulator(dataCount)
   const sourceColumns = view.data.map(data => store.columns[data.field])
   const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
-  const functions = view.data.map(data => data.fn)
+  const functions = view.data.map(data => valueFnCode(data.fn))
+  const rowFunctions = new Uint8Array(rowCount * dataCount)
+  const colFunctions = new Uint8Array(colCount * dataCount)
+  const rowNamed = new Uint8Array(rowCount), colNamed = new Uint8Array(colCount)
+  for (let row = 0; row < rowCount; row++) {
+    const line = axes.rows[row]!
+    rowNamed[row] = +isNamedSubtotal(line.type)
+    for (let d = 0; d < dataCount; d++) rowFunctions[row * dataCount + d] = subtotalFnCode(line.type, functions[d]!)
+  }
+  for (let col = 0; col < colCount; col++) {
+    const line = axes.cols[col]!
+    colNamed[col] = +isNamedSubtotal(line.type)
+    for (let d = 0; d < dataCount; d++) colFunctions[col * dataCount + d] = subtotalFnCode(line.type, functions[d]!)
+  }
   const valueScratch: ReadValue = { kind: 'missing', value: 0 }
   for (let record = 0; record < store.count; record++) {
     for (let d = 0; d < dataCount; d++) {
@@ -223,22 +265,20 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       const colTargets = recordTargets.value.cols[d]![axes.colKey[record]!]!
       add(grandTotals, d, valueScratch, fn)
       for (const row of rowTargets) {
-        const rowLine = axes.rows[row]!
-        add(rowTotals, row * dataCount + d, valueScratch, subtotalFunction(rowLine.type, fn))
+        add(rowTotals, row * dataCount + d, valueScratch, rowFunctions[row * dataCount + d]! as ValueFnCode)
       }
       for (const col of colTargets) {
-        const colLine = axes.cols[col]!
-        add(colTotals, col * dataCount + d, valueScratch, subtotalFunction(colLine.type, fn))
+        add(colTotals, col * dataCount + d, valueScratch, colFunctions[col * dataCount + d]! as ValueFnCode)
       }
       for (const row of rowTargets) for (const col of colTargets) {
-        const rowLine = axes.rows[row]!, colLine = axes.cols[col]!
-        const rowNamed = isNamedSubtotal(rowLine.type), colNamed = isNamedSubtotal(colLine.type)
-        const rowFn = subtotalFunction(rowLine.type, fn), colFn = subtotalFunction(colLine.type, fn)
-        if (rowNamed && colNamed && rowFn !== colFn)
+        const isRowNamed = !!rowNamed[row], isColNamed = !!colNamed[col]
+        const rowFn = rowFunctions[row * dataCount + d]! as ValueFnCode
+        const colFn = colFunctions[col * dataCount + d]! as ValueFnCode
+        if (isRowNamed && isColNamed && rowFn !== colFn)
           return unmeasured('intersecting row and column named subtotals with different functions are not measured')
-        if ((rowNamed || colNamed) && view.data[d]!.showAs !== 'normal')
+        if ((isRowNamed || isColNamed) && view.data[d]!.showAs !== 'normal')
           return unmeasured('show-as applied to a named subtotal is not measured')
-        const cellFn = rowNamed ? rowFn : colNamed ? colFn : fn
+        const cellFn = isRowNamed ? rowFn : isColNamed ? colFn : fn
         add(gridAcc, cellIndex(row, col, d, colCount, dataCount), valueScratch, cellFn)
       }
     }
