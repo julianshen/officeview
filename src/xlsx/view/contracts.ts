@@ -30,6 +30,15 @@ export const REGION_STYLE_REGION_ESTIMATE_BYTES = 512
 export const REGION_STYLE_LAYER_MAX_BYTES = REGION_STYLE_LAYER_BASE_BYTES
   + MAX_REGION_STYLE_TABLES * REGION_STYLE_REGION_ESTIMATE_BYTES
   + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES
+/** The fixed part of a decoded region layer's charge (receiver and worker Find alike): the shared style
+ * memo, each table/pivot region and pivot style, and each formatted pivot's own overrides memo
+ * (pivots/regions.ts). A pivot's saved layout is added by tableStyles/remoteLayer.ts. */
+export function regionLayerFixedBytes(payload: RemoteRegionStyles | RemotePivotDisplay): number {
+  const count = 'pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : payload.tables.length
+  if (!count) return 0
+  const formatted = 'pivotTables' in payload ? payload.pivotTables.filter(def => def.formats.some(format => format.action === 'formatting' && format.dxfId !== undefined)).length : 0
+  return REGION_STYLE_LAYER_BASE_BYTES + count * REGION_STYLE_REGION_ESTIMATE_BYTES + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES + formatted * PIVOT_FORMAT_MEMO_BYTES
+}
 
 /** Source-space contracts, spec §4.1; limits bound output, never semantic membership. */
 export const MAX_OVERVIEW_GROUPS_DESKTOP = 2048

@@ -1,17 +1,14 @@
 import type { CacheIdentity, RemotePivotDisplay, RemoteRegionStyles, WorkerReply } from '../xlsx/view/contracts'
 import type { RegionStyleLayer } from '../xlsx/tableStyles/regionLayer'
-import type { DxfStyle, TableStyleDiagnostic } from '../xlsx/tableStyles/model'
+import type { TableStyleDiagnostic } from '../xlsx/tableStyles/model'
 import type { CommandOf } from './viewerProtocol'
-import { PIVOT_FORMAT_MEMO_BYTES, REGION_STYLE_LAYER_BASE_BYTES, MAX_REGION_STYLE_MEMO_ENTRIES, REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../xlsx/view/contracts'
+import { regionLayerFixedBytes } from '../xlsx/view/contracts'
 
 const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
 const RETRY_MS = 250
 const MAX_ATTEMPTS = 20
 const READ_TIMEOUT_MS = 10_000
-/** styles.xml dxf ids stop at parseStylesExtras' MAX_DXFS (65,536). */
-const MAX_DXF_ID = 65_536
 const MAX_LAYER_DIAGNOSTICS = 64
-const layerBytesFor = (tableCount: number) => REGION_STYLE_LAYER_BASE_BYTES + tableCount * REGION_STYLE_REGION_ESTIMATE_BYTES + MAX_REGION_STYLE_MEMO_ENTRIES * REGION_STYLE_MEMO_ENTRY_ESTIMATE_BYTES
 export interface PagedRegionStyleState {
   readonly state: 'waiting' | 'loading' | 'ready' | 'failed'
   readonly gen: number
@@ -49,14 +46,8 @@ const empty = (): PagedRegionStyleState => ({ state: 'waiting', gen: 0, diagnost
 
 /** Tables and pivots the payload lays out, and the pivot styles it carries. */
 const layerCountOf = (payload: RemoteRegionStyles | RemotePivotDisplay) => 'pivotTables' in payload ? payload.pivotTables.length + payload.pivotStyles.length : payload.tables.length
-/** The decoded layer's admission and retained charge: the shared style memo, each region, and each formatted
- * pivot's own overrides memo (pivots/regions.ts, PIVOT_FORMAT_MEMO_BYTES). */
-function layerBytesOf(payload: RemoteRegionStyles | RemotePivotDisplay): number {
-  const count = layerCountOf(payload)
-  if (!count) return 0
-  const formatted = 'pivotTables' in payload ? payload.pivotTables.filter(def => def.formats.some(format => format.action === 'formatting' && format.dxfId !== undefined)).length : 0
-  return layerBytesFor(count) + formatted * PIVOT_FORMAT_MEMO_BYTES
-}
+/** The decoded layer's fixed charge; buildLayer adds each pivot's saved layout (tableStyles/remoteLayer.ts). */
+const layerBytesOf = regionLayerFixedBytes
 
 function unpack(reply: WorkerReply<'read'>, op: 'regionStyles' | 'pivotDisplay'): RemoteRegionStyles | RemotePivotDisplay | undefined {
   if (reply.kind !== 'complete' || reply.result.kind !== 'read' || reply.result.result.op !== op) return undefined
@@ -133,11 +124,10 @@ export class RemoteRegionStyleCache {
   private async buildLayer(sheetId: string, entry: Entry, requestId: string, payload: RemoteRegionStyles | RemotePivotDisplay, seq: number, reply?: WorkerReply<'read'>, releaseReply?: () => void): Promise<void> {
     let layerBytes = layerBytesOf(payload)
     // Each pivot's region retains its saved layout (lines, item vectors, parent bands): reserved before the
-    // build and kept in the retained charge. The estimator sits in the lazy pivots chunk, loaded only here.
+    // build and kept in the retained charge. The estimator sits in the lazy style chunk, loaded only here.
     if (layerBytes && 'pivotTables' in payload && payload.pivotTables.length) {
       try {
-        const { savedPivotLayoutBytes } = await import('../xlsx/pivots/savedLayout')
-        for (const def of payload.pivotTables) layerBytes += savedPivotLayoutBytes(def)
+        layerBytes = await (await import('../xlsx/tableStyles/remoteLayer')).decodedRegionLayerBytes(payload)
       } catch (cause) {
         if (reply) releaseReply?.()
         entry.layerPending = false
@@ -172,20 +162,7 @@ export class RemoteRegionStyleCache {
           entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit', `${this.op === 'pivotDisplay' ? 'Pivot display' : 'Table style'} metadata exceeds the main-thread cache budget.`) }]
           this.deferChanged(sheetId); return
         }
-        const { preloadTableStyles } = await import('../xlsx/tableStyleLoader')
-        await preloadTableStyles()
-        const { buildSheetRegionLayer } = await import('../xlsx/tableStyles/regionLayer')
-        const tables = 'tables' in payload ? payload.tables : []
-        const tableStyles = new Map(tables.map(item => [item.def.name, item.def]))
-        if ('pivotStyles' in payload) for (const def of payload.pivotStyles) tableStyles.set(def.name, def)
-        const slicerStyles = new Map()
-        // The pivots' `formats` dxfs at their styles.xml ids (a sparse list, as regions.ts indexes it).
-        const dxfs: DxfStyle[] = []
-        if ('pivotDxfs' in payload) for (const { id, dxf } of payload.pivotDxfs ?? []) if (Number.isSafeInteger(id) && id >= 0 && id < MAX_DXF_ID) dxfs[id] = dxf
-        const extras = { dxfs, tableStyles, slicerStyles }
-        const sheet = { name: sheetId, tables: tables.map(item => item.table), ...('pivotTables' in payload ? { pivotTables: payload.pivotTables } : {}) } as import('../xlsx/types').XlsxSheet
-        if (sheet.pivotTables?.length) await (await import('../xlsx/pivotLoader')).ensurePivotEngine([sheet])
-        layer = buildSheetRegionLayer(sheet, extras, payload.theme ?? (await import('../drawing/style')).parseThemeContext(), report)
+        layer = await (await import('../xlsx/tableStyles/remoteLayer')).buildRemoteRegionLayer(sheetId, payload, report)
       }
       if (this.closed || entry.seq !== seq || !sameOwner(entry.owner ?? this.host.identity(sheetId), this.host.identity(sheetId))) {
         layerRelease?.(); layerRelease = undefined; if (reply) releaseReply?.()

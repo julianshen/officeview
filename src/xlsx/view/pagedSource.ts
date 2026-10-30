@@ -1230,7 +1230,11 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     },
     coverageDiagnostics: sheetId => storeFor(sheetId).coverageDiagnostics(),
     formatting: () => workbook.formatting,
-    displayText: (cell, _sheetId, allocation) => cellDisplayText(displaySheet, { value: cell.value, style: workbook.formatting.styles[cell.styleIndex] }, allocation),
+    // A styled table/pivot region resolves over the cell's own style, as the viewer paints it (worker Find).
+    displayText: (cell, _sheetId, allocation, region) => {
+      const own = workbook.formatting.styles[cell.styleIndex]
+      return cellDisplayText(displaySheet, { value: cell.value, style: region?.styleAt(cell.row, cell.col, own, 'screen') ?? own }, allocation)
+    },
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },
     async release() {
