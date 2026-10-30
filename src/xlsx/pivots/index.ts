@@ -15,5 +15,7 @@ export { computeAxes, lineCarriesValues, NO_LINE, subtotalTypes } from './engine
 export type { EngineResult, PivotAxes } from './engine/axes'
 export { liveDefinition, placeCells } from './engine/place'
 export type { PivotCellValue, PivotLayout, PivotLayoutCell, PivotValueGrid, PlaceOptions } from './engine/place'
+export { computePivot } from './engine/compute'
+export { computeValues } from './engine/values'
 
 registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl })
