@@ -22,12 +22,10 @@ import { orderRoles } from '../tableStyles/resolve'
 import { PIVOT_FORMAT_MEMO_BYTES, PIVOT_FORMAT_MEMO_ENTRIES, REGION_STYLE_REGION_ESTIMATE_BYTES } from '../view/contracts'
 import { MAX_COLS } from '../view/coordinates'
 import { PIVOT_VALUES_FIELD, type PivotArea, type PivotTableDefinition } from './model'
-import { PARENT_BAND_ENTRIES_PER_LINE, savedPivotLayout, savedPivotRoles, type PivotLine, type SavedPivotLayout } from './savedLayout'
+import { PARENT_BAND_ENTRIES_PER_LINE, savedPivotLayout, savedPivotLayoutBytes, savedPivotRoles, type PivotLine, type SavedPivotLayout } from './savedLayout'
 import { compactLabelIndents } from './buttons'
 
 const NO_STYLE: TableStyleDef = { name: '', pivot: true, table: false, elements: {} }
-/** Retained per saved line: the resolved item vector and its bookkeeping. */
-const LINE_ESTIMATE_BYTES = 64
 
 /** A pivot cell's coordinates: the field items it stands for, its data field, and what kind of cell it is. */
 interface PivotCellCoordinates {
@@ -232,7 +230,8 @@ export function pivotStyleRegions(sheet: XlsxSheet, extras: StylesExtras, _theme
       rects: roles.rects,
       def: style ?? NO_STYLE,
       kind: 'pivot' as const,
-      retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES + (layout.rows.length + layout.cols.length) * LINE_ESTIMATE_BYTES
+      // The saved layout the closures below retain: lines, item vectors and parent bands.
+      retainedBytes: REGION_STYLE_REGION_ESTIMATE_BYTES + savedPivotLayoutBytes(def)
         + (formats.length ? PIVOT_FORMAT_MEMO_BYTES : 0),
       cell(row, col, mode) {
         const hits = formats.length ? overridesAt(row, col) : undefined

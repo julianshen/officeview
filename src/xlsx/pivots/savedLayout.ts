@@ -166,6 +166,43 @@ export function savedPivotLayout(def: PivotTableDefinition, why?: { tooDeep?: bo
   }
 }
 
+/** Retained per saved line: the line record and its bookkeeping, before its item vector. */
+export const SAVED_LINE_ESTIMATE_BYTES = 64
+/** Per resolved item-vector slot, per parent-band reference, per parent band, and per line holding bands. */
+const VECTOR_SLOT_BYTES = 8, BAND_REFERENCE_BYTES = 8, PARENT_BAND_BYTES = 48, BAND_LIST_BYTES = 64
+
+/**
+ * What savedPivotLayout(def) retains (PR #55 P2): every saved line with its resolved
+ * item vector, and the parent-band lists, estimated from the definition alone with
+ * no allocation, so a receiver can reserve it before building. It walks the same
+ * parent-band loop as savedPivotLayout as a count, over every saved line (an upper
+ * bound when the location keeps fewer); past the parent-band budget the layout is
+ * not built and only its lines are counted.
+ */
+export function savedPivotLayoutBytes(def: PivotTableDefinition): number {
+  const rows = def.rowItems, cols = def.colItems
+  if (!rows || !cols) return 0
+  const vectorLength = (item: PivotAxisItem) => item.type === 'grand' ? 0 : Math.max(0, item.r) + item.x.length
+  let bytes = 0
+  for (const item of rows) bytes += SAVED_LINE_ESTIMATE_BYTES + VECTOR_SLOT_BYTES * vectorLength(item)
+  for (const item of cols) bytes += SAVED_LINE_ESTIMATE_BYTES + VECTOR_SLOT_BYTES * vectorLength(item)
+  let budget = PARENT_BAND_ENTRIES_PER_LINE * rows.length + PARENT_BAND_ENTRIES_BASE
+  let references = 0, bands = 0
+  for (let n = 0; n < rows.length; n++) {
+    const line = rows[n]!
+    if (line.type !== 'data') continue
+    const first = Math.max(0, line.r)
+    for (let level = first; level < vectorLength(line) - 1; level++) {
+      let last = n
+      while (last + 1 < rows.length && Math.max(0, rows[last + 1]!.r) > level && rows[last + 1]!.type !== 'grand' && rows[last + 1]!.type !== 'blank') last++
+      if ((budget -= last - n + 1) < 0) return bytes
+      bands++
+      references += last - n + 1
+    }
+  }
+  return bytes + bands * PARENT_BAND_BYTES + references * BAND_REFERENCE_BYTES + Math.min(rows.length, references) * BAND_LIST_BYTES
+}
+
 const NTH = ['first', 'second', 'third'] as const
 const nth = (level: number, kind: 'SubtotalRow' | 'SubtotalColumn' | 'RowSubheading' | 'ColumnSubheading') =>
   `${NTH[Math.min(2, Math.max(0, level))]}${kind}` as TableStyleElementType

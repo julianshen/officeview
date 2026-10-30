@@ -131,7 +131,25 @@ export class RemoteRegionStyleCache {
     return kind === 'reply-limit' ? 'Table style metadata exceeds the receiver cache budget.' : 'Table style metadata could not be loaded.'
   }
   private async buildLayer(sheetId: string, entry: Entry, requestId: string, payload: RemoteRegionStyles | RemotePivotDisplay, seq: number, reply?: WorkerReply<'read'>, releaseReply?: () => void): Promise<void> {
-    const layerBytes = layerBytesOf(payload)
+    let layerBytes = layerBytesOf(payload)
+    // Each pivot's region retains its saved layout (lines, item vectors, parent bands): reserved before the
+    // build and kept in the retained charge. The estimator sits in the lazy pivots chunk, loaded only here.
+    if (layerBytes && 'pivotTables' in payload && payload.pivotTables.length) {
+      try {
+        const { savedPivotLayoutBytes } = await import('../xlsx/pivots/savedLayout')
+        for (const def of payload.pivotTables) layerBytes += savedPivotLayoutBytes(def)
+      } catch (cause) {
+        if (reply) releaseReply?.()
+        entry.layerPending = false
+        entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('read-failed'), message: this.diagnosticMessage('read-failed', cause instanceof Error ? cause.message.slice(0, 256) : undefined) }]
+        this.deferChanged(sheetId); return
+      }
+      if (this.closed || entry.seq !== seq) {
+        if (reply) releaseReply?.()
+        entry.layerPending = false
+        return
+      }
+    }
     if (layerBytes && !this.makeRoom(entry, layerBytes + (reply ? reply.replyBytes ?? 0 : 0))) {
       if (reply) releaseReply?.()
       entry.state = 'failed'; entry.diagnostics = [{ kind: 'unsupported', feature: this.diagnosticFeature('reply-limit'), message: this.diagnosticMessage('reply-limit') }]
