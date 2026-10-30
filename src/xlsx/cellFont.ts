@@ -10,9 +10,18 @@ export const CELL_FONT_STACK = '"Calibri", Carlito, Arial, Helvetica, "Liberatio
  * stack (so a missing face still falls back deterministically); Calibri and an
  * absent name are the stack itself. */
 export function cellFontFamily(name: string | undefined): string {
-  const face = name?.replace(/["\\;{}]/g, '').trim()
+  const face = cellFace(name)
   return !face || face === 'Calibri' ? CELL_FONT_STACK : `"${face}", ${CELL_FONT_STACK}`
 }
+
+/** Whether a cell paints in Calibri, its own or the default (an absent name): the
+ * only face whose Excel layout metrics the renderer carries (render.ts calibriWidth). */
+export function isCalibriFace(name: string | undefined): boolean {
+  const face = cellFace(name)
+  return !face || face === 'Calibri'
+}
+
+const cellFace = (name: string | undefined) => name?.replace(/["\\;{}]/g, '').trim()
 
 /** The canvas font string of a cell style at `sizePt`. */
 export function cellFontString(style: { bold?: boolean; italic?: boolean; fontName?: string } | undefined, sizePt: number): string {
