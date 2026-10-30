@@ -20,6 +20,7 @@ import type { XlsxSheet } from '../src/xlsx/types'
 import type { LogicalViewport } from '../src/xlsx/view/contracts'
 
 const fixture = readFileSync(fileURLToPath(new URL('./fixtures/xlsx-pivots/table-medium-2.xlsx', import.meta.url)))
+const pivotFixture = readFileSync(fileURLToPath(new URL('./fixtures/xlsx-pivots/pivot-formats-override.xlsx', import.meta.url)))
 /** Sub-detail rows and columns: 2 px each at zoom 1 (detail needs 4 device px). The planner turns a frame
  * with more visible indexes than its 4,096 gridline instances wholly coarse, so a mixed plan holds at most
  * a few thousand; this is near that ceiling. */
@@ -83,3 +84,35 @@ describe.each(['rows', 'cols'] as const)('a mixed plan of normal and sub-detail 
     expect(crop(mixed.canvas).equals(crop(pure.canvas))).toBe(true)
   }, 60_000)
 })
+
+describe('a summarized run inside a pivot', () => {
+  it('keeps its interior gridlines hidden, decided from the pivot rectangle', async () => {
+    await preloadTableStyles()
+    const doc = await parseXlsx(await OfficePackage.load(pivotFixture))
+    const sheet = doc.sheets.find(item => item.pivotTables?.length)!
+    const def = sheet.pivotTables![0]!
+    // The pivot's location reaches 300 rows further down; rows 30… are 1 px, below detail at zoom 1.
+    const [from] = def.location.ref.split(':')
+    def.location = { ...def.location, ref: `${from}:I330` }
+    const known = new Set(sheet.rows.map(row => row.index))
+    for (let r = 30; r < 330; r++) if (!known.has(r)) sheet.rows.push({ index: r, cells: [], heightPt: 0.75 })
+    sheet.rows.sort((a, b) => a.index - b.index)
+    const geometry = buildSheetGeometry(sheet)
+    expect(geometry.kind).toBe('ready')
+    if (geometry.kind !== 'ready') return
+    expect(belowDetail(geometry.metrics.rows.size(100), 1)).toBe(true)
+    const box = { x: 0, y: 0, width: 600, height: Math.ceil(geometry.metrics.rows.start(330)) + 10 }
+    const layer = regionStylesFor(sheet)
+    const lookups = layer ? vi.spyOn(layer, 'styleAt') : undefined
+    const { canvas, plan } = paint(sheet, box)
+    expect(plan.kind === 'detail' && plan.coarse.length).toBeGreaterThan(0)
+    // The gridline between columns B and C, halfway down the summarized rows.
+    const x = Math.round(geometry.metrics.cols.start(2)), y = Math.round((geometry.metrics.rows.start(30) + geometry.metrics.rows.start(330)) / 2)
+    const at = (px: number) => Array.from(canvas.getContext('2d').getImageData(px, y, 1, 1).data)
+    // 6906332c: the summarized run was skipped and the line drawn through the pivot.
+    expect(at(x)).toEqual(at(x + 4))
+    // Decided once per gridline from the rectangle: no per-row lookups for the 300 summarized rows.
+    if (lookups) expect(lookups.mock.calls.length).toBeLessThan(500)
+  }, 60_000)
+})
+

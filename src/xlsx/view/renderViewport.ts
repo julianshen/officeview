@@ -416,30 +416,61 @@ export function renderSheetViewport(
   }
 }
 
+/** A summarized (sub-detail) run of at most this many rows or columns is still decided cell by cell. */
+const REGION_RUN_CELLS = 32
+
 /** The styled-region gridline rule over one tile's visible rows and columns: per gridline, the segments left to
  * stroke, and the spans a region fill covers (collected in `covered`). Undefined without a rule. Lines are
- * checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles. Only detail runs are
- * enumerated (the planner's `belowDetail` rule): a sub-detail run stays summarized, and the lines crossing it
- * stroke as the plan's ordinary gridlines do there, so the work is bounded by the plan's detail rows and
- * columns, never by the source rows or columns a few pixels hold (PR #55 r7). */
+ * checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles.
+ *
+ * Work is bounded by the plan, never by the source rows or columns a few pixels hold (PR #55 r7). Detail runs
+ * are decided cell by cell. A sub-detail run the planner summarizes is decided cell by cell only while it holds
+ * at most REGION_RUN_CELLS indexes (as before, so ordinary zoomed-out frames paint unchanged); a longer one is
+ * decided once per gridline from the region rectangles: the segment across it is hidden when the run lies wholly
+ * inside a styled table or pivot rectangle that holds the cell on either side of the line. That reads every
+ * region cell as one that hides its gridlines (a pivot body, a filled band), the choice that keeps "no
+ * gridlines inside pivots and under filled table cells" for a span too dense to show any one row; an unfilled
+ * stripe inside a long summarized run therefore loses its line too. */
 function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number, scale: number):
   { lines(segments: Array<[number, number]>, at: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
   const lineRule = regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style)
   if (!lineRule) return undefined
   const { rows, cols, order } = geometry.metrics
-  const lineRows: Array<{ source: number; y0: number; y1: number }> = [], lineCols: Array<{ col: number; x0: number; x1: number }> = []
-  for (const run of rows.visibleBetween(yTop, yBottom).runs) for (let slot = run.start; !belowDetail(run.sizeCss, scale) && slot <= run.end; slot++) {
-    const source = order.displayToSource(slot)
-    if (lineRule.rects.some(r => source >= r.minRow && source <= r.maxRow)) lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot) })
+  const rects = lineRule.rects
+  type Span = { source: number; y0: number; y1: number } | { col: number; x0: number; x1: number } | { lo: number; hi: number; from: number; to: number }
+  const lineRows: Span[] = [], lineCols: Span[] = []
+  const meets = (lo: number, hi: number, rowAxis: boolean) => rects.some(r => rowAxis ? hi >= r.minRow && lo <= r.maxRow : hi >= r.minCol && lo <= r.maxCol)
+  for (const run of rows.visibleBetween(yTop, yBottom).runs) {
+    if (belowDetail(run.sizeCss, scale) && run.end - run.start + 1 > REGION_RUN_CELLS) {
+      // The source rows a run of display slots can hold: its own slots, widened by any reordered band it meets.
+      let lo = run.start, hi = run.end
+      for (const band of order.bands) if (band.r0 <= run.end && band.r1 >= run.start) { lo = Math.min(lo, band.r0); hi = Math.max(hi, band.r1) }
+      if (meets(lo, hi, true)) lineRows.push({ lo, hi, from: run.startCss, to: run.startCss + (run.end - run.start + 1) * run.sizeCss })
+      continue
+    }
+    for (let slot = run.start; slot <= run.end; slot++) {
+      const source = order.displayToSource(slot)
+      if (rects.some(r => source >= r.minRow && source <= r.maxRow)) lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot) })
+    }
   }
-  for (const run of cols.visibleBetween(xLeft, xRight).runs) for (let col = run.start; !belowDetail(run.sizeCss, scale) && col <= run.end; col++) {
-    if (lineRule.rects.some(r => col >= r.minCol && col <= r.maxCol)) lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col) })
+  for (const run of cols.visibleBetween(xLeft, xRight).runs) {
+    if (belowDetail(run.sizeCss, scale) && run.end - run.start + 1 > REGION_RUN_CELLS) {
+      if (meets(run.start, run.end, false)) lineCols.push({ lo: run.start, hi: run.end, from: run.startCss, to: run.startCss + (run.end - run.start + 1) * run.sizeCss })
+      continue
+    }
+    for (let col = run.start; col <= run.end; col++) {
+      if (rects.some(r => col >= r.minCol && col <= r.maxCol)) lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col) })
+    }
   }
   const neighbours = (axis: 'rows' | 'cols', at: number): [number, number] | undefined => {
     const after = geometry.metrics[axis].locate(at), before = at >= 0.5 ? geometry.metrics[axis].locate(at - 0.5) : null
     if (after === null || before === null || before === after) return undefined
     return axis === 'cols' ? [before, after] : [order.displayToSource(before), order.displayToSource(after)]
   }
+  /** A summarized run [lo, hi] along the line, the cells either side at `pair` across it: hidden by a region holding both. */
+  const runHidden = (lo: number, hi: number, pair: [number, number], vertical: boolean) => rects.some(r => vertical
+    ? lo >= r.minRow && hi <= r.maxRow && pair.some(col => col >= r.minCol && col <= r.maxCol)
+    : lo >= r.minCol && hi <= r.maxCol && pair.some(row => row >= r.minRow && row <= r.maxRow))
   const covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> = []
   return {
     covered,
@@ -448,6 +479,10 @@ function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: nu
       if (!pair) return segments
       const hidden: Array<[number, number]> = []
       for (const span of vertical ? lineRows : lineCols) {
+        if ('lo' in span) {
+          if (runHidden(span.lo, span.hi, pair, vertical)) hidden.push([span.from, span.to])
+          continue
+        }
         const rule = 'source' in span ? lineRule.line(span.source, pair[0], span.source, pair[1]) : lineRule.line(pair[0], span.col, pair[1], span.col)
         if (rule === undefined) continue
         const from = 'source' in span ? span.y0 : span.x0, to = 'source' in span ? span.y1 : span.x1
