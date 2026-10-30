@@ -1,6 +1,6 @@
 /** Pure filter predicates shared by computeAxes. */
 import type { PivotFilter, PivotFilterColumn, PivotFilterType, PivotValue } from '../model'
-import { compareEnglishLabels } from './sort'
+import { compareEnglishLabels, hasMeasuredEnglishOrder } from './sort'
 
 const CAPTION_TYPES = new Set<PivotFilterType>([
   'captionEqual', 'captionNotEqual', 'captionBeginsWith', 'captionNotBeginsWith', 'captionEndsWith', 'captionNotEndsWith',
@@ -49,7 +49,10 @@ function wildcardRegex(pattern: string, mode: 'exact' | 'prefix' | 'contains' | 
 }
 const WILDCARD_CACHE = new Map<string, RegExp>()
 const printableAscii = (text: string) => /^[\x20-\x7e]*$/u.test(text)
-function captionCompare(label: string, op: PivotFilterType, a: string, b?: string): boolean {
+function captionCompare(label: string, op: PivotFilterType, a: string, b?: string): boolean | undefined {
+  const usesOrder = op === 'captionGreaterThan' || op === 'captionGreaterThanOrEqual' || op === 'captionLessThan' ||
+    op === 'captionLessThanOrEqual' || op === 'captionBetween' || op === 'captionNotBetween'
+  if (usesOrder && (!hasMeasuredEnglishOrder(label) || !hasMeasuredEnglishOrder(a) || (b !== undefined && !hasMeasuredEnglishOrder(b)))) return undefined
   const firstVsLabel = compareEnglishLabels(label, a), secondVsLabel = b === undefined ? undefined : compareEnglishLabels(label, b)
   const glob = wildcardRegex(a, op === 'captionBeginsWith' || op === 'captionNotBeginsWith' ? 'prefix'
     : op === 'captionEndsWith' || op === 'captionNotEndsWith' ? 'suffix'
@@ -79,7 +82,7 @@ export function matchesLabelFilter(filter: PivotFilter, value: PivotValue | unde
   const label = value.value
   if (column?.filters) {
     if (column.filters.values.some(candidate => !printableAscii(candidate))) return undefined
-    return column.filters.values.some(candidate => compareEnglishLabels(candidate, label) === 0)
+    return column.filters.values.some(candidate => candidate.toLowerCase() === label.toLowerCase())
   }
   const a = criterion(filter, column, 1)
   const b = criterion(filter, column, 2)

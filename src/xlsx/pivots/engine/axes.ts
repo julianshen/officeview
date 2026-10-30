@@ -100,6 +100,9 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   if (view.filters.some(isDynamicDateFilter)) return fail('unsupported', 'pivot-filter-dynamic-date', 'dynamic date filters depend on the current date and are not implemented')
   // Merged labels are unmeasured: fail closed until Task 15 has an Excel case.
   if (def.mergeItem) return unmeasured('merged item labels (mergeItem) are not measured yet')
+  // The observed row-header offset is the classic layout with data fields on rows. The
+  // corpus's gridDropZones/dataOnRows=false case (two data fields) has a matching layout.
+  if (def.gridDropZones && def.dataOnRows) return unmeasured('classic pivot layout (gridDropZones) geometry is not modelled')
   // Calculated fields are Task 22's, on an axis, a page or as data.
   for (const field of [...view.rows, ...view.cols, ...view.pages.map(page => page.field), ...view.data.map(data => data.field)]) {
     const cacheField = cache.fields[field]
@@ -115,13 +118,6 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   const filterFields = new Set(view.filters.map(filter => filter.fld))
   if (view.filters.some(filter => axisFields.some(target => target !== filter.fld && view.fields[target]?.showAll)))
     return unmeasured('cross-field filter visibility with showAll is not measured')
-  // Measured guard: removing this for lo-calc-pivottable_date_field_filter.xlsx leaves its rowItems tuple
-  // unchanged but places Date/Date2/Date3 labels over the saved Sum - Amount header. The axes tuple alone
-  // therefore does not establish that combined hidden-item visibility and a sorted axis are safe to emit.
-  const visibilityFields = view.fields.map((state, index) => ({ state, index }))
-    .filter(({ state, index }) => axisUsed.has(index) && (state.hidden.includes(true) || view.pages.some(page => page.field === index && page.selected !== 'all')))
-  if (visibilityFields.length > 1 && axisFields.some(field => view.fields[field]?.sortType !== 'manual'))
-    return unmeasured('combined hidden-item visibility across multiple sorted fields disagrees with the saved label layout')
   const used = new Set([...axisUsed, ...filterFields])
   const offAxis = view.fields.findIndex((field, index) => field.hidden.includes(true) && !axisUsed.has(index) && !filterFields.has(index))
   if (offAxis >= 0) return unmeasured(`field ${offAxis} is on no axis but has hidden items`)
@@ -197,6 +193,9 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
       if (isTop10Filter(filter) && filter.type !== 'count') return unmeasured(`top-10 ${filter.type} thresholds are not measured`)
       const aggregate = aggregateByKey(store, cache, view, dataIndex, keys, map.size, passes)
       if (!aggregate.ok) return aggregate
+      if (axisFields.includes(filter.fld) && view.fields[filter.fld]?.showAll &&
+        map.order.some(item => !view.fields[filter.fld]!.hidden[item] && aggregate.value[item] === undefined))
+        return unmeasured(`showAll with ${filter.type} filter on field ${filter.fld} has visible items without aggregates`)
       let allowed: Set<number>
       if (isValueFilter(filter)) {
         allowed = new Set()

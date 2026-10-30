@@ -35,8 +35,6 @@ function caption(item: PivotValue): string | undefined {
   return item.type === 'string' || item.type === 'number' ? String(item.value) : undefined
 }
 function rangeBucket(groupItems: readonly PivotValue[], start: number, end: number, interval: number, value: number): number {
-  if (value < start) return groupItems.findIndex(item => item.type === 'string' && /^\s*</u.test(item.value))
-  if (value > end) return groupItems.findIndex(item => item.type === 'string' && /^\s*>/u.test(item.value))
   const buckets: Array<{ index: number; start: number; end: number }> = []
   for (let i = 0; i < groupItems.length; i++) {
     const text = caption(groupItems[i]!)
@@ -127,6 +125,10 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
       if (start === undefined || end === undefined || !Number.isFinite(start) || !Number.isFinite(end) || end < start ||
         !Number.isFinite(range.groupInterval) || range.groupInterval <= 0)
         return invalid(`number group field ${field} has invalid range bounds`)
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(range.groupInterval))
+        return unmeasured(`fractional numeric group start or interval for field ${field} is not measured`)
+      if (value.value < start || value.value > end)
+        return unmeasured(`out-of-range number group values for field ${field} are not measured`)
       const item = rangeBucket(groupItems, start, end, range.groupInterval, value.value)
       if (item < 0) return unmeasured(`number group label for ${value.value} in field ${field} is not represented`)
       output[row] = item

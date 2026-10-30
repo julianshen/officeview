@@ -8,14 +8,13 @@ const fail = (message: string): EngineResult<never> => ({
 const MONTHS = new Set(['jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april', 'may', 'jun', 'june', 'jul', 'july', 'aug', 'august', 'sep', 'sept', 'september', 'oct', 'october', 'nov', 'november', 'dec', 'december'])
 const WEEKDAYS = new Set(['sun', 'sunday', 'mon', 'monday', 'tue', 'tues', 'tuesday', 'wed', 'wednesday', 'thu', 'thur', 'thurs', 'thursday', 'fri', 'friday', 'sat', 'saturday'])
 const ENGLISH_LABELS = new Intl.Collator('en', { sensitivity: 'accent' })
-const WORD_PUNCTUATION = /[-']/u
 
-/** Excel's English word sort ignores hyphen/apostrophe within words but keeps unpunctuated spelling first. */
+/** Task 21 has measured only ASCII letters, digits and spaces for English label order. */
+export function hasMeasuredEnglishOrder(value: string): boolean {
+  return /^[A-Za-z0-9 ]*$/u.test(value)
+}
+
 export function compareEnglishLabels(left: string, right: string): number {
-  const normalized = ENGLISH_LABELS.compare(left.replace(/[-']/gu, ''), right.replace(/[-']/gu, ''))
-  if (normalized) return normalized
-  const leftPunctuated = WORD_PUNCTUATION.test(left), rightPunctuated = WORD_PUNCTUATION.test(right)
-  if (leftPunctuated !== rightPunctuated) return leftPunctuated ? 1 : -1
   return ENGLISH_LABELS.compare(left, right)
 }
 function category(value: PivotValue): string {
@@ -42,8 +41,8 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
   if (new Set(values.map(category)).size > 1)
     return fail(`mixed-type item order for sorted field ${field} is not measured`)
   if (values.some(value => value.type === 'error')) return fail(`error-item order for sorted field ${field} is not measured`)
-  if (values.some(value => value.type === 'string' && !/^[\x20-\x7e]*$/u.test(value.value)))
-    return fail(`non-ASCII text collation for sorted field ${field} is not measured`)
+  if (values.some(value => value.type === 'string' && !hasMeasuredEnglishOrder(value.value)))
+    return fail(`text collation outside ASCII letters, digits and spaces for sorted field ${field} is not measured`)
   if (values.some(value => value.type === 'string' && (MONTHS.has(value.value.trim().toLocaleLowerCase()) || WEEKDAYS.has(value.value.trim().toLocaleLowerCase()))))
     return fail(`custom-list order for sorted field ${field} is not measured`)
   const direction = sortType === 'descending' ? -1 : 1
