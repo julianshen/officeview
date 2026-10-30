@@ -354,7 +354,7 @@ export function renderSheetViewport(
       }
       // Pivot interiors and filled styled-region cells hide their gridlines (regionGrid.ts). A sheet with
       // no pivot and no styled table pays only the guard: no allocation, no style lookup (spec §8 hot path).
-      const region = geometry?.kind === 'ready' && mayHaveRegionGrid(sheet) ? viewportRegionLines(sheet, geometry, yTop, yBottom, xLeft, xRight) : undefined
+      const region = geometry?.kind === 'ready' && mayHaveRegionGrid(sheet) ? viewportRegionLines(sheet, geometry, yTop, yBottom, xLeft, xRight, viewport.zoom * viewport.deviceScale) : undefined
       for (const x of plan.colLines) {
         const hidden = plan.merges.filter(merge => merge.x < x && x < merge.x + merge.width).map(merge => [merge.y, merge.y + merge.height] as [number, number])
         for (const band of spills) if (band.x0 < x && x < band.x1) hidden.push([band.y0, band.y1])
@@ -418,18 +418,21 @@ export function renderSheetViewport(
 
 /** The styled-region gridline rule over one tile's visible rows and columns: per gridline, the segments left to
  * stroke, and the spans a region fill covers (collected in `covered`). Undefined without a rule. Lines are
- * checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles. */
-function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number):
+ * checked per pair of neighbouring cells, so a line on a tile edge agrees in both tiles. Only detail runs are
+ * enumerated (the planner's `belowDetail` rule): a sub-detail run stays summarized, and the lines crossing it
+ * stroke as the plan's ordinary gridlines do there, so the work is bounded by the plan's detail rows and
+ * columns, never by the source rows or columns a few pixels hold (PR #55 r7). */
+function viewportRegionLines(sheet: XlsxSheet, geometry: SheetGeometry, yTop: number, yBottom: number, xLeft: number, xRight: number, scale: number):
   { lines(segments: Array<[number, number]>, at: number, vertical: boolean): Array<[number, number]>; covered: Array<{ color: string; vertical: boolean; at: number; segments: Array<[number, number]> }> } | undefined {
   const lineRule = regionGrid(sheet, (row, col) => geometry.cellsOf(row)?.find(cell => cell.col === col)?.style)
   if (!lineRule) return undefined
   const { rows, cols, order } = geometry.metrics
   const lineRows: Array<{ source: number; y0: number; y1: number }> = [], lineCols: Array<{ col: number; x0: number; x1: number }> = []
-  for (const run of rows.visibleBetween(yTop, yBottom).runs) for (let slot = run.start; slot <= run.end; slot++) {
+  for (const run of rows.visibleBetween(yTop, yBottom).runs) for (let slot = run.start; !belowDetail(run.sizeCss, scale) && slot <= run.end; slot++) {
     const source = order.displayToSource(slot)
     if (lineRule.rects.some(r => source >= r.minRow && source <= r.maxRow)) lineRows.push({ source, y0: rows.start(slot), y1: rows.start(slot) + rows.size(slot) })
   }
-  for (const run of cols.visibleBetween(xLeft, xRight).runs) for (let col = run.start; col <= run.end; col++) {
+  for (const run of cols.visibleBetween(xLeft, xRight).runs) for (let col = run.start; !belowDetail(run.sizeCss, scale) && col <= run.end; col++) {
     if (lineRule.rects.some(r => col >= r.minCol && col <= r.maxCol)) lineCols.push({ col, x0: cols.start(col), x1: cols.start(col) + cols.size(col) })
   }
   const neighbours = (axis: 'rows' | 'cols', at: number): [number, number] | undefined => {
