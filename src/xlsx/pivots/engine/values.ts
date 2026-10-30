@@ -22,7 +22,6 @@ const unmeasured = (message: string) => fail('pivot-engine-unmeasured', message)
 const invalid = (message: string) => ({ ok: false as const, diagnostic: { kind: 'parse' as const, feature: 'pivot-values', message } })
 
 interface Accumulator {
-  records: Uint8Array
   nonEmpty?: Uint32Array
   numeric?: Uint32Array
   sum?: Float64Array
@@ -63,15 +62,15 @@ function subtotalFnCode(type: PivotItemType, fallback: ValueFnCode): ValueFnCode
 
 function accumulatorBytes(fn: ValueFnCode): number {
   switch (fn) {
-    case VALUE_FN.sum: return 9
-    case VALUE_FN.count: case VALUE_FN.countNums: return 5
-    case VALUE_FN.average: case VALUE_FN.max: case VALUE_FN.min: case VALUE_FN.product: return 13
-    default: return 21 // records byte, numeric count, Welford mean and M2
+    case VALUE_FN.sum: return 8
+    case VALUE_FN.count: case VALUE_FN.countNums: return 4
+    case VALUE_FN.average: case VALUE_FN.max: case VALUE_FN.min: case VALUE_FN.product: return 12
+    default: return 20 // numeric count, Welford mean and M2
   }
 }
 
 function accumulator(size: number, fn: ValueFnCode): Accumulator {
-  const result: Accumulator = { records: new Uint8Array(size) }
+  const result: Accumulator = {}
   switch (fn) {
     case VALUE_FN.sum: result.sum = new Float64Array(size); break
     case VALUE_FN.count: result.nonEmpty = new Uint32Array(size); break
@@ -94,22 +93,20 @@ function accumulator(size: number, fn: ValueFnCode): Accumulator {
 }
 
 type AccumulatorBank = Array<Accumulator | undefined>
-function accumulatorBank(size: number, functions: readonly (readonly number[])[]): AccumulatorBank[] {
-  return functions.map(codes => {
-    const bank: AccumulatorBank = new Array(11)
-    for (const code of codes) bank[code] = accumulator(size, code as ValueFnCode)
-    return bank
-  })
+function accumulatorBank(size: number, codes: readonly number[]): AccumulatorBank {
+  const bank: AccumulatorBank = new Array(11)
+  for (const code of codes) bank[code] = accumulator(size, code as ValueFnCode)
+  return bank
 }
 
-function accumulatorBankBytes(size: number, functions: readonly (readonly number[])[]): number {
+function accumulatorBankBytes(size: number, codes: readonly number[]): number {
   let bytes = 0
-  for (const codes of functions) for (const code of codes) bytes += size * accumulatorBytes(code as ValueFnCode)
+  for (const code of codes) bytes += size * accumulatorBytes(code as ValueFnCode)
   return bytes
 }
 
-function add(acc: Accumulator, at: number, value: ReadValue, fn: ValueFnCode): void {
-  acc.records[at] = 1
+function add(acc: Accumulator, present: Uint8Array, at: number, value: ReadValue, fn: ValueFnCode): void {
+  present[at] = 1
   if (value.kind === 'missing') return
   if (fn === VALUE_FN.count) { acc.nonEmpty![at]++; return }
   if (value.kind !== 'number') return
@@ -154,9 +151,9 @@ function readValue(column: RecordColumn | undefined, sharedItems: readonly impor
   return true
 }
 
-function valueOf(acc: Accumulator, at: number, fn: ValueFnCode): number | undefined {
+function valueOf(acc: Accumulator, present: Uint8Array, at: number, fn: ValueFnCode): number | undefined {
   const count = acc.numeric?.[at] ?? 0
-  if (!acc.records[at]) return undefined
+  if (!present[at]) return undefined
   switch (fn) {
     case VALUE_FN.sum: return acc.sum![at]!
     case VALUE_FN.count: return acc.nonEmpty![at]!
@@ -188,10 +185,12 @@ function isNamedSubtotal(type: PivotItemType): boolean {
   return type !== 'data' && type !== 'default' && type !== 'grand' && type !== 'blank'
 }
 
-interface Targets { rows: number[][][]; cols: number[][][] }
-interface LineIndex { prefixes: Map<string, number[]>; grand: number[]; grandByData: Map<number, number[]> }
+interface LineTargets { offsets: Int32Array; indices: Int32Array }
+interface Targets { rows: LineTargets[]; cols: LineTargets[] }
+interface PrefixNode { children: Map<number, PrefixNode>; lines: number[] }
+interface LineIndex { root: PrefixNode; grand: number[]; grandByData: Map<number, number[]> }
 function makePrefixIndex(lines: readonly PivotLine[], view: PivotViewState, axis: 'rows' | 'cols'): LineIndex {
-  const prefixes = new Map<string, number[]>(), grand: number[] = [], grandByData = new Map<number, number[]>()
+  const root: PrefixNode = { children: new Map(), lines: [] }, grand: number[] = [], grandByData = new Map<number, number[]>()
   lines.forEach((line, index) => {
     if (line.type === 'grand') {
       grand.push(index)
@@ -201,37 +200,18 @@ function makePrefixIndex(lines: readonly PivotLine[], view: PivotViewState, axis
       return
     }
     if (!lineCarriesValues(view, axis, line)) return
-    const key = line.items.join(',')
-    let items = prefixes.get(key)
-    if (!items) prefixes.set(key, items = [])
-    items.push(index)
-  })
-  return { prefixes, grand, grandByData }
-}
-
-function targetsFor(lines: readonly PivotLine[], index: LineIndex, view: PivotViewState,
-  axis: 'rows' | 'cols', leafIndex: number, data: number): number[] | undefined {
-  const leaf = lines[leafIndex]
-  if (!leaf) return undefined
-  const path = [...leaf.items]
-  const fields = axis === 'rows' ? view.rows : view.cols
-  const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
-  if (valuesLevel >= 0 && valuesLevel < path.length) path[valuesLevel] = data
-  const found = new Set<number>()
-  for (let length = 0; length <= path.length; length++) {
-    for (const lineIndex of index.prefixes.get(path.slice(0, length).join(',')) ?? []) {
-      const line = lines[lineIndex]!
-      if (valuesLevel >= 0 && line.data !== data) continue
-      found.add(lineIndex)
+    let node = root
+    for (const item of line.items) {
+      let child = node.children.get(item)
+      if (!child) node.children.set(item, child = { children: new Map(), lines: [] })
+      node = child
     }
-  }
-  for (const lineIndex of (valuesLevel < 0 ? index.grand : index.grandByData.get(data) ?? [])) found.add(lineIndex)
-  return [...found].sort((a, b) => a - b)
+    node.lines.push(index)
+  })
+  return { root, grand, grandByData }
 }
 
 function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes): EngineResult<Targets> {
-  const rows: number[][][] = Array.from({ length: view.data.length }, () => Array.from({ length: axes.rows.length }, () => []))
-  const cols: number[][][] = Array.from({ length: view.data.length }, () => Array.from({ length: axes.cols.length }, () => []))
   for (let record = 0; record < store.count; record++) {
     const row = axes.rowKey[record], col = axes.colKey[record]
     if (row === undefined || col === undefined) return invalid(`record ${record} has an invalid leaf line`)
@@ -239,12 +219,39 @@ function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes):
     if (row >= axes.rows.length || col >= axes.cols.length) return invalid(`record ${record} has an invalid leaf line`)
   }
   const rowLineIndex = makePrefixIndex(axes.rows, view, 'rows'), colLineIndex = makePrefixIndex(axes.cols, view, 'cols')
+  const lists = (lines: readonly PivotLine[], index: LineIndex, axis: 'rows' | 'cols', data: number): LineTargets => {
+    const offsets = new Int32Array(lines.length + 1), values: number[] = []
+    const fields = axis === 'rows' ? view.rows : view.cols
+    const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
+    const append = (bucket: readonly number[]) => {
+      for (const target of bucket) {
+        if (valuesLevel < 0 || lines[target]!.data === data) values.push(target)
+      }
+    }
+    for (let line = 0; line < lines.length; line++) {
+      const leaf = lines[line]!
+      let node: PrefixNode | undefined = index.root
+      append(node.lines)
+      for (let level = 0; level < leaf.items.length; level++) {
+        const item = valuesLevel === level ? data : leaf.items[level]!
+        node = node.children.get(item)
+        if (!node) break
+        append(node.lines)
+      }
+      append(valuesLevel < 0 ? index.grand : index.grandByData.get(data) ?? [])
+      offsets[line + 1] = values.length
+    }
+    return { offsets, indices: Int32Array.from(values) }
+  }
+  const rows: LineTargets[] = [], cols: LineTargets[] = []
+  const rowShared = !view.rows.includes(PIVOT_VALUES_FIELD), colShared = !view.cols.includes(PIVOT_VALUES_FIELD)
   for (let d = 0; d < view.data.length; d++) {
-    for (let row = 0; row < axes.rows.length; row++) rows[d]![row] = targetsFor(axes.rows, rowLineIndex, view, 'rows', row, d) ?? []
-    for (let col = 0; col < axes.cols.length; col++) cols[d]![col] = targetsFor(axes.cols, colLineIndex, view, 'cols', col, d) ?? []
+    rows.push(rowShared && d > 0 ? rows[0]! : lists(axes.rows, rowLineIndex, 'rows', d))
+    cols.push(colShared && d > 0 ? cols[0]! : lists(axes.cols, colLineIndex, 'cols', d))
   }
   for (let record = 0; record < store.count; record++) for (let d = 0; d < view.data.length; d++) {
-    if (!rows[d]![axes.rowKey[record]!]!.length || !cols[d]![axes.colKey[record]!]!.length)
+    const row = axes.rowKey[record]!, col = axes.colKey[record]!
+    if (rows[d]!.offsets[row] === rows[d]!.offsets[row + 1] || cols[d]!.offsets[col] === cols[d]!.offsets[col + 1])
       return invalid(`record ${record} has no value-carrying row or column line`)
   }
   return { ok: true, value: { rows, cols } }
@@ -286,11 +293,15 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   const colCodes = functions.map((_, d) => codesFor(axes.cols, d))
   const gridCodes = functions.map((fn, d) => [...new Set([fn, ...rowCodes[d]!, ...colCodes[d]!])])
   const grandCodes = functions.map(fn => [fn])
-  // The byte estimate includes per-line target lists and prefix-index maps,
-  // whose JS overhead dominates when a pivot has many lines.
-  const estimatedBytes = accumulatorBankBytes(gridCellCount, gridCodes)
-    + accumulatorBankBytes(rowCount, rowCodes) + accumulatorBankBytes(colCount, colCodes)
-    + accumulatorBankBytes(1, grandCodes) + gridSize * OUTPUT_BYTES_PER_SLOT * 2 + targetBytes
+  const unionCodes = (sets: readonly (readonly number[])[]) => [...new Set(sets.flat())]
+  const gridBankCodes = unionCodes(gridCodes), rowBankCodes = unionCodes(rowCodes)
+  const colBankCodes = unionCodes(colCodes), grandBankCodes = unionCodes(grandCodes)
+  // The byte estimate includes per-line target lists and prefix-trie planning,
+  // whose working set grows with the number of axis lines.
+  const estimatedBytes = gridSize + rowCount * dataCount + colCount * dataCount + dataCount
+    + accumulatorBankBytes(gridSize, gridBankCodes)
+    + accumulatorBankBytes(rowCount * dataCount, rowBankCodes) + accumulatorBankBytes(colCount * dataCount, colBankCodes)
+    + accumulatorBankBytes(dataCount, grandBankCodes) + gridSize * OUTPUT_BYTES_PER_SLOT * 2 + targetBytes
   if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_ACCUMULATOR_BYTES)
     return fail('pivot-values-limit', 'the value grid exceeds its bounded accumulator budget')
 
@@ -310,39 +321,161 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   const recordTargets = readTargets(store, view, axes)
   if (!recordTargets.ok) return recordTargets
 
-  const gridAcc = accumulatorBank(gridCellCount, gridCodes), rowTotals = accumulatorBank(rowCount, rowCodes)
-  const colTotals = accumulatorBank(colCount, colCodes), grandTotals = accumulatorBank(1, grandCodes)
   const sourceColumns = view.data.map(data => store.columns[data.field])
   const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
+  const sumOnly = functions.every(fn => fn === VALUE_FN.sum)
+    && gridBankCodes.length === 1 && gridBankCodes[0] === VALUE_FN.sum
+    && rowBankCodes.length === 1 && rowBankCodes[0] === VALUE_FN.sum
+    && colBankCodes.length === 1 && colBankCodes[0] === VALUE_FN.sum
+    && grandBankCodes.length === 1 && grandBankCodes[0] === VALUE_FN.sum
+  const normalOnly = view.data.every(data => data.showAs === 'normal')
+  if (sumOnly && normalOnly) {
+    // NaN is a private empty-cell sentinel (record values are finite); this
+    // folds sum presence into the value array and keeps the hot update to one
+    // typed-array read/write.
+    const sums = new Float64Array(gridSize); sums.fill(Number.NaN)
+    const scratch: ReadValue = { kind: 'missing', value: 0 }
+    const commonTargets = !view.rows.includes(PIVOT_VALUES_FIELD) && !view.cols.includes(PIVOT_VALUES_FIELD)
+    if (commonTargets) {
+      const dataValues = new Float64Array(dataCount), dataNumeric = new Uint8Array(dataCount)
+      const rowList = recordTargets.value.rows[0]!, colList = recordTargets.value.cols[0]!
+      for (let record = 0; record < store.count; record++) {
+        const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+        for (let d = 0; d < dataCount; d++) {
+          const field = view.data[d]!.field
+          if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
+          if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+          if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+          dataNumeric[d] = +(scratch.kind === 'number')
+          dataValues[d] = scratch.value
+        }
+        const rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
+        const colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
+        for (let r = rowStart; r < rowEnd; r++) {
+          const row = rowList.indices[r]!, rowOffset = row * colCount
+          for (let c = colStart; c < colEnd; c++) {
+            const col = colList.indices[c]!, base = (rowOffset + col) * dataCount
+            for (let d = 0; d < dataCount; d++) {
+              const at = base + d, current = sums[at]!
+              if (dataNumeric[d]) sums[at] = (Number.isNaN(current) ? 0 : current) + dataValues[d]!
+              else if (Number.isNaN(current)) sums[at] = 0
+            }
+          }
+        }
+      }
+    } else {
+      for (let record = 0; record < store.count; record++) {
+        const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+        for (let d = 0; d < dataCount; d++) {
+          const field = view.data[d]!.field
+          if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
+          if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+          if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+          const numeric = scratch.kind === 'number', value = scratch.value
+          const rowList = recordTargets.value.rows[d]!, rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
+          const colList = recordTargets.value.cols[d]!, colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
+          for (let r = rowStart; r < rowEnd; r++) {
+            const row = rowList.indices[r]!
+            for (let c = colStart; c < colEnd; c++) {
+              const col = colList.indices[c]!, at = (row * colCount + col) * dataCount + d
+              const current = sums[at]!
+              if (numeric) sums[at] = (Number.isNaN(current) ? 0 : current) + value
+              else if (Number.isNaN(current)) sums[at] = 0
+            }
+          }
+        }
+      }
+    }
+    for (let at = 0; at < gridSize; at++) if (!Number.isNaN(sums[at]!) && !Number.isFinite(sums[at]!))
+      return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+    const grid: PivotValueGrid = {
+      get(row, col, data): PivotCellValue {
+        if (!Number.isInteger(row) || !Number.isInteger(col) || !Number.isInteger(data) || row < 0 || col < 0 || data < 0
+          || row >= rowCount || col >= colCount || data >= dataCount) return { kind: 'empty' }
+        const at = (row * colCount + col) * dataCount + data
+        const value = sums[at]!
+        return Number.isNaN(value) ? { kind: 'empty' } : { kind: 'number', value }
+      },
+    }
+    return { ok: true, value: grid }
+  }
+
+  const gridPresent = new Uint8Array(gridSize), rowPresent = new Uint8Array(rowCount * dataCount)
+  const colPresent = new Uint8Array(colCount * dataCount), grandPresent = new Uint8Array(dataCount)
+  const gridAcc = accumulatorBank(gridSize, gridBankCodes), rowTotals = accumulatorBank(rowCount * dataCount, rowBankCodes)
+  const colTotals = accumulatorBank(colCount * dataCount, colBankCodes), grandTotals = accumulatorBank(dataCount, grandBankCodes)
   const valueScratch: ReadValue = { kind: 'missing', value: 0 }
-  for (let record = 0; record < store.count; record++) {
-    for (let d = 0; d < dataCount; d++) {
-      const field = view.data[d]!.field
-      if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
-      if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
-      if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
-      const fn = functions[d]!
-      const rowTargets = recordTargets.value.rows[d]![axes.rowKey[record]!]!
-      const colTargets = recordTargets.value.cols[d]![axes.colKey[record]!]!
-      add(grandTotals[d]![fn]!, 0, valueScratch, fn)
-      for (const row of rowTargets) {
-        const rowFn = rowFunctions[row * dataCount + d]! as ValueFnCode
-        add(rowTotals[d]![rowFn]!, row, valueScratch, rowFn)
+  if (sumOnly) {
+    const gridSum = gridAcc[VALUE_FN.sum]!.sum!, rowSum = rowTotals[VALUE_FN.sum]!.sum!
+    const colSum = colTotals[VALUE_FN.sum]!.sum!, grandSum = grandTotals[VALUE_FN.sum]!.sum!
+    for (let record = 0; record < store.count; record++) {
+      const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+      for (let d = 0; d < dataCount; d++) {
+        const field = view.data[d]!.field
+        if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
+        if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+        if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+        const numeric = valueScratch.kind === 'number', value = valueScratch.value
+        grandPresent[d] = 1
+        if (numeric) grandSum[d] += value
+        const rowList = recordTargets.value.rows[d]!, rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
+        for (let r = rowStart; r < rowEnd; r++) {
+          const row = rowList.indices[r]!, at = row * dataCount + d
+          rowPresent[at] = 1
+          if (numeric) rowSum[at] += value
+        }
+        const colList = recordTargets.value.cols[d]!, colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
+        for (let c = colStart; c < colEnd; c++) {
+          const col = colList.indices[c]!, at = col * dataCount + d
+          colPresent[at] = 1
+          if (numeric) colSum[at] += value
+        }
+        for (let r = rowStart; r < rowEnd; r++) {
+          const row = rowList.indices[r]!
+          for (let c = colStart; c < colEnd; c++) {
+            const col = colList.indices[c]!, at = (row * colCount + col) * dataCount + d
+            gridPresent[at] = 1
+            if (numeric) gridSum[at] += value
+          }
+        }
       }
-      for (const col of colTargets) {
-        const colFn = colFunctions[col * dataCount + d]! as ValueFnCode
-        add(colTotals[d]![colFn]!, col, valueScratch, colFn)
-      }
-      for (const row of rowTargets) for (const col of colTargets) {
-        const isRowNamed = !!rowNamed[row], isColNamed = !!colNamed[col]
-        const rowFn = rowFunctions[row * dataCount + d]! as ValueFnCode
-        const colFn = colFunctions[col * dataCount + d]! as ValueFnCode
-        if (isRowNamed && isColNamed && rowFn !== colFn)
-          return unmeasured('intersecting row and column named subtotals with different functions are not measured')
-        if ((isRowNamed || isColNamed) && view.data[d]!.showAs !== 'normal')
-          return unmeasured('show-as applied to a named subtotal is not measured')
-        const cellFn = isRowNamed ? rowFn : isColNamed ? colFn : fn
-        add(gridAcc[d]![cellFn]!, row * colCount + col, valueScratch, cellFn)
+    }
+  } else {
+    for (let record = 0; record < store.count; record++) {
+      for (let d = 0; d < dataCount; d++) {
+        const field = view.data[d]!.field
+        if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
+        if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+        if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+        const fn = functions[d]!
+        const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+        const rowList = recordTargets.value.rows[d]!, colList = recordTargets.value.cols[d]!
+        const rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
+        const colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
+        add(grandTotals[fn]!, grandPresent, d, valueScratch, fn)
+        for (let r = rowStart; r < rowEnd; r++) {
+          const row = rowList.indices[r]!
+          const rowAt = row * dataCount + d, rowFn = rowFunctions[rowAt]! as ValueFnCode
+          add(rowTotals[rowFn]!, rowPresent, rowAt, valueScratch, rowFn)
+        }
+        for (let c = colStart; c < colEnd; c++) {
+          const col = colList.indices[c]!
+          const colAt = col * dataCount + d, colFn = colFunctions[colAt]! as ValueFnCode
+          add(colTotals[colFn]!, colPresent, colAt, valueScratch, colFn)
+        }
+        for (let r = rowStart; r < rowEnd; r++) for (let c = colStart; c < colEnd; c++) {
+          const row = rowList.indices[r]!, col = colList.indices[c]!
+          const isRowNamed = !!rowNamed[row], isColNamed = !!colNamed[col]
+          const rowFn = rowFunctions[row * dataCount + d]! as ValueFnCode
+          const colFn = colFunctions[col * dataCount + d]! as ValueFnCode
+          if (isRowNamed && isColNamed && rowFn !== colFn)
+            return unmeasured('intersecting row and column named subtotals with different functions are not measured')
+          if ((isRowNamed || isColNamed) && view.data[d]!.showAs !== 'normal')
+            return unmeasured('show-as applied to a named subtotal is not measured')
+          const cellFn = isRowNamed ? rowFn : isColNamed ? colFn : fn
+          const at = cellIndex(row, col, d, colCount, dataCount)
+          add(gridAcc[cellFn]!, gridPresent, at, valueScratch, cellFn)
+        }
       }
     }
   }
@@ -357,7 +490,7 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
       return unmeasured('intersecting row and column named subtotals with different functions are not measured')
     const fn = rowNamed ? rowFn : colNamed ? colFn : view.data[d]!.fn
     const fnCode = valueFnCode(fn)
-    const result = valueOf(gridAcc[d]![fnCode]!, row * colCount + col, fnCode)
+    const result = valueOf(gridAcc[fnCode]!, gridPresent, at, fnCode)
     if (result === undefined) continue
     if (!Number.isFinite(result)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     raw[at] = result; present[at] = 1
@@ -375,9 +508,9 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
   }
 
   const output = raw.slice(), outputPresent = present.slice()
-  const totalValue = (acc: AccumulatorBank[], d: number, at: number): number | undefined => {
+  const totalValue = (acc: AccumulatorBank, present: Uint8Array, at: number, d: number): number | undefined => {
     const fn = functions[d]!
-    return valueOf(acc[d]![fn]!, at, fn)
+    return valueOf(acc[fn]!, present, at, fn)
   }
   const rowFields = view.rows, colFields = view.cols
   const findBaseLine = (axis: 'rows' | 'cols', current: number, baseField: number, baseItem: number): number | undefined => {
@@ -441,9 +574,9 @@ export function computeValues(store: RecordStore, cache: PivotCacheDefinition, _
     const data = view.data[d]!, mode = data.showAs as PivotShowDataAs | string
     if (mode === 'normal') continue
     let denominator: number | undefined, numerator = raw[at]!, result: number
-    const rowTotal = totalValue(rowTotals, d, row)
-    const colTotal = totalValue(colTotals, d, col)
-    const grandTotal = totalValue(grandTotals, d, 0)
+    const rowTotal = totalValue(rowTotals, rowPresent, row * dataCount + d, d)
+    const colTotal = totalValue(colTotals, colPresent, col * dataCount + d, d)
+    const grandTotal = totalValue(grandTotals, grandPresent, d, d)
     if (mode === 'percentOfTotal') denominator = grandTotal
     else if (mode === 'percentOfRow') denominator = rowTotal
     else if (mode === 'percentOfCol') denominator = colTotal
