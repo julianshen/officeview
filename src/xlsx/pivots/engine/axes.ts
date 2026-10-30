@@ -100,9 +100,10 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   if (view.filters.some(isDynamicDateFilter)) return fail('unsupported', 'pivot-filter-dynamic-date', 'dynamic date filters depend on the current date and are not implemented')
   // Merged labels are unmeasured: fail closed until Task 15 has an Excel case.
   if (def.mergeItem) return unmeasured('merged item labels (mergeItem) are not measured yet')
-  // The observed row-header offset is the classic layout with data fields on rows. The
-  // corpus's gridDropZones/dataOnRows=false case (two data fields) has a matching layout.
-  if (def.gridDropZones && def.dataOnRows) return unmeasured('classic pivot layout (gridDropZones) geometry is not modelled')
+  // With no column-axis field, classic layout shifts the row header even when
+  // dataOnRows is false (the default). A Values field on columns preserves the
+  // observed two-data-field geometry.
+  if (def.gridDropZones && view.cols.length === 0) return unmeasured('classic pivot layout (gridDropZones) geometry is not modelled')
   // Calculated fields are Task 22's, on an axis, a page or as data.
   for (const field of [...view.rows, ...view.cols, ...view.pages.map(page => page.field), ...view.data.map(data => data.field)]) {
     const cacheField = cache.fields[field]

@@ -1,6 +1,6 @@
 /** Pure filter predicates shared by computeAxes. */
 import type { PivotFilter, PivotFilterColumn, PivotFilterType, PivotValue } from '../model'
-import { compareEnglishLabels, hasMeasuredEnglishOrder } from './sort'
+import { compareEnglishLabels, hasMeasuredEnglishOrder, hasUnmeasuredSpaceOrder } from './sort'
 
 const CAPTION_TYPES = new Set<PivotFilterType>([
   'captionEqual', 'captionNotEqual', 'captionBeginsWith', 'captionNotBeginsWith', 'captionEndsWith', 'captionNotEndsWith',
@@ -53,7 +53,9 @@ function captionCompare(label: string, op: PivotFilterType, a: string, b?: strin
   const usesOrder = op === 'captionGreaterThan' || op === 'captionGreaterThanOrEqual' || op === 'captionLessThan' ||
     op === 'captionLessThanOrEqual' || op === 'captionBetween' || op === 'captionNotBetween'
   if (usesOrder && (!hasMeasuredEnglishOrder(label) || !hasMeasuredEnglishOrder(a) || (b !== undefined && !hasMeasuredEnglishOrder(b)))) return undefined
+  if (usesOrder && hasUnmeasuredSpaceOrder(b === undefined ? [label, a] : [label, a, b])) return undefined
   const firstVsLabel = compareEnglishLabels(label, a), secondVsLabel = b === undefined ? undefined : compareEnglishLabels(label, b)
+  if (usesOrder && (firstVsLabel === undefined || (b !== undefined && secondVsLabel === undefined))) return undefined
   const glob = wildcardRegex(a, op === 'captionBeginsWith' || op === 'captionNotBeginsWith' ? 'prefix'
     : op === 'captionEndsWith' || op === 'captionNotEndsWith' ? 'suffix'
       : op === 'captionContains' || op === 'captionNotContains' ? 'contains' : 'exact')

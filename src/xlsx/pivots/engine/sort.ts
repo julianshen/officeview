@@ -17,6 +17,23 @@ export function hasMeasuredEnglishOrder(value: string): boolean {
 export function compareEnglishLabels(left: string, right: string): number {
   return ENGLISH_LABELS.compare(left, right)
 }
+/** Detect a measured-order boundary where a space competes with a word character. */
+export function hasUnmeasuredSpaceBoundary(leftValue: string, rightValue: string): boolean {
+  const left = leftValue.toLowerCase(), right = rightValue.toLowerCase()
+  const isAlphaNumeric = (value: string | undefined) => value !== undefined && /^[a-z0-9]$/u.test(value)
+  let offset = 0
+  while (offset < left.length && offset < right.length && left[offset] === right[offset]) offset++
+  const a = left[offset], b = right[offset]
+  return (a === ' ' && isAlphaNumeric(b)) || (b === ' ' && isAlphaNumeric(a))
+}
+/** Detect an unmeasured space-versus-word ordering without comparing every item pair. */
+export function hasUnmeasuredSpaceOrder(values: readonly string[]): boolean {
+  const labels = [...new Set(values.map(value => value.toLowerCase()))].sort()
+  for (let index = 1; index < labels.length; index++) {
+    if (hasUnmeasuredSpaceBoundary(labels[index - 1]!, labels[index]!)) return true
+  }
+  return false
+}
 function category(value: PivotValue): string {
   if (value.type === 'number') return 'number'
   if (value.type === 'date') return 'date'
@@ -51,6 +68,13 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
     if (!a || !b) return left - right
     return direction * (compare(a, b) ?? 0) || left - right
   })
+  // Reuse the sort order already needed for output: the only risky labels will
+  // meet at the space/word boundary after collation, without a second O(n log n) sort.
+  for (let index = 1; index < sorted.length; index++) {
+    const left = valuesByItem[sorted[index - 1]!], right = valuesByItem[sorted[index]!]
+    if (left?.type === 'string' && right?.type === 'string' && hasUnmeasuredSpaceBoundary(left.value, right.value))
+      return fail(`space-versus-word collation for sorted field ${field} is not measured`)
+  }
   return { ok: true, value: sorted }
 }
 

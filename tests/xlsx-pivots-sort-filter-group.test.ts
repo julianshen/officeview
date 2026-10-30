@@ -124,6 +124,14 @@ describe('Task 21 sort, filters and group mapping', () => {
     allowed.view.fields = [{ ...allowed.view.fields[0]!, sortType: 'ascending' }, allowed.view.fields[1]!]
     expect(lines(result(allowed))).toEqual([3, 2, 1, 4, 0])
 
+    const ambiguous = fixture(['A 1', 'A1'].map(value => ({ type: 'string', value })), [0, 1], [1, 1])
+    ambiguous.view.fields = [{ ...ambiguous.view.fields[0]!, sortType: 'ascending' }, ambiguous.view.fields[1]!]
+    expect(result(ambiguous)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const separated = fixture(['North Europe', 'North Asia'].map(value => ({ type: 'string', value })), [0, 1], [1, 1])
+    separated.view.fields = [{ ...separated.view.fields[0]!, sortType: 'ascending' }, separated.view.fields[1]!]
+    expect(lines(result(separated))).toEqual([1, 0])
+
     const f = fixture(['Apple', 'apricot', 'Berry'].map(value => ({ type: 'string', value })), [0, 1, 2], [1, 1, 1], [filter({
       type: 'captionEqual', stringValue1: 'A?ple', autoFilter: { columns: [{ colId: 0, hiddenButton: false, showButton: true,
         customFilters: { and: false, filters: [{ operator: 'equal', val: 'A?ple' }, { operator: 'equal', val: 'berry' }] } }] },
@@ -149,6 +157,20 @@ describe('Task 21 sort, filters and group mapping', () => {
     const escapedAxes = result(escaped)
     expect(escapedAxes.ok).toBe(true)
     if (escapedAxes.ok) expect([...escapedAxes.value.rowKey]).toEqual([0, NO_LINE])
+  })
+
+  it('refuses caption ordering when a space competes with a letter or digit', () => {
+    const ambiguous = fixture(['A 1', 'A1'].map(value => ({ type: 'string', value })), [0, 1], [1, 1], [filter({
+      type: 'captionGreaterThan', stringValue1: 'A1',
+    })])
+    expect(result(ambiguous)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
+
+    const separated = fixture(['North Asia', 'North Europe'].map(value => ({ type: 'string', value })), [0, 1], [1, 1], [filter({
+      type: 'captionLessThan', stringValue1: 'North Europe',
+    })])
+    const axes = result(separated)
+    expect(axes.ok).toBe(true)
+    if (axes.ok) expect([...axes.value.rowKey]).toEqual([0, NO_LINE])
   })
 
   it('refuses label filters on unmeasured captions and filters renamed items by no guessed caption', () => {
@@ -222,7 +244,7 @@ describe('Task 21 sort, filters and group mapping', () => {
   it('refuses classic gridDropZones geometry without rejecting unrelated hidden sorted axes', () => {
     const classic = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 1], [1, 2])
     classic.def.gridDropZones = true
-    classic.def.dataOnRows = true
+    classic.def.dataOnRows = false
     expect(result(classic)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured', message: 'classic pivot layout (gridDropZones) geometry is not modelled' } })
 
     const ordinary = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 0], [1, 2])
@@ -240,6 +262,7 @@ describe('Task 21 sort, filters and group mapping', () => {
 
     const gridWithoutRows = fixture(['A', 'B'].map(value => ({ type: 'string', value })), [0, 1], [1, 2])
     gridWithoutRows.def.gridDropZones = true
+    gridWithoutRows.view.cols = [-2]
     expect(result(gridWithoutRows).ok).toBe(true)
   })
 
