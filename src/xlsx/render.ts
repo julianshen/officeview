@@ -144,6 +144,17 @@ function alignedLayout(layout: TextLayout, bounds: ReturnType<typeof textLayoutB
   return { ...layout, lines: layout.lines.map(line => ({ ...line, segments: line.segments.map(segment => ({ ...segment,
     transform: segment.transform ? { ...segment.transform, e: segment.transform.e + dx, f: segment.transform.f + dy } : { a: 1, b: 0, c: 0, d: 1, e: segment.x + dx, f: line.baseline + dy } })) })) }
 }
+/** The indent layoutCellText applies to a cell `w` wide: alignment@indent narrows the box
+ * on the aligned side for left, right and distributed text, never for rotated or stacked
+ * text, and leaves at least one pixel of interior. layoutCellBody fits, shrinks and
+ * '#'-fills numbers against the same narrowed width (PR #55 r4). */
+function textIndent(style: XlsxCellStyle | undefined, numeric: boolean, center: boolean, w: number, indentPx: number): number {
+  if (!(indentPx > 0)) return 0
+  const mapped = cellTextRotation(style?.textRotation)
+  if (mapped && ('stacked' in mapped || ('radians' in mapped && mapped.radians))) return 0
+  const horizontal = style?.horizontal === undefined || style.horizontal === 'general' ? numeric ? 'right' : center ? 'center' : 'left' : style.horizontal
+  return horizontal === 'left' || horizontal === 'right' || horizontal === 'distributed' ? Math.min(indentPx, Math.max(0, w - PADDING_L - PADDING_R - 1)) : 0
+}
 /** Wrapped text chooses a measured local multiline box that fits its rotated
  * cell interior. No-wrap or physically oversized text keeps authored font size
  * and clips to the cell; source remains complete, with clip-aware indexing.
@@ -160,7 +171,7 @@ function layoutCellText(ctx: CanvasRenderingContext2D, text: string, style: Xlsx
   const fontFamily = style?.fontName ?? 'Calibri'
   // alignment@indent (left, right, distributed) narrows the box the text is
   // fitted and aligned in, from the aligned side; the clip stays the cell.
-  const indent = !stacked && !radians && (horizontal === 'left' || horizontal === 'right' || horizontal === 'distributed') ? Math.min(indentPx, Math.max(0, w - PADDING_L - PADDING_R - 1)) : 0
+  const indent = textIndent(style, numeric, center, w, indentPx)
   const box = { x: horizontal === 'right' ? x : x + indent, y, w: w - indent, h }
   const body: PptxTextBody = { direction: stacked ? 'wordArtVertRtl' : 'horz', anchor: 't', wrap,
     insetLeftEmu: 0, insetRightEmu: 0, insetTopEmu: 0, insetBottomEmu: 0,
@@ -1184,7 +1195,20 @@ export function layoutCellBody(
   const fontAt = (sizePt: number) => cellFontString(cell.style, sizePt)
   const baseSize = cell.style?.fontSizePt ?? 10
   const rotated = cellTextRotation(cell.style?.textRotation) !== undefined
-  const inner = Math.max(0, w - PADDING_L - PADDING_R)
+  // OOXML often authors default alignment fields on every cell. Those
+  // retain ordinary placement; real alignment/wrapping/rotation needs
+  // the measured local layout (including explicit no-wrap for255).
+  const explicit = (cell.style?.horizontal !== undefined && cell.style.horizontal !== 'general')
+    || (cell.style?.vertical !== undefined && cell.style.vertical !== 'bottom')
+    || cell.style?.wrapText === true || rotated
+  const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
+  // One indent level is one maximum digit width (measured, Excel 16.114).
+  const indentPx = cell.style?.indentPx ?? (cell.style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? sheet.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
+  // The laid-out text sits in the indented box, so General fitting, '#' overflow and
+  // shrink-to-fit measure against that same width (the non-indented rules, applied to it:
+  // Excel's indented overflow is unmeasured).
+  const indent = explicit ? textIndent(cell.style, typeof cell.value === 'number', isCenter, w, indentPx) : 0
+  const inner = Math.max(0, w - PADDING_L - PADDING_R - indent)
   const shrinkable = cell.style?.shrinkToFit === true && cell.style.wrapText !== true && !rotated
   let font = fontAt(baseSize), fontSize = baseSize
   // Excel decides fit with its Calibri metrics; a wider fallback face must not
@@ -1211,7 +1235,7 @@ export function layoutCellBody(
       }
     }
   }
-  const text = numericOverflowText(cell, formatted, font, w, measured, generalNoFit, excelFits, allocation)
+  const text = numericOverflowText(cell, formatted, font, w - indent, measured, generalNoFit, excelFits, allocation)
   if (text === formatted && typeof cell.value === 'number' && !cell.valueIsError && !rotated && cell.style?.wrapText !== true && measured(font, text) > inner && excelFits(text)) {
     // Excel shows it in full; the fallback face is wider, so fit the paint to
     // the cell (as shrink-to-fit would) instead of spilling a number.
@@ -1226,18 +1250,9 @@ export function layoutCellBody(
     // A colour section ([Red], [Color n]) overrides the font colour.
     const code = displayFormatCode(cell.style)
     const color = (code !== undefined && cell.value !== null ? formatColor(cell.value, code, allocation) : undefined) ?? (style?.color ? spreadsheetColor(style.color) : '#000000')
-    // OOXML often authors default alignment fields on every cell. Those
-    // retain ordinary placement; real alignment/wrapping/rotation needs
-    // the measured local layout (including explicit no-wrap for255).
-    const explicit = (style?.horizontal !== undefined && style.horizontal !== 'general')
-      || (style?.vertical !== undefined && style.vertical !== 'bottom')
-      || style?.wrapText === true || rotated
-    const isCenter = cell.valueIsError ?? (cell.formula !== undefined && isFormulaError(cell.value))
     if (explicit) {
       ctx.fillStyle = color
       ctx.font = font
-      // One indent level is one maximum digit width (measured, Excel 16.114).
-      const indentPx = style?.indentPx ?? (style?.indent ?? 0) * (sheet.columnMetrics?.maxDigitWidthPx ?? sheet.maxDigitWidthPx ?? DEFAULT_COLUMN_METRICS.maxDigitWidthPx)
       out.text = { ...layoutCellText(ctx, text, style, typeof cell.value === 'number', x, y, w, hh, color, isCenter, overflow, indentPx), font }
     } else {
       // Preserve accepted ordinary default horizontal layout exactly.
