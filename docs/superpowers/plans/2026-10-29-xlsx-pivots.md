@@ -461,9 +461,9 @@
 - **Captions.** Excel rewrites the default captions in its UI language on refresh (Stage 1 probe C). Caption text comes from the first of these that exists:
   1. an explicit name in the definition (`rowHeaderCaption`, `colHeaderCaption`, `grandTotalCaption`, `dataField@name`, item `n`, `subtotalCaption`);
   2. the saved cell text for the same caption slot in the saved state;
-  3. Excel's English default.
+  3. otherwise the cell carries `caption: 'implicit'` with Excel's English default as placeholder text, and the layout sets `captionsUnverified: true`. Stage 3 must not show a layout with that flag until a locale rule is measured, because Excel 16.114 in zh-TW writes localised defaults (Stage 1 probe C).
 
-  The faithfulness check compares implicit-caption cells for presence only, not text. Task 15 measures which captions Excel localises.
+  The faithfulness check compares implicit-caption cells for presence only, not text. Task 15 records Excel's localised text for each implicit caption.
 - **Writer-made files.** A LibreOffice- or POI-written file is that writer's own computation, not Excel's. A faithfulness mismatch there is the fail-closed path working, never a reason to tune the engine. Files without `rowItems`/`colItems` exercise the *unverified* path (§6.4 item 5), which has its own tests.
 - **Caps [call] (§13):**
 
@@ -529,14 +529,14 @@
   | Group (task) | Cases |
   |---|---|
   | Layout (17) | compact, outline and tabular, each with 3 row fields; collapsed items; subtotals top and bottom; grand totals row-only, column-only and off; Values on rows and on columns with 2 data fields; blank rows; repeat labels; named subtotals (sum + count + average) |
-  | Data quirks (17, 18) | blank items, an error in a value, mixed number and text items in a row field, a hidden item, page field single and multiple |
+  | Data quirks (17, 18) | blank items, an error in a value, mixed number and text items in a row field, a hidden item, page field single and multiple; **cross-field visibility:** a hidden item, a page selection and a label filter on one field that each leave an item of another row or column field with no records (with and without `showAll`) |
   | Values (18) | each of the 11 functions; each show-as mode, including previous and next base items, % of parent at 2 levels, rank with ties, running total, index, and % difference with a zero base; an addition-order case for the 15-digit rule |
   | Sort, filter, group (21) | sort ascending and descending with numbers, text and blanks; custom lists (month and weekday names); sort by value within groups; label filters (wildcard, between); value filter; top 10 by count, percent and sum, with ties; date filter between; date groups (years, quarters, months) with blanks and out-of-range start and end; a number range group; a manual group; a group field with its base field |
   | Calculated (22) | a calculated field with spaces in the name and division by zero; one calculated-item case, which decides §5.6 |
 - [ ] **Step 4: Answer the [measure] items.** Read them off the cases and record each in the validation doc with its case:
   - §5.1: error propagation; the out-of-range labels.
   - §5.2:
-    - whether filters on other fields hide items;
+    - whether filters on other fields hide items (the cross-field cases);
     - `subtotalTop` placement per form.
   - §5.3:
     - totals from records;
@@ -580,7 +580,8 @@ export function isoToSerial(iso: string, date1904: boolean): number   // reuse t
   - `x out of range gives pivot-records parse`.
   - `child count mismatch gives pivot-records parse`.
   - `an inline value in a shared field gives pivot-records parse`.
-  - `cap crossed mid-stream gives pivot-records-limit`, for both maxBytes and maxRecords; the stream is not read to its end.
+  - `cap crossed mid-stream gives pivot-records-limit`, for each of maxBytes, maxRecords and maxInlineStrings (many short distinct inline strings); the stream is not read to its end.
+  - `RECORD_LIMITS per profile`: D and M equal the caps table.
   - `dates decode to serials in 1900 and 1904 systems`.
   - `bytes equals the typed-array byteLengths plus string estimate`.
   - `resident bytes and worker openPart stream give equal stores`, through the paged package in node.
@@ -618,9 +619,14 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
 export type PivotCellValue = { kind: 'empty' } | { kind: 'number'; value: number } | { kind: 'text'; value: string } | { kind: 'error'; value: string }
 export interface PivotValueGrid { get(rowLine: number, colLine: number, data: number): PivotCellValue }
 export interface PivotLayoutCell { row: number; col: number; value: PivotCellValue; numFmtId?: number; caption?: 'implicit' }
-export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[] }
+export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean }
 export function placeCells(def: PivotTableDefinition, view: PivotViewState, cache: PivotCacheDefinition, axes: PivotAxes, values: PivotValueGrid, savedCaption?: (row: number, col: number) => string | undefined): PivotLayout
+/** The definition as the live view would save it: fields' axis, items (h, sd), subtotal flags, rowFields/colFields/pageFields/dataFields,
+ * rowItems/colItems from `axes`, and `location` resized from the layout. Stage 1's `savedPivotLayout`, `savedPivotRoles`, `pivotButtons`
+ * and `formats` matching then run unchanged on it: this is the bridge for style roles and button placements (Task 26 consumes it). */
+export function liveDefinition(def: PivotTableDefinition, view: PivotViewState, axes: PivotAxes, layout: PivotLayout): PivotTableDefinition
 ```
+- `PivotLayout` also carries `captionsUnverified: boolean` (see the caption ruling).
 - Order in this task: `items` order, `manual` only. Visibility: `h` and page-field selections only. Sorting, label, value, date and top-10 filters, and grouping are Task 21. For each of those, `computeAxes` returns `{ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-engine-pending', … } }` until Task 21 replaces it.
 
 - [ ] **Step 1: Write the failing tests.** The oracle is every manifest case with `task: 17`, plus the Stage 1 references (`tests/fixtures/xlsx-pivots/pivot-*.xlsx`) and the corpus files with `rowItems`. Their `computeAxes` lines must deep-equal `savedPivotLayout(def).rows/cols`.
@@ -629,6 +635,8 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   - `values on rows and on columns place the Values level`.
   - `items with no data are dropped unless showAll`.
   - `hidden items and page selections`.
+  - `cross-field visibility: an item left without records by another field's hidden item or page selection follows the measurement` (manifest cross-field cases with `task: 17`).
+  - `liveDefinition of the saved state reproduces the saved definition`: its `rowItems`, `colItems` and `location` deep-equal the file's, and `savedPivotRoles(liveDef)` and `pivotButtons(liveDef, mode)` in both modes equal those of the file's definition, on every Stage 1 reference.
   - `named subtotals add one line per function`.
   - `placeCells puts labels, captions and blank rows where the saved cells are`. This compares every non-value cell's text or `caption: 'implicit'` with the saved sheet cells.
 - [ ] **Step 2: Run them; they fail.**
@@ -682,6 +690,8 @@ export type CellReader = (row: number, col: number) => SavedCell | undefined
 export interface CellDiff { row: number; col: number; expected?: SavedCell; actual: PivotCellValue | 'line'; reason: string }
 export type FaithfulResult = { status: 'ok' } | { status: 'mismatch'; firstDiff: CellDiff } | { status: 'unverified'; reason: 'no-row-items' | 'no-col-items' | 'cells-missing' | 'cells-predate-records' | 'unsupported'; detail?: string }
 export function checkSavedLayout(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition, saved: CellReader): FaithfulResult
+/** §7.6 gate before any decode: absent records part, unsupported source type or OLAP cache. */
+export function engineEligibility(cache: PivotCacheDefinition, def: PivotTableDefinition): { ok: true } | { ok: false; diagnostic: PivotDiagnostic }
 export function sheetCellReader(sheet: XlsxSheet): CellReader          // resident
 ```
 - **Method:**
@@ -694,7 +704,11 @@ export function sheetCellReader(sheet: XlsxSheet): CellReader          // reside
 - [ ] **Step 1: Write the failing tests.**
   - `every Excel-made fixture is ok or unverified with a named pending task`.
   - `a one-cell edit is a mismatch naming that cell`.
-  - `absent rowItems is unverified`.
+  - `absent rowItems is unverified` and `absent colItems is unverified` (when the pivot has a column axis).
+  - `missing or incomplete saved cells is unverified (cells-missing)`.
+  - `recordCount differing from the store is unverified (cells-predate-records)`.
+  - The §7.6 refusals, each a typed result with its feature, never a throw: `saveData="0"` (no records part: the caller gets `pivot-records-absent` before any check), an external / consolidation / scenario source and an OLAP cache (`pivot-source-unsupported`), and an unknown definition construct (`def.unsupported` non-empty → `unverified`, `reason: 'unsupported'`). Each built by editing an Excel-made fixture's XML.
+  - `a refused pivot's display is unchanged`: `savedPivotRoles` and the sheet cells are identical before and after the check.
   - `LibreOffice files are ok, mismatch or unverified, never throw`, which records each file's status in a snapshot table.
   - `paged CellReader equals resident`, through the paged sheet shell used in `tests/xlsx-pivots-paged.test.ts`.
 - [ ] **Step 2: Run them; they fail.**
@@ -746,6 +760,7 @@ export function sheetCellReader(sheet: XlsxSheet): CellReader          // reside
   - `type order: numbers, text, blanks per measurement`.
   - `top 10 ties per measurement`.
   - `label filter wildcards and case`.
+  - `cross-field visibility under a label filter follows the measurement` (manifest cross-field case with `task: 21`).
   - `dynamic date filter is unsupported`.
 - [ ] **Step 2: Run them; they fail.**
 - [ ] **Step 3: Implement.**
