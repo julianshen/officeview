@@ -596,13 +596,7 @@ async function checkManifestCase(entry: ManifestCase) {
 /** Ruling S2-AA: task-17 manifest cases the engine still refuses, each with its exact refusal and why Excel's file
  * does not settle it. Empty after fix round B1: every task-17 case computes. */
 const TASK17_REFUSED: Record<string, { message: string; why: string }> = {}
-/** Task-17 cases whose lines, location, labels and merges equal Excel's, but whose value cells still differ in lane
- * A's files (values.ts): case → the exact first difference checkSavedLayout reports. */
-const TASK17_LANE_A: Record<string, { cell: string; reason: string; why: string }> = {
-  // Record 43 (West, Online, 2022) has Sales missing: Excel leaves the Sum of Sales cell blank (R21C2) while Units
-  // shows 57; values.ts's sum turns a cell whose only values are missing into 0. The aggregation rule is lane A's.
-  'quirk-blank-and-mixed-row-items': { cell: 'R21C2', reason: 'the engine places a value the saved cell does not have', why: 'a sum over missing values only is blank in Excel' },
-}
+/** Task-17 cases the engine refuses, each with its exact refusal and why Excel's file does not settle it. */
 async function checkManifestStatus(entry: ManifestCase) {
   const p = await manifestPivot(entry)
   const refused = TASK17_REFUSED[entry.case]
@@ -614,12 +608,6 @@ async function checkManifestStatus(entry: ManifestCase) {
     return
   }
   await checkManifestCase(entry)
-  const laneA = TASK17_LANE_A[entry.case]
-  if (laneA) {
-    expect(result.status === 'mismatch' ? { cell: `R${result.firstDiff.row + 1}C${result.firstDiff.col + 1}`, reason: result.firstDiff.reason } : result)
-      .toEqual({ cell: laneA.cell, reason: laneA.reason })
-    return
-  }
   expect(result).toEqual({ status: 'ok' })
 }
 
@@ -633,8 +621,8 @@ describe('Task 15 Excel oracle: manifest cases with task 17', () => {
     return
   }
   it.each(task17.map(entry => [entry.case, entry] as const))('%s', async (_name, entry) => checkManifestStatus(entry))
-  it('the refusal and lane-A maps name task-17 cases only', () => {
-    for (const name of [...Object.keys(TASK17_REFUSED), ...Object.keys(TASK17_LANE_A)]) expect(task17.map(entry => entry.case)).toContain(name)
+  it('the refusal map names task-17 cases only', () => {
+    for (const name of Object.keys(TASK17_REFUSED)) expect(task17.map(entry => entry.case)).toContain(name)
   })
 })
 

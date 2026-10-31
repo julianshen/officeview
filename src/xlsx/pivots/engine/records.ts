@@ -61,10 +61,9 @@ export function isoToSerial(iso: string, date1904: boolean): number {
   const epoch = date1904 ? daysFromCivil(1904, 1, 1) : daysFromCivil(1899, 12, 30)
   const dayOffset = daysFromCivil(year, month, day) - epoch
   if (dayOffset < 0) return Number.NaN
-  // Excel's 1900 system reserves serial 0 for the 1899-12-30 time-only day.
-  // Shift the January–February 1900 civil dates down one slot; serial 60 is
-  // consequently reserved for Excel's fictitious 1900-02-29, and March 1 is 61.
-  const daySerial = !date1904 && year === 1900 && month < 3 ? dayOffset - 1 : dayOffset
+  // Task 15 Excel oracle: saved ISO cache dates use the uniform 1899-12-30
+  // epoch. Thus 1900-02-28 is serial 60; do not insert Excel's phantom day.
+  const daySerial = dayOffset
   let fraction = (hour * 3600 + minute * 60 + second) / 86400
   if (m[7]) fraction += Number(`0.${m[7]}`) / 86400
   if (m[8]) {

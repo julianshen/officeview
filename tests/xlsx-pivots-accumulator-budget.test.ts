@@ -77,8 +77,22 @@ describe('pivot accumulator budget', () => {
     const grandCol = axes.value.cols.findIndex(line => line.type === 'grand')
     expect(grandRow).toBeGreaterThanOrEqual(0)
     expect(grandCol).toBeGreaterThanOrEqual(0)
-    expect(grid.value.get(grandRow, grandCol, 0)).toEqual({ kind: 'number', value: values1.sum })
-    expect(grid.value.get(grandRow, grandCol, 1)).toEqual({ kind: 'number', value: values2.sum })
+    // S2-AB: grand totals sum the already-rounded leaf cells in display order,
+    // which differs from summing every record in source order for this seeded layout.
+    const cellSums = [new Float64Array(axes.value.rows.length * axes.value.cols.length),
+      new Float64Array(axes.value.rows.length * axes.value.cols.length)]
+    for (let record = 0; record < count; record++) {
+      const cell = axes.value.rowKey[record]! * axes.value.cols.length + axes.value.colKey[record]!
+      cellSums[0]![cell] += values1.values[record]!
+      cellSums[1]![cell] += values2.values[record]!
+    }
+    const leafRows = axes.value.rows.map((line, index) => line.type === 'data' && line.items.length === 3 ? index : -1).filter(index => index >= 0)
+    const leafCols = axes.value.cols.map((line, index) => line.type === 'data' && line.items.length === 1 ? index : -1).filter(index => index >= 0)
+    for (let data = 0; data < 2; data++) {
+      let expected = 0
+      for (const row of leafRows) for (const col of leafCols) expected += cellSums[data]![row * axes.value.cols.length + col]!
+      expect(grid.value.get(grandRow, grandCol, data)).toEqual({ kind: 'number', value: expected })
+    }
   })
 
   it('refuses a value grid whose estimated workspace exceeds the cap', () => {

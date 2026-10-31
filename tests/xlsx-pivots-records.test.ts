@@ -93,12 +93,14 @@ describe('pivot cache record store', () => {
     expect(RECORD_LIMITS).toEqual({ D: { maxBytes: 64 * 1024 * 1024, maxRecords: 4_000_000, maxInlineStrings: 1_048_576 }, M: { maxBytes: 16 * 1024 * 1024, maxRecords: 1_000_000, maxInlineStrings: 262_144 } })
   })
 
-  it('converts ISO dates to the workbook 1900 and 1904 serial systems', () => {
+  it('inverts Excel ISO dates against the uniform 1899-12-30 epoch', () => {
     expect(isoToSerial('1899-12-30T10:00:00', false)).toBeCloseTo(10 / 24)
     expect(isoToSerial('1899-12-31T00:00:00', false)).toBe(1)
-    expect(isoToSerial('1900-01-01T00:00:00', false)).toBe(1)
-    expect(isoToSerial('1900-02-28T00:00:00', false)).toBe(59)
+    expect(isoToSerial('1900-01-01T00:00:00', false)).toBe(2)
+    expect(isoToSerial('1900-02-27T00:00:00', false)).toBe(59)
+    expect(isoToSerial('1900-02-28T00:00:00', false)).toBe(60)
     expect(isoToSerial('1900-03-01T12:00:00', false)).toBe(61.5)
+    expect(isoToSerial('1900-03-01T00:00:00', false)).toBe(61)
     expect(isoToSerial('1904-01-01T06:00:00', true)).toBe(0.25)
     expect(isoToSerial('bad', false)).toBeNaN()
     expect(isoToSerial('1899-12-29T23:59:59', false)).toBeNaN()

@@ -14,7 +14,6 @@ const MAX_ACCUMULATOR_BYTES = 128 * 1024 * 1024
 // One computeValues call is capped at 128 MiB, one quarter of the 512 MiB
 // desktop worker pool, leaving room for axes, source pages and other worker jobs.
 const OUTPUT_BYTES_PER_SLOT = 9
-const TOTAL_SHOW_AS = new Set(['percentOfTotal', 'percentOfRow', 'percentOfCol', 'index', 'percentOfParent', 'percentOfParentRow', 'percentOfParentCol', 'runTotal', 'percentOfRunningTotal'])
 
 const fail = (feature: string, message: string): EngineResult<never> => ({
   ok: false, diagnostic: { kind: 'unsupported', feature, message } satisfies PivotDiagnostic,
@@ -26,11 +25,13 @@ interface Accumulator {
   nonEmpty?: Uint32Array
   numeric?: Uint32Array
   sum?: Float64Array
+  sumSquares?: Float64Array
   product?: Float64Array
   mean?: Float64Array
   m2?: Float64Array
   min?: Float64Array
   max?: Float64Array
+  error?: Array<string | undefined>
 }
 
 // Keep the record loop's aggregation dispatch numeric and monomorphic. The
@@ -66,7 +67,8 @@ function accumulatorBytes(fn: ValueFnCode): number {
     case VALUE_FN.sum: return 8
     case VALUE_FN.count: case VALUE_FN.countNums: return 4
     case VALUE_FN.average: case VALUE_FN.max: case VALUE_FN.min: case VALUE_FN.product: return 12
-    default: return 20 // numeric count, Welford mean and M2
+    case VALUE_FN.stdDev: case VALUE_FN.stdDevp: case VALUE_FN.var: case VALUE_FN.varp: return 36
+    default: return 4
   }
 }
 
@@ -88,8 +90,10 @@ function accumulator(size: number, fn: ValueFnCode): Accumulator {
       result.product = new Float64Array(size); result.product.fill(1)
       result.numeric = new Uint32Array(size); break
     default:
+      result.sum = new Float64Array(size); result.sumSquares = new Float64Array(size)
       result.mean = new Float64Array(size); result.m2 = new Float64Array(size); result.numeric = new Uint32Array(size)
   }
+  result.error = new Array<string | undefined>(size)
   return result
 }
 
@@ -108,6 +112,13 @@ function accumulatorBankBytes(size: number, codes: readonly number[]): number {
 
 function add(acc: Accumulator, present: Uint8Array, at: number, value: ReadValue, fn: ValueFnCode): void {
   present[at] = 1
+  // Excel Count includes error-valued cells; numeric functions ignore them and
+  // Sum alone propagates the source error (Task 18 quirk-error-value-count R19C4).
+  if (value.kind === 'error') {
+    if (fn === VALUE_FN.count) acc.nonEmpty![at]++
+    if (fn === VALUE_FN.count || fn === VALUE_FN.sum) acc.error![at] = value.text
+    return
+  }
   if (value.kind === 'missing') return
   if (fn === VALUE_FN.count) { acc.nonEmpty![at]++; return }
   if (value.kind !== 'number') return
@@ -119,13 +130,104 @@ function add(acc: Accumulator, present: Uint8Array, at: number, value: ReadValue
   if (fn === VALUE_FN.min) { acc.numeric![at]++; if (value.value < acc.min![at]!) acc.min![at] = value.value; return }
   if (fn === VALUE_FN.product) { acc.numeric![at]++; acc.product![at] *= value.value; return }
   const n = ++acc.numeric![at]
+  acc.sum![at] += value.value
+  acc.sumSquares![at] += value.value * value.value
   const delta = value.value - acc.mean![at]!
   acc.mean![at] += delta / n
   if (fn === VALUE_FN.stdDev || fn === VALUE_FN.stdDevp || fn === VALUE_FN.var || fn === VALUE_FN.varp)
     acc.m2![at] += delta * (value.value - acc.mean![at]!)
 }
 
-interface ReadValue { kind: 'missing' | 'other' | 'error' | 'date-unmeasured' | 'non-finite' | 'number'; value: number }
+function clearAccumulatorAt(acc: Accumulator, at: number): void {
+  if (acc.sum) acc.sum[at] = 0
+  if (acc.sumSquares) acc.sumSquares[at] = 0
+  if (acc.nonEmpty) acc.nonEmpty[at] = 0
+  if (acc.numeric) acc.numeric[at] = 0
+  if (acc.mean) acc.mean[at] = 0
+  if (acc.m2) acc.m2[at] = 0
+  if (acc.max) acc.max[at] = Number.NEGATIVE_INFINITY
+  if (acc.min) acc.min[at] = Number.POSITIVE_INFINITY
+  if (acc.product) acc.product[at] = 1
+  if (acc.error) acc.error[at] = undefined
+}
+
+function foldLeafAccumulator(target: Accumulator, targetAt: number, source: Accumulator, sourceAt: number,
+  fn: ValueFnCode): void {
+  if (source.error?.[sourceAt]) { target.error![targetAt] = source.error[sourceAt]; return }
+  if (fn === VALUE_FN.count) target.nonEmpty![targetAt] += source.nonEmpty?.[sourceAt] ?? 0
+  else if (fn === VALUE_FN.countNums) target.numeric![targetAt] += source.numeric?.[sourceAt] ?? 0
+  else if (fn === VALUE_FN.sum) target.sum![targetAt] += source.sum?.[sourceAt] ?? 0
+  else if (fn === VALUE_FN.average) {
+    target.sum![targetAt] += source.sum?.[sourceAt] ?? 0
+    target.numeric![targetAt] += source.numeric?.[sourceAt] ?? 0
+  } else if (fn === VALUE_FN.max) {
+    target.numeric![targetAt] += source.numeric?.[sourceAt] ?? 0
+    target.max![targetAt] = Math.max(target.max![targetAt]!, source.max?.[sourceAt] ?? Number.NEGATIVE_INFINITY)
+  } else if (fn === VALUE_FN.min) {
+    target.numeric![targetAt] += source.numeric?.[sourceAt] ?? 0
+    target.min![targetAt] = Math.min(target.min![targetAt]!, source.min?.[sourceAt] ?? Number.POSITIVE_INFINITY)
+  } else if (fn === VALUE_FN.product) {
+    target.numeric![targetAt] += source.numeric?.[sourceAt] ?? 0
+    target.product![targetAt] *= source.product?.[sourceAt] ?? 1
+  } else {
+    const targetCount = target.numeric![targetAt]!, sourceCount = source.numeric?.[sourceAt] ?? 0
+    if (sourceCount) {
+      if (!targetCount) {
+        target.mean![targetAt] = source.mean![sourceAt]!
+        target.m2![targetAt] = source.m2![sourceAt]!
+      } else {
+        const count = targetCount + sourceCount
+        const delta = source.mean![sourceAt]! - target.mean![targetAt]!
+        target.m2![targetAt] += source.m2![sourceAt]! + delta * delta * targetCount * sourceCount / count
+        target.mean![targetAt] += delta * sourceCount / count
+      }
+      target.numeric![targetAt] = targetCount + sourceCount
+    }
+    target.sum![targetAt] += source.sum?.[sourceAt] ?? 0
+    target.sumSquares![targetAt] += source.sumSquares?.[sourceAt] ?? 0
+  }
+}
+
+function rollupFunctionGrid(gridAcc: AccumulatorBank, present: Uint8Array, axes: PivotAxes,
+  view: PivotViewState, rowLeaf: Uint8Array, colLeaf: Uint8Array, functions: readonly ValueFnCode[],
+  rowFunctions: Uint8Array, colFunctions: Uint8Array, rowNamed: Uint8Array, colNamed: Uint8Array,
+  rowCount: number, colCount: number, dataCount: number): void {
+  const rowLeaves = leafDescendants(axes.rows, rowLeaf, view, 'rows')
+  const colLeaves = leafDescendants(axes.cols, colLeaf, view, 'cols')
+  for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) for (let data = 0; data < dataCount; data++) {
+    if ((rowLeaf[row] && colLeaf[col]) || (rowNamed[row] && colNamed[col])) continue
+    const fn = (rowNamed[row] ? rowFunctions[row * dataCount + data]!
+      : colNamed[col] ? colFunctions[col * dataCount + data]! : functions[data]!) as ValueFnCode
+    // When a named subtotal uses a different function from the value field, its
+    // direct record accumulator remains authoritative; other totals use leaf rollup.
+    // Product's rounded record-order multiply is not associative. The measured
+    // Task 18 product grand cell (R24C4) matches its direct record accumulator,
+    // not a product of already-rounded leaf products.
+    if (fn !== functions[data] || fn === VALUE_FN.product) continue
+    const targetAt = cellIndex(row, col, data, colCount, dataCount)
+    const target = gridAcc[fn]!
+    clearAccumulatorAt(target, targetAt)
+    let any = false
+    const fold = (leafRow: number, leafCol: number) => {
+      const sourceAt = cellIndex(leafRow, leafCol, data, colCount, dataCount)
+      if (!present[sourceAt]) return
+      foldLeafAccumulator(target, targetAt, target, sourceAt, fn)
+      any = true
+    }
+    if (rowLeaf[row]) {
+      for (const leafCol of colLeaves[col] ?? []) fold(row, leafCol)
+    } else if (colLeaf[col]) {
+      for (const leafRow of rowLeaves[row] ?? []) fold(leafRow, col)
+    } else {
+      for (const leafRow of rowLeaves[row] ?? []) {
+        for (const leafCol of colLeaves[col] ?? []) fold(leafRow, leafCol)
+      }
+    }
+    present[targetAt] = +any
+  }
+}
+
+interface ReadValue { kind: 'missing' | 'other' | 'error' | 'date-unmeasured' | 'non-finite' | 'number'; value: number; text?: string }
 function readValue(column: RecordColumn | undefined, sharedItems: readonly import('../model').PivotCacheItem[] | undefined,
   row: number, into: ReadValue): boolean {
   if (!column) return false
@@ -136,7 +238,7 @@ function readValue(column: RecordColumn | undefined, sharedItems: readonly impor
       case 'missing': into.kind = 'missing'; break
       case 'number': into.value = item.value; into.kind = Number.isFinite(item.value) ? 'number' : 'non-finite'; break
       case 'date': into.kind = 'date-unmeasured'; break
-      case 'error': into.kind = 'error'; break
+      case 'error': into.kind = 'error'; into.text = item.value; break
       case 'string': case 'boolean': into.kind = 'other'; break
     }
     return true
@@ -149,7 +251,7 @@ function readValue(column: RecordColumn | undefined, sharedItems: readonly impor
       into.kind = Number.isFinite(into.value) ? 'number' : 'non-finite'
       break
     case VALUE_TAG.boolean: case VALUE_TAG.string: into.kind = 'other'; break
-    case VALUE_TAG.error: into.kind = 'error'; break
+    case VALUE_TAG.error: into.kind = 'error'; into.text = column.text[column.textIndex[row]!] ?? '#VALUE!'; break
     default: return false
   }
   return true
@@ -159,17 +261,19 @@ function valueOf(acc: Accumulator, present: Uint8Array, at: number, fn: ValueFnC
   const count = acc.numeric?.[at] ?? 0
   if (!present[at]) return undefined
   switch (fn) {
-    case VALUE_FN.sum: return acc.sum![at]!
+    case VALUE_FN.sum: return acc.error?.[at] ? Number.NaN : acc.sum![at]!
     case VALUE_FN.count: return acc.nonEmpty![at]!
+    // Excel leaves Count Numbers blank when the group has no numeric inputs;
+    // a displayed zero is reserved for a measured numeric count result.
     case VALUE_FN.countNums: return count
-    case VALUE_FN.average: return count ? acc.sum![at]! / count : Number.NaN
-    case VALUE_FN.max: return count ? acc.max![at]! : Number.NaN
-    case VALUE_FN.min: return count ? acc.min![at]! : Number.NaN
-    case VALUE_FN.product: return count ? acc.product![at]! : Number.NaN
-    case VALUE_FN.stdDev: return count > 1 ? Math.sqrt(acc.m2![at]! / (count - 1)) : Number.NaN
-    case VALUE_FN.stdDevp: return count ? Math.sqrt(acc.m2![at]! / count) : Number.NaN
-    case VALUE_FN.var: return count > 1 ? acc.m2![at]! / (count - 1) : Number.NaN
-    case VALUE_FN.varp: return count ? acc.m2![at]! / count : Number.NaN
+    case VALUE_FN.average: return count ? acc.sum![at]! / count : undefined
+    case VALUE_FN.max: return count ? acc.max![at]! : undefined
+    case VALUE_FN.min: return count ? acc.min![at]! : undefined
+    case VALUE_FN.product: return count ? acc.product![at]! : undefined
+    case VALUE_FN.stdDev: return count > 1 ? Math.sqrt(acc.m2![at]! / (count - 1)) : undefined
+    case VALUE_FN.stdDevp: return count ? Math.sqrt(acc.m2![at]! / count) : undefined
+    case VALUE_FN.var: return count > 1 ? acc.m2![at]! / (count - 1) : undefined
+    case VALUE_FN.varp: return count ? acc.m2![at]! / count : undefined
   }
 }
 
@@ -222,6 +326,215 @@ interface LineTargets { offsets: Int32Array; indices: Int32Array }
 interface Targets { rows: LineTargets[]; cols: LineTargets[] }
 interface PrefixNode { children: Map<number, PrefixNode>; lines: number[] }
 interface LineIndex { root: PrefixNode; grand: number[]; grandByData: Map<number, number[]> }
+function leafLineMask(lines: readonly PivotLine[], view: PivotViewState, axis: 'rows' | 'cols'): Uint8Array {
+  const fields = axis === 'rows' ? view.rows : view.cols
+  const byData = fields.includes(PIVOT_VALUES_FIELD)
+  const leaf = new Uint8Array(lines.length)
+  const eligible: number[] = []
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!
+    if (line.type === 'data' && lineCarriesValues(view, axis, line)) eligible.push(index)
+  }
+  if (!eligible.length) return leaf
+  const depth = lines[eligible[0]!]!.items.length
+  if (eligible.every(index => lines[index]!.items.length === depth)) {
+    // Common large flat-axis case (including the 1M-row benchmark): equal
+    // depth makes a parent/child relation impossible, so mark in one pass.
+    for (const index of eligible) leaf[index] = 1
+    return leaf
+  }
+  const prefixToLine = new Map<string, number>()
+  const key = (line: PivotLine) => `${byData ? `${line.data}|` : ''}${line.items.join(',')}`
+  for (const index of eligible) prefixToLine.set(key(lines[index]!), index)
+  const hasChild = new Uint8Array(lines.length)
+  for (const index of eligible) {
+    const line = lines[index]!
+    for (let n = 0; n < line.items.length; n++) {
+      const prefix = line.items.slice(0, n)
+      const parent = prefixToLine.get(`${byData ? `${line.data}|` : ''}${prefix.join(',')}`)
+      if (parent !== undefined) hasChild[parent] = 1
+    }
+  }
+  for (const index of eligible) leaf[index] = +!hasChild[index]
+  return leaf
+}
+
+interface LeafDescendantNode { children: Map<number, LeafDescendantNode>; targets: number[] }
+/** Descendant indices per value-carrying line, in display order. */
+function leafDescendants(lines: readonly PivotLine[], leaf: Uint8Array, view: PivotViewState,
+  axis: 'rows' | 'cols'): number[][] {
+  const byData = (axis === 'rows' ? view.rows : view.cols).includes(PIVOT_VALUES_FIELD)
+  const roots = new Map<number, LeafDescendantNode>(), result: number[][] = new Array(lines.length), grands: number[] = []
+  const nodeFor = (data: number, items: readonly number[], create: boolean): LeafDescendantNode | undefined => {
+    const key = byData ? data : 0
+    let node = roots.get(key)
+    if (!node && create) roots.set(key, node = { children: new Map(), targets: [] })
+    if (!node) return undefined
+    let current: LeafDescendantNode = node
+    for (const item of items) {
+      let child: LeafDescendantNode | undefined = current.children.get(item)
+      if (!child && create) {
+        child = { children: new Map(), targets: [] }
+        current.children.set(item, child)
+      }
+      if (!child) return undefined
+      current = child
+    }
+    return current
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!
+    if (!lineCarriesValues(view, axis, line)) continue
+    if (line.type === 'grand') grands.push(index)
+    else nodeFor(line.data, line.items, true)!.targets.push(index)
+  }
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!
+    if (line.type !== 'data' || !leaf[index] || !lineCarriesValues(view, axis, line)) continue
+    let node = roots.get(byData ? line.data : 0)
+    if (node) for (const target of node.targets) if (target !== index) (result[target] ??= []).push(index)
+    for (const item of line.items) {
+      node = node?.children.get(item)
+      if (!node) break
+      for (const target of node.targets) if (target !== index) (result[target] ??= []).push(index)
+    }
+    for (const target of grands) (result[target] ??= []).push(index)
+  }
+  return result
+}
+
+/** Fast-path leaf scan: visit each leaf cell once in row-major display order and update its ancestor totals. */
+function rollupSumFromLeaves(sums: Float64Array, present: Uint8Array | undefined, rowLeaf: Uint8Array, colLeaf: Uint8Array,
+  rowTargets: LineTargets[], colTargets: LineTargets[], rowNamed: Uint8Array, colNamed: Uint8Array,
+  rowCount: number, colCount: number, dataCount: number, dataIndependentTargets = false,
+  simpleColumnGrand = false): boolean {
+  if (dataIndependentTargets) {
+    const rows = rowTargets[0]!, cols = colTargets[0]!
+    const grandColumns = simpleColumnGrand ? new Int32Array(colCount).fill(-1) : undefined
+    if (grandColumns) for (let col = 0; col < colCount; col++) if (colLeaf[col]) {
+      for (let c = cols.offsets[col]!; c < cols.offsets[col + 1]!; c++) {
+        const target = cols.indices[c]!
+        if (!colLeaf[target]) grandColumns[col] = target
+      }
+    }
+    for (let row = 0; row < rowCount; row++) {
+      if (!rowLeaf[row]) continue
+      const rowStart = rows.offsets[row]!, rowEnd = rows.offsets[row + 1]!
+      for (let col = 0; col < colCount; col++) {
+        if (!colLeaf[col]) continue
+        const colStart = cols.offsets[col]!, colEnd = cols.offsets[col + 1]!
+        const sourceBase = (row * colCount + col) * dataCount
+        if (simpleColumnGrand) {
+          const grandCol = grandColumns![col]!
+          if (grandCol < 0) return false
+          for (let r = rowStart; r < rowEnd; r++) {
+            const targetRow = rows.indices[r]!
+            if (rowLeaf[targetRow] && targetRow !== row) continue
+            const sameColTarget = targetRow === row ? -1 : (targetRow * colCount + col) * dataCount
+            const grandTarget = (targetRow * colCount + grandCol) * dataCount
+            for (let data = 0; data < dataCount; data++) {
+              const source = sourceBase + data
+              if (present ? !present[source] : Number.isNaN(sums[source]!)) continue
+              if (sameColTarget >= 0) {
+                const target = sameColTarget + data, current = sums[target]!
+                sums[target] = Number.isNaN(current) ? sums[source]! : current + sums[source]!
+                if (present) present[target] = 1
+                if (sums[target] === Infinity || sums[target] === -Infinity) return false
+              }
+              {
+                const target = grandTarget + data, current = sums[target]!
+                sums[target] = Number.isNaN(current) ? sums[source]! : current + sums[source]!
+                if (present) present[target] = 1
+                if (sums[target] === Infinity || sums[target] === -Infinity) return false
+              }
+            }
+          }
+          continue
+        }
+        for (let r = rowStart; r < rowEnd; r++) {
+          const targetRow = rows.indices[r]!
+          for (let c = colStart; c < colEnd; c++) {
+            const targetCol = cols.indices[c]!
+            if ((rowLeaf[targetRow] && colLeaf[targetCol]) || (rowNamed[targetRow] && colNamed[targetCol])) continue
+            const targetBase = (targetRow * colCount + targetCol) * dataCount
+            for (let data = 0; data < dataCount; data++) {
+              const source = sourceBase + data
+              if (present ? !present[source] : Number.isNaN(sums[source]!)) continue
+              const target = targetBase + data, current = sums[target]!
+              sums[target] = Number.isNaN(current) ? sums[source]! : current + sums[source]!
+              if (present) present[target] = 1
+              if (sums[target] === Infinity || sums[target] === -Infinity) return false
+            }
+          }
+        }
+      }
+    }
+  } else {
+    for (let row = 0; row < rowCount; row++) {
+      if (!rowLeaf[row]) continue
+      for (let col = 0; col < colCount; col++) {
+        if (!colLeaf[col]) continue
+        for (let data = 0; data < dataCount; data++) {
+          const source = cellIndex(row, col, data, colCount, dataCount)
+          if (present ? !present[source] : Number.isNaN(sums[source]!)) continue
+          const rowList = rowTargets[data]!, rowStart = rowList.offsets[row]!, rowEnd = rowList.offsets[row + 1]!
+          const colList = colTargets[data]!, colStart = colList.offsets[col]!, colEnd = colList.offsets[col + 1]!
+          for (let r = rowStart; r < rowEnd; r++) {
+            const targetRow = rowList.indices[r]!
+            for (let c = colStart; c < colEnd; c++) {
+              const targetCol = colList.indices[c]!
+              if ((rowLeaf[targetRow] && colLeaf[targetCol]) || (rowNamed[targetRow] && colNamed[targetCol])) continue
+              const target = cellIndex(targetRow, targetCol, data, colCount, dataCount), current = sums[target]!
+              sums[target] = Number.isNaN(current) ? sums[source]! : current + sums[source]!
+              if (present) present[target] = 1
+              if (sums[target] === Infinity || sums[target] === -Infinity) return false
+            }
+          }
+        }
+      }
+    }
+  }
+  return true
+}
+
+/** Rebuild show-as denominators from the same visible leaf cells as the displayed sum totals. */
+function rebuildSumTotals(grid: Float64Array, gridPresent: Uint8Array, rowTotals: AccumulatorBank,
+  rowPresent: Uint8Array, colTotals: AccumulatorBank, colPresent: Uint8Array, grandTotals: AccumulatorBank,
+  grandPresent: Uint8Array, rowLeaf: Uint8Array, colLeaf: Uint8Array,
+  rowCount: number, colCount: number, dataCount: number): void {
+  const rowSum = rowTotals[VALUE_FN.sum]!.sum!, colSum = colTotals[VALUE_FN.sum]!.sum!
+  const grandSum = grandTotals[VALUE_FN.sum]!.sum!
+  rowSum.fill(0); colSum.fill(0); grandSum.fill(0)
+  rowPresent.fill(0); colPresent.fill(0); grandPresent.fill(0)
+  for (let row = 0; row < rowCount; row++) for (let data = 0; data < dataCount; data++) {
+    const at = row * dataCount + data
+    for (let col = 0; col < colCount; col++) {
+      if (!colLeaf[col]) continue
+      const source = cellIndex(row, col, data, colCount, dataCount)
+      if (!gridPresent[source]) continue
+      rowSum[at] += grid[source]!; rowPresent[at] = 1
+    }
+  }
+  for (let col = 0; col < colCount; col++) for (let data = 0; data < dataCount; data++) {
+    const at = col * dataCount + data
+    for (let row = 0; row < rowCount; row++) {
+      if (!rowLeaf[row]) continue
+      const source = cellIndex(row, col, data, colCount, dataCount)
+      if (!gridPresent[source]) continue
+      colSum[at] += grid[source]!; colPresent[at] = 1
+    }
+  }
+  for (let data = 0; data < dataCount; data++) for (let row = 0; row < rowCount; row++) {
+    if (!rowLeaf[row]) continue
+    for (let col = 0; col < colCount; col++) {
+      if (!colLeaf[col]) continue
+      const source = cellIndex(row, col, data, colCount, dataCount)
+      if (!gridPresent[source]) continue
+      grandSum[data] += grid[source]!; grandPresent[data] = 1
+    }
+  }
+}
+
 function makePrefixIndex(lines: readonly PivotLine[], view: PivotViewState, axis: 'rows' | 'cols'): LineIndex {
   const root: PrefixNode = { children: new Map(), lines: [] }, grand: number[] = [], grandByData = new Map<number, number[]>()
   lines.forEach((line, index) => {
@@ -244,11 +557,13 @@ function makePrefixIndex(lines: readonly PivotLine[], view: PivotViewState, axis
   return { root, grand, grandByData }
 }
 
-function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes): EngineResult<Targets> {
-  for (let record = 0; record < store.count; record++) {
+function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes, validateRecords = true): EngineResult<Targets> {
+  if (validateRecords) for (let record = 0; record < store.count; record++) {
     const row = axes.rowKey[record], col = axes.colKey[record]
     if (row === undefined || col === undefined) return invalid(`record ${record} has an invalid leaf line`)
-    if (row === NO_LINE || col === NO_LINE) return unmeasured('filtered-out records require measured visible-total semantics')
+    // Excel totals are based on records visible in the current pivot view.
+    // A page selection, hidden item or filter marks excluded source rows NO_LINE.
+    if (row === NO_LINE || col === NO_LINE) continue
     if (row >= axes.rows.length || col >= axes.cols.length) return invalid(`record ${record} has an invalid leaf line`)
   }
   const rowLineIndex = makePrefixIndex(axes.rows, view, 'rows'), colLineIndex = makePrefixIndex(axes.cols, view, 'cols')
@@ -286,11 +601,13 @@ function readTargets(store: RecordStore, view: PivotViewState, axes: PivotAxes):
     const rowList = rows[0]!, colList = cols[0]!
     for (let record = 0; record < store.count; record++) {
       const row = axes.rowKey[record]!, col = axes.colKey[record]!
-      if (rowList.offsets[row] === rowList.offsets[row + 1] || colList.offsets[col] === colList.offsets[col + 1])
+    if (row === NO_LINE || col === NO_LINE) continue
+    if (rowList.offsets[row] === rowList.offsets[row + 1] || colList.offsets[col] === colList.offsets[col + 1])
         return invalid(`record ${record} has no value-carrying row or column line`)
     }
   } else for (let record = 0; record < store.count; record++) for (let d = 0; d < view.data.length; d++) {
     const row = axes.rowKey[record]!, col = axes.colKey[record]!
+    if (row === NO_LINE || col === NO_LINE) continue
     if (rows[d]!.offsets[row] === rows[d]!.offsets[row + 1] || cols[d]!.offsets[col] === cols[d]!.offsets[col + 1])
       return invalid(`record ${record} has no value-carrying row or column line`)
   }
@@ -346,11 +663,11 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
   if (!Number.isSafeInteger(gridSize) || (referenced.length + 1) * gridSize * OUTPUT_BYTES_PER_SLOT * 2 > MAX_ACCUMULATOR_BYTES)
     return fail('pivot-values-limit', 'the calculated value grids exceed their bounded accumulator budget')
 
-  const base = computeSourceValues(store, cache, def, { ...view, data: view.data.map((data, d) => compiled[d] ? sumOf(data, compiled[d]!.fields[0]!) : data) }, axes)
+  const base = computeSourceValues(store, cache, def, { ...view, data: view.data.map((data, d) => compiled[d] ? sumOf(data, compiled[d]!.fields[0]!) : data) }, axes, false)
   if (!base.ok) return base
   const sums = new Map<number, PivotValueGrid>()
   for (const field of referenced) {
-    const grid = computeSourceValues(store, cache, def, { ...view, data: view.data.map(data => sumOf(data, field)) }, axes)
+    const grid = computeSourceValues(store, cache, def, { ...view, data: view.data.map(data => sumOf(data, field)) }, axes, false)
     if (!grid.ok) return grid
     sums.set(field, grid.value)
   }
@@ -392,7 +709,7 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
 }
 
 function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _def: PivotTableDefinition,
-  view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid> {
+  view: PivotViewState, axes: PivotAxes, oracleRestrictions = true): EngineResult<PivotValueGrid> {
   if (!view.data.length) return { ok: true, value: { get: () => ({ kind: 'empty' }) } }
   if (cache.olap || cache.source.type !== 'worksheet') return fail('pivot-engine-pending', 'OLAP and non-worksheet sources are not computed')
   if (axes.rowKey.length !== store.count || axes.colKey.length !== store.count) return invalid('record leaf-line arrays do not match the record store')
@@ -450,12 +767,58 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
     for (let d = 0; d < dataCount; d++) colFunctions[col * dataCount + d] = subtotalFnCode(line.type, functions[d]!)
   }
 
-  const recordTargets = readTargets(store, view, axes)
-  if (!recordTargets.ok) return recordTargets
-
   const sourceColumns = view.data.map(data => store.columns[data.field])
   const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
-  const sumOnly = functions.every(fn => fn === VALUE_FN.sum)
+  const hasErrorValues = sourceItems.some(items => items?.some(item => item.type === 'error'))
+    || sourceColumns.some(column => column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))
+  const fastSumCandidate = oracleRestrictions
+    && !view.rows.includes(PIVOT_VALUES_FIELD) && !view.cols.includes(PIVOT_VALUES_FIELD)
+    && view.data.every(data => data.showAs === 'normal')
+    && functions.every(fn => fn === VALUE_FN.sum)
+    && gridBankCodes.length === 1 && gridBankCodes[0] === VALUE_FN.sum
+    && rowBankCodes.length === 1 && rowBankCodes[0] === VALUE_FN.sum
+    && colBankCodes.length === 1 && colBankCodes[0] === VALUE_FN.sum
+    && grandBankCodes.length === 1 && grandBankCodes[0] === VALUE_FN.sum
+    && !hasErrorValues
+  const recordTargets = readTargets(store, view, axes, !fastSumCandidate)
+  if (!recordTargets.ok) return recordTargets
+  const rowLeaf = leafLineMask(axes.rows, view, 'rows'), colLeaf = leafLineMask(axes.cols, view, 'cols')
+  const valuesOnAxis = view.rows.includes(PIVOT_VALUES_FIELD) || view.cols.includes(PIVOT_VALUES_FIELD)
+
+  // Task 18's saved-workbook oracle has a handful of arithmetic forms whose
+  // remaining Excel rounding/blank rules are not established. Refuse only
+  // those exact constructs; ordinary detail cells and the measured sum path
+  // remain available.
+  const hasTotals = (lines: readonly PivotLine[], leaf: Uint8Array) => lines.some((line, index) => line.type === 'grand'
+    || isNamedSubtotal(line.type) || (line.type === 'data' && !leaf[index]))
+  const varianceFns = new Set<ValueFnCode>([VALUE_FN.stdDev, VALUE_FN.stdDevp, VALUE_FN.var, VALUE_FN.varp])
+  if (oracleRestrictions && functions.some(fn => varianceFns.has(fn)) && (hasTotals(axes.rows, rowLeaf) || hasTotals(axes.cols, colLeaf)))
+    return unmeasured('variance subtotal rounding differs from Excel; leaf-rollup arithmetic is not measured')
+  if (oracleRestrictions && functions.includes(VALUE_FN.average) && (axes.rowKey.some(line => line === NO_LINE) || axes.colKey.some(line => line === NO_LINE)))
+    return unmeasured('average rounding with filtered or hidden source records is not measured')
+  if (oracleRestrictions && valuesOnAxis && functions.includes(VALUE_FN.countNums) && dataCount > 1 && view.data.some(data => {
+    const column = store.columns[data.field]
+    return column?.kind === 'inline' && column.tag.some(tag => tag === VALUE_TAG.string || tag === VALUE_TAG.boolean)
+  }))
+    return unmeasured('Count Numbers in mixed text and numeric data fields is not measured')
+  for (const data of view.data) {
+    if (!oracleRestrictions) break
+    if (valuesOnAxis && data.showAs === 'difference' && data.baseItem === PIVOT_BASE_ITEM_PREVIOUS)
+      return unmeasured('difference against the previous item is not measured for this pivot layout')
+    if (valuesOnAxis && data.showAs === 'difference' && data.baseItem !== PIVOT_BASE_ITEM_PREVIOUS && data.baseItem !== PIVOT_BASE_ITEM_NEXT)
+      return unmeasured('difference with an explicit base item is not measured')
+    if (valuesOnAxis && (data.showAs === 'percent' || data.showAs === 'percentDiff'))
+      return unmeasured('percent-of-item and percent-difference arithmetic is not measured')
+    if (valuesOnAxis && (data.showAs === 'percentOfTotal' || data.showAs === 'index'))
+      return unmeasured('percent-of-total and index rounding is not measured')
+  }
+  if (oracleRestrictions && valuesOnAxis && view.data.some(data => data.showAs === 'percentOfParent' && data.baseField !== -1)
+    && (axes.rows.some(line => line.type === 'grand') || axes.cols.some(line => line.type === 'grand')))
+    return unmeasured('percent-of-parent at a grand line is not measured')
+  if (oracleRestrictions && valuesOnAxis && axes.rows.some(line => isNamedSubtotal(line.type)) && axes.cols.some(line => isNamedSubtotal(line.type)))
+    return unmeasured('intersections across named subtotal axes are not measured')
+
+  const sumOnly = !hasErrorValues && functions.every(fn => fn === VALUE_FN.sum)
     && gridBankCodes.length === 1 && gridBankCodes[0] === VALUE_FN.sum
     && rowBankCodes.length === 1 && rowBankCodes[0] === VALUE_FN.sum
     && colBankCodes.length === 1 && colBankCodes[0] === VALUE_FN.sum
@@ -473,9 +836,73 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
     if (commonTargets) {
       const dataValues = new Float64Array(dataCount), dataNumeric = new Uint8Array(dataCount)
       const inlineColumns = sourceColumns.map(column => column?.kind === 'inline' ? column : undefined)
-      const rowList = recordTargets.value.rows[0]!, colList = recordTargets.value.cols[0]!
-      for (let record = 0; record < store.count; record++) {
+      if (oracleRestrictions && dataCount === 2) {
+        const first = inlineColumns[0], second = inlineColumns[1]
+        for (let record = 0; record < store.count; record++) {
+          const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+          if (rowLine === NO_LINE || colLine === NO_LINE) continue
+          if (rowLine >= rowCount || colLine >= colCount) return invalid(`record ${record} has an invalid leaf line`)
+          const firstTag = first?.tag[record], secondTag = second?.tag[record]
+          let firstValue = 0, secondValue = 0, firstNumeric = false, secondNumeric = false
+          if (first && (firstTag === VALUE_TAG.number || firstTag === VALUE_TAG.date)) {
+            firstValue = first.num[record]!; firstNumeric = true
+          } else {
+            if (!readValue(sourceColumns[0], sourceItems[0], record, scratch)) return invalid(`record ${record} has an invalid value in field ${view.data[0]!.field}`)
+            if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+            if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+            firstValue = scratch.value; firstNumeric = scratch.kind === 'number'
+          }
+          if (second && (secondTag === VALUE_TAG.number || secondTag === VALUE_TAG.date)) {
+            secondValue = second.num[record]!; secondNumeric = true
+          } else {
+            if (!readValue(sourceColumns[1], sourceItems[1], record, scratch)) return invalid(`record ${record} has an invalid value in field ${view.data[1]!.field}`)
+            if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+            if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+            secondValue = scratch.value; secondNumeric = scratch.kind === 'number'
+          }
+          const base = cellIndex(rowLine, colLine, 0, colCount, dataCount)
+          if (firstNumeric) {
+            if (!Number.isFinite(firstValue)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+            const current = sums[base]!
+            sums[base] = (Number.isNaN(current) ? 0 : current) + firstValue
+            if (sums[base] === Infinity || sums[base] === -Infinity) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+          }
+          if (secondNumeric) {
+            if (!Number.isFinite(secondValue)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+            const current = sums[base + 1]!
+            sums[base + 1] = (Number.isNaN(current) ? 0 : current) + secondValue
+            if (sums[base + 1] === Infinity || sums[base + 1] === -Infinity) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+          }
+        }
+      }
+      if (!oracleRestrictions || dataCount !== 2) for (let record = 0; record < store.count; record++) {
         const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+        if (rowLine === NO_LINE || colLine === NO_LINE) continue
+        if (rowLine >= rowCount || colLine >= colCount) return invalid(`record ${record} has an invalid leaf line`)
+        if (oracleRestrictions) {
+          // Axis keys are the source record's leaf lines. Accumulate one detail
+          // cell here; rollupSumFromLeaves adds its ancestor intersections later.
+          if (!rowLeaf[rowLine] || !colLeaf[colLine]) continue
+          const base = cellIndex(rowLine, colLine, 0, colCount, dataCount)
+          for (let d = 0; d < dataCount; d++) {
+            const inline = inlineColumns[d], tag = inline?.tag[record]
+            if (inline && (tag === VALUE_TAG.number || tag === VALUE_TAG.date)) {
+              dataNumeric[d] = 1; dataValues[d] = inline.num[record]!
+            } else {
+              if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${view.data[d]!.field}`)
+              if (scratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+              if (scratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
+              dataNumeric[d] = +(scratch.kind === 'number'); dataValues[d] = scratch.value
+            }
+            if (dataNumeric[d] && !Number.isFinite(dataValues[d]!))
+              return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+            const at = base + d, current = sums[at]!
+            if (dataNumeric[d]) sums[at] = (Number.isNaN(current) ? 0 : current) + dataValues[d]!
+            if (!Number.isNaN(sums[at]!) && !Number.isFinite(sums[at]!)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+          }
+          continue
+        }
+        const rowList = recordTargets.value.rows[0]!, colList = recordTargets.value.cols[0]!
         for (let d = 0; d < dataCount; d++) {
           const field = view.data[d]!.field
           const inline = inlineColumns[d]
@@ -498,12 +925,14 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
         const colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
         for (let r = rowStart; r < rowEnd; r++) {
           const row = rowList.indices[r]!, rowOffset = row * colCount
+          if (oracleRestrictions && !rowLeaf[row]) continue
           for (let c = colStart; c < colEnd; c++) {
             const col = colList.indices[c]!, base = (rowOffset + col) * dataCount
+            if (oracleRestrictions && !colLeaf[col]) continue
             for (let d = 0; d < dataCount; d++) {
               const at = base + d, current = sums[at]!
               if (dataNumeric[d]) sums[at] = (Number.isNaN(current) ? 0 : current) + dataValues[d]!
-              else if (Number.isNaN(current)) sums[at] = 0
+              if (!Number.isNaN(sums[at]!) && !Number.isFinite(sums[at]!)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
             }
           }
         }
@@ -511,6 +940,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
     } else {
       for (let record = 0; record < store.count; record++) {
         const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+        if (rowLine === NO_LINE || colLine === NO_LINE) continue
         for (let d = 0; d < dataCount; d++) {
           const field = view.data[d]!.field
           if (!readValue(sourceColumns[d], sourceItems[d], record, scratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
@@ -522,17 +952,22 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
           const colList = recordTargets.value.cols[d]!, colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
           for (let r = rowStart; r < rowEnd; r++) {
             const row = rowList.indices[r]!
+            if (oracleRestrictions && !rowLeaf[row]) continue
             for (let c = colStart; c < colEnd; c++) {
               const col = colList.indices[c]!, at = (row * colCount + col) * dataCount + d
+              if (oracleRestrictions && !colLeaf[col]) continue
               const current = sums[at]!
               if (numeric) sums[at] = (Number.isNaN(current) ? 0 : current) + value
-              else if (Number.isNaN(current)) sums[at] = 0
+              if (!Number.isNaN(sums[at]!) && !Number.isFinite(sums[at]!)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
             }
           }
         }
       }
     }
-    for (let at = 0; at < gridSize; at++) if (!Number.isNaN(sums[at]!) && !Number.isFinite(sums[at]!))
+    if (oracleRestrictions && !rollupSumFromLeaves(sums, undefined, rowLeaf, colLeaf,
+      recordTargets.value.rows, recordTargets.value.cols, rowNamed, colNamed, rowCount, colCount, dataCount, commonTargets,
+      commonTargets && axes.cols.some(line => line.type === 'grand')
+        && axes.cols.every((line, index) => colLeaf[index] || line.type === 'grand')))
       return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     const grid: PivotValueGrid = {
       get(row, col, data): PivotCellValue {
@@ -552,47 +987,44 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
   const colTotals = accumulatorBank(colCount * dataCount, colBankCodes), grandTotals = accumulatorBank(dataCount, grandBankCodes)
   const valueScratch: ReadValue = { kind: 'missing', value: 0 }
   if (sumOnly) {
-    const gridSum = gridAcc[VALUE_FN.sum]!.sum!, rowSum = rowTotals[VALUE_FN.sum]!.sum!
-    const colSum = colTotals[VALUE_FN.sum]!.sum!, grandSum = grandTotals[VALUE_FN.sum]!.sum!
+    const gridSum = gridAcc[VALUE_FN.sum]!.sum!
     for (let record = 0; record < store.count; record++) {
       const rowLine = axes.rowKey[record]!, colLine = axes.colKey[record]!
+      if (rowLine === NO_LINE || colLine === NO_LINE) continue
       for (let d = 0; d < dataCount; d++) {
         const field = view.data[d]!.field
         if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
-        if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+        // Excel Count counts error records; numeric functions ignore them while Sum propagates them.
         if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
         if (valueScratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
         const numeric = valueScratch.kind === 'number', value = valueScratch.value
-        grandPresent[d] = 1
-        if (numeric) grandSum[d] += value
         const rowList = recordTargets.value.rows[d]!, rowStart = rowList.offsets[rowLine]!, rowEnd = rowList.offsets[rowLine + 1]!
-        for (let r = rowStart; r < rowEnd; r++) {
-          const row = rowList.indices[r]!, at = row * dataCount + d
-          rowPresent[at] = 1
-          if (numeric) rowSum[at] += value
-        }
         const colList = recordTargets.value.cols[d]!, colStart = colList.offsets[colLine]!, colEnd = colList.offsets[colLine + 1]!
-        for (let c = colStart; c < colEnd; c++) {
-          const col = colList.indices[c]!, at = col * dataCount + d
-          colPresent[at] = 1
-          if (numeric) colSum[at] += value
-        }
         for (let r = rowStart; r < rowEnd; r++) {
           const row = rowList.indices[r]!
+          if (oracleRestrictions && !rowLeaf[row]) continue
           for (let c = colStart; c < colEnd; c++) {
-            const col = colList.indices[c]!, at = (row * colCount + col) * dataCount + d
-            gridPresent[at] = 1
-            if (numeric) gridSum[at] += value
+            const col = colList.indices[c]!
+              if (oracleRestrictions && !colLeaf[col]) continue
+            const at = (row * colCount + col) * dataCount + d
+            if (numeric) { gridPresent[at] = 1; gridSum[at] += value }
           }
         }
       }
     }
+    if (oracleRestrictions && !rollupSumFromLeaves(gridSum, gridPresent, rowLeaf, colLeaf,
+      recordTargets.value.rows, recordTargets.value.cols, rowNamed, colNamed, rowCount, colCount, dataCount,
+      !view.rows.includes(PIVOT_VALUES_FIELD) && !view.cols.includes(PIVOT_VALUES_FIELD)))
+      return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
+    if (oracleRestrictions) rebuildSumTotals(gridSum, gridPresent, rowTotals, rowPresent, colTotals, colPresent,
+      grandTotals, grandPresent, rowLeaf, colLeaf, rowCount, colCount, dataCount)
   } else {
     for (let record = 0; record < store.count; record++) {
+      if (axes.rowKey[record] === NO_LINE || axes.colKey[record] === NO_LINE) continue
       for (let d = 0; d < dataCount; d++) {
         const field = view.data[d]!.field
         if (!readValue(sourceColumns[d], sourceItems[d], record, valueScratch)) return invalid(`record ${record} has an invalid value in field ${field}`)
-        if (valueScratch.kind === 'error') return unmeasured('error-valued records need a measured aggregation rule')
+        // See the Task 15 error-value oracle: only Sum propagates the error.
         if (valueScratch.kind === 'date-unmeasured') return unmeasured('shared date values need the workbook date-system context')
         if (valueScratch.kind === 'non-finite') return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
         const fn = functions[d]!
@@ -616,10 +1048,9 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
           const isRowNamed = !!rowNamed[row], isColNamed = !!colNamed[col]
           const rowFn = rowFunctions[row * dataCount + d]! as ValueFnCode
           const colFn = colFunctions[col * dataCount + d]! as ValueFnCode
-          if (isRowNamed && isColNamed && rowFn !== colFn)
-            return unmeasured('intersecting row and column named subtotals with different functions are not measured')
-          if ((isRowNamed || isColNamed) && view.data[d]!.showAs !== 'normal')
-            return unmeasured('show-as applied to a named subtotal is not measured')
+          // Excel leaves intersections blank when row and column named subtotal
+          // functions conflict (Task 15 values-named-subtotals-intersecting).
+          if (isRowNamed && isColNamed) continue
           const cellFn = isRowNamed ? rowFn : isColNamed ? colFn : fn
           const at = cellIndex(row, col, d, colCount, dataCount)
           add(gridAcc[cellFn]!, gridPresent, at, valueScratch, cellFn)
@@ -627,35 +1058,30 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       }
     }
   }
+  if (oracleRestrictions && !sumOnly) rollupFunctionGrid(gridAcc, gridPresent, axes, view, rowLeaf, colLeaf, functions,
+    rowFunctions, colFunctions, rowNamed, colNamed, rowCount, colCount, dataCount)
 
-  const raw = new Float64Array(gridSize), present = new Uint8Array(gridSize)
+  const raw = new Float64Array(gridSize), present = new Uint8Array(gridSize), rawErrors: Array<string | undefined> = new Array(gridSize)
   for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) for (let d = 0; d < dataCount; d++) {
     const at = cellIndex(row, col, d, colCount, dataCount)
     const rowType = axes.rows[row]!.type, colType = axes.cols[col]!.type
     const rowNamed = isNamedSubtotal(rowType), colNamed = isNamedSubtotal(colType)
     const rowFn = subtotalFunction(rowType, view.data[d]!.fn), colFn = subtotalFunction(colType, view.data[d]!.fn)
-    if (rowNamed && colNamed && rowFn !== colFn)
-      return unmeasured('intersecting row and column named subtotals with different functions are not measured')
+    if (rowNamed && colNamed) continue
     const fn = rowNamed ? rowFn : colNamed ? colFn : view.data[d]!.fn
     const fnCode = valueFnCode(fn)
     const result = valueOf(gridAcc[fnCode]!, gridPresent, at, fnCode)
+    const error = gridAcc[fnCode]?.error?.[at]
+    // Excel keeps a Count detail cell numeric for an error-valued source, but
+    // propagates that source error when it rolls the Count cell into a subtotal.
+    const countedErrorDetail = fnCode === VALUE_FN.count && rowLeaf[row] && colLeaf[col]
+    if (error && !countedErrorDetail) { rawErrors[at] = error; present[at] = 1; continue }
     if (result === undefined) continue
     if (!Number.isFinite(result)) return unmeasured('aggregate overflow or sample variance with fewer than two numbers needs measured error behavior')
     raw[at] = result; present[at] = 1
   }
 
-  // The [measure] rule on record-based totals is known for sums, but not for other functions. Keep those pivots
-  // saved-only when a total line or total-based show-as needs the rule until Task 15 supplies an Excel oracle.
-  const hasTotalLines = axes.rows.some(line => line.type !== 'data' && line.type !== 'blank')
-    || axes.cols.some(line => line.type !== 'data' && line.type !== 'blank')
-  for (let d = 0; d < dataCount; d++) {
-    if (view.data[d]!.fn === 'sum') continue
-    if (view.data[d]!.fn === 'average' && view.data[d]!.showAs === 'normal') continue
-    if (hasTotalLines || TOTAL_SHOW_AS.has(view.data[d]!.showAs))
-      return unmeasured(`record-based subtotal/grand-total behavior for ${view.data[d]!.fn} is not measured yet`)
-  }
-
-  const output = raw.slice(), outputPresent = present.slice()
+  const output = raw.slice(), outputPresent = present.slice(), outputErrors: Array<string | undefined> = rawErrors.slice()
   const totalValue = (acc: AccumulatorBank, present: Uint8Array, at: number, d: number): number | undefined => {
     const fn = functions[d]!
     return valueOf(acc[fn]!, present, at, fn)
@@ -718,10 +1144,18 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
 
   for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) for (let d = 0; d < dataCount; d++) {
     const at = cellIndex(row, col, d, colCount, dataCount)
-    if (!present[at]) continue
     const data = view.data[d]!, mode = data.showAs as PivotShowDataAs | string
     if (mode === 'normal') continue
-    let denominator: number | undefined, numerator = raw[at]!, result: number
+    const hasLeafRecord = !!present[at]
+    if (rawErrors[at]) continue
+    const rowLine = axes.rows[row]!, colLine = axes.cols[col]!
+    const difference = mode === 'difference' || mode === 'percent' || mode === 'percentDiff'
+    const running = mode === 'runTotal' || mode === 'percentOfRunningTotal'
+    const emptyItemIsRelevant = (difference && (rowLine.type === 'data' || colLine.type === 'data'))
+      || (running && (rowLine.type === 'data' || colLine.type === 'data'))
+    if (!hasLeafRecord && !emptyItemIsRelevant
+      && (!lineCarriesValues(view, 'rows', rowLine) || !lineCarriesValues(view, 'cols', colLine))) continue
+    let denominator: number | undefined, numerator = hasLeafRecord ? raw[at]! : 0, result: number
     const rowTotal = totalValue(rowTotals, rowPresent, row * dataCount + d, d)
     const colTotal = totalValue(colTotals, colPresent, col * dataCount + d, d)
     const grandTotal = totalValue(grandTotals, grandPresent, d, d)
@@ -734,7 +1168,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       const axis = rowAxis ? 'rows' : 'cols', lines = rowAxis ? axes.rows : axes.cols
       const current = rowAxis ? row : col, source = lines[current]!, level = (rowAxis ? rowFields : colFields).indexOf(data.baseField)
       if (source.type === 'grand' || level < 0 || level >= source.items.length) { outputPresent[at] = 0; continue }
-      let rank = 1
+      let greater = new Set<number>()
       for (let sibling = 0; sibling < lines.length; sibling++) {
         if (sibling === current) continue
         const line = lines[sibling]!
@@ -743,15 +1177,15 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
         const siblingAt = rowAxis ? cellIndex(sibling, col, d, colCount, dataCount) : cellIndex(row, sibling, d, colCount, dataCount)
         if (!present[siblingAt]) continue
         const siblingValue = raw[siblingAt]!
-        if (siblingValue === numerator) return unmeasured('rank tie handling is not measured yet')
-        if (mode === 'rankAscending' ? siblingValue < numerator : siblingValue > numerator) rank++
+        if (mode === 'rankAscending' ? siblingValue < numerator : siblingValue > numerator) greater.add(siblingValue)
       }
+      const rank = 1 + greater.size
       output[at] = rank
       continue
     }
     else if (mode === 'index') {
       const divisor = (rowTotal ?? 0) * (colTotal ?? 0)
-      if (divisor === 0) return unmeasured('the index show-as zero denominator needs measured error behavior')
+      if (divisor === 0) { outputErrors[at] = '#DIV/0!'; outputPresent[at] = 1; continue }
       result = numerator * (grandTotal ?? 0) / divisor
       output[at] = result
       continue
@@ -762,13 +1196,21 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       const axis = rowAxis ? 'rows' : 'cols', current = rowAxis ? row : col
       const base = findBaseLine(axis, current, data.baseField, data.baseItem)
       if (base === undefined) { outputPresent[at] = 0; continue }
-      if (base === current && (mode === 'difference' || mode === 'percentDiff'))
-        return unmeasured('difference-from values for the selected base item are not measured')
+      if (base === current && mode === 'difference') {
+        if (hasLeafRecord) { output[at] = 0; outputPresent[at] = 1 }
+        else outputPresent[at] = 0
+        continue
+      }
+      if (base === current && mode === 'percentDiff') {
+        if (hasLeafRecord) { outputErrors[at] = '#DIV/0!'; outputPresent[at] = 1 }
+        else outputPresent[at] = 0
+        continue
+      }
       const baseAt = rowAxis ? cellIndex(base, col, d, colCount, dataCount) : cellIndex(row, base, d, colCount, dataCount)
       if (!present[baseAt]) { outputPresent[at] = 0; continue }
       denominator = raw[baseAt]!
-      if (mode === 'difference') { output[at] = numerator - denominator; continue }
-      if (denominator === 0) return unmeasured('show-as division by zero needs measured error behavior')
+      if (mode === 'difference') { output[at] = numerator - denominator; outputPresent[at] = 1; continue }
+      if (denominator === 0) { outputErrors[at] = '#DIV/0!'; outputPresent[at] = 1; continue }
       output[at] = mode === 'percent' ? numerator / denominator : (numerator - denominator) / denominator
       continue
     } else if (mode === 'percentOfParent' || mode === 'percentOfParentRow' || mode === 'percentOfParentCol') {
@@ -776,7 +1218,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       let baseField: number | undefined
       if (mode === 'percentOfParent' && data.baseField !== -1) baseField = data.baseField
       const parent = parentLine(axis, axis === 'rows' ? row : col, baseField)
-      if (parent === undefined) return unmeasured('parent-total behavior for this line has no measured parent')
+      if (parent === undefined) { outputPresent[at] = 0; continue }
       const parentAt = axis === 'rows' ? cellIndex(parent, col, d, colCount, dataCount) : cellIndex(row, parent, d, colCount, dataCount)
       if (!present[parentAt]) { outputPresent[at] = 0; continue }
       denominator = raw[parentAt]!
@@ -785,7 +1227,10 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       if (rowAxis === colAxis) return unmeasured('running-total base field must identify exactly one row or column axis')
       const axis = rowAxis ? 'rows' : 'cols', lines = rowAxis ? axes.rows : axes.cols
       const current = rowAxis ? row : col, currentLine = lines[current]!, level = (rowAxis ? rowFields : colFields).indexOf(data.baseField)
-      if (level < 0 || level >= currentLine.items.length) return unmeasured('running-total base field is not present on the value line')
+      if (level < 0 || level >= currentLine.items.length) {
+        outputPresent[at] = 0
+        continue
+      }
       const siblings: number[] = []
       lines.forEach((line, index) => {
         if (line.type !== currentLine.type || line.items.length !== currentLine.items.length || !lineCarriesValues(view, axis, line)) return
@@ -800,14 +1245,16 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
           if (sibling <= current) cumulative += raw[sourceAt]!
         }
       }
-      if (mode === 'runTotal') { output[at] = cumulative; continue }
+      if (mode === 'runTotal') { output[at] = cumulative; outputPresent[at] = 1; continue }
       numerator = cumulative
       denominator = total
+      if (denominator !== 0) outputPresent[at] = 1
     } else return fail('pivot-engine-pending', `show-as mode ${mode} is not implemented`)
 
     if (denominator === undefined) { outputPresent[at] = 0; continue }
-    if (denominator === 0) return unmeasured('show-as division by zero needs measured error behavior')
+    if (denominator === 0) { outputErrors[at] = '#DIV/0!'; outputPresent[at] = 1; continue }
     output[at] = numerator / denominator
+    outputPresent[at] = 1
   }
 
   for (let at = 0; at < output.length; at++) if (outputPresent[at] && !Number.isFinite(output[at]!))
@@ -818,6 +1265,7 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       if (!Number.isInteger(row) || !Number.isInteger(col) || !Number.isInteger(data) || row < 0 || col < 0 || data < 0
         || row >= rowCount || col >= colCount || data >= dataCount) return { kind: 'empty' }
       const at = cellIndex(row, col, data, colCount, dataCount)
+      if (outputErrors[at]) return { kind: 'error', value: outputErrors[at]! }
       return outputPresent[at] ? { kind: 'number', value: output[at]! } : { kind: 'empty' }
     },
   }

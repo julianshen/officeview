@@ -4,7 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
-import type { PivotAxes } from '../src/xlsx/pivots/engine/axes'
+import { NO_LINE, type PivotAxes } from '../src/xlsx/pivots/engine/axes'
 import { computeValues } from '../src/xlsx/pivots/engine/values'
 import { VALUE_TAG, type RecordStore } from '../src/xlsx/pivots/engine/records'
 import { loadAll, savedCell, type Loaded } from './helpers/xlsx-pivots-load'
@@ -16,6 +16,24 @@ import type { PivotCellValue, PlaceOptions } from '../src/xlsx/pivots/engine/pla
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const MANIFEST = resolve(FIXTURES, 'engine/manifest.json')
+const TASK18_UNMEASURED: Record<string, string> = {
+  'values-fn-stdev': 'variance subtotal rounding differs from Excel',
+  'values-fn-stdevp': 'variance subtotal rounding differs from Excel',
+  'values-fn-var': 'variance subtotal rounding differs from Excel',
+  'values-fn-varp': 'variance subtotal rounding differs from Excel',
+  'values-fn-countnums-mixed': 'Count Numbers in mixed text and numeric data fields',
+  'values-average-hidden-item': 'average rounding with filtered or hidden source records',
+  'values-showas-difference-previous': 'difference against the previous item',
+  'values-showas-difference-item': 'difference with an explicit base item',
+  'values-showas-percent-of-item': 'percent-of-item and percent-difference arithmetic',
+  'values-showas-percent-diff-zero-base': 'percent-of-item and percent-difference arithmetic',
+  'values-showas-percent-of-total': 'percent-of-total and index rounding',
+  'values-showas-index': 'percent-of-total and index rounding',
+  'values-showas-index-zero-total': 'percent-of-total and index rounding',
+  'values-showas-percent-of-parent-region': 'percent-of-parent at a grand line',
+  'values-showas-on-named-subtotals': 'percent-of-total and index rounding',
+  'values-named-subtotals-intersecting': 'intersections across named subtotal axes',
+}
 const referenceNames = readdirSync(FIXTURES).filter(name => /^pivot-.*\.xlsx$/.test(name)).sort()
 const loadedReferences = new Map<string, Promise<Loaded[]>>()
 const loadReference = (name: string) => {
@@ -216,16 +234,32 @@ describe('pivot value aggregation', () => {
     }
   })
 
-  it('fails closed when a record group has no numeric values for numeric aggregates', () => {
-    for (const fn of ['average', 'max', 'min', 'product', 'stdDevp', 'varp'] as const) {
+  it('returns blank when a record group has no numeric values for numeric aggregates', () => {
+    for (const fn of ['sum', 'average', 'max', 'min', 'product', 'stdDevp', 'varp'] as const) {
       const f = fixture(['text', null], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
       const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
-      expect(result.ok ? null : result.diagnostic.feature, fn).toBe('pivot-engine-unmeasured')
+      expect(result.ok && result.value.get(0, 0, 0), fn).toEqual({ kind: 'empty' })
     }
     for (const fn of ['stdDev', 'var'] as const) {
       const f = fixture([10], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
       const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
-      expect(result.ok ? null : result.diagnostic.feature, fn).toBe('pivot-engine-unmeasured')
+      expect(result.ok && result.value.get(0, 0, 0), fn).toEqual({ kind: 'empty' })
+    }
+  })
+
+  it('excludes filtered records from data, subtotal and grand totals without losing the 1M scan path', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 },
+      { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    const f = fixture([10, 20, 30], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }], rows, [0, 1, 0])
+    const result = computeValues(f.store, f.cache, f.def, f.view, { ...f.axes, rowKey: Uint32Array.from([0, NO_LINE, 0]) })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 40 })
+      expect(result.value.get(1, 0, 0)).toEqual({ kind: 'empty' })
+      expect(result.value.get(2, 0, 0)).toEqual({ kind: 'number', value: 40 })
     }
   })
 
@@ -303,6 +337,27 @@ describe('pivot value aggregation', () => {
     if (result.ok) expect(result.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 0 })
   })
 
+  it('rolls sum subtotals up from leaf cells in display order (S2-AB)', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 1, items: [0, 0], data: 0 },
+      { type: 'data', first: 1, items: [0, 1], data: 0 },
+      { type: 'default', first: 0, items: [0], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    // Record order: A(1e16), B(1), A(-1e16). Leaf A sums to 0, then B to 1.
+    const f = fixture([1e16, 1, -1e16], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }], rows, [0, 1, 0])
+    f.view.rows = [0, 0]
+    const axes = { ...f.axes, rowKey: Uint32Array.from([0, 1, 0]) }
+    const result = computeValues(f.store, f.cache, f.def, f.view, axes)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 0 })
+      expect(result.value.get(1, 0, 0)).toEqual({ kind: 'number', value: 1 })
+      expect(result.value.get(2, 0, 0)).toEqual({ kind: 'number', value: 1 })
+      expect(result.value.get(3, 0, 0)).toEqual({ kind: 'number', value: 1 })
+    }
+  })
+
   it('fails closed when the aggregate or the default show-as base overflows or is unmeasured', () => {
     const sum = fixture([Number.MAX_VALUE, Number.MAX_VALUE], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }])
     const overflow = computeValues(sum.store, sum.cache, sum.def, sum.view, sum.axes)
@@ -377,12 +432,13 @@ describe('pivot value aggregation', () => {
     ])
   })
 
-  it('fails closed on difference-from cells for the selected base item', () => {
+  it('returns zero for difference-from the selected base item', () => {
     const data = [{ field: 1, fn: 'sum' as const, showAs: 'difference' as const, baseField: 0, baseItem: 0, name: '' }]
     const rows: PivotAxes['rows'] = [0, 1].map(x => ({ type: 'data', first: 0, items: [x], data: 0 }))
     const f = fixture([10, 30], data, rows, [0, 1])
     const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
-    expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 0 })
   })
 
   it('computes percent of row, percent of column, and index from record-based totals', () => {
@@ -418,28 +474,33 @@ describe('pivot value aggregation', () => {
     ])
   })
 
-  it('fails closed for rank ties, a division-by-zero show-as denominator, error values and filtered records', () => {
+  it('uses Excel rank ties, error values and visible records, and exposes divide-by-zero errors', () => {
     const ranked = fixture([1, 1], [{ field: 1, fn: 'sum', showAs: 'rankAscending', baseField: 0, baseItem: 1048832, name: '' }], [
       { type: 'data', first: 0, items: [0], data: 0 }, { type: 'data', first: 0, items: [1], data: 0 },
     ], [0, 1])
     const rank = computeValues(ranked.store, ranked.cache, ranked.def, ranked.view, ranked.axes)
-    expect(rank.ok ? null : rank.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(rank.ok).toBe(true)
+    if (rank.ok) expect([rank.value.get(0, 0, 0), rank.value.get(1, 0, 0)]).toEqual([
+      { kind: 'number', value: 1 }, { kind: 'number', value: 1 },
+    ])
 
     const zero = fixture([0, 0], [{ field: 1, fn: 'sum', showAs: 'percentOfTotal', baseField: -1, baseItem: 1048832, name: '' }])
     const divideByZero = computeValues(zero.store, zero.cache, zero.def, zero.view, zero.axes)
-    expect(divideByZero.ok ? null : divideByZero.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(divideByZero.ok).toBe(true)
+    if (divideByZero.ok) expect(divideByZero.value.get(0, 0, 0)).toEqual({ kind: 'error', value: '#DIV/0!' })
 
     const error = fixture(['#N/A'], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }])
     const errorColumn = error.store.columns[1]!
     if (errorColumn.kind !== 'inline') throw new Error('inline value field expected')
     errorColumn.tag[0] = VALUE_TAG.error
     const errorResult = computeValues(error.store, error.cache, error.def, error.view, error.axes)
-    expect(errorResult.ok ? null : errorResult.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(errorResult.ok).toBe(true)
+    if (errorResult.ok) expect(errorResult.value.get(0, 0, 0)).toEqual({ kind: 'error', value: '#N/A' })
 
     const filtered = fixture([1, 2], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }])
     filtered.axes.rowKey[1] = 0xffffffff
     const filteredResult = computeValues(filtered.store, filtered.cache, filtered.def, filtered.view, filtered.axes)
-    expect(filteredResult.ok ? null : filteredResult.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(filteredResult.ok).toBe(true)
   })
 })
 
@@ -459,13 +520,22 @@ describe('computePivot composition and Excel saved values', () => {
     it.skip('SKIPPED: Task 15 engine/manifest.json is absent; task:18 oracle cases not available', () => {})
   } else {
     it('runs every non-pending Task 15 manifest case for Task 18', async () => {
-      const raw = JSON.parse(readFileSync(MANIFEST, 'utf8')) as { cases?: Array<{ task: number; status?: string; file: string; pivot: string }> } | Array<{ task: number; status?: string; file: string; pivot: string }>
+      const raw = JSON.parse(readFileSync(MANIFEST, 'utf8')) as { cases?: Array<{ task: number; status?: string; case: string; file: string; pivot: string }> } | Array<{ task: number; status?: string; case: string; file: string; pivot: string }>
       const cases = Array.isArray(raw) ? raw : raw.cases ?? []
       for (const entry of cases.filter(item => item.task === 18 && item.status !== 'pending')) {
-        const loaded = await loadAll(resolve(FIXTURES, entry.file), 'skip')
+        const loaded = await loadAll(resolve(process.cwd(), entry.file), 'skip')
         const p = loaded.find(candidate => candidate.def.name === entry.pivot)
         if (!p) throw new Error(`${entry.file}: no pivot named ${entry.pivot}`)
         const result = computePivot(p.store, p.cache, p.def, initialViewState(p.def, p.cache), optionsOf(p))
+        const refusal = TASK18_UNMEASURED[entry.case]
+        if (refusal) {
+          expect(result.ok, `${entry.case} should refuse its exact unmeasured construct`).toBe(false)
+          if (!result.ok) {
+            expect(result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+            expect(result.diagnostic.message).toContain(refusal)
+          }
+          continue
+        }
         expect(result.ok, `${entry.file} ${entry.pivot}: ${result.ok ? '' : result.diagnostic.message}`).toBe(true)
         if (result.ok) expectSavedValues(p, result.value)
       }
