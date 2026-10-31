@@ -49,6 +49,7 @@ import { pivotFieldName, pivotMenuItemLabel, pivotMenuModel, type PivotMenuField
 import { registerGetPivotData } from '../../../xlsx/pivots/session/getpivotdata'
 import { sheetBlockers, structuralOccupancy } from '../../../xlsx/pivots/session/occupancy'
 import { engineSpillFootprints } from '../../../xlsx/formula/workbook'
+import { estimatePayloadBytes } from '../../../xlsx/view/payloadBytes'
 
 registerGetPivotData()
 
@@ -124,10 +125,19 @@ const OPEN_FIRST = 'Open the pivot before changing it.'
  * again before an apply; a stale or cancelled apply is refused with a retry message (a newer one won). The menu
  * model's numbers and dates are labelled on this thread (`formatMenu`).
  */
-export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(sheetId: number): number | undefined; sheet(sheetId: number): XlsxSheet | undefined }): RemotePivotPort {
+/** Main-ledger admission of fit cells the main thread keeps (codex review T29-3): false refuses (nothing is kept). */
+export interface PivotFitMemory { set(owner: string, bytes: number): boolean; release(owner: string): void }
+let fitMemorySerial = 0
+export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(sheetId: number): number | undefined; sheet(sheetId: number): XlsxSheet | undefined }, memory?: PivotFitMemory): RemotePivotPort {
   const models = new Map<string, PivotMenuModel>(), opened = new Set<string>()
-  // The cells each open pivot shows (its last committed or opened layout): the "before" of the next change's autofit.
-  const shown = new Map<string, PivotShownLayout>()
+  // The cells each open pivot shows (its last committed or opened layout): the "before" of the next change's autofit,
+  // charged while kept; one the budget refuses is not kept (that pivot's next change is not autofitted).
+  const shown = new Map<string, PivotShownLayout>(), serial = ++fitMemorySerial
+  const owner = (k: string) => `pivot-shown:${serial}:${k}`
+  const keep = (k: string, layout: PivotShownLayout | undefined) => {
+    if (layout && (!memory || memory.set(owner(k), estimatePayloadBytes(layout.cells)))) { shown.set(k, layout); return }
+    shown.delete(k); memory?.release(owner(k))
+  }
   const key = (sheetId: number, pivot: number) => `${sheetId}:${pivot}`
   const refusedAs = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
   const port: RemotePivotPort = {
@@ -138,7 +148,7 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       if (result.kind === 'refused') return refusedAs('pivot-remote-refused', result.message)
       const model = formatMenu(result.menu, sheets.sheet(sheetId))
       models.set(key(sheetId, pivot), model); opened.add(key(sheetId, pivot))
-      if (result.cells) shown.set(key(sheetId, pivot), { def: result.def, cells: result.cells })
+      keep(key(sheetId, pivot), result.cells ? { def: result.def, cells: result.cells } : undefined)
       return { ok: true, revision: result.revision, def: result.def, verifiedKinds: ORACLE_VERIFIED_KINDS, model }
     },
     async apply(sheetId, pivot, delta) {
@@ -148,7 +158,7 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       if (result.kind === 'refused' && result.message === OPEN_FIRST) {
         const reopened = await sessions.open(id, pivot, new AbortController().signal)
         if (reopened.kind === 'refused') return refusedAs('pivot-remote-refused', reopened.message)
-        if (reopened.cells) shown.set(key(sheetId, pivot), { def: reopened.def, cells: reopened.cells })
+        keep(key(sheetId, pivot), reopened.cells ? { def: reopened.def, cells: reopened.cells } : undefined)
         result = await sessions.apply(id, pivot, delta)
       }
       if (result.kind === 'refused') return refusedAs('pivot-remote-refused', result.message)
@@ -156,12 +166,12 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       const model = formatMenu(result.menu, sheets.sheet(sheetId))
       models.set(key(sheetId, pivot), model)
       const before = shown.get(key(sheetId, pivot)), after = result.cells ? { def: result.def, cells: result.cells } : undefined
-      if (after) shown.set(key(sheetId, pivot), after); else shown.delete(key(sheetId, pivot))
+      keep(key(sheetId, pivot), after)
       return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def, ...(before && after ? { fit: { before, after } } : {}) }, ...(result.notice ? { notice: result.notice } : {}) }
     },
     release(sheetId, pivot) {
       const k = key(sheetId, pivot), id = sheets.id(sheetId)
-      models.delete(k); shown.delete(k)
+      models.delete(k); keep(k, undefined)
       if (opened.delete(k) && id !== undefined) sessions.release(id, pivot)
     },
     labels(sheetId, pivot) {
@@ -570,8 +580,14 @@ export interface PendingPivotFit<S> { pivot: number; fit: NonNullable<PivotCommi
  * display refreshed keeps the first's "before" and takes the new "after" (the cells shown between were never fitted);
  * another pivot's commit waits beside it. `take` hands over, in commit order, a sheet's fits whose display moved on.
  */
-export function pendingPivotFits<S>() {
-  const bySheet = new Map<string, Map<number, PendingPivotFit<S>>>()
+export function pendingPivotFits<S>(memory?: PivotFitMemory) {
+  const bySheet = new Map<string, Map<number, PendingPivotFit<S>>>(), serial = ++fitMemorySerial
+  // Each waiting fit's cells (before and after) are charged until it is fitted or dropped (codex review T29-3).
+  const owner = (sheetId: string, pivot: number) => `pivot-fit:${serial}:${sheetId}:${pivot}`
+  const drop = (sheetId: string, fits: Map<number, PendingPivotFit<S>>, pivot: number) => {
+    fits.delete(pivot); memory?.release(owner(sheetId, pivot))
+    if (!fits.size) bySheet.delete(sheetId)
+  }
   return {
     get size() { let count = 0; for (const fits of bySheet.values()) count += fits.size; return count },
     sheets: () => [...bySheet.keys()],
@@ -579,17 +595,20 @@ export function pendingPivotFits<S>() {
       let fits = bySheet.get(sheetId)
       if (!fits) bySheet.set(sheetId, fits = new Map())
       const earlier = fits.get(pending.pivot)
-      fits.set(pending.pivot, earlier ? { ...pending, fit: { before: earlier.fit.before, after: pending.fit.after }, styleAt: earlier.styleAt } : pending)
+      const next = earlier ? { ...pending, fit: { before: earlier.fit.before, after: pending.fit.after }, styleAt: earlier.styleAt } : pending
+      if (memory && !memory.set(owner(sheetId, pending.pivot), estimatePayloadBytes(next.fit.before.cells) + estimatePayloadBytes(next.fit.after.cells))) { drop(sheetId, fits, pending.pivot); return }
+      fits.set(pending.pivot, next)
     },
     take(sheetId: string, styleGen: string): PendingPivotFit<S>[] {
       const fits = bySheet.get(sheetId)
       if (!fits) return []
       const ready = [...fits.values()].filter(pending => pending.styleGen !== styleGen)
-      for (const pending of ready) fits.delete(pending.pivot)
-      if (!fits.size) bySheet.delete(sheetId)
+      for (const pending of ready) drop(sheetId, fits, pending.pivot)
       return ready
     },
-    clear(): void { bySheet.clear() },
+    clear(): void {
+      for (const [sheetId, fits] of bySheet) for (const pivot of [...fits.keys()]) drop(sheetId, fits, pivot)
+    },
   }
 }
 export type PendingPivotFits<S> = ReturnType<typeof pendingPivotFits<S>>

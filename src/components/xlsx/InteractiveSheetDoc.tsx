@@ -550,6 +550,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   /** Paged commits waiting for their sheet's refreshed pivot display before the autofit (Task 29). */
   // One per pivot, so a second pivot's commit before the refresh does not drop the first's fit (codex review T29-6).
   const pendingPagedFits = useRef<PivotUi.PendingPivotFits<ReturnType<typeof pivotStyleAt>> | null>(null)
+  /** The paged fit cells the main thread keeps (a port's shown layouts, waiting fits), admitted to the main ledger. */
+  const pivotFitMemory: PivotUi.PivotFitMemory = {
+    set: (owner, bytes) => {
+      mainLedger.release('layout', owner)
+      if (mainLedger.bytes + bytes > MAIN_THREAD_BUDGETS[budgetProfile]) return false
+      mainLedger.set('layout', owner, bytes)
+      return true
+    },
+    release: owner => mainLedger.release('layout', owner),
+  }
   useEffect(() => {
     const pending = pendingPagedFits.current
     if (!remote || !pivotUi || !pending?.size) return
@@ -1375,7 +1385,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRects, remote.hasFormulaCellsOutsidePivots ?? false))
       // §7.8 (Task 29): autofit once the worker's new pivot display (its styles) has arrived; the old styles now.
       const shownEntry = entries.get(sheetId)
-      if (pivotUi && commit.fit && shownEntry) (pendingPagedFits.current ??= pivotUi.pendingPivotFits()).add(sheetId, { pivot: commit.pivot, fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
+      if (pivotUi && commit.fit && shownEntry) (pendingPagedFits.current ??= pivotUi.pendingPivotFits(pivotFitMemory)).add(sheetId, { pivot: commit.pivot, fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
       cancelCopy(); dropTiles(sheetId, null); rerender(); return
     }
     if (!sheet?.pivotTables) return
@@ -1514,7 +1524,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const client = remote ? pivotUi.createRemotePivotClient(pivotUi.remotePivotPort(remote.pivots, {
       id: index => { const id = Number(sheetIds[index]); return Number.isSafeInteger(id) ? id : undefined },
       sheet: index => doc.sheets[index],
-    }), commit => pivotHost.current.installPivot(commit))
+    }, pivotFitMemory), commit => pivotHost.current.installPivot(commit))
       : pivotUi.createResidentPivotClient({ doc, saved: savedPivotDefs, ledger: mainLedger, profile: budgetProfile, install: commit => pivotHost.current.installPivot(commit), ...(pivotKinds ? { verifiedKinds: pivotKinds } : {}) })
     const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu() })
     setPivotController(controller)

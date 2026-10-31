@@ -20,6 +20,7 @@ import { ORACLE_VERIFIED_KINDS } from '../src/xlsx/pivots/session/session'
 import { pivotChartGate } from '../src/xlsx/pivots/session/charts'
 import type { PivotDelta } from '../src/xlsx/pivots/session/delta'
 import { RECORD_LIMITS } from '../src/xlsx/pivots/engine/records'
+import { pivotFitPayload } from '../src/xlsx/pivots/session/autofit'
 import { decodeParts, loadPivotParts } from './helpers/xlsx-pivots-load'
 import { RemoteWorkbook, openRemoteWorkbook } from '../src/worker/viewerRemoteSource'
 import { pagedSheetGeometry } from '../src/components/xlsx/pagedGeometry'
@@ -668,13 +669,16 @@ describe('worker pivot protocol', () => {
       const pagedReply = completed(await run(kernel, { kind: 'pivotApply', requestId: id(), docId, sheetId: sheet.sheetId, pivot, baseRevision: revision - 1, revision,
         delta, grantBytes: 16 * 1024 * 1024 })) as { kind: string; cells?: Array<{ row: number; col: number; value: unknown }> }
       expect(pagedReply.kind, entry.case).toBe('pivotApply')
-      const expected = residentApply.value.layout.cells.map(cell => ({
-        row: cell.row, col: cell.col,
-        value: cell.value.kind === 'empty' ? null : {
+      // The reply carries the value cells the main thread's autofit reads (Task 29 r1: bounded), as the resident layout has them.
+      const placed = new Map(residentApply.value.layout.cells.map(cell => [`${cell.row},${cell.col}`, cell]))
+      const expected = pivotFitPayload(residentApply.value.def, (row, col) => {
+        const cell = placed.get(`${row},${col}`)
+        return !cell || cell.value.kind === 'empty' ? null : {
           value: cell.value.value, ...(cell.value.kind === 'error' ? { valueIsError: true } : {}),
           ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }),
-        },
-      }))
+        }
+      })
+      expect(expected?.length).toBeGreaterThan(0)
       expect(pagedReply.cells).toEqual(expected)
       const committed = await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId: sheet.sheetId, pivot, revision })
       expect(completed(committed)).toMatchObject({ kind: 'pivotCommit', revision })
@@ -789,7 +793,7 @@ describe('worker pivot protocol', () => {
       const committed = await remote.pivots.apply(sheetId, 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })
       expect(committed.kind).toBe('committed')
       if (committed.kind !== 'committed') throw new Error(JSON.stringify(committed))
-      const changed = committed.cells.find(cell => cell.value !== null)
+      const changed = committed.cells?.find(cell => cell.value !== null)
       expect(changed).toBeDefined()
       if (!changed) throw new Error('Pivot commit contained no cells')
       const read = await remote.store(remoteSheetId).readCell({ row: changed.row, col: changed.col }, {

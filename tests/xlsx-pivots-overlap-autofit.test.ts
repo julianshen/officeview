@@ -11,14 +11,14 @@ import { describe, expect, it } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
-import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
-import { createResidentPivotClient, pendingPivotFits, valueFilter } from '../src/components/xlsx/pivot/pivotClient'
+import { MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
+import { createResidentPivotClient, pendingPivotFits, remotePivotPort, valueFilter } from '../src/components/xlsx/pivot/pivotClient'
 import { sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { loadPivotParts } from './helpers/xlsx-pivots-load'
 import JSZip from 'jszip'
 import { SheetSizes } from '../src/xlsx/view/axisSizes'
-import { macDigitWidth, PIVOT_FIT_INDENT_PT, PIVOT_FIT_TOLERANCE, pivotAutofit, pivotColumnFits } from '../src/xlsx/pivots/session/autofit'
+import { macDigitWidth, PIVOT_FIT_INDENT_PT, PIVOT_FIT_PAYLOAD_CELLS, PIVOT_FIT_TOLERANCE, pivotAutofit, pivotColumnFits, pivotFitPayload } from '../src/xlsx/pivots/session/autofit'
 import { calibriTextPt } from './helpers/calibri-model'
 import { ensureTableStyleEngine, regionStylesFor } from '../src/xlsx/tableStyleLoader'
 import { cellDisplayText } from '../src/xlsx/render'
@@ -308,5 +308,91 @@ describe('§7.8 paged fits waiting for the refreshed display (Task 29 fix round 
     expect(pending.sheets()).toEqual(['s2'])
     pending.clear()
     expect(pending.size).toBe(0)
+  })
+})
+
+describe('§7.8 the fit cells a paged reply carries are bounded (Task 29 fix round 1)', () => {
+  it('only the cells a fit reads that hold a value, in its order; none past PIVOT_FIT_PAYLOAD_CELLS', async () => {
+    const doc = await load('engine/layout-collapsed-item'), sheet = doc.sheets[pivotSheet(doc)]!, def = sheet.pivotTables![0]!
+    const read = sheetCellReader(sheet)
+    const payload = pivotFitPayload(def, (row, col) => { const cell = read(row, col); return cell ? cell.value : null })!
+    const rects = savedPivotLayout(def)!.rects
+    let nonblank = 0
+    for (const rect of rects) for (let row = rect.minRow; row <= rect.maxRow; row++) for (let col = rect.minCol; col <= rect.maxCol; col++) if (read(row, col)) nonblank++
+    expect(payload.length).toBe(nonblank)
+    expect(payload.every(cell => cell.value !== null)).toBe(true)
+    expect(payload.map(cell => cell.row * 100 + cell.col)).toEqual([...payload.map(cell => cell.row * 100 + cell.col)].sort((a, b) => a - b))
+    // A pivot whose fit would read more value cells than the cap carries none: its change is not autofitted.
+    expect(pivotFitPayload(def, () => 1, nonblank)).toBeUndefined()
+    expect(pivotFitPayload(def, (row, col) => read(row, col)?.value ?? null, nonblank)).toHaveLength(nonblank)
+    expect(PIVOT_FIT_PAYLOAD_CELLS).toBe(32_768)
+  })
+})
+
+describe('§7.8 fit cells kept on the main thread are charged while kept (Task 29 fix round 1)', () => {
+  const menu = { name: 'P', fields: [], data: [], nextFilterId: 1 }
+  const cells = (n: number, tag: string) => Array.from({ length: n }, (_, row) => ({ row, col: 0, value: { value: `${tag}-${row}` } }))
+  function memoryOf(ledger: MainMemoryLedger, room = Number.POSITIVE_INFINITY) {
+    return {
+      set: (owner: string, bytes: number) => { if (ledger.bytes + bytes > room) return false; ledger.set('layout', owner, bytes); return true },
+      release: (owner: string) => ledger.release('layout', owner),
+    }
+  }
+  it('the port charges the shown layout through open, apply, replacement and release', async () => {
+    const ledger = new MainMemoryLedger()
+    let next = cells(10, 'open')
+    const sessions = {
+      open: async () => ({ kind: 'open' as const, revision: 0, def: { name: 'P' } as never, menu, cells: next }),
+      apply: async () => ({ kind: 'committed' as const, revision: 1, def: { name: 'P' } as never, menu, cells: next }),
+      release: () => {},
+    }
+    const port = remotePivotPort(sessions, { id: sheet => sheet, sheet: () => undefined }, memoryOf(ledger))
+    const charged = () => ledger.snapshot().byPool.layout
+    expect((await port.open(0, 0, signal())).ok).toBe(true)
+    expect(charged()).toBe(estimatePayloadBytes(cells(10, 'open')))
+    next = cells(200, 'one')
+    const first = await port.apply(0, 0, { kind: 'collapseAll', collapsed: true })
+    if (!first.ok) throw new Error(JSON.stringify(first))
+    // The shown layout is replaced: its charge follows; the commit's "before" is the viewer's to charge.
+    expect(charged()).toBe(estimatePayloadBytes(cells(200, 'one')))
+    expect(first.commit.fit?.before.cells).toHaveLength(10)
+    next = cells(30, 'two')
+    expect((await port.apply(0, 0, { kind: 'collapseAll', collapsed: false })).ok).toBe(true)
+    expect(charged()).toBe(estimatePayloadBytes(cells(30, 'two')))
+    port.release(0, 0)
+    expect(charged()).toBe(0)
+  })
+  it('a layout the main budget cannot keep is not kept: that change is not autofitted', async () => {
+    const ledger = new MainMemoryLedger()
+    const sessions = {
+      open: async () => ({ kind: 'open' as const, revision: 0, def: { name: 'P' } as never, menu, cells: cells(5000, 'big') }),
+      apply: async () => ({ kind: 'committed' as const, revision: 1, def: { name: 'P' } as never, menu, cells: cells(5, 'small') }),
+      release: () => {},
+    }
+    const port = remotePivotPort(sessions, { id: sheet => sheet, sheet: () => undefined }, memoryOf(ledger, 64 * 1024))
+    expect((await port.open(0, 0, signal())).ok).toBe(true)
+    expect(ledger.snapshot().byPool.layout).toBe(0)
+    const applied = await port.apply(0, 0, { kind: 'collapseAll', collapsed: true })
+    if (!applied.ok) throw new Error(JSON.stringify(applied))
+    expect(applied.commit.fit).toBeUndefined()
+    expect(ledger.snapshot().byPool.layout).toBe(estimatePayloadBytes(cells(5, 'small')))
+  })
+  it('pending fits are charged until fitted or dropped', () => {
+    const ledger = new MainMemoryLedger()
+    const pending = pendingPivotFits<string>(memoryOf(ledger))
+    const fit = (n: number) => ({ before: { def: {} as never, cells: cells(n, 'b') }, after: { def: {} as never, cells: cells(n, 'a') } })
+    pending.add('s1', { pivot: 0, fit: fit(10), styleAt: '', styleGen: 'g0' })
+    pending.add('s1', { pivot: 1, fit: fit(20), styleAt: '', styleGen: 'g0' })
+    const bytes = (n: number) => estimatePayloadBytes(cells(n, 'b')) + estimatePayloadBytes(cells(n, 'a'))
+    expect(ledger.snapshot().byPool.layout).toBe(bytes(10) + bytes(20))
+    pending.take('s1', 'g1')
+    expect(ledger.snapshot().byPool.layout).toBe(0)
+    pending.add('s1', { pivot: 0, fit: fit(10), styleAt: '', styleGen: 'g0' })
+    pending.clear()
+    expect(ledger.snapshot().byPool.layout).toBe(0)
+    // Refused by the budget: the fit is dropped, not kept uncharged.
+    const tight = pendingPivotFits<string>(memoryOf(ledger, 1))
+    tight.add('s1', { pivot: 0, fit: fit(10), styleAt: '', styleGen: 'g0' })
+    expect(tight.size).toBe(0)
   })
 })

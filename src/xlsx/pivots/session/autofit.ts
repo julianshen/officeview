@@ -44,16 +44,42 @@ export const macDigitWidth = (mdwPx96: number): number => Math.max(1, Math.ceil(
 /** A fitted width in characters: the content plus padding in whole 72-dpi pixels, over the digit width, to 1/256. */
 export const fitChars = (contentPt: number, mdwPt: number): number => Math.trunc(Math.ceil(contentPt + PIVOT_FIT_PADDING_PT - 1e-9) / mdwPt * 256) / 256
 
+/** The cells a fit reads, in its order: at most `AUTOFIT_MAX_ROWS` of each of the first `AUTOFIT_MAX_CELLS` columns. */
+export function* pivotFitCells<C extends { row: number; col: number }>(cells: Iterable<C>): Generator<C> {
+  const counts = new Map<number, number>()
+  for (const cell of cells) {
+    const seen = counts.get(cell.col) ?? 0
+    if (seen >= AUTOFIT_MAX_ROWS || (seen === 0 && counts.size >= AUTOFIT_MAX_CELLS)) continue
+    counts.set(cell.col, seen + 1)
+    yield cell
+  }
+}
+/** The saved-area cells of a pivot `def`, row by row (the order a fit reads them). */
+export function* pivotAreaCells(def: PivotTableDefinition): Generator<{ row: number; col: number }> {
+  for (const rect of savedPivotLayout(def)?.rects ?? []) for (let row = rect.minRow; row <= rect.maxRow; row++) for (let col = rect.minCol; col <= rect.maxCol; col++) yield { row, col }
+}
+/** Value cells a worker reply carries for the main thread's fit, at most (codex review T29-3: the payload is bounded). */
+export const PIVOT_FIT_PAYLOAD_CELLS = 32_768
+/** The cells of `def`'s area a fit reads that hold a value, as a reply carries them; undefined past
+ * `PIVOT_FIT_PAYLOAD_CELLS` (the change is then not autofitted). */
+export function pivotFitPayload<V>(def: PivotTableDefinition, value: (row: number, col: number) => V | null | undefined, cap = PIVOT_FIT_PAYLOAD_CELLS): { row: number; col: number; value: V }[] | undefined {
+  const out: { row: number; col: number; value: V }[] = []
+  for (const { row, col } of pivotFitCells(pivotAreaCells(def))) {
+    const shown = value(row, col)
+    if (shown === null || shown === undefined) continue
+    if (out.length >= cap) return undefined
+    out.push({ row, col, value: shown })
+  }
+  return out
+}
+
 /** Each pivot column's fit in characters (see the header). */
 export function pivotColumnFits(input: PivotFitInput, measure: PivotFitMeasure, mdwPt: number): Map<number, number> {
   const layout = savedPivotLayout(input.def)
   const buttons = new Set(pivotButtons(input.def, 'screen', layout).filter(button => button.kind === 'filter' || button.kind === 'page').map(button => `${button.row},${button.col}`))
   const indent = layout ? compactLabelIndents(layout) : undefined
-  const fits = new Map<number, number>(), counts = new Map<number, number>()
-  for (const { row, col } of input.cells) {
-    const seen = counts.get(col) ?? 0
-    if (seen >= AUTOFIT_MAX_ROWS || (seen === 0 && counts.size >= AUTOFIT_MAX_CELLS)) continue
-    counts.set(col, seen + 1)
+  const fits = new Map<number, number>()
+  for (const { row, col } of pivotFitCells(input.cells)) {
     const text = measure.textPt(row, col)
     if (!text) continue
     const extra = (buttons.has(`${row},${col}`) ? PIVOT_FIT_BUTTON_PT : 0) + (indent?.(row, col, 'screen') ?? 0) * 0.75
