@@ -106,13 +106,30 @@ function datePartLabel(groupItems: readonly PivotValue[], value: string, groupBy
   } else if (groupBy === 'hours') candidates.add(String(hour))
   else if (groupBy === 'minutes') candidates.add(String(minute))
   else if (groupBy === 'seconds') candidates.add(String(second))
-  for (let i = 0; i < groupItems.length; i++) {
-    const item = groupItems[i]!
-    if (item.type === 'date' && groupBy === 'days' && item.value.slice(0, 10) === `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`) return i
-    const label = caption(item)
-    if (label !== undefined && candidates.has(label)) return i
+  // The first group item matching a day's date or any candidate caption, through lookups built once per list.
+  const { byCaption, byDay } = dateLabelIndex(groupItems)
+  let found = groupBy === 'days' ? byDay.get(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`) ?? -1 : -1
+  for (const label of candidates) {
+    const at = byCaption.get(label)
+    if (at !== undefined && (found < 0 || at < found)) found = at
   }
-  return -1
+  return found
+}
+/** First index per caption and per date item's day, built once per group-item list (a scan per record was quadratic). */
+const DATE_LABEL_INDEXES = new WeakMap<readonly PivotValue[], { byCaption: Map<string, number>; byDay: Map<string, number> }>()
+function dateLabelIndex(groupItems: readonly PivotValue[]) {
+  let index = DATE_LABEL_INDEXES.get(groupItems)
+  if (!index) {
+    index = { byCaption: new Map(), byDay: new Map() }
+    for (let i = 0; i < groupItems.length; i++) {
+      const item = groupItems[i]!
+      if (item.type === 'date' && !index.byDay.has(item.value.slice(0, 10))) index.byDay.set(item.value.slice(0, 10), i)
+      const label = caption(item)
+      if (label !== undefined && !index.byCaption.has(label)) index.byCaption.set(label, i)
+    }
+    DATE_LABEL_INDEXES.set(groupItems, index)
+  }
+  return index
 }
 
 /** Returns one groupItems index per source record. The sentinel represents an unmapped discrete item. */
@@ -148,16 +165,16 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
   // The Task 15 cases measure number ranges and date years, quarters and months only (final review M2).
   if (range.groupBy !== 'range' && range.groupBy !== 'years' && range.groupBy !== 'quarters' && range.groupBy !== 'months')
     return unmeasured(`date grouping by ${range.groupBy} on field ${field} is not measured`)
+  // The out-of-range buckets, found once (not per record).
+  const lowerBucket = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
+  const upperBucket = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
   for (let row = 0; row < store.count; row++) {
     const value = sourceValue(store, cache, base, row)
     if (!value) return invalid(`group field ${field} has an invalid base value at record ${row}`)
     if (value.type === 'missing') {
       if (range.groupBy === 'range') return unmeasured(`blank values in number group field ${field} are not measured`)
       if (blank >= 0) output[row] = blank
-      else if (range.groupBy === 'years' || range.groupBy === 'quarters' || range.groupBy === 'months') {
-        const lower = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
-        if (lower >= 0) output[row] = lower
-      }
+      else if ((range.groupBy === 'years' || range.groupBy === 'quarters' || range.groupBy === 'months') && lowerBucket >= 0) output[row] = lowerBucket
       continue
     }
     if (range.groupBy === 'range') {
@@ -182,14 +199,12 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     if (Number.isFinite(serial) && serial < 61)
       return unmeasured(`date group field ${field} contains a date before Excel serial 61 (1900-03-01), whose grouping is not measured`)
     if (range.startDate && iso < range.startDate.slice(0, 10)) {
-      const index = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
-      if (index < 0) return unmeasured(`out-of-range date ${iso} has no lower bucket in group field ${field}`)
-      output[row] = index; continue
+      if (lowerBucket < 0) return unmeasured(`out-of-range date ${iso} has no lower bucket in group field ${field}`)
+      output[row] = lowerBucket; continue
     }
     if (range.endDate && iso > range.endDate.slice(0, 10)) {
-      const index = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
-      if (index < 0) return unmeasured(`out-of-range date ${iso} has no upper bucket in group field ${field}`)
-      output[row] = index; continue
+      if (upperBucket < 0) return unmeasured(`out-of-range date ${iso} has no upper bucket in group field ${field}`)
+      output[row] = upperBucket; continue
     }
     if (source.kind === 'inline') return unmeasured(`inline date grouping for field ${field} needs the workbook date-system context`)
     const item = datePartLabel(groupItems, value.value, range.groupBy)

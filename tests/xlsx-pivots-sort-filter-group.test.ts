@@ -284,6 +284,25 @@ describe('Task 21 sort, filters and group mapping', () => {
     expect(grouped).toMatchObject({ ok: true, value: Uint32Array.from({ length: n }, (_, i) => i + 1) })
   })
 
+  it('date groups look their labels up once per list, not per record (PR #56 review)', () => {
+    const years = 8000, n = 80000
+    const cache = {
+      source: { type: 'worksheet' }, olap: false,
+      fields: [
+        { databaseField: true, sharedItems: { inline: false, items: Array.from({ length: years }, (_, i) => ({ type: 'date', value: `${String(1901 + i).padStart(4, '0')}-06-01T00:00:00` })) } },
+        { databaseField: false, fieldGroup: { base: 0, rangePr: { autoStart: false, autoEnd: false, groupBy: 'years', groupInterval: 1,
+          startDate: '1901-01-01T00:00:00', endDate: `${1900 + years}-12-31T00:00:00` },
+          groupItems: [{ type: 'string', value: '<1901/1/1' }, ...Array.from({ length: years }, (_, i) => ({ type: 'string', value: `${1901 + i}年` })), { type: 'string', value: `>${1900 + years}/12/31` }] } },
+      ],
+    } as unknown as PivotCacheDefinition
+    const store: RecordStore = { count: n, bytes: 0, columns: [{ kind: 'shared', index: Uint32Array.from({ length: n }, (_, i) => i % years) }] }
+    const started = performance.now()
+    const grouped = groupColumn(store, cache, 1)
+    expect(performance.now() - started).toBeLessThan(1500)
+    expect(grouped).toMatchObject({ ok: true })
+    if (grouped.ok) expect([grouped.value[0], grouped.value[1], grouped.value[years]]).toEqual([1, 2, 1])
+  })
+
   it('a value filter by a calculated field naming no field (=1) computes (PR #56 review)', async () => {
     const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/calc-constant.xlsx'))
     const view = initialViewState(p!.def, p!.cache)
