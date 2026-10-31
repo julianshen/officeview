@@ -556,3 +556,34 @@ export function pivotAutofitColumns(input: {
   }
   return pivotAutofit(fits(input.before), fits(input.after), input.current, input.userSet, viewerFitTolerance)
 }
+
+/** A paged commit's fit waiting for its sheet's refreshed pivot display (its styles; Task 29). */
+export interface PendingPivotFit<S> { pivot: number; fit: NonNullable<PivotCommit['fit']>; styleAt: S; styleGen: string }
+/**
+ * The paged fits waiting per sheet, one per pivot (codex review T29-6): a second commit of the same pivot before the
+ * display refreshed keeps the first's "before" and takes the new "after" (the cells shown between were never fitted);
+ * another pivot's commit waits beside it. `take` hands over, in commit order, a sheet's fits whose display moved on.
+ */
+export function pendingPivotFits<S>() {
+  const bySheet = new Map<string, Map<number, PendingPivotFit<S>>>()
+  return {
+    get size() { let count = 0; for (const fits of bySheet.values()) count += fits.size; return count },
+    sheets: () => [...bySheet.keys()],
+    add(sheetId: string, pending: PendingPivotFit<S>): void {
+      let fits = bySheet.get(sheetId)
+      if (!fits) bySheet.set(sheetId, fits = new Map())
+      const earlier = fits.get(pending.pivot)
+      fits.set(pending.pivot, earlier ? { ...pending, fit: { before: earlier.fit.before, after: pending.fit.after }, styleAt: earlier.styleAt } : pending)
+    },
+    take(sheetId: string, styleGen: string): PendingPivotFit<S>[] {
+      const fits = bySheet.get(sheetId)
+      if (!fits) return []
+      const ready = [...fits.values()].filter(pending => pending.styleGen !== styleGen)
+      for (const pending of ready) fits.delete(pending.pivot)
+      if (!fits.size) bySheet.delete(sheetId)
+      return ready
+    },
+    clear(): void { bySheet.clear() },
+  }
+}
+export type PendingPivotFits<S> = ReturnType<typeof pendingPivotFits<S>>

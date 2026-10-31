@@ -525,25 +525,30 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     for (const [col, chars] of widths) if (sizes.set('col', col, columnWidthPx(chars, mdw), 'autofit')) fitted.set(col, chars)
   }
   /** Paged commits waiting for their sheet's refreshed pivot display before the autofit (Task 29). */
-  const pendingPagedFits = useRef(new Map<string, { fit: NonNullable<PivotUi.PivotCommit['fit']>; styleAt: ReturnType<typeof pivotStyleAt>; styleGen: string }>()).current
+  // One per pivot, so a second pivot's commit before the refresh does not drop the first's fit (codex review T29-6).
+  const pendingPagedFits = useRef<PivotUi.PendingPivotFits<ReturnType<typeof pivotStyleAt>> | null>(null)
   useEffect(() => {
-    if (!remote || !pivotUi || !pendingPagedFits.size) return
-    for (const [sheetId, pending] of pendingPagedFits) {
+    const pending = pendingPagedFits.current
+    if (!remote || !pivotUi || !pending?.size) return
+    for (const sheetId of pending.sheets()) {
       const shownEntry = entries.get(sheetId)
-      if (!shownEntry || shownEntry.regionStyleGen === pending.styleGen || !shownEntry.sheet.regionStyles) continue
-      pendingPagedFits.delete(sheetId)
-      const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7, metrics = shownEntry.metrics
-      const { before, after } = pending.fit
-      autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(pending.styleAt ? { styleAt: pending.styleAt } : {}) },
-        { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
-        col => metrics.cols.size(col) / mdw)
+      if (!shownEntry || !shownEntry.sheet.regionStyles) continue
+      const ready = pending.take(sheetId, shownEntry.regionStyleGen)
+      if (!ready.length) continue
+      const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7
+      for (const { fit: { before, after }, styleAt } of ready) {
+        const metrics = entries.get(sheetId)!.metrics
+        autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(styleAt ? { styleAt } : {}) },
+          { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
+          col => metrics.cols.size(col) / mdw)
+      }
       dropTiles(sheetId, null)
       rerender()
     }
   })
   const restorePivots = () => {
     pivotLifecycle.current++
-    pendingPagedFits.clear()
+    pendingPagedFits.current?.clear()
     for (const [sheetId, fitted] of pivotAutofitChars) {
       const sizes = sheetSizes.get(sheetId)
       for (const col of fitted.keys()) if (sizes && !sizes.userSet('col', col)) sizes.restore('col', col, undefined)
@@ -1346,7 +1351,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRects, remote.hasFormulaCellsOutsidePivots ?? false))
       // §7.8 (Task 29): autofit once the worker's new pivot display (its styles) has arrived; the old styles now.
       const shownEntry = entries.get(sheetId)
-      if (pivotUi && commit.fit && shownEntry) pendingPagedFits.set(sheetId, { fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
+      if (pivotUi && commit.fit && shownEntry) (pendingPagedFits.current ??= pivotUi.pendingPivotFits()).add(sheetId, { pivot: commit.pivot, fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
       cancelCopy(); dropTiles(sheetId, null); rerender(); return
     }
     if (!sheet?.pivotTables) return

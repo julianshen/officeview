@@ -12,7 +12,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument, XlsxSheet } from '../src/xlsx/types'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
-import { createResidentPivotClient, valueFilter } from '../src/components/xlsx/pivot/pivotClient'
+import { createResidentPivotClient, pendingPivotFits, valueFilter } from '../src/components/xlsx/pivot/pivotClient'
 import { sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { loadPivotParts } from './helpers/xlsx-pivots-load'
@@ -273,5 +273,32 @@ describe('§7.8 autofit after a change', () => {
     const start = await fitted('recipes/engine-seed'), saved = await fitted('interaction/interaction-collapse-field-compact-top')
     expect(pivotAutofit(start.fits, saved.fits, col => start.widths.get(col), () => false).get(0)).toBeCloseTo(12.83203125, 2)
     expect(pivotAutofit(start.fits, saved.fits, col => start.widths.get(col), col => col === 0).has(0)).toBe(false)
+  })
+})
+
+describe('§7.8 paged fits waiting for the refreshed display (Task 29 fix round 1)', () => {
+  const layout = (name: string) => ({ def: { name } as never, cells: [] })
+  const fit = (before: string, after: string) => ({ before: layout(before), after: layout(after) })
+  it('two pivots committing before the display refreshes are both fitted, in commit order', () => {
+    const pending = pendingPivotFits<string>()
+    pending.add('s1', { pivot: 0, fit: fit('a0', 'a1'), styleAt: 'old', styleGen: 'g0' })
+    pending.add('s1', { pivot: 1, fit: fit('b0', 'b1'), styleAt: 'old', styleGen: 'g0' })
+    expect(pending.take('s1', 'g0')).toEqual([])
+    const ready = pending.take('s1', 'g1')
+    expect(ready.map(entry => [entry.pivot, (entry.fit.before.def as { name: string }).name, (entry.fit.after.def as { name: string }).name])).toEqual([[0, 'a0', 'a1'], [1, 'b0', 'b1']])
+    expect(pending.size).toBe(0)
+  })
+  it('one pivot committing twice is fitted once, from its first "before" to its last "after"', () => {
+    const pending = pendingPivotFits<string>()
+    pending.add('s1', { pivot: 0, fit: fit('a0', 'a1'), styleAt: 'first', styleGen: 'g0' })
+    pending.add('s1', { pivot: 0, fit: fit('a1', 'a2'), styleAt: 'second', styleGen: 'g0' })
+    pending.add('s2', { pivot: 0, fit: fit('c0', 'c1'), styleAt: 'other', styleGen: 'h0' })
+    const ready = pending.take('s1', 'g1')
+    expect(ready).toHaveLength(1)
+    expect(ready[0]).toMatchObject({ pivot: 0, styleAt: 'first' })
+    expect([(ready[0]!.fit.before.def as { name: string }).name, (ready[0]!.fit.after.def as { name: string }).name]).toEqual(['a0', 'a2'])
+    expect(pending.sheets()).toEqual(['s2'])
+    pending.clear()
+    expect(pending.size).toBe(0)
   })
 })
