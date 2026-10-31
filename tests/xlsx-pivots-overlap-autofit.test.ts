@@ -17,6 +17,7 @@ import { sheetCellReader } from '../src/xlsx/pivots/engine/faithful'
 import { savedPivotLayout } from '../src/xlsx/pivots/savedLayout'
 import { loadPivotParts } from './helpers/xlsx-pivots-load'
 import JSZip from 'jszip'
+import { SheetSizes } from '../src/xlsx/view/axisSizes'
 import { StructuralIndex } from '../src/xlsx/view/structure'
 import { guardFilter, guardSort, PIVOT_SHEET_CHANGE_MESSAGE } from '../src/xlsx/view/operationGuard'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
@@ -193,5 +194,24 @@ describe('S3-W / S3-X: sheet sort and filter around a pivot (owner-sheet-sort, o
     for (const target of [range(4, 23, 0, 8), range(4, 9, 8, 11)]) {
       expect(await filterOver(target, [{ r0: 5, r1: 5 }])).toMatchObject({ ok: false, refusal: { reason: 'pivot', message: PIVOT_SHEET_CHANGE_MESSAGE } })
     }
+  })
+})
+
+describe('SheetSizes records which sizes the user set', () => {
+  it('a user resize is user-set; an autofit size is not; reset clears both', () => {
+    const sizes = new SheetSizes()
+    expect(sizes.set('col', 1, 120)).toBe(true)
+    expect(sizes.userSet('col', 1)).toBe(true)
+    expect(sizes.set('col', 2, 90, 'autofit')).toBe(true)
+    expect(sizes.userSet('col', 2)).toBe(false)
+    expect(sizes.get('col', 2)).toBe(90)
+    expect(sizes.userSet('row', 1)).toBe(false)
+    // A later user resize of an autofit column makes it the user's.
+    sizes.set('col', 2, 95)
+    expect(sizes.userSet('col', 2)).toBe(true)
+    sizes.restore('col', 1, undefined)
+    expect(sizes.userSet('col', 1)).toBe(false)
+    sizes.reset()
+    expect(sizes.userSet('col', 2)).toBe(false)
   })
 })

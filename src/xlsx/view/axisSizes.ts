@@ -72,6 +72,8 @@ export const hasSessionSizes = (sizes: SessionSizes | undefined): sizes is Sessi
 export class SheetSizes {
   private readonly rows = new Map<number, number>()
   private readonly cols = new Map<number, number>()
+  /** Lines the user resized (Task 29, §7.8): a pivot's autofit never changes them. */
+  private readonly user = { row: new Set<number>(), col: new Set<number>() }
   private version = 0
   private published: SessionSizes | undefined
   get gen(): number { return this.version }
@@ -79,10 +81,14 @@ export class SheetSizes {
   get count(): number { return this.rows.size + this.cols.size }
   get bytes(): number { return this.count * SESSION_SIZE_ENTRY_BYTES }
   get(axis: ResizeAxis, index: number): number | undefined { return (axis === 'row' ? this.rows : this.cols).get(index) }
-  /** Clamped; false when the axis cap refuses a new index. */
-  set(axis: ResizeAxis, index: number, sizeCss: number): boolean {
+  /** Whether the user set this line's size (a resize or fit gesture), never true for an autofit size. */
+  userSet(axis: ResizeAxis, index: number): boolean { return this.user[axis].has(index) }
+  /** Clamped; false when the axis cap refuses a new index. `source` 'autofit' (a pivot's column autofit after a
+   * change) leaves the line not user-set. */
+  set(axis: ResizeAxis, index: number, sizeCss: number, source: 'user' | 'autofit' = 'user'): boolean {
     const map = axis === 'row' ? this.rows : this.cols
     if (!map.has(index) && map.size >= MAX_SESSION_SIZES) return false
+    if (source === 'user') this.user[axis].add(index)
     const value = clampSize(axis, sizeCss)
     if (map.get(index) === value) return true
     map.set(index, value)
@@ -103,7 +109,7 @@ export class SheetSizes {
   restore(axis: ResizeAxis, index: number, previous: number | undefined): void {
     const map = axis === 'row' ? this.rows : this.cols
     if (map.get(index) === previous) return
-    if (previous === undefined) map.delete(index)
+    if (previous === undefined) { map.delete(index); this.user[axis].delete(index) }
     else map.set(index, previous)
     this.changed()
   }
@@ -111,6 +117,7 @@ export class SheetSizes {
     if (this.empty) return false
     this.rows.clear()
     this.cols.clear()
+    this.user.row.clear(); this.user.col.clear()
     this.changed()
     return true
   }
