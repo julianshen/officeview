@@ -31,7 +31,7 @@ import { createAxisMetrics } from './axes'
 import { createIntervalSet } from './visibility'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import {
-  failedPage, failure, lowerBound, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource,
+  failedPage, failure, lowerBound, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets,
 } from '../../worker/viewerSession'
 import { addRecord, answerOverview, emptyAggregate, type OverviewCellSource } from '../storage/overviewIndex'
 import { cellDisplayText } from '../render'
@@ -1000,6 +1000,35 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     valueStatus: () => status,
     ...(status.message === undefined ? {} : { openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message }]) }),
     sheets: Object.freeze(sheets.map(({ sheet, sheetId }) => Object.freeze({ sheetId, name: sheet.name }))),
+    async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
+      if (signal.aborted) return undefined
+      const sheet = find(sheetId).sheet
+      if (!sheet.pivotTables?.length) return undefined
+      const { pivotRuntimeFor } = await import('../pivotLoader')
+      const runtime = pivotRuntimeFor(doc)
+      if (!runtime) return undefined
+      const { sheetCellReader } = await import('../pivots/engine/faithful')
+      const cells = new Set<number>()
+      let metadataBytes = 512
+      if (memory && !memory.set(metadataBytes)) return undefined
+      for (const row of sheet.rows) for (const cell of row.cells) {
+        if (cell.value !== null || cell.formula !== undefined) {
+          metadataBytes += 32
+          if (memory && !memory.set(metadataBytes)) return undefined
+          cells.add(cell.row * MAX_COLS + cell.col)
+        }
+      }
+      const { RECORD_LIMITS } = await import('../pivots/engine/records')
+      return {
+        tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes,
+        metadataBytes, runtimeKey: runtime,
+        cache: def => runtime.cache(def),
+        records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),
+        saved: async () => sheetCellReader(sheet),
+        occupied: (row, col) => cells.has(row * MAX_COLS + col),
+        store: storeFor,
+      }
+    },
     store: storeFor,
     displayText: (cell, sheetId, allocation) => storeFor(sheetId).displayText(cell, allocation),
     geometry(sheetId) {

@@ -7,6 +7,8 @@ import type { SparklineDiagnostic, XlsxSparklineGroup } from '../sparklines/mode
 import type { TableMetadata } from '../formula/types'
 import type { DxfStyle, TableStyleDef, TableStyleDiagnostic } from '../tableStyles/model'
 import type { PivotTableDefinition, PivotDiagnostic } from '../pivots/model'
+import type { PivotDelta } from '../pivots/session/delta'
+import type { ChartModel } from '../../charts/model'
 
 /** Shared bounds for paged table-style descriptors and decoded role caches. */
 export const MAX_REGION_STYLE_TABLES = 512
@@ -82,6 +84,8 @@ export type CellRead =
   | { kind: 'unavailable'; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
 
 export interface SourceStamp { docId: string; sheetId: string; valueGen: number }
+/** Pool estimate for each cell owned by a committed worker pivot overlay. */
+export const PAGED_CELL_BYTES_ESTIMATE = 128
 /** Committed pivot values. `undefined` means the coordinate is not owned;
  * `null` explicitly clears a cell inside an owned rectangle. */
 export interface ValueOverlayCell { value: XlsxCell['value']; valueIsError?: boolean; numFmtId?: number }
@@ -659,6 +663,10 @@ export type WorkerCommand =
   | { kind: 'valueQuery'; requestId: string; owner: CacheIdentity; query: ColumnQuery }
   | { kind: 'search'; requestId: string; owner: WorkbookOwner; query: SearchQuery; cursor?: string }
   | { kind: 'read'; requestId: string; owner: CacheIdentity; query: SourceReadQuery }
+  | { kind: 'pivotOpen'; requestId: string; docId: string; sheetId: string; pivot: number; grantBytes: number }
+  | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number; delta: PivotDelta | 'reset'; grantBytes: number }
+  | { kind: 'pivotCommit'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number }
+  | { kind: 'pivotRelease'; requestId: string; docId: string; sheetId: string; pivot: number }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }
   | { kind: 'close'; requestId: string; docId: string }
 
@@ -703,6 +711,10 @@ export type WorkerResult =
   | { kind: 'valueQuery'; page: Page<ColumnEntry> }
   | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number; page?: FindPage }
   | { kind: 'read'; result: SourceReadResult }
+  | { kind: 'pivotOpen'; revision: number; def: PivotTableDefinition }
+  | { kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly ChartModel[]; cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
+  | { kind: 'pivotCommit'; revision: number; valueGen: number } | { kind: 'pivotCommit'; refused: 'stale' }
+  | { kind: 'pivotRelease'; released: boolean; valueGen?: number }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).
  * Sort/filter publish one view delta; other completions match their command. */

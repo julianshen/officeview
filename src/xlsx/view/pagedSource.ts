@@ -20,7 +20,7 @@ import { resolveDrawingAnchors } from './drawingBounds'
 import { PackageError } from '../../core/package-error'
 import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceRect, parseA1, type SourceCell, type SourceRect } from './coordinates'
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
-import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource } from '../../worker/viewerSession'
+import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
 import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
 import {
@@ -1478,6 +1478,52 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     regionStyleTableCount(sheetId) { return find(sheetId).tables?.filter(table => table.styleInfo?.name).length ?? 0 },
     hasPivotDisplay(sheetId) { const sheet = find(sheetId); return Boolean(sheet.metadata.pivotRegions?.length || sheet.metadata.pivotDiagnostics?.length) },
     pivotTableCount(sheetId) { return find(sheetId).metadata.pivotRegions?.length ?? 0 },
+    async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
+      const sheet = find(sheetId)
+      if (signal.aborted || sheet.state !== 'complete' || !sheet.metadata.pivotRegions?.length) return undefined
+      const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
+      const parsed = await readPagedPivotDisplayParts(workbook.parts, { sheetId, sheetName: sheet.name,
+        pivotRegions: new Map([[sheet.name, sheet.metadata.pivotRegions]]) }, profile, signal, memory, workbook.pivotPartBytes)
+      if (memory && !memory.set(0)) return undefined
+      if (!parsed.pivotTables.length || !parsed.pivotCaches.size) return undefined
+      const { createPivotRuntime } = await import('../pivots/session/runtime')
+      const { openPart } = await import('../../core/zip-stream')
+      const runtime = createPivotRuntime(parsed.pivotCaches, (path, readSignal) => {
+        const entry = workbook.parts.inventory.find(path)
+        return entry ? openPart(workbook.parts.src, entry, { signal: readSignal, budget: { charge: () => {} } }) : undefined
+      }, () => workbook.formatting.dateSystem === '1904')
+      const store = storeFor(sheetId)
+      const used = sheet.used
+      if (!used || !store.scanOccupied) return undefined
+      const occupied = new Set<number>()
+      let cursor: string | undefined, count = 0
+      const readOptions = { signal, stamp: store.stamp }
+      do {
+        const pages = store.scanOccupied({ range: used, limit: 8192, ...(cursor ? { cursor } : {}) }, readOptions)
+        let next: string | undefined
+        for await (const page of pages) {
+          if (page.completeness !== 'complete' || page.error) return undefined
+          for (const cell of page.items) {
+            if (++count > 500_000) return undefined
+            if (memory && !memory.set(count * 32 + 512)) return undefined
+            occupied.add(cell.row * MAX_COLS + cell.col)
+          }
+          next = page.nextCursor
+        }
+        cursor = next
+      } while (cursor !== undefined)
+      const { pagedCellReader } = await import('../pivots/engine/faithful')
+      const { RECORD_LIMITS } = await import('../pivots/engine/records')
+      return {
+        tables: parsed.pivotTables, date1904: runtime.date1904, retainedBytes: 0, metadataBytes: 512 + count * 32,
+        runtimeKey: runtime,
+        cache: def => runtime.cache(def),
+        records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),
+        saved: (def, readSignal) => pagedCellReader(store, def, { signal: readSignal, stamp: store.stamp }, profile),
+        occupied: (row, col) => occupied.has(row * MAX_COLS + col),
+        store: storeFor,
+      }
+    },
     store: storeFor,
     geometry(sheetId) {
       const sheet = find(sheetId)

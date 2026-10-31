@@ -87,6 +87,7 @@ const FINISHED_OWNERS_LIMIT = 1024
 export interface KernelStats { opens: number; parses: number; sourceReads: number }
 export interface KernelLifecycleStats { sessions: number; inflight: number; opening: number; retainedBytes: number; transientBytes: number }
 interface InFlight {
+  command: WorkerCommand
   controller: AbortController
   owner: WorkerOwner
   kind: WorkerCommandKind
@@ -104,7 +105,7 @@ const errorReply = <K extends WorkerCommandKind>(
 
 /** The document a non-open command addresses (undefined when malformed). */
 function documentOf(command: Exclude<WorkerCommand, { kind: 'cancel' | 'open' }>): string | undefined {
-  if (command.kind === 'close') return command.docId
+  if ('docId' in command) return command.docId
   const owner = (command as { owner?: { docId?: unknown } }).owner
   return typeof owner?.docId === 'string' ? owner.docId : undefined
 }
@@ -113,7 +114,9 @@ function documentOf(command: Exclude<WorkerCommand, { kind: 'cancel' | 'open' }>
  * command never supersedes a current one. */
 function supersessionKey(command: Exclude<WorkerCommand, { kind: 'cancel' }>, session: DocumentSession | undefined): string | undefined {
   if (session && command.kind === 'search' && workbookIndexKey(command.owner) === workbookIndexKey(session.workbookOwner())) return JSON.stringify(['search', session.epoch, command.owner.docId])
-  if (!session || (command.kind !== 'sort' && command.kind !== 'filter' && command.kind !== 'valueQuery')) return undefined
+  if (!session) return undefined
+  if (command.kind === 'pivotApply' || command.kind === 'pivotOpen') return JSON.stringify(['pivot', session.epoch, command.docId, command.sheetId, command.pivot])
+  if (command.kind !== 'sort' && command.kind !== 'filter' && command.kind !== 'valueQuery') return undefined
   if (!session.isCurrent(command.owner)) return undefined
   const scope = [session.epoch, command.owner.docId, command.owner.sheetId]
   return JSON.stringify(command.kind === 'valueQuery' ? ['query', ...scope, command.query?.col] : ['view', ...scope])
@@ -121,7 +124,7 @@ function supersessionKey(command: Exclude<WorkerCommand, { kind: 'cancel' }>, se
 /** Owner captured from the command itself (§10.2); cancel uses its target's. */
 function capturedOwner(command: WorkerCommand, inflight?: InFlight): WorkerOwner {
   switch (command.kind) {
-    case 'open': case 'close': return { docId: command.docId }
+    case 'open': case 'close': case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotRelease': return { docId: command.docId }
     case 'cancel': return inflight?.owner ?? { docId: '' }
     default: return command.owner
   }
@@ -272,7 +275,7 @@ export class ViewerKernel {
           if (other.key === key && (command.kind !== 'search' || command.cursor === undefined)) this.abort(other, command.kind === 'valueQuery' ? 'range-replaced' : 'superseded')
         }
       }
-      entry = { controller: new AbortController(), owner: capturedOwner(command), kind: command.kind, session, key }
+      entry = { controller: new AbortController(), owner: capturedOwner(command), kind: command.kind, command, session, key }
       this.inflight.set(command.requestId, entry)
       const expired = new AbortController()
       bindQueryDeadline(entry.controller.signal, expired.signal)
@@ -328,6 +331,9 @@ export class ViewerKernel {
       if (entry?.controller.signal.aborted && dispatched?.kind === 'complete' && dispatched.result.kind === 'search' && dispatched.result.nextCursor) {
         entry.session?.releaseSearch(dispatched.result.nextCursor)
       }
+      if (command.kind === 'pivotApply' && entry?.controller.signal.aborted) {
+        entry.session?.cancelPivotApply(command.sheetId, command.pivot, command.revision)
+      }
       if (entry) {
         this.foreground.delete(entry.controller.signal)
         // Wake on every removal, not just a full drain: parked kernels wait on
@@ -356,6 +362,7 @@ export class ViewerKernel {
     const workspace = docId === undefined ? undefined : this.sessions.get(docId)?.memory.charge()
     const injected = this.walkYield('reply')
     const budget = new CheckpointBudget(() => { if (!published()) throw new StopWalk() }, undefined, injected ? { yield: injected } : {}, 'reply')
+    let delivered = false
     try {
       const sized = { ...answer, replyBytes: 0 }
       const run = walkPayload(sized, walkAdmission(workspace), budget)
@@ -382,7 +389,23 @@ export class ViewerKernel {
       if (outcome.kind !== 'measured') return
       sized.replyBytes = outcome.bytes
       emit(sized, false, outcome.transfer)
-    } finally { budget.dispose(); workspace?.release() }
+      delivered = true
+    } finally {
+      budget.dispose(); workspace?.release()
+      // A staged pivot result is owned by the worker until its receiver sees
+      // the reply. If publication is cancelled or its bounded walk refuses,
+      // discard that unreachable candidate (and an unreachable newly-opened
+      // handle) here rather than waiting for a later release/close.
+      if (!delivered && (command.kind === 'pivotApply' || command.kind === 'pivotOpen')) {
+        const result = out.kind === 'complete' ? out.result : undefined
+        const session = this.sessions.get(command.docId)
+        if (command.kind === 'pivotApply' && result?.kind === 'pivotApply') {
+          session?.cancelPivotApply(command.sheetId, command.pivot, command.revision)
+        } else if (command.kind === 'pivotOpen' && result?.kind === 'pivotOpen') {
+          session?.pivotRelease(command.sheetId, command.pivot)
+        }
+      }
+    }
   }
   /** The kernel's injected yield for a walk phase (tests), else undefined (the host's). */
   private walkYield(phase: string): (() => Promise<void>) | undefined {
@@ -429,6 +452,9 @@ export class ViewerKernel {
         return this.sessions.has(command.docId) ? out : reply(command, { docId: command.docId }, { kind: 'cancelled' })
       case 'close':
         return out
+      case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotRelease':
+        if (signal.aborted) return reply(command, { docId: command.docId }, { kind: 'cancelled' })
+        return live(command.docId) ? out : errorReply(command, { docId: command.docId }, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
       case 'sort':
       case 'filter': {
         // The command owner is superseded by its own commit; the committed
@@ -469,6 +495,39 @@ export class ViewerKernel {
     switch (command.kind) {
       case 'open': return this.open(command, signal)
       case 'close': return this.close(command)
+      case 'pivotOpen':
+      case 'pivotApply':
+      case 'pivotCommit':
+      case 'pivotRelease': {
+        const session = this.sessions.get(command.docId)
+        const owner = { docId: command.docId }
+        if (!session || session.isClosed) return errorReply(command as never, owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document is not open' }])
+        if (!session.hasSheet(command.sheetId)) return errorReply(command as never, owner, 'stale-source', false, [{ code: 'unknown-sheet', message: `No sheet ${command.sheetId}` }])
+        if (command.kind === 'pivotRelease') {
+          for (const [requestId, other] of this.inflight) {
+            const pending = other.command
+            if (requestId !== command.requestId && (pending.kind === 'pivotOpen' || pending.kind === 'pivotApply')
+              && pending.docId === command.docId && pending.sheetId === command.sheetId && pending.pivot === command.pivot) this.abort(other, 'superseded')
+          }
+        }
+        let outcome
+        switch (command.kind) {
+          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); break
+          case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.revision, command.delta, command.grantBytes); break
+          case 'pivotCommit': outcome = session.pivotCommit(command.sheetId, command.pivot, command.revision); break
+          case 'pivotRelease': outcome = session.pivotRelease(command.sheetId, command.pivot); break
+        }
+        if (outcome.kind === 'cancelled') return reply(command as never, owner, { kind: 'cancelled' } as never)
+        if (outcome.kind === 'quota') return reply(command as never, owner, { kind: 'quota', resource: 'memory', limitBytes: outcome.limitBytes, ...(outcome.requiredBytes === undefined ? {} : { requiredBytes: outcome.requiredBytes }) } as never)
+        if (outcome.kind === 'refused') return errorReply(command as never, owner, 'operation-refused', false, [{ code: outcome.feature, message: outcome.message }])
+        const result = outcome.kind === 'open' ? { kind: 'pivotOpen', revision: outcome.revision, def: outcome.def }
+          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, def: outcome.def, rects: outcome.rects, protectedRects: outcome.protectedRects, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, cells: outcome.cells }
+          : outcome.kind === 'commit' ? { kind: 'pivotCommit', revision: outcome.revision, valueGen: outcome.valueGen }
+          : outcome.kind === 'stale' ? (command.kind === 'pivotCommit' ? { kind: 'pivotCommit', refused: 'stale' } : undefined)
+          : { kind: 'pivotRelease', released: outcome.released, ...(outcome.valueGen === undefined ? {} : { valueGen: outcome.valueGen }) }
+        if (!result) return errorReply(command as never, owner, 'stale-source', true, [{ code: 'pivot-revision-stale', message: 'The pivot revision is stale.' }])
+        return reply(command as never, owner, { kind: 'complete', result } as never)
+      }
       case 'activateSheet': {
         // Activation selects resident state; it publishes nothing that depends on
         // view generations, so the document owner is the relevant check. An
@@ -482,6 +541,10 @@ export class ViewerKernel {
         switch (resident.kind) {
           case 'resident':
             if (session.isClosed) return errorReply(command, command.owner, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
+            session.releasePivotsExcept(command.sheetId)
+            for (const other of this.inflight.values()) if ((other.kind === 'pivotOpen' || other.kind === 'pivotApply')
+              && other.command.kind !== 'cancel' && 'sheetId' in other.command && other.command.sheetId !== command.sheetId
+              && other.owner.docId === command.owner.docId) this.abort(other, 'superseded')
             session.activate(command.sheetId)
             return reply(command, command.owner, { kind: 'complete', result: { kind: 'activateSheet', sheetId: command.sheetId, layout: session.layout(command.sheetId) } }, resident.diagnostics ?? [])
           case 'cancelled': return reply(command, command.owner, { kind: 'cancelled' })
