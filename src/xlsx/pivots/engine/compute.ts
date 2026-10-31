@@ -16,6 +16,9 @@ export function computePivot(store: RecordStore, cache: PivotCacheDefinition, de
   view: PivotViewState, options: PlaceOptions): EngineResult<PivotLayout> {
   if (def.unsupported.length) return unsupported('pivot-engine-pending', `unsupported pivot definition: ${def.unsupported.join(', ')}`)
   if (cache.olap || cache.source.type !== 'worksheet') return unsupported('pivot-engine-pending', 'OLAP and non-worksheet sources are not computed')
+  // Date-filter criteria are read on the 1900 epoch (filters.ts) while records carry the workbook's serials.
+  if (options.date1904 && view.filters.some(filter => filter.type.startsWith('date')))
+    return unsupported('pivot-engine-unmeasured', 'date-filter criteria in a 1904 workbook are not measured (the oracle is 1900-based)')
   const axes = computeAxes(store, cache, def, view)
   if (!axes.ok) return axes
   const values = computeValues(store, cache, def, view, axes.value)

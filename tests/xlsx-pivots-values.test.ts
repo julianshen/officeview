@@ -605,6 +605,14 @@ describe('pivot value aggregation', () => {
 })
 
 describe('computePivot composition and Excel saved values', () => {
+  it('refuses date-filter criteria in a 1904 workbook (criteria are read on the 1900 epoch)', async () => {
+    const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/filter-date-between.xlsx'))
+    const view = initialViewState(p!.def, p!.cache)
+    expect(view.filters.some(filter => filter.type.startsWith('date'))).toBe(true)
+    expect(computePivot(p!.store, p!.cache, p!.def, view, { date1904: false }).ok).toBe(true)
+    const refused = computePivot(p!.store, p!.cache, p!.def, view, { date1904: true })
+    expect(refused.ok ? undefined : refused.diagnostic).toMatchObject({ kind: 'unsupported', feature: 'pivot-engine-unmeasured' })
+  })
   it.each(referenceNames)('%s: computed value cells match the saved cells to 15 significant digits', async name => {
     const cases = await loadReference(name)
     for (const p of cases) {

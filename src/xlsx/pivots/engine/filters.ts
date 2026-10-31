@@ -146,8 +146,7 @@ export function matchesDateFilter(filter: PivotFilter, value: PivotValue | undef
     return Number.isFinite(time) ? time / 86_400_000 + 25_569 : Number.NaN
   }
   if (v === undefined || aValue === undefined || (bValue !== undefined && !Number.isFinite(serial(bValue)))) return undefined
-  // The engine API carries no workbook date-system bit. Criteria here use the 1900 serial epoch;
-  // callers must keep 1904 workbooks on the display-only path until that context is threaded through.
+  // Criteria here use the 1900 serial epoch; computePivot refuses date filters in a 1904 workbook.
   const a = serial(aValue)
   const b = bValue === undefined ? undefined : serial(bValue)
   if (!Number.isFinite(a)) return undefined
