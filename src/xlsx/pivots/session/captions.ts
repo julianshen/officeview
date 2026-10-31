@@ -26,11 +26,39 @@ export interface CaptionRule { readonly locale: 'zh-TW' | 'file'; caption(kind: 
 export type CaptionTable = Readonly<Partial<Record<string, string>>>
 
 /**
- * The measured zh-TW caption patterns (Excel 16.114 zh-TW). TASK 24 PLUGS ITS MEASURED TABLE IN HERE, one entry per
- * pattern key, each cited from docs/validation/xlsx-pivots.md ("Stage 3 interaction oracle and measurements") and
- * pinned by a test. Until then it is empty, so no pivot matches it and every pivot uses its own saved patterns.
+ * The measured zh-TW caption patterns (Excel 16.114 zh-TW UI), from docs/validation/xlsx-pivots.md "Stage 3
+ * interaction oracle and measurements", "Implicit captions" (raw: xlsx-pivots-stage3-measurements.md (b)); each entry
+ * names the saved cell that shows it. Pinned by tests/xlsx-pivots-session.test.ts (every engine case that matches the
+ * table renders exactly its saved captions) and the interaction oracle. Kinds Excel never showed here (a named
+ * subtotal's other functions, `subtotalFunctionData` with another function) stay out: such a pivot refuses.
  */
-export const ZH_TW_CAPTIONS: CaptionTable = Object.freeze({})
+export const ZH_TW_CAPTIONS: CaptionTable = Object.freeze({
+  rowLabels: '列標籤',                         // interaction/caption-defaults A5
+  columnLabels: '欄標籤',                      // interaction/caption-defaults B3
+  grandTotal: '總計',                          // interaction/caption-defaults A24
+  valuesTotal: '{data} 的加總',                // engine/baseline H4 "Sum of Sales 的加總"
+  subtotal: '{item} 合計',                     // engine/layout-tabular-three-rows B7 "Apples 合計"
+  'subtotalFunction:sum': '{item} 加總',       // engine/layout-named-subtotals-compact A10
+  'subtotalFunction:countA': '{item} 計數',    // engine/layout-named-subtotals-compact A11
+  'subtotalFunction:avg': '{item} 平均值',     // engine/layout-named-subtotals-compact A12
+  'subtotalFunctionData:avg': '{item} 平均值 - {field}', // engine/values-named-subtotals-intersecting H4 "2022 平均值 - Sales"
+  blank: '(空白)',                             // engine/quirk-blank-and-mixed-row-items A10
+  all: '(全部)',                               // interaction/interaction-page-all B1
+  multipleItems: '(多重項目)',                 // engine/quirk-page-multiple B1
+  classicTotal: '合計',                        // engine/layout-classic-single-data B4
+  // Data field names Excel assigns (saved as dataField@name by Excel; used when a definition leaves the name out).
+  'dataField:sum': '加總 - {field}',           // engine/values-fn-sum
+  'dataField:count': '計數 - {field}',         // engine/values-fn-count
+  'dataField:countNums': '計數 - {field}',     // engine/values-fn-countnums
+  'dataField:average': '平均值 - {field}',     // engine/values-fn-average
+  'dataField:max': '最大 - {field}',           // engine/values-fn-max
+  'dataField:min': '最小 - {field}',           // engine/values-fn-min
+  'dataField:product': '乘積 - {field}',       // engine/values-fn-product
+  'dataField:stdDev': '標準差 - {field}',      // engine/values-fn-stdev
+  'dataField:stdDevp': '母體標準差 - {field}', // engine/values-fn-stdevp
+  'dataField:var': '變異數 - {field}',         // engine/values-fn-var
+  'dataField:varp': '母體變異值 - {field}',    // engine/values-fn-varp
+})
 export const MEASURED_CAPTION_TABLES: Readonly<Record<'zh-TW', CaptionTable>> = Object.freeze({ 'zh-TW': ZH_TW_CAPTIONS })
 
 const FN_KINDS = new Set<CaptionKind>(['dataField', 'subtotalFunction', 'subtotalFunctionData'])
