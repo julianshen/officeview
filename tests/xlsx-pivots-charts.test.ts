@@ -160,6 +160,15 @@ describe('pivot charts follow (Task 30)', () => {
       const rebuilt = pivotChartSeries(fewer.charts[0]!, s.layout, s.def)
       expect(rebuilt.ok ? 'ok' : rebuilt.diagnostic.feature).toBe('pivot-chart-mapping')
     })
+    it('a single-colour chart style refuses a series change (its shades follow the series count)', async () => {
+      const seed = await book(SEED)
+      const { session: rows } = await session(caseFile(CASES.find(c => c.case === 'chart-values-on-rows')!))
+      const mono = pivotChartSeries({ ...seed.charts[0]!, styleId: 3 }, rows.layout, rows.def)
+      expect(mono.ok ? 'ok' : mono.diagnostic.feature).toBe('pivot-chart-mapping')
+      const { session: same } = await session(SEED)
+      const kept = pivotChartSeries({ ...seed.charts[0]!, styleId: 3 }, same.layout, same.def)
+      expect(kept.ok ? 'ok' : kept.diagnostic.message).toBe('ok')
+    })
     it('a series with its own format refuses when the series change, and keeps it when they do not', async () => {
       const seed = await book(SEED)
       const chart = seed.charts[0]!
@@ -185,9 +194,10 @@ describe('pivot charts follow (Task 30)', () => {
     })
     it('a chart whose saved series are not its pivot\'s default mapping refuses at open', async () => {
       // The values-on-rows chart (3 series by Year) linked to the seed's pivot (6 series by Year × Values).
+      // (A fresh object: the gate has not seen it. It refuses as soon as its 3 series cannot hold the seed's 6.)
       const other = await book(caseFile(CASES.find(c => c.case === 'chart-values-on-rows')!))
-      expect(await refusedAt(SEED, () => other.charts)).toBe('pivot-chart-mapping')
-      // Reordered series are not the default mapping either.
+      expect(await refusedAt(SEED, () => [{ ...other.charts[0]! }])).toBe('pivot-chart-mapping')
+      // Reordered series are not the default mapping: the open-time check (rebuilt ≠ saved) refuses them.
       expect(await refusedAt(SEED, charts => charts.map(chart => ({ ...chart, groups: chart.groups.map(group => ({ ...group, series: [...group.series].reverse() })) })))).toBe('pivot-chart-mapping')
     })
     it('the gate opens a chart-linked pivot, and a later layout no case covers refuses with the session left at its revision', async () => {

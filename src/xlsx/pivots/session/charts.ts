@@ -28,11 +28,12 @@
  * than rows [a] or [a, b] with Values last on columns after one column field, or rows [a, b, Values] with one column
  * field; more than one page field; grand totals off; a form with more than one label column (outline, tabular);
  * subtotal lines with Values on columns (subtotals at the bottom); a collapsed item with Values on rows or on the
- * column axis; an unfilled level; a label or value number format other than General; a chart that is not one clustered
+ * column axis; an unfilled level; a label or value number format other than General; a text or error value cell; a chart that is not one clustered
  * bar/column group without varied colours, or that is uncached, truncated, date-categorised or has hidden-cell
  * provenance; trendlines or error bars; a series past the saved chart's series count (its format is unmeasured); a
  * series or category change on a chart whose series carry their own formatting, per-point formatting, deleted legend
- * entries or a title (an automatic title would follow the series); an empty chart.
+ * entries or a title (an automatic title would follow the series), or under a single-colour style column (colours
+ * shade by the series count); an empty chart.
  */
 import type { ChartCategoryLevel, ChartModel, ChartRange, ChartSeries } from '../../../charts/model'
 import { PointWriter, pointBytes, stringBytes } from '../../../charts/points'
@@ -172,6 +173,10 @@ export function pivotChartSeries(chart: ChartModel, layout: PivotLayout, def: Pi
   const sameCategories = built.categories.length === chart.categories.length && built.categories.every((c, k) => c === chart.categories[k])
   if (!sameSeries && (saved.some(ownFormat) || chart.legendDeleted?.length || chart.title !== undefined)) return unmapped(def, 'series that change under their own formatting, deleted legend entries or a title have no measured mapping')
   if (!sameCategories && saved.some(perPoint)) return unmapped(def, 'points that change under per-point formatting have no measured mapping')
+  // Automatic colours by position hold for the accent-cycle style column (c:style 2 in every case); a single-colour
+  // style column shades by the series count (charts/style.ts styleColor), unmeasured when the count changes.
+  const id = chart.styleId, column = id !== undefined && Number.isInteger(id) && id >= 1 && id <= 48 ? (id - 1) % 8 : 1
+  if (!sameSeries && column !== 1) return unmapped(def, 'series that change under a single-colour chart style have no measured colours')
 
   // Values: each series' column over the leaf lines (a blank cell a blank point; numbers General).
   const values: PivotLayoutCell[][] = []
@@ -182,7 +187,7 @@ export function pivotChartSeries(chart: ChartModel, layout: PivotLayout, def: Pi
     for (const p of built.points) {
       const cell = cells.get((built.dataRow0 + p.line) * 16_384 + s.col)
       if (cell && cell.value.kind !== 'empty') {
-        if (cell.value.kind === 'text') return unmapped(def, 'a text value cell has no measured chart mapping')
+        if (cell.value.kind === 'text' || cell.value.kind === 'error') return unmapped(def, 'a text or error value cell has no measured chart mapping')
         if (cell.value.kind === 'number' && cell.numFmtId !== undefined && cell.numFmtId !== 0) return unmapped(def, 'a value number format other than General has no measured chart mapping')
       }
       column.push(cell ?? { row: 0, col: 0, value: { kind: 'empty' } })
@@ -200,7 +205,6 @@ export function pivotChartSeries(chart: ChartModel, layout: PivotLayout, def: Pi
       const out = new PointWriter(n, 'lazy', charge)
       values[k]!.forEach((cell, i) => {
         if (cell.value.kind === 'number') out.value(i, cell.value.value, 'General')
-        else if (cell.value.kind === 'error') out.error(i, cell.value.value)
       })
       const { pending: _pending, categories: _categories, absent: _absent, refs: _refs, ...rest } = saved[k]!
       void _pending, void _categories, void _absent, void _refs
