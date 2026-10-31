@@ -801,42 +801,474 @@ export function sheetCellReader(sheet: XlsxSheet): CellReader          // reside
 - [ ] **Step 2:** Run the full gates, the eager gates (`OV_MODULE_MAP=1 bun run build && bun scripts/check-eager.ts && bun scripts/eager-budget.ts`) and the lazy-chunk growth report. Also run the benchmark again.
 - [ ] **Step 3:** Update `docs/validation/xlsx-pivots.md` and `CHANGELOG.md` (Unreleased: engine, no user-visible change). Open the PR, trigger the Codex bot, wait for CI, then ask the owner to merge.
 
-## Stage 3: in-table interaction (PR 3) — refined at stage start
+## Stage 3: in-table interaction (PR 3) — refined 2026-10-31
 
-- **Task 24. Value overlay and `valueGen` (codex).**
-  - `ValueOverlay` on `ObjectXlsxSheetAdapter` and `PagedXlsxSheetAdapter`, covering cells, extent and merges (§7.9, AGY-4, AGY-6).
-  - A live `valueGen` for pivot sheets.
-  - Sheet sort and filter are disabled across pivots.
-- **Task 25. Worker pivot protocol (codex):**
-  - no layout with `captionsUnverified` is published, from an open or an apply: either returns a `pivot-caption-locale` refusal and the saved cells stay shown. Tests pin the open path, the apply path, and the behaviour once a locale rule is supplied;
-  - open, apply with an identity and revision, and release (§6.8, CODEX-5);
-  - leases on the shared store.
-- **Task 26. Buttons as controls (Claude opus):**
-  - DOM hit targets from `ButtonPlacement`;
-  - expand and collapse;
-  - filter menus, reusing `FilterDropdown` and `ConditionEditor`;
-  - sort, page fields, and Reset to saved view (AGY-11).
-- **Task 27. Overlap rule and autofit (agy).** §7.1, and §7.8 with the measured autofit.
-- **Task 28. Pivot charts follow (Claude opus).**
-  - Series and category mapping from the current layout (CODEX-3), and a refill through `fillChartRanges` and `succeedChartModel`.
-  - Unverified mappings disable interaction.
-- **Task 29. Dependent values (codex):**
-  - a `GETPIVOTDATA` registration hook (AGY-3);
-  - recompute of the dependency set on the resident path;
-  - stale marking on the paged path and under the `cached` value policy (§7.5).
-- **Task 30. `refreshOnLoad` refresh path (codex).** §7.7, including `saveData="0"` (CODEX-R2-2).
-- **Task 31. Stage 3 Excel interaction oracle and verification (orchestrator).**
+**Revision note.** This refinement replaces the provisional Stage 3 outline. Changes against it:
+- The Excel interaction oracle is built **first** (Task 24), as in Stage 2. Each Stage 2 case is the seed plus one change, saved by Excel, which makes it an interaction oracle. Recon found that 87 of the 126 cases share the seed's cache and records exactly.
+- The outline never said who decodes records, runs the faithfulness check or applies a change. A **pivot session** (Task 25) now does that on both paths, so the worker protocol (Task 27) carries it and does not re-implement it.
+- The value overlay (Task 26) feeds the **sheet geometry** as well as the source stores. Painting reads `geometry.cellsOf()`, built from `sheet.rows`, not the stores, so a store-only overlay would repaint nothing.
+- The tasks are 24–33, so Stages 4 and 5 are renumbered 34–41.
+
+**Codebase facts the outline did not know** (recon at `3654901d`; each task below repeats the facts it needs):
+- Neither load path keeps the `PivotCacheDefinition`. Resident `attachPivotTables` (`src/xlsx/pivotLoader.ts`) and paged `readPagedPivotDisplayParts` (`src/xlsx/storage/pagedDrawings.ts:269`) both keep only `pivotTables`. Records are never read at runtime.
+- `valueGen` is frozen at `INITIAL_GENERATION` (0) on both paths. Tiles are keyed by `[docId, sheetId, valueGen, fontGen, viewGen]` (`src/xlsx/view/tileCache.ts:344`).
+- The region style layer is cached once per sheet (`src/xlsx/tableStyleLoader.ts`, `regionStylesResolved`) with no invalidation hook. Button placements are cached per definition object (`WeakMap`), so a new live definition invalidates them automatically.
+- The interactive viewer never shows `sheet.diagnostics` (`src/components/xlsx/InteractiveSheetDoc.tsx:1331`).
+- Charts fill once: `ChartSeries.pending` is consumed by `fillChartRanges` (`src/charts/fill.ts:182`), only `refs` is kept, and `ChartModel.pivot` has no consumers.
+- The formula engine has one entry point, `evaluateWorkbookFormulas` (`src/xlsx/formula/workbook.ts:378`). Its dependency maps and `affectedReaders` are private, and it throws under the `cached` value policy. `FUNCTIONS` (`src/xlsx/formula/functions.ts:508`) is a plain mutable record.
+
+**Stage 3 scope rulings [call]:**
+- **When a pivot becomes interactive.** In the interactive viewer, the first interaction with a pivot opens a session:
+  1. eligibility (`engineEligibility`);
+  2. records decode;
+  3. the faithfulness check (`checkSavedLayout`);
+  4. on this stage's apply checks: captions (below), overlap (Task 29), chart mapping (Task 30).
+
+  A refusal at any step keeps the saved cells. The pivot then shows its reason as the accessible name and tooltip of its buttons, and once as a status notice (§7.6). The buttons stay painted. Page mode, export and print never open a session (§7.10).
+- **Interactions in Stage 3** (§12):
+  - expand and collapse an item, a field, or everything;
+  - item visibility (checklist with search, select all, clear);
+  - label, value, date and top-10 filters;
+  - page-field single and multiple selection;
+  - clear the filters on a field;
+  - sort ascending or descending, by label or by a value column;
+  - Reset to saved view (AGY-11).
+
+  Field moves, value field settings and grouping are Stage 4. Dynamic date filters stay refused (CODEX-4).
+- **Interaction oracle (§9, §11).**
+  - Each interaction kind is verified by Excel applying the same change to the same pivot and saving.
+  - The test applies the same `PivotDelta` to the seed's own verified state and compares with the case's saved cells, its `rowItems`/`colItems` and its `location`.
+  - An interaction kind with no passing oracle case is disabled in the UI: its menu entry is absent, not greyed. A wrong number is the anti-goal.
+- **Captions (S2 ruling, closed here).** A layout cell with `caption: 'implicit'` is filled from the pivot's own file.
+  1. Measured zh-TW patterns per caption kind (Task 24): row labels, column labels, grand total, subtotal, Values, data field default name, `(blank)`, classic `Total`.
+  2. The pivot's locale is detected from its saved implicit captions: the one measured table they all match.
+  3. A pivot whose saved captions match no measured table uses only the patterns its own saved cells show, kind by kind. A layout that needs a kind with no pattern refuses with `pivot-caption-locale`.
+
+  English defaults are not assumed. Excel 16.114 here is zh-TW, and an English table would be a guess.
+- **Overlap (§7.1).** View-only means we never replace sheet data. A change whose new rectangle (page cells included) covers a cell that is not part of this pivot's previous rectangle is refused. "Covers" means the cell is non-empty, or formatted if Task 24 shows Excel counts formatting. The pivot stays as it was, with Excel's message text as measured in Task 24.
+- **Paged dependents (§7.5).** The worker has no formula dependency graph, so on the paged path dependents cannot be found reliably. Any pivot change on a paged sheet that has formulas outside its pivots therefore shows the fallback notice. Per-cell stale marks are resident-only. **[call]** Cost: a paged user sees a sheet-wide notice instead of marked cells.
+- **Caps.** One open session holds its record store charged: main-thread ledger on the resident path, worker pool on the paged path, at `RECORD_LIMITS[profile]`. Pivots that share a cache share one store (§7.4), leased by every session and in-flight apply. It is released when the last one releases. A layout's overlay is charged at `PAGED_CELL_BYTES_ESTIMATE` per cell.
+
+**Agents (Stage 3).**
+- codex implements Tasks 26, 27, 29 and 31, reviewed by Claude opus; agy is added as a second reviewer on worker and grant tasks (26, 27).
+- A Claude opus subagent implements Tasks 25, 28, 30 and 32, reviewed by codex.
+- The orchestrator does Tasks 24 and 33, reviewed by codex.
+- Parallel lanes, with disjoint files:
+  - 25 ∥ 26;
+  - 29 ∥ 30 after 28;
+  - 31 ∥ 32 after 27.
+
+**Stage 3 review focus** (from spec §10, plus the inputs this stage adds):
+1. **Shrink and grow across tile boundaries.** Collapse in compact form with subtotals at the top, at 175% zoom and DPR 2. The cells the pivot no longer covers repaint empty across tile boundaries, and the grown rows extend the used extent (§7.1, §7.9). Test: Task 26 `collapse clears the vacated cells in every intersecting tile`.
+2. **A stale paged apply.** A reply that arrives after a newer apply has been sent is discarded, its grant refunded, and `valueGen` untouched (§6.8, CODEX-5). Test: Task 27 `stale apply reply is dropped and refunded`.
+3. **Copy and Find inside a changed pivot return the new values** on both paths (§7.9, AGY-4). Test: Task 26 `find and copy read the overlay`.
+4. **A filter that leaves no items** shows Excel's saved shape for that case, or refuses if no case covers it. Test: Task 24 case `interaction-filter-all-hidden`, asserted in Task 25.
+5. **`GETPIVOTDATA` after hiding the item it names** gives Excel's saved value (a `#REF!` is expected) on the resident path, and the fallback notice on the paged path. Test: Task 31 `getpivotdata follows the measured hidden-item rule`.
+
+### Task 24: Stage 3 Excel interaction oracle (orchestrator; review: codex)
+
+**Files:**
+- Create:
+  - `scripts/xlsx-refs/interaction-cases.ts`;
+  - `tests/fixtures/xlsx-pivots/interaction/*.xlsx` and `manifest.json`;
+  - `tests/xlsx-refs-interaction-cases.test.ts`;
+  - `docs/validation/xlsx-pivots-recipes-stage3.md`, only if a case needs the owner.
+- Modify:
+  - `scripts/xlsx-refs/build-engine.ts`, which gains `--interaction` and reuses its session, verify and manifest code;
+  - `docs/validation/xlsx-pivots.md`, adding a section "Stage 3 interaction oracle and measurements".
+
+**Interfaces:**
+- Produces `tests/fixtures/xlsx-pivots/interaction/manifest.json` entries:
+```ts
+interface InteractionCase {
+  case: string; file: string; pivot: string; task: 25 | 29 | 30 | 31 | 32
+  seed: 'engine-seed' | 'chart-seed' | 'getpivotdata-seed' | 'refresh-seed'
+  delta: PivotDelta[]          // Task 25's type; the UI-expressible change Excel applied, in order
+  measures?: string            // what the case pins
+}
+```
+- Also `delta-from-stage2.json`. For each Stage 2 case that shares `engine-seed`'s cache and records (87, recon) and whose change is a Stage 3 UI action, it holds `{ case, delta }`. A case whose change is not a UI action (an XML-route construct, a value-field setting, a field move) is listed with `delta: null` and the reason.
+
+- [ ] **Step 1: Classify the Stage 2 cases.** For each of the 87 same-cache cases, read its `lines`/`xmlEdit` in `engine-cases.ts` and write its delta or `null` with a reason. Pin the classification in `tests/xlsx-refs-interaction-cases.test.ts`: every same-cache case appears once, and every delta round-trips through `JSON`.
+- [ ] **Step 2: New cases from the seeds.** Use the AppleScript routes Stage 2 probed, and the XML route where AppleScript can't reach (`make new pivot filter`, `set source data` and `enable multiple page items` are refused; `auto show` is ignored).
+  - **Expand and collapse:** a field (`show detail` of every item), everything, and an item in each form with subtotals at the top and at the bottom.
+  - **Clear filters:** clearing a label filter and a value filter, back to the seed.
+  - **Hidden items:** every item of a field hidden but one (`interaction-filter-all-hidden`), and a page multi-select toggled back to all.
+  - **Captions:** a change that creates each caption kind the seed lacks: a bottom subtotal (`East 合計`?), a grand total on a new axis, `(blank)`, Values, and the classic `Total`. These measure the zh-TW patterns.
+  - **Chart seed:** `recipes/pivot-chart-seed.xlsx` (Stage 1). Baseline, hide an item, collapse, a value filter, a sort, Values on rows, and a page selection. Each saved chart part pins the series and category mapping (§6.6, CODEX-3) and `pivotFmts`.
+  - **`GETPIVOTDATA` seed:** the engine seed plus formulas on a second sheet. They cover a total, an item, two fields, a hidden item, a collapsed item and an item filtered out. The same changes apply; Excel's saved cached values pin the semantics (§7.5).
+  - **Refresh seed:** a `refreshOnLoad="1"` copy of the engine seed whose source range differs from its records, and one with `saveData="0"`. Each is opened, refreshed and saved (§7.7).
+- [ ] **Step 3: Measurements read off the saved files.**
+  - **Autofit (§7.8):** the `<col>` widths of every case against the seed. Does Excel grow only, and with what padding over the measured text width? Record the rule, with examples.
+  - **Captions:** the pattern table per kind, with the cell that shows each.
+- [ ] **Step 4: Owner recipes,** in one batch, only for what Excel's alerts block:
+  - **Overlap:** expand an item into a non-empty cell, into a formatting-only cell, and into another pivot. Record the message text and the result.
+  - **Sheet sort or filter across a pivot:** record the message (§7.9).
+- [ ] **Step 5: Build the cases, check their markers, and write the doc section.** The section lists each measurement as a citable rule, as Stage 2's did.
+- [ ] **Step 6: Commit.** codex reviews the scripts, the classification and the doc.
+
+### Task 25: Pivot session — open, apply, reset (Claude opus; review: codex; parallel with Task 26)
+
+**Files:**
+- Create:
+  - `src/xlsx/pivots/session/delta.ts`;
+  - `src/xlsx/pivots/session/session.ts`;
+  - `src/xlsx/pivots/session/captions.ts`;
+  - `src/xlsx/pivots/session/runtime.ts`.
+- Modify:
+  - `src/xlsx/pivots/index.ts` (exports);
+  - `src/xlsx/pivots/load.ts` and `src/xlsx/pivotLoader.ts`, to retain caches and a records source.
+- Test:
+  - `tests/xlsx-pivots-session.test.ts`;
+  - `tests/xlsx-pivots-interaction-oracle.test.ts`.
+
+**Interfaces:**
+- Consumes the Stage 2 engine exports:
+  - `initialViewState`, `computePivot`, `liveDefinition`, `checkSavedLayout`, `engineEligibility`;
+  - `decodeRecords` and `recordEvents`;
+  - `CellReader` and `RECORD_LIMITS`.
+- Produces:
+```ts
+// delta.ts — pure
+export type PivotDelta =
+  | { kind: 'collapse'; field: number; item: number; collapsed: boolean }
+  | { kind: 'collapseField'; field: number; collapsed: boolean }
+  | { kind: 'collapseAll'; collapsed: boolean }
+  | { kind: 'items'; field: number; hidden: readonly number[] }          // pivot-item indices hidden
+  | { kind: 'page'; field: number; selected: readonly number[] | 'all' }
+  | { kind: 'filter'; field: number; filter: PivotFilter }               // label | value | date | top-10
+  | { kind: 'clearFilters'; field: number }
+  | { kind: 'sort'; field: number; order: 'ascending' | 'descending'; byData?: number }
+export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTableDefinition, cache: PivotCacheDefinition): EngineResult<PivotViewState>
+
+// captions.ts
+export interface CaptionRule { readonly locale: 'zh-TW' | 'file'; caption(kind: CaptionKind, args: CaptionArgs): string | undefined }
+export function captionRule(def: PivotTableDefinition, saved: CellReader, layout: PivotLayout): CaptionRule
+export function resolveCaptions(layout: PivotLayout, rule: CaptionRule): EngineResult<PivotLayout>   // refuses pivot-caption-locale
+
+// session.ts
+export interface PivotSessionInput { def: PivotTableDefinition; cache: PivotCacheDefinition; store: RecordStore; date1904: boolean; saved: CellReader; occupied: (row: number, col: number) => boolean }
+export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[] }
+export interface PivotSession {
+  readonly revision: number; readonly view: PivotViewState; readonly def: PivotTableDefinition; readonly layout: PivotLayout
+  apply(delta: PivotDelta): EngineResult<PivotApplyResult>   // pure: does not change the session
+  commit(result: PivotApplyResult): boolean                   // false when result.revision !== revision + 1
+  reset(): PivotApplyResult                                    // back to the saved state, as the next revision
+}
+export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSession>   // eligibility, check, captions
+
+// runtime.ts — what the lazy chunk keeps per loaded workbook (never structured-cloned)
+export interface PivotRuntime { cache(def: PivotTableDefinition): PivotCacheDefinition | undefined; records(cache: PivotCacheDefinition, signal: AbortSignal): Promise<RecordResult> }
+export function pivotRuntimeFor(doc: object): PivotRuntime | undefined   // WeakMap keyed by the document
+```
+- `apply` refuses each of these as a typed result:
+  - an interaction kind whose Task 24 oracle did not pass;
+  - captions with no rule;
+  - overlap (via `occupied`; Task 29 adds formatting if measured);
+  - any engine refusal.
+- `vacated` is the previous rectangle and page cells minus the new ones.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `applyDelta maps each kind onto the view`:
+    - collapse marks `collapsed[item]`;
+    - `items` sets `hidden`;
+    - `page` sets `pages`;
+    - `filter` replaces that field's filter of the same family, and a second filter of another family refuses as the engine does;
+    - `sort` sets `sortType` and `autoSortScope`.
+  - `Excel interaction oracle`: for every `delta-from-stage2.json` entry with a delta, and every Task 24 case with task 25, open a session on the seed, apply the deltas in order, and compare:
+    - the saved cells with `checkSavedLayout`'s rules;
+    - `liveDefinition`'s `rowItems`, `colItems` and `location` with the case's.
+
+    A visible named skip appears while the manifest is absent; never a silent pass.
+  - `open refuses each §7.6 case with its feature`.
+  - `captions: zh-TW table from the file`, `a pivot with no matching table uses its own patterns`, `a needed kind with no pattern refuses pivot-caption-locale`.
+  - `apply is pure; commit rejects a skipped revision; reset returns the saved layout as the next revision`.
+  - `vacated covers the cells a collapse frees`.
+  - `runtime retains caches and streams records on resident load`. `records()` charges nothing until called, and gives the same store as `decodeRecords` on the part bytes.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+  - `load.ts` keeps `book.caches` in the runtime, keyed by `cacheId`. Resident records come from the package's part bytes, read on demand, so a sheet that never opens a session reads none.
+  - `pivotLoader.ts` exposes `pivotRuntimeFor` through the lazy engine only.
+  - An open session charges its store's `bytes` to the main-thread ledger (`MainMemoryLedger.chargeWhileHeld`, `src/xlsx/view/mainLedger.ts`) until it is released, shared by the sessions on one cache.
+- [ ] **Step 4: Run them; they pass.** Then tsc, the eager gates and `npx vitest run tests/xlsx-pivots*`.
+- [ ] **Step 5: Commit.**
+
+### Task 26: Value overlay, live `valueGen` and geometry (codex; review: Claude opus + agy; parallel with Task 25)
+
+**Files:**
+- Modify:
+  - `src/xlsx/view/contracts.ts` (types);
+  - `src/xlsx/view/source.ts` (`ObjectXlsxSheetAdapter`);
+  - `src/xlsx/view/pagedSource.ts` (`PagedXlsxSheetAdapter`);
+  - `src/xlsx/view/viewport.ts` (`buildSheetGeometry`);
+  - `src/components/xlsx/pagedGeometry.ts`;
+  - `src/xlsx/tableStyleLoader.ts` (an invalidation hook);
+  - `src/xlsx/view/operationGuard.ts` (pivot refusal).
+- Test:
+  - `tests/xlsx-pivots-overlay.test.ts`;
+  - `tests/xlsx-viewer-sort-ui.test.tsx` and `tests/xlsx-viewer-filter-ui.test.tsx` (refusal cases).
+
+**Interfaces:**
+```ts
+// contracts.ts
+export interface ValueOverlayCell { value: CellValue; numFmtId?: number }        // the cell shape the stores already return
+export interface ValueOverlay {
+  readonly rects: readonly SheetRect[]            // every rectangle the overlay owns (pivot + page cells + vacated)
+  cell(row: number, col: number): ValueOverlayCell | null | undefined   // null = empty (vacated), undefined = not owned
+  readonly merges: readonly SheetRect[]
+  readonly usedRows: number; readonly usedCols: number                  // extent the overlay needs
+}
+// SourceStore gains:
+setValueOverlay?(overlay: ValueOverlay | undefined): void              // bumps stamp.valueGen; merge change bumps structureGen
+// buildSheetGeometry / pagedSheetGeometry options gain:
+overlay?: ValueOverlay
+// tableStyleLoader.ts gains:
+export function invalidateRegionStyles(sheet: XlsxSheet): void
+```
+- `ValueOverlayCell` reuses the stores' existing cell type. Check `readCell`'s return type and use it; do not invent a second cell shape.
+- Pivot styles follow from the live definition: the caller replaces `sheet.pivotTables[i]` with Task 25's `def` and calls `invalidateRegionStyles`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `readCell, readRows, scanPopulated and queryColumn read the overlay` on both stores.
+  - `extent grows to the overlay's used rows/cols`.
+  - `setValueOverlay bumps valueGen; a merge change bumps structureGen`.
+  - `geometry cellsOf and merges read the overlay` (both builders).
+  - `collapse clears the vacated cells in every intersecting tile`: render tiles at 175%/DPR 2 before and after; the vacated cells paint empty.
+  - `find and copy read the overlay` (resident and paged).
+  - `sheet sort and filter over a range intersecting a pivot refuse with the measured message`. A range beside it still sorts.
+  - `a sheet without pivots does no overlay work`: the hot path is one `undefined` check (§8).
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+  - The overlay is consulted before row records or pages.
+  - Neither store's records or pages are rewritten (§7.9).
+  - `valueGen` lives on the store stamp, mutable for pivot sheets only.
+  - The worker overlay is set by Task 27; this task gives the paged adapter the hook and its tests.
+- [ ] **Step 4: Run them; they pass.** Then the full gates; the hot-path test guards the eager budget.
+- [ ] **Step 5: Commit.**
+
+### Task 27: Worker pivot protocol (codex; review: Claude opus + agy; after Tasks 25 and 26)
+
+**Files:**
+- Modify:
+  - `src/worker/viewerProtocol.ts` (`VIEWER_COMMAND_KINDS`);
+  - `src/xlsx/view/contracts.ts` (`WorkerCommand`, `WorkerResult`);
+  - `src/worker/viewerSession.ts`, `src/worker/viewerKernel.ts` (grants);
+  - `src/xlsx/storage/pagedDrawings.ts` (keep caches).
+- Create: `src/worker/viewerRemotePivots.ts`.
+- Test: `tests/xlsx-pivots-worker.test.ts`.
+
+**Interfaces:**
+```ts
+// commands
+{ kind: 'pivotOpen'; docId; sheetId; pivot: number; grantBytes: number }
+{ kind: 'pivotApply'; docId; sheetId; pivot: number; revision: number; delta: PivotDelta | 'reset'; grantBytes: number }
+{ kind: 'pivotRelease'; docId; sheetId; pivot: number }
+// results
+{ kind: 'pivotOpen'; revision: number; def: PivotTableDefinition } | refusal with its diagnostic
+{ kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: SheetRect[]; valueGen: number } | refusal
+// main side
+export class RemotePivotSessions {
+  open(sheetId: number, pivot: number, signal: AbortSignal): Promise<RemotePivotOpen>
+  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<RemotePivotApply>
+  release(sheetId: number, pivot: number): void
+}
+```
+- The worker runs Task 25's session. Records stream: `openPart` → `recordEvents(cache, RECORD_LIMITS[profile], date1904)` via `tokenizeBytes`, never `RangePackage.bytes`, which caps whole parts and refuses as a side effect.
+- The committed apply sets the worker store's overlay (Task 26). The reply carries only the live definition and the rectangles, and the main thread refetches rows with the new `valueGen`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `open streams records under the profile cap and charges the worker pool`.
+  - `apply commits only the current revision`.
+  - `stale apply reply is dropped and refunded`: a second apply sent before the first's reply arrives; the first reply is discarded, its grant refunded, `valueGen` unchanged.
+  - `pivots on one cache share one store until the last release` (§7.4).
+  - `release on every exit`: close, sheet switch, abort and owner change.
+  - `paged layout equals resident layout` for every interaction oracle case, through the paged shell.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement,** following `RemoteSparklineCache` (`src/worker/viewerRemoteSparklines.ts`): leases, seq/abort per entry, quota release, and commit on reply never on send.
+- [ ] **Step 4: Run them; they pass.** Then the full gates, including `tests/xlsx-viewer-worker-races.test.ts`.
+- [ ] **Step 5: Commit.**
+
+### Task 28: Pivot buttons as controls and menus (Claude opus; review: codex; after Task 25 resident, Task 27 paged)
+
+**Files:**
+- Create:
+  - `src/components/xlsx/pivot/PivotButtonLayer.tsx`;
+  - `src/components/xlsx/pivot/PivotFieldMenu.tsx`;
+  - `src/components/xlsx/pivot/PivotPageMenu.tsx`;
+  - `src/components/xlsx/pivot/pivotClient.ts`.
+- Modify:
+  - `src/components/xlsx/InteractiveSheetDoc.tsx` (popup kinds, pivot notices, the commit wiring);
+  - `src/components/xlsx/GridSemantics.tsx` (popup anchor that is not a column header);
+  - `src/xlsx/pivots/buttons.ts`, to export the ± box geometry.
+- Test:
+  - `tests/xlsx-viewer-pivot-ui.test.tsx`;
+  - `tests/browser/xlsx-pivots.spec.ts`, which gains click → apply → repaint on its three legs.
+
+**Interfaces:**
+- `PivotClient`:
+```ts
+export interface PivotClient {
+  open(sheetId: number, pivot: number, signal: AbortSignal): Promise<PivotOpenResult>
+  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<PivotApplyOutcome>
+  release(sheetId: number, pivot: number): void
+}
+```
+  It has a resident implementation over Task 25's session (main thread) and a paged one over Task 27.
+- The commit wiring:
+  1. replace the sheet's live definition;
+  2. call `invalidateRegionStyles`;
+  3. set the overlay (resident);
+  4. bump `valueGen`;
+  5. invalidate tiles on commit.
+- The hit targets come from `pivotButtons(def, 'screen', savedPivotLayout(def))`. Each is a `<button data-officeview-ui>` with an accessible name, so grid selection skips it (`isViewerUiTarget`). The name is the field and action, or the refusal reason when the pivot is not interactive.
+- Menus:
+  - The item checklist, search, select all and clear follow `FilterDropdown`'s behaviour and its `useControlLifetime`, `controlTarget` and `useControlMedia` patterns.
+  - `FilterDropdown` is bound to `ControlsClient`, so `PivotFieldMenu` is a sibling component that reuses `ConditionEditor` for label, value and date conditions, not a fork.
+  - Top 10 uses Excel's fields: top or bottom, count, kind and data field. Bottom refuses until measured; the S2-AJ rounding refusals surface as a notice.
+- The sort entries, Reset to saved view and the page menu (single or multiple) are in the same menus.
+- Row headers carry `aria-expanded` for collapsible items (§8).
+
+- [ ] **Step 1: Write the failing tests.**
+  - `each button opens its menu and applies its delta`.
+  - `a refused pivot names its reason on every button and shows one notice`. That includes the load-time `pivot-*` diagnostics on `sheet.diagnostics`, which the viewer does not show today.
+  - `kinds without a passing oracle are absent from the menu`.
+  - `keyboard: roving focus, Escape, 44 px targets; coarse pointer uses the bottom sheet`.
+  - `reset returns the saved view`.
+  - In the browser: `click collapse → repaint equals the oracle case on resident, worker and paged legs`.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them; they pass.** Then the full gates and `npm run test:browser -- xlsx-pivots`.
+- [ ] **Step 5: Commit.**
+
+### Task 29: Overlap rule and autofit (codex; review: Claude opus; parallel with Task 30, after Task 28)
+
+**Files:**
+- Modify:
+  - `src/xlsx/pivots/session/session.ts` (the `occupied` contract, and formatting if measured);
+  - `src/xlsx/view/axisSizes.ts` (`SheetSizes` records which sizes the user set);
+  - `src/components/xlsx/InteractiveSheetDoc.tsx` (autofit after commit).
+- Create: `src/xlsx/pivots/session/autofit.ts`.
+- Test: `tests/xlsx-pivots-overlap-autofit.test.ts`.
+
+**Interfaces:**
+- `occupied(row, col)` follows Task 24's overlap rule. The resident path reads the sheet cells and styles; the paged path reads the worker store.
+- `pivotAutofit(layout: PivotLayout, def: PivotTableDefinition, measure: FitMeasure, userSet: (col: number) => boolean): Map<number, number>` gives the column widths after a commit. It follows the measured rule, grow-only if Task 24 shows that, and is bounded by `AUTOFIT_MAX_*`.
+- `SheetSizes` gains `userSet(axis, i): boolean`, set by a user resize and never by autofit.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `a change into a non-empty cell refuses with the measured message and leaves the pivot as it was`.
+  - `formatting-only cells follow the measured rule`.
+  - `another pivot's cells refuse`.
+  - `autofit widths equal Excel's saved <col> widths for every interaction case`, within the measured rounding.
+  - `a user-resized column keeps its width`.
+  - `autofit invalidates layout on both paths like a user resize`.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them; they pass.** Then the full gates.
+- [ ] **Step 5: Commit.**
+
+### Task 30: Pivot charts follow (Claude opus; review: codex; parallel with Task 29)
+
+**Files:**
+- Create: `src/xlsx/pivots/session/charts.ts`.
+- Modify:
+  - `src/charts/fill.ts` (export a refill from series built outside the range fill);
+  - `src/components/xlsx/sheetAssets.ts` (refresh the chart on a pivot commit).
+- Test: `tests/xlsx-pivots-charts.test.ts`.
+
+**Interfaces:**
+```ts
+export function pivotChartSeries(chart: ChartModel, layout: PivotLayout, def: PivotTableDefinition): EngineResult<ChartModel>
+// series from column-axis leaves and categories from row-axis items by default; dataOnRows and Values position per the
+// measured mapping (Task 24 chart cases); a layout shape no case covers refuses pivot-chart-mapping
+```
+- The result goes through `succeedChartModel`. `ChartModel.pivot` (`c:pivotSource`) links the chart to its pivot by name.
+- A pivot whose chart's mapping refuses is not interactive (CODEX-3), so this check also runs at session open (Task 25's open checks).
+
+- [ ] **Step 1: Write the failing tests.**
+  - `series, categories and caches equal Excel's saved chart for every chart oracle case`.
+  - `pivotFmts follow the measured rule when a series appears or disappears`.
+  - `an uncovered mapping refuses and the pivot is not interactive`.
+  - `the chart repaints after a commit` (resident and paged).
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them; they pass.**
+- [ ] **Step 5: Commit.**
+
+### Task 31: Dependent values (codex; review: Claude opus; parallel with Task 32, after Task 27)
+
+**Files:**
+- Modify:
+  - `src/xlsx/formula/workbook.ts` (a dependency-set recompute entry point);
+  - `src/xlsx/formula/functions.ts` (registration hook);
+  - `src/components/xlsx/InteractiveSheetDoc.tsx` (notice).
+- Create: `src/xlsx/pivots/session/getpivotdata.ts`.
+- Test: `tests/xlsx-pivots-dependents.test.ts`.
+
+**Interfaces:**
+```ts
+// functions.ts (eager, tiny)
+export function registerFormulaFunction(name: string, handler: FunctionHandler): void   // the lazy chunk installs GETPIVOTDATA
+// workbook.ts
+export function recomputeDependents(doc: XlsxDocument, changed: ReadonlyArray<{ sheetId: number; rect: SheetRect }>, options: WorkbookEvaluationOptions): { recomputed: number; charts: readonly number[] }
+```
+- `recomputeDependents` re-evaluates the transitive readers of the changed rectangles, using the dependency maps `evaluateWorkbookFormulas` already builds, and returns the charts whose ranges they feed.
+- It throws, as `evaluateWorkbookFormulas` does, under the `cached` policy. The caller never calls it on the paged path.
+- `GETPIVOTDATA` keeps its saved value until a pivot on that sheet has changed (§7.5). After that it evaluates against the live layout, with the semantics measured in Task 24's `GETPIVOTDATA` cases.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `cell references into a changed pivot recompute`.
+  - `getpivotdata follows the measured hidden-item rule` and every other `GETPIVOTDATA` oracle case.
+  - `an unchanged pivot keeps GETPIVOTDATA's saved value`.
+  - `charts on recomputed cells refill`.
+  - `paged: any change on a sheet with formulas outside pivots shows the fallback notice once`.
+  - `the eager formula engine imports no pivot code` (eager graph).
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run them; they pass.** Then the full gates and the eager gates.
+- [ ] **Step 5: Commit.**
+
+### Task 32: `refreshOnLoad` refresh path (Claude opus; review: codex; parallel with Task 31)
+
+**Files:**
+- Create: `src/xlsx/pivots/session/refresh.ts`.
+- Modify: `src/xlsx/pivots/session/session.ts` (open consults `engineEligibility`'s `refresh`).
+- Test: `tests/xlsx-pivots-refresh.test.ts`.
+
+**Interfaces:**
+```ts
+export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader, ref: SheetRect, date1904: boolean, limits: RecordLimits): EngineResult<{ cache: PivotCacheDefinition; store: RecordStore }>
+```
+- The function rebuilds the cache's fields, shared items and records from the source range as Excel's refresh does: item order, types and `containsBlank`, per the Task 24 refresh cases.
+- Display never refreshes (§7.7). Refreshing happens on the first interaction only, with the one-line notice.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `refreshed cache and layout equal Excel's saved output for each refresh oracle case`, including `saveData="0"` (CODEX-R2-2).
+  - `an unreadable or external source is not interactive (pivot-refresh-on-load)`.
+  - `display stays the saved cells in every mode`.
+  - `the notice appears once`.
+- [ ] **Step 2: Run them; they fail.**
+- [ ] **Step 3: Implement.** The paged path reads the source range through the worker store.
+- [ ] **Step 4: Run them; they pass.**
+- [ ] **Step 5: Commit.**
+
+### Task 33: Stage 3 verification (orchestrator; review: codex)
+
+- [ ] **Step 1:** Run every interaction oracle case, on both paths, through the UI path where the browser harness reaches it. Each is `ok`, or the interaction kind is disabled, with the reason in the doc.
+- [ ] **Step 2:** Run a read-only performance audit of the session, overlay, protocol and menus for super-linear work. Stage 2's Codex bot spent ten rounds finding these one at a time. Fix the audit's findings before opening the PR.
+- [ ] **Step 3:** Run the full gates, the eager gates, the lazy-chunk growth report, the benchmark and `npm run test:browser`.
+- [ ] **Step 4:** Update `docs/validation/xlsx-pivots.md` and `CHANGELOG.md`. Run the final whole-branch review (most capable model). Open the PR, trigger the Codex bot, wait for CI, then ask the owner to merge.
 
 ## Stage 4: field list and values (PR 4) — refined at stage start
 
-- **Task 32. Field-list panel (Claude opus).** Side panel and bottom sheet, drag plus a keyboard/menu alternative (§6.7).
-- **Task 33. Value field settings dialog (agy).**
-- **Task 34. Group dialog and regrouping (codex).**
-- **Task 35. Stage 4 oracle and verification (orchestrator).**
+- **Task 34. Field-list panel (Claude opus).** Side panel and bottom sheet, drag plus a keyboard/menu alternative (§6.7).
+- **Task 35. Value field settings dialog (agy).**
+- **Task 36. Group dialog and regrouping (codex).**
+- **Task 37. Stage 4 oracle and verification (orchestrator).**
 
 ## Stage 5: slicer and timeline interaction (PR 5) — refined at stage start
 
-- **Task 36. Slicer controls (Claude opus).** Click, Ctrl/⌘-click, the Multi-Select toggle (AGY-7), clear, and cross-filter states (§7.2).
-- **Task 37. Timeline controls (codex).** Period select by click or drag, and level changes.
-- **Task 38. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`.
-- **Task 39. Stage 5 oracle, verification and the final whole-feature review (orchestrator).**
+- **Task 38. Slicer controls (Claude opus).** Click, Ctrl/⌘-click, the Multi-Select toggle (AGY-7), clear, and cross-filter states (§7.2).
+- **Task 39. Timeline controls (codex).** Period select by click or drag, and level changes.
+- **Task 40. Multi-pivot linkage and table slicers (codex).** Table slicers go through the existing `FilterEngine`.
+- **Task 41. Stage 5 oracle, verification and the final whole-feature review (orchestrator).**
