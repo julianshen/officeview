@@ -27,7 +27,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
 import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxDrawing, XlsxSheet } from '../../xlsx/types'
-import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues } from '../../xlsx/formula/workbook'
+import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues, savedDependentFormulaCells } from '../../xlsx/formula/workbook'
 import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
@@ -1591,9 +1591,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!sheet?.pivotTables) return
     // §7.8 (Task 29): the cells and pivot styles shown before the change, read before they go.
     const beforeFit = pivotUi ? { def: sheet.pivotTables[commit.pivot]!, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) } : undefined
-    sheet.pivotTables = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def)
+    const defs = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def), saved = savedPivotDefs[commit.sheetId]
+    // Every pivot of the sheet back to its saved definition (a reset): the sheet gets the saved arrays themselves, so
+    // print and teardown see it as saved again (final review minor 13).
+    const allSaved = saved !== undefined && defs.length === saved.length && defs.every((def, index) => def === saved[index])
+    sheet.pivotTables = allSaved ? saved : defs
     // The pivot's region (gridlines hidden inside it, regionGrid) follows its live location.
-    if (sheet.pivotRegions) sheet.pivotRegions = sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
+    if (sheet.pivotRegions) sheet.pivotRegions = allSaved ? savedPivotRegions[commit.sheetId] : sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
     invalidateRegionStyles(sheet)
     regionStylesFor(sheet)
     // Task 30: the refilled pivot charts replace their saved models (charts may sit on other sheets: their tiles go too).
@@ -1999,14 +2003,21 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     let pages: Awaited<ReturnType<typeof loader>>
     // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
     const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
-    setPrintPivotNote(changed ? 'Printing shows the pivot as saved.' : '')
+    // Ruling S3-AL: so do its dependents. The formula cells Task 31 recomputed print their saved values, and the charts
+    // it refilled their saved models, so the paper never shows a saved pivot beside live numbers that read it.
+    const savedCells = savedDependentFormulaCells(doc)
     // Its linked charts print as saved too: each live chart model maps back to the saved one it replaced.
     const savedChart = new Map<ChartModel, ChartModel>()
+    let dependentsSaved = Boolean(savedCells)
+    for (const [node, saved] of savedDependentCharts) if (node.content?.kind === 'xlsxChart' && node.content.chart && node.content.chart !== saved) { savedChart.set(node.content.chart, saved); dependentsSaved = true }
+    // A pivot chart's saved model (captured before any refill) wins over a dependent refill's snapshot of the same chart.
     for (const { sheet, name, charts } of savedPivotCharts.values()) linkedPivotCharts(doc, sheet, name).forEach((live, k) => { const saved = charts[k]; if (saved && saved !== live) savedChart.set(live, saved) })
-    const printed = changed || savedChart.size ? { ...doc, sheets: doc.sheets.map((sheet, index) => {
+    setPrintPivotNote(dependentsSaved ? 'Printing shows the pivot, and the values that depend on it, as saved.' : changed ? 'Printing shows the pivot as saved.' : '')
+    const printed = changed || savedChart.size || savedCells ? { ...doc, sheets: doc.sheets.map((sheet, index) => {
       const drawings = savedChart.size ? withSavedCharts(sheet.drawings, savedChart) : sheet.drawings
-      if (sheet.pivotTables === savedPivotDefs[index] && drawings === sheet.drawings) return sheet
-      return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
+      const rows = savedCells ? withSavedCells(sheet.rows, savedCells) : sheet.rows
+      if (sheet.pivotTables === savedPivotDefs[index] && drawings === sheet.drawings && rows === sheet.rows) return sheet
+      return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(rows !== sheet.rows ? { rows } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
     }) } : doc
     try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
@@ -2523,6 +2534,17 @@ function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.Pi
 /** A pivot's linked charts in `installPivotCharts`' order (sheets, then drawing order), by the name after the last `!`. */
 function linkedPivotCharts(doc: XlsxDocument, sheetName: string, name: string): ChartModel[] {
   return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chartLinksPivot(chart, sheetName, name))
+}
+
+/** Rows with the given cells swapped for their saved copies (copies only the rows that hold one; print, Ruling S3-AL). */
+function withSavedCells(rows: XlsxSheet['rows'], saved: ReadonlyMap<XlsxCell, XlsxCell>): XlsxSheet['rows'] {
+  let changed = false
+  const out = rows.map(row => {
+    if (!row.cells.some(cell => saved.has(cell))) return row
+    changed = true
+    return { ...row, cells: row.cells.map(cell => saved.get(cell) ?? cell) }
+  })
+  return changed ? out : rows
 }
 
 /** Drawing nodes with the given chart models swapped back (copies only along the changed paths; print of a changed pivot). */

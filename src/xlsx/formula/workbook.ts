@@ -707,6 +707,18 @@ export function recomputeDependents(
   return { recomputed: recomputeKeys.size, readers: [...recomputeKeys], charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
+/** The saved content of every formula cell a dependent recompute rewrote in place, as a detached copy of each cell
+ * (keyed by the live cell object); undefined when none was rewritten. Ruling S3-AL: print, which never runs a pivot
+ * session, shows these saved values beside the saved pivot. */
+export function savedDependentFormulaCells(doc: XlsxDocument): ReadonlyMap<XlsxCell, XlsxCell> | undefined {
+  const snapshots = liveFormulaSnapshots.get(doc)
+  if (!snapshots?.size) return undefined
+  const out = new Map<XlsxCell, XlsxCell>()
+  // A copy of the snapshot, never the live cell spread over it: the live cell may carry keys the saved one lacks.
+  for (const { cell, content } of snapshots.values()) out.set(cell, { ...content, ref: cell.ref, col: cell.col, row: cell.row })
+  return out
+}
+
 /** Restore the saved formula values after a resident viewer releases its live pivot contexts; returns the indexes of
  * the sheets whose cells it restored. */
 export function restoreDependentFormulaValues(doc: XlsxDocument): number[] {
