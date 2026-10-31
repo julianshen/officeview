@@ -476,6 +476,27 @@ describe('session', () => {
     expect(all.ok ? 'ok' : all.diagnostic.feature).toBe('pivot-caption-locale')
   })
 
+  it('open sessions on one cache charge its store once to the main ledger until the last release', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx')))))
+    const sheet = doc.sheets.find(s => s.pivotTables?.length)!
+    const def = sheet.pivotTables![0]!
+    const runtime = pivotRuntimeFor(doc)!, cache = runtime.cache(def)!
+    const ledger = new MainMemoryLedger(), signal = new AbortController().signal
+    const openOne = async () => {
+      const leased = await runtime.lease(cache, ledger, signal)
+      if (!leased.ok) throw new Error(leased.diagnostic.message)
+      return open({ def, cache, store: leased.lease.store, date1904: runtime.date1904, saved: sheetCellReader(sheet), occupied: () => false, linkedCharts: [], lease: leased.lease })
+    }
+    const [one, two] = [await openOne(), await openOne()]
+    const bytes = ledger.snapshot().byPool.document
+    expect(bytes).toBeGreaterThan(0)
+    expect(ok(one.apply(COLLAPSE_EAST)).layout.rect.maxRow).toBe(20)
+    one.release()
+    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    two.release()
+    expect(ledger.snapshot().byPool.document).toBe(0)
+  })
+
   it('release releases the lease once and closes the session', async () => {
     const p = await baseline()
     let releases = 0
