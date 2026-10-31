@@ -27,6 +27,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
 import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
+import { markPagedDependentsStale, recomputeDependents } from '../../xlsx/formula/workbook'
+import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
   AuthoritativeCell, CacheIdentity, FilterSpec, GridSelection, LogicalCellBox, ProfileId, RowOrder, RowVisibility, ScrollWindow, SheetView, SortSpec, SourceRowInterval, SourceStore, WorkbookOwner,
 } from '../../xlsx/view/contracts'
@@ -441,6 +443,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // admitted replacement has committed; only then is it disposed (§10.1).
   const fontKey = fallbackFonts ? JSON.stringify(fallbackFonts) : ''
   const [assets, setAssets] = useState<{ lease: SheetAssetsLease; fontGen: number; fontKey: string; sheetId: string; sparklineGen: number } | null>(null)
+  const [residentDrawingGen, setResidentDrawingGen] = useState(0)
   const fontGenRef = useRef<{ key: string; gen: number }>({ key: fontKey, gen: 0 })
   const loadAssets = props.assetLoader ?? prepareSheetAssets
   // Transferred chart models are charged to this viewer's live main-thread budget (spec 6.4), like its drawings.
@@ -471,7 +474,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent])
+  }, [doc, fontKey, activeSheetId, profile, activeDrawings?.gen, activeSparklines?.gen, chartParent, residentDrawingGen])
   const committedLease = useRef<SheetAssetsLease | null>(null)
   useEffect(() => {
     const previous = committedLease.current
@@ -484,6 +487,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // ---- pivots (Task 28): committed overlays per resident sheet; the saved definitions the host's document gets back ----
   const pivotOverlays = useRef(new Map<string, ValueOverlay>()).current
+  const pivotFormulaContexts = useRef(new Map<string, { sheet: string; def: import('../../xlsx/pivots/model').PivotTableDefinition; cache: import('../../xlsx/pivots/model').PivotCacheDefinition; layout: import('../../xlsx/pivots/engine/place').PivotLayout; date1904: boolean; rects: readonly { r0: number; r1: number; c0: number; c1: number }[] }>()).current
+  const [pagedDependentNoticeSheets, setPagedDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
@@ -1271,7 +1276,18 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
     if (sheetId === undefined) return
     // Paged: the workbook already published the worker's commit (merges, extent, valueGen, pivot display and charts).
-    if (remote) { cancelCopy(); dropTiles(sheetId, null); rerender(); return }
+    if (remote) {
+      const defs = [...(sheet?.pivotTables ?? [])]
+      defs[commit.pivot] = commit.def
+      const pivotRects = defs.flatMap(def => {
+        const m = /^\$?([A-Z]{1,3})\$?([1-9]\d*):\$?([A-Z]{1,3})\$?([1-9]\d*)$/.exec(def.location.ref)
+        if (!m) return []
+        const toCol = (letters: string) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1
+        return [{ minRow: Number(m[2]) - 1, maxRow: Number(m[4]) - 1, minCol: toCol(m[1]!), maxCol: toCol(m[3]!) }]
+      })
+      if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRects))
+      cancelCopy(); dropTiles(sheetId, null); rerender(); return
+    }
     if (!sheet?.pivotTables) return
     sheet.pivotTables = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def)
     // The pivot's region (gridlines hidden inside it, regionGrid) follows its live location.
@@ -1287,6 +1303,64 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (!remote && commit.overlay !== undefined) {
       if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
       source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
+    }
+    if (commit.layout && commit.cache && commit.changedRects?.length) {
+      const contextKey = `${commit.sheetId}:${commit.pivot}`
+      pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache: commit.cache, layout: commit.layout, date1904: commit.date1904 ?? false, rects: commit.changedRects })
+      const changed = commit.changedRects.map(rect => ({ sheetId: commit.sheetId, rect: { minRow: rect.r0, minCol: rect.c0, maxRow: rect.r1, maxCol: rect.c1 } }))
+      const contexts = [...pivotFormulaContexts.values()]
+      // The viewer's pivot chunk is already loaded here; keep formula support out
+      // of the eager graph by resolving its adapter from a lazy import.
+      void import('../../xlsx/pivots/session/getpivotdata').then(({ getPivotData }) => {
+        const result = recomputeDependents(doc, changed, {
+          getPivotData: (args, evaluate) => getPivotData(contexts, args, evaluate),
+          readCellValue: (name, col, row) => {
+            for (const context of contexts) {
+              if (context.sheet.toLocaleLowerCase() !== name.toLocaleLowerCase()) continue
+              const cell = context.layout.cells.find(candidate => candidate.row === row && candidate.col === col)
+              if (!cell) {
+                if (context.rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)) return null
+                continue
+              }
+              if (cell.value.kind === 'empty') return null
+              if (cell.value.kind === 'error') return formulaError(cell.value.value as Parameters<typeof formulaError>[0])
+              return cell.value.value
+            }
+            return undefined
+          },
+        })
+        if (result.recomputed) for (const id of sheetIds) dropTiles(id, null)
+        if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges }) => {
+          const wanted = new Set(result.charts), changedSheets = new Set<number>()
+          let chartIndex = 0
+          const refill = (nodes: XlsxSheet['drawings'], sheetIndex: number) => {
+            for (const node of nodes ?? []) {
+              if (node.content?.kind === 'xlsxChart' && node.content.chart) {
+                if (wanted.has(chartIndex)) {
+                  const ownerSheet = doc.sheets[sheetIndex]!
+                  node.content.chart = fillChartRanges(node.content.chart, ownerSheet.name, (name, row, col, needsText) => {
+                    const target = doc.sheets.find(candidate => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())
+                    const cell = target?.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
+                    if (!cell) return undefined
+                    const style = cell.style
+                    return { value: cell.value, ...(cell.valueIsError ? { error: String(cell.value) } : {}),
+                      ...(style?.formatCode ? { formatCode: style.formatCode } : {}),
+                      ...(needsText ? { text: cellDisplayText(target!, { value: cell.value, style }) } : {}) }
+                  })
+                  changedSheets.add(sheetIndex)
+                }
+                chartIndex++
+              }
+              if (node.children?.length) refill(node.children, sheetIndex)
+            }
+          }
+          doc.sheets.forEach((owner, index) => refill(owner.drawings, index))
+          for (const index of changedSheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+          if (changedSheets.size) setResidentDrawingGen(generation => generation + 1)
+          rerender()
+        }).catch(() => setAnnouncement('Some charts that depend on this pivot may still show saved values.'))
+        rerender()
+      }).catch(() => setAnnouncement('Some formulas that depend on this pivot may still show saved values.'))
     }
     cancelCopy()
     dropTiles(sheetId, null)
@@ -1464,6 +1538,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pivotNotices = entry ? [...new Set([
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
     ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
+    ...(pagedDependentNoticeSheets.has(activeIndex) ? ['Formulas outside this pivot may still show saved values (paged workbook).'] : []),
   ])] : []
 
   // Overlay layer: selection and search highlights in viewport space.

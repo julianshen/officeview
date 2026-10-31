@@ -55,6 +55,10 @@ export interface WorkbookEvaluationOptions {
   now?: () => number
   /** Explicit date-system override (wins over the parsed workbookPr date1904). */
   date1904?: boolean
+  /** Lazy pivot adapter; absent on load so GETPIVOTDATA retains its shipped value. */
+  getPivotData?: (args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue) => EvaluationValue
+  /** Optional view-only cell values, used by a resident pivot commit without mutating saved sheet cells. */
+  readCellValue?: (sheetName: string, col: number, row: number) => EvaluationValue | undefined
 }
 
 function capturedWorkbookZone(): string {
@@ -147,11 +151,13 @@ interface GeneratedCellRecord {
   /** Original content when the cell pre-existed (restore); undefined = we created it. */
   original?: CellContent
 }
-interface CreatedRowRecord { sheet: XlsxSheet; index: number }
+interface CreatedRowRecord { sheet: XlsxSheet; index: number; ownerKey: string }
 interface DocSpillState {
   generated: GeneratedCellRecord[]
   createdRows: CreatedRowRecord[]
   valueDeps: Map<string, Set<string>>
+  /** Actual reads including readers that consumed a memoized formula value. */
+  formulaDeps: Map<string, Set<string>>
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
 
@@ -285,6 +291,129 @@ function affectedReaders(changed: ReadonlySet<string>, deps: Map<string, Set<str
   return out
 }
 
+export interface ChangedSheetRect { sheetId: number; rect: { minRow: number; minCol: number; maxRow: number; maxCol: number } }
+
+/** Paged sheets cannot build the resident formula graph; record one sheet-level
+ * stale notice when any formula cell is outside the pivot rectangles. */
+export function markPagedDependentsStale(
+  prior: ReadonlySet<number>, sheetId: number, sheet: XlsxSheet,
+  pivotRects: readonly { minRow: number; minCol: number; maxRow: number; maxCol: number }[],
+): ReadonlySet<number> {
+  if (prior.has(sheetId)) return prior
+  const hasDependent = sheet.rows.some(row => row.cells.some(cell => Boolean(cell.formula)
+    && !pivotRects.some(rect => cell.row >= rect.minRow && cell.row <= rect.maxRow && cell.col >= rect.minCol && cell.col <= rect.maxCol)))
+  return hasDependent ? new Set([...prior, sheetId]) : prior
+}
+
+/** Find dependency keys within the changed rectangles without expanding a
+ * potentially large pivot range into one key per cell. */
+function keyInChangedRect(key: string, changed: readonly ChangedSheetRect[], sheets: readonly XlsxSheet[]): boolean {
+  const bang = key.lastIndexOf('!')
+  if (bang < 0) return false
+  const sheetName = key.slice(0, bang)
+  const match = /^(\d+):(\d+)$/.exec(key.slice(bang + 1))
+  if (!match) return false
+  const col = Number(match[1]), row = Number(match[2])
+  for (const entry of changed) {
+    const sheet = sheets[entry.sheetId]
+    if (!sheet || sheet.name.toLowerCase() !== sheetName) continue
+    const { minRow, minCol, maxRow, maxCol } = entry.rect
+    if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) return true
+  }
+  return false
+}
+
+function containsGetPivotDataReference(node: AstNode, currentSheet: string, changed: readonly ChangedSheetRect[], sheets: readonly XlsxSheet[]): boolean {
+  const pending = [node]
+  while (pending.length) {
+    const at = pending.pop()!
+    if (at.type === 'call') {
+      if (at.name.toUpperCase() === 'GETPIVOTDATA') {
+        const ref = at.args[1]
+        if (ref?.type === 'cell') {
+          const sheet = ref.ref.sheet ?? currentSheet
+          const key = makeCellKey(sheet, ref.ref.col, ref.ref.row)
+          if (keyInChangedRect(key, changed, sheets)) return true
+        }
+      }
+      pending.push(...at.args)
+    } else if (at.type === 'binary' || at.type === 'intersect') pending.push(at.left, at.right)
+    else if (at.type === 'unary' || at.type === 'implicitIntersect') pending.push(at.expr)
+    else if (at.type === 'union') pending.push(...at.refs)
+  }
+  return false
+}
+
+function chartRanges(model: import('../chartModel').XlsxChartModel): Array<{ sheet?: string; r0: number; c0: number; r1: number; c1: number }> {
+  const ranges: Array<{ sheet?: string; r0: number; c0: number; r1: number; c1: number }> = []
+  if (model.categoryRef) ranges.push(model.categoryRef)
+  if (model.categoryPending) ranges.push(model.categoryPending)
+  for (const group of model.groups) for (const series of group.series) {
+    for (const range of Object.values(series.refs ?? {})) if (range) ranges.push(range)
+    for (const range of Object.values(series.pending ?? {})) if (range) ranges.push(range)
+  }
+  return ranges
+}
+
+function chartsUsing(doc: XlsxDocument, formulaKeys: ReadonlySet<string>): number[] {
+  const positions = new Set<string>()
+  for (const key of formulaKeys) positions.add(key)
+  const changed = new Set<number>()
+  let chartIndex = 0
+  const visit = (sheet: XlsxSheet, nodes: readonly import('../types').XlsxDrawing[] | undefined): void => {
+    for (const node of nodes ?? []) {
+      const chart = node.content?.kind === 'xlsxChart' ? node.content.chart : undefined
+      if (chart) {
+        const index = chartIndex++
+        if (chartRanges(chart).some(range => {
+          const name = (range.sheet ?? sheet.name).toLowerCase()
+          for (const key of positions) {
+            const bang = key.lastIndexOf('!'), coords = /^(\d+):(\d+)$/.exec(key.slice(bang + 1))
+            if (bang < 0 || key.slice(0, bang) !== name || !coords) continue
+            const col = Number(coords[1]), row = Number(coords[2])
+            if (row >= range.r0 && row <= range.r1 && col >= range.c0 && col <= range.c1) return true
+          }
+          return false
+        })) changed.add(index)
+      }
+      if (node.children?.length) visit(sheet, node.children)
+    }
+  }
+  for (const sheet of doc.sheets) visit(sheet, sheet.drawings)
+  return [...changed]
+}
+
+/** Re-evaluate just the transitive formula readers of committed pivot cells.
+ * Dependency edges are those observed during the last workbook evaluation;
+ * GETPIVOTDATA's anchor reference is also matched syntactically so its shipped
+ * cache can survive the earlier unknown-function pass. */
+export function recomputeDependents(
+  doc: XlsxDocument,
+  changed: readonly ChangedSheetRect[],
+  options?: WorkbookEvaluationOptions,
+): { recomputed: number; charts: readonly number[] } {
+  if (workbookValuePolicy(doc) === 'cached') {
+    throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
+  }
+  const prior = docSpillStates.get(doc)
+  const seeds = new Set<string>()
+  for (const targets of prior?.formulaDeps.values() ?? []) for (const target of targets) {
+    if (keyInChangedRect(target, changed, doc.sheets)) seeds.add(target)
+  }
+  const formulaKeys = new Set<string>()
+  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
+    if (!cell.formula) continue
+    const key = makeCellKey(sheet.name, cell.col, cell.row)
+    try {
+      if (containsGetPivotDataReference(parseFormula(cell.formula), sheet.name, changed, doc.sheets)) formulaKeys.add(key)
+    } catch { /* malformed formula remains governed by the ordinary evaluator */ }
+  }
+  for (const reader of affectedReaders(seeds, prior?.formulaDeps ?? new Map())) formulaKeys.add(reader)
+  if (!formulaKeys.size) return { recomputed: 0, charts: [] }
+  evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, formulaKeys)
+  return { recomputed: formulaKeys.size, charts: chartsUsing(doc, formulaKeys) }
+}
+
 /**
  * Whether an AST contains structured table identifiers. Shared copies keep
  * table expressions verbatim, so a master whose tables cannot bind in this
@@ -379,6 +508,16 @@ export function evaluateWorkbookFormulas(
   doc: XlsxDocument,
   options?: WorkbookEvaluationOptions
 ): void {
+  evaluateWorkbookFormulasInternal(doc, options)
+}
+
+/** A bounded subset run used only by recomputeDependents. `onlyKeys` also
+ * scopes old spill cleanup and preserves unaffected dependency edges. */
+function evaluateWorkbookFormulasInternal(
+  doc: XlsxDocument,
+  options?: WorkbookEvaluationOptions,
+  onlyKeys?: ReadonlySet<string>,
+): void {
   if (workbookValuePolicy(doc) === 'cached') {
     throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   }
@@ -438,6 +577,7 @@ export function evaluateWorkbookFormulas(
   const removedKeys = new Set<string>()
   if (prior && !manualFileLoadNoOp) {
     for (const g of prior.generated) {
+      if (onlyKeys && !onlyKeys.has(g.ownerKey)) continue
       const rowObj = g.sheet.rows.find((r) => r.index === g.cell.row)
       if (!rowObj || !rowObj.cells.includes(g.cell)) continue // replaced object → user input
       if (!cellContentMatches(g.cell, g.written)) continue // user content edit → user input
@@ -445,9 +585,19 @@ export function evaluateWorkbookFormulas(
       else removeCell(g.sheet, g.cell)
       removedKeys.add(g.key)
     }
-    for (const row of prior.createdRows) removeCreatedRow(row.sheet, row.index)
+    for (const row of prior.createdRows) {
+      if (onlyKeys && !onlyKeys.has(row.ownerKey)) continue
+      removeCreatedRow(row.sheet, row.index)
+    }
   }
-  const valueDeps = prior?.valueDeps ?? new Map<string, Set<string>>()
+  const valueDeps = onlyKeys && prior
+    ? new Map([...prior.valueDeps].map(([key, deps]) => [key, new Set(deps)]))
+    : prior?.valueDeps ?? new Map<string, Set<string>>()
+  if (onlyKeys) for (const key of onlyKeys) valueDeps.delete(key)
+  const formulaDeps = onlyKeys && prior
+    ? new Map([...prior.formulaDeps].map(([key, deps]) => [key, new Set(deps)]))
+    : prior?.formulaDeps ?? new Map<string, Set<string>>()
+  if (onlyKeys) for (const key of onlyKeys) formulaDeps.delete(key)
   /** ACTUAL (lazily discovered) dependency edges for this generation, kept
    * separate from `valueDeps` so established spill-cleanup semantics are
    * unchanged. Populated only by real reads — dead lazy branches add nothing. */
@@ -532,6 +682,7 @@ export function evaluateWorkbookFormulas(
   const activeSet = new Set<string>()
   const cycleMembers = new Set<string>()
   const generatedList: GeneratedCellRecord[] = []
+  const retainedGenerated = onlyKeys && prior ? prior.generated.filter(g => !onlyKeys.has(g.ownerKey)) : []
   /** Rows this recalculation CREATED (safe to drop when empty); original rows
    * carrying heightPt/customHeight are never removed. */
   const createdRows: CreatedRowRecord[] = []
@@ -634,6 +785,9 @@ export function evaluateWorkbookFormulas(
     const discovery = generationDeps.get(frame.key)
     if (discovery) discovery.add(targetKey)
     else generationDeps.set(frame.key, new Set([targetKey]))
+    const graph = formulaDeps.get(frame.key)
+    if (graph) graph.add(targetKey)
+    else formulaDeps.set(frame.key, new Set([targetKey]))
   }
 
   /** Discovery-only edge: records the ACTUAL read graph for iteration without
@@ -648,6 +802,9 @@ export function evaluateWorkbookFormulas(
     const discovery = generationDeps.get(frame.key)
     if (discovery) discovery.add(targetKey)
     else generationDeps.set(frame.key, new Set([targetKey]))
+    const graph = formulaDeps.get(frame.key)
+    if (graph) graph.add(targetKey)
+    else formulaDeps.set(frame.key, new Set([targetKey]))
   }
 
   function writeGenerated(address: CellAddress, value: ElementValue, valueIsError: boolean, ownerKey: string): void {
@@ -667,7 +824,7 @@ export function evaluateWorkbookFormulas(
     cell.valueIsError = valueIsError
     cell.hasCachedValue = true
     cell.formula = undefined
-    if (!existingRow) createdRows.push({ sheet, index: address.row })
+    if (!existingRow) createdRows.push({ sheet, index: address.row, ownerKey })
     const key = makeCellKey(name, address.col, address.row)
     cellMap.set(key, cell)
     cellSheets.set(key, name)
@@ -756,6 +913,7 @@ export function evaluateWorkbookFormulas(
     }
   }
   for (const [key, cell] of cellMap) {
+    if (onlyKeys && !onlyKeys.has(key)) continue
     if (!cell.formula) {
       // A what-if data-table cell may carry no formula text at all; it is still
       // unsupported and must be diagnosed, never silently computed.
@@ -767,7 +925,7 @@ export function evaluateWorkbookFormulas(
       ca: cell.ca,
       hasCachedValue: cell.hasCachedValue,
       value: cell.value,
-      forcedDependent: forceKeys.has(key),
+      forcedDependent: forceKeys.has(key) || Boolean(onlyKeys?.has(key)),
     })
     if (decision.whatIfDataTable) {
       reportWhatIfDataTable(cell)
@@ -871,6 +1029,7 @@ export function evaluateWorkbookFormulas(
     excelTextLengthVersion: unicodeVersionOf(semantics.unicode),
     unsupportedFeatures: new Set(),
     semantics,
+    ...(options?.getPivotData ? { getPivotData: options.getPivotData } : {}),
     maxArrayCells: options?.maxArrayCells,
     maxArraySide: options?.maxArraySide,
     ...(options?.maxMaterializedCells !== undefined ? { materializationBudget: { limit: options.maxMaterializedCells, used: 0 } } : {}),
@@ -938,6 +1097,8 @@ export function evaluateWorkbookFormulas(
         }
       }
       const cell = cellMap.get(key)
+      const viewValue = options?.readCellValue?.(resolvedSheet.name, col, row)
+      if (viewValue !== undefined) { memo.set(key, viewValue); recordDependency(key); return viewValue }
       if (!cell) {
         memo.set(key, null)
         recordDependency(key)
@@ -1617,5 +1778,5 @@ export function evaluateWorkbookFormulas(
 
   docSpillStates.set(doc, manualFileLoadNoOp && prior
     ? prior
-    : { generated: generatedList, createdRows, valueDeps })
+    : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyKeys && prior ? [...prior.createdRows.filter(row => !onlyKeys.has(row.ownerKey)), ...createdRows] : createdRows, valueDeps, formulaDeps })
 }

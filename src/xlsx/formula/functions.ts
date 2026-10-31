@@ -962,3 +962,15 @@ export const FUNCTIONS: Record<string, FunctionHandler> = {
     return area.cols
   },
 }
+
+/** Install a formula handler from a lazy feature chunk without importing that
+ * feature into the eager formula engine. Built-ins are reserved; repeated
+ * registration of a custom function replaces its previous lazy handler. */
+export function registerFormulaFunction(name: string, handler: FunctionHandler): void {
+  const key = name.trim().toUpperCase()
+  if (!key) throw new TypeError('Formula function name must not be empty')
+  if (BUILTIN_FUNCTIONS.has(key)) throw new Error(`Formula function ${key} is already built in`)
+  FUNCTIONS[key] = handler
+}
+
+const BUILTIN_FUNCTIONS = new Set(Object.keys(FUNCTIONS))

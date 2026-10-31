@@ -46,6 +46,9 @@ import {
 import { sheetCharts } from '../sheetCharts'
 import { linkPivotCharts } from '../../../xlsx/pivotChartLink'
 import { pivotFieldName, pivotMenuItemLabel, pivotMenuModel, type PivotMenuField, type PivotMenuItem, type PivotMenuModel } from '../../../xlsx/pivots/session/menu'
+import { registerGetPivotData } from '../../../xlsx/pivots/session/getpivotdata'
+
+registerGetPivotData()
 
 export type { PivotDelta, PivotDeltaKind }
 
@@ -55,6 +58,10 @@ export type { PivotMenuField, PivotMenuItem, PivotMenuModel }
  * their own styles included). The paged path's overlay lives in the worker (Task 27); its commit carries none. */
 export interface PivotCommit {
   sheetId: number; pivot: number; revision: number; def: PivotTableDefinition; overlay?: ValueOverlay | null
+  /** Resident-only live formula context; never sent through the worker protocol. */
+  layout?: PivotLayout; cache?: PivotCacheDefinition; date1904?: boolean
+  /** Saved and current rectangles affected by this commit, in source coordinates. */
+  changedRects?: readonly SourceRect[]
   /** The pivot's linked charts refilled for this revision (Task 30's gate), in the order the client collected them
    * (`doc.sheets` × drawing order); the viewer installs them with `installPivotCharts`. */
   charts?: readonly ChartModel[]
@@ -432,7 +439,10 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
       entry.current = layoutArea(session.layout)
       const owned = parts(sheetId)
-      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null, ...(result.charts.length ? { charts: result.charts } : {}) }
+      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null,
+        layout: result.layout, cache: entry.cache, date1904: entry.date1904,
+        changedRects: [...entry.saved, ...entry.current],
+        ...(result.charts.length ? { charts: result.charts } : {}) }
       options.install(commit)
       return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit, ...(result.notice ? { notice: result.notice } : {}) }
     },
