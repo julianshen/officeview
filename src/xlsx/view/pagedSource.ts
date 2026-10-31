@@ -1556,7 +1556,8 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
             if (released) return
             released = true
             cachedAssets.refs--
-            if (cachedAssets.retired && cachedAssets.refs === 0) {
+            // The last holder frees it (R2-2): an idle sheet keeps no pivot metadata charged; the next open rebuilds.
+            if (cachedAssets.refs === 0) {
               cachedAssets.entry?.release()
               pivotAssetCache.delete(cacheKey)
             }

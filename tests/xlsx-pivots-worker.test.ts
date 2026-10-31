@@ -255,6 +255,36 @@ describe('worker pivot protocol', () => {
     }
   }, 60_000)
 
+  it('R2-2: a paged pool returns to its pre-open baseline after the last release, a repeated open included', async () => {
+    const file = resolve(FIXTURE_ROOT, 'engine/layout-merge-labels.xlsx')
+    const blob = new Blob([new Uint8Array(readFileSync(file))])
+    const docId = id()
+    const imported = await openImportSession({ kind: 'blob', blob }, { docId, profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported)
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'paged', handleId: docId }, profile: 'D' })
+    const session = kernel.session(docId)!
+    const sheetId = (source.sheets.find(candidate => candidate.name === 'Pivot') ?? source.sheets[0]!).sheetId
+    const before = session.memoryStats().sourceBytes
+    const pivotSlots = () => [...((session as unknown as { memory: { slots: Map<string, unknown> } }).memory.slots.keys())].filter(key => key.startsWith('pivot-'))
+    const settled: number[] = []
+    for (let k = 0; k < 2; k++) {
+      expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen' })
+      // A second open of the open pivot returns the existing handle (it reads the assets again; nothing may stay held).
+      expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen' })
+      expect(pivotSlots().length).toBeGreaterThan(0)
+      expect(completed(await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 }))).toMatchObject({ kind: 'pivotRelease', released: true })
+      // Nothing of the pivot stays charged (assets, runtime, store, overlay); only evictable source pages the reads
+      // brought in remain (page/sst cache), the same after every round.
+      expect(pivotSlots()).toEqual([])
+      settled.push(session.memoryStats().sourceBytes)
+    }
+    expect(settled[1]).toBe(settled[0])
+    expect(settled[0]! - before).toBeLessThan(8192)
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('apply commits only the current revision', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!

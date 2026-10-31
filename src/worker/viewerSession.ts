@@ -1266,13 +1266,17 @@ export class DocumentSession {
     finally { construction.release() }
     if (signal.aborted || this.closed) return { kind: 'cancelled' }
     if (!assets) return { kind: 'refused', feature: 'pivot-source-unavailable', message: 'This worker source has no interactive pivot runtime.' }
+    // Held from here (R2-2): every early return gives it back, so cached assets nobody holds are freed.
+    const releaseAssets = assets.retain?.()
+    let assetsTransferred = false
+    const early = <T>(outcome: T): T => { releaseAssets?.(); assetsTransferred = true; return outcome }
     const def = assets.tables[pivot]
-    if (!def) return { kind: 'refused', feature: 'pivot-definition-unsupported', message: `Pivot ${pivot} is not present on sheet ${sheetId}.` }
+    if (!def) return early({ kind: 'refused', feature: 'pivot-definition-unsupported', message: `Pivot ${pivot} is not present on sheet ${sheetId}.` })
     const cache = assets.cache(def)
-    if (!cache) return { kind: 'refused', feature: 'pivot-cache-unreadable', message: `Pivot ${def.name} has no readable cache definition.` }
+    if (!cache) return early({ kind: 'refused', feature: 'pivot-cache-unreadable', message: `Pivot ${def.name} has no readable cache definition.` })
     const handleKey = pivotHandleKey(sheetId, pivot)
     const prior = this.pivotHandles.get(handleKey)
-    if (prior) return { kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), created: false }
+    if (prior) return early({ kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), created: false })
     const runtimeKey = assets.runtimeKey
     const runtimeBytes = assets.retainedBytes + assets.metadataBytes
     let runtimeHeld = false
@@ -1283,13 +1287,11 @@ export class DocumentSession {
         const entry = this.memory.retain(`pivot-runtime:${this.docId}:${this.pivotSerial++}`, {
           tier: 'source', owner: sheetId, bytes: runtimeBytes, evictable: false,
         })
-        if (!entry) return { kind: 'quota', requiredBytes: runtimeBytes, limitBytes: this.memory.limitBytes }
+        if (!entry) return early({ kind: 'quota', requiredBytes: runtimeBytes, limitBytes: this.memory.limitBytes })
         this.pivotRuntimeEntries.set(runtimeKey, { entry, refs: 1 })
       }
       runtimeHeld = true
     }
-    const releaseAssets = assets.retain?.()
-    let assetsTransferred = false
     let runtimeTransferred = false
     let share: PivotStoreShare | undefined
     let shareHeld = false
