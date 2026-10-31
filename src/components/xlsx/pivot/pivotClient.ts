@@ -599,12 +599,18 @@ export function pendingPivotFits<S>(memory?: PivotFitMemory) {
       if (memory && !memory.set(owner(sheetId, pending.pivot), estimatePayloadBytes(next.fit.before.cells) + estimatePayloadBytes(next.fit.after.cells))) { drop(sheetId, fits, pending.pivot); return }
       fits.set(pending.pivot, next)
     },
-    take(sheetId: string, styleGen: string): PendingPivotFit<S>[] {
+    /** The ready fits, removed; each stays charged until the caller's `release()` (in `finally`, after fitting:
+     * codex re-review T29-R2-3). */
+    take(sheetId: string, styleGen: string): Array<PendingPivotFit<S> & { release(): void }> {
       const fits = bySheet.get(sheetId)
       if (!fits) return []
       const ready = [...fits.values()].filter(pending => pending.styleGen !== styleGen)
-      for (const pending of ready) drop(sheetId, fits, pending.pivot)
-      return ready
+      for (const pending of ready) fits.delete(pending.pivot)
+      if (!fits.size) bySheet.delete(sheetId)
+      return ready.map(pending => {
+        let held = true
+        return { ...pending, release: () => { if (held) { held = false; memory?.release(owner(sheetId, pending.pivot)) } } }
+      })
     },
     clear(): void {
       for (const [sheetId, fits] of bySheet) for (const pivot of [...fits.keys()]) drop(sheetId, fits, pivot)

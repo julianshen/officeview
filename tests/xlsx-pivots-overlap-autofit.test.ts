@@ -388,7 +388,12 @@ describe('§7.8 fit cells kept on the main thread are charged while kept (Task 2
     pending.add('s1', { pivot: 1, fit: fit(20), styleAt: '', styleGen: 'g0' })
     const bytes = (n: number) => estimatePayloadBytes(cells(n, 'b')) + estimatePayloadBytes(cells(n, 'a'))
     expect(ledger.snapshot().byPool.layout).toBe(bytes(10) + bytes(20))
-    pending.take('s1', 'g1')
+    const taken = pending.take('s1', 'g1')
+    // Still charged while the caller fits them (codex re-review T29-R2-3); released when it is done.
+    expect(ledger.snapshot().byPool.layout).toBe(bytes(10) + bytes(20))
+    for (const fit of taken) fit.release()
+    expect(ledger.snapshot().byPool.layout).toBe(0)
+    taken[0]!.release()
     expect(ledger.snapshot().byPool.layout).toBe(0)
     pending.add('s1', { pivot: 0, fit: fit(10), styleAt: '', styleGen: 'g0' })
     pending.clear()

@@ -576,13 +576,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const ready = pending.take(sheetId, shownEntry.regionStyleGen)
       if (!ready.length) continue
       const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7
-      for (const { fit: { before, after }, styleAt } of ready) {
-        const metrics = entries.get(sheetId)!.metrics
-        const refused = autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(styleAt ? { styleAt } : {}) },
-          { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
-          col => metrics.cols.size(col) / mdw)
-        if (refused) setAnnouncement(refused)
-      }
+      try {
+        for (const { fit: { before, after }, styleAt } of ready) {
+          const metrics = entries.get(sheetId)!.metrics
+          const refused = autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(styleAt ? { styleAt } : {}) },
+            { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
+            col => metrics.cols.size(col) / mdw)
+          if (refused) setAnnouncement(refused)
+        }
+      } finally { for (const fit of ready) fit.release() }   // charged through the fit (codex re-review T29-R2-3)
       dropTiles(sheetId, null)
       rerender()
     }
