@@ -23,6 +23,7 @@ import { createCanvas } from 'canvas'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { LayoutCache } from '../src/xlsx/view/textLayout'
 import { SOURCE_ALLOCATION } from '../src/xlsx/view/allocationAccount'
+import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 
 const options = (store: any) => ({ signal: new AbortController().signal, stamp: { ...store.stamp } })
 const overlay = {
@@ -576,5 +577,15 @@ describe('pivot value overlay (fix round 4)', () => {
     // One adoption per published page, as on the base path; no inner readRows page is charged or adopted.
     expect(overlaid.adopts).toBe(overlaid.pages)
     expect(overlaid.adopted).toBeLessThanOrEqual(base.adopted * 1.2)
+  })
+
+  it('N5: remote invalidation drops the pivot display layer too, and a remote call without a sheet id throws', () => {
+    const invalidated: string[] = []
+    const remote = Object.create(RemoteWorkbook.prototype)
+    remote.regionStyleCache = { invalidate: (sheetId: string) => invalidated.push(`regionStyles:${sheetId}`) }
+    remote.pivotDisplayCache = { invalidate: (sheetId: string) => invalidated.push(`pivotDisplay:${sheetId}`) }
+    invalidateRegionStyles(remote, 's')
+    expect(invalidated).toEqual(['regionStyles:s', 'pivotDisplay:s'])
+    expect(() => invalidateRegionStyles(remote)).toThrow(/sheet id/i)
   })
 })

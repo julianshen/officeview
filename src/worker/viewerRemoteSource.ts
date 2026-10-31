@@ -308,7 +308,9 @@ export class RemoteWorkbook implements WorkbookSource {
   drawings(sheetId: string): PagedSheetDrawings { return this.drawingCache.get(sheetId) }
   sparklines(sheetId: string): PagedSheetSparklines { return this.sparklineCache.get(sheetId) }
   regionStyles(sheetId: string): PagedRegionStyleState { return this.regionStyleCache.get(sheetId) }
-  invalidateRegionStyles(sheetId: string): void { this.regionStyleCache.invalidate(sheetId) }
+  /** Drops the sheet's table/pivot region layer and its pivot display layer (banding, header and subtotal
+   * styles of the paged pivots): both are keyed on the pivot's placement, which a commit moves. */
+  invalidateRegionStyles(sheetId: string): void { this.regionStyleCache.invalidate(sheetId); this.pivotDisplayCache.invalidate(sheetId) }
   pivotDisplay(sheetId: string): PagedRegionStyleState { return this.pivotDisplayCache.get(sheetId) }
   subscribeRegionStyleEvictions(listener: (sheetId: string) => void): () => void {
     if (this.closed) return () => {}
