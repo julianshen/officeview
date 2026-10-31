@@ -91,6 +91,24 @@ describe('resident pivot client (headless)', () => {
     expect((await client.apply(sheet, 0, 'reset')).ok).toBe(false)
   })
 
+  it('the composite overlay over two pivots: the current area answers first, a vacated saved cell reads blank', async () => {
+    const { compositeOverlay } = await import('../src/components/xlsx/pivot/pivotClient')
+    const layout = (minRow: number, maxRow: number, minCol: number, maxCol: number, cells: Array<[number, number, number]>) =>
+      ({ rect: { minRow, maxRow, minCol, maxCol }, merges: [], cells: cells.map(([row, col, value]) => ({ row, col, value: { kind: 'number', value } })) }) as never
+    // A shrank from rows 0–5 to 0–2; B grew from rows 6–8 into row 5, a row A vacated.
+    const overlay = compositeOverlay([
+      { saved: [{ r0: 0, r1: 5, c0: 0, c1: 1 }], current: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], layout: layout(0, 2, 0, 1, [[0, 0, 1], [2, 1, 2]]) },
+      { saved: [{ r0: 6, r1: 8, c0: 0, c1: 1 }], current: [{ r0: 5, r1: 8, c0: 0, c1: 1 }], layout: layout(5, 8, 0, 1, [[5, 0, 50], [8, 1, 80]]) },
+    ])
+    expect(overlay.cell(0, 0)).toEqual({ value: 1 })
+    expect(overlay.cell(1, 0)).toBeNull()          // inside A's current area, no layout value
+    expect(overlay.cell(4, 1)).toBeNull()          // A vacated it
+    expect(overlay.cell(5, 0)).toEqual({ value: 50 })  // B's current area wins over A's vacated saved area
+    expect(overlay.cell(8, 1)).toEqual({ value: 80 })
+    expect(overlay.cell(9, 0)).toBeUndefined()     // owned by neither
+    expect(overlay.protectedRects).toEqual([{ r0: 0, r1: 2, c0: 0, c1: 1 }, { r0: 5, r1: 8, c0: 0, c1: 1 }])
+  })
+
   it('a pivot whose records cannot be leased, or with a linked chart, refuses at open with its feature', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await load(CHART_LINKED), sheet = pivotSheet(doc)

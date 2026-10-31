@@ -128,11 +128,21 @@ function placementsOf(def: PivotTableDefinition): ButtonPlacement[] {
   if (!list) { try { list = pivotButtons(def, 'screen', savedPivotLayout(def)) } catch { list = [] } placed.set(def, list) }
   return list
 }
+// The ± state by cell, indexed once per definition: every rendered gridcell asks (up to 20,000 per frame).
+const drills = new WeakMap<PivotTableDefinition, Map<number, boolean>>()
+const CELL_KEY = 16_384
+function drillsOf(def: PivotTableDefinition): Map<number, boolean> {
+  let map = drills.get(def)
+  if (!map) {
+    map = new Map()
+    for (const button of placementsOf(def)) if (button.kind === 'expand' || button.kind === 'collapse') map.set(button.row * CELL_KEY + button.col, button.kind === 'collapse')
+    drills.set(def, map)
+  }
+  return map
+}
 /** aria-expanded for a pivot cell carrying a ± button (§8: expanded/collapsed state on row headers). */
 export function expandedAt(defs: readonly PivotTableDefinition[] | undefined, row: number, col: number): boolean | undefined {
-  for (const def of defs ?? []) for (const button of placementsOf(def)) {
-    if (button.row === row && button.col === col && (button.kind === 'expand' || button.kind === 'collapse')) return button.kind === 'collapse'
-  }
+  for (const def of defs ?? []) { const expanded = drillsOf(def).get(row * CELL_KEY + col); if (expanded !== undefined) return expanded }
   return undefined
 }
 
