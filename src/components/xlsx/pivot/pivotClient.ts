@@ -312,6 +312,7 @@ export interface ResidentPivotClientOptions {
 interface OpenPivot { session: PivotSession; savedDef: PivotTableDefinition; cache: PivotCacheDefinition; saved: SourceRect[]; current: SourceRect[]; date1904: boolean; style: ReturnType<typeof savedStyles> }
 
 
+let refreshBuilds = 0
 export function createResidentPivotClient(options: ResidentPivotClientOptions): PivotClient {
   const { doc, ledger } = options
   const verified = options.verifiedKinds ?? ORACLE_VERIFIED_KINDS
@@ -403,15 +404,19 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
           try { chartGate = (await import('../../../xlsx/pivots/session/charts')).pivotChartGate } catch { /* no gate: the session refuses pivot-chart-mapping */ }
           if (signal.aborted) { leased?.release(); return refusal('pivot-session-released', `${nameOf(def)}: opening was cancelled`) }
         }
+        // A refresh's construction (the decoder's arrays and the build's distinct texts and items) is charged to the
+        // document pool as it grows, under its own owner, until the session holds the store (codex review T32-1).
+        const building = `pivot-refresh-build:${++refreshBuilds}`
         const session = openPivotSession({
           def, cache, ...(leased?.store ? { store: leased.store } : {}), date1904, saved: sheetCellReader(sheet), occupied: occupiedFor(sheetId, pivot),
           linkedCharts: linked, ...(leased ? { lease: leased } : {}), verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
           ...(sourceSheet ? {
-            source: sheetCellReader(sourceSheet), limits,
+            source: sheetCellReader(sourceSheet), limits: { ...limits, admitBytes: bytes => { ledger.set('document', building, bytes); return true } },
             // The rebuilt store is charged to the document pool while the session holds it.
             admitStore: store => { ledger.chargeWhileHeld('document', [store], store.bytes); return ledger.hold(store) ?? undefined },
           } : {}),
         })
+        ledger.set('document', building, 0)
         if (!session.ok) { leased?.release(); return session }
         const saved = savedPivotLayout(def)
         const savedArea = saved ? saved.rects.map(toSource) : layoutArea(session.value.layout)

@@ -54,7 +54,12 @@ export function worksheetSourceRange(cache: PivotCacheDefinition): { sheet: stri
 }
 
 const DAY_MS = 86_400_000
-/** Excel serial → the ISO dateTime the cache writes (uniform epoch, Ruling S2-H; records.ts `isoToSerial` inverts it). */
+/** Excel's last date serial, 9999-12-31 (1900 system; the 1904 system ends 1,462 days earlier). */
+const MAX_SERIAL = 2_958_465
+/** Whether a serial is a date the cache can write: finite, not negative, at most 9999-12-31 23:59:59.999. */
+const isDateSerial = (serial: number, date1904: boolean) => Number.isFinite(serial) && serial >= 0 && serial < (date1904 ? MAX_SERIAL - 1462 : MAX_SERIAL) + 1
+/** Excel serial → the ISO dateTime the cache writes (uniform epoch, Ruling S2-H; records.ts `isoToSerial` inverts it).
+ * Callers check `isDateSerial` first. */
 function serialToIso(serial: number, date1904: boolean): string {
   const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30)
   const iso = new Date(epoch + Math.round(serial * DAY_MS)).toISOString()
@@ -68,6 +73,7 @@ const asciiLower = (text: string) => text.replace(/[A-Z]+/g, run => run.toLowerC
 function spellings() {
   const first = new Map<string, string>(), full = new Map<string, string>()
   return {
+    get size() { return first.size },
     of(text: string): string | undefined {
       const key = asciiLower(text), wide = text.toLowerCase()
       const known = full.get(wide)
@@ -81,57 +87,65 @@ function spellings() {
 }
 const itemKey = (value: PivotValue) => value.type === 'missing' ? 'm' : `${value.type}:${String(value.value)}`
 
-/** The rebuilt shared items of one field from its column's values. */
-function sharedItemsOf(old: PivotSharedItems, values: readonly PivotValue[], listed: boolean, date1904: boolean, name: string): EngineResult<PivotSharedItems> {
+/** Bytes the build keeps besides the store, per distinct text (its spellings and keys) and per listed item. */
+const TEXT_BYTES = (text: string) => 3 * (48 + 2 * text.length)
+const ITEM_BYTES = 96
+
+/** One field's rebuilt shared items, accumulated value by value (no column of values is kept). */
+function sharedItemsAccumulator(old: PivotSharedItems, listed: boolean, date1904: boolean, name: string) {
   let hasString = false, hasBlank = false, hasNumber = false, hasDate = false, longText = false, integers = true
   let minValue = Infinity, maxValue = -Infinity, minDate = Infinity, maxDate = -Infinity
   const items: PivotCacheItem[] = []
-  const seen = new Set<string>()
-  for (const value of values) {
-    switch (value.type) {
-      case 'missing': hasBlank = true; break
-      case 'string': case 'error':
-        hasString = true
-        if (value.value.length > 255) longText = true
-        break
-      case 'number':
-        hasNumber = true
-        if (!Number.isInteger(value.value)) integers = false
-        minValue = Math.min(minValue, value.value); maxValue = Math.max(maxValue, value.value)
-        break
-      case 'date': {
-        hasDate = true
-        const serial = dateSerial(value.value, date1904)
-        minDate = Math.min(minDate, serial); maxDate = Math.max(maxDate, serial)
-        break
-      }
-      case 'boolean': return refuse(`field ${name} has a boolean value, whose refresh is not measured`)
-    }
-    if (!listed) continue
-    const key = itemKey(value)
-    if (seen.has(key)) continue
-    seen.add(key)
-    items.push({ ...value })
-  }
-  const types = Number(hasString) + Number(hasNumber) + Number(hasDate)
-  const { minValue: _a, maxValue: _b, minDate: _c, maxDate: _d, ...rest } = old
+  const index = new Map<string, number>()
   return {
-    ok: true,
-    value: {
-      ...rest,
-      containsSemiMixedTypes: hasString || hasBlank,
-      containsNonDate: hasString || hasNumber,
-      containsDate: hasDate,
-      containsString: hasString,
-      containsBlank: hasBlank,
-      containsMixedTypes: types > 1,
-      containsNumber: hasNumber,
-      containsInteger: hasNumber && integers,
-      ...(hasNumber ? { minValue, maxValue } : {}),
-      ...(hasDate ? { minDate: serialToIso(minDate, date1904), maxDate: serialToIso(Number.isInteger(maxDate) ? maxDate + 1 : maxDate, date1904) } : {}),
-      longText,
-      inline: !listed,
-      items,
+    index,
+    /** Adds one value; returns the bytes it added to the build (a new listed item), or a refusal. */
+    add(value: PivotValue): number | PivotDiagnostic {
+      switch (value.type) {
+        case 'missing': hasBlank = true; break
+        case 'string': case 'error':
+          hasString = true
+          if (value.value.length > 255) longText = true
+          break
+        case 'number':
+          hasNumber = true
+          if (!Number.isInteger(value.value)) integers = false
+          minValue = Math.min(minValue, value.value); maxValue = Math.max(maxValue, value.value)
+          break
+        case 'date': {
+          hasDate = true
+          const serial = dateSerial(value.value, date1904)
+          minDate = Math.min(minDate, serial); maxDate = Math.max(maxDate, serial)
+          break
+        }
+        case 'boolean': return { kind: 'unsupported', feature: 'pivot-refresh-on-load', message: `field ${name} has a boolean value, whose refresh is not measured` }
+      }
+      if (!listed) return 0
+      const key = itemKey(value)
+      if (index.has(key)) return 0
+      index.set(key, items.length)
+      items.push({ ...value })
+      return ITEM_BYTES
+    },
+    finish(): PivotSharedItems {
+      const types = Number(hasString) + Number(hasNumber) + Number(hasDate)
+      const { minValue: _a, maxValue: _b, minDate: _c, maxDate: _d, ...rest } = old
+      return {
+        ...rest,
+        containsSemiMixedTypes: hasString || hasBlank,
+        containsNonDate: hasString || hasNumber,
+        containsDate: hasDate,
+        containsString: hasString,
+        containsBlank: hasBlank,
+        containsMixedTypes: types > 1,
+        containsNumber: hasNumber,
+        containsInteger: hasNumber && integers,
+        ...(hasNumber ? { minValue, maxValue } : {}),
+        ...(hasDate ? { minDate: serialToIso(minDate, date1904), maxDate: serialToIso(Number.isInteger(maxDate) ? maxDate + 1 : maxDate, date1904) } : {}),
+        longText,
+        inline: !listed,
+        items,
+      }
     },
   }
 }
@@ -157,51 +171,76 @@ export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader
   }
   const count = ref.maxRow - ref.minRow
   if (count > limits.maxRecords) return limit(`the source range has ${count} records, more than the ${limits.maxRecords} allowed`)
+  // The store's least size follows from the shape alone (4 bytes per listed value, 13 per inline one): refuse before
+  // reading a row when even that exceeds the limit.
+  const rowBytes = database.reduce((sum, index) => sum + (cache.fields[index]!.sharedItems!.inline === false ? 4 : 13), 0)
+  if (count * rowBytes > limits.maxBytes) return limit(`the source range's ${count} records need at least ${count * rowBytes} bytes, more than the ${limits.maxBytes} allowed`)
 
-  // Column values.
-  const columns: PivotValue[][] = database.map(() => [])
+  // Two passes over the cells, keeping no column of values (codex review T32-1): the first gathers each field's
+  // shared items and type flags, the second streams the records into the decoder. What the build keeps besides the
+  // store (texts' first spellings, listed items) is counted, admitted as it grows, and left out of the decoder's share.
   const spelling = database.map(() => spellings())
+  let kept = 0, inlineTexts = 0
+  const keep = (bytes: number): EngineResult<never> | undefined => {
+    if (!bytes) return undefined
+    kept += bytes
+    if (kept > limits.maxBytes) return limit(`refreshing needs more than the ${limits.maxBytes} bytes allowed`)
+    if (limits.admitBytes && !limits.admitBytes(kept)) return { ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-worker-quota', message: 'Refreshing the pivot exceeds the memory budget.' } }
+    return undefined
+  }
+  const valueAt = (row: number, k: number): PivotValue | EngineResult<never> => {
+    const field = cache.fields[database[k]!]!, cell = cells(row, ref.minCol + k)
+    const datesOnly = isDatesOnly(field)
+    if (!cell) return { type: 'missing' }
+    if (cell.kind === 'number') {
+      if (!datesOnly) return { type: 'number', value: cell.value }
+      if (!isDateSerial(cell.value, date1904)) return refuse(`field ${field.name} has the number ${cell.value}, which is not a date Excel can hold`)
+      return { type: 'date', value: serialToIso(cell.value, date1904) }
+    }
+    if (datesOnly) return refuse(`field ${field.name} held dates only and now has ${cell.kind} values`)
+    if (cell.kind === 'error') return { type: 'error', value: cell.value }
+    if (cell.kind === 'bool') return { type: 'boolean', value: cell.value }
+    const before = spelling[k]!.size
+    const spelled = spelling[k]!.of(cell.value)
+    if (spelled === undefined) return refuse(`field ${field.name} has texts that differ only in non-ASCII case, whose item identity is not measured`)
+    if (spelling[k]!.size !== before) {
+      const refused = keep(TEXT_BYTES(cell.value))
+      if (refused) return refused
+      if (cache.fields[database[k]!]!.sharedItems!.inline !== false && ++inlineTexts > limits.maxInlineStrings) return limit(`the source has more than ${limits.maxInlineStrings} distinct texts`)
+    }
+    return { type: 'string', value: spelled }
+  }
+  const isRefusal = (value: PivotValue | EngineResult<never>): value is EngineResult<never> => 'ok' in value
+  // Pass 1: fields.
+  const accumulators = database.map(index => sharedItemsAccumulator(cache.fields[index]!.sharedItems!, cache.fields[index]!.sharedItems!.inline === false, date1904, cache.fields[index]!.name))
   for (let row = ref.minRow + 1; row <= ref.maxRow; row++) {
     for (let k = 0; k < database.length; k++) {
-      const field = cache.fields[database[k]!]!, cell = cells(row, ref.minCol + k)
-      let value: PivotValue
-      if (!cell) value = { type: 'missing' }
-      else if (cell.kind === 'text') value = { type: 'string', value: cell.value }
-      else if (cell.kind === 'error') value = { type: 'error', value: cell.value }
-      else if (cell.kind === 'bool') value = { type: 'boolean', value: cell.value }
-      else value = isDatesOnly(field) ? { type: 'date', value: serialToIso(cell.value, date1904) } : { type: 'number', value: cell.value }
-      if (isDatesOnly(field) && value.type !== 'date' && value.type !== 'missing') return refuse(`field ${field.name} held dates only and now has ${value.type} values`)
-      if (value.type === 'string') {
-        const spelled = spelling[k]!.of(value.value)
-        if (spelled === undefined) return refuse(`field ${field.name} has texts that differ only in non-ASCII case, whose item identity is not measured`)
-        value = { type: 'string', value: spelled }
-      }
-      columns[k]!.push(value)
+      const value = valueAt(row, k)
+      if (isRefusal(value)) return value
+      const added = accumulators[k]!.add(value)
+      if (typeof added !== 'number') return { ok: false, diagnostic: added }
+      const refused = keep(added)
+      if (refused) return refused
     }
   }
-  // Fields.
   const fields = [...cache.fields]
-  for (let k = 0; k < database.length; k++) {
-    const index = database[k]!, field = cache.fields[index]!
-    const shared = sharedItemsOf(field.sharedItems!, columns[k]!, field.sharedItems!.inline === false, date1904, field.name)
-    if (!shared.ok) return shared
-    fields[index] = { ...field, sharedItems: shared.value }
-  }
+  database.forEach((index, k) => { fields[index] = { ...cache.fields[index]!, sharedItems: accumulators[k]!.finish() } })
   const rebuilt: PivotCacheDefinition = { ...cache, fields, recordCount: count }
 
-  // Records, through the records part's own decoder (same layout, limits and byte accounting).
-  const decoder = recordEvents(rebuilt, limits, date1904)
-  const lookup = database.map(index => {
-    const items = fields[index]!.sharedItems!
-    return items.inline ? undefined : new Map(items.items.map((item, at) => [itemKey(item), at]))
-  })
+  // Pass 2: records, through the records part's own decoder (same layout, limits and byte accounting), its admission
+  // offset by what the build keeps.
+  const decoderLimits: RecordLimits = { ...limits, maxBytes: limits.maxBytes - kept, ...(limits.admitBytes ? { admitBytes: (bytes: number) => limits.admitBytes!(kept + bytes) } : {}) }
+  const decoder = recordEvents(rebuilt, decoderLimits, date1904)
+  const lookup = database.map((index, k) => fields[index]!.sharedItems!.inline ? undefined : accumulators[k]!.index)
   const NONE: readonly string[] = []
   try {
     decoder.events.open('pivotCacheRecords', ['count'], [String(count)], 1, false)
-    for (let r = 0; r < count; r++) {
+    for (let row = ref.minRow + 1; row <= ref.maxRow; row++) {
       decoder.events.open('r', NONE, NONE, 0, false)
       for (let k = 0; k < database.length; k++) {
-        const value = columns[k]![r]!, shared = lookup[k]
+        const value = valueAt(row, k)
+        if (isRefusal(value)) return value
+        const shared = lookup[k]
         if (shared) decoder.events.open('x', ['v'], [String(shared.get(itemKey(value))!)], 1, true)
         else if (value.type === 'missing') decoder.events.open('m', NONE, NONE, 0, true)
         else {

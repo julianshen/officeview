@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { loadPivotWorkbook } from '../src/xlsx/pivots/load'
@@ -254,5 +254,94 @@ describe('the refresh notice in the viewer', () => {
     expect(changes[1]).toBe(PIVOT_APPLIED)
     controller.dispose()
     client.dispose?.()
+  })
+})
+
+// ---- fix round 1 (codex review of Task 32) ----------------------------------------------------------------------
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
+setFlagsFromString('--expose_gc')
+const collectGarbage = runInNewContext('gc') as () => void
+/** Heap growth while `run` executes, garbage included (no collection in between): a proxy for its transient peak. */
+async function heapGrowth<T>(run: () => T | Promise<T>): Promise<{ value: T; grown: number }> {
+  collectGarbage(); collectGarbage()
+  const before = process.memoryUsage().heapUsed
+  const value = await run()
+  return { value, grown: process.memoryUsage().heapUsed - before }
+}
+const tall = (cache: PivotCacheDefinition, rows: number): PivotCacheDefinition =>
+  ({ ...cache, source: { ...cache.source, worksheet: { ...cache.source.worksheet!, ref: `A1:L${rows + 1}` } } })
+
+describe('refresh fix round 1', () => {
+  it('a sparse tall source builds without an unbounded transient matrix, and its construction is admitted as it grows', async () => {
+    const seed = await book('recipes/refresh-seed')
+    const cache = tall(seed.cache, 100_000), range = worksheetSourceRange(cache)!
+    const cells = sheetCellReader(seed.source('Data')!)
+    let peak = 0
+    const limits = { ...RECORD_LIMITS.D, admitBytes: (bytes: number) => { peak = Math.max(peak, bytes); return true } }
+    const { value: result, grown } = await heapGrowth(() => recordsFromSource(cache, cells, range.ref, false, limits))
+    if (!result.ok) throw new Error(result.diagnostic.message)
+    const stored = result.value.store.bytes
+    expect(result.value.store.count).toBe(100_000)
+    // Admission covered at least the store; the heap grew by no more than about twice what was admitted (the decoder's
+    // doubling arrays), never the ~90 MB boxed-value matrix the review measured for this 12.9 MB store.
+    expect(peak).toBeGreaterThanOrEqual(stored)
+    expect(grown).toBeLessThan(2 * peak + 8 * 1024 * 1024)
+  })
+
+  it('a source too large for the record limits refuses before reading its rows', async () => {
+    const seed = await book('recipes/refresh-seed')
+    const cache = tall(seed.cache, 3_999_999), range = worksheetSourceRange(cache)!
+    const base = sheetCellReader(seed.source('Data')!)
+    let reads = 0
+    const counted = (row: number, col: number) => { reads++; return base(row, col) }
+    // Within D's record count (4,000,000) but not its 64 MiB: the store's least size is known from the shape alone.
+    const result = recordsFromSource(cache, counted, range.ref, false, RECORD_LIMITS.D)
+    expect(result.ok ? 'ok' : result.diagnostic.feature).toBe('pivot-records-limit')
+    expect(reads).toBeLessThanOrEqual(12)
+    // An admission refusal stops construction too.
+    const refused = recordsFromSource(tall(seed.cache, 100_000), base, worksheetSourceRange(tall(seed.cache, 100_000))!.ref, false, { ...RECORD_LIMITS.D, admitBytes: () => false })
+    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toMatch(/^pivot-(records-limit|worker-quota)$/)
+  })
+
+  it('an out-of-range date serial in a dates-only field refuses pivot-refresh-on-load instead of throwing', async () => {
+    const seed = await book('recipes/refresh-seed')
+    const range = worksheetSourceRange(seed.cache)!, cells = sheetCellReader(seed.source('Data')!)
+    for (const serial of [1e100, -1, Number.MAX_VALUE, 2958466]) {
+      const odd = (row: number, col: number) => row === 3 && col === 5 ? { kind: 'number' as const, value: serial } : cells(row, col)
+      const result = recordsFromSource(seed.cache, odd, range.ref, false, RECORD_LIMITS.D)
+      expect(result.ok ? 'ok' : result.diagnostic.feature, String(serial)).toBe('pivot-refresh-on-load')
+    }
+  })
+
+  it('the resident and worker refresh paths charge construction and stay bounded on a sparse tall source', async () => {
+    const pkg = await OfficePackage.load(new Uint8Array(readFileSync(file('recipes/refresh-seed'))))
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets.findIndex(s => s.pivotTables?.length)
+    const runtimeCache = pivotRuntimeFor(doc)!.cache(doc.sheets[sheet]!.pivotTables![0]!)!
+    runtimeCache.source = tall(runtimeCache, 100_000).source
+    const ledger = new MainMemoryLedger()
+    const sets = vi.spyOn(ledger, 'set')
+    const client = createResidentPivotClient({ doc, ledger, install: () => {} })
+    const { value: opened, grown } = await heapGrowth(() => client.open(sheet, 0, new AbortController().signal))
+    // The construction was charged while it grew, under its own owner, and that charge ended with the open.
+    const building = sets.mock.calls.filter(([, owner]) => String(owner).startsWith('pivot-refresh-build:'))
+    expect(Math.max(...building.map(([, , bytes]) => bytes))).toBeGreaterThan(1024 * 1024)
+    expect(building.at(-1)![2]).toBe(0)
+    // Either outcome is bounded: refused by a typed limit, or open with its construction charged as it was built.
+    if (opened.ok) {
+      const peak = ledger.snapshot().peakBytes
+      expect(peak).toBeGreaterThan(pivotRuntimeFor(doc)!.retainedBytes)
+      expect(grown).toBeLessThan(3 * peak + 16 * 1024 * 1024)
+    } else expect(opened.diagnostic.feature).toMatch(/^pivot-(records-limit|caption-locale|refresh-on-load)$/)
+    client.dispose?.()
+    expect(ledger.snapshot().byPool.document).toBe(pivotRuntimeFor(doc)!.retainedBytes)
+  })
+
+  it('the load diagnostic stays true after the first refresh commit', async () => {
+    const seed = await book('recipes/refresh-seed')
+    const message = seed.sheet.diagnostics!.find(d => d.feature === 'pivot-refresh-on-load')!.message
+    expect(message).not.toMatch(/shows its saved cells/)
+    expect(message).toMatch(/refreshed from the workbook's data on its first change/)
   })
 })

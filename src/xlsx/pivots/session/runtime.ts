@@ -19,7 +19,7 @@ import type { MainMemoryLedger } from '../../view/mainLedger'
 /** One holder's claim on a shared store. Releasing twice is a no-op. */
 export interface RecordLease { readonly store: RecordStore; release(): void }
 export type RecordLeaseResult = { ok: true; lease: RecordLease } | { ok: false; diagnostic: PivotDiagnostic }
-export type RuntimeLedger = Pick<MainMemoryLedger, 'chargeWhileHeld' | 'hold' | 'chargeWhileReachable'>
+export type RuntimeLedger = Pick<MainMemoryLedger, 'chargeWhileHeld' | 'hold' | 'chargeWhileReachable' | 'set'>
 export interface PivotRuntime {
   /** The workbook's date system (decided after the pivots load; read when needed). */
   readonly date1904: boolean

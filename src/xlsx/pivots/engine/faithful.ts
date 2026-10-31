@@ -190,7 +190,10 @@ export function sheetCellReader(sheet: Pick<XlsxSheet, 'rows'>): CellReader {
     rows ??= new Map(sheet.rows.map(entry => [entry.index, entry]))
     let line = cells.get(row)
     if (!line) {
-      line = new Map((rows.get(row)?.cells ?? []).map(cell => [cell.col, cell]))
+      // A row the sheet does not have reads blank without indexing (a sparse refresh source, Task 32).
+      const entry = rows.get(row)
+      if (!entry) return undefined
+      line = new Map(entry.cells.map(cell => [cell.col, cell]))
       cells.set(row, line)
     }
     const cell = line.get(col)

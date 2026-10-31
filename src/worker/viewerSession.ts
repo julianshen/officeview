@@ -1406,10 +1406,13 @@ export class DocumentSession {
     const linkedCharts = linked.map(item => item.chart)
     const chartGate = linkedCharts.length ? (await import('../xlsx/pivots/session/charts')).pivotChartGate : undefined
     const held = share
+    // A refresh's construction is admitted to the pool as it grows (codex review T32-1); the store's own entry takes
+    // over once admitted, and this charge ends with the open.
+    const building = refreshSource ? this.memory.charge() : undefined
     const opened = openPivotSession({ def, cache, ...(held.store ? { store: held.store } : {}), date1904: assets.date1904, saved,
       occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
       ...(refreshSource ? {
-        source: refreshSource, limits,
+        source: refreshSource, limits: { ...limits, admitBytes: (bytes: number) => building!.set(bytes) },
         admitStore: (store: import('../xlsx/pivots/engine/records').RecordStore) => {
           const entry = this.memory.retain(`pivot-refresh-store:${this.docId}:${this.pivotSerial++}`, { tier: 'source', owner: sheetId, bytes: store.bytes, evictable: false })
           if (!entry) return undefined
@@ -1418,6 +1421,7 @@ export class DocumentSession {
           return { release: () => {} }   // the share's release frees the entry (handle release or a failed open)
         },
       } : {}) })
+    building?.release()
     if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
     const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, share, runtimeHeld,
       linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),

@@ -969,3 +969,31 @@ describe('worker refreshOnLoad route (Task 32)', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 })
+
+describe('worker refresh construction is bounded (Task 32 fix round 1)', () => {
+  it('a sparse tall refresh source is admitted to the pool as it is built, and nothing stays charged after release', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(FIXTURE_ROOT, 'recipes/refresh-seed.xlsx')))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const cache = pivotRuntimeFor(doc)!.cache(sheet.pivotTables![0]!)!
+    cache.source = { ...cache.source, worksheet: { ...cache.source.worksheet!, ref: 'A1:L100001' } }
+    const kernel = new ViewerKernel({ parse: async input => parseXlsx(await OfficePackage.load(input)) }, quiet)
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const session = kernel.session(docId)!
+    const pool = (session as unknown as { memory: { charge(): { set(bytes: number): boolean; release(): void } } }).memory
+    const charge = pool.charge.bind(pool), peaks: number[] = []
+    vi.spyOn(pool, 'charge').mockImplementation(() => {
+      const inner = charge(); let peak = 0
+      return { set: (bytes: number) => { peak = Math.max(peak, bytes); return inner.set(bytes) }, release: () => { peaks.push(peak); inner.release() } } as never
+    })
+    const reply = await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 })
+    // A typed outcome either way; the build was admitted as it grew (a charge that reached megabytes).
+    if (reply.kind !== 'complete') expect(reply.kind).toBe('error')
+    expect(Math.max(...peaks)).toBeGreaterThan(1024 * 1024)
+    vi.restoreAllMocks()
+    await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    const slots = [...((session as unknown as { memory: { slots: Map<string, unknown> } }).memory.slots.keys())].filter(key => key.startsWith('pivot-refresh'))
+    expect(slots).toEqual([])
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+})
