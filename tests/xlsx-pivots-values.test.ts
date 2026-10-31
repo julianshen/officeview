@@ -471,6 +471,24 @@ describe('pivot value aggregation', () => {
     expect(plain.ok && plain.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 50 })
   })
 
+  it('refuses average, product and variance on a collapsed item, on rows and on columns (S2-AA)', () => {
+    // codex review repros: one collapsed item over records 10, 20 (its children hidden); var would compute 50.
+    const collapsed = [{ type: 'data' as const, first: 0, items: [0], data: 0 }]
+    const single = [{ type: 'data' as const, first: 0, items: [], data: 0 }]
+    for (const axis of ['rows', 'cols'] as const) for (const fn of ['var', 'stdDevp', 'average', 'product', 'sum', 'count', 'max'] as const) {
+      const f = fixture([10, 20], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }],
+        axis === 'rows' ? collapsed : single, [0, 0], axis === 'cols' ? collapsed : single, [0, 0])
+      f.view.fields = [{ ...fieldState, defaultSubtotal: true, collapsed: [true, false, false, false] }, fieldState]
+      if (axis === 'rows') f.view.rows = [0, 0]
+      else { f.view.rows = []; f.view.cols = [0, 0] }
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      if (fn === 'sum' || fn === 'count' || fn === 'max') {
+        // Sum is measured (layout-collapsed-item); Count and Max do not depend on the accumulation order.
+        expect(result.ok && result.value.get(0, 0, 0), `${fn} on ${axis}`).toEqual({ kind: 'number', value: fn === 'sum' ? 30 : fn === 'count' ? 2 : 20 })
+      } else expect(result.ok ? 'computed' : result.diagnostic.message, `${fn} on ${axis}`).toContain('on a collapsed item are not measured')
+    }
+  })
+
   it('shows #DIV/0! for a sample statistic over one number and uses the measured textbook variance forms', () => {
     for (const fn of ['stdDev', 'var'] as const) {
       const f = fixture([10], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])

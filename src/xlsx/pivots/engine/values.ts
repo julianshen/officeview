@@ -829,6 +829,21 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
   if (gridBankCodes.some(fn => varianceFns.has(fn as ValueFnCode)) && (hasTotals(axes.rows, rowLeaf, 'rows') || hasTotals(axes.cols, colLeaf, 'cols')))
     return unmeasured('variance subtotal rounding differs from Excel: its total cells differ in the 15th digit under every tested accumulation of the leaf moments')
 
+  // A collapsed parent line is a leaf here: its records accumulate straight into its cell, in record order. Excel does
+  // the same for Sum (layout-collapsed-item and -above-values are bit-exact, East × 2023 included, where summing the
+  // hidden Product groups would differ in the last bit). Count, Count Numbers, Max and Min do not depend on the
+  // accumulation order. S2-AA: Average, Product and the variance functions on a collapsed line have no oracle case.
+  const collapsedLeaf = (lines: readonly PivotLine[], leaf: Uint8Array, fields: readonly number[]) => lines.some((line, index) =>
+    leaf[index] && line.items.some((item, level) => {
+      const field = fields[level]
+      return field !== undefined && field !== PIVOT_VALUES_FIELD && item >= 0 && view.fields[field]?.collapsed[item] === true
+        && fields.slice(level + 1).some(after => after !== PIVOT_VALUES_FIELD)
+    }))
+  const orderSensitive = new Set<ValueFnCode>([VALUE_FN.average, VALUE_FN.product, ...varianceFns])
+  if (gridBankCodes.some(fn => orderSensitive.has(fn as ValueFnCode))
+    && (collapsedLeaf(axes.rows, rowLeaf, view.rows) || collapsedLeaf(axes.cols, colLeaf, view.cols)))
+    return unmeasured('average, product and variance on a collapsed item are not measured: no Excel oracle case covers them')
+
   const sumOnly = !hasErrorValues && functions.every(fn => fn === VALUE_FN.sum)
     && gridBankCodes.length === 1 && gridBankCodes[0] === VALUE_FN.sum
     && rowBankCodes.length === 1 && rowBankCodes[0] === VALUE_FN.sum
