@@ -85,19 +85,24 @@ function compareExcelLabels(left: string, right: string, customListSort: boolean
 
 function hasUnmeasuredEqualWeightPair(values: readonly (PivotValue | undefined)[]): boolean {
   const labels = values.flatMap(value => value?.type === 'string' ? [value.value.toLowerCase()] : [])
-  const labelSet = new Set(labels)
-  const hyphensByText = new Map<string, string>()
+  let hasLeadingSpace = false, hasLeadingHash = false
+  const punctuationShapes = new Map<string, Set<string>>()
   for (const label of labels) {
-    if ((label.startsWith(' ') && labelSet.has(`#${label.slice(1)}`)) ||
-      (label.startsWith('#') && labelSet.has(` ${label.slice(1)}`))) return true
-    const positions = [...label].flatMap((character, index) => character === '-' ? [index] : []).join(',')
-    if (!positions) continue
-    const withoutHyphens = label.replace(/-/gu, '')
-    const previous = hyphensByText.get(withoutHyphens)
-    if (previous !== undefined && previous !== positions) return true
-    hyphensByText.set(withoutHyphens, positions)
+    if (label.startsWith(' ')) hasLeadingSpace = true
+    if (label.startsWith('#')) hasLeadingHash = true
+    const shape = label.replace(/['-]/gu, '')
+    const spellings = punctuationShapes.get(shape) ?? new Set<string>()
+    spellings.add(label)
+    punctuationShapes.set(shape, spellings)
   }
-  return false
+  if (hasLeadingSpace && hasLeadingHash) return true
+  const measuredPunctuationShapes = new Map([
+    ['ab', new Set(['ab', "a'b", 'a-b'])],
+    // The Task 21 saved collation fixture also measures the leading-hyphen pair -x / x.
+    ['x', new Set(['x', '-x'])],
+  ])
+  return [...punctuationShapes].some(([shape, spellings]) => spellings.size > 1 &&
+    ![...spellings].every(spelling => measuredPunctuationShapes.get(shape)?.has(spelling)))
 }
 
 /** Stable ascending/descending order for homogeneous labels; item ids remain the pivotField item indexes. */
@@ -111,7 +116,7 @@ export function sortItemOrder(current: readonly number[], valuesByItem: readonly
   if (values.some(value => value?.type === 'string' && !hasMeasuredEnglishOrder(value.value)))
     return fail(`Excel's saved punctuation order for sorted field ${field} contains characters outside the measured alphanumeric, space and Code punctuation set`)
   if (hasUnmeasuredEqualWeightPair(values))
-    return fail(`equal-weight space/hash or hyphen-position labels in sorted field ${field} have no measured Excel order`)
+    return fail(`equal-weight leading-space, apostrophe or hyphen-position labels in sorted field ${field} have no measured Excel order`)
   if (customListSort) {
     const lists = values.map(value => value?.type === 'string' ? customListIndex(value.value) : undefined)
     const kinds = new Set(lists.flatMap(value => value ? [value.kind] : []))

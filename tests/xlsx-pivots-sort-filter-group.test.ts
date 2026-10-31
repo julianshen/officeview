@@ -628,11 +628,14 @@ describe('Task 21 oracle fix round 2 counterexamples', () => {
   })
 
   it('refuses unmeasured equal-weight label orderings', () => {
-    for (const labels of [[' x', '#x'], ['a-bc', 'ab-c']]) {
+    for (const labels of [[' x', '#x'], [' b', '#a'], ['a-bc', 'ab-c'], ["a'bc", "ab'c"], ["a'b-c", "a-b'c"]]) {
       const p = fixture(labels.map(value => ({ type: 'string', value })), [0, 1], [1, 1])
       p.view.fields = [{ ...p.view.fields[0]!, sortType: 'ascending' }, p.view.fields[1]!]
       expect(result(p)).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-engine-unmeasured' } })
     }
+    const measuredPunctuation = fixture(['ab', "a'b", 'a-b'].map(value => ({ type: 'string', value })), [0, 1, 2], [1, 1, 1])
+    measuredPunctuation.view.fields = [{ ...measuredPunctuation.view.fields[0]!, sortType: 'ascending' }, measuredPunctuation.view.fields[1]!]
+    expect(lines(result(measuredPunctuation))).toEqual([0, 1, 2])
   })
 
   it('refuses bottom-N items, percent and sum filters', () => {
