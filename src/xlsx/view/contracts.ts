@@ -257,6 +257,10 @@ export interface SourceStore {
   readonly extent: { rows: 1048576; cols: 16384; used?: SourceRect }
   /** Publish a committed pivot overlay; stores advance valueGen atomically. */
   setValueOverlay?(overlay: ValueOverlay | undefined): void
+  /** Resident: the sheet's cell values changed in place (a dependent recompute after a pivot change wrote formula
+   * results, or put the saved ones back); advances valueGen so value-keyed consumers (tiles, find, filter value
+   * lists) re-read. */
+  noteValuesChanged?(): void
   readCell(at: SourceCell, options: ReadOptions): Promise<CellRead>
   readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
   /** Ordering contract (§4.1; enforced by the worker session since S4.2): the

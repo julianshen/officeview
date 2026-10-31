@@ -149,3 +149,49 @@ it('a printout after every pivot is back to its saved view prints the document a
   expect(await print()).toBe(doc)
   expect(note()).toBe('')
 }, 30_000)
+
+// ---- the reader sheets' values move with the recompute: value-keyed consumers on them see the live values --------
+const pickSheet = (ui: ReturnType<typeof render>, name: string) => {
+  const picker = ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement
+  fireEvent.change(picker, { target: { value: [...picker.options].find(option => option.textContent === name)!.value } })
+}
+const goTo = (ui: ReturnType<typeof render>, at: string) => {
+  fireEvent.change(ui.getByRole('textbox', { name: 'Go To cell' }), { target: { value: at } })
+  fireEvent.click(ui.getByRole('button', { name: 'Go To' }))
+}
+
+it('a filter list on a reader sheet built before a pivot change lists the recomputed values', async () => {
+  const doc = await load()
+  const ui = render(<InteractiveSheetDoc doc={doc} />)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  // The Formulas sheet's controls (its value lanes) are built once, before the change.
+  pickSheet(ui, 'Formulas'); goTo(ui, 'B1')
+  fireEvent.click(await ui.findByRole('button', { name: /Filter column B/ }, { timeout: 10_000 }))
+  await ui.findByRole('checkbox', { name: /222,?603\.36/ }, { timeout: 10_000 })
+  fireEvent.click(ui.getByRole('button', { name: 'Cancel' }))
+  pickSheet(ui, 'Pivot')
+  await filterRegion(await ui.findByRole('button', { name: 'Filter and sort Region' }, { timeout: 10_000 }).then(() => ui), 'West')
+  await waitFor(() => expect(value(doc, 'B1')).toBeCloseTo(161104.2, 6), { timeout: 10_000 })
+  pickSheet(ui, 'Formulas'); goTo(ui, 'B1')
+  fireEvent.click(await ui.findByRole('button', { name: /Filter column B/ }, { timeout: 10_000 }))
+  await ui.findByRole('checkbox', { name: /161,?104\.2/ }, { timeout: 10_000 })
+  expect(ui.queryByRole('checkbox', { name: /222,?603\.36/ })).toBeNull()
+}, 60_000)
+
+it('a search running when a pivot changes finds the recomputed values, as a new search does', async () => {
+  const doc = await load()
+  const ui = render(<InteractiveSheetDoc doc={doc} showSearch />)
+  await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+  const search = ui.getByRole('searchbox', { name: 'Search document' }) as HTMLInputElement
+  const count = () => ui.getByTestId('officeview-search-status').textContent ?? ''
+  fireEvent.change(search, { target: { value: '161104.2' } })
+  await waitFor(() => expect(count()).toMatch(/no matches/), { timeout: 10_000 })
+  await filterRegion(ui, 'West')
+  await waitFor(() => expect(value(doc, 'B1')).toBeCloseTo(161104.2, 6), { timeout: 10_000 })
+  await waitFor(() => expect(count()).toMatch(/ of /), { timeout: 10_000 })
+  const running = count()
+  fireEvent.change(search, { target: { value: '' } })
+  fireEvent.change(search, { target: { value: '161104.2' } })
+  await waitFor(() => expect(count()).toMatch(/ of /), { timeout: 10_000 })
+  expect(running).toBe(count())
+}, 60_000)

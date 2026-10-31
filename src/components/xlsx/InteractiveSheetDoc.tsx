@@ -641,9 +641,15 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const restoreAllDependents = () => {
     pivotLifecycle.current++
     pivotFormulaContexts.clear(); pivotFormulaGens.clear(); pendingDependentRects.clear(); dependentChartOwners.clear(); dependentStaleMarks.clear()
-    for (const index of restoreDependentFormulaValues(doc)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+    for (const index of restoreDependentFormulaValues(doc)) { const id = sheetIds[index]; if (id !== undefined) valuesChanged(id) }
     dropDependentChartTiles(restoreDependentCharts(savedDependentCharts))
     if (!unmounting.current) setResidentDependentNotices({ unsupported: new Set(), outdated: new Set() })
+  }
+  /** A reader sheet's formula values changed in place (recomputed, or put back): its value generation moves, so every
+   * value-keyed consumer of it re-reads (its filter value lists, find, copy, geometry), and its tiles go. */
+  const valuesChanged = (sheetId: string) => {
+    try { source.store(sheetId).noteValuesChanged?.() } catch { /* released with the viewer */ }
+    dropTiles(sheetId, null)
   }
   const dropDependentChartTiles = (restored: readonly XlsxDrawing[]) => {
     if (!restored.length) return
@@ -1513,7 +1519,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         if (marks.unsupported.size || marks.outdated.size) dependentStaleMarks.set(contextKey, marks)
       }
       if (marksChanged) publishDependentNotices()
-      if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+      if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) valuesChanged(id) }
       if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges, refillChartModel }) => {
         if (!current()) return
         const wanted = new Set(result.charts), changedSheets = new Set<number>(), chartOverlays = overlaysByName()

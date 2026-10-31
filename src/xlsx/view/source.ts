@@ -291,6 +291,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     overlayStates.set(this, { overlay, structureGen })
     this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 })
   }
+  noteValuesChanged(): void { this.currentStamp = Object.freeze({ ...this.currentStamp, valueGen: this.currentStamp.valueGen + 1 }) }
   /** parse.ts turns an unreadable merge ref into an A1 merge; when the raw refs
    * are present, those are dropped (and diagnosed) exactly as the paged adapter does. */
   private validMerges(): XlsxSheet['mergeRanges'] {
