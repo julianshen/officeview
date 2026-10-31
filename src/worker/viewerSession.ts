@@ -916,6 +916,8 @@ export class DocumentSession {
   private readonly pivotRuntimeEntries = new Map<object, PivotRuntimeShare>()
   private formulaOutsidePivots?: boolean
   private formulaOutsidePivotsScan?: Promise<boolean | undefined>
+  private formulaOutsidePivotsAbort?: AbortController
+  private formulaOutsidePivotsEpoch = 0
   private pivotSerial = 0
   /** The single document-wide worker budget (§12.4): every sheet, operation and
    * retained cache of this document charges it. */
@@ -1514,30 +1516,37 @@ export class DocumentSession {
     store.setValueOverlay(this.combinedPivotOverlay(sheetId))
     this.publishValues(sheetId)
     if (previous && previous !== staged && previous.entry !== staged.entry) previous.entry.release()
-    let hasFormulaCellsOutsidePivots: boolean | undefined
-    if (this.source.scanFormulaCellsOutsidePivots) {
-      while (this.formulaOutsidePivots === undefined) {
-        if (signal.aborted) return { kind: 'cancelled' }
-        let scan = this.formulaOutsidePivotsScan
-        try {
-          if (!scan) {
-            scan = Promise.resolve().then(() => this.source.scanFormulaCellsOutsidePivots!(signal))
-            this.formulaOutsidePivotsScan = scan
-          }
-          const result = await scan
-          if (signal.aborted) return { kind: 'cancelled' }
-          if (result !== undefined) this.formulaOutsidePivots = result
-        } catch {
-          if (signal.aborted) return { kind: 'cancelled' }
-          // An incomplete scan must conservatively retain the existing notice.
-          this.formulaOutsidePivots = true
-        } finally {
-          if (this.formulaOutsidePivotsScan === scan) this.formulaOutsidePivotsScan = undefined
-        }
-      }
-      hasFormulaCellsOutsidePivots = this.formulaOutsidePivots
-    }
-    return { kind: 'commit', revision, valueGen: store.stamp.valueGen, ...(hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots }) }
+    this.startFormulaOutsidePivotsScan()
+    return { kind: 'commit', revision, valueGen: store.stamp.valueGen }
+  }
+  private startFormulaOutsidePivotsScan(): void {
+    if (this.closed || this.formulaOutsidePivots !== undefined || !this.source.scanFormulaCellsOutsidePivots) return
+    this.formulaOutsidePivotsAbort?.abort()
+    const controller = new AbortController(), epoch = ++this.formulaOutsidePivotsEpoch
+    this.formulaOutsidePivotsAbort = controller
+    const scan = Promise.resolve().then(() => this.source.scanFormulaCellsOutsidePivots!(controller.signal)).then(result => {
+      if (!this.closed && !controller.signal.aborted && epoch === this.formulaOutsidePivotsEpoch && result !== undefined) this.formulaOutsidePivots = result
+      return result
+    }, () => {
+      if (!this.closed && !controller.signal.aborted && epoch === this.formulaOutsidePivotsEpoch) this.formulaOutsidePivots = true
+      return this.formulaOutsidePivots
+    }).finally(() => {
+      if (this.formulaOutsidePivotsAbort === controller) { this.formulaOutsidePivotsAbort = undefined; this.formulaOutsidePivotsScan = undefined }
+    })
+    this.formulaOutsidePivotsScan = scan
+  }
+  async pivotFormulaStatus(signal: AbortSignal): Promise<boolean | undefined> {
+    if (this.closed || signal.aborted) return undefined
+    if (this.formulaOutsidePivots !== undefined) return this.formulaOutsidePivots
+    const scan = this.formulaOutsidePivotsScan
+    if (!scan) return undefined
+    return new Promise(resolve => {
+      const finish = (value: boolean | undefined) => { signal.removeEventListener('abort', onAbort); resolve(value) }
+      const onAbort = () => finish(undefined)
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) { onAbort(); return }
+      void scan.then(finish, () => finish(this.formulaOutsidePivots))
+    })
   }
   /** The display parts with each committed pivot's live definition (Task 28): its buttons, regions and styles
    * follow the committed layout, matched by part path. */
@@ -3107,6 +3116,10 @@ export class DocumentSession {
     if (this.closed) return
     // Closed first: every new reservation, slot and retain is refused from here.
     this.closed = true
+    this.formulaOutsidePivotsEpoch++
+    this.formulaOutsidePivotsAbort?.abort()
+    this.formulaOutsidePivotsAbort = undefined
+    this.formulaOutsidePivotsScan = undefined
     this.releasePivotsExcept()
     this.stopSearch()
     this.projections.clear()

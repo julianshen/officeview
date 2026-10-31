@@ -170,6 +170,7 @@ export class RemoteWorkbook implements WorkbookSource {
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
   hasFormulaCellsOutsidePivots?: boolean
+  readonly pivotFormulaNoticeSheets = new Set<string>()
   readonly openDiagnostics: readonly WorkerDiagnostic[]
   readonly docId: string
   readonly profile: ProfileId
@@ -328,6 +329,12 @@ export class RemoteWorkbook implements WorkbookSource {
         release: owner => this.mainLedger.release('replies', owner),
       },
       committed: (sheetId, pivot, result, valueGen) => this.publishPivotCommit(String(sheetId), pivot, result, valueGen),
+      formulaFlagChanged: (sheetId, hasFormulaCellsOutsidePivots) => {
+        this.hasFormulaCellsOutsidePivots = hasFormulaCellsOutsidePivots
+        if (hasFormulaCellsOutsidePivots) this.pivotFormulaNoticeSheets.add(String(sheetId))
+        else this.pivotFormulaNoticeSheets.delete(String(sheetId))
+        this.notify()
+      },
       released: (sheetId, pivot, valueGen) => this.withdrawPivotCommit(String(sheetId), pivot, valueGen),
     })
   }

@@ -40,11 +40,13 @@ describe('syntactic reader index', () => {
     expect([k(2), k(6)]).toEqual([999, 999])
   })
 
-  it('R2-6 Minor: rejects subset recalculation if cells changed since the full evaluation', async () => {
-    const { doc } = await run([{ row: 1, formula: 'Pivot!B6*1', cached: 11204.24 }])
+  it('R2-6 Minor: rebuilds the runtime cell index when cells are added after full evaluation', async () => {
+    const { doc, k } = await run([{ row: 1, formula: 'Pivot!B6*1', cached: 11204.24 }])
     const formulas = doc.sheets.find(sheet => sheet.name === 'Formulas')!
     formulas.rows[0]!.cells.push({ ref: 'Z1', col: 25, row: 0, value: 1, styleIndex: 0, hasCachedValue: true })
-    expect(() => recomputeDependents(doc, changedOf(doc, 'Pivot', []), { readCellValue: () => undefined })).toThrow(/evaluate formulas before applying a pivot overlay/i)
+    const result = recomputeDependents(doc, changedOf(doc, 'Pivot', [{ r0: 5, r1: 5, c0: 1, c1: 1 }]), { readCellValue: () => 12345 })
+    expect(result.recomputed).toBeGreaterThan(0)
+    expect(k(1)).toBe(12345)
   })
 
   it('R2-2 (Important): INDIRECT into the pivot is neither recomputed nor flagged (no conservative fallback)', async () => {

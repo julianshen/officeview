@@ -610,7 +610,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     pivotAutofitChars.clear()
     pivotFormulaContexts.clear()
     restoreDependentFormulaValues(doc)
-    restoreDependentCharts(savedDependentCharts)
+    const restoredDependentCharts = restoreDependentCharts(savedDependentCharts)
+    if (restoredDependentCharts.length) {
+      for (const [index, sheet] of doc.sheets.entries()) if (restoredDependentCharts.some(node => sheet.drawings?.includes(node))) {
+        const id = sheetIds[index]
+        if (id !== undefined) dropTiles(id, null)
+      }
+      if (!unmounting.current) setResidentDrawingGen(generation => generation + 1)
+    }
     doc.sheets.forEach((sheet, index) => {
       if (sheet.pivotTables === savedPivotDefs[index]) return
       sheet.pivotTables = savedPivotDefs[index]
@@ -621,6 +628,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     pivotOverlays.clear()
     for (const { sheet, name, charts } of savedPivotCharts.values()) for (const index of installPivotCharts(doc, name, charts, sheet)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
     savedPivotCharts.clear()
+    if (!unmounting.current) setResidentDependentNoticeSheets(new Set())
   }
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
@@ -1389,6 +1397,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const installPivot = (commit: PivotUi.PivotCommit) => {
     const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
     if (sheetId === undefined) return
+    if (commit.reset) {
+      // The saved pivot view restores cached formula values; do not leave a
+      // notice from the transient dependent recalculation on screen.
+      pivotLifecycle.current++
+      restoreDependentFormulaValues(doc)
+      const restored = restoreDependentCharts(savedDependentCharts)
+      for (const [index, owner] of doc.sheets.entries()) if (restored.some(node => owner.drawings?.includes(node))) {
+        const id = sheetIds[index]
+        if (id !== undefined) dropTiles(id, null)
+      }
+      if (restored.length) setResidentDrawingGen(generation => generation + 1)
+      setResidentDependentNoticeSheets(new Set())
+    }
     // Paged: the workbook already published the worker's commit (merges, extent, valueGen, pivot display and charts).
     if (remote) {
       const defs = [...(sheet?.pivotTables ?? [])]
@@ -1472,7 +1493,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
           },
         })
         if (lifecycle !== pivotLifecycle.current) return
-        if (result.stale.length) {
+        if (result.stale.length && !commit.reset) {
           const staleSheets = new Set(result.stale.map(key => {
             const bang = key.lastIndexOf('!')
             return doc.sheets.findIndex(candidate => candidate.name.toLocaleLowerCase() === key.slice(0, bang))
@@ -1706,7 +1727,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pivotNotices = entry ? [...new Set([
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
     ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
-    ...(pagedDependentNoticeSheets.has(activeIndex) ? ['Formulas outside this pivot may still show saved values (paged workbook).'] : []),
+    ...(pagedDependentNoticeSheets.has(activeIndex) || Boolean(activeSheetId && remote?.pivotFormulaNoticeSheets.has(activeSheetId)) ? ['Formulas outside this pivot may still show saved values (paged workbook).'] : []),
     ...(residentDependentNoticeSheets.has(activeIndex) ? ['Some formulas still show saved values because their pivot reference is unsupported.'] : []),
   ])] : []
 

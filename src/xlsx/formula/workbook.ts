@@ -167,7 +167,7 @@ interface DocSpillState {
   runtimeIndex?: {
     sheetsByName: Map<string, XlsxSheet>; cellMap: Map<string, XlsxCell>; cellSheets: Map<string, string>
     sheetMaxCols: Map<string, number>; sheetMaxRows: Map<string, number>; inputKeys: Set<string>; formulaKeys: Set<string>; mergeKeys: Set<string>
-    identitySheets: { sheetId: SheetId; name: string; workbookIndex: number }[]; shape: string
+    identitySheets: { sheetId: SheetId; name: string; workbookIndex: number }[]; shape: string; formulaSources: Map<string, string>
   }
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
@@ -336,11 +336,35 @@ type ReferenceIntervalNode = {
   left?: ReferenceIntervalNode
   right?: ReferenceIntervalNode
 }
-type FormulaReferenceIndex = { formulas: IndexedFormula[]; byKey: Map<string, IndexedFormula>; bySheet: Map<string, ReferenceIntervalNode>; volatileReaders: Set<string>; shape: string }
+type FormulaReferenceIndex = { formulas: IndexedFormula[]; byKey: Map<string, IndexedFormula>; bySheet: Map<string, ReferenceIntervalNode>; volatileReaders: Set<string>; shape: string; formulaSources: Map<string, string> }
 const formulaReferenceIndexes = new WeakMap<XlsxDocument, FormulaReferenceIndex>()
 
 function documentShape(doc: XlsxDocument): string {
   return doc.sheets.map(sheet => `${sheet.rows.length}:${sheet.rows.reduce((count, row) => count + row.cells.length, 0)}`).join('|')
+}
+
+/** Formula text is mutable on the public document model. Keep an exact snapshot
+ * beside the runtime cell index so an in-place edit cannot reuse stale edges. */
+function formulaSources(doc: XlsxDocument): Map<string, string> {
+  const sources = new Map<string, string>()
+  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
+    if (cell.formula !== undefined || cell.sharedFormula !== undefined) sources.set(makeCellKey(sheet.name, cell.col, cell.row), cell.formula ?? (typeof cell.sharedFormula === 'string' ? cell.sharedFormula : JSON.stringify(cell.sharedFormula)) ?? '')
+  }
+  return sources
+}
+
+function sameFormulaSources(a: ReadonlyMap<string, string> | undefined, b: ReadonlyMap<string, string>): boolean {
+  if (!a || a.size !== b.size) return false
+  for (const [key, formula] of b) if (a.get(key) !== formula) return false
+  return true
+}
+function runtimeCellIndexMatches(doc: XlsxDocument, cellMap: ReadonlyMap<string, XlsxCell>): boolean {
+  let count = 0
+  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
+    count++
+    if (cellMap.get(makeCellKey(sheet.name, cell.col, cell.row)) !== cell) return false
+  }
+  return count === cellMap.size
 }
 
 function buildReferenceTree(items: IndexedReference[]): ReferenceIntervalNode | undefined {
@@ -390,8 +414,9 @@ function queryReferences(index: FormulaReferenceIndex, sheet: string, rect: { mi
 
 function referenceIndexFor(doc: XlsxDocument): FormulaReferenceIndex {
   const shape = documentShape(doc)
+  const sources = formulaSources(doc)
   const cached = formulaReferenceIndexes.get(doc)
-  if (cached?.shape === shape) return cached
+  if (cached?.shape === shape && sameFormulaSources(cached.formulaSources, sources)) return cached
   const formulas: IndexedFormula[] = []
   const byKey = new Map<string, IndexedFormula>()
   const volatileReaders = new Set<string>()
@@ -463,9 +488,68 @@ function referenceIndexFor(doc: XlsxDocument): FormulaReferenceIndex {
     const tree = buildReferenceTree(refs)
     if (tree) bySheet.set(sheet, tree)
   }
-  const result = { formulas, byKey, bySheet, volatileReaders, shape }
+  const result = { formulas, byKey, bySheet, volatileReaders, shape, formulaSources: sources }
   formulaReferenceIndexes.set(doc, result)
   return result
+}
+
+function refreshRuntimeCellIndex(doc: XlsxDocument, runtime: NonNullable<DocSpillState['runtimeIndex']>, sources: Map<string, string>): void {
+  const sheetsByName = new Map<string, XlsxSheet>(), cellMap = new Map<string, XlsxCell>(), cellSheets = new Map<string, string>()
+  const sheetMaxCols = new Map<string, number>(), sheetMaxRows = new Map<string, number>()
+  const inputKeys = new Set<string>(), formulaKeys = new Set<string>(), mergeKeys = new Set<string>()
+  for (const sheet of doc.sheets) {
+    resolveSheetSharedFormulas(sheet, doc)
+    sheetsByName.set(sheet.name.toLowerCase(), sheet)
+    let maxCol = -1, maxRow = -1
+    for (const row of sheet.rows) {
+      maxRow = Math.max(maxRow, row.index)
+      for (const cell of row.cells) {
+        maxCol = Math.max(maxCol, cell.col); maxRow = Math.max(maxRow, cell.row)
+        const key = makeCellKey(sheet.name, cell.col, cell.row)
+        cellMap.set(key, cell); cellSheets.set(key, sheet.name)
+        if (cell.formula !== undefined || cell.sharedFormula !== undefined) formulaKeys.add(key)
+        else if (cell.value !== null && cell.value !== undefined) inputKeys.add(key)
+      }
+    }
+    sheetMaxCols.set(sheet.name.toLowerCase(), Math.max(0, maxCol))
+    sheetMaxRows.set(sheet.name.toLowerCase(), Math.max(0, maxRow))
+    for (const merge of sheet.mergeRanges ?? []) for (let row = merge.minRow; row <= merge.maxRow; row++) for (let col = merge.minCol; col <= merge.maxCol; col++) mergeKeys.add(makeCellKey(sheet.name, col, row))
+  }
+  Object.assign(runtime, { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys,
+    shape: documentShape(doc), formulaSources: sources })
+}
+
+/** Conservative admission bound for subset recalculation. A range aggregate
+ * currently scans all stored workbook cells in refs.ts; include that cost too. */
+export const MAX_DEPENDENT_CELL_VISITS = 2_000_000
+
+function dependentWorkEstimate(doc: XlsxDocument, index: FormulaReferenceIndex, keys: ReadonlySet<string>): number {
+  const used = new Map<string, { rows: number; cols: number }>()
+  let storedCells = 0
+  for (const sheet of doc.sheets) {
+    let rows = 0, cols = 0
+    for (const row of sheet.rows) {
+      rows = Math.max(rows, row.index + 1)
+      for (const cell of row.cells) { rows = Math.max(rows, cell.row + 1); cols = Math.max(cols, cell.col + 1); storedCells++ }
+    }
+    used.set(sheet.name.toLowerCase(), { rows, cols })
+  }
+  let visits = 0
+  for (const key of keys) {
+    const formula = index.byKey.get(key)
+    if (!formula) continue
+    for (const ref of formula.refs) {
+      const extent = used.get(ref.sheet)
+      const rows = Math.max(0, Math.min(ref.maxRow + 1, extent?.rows ?? 0) - Math.max(0, ref.minRow))
+      const cols = Math.max(0, Math.min(ref.maxCol + 1, extent?.cols ?? 0) - Math.max(0, ref.minCol))
+      const span = rows * cols
+      // Cell references are O(1); aggregate ranges enumerate the stored map.
+      const cost = span <= 1 ? span : Math.max(span, storedCells)
+      visits += cost
+      if (visits > MAX_DEPENDENT_CELL_VISITS) return visits
+    }
+  }
+  return visits
 }
 
 /** Paged sheets cannot build the resident formula graph; record one sheet-level
@@ -532,11 +616,11 @@ export function recomputeDependents(
   if (workbookValuePolicy(doc) === 'cached') throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   const prior = docSpillStates.get(doc)
   const index = referenceIndexFor(doc)
-  // Subset recalculation requires a full-evaluation cell index. Enforce this
-  // invariant rather than silently omitting formulas added after that pass.
-  if (prior?.runtimeIndex && prior.runtimeIndex.shape !== index.shape) {
-    throw new RangeError('Workbook cells changed since full evaluation; evaluate formulas before applying a pivot overlay')
-  }
+  // The public document model can gain cells or have formula text edited after
+  // the full pass. Rebuild only the runtime cell maps; the syntactic index was
+  // independently rebuilt above and cached values remain intact.
+  if (prior?.runtimeIndex && (prior.runtimeIndex.shape !== index.shape || !runtimeCellIndexMatches(doc, prior.runtimeIndex.cellMap) || !sameFormulaSources(prior.runtimeIndex.formulaSources, index.formulaSources)))
+    refreshRuntimeCellIndex(doc, prior.runtimeIndex, index.formulaSources)
   const formulaKeys = new Set<string>(), queue: string[] = []
   const enqueue = (key: string) => { if (index.byKey.has(key) && !formulaKeys.has(key)) { formulaKeys.add(key); queue.push(key) } }
   for (const entry of changed) {
@@ -575,20 +659,53 @@ export function recomputeDependents(
     }
   }
   if (!formulaKeys.size) return { recomputed: 0, charts: [], sheets: [], stale: [] }
+  const staleKeys = new Set<string>()
+  const estimatedVisits = dependentWorkEstimate(doc, index, formulaKeys)
+  if (estimatedVisits > MAX_DEPENDENT_CELL_VISITS) {
+    for (const key of formulaKeys) staleKeys.add(key)
+    const retained = prior?.retainedUnsupportedKeys ?? new Set<string>()
+    for (const key of formulaKeys) retained.add(key)
+    if (prior) prior.retainedUnsupportedKeys = retained
+    const sheets = [...new Set([...formulaKeys].map(key => doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, key.lastIndexOf('!')))).filter(i => i >= 0))]
+    return { recomputed: 0, charts: [], sheets, stale: [...staleKeys] }
+  }
+  const recomputeKeys = formulaKeys
   let snapshots = liveFormulaSnapshots.get(doc)
   if (!snapshots) liveFormulaSnapshots.set(doc, snapshots = new Map())
-  for (const key of formulaKeys) {
+  for (const key of recomputeKeys) {
     if (snapshots.has(key)) continue
     const cell = prior?.runtimeIndex?.cellMap.get(key)
     if (cell) snapshots.set(key, { cell, content: snapshotCell(cell) })
   }
-  evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, formulaKeys)
+  evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, recomputeKeys)
   const affectedSheets = [...new Set([...formulaKeys].map(key => {
     const bang = key.lastIndexOf('!')
     return doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, bang))
   }).filter(index => index >= 0))]
   const retained = docSpillStates.get(doc)?.retainedUnsupportedKeys ?? new Set<string>()
-  return { recomputed: formulaKeys.size, charts: chartsUsing(doc, formulaKeys), sheets: affectedSheets, stale: [...formulaKeys].filter(key => retained.has(key)) }
+  // A reader can become stale because an unsupported formula was first
+  // discovered during this very subset evaluation. Propagate that result to
+  // its transitive readers and restore their own pre-run cached values.
+  const newlyStale = [...recomputeKeys].filter(key => retained.has(key))
+  const afterQueue = [...newlyStale]
+  for (const key of newlyStale) staleKeys.add(key)
+  for (let i = 0; i < afterQueue.length; i++) {
+    const target = afterQueue[i]!
+    const bang = target.lastIndexOf('!'), coords = /^([0-9]+):([0-9]+)$/.exec(target.slice(bang + 1))
+    const readers = new Set(docSpillStates.get(doc)?.reverseFormulaDeps?.get(target) ?? [])
+    if (bang >= 0 && coords) {
+      const col = Number(coords[1]), row = Number(coords[2])
+      for (const reader of queryReferences(index, target.slice(0, bang), { minRow: row, maxRow: row, minCol: col, maxCol: col })) readers.add(reader)
+    }
+    for (const reader of readers) if (index.byKey.has(reader) && !staleKeys.has(reader)) {
+      staleKeys.add(reader); retained.add(reader)
+      const original = snapshots.get(reader), formula = prior?.runtimeIndex?.cellMap.get(reader)
+      if (original && formula) restoreCell(formula, original.content)
+      afterQueue.push(reader)
+    }
+  }
+  for (const key of staleKeys) retained.add(key)
+  return { recomputed: recomputeKeys.size, charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
 /** Restore the saved formula values after a resident viewer releases its live pivot contexts. */
@@ -1991,5 +2108,5 @@ function evaluateWorkbookFormulasInternal(
   docSpillStates.set(doc, manualFileLoadNoOp && prior
     ? prior
     : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyKeys && prior ? [...prior.createdRows.filter(row => !onlyKeys.has(row.ownerKey)), ...createdRows] : createdRows,
-      valueDeps, formulaDeps, reverseFormulaDeps: reverseDeps, retainedUnsupportedKeys, runtimeIndex: { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys, identitySheets, shape: documentShape(doc) } })
+      valueDeps, formulaDeps, reverseFormulaDeps: reverseDeps, retainedUnsupportedKeys, runtimeIndex: { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys, identitySheets, shape: documentShape(doc), formulaSources: formulaSources(doc) } })
 }

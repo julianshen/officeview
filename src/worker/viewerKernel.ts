@@ -126,7 +126,7 @@ function supersessionKey(command: Exclude<WorkerCommand, { kind: 'cancel' }>, se
 /** Owner captured from the command itself (§10.2); cancel uses its target's. */
 function capturedOwner(command: WorkerCommand, inflight?: InFlight): WorkerOwner {
   switch (command.kind) {
-    case 'open': case 'close': case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotRelease': return { docId: command.docId }
+    case 'open': case 'close': case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotFormulaStatus': case 'pivotRelease': return { docId: command.docId }
     case 'cancel': return inflight?.owner ?? { docId: '' }
     default: return command.owner
   }
@@ -457,7 +457,7 @@ export class ViewerKernel {
         return this.sessions.has(command.docId) ? out : reply(command, { docId: command.docId }, { kind: 'cancelled' })
       case 'close':
         return out
-      case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotRelease':
+      case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotFormulaStatus': case 'pivotRelease':
         if (signal.aborted) return reply(command, { docId: command.docId }, { kind: 'cancelled' })
         return live(command.docId) ? out : errorReply(command, { docId: command.docId }, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
       case 'sort':
@@ -503,6 +503,7 @@ export class ViewerKernel {
       case 'pivotOpen':
       case 'pivotApply':
       case 'pivotCommit':
+      case 'pivotFormulaStatus':
       case 'pivotRelease': {
         const session = this.sessions.get(command.docId)
         const owner = { docId: command.docId }
@@ -520,6 +521,11 @@ export class ViewerKernel {
           case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal, command.fitGrantBytes); if (outcome.kind === 'open' && outcome.created && outcome.handle) onPivotOpenCreated?.(outcome.handle); break
           case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.baseRevision, command.revision, command.delta, command.grantBytes, command.fitGrantBytes); break
           case 'pivotCommit': outcome = await session.pivotCommit(command.sheetId, command.pivot, command.revision, signal); break
+          case 'pivotFormulaStatus': {
+            const status = await session.pivotFormulaStatus(signal)
+            if (signal.aborted) return reply(command, owner, { kind: 'cancelled' } as never)
+            return reply(command, owner, { kind: 'complete', result: { kind: 'pivotFormulaStatus', ...(status === undefined ? {} : { hasFormulaCellsOutsidePivots: status }) } } as never)
+          }
           case 'pivotRelease': outcome = session.pivotRelease(command.sheetId, command.pivot); break
         }
         if (outcome.kind === 'cancelled') return reply(command as never, owner, { kind: 'cancelled' } as never)

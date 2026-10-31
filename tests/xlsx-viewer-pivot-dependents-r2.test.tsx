@@ -42,6 +42,12 @@ it('R2-3 (Important): S3-T — a retained (unmeasured) GETPIVOTDATA is marked st
   expect(value(doc, 'K1')).toBe(5) // retained, as S3-T requires
   await showFormulaSheet(ui)
   await waitFor(() => expect(status(ui.container)).toMatch(/saved values/i)) // ... and flagged stale, as S3-T requires
+  fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: '2' } })
+  await waitFor(() => expect((ui.getByRole('combobox', { name: 'Worksheet' }) as HTMLSelectElement).value).toBe('2'))
+  fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+  const region = await ui.findByRole('dialog', { name: 'Region' })
+  fireEvent.click(within(region).getByRole('button', { name: 'Reset to saved view' }))
+  await waitFor(() => expect(status(ui.container)).not.toMatch(/saved values/i))
 }, 30_000)
 
 it('R2-2 mounted (Important): INDIRECT into the pivot neither follows the change nor shows a notice', async () => {

@@ -61,6 +61,8 @@ export type { PivotMenuField, PivotMenuItem, PivotMenuModel }
  * their own styles included). The paged path's overlay lives in the worker (Task 27); its commit carries none. */
 export interface PivotCommit {
   sheetId: number; pivot: number; revision: number; def: PivotTableDefinition; overlay?: ValueOverlay | null
+  /** True when this commit restores this pivot to its saved view. */
+  reset?: boolean
   /** Resident-only live formula context; never sent through the worker protocol. */
   layout?: PivotLayout; cache?: PivotCacheDefinition; date1904?: boolean
   /** Saved and current rectangles affected by this commit, in source coordinates. */
@@ -470,7 +472,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
       entry.current = layoutArea(session.layout)
       const owned = parts(sheetId)
-      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null,
+      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null, ...(delta === 'reset' ? { reset: true } : {}),
         layout: result.layout, cache: entry.cache, date1904: entry.date1904,
         changedRects: [...entry.saved, ...entry.current],
         ...(result.charts.length ? { charts: result.charts } : {}) }

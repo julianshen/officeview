@@ -687,6 +687,7 @@ export type WorkerCommand =
   | { kind: 'pivotOpen'; requestId: string; docId: string; sheetId: string; pivot: number; grantBytes: number; /** Main's grant for the fit cells (Task 29 r2; absent: PIVOT_FIT_REPLY_BYTES, 0: none). */ fitGrantBytes?: number }
   | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; /** Latest revision the receiver has committed. */ baseRevision: number; /** Unique receiver request sequence, used only to cancel its stage. */ revision: number; delta: PivotDelta | 'reset'; grantBytes: number; /** As pivotOpen's. */ fitGrantBytes?: number }
   | { kind: 'pivotCommit'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number }
+  | { kind: 'pivotFormulaStatus'; requestId: string; docId: string; sheetId: string }
   | { kind: 'pivotRelease'; requestId: string; docId: string; sheetId: string; pivot: number }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }
   | { kind: 'close'; requestId: string; docId: string }
@@ -735,6 +736,7 @@ export type WorkerResult =
   | { kind: 'pivotOpen'; /** Last worker-committed wire revision. */ revision: number; def: PivotTableDefinition; /** The menus' model (Task 28), built where the cache lives. */ menu: import('../pivots/session/menu').PivotMenuModel; /** The session's value cells a fit reads (Task 29: the main thread's autofit fits them); absent past the payload cap. */ cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
   | { kind: 'pivotApply'; /** Worker-assigned candidate revision; commit only this value. */ revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; def: PivotTableDefinition; menu: import('../pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: ChartModel }[]; /** As pivotOpen's. */ cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
   | { kind: 'pivotCommit'; revision: number; valueGen: number; hasFormulaCellsOutsidePivots?: boolean } | { kind: 'pivotCommit'; refused: 'stale' }
+  | { kind: 'pivotFormulaStatus'; hasFormulaCellsOutsidePivots?: boolean }
   | { kind: 'pivotRelease'; released: boolean; valueGen?: number }
   | { kind: 'close' }
 /** Cancel is non-completing: it terminates with cancelled/error, not complete (§10.2).

@@ -12,11 +12,13 @@ export function rememberDependentChart(
 }
 
 /** Restore charts changed by dependent-value refills and release the snapshots. */
-export function restoreDependentCharts(snapshots: Map<XlsxDrawing, ChartModel>): void {
+export function restoreDependentCharts(snapshots: Map<XlsxDrawing, ChartModel>): XlsxDrawing[] {
+  const restored: XlsxDrawing[] = []
   for (const [node, chart] of snapshots) {
-    if (node.content?.kind === 'xlsxChart') node.content.chart = chart
+    if (node.content?.kind === 'xlsxChart') { node.content.chart = chart; restored.push(node) }
   }
   snapshots.clear()
+  return restored
 }
 
 /** The dependent refill path reads committed overlay values but keeps the host cell's number format. */

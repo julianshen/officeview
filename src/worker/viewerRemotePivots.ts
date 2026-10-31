@@ -40,6 +40,7 @@ export interface RemotePivotHost {
    * arrived reply's stamped size from arrival, adopting the grant. Absent: no grant is sent (the worker's default). */
   readonly replyGrant?: { reserve(owner: string, bytes: number): boolean; settle(owner: string, reply: WorkerReply): void; release(owner: string): void }
   committed?(sheetId: number, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void
+  formulaFlagChanged?(sheetId: number, hasFormulaCellsOutsidePivots: boolean): void
   released?(sheetId: number, pivot: number, valueGen?: number): void
 }
 interface Entry { generation: number; revision: number; requestRevision: number; opened: boolean; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }> }
@@ -114,6 +115,14 @@ export class RemotePivotSessions {
         entry.revision = revision
         staged = { ...staged, ...(committed.result.hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots: committed.result.hasFormulaCellsOutsidePivots }) }
         this.host.committed?.(sheetId, pivot, staged, committed.result.valueGen)
+        if (committed.result.hasFormulaCellsOutsidePivots === undefined) {
+          const statusRevision = revision
+          void this.host.client.send({ kind: 'pivotFormulaStatus', requestId: this.host.client.nextRequestId(), docId: this.host.docId, sheetId: String(sheetId) }).then(reply => {
+            if (this.closed || this.host.isClosed() || this.entries.get(key) !== entry || entry.revision !== statusRevision
+              || reply.kind !== 'complete' || reply.result.kind !== 'pivotFormulaStatus' || reply.result.hasFormulaCellsOutsidePivots === undefined) return
+            this.host.formulaFlagChanged?.(sheetId, reply.result.hasFormulaCellsOutsidePivots)
+          }).catch(() => {})
+        }
       }
       return generation !== entry.generation || !registered ? { kind: 'stale' } : { ...staged, kind: 'committed', valueGen: committed.result.valueGen }
     } finally { if (entry.applyRequest === requestId) entry.applyRequest = undefined }

@@ -20,7 +20,8 @@ it('restores a dependent-refilled non-pivot chart when the pivot client is torn 
   node.content.chart = replacement
   // A second refill keeps the first source model, not an intermediate model.
   rememberDependentChart(snapshots, node, replacement)
-  restoreDependentCharts(snapshots)
+  const invalidated = restoreDependentCharts(snapshots)
+  expect(invalidated).toEqual([node])
   expect(node.content.chart).toBe(original)
   expect(snapshots.size).toBe(0)
 })

@@ -100,7 +100,9 @@ describe('worker pivot protocol', () => {
     if (staged.kind !== 'pivotApply') throw new Error(JSON.stringify(staged))
     const committed = completed(await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: staged.revision }))
     expect(scan).toHaveBeenCalledTimes(1)
-    expect(committed).toMatchObject({ kind: 'pivotCommit', hasFormulaCellsOutsidePivots: true })
+    expect(committed).toMatchObject({ kind: 'pivotCommit' })
+    const status = completed(await run(kernel, { kind: 'pivotFormulaStatus', requestId: id(), docId, sheetId }))
+    expect(status).toMatchObject({ kind: 'pivotFormulaStatus', hasFormulaCellsOutsidePivots: true })
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 

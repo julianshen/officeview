@@ -128,7 +128,7 @@ export class ViewerClient {
     switch (command.kind) {
       case 'open': case 'close': return { docId: command.docId }
       case 'cancel': return this.pending.get(command.targetRequestId)?.owner
-      case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotRelease': return { docId: command.docId }
+      case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotFormulaStatus': case 'pivotRelease': return { docId: command.docId }
       default: return command.owner
     }
   }
