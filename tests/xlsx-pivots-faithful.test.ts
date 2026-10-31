@@ -418,11 +418,11 @@ const CORPUS_STATUS: Record<string, string[]> = {
   // worksheetSource r:id: the source is another workbook (§7.6).
   'lo-calc-PivotTableWithNoSourceData.xlsx': ['xl', 'refused:pivot-source-unsupported'],
   'lo-calc-PivotTable_CachedDefinitionAndDataNotInSync_SheetColumnsRemoved_WithCacheData.xlsx': ['xl', 'ok'],
-  // Collabora-written, not an oracle. Calculated data fields (Task 22): Field4 `2/0` uses no field and Field5 refers to
-  // a calculated field, both unmeasured (S2-M); Collabora shows #VALUE! for both.
-  'lo-calc-calcfields.xlsx': ['Calc', UNMEASURED],
-  // Count subtotals/grand totals from records are unmeasured (Task 15).
-  'lo-calc-pivot_dark1.xlsx': ['xl', UNMEASURED],
+  // Collabora-written, not an oracle. With calculated fields computed (Task 22), Collabora's colItems carry no data
+  // index where Excel writes one, so the check reports a mismatch: the saved cells stay shown (fail-closed).
+  'lo-calc-calcfields.xlsx': ['Calc', 'mismatch R2C2: colItems line 0: computed data r=0 i=0 [0], saved data r=0 i=0 []'],
+  // Count subtotals and grand totals from records (measured in Task 15, values-fn-count).
+  'lo-calc-pivot_dark1.xlsx': ['xl', 'ok'],
   'lo-calc-pivotcompact.xlsx': ['xl', 'ok'],
   // Classic layout with no column field and one data field: measured in fix round B1 (Task 15
   // layout-classic-single-data); its saved cells now agree.
@@ -430,15 +430,15 @@ const CORPUS_STATUS: Record<string, string[]> = {
   'lo-calc-pivottable_outline_mode.xlsx': ['xl', 'ok'],
   // Field 6, on no axis, has a hidden item (Task 15 cross-field measurement).
   'lo-calc-pivottable_rowcolpage_field_filter.xlsx': ['xl', UNMEASURED],
-  // Hidden items filter records: visible totals are unmeasured (Task 15).
-  'lo-calc-pivottable_tabular_mode.xlsx': ['xl', UNMEASURED],
+  // Hidden items leave their records out of every total (measured in Task 15).
+  'lo-calc-pivottable_tabular_mode.xlsx': ['xl', 'ok'],
   // Date and number grouping (Task 21).
   'lo-calc-shared-dategroup.xlsx': ['xl', 'ok', 'ok'],
   'lo-calc-shared-numgroup.xlsx': ['xl', 'ok', 'ok'],
-  // Count subtotals/grand totals from records are unmeasured (Task 15).
-  'lo-calc-two-data-fields.xlsx': ['xl', UNMEASURED],
-  // A page selection filters records: visible totals are unmeasured (Task 15).
-  'poi-ExcelPivotTableSample.xlsx': ['xl', UNMEASURED, UNMEASURED],
+  // Count subtotals and grand totals from records (measured in Task 15).
+  'lo-calc-two-data-fields.xlsx': ['xl', 'ok'],
+  // A page selection leaves its records out of every total (measured in Task 15).
+  'poi-ExcelPivotTableSample.xlsx': ['xl', 'ok', 'ok'],
 }
 const CORPUS_FILES = existsSync(CORPUS) ? readdirSync(CORPUS).filter(name => name.endsWith('.xlsx')).sort() : []
 async function corpusStatus(file: string): Promise<{ writer: string; statuses: string[] }> {
