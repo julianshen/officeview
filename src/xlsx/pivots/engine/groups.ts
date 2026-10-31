@@ -36,6 +36,11 @@ function caption(item: PivotValue): string | undefined {
 }
 function rangeBucket(groupItems: readonly PivotValue[], start: number, end: number, interval: number, value: number): number {
   const buckets: Array<{ index: number; start: number; end: number }> = []
+  const lower = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
+  const upper = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
+  if (value < start && lower >= 0) return lower
+  if (value > end && upper >= 0) return upper
+  if (value < start || value > end) return -1
   for (let i = 0; i < groupItems.length; i++) {
     const text = caption(groupItems[i]!)
     if (!text) continue
@@ -45,28 +50,36 @@ function rangeBucket(groupItems: readonly PivotValue[], start: number, end: numb
   buckets.sort((a, b) => a.start - b.start)
   const count = Math.ceil((end - start) / interval)
   if (buckets.length !== count) return -1
-  const slot = Math.min(Math.floor((value - start) / interval), count - 1)
+  const decimalPlaces = (n: number) => Math.min(12, (String(n).split('.')[1] ?? '').length)
+  const scale = 10 ** Math.max(decimalPlaces(start), decimalPlaces(end), decimalPlaces(interval), decimalPlaces(value))
+  const scaledStart = Math.round(start * scale), scaledValue = Math.round(value * scale), scaledInterval = Math.round(interval * scale)
+  if (!Number.isSafeInteger(scaledStart) || !Number.isSafeInteger(scaledValue) || !Number.isSafeInteger(scaledInterval) || scaledInterval <= 0) return -1
+  const slot = Math.min(Math.floor((scaledValue - scaledStart) / scaledInterval), count - 1)
   const bucket = buckets[slot]
   if (!bucket) return -1
-  const expectedStart = start + slot * interval
-  const tolerance = Math.max(1, Math.abs(expectedStart)) * Number.EPSILON * 8
-  if (Math.abs(bucket.start - expectedStart) > tolerance) return -1
+  const expectedStart = Math.round((start + slot * interval) * scale) / scale
+  if (Math.abs(bucket.start - expectedStart) > 1 / scale) return -1
   return bucket.index
 }
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const MONTH_ALIASES = [
+  ['January', 'Jan', '1', '1月'], ['February', 'Feb', '2', '2月'], ['March', 'Mar', '3', '3月'], ['April', 'Apr', '4', '4月'],
+  ['May', '5', '5月'], ['June', 'Jun', '6', '6月'], ['July', 'Jul', '7', '7月'], ['August', 'Aug', '8', '8月'],
+  ['September', 'Sep', '9', '9月'], ['October', 'Oct', '10', '10月'], ['November', 'Nov', '11', '11月'], ['December', 'Dec', '12', '12月'],
+]
+const QUARTER_ALIASES = [['Q1', 'Qtr1', 'Quarter 1', 'Quarter1', '第一季'], ['Q2', 'Qtr2', 'Quarter 2', 'Quarter2', '第二季'],
+  ['Q3', 'Qtr3', 'Quarter 3', 'Quarter3', '第三季'], ['Q4', 'Qtr4', 'Quarter 4', 'Quarter4', '第四季']]
 function datePartLabel(groupItems: readonly PivotValue[], value: string, groupBy: string): number {
   const date = new Date(value.endsWith('Z') ? value : `${value}Z`)
   if (!Number.isFinite(date.getTime())) return -1
   const year = date.getUTCFullYear(), month = date.getUTCMonth(), day = date.getUTCDate()
   const hour = date.getUTCHours(), minute = date.getUTCMinutes(), second = date.getUTCSeconds()
   const candidates = new Set<string>()
-  if (groupBy === 'years') candidates.add(String(year))
+  if (groupBy === 'years') { candidates.add(String(year)); candidates.add(`${year}年`) }
   else if (groupBy === 'quarters') {
-    const q = Math.floor(month / 3) + 1
-    candidates.add(`Q${q}`); candidates.add(`Qtr${q}`); candidates.add(`Quarter ${q}`); candidates.add(`Quarter${q}`)
+    for (const label of QUARTER_ALIASES[Math.floor(month / 3)]!) candidates.add(label)
   } else if (groupBy === 'months') {
-    candidates.add(MONTHS[month]!); candidates.add(MONTHS[month]!.slice(0, 3)); candidates.add(String(month + 1))
+    for (const label of MONTH_ALIASES[month]!) candidates.add(label)
   } else if (groupBy === 'days') {
     candidates.add(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
     candidates.add(String(day))
@@ -117,6 +130,10 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     if (!value) return invalid(`group field ${field} has an invalid base value at record ${row}`)
     if (value.type === 'missing') {
       if (blank >= 0) output[row] = blank
+      else if (range.groupBy === 'range' || range.groupBy === 'years' || range.groupBy === 'quarters' || range.groupBy === 'months') {
+        const lower = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
+        if (lower >= 0) output[row] = lower
+      }
       continue
     }
     if (range.groupBy === 'range') {
@@ -125,10 +142,6 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
       if (start === undefined || end === undefined || !Number.isFinite(start) || !Number.isFinite(end) || end < start ||
         !Number.isFinite(range.groupInterval) || range.groupInterval <= 0)
         return invalid(`number group field ${field} has invalid range bounds`)
-      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(range.groupInterval))
-        return unmeasured(`fractional numeric group start or interval for field ${field} is not measured`)
-      if (value.value < start || value.value > end)
-        return unmeasured(`out-of-range number group values for field ${field} are not measured`)
       const item = rangeBucket(groupItems, start, end, range.groupInterval, value.value)
       if (item < 0) return unmeasured(`number group label for ${value.value} in field ${field} is not represented`)
       output[row] = item
@@ -136,8 +149,16 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
     }
     if (value.type !== 'date') return unmeasured(`date group field ${field} contains a non-date base item`)
     const iso = value.value.slice(0, 10)
-    if (range.startDate && iso < range.startDate.slice(0, 10) || range.endDate && iso > range.endDate.slice(0, 10))
-      return unmeasured(`out-of-range date group labels for field ${field} are not measured`)
+    if (range.startDate && iso < range.startDate.slice(0, 10)) {
+      const index = groupItems.findIndex(item => caption(item)?.trim().startsWith('<'))
+      if (index < 0) return unmeasured(`out-of-range date ${iso} has no lower bucket in group field ${field}`)
+      output[row] = index; continue
+    }
+    if (range.endDate && iso > range.endDate.slice(0, 10)) {
+      const index = groupItems.findIndex(item => caption(item)?.trim().startsWith('>'))
+      if (index < 0) return unmeasured(`out-of-range date ${iso} has no upper bucket in group field ${field}`)
+      output[row] = index; continue
+    }
     if (source.kind === 'inline') return unmeasured(`inline date grouping for field ${field} needs the workbook date-system context`)
     const item = datePartLabel(groupItems, value.value, range.groupBy)
     if (item < 0) return unmeasured(`date group label for ${iso} in field ${field} is not represented`)

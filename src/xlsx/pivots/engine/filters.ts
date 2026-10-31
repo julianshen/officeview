@@ -1,6 +1,6 @@
 /** Pure filter predicates shared by computeAxes. */
 import type { PivotFilter, PivotFilterColumn, PivotFilterType, PivotValue } from '../model'
-import { compareEnglishLabels, hasMeasuredEnglishOrder, hasUnmeasuredSpaceOrder } from './sort'
+import { compareEnglishLabels, hasMeasuredEnglishOrder } from './sort'
 
 const CAPTION_TYPES = new Set<PivotFilterType>([
   'captionEqual', 'captionNotEqual', 'captionBeginsWith', 'captionNotBeginsWith', 'captionEndsWith', 'captionNotEndsWith',
@@ -53,7 +53,6 @@ function captionCompare(label: string, op: PivotFilterType, a: string, b?: strin
   const usesOrder = op === 'captionGreaterThan' || op === 'captionGreaterThanOrEqual' || op === 'captionLessThan' ||
     op === 'captionLessThanOrEqual' || op === 'captionBetween' || op === 'captionNotBetween'
   if (usesOrder && (!hasMeasuredEnglishOrder(label) || !hasMeasuredEnglishOrder(a) || (b !== undefined && !hasMeasuredEnglishOrder(b)))) return undefined
-  if (usesOrder && hasUnmeasuredSpaceOrder(b === undefined ? [label, a] : [label, a, b])) return undefined
   const firstVsLabel = compareEnglishLabels(label, a), secondVsLabel = b === undefined ? undefined : compareEnglishLabels(label, b)
   if (usesOrder && (firstVsLabel === undefined || (b !== undefined && secondVsLabel === undefined))) return undefined
   const glob = wildcardRegex(a, op === 'captionBeginsWith' || op === 'captionNotBeginsWith' ? 'prefix'
@@ -80,8 +79,10 @@ function captionCompare(label: string, op: PivotFilterType, a: string, b?: strin
 export function matchesLabelFilter(filter: PivotFilter, value: PivotValue | undefined): boolean | undefined {
   if (!isLabelFilter(filter)) return undefined
   const column = filter.autoFilter.columns[0]
-  if (!value || value.type !== 'string' || !printableAscii(value.value)) return undefined
-  const label = value.value
+  if (!value || value.type === 'missing') return false
+  if (value.type !== 'string' && value.type !== 'number') return undefined
+  const label = value.type === 'string' ? value.value : String(value.value)
+  if (!printableAscii(label)) return undefined
   if (column?.filters) {
     if (column.filters.values.some(candidate => !printableAscii(candidate))) return undefined
     return column.filters.values.some(candidate => candidate.toLowerCase() === label.toLowerCase())
@@ -109,7 +110,7 @@ function asNumber(value: PivotValue | undefined): number | undefined {
   if (value?.type === 'number') return value.value
   if (value?.type === 'date') {
     const time = Date.parse(value.value.endsWith('Z') ? value.value : `${value.value}Z`)
-    return Number.isFinite(time) ? time : undefined
+    return Number.isFinite(time) ? time / 86_400_000 + 25_569 : undefined
   }
   return undefined
 }
@@ -130,15 +131,19 @@ export function matchesValueFilter(filter: PivotFilter, value: number | undefine
 }
 export function matchesDateFilter(filter: PivotFilter, value: PivotValue | undefined): boolean | undefined {
   if (!isDateFilter(filter)) return undefined
-  // Excel's date-filter caption and day-boundary semantics need an oracle for blanks,
-  // serial numbers and time-bearing values. Only ISO midnight cache dates are settled.
+  if (value?.type === 'missing') return false
   if (value?.type !== 'date') return undefined
   const midnight = (iso: string) => /^\d{4}-\d\d-\d\d(?:T00:00:00(?:\.0+)?(?:Z|[+-]00:00)?)?$/u.test(iso)
   if (!midnight(value.value)) return undefined
   const v = asNumber(value), aValue = criterion(filter, filter.autoFilter.columns[0], 1), bValue = criterion(filter, filter.autoFilter.columns[0], 2)
-  if (v === undefined || aValue === undefined || !midnight(aValue) || (bValue !== undefined && !midnight(bValue))) return undefined
-  const a = Date.parse(aValue.endsWith('Z') ? aValue : `${aValue}Z`)
-  const b = bValue === undefined ? undefined : Date.parse(bValue.endsWith('Z') ? bValue : `${bValue}Z`)
+  const serial = (text: string): number => {
+    if (/^\d+(?:\.\d+)?$/u.test(text)) return Number(text)
+    const time = Date.parse(text.endsWith('Z') ? text : `${text}Z`)
+    return Number.isFinite(time) ? time / 86_400_000 + 25_569 : Number.NaN
+  }
+  if (v === undefined || aValue === undefined || (bValue !== undefined && !Number.isFinite(serial(bValue)))) return undefined
+  const a = serial(aValue)
+  const b = bValue === undefined ? undefined : serial(bValue)
   if (!Number.isFinite(a)) return undefined
   switch (filter.type) {
     case 'dateEqual': return v === a
