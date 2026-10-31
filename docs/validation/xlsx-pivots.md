@@ -713,5 +713,29 @@ Excel rewrites `<col>` widths after a change. It both grows and shrinks columns:
 ### `refreshOnLoad` (§7.7)
 The refresh cases keep `refreshOnLoad="1"`. The `saveData="0"` case saves no records part. Task 32 compares its rebuilt cache and layout with these files.
 
-### Owner recipes
-Overlap into a value, into a formatting-only cell and into another pivot; sheet sort and filter across a pivot: see `xlsx-pivots-recipes-stage3.md`. The results are pending.
+### Owner recipes (measured 2026-11-01)
+The recipes are in `xlsx-pivots-recipes-stage3.md`. The orchestrator ran them through Excel's AppleScript dictionary plus System Events UI scripting, using the Accessibility and Screen Recording grants. Each saved result is `tests/fixtures/xlsx-pivots/interaction/owner-*.xlsx`, and the alert captures are in `assets/xlsx-pivots-stage3/`.
+
+**Overlap (§7.1): Excel 16.114 shows no alert.**
+- **O1, expand into a value.** `blocker` is in A23 and East is expanded. Excel commits the change and the pivot collapses to a single `#溢出!` (#SPILL!) cell at its top-left (`O1-spill.png`).
+  - The old pivot cells are cleared.
+  - The screen shows a dashed outline of the area the pivot would need (A3:I24).
+  - A23 keeps `blocker`.
+  - Saved: `<location ref="A3" firstHeaderRow="0" firstDataRow="0" firstDataCol="0"/>`. A3 is `t="e" vm="1"`, a rich-value error cached as `#VALUE!`. The item keeps `sd` (expanded).
+- **O2, expand into a formatting-only cell.** A23 has a yellow fill and no value. There is no alert, and the pivot grows to A3:I24 over A23. The fill is gone: the saved styles have no fill but `none`/`gray125`. A formatting-only cell does not block a pivot, and the pivot's format replaces it.
+- **O3, expand into another pivot.** The second pivot sits at A23:B29. The result is the same as O1: the first pivot becomes `#溢出!` with `location ref="A3"`, and the second pivot is unchanged.
+- **O4, shrink beside a value.** `beside` is in J10 and East is collapsed. There is no alert, the pivot shrinks to A3:I21, and J10 is kept.
+
+**Sheet sort (§7.9).**
+- **O5, selection A1:K30 → 資料 → 排序.** Excel narrows the selection to the pivot's own range (the column list offers 欄 A–I only). On OK it shows an alert, and the pivot is unchanged (`O5-sort-across.png`). Alert text, verbatim; its only button is 確定:
+  > 無法針對選定儲存格執行此變更，因為會影響到樞紐分析表。請使用欄位清單變更報表。如果您要插入或刪除儲存格，請移動樞紐分析表，然後再試一次。
+- **O5, selection inside the value cells (B6:B10).** 資料 → 排序… is disabled. There is no dialog and no alert.
+
+**Sheet filter (§7.9).**
+- **O6, selection inside the pivot (A5:I24).** 資料 → 自動篩選 and 排序… are disabled.
+- **O6, empty cells beside the pivot (K5:L10).** Excel shows its generic empty-range alert (`O6-filter-empty-beside.png`), which has nothing to do with the pivot: 這無法套用至選取範圍。請選取範圍中的單一儲存格，然後再試一次。
+- **O6, data beside the pivot in the same rows** (K5:L10, header Key/Note). The filter is allowed. Filtering Key = "a" hides sheet rows 6, 8 and 10, including the pivot's East and North lines. Saved: `<autoFilter ref="K5:L10">` and `hidden="1"` on rows 6, 8 and 10. The pivot's location is unchanged (A3:I24).
+
+**Two filter families (O7).** The seed has `multipleFieldFilters="0"` and a Product label filter "begins with B". The value filter was set through Excel's filter panel: 依值 → 大於 3000 on Sum of Sales.
+- The value filter **replaces** the label filter: the panel's 依標籤 resets to 請選擇一個.
+- Saved: one `<filter fld="1" type="valueGreaterThan" … iMeasureFld="0">` with `val="3000"`, and no label filter. The pivot is A3:I22, and the grand total is 221677.36 (Elderberries, 926, is dropped).

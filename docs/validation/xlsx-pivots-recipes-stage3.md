@@ -1,4 +1,6 @@
-# XLSX pivots: Stage 3 owner recipes (draft)
+# XLSX pivots: Stage 3 owner recipes
+
+Results (measured 2026-11-01): `xlsx-pivots.md`, "Owner recipes (measured 2026-11-01)".
 
 One batch for the owner (pivots plan Task 24, step 4). Everything else in the Stage 3 interaction oracle is built by
 `bun scripts/xlsx-refs/build-engine.ts --interaction`. These recipes cover only what an Excel alert blocks: an alert
