@@ -25,6 +25,7 @@ import { LayoutCache } from '../src/xlsx/view/textLayout'
 import { SOURCE_ALLOCATION } from '../src/xlsx/view/allocationAccount'
 import type { ValueOverlay } from '../src/xlsx/view/contracts'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
+import { parsePivotRegion } from '../src/xlsx/pivots/stub'
 
 const options = (store: any) => ({ signal: new AbortController().signal, stamp: { ...store.stamp } })
 const overlay = {
@@ -671,6 +672,48 @@ describe('pivot value overlay (fix round 4)', () => {
     expect(truncated.completeness).toBe('loading')
     expect(truncated.nextCursor).toBe(`objcol:0:${truncated.items.filter((item: any) => item.kind === 'cell').length}`)
     await resident.release()
+  })
+
+  it('N3: a saved pivot guards its page-field cells above the location on both stores', async () => {
+    const xml = (rowPageCount: number, colPageCount: number) => `<pivotTableDefinition name="P"><location ref="A5:C20" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="${rowPageCount}" colPageCount="${colPageCount}"/></pivotTableDefinition>`
+    expect(parsePivotRegion(xml(2, 1), 'p.xml').region).toEqual({ partPath: 'p.xml', ref: 'A5:C20', name: 'P', rowPageCount: 2, colPageCount: 1 })
+    expect(parsePivotRegion('<pivotTableDefinition><location ref="A3:B9"/></pivotTableDefinition>', 'q.xml').region).toEqual({ partPath: 'q.xml', ref: 'A3:B9' })
+    const region = parsePivotRegion(xml(2, 2), 'p.xml').region!
+    // Two page rows (2-3) above the gap row 4; two page columns (A:B and D:E), the gap column C unguarded.
+    const resident = workbookOf([{ sheetId: 's', cells: [{ row: 1, col: 0, value: 'Region' }, { row: 1, col: 1, value: 'East' }] }])
+    resident.sheets[0].pivotRegions = [region]
+    const residentSource = createObjectWorkbookSource(resident, 'n3-resident')
+    const bytes = xlsxBytes({ sheetData: '<row r="2"><c r="A2" t="inlineStr"><is><t>Region</t></is></c></row>' })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: 'n3-paged', profile: 'D', store: new SourcePageStore({ docId: 'n3-paged', backend: memoryPageBackend() }), pageRows: 4 })
+    expect((await session.done).kind).toBe('complete')
+    ;(session.workbook.sheets[0] as any).metadata.pivotRegions = [region]
+    const pagedSource = createPagedWorkbookSource(session)
+    const range = (r0: number, r1: number, c0: number, c1: number) => ({ r0, r1, c0, c1, headerRows: 0 as const, totalsRows: 0 as const })
+    for (const store of [residentSource.store('s'), pagedSource.store('1')] as any[]) {
+      const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 30, c0: 0, c1: 10 }, options(store)))
+      const occupancy = fromStoreScan(store, options(store))
+      expect(await guardSort(range(1, 2, 0, 1), structure, occupancy)).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+      // A sort permutes whole rows; the structural rects themselves are the page pairs, not the gap column.
+      expect(structure.firstWhere({ r0: 1, r1: 2, c0: 3, c1: 4 }, hit => hit.kind === 'pivot')).toBeDefined()
+      expect(structure.firstWhere({ r0: 1, r1: 2, c0: 2, c1: 2 }, hit => hit.kind === 'pivot')).toBeUndefined()
+      expect(await guardSort(range(3, 3, 0, 4), structure, occupancy)).toEqual({ ok: true })
+      // Once an overlay owns the pivot, the overlay's bounds replace the whole saved group, page cells included.
+      const owned = { r0: 4, r1: 19, c0: 0, c1: 2 }
+      store.setValueOverlay({ rects: [owned], protectedRects: [owned], merges: [], cell: () => null })
+      const live = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 30, c0: 0, c1: 10 }, options(store)))
+      expect(await guardSort(range(1, 2, 0, 1), live, fromStoreScan(store, options(store)))).toEqual({ ok: true })
+    }
+    await residentSource.release(); await pagedSource.release()
+  })
+
+  it('N3: a loaded saved definition guards its page cells from its location (resident)', async () => {
+    const doc = workbookOf([{ sheetId: 's', cells: [] }])
+    doc.sheets[0].pivotTables = [{ location: { ref: 'B4:D9', firstHeaderRow: 1, firstDataRow: 1, firstDataCol: 1, rowPageCount: 1, colPageCount: 1 }, pageFields: [{ fld: 0 }] } as any]
+    const source = createObjectWorkbookSource(doc, 'n3-def')
+    const store: any = source.store('s')
+    const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 10, c0: 0, c1: 5 }, options(store)))
+    expect(await guardSort({ r0: 1, r1: 1, c0: 1, c1: 2, headerRows: 0, totalsRows: 0 }, structure, fromStoreScan(store, options(store)))).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+    await source.release()
   })
 
   it('N5: remote invalidation drops the pivot display layer too, and a remote call without a sheet id throws', () => {

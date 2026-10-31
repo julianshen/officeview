@@ -45,6 +45,7 @@ import { cellDisplayText } from '../render'
 import { semanticsFor } from './semanticsFor'
 import { MAX_PIVOT_DISPLAY_DXFS, MAX_REGION_STYLE_TABLES, REGION_STYLE_REPLY_OVERHEAD_BYTES, type RemoteRegionStyles } from './contracts'
 import { estimatePayloadBytes } from './payloadBytes'
+import { savedPivotRects } from '../pivots/stub'
 import { SOURCE_ALLOCATION, adoptAllocation, type SourceAllocationOptions } from './allocationAccount'
 
 type RowStatus = { kind: 'ready' } | { kind: 'unknown'; pageId: string } | { kind: 'error'; failure: SourceFailure }
@@ -742,8 +743,10 @@ export class PagedXlsxSheetAdapter implements SourceStore {
         error: failure('unsupported', `${sheet.metadata.structuralIncomplete.join(', ')} metadata is wrapped in mc:AlternateContent and cannot be read`),
       }
     }
-    const saved = uniqueRects((sheet.metadata.pivotRegions ?? []).flatMap(region => { const parsed = pivotRegionRect(region.ref); return parsed ? [parsed] : [] }))
-      .filter(pivot => !overlay?.rects.some(owned => intersects(pivot, owned)))
+    // Every saved pivot is guarded with its page-field cells (S3-G); one the overlay owns any part of
+    // is replaced as a whole by the overlay's protected bounds (vacated cells are not pivot, S3-H).
+    const groups = (sheet.metadata.pivotRegions ?? []).map(region => { const table = pivotRegionRect(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] })
+    const saved = uniqueRects(groups.filter(group => !group.some(part => overlay?.rects.some(owned => intersects(part, owned)))).flat())
     const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     return { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
   }

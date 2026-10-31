@@ -24,6 +24,7 @@ import { DRAWING_MEMORY_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDr
 import { countLoadEvaluatedFormulas, documentValuePolicy, isValueUnavailable, laneValue, SAVED_VALUES_DIAGNOSTIC, valueAuthority, valueStatus } from './values'
 import type { XlsxCell, XlsxDocument, XlsxDrawing, XlsxRow, XlsxSheet } from '../types'
 import type { TableMetadata } from '../formula/types'
+import { savedPivotRects } from '../pivots/stub'
 import { engineSpillFootprints, type EngineSpillFootprint } from '../formula/workbook'
 import { resolveDrawingAnchors } from './drawingBounds'
 import { MAX_COLS, MAX_ROWS, cellId, isValidCoordinate, isValidSourceRect, parseA1, type SourceCell, type SourceRect } from './coordinates'
@@ -697,9 +698,16 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
       finally { cacheAccount.release() }
     } else cached = this.drawings()
     const drawings = cached.filter(d => d.kind === 'absolute' || intersects(d.bounds, rect))
-    const saved = uniqueRects([...(this.sheet.pivotRegions ?? []).map(region => parseRange(region.ref)), ...(this.sheet.pivotTables ?? []).map(pivot => parseRange(pivot.location.ref))]
-      .filter((value): value is SourceRect => Boolean(value)))
-      .filter(pivot => !overlay?.rects.some(owned => intersects(pivot, owned)))
+    // Every saved pivot is guarded with its page-field cells (S3-G); one the overlay owns any part of
+    // is replaced as a whole by the overlay's protected bounds (vacated cells are not pivot, S3-H).
+    const groups = [
+      ...(this.sheet.pivotRegions ?? []).map(region => { const table = parseRange(region.ref); return table ? savedPivotRects(table, region.rowPageCount, region.colPageCount) : [] }),
+      ...(this.sheet.pivotTables ?? []).map(pivot => {
+        const table = parseRange(pivot.location.ref), pages = pivot.pageFields?.length ?? 0
+        return table ? savedPivotRects(table, pages ? pivot.location.rowPageCount || pages : 0, pivot.location.colPageCount) : []
+      }),
+    ]
+    const saved = uniqueRects(groups.filter(group => !group.some(part => overlay?.rects.some(owned => intersects(part, owned)))).flat())
     const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])

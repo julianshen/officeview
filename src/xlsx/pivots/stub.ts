@@ -1,5 +1,6 @@
 import { attrs, getChildren, elementNamespaceUri, type XmlNode } from '../../core/xml'
 import type { XlsxSheet } from '../types'
+import { MAX_COLS, type SourceRect } from '../view/coordinates'
 
 export const X14_SLICER_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main'
 export const X15_TIMELINE_NS = 'http://schemas.microsoft.com/office/spreadsheetml/2010/11/main'
@@ -9,7 +10,25 @@ export const TIMELINE_EXTENSION_URI = '{7E03D99C-DC04-49d9-9315-930204A7B6E9}'
  * worker's cap on whole pivot, cache, slicer and timeline parts is the profile's `paged.pivotPartBytes` (Ruling AP). */
 export const PIVOT_PART_MAX_BYTES = 64 * 1024
 
-export interface PivotRegionRef { partPath: string; ref: string; name?: string; styleName?: string }
+/** `rowPageCount`/`colPageCount` are the `<location>` page-field grid above `ref` (absent when 0). */
+export interface PivotRegionRef { partPath: string; ref: string; name?: string; styleName?: string; rowPageCount?: number; colPageCount?: number }
+/** Page-field grid counts above a few thousand cannot be real (a field is at most one column of the cache). */
+const MAX_PAGE_GRID = 16_384
+
+/** A saved pivot's guarded rectangles (S3-G): its location and the page-field cells above it. The page
+ * grid is `rowPageCount` rows ending one gap row above the location, with `colPageCount` label/value
+ * pairs three columns apart (Excel's placement, as savedLayout and the engine place them). */
+export function savedPivotRects(table: SourceRect, rowPageCount = 0, colPageCount = 0): SourceRect[] {
+  const rects = [table]
+  const r0 = Math.max(0, table.r0 - 1 - rowPageCount), r1 = table.r0 - 2
+  if (rowPageCount <= 0 || r1 < r0) return rects
+  for (let j = 0; j < Math.max(1, colPageCount); j++) {
+    const c0 = table.c0 + 3 * j
+    if (c0 + 1 >= MAX_COLS) break
+    rects.push({ r0, r1, c0, c1: c0 + 1 })
+  }
+  return rects
+}
 export interface ControlPartRef { partPath: string; anchorId?: string }
 export interface TableStyleInfo {
   name?: string
@@ -69,7 +88,9 @@ export function parsePivotRegion(text: string | undefined, partPath: string): { 
   const style = /<(?:[A-Za-z_][\w.-]*:)?pivotTableStyleInfo\b([^>]*)>/s.exec(text)
   const rawStyleName = style ? attr(style[1], 'name') : undefined
   const styleName = rawStyleName === undefined ? undefined : decodeXmlEntities(rawStyleName)
-  return { region: { partPath, ref, ...(name ? { name } : {}), ...(styleName ? { styleName } : {}) }, unreadable: false }
+  const count = (key: string) => { const raw = attr(loc[1], key), n = raw === undefined || !/^\d+$/.test(raw) ? 0 : Number(raw); return n > 0 && n <= MAX_PAGE_GRID ? n : undefined }
+  const rowPageCount = count('rowPageCount'), colPageCount = count('colPageCount')
+  return { region: { partPath, ref, ...(name ? { name } : {}), ...(styleName ? { styleName } : {}), ...(rowPageCount ? { rowPageCount } : {}), ...(colPageCount ? { colPageCount } : {}) }, unreadable: false }
 }
 
 /** Distinct slicer or timeline relationship ids read per worksheet (each names a part of up to 256 controls). */
