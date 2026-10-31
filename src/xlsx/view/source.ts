@@ -17,7 +17,7 @@ import { DEFAULT_COLUMN_METRICS, columnWidthPx, type ColumnMetrics } from '../co
 import type {
   AuthoritativeCell, AxisSizeInterval, CellRead, ColumnEntry, ColumnQuery, OverviewGroup, OverviewQuery, Page, PopulatedQuery,
   DrawingAnchor, RangeCompletion, ReadOptions, SingleCellPayload, SourceFailure, SourceRowInterval, SourceStamp, SourceStore,
-  SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, ValueOverlay, WorkerDiagnostic,
+  SparseRowPage, SpillExtent, StructuralResult, ValuePolicy, ValueOverlay, ValueOverlayCell, WorkerDiagnostic,
 } from './contracts'
 import type { ColumnLanes, DrawingMemory, ProfileId, SheetDrawings } from './contracts'
 import { DRAWING_MEMORY_REFUSED, drawingFootprint, drawingPayloadBudget, sheetDrawingPayload, unavailableDrawings } from './drawingPayload'
@@ -760,36 +760,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
   }
   private overlayColumnPage(page: Page<ColumnEntry>, request: ColumnQuery, intervals: readonly SourceRowInterval[], startAt: number, startRow: number, prefix: string, overlay: ValueOverlay): Page<ColumnEntry> {
     if (!overlay || page.items.some(item => item.kind === 'lanes')) return page
-    if (page.completeness !== 'complete') {
-      const output: ColumnEntry[] = []
-      for (const item of page.items) {
-        if (item.kind === 'unknown' || item.kind === 'error') { output.push(item); continue }
-        if (item.kind === 'cell' || item.kind === 'unavailable') {
-          const value = this.overlayCell(item.row, request.col)
-          if (value === undefined) output.push(item)
-          else if (value === null) output.push({ kind: 'blank', r0: item.row, r1: item.row })
-          else output.push({ kind: 'cell', row: item.row, cell: this.overlayPayload(item.row, request.col, value) })
-          continue
-        }
-        const replacements: Array<{ row: number; value: NonNullable<ReturnType<ValueOverlay['cell']>> }> = []
-        for (const rect of overlay.rects) if (request.col >= rect.c0 && request.col <= rect.c1) {
-          for (let row = Math.max(item.r0, rect.r0); row <= Math.min(item.r1, rect.r1); row++) {
-            const value = overlay.cell(row, request.col)
-            if (value !== undefined && value !== null) replacements.push({ row, value })
-          }
-        }
-        replacements.sort((a, b) => a.row - b.row)
-        let at = item.r0
-        for (const replacement of replacements) {
-          if (replacement.row < at) continue
-          if (replacement.row > at) output.push({ kind: 'blank', r0: at, r1: replacement.row - 1 })
-          output.push({ kind: 'cell', row: replacement.row, cell: this.overlayPayload(replacement.row, request.col, replacement.value) })
-          at = replacement.row + 1
-        }
-        if (at <= item.r1) output.push({ kind: 'blank', r0: at, r1: item.r1 })
-      }
-      return { ...page, items: output }
-    }
+    if (page.completeness !== 'complete') return overlayIncompleteColumnPage(page, request, intervals, startAt, prefix, overlay, row => this.overlayCell(row, request.col), (row, value) => this.overlayPayload(row, request.col, value))
     let endAt = intervals.length - 1, endRow = intervals[endAt]?.r1 ?? -1
     if (page.nextCursor) {
       const parts = page.nextCursor.split(':')
@@ -1053,4 +1024,50 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       geometries.clear()
     },
   }
+}
+
+/** The overlay over an incomplete (loading or failed) column page: answered entries take the
+ * overlay, unknown and error runs pass through. A blank run that crosses an overlay column expands
+ * into the owned cells, so the rewrite is cut at the request's limit with a continuation cursor
+ * (queryColumn is bounded by its limit); a failed page is cut without one. */
+export function overlayIncompleteColumnPage(page: Page<ColumnEntry>, request: ColumnQuery, intervals: readonly SourceRowInterval[], startAt: number, prefix: string, overlay: ValueOverlay,
+  cellAt: (row: number) => ReturnType<ValueOverlay['cell']>, payload: (row: number, value: ValueOverlayCell) => SingleCellPayload): Page<ColumnEntry> {
+  const output: ColumnEntry[] = []
+  let resume: number | undefined
+  const emit = (entry: ColumnEntry, from: number): boolean => {
+    if (output.length >= request.limit) { resume = from; return false }
+    output.push(entry); return true
+  }
+  items: for (const item of page.items) {
+    if (item.kind === 'unknown' || item.kind === 'error') { if (!emit(item, item.r0)) break; continue }
+    if (item.kind === 'cell' || item.kind === 'unavailable') {
+      const value = cellAt(item.row)
+      const entry: ColumnEntry = value === undefined ? item : value === null ? { kind: 'blank', r0: item.row, r1: item.row } : { kind: 'cell', row: item.row, cell: payload(item.row, value) }
+      if (!emit(entry, item.row)) break
+      continue
+    }
+    if (item.kind !== 'blank') { if (!emit(item, intervals[startAt]?.r0 ?? 0)) break; continue }
+    const replacements: Array<{ row: number; value: ValueOverlayCell }> = []
+    for (const rect of overlay.rects) if (request.col >= rect.c0 && request.col <= rect.c1) {
+      for (let row = Math.max(item.r0, rect.r0); row <= Math.min(item.r1, rect.r1); row++) {
+        const value = overlay.cell(row, request.col)
+        if (value !== undefined && value !== null) replacements.push({ row, value })
+      }
+    }
+    replacements.sort((a, b) => a.row - b.row)
+    let at = item.r0
+    for (const replacement of replacements) {
+      if (replacement.row < at) continue
+      if (replacement.row > at && !emit({ kind: 'blank', r0: at, r1: replacement.row - 1 }, at)) break items
+      if (!emit({ kind: 'cell', row: replacement.row, cell: payload(replacement.row, replacement.value) }, replacement.row)) break items
+      at = replacement.row + 1
+    }
+    if (at <= item.r1 && !emit({ kind: 'blank', r0: at, r1: item.r1 }, at)) break
+  }
+  if (resume === undefined) return { ...page, items: output }
+  const { nextCursor: _cut, ...rest } = page
+  let at = startAt
+  while (at < intervals.length && intervals[at].r1 < resume) at++
+  if (page.error || at >= intervals.length) return { ...rest, items: output }
+  return { ...rest, items: output, nextCursor: `${prefix}:${at}:${Math.max(resume, intervals[at].r0)}` }
 }

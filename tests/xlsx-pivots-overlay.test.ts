@@ -630,6 +630,49 @@ describe('pivot value overlay (fix round 4)', () => {
     await resident.release(); await paged.release()
   })
 
+  it('N4: an incomplete column page stays within its limit and resumes by cursor (paged loading and resident)', async () => {
+    const sheetData = Array.from({ length: 50 }, (_, r) => `<row r="${r + 1}"><c r="A${r + 1}"><v>${r}</v></c></row>`).join('')
+    const bytes = xlsxBytes({ sheetData })
+    const pages = new SourcePageStore({ docId: 'n4-paged', backend: memoryPageBackend() })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: 'n4-paged', profile: 'D', store: pages, pageRows: 16 })
+    expect((await session.done).kind).toBe('complete')
+    const sheet = session.workbook.sheets[0] as any
+    sheet.state = 'loading'; sheet.importedThroughRow = 49
+    const source = createPagedWorkbookSource(session)
+    const store: any = source.store('1')
+    // Column B has no sheet cells: one blank run over the loaded rows, crossed by 50 pivot values.
+    const pivot = { r0: 0, r1: 49, c0: 1, c1: 1 }
+    store.setValueOverlay({ rects: [pivot], protectedRects: [pivot], merges: [], cell: (row: number) => ({ value: row * 10 }) })
+    const rows = { kind: 'intervals' as const, intervals: [{ r0: 0, r1: 59 }] }
+    const limit = 5
+    const seen: Array<[number, unknown]> = []
+    let unknown = 0, cursor: string | undefined, guard = 0
+    do {
+      const page = await store.queryColumn({ col: 1, rows, limit, ...(cursor ? { cursor } : {}) }, options(store))
+      expect(page.items.length).toBeLessThanOrEqual(limit)
+      for (const item of page.items) {
+        if (item.kind === 'cell') seen.push([item.row, item.cell.value])
+        if (item.kind === 'unknown') unknown++
+      }
+      cursor = page.nextCursor
+    } while (cursor && ++guard < 100)
+    expect(seen).toEqual(Array.from({ length: 50 }, (_, row) => [row, row * 10]))
+    expect(unknown).toBe(1)
+    await source.release()
+
+    // The resident store's equivalent branch (its pages are complete today), exercised directly.
+    const resident = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }]), 'n4-resident')
+    const residentStore: any = resident.store('s')
+    residentStore.setValueOverlay({ rects: [pivot], protectedRects: [pivot], merges: [], cell: (row: number) => ({ value: row * 10 }) })
+    const intervals = [{ r0: 0, r1: 59 }]
+    const partial = { items: [{ kind: 'blank', r0: 0, r1: 49 }, { kind: 'unknown', r0: 50, r1: 59, pageId: 'p' }], completeness: 'loading', stamp: residentStore.stamp }
+    const truncated = residentStore.overlayColumnPage(partial, { col: 1, rows: { kind: 'intervals', intervals }, limit }, intervals, 0, 0, 'objcol', residentStore.valueOverlay)
+    expect(truncated.items.length).toBeLessThanOrEqual(limit)
+    expect(truncated.completeness).toBe('loading')
+    expect(truncated.nextCursor).toBe(`objcol:0:${truncated.items.filter((item: any) => item.kind === 'cell').length}`)
+    await resident.release()
+  })
+
   it('N5: remote invalidation drops the pivot display layer too, and a remote call without a sheet id throws', () => {
     const invalidated: string[] = []
     const remote = Object.create(RemoteWorkbook.prototype)

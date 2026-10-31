@@ -22,7 +22,7 @@ import { MAX_COLS, MAX_ROWS, cellId, formatA1, isValidCoordinate, isValidSourceR
 import { INITIAL_GENERATION } from '../../worker/viewerProtocol'
 import { failedPage, failure, rowSetIntervals, sameStamp, type SheetGeometry, type WorkbookSource, type WorkerPivotAssets } from '../../worker/viewerSession'
 import type { MemoryPool, PoolEntry } from './tileCache'
-import { LaneBuilder, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
+import { LaneBuilder, overlayIncompleteColumnPage, READ_ROWS_MAX_CELLS, READ_ROWS_PAGE_ROWS, SourceStop, buildGeometry, requestBudget, withFrozen, intersects, invalidMergeDiagnostic, type StorePacing } from './source'
 import {
   F_BLOB, F_CACHED, F_ERROR, K_BOOL, K_EMPTY, K_ERROR, K_NUMBER, K_SST, K_TEXT, recordPopulated, textAt, textPrefix,
   type CellPagePayload, type PageSummary,
@@ -546,36 +546,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
 
   private overlayColumnPage(page: Page<ColumnEntry>, request: ColumnQuery, intervals: readonly SourceRowInterval[], startAt: number, startRow: number, prefix: string, overlay: ValueOverlay): Page<ColumnEntry> {
     if (!overlay || page.items.some(item => item.kind === 'lanes')) return page
-    if (page.completeness !== 'complete') {
-      const output: ColumnEntry[] = []
-      for (const item of page.items) {
-        if (item.kind === 'unknown' || item.kind === 'error') { output.push(item); continue }
-        if (item.kind === 'cell' || item.kind === 'unavailable') {
-          const value = this.overlayCell(item.row, request.col)
-          if (value === undefined) output.push(item)
-          else if (value === null) output.push({ kind: 'blank', r0: item.row, r1: item.row })
-          else output.push({ kind: 'cell', row: item.row, cell: this.overlayPayload(item.row, request.col, value) })
-          continue
-        }
-        const replacements: Array<{ row: number; value: NonNullable<ReturnType<ValueOverlay['cell']>> }> = []
-        for (const rect of overlay.rects) if (request.col >= rect.c0 && request.col <= rect.c1) {
-          for (let row = Math.max(item.r0, rect.r0); row <= Math.min(item.r1, rect.r1); row++) {
-            const value = overlay.cell(row, request.col)
-            if (value !== undefined && value !== null) replacements.push({ row, value })
-          }
-        }
-        replacements.sort((a, b) => a.row - b.row)
-        let at = item.r0
-        for (const replacement of replacements) {
-          if (replacement.row < at) continue
-          if (replacement.row > at) output.push({ kind: 'blank', r0: at, r1: replacement.row - 1 })
-          output.push({ kind: 'cell', row: replacement.row, cell: this.overlayPayload(replacement.row, request.col, replacement.value) })
-          at = replacement.row + 1
-        }
-        if (at <= item.r1) output.push({ kind: 'blank', r0: at, r1: item.r1 })
-      }
-      return { ...page, items: output }
-    }
+    if (page.completeness !== 'complete') return overlayIncompleteColumnPage(page, request, intervals, startAt, prefix, overlay, row => this.overlayCell(row, request.col), (row, value) => this.overlayPayload(row, request.col, value))
     let endAt = intervals.length - 1, endRow = intervals[endAt]?.r1 ?? -1
     if (page.nextCursor) {
       const parts = page.nextCursor.split(':')
