@@ -12,10 +12,10 @@
  *   cannot be confirmed with nothing selected).
  * - `collapseField` and `collapseAll` mark data items only; `collapseAll` covers every row and column field.
  * - `filter`: a filter of the same family on the field (label or date; value or top-10, the engine's two kinds,
- *   axes.ts) is replaced in place. A filter of the other family is kept beside it only when the definition allows
- *   multiple filters per field (`multipleFieldFilters`, which the engine computes); otherwise it refuses with the
- *   engine's "more than one filter" feature, `pivot-engine-unmeasured`: whether Excel then replaces the first filter
- *   is not measured.
+ *   axes.ts) is replaced in place. A filter of the other family on a field that already has one refuses with the
+ *   engine's "more than one filter" feature, `pivot-engine-unmeasured`, whatever `multipleFieldFilters` says: no
+ *   oracle case combines the two families on one field, so neither Excel's replace (one filter per field) nor its
+ *   combined evaluation (multiple filters allowed) is measured (§9).
  * - `clearFilters` drops the field's pivot filters and shows its hidden items, and a page field goes back to (All):
  *   Excel's "Clear Filter From" (Task 24 measures it; the kind stays refused until then, session.ts).
  * - `page` sets the page field's selection only; its hidden items are an `items` delta.
@@ -111,8 +111,8 @@ export function applyDelta(view: PivotViewState, delta: PivotDelta, def: PivotTa
       const kind = family(delta.filter)
       const same = view.filters.findIndex(filter => filter.fld === field && family(filter) === kind)
       if (same >= 0) return { ok: true, value: { ...view, filters: view.filters.map((filter, k) => k === same ? delta.filter : filter) } }
-      if (view.filters.some(filter => filter.fld === field) && !def.multipleFieldFilters)
-        return refuse('pivot-engine-unmeasured', `field ${field} would have more than one filter while the pivot allows one filter per field`)
+      if (view.filters.some(filter => filter.fld === field))
+        return refuse('pivot-engine-unmeasured', `field ${field} would have a label or date filter and a value or top-10 filter; combining them is not measured`)
       return { ok: true, value: { ...view, filters: [...view.filters, delta.filter] } }
     }
     case 'clearFilters': {

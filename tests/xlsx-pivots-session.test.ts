@@ -110,15 +110,13 @@ describe('applyDelta maps each kind onto the view', () => {
     expect(ok(apply(p, value, { kind: 'filter', field: REGION, filter: topFilter(REGION, 2) })).filters).toEqual([topFilter(REGION, 2)])
     // Other fields keep their filters.
     expect(ok(apply(p, first, { kind: 'filter', field: REGION, filter: valueFilter(REGION, 50000) })).filters).toEqual([labelFilter(PRODUCT, 'B'), valueFilter(REGION, 50000)])
-    // The seed saves multipleFieldFilters="0": a second filter of the other family on one field is the engine's
-    // "more than one filter" refusal (pivot-engine-unmeasured), never a silent replace.
+    // A second filter of the other family on one field is the engine's "more than one filter" refusal
+    // (pivot-engine-unmeasured), never a silent replace or an unmeasured combination: the seed saves
+    // multipleFieldFilters="0", and allowing multiple filters does not change it.
     expect(p.def.multipleFieldFilters).toBe(false)
     expect(refusal(apply(p, first, { kind: 'filter', field: PRODUCT, filter: valueFilter(PRODUCT, 1000) }))).toBe('pivot-engine-unmeasured')
-    // With multiple filters per field allowed, the engine computes one label and one value filter on a field: both kept.
     const multi = { ...p, def: { ...p.def, multipleFieldFilters: true } }
-    const both = ok(apply(multi, first, { kind: 'filter', field: PRODUCT, filter: valueFilter(PRODUCT, 1000) }))
-    expect(both.filters).toEqual([labelFilter(PRODUCT, 'B'), valueFilter(PRODUCT, 1000)])
-    expect(computePivot(p.store, p.cache, multi.def, both, { date1904: false }).ok).toBe(true)
+    expect(refusal(apply(multi, first, { kind: 'filter', field: PRODUCT, filter: valueFilter(PRODUCT, 1000) }))).toBe('pivot-engine-unmeasured')
     // The filter must name the delta's field.
     expect(refusal(apply(p, view, { kind: 'filter', field: REGION, filter: labelFilter(PRODUCT, 'B') }))).toBe('pivot-delta-invalid')
   })
