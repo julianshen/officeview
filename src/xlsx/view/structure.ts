@@ -183,6 +183,7 @@ export interface StructuralQueryOptions { limit?: number; cursor?: string; count
 export type CellAnchoredDrawing = Extract<DrawingAnchor, { kind: 'oneCell' | 'twoCell' }>
 export type AbsoluteDrawing = Extract<DrawingAnchor, { kind: 'absolute' }>
 export type StructuralHit =
+  | { kind: 'pivot'; record: SourceRect }
   | { kind: 'merge'; record: MergeExtent }
   | { kind: 'table'; record: TableExtent }
   | { kind: 'spill'; record: SpillExtent }
@@ -231,6 +232,8 @@ function frozenClone<T>(value: T): T {
  * and cursors stay exactly resumable with no cross-page dedup. Absolute anchors
  * are retained separately and never enter the spatial index. All records are
  * cloned and deep-frozen: the index owns its copies. */
+// Structural indexes without pivot records need no per-instance pivot slot.
+const pivotIndexes = new WeakMap<object, RectangleIndex<SourceRect>>()
 export class StructuralIndex {
   readonly stamp: SourceStamp
   readonly completeness: Completeness
@@ -243,10 +246,11 @@ export class StructuralIndex {
   private readonly tables: RectangleIndex<TableExtent>
   private readonly spillEntries: RectangleIndex<SpillExtent>
   private readonly drawings: RectangleIndex<CellAnchoredDrawing>
+  private get pivots(): RectangleIndex<SourceRect> | undefined { return pivotIndexes.get(this) }
   /** Retained bytes (S10.2 main ledger): the four indexes, their frozen record copies, gaps. */
   get estimatedBytes(): number {
     return this.merges.estimatedBytes + this.tables.estimatedBytes + this.spillEntries.estimatedBytes + this.drawings.estimatedBytes
-      + this.recordCount * 96 + this.absoluteDrawings.length * 96 + this.missing.length * 48 + 256
+      + (this.pivots?.estimatedBytes ?? 0) + this.recordCount * 96 + this.absoluteDrawings.length * 96 + this.missing.length * 48 + 256
   }
   constructor(result: StructuralResult) {
     this.stamp = frozenClone(result.stamp)
@@ -281,13 +285,16 @@ export class StructuralIndex {
     this.tables = RectangleIndex.build(tableEntries)
     this.spillEntries = RectangleIndex.build(spillEntries)
     this.drawings = RectangleIndex.build(drawingEntries)
+    if (result.pivots?.length) pivotIndexes.set(this, RectangleIndex.build(result.pivots.map(rect => ({ rect, value: frozenClone(rect) }))))
     this.absoluteDrawings = Object.freeze(absolute)
-    this.recordCount = this.merges.size + this.tables.size + this.spillEntries.size + this.drawings.size
+    this.recordCount = (this.pivots?.size ?? 0) + this.merges.size + this.tables.size + this.spillEntries.size + this.drawings.size
   }
   /** First hit across kinds in merge/table/spill/drawing order with early exit.
    * Later kinds are never visited once a hit is found. */
   firstWhere(rect: SourceRect, pred: (hit: StructuralHit) => boolean): StructuralHit | undefined {
     validateSourceRect(rect)
+    const pivot = this.pivots?.firstWhere(rect, record => pred({ kind: 'pivot', record }))
+    if (pivot !== undefined) return { kind: 'pivot', record: pivot }
     const merge = this.merges.firstWhere(rect, record => pred({ kind: 'merge', record }))
     if (merge !== undefined) return { kind: 'merge', record: merge }
     const table = this.tables.firstWhere(rect, record => pred({ kind: 'table', record }))

@@ -6,7 +6,7 @@
  * yet are reported separately (RemoteSheetStore.pendingIn) and paint pending.
  */
 import { bindOverflowCache, type OverflowCache } from '../../xlsx/view/overflowCache'
-import type { RowOrder, RowVisibility } from '../../xlsx/view/contracts'
+import type { RowOrder, RowVisibility, ValueOverlay } from '../../xlsx/view/contracts'
 import { createSheetMetrics } from '../../xlsx/view/projection'
 import { RectangleIndex } from '../../xlsx/view/structure'
 import type { SheetGeometry } from '../../xlsx/view/viewport'
@@ -14,7 +14,7 @@ import type { RemoteWorkbook } from '../../worker/viewerRemoteSource'
 import { axisBytes, projectionBytes } from '../../xlsx/view/mainLedger'
 import { AxisMetricsError, createAxisMetrics } from '../../xlsx/view/axes'
 import { SIZED_DRAWING_BYTES, axisUpperBytes, hasSessionSizes, mergeAxisOverrides, type SessionSizes } from '../../xlsx/view/axisSizes'
-import { MAX_COLS, MAX_ROWS } from '../../xlsx/view/coordinates'
+import { MAX_COLS, MAX_ROWS, cellId } from '../../xlsx/view/coordinates'
 import { axisDiagnostic, drawingQuery, sizedDrawings } from '../../xlsx/view/viewport'
 import type { WorkerDiagnostic } from '../../xlsx/view/contracts'
 import type { XlsxDrawing } from '../../xlsx/types'
@@ -25,7 +25,7 @@ import { MAIN_THREAD_BUDGETS } from '../../xlsx/view/tileCache'
  * main-thread consumer (planner, hit-testing, overlays, a11y) agrees. Worker
  * viewport plans use the workbook geometry and are not consulted while a
  * sheet has session sizes (InteractiveSheetDoc / tilePlanSource). */
-export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor(), sizes?: SessionSizes, deferCharge = false): SheetGeometry & { readonly chargeBytes: number } {
+export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, order: RowOrder, visibility: RowVisibility, cache: OverflowCache = remote.overflowFor(), sizes?: SessionSizes, deferCharge = false, overlay?: ValueOverlay): SheetGeometry & { readonly chargeBytes: number } {
   const axes = remote.geometry(sheetId)
   const store = remote.store(sheetId)
   const merges = remote.merges(sheetId).merges
@@ -87,12 +87,31 @@ export function pagedSheetGeometry(remote: RemoteWorkbook, sheetId: string, orde
     }
   }
   metrics ??= createSheetMetrics({ rows, cols, order, visibility })
-  const mergeIndex = RectangleIndex.build(merges.map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range })))
+  const mergeEntries = merges.filter(range => !overlay?.rects.some(rect => range.minRow <= rect.r1 && rect.r0 <= range.maxRow && range.minCol <= rect.c1 && rect.c0 <= range.maxCol))
+    .map(range => ({ rect: { r0: range.minRow, r1: range.maxRow, c0: range.minCol, c1: range.maxCol }, value: range }))
+  if (overlay) for (const merge of overlay.merges) mergeEntries.push({ rect: { ...merge }, value: { minRow: merge.r0, maxRow: merge.r1, minCol: merge.c0, maxCol: merge.c1 } })
+  const mergeIndex = RectangleIndex.build(mergeEntries)
+  const cellsOf = (sourceRow: number): readonly import('../../xlsx/types').XlsxCell[] | undefined => {
+    const base = store.cellsOf(sourceRow)
+    if (!overlay) return base
+    const cells = [...(base ?? [])]
+    for (const rect of overlay.rects) {
+      if (sourceRow < rect.r0 || sourceRow > rect.r1) continue
+      for (let col = rect.c0; col <= rect.c1; col++) {
+        const value = overlay.cell(sourceRow, col)
+        if (value === undefined) continue
+        const existing = cells.findIndex(cell => cell.row === sourceRow && cell.col === col)
+        if (existing >= 0) cells.splice(existing, 1)
+        if (value !== null) cells.push({ id: cellId(sourceRow, col), ref: `R${sourceRow}C${col}`, row: sourceRow, col, value: value.value, styleIndex: 0, ...(value.numFmtId !== undefined ? { style: { numFmtId: value.numFmtId } } : {}), hasCachedValue: true, valueProvenance: 'cached' })
+      }
+    }
+    return cells.length ? cells.sort((a, b) => a.col - b.col) : undefined
+  }
   const geometry = Object.freeze({
     kind: 'ready' as const,
     metrics,
     diagnostics: Object.freeze([...drawings.diagnostics, ...sizeDiagnostics]),
-    cellsOf: (sourceRow: number) => store.cellsOf(sourceRow),
+    cellsOf,
     merges: mergeIndex,
     // Read at query time so geometry does not pin an evicted drawing payload.
     drawingsIn,

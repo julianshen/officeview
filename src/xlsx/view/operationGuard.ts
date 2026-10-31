@@ -68,6 +68,10 @@ function invalidRange(error: unknown): GuardOutcome {
   if (error instanceof RangeError) return { ok: false, refusal: { reason: 'invalid-range', message: error.message } }
   throw error
 }
+function pivotRefusal(range: SourceRect): OperationRefusal {
+  // TODO(Task 24): replace with the measured Excel message verbatim.
+  return { reason: 'pivot', range, message: "This change can't be made to a PivotTable." }
+}
 function mergeBands(bands: readonly SourceRowInterval[]): SourceRowInterval[] {
   const sorted = [...bands].sort((a, b) => a.r0 - b.r0 || a.r1 - b.r1)
   const out: SourceRowInterval[] = []
@@ -126,6 +130,8 @@ export async function guardSort(
       return { ok: false, refusal: incompleteRefusal(structure) }
     }
     const fullBand: SourceRect = { r0: band.r0, r1: band.r1, c0: 0, c1: MAX_COLS - 1 }
+    const pivot = structure.firstWhere(fullBand, hit => hit.kind === 'pivot')
+    if (pivot?.kind === 'pivot') return { ok: false, refusal: pivotRefusal(pivot.record) }
     const merge = structure.firstWhere(fullBand, hit => hit.kind === 'merge')
     if (merge !== undefined && merge.kind === 'merge') {
       return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }
@@ -237,6 +243,8 @@ export async function guardSort(
   for (const covered of mergeBands([band, ...changed])) {
     if (due()) await cooperate!.pause()
     const coveredBand: SourceRect = { r0: covered.r0, r1: covered.r1, c0: 0, c1: MAX_COLS - 1 }
+    const pivot = structure.firstWhere(coveredBand, hit => hit.kind === 'pivot')
+    if (pivot?.kind === 'pivot') return { ok: false, refusal: pivotRefusal(pivot.record) }
     const merge = structure.firstWhere(coveredBand, hit => hit.kind === 'merge')
     if (merge !== undefined && merge.kind === 'merge') {
       return { ok: false, refusal: { reason: 'merge', range: merge.record.range } }

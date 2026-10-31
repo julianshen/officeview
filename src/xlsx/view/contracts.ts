@@ -82,6 +82,16 @@ export type CellRead =
   | { kind: 'unavailable'; cell: SingleCellPayload; reason: 'formula-value-unavailable' }
 
 export interface SourceStamp { docId: string; sheetId: string; valueGen: number }
+/** Committed pivot values. `undefined` means the coordinate is not owned;
+ * `null` explicitly clears a cell inside an owned rectangle. */
+export interface ValueOverlayCell { value: XlsxCell['value']; numFmtId?: number }
+export interface ValueOverlay {
+  readonly rects: readonly SourceRect[]
+  cell(row: number, col: number): ValueOverlayCell | null | undefined
+  readonly merges: readonly SourceRect[]
+  readonly usedRows: number
+  readonly usedCols: number
+}
 export interface ReadOptions { signal: AbortSignal; stamp: SourceStamp }
 /** Cursors belong to the original query/stamp; owner changes invalidate them (§4.1).
  * readRows/queryColumn/scanPopulated/queryOverview publish expected operational
@@ -213,8 +223,12 @@ export interface RangeCompletion {
  * bounded by its limit. External custom providers must meet the same contract. */
 export interface SourceStore {
   readonly stamp: SourceStamp
+  /** Structural generation for geometry-affecting metadata, including overlay merges. */
+  readonly structureGen?: number
   readonly valuePolicy: ValuePolicy
   readonly extent: { rows: 1048576; cols: 16384; used?: SourceRect }
+  /** Publish a committed pivot overlay; stores advance valueGen atomically. */
+  setValueOverlay?(overlay: ValueOverlay | undefined): void
   readCell(at: SourceCell, options: ReadOptions): Promise<CellRead>
   readRows(range: SourceRect, cursor: string | undefined, options: ReadOptions): Promise<Page<SparseRowPage>>
   /** Ordering contract (§4.1; enforced by the worker session since S4.2): the
@@ -347,11 +361,14 @@ export interface StructuralResult {
   tables: readonly TableExtent[]
   spills: readonly SpillExtent[]
   drawings: readonly DrawingAnchor[]
+  /** Pivot output rectangles are protected from sheet-level sort/filter. */
+  pivots?: readonly SourceRect[]
   missing: readonly SourceRect[]
   error?: SourceFailure
 }
 /** Refusals never publish a changed view owner, spec §§4.4, 6.1, 6.3. */
 export type OperationRefusal =
+  | { reason: 'pivot'; range: SourceRect; message: string }
   | { reason: 'formula-value-unavailable'; count: number; firstAddress: SourceCell }
   | { reason: 'merge' | 'fixed-array' | 'dynamic-spill' | 'outside-column-data'; range: SourceRect }
   | { reason: 'drawing-impact'; drawingId: string }

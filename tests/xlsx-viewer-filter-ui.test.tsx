@@ -232,6 +232,18 @@ it('shows incomplete progress, disables Apply, permits cancel and releases a ref
   expect(f.runs.refCount).toBe(0)
 })
 
+it('shows the measured PivotTable refusal without changing the filter', async () => {
+  const f = controlsFixture(6), client = createControlsClient({ ...f.options, stageFilter: async () => ({ kind: 'refused', refusal: { reason: 'pivot', range: f.range, message: "This change can't be made to a PivotTable." } }) })
+  const ui = render(<FilterHarness fixture={f} client={client} />)
+  await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
+  fireEvent.click(ui.getByRole('checkbox', { name: 'item-3' }))
+  await waitFor(() => expect(ui.getByRole('button', { name: 'OK' }).hasAttribute('disabled')).toBe(false))
+  fireEvent.click(ui.getByRole('button', { name: 'OK' }))
+  await waitFor(() => expect(ui.getByRole('status').textContent).toContain("Operation refused: This change can't be made to a PivotTable."))
+  expect(f.publications).toBe(0)
+  expect(f.snapshot.filter).toBeNull()
+})
+
 it('search Enter searches without applying and native checkbox/negative typing stays isolated', async () => {
   const f = controlsFixture(6), ui = render(<FilterHarness fixture={f} />)
   await waitFor(() => expect(ui.getByRole('checkbox', { name: 'item-3' })).toBeTruthy())
