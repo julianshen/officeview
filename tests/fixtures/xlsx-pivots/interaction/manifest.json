@@ -1,0 +1,1056 @@
+[
+  {
+    "case": "interaction-base-tabular-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-base-tabular-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "the tabular/bottom start state for the collapse cases",
+    "setup": "tabular form, subtotals at the bottom (Stage 2 has no such file)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-item-compact-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-item-compact-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse one outer row item in compact form with subtotals at the top: the collapsed line, its subtotal, the vacated rows (§10.1)",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-field-compact-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-field-compact-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse the entire outer row field in compact form, subtotals at the top",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-item-compact-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-item-compact-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse one outer row item in compact form with subtotals at the bottom: the collapsed line, its subtotal, the vacated rows (§10.1)",
+    "base": "engine/layout-subtotals-bottom-compact",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-field-compact-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-field-compact-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse the entire outer row field in compact form, subtotals at the bottom",
+    "base": "engine/layout-subtotals-bottom-compact",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-item-outline-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-item-outline-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse one outer row item in outline form with subtotals at the top: the collapsed line, its subtotal, the vacated rows (§10.1)",
+    "base": "engine/layout-subtotals-top-outline",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-field-outline-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-field-outline-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse the entire outer row field in outline form, subtotals at the top",
+    "base": "engine/layout-subtotals-top-outline",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-item-outline-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-item-outline-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse one outer row item in outline form with subtotals at the bottom: the collapsed line, its subtotal, the vacated rows (§10.1)",
+    "base": "engine/layout-subtotals-bottom-outline",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-field-outline-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-field-outline-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse the entire outer row field in outline form, subtotals at the bottom",
+    "base": "engine/layout-subtotals-bottom-outline",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-item-tabular-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-item-tabular-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse one outer row item in tabular form with subtotals at the top: the collapsed line, its subtotal, the vacated rows (§10.1)",
+    "base": "engine/layout-subtotals-top-tabular",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-field-tabular-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-field-tabular-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse the entire outer row field in tabular form, subtotals at the top",
+    "base": "engine/layout-subtotals-top-tabular",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-item-tabular-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-item-tabular-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse one outer row item in tabular form with subtotals at the bottom: the collapsed line, its subtotal, the vacated rows (§10.1)",
+    "base": "interaction/interaction-base-tabular-bottom",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-field-tabular-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-field-tabular-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse the entire outer row field in tabular form, subtotals at the bottom",
+    "base": "interaction/interaction-base-tabular-bottom",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-all-compact-top",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-all-compact-top.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseAll",
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse everything in compact form (subtotals at the top): every item of each field that has a level below it on its axis (Region on rows; Year on columns, above Values); the innermost row field Product is not collapsible in the UI",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-collapse-all-outline-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-collapse-all-outline-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseAll",
+        "collapsed": true
+      }
+    ],
+    "measures": "collapse everything in outline form (subtotals at the bottom): every item of each field that has a level below it on its axis (Region on rows; Year on columns, above Values); the innermost row field Product is not collapsible in the UI",
+    "base": "engine/layout-subtotals-bottom-outline",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-expand-item",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-expand-item.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": false
+      }
+    ],
+    "measures": "expand a collapsed item: back to the seed (sd removed, rows regrow)",
+    "base": "engine/layout-collapsed-item",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-expand-field",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-expand-field.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseField",
+        "field": 0,
+        "collapsed": false
+      }
+    ],
+    "measures": "expand the entire field after collapsing it",
+    "base": "interaction/interaction-collapse-field-compact-top",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-expand-all",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-expand-all.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapseAll",
+        "collapsed": false
+      }
+    ],
+    "measures": "expand everything after collapsing everything: back to the seed, and whether column widths grow back (§7.8)",
+    "base": "interaction/interaction-collapse-all-compact-top",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-filter-all-hidden",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-filter-all-hidden.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": [
+          0,
+          2,
+          3,
+          4
+        ]
+      }
+    ],
+    "measures": "every Region item hidden but North (§10.4): the one remaining group, subtotals and grand totals; whether column A shrinks (§7.8)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-items-inner-all-but-one",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-items-inner-all-but-one.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 1,
+        "hidden": [
+          0,
+          1,
+          3
+        ]
+      }
+    ],
+    "measures": "every inner item hidden but Cherries: Central (Elderberries only) drops; outer lines keep one child each",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-items-show-again",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-items-show-again.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": []
+      }
+    ],
+    "measures": "select all after one item was hidden: back to the seed",
+    "base": "engine/quirk-hidden-row-item",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-clear-filters-hidden-items",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-clear-filters-hidden-items.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "clearFilters",
+        "field": 0
+      }
+    ],
+    "measures": "Clear Filter From \"Region\" with only a manual (hidden-item) filter: does it show the hidden items again? (no xml fallback: the fallback would presuppose the answer)",
+    "base": "engine/quirk-hidden-row-item",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-page-select-other",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-page-select-other.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "page",
+        "field": 1,
+        "selected": [
+          2
+        ]
+      }
+    ],
+    "measures": "a single page selection changed (Apples → Cherries): Central drops again",
+    "base": "engine/quirk-page-single",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-page-all",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-page-all.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "page",
+        "field": 1,
+        "selected": "all"
+      }
+    ],
+    "measures": "page selection back to (All): the page cell caption \"(All)\" in zh-TW, Central returns",
+    "base": "engine/quirk-page-single",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "interaction-page-multi",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-page-multi.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "page",
+        "field": 1,
+        "selected": [
+          0,
+          2
+        ]
+      }
+    ],
+    "measures": "single → multiple page selection (Apples and Cherries; `enable multiple page items` is refused, so the xml route)",
+    "base": "engine/quirk-page-single",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "interaction-page-multi-to-all",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-page-multi-to-all.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "page",
+        "field": 1,
+        "selected": "all"
+      }
+    ],
+    "measures": "a multiple page selection toggled back to all: \"(All)\" again; whether multipleItemSelectionAllowed stays (applyDelta(page, all) must clear the hidden items)",
+    "base": "engine/quirk-page-multiple",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-clear-label-filter",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-clear-label-filter.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "clearFilters",
+        "field": 1
+      }
+    ],
+    "measures": "clear a label filter: back to the seed (and whether measureFilter is dropped)",
+    "base": "engine/filter-label-begins-with",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-clear-value-filter",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-clear-value-filter.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "clearFilters",
+        "field": 0
+      }
+    ],
+    "measures": "clear a value filter: back to the seed (and whether measureFilter is dropped)",
+    "base": "engine/filter-value-greater-than",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-clear-top10-filter",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-clear-top10-filter.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "clearFilters",
+        "field": 0
+      }
+    ],
+    "measures": "clear a top-10 filter: back to the seed (and whether measureFilter is dropped)",
+    "base": "engine/filter-top-count",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-filter-date-base",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-filter-date-base.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "the start state of the date-filter cases (Date items in the cache)",
+    "setup": "Date alone on rows (Region and Product off the axis)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-filter-date-between",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-filter-date-between.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 5,
+        "filter": {
+          "fld": 5,
+          "type": "dateBetween",
+          "evalOrder": -1,
+          "id": 101,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": true,
+                  "filters": [
+                    {
+                      "operator": "greaterThanOrEqual",
+                      "val": "43831"
+                    },
+                    {
+                      "operator": "lessThanOrEqual",
+                      "val": "44561"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "measures": "a date filter as a delta on Date-on-rows (Stage 2 filter-date-between changes the cache, so it is not same-cache): 2020-01-01..2021-12-31, blanks out?",
+    "base": "interaction/interaction-filter-date-base",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "interaction-filter-date-clear",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-filter-date-clear.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "clearFilters",
+        "field": 5
+      }
+    ],
+    "measures": "clear a date filter",
+    "base": "engine/filter-date-between",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-sort-value-ascending-ties",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-sort-value-ascending-ties.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 0,
+        "order": "ascending",
+        "byData": 1
+      }
+    ],
+    "measures": "sort ascending by a value column with ties (North = South on Sum of Units): tie order ascending",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "interaction-sort-then-collapse",
+    "file": "tests/fixtures/xlsx-pivots/interaction/interaction-sort-then-collapse.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 0,
+        "order": "descending"
+      },
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 3,
+        "collapsed": true
+      }
+    ],
+    "measures": "two deltas in order: a label sort, then a collapse addressed by pivot-item index (indices are the start file's, not the sorted order)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "caption-defaults",
+    "file": "tests/fixtures/xlsx-pivots/interaction/caption-defaults.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "zh-TW defaults for Row Labels, Column Labels and Grand Total (the seed spells them out in English); Values stays explicit: dataCaption is required and Excel always writes it",
+    "setup": "the seed's explicit grandTotalCaption, rowHeaderCaption and colHeaderCaption removed",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "caption-defaults-single-data",
+    "file": "tests/fixtures/xlsx-pivots/interaction/caption-defaults-single-data.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "one data field: its name in the top-left cell, both grand totals as the implicit Grand Total caption",
+    "setup": "Sum of Units removed from Values; explicit captions removed",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "caption-defaults-outline-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/caption-defaults-outline-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "field-name headers over each column (Values field = dataCaption), bottom subtotal captions and Grand Total, all in zh-TW",
+    "setup": "outline form, subtotals at the bottom, explicit captions removed",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "caption-defaults-collapsed-bottom",
+    "file": "tests/fixtures/xlsx-pivots/interaction/caption-defaults-collapsed-bottom.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 25,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "a collapse on a pivot whose captions are all implicit: the caption rule must fill the new subtotal-less line (the oracle for resolveCaptions)",
+    "base": "interaction/caption-defaults-outline-bottom",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "autofit-refresh-narrow",
+    "file": "tests/fixtures/xlsx-pivots/interaction/autofit-refresh-narrow.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 29,
+    "seed": "engine-seed",
+    "delta": [],
+    "measures": "does a plain refresh autofit the pivot columns (useAutoFormatting=\"1\")? widths before 4, after?",
+    "setup": "columns A:K set to width 4 before the refresh",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "autofit-collapse-narrow",
+    "file": "tests/fixtures/xlsx-pivots/interaction/autofit-collapse-narrow.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 29,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "an update after narrow columns: does Excel grow them to fit, and with what padding over the text width?",
+    "setup": "columns A:K set to width 4 before the collapse",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "autofit-collapse-wide",
+    "file": "tests/fixtures/xlsx-pivots/interaction/autofit-collapse-wide.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 29,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "grow only? wide columns after an update: shrunk to fit or kept",
+    "setup": "columns A:K set to width 40 before the collapse",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "autofit-hide-longest",
+    "file": "tests/fixtures/xlsx-pivots/interaction/autofit-hide-longest.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 29,
+    "seed": "engine-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": [
+          4
+        ]
+      },
+      {
+        "kind": "items",
+        "field": 1,
+        "hidden": [
+          3
+        ]
+      }
+    ],
+    "measures": "the longest row label (Elderberries) leaves: does column A shrink with no manual width?",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-baseline",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-baseline.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [],
+    "measures": "the chart seed refreshed: series, categories and pivotFmts as saved",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-hide-item",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-hide-item.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": [
+          3
+        ]
+      }
+    ],
+    "measures": "a hidden category group: category ref shrinks, series count unchanged",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-collapse-item",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-collapse-item.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "a collapsed category: one category for East, multi-level categories",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-value-filter",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-value-filter.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 0,
+        "filter": {
+          "fld": 0,
+          "type": "valueGreaterThan",
+          "evalOrder": -1,
+          "id": 102,
+          "iMeasureFld": 0,
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "greaterThan",
+                      "val": "34000"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "measures": "a value filter that drops two category groups (§10.7)",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "chart-sort",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-sort.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "sort",
+        "field": 0,
+        "order": "descending"
+      }
+    ],
+    "measures": "category order follows a label sort",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-values-on-rows",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-values-on-rows.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [],
+    "measures": "series and categories with Values on rows (§6.6, CODEX-3): what the chart gate must map",
+    "setup": "Values moved to rows (a field move)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-page-base",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-page-base.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [],
+    "measures": "a pivot chart over a pivot with a page field: the start state of chart-page-select",
+    "setup": "Product moved to a page field (a field move)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "chart-page-select",
+    "file": "tests/fixtures/xlsx-pivots/interaction/chart-page-select.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 30,
+    "seed": "chart-seed",
+    "delta": [
+      {
+        "kind": "page",
+        "field": 1,
+        "selected": [
+          0
+        ]
+      }
+    ],
+    "measures": "a page selection under a pivot chart: values change, refs do not",
+    "base": "interaction/chart-page-base",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "gpd-baseline",
+    "file": "tests/fixtures/xlsx-pivots/interaction/gpd-baseline.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 31,
+    "seed": "getpivotdata-seed",
+    "delta": [],
+    "measures": "the saved GETPIVOTDATA values on the unchanged pivot",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "gpd-hide-item",
+    "file": "tests/fixtures/xlsx-pivots/interaction/gpd-hide-item.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 31,
+    "seed": "getpivotdata-seed",
+    "delta": [
+      {
+        "kind": "items",
+        "field": 0,
+        "hidden": [
+          3
+        ]
+      }
+    ],
+    "measures": "GETPIVOTDATA naming a hidden item (§10.5: #REF! expected) and the grand total without it",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "gpd-collapse-item",
+    "file": "tests/fixtures/xlsx-pivots/interaction/gpd-collapse-item.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 31,
+    "seed": "getpivotdata-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "GETPIVOTDATA naming detail under a collapsed item (East/Bananas)",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "gpd-filter-out",
+    "file": "tests/fixtures/xlsx-pivots/interaction/gpd-filter-out.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 31,
+    "seed": "getpivotdata-seed",
+    "delta": [
+      {
+        "kind": "filter",
+        "field": 1,
+        "filter": {
+          "fld": 1,
+          "type": "captionBeginsWith",
+          "evalOrder": -1,
+          "id": 103,
+          "stringValue1": "B",
+          "autoFilter": {
+            "ref": "A1",
+            "columns": [
+              {
+                "colId": 0,
+                "hiddenButton": false,
+                "showButton": true,
+                "customFilters": {
+                  "and": false,
+                  "filters": [
+                    {
+                      "operator": "equal",
+                      "val": "B*"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "measures": "GETPIVOTDATA naming an item a label filter removes (South/Cherries) and Central, left without records",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "refresh-on-load",
+    "file": "tests/fixtures/xlsx-pivots/interaction/refresh-on-load.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 32,
+    "seed": "refresh-seed",
+    "delta": [],
+    "measures": "the refreshed output of a refreshOnLoad pivot whose records were older than Data (§7.7): East/Apples/2022 empties, North gains a record",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "refresh-on-load-collapse",
+    "file": "tests/fixtures/xlsx-pivots/interaction/refresh-on-load-collapse.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 32,
+    "seed": "refresh-seed",
+    "delta": [
+      {
+        "kind": "collapse",
+        "field": 0,
+        "item": 0,
+        "collapsed": true
+      }
+    ],
+    "measures": "the first interaction on a refreshOnLoad pivot: refresh from the source, then the change",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "refresh-on-load-nodata",
+    "file": "tests/fixtures/xlsx-pivots/interaction/refresh-on-load-nodata.xlsx",
+    "pivot": "樞紐分析表2",
+    "task": 32,
+    "seed": "refresh-seed",
+    "delta": [],
+    "measures": "refreshOnLoad with saveData=\"0\": the cells Excel computes from the source alone",
+    "base": "recipes/refresh-seed-nodata",
+    "route": "applescript",
+    "status": "built"
+  }
+]
