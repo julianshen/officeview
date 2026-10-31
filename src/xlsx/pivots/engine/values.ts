@@ -821,10 +821,12 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
   // rolled up (S2-AB), records in display order, per-row or per-column partial sums, Welford with a parallel merge,
   // two-pass over the records and fused multiply-add forms each leave 1–9 total cells off in the 15th digit
   // (e.g. values-fn-var R24C8 grand × grand: Excel 6768554.289461315, closest 6768554.289461324).
-  const hasTotals = (lines: readonly PivotLine[], leaf: Uint8Array) => lines.some((line, index) => line.type === 'grand'
-    || isNamedSubtotal(line.type) || (line.type === 'data' && !leaf[index] && lineCarriesValues(view, lines === axes.rows ? 'rows' : 'cols', line)))
+  // A total line is any value-carrying line that is not a leaf: grand, default and named subtotals, and parent data
+  // lines that carry their subtotal (on top or collapsed); only leaf data lines and blank lines are not.
+  const hasTotals = (lines: readonly PivotLine[], leaf: Uint8Array, axis: 'rows' | 'cols') =>
+    lines.some((line, index) => !leaf[index] && lineCarriesValues(view, axis, line))
   const varianceFns = new Set<ValueFnCode>([VALUE_FN.stdDev, VALUE_FN.stdDevp, VALUE_FN.var, VALUE_FN.varp])
-  if (gridBankCodes.some(fn => varianceFns.has(fn as ValueFnCode)) && (hasTotals(axes.rows, rowLeaf) || hasTotals(axes.cols, colLeaf)))
+  if (gridBankCodes.some(fn => varianceFns.has(fn as ValueFnCode)) && (hasTotals(axes.rows, rowLeaf, 'rows') || hasTotals(axes.cols, colLeaf, 'cols')))
     return unmeasured('variance subtotal rounding differs from Excel: its total cells differ in the 15th digit under every tested accumulation of the leaf moments')
 
   const sumOnly = !hasErrorValues && functions.every(fn => fn === VALUE_FN.sum)

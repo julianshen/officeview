@@ -442,6 +442,35 @@ describe('pivot value aggregation', () => {
     expect(result.ok && result.value.get(2, 0, 0)).toEqual({ kind: 'empty' })
   })
 
+  it('refuses variance on every kind of total line, on either axis (S2-AA)', () => {
+    // codex review repro: two records 10, 20 under one default subtotal, no grand totals; var would be 50.
+    const fn = 'var' as const
+    const data = [{ field: 1, fn, showAs: 'normal' as const, baseField: -1, baseItem: 1048832, name: fn }]
+    const leaves = (prefix: number[]): PivotAxes['rows'] => [{ type: 'data', first: 1, items: [...prefix, 0], data: 0 }, { type: 'data', first: 1, items: [...prefix, 1], data: 0 }]
+    const single: PivotAxes['rows'] = [{ type: 'data', first: 0, items: [], data: 0 }]
+    for (const total of ['default', 'grand', 'sum', 'avg', 'countA'] as const) {
+      const lines: PivotAxes['rows'] = [...leaves([0]), { type: total, first: 0, items: total === 'grand' ? [] : [0], data: 0 }]
+      for (const axis of ['rows', 'cols'] as const) {
+        const f = fixture([10, 20], data, axis === 'rows' ? lines : single, [0, 1], axis === 'cols' ? lines : single, [0, 1])
+        if (axis === 'rows') { f.axes.rowKey = Uint32Array.from([0, 1]); f.axes.colKey = new Uint32Array(2); f.view.rows = [0, 0] }
+        else { f.axes.colKey = Uint32Array.from([0, 1]); f.axes.rowKey = new Uint32Array(2); f.view.rows = []; f.view.cols = [0, 0] }
+        const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+        expect(result.ok ? 'computed' : result.diagnostic.message, `${total} on ${axis}`).toContain('variance subtotal rounding differs from Excel')
+      }
+    }
+    // A parent data line carrying its subtotal on top is a total too.
+    const top: PivotAxes['rows'] = [{ type: 'data', first: 0, items: [0], data: 0 }, ...leaves([0])]
+    const f = fixture([10, 20], data, top, [1, 2])
+    f.view.rows = [0, 0]
+    f.view.fields = [{ ...fieldState, subtotalTop: true, defaultSubtotal: true }, fieldState]
+    const result = computeValues(f.store, f.cache, f.def, f.view, { ...f.axes, rowKey: Uint32Array.from([1, 2]) })
+    expect(result.ok ? 'computed' : result.diagnostic.message).toContain('variance subtotal rounding differs from Excel')
+    // Leaf-only variance still computes.
+    const flat = fixture([10, 20], data)
+    const plain = computeValues(flat.store, flat.cache, flat.def, flat.view, flat.axes)
+    expect(plain.ok && plain.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 50 })
+  })
+
   it('shows #DIV/0! for a sample statistic over one number and uses the measured textbook variance forms', () => {
     for (const fn of ['stdDev', 'var'] as const) {
       const f = fixture([10], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
