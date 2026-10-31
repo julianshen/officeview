@@ -50,6 +50,7 @@ import { registerGetPivotData } from '../../../xlsx/pivots/session/getpivotdata'
 import { sheetBlockers, structuralOccupancy } from '../../../xlsx/pivots/session/occupancy'
 import { engineSpillFootprints } from '../../../xlsx/formula/workbook'
 import { estimatePayloadBytes } from '../../../xlsx/view/payloadBytes'
+import { OwnedRects, uniqueRectList } from '../../../xlsx/view/rectIndex'
 
 registerGetPivotData()
 
@@ -308,15 +309,19 @@ export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay {
   const rects = owned.flatMap(part => part.rects)
   // Ruling S3-G: sheet sort and filter stay refused over every saved pivot area and every current one (page cells
   // included); a vacated saved area reads blank but is still the pivot's.
-  const protectedRects = owned.flatMap(part => part.rects).filter((rect, k, all) => all.findIndex(other => other.r0 === rect.r0 && other.r1 === rect.r1 && other.c0 === rect.c0 && other.c1 === rect.c1) === k)
+  const protectedRects = uniqueRectList(rects)
   const merges = parts.flatMap(part => part.layout.merges.map(toSource))
+  // Indexed by part (Task 33 perf): a read is one point query, not a walk over every pivot.
+  const currents = new OwnedRects(owned.flatMap((part, k) => part.current.map(rect => ({ rect, owner: k }))))
+  const areas = new OwnedRects(owned.flatMap((part, k) => part.rects.map(rect => ({ rect, owner: k }))))
   return Object.freeze({
     rects, protectedRects, merges,
     cell(row: number, col: number) {
-      // The pivot whose current area holds the cell answers first, so a pivot growing into a cell another one vacated wins.
-      for (const part of owned) if (within(part.current, row, col)) return part.cell(row, col)
-      for (const part of owned) if (within(part.rects, row, col)) return null
-      return undefined
+      // The pivot whose current area holds the cell answers first, so a pivot growing into a cell another one vacated
+      // wins; among several, the first part (as the parts are listed).
+      const holders = currents.at(row, col)
+      if (holders.length) return owned[Math.min(...holders)]!.cell(row, col)
+      return areas.has(row, col) ? null : undefined
     },
   })
 }
@@ -366,23 +371,29 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     for (const [id, entry] of open) if (id.startsWith(`${sheetId}:`) && shows(entry)) out.push({ saved: entry.saved, current: entry.current, layout: entry.session.layout, style: entry.style(savedPivotLayout(entry.session.def)) })
     return out
   }
+  // Ruling S3-AC: every pivot's saved area (vacated cells too, which it protects while it is open and gets back on a
+  // reset) and the current area of each one showing a change, indexed per sheet (Task 33 perf: one point query per
+  // cell, not a walk over every pivot); rebuilt after a commit or a release.
+  const blockers = new Map<number, OwnedRects<number>>()
+  const blockersOf = (sheetId: number): OwnedRects<number> => {
+    let index = blockers.get(sheetId)
+    if (index) return index
+    const entries: { rect: SourceRect; owner: number }[] = []
+    savedDefs[sheetId]!.forEach((def, pivot) => { for (const rect of savedPivotLayout(def)?.rects ?? []) entries.push({ rect: toSource(rect), owner: pivot }) })
+    for (const [id, entry] of open) {
+      const [sheet, pivot] = id.split(':').map(Number) as [number, number]
+      if (sheet === sheetId && shows(entry)) for (const rect of entry.current) entries.push({ rect, owner: pivot })
+    }
+    blockers.set(sheetId, index = new OwnedRects(entries))
+    return index
+  }
   const occupiedFor = (sheetId: number, pivot: number) => {
     const sheet = sheetOf(sheetId)!
     const saved = sheetCellReader(sheet)
-    const others = savedDefs[sheetId]!.map((def, index) => ({ index, def })).filter(entry => entry.index !== pivot)
-    const savedRects = new Map(others.map(entry => [entry.index, (savedPivotLayout(entry.def)?.rects ?? []).map(toSource)]))
     // Merges, array and spill ranges and noted cells (S3-AC), charged while the session holds the check.
     const structure = structuralOccupancy(sheetBlockers(sheet, engineSpillFootprints(doc)?.get(sheet)))
-    // Ruling S3-AC: another pivot's current area always counts, and so does its saved area — vacated cells too, which
-    // it protects while it is open (the composite overlay's protected rectangles) and gets back on a reset.
-    const occupied = (row: number, col: number): boolean => {
-      for (const { index } of others) {
-        if (within(savedRects.get(index)!, row, col)) return true
-        const live = open.get(key(sheetId, index))
-        if (live && shows(live) && within(live.current, row, col)) return true
-      }
-      return saved(row, col) !== undefined || structure.occupied(row, col)
-    }
+    const occupied = (row: number, col: number): boolean =>
+      blockersOf(sheetId).find(row, col, owner => owner !== pivot) !== undefined || saved(row, col) !== undefined || structure.occupied(row, col)
     ledger.chargeWhileReachable('structure', [occupied], structure.bytes)
     return occupied
   }
@@ -477,6 +488,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       // shown after (a shrink or reset vacates cells the previous layout filled).
       const before = entry.current
       entry.current = layoutArea(session.layout)
+      blockers.delete(sheetId)
       const owned = parts(sheetId)
       const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null, ...(delta === 'reset' ? { reset: true } : {}),
         layout: result.layout, cache: entry.cache, date1904: entry.date1904,
@@ -489,10 +501,12 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       const id = key(sheetId, pivot)
       open.get(id)?.session.release()
       open.delete(id)
+      blockers.delete(sheetId)
     },
     dispose() {
       for (const entry of open.values()) entry.session.release()
       open.clear()
+      blockers.clear()
     },
   }
   return client

@@ -62,6 +62,7 @@ import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
+import { OwnedRects } from '../xlsx/view/rectIndex'
 import { PAGED_CELL_BYTES_ESTIMATE, PIVOT_FIT_REPLY_BYTES, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
@@ -802,6 +803,22 @@ function pivotOutputRects(layout: import('../xlsx/pivots/engine/place').PivotLay
   }
   return rects
 }
+/** A sheet's committed pivot overlays as one: a cell is answered by the last overlay whose rectangles hold it,
+ * found with one point query over all of them (Task 33 perf: not a walk over every overlay). */
+export function combinePivotOverlays(overlays: readonly import('../xlsx/view/contracts').ValueOverlay[]): import('../xlsx/view/contracts').ValueOverlay | undefined {
+  if (!overlays.length) return undefined
+  const rects = overlays.flatMap(overlay => overlay.rects)
+  const protectedRects = overlays.flatMap(overlay => overlay.protectedRects)
+  const merges = overlays.flatMap(overlay => overlay.merges)
+  const owners = new OwnedRects(overlays.flatMap((overlay, k) => overlay.rects.map(rect => ({ rect, owner: k }))))
+  return Object.freeze({
+    rects, protectedRects, merges,
+    cell(row: number, col: number) {
+      const holders = owners.at(row, col)
+      return holders.length ? overlays[Math.max(...holders)]!.cell(row, col) : undefined
+    },
+  })
+}
 /** `saved`: the session's saved area (rectangle and page cells): protected from the first commit on (Ruling S3-L). */
 function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotApplyResult, saved: readonly SourceRect[], previous?: import('../xlsx/view/contracts').ValueOverlay): import('../xlsx/view/contracts').ValueOverlay {
   const currentRects = pivotOutputRects(result.layout)
@@ -1435,16 +1452,10 @@ export class DocumentSession {
     // over once admitted, and this charge ends with the open.
     const building = refreshSource ? this.memory.charge() : undefined
     // Ruling S3-AC: the other pivots' saved areas (vacated cells included: each protects its own) and the areas their
-    // commits show, read at each apply; then the sheet's own cells.
-    const otherSaved = assets.tables.flatMap((table, index) => index === pivot ? [] : (savedPivotLayout(table)?.rects ?? []).map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol })))
-    const inRects = (rects: readonly SourceRect[], row: number, col: number) => rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)
-    const occupied = (row: number, col: number): boolean => {
-      if (inRects(otherSaved, row, col)) return true
-      for (const other of this.pivotHandles.values()) {
-        if (other.sheetId === sheetId && other.pivot !== pivot && other.committed && inRects(other.committed.overlay.protectedRects, row, col)) return true
-      }
-      return assets.occupied(row, col)
-    }
+    // commits show, from the sheet's blocker index (one point query per cell; Task 33 perf); then the sheet's cells.
+    const savedRectsOf = (table: PivotTableDefinition) => (savedPivotLayout(table)?.rects ?? []).map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))
+    const occupied = (row: number, col: number): boolean =>
+      this.pivotBlockers(sheetId, assets.tables, savedRectsOf).find(row, col, owner => owner !== pivot) !== undefined || assets.occupied(row, col)
     const opened = openPivotSession({ def, cache, ...(held.store ? { store: held.store } : {}), date1904: assets.date1904, saved,
       occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
       ...(refreshSource ? {
@@ -1594,22 +1605,24 @@ export class DocumentSession {
   releasePivotsExcept(sheetId?: string): void {
     for (const handle of [...this.pivotHandles.values()]) if (sheetId === undefined || handle.sheetId !== sheetId) this.pivotRelease(handle.sheetId, handle.pivot)
   }
+  /** The sheet's committed overlays combined (called on every commit and release, so the sheet's blocker index, which
+   * reads the commits, is rebuilt with it). */
   private combinedPivotOverlay(sheetId: string): import('../xlsx/view/contracts').ValueOverlay | undefined {
-    const overlays = [...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed).map(handle => handle.committed!.overlay)
-    if (!overlays.length) return undefined
-    const rects = overlays.flatMap(overlay => overlay.rects)
-    const protectedRects = overlays.flatMap(overlay => overlay.protectedRects)
-    const merges = overlays.flatMap(overlay => overlay.merges)
-    return Object.freeze({
-      rects, protectedRects, merges,
-      cell(row: number, col: number) {
-        for (let i = overlays.length - 1; i >= 0; i--) {
-          const overlay = overlays[i]!
-          if (overlay.rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)) return overlay.cell(row, col)
-        }
-        return undefined
-      },
-    })
+    this.pivotBlockerIndexes.delete(sheetId)
+    return combinePivotOverlays([...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed).map(handle => handle.committed!.overlay))
+  }
+  private readonly pivotBlockerIndexes = new Map<string, OwnedRects<number>>()
+  /** Per sheet: every pivot's saved area and each committed pivot's protected rectangles, by pivot (Task 33 perf). */
+  private pivotBlockers(sheetId: string, tables: readonly PivotTableDefinition[], savedRects: (table: PivotTableDefinition) => SourceRect[]): OwnedRects<number> {
+    let index = this.pivotBlockerIndexes.get(sheetId)
+    if (index) return index
+    const entries: { rect: SourceRect; owner: number }[] = []
+    tables.forEach((table, pivot) => { for (const rect of savedRects(table)) entries.push({ rect, owner: pivot }) })
+    for (const handle of this.pivotHandles.values()) {
+      if (handle.sheetId === sheetId && handle.committed) for (const rect of handle.committed.overlay.protectedRects) entries.push({ rect, owner: handle.pivot })
+    }
+    this.pivotBlockerIndexes.set(sheetId, index = new OwnedRects(entries))
+    return index
   }
   /** Font readiness (§10.1): advances fontGen only; no view revision, order or
    * mask changes, but every owner captured before it is superseded. */
