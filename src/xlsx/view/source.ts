@@ -254,7 +254,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const overlay = this.valueOverlay
     const base = this.baseExtent.used
     if (!overlay) return this.baseExtent
-    const bounds = overlay.protectedRects ?? overlay.rects
+    const bounds = overlay.protectedRects
     const used = bounds.length ? bounds.reduce((all, rect) => ({ r0: Math.min(all.r0, rect.r0), r1: Math.max(all.r1, rect.r1), c0: Math.min(all.c0, rect.c0), c1: Math.max(all.c1, rect.c1) }), { ...bounds[0] }) : undefined
     if (!used && !base) return { rows: MAX_ROWS, cols: MAX_COLS }
     return { rows: MAX_ROWS, cols: MAX_COLS, used: base && used
@@ -700,7 +700,7 @@ export class ObjectXlsxSheetAdapter implements SourceStore {
     const saved = uniqueRects([...(this.sheet.pivotRegions ?? []).map(region => parseRange(region.ref)), ...(this.sheet.pivotTables ?? []).map(pivot => parseRange(pivot.location.ref))]
       .filter((value): value is SourceRect => Boolean(value)))
       .filter(pivot => !overlay?.rects.some(owned => intersects(pivot, owned)))
-    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? overlay?.rects ?? [])]).filter(pivot => intersects(pivot, rect))
+    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     const result: StructuralResult = { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
     if (account) adoptAllocation(account, result, account.bytes, [this.stamp, ...drawings])
     return result

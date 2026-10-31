@@ -89,7 +89,7 @@ describe('viewer controls structural snapshot', () => {
     const view: SheetView = { sheetId: '1', revision: 0, order: createIdentityOrder(), baseHidden: createIntervalSet([]), visibility: visibilityFromHidden(createIntervalSet([]),), sort: null, filter: null, selection: emptyGridSelection() }
     const snapshot = () => ({ owner, filter: null, sort: null, records: { visible: 3, total: 3, completeness: 'complete' as const } })
     const controls = await viewerControls({ doc, source, sheetId: '1', snapshot, view: () => view, publish: snapshot }, new AbortController().signal)
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], usedRows: 3, usedCols: 1,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [],
       cell: (row: number, col: number) => col === 0 && row < 3 ? { value: row } : undefined })
     owner = { ...owner, valueGen: store.stamp.valueGen }
     const result = await controls.client.sort(owner, { range: { r0: 0, r1: 2, c0: 0, c1: 0, headerRows: 0, totalsRows: 0 }, keys: [{ col: 0, order: 'desc' }], caseSensitive: false }, new AbortController().signal)

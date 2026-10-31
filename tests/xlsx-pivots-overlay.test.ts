@@ -23,11 +23,12 @@ import { createCanvas } from 'canvas'
 import { renderSheetViewport } from '../src/xlsx/view/renderViewport'
 import { LayoutCache } from '../src/xlsx/view/textLayout'
 import { SOURCE_ALLOCATION } from '../src/xlsx/view/allocationAccount'
+import type { ValueOverlay } from '../src/xlsx/view/contracts'
 import { RemoteWorkbook } from '../src/worker/viewerRemoteSource'
 
 const options = (store: any) => ({ signal: new AbortController().signal, stamp: { ...store.stamp } })
 const overlay = {
-  rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], merges: [], usedRows: 3, usedCols: 2,
+  rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], merges: [],
   cell(row: number, col: number) {
     if (row === 0 && col === 0) return { value: 100, numFmtId: 14 }
     if (row === 2 && col === 1) return { value: 'new', numFmtId: 0 }
@@ -41,7 +42,7 @@ describe('pivot value overlay', () => {
     const doc = workbookOf([{ sheetId: 's', cells: rows }])
     const source = createObjectWorkbookSource(doc, 'overlay-pages')
     const store: any = source.store('s')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], usedRows: 3, usedCols: 1,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [],
       cell: (row: number, col: number) => col === 0 && row < 3 ? { value: `over-${row}` } : undefined })
     const seen: number[] = []
     let cursor: string | undefined
@@ -76,7 +77,7 @@ describe('pivot value overlay', () => {
     const doc = workbookOf([{ sheetId: 's', cells: [] }])
     const source = createObjectWorkbookSource(doc, 'overlay-big')
     const store: any = source.store('s')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: rows - 1, c0: 0, c1: cols - 1 }], merges: [], usedRows: rows, usedCols: cols,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: rows - 1, c0: 0, c1: cols - 1 }], protectedRects: [{ r0: 0, r1: rows - 1, c0: 0, c1: cols - 1 }], merges: [],
       cell: (row: number, col: number) => ({ value: row * cols + col }) })
     let count = 0, pages = 0, cursor: string | undefined
     do {
@@ -118,7 +119,7 @@ describe('pivot value overlay', () => {
     expect((await session.done).kind).toBe('complete')
     const source = createPagedWorkbookSource(session)
     const store: any = source.store('1')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], usedRows: 3, usedCols: 1,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [],
       cell: (row: number, col: number) => col === 0 && row < 3 ? { value: `over-${row}` } : undefined })
     let cursor: string | undefined, seen: number[] = []
     do {
@@ -151,7 +152,7 @@ describe('pivot value overlay', () => {
       expect(copied.text.split('\n')).toHaveLength(405)
       expect(copied.text.match(/over-[012]/g)).toHaveLength(3)
     }
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 19_999, c0: 0, c1: 13 }], merges: [], usedRows: 20_000, usedCols: 14,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 19_999, c0: 0, c1: 13 }], protectedRects: [{ r0: 0, r1: 19_999, c0: 0, c1: 13 }], merges: [],
       cell: (row: number, col: number) => ({ value: row * 14 + col }) })
     let count = 0, pageCount = 0
     cursor = undefined
@@ -225,7 +226,7 @@ describe('pivot value overlay', () => {
     const raw: any = source.store('s')
     const wrapped: any = interruptibleStore(raw)
     expect(wrapped.structureGen).toBe(0)
-    wrapped.setValueOverlay({ rects: [{ r0: 1, r1: 1, c0: 1, c1: 1 }], merges: [], usedRows: 2, usedCols: 2, cell: () => ({ value: 9 }) })
+    wrapped.setValueOverlay({ rects: [{ r0: 1, r1: 1, c0: 1, c1: 1 }], protectedRects: [{ r0: 1, r1: 1, c0: 1, c1: 1 }], merges: [], cell: () => ({ value: 9 }) })
     expect(wrapped.structureGen).toBe(0)
     expect((await wrapped.readCell({ row: 1, col: 1 }, options(wrapped))).kind).toBe('cell')
     await source.release()
@@ -254,7 +255,7 @@ describe('pivot value overlay', () => {
     const merged = { ...overlay, merges: [{ r0: 0, r1: 1, c0: 0, c1: 1 }] }
     store.setValueOverlay(merged)
     expect(store.structureGen).toBe(structureBefore + 1)
-    store.setValueOverlay({ ...merged, usedRows: 4 })
+    store.setValueOverlay({ ...merged, rects: [...merged.rects] })
     expect(store.structureGen).toBe(structureBefore + 1)
     store.setValueOverlay(undefined)
     expect(store.structureGen).toBe(structureBefore + 2)
@@ -266,10 +267,10 @@ describe('pivot value overlay', () => {
     const source = createObjectWorkbookSource(doc, 'overlay-extent')
     const store: any = source.store('s')
     const base = store.extent.used
-    const expanded = { rects: [{ r0: 8, r1: 12, c0: 6, c1: 9 }], protectedRects: [{ r0: 8, r1: 12, c0: 6, c1: 9 }], merges: [], usedRows: 13, usedCols: 10, cell: () => null }
+    const expanded = { rects: [{ r0: 8, r1: 12, c0: 6, c1: 9 }], protectedRects: [{ r0: 8, r1: 12, c0: 6, c1: 9 }], merges: [], cell: () => null }
     store.setValueOverlay(expanded)
     expect(store.extent.used).toEqual({ r0: 8, r1: 12, c0: 6, c1: 9 })
-    store.setValueOverlay({ ...expanded, rects: [{ r0: 8, r1: 8, c0: 6, c1: 6 }], protectedRects: [{ r0: 8, r1: 8, c0: 6, c1: 6 }], usedRows: 9, usedCols: 7 })
+    store.setValueOverlay({ ...expanded, rects: [{ r0: 8, r1: 8, c0: 6, c1: 6 }], protectedRects: [{ r0: 8, r1: 8, c0: 6, c1: 6 }]})
     expect(store.extent.used).toEqual(base)
     const structure = new StructuralIndex(await store.queryStructural({ r0: 8, r1: 12, c0: 6, c1: 9 }, options(store)))
     expect(structure.firstWhere({ r0: 12, r1: 12, c0: 9, c1: 9 }, hit => hit.kind === 'pivot')).toBeUndefined()
@@ -280,9 +281,9 @@ describe('pivot value overlay', () => {
   it('does not advance structureGen when overlay merges are only reordered', () => {
     const store: any = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [] }]), 'merge-order').store('s')
     const a = { r0: 0, r1: 1, c0: 0, c1: 1 }, b = { r0: 4, r1: 5, c0: 4, c1: 5 }
-    store.setValueOverlay({ rects: [], merges: [a, b], usedRows: 0, usedCols: 0, cell: () => undefined })
+    store.setValueOverlay({ rects: [], protectedRects: [], merges: [a, b], cell: () => undefined })
     const generation = store.structureGen
-    store.setValueOverlay({ rects: [], merges: [b, a], usedRows: 0, usedCols: 0, cell: () => undefined })
+    store.setValueOverlay({ rects: [], protectedRects: [], merges: [b, a], cell: () => undefined })
     expect(store.structureGen).toBe(generation)
   })
 
@@ -291,7 +292,7 @@ describe('pivot value overlay', () => {
     doc.sheets[0].rows[0].cells[0].style = { numFmtId: 10, formatCode: '0.00%' }
     const source = createObjectWorkbookSource(doc, 'overlay-style')
     const store: any = source.store('s')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], usedRows: 1, usedCols: 1,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [],
       cell: () => ({ value: 0.25 }) })
     const read = await store.readCell({ row: 0, col: 0 }, options(store))
     expect(read.kind).toBe('cell')
@@ -304,7 +305,7 @@ describe('pivot value overlay', () => {
     doc.sheets[0].rows[1].cells[0] = { ref: 'C5', row: 4, col: 2, value: null, styleIndex: 7 }
     const source = createObjectWorkbookSource(doc, 'overlay-error')
     const store: any = source.store('s')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 2 }], merges: [], usedRows: 1, usedCols: 3,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 2 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 2 }], merges: [],
       cell: (row: number, col: number) => row === 0 && col === 1 ? { value: '#N/A', valueIsError: true } : undefined })
     const error = await store.readCell({ row: 0, col: 1 }, options(store))
     expect(error).toMatchObject({ kind: 'cell', cell: { value: '#N/A', valueIsError: true } })
@@ -319,7 +320,7 @@ describe('pivot value overlay', () => {
   it('charges overlay scan output pages through the caller allocation context', async () => {
     const source = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [] }]), 'overlay-scan-charge')
     const store: any = source.store('s')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], usedRows: 3, usedCols: 1, cell: (row: number) => ({ value: row + 1 }) })
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 0 }], merges: [], cell: (row: number) => ({ value: row + 1 }) })
     let reserves = 0, adopted = 0
     const allocation: any = {
       limitBytes: 1_000_000, usedBytes: 0, owns: () => false, canReserve: () => true, settle: () => {},
@@ -372,7 +373,7 @@ describe('pivot value overlay', () => {
     expect(leftBefore).toContain('vacated')
     expect(rightBefore).toContain('vacated')
 
-    const clearingOverlay = { ...overlay, rects: [{ r0: 0, r1: 0, c0: 2, c1: 2 }], usedRows: 1, usedCols: 3, cell: () => null }
+    const clearingOverlay = { ...overlay, rects: [{ r0: 0, r1: 0, c0: 2, c1: 2 }], protectedRects: [], cell: () => null }
     const after = buildSheetGeometry(sheet, { overlay: clearingOverlay } as any)
     expect(after.kind).toBe('ready')
     if (after.kind !== 'ready') return
@@ -492,7 +493,7 @@ describe('pivot value overlay', () => {
     sheet.state = 'loading'; sheet.importedThroughRow = 0
     const source = createPagedWorkbookSource(session)
     const store: any = source.store('1')
-    store.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], usedRows: 1, usedCols: 1,
+    store.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [],
       cell: () => ({ value: 99 }) })
     const result = await store.queryColumn({ col: 0, rows: { kind: 'intervals', intervals: [{ r0: 0, r1: 1 }] }, limit: 10 }, options(store))
     expect(result.completeness).toBe('loading')
@@ -503,7 +504,7 @@ describe('pivot value overlay', () => {
   it('refuses sorts intersecting an overlay pivot and allows an adjacent band', async () => {
     const source = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }]), 'guard')
     const store: any = source.store('s')
-    const protectedOverlay = { ...overlay, rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }] }
+    const protectedOverlay = { ...overlay, rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }] }
     store.setValueOverlay(protectedOverlay)
     const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 4, c0: 0, c1: 2 }, options(store)))
     const pivotRange = { r0: 0, r1: 2, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }
@@ -565,7 +566,7 @@ describe('pivot value overlay (fix round 4)', () => {
       const cells = withOverlay ? [{ row: 5_000, col: 5, value: 1 }] : Array.from({ length: N }, (_, row) => ({ row, col: 0, value: row }))
       const source = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells }]), `n2-${withOverlay}`)
       const store: any = source.store('s')
-      if (withOverlay) store.setValueOverlay({ rects: [{ r0: 0, r1: N - 1, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: N - 1, c0: 0, c1: 0 }], merges: [], usedRows: N, usedCols: 1, cell: (row: number) => ({ value: row }) })
+      if (withOverlay) store.setValueOverlay({ rects: [{ r0: 0, r1: N - 1, c0: 0, c1: 0 }], protectedRects: [{ r0: 0, r1: N - 1, c0: 0, c1: 0 }], merges: [], cell: (row: number) => ({ value: row }) })
       const { allocation, seen } = recordingAllocation()
       let count = 0, pages = 0
       for await (const page of store.scanPopulated({ range: { r0: 0, r1: N - 1, c0: 0, c1: 0 }, limit: 10_000 }, { ...options(store), [SOURCE_ALLOCATION]: allocation })) { count += page.items.length; pages++ }
@@ -601,6 +602,32 @@ describe('pivot value overlay (fix round 4)', () => {
     expect(values()).toEqual([100, 'refetched'])
     row0 = undefined
     expect(values()).toEqual([100])
+  })
+
+  it('N6: an overlay names its protected bounds; vacated cells are ordinary empty cells on both stores', async () => {
+    // @ts-expect-error protectedRects is required: a fallback to rects would protect vacated cells
+    const missing: ValueOverlay = { rects: [], merges: [], cell: () => undefined }
+    // @ts-expect-error the overlay carries no row/column counts; the extent comes from protectedRects
+    const counted: ValueOverlay = { rects: [], protectedRects: [], merges: [], cell: () => undefined, usedRows: 1, usedCols: 1 }
+    void missing; void counted
+    // The pivot shrank from A1:B3 to A1:A1: B1:B3 and A2:A3 are vacated (owned, null, unprotected).
+    const shrunk: ValueOverlay = { rects: [{ r0: 0, r1: 2, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 0 }], merges: [], cell: (row, col) => row === 0 && col === 0 ? { value: 7 } : null }
+    const resident = createObjectWorkbookSource(workbookOf([{ sheetId: 's', cells: [{ row: 0, col: 0, value: 1 }] }]), 'n6')
+    const bytes = xlsxBytes({ sheetData: '<row r="1"><c r="A1"><v>1</v></c></row>' })
+    const session = await openImportSession({ kind: 'blob', blob: new Blob([bytes.slice().buffer as ArrayBuffer]) }, { docId: 'n6-paged', profile: 'D', store: new SourcePageStore({ docId: 'n6-paged', backend: memoryPageBackend() }), pageRows: 2 })
+    expect((await session.done).kind).toBe('complete')
+    const paged = createPagedWorkbookSource(session)
+    for (const store of [resident.store('s'), paged.store('1')] as any[]) {
+      store.setValueOverlay(shrunk)
+      expect(store.extent.used).toEqual({ r0: 0, r1: 0, c0: 0, c1: 0 })
+      expect(await store.readCell({ row: 2, col: 1 }, options(store))).toEqual({ kind: 'blank' })
+      const structure = new StructuralIndex(await store.queryStructural({ r0: 0, r1: 3, c0: 0, c1: 2 }, options(store)))
+      const vacated = { r0: 1, r1: 2, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }
+      expect(await guardSort(vacated, structure, fromStoreScan(store, options(store)))).toEqual({ ok: true })
+      const pivot = { r0: 0, r1: 1, c0: 0, c1: 0, headerRows: 0 as const, totalsRows: 0 as const }
+      expect(await guardSort(pivot, structure, fromStoreScan(store, options(store)))).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+    }
+    await resident.release(); await paged.release()
   })
 
   it('N5: remote invalidation drops the pivot display layer too, and a remote call without a sheet id throws', () => {

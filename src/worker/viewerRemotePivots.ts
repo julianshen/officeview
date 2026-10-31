@@ -126,10 +126,8 @@ export class RemotePivotSessions {
     if (!overlays.length) return undefined
     return Object.freeze({
       rects: overlays.flatMap(overlay => overlay.rects),
-      protectedRects: overlays.flatMap(overlay => overlay.protectedRects ?? overlay.rects),
+      protectedRects: overlays.flatMap(overlay => overlay.protectedRects),
       merges: overlays.flatMap(overlay => overlay.merges),
-      usedRows: Math.max(...overlays.map(overlay => overlay.usedRows)),
-      usedCols: Math.max(...overlays.map(overlay => overlay.usedCols)),
       cell(row: number, col: number) {
         for (let i = overlays.length - 1; i >= 0; i--) {
           const overlay = overlays[i]!
@@ -173,7 +171,6 @@ export function valueOverlayFromPivotApply(result: RemotePivotApplyPayload): Val
   const values = new Map(result.cells.map(cell => [`${cell.row},${cell.col}`, cell.value]))
   return Object.freeze({
     rects: result.rects, protectedRects: result.protectedRects, merges: result.merges,
-    usedRows: result.usedRows, usedCols: result.usedCols,
     cell: (row: number, col: number) => values.get(`${row},${col}`) ?? null,
   })
 }

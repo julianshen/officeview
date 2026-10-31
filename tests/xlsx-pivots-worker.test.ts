@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
+import { overlayUsedCounts, type WorkerCommand, type WorkerReply } from '../src/xlsx/view/contracts'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { ViewerKernel } from '../src/worker/viewerKernel'
@@ -343,6 +343,8 @@ describe('worker pivot protocol', () => {
       expect(result.merges.map(rect => [rect.r0, rect.r1, rect.c0, rect.c1])).not.toEqual(oldMerges.map(rect => [rect.minRow, rect.maxRow, rect.minCol, rect.maxCol]))
       expect(remote.merges(sheet.sheetId).merges).toEqual(expect.arrayContaining(result.merges.map(rect => ({ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 }))))
       expect(before).toBeDefined()
+      // The published extent is the overlay's protected bounds, as the stores' extent reads it (Task 26 N6).
+      expect({ usedRows: result.usedRows, usedCols: result.usedCols }).toEqual(overlayUsedCounts(result.protectedRects))
       expect(remote.layout(sheet.sheetId).used?.r1).toBeGreaterThan(before!.r1)
       expect(remote.layout(sheet.sheetId).used?.c1).toBeGreaterThanOrEqual(result.usedCols - 1)
       const geometry = pagedSheetGeometry(remote, sheet.sheetId, createIdentityOrder(), visibilityFromHidden(createIntervalSet([])))

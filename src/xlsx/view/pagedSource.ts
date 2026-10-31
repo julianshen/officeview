@@ -147,7 +147,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
   get extent(): SourceStore['extent'] {
     const used = this.sheet.state === 'complete' ? this.sheet.used : undefined
     const overlay = this.valueOverlay
-    const bounds = overlay?.protectedRects ?? overlay?.rects ?? []
+    const bounds = overlay?.protectedRects ?? []
     const extra = bounds.length ? bounds.reduce((all, rect) => ({ r0: Math.min(all.r0, rect.r0), r1: Math.max(all.r1, rect.r1), c0: Math.min(all.c0, rect.c0), c1: Math.max(all.c1, rect.c1) }), { ...bounds[0] }) : undefined
     const merged = used && extra ? { r0: Math.min(used.r0, extra.r0), r1: Math.max(used.r1, extra.r1), c0: Math.min(used.c0, extra.c0), c1: Math.max(used.c1, extra.c1) } : used ?? extra
     return merged ? { rows: MAX_ROWS, cols: MAX_COLS, used: { ...merged } } : { rows: MAX_ROWS, cols: MAX_COLS }
@@ -773,7 +773,7 @@ export class PagedXlsxSheetAdapter implements SourceStore {
     }
     const saved = uniqueRects((sheet.metadata.pivotRegions ?? []).flatMap(region => { const parsed = pivotRegionRect(region.ref); return parsed ? [parsed] : [] }))
       .filter(pivot => !overlay?.rects.some(owned => intersects(pivot, owned)))
-    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? overlay?.rects ?? [])]).filter(pivot => intersects(pivot, rect))
+    const pivots = uniqueRects([...saved, ...(overlay?.protectedRects ?? [])]).filter(pivot => intersects(pivot, rect))
     return { ...base, merges, tables, spills, drawings, ...(pivots?.length ? { pivots } : {}), completeness: missing.length ? 'incomplete' : 'complete', missing }
   }
   /** Resolved once the sheet is complete (its row/column metadata is final), against the geometry the source publishes. */

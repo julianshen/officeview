@@ -90,14 +90,21 @@ export const PAGED_CELL_BYTES_ESTIMATE = 128
  * `null` explicitly clears a cell inside an owned rectangle. */
 export interface ValueOverlayCell { value: XlsxCell['value']; valueIsError?: boolean; numFmtId?: number }
 export interface ValueOverlay {
-  /** Cells the overlay replaces, including explicit null blanks. */
+  /** Cells the overlay replaces, including explicit null blanks (vacated cells). */
   readonly rects: readonly SourceRect[]
-  /** Current pivot output bounds. When omitted, `rects` are also the protected bounds. */
-  readonly protectedRects?: readonly SourceRect[]
+  /** The pivots' current output bounds: guarded from sheet sort/filter and joined to the extent (S3-G,
+   * S3-H). Vacated cells are in `rects` only, so they read as ordinary empty cells. Required: a fallback
+   * to `rects` would protect vacated cells and grow the extent over them. The stores derive the used
+   * extent from these bounds; no separate row/column count is part of the overlay. */
+  readonly protectedRects: readonly SourceRect[]
   cell(row: number, col: number): ValueOverlayCell | null | undefined
   readonly merges: readonly SourceRect[]
-  readonly usedRows: number
-  readonly usedCols: number
+}
+/** The used extent (exclusive row/column counts) an overlay adds: its protected bounds, as the stores' `extent`. */
+export function overlayUsedCounts(rects: readonly SourceRect[]): { usedRows: number; usedCols: number } {
+  let usedRows = 0, usedCols = 0
+  for (const rect of rects) { usedRows = Math.max(usedRows, rect.r1 + 1); usedCols = Math.max(usedCols, rect.c1 + 1) }
+  return { usedRows, usedCols }
 }
 export interface ReadOptions { signal: AbortSignal; stamp: SourceStamp }
 /** Cursors belong to the original query/stamp; owner changes invalidate them (§4.1).

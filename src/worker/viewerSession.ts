@@ -61,7 +61,7 @@ import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
-import { PAGED_CELL_BYTES_ESTIMATE, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
+import { PAGED_CELL_BYTES_ESTIMATE, overlayUsedCounts, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
@@ -790,10 +790,8 @@ function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotAppl
           : { value: value.value, valueIsError: true, ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }) })
   }
   const merges = result.layout.merges.map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))
-  const usedRows = Math.max(0, result.layout.rect.maxRow + 1, ...result.layout.cells.map(cell => cell.row + 1))
-  const usedCols = Math.max(0, result.layout.rect.maxCol + 1, ...result.layout.cells.map(cell => cell.col + 1))
   return Object.freeze({
-    rects: Object.freeze(rects), protectedRects: Object.freeze(currentRects), merges: Object.freeze(merges), usedRows, usedCols,
+    rects: Object.freeze(rects), protectedRects: Object.freeze(currentRects), merges: Object.freeze(merges),
     cell: (row: number, col: number) => cells.get(pivotCellKey(row, col)) ?? null,
   })
 }
@@ -1329,9 +1327,10 @@ export class DocumentSession {
     handle.wireRevision = revision
     handle.staged = { wireRevision: revision, result: applied.value, overlay, entry }
     const cells = applied.value.layout.cells.map(cell => ({ row: cell.row, col: cell.col, value: overlay.cell(cell.row, cell.col) ?? null }))
+    // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
     return { kind: 'apply', revision, def: applied.value.def, rects: overlay.rects, merges: overlay.merges,
-      usedRows: overlay.usedRows, usedCols: overlay.usedCols, charts: applied.value.charts, cells,
-      protectedRects: overlay.protectedRects ?? overlay.rects }
+      ...overlayUsedCounts(overlay.protectedRects), charts: applied.value.charts, cells,
+      protectedRects: overlay.protectedRects }
   }
   pivotCommit(sheetId: string, pivot: number, revision: number): WorkerPivotOutcome {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot)), staged = handle?.staged
@@ -1384,12 +1383,10 @@ export class DocumentSession {
     const overlays = [...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed).map(handle => handle.committed!.overlay)
     if (!overlays.length) return undefined
     const rects = overlays.flatMap(overlay => overlay.rects)
-    const protectedRects = overlays.flatMap(overlay => overlay.protectedRects ?? overlay.rects)
+    const protectedRects = overlays.flatMap(overlay => overlay.protectedRects)
     const merges = overlays.flatMap(overlay => overlay.merges)
     return Object.freeze({
       rects, protectedRects, merges,
-      usedRows: Math.max(...overlays.map(overlay => overlay.usedRows)),
-      usedCols: Math.max(...overlays.map(overlay => overlay.usedCols)),
       cell(row: number, col: number) {
         for (let i = overlays.length - 1; i >= 0; i--) {
           const overlay = overlays[i]!

@@ -78,7 +78,7 @@ describe('paged sparkline transfer cache', () => {
     ;(session.workbook.sheets as any).push({ ...hostSheet, sheetId: '2', name: 'Data', metadata: { ...hostSheet.metadata, sparklineGroups: [] } })
     const source = createPagedWorkbookSource(session)
     const dataStore: any = source.store('2')
-    dataStore.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 1 }], merges: [], usedRows: 1, usedCols: 2,
+    dataStore.setValueOverlay({ rects: [{ r0: 0, r1: 0, c0: 0, c1: 1 }], protectedRects: [{ r0: 0, r1: 0, c0: 0, c1: 1 }], merges: [],
       cell: (_row: number, col: number) => ({ value: col === 0 ? 7_000_001 : 11_000_009 }) })
     const hostStore: any = source.store('1')
     const result = await hostStore.readSparklines!({ signal: new AbortController().signal, stamp: hostStore.stamp }, 64 * 1024 * 1024, { set: () => true })
