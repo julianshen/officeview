@@ -666,6 +666,13 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
   const namedRow = axes.rows.map(line => isNamedSubtotal(line.type))
   const sumAxes: PivotAxes = { ...axes, rows: axes.rows.map(line => isNamedSubtotal(line.type) ? { ...line, type: 'default' } : line) }
   const referenced = [...new Set(compiled.flatMap(field => field?.fields ?? []))]
+  // S2-AA (final review R2-I1): no case measures a calculated field over error-valued records; never read an
+  // error sum as 0.
+  for (let d = 0; d < compiled.length; d++) for (const field of compiled[d]?.fields ?? []) {
+    const column = store.columns[field], items = cache.fields[field]?.sharedItems?.items
+    if (items?.some(item => item.type === 'error') || (column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error)))
+      return unmeasured(`calculated data field ${d} sums field ${field}, which has error-valued records; the formula over an error is not measured`)
+  }
   for (const field of referenced) {
     const column = store.columns[field], items = cache.fields[field]?.sharedItems?.items
     if (!column) return invalid(`calculated field source ${field} has no record column`)
@@ -701,10 +708,13 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
       if (!field) continue
       if (namedRow[row] && axes.cols[col]!.type !== 'grand') continue
       // B2 rule: a cell without records is the formula over zero sums (calc-cell-without-records).
+      let errorOperand = false
       const value = calculatedValue(field, source => {
         const sum = sums.get(source)!.get(row, col, d)
+        if (sum.kind === 'error') errorOperand = true
         return sum.kind === 'number' ? sum.value : 0
       })
+      if (errorOperand) return unmeasured(`calculated data field ${d} has an error-valued operand sum; the formula over an error is not measured`)
       if (value === 'unsupported') return fail('pivot-calculated-field', `calculated data field ${d} uses a construct the formula engine lacks`)
       const at = cellIndex(row, col, d, colCount, dataCount)
       // B2 rule: an error shows as the error value with showError off (calc-division-by-zero).

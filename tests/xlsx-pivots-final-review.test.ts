@@ -192,3 +192,27 @@ describe('M4: layout shapes beyond the measured cases', () => {
     expect(refusal(run(p, { ...view, rows: [0, 1, 2], cols: [-2] }))).toMatch(/^pivot-engine-unmeasured: a record-less showAll item/)
   })
 })
+
+describe('final review round 2 residuals', () => {
+  it('R2-I1: refuses a calculated field over a field with error-valued records (no error read as 0)', async () => {
+    const p = await load('quirk-error-value')
+    const cache = structuredClone(p.cache), def = structuredClone(p.def)
+    cache.fields.push({ ...cache.fields[3]!, name: 'Double', databaseField: false, formula: 'Sales*2', sharedItems: undefined })
+    def.fields.push({ ...def.fields[3]!, items: undefined, axis: undefined, dataField: true })
+    def.dataFields[0] = { ...def.dataFields[0]!, fld: cache.fields.length - 1, name: 'Sum of Double' }
+    expect(refusal(run(p, initialViewState(def, cache), def, cache))).toMatch(/^pivot-engine-unmeasured: calculated data field 0 sums field 3, which has error-valued records/)
+  })
+
+  it('R2-M1: refuses the record-less showAll listing when a value or top-10 filter is in the view', async () => {
+    for (const name of ['filter-value-nested']) {
+      const p = await load(name)
+      const view = initialViewState(p.def, p.cache)
+      expect(refusal(run(p, view)), name).toBe('ok')
+      expect(refusal(run(p, withField(view, view.rows[0]!, { showAll: true }))), name)
+        .toMatch(/^pivot-engine-unmeasured: a record-less showAll item under a value or top-10 filter/)
+    }
+    // A label filter with the same listing is measured (filter-label-cross-field-showall) and stays ok.
+    const label = await load('filter-label-cross-field-showall')
+    expect(refusal(run(label, initialViewState(label.def, label.cache)))).toBe('ok')
+  })
+})

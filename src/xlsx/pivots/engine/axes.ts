@@ -612,6 +612,12 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
         refusal ??= `a record-less showAll item listing field ${field} at ${which} level ${level} is not measured`
         return
       }
+      // Final review R2-M1: a value or top-10 filter may have removed the listed items; the measured listing
+      // (filter-label-cross-field-showall) is under a label filter only.
+      if (!node && view.filters.some(filter => isValueFilter(filter) || isTop10Filter(filter))) {
+        refusal ??= `a record-less showAll item under a value or top-10 filter lists field ${field}; that listing is not measured`
+        return
+      }
       children = (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item] && (!node || (allowedByField.get(field)?.has(item) ?? true)))
       if (!node && !state.showAll) {
         const present = itemsWithRecords(field)
