@@ -697,7 +697,10 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
     return fail('pivot-values-limit', 'the calculated value grids exceed their bounded accumulator budget')
 
   const anyRecordField = cache.fields.findIndex((field, index) => field.databaseField && store.columns[index] !== undefined)
-  const base = computeSourceValues(store, cache, def, { ...view, data: view.data.map((data, d) => compiled[d] ? sumOf(data, compiled[d]!.fields[0] ?? anyRecordField) : data) }, axes)
+  // The base grid is read only for ordinary slots; a calculated slot (a dependency-free one above all) reads none of
+  // it, so an unrelated field's type (shared dates under `=1`) cannot refuse it.
+  const baseSlots = Uint8Array.from(view.data, (_, d) => compiled[d] ? 0 : 1)
+  const base = computeSourceValues(store, cache, def, { ...view, data: view.data.map((data, d) => compiled[d] ? sumOf(data, compiled[d]!.fields[0] ?? anyRecordField) : data) }, axes, baseSlots)
   if (!base.ok) return base
   // Perf audit item 4: a slot sums one field per pass, so pass j gives every slot its j-th referenced field. That is
   // max(fields per formula) passes (usually one), not one D-slot pass per referenced field; a slot without a j-th field
@@ -764,8 +767,11 @@ function computeCalculatedValues(store: RecordStore, cache: PivotCacheDefinition
     for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) {
       const at = cellIndex(row, col, d, colCount, dataCount)
       if (!present[at] || errors.has(at)) continue
-      if (grand === 0) errors.set(at, '#DIV/0!')
-      else values[at] = values[at]! / grand
+      if (grand === 0) { errors.set(at, '#DIV/0!'); continue }
+      const share = values[at]! / grand
+      // Both operands are finite, but a large cell over a tiny grand total can still overflow.
+      if (!Number.isFinite(share)) return unmeasured(OVERFLOW)
+      values[at] = share
     }
   }
   return {
@@ -923,7 +929,10 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
     const commonTargets = !view.rows.includes(PIVOT_VALUES_FIELD) && !view.cols.includes(PIVOT_VALUES_FIELD)
     if (commonTargets) {
       const values: Float64Array[] = []
+      let unread: Float64Array | undefined
       for (let d = 0; d < dataCount; d++) {
+        // An unmarked slot is never read: it gets a shared zero column instead of its field's values.
+        if (activeSlots && !activeSlots[d]) { values.push(unread ??= new Float64Array(store.count)); continue }
         const column = numericValues(sourceColumns[d], sourceItems[d], store.count, view.data[d]!.field)
         if (!column.ok) return column
         values.push(column.value)

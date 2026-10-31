@@ -216,3 +216,55 @@ describe('final review round 2 residuals', () => {
     expect(refusal(run(label, initialViewState(label.def, label.cache)))).toBe('ok')
   })
 })
+
+describe('PR #56 bot review: calculated slots, overflow and page-cell bounds', () => {
+  const numbers = (values: number[]) => ({
+    kind: 'inline' as const, tag: new Uint8Array(values.length).fill(VALUE_TAG.number), num: Float64Array.from(values), text: [], textIndex: new Uint32Array(values.length),
+  })
+  const view = (data: Array<Partial<DataFieldState>>, fields: number) => ({
+    rows: [0], cols: [], pages: [], filters: [],
+    data: data.map(d => ({ field: 0, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Calc', numFmtId: 0, ...d })),
+    fields: Array.from({ length: fields }, () => ({ hidden: [false, false], collapsed: [false, false], sortType: 'manual', defaultSubtotal: false, subtotals: [],
+      subtotalTop: false, compact: false, outline: true, insertBlankRow: false, fillDownLabels: false, showAll: false })),
+  }) as unknown as PivotViewState
+  const def = (fields: number) => ({
+    location: { ref: 'A3:B5', firstHeaderRow: 1, firstDataRow: 1, firstDataCol: 1 }, rowGrandTotals: true, colGrandTotals: true,
+    fields: Array.from({ length: fields }, () => ({ items: [{ type: 'data', x: 0 }, { type: 'data', x: 1 }, { type: 'default' }] })),
+    pageFields: [], dataFields: [], unsupported: [], pageWrap: 0, pageOverThenDown: false,
+  }) as unknown as PivotTableDefinition
+
+  it('a dependency-free calculated field (=1) over a shared-date row field computes', () => {
+    const cache = { source: { type: 'worksheet' }, olap: false, fields: [
+      { name: 'When', databaseField: true, sharedItems: { inline: false, items: [{ type: 'date', value: '2024-01-01T00:00:00' }, { type: 'date', value: '2024-02-01T00:00:00' }] } },
+      { name: 'One', databaseField: false, formula: '1' },
+    ] } as unknown as PivotCacheDefinition
+    const store: RecordStore = { count: 2, bytes: 0, columns: [{ kind: 'shared', index: Uint32Array.of(0, 1) }, undefined as never] }
+    const result = computePivot(store, cache, def(2), view([{ field: 1 }], 2), { date1904: false })
+    expect(result.ok, result.ok ? '' : result.diagnostic.message).toBe(true)
+    // Column B holds the values (column A's numbers are the date labels' serials): two items and the grand total.
+    if (result.ok) expect(result.value.cells.filter(cell => cell.col === 1 && cell.value.kind === 'number').map(cell => (cell.value as { value: number }).value)).toEqual([1, 1, 1])
+  })
+
+  it('percent of total on a calculated field refuses an overflowing share instead of placing Infinity', () => {
+    const cache = { source: { type: 'worksheet' }, olap: false, fields: [
+      { name: 'Item', databaseField: true, sharedItems: { inline: false, items: [{ type: 'string', value: 'A' }, { type: 'string', value: 'B' }] } },
+      { name: 'Amount', databaseField: true, sharedItems: { inline: true, items: [] } },
+      { name: 'Calc', databaseField: false, formula: '1/(Amount*10)' },
+    ] } as unknown as PivotCacheDefinition
+    const store: RecordStore = { count: 2, bytes: 0, columns: [{ kind: 'shared', index: Uint32Array.of(0, 1) }, numbers([1e-308, 1e307]), undefined as never] }
+    const result = computePivot(store, cache, def(3), view([{ field: 2, showAs: 'percentOfTotal' }], 3), { date1904: false })
+    expect(result.ok ? 'ok' : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+  })
+
+  it('page cells wrapping past column XFD refuse even when the main rectangle fits', async () => {
+    const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/baseline.xlsx'))
+    const base = initialViewState(p!.def, p!.cache)
+    const pagesView = { ...base, rows: [], cols: [], pages: [0, 1, 2].map(field => ({ field, selected: 'all' as const })) }
+    const near = { ...p!.def, pageWrap: 3, pageOverThenDown: true, location: { ...p!.def.location, ref: 'XFB10:XFC11' } }
+    const result = computePivot(p!.store, p!.cache, near, pagesView, { date1904: false })
+    expect(result.ok ? 'ok' : result.diagnostic.feature).toBe('pivot-values-limit')
+    const room = { ...near, location: { ...near.location, ref: 'B10:C11' } }
+    expect(computePivot(p!.store, p!.cache, room, pagesView, { date1904: false }).ok).toBe(true)
+  })
+})
+

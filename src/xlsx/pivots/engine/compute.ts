@@ -28,7 +28,10 @@ export function computePivot(store: RecordStore, cache: PivotCacheDefinition, de
   if (!values.ok) return values
   const layout = placeCells(def, view, cache, axes.value, values.value, options)
   // The axis caps don't count the anchor or the header rows: a pivot near the sheet's edge can still outgrow it.
-  if (layout.rect.minRow < 0 || layout.rect.minCol < 0 || layout.rect.maxRow >= SHEET_ROWS || layout.rect.maxCol >= SHEET_COLS)
+  const outside = (row: number, col: number) => row < 0 || col < 0 || row >= SHEET_ROWS || col >= SHEET_COLS
+  // Page cells sit outside `rect` (above it, wrapping across), so every placed cell is checked too.
+  if (outside(layout.rect.minRow, layout.rect.minCol) || outside(layout.rect.maxRow, layout.rect.maxCol) ||
+    layout.cells.some(cell => outside(cell.row, cell.col)))
     return unsupported('pivot-values-limit', 'the pivot layout would extend beyond the worksheet')
   return { ok: true, value: layout }
 }

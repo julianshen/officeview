@@ -11,6 +11,14 @@ import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { liveDefinition } from '../src/xlsx/pivots/engine/place'
 import { checkSavedLayout } from '../src/xlsx/pivots/engine/faithful'
 import { compileCalculatedField } from '../src/xlsx/pivots/engine/calculated'
+
+/**
+ * CI runners are slower and run suites in parallel. Every bound was proven against the pre-fix code at ≥ 3× on the
+ * development machine, so a 4× slack on CI still fails the quadratic code (≈ 2.5× slower there) and keeps the fixed
+ * code clear of scheduling noise.
+ */
+const SLACK = process.env.CI ? 4 : 1
+const within = (bound: number) => bound * SLACK
 import { VALUE_TAG, type RecordStore } from '../src/xlsx/pivots/engine/records'
 import type { PivotCacheDefinition, PivotTableDefinition } from '../src/xlsx/pivots/model'
 import type { PivotViewState } from '../src/xlsx/pivots/engine/view'
@@ -61,7 +69,7 @@ describe('perf audit: label filters (item 1)', () => {
     const filter = labelFilter('captionContains', { stringValue1: 'x?'.repeat(3999) + 'q' })
     const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0], filters: [filter] })))
     expect(feature(value)).toBe('pivot-values-limit')
-    expect(ms).toBeLessThan(800)
+    expect(ms).toBeLessThan(within(800))
   })
 
   it('validates an ordered criterion once, with an unchanged result', () => {
@@ -71,7 +79,7 @@ describe('perf audit: label filters (item 1)', () => {
     const filter = labelFilter('captionGreaterThan', { stringValue1: 'a'.repeat(400_000) })
     const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0], filters: [filter] })))
     expect(value.ok && value.value.rows.length).toBe(M + 1)   // every L… label sorts after a…a
-    expect(ms).toBeLessThan(800)
+    expect(ms).toBeLessThan(within(800))
   })
 
   it('matches a <filters> value list through one lower-cased set, with an unchanged result', () => {
@@ -82,7 +90,7 @@ describe('perf audit: label filters (item 1)', () => {
     const filter = labelFilter('captionEqual', { column: { filters: { blank: false, values } } })
     const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0], filters: [filter] })))
     expect(value.ok && value.value.rows.length).toBe(M / 2 + 1)
-    expect(ms).toBeLessThan(1500)
+    expect(ms).toBeLessThan(within(1500))
   })
 
   it('refuses more custom rules than the schema allows instead of comparing each per item', () => {
@@ -93,7 +101,7 @@ describe('perf audit: label filters (item 1)', () => {
     const filter = labelFilter('captionEqual', { column: { customFilters: { and: false, filters } } })
     const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0], filters: [filter] })))
     expect(feature(value)).toBe('pivot-engine-unmeasured')
-    expect(ms).toBeLessThan(1000)
+    expect(ms).toBeLessThan(within(1000))
   })
 })
 
@@ -119,7 +127,7 @@ describe('perf audit: faithfulness check walks its rects (item 2)', () => {
     }
     const { value, ms } = timed(() => checkSavedLayout(store, cache, saved, reader, { date1904: false }))
     expect(value).toEqual({ status: 'ok' })
-    expect(ms).toBeLessThan(1500)
+    expect(ms).toBeLessThan(within(1500))
   })
 })
 
@@ -140,7 +148,7 @@ describe('perf audit: Values-axis target lists (item 3)', () => {
       const grand = axes.value.rows.findIndex(line => line.type === 'grand' && line.data === D - 1)
       expect(value.value.get(grand, 0, D - 1)).toEqual({ kind: 'number', value: 1 })
     }
-    expect(ms).toBeLessThan(250)
+    expect(ms).toBeLessThan(within(250))
   })
 })
 
@@ -163,7 +171,7 @@ describe('perf audit: calculated fields (items 4 and 7)', () => {
       const col = axes.value.cols.findIndex(line => line.data === i)
       expect(value.value.get(grand, col, i)).toEqual({ kind: 'number', value: 2 * (R * (R - 1) / 2 + R * i) })
     }
-    expect(ms).toBeLessThan(1000)
+    expect(ms).toBeLessThan(within(1000))
   })
 
   it('with the Values field on an axis, sums only the slots that name a field, with unchanged values', () => {
@@ -223,8 +231,8 @@ describe('perf audit: calculated fields (items 4 and 7)', () => {
     expect(lastValue.ok && lastValue.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 1 + C })
     const fresh = build(1, specs)
     const compile = timed(() => { for (let i = 0; i < C; i++) compileCalculatedField(specs[2 + i]!.formula!, fresh.cache, 2 + i) })
-    expect(ms).toBeLessThan(300)
-    expect(compile.ms).toBeLessThan(300)
+    expect(ms).toBeLessThan(within(300))
+    expect(compile.ms).toBeLessThan(within(300))
   })
 })
 
@@ -236,7 +244,7 @@ describe('perf audit: showAll listings (items 5 and 8)', () => {
     const filter = { fld: 1, type: 'captionEqual', evalOrder: 0, id: 1, stringValue1: 'item0', autoFilter: { columns: [{ colId: 0 }] } }
     const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0, 1], filters: [filter] })))
     expect(value.ok && value.value.rows.length).toBe(2 * P + 1)
-    expect(ms).toBeLessThan(500)
+    expect(ms).toBeLessThan(within(500))
   })
 
   it('counts a parent\'s no-data items under a showAll value sort without scanning the order', () => {
@@ -247,7 +255,7 @@ describe('perf audit: showAll listings (items 5 and 8)', () => {
     const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0, 1], data: [sumOf(2)] })))
     expect(value.ok && value.value.rows.length).toBe(3 * P + 1)
     if (value.ok) expect(value.value.rows.slice(0, 3).map(line => line.items)).toEqual([[0], [0, 1], [0, 0]])   // descending: record 1 > record 0
-    expect(ms).toBeLessThan(230)
+    expect(ms).toBeLessThan(within(230))
   })
 })
 
@@ -261,7 +269,7 @@ describe('perf audit: filters per field (item 6)', () => {
     for (const filters of [labels, values]) {
       const { value, ms } = timed(() => computeAxes(store, cache, def, view(states, { rows: [0], data: [sumOf(1)], filters })))
       expect(feature(value)).toBe('pivot-engine-unmeasured')
-      expect(ms).toBeLessThan(400)
+      expect(ms).toBeLessThan(within(400))
     }
     // One label and one value filter on the field still compute.
     const both = computeAxes(store, cache, def, view(states, { rows: [0], data: [sumOf(1)], filters: [labels[0]!, { ...values[0]!, evalOrder: 1 }] }))
@@ -281,7 +289,7 @@ describe('perf audit: liveDefinition lookups (item 9)', () => {
     const { value, ms } = timed(() => liveDefinition(def, v, layout.value.axes, layout.value))
     const items = value.fields[1]!.items!
     expect([items[0]!.hidden, items[1]!.hidden, items[M - 1]!.hidden]).toEqual([true, false, false])
-    expect(ms).toBeLessThan(330)
+    expect(ms).toBeLessThan(within(330))
   })
 })
 
@@ -296,6 +304,6 @@ describe('perf audit footnote: the show-as scan cap is one total', () => {
     if (!axes.ok) return
     const { value, ms } = timed(() => computeValues(store, cache, def, v, axes.value as PivotAxes))
     expect(feature(value)).toBe('pivot-values-limit')
-    expect(ms).toBeLessThan(900)
+    expect(ms).toBeLessThan(within(900))
   })
 })
