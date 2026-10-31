@@ -71,6 +71,8 @@ const SHEET_COLS = 16384
 const inRect = (rect: SheetRect, row: number, col: number) => row >= rect.minRow && row <= rect.maxRow && col >= rect.minCol && col <= rect.maxCol
 /** A computed cell with nothing to show: no cell, an empty value or empty text (an item whose label is ''). */
 const isBlank = (cell: PivotLayoutCell | undefined) => !cell || cell.value.kind === 'empty' || (cell.value.kind === 'text' && cell.value.value === '')
+/** The most location and page-field cells the check compares (the §6.3 benchmark layout is about 2.8 million). */
+const COMPARE_CELL_CAP = 1 << 23
 /** Excel's comparison precision (§9): 15 significant digits. */
 const same15 = (a: number, b: number) => a === b || Number(a.toPrecision(15)) === Number(b.toPrecision(15))
 
@@ -102,6 +104,10 @@ export function checkSavedLayout(store: RecordStore, cache: PivotCacheDefinition
   const layoutSaved = savedPivotLayout(def)
   // Saved items that do not fill the location, or a layout too deep to lay out (savedPivotLayout's own refusals).
   if (!layoutSaved) return unverified('unsupported', 'pivot-saved-layout')
+  // The comparison walks every cell of the location and page fields: past a fixed area it is not attempted (a pivot
+  // with large axes but no data fields computes quickly yet would still be scanned cell by cell).
+  const area = layoutSaved.rects.reduce((sum, r) => sum + (r.maxRow - r.minRow + 1) * (r.maxCol - r.minCol + 1), 0)
+  if (area > COMPARE_CELL_CAP) return unverified('cells-over-cap', `the pivot area has ${area} cells, more than the ${COMPARE_CELL_CAP} the check compares`)
   const computed = computePivot(store, cache, def, initialViewState(def, cache), { date1904: options.date1904 })
   if (!computed.ok) return unverified('unsupported', computed.diagnostic.feature)
   const layout = computed.value

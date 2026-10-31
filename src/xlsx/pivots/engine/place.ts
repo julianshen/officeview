@@ -96,12 +96,7 @@ function geometry(def: PivotTableDefinition, view: PivotViewState, axes: PivotAx
   const bodyCols = view.cols.length === 0 && !view.data.length ? 0 : axes.cols.length
   const rect = { minRow: anchor.row, minCol: anchor.col, maxRow: anchor.row + firstDataRow + bodyRows - 1, maxCol: anchor.col + firstDataCol + bodyCols - 1 }
   // Page fields: "down, then over" unless pageOverThenDown, wrapping at pageWrap; a blank row above the location.
-  const n = view.pages.length, wrap = def.pageWrap > 0 ? def.pageWrap : n
-  let rowPageCount = 0, colPageCount = 0
-  if (n) {
-    if (def.pageOverThenDown) { colPageCount = Math.min(n, wrap); rowPageCount = Math.ceil(n / colPageCount) }
-    else { rowPageCount = Math.min(n, wrap); colPageCount = Math.ceil(n / rowPageCount) }
-  }
+  const { rowPageCount, colPageCount } = pageGrid(def, view.pages.length)
   const pages: Geometry['pages'] = []
   view.pages.forEach((_, k) => {
     const i = def.pageOverThenDown ? Math.floor(k / colPageCount) : k % rowPageCount
@@ -113,6 +108,20 @@ function geometry(def: PivotTableDefinition, view: PivotViewState, axes: PivotAx
     rect, firstHeaderRow, firstDataRow, firstDataCol, rowPageCount, colPageCount,
     itemRow0: anchor.row + firstHeaderRow, dataRow0: anchor.row + firstDataRow, dataCol0: anchor.col + firstDataCol, labelCol, pages,
   }
+}
+
+/** How `n` page fields tile above the location: "down, then over" unless pageOverThenDown, wrapping at pageWrap. */
+function pageGrid(def: PivotTableDefinition, n: number): { rowPageCount: number; colPageCount: number } {
+  if (!n) return { rowPageCount: 0, colPageCount: 0 }
+  const wrap = def.pageWrap > 0 ? def.pageWrap : n
+  if (def.pageOverThenDown) { const colPageCount = Math.min(n, wrap); return { rowPageCount: Math.ceil(n / colPageCount), colPageCount } }
+  const rowPageCount = Math.min(n, wrap)
+  return { rowPageCount, colPageCount: Math.ceil(n / rowPageCount) }
+}
+/** Whether the anchor leaves room above it for the page fields and the blank row between them and the location. */
+export function pageFieldsFit(def: PivotTableDefinition, view: PivotViewState): boolean {
+  const { rowPageCount } = pageGrid(def, view.pages.length)
+  return !rowPageCount || anchorOf(def.location.ref).row - 1 - rowPageCount >= 0
 }
 
 /** Classic layout (`gridDropZones`) with no column field: two header rows (see the header). */

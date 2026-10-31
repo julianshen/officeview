@@ -266,5 +266,17 @@ describe('PR #56 bot review: calculated slots, overflow and page-cell bounds', (
     const room = { ...near, location: { ...near.location, ref: 'B10:C11' } }
     expect(computePivot(p!.store, p!.cache, room, pagesView, { date1904: false }).ok).toBe(true)
   })
+
+  it('page fields with no room above the location refuse instead of being dropped while they filter', async () => {
+    const [p] = await loadAll(resolve(process.cwd(), 'tests/fixtures/xlsx-pivots/engine/baseline.xlsx'))
+    const base = initialViewState(p!.def, p!.cache)
+    const withPage = { ...base, rows: base.rows.filter(field => field !== 0), pages: [{ field: 0, selected: 'all' as const }] }
+    const top = { ...p!.def, location: { ...p!.def.location, ref: 'A1:I20' } }
+    const refused = computePivot(p!.store, p!.cache, top, withPage, { date1904: false })
+    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toBe('pivot-values-limit')
+    // Row 3 leaves the page row (row 1) and the blank row (row 2).
+    const fits = { ...p!.def, location: { ...p!.def.location, ref: 'A3:I22' } }
+    expect(computePivot(p!.store, p!.cache, fits, withPage, { date1904: false }).ok).toBe(true)
+  })
 })
 

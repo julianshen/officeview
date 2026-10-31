@@ -2,7 +2,7 @@
 import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition } from '../model'
 import { computeAxes, type EngineResult } from './axes'
 import type { PivotLayout, PlaceOptions } from './place'
-import { placeCells } from './place'
+import { pageFieldsFit, placeCells } from './place'
 import { computeValues } from './values'
 import type { RecordStore } from './records'
 import type { PivotViewState } from './view'
@@ -26,6 +26,8 @@ export function computePivot(store: RecordStore, cache: PivotCacheDefinition, de
   if (!axes.ok) return axes
   const values = computeValues(store, cache, def, view, axes.value)
   if (!values.ok) return values
+  // Page fields that would sit above row 1 would be dropped while their selections still filter the records.
+  if (!pageFieldsFit(def, view)) return unsupported('pivot-values-limit', 'the page fields do not fit above the pivot location')
   const layout = placeCells(def, view, cache, axes.value, values.value, options)
   // The axis caps don't count the anchor or the header rows: a pivot near the sheet's edge can still outgrow it.
   const outside = (row: number, col: number) => row < 0 || col < 0 || row >= SHEET_ROWS || col >= SHEET_COLS
