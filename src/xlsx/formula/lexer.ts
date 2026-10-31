@@ -139,11 +139,14 @@ function parseCellCoord(s: string): ParsedCellCoord | null {
   }
 }
 
+/** `quotedNames` (pivot calculated-field formulas, AGY-8): a quoted run not followed by `!` is a name. Off by default. */
+export interface TokenizeOptions { quotedNames?: boolean }
+
 /**
  * Tokenize an Excel formula string into tokens.
  * Strips leading '=', skips whitespace, and bounds input length.
  */
-export function tokenize(input: string): Token[] {
+export function tokenize(input: string, options?: TokenizeOptions): Token[] {
   let str = input.trim()
   if (str.startsWith('=')) {
     str = str.slice(1).trim()
@@ -365,6 +368,11 @@ export function tokenize(input: string): Token[] {
           sheetName += str[sIdx]
           sIdx++
         }
+      }
+      if (closed && options?.quotedNames && str[sIdx] !== '!') {
+        emit({ type: 'ident', value: sheetName.toUpperCase(), raw: sheetName, start: tokenStart })
+        i = sIdx
+        continue
       }
       if (closed && sIdx < len && str[sIdx] === '!') {
         sIdx++ // skip '!'

@@ -1,0 +1,1577 @@
+[
+  {
+    "case": "baseline",
+    "file": "tests/fixtures/xlsx-pivots/engine/baseline.xlsx",
+    "features": [
+      "layout-compact",
+      "values-on-columns",
+      "fn-sum",
+      "blank-items",
+      "cross-field-baseline"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-compact-three-rows",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-compact-three-rows.xlsx",
+    "features": [
+      "layout-compact",
+      "three-row-fields"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-outline-three-rows",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-outline-three-rows.xlsx",
+    "features": [
+      "layout-outline",
+      "three-row-fields"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-tabular-three-rows",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-tabular-three-rows.xlsx",
+    "features": [
+      "layout-tabular",
+      "three-row-fields"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-collapsed-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-collapsed-item.xlsx",
+    "features": [
+      "collapsed-item"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-collapsed-item-above-values",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-collapsed-item-above-values.xlsx",
+    "features": [
+      "collapsed-item",
+      "collapsed-above-values",
+      "values-on-rows"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-subtotals-bottom-compact",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-subtotals-bottom-compact.xlsx",
+    "features": [
+      "subtotal-bottom",
+      "layout-compact"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-subtotals-top-outline",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-subtotals-top-outline.xlsx",
+    "features": [
+      "subtotal-top",
+      "layout-outline"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-subtotals-bottom-outline",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-subtotals-bottom-outline.xlsx",
+    "features": [
+      "subtotal-bottom",
+      "layout-outline"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-subtotals-top-tabular",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-subtotals-top-tabular.xlsx",
+    "features": [
+      "subtotal-top",
+      "layout-tabular"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-grand-totals-row-only",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-grand-totals-row-only.xlsx",
+    "features": [
+      "grand-totals-row-only"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-grand-totals-column-only",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-grand-totals-column-only.xlsx",
+    "features": [
+      "grand-totals-column-only"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-grand-totals-off",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-grand-totals-off.xlsx",
+    "features": [
+      "grand-totals-off"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-values-on-rows-two-data",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-values-on-rows-two-data.xlsx",
+    "features": [
+      "values-on-rows",
+      "two-data-fields"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-values-on-columns-no-column-field",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-values-on-columns-no-column-field.xlsx",
+    "features": [
+      "values-on-columns",
+      "two-data-fields"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-blank-rows-compact",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-blank-rows-compact.xlsx",
+    "features": [
+      "blank-rows",
+      "layout-compact"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-blank-rows-tabular",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-blank-rows-tabular.xlsx",
+    "features": [
+      "blank-rows",
+      "layout-tabular"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-repeat-labels-tabular",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-repeat-labels-tabular.xlsx",
+    "features": [
+      "repeat-labels",
+      "layout-tabular"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-repeat-labels-outline",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-repeat-labels-outline.xlsx",
+    "features": [
+      "repeat-labels",
+      "layout-outline"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-named-subtotals-compact",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-named-subtotals-compact.xlsx",
+    "features": [
+      "named-subtotals",
+      "subtotal-sum",
+      "subtotal-count",
+      "subtotal-average",
+      "layout-compact"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-named-subtotals-tabular",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-named-subtotals-tabular.xlsx",
+    "features": [
+      "named-subtotals",
+      "subtotal-sum",
+      "subtotal-count",
+      "subtotal-average",
+      "layout-tabular"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-merge-labels",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-merge-labels.xlsx",
+    "features": [
+      "merge-item",
+      "layout-tabular"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-classic-single-data",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-classic-single-data.xlsx",
+    "features": [
+      "grid-drop-zones",
+      "classic-layout",
+      "single-data-field",
+      "no-column-field"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "layout-classic-two-data",
+    "file": "tests/fixtures/xlsx-pivots/engine/layout-classic-two-data.xlsx",
+    "features": [
+      "grid-drop-zones",
+      "classic-layout",
+      "two-data-fields"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-blank-and-mixed-row-items",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-blank-and-mixed-row-items.xlsx",
+    "features": [
+      "blank-items",
+      "mixed-type-items"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-error-value",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-error-value.xlsx",
+    "features": [
+      "error-value",
+      "error-propagation"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "quirk-error-value-count",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-error-value-count.xlsx",
+    "features": [
+      "error-value",
+      "fn-count"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "quirk-hidden-row-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-hidden-row-item.xlsx",
+    "features": [
+      "hidden-item"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-page-single",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-page-single.xlsx",
+    "features": [
+      "page-field",
+      "page-single",
+      "cross-field-visibility"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-page-single-showall",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-page-single-showall.xlsx",
+    "features": [
+      "page-field",
+      "page-single",
+      "cross-field-visibility",
+      "show-all"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-page-multiple",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-page-multiple.xlsx",
+    "features": [
+      "page-field",
+      "page-multiple"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "quirk-cross-hidden-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-cross-hidden-item.xlsx",
+    "features": [
+      "hidden-item",
+      "cross-field-visibility"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-cross-hidden-item-showall",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-cross-hidden-item-showall.xlsx",
+    "features": [
+      "hidden-item",
+      "cross-field-visibility",
+      "show-all"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-off-axis-hidden-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-off-axis-hidden-item.xlsx",
+    "features": [
+      "hidden-item",
+      "off-axis-hidden-item"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "quirk-dates-1900-rows",
+    "file": "tests/fixtures/xlsx-pivots/engine/quirk-dates-1900-rows.xlsx",
+    "features": [
+      "date-items",
+      "dates-before-1900-03-01",
+      "time-only"
+    ],
+    "task": 17,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-sum",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-sum.xlsx",
+    "features": [
+      "fn-sum",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-count",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-count.xlsx",
+    "features": [
+      "fn-count",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-average",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-average.xlsx",
+    "features": [
+      "fn-average",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-max",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-max.xlsx",
+    "features": [
+      "fn-max",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-min",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-min.xlsx",
+    "features": [
+      "fn-min",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-product",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-product.xlsx",
+    "features": [
+      "fn-product",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-countnums",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-countnums.xlsx",
+    "features": [
+      "fn-countNums",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-stdev",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-stdev.xlsx",
+    "features": [
+      "fn-stdDev",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-stdevp",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-stdevp.xlsx",
+    "features": [
+      "fn-stdDevp",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-var",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-var.xlsx",
+    "features": [
+      "fn-var",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-varp",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-varp.xlsx",
+    "features": [
+      "fn-varp",
+      "record-based-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-countnums-mixed",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-countnums-mixed.xlsx",
+    "features": [
+      "fn-countNums",
+      "fn-count",
+      "mixed-type-values"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-average-hidden-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-average-hidden-item.xlsx",
+    "features": [
+      "fn-average",
+      "hidden-item",
+      "filtered-totals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-fn-max-of-date",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-fn-max-of-date.xlsx",
+    "features": [
+      "fn-max",
+      "date-values"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-addition-order",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-addition-order.xlsx",
+    "features": [
+      "fn-sum",
+      "fifteen-digit-rule",
+      "addition-order"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-difference-previous",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-difference-previous.xlsx",
+    "features": [
+      "show-as",
+      "difference",
+      "base-previous"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-difference-next",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-difference-next.xlsx",
+    "features": [
+      "show-as",
+      "difference",
+      "base-next"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-difference-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-difference-item.xlsx",
+    "features": [
+      "show-as",
+      "difference",
+      "base-item-own-line"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-item.xlsx",
+    "features": [
+      "show-as",
+      "percent"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-diff-zero-base",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-diff-zero-base.xlsx",
+    "features": [
+      "show-as",
+      "percentDiff",
+      "division-by-zero"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-row",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-row.xlsx",
+    "features": [
+      "show-as",
+      "percentOfRow"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-column",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-column.xlsx",
+    "features": [
+      "show-as",
+      "percentOfCol"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-total",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-total.xlsx",
+    "features": [
+      "show-as",
+      "percentOfTotal"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-row-zero-total",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-row-zero-total.xlsx",
+    "features": [
+      "show-as",
+      "percentOfRow",
+      "division-by-zero"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-index",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-index.xlsx",
+    "features": [
+      "show-as",
+      "index"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-index-zero-total",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-index-zero-total.xlsx",
+    "features": [
+      "show-as",
+      "index",
+      "division-by-zero"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-running-total-year",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-running-total-year.xlsx",
+    "features": [
+      "show-as",
+      "runTotal"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-running-total-region",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-running-total-region.xlsx",
+    "features": [
+      "show-as",
+      "runTotal",
+      "base-field-on-outer-row"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-parent-row-two-levels",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-parent-row-two-levels.xlsx",
+    "features": [
+      "show-as",
+      "show-as-x14",
+      "percentOfParentRow",
+      "three-row-fields"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-parent-column",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-parent-column.xlsx",
+    "features": [
+      "show-as",
+      "show-as-x14",
+      "percentOfParentCol"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-of-parent-region",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-of-parent-region.xlsx",
+    "features": [
+      "show-as",
+      "show-as-x14",
+      "percentOfParent",
+      "three-row-fields"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-percent-running-total",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-percent-running-total.xlsx",
+    "features": [
+      "show-as",
+      "show-as-x14",
+      "percentOfRunningTotal"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-rank-descending-ties",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-rank-descending-ties.xlsx",
+    "features": [
+      "show-as",
+      "show-as-x14",
+      "rankDescending",
+      "rank-ties"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-rank-ascending",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-rank-ascending.xlsx",
+    "features": [
+      "show-as",
+      "show-as-x14",
+      "rankAscending"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "values-showas-on-named-subtotals",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-showas-on-named-subtotals.xlsx",
+    "features": [
+      "show-as",
+      "percentOfTotal",
+      "named-subtotals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "values-named-subtotals-intersecting",
+    "file": "tests/fixtures/xlsx-pivots/engine/values-named-subtotals-intersecting.xlsx",
+    "features": [
+      "named-subtotals",
+      "column-subtotals",
+      "intersecting-subtotals"
+    ],
+    "task": 18,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-text-ascending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-text-ascending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-ascending",
+      "sort-text"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-text-descending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-text-descending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-descending",
+      "sort-text"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-number-descending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-number-descending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-descending",
+      "sort-number"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-mixed-blank-ascending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-mixed-blank-ascending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-ascending",
+      "sort-mixed-types",
+      "sort-blanks"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-mixed-blank-descending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-mixed-blank-descending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-descending",
+      "sort-mixed-types",
+      "sort-blanks"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-custom-list-months",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-custom-list-months.xlsx",
+    "features": [
+      "sort-label",
+      "sort-ascending",
+      "custom-list",
+      "months"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-custom-list-weekdays",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-custom-list-weekdays.xlsx",
+    "features": [
+      "sort-label",
+      "sort-ascending",
+      "custom-list",
+      "weekdays"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-custom-list-off",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-custom-list-off.xlsx",
+    "features": [
+      "sort-label",
+      "custom-list",
+      "custom-list-off"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-collation-ascending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-collation-ascending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-ascending",
+      "collation",
+      "collation-space-pair"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-collation-descending",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-collation-descending.xlsx",
+    "features": [
+      "sort-label",
+      "sort-descending",
+      "collation",
+      "collation-space-pair"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-error-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-error-item.xlsx",
+    "features": [
+      "sort-label",
+      "error-item"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "sort-value-top-level",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-value-top-level.xlsx",
+    "features": [
+      "sort-by-value"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-value-within-groups",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-value-within-groups.xlsx",
+    "features": [
+      "sort-by-value",
+      "nested-sort"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-value-ties",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-value-ties.xlsx",
+    "features": [
+      "sort-by-value",
+      "sort-ties"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-value-showall-no-data",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-value-showall-no-data.xlsx",
+    "features": [
+      "sort-by-value",
+      "show-all",
+      "nested-sort"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "sort-grouped-field",
+    "file": "tests/fixtures/xlsx-pivots/engine/sort-grouped-field.xlsx",
+    "features": [
+      "sort-label",
+      "sort-descending",
+      "date-group",
+      "group-years"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-begins-with",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-begins-with.xlsx",
+    "features": [
+      "label-filter"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-wildcard",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-wildcard.xlsx",
+    "features": [
+      "label-filter",
+      "wildcard"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-between",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-between.xlsx",
+    "features": [
+      "label-filter",
+      "between"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-collation",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-collation.xlsx",
+    "features": [
+      "label-filter",
+      "collation"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-mixed-items",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-mixed-items.xlsx",
+    "features": [
+      "label-filter",
+      "mixed-type-items"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-renamed-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-renamed-item.xlsx",
+    "features": [
+      "label-filter",
+      "renamed-item"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-cross-field",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-cross-field.xlsx",
+    "features": [
+      "label-filter",
+      "cross-field-visibility"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-label-cross-field-showall",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-label-cross-field-showall.xlsx",
+    "features": [
+      "label-filter",
+      "cross-field-visibility",
+      "show-all"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-value-greater-than",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-value-greater-than.xlsx",
+    "features": [
+      "value-filter"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-value-between",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-value-between.xlsx",
+    "features": [
+      "value-filter",
+      "between"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-value-showall",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-value-showall.xlsx",
+    "features": [
+      "value-filter",
+      "show-all"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-value-nested",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-value-nested.xlsx",
+    "features": [
+      "value-filter",
+      "nested-filter"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-top-count",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-count.xlsx",
+    "features": [
+      "top10-filter",
+      "top-count"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-top-count-ties",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-count-ties.xlsx",
+    "features": [
+      "top10-filter",
+      "top-count",
+      "top10-ties"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-top-percent",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-percent.xlsx",
+    "features": [
+      "top10-filter",
+      "top-percent"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-top-percent-30",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-percent-30.xlsx",
+    "features": [
+      "top10-filter",
+      "top-percent"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-top-sum",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-sum.xlsx",
+    "features": [
+      "top10-filter",
+      "top-sum"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-top-nested",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-nested.xlsx",
+    "features": [
+      "top10-filter",
+      "top-count",
+      "nested-filter"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "filter-date-between",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-date-between.xlsx",
+    "features": [
+      "date-filter",
+      "between"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "group-date-years",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-date-years.xlsx",
+    "features": [
+      "date-group",
+      "group-years",
+      "blank-items"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-date-quarters",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-date-quarters.xlsx",
+    "features": [
+      "date-group",
+      "group-quarters",
+      "blank-items"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-date-months",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-date-months.xlsx",
+    "features": [
+      "date-group",
+      "group-months",
+      "blank-items"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-date-years-quarters-months",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-date-years-quarters-months.xlsx",
+    "features": [
+      "date-group",
+      "group-years",
+      "group-quarters",
+      "group-months",
+      "blank-items"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-date-out-of-range",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-date-out-of-range.xlsx",
+    "features": [
+      "date-group",
+      "group-years",
+      "blank-items",
+      "group-out-of-range"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-number-range",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-number-range.xlsx",
+    "features": [
+      "number-group"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-number-out-of-range",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-number-out-of-range.xlsx",
+    "features": [
+      "number-group",
+      "group-out-of-range"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "group-number-fractional",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-number-fractional.xlsx",
+    "features": [
+      "number-group",
+      "fractional-interval",
+      "group-out-of-range"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
+    "case": "group-manual",
+    "file": "tests/fixtures/xlsx-pivots/engine/group-manual.xlsx",
+    "features": [
+      "manual-group",
+      "group-field-with-base"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-cell-without-records",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-cell-without-records.xlsx",
+    "features": [
+      "calculated-field",
+      "spaces-in-name",
+      "no-record-cells"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-division-by-zero",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-division-by-zero.xlsx",
+    "features": [
+      "calculated-field",
+      "spaces-in-name",
+      "division-by-zero"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-quoted-field-name",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-quoted-field-name.xlsx",
+    "features": [
+      "calculated-field",
+      "quoted-name"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-references-calculated",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-references-calculated.xlsx",
+    "features": [
+      "calculated-field",
+      "calc-references-calc"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-constant",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-constant.xlsx",
+    "features": [
+      "calculated-field",
+      "no-field-reference"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-text-field",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-text-field.xlsx",
+    "features": [
+      "calculated-field",
+      "text-values"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-function-count",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-function-count.xlsx",
+    "features": [
+      "calculated-field",
+      "calc-function"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-show-as",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-show-as.xlsx",
+    "features": [
+      "calculated-field",
+      "calc-show-as",
+      "percentOfTotal"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-named-subtotals",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-named-subtotals.xlsx",
+    "features": [
+      "calculated-field",
+      "named-subtotals"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-value-sort",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-value-sort.xlsx",
+    "features": [
+      "calculated-field",
+      "sort-by-value"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  },
+  {
+    "case": "calc-item",
+    "file": "tests/fixtures/xlsx-pivots/engine/calc-item.xlsx",
+    "features": [
+      "calculated-item"
+    ],
+    "task": 22,
+    "pivot": "樞紐分析表2",
+    "route": "applescript",
+    "status": "built"
+  }
+]

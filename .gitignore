@@ -26,3 +26,7 @@ site/public/samples/
 
 # Office lock files (Excel keeps reference workbooks open during capture)
 ~$*
+
+# Task 15 engine oracle scratch (build-engine.ts)
+tests/fixtures/xlsx-pivots/engine/.work/
+tests/fixtures/xlsx-pivots/engine/.probes/

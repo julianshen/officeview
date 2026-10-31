@@ -7,7 +7,10 @@
  * (`<s/><m/><n/>`) are indexed by document position, which the grouped tree loses.
  */
 import { attrs, elementChildren, getChild, getChildren, orderedChildren, type XmlNode } from '../../core/xml'
-import type { PivotCacheDefinition, PivotCacheField, PivotCacheItem, PivotCacheSource, PivotDiagnostic, PivotFieldGroup, PivotSharedItems } from './model'
+import type {
+  PivotArea, PivotAreaReference, PivotAxis, PivotCacheDefinition, PivotCacheField, PivotCacheItem, PivotCacheSource, PivotCalculatedItem, PivotDiagnostic,
+  PivotFieldGroup, PivotSharedItems, PivotSubtotalFunction,
+} from './model'
 
 // ---------------------------------------------------------------- shared attribute readers (also used by parsePivotTable)
 
@@ -133,6 +136,47 @@ export function readIndices(node: XmlNode | undefined, el: string, u: Unsupporte
 export const X14_PIVOT_CACHE_EXT = '{725AE2AE-9491-48be-B2B4-4EB974FC3084}'
 /** xlpdsc `dataSourceClean`: a refresh hint with no effect on the saved cache. */
 const DATA_SOURCE_CLEAN_EXT = '{F4336242-56EE-4DD3-A5F7-E900642BF6E9}'
+// Pivot areas (shared by the table definition and the cache's calculated items).
+/** The Values field as an unsigned pivot-area reference field. */
+export const VALUES_FIELD_UNSIGNED = 4294967294
+export const AXES = ['axisRow', 'axisCol', 'axisPage', 'axisValues'] as const satisfies readonly PivotAxis[]
+export const SUBTOTALS = ['sum', 'countA', 'avg', 'max', 'min', 'product', 'count', 'stdDev', 'stdDevP', 'var', 'varP'] as const satisfies readonly PivotSubtotalFunction[]
+export const SUBTOTAL_ATTRS = SUBTOTALS.map(name => `${name}Subtotal`)
+
+/** The named subtotal flags set on a field or reference, in schema order. */
+export function subtotalsOf(node: XmlNode, el: string, u: Unsupported): PivotSubtotalFunction[] {
+  const a = attrs(node)
+  return SUBTOTALS.filter((_, i) => bool(false)(a[SUBTOTAL_ATTRS[i]], () => u.add(`${el}@${SUBTOTAL_ATTRS[i]}=${a[SUBTOTAL_ATTRS[i]]}`)))
+}
+
+export function readArea(node: XmlNode, u: Unsupported): PivotArea {
+  const a = readAttrs(node, 'pivotArea', {
+    field: optInt, type: oneOf(['none', 'normal', 'data', 'all', 'origin', 'button', 'topEnd', 'topRight'] as const, 'normal'),
+    dataOnly: bool(true), labelOnly: bool(false), grandRow: bool(false), grandCol: bool(false), cacheIndex: bool(false),
+    outline: bool(true), offset: str, collapsedLevelsAreSubtotals: bool(false), axis: optOneOf(AXES), fieldPosition: optUint,
+  }, u)
+  checkChildren(node, 'pivotArea', ['references'], u)
+  readExtensions(node, {}, [], u)
+  const refs = getChild(node, 'references')
+  if (refs) {
+    readList(refs, 'references', getChildren(refs, 'reference').length, u)
+    checkChildren(refs, 'references', ['reference'], u)
+  }
+  const references = getChildren(refs, 'reference').map((ref): PivotAreaReference => {
+    const r = readAttrs(ref, 'reference', {
+      field: optUint, selected: bool(true), byPosition: bool(false), relative: bool(false), defaultSubtotal: bool(false),
+    }, u, ['count', ...SUBTOTAL_ATTRS])
+    checkChildren(ref, 'reference', ['x'], u)
+    readExtensions(ref, {}, [], u)
+    const field = r.field === VALUES_FIELD_UNSIGNED ? -2 : r.field
+    const x = readIndices(ref, 'reference', u)
+    checkCount(ref, 'reference', x.length, u)
+    return { ...r, ...(field !== undefined ? { field } : {}), subtotals: subtotalsOf(ref, 'reference', u), x }
+  })
+  return { ...a, references }
+}
+
+
 const OLAP_CHILDREN = ['cacheHierarchies', 'kpis', 'tupleCache', 'calculatedMembers', 'dimensions', 'measureGroups', 'maps'] as const
 const ITEM_TYPES = new Set(['m', 'n', 'b', 'e', 's', 'd'])
 
@@ -240,6 +284,21 @@ function readSource(node: XmlNode | undefined, u: Unsupported): PivotCacheSource
   return source
 }
 
+/** `calculatedItems`: each item's formula and the pivot area naming its field and item (CT_CalculatedItem). */
+function readCalculatedItems(node: XmlNode, u: Unsupported): PivotCalculatedItem[] {
+  const items = getChildren(node, 'calculatedItem')
+  readList(node, 'calculatedItems', items.length, u)
+  checkChildren(node, 'calculatedItems', ['calculatedItem'], u)
+  return items.map(item => {
+    const a = readAttrs(item, 'calculatedItem', { field: optUint, formula: str }, u)
+    checkChildren(item, 'calculatedItem', ['pivotArea'], u)
+    readExtensions(item, {}, [], u)
+    const area = getChild(item, 'pivotArea')
+    if (!area) u.add('calculatedItem/pivotArea(missing)')
+    return { ...(a.field !== undefined ? { field: a.field } : {}), formula: a.formula ?? '', area: readArea(area ?? {}, u) }
+  })
+}
+
 /**
  * Parses one cache definition. `cacheId` comes from the workbook's `pivotCaches`;
  * `recordsPartPath` is resolved by the loader from the root's `r:id`.
@@ -252,8 +311,8 @@ export function parseCacheDefinition(root: XmlNode, cacheId: number, partPath: s
     createdVersion: uint(0), refreshedVersion: uint(0), minRefreshableVersion: uint(0), recordCount: optUint,
     upgradeOnRefresh: bool(false), tupleCache: bool(false), supportSubquery: bool(false), supportAdvancedDrill: bool(false),
   }, u, ['id'])
-  // calculatedItems (calculated items, §5.6) is deliberately absent: it lands in `unsupported`.
-  checkChildren(root, 'pivotCacheDefinition', ['cacheSource', 'cacheFields', ...OLAP_CHILDREN], u)
+  // calculatedItems (§5.6) are read so the engine can refuse them by name (`pivot-calculated-item`, Task 15 calc-item).
+  checkChildren(root, 'pivotCacheDefinition', ['cacheSource', 'cacheFields', 'calculatedItems', ...OLAP_CHILDREN], u)
   const fieldsNode = getChild(root, 'cacheFields')
   if (!fieldsNode) u.add('pivotCacheDefinition/cacheFields(missing)')
   else readList(fieldsNode, 'cacheFields', getChildren(fieldsNode, 'cacheField').length, u)
@@ -265,6 +324,8 @@ export function parseCacheDefinition(root: XmlNode, cacheId: number, partPath: s
     olap: tupleCache || OLAP_CHILDREN.some(name => getChild(root, name) !== undefined),
     unsupported: [],
   }
+  const calculated = getChild(root, 'calculatedItems')
+  if (calculated) cache.calculatedItems = readCalculatedItems(calculated, u)
   readExtensions(root, {
     [X14_PIVOT_CACHE_EXT]: ext => {
       const node = getChild(ext, 'pivotCacheDefinition')

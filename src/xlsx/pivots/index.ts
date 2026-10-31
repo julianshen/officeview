@@ -6,5 +6,19 @@ import { loadSheetControls } from './slicers/load'
 import { paintControl } from './slicers/paint'
 
 export { loadPivotWorkbook } from './load'
+// The Stage 2 engine (library only: no runtime caller yet). Exported here so it lives in this lazy chunk.
+export { decodeRecords, isoToSerial, recordEvents, RECORD_LIMITS, VALUE_TAG } from './engine/records'
+export type { RecordColumn, RecordLimits, RecordResult, RecordStore } from './engine/records'
+export { initialViewState } from './engine/view'
+export type { DataFieldState, FieldState, PageState, PivotViewState } from './engine/view'
+/** `computeAxes` has no date-system input; 1904 workbooks with date filters must use `computePivot`, which refuses them. */
+export { computeAxes, lineCarriesValues, NO_LINE, subtotalTypes } from './engine/axes'
+export type { EngineResult, PivotAxes } from './engine/axes'
+export { liveDefinition, placeCells } from './engine/place'
+export type { PivotCellValue, PivotLayout, PivotLayoutCell, PivotValueGrid, PlaceOptions } from './engine/place'
+export { computePivot } from './engine/compute'
+export { computeValues } from './engine/values'
+export { checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader } from './engine/faithful'
+export type { CellDiff, CellReader, FaithfulOptions, FaithfulResult, SavedCell } from './engine/faithful'
 
 registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl })

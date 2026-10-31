@@ -12,25 +12,20 @@ import { attrs, getChild, getChildren, type XmlNode } from '../../core/xml'
 import type { PivotRegionRef } from './stub'
 import {
   dataFieldSource, PIVOT_BASE_ITEM_NEXT, PIVOT_BASE_ITEM_PREVIOUS, PIVOT_VALUES_FIELD,
-  type PivotArea, type PivotAreaReference, type PivotAxis, type PivotAxisItem, type PivotCacheDefinition, type PivotDataField, type PivotDiagnostic,
-  type PivotField, type PivotFieldItem, type PivotFilter, type PivotFilterColumn, type PivotItemType, type PivotSubtotalFunction, type PivotTableDefinition,
+  type PivotArea, type PivotAxisItem, type PivotCacheDefinition, type PivotDataField, type PivotDiagnostic,
+  type PivotField, type PivotFieldItem, type PivotFilter, type PivotFilterColumn, type PivotItemType, type PivotTableDefinition,
 } from './model'
 import {
-  bool, checkChildren, checkCount, countDiagnostics, double, int, oneOf, optBool, optDouble, optInt, optOneOf, optUint, pushDiagnostic,
-  readAttrs, readExtensions, readIndices, readList, str, uint, Unsupported,
+  bool, checkChildren, countDiagnostics, double, int, oneOf, optBool, optDouble, optInt, optOneOf, optUint, pushDiagnostic,
+  readArea, readAttrs, readExtensions, readIndices, readList, str, subtotalsOf, uint, Unsupported, AXES, SUBTOTAL_ATTRS,
 } from './parseCacheDefinition'
 
 export const X14_PIVOT_TABLE_EXT = '{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}'
 export const X14_PIVOT_FIELD_EXT = '{2946ED86-A175-432a-8AC1-64E0C546D7DE}'
 export const X14_DATA_FIELD_EXT = '{E15A36E0-9728-4e99-A89B-3F7291B0FE68}'
 export const XPDL_PIVOT_TABLE_EXT = '{747A6164-185A-40DC-8AA5-F01512510D54}'
-/** The Values field as an unsigned pivot-area reference field. */
-const VALUES_FIELD_UNSIGNED = 4294967294
 
-const AXES = ['axisRow', 'axisCol', 'axisPage', 'axisValues'] as const satisfies readonly PivotAxis[]
 const ITEM_TYPES = ['data', 'default', 'sum', 'countA', 'avg', 'max', 'min', 'product', 'count', 'stdDev', 'stdDevP', 'var', 'varP', 'grand', 'blank'] as const satisfies readonly PivotItemType[]
-const SUBTOTALS = ['sum', 'countA', 'avg', 'max', 'min', 'product', 'count', 'stdDev', 'stdDevP', 'var', 'varP'] as const satisfies readonly PivotSubtotalFunction[]
-const SUBTOTAL_ATTRS = SUBTOTALS.map(name => `${name}Subtotal`)
 const FILTER_TYPES = [
   'unknown', 'count', 'percent', 'sum', 'captionEqual', 'captionNotEqual', 'captionBeginsWith', 'captionNotBeginsWith', 'captionEndsWith',
   'captionNotEndsWith', 'captionContains', 'captionNotContains', 'captionGreaterThan', 'captionGreaterThanOrEqual', 'captionLessThan',
@@ -41,39 +36,6 @@ const FILTER_TYPES = [
   'Q1', 'Q2', 'Q3', 'Q4', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12',
 ] as const satisfies readonly PivotFilter['type'][]
 const AREA_REF = /^\$?[A-Z]{1,3}\$?[1-9]\d{0,6}(?::\$?[A-Z]{1,3}\$?[1-9]\d{0,6})?$/
-
-/** The named subtotal flags set on a field or reference, in schema order. */
-function subtotalsOf(node: XmlNode, el: string, u: Unsupported): PivotSubtotalFunction[] {
-  const a = attrs(node)
-  return SUBTOTALS.filter((_, i) => bool(false)(a[SUBTOTAL_ATTRS[i]], () => u.add(`${el}@${SUBTOTAL_ATTRS[i]}=${a[SUBTOTAL_ATTRS[i]]}`)))
-}
-
-function readArea(node: XmlNode, u: Unsupported): PivotArea {
-  const a = readAttrs(node, 'pivotArea', {
-    field: optInt, type: oneOf(['none', 'normal', 'data', 'all', 'origin', 'button', 'topEnd', 'topRight'] as const, 'normal'),
-    dataOnly: bool(true), labelOnly: bool(false), grandRow: bool(false), grandCol: bool(false), cacheIndex: bool(false),
-    outline: bool(true), offset: str, collapsedLevelsAreSubtotals: bool(false), axis: optOneOf(AXES), fieldPosition: optUint,
-  }, u)
-  checkChildren(node, 'pivotArea', ['references'], u)
-  readExtensions(node, {}, [], u)
-  const refs = getChild(node, 'references')
-  if (refs) {
-    readList(refs, 'references', getChildren(refs, 'reference').length, u)
-    checkChildren(refs, 'references', ['reference'], u)
-  }
-  const references = getChildren(refs, 'reference').map((ref): PivotAreaReference => {
-    const r = readAttrs(ref, 'reference', {
-      field: optUint, selected: bool(true), byPosition: bool(false), relative: bool(false), defaultSubtotal: bool(false),
-    }, u, ['count', ...SUBTOTAL_ATTRS])
-    checkChildren(ref, 'reference', ['x'], u)
-    readExtensions(ref, {}, [], u)
-    const field = r.field === VALUES_FIELD_UNSIGNED ? -2 : r.field
-    const x = readIndices(ref, 'reference', u)
-    checkCount(ref, 'reference', x.length, u)
-    return { ...r, ...(field !== undefined ? { field } : {}), subtotals: subtotalsOf(ref, 'reference', u), x }
-  })
-  return { ...a, references }
-}
 
 /** A required `pivotArea` child; a missing one is recorded and read as the all-defaults area. */
 function requiredArea(node: XmlNode, el: string, u: Unsupported): PivotArea {

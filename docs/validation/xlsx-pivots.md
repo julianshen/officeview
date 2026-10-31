@@ -530,3 +530,132 @@ Status is `pass` (compared within tolerance) or `*unverified*`, with the reason 
 | measure-field-buttons | pass | 0.0033 | 0.0627 | 20 | 0.006 / 0.073 / 23 | window screenshot: screen mode with dropdowns |
 | pivot-layout-outline-window | pass | 0.0020 | 0.0627 | 11 | 0.005 / 0.073 / 14 | window screenshot: screen mode with dropdowns |
 | pivot-chart-buttons-all-window | *unverified* | — | — | — | — | A window screenshot of the chart only, with no cell range. Its pixels belong to the chart renderer. What Stage 1 takes from it, that Excel for Mac draws no PivotChart field buttons (Ruling AI), is asserted by tests/charts-pivot-buttons.test.ts. |
+
+## Stage 2 engine oracle and measurements (Task 15, 2026-10-31, Excel 16.114, zh-TW UI)
+
+### How the oracle is made
+- **Seed.** `recipes/engine-seed.xlsx` is built from `recipes/pivot-seed.xlsx` by `bun scripts/xlsx-refs/build-engine.ts --seed`.
+  - AppleScript writes a 56-record, 12-column source (A1:L57) with blanks, ties, negatives, mixed-type Channel values, punctuation codes, month and weekday names, and a Stamp column of serials 0.5, 1, 59, 60 and 61. Row 58 holds a `#N/A` record outside the source; only the error cases widen the source to it.
+  - The pivot is then pointed at the new source. `set source data` is a syntax error in Excel's dictionary (-2741), so the seed takes the XML route: the `worksheetSource` ref is rewritten, and Excel opens, refreshes and saves the file.
+- **Cases.** `scripts/xlsx-refs/engine-cases.ts` defines 125 cases. `build-engine.ts` copies the seed for each one, applies the case, runs `refresh table`, saves, and checks markers in the saved parts, because Excel can ignore a setting without an error.
+  - 96 cases go through AppleScript. 29 go through the XML route: an optional AppleScript prep, then a part edit, then Excel reopens, refreshes and saves.
+  - Excel opened every XML-route file without a repair prompt, and re-applied filters on refresh. For example, `filter-label-begins-with`'s `rowItems` went from 19 to 9.
+  - No case needed the owner, so there is no Stage 2 recipe batch.
+- **Manifest.** `engine/manifest.json` has one entry per case: `{ case, file, features, task, pivot, route, status }`. `pivot` is the pivot table's `name` attribute, which Excel writes in the UI locale (`樞紐分析表2`).
+
+### Dictionary probes (`--probes`)
+| Reshape | Result |
+|---|---|
+| `set source data of <pivot> to "…"` | refused (syntax error -2741): XML route |
+| `set value of range … to {{…}}`, `set formula`, `set number format` | reached |
+| `set subtotals <field> subtotal index sum subtotal / count subtotal / average subtotal value true` | reached. `count subtotal` is Excel's Count, which writes `countASubtotal="1"` and `<item t="countA"/>` |
+| `set pivot field orientation of data field … to orient as hidden` | reached |
+| `data field N of <pivot>` for an added data field, then `set name` | reached |
+| `set base item … to "(previous)"` / `"(next)"` | reached |
+| `make new pivot filter at <field> with properties {…}` | refused (parameter error -50) for every filter type: XML route |
+| `auto show <field> …` | ignored (no `autoShow` or top-10 filter saved): XML route |
+| `group (label range …) start/end/by/periods` | reached |
+| `make new calculated field` / `make new calculated item` | reached |
+| `set enable multiple page items of <field> to true` | refused (-10006): XML route |
+| `set column grand` / `set row grand` | reached, named the other way round from ECMA: `column grand` is `rowGrandTotals`, `row grand` is `colGrandTotals` |
+
+### What Excel writes (measured from the saved parts)
+- **Dates in the cache (ruling S2-H).** The ISO value is 1899-12-30 + serial, applied uniformly: serials 0.5, 1, 59, 60 and 61 are saved as `1899-12-30T12:00:00`, `1899-12-31T00:00:00`, `1900-02-27`, `1900-02-28` and `1900-03-01`. There is no 1900 leap-year correction in the cache. The fictitious 1900-02-29 is serial 60, written as `1900-02-28`.
+- **Fields on no axis.** Their text stays inline in `pivotCacheRecords` (`<s v="…"/>`), and the definition keeps an empty `<sharedItems/>`.
+  - When a field leaves every axis, Excel drops its hidden items and its shared items. An off-axis hidden item is therefore never written by Excel (`quirk-off-axis-hidden-item`). This was checked in two saves:
+    - with Channel on rows and Retail hidden, Excel saved `<item h="1" x="1"/>` and four Channel shared items;
+    - after Channel was taken off the axis, the same file saved as `<pivotField showAll="0"/>` with an empty `sharedItems`.
+  - The engine still refuses that state in files from other writers.
+- **`showAll`.** True is written by omitting the attribute (the schema default); false is `showAll="0"`.
+- **Data field captions.** Setting a data field's function, even to Sum, renames it with Excel's localised default (`加總 - Sales`). Captions Excel wrote earlier stay as they are. The engine takes captions from the saved `name`.
+- **Named subtotals.** Excel writes the `*Subtotal` flags and one `<item t=…>` per function after the item list. It writes no `defaultSubtotal` attribute and no `default` item.
+
+### Rules read off the oracle (implemented and cited in the engine)
+- **Totals arithmetic (ruling S2-AB, as refined).** Each leaf cell (leaf row × leaf column) is the naive Float64 sum of its records in record order. Totals are built from leaf cells, never from intermediate subtotals and never from the records directly:
+  - each leaf row sums its leaf cells across the columns;
+  - each total then sums those leaf-row cells down the rows, in display order.
+  - This is bit-exact on every Sum cell of `baseline`, `values-fn-sum` and `values-addition-order`. Percent of total and index use the same totals; index is `((v × G) / R) / C`.
+- **Average totals** sum the records leaf row by leaf row; column totals then sum those cells. This is fitted on `values-fn-average` and `values-average-hidden-item`.
+- **Visible totals.** Records of hidden items, page selections and filtered-out items are left out of every total.
+- **Blank and error cells.**
+  - Sum and Count over no values are blank.
+  - Count Numbers is 0 over text-only groups and blank with no values.
+  - A sample statistic over one number is `#DIV/0!`.
+  - For difference, % of and % difference, the blank cells, the base item's own cells, `#N/A`, `#NULL!` and `#DIV/0!` all follow the saved cells.
+  - % of parent with a base field is blank on the grand line.
+- **Rank** ties are dense.
+- **Calculated fields** are evaluated on each cell's sums, unrounded, because Excel keeps full precision in pivot cells. In detail:
+  - a cell without records uses zero sums;
+  - the data field's function is ignored;
+  - text values are left out of the sums;
+  - a formula naming no field fills every cell;
+  - a reference to another calculated field applies that formula to the same sums;
+  - percent of total divides each cell by the field's grand-total cell.
+- **Layout.**
+  - The Values row is hidden in every form but classic.
+  - Classic layout with one data field and no column field has two header rows.
+  - A collapsed item above Values gets its own line, then one line per data field.
+  - `mergeItem` merges the outer row labels, the total captions and the column labels.
+  - A showAll item with no records lists the next field's visible items.
+- **Sorting.**
+  - Mixed types sort as number < text < blank, and descending reverses all of it.
+  - Months and weekdays follow their custom lists unless `customListSort` is off.
+  - Text uses Excel's word sort: apostrophes and hyphens are ignored, a difference only in hyphens sorts last, symbol weights are fixed, and only characters the oracle measured are accepted.
+  - Value-sort ties keep item order.
+- **Filters** apply in `evalOrder`.
+  - Label filters match captions, including renamed items and wildcards.
+  - Value and top-10 filters rank items by their aggregate over the records left by earlier filters, per parent when nested. Ties at a Count cut are kept.
+  - Top **Percent** keeps the top items whose values reach N % of the total (`filter-top-percent-30`: West + South, 120099.08).
+- **Groups.**
+  - Number ranges are `[a, a + interval)`. Excel relabels the last bucket's upper bound as start + count × interval (`group-number-fractional`: `98-100.5`, `>100.5`).
+  - Dates group by years, quarters and months. Blanks fall in the `<start` bucket.
+  - A base field's `fieldGroup par` link is not a group definition (`group-manual`).
+
+### Engine results per case
+All 126 manifest cases go through `checkSavedLayout` (`tests/xlsx-pivots-*.test.ts`; the triage dump is `.superpowers/sdd/…/dump-cases.ts` during development).
+
+| Task | Cases | ok | Refused (unverified) | Mismatch |
+|---|---|---|---|---|
+| 17 layout and data quirks | 33 | 33 | 0 | 0 |
+| 18 values and show-as | 38 | 34 | 4 | 0 |
+| 21 sort, filter, group | 44 | 43 | 1 | 0 |
+| 22 calculated | 11 | 10 | 1 | 0 |
+| **All** | **126** | **120** | **6** | **0** |
+
+The refused cases, each asserted with its exact message in its test file:
+
+| Case | Refusal | Why Excel's file does not settle it |
+|---|---|---|
+| `values-fn-stdev`, `values-fn-stdevp`, `values-fn-var`, `values-fn-varp` | `pivot-engine-unmeasured` | Every leaf cell matches. The total cells differ in the 15th digit under every accumulation tried: leaf-moment rollup, records in display order, row or column partials, Welford, two-pass, fused multiply-add. |
+| `sort-value-showall-no-data` | `pivot-engine-unmeasured` | Several no-data items under one parent; their tie order is not measured. |
+| `calc-item` | `pivot-calculated-item` | Excel lists a calculated item under every parent and counts it in totals. Spec §5.6 recomputes calculated items only once the oracle passes (ruling S2-AD). |
+
+Beyond the manifest, the engine refuses with a named reason, rather than guessing, every construct no case measures, among them:
+- Bottom-N filters;
+- nested Top Percent;
+- sorting a group field;
+- custom lists mixed with other labels;
+- labels with characters outside the measured collation set (other punctuation, accented letters, CJK);
+- booleans and dates in mixed sorts;
+- date filters in a 1904 workbook;
+- date groups below serial 61;
+- variance totals;
+- Average, Product and variance on a collapsed item;
+- error-valued records under any function but Sum and Count, under a named subtotal of another function, or under show-as;
+- % of parent total with its base field on the columns, or on a cell without a parent line (grand totals off);
+- error captions (`showError`) and missing-value captions (`showMissing` off or a `missingCaption`); the oracle files keep Excel's defaults, which compute;
+- value filters, top-10 filters and value sorts on a data field with show-as;
+- date grouping by days, hours, minutes or seconds;
+- calculated items on any field, used or not;
+- a collapsed item above Values with more than one unfilled level, and `mergeItem` beyond two tabular row fields and one column field;
+- the record-less showAll listing outside its measured shape (rows, second level, last row field, compact parent), or when a listed item has no record past the hidden items and page selections.
+
+Show-as modes that scan sibling or parent lines (previous/next and explicit base items, running totals, rank, % of parent) refuse as `pivot-values-limit` when cells × axis lines would exceed 5×10⁷. An indexed sibling lookup is a Stage 3 entry item.
+
+Error-valued item labels are placed as text, as Excel saves them (`sort-error-item`, now ok).
+
+### Speed and size (Task 23, 2026-10-31)
+- **§6.3 gate.** `bun scripts/pivot-bench.ts --runs 3` runs 1,000,000 spec-shaped records (3 row fields of 10/50/200 items, 1 column field of 12, 2 sum data fields). `computeAxes + computeValues` gives a median-of-medians of **135.89 ms** (final-review fix round; 140.93 ms at Task 23), against a limit of 200 and an internal bar of 180. Decoding the records is reported separately.
+- **Bundles.** The eager bundle is 35,968 B gzip, unchanged from `main` (budget 38,720). The engine lives in the lazy pivots chunk, which grows from 40,823 B raw / 12,702 B gzip on `main` to 161,560 / 46,267 at Task 23 (+33,565 B gzip), and to 164,065 B raw / 46.98 kB gzip (Vite's report) after the final-review fix round's refusals.
+
+**LibreOffice and POI files** (`corpus/`, recorded, never tuned toward): see `CORPUS_STATUS` in `tests/xlsx-pivots-faithful.test.ts`. Collabora's `calcfields` reports a `colItems` mismatch, so its saved cells stay shown.

@@ -142,9 +142,14 @@ export interface PivotCacheDefinition {
   /** An OLAP / data-model cache: `cacheHierarchies`, `dimensions`, `measureGroups`, `kpis`, `tupleCache` or `calculatedMembers`, or `@tupleCache`. */
   olap: boolean
   x14?: PivotCacheX14
+  /** `calculatedItems` (§5.6): parsed for the engine's `pivot-calculated-item` refusal; not evaluated. */
+  calculatedItems?: PivotCalculatedItem[]
   /** Constructs this parser does not model (see `PivotTableDefinition.unsupported`). */
   unsupported: string[]
 }
+
+/** A calculated item (CT_CalculatedItem): its formula and the pivot area that names its field and item. */
+export interface PivotCalculatedItem { field?: number; formula: string; area: PivotArea }
 
 // ---------------------------------------------------------------- pivot table definition
 
