@@ -117,11 +117,16 @@ export function compactLabelIndents(layout: SavedPivotLayout): (row: number, col
   }
 }
 
-function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean, ppt = PX_PER_PT): void {
-  // Centred below the row's top gridline pixel, a half pixel rounding down: a 15 px row puts the box at
-  // rows 5–11 (refs/pivot-light-23.png and pivot-medium-9.png: East's box at y 80–86 in the row from 75).
+/** The ± box in `rect`: 7 × 7 pt at x 6–12, centred below the row's top gridline pixel, a half pixel rounding down
+ * (a 15 px row puts the box at rows 5–11: refs/pivot-light-23.png and pivot-medium-9.png, East's box at y 80–86 in
+ * the row from 75). Shared by the painter and the interactive viewer's hit targets (Task 28). */
+export function drillBox(rect: Rect, ppt = PX_PER_PT): Rect {
   const size = Math.round(7 * ppt)
-  const x = Math.round(rect.x + 6 * ppt), y = Math.round(rect.y) + 1 + Math.ceil((Math.round(rect.height) - 1 - size) / 2)
+  return { x: Math.round(rect.x + 6 * ppt), y: Math.round(rect.y) + 1 + Math.ceil((Math.round(rect.height) - 1 - size) / 2), width: size, height: size }
+}
+
+function paintDrill(ctx: CanvasRenderingContext2D, rect: Rect, expand: boolean, ppt = PX_PER_PT): void {
+  const { x, y, width: size } = drillBox(rect, ppt)
   ctx.fillStyle = '#E2E3E3'
   ctx.fillRect(x + 1, y + 1, size - 2, size - 2)
   // Corners stay open, as Excel's rounded box leaves them.

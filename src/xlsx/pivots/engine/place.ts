@@ -150,6 +150,33 @@ const labelText = (label: Label) => label.value.kind === 'empty' ? '' : String(l
 /** A label as a caption argument: its nested implicit caption, else its text. */
 const argOf = (label: Label): CaptionArg => label.implicit ?? labelText(label)
 
+/**
+ * A pivot item's label as placeCells writes it (the item's `n`, the cache item's caption, else its value in the field's
+ * number format); `blank` marks the missing item, whose "(blank)" caption is localised (an implicit caption). Shared
+ * with the Stage 3 menus (Task 28), which list a field's items by these labels.
+ */
+export function pivotItemLabel(def: PivotTableDefinition, cache: PivotCacheDefinition, field: number, item: number, date1904: boolean): { value: PivotCellValue; numFmtId?: number; blank?: true } {
+  const pivotItem = def.fields[field]?.items?.[item]
+  if (pivotItem?.name !== undefined) return { value: { kind: 'text', value: pivotItem.name } }
+  const cacheField = cache.fields[field]
+  const itemValues = cacheField?.fieldGroup?.groupItems ?? cacheField?.sharedItems?.items
+  const value = itemValues?.[pivotItem ? pivotItem.x ?? -1 : item]
+  if (!value) return { value: { kind: 'text', value: '' } }
+  if (value.caption !== undefined) return { value: { kind: 'text', value: value.caption } }
+  const numFmtId = def.fields[field]?.numFmtId ?? cacheField?.numFmtId
+  const format = numFmtId !== undefined ? { numFmtId } : {}
+  switch (value.type) {
+    case 'missing': return { value: { kind: 'text', value: '(blank)' }, blank: true }
+    case 'number': return { value: { kind: 'number', value: value.value }, ...format }
+    // Date items show as serials in the field's number format (lo-calc-pivot_dark1), in the workbook's date system.
+    case 'date': return { value: { kind: 'number', value: isoToSerial(value.value, date1904) }, ...format }
+    case 'boolean': return { value: { kind: 'text', value: value.value ? 'TRUE' : 'FALSE' } }
+    // Excel saves an error-valued item's label as text (Task 15 sort-error-item R24C1: the text #N/A).
+    case 'error': return { value: { kind: 'text', value: value.value } }
+    case 'string': return { value: { kind: 'text', value: value.value } }
+  }
+}
+
 export function placeCells(def: PivotTableDefinition, view: PivotViewState, cache: PivotCacheDefinition, axes: PivotAxes, values: PivotValueGrid,
   options: PlaceOptions): PivotLayout {
   const { date1904, savedCaption } = options
@@ -176,24 +203,8 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   }
   const itemLabel = (field: number, item: number): Label => {
     if (field === PIVOT_VALUES_FIELD) return dataName(item)
-    const pivotItem = def.fields[field]?.items?.[item]
-    if (pivotItem?.name !== undefined) return text(pivotItem.name)
-    const cacheField = cache.fields[field]
-    const itemValues = cacheField?.fieldGroup?.groupItems ?? cacheField?.sharedItems?.items
-    const value = itemValues?.[pivotItem ? pivotItem.x ?? -1 : item]
-    if (!value) return text('')
-    if (value.caption !== undefined) return text(value.caption)
-    const numFmtId = def.fields[field]?.numFmtId ?? cacheField?.numFmtId
-    switch (value.type) {
-      case 'missing': return implicit('(blank)', 'blank')
-      case 'number': return { value: { kind: 'number', value: value.value }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
-      // Date items show as serials in the field's number format (lo-calc-pivot_dark1), in the workbook's date system.
-      case 'date': return { value: { kind: 'number', value: isoToSerial(value.value, date1904) }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
-      case 'boolean': return text(value.value ? 'TRUE' : 'FALSE')
-      // Excel saves an error-valued item's label as text (Task 15 sort-error-item R24C1: the text #N/A).
-      case 'error': return text(value.value)
-      case 'string': return text(value.value)
-    }
+    const label = pivotItemLabel(def, cache, field, item, date1904)
+    return label.blank ? implicit('(blank)', 'blank') : { value: label.value, ...(label.numFmtId !== undefined ? { numFmtId: label.numFmtId } : {}) }
   }
   const explicitOr = (explicit: string | undefined, english: string, kind: CaptionKind): Label => explicit !== undefined ? text(explicit) : implicit(english, kind)
   /** A subtotal or grand line's caption. */

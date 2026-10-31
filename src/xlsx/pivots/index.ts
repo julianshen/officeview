@@ -2,6 +2,9 @@
 import { registerPivotEngine } from '../pivotLoader'
 import { pivotStyleRegions } from './regions'
 import { paintPivotButtons } from './buttons'
+export { dropdownBox, drillBox, pivotButtons, PX_PER_PT } from './buttons'
+export type { ButtonPlacement } from './buttons'
+export { savedPivotLayout } from './savedLayout'
 import { loadSheetControls } from './slicers/load'
 import { paintControl } from './slicers/paint'
 import { pivotRuntimeFor } from './session/runtime'
@@ -15,7 +18,7 @@ export type { DataFieldState, FieldState, PageState, PivotViewState } from './en
 /** `computeAxes` has no date-system input; 1904 workbooks with date filters must use `computePivot`, which refuses them. */
 export { computeAxes, lineCarriesValues, NO_LINE, subtotalTypes } from './engine/axes'
 export type { EngineResult, PivotAxes } from './engine/axes'
-export { liveDefinition, placeCells } from './engine/place'
+export { liveDefinition, pivotItemLabel, placeCells } from './engine/place'
 export type { PivotCellValue, PivotLayout, PivotLayoutCell, PivotValueGrid, PlaceOptions } from './engine/place'
 export { computePivot } from './engine/compute'
 export { computeValues } from './engine/values'
