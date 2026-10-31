@@ -125,6 +125,46 @@ describe('resident pivot client (headless)', () => {
     expect((await client.apply(sheet, 0, 'reset')).ok).toBe(false)
   })
 
+  it('a resident open is admitted against the main-thread budget, as the worker admits it; refused, nothing stays charged', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const { MAIN_QUOTA_MESSAGE } = await import('../src/xlsx/pivots/session/runtime')
+    const { MAIN_THREAD_BUDGETS } = await import('../src/xlsx/view/tileCache')
+    const doc = await load(BASELINE), sheet = pivotSheet(doc)
+    const ledger = new MainMemoryLedger()
+    ledger.set('document', 'everything-else', MAIN_THREAD_BUDGETS.D)   // the main budget is used up
+    const full = createResidentPivotClient({ doc, ledger, install: () => {} })
+    const refused = await full.open(sheet, 0, signal())
+    expect(refused).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-records-limit', message: MAIN_QUOTA_MESSAGE } })
+    // The runtime's retained copy is charged by the viewer before any open (S3-F); the store and its decode are not.
+    const retained = pivotRuntimeFor(doc)!.retainedBytes
+    expect(ledger.bytes).toBe(MAIN_THREAD_BUDGETS.D + retained)
+    full.dispose?.()
+    // With room the same open is admitted and charges its store.
+    ledger.release('document', 'everything-else')
+    const roomy = createResidentPivotClient({ doc, ledger, install: () => {} })
+    expect((await roomy.open(sheet, 0, signal())).ok).toBe(true)
+    expect(ledger.bytes).toBeGreaterThan(retained)
+    expect(ledger.bytes).toBeLessThanOrEqual(MAIN_THREAD_BUDGETS.D)
+    roomy.dispose?.()
+  })
+
+  it('the runtime does not charge or keep a store its caller refuses to admit', async () => {
+    const doc = await load(BASELINE), sheet = doc.sheets[pivotSheet(doc)]!
+    const runtime = pivotRuntimeFor(doc)!, cache = runtime.cache(sheet.pivotTables![0]!)!
+    const ledger = new MainMemoryLedger()
+    runtime.chargeRetained(ledger)
+    const before = ledger.bytes
+    const refused = await runtime.lease(cache, ledger, signal(), undefined, () => false)
+    expect(refused).toMatchObject({ ok: false, diagnostic: { feature: 'pivot-records-limit' }, quota: { requiredBytes: expect.any(Number) } })
+    expect(ledger.bytes).toBe(before)
+    // Not kept: the next lease decodes again and, admitted, holds the store until it is released.
+    const admitted = await runtime.lease(cache, ledger, signal(), undefined, () => true)
+    if (!admitted.ok) throw new Error(admitted.diagnostic.message)
+    expect(ledger.bytes).toBe(before + admitted.lease.store.bytes)
+    admitted.lease.release()
+    expect(ledger.bytes).toBe(before)
+  })
+
   it('S3-G: after a commit the vacated saved area stays protected from sheet sort and filter', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await load(BASELINE), sheet = pivotSheet(doc), source = createObjectWorkbookSource(doc, 'pivot-guard')

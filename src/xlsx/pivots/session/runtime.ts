@@ -10,6 +10,9 @@
  *   `document` pool (`chargeWhileHeld`), each lease holds it, and the charge ends at the last release, when the
  *   runtime also drops the store (the next lease decodes again). The ledger has no pivot pool: adding one is in
  *   `src/xlsx/view/mainLedger.ts` (Task 26's lane), so the store counts as document memory.
+ * - Admission (final review I3): given `admit`, the store is admitted before it is first charged, as the worker admits
+ *   it to its pool; refused, the lease fails `pivot-records-limit` with a quota and nothing is charged or kept. The
+ *   decode's own growth is admitted by the caller through `limits.admitBytes`.
  */
 import { PackageError } from '../../../core/package-error'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition } from '../model'
@@ -18,8 +21,8 @@ import type { MainMemoryLedger } from '../../view/mainLedger'
 
 /** One holder's claim on a shared store. Releasing twice is a no-op. */
 export interface RecordLease { readonly store: RecordStore; release(): void }
-export type RecordLeaseResult = { ok: true; lease: RecordLease } | { ok: false; diagnostic: PivotDiagnostic }
-export type RuntimeLedger = Pick<MainMemoryLedger, 'chargeWhileHeld' | 'hold' | 'chargeWhileReachable' | 'set'>
+export type RecordLeaseResult = { ok: true; lease: RecordLease } | { ok: false; diagnostic: PivotDiagnostic; quota?: { requiredBytes: number; limitBytes?: number } }
+export type RuntimeLedger = Pick<MainMemoryLedger, 'chargeWhileHeld' | 'hold' | 'chargeWhileReachable' | 'set' | 'bytes'>
 export interface PivotRuntime {
   /** The workbook's date system (decided after the pivots load; read when needed). */
   readonly date1904: boolean
@@ -29,12 +32,15 @@ export interface PivotRuntime {
   chargeRetained(ledger: RuntimeLedger): void
   cache(def: PivotTableDefinition): PivotCacheDefinition | undefined
   records(cache: PivotCacheDefinition, signal: AbortSignal, limits?: RecordLimits): Promise<RecordResult>
-  lease(cache: PivotCacheDefinition, ledger: RuntimeLedger, signal: AbortSignal, limits?: RecordLimits): Promise<RecordLeaseResult>
+  /** `admit(bytes)`: whether the store's first charge fits the caller's budget (absent: always). */
+  lease(cache: PivotCacheDefinition, ledger: RuntimeLedger, signal: AbortSignal, limits?: RecordLimits, admit?: (bytes: number) => boolean): Promise<RecordLeaseResult>
 }
 /** A records part's bytes as a stream, or undefined when the part is not in the package. */
 export type RecordsSource = (path: string, signal: AbortSignal) => AsyncIterable<Uint8Array> | PivotDiagnostic | undefined
 
 const cancelled = () => new PackageError('cancelled', 'operation cancelled')
+/** The resident refusal of a record store or decode the main-thread budget cannot hold (the worker's is worded for it). */
+export const MAIN_QUOTA_MESSAGE = 'The pivot operation exceeds the main-thread memory budget.'
 const absent = (cache: PivotCacheDefinition): RecordResult => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-records-absent', message: `Pivot cache ${cache.cacheId} has no records part`, partPath: cache.partPath } })
 
 function waitOrAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -80,7 +86,7 @@ export function createPivotRuntime(caches: ReadonlyMap<number, PivotCacheDefinit
       if (signal.aborted) throw cancelled()
       return result
     },
-    async lease(cache, ledger, signal, limits) {
+    async lease(cache, ledger, signal, limits, admit) {
       if (signal.aborted) throw cancelled()
       runtime.chargeRetained(ledger)
       let entry = shared.get(cache)
@@ -105,7 +111,14 @@ export function createPivotRuntime(caches: ReadonlyMap<number, PivotCacheDefinit
       }
       const store = result.store
       let hold = ledger.hold(store)
-      if (!hold) { ledger.chargeWhileHeld('document', [store], store.bytes); hold = ledger.hold(store)! }
+      if (!hold) {
+        if (admit && !admit(store.bytes)) {
+          // Not admitted: nothing is charged, and a store nobody holds is not kept (a later lease decodes again).
+          if (shared.get(cache) === current && !current.holders) shared.delete(cache)
+          return { ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-records-limit', message: MAIN_QUOTA_MESSAGE, partPath: cache.partPath }, quota: { requiredBytes: store.bytes } }
+        }
+        ledger.chargeWhileHeld('document', [store], store.bytes); hold = ledger.hold(store)!
+      }
       current.holders++
       let held = true
       return { ok: true, lease: { store, release: () => {

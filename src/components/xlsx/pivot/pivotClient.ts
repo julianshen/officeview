@@ -36,7 +36,8 @@ import type { ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/vi
 import type { SourceRect } from '../../../xlsx/view/coordinates'
 import { cellDisplayText } from '../../../xlsx/render'
 import { pivotRuntimeFor } from '../../../xlsx/pivotLoader'
-import type { RuntimeLedger } from '../../../xlsx/pivots/session/runtime'
+import { MAIN_QUOTA_MESSAGE, type RuntimeLedger } from '../../../xlsx/pivots/session/runtime'
+import { MAIN_THREAD_BUDGETS } from '../../../xlsx/view/tileCache'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotFilter, PivotTableDefinition } from '../../../xlsx/pivots/model'
 import type { SavedPivotLayout } from '../../../xlsx/pivots/savedLayout'
 import {
@@ -341,6 +342,9 @@ export interface ResidentPivotClientOptions {
   verifiedKinds?: ReadonlySet<PivotDeltaKind>
   /** Task 30's pivot chart gate; absent, a pivot with linked charts refuses at open. */
   chartGate?: ChartGate
+  /** The main-thread budget the record stores and their decodes are admitted against (final review I3); default
+   * `MAIN_THREAD_BUDGETS[profile]`, as the viewer's other main-thread admissions. */
+  budgetBytes?: number
 }
 interface OpenPivot { session: PivotSession; savedDef: PivotTableDefinition; cache: PivotCacheDefinition; saved: SourceRect[]; current: SourceRect[]; date1904: boolean; style: ReturnType<typeof savedStyles> }
 
@@ -354,6 +358,21 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
   const key = (sheetId: number, pivot: number) => `${sheetId}:${pivot}`
   const sheetOf = (sheetId: number) => doc.sheets[sheetId]
   const savedDefs = doc.sheets.map((sheet, index) => [...(options.saved ? options.saved[index] ?? [] : sheet.pivotTables ?? [])])
+  // Final review I3: a session's record store, the decode that builds it, and a refresh's build are admitted against
+  // the main-thread budget before they are charged, as the worker admits them to its pool; refused, the open is.
+  const budget = options.budgetBytes ?? MAIN_THREAD_BUDGETS[options.profile ?? 'D']
+  /** Charges `bytes` under `owner` (replacing its earlier charge) only when the ledger stays within the budget; the
+   * caller zeroes the owner when the work ends. */
+  const admitAs = (owner: string) => {
+    let held = 0
+    return (bytes: number): boolean => {
+      if (ledger.bytes - held + bytes > budget) return false
+      ledger.set('document', owner, held = bytes)
+      return true
+    }
+  }
+  /** A decode's or a build's refusal as the main thread says it (the engine words it for the worker). */
+  const mainQuota = (diagnostic: PivotDiagnostic): PivotDiagnostic => diagnostic.feature === 'pivot-worker-quota' ? { ...diagnostic, feature: 'pivot-records-limit', message: MAIN_QUOTA_MESSAGE } : diagnostic
 
   const preflight = (sheetId: number, pivot: number): PivotDiagnostic | undefined => {
     const def = savedDefs[sheetId]?.[pivot]
@@ -435,8 +454,14 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         const sourceSheet = range ? doc.sheets.find(candidate => candidate.name === range.sheet) : undefined
         let leased: { release(): void; store?: import('../../../xlsx/pivots/engine/records').RecordStore } | undefined
         if (!sourceSheet) {
-          const result = await runtime.lease(cache, ledger, signal, limits)
-          if (!result.ok) return { ok: false, diagnostic: result.diagnostic }
+          // The decode's arrays are charged as they grow, under their own owner, until the store's own charge takes over.
+          const decoding = `pivot-decode:${++refreshBuilds}`
+          let result: Awaited<ReturnType<typeof runtime.lease>>
+          try {
+            result = await runtime.lease(cache, ledger, signal, { ...limits, admitBytes: admitAs(decoding) },
+              bytes => { ledger.set('document', decoding, 0); return ledger.bytes + bytes <= budget })
+          } finally { ledger.set('document', decoding, 0) }
+          if (!result.ok) return { ok: false, diagnostic: mainQuota(result.diagnostic) }
           leased = result.lease
         } else runtime.chargeRetained(ledger)
         const date1904 = runtime.date1904
@@ -456,13 +481,18 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
           def, cache, ...(leased?.store ? { store: leased.store } : {}), date1904, saved: sheetCellReader(sheet), occupied: occupiedFor(sheetId, pivot),
           linkedCharts: linked, ...(leased ? { lease: leased } : {}), verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
           ...(sourceSheet ? {
-            source: sheetCellReader(sourceSheet), limits: { ...limits, admitBytes: bytes => { ledger.set('document', building, bytes); return true } },
-            // The rebuilt store and cache metadata are charged to the document pool while the session holds them.
-            admitStore: (store, metadataBytes) => { ledger.chargeWhileHeld('document', [store], store.bytes + metadataBytes); return ledger.hold(store) ?? undefined },
+            source: sheetCellReader(sourceSheet), limits: { ...limits, admitBytes: admitAs(building) },
+            // The rebuilt store and cache metadata are admitted, then charged to the document pool while the session
+            // holds them.
+            admitStore: (store, metadataBytes) => {
+              ledger.set('document', building, 0)
+              if (ledger.bytes + store.bytes + metadataBytes > budget) return undefined
+              ledger.chargeWhileHeld('document', [store], store.bytes + metadataBytes); return ledger.hold(store) ?? undefined
+            },
           } : {}),
         })
         ledger.set('document', building, 0)
-        if (!session.ok) { leased?.release(); return session }
+        if (!session.ok) { leased?.release(); return { ok: false, diagnostic: mainQuota(session.diagnostic) } }
         const saved = savedPivotLayout(def)
         const savedArea = saved ? saved.rects.map(toSource) : layoutArea(session.value.layout)
         // Until its first commit the sheet shows the saved cells (a refreshed pivot's revision 0 is not shown yet).
