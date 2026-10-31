@@ -27,6 +27,9 @@ export const PIVOT_FIT_BUTTON_PT = 15
 /** One Excel-for-Mac pixel in characters of a 6-px digit, plus the 1/256 truncation: the tolerance of "the width is
  * still the old fit" (a measure a pixel off Excel's must not read a fitted column as a hand-sized one). */
 export const PIVOT_FIT_TOLERANCE = 1 / 6 + 1 / 256
+/** The viewer's tolerance: its fonts are not Excel's, so its fit of a column Excel autofitted is within a few percent
+ * of the saved width, while a width kept from another layout or sized by hand is far from it (outline A: 25%). */
+export const viewerFitTolerance = (width: number): number => Math.max(PIVOT_FIT_TOLERANCE, 0.1 * width)
 
 /** One alignment indent level, in points (Excel: three spaces of the default font, 9 px at 72 dpi). */
 export const PIVOT_FIT_INDENT_PT = 9
@@ -65,7 +68,7 @@ export function pivotColumnFits(input: PivotFitInput, measure: PivotFitMeasure, 
  * in characters (undefined: the sheet default); `userSet` names the columns the user resized in this session.
  */
 export function pivotAutofit(before: ReadonlyMap<number, number>, after: ReadonlyMap<number, number>, current: (col: number) => number | undefined,
-  userSet: (col: number) => boolean): Map<number, number> {
+  userSet: (col: number) => boolean, tolerance: (width: number) => number = () => PIVOT_FIT_TOLERANCE): Map<number, number> {
   const out = new Map<number, number>()
   for (const [col, fit] of after) {
     if (userSet(col)) continue
@@ -73,7 +76,7 @@ export function pivotAutofit(before: ReadonlyMap<number, number>, after: Readonl
     if (old === undefined) { if (width !== fit) out.set(col, fit); continue }
     if (old === fit) continue
     // A column at the sheet default width has no saved size to keep.
-    if (width !== undefined && Math.abs(width - old) > PIVOT_FIT_TOLERANCE) continue
+    if (width !== undefined && Math.abs(width - old) > tolerance(width)) continue
     if (width !== fit) out.set(col, fit)
   }
   return out

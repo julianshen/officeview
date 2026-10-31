@@ -29,7 +29,7 @@
  *   through Task 30's `pivotChartGate` (lazily loaded); a commit carries the refilled models, in the same order as
  *   `installPivotCharts` walks them.
  */
-import type { XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
 import type { StyledValueOverlayCell } from '../../../xlsx/view/viewport'
 import type { ChartModel } from '../../../charts/model'
 import type { ProfileId, ValueOverlay, ValueOverlayCell } from '../../../xlsx/view/contracts'
@@ -40,7 +40,7 @@ import type { RuntimeLedger } from '../../../xlsx/pivots/session/runtime'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotFilter, PivotTableDefinition } from '../../../xlsx/pivots/model'
 import type { SavedPivotLayout } from '../../../xlsx/pivots/savedLayout'
 import {
-  openPivotSession, ORACLE_VERIFIED_KINDS, RECORD_LIMITS, savedPivotLayout, sheetCellReader, worksheetSourceRange,
+  macDigitWidth, viewerFitTolerance, openPivotSession, ORACLE_VERIFIED_KINDS, PIVOT_FIT_INDENT_PT, pivotAutofit, pivotColumnFits, RECORD_LIMITS, savedPivotLayout, sheetCellReader, worksheetSourceRange,
   type ChartGate, type PivotDelta, type PivotDeltaKind, type PivotLayout, type PivotSession, type PivotViewState,
 } from '../../../xlsx/pivots/index'
 import { sheetCharts } from '../sheetCharts'
@@ -509,4 +509,40 @@ export function dateFilter(fld: number, id: number, op: DateOp, first: number, s
 /** Top 10 (Excel's fields: top, count, kind and data field). Bottom is not offered: it refuses until measured. */
 export function top10Filter(fld: number, id: number, data: number, kind: 'count' | 'percent' | 'sum', val: number): PivotFilter {
   return filterOf(fld, id, kind, { colId: 0, hiddenButton: false, showButton: true, top10: { top: true, percent: kind === 'percent', val } }, { iMeasureFld: data })
+}
+
+// ---- column autofit after a change (Task 29, §7.8) -------------------------------------------------------------------
+
+/** A pivot cell as the viewer shows it: its value and its own style (the pivot style resolves over it). */
+export interface PivotShownCell { value: unknown; style?: XlsxCellStyle }
+/**
+ * The columns a commit resizes, in characters (session/autofit.ts's rule). The fits are measured on this thread:
+ * `before` and `after` read the cells shown before and after the change, each with the region styles of its own
+ * definition (`styleAt`); `measure` is the painter's text measure (CSS px for a font and a text).
+ */
+export function pivotAutofitColumns(input: {
+  sheet: XlsxSheet
+  before: { def: PivotTableDefinition; read(row: number, col: number): PivotShownCell | undefined; styleAt?(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined }
+  after: { def: PivotTableDefinition; read(row: number, col: number): PivotShownCell | undefined; styleAt?(row: number, col: number, own: XlsxCellStyle | undefined): XlsxCellStyle | undefined }
+  measure(font: string, text: string): number
+  font(style: XlsxCellStyle | undefined): string
+  mdwPx: number
+  current(col: number): number | undefined
+  userSet(col: number): boolean
+}): Map<number, number> {
+  const mdw = macDigitWidth(input.mdwPx)
+  const fits = (side: typeof input.before) => {
+    const layout = savedPivotLayout(side.def)
+    if (!layout) return new Map<number, number>()
+    const cells = function* () { for (const rect of layout.rects) for (let row = rect.minRow; row <= rect.maxRow; row++) for (let col = rect.minCol; col <= rect.maxCol; col++) yield { row, col } }
+    return pivotColumnFits({ def: side.def, cells: cells() }, { textPt(row, col) {
+      const cell = side.read(row, col)
+      if (!cell || cell.value === null || cell.value === undefined || cell.value === '') return undefined
+      const style = side.styleAt?.(row, col, cell.style) ?? cell.style
+      const text = cellDisplayText(input.sheet, { value: cell.value as XlsxCell['value'], ...(style ? { style } : {}) })
+      const own = (style as { indentPx?: number } | undefined)?.indentPx ? 0 : (style?.indent ?? 0) * PIVOT_FIT_INDENT_PT
+      return input.measure(input.font(style), text) * 0.75 + own
+    } }, mdw)
+  }
+  return pivotAutofit(fits(input.before), fits(input.after), input.current, input.userSet, viewerFitTolerance)
 }

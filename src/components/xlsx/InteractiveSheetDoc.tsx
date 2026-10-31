@@ -26,7 +26,7 @@ import { tilePlanSource, WorkerViewportPlans } from './workerViewport'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import { Copy, Printer, Minus, Plus, RotateCcw } from 'lucide-react'
 import { Icon } from '../Icon'
-import type { XlsxCell, XlsxDocument, XlsxSheet } from '../../xlsx/types'
+import type { XlsxCell, XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../xlsx/types'
 import { markPagedDependentsStale, recomputeDependents, restoreDependentFormulaValues } from '../../xlsx/formula/workbook'
 import { formulaError } from '../../xlsx/formula/evaluator'
 import type {
@@ -97,7 +97,8 @@ import { DisplayHolds } from './displayHolds'
 import { SheetChartDescriptions, chartNotices, sheetCharts } from './sheetCharts'
 import type { XlsxFrozenPane } from '../../xlsx/frozenPane'
 import { initialOrigin, paneLogicalBoxes, paneRegions } from '../../xlsx/view/frozenPanes'
-import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisUpperBytes, cellFont, type SessionSizes } from '../../xlsx/view/axisSizes'
+import { columnWidthPx } from '../../xlsx/columnWidth'
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
@@ -497,8 +498,34 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const savedPivotCharts = useRef(new Map<string, { sheet: string; name: string; charts: ChartModel[] }>()).current
   /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
    * outlives the sessions that made it (unmount, or a new client). */
+  /** Columns a pivot autofit sized, per sheet, in characters (Task 29): their widths are the "current" a later
+   * autofit compares with, and they go back to the workbook's when the pivots do. */
+  const pivotAutofitChars = useRef(new Map<string, Map<number, number>>()).current
+  const autofitMeasure = useRef<CanvasRenderingContext2D | null | undefined>(undefined)
+  const autofitPivot = (sheetId: string, sheet: XlsxSheet, before: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['before'], after: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['after']) => {
+    if (!pivotUi) return
+    if (autofitMeasure.current === undefined) { try { autofitMeasure.current = globalThis.document.createElement('canvas').getContext('2d') } catch { autofitMeasure.current = null } }
+    const ctx = autofitMeasure.current
+    if (!ctx) return
+    const mdw = sheet.columnMetrics?.maxDigitWidthPx ?? 7, sizes = sizesOf(sheetId)
+    let fitted = pivotAutofitChars.get(sheetId)
+    if (!fitted) pivotAutofitChars.set(sheetId, fitted = new Map())
+    const authored = (col: number) => sheet.cols.find(spec => col >= spec.min && col <= spec.max)?.widthChars
+    const widths = pivotUi.pivotAutofitColumns({ sheet, before, after, mdwPx: mdw,
+      measure: (font, text) => { ctx.font = font; return ctx.measureText(text).width },
+      font: style => cellFont(style).font,
+      current: col => fitted!.get(col) ?? authored(col),
+      userSet: col => sizes.userSet('col', col) })
+    // Like a user resize, but never user-set: the next render rebuilds the geometry for the new sizes.
+    for (const [col, chars] of widths) if (sizes.set('col', col, columnWidthPx(chars, mdw), 'autofit')) fitted.set(col, chars)
+  }
   const restorePivots = () => {
     pivotLifecycle.current++
+    for (const [sheetId, fitted] of pivotAutofitChars) {
+      const sizes = sheetSizes.get(sheetId)
+      for (const col of fitted.keys()) if (sizes && !sizes.userSet('col', col)) sizes.restore('col', col, undefined)
+    }
+    pivotAutofitChars.clear()
     pivotFormulaContexts.clear()
     restoreDependentFormulaValues(doc)
     doc.sheets.forEach((sheet, index) => {
@@ -1296,6 +1323,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       cancelCopy(); dropTiles(sheetId, null); rerender(); return
     }
     if (!sheet?.pivotTables) return
+    // §7.8 (Task 29): the cells and pivot styles shown before the change, read before they go.
+    const beforeFit = pivotUi ? { def: sheet.pivotTables[commit.pivot]!, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) } : undefined
     sheet.pivotTables = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def)
     // The pivot's region (gridlines hidden inside it, regionGrid) follows its live location.
     if (sheet.pivotRegions) sheet.pivotRegions = sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
@@ -1311,6 +1340,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
       source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
     }
+    if (pivotUi && beforeFit) autofitPivot(sheetId, sheet, beforeFit, { def: commit.def, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) })
     if (commit.layout && commit.cache && commit.changedRects?.length) {
       const contextKey = `${commit.sheetId}:${commit.pivot}`
       pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache: commit.cache, layout: commit.layout, layoutCells: new Map(commit.layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])), date1904: commit.date1904 ?? false, rects: commit.changedRects, overlay: commit.overlay ?? undefined })
@@ -2320,4 +2350,25 @@ function withSavedCharts(nodes: XlsxSheet['drawings'], saved: ReadonlyMap<ChartM
     return { ...node, ...(content ? { content: { ...node.content!, chart: content } } : {}), ...(children !== node.children ? { children } : {}) } as typeof node
   })
   return changed ? out : nodes
+}
+
+/** The cells a resident pivot shows: its committed overlay's (value, number format and role style), else the sheet's. */
+function pivotShownReader(sheet: XlsxSheet, overlay: ValueOverlay | undefined): (row: number, col: number) => { value: unknown; style?: XlsxCellStyle } | undefined {
+  let rows: Map<number, XlsxSheet['rows'][number]> | undefined
+  return (row, col) => {
+    const shown = overlay?.cell(row, col)
+    if (shown === null) return undefined
+    if (shown !== undefined) {
+      const own = (shown as { style?: XlsxCellStyle }).style
+      const style = own ? { ...own, numFmtId: shown.numFmtId ?? 0 } : shown.numFmtId !== undefined ? { numFmtId: shown.numFmtId } : undefined
+      return { value: shown.value, ...(style ? { style } : {}) }
+    }
+    rows ??= new Map(sheet.rows.map(entry => [entry.index, entry]))
+    const cell = rows.get(row)?.cells.find(entry => entry.col === col)
+    return cell ? { value: cell.value, ...(cell.style ? { style: cell.style } : {}) } : undefined
+  }
+}
+/** A region style layer's resolution for screen, as a pivot autofit reads it. */
+function pivotStyleAt(layer: ReturnType<typeof regionStylesFor>): ((row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) | undefined {
+  return layer ? (row, col, own) => layer.styleAt(row, col, own, 'screen') ?? own : undefined
 }

@@ -458,6 +458,40 @@ describe('the interactive viewer', () => {
     expect(first.top + first.height).toBeLessThanOrEqual(second.top)
   })
 
+  it('Task 29: a change autofits the pivot\'s columns (a session size, like a resize) and a user-resized column keeps its width', async () => {
+    const doc = await load(BASELINE)
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const header = (col: number) => ui.container.querySelector<HTMLElement>(`[role=columnheader][aria-colindex="${col + 2}"]`)
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(header(0)).not.toBeNull())
+    const width = () => Number.parseFloat(header(0)!.style.width)
+    const saved = width()
+    // Collapse the whole Region field: column A no longer holds the indented product labels.
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(width()).toBeLessThan(saved))
+    const narrowed = width()
+    // Expanding it again brings the indented labels and the width back.
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Expand entire field' }))
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(width()).toBeGreaterThan(narrowed))
+    // The user widens column A by keyboard; the next change leaves it alone.
+    const grid = ui.getByRole('grid')
+    act(() => grid.focus())
+    fireEvent.keyDown(grid, { key: 'Home', ctrlKey: true })
+    for (let k = 0; k < 3; k++) fireEvent.keyDown(grid, { key: 'ArrowRight', altKey: true, shiftKey: true })
+    await waitFor(() => expect(width()).toBeGreaterThan(narrowed + 16))
+    const user = width()
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(width()).toBe(user)
+    ui.unmount()
+  })
+
   it('reset returns the saved view', async () => {
     const doc = await load(BASELINE)
     const saved = doc.sheets[pivotSheet(doc)]!.pivotTables![0]

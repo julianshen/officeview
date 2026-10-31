@@ -25,7 +25,7 @@ import type { PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './
 import { PivotFieldMenu } from './PivotFieldMenu'
 import { PivotPageMenu } from './PivotPageMenu'
 
-export { createResidentPivotClient, createRemotePivotClient, remotePivotPort, unavailablePivotClient, REMOTE_PIVOTS_UNAVAILABLE } from './pivotClient'
+export { createResidentPivotClient, createRemotePivotClient, pivotAutofitColumns, remotePivotPort, unavailablePivotClient, REMOTE_PIVOTS_UNAVAILABLE } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind } from './pivotClient'
 
 export type PivotUiState =
