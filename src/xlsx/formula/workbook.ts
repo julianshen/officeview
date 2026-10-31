@@ -167,7 +167,9 @@ interface DocSpillState {
   runtimeIndex?: {
     sheetsByName: Map<string, XlsxSheet>; cellMap: Map<string, XlsxCell>; cellSheets: Map<string, string>
     sheetMaxCols: Map<string, number>; sheetMaxRows: Map<string, number>; inputKeys: Set<string>; formulaKeys: Set<string>; mergeKeys: Set<string>
-    identitySheets: { sheetId: SheetId; name: string; workbookIndex: number }[]; shape: string; formulaSources: Map<string, string>
+    identitySheets: { sheetId: SheetId; name: string; workbookIndex: number }[]
+    /** The document's cell-model revision (`noteWorkbookCellsChanged`) this index was built or last validated at. */
+    revision: number
   }
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
@@ -336,35 +338,22 @@ type ReferenceIntervalNode = {
   left?: ReferenceIntervalNode
   right?: ReferenceIntervalNode
 }
-type FormulaReferenceIndex = { formulas: IndexedFormula[]; byKey: Map<string, IndexedFormula>; bySheet: Map<string, ReferenceIntervalNode>; volatileReaders: Set<string>; shape: string; formulaSources: Map<string, string> }
+type FormulaReferenceIndex = { formulas: IndexedFormula[]; byKey: Map<string, IndexedFormula>; bySheet: Map<string, ReferenceIntervalNode>; volatileReaders: Set<string>; revision: number }
 const formulaReferenceIndexes = new WeakMap<XlsxDocument, FormulaReferenceIndex>()
 
-function documentShape(doc: XlsxDocument): string {
-  return doc.sheets.map(sheet => `${sheet.rows.length}:${sheet.rows.reduce((count, row) => count + row.cells.length, 0)}`).join('|')
-}
+/** The cell model's mutation revision per document (T31 r4 M-1). The formula engine's own writes (spill followers,
+ * restored snapshots) never change formula text and keep the runtime cell index in step themselves; anything else
+ * that adds, removes or replaces cells, or edits formula text in place, after the workbook was evaluated announces it
+ * with `noteWorkbookCellsChanged`. A pivot commit then validates its caches by this number instead of walking every
+ * cell of the workbook. */
+const cellModelRevisions = new WeakMap<XlsxDocument, number>()
+const cellModelRevision = (doc: XlsxDocument): number => cellModelRevisions.get(doc) ?? 0
 
-/** Formula text is mutable on the public document model. Keep an exact snapshot
- * beside the runtime cell index so an in-place edit cannot reuse stale edges. */
-function formulaSources(doc: XlsxDocument): Map<string, string> {
-  const sources = new Map<string, string>()
-  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
-    if (cell.formula !== undefined || cell.sharedFormula !== undefined) sources.set(makeCellKey(sheet.name, cell.col, cell.row), cell.formula ?? (typeof cell.sharedFormula === 'string' ? cell.sharedFormula : JSON.stringify(cell.sharedFormula)) ?? '')
-  }
-  return sources
-}
-
-function sameFormulaSources(a: ReadonlyMap<string, string> | undefined, b: ReadonlyMap<string, string>): boolean {
-  if (!a || a.size !== b.size) return false
-  for (const [key, formula] of b) if (a.get(key) !== formula) return false
-  return true
-}
-function runtimeCellIndexMatches(doc: XlsxDocument, cellMap: ReadonlyMap<string, XlsxCell>): boolean {
-  let count = 0
-  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
-    count++
-    if (cellMap.get(makeCellKey(sheet.name, cell.col, cell.row)) !== cell) return false
-  }
-  return count === cellMap.size
+/** Announces a direct edit of the document's cells (added, removed or replaced cells, or formula text edited in
+ * place) made after its formulas were evaluated: the next dependent recompute rebuilds its indexes from the cells.
+ * A full `evaluateWorkbookFormulas` resynchronises too. */
+export function noteWorkbookCellsChanged(doc: XlsxDocument): void {
+  cellModelRevisions.set(doc, cellModelRevision(doc) + 1)
 }
 
 function buildReferenceTree(items: IndexedReference[]): ReferenceIntervalNode | undefined {
@@ -413,10 +402,9 @@ function queryReferences(index: FormulaReferenceIndex, sheet: string, rect: { mi
 }
 
 function referenceIndexFor(doc: XlsxDocument): FormulaReferenceIndex {
-  const shape = documentShape(doc)
-  const sources = formulaSources(doc)
+  const revision = cellModelRevision(doc)
   const cached = formulaReferenceIndexes.get(doc)
-  if (cached?.shape === shape && sameFormulaSources(cached.formulaSources, sources)) return cached
+  if (cached?.revision === revision) return cached
   const formulas: IndexedFormula[] = []
   const byKey = new Map<string, IndexedFormula>()
   const volatileReaders = new Set<string>()
@@ -488,12 +476,12 @@ function referenceIndexFor(doc: XlsxDocument): FormulaReferenceIndex {
     const tree = buildReferenceTree(refs)
     if (tree) bySheet.set(sheet, tree)
   }
-  const result = { formulas, byKey, bySheet, volatileReaders, shape, formulaSources: sources }
+  const result = { formulas, byKey, bySheet, volatileReaders, revision }
   formulaReferenceIndexes.set(doc, result)
   return result
 }
 
-function refreshRuntimeCellIndex(doc: XlsxDocument, runtime: NonNullable<DocSpillState['runtimeIndex']>, sources: Map<string, string>): void {
+function refreshRuntimeCellIndex(doc: XlsxDocument, runtime: NonNullable<DocSpillState['runtimeIndex']>, revision: number): void {
   const sheetsByName = new Map<string, XlsxSheet>(), cellMap = new Map<string, XlsxCell>(), cellSheets = new Map<string, string>()
   const sheetMaxCols = new Map<string, number>(), sheetMaxRows = new Map<string, number>()
   const inputKeys = new Set<string>(), formulaKeys = new Set<string>(), mergeKeys = new Set<string>()
@@ -516,15 +504,22 @@ function refreshRuntimeCellIndex(doc: XlsxDocument, runtime: NonNullable<DocSpil
     for (const merge of sheet.mergeRanges ?? []) for (let row = merge.minRow; row <= merge.maxRow; row++) for (let col = merge.minCol; col <= merge.maxCol; col++) mergeKeys.add(makeCellKey(sheet.name, col, row))
   }
   Object.assign(runtime, { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys,
-    shape: documentShape(doc), formulaSources: sources })
+    revision })
 }
 
 /** Conservative admission bound for subset recalculation. A range aggregate
  * currently scans all stored workbook cells in refs.ts; include that cost too. */
 export const MAX_DEPENDENT_CELL_VISITS = 2_000_000
 
-function dependentWorkEstimate(doc: XlsxDocument, index: FormulaReferenceIndex, keys: ReadonlySet<string>): number {
+/** The used extents and stored-cell count the estimate charges against. With the evaluated workbook's runtime index
+ * (the normal case) they are exactly what the engine reads: whole-row/column references clip to its per-sheet maxima,
+ * and range aggregates enumerate its cell map, which follows spill writes and removals. No walk of the cells. */
+function workExtents(doc: XlsxDocument, runtime: DocSpillState['runtimeIndex']): { used: Map<string, { rows: number; cols: number }>; storedCells: number } {
   const used = new Map<string, { rows: number; cols: number }>()
+  if (runtime) {
+    for (const [name, maxRow] of runtime.sheetMaxRows) used.set(name, { rows: maxRow + 1, cols: (runtime.sheetMaxCols.get(name) ?? 0) + 1 })
+    return { used, storedCells: runtime.cellMap.size }
+  }
   let storedCells = 0
   for (const sheet of doc.sheets) {
     let rows = 0, cols = 0
@@ -534,6 +529,11 @@ function dependentWorkEstimate(doc: XlsxDocument, index: FormulaReferenceIndex, 
     }
     used.set(sheet.name.toLowerCase(), { rows, cols })
   }
+  return { used, storedCells }
+}
+
+function dependentWorkEstimate(doc: XlsxDocument, index: FormulaReferenceIndex, keys: ReadonlySet<string>, runtime: DocSpillState['runtimeIndex']): number {
+  const { used, storedCells } = workExtents(doc, runtime)
   let visits = 0
   for (const key of keys) {
     const formula = index.byKey.get(key)
@@ -616,11 +616,10 @@ export function recomputeDependents(
   if (workbookValuePolicy(doc) === 'cached') throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   const prior = docSpillStates.get(doc)
   const index = referenceIndexFor(doc)
-  // The public document model can gain cells or have formula text edited after
-  // the full pass. Rebuild only the runtime cell maps; the syntactic index was
-  // independently rebuilt above and cached values remain intact.
-  if (prior?.runtimeIndex && (prior.runtimeIndex.shape !== index.shape || !runtimeCellIndexMatches(doc, prior.runtimeIndex.cellMap) || !sameFormulaSources(prior.runtimeIndex.formulaSources, index.formulaSources)))
-    refreshRuntimeCellIndex(doc, prior.runtimeIndex, index.formulaSources)
+  // A host that edited the cells after the full pass announced it (noteWorkbookCellsChanged): rebuild only the
+  // runtime cell maps; the syntactic index was rebuilt above and cached values remain intact. Unchanged, neither
+  // index walks the workbook (M-1).
+  if (prior?.runtimeIndex && prior.runtimeIndex.revision !== index.revision) refreshRuntimeCellIndex(doc, prior.runtimeIndex, index.revision)
   const formulaKeys = new Set<string>(), queue: string[] = []
   const enqueue = (key: string) => { if (index.byKey.has(key) && !formulaKeys.has(key)) { formulaKeys.add(key); queue.push(key) } }
   for (const entry of changed) {
@@ -660,7 +659,7 @@ export function recomputeDependents(
   }
   if (!formulaKeys.size) return { recomputed: 0, charts: [], sheets: [], stale: [] }
   const staleKeys = new Set<string>()
-  const estimatedVisits = dependentWorkEstimate(doc, index, formulaKeys)
+  const estimatedVisits = dependentWorkEstimate(doc, index, formulaKeys, prior?.runtimeIndex)
   if (estimatedVisits > MAX_DEPENDENT_CELL_VISITS) {
     for (const key of formulaKeys) staleKeys.add(key)
     const retained = prior?.retainedUnsupportedKeys ?? new Set<string>()
@@ -715,7 +714,7 @@ export function restoreDependentFormulaValues(doc: XlsxDocument): void {
   for (const { cell, content } of snapshots.values()) restoreCell(cell, content)
   snapshots.clear()
   liveFormulaSnapshots.delete(doc)
-  formulaReferenceIndexes.delete(doc)
+  // The restored cells carry the same formula text: the syntactic index stays valid (M-1).
 }
 
 /**
@@ -2108,5 +2107,8 @@ function evaluateWorkbookFormulasInternal(
   docSpillStates.set(doc, manualFileLoadNoOp && prior
     ? prior
     : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyKeys && prior ? [...prior.createdRows.filter(row => !onlyKeys.has(row.ownerKey)), ...createdRows] : createdRows,
-      valueDeps, formulaDeps, reverseFormulaDeps: reverseDeps, retainedUnsupportedKeys, runtimeIndex: { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys, identitySheets, shape: documentShape(doc), formulaSources: formulaSources(doc) } })
+      valueDeps, formulaDeps, reverseFormulaDeps: reverseDeps, retainedUnsupportedKeys, runtimeIndex: { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys, identitySheets, revision: cellModelRevision(doc) } })
+  // A full pass reads every cell afresh: it is the resynchronisation point for direct edits nobody announced, so the
+  // syntactic reader index is rebuilt from the cells at the next dependent recompute.
+  if (!onlyKeys) formulaReferenceIndexes.delete(doc)
 }

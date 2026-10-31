@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { evaluateWorkbookFormulas, recomputeDependents } from '../src/xlsx/formula/workbook'
+import { evaluateWorkbookFormulas, noteWorkbookCellsChanged, recomputeDependents } from '../src/xlsx/formula/workbook'
 import type { XlsxDocument } from '../src/xlsx/types'
 
 const cell = (ref: string, col: number, value: number, formula?: string) => ({ ref, col, row: 0, value, ...(formula ? { formula } : {}), styleIndex: 0, hasCachedValue: true })
@@ -24,6 +24,8 @@ it('R3-6: an in-place formula edit rebuilds the syntactic and runtime cell index
   const formula = doc.sheets[1]!.rows[0]!.cells[0]!
   formula.formula = 'Pivot!B1*2'
   doc.sheets[0]!.rows[0]!.cells.push(cell('B1', 1, 9))
+  // T31 r4 M-1: a direct edit of the cell model is announced; the commit path no longer walks every cell to find it.
+  noteWorkbookCellsChanged(doc)
   const result = recomputeDependents(doc, [{ sheetId: 0, rect: { minRow: 0, minCol: 1, maxRow: 0, maxCol: 1 } }])
   expect(result.recomputed).toBe(2)
   expect(formula.value).toBe(18)
