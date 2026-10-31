@@ -4,8 +4,9 @@ import { pivotStyleRegions } from './regions'
 import { paintPivotButtons } from './buttons'
 import { loadSheetControls } from './slicers/load'
 import { paintControl } from './slicers/paint'
+import { pivotRuntimeFor } from './session/runtime'
 
-export { loadPivotWorkbook } from './load'
+export { loadPivotWorkbook, retainPivotRuntime } from './load'
 // The Stage 2 engine (library only: no runtime caller yet). Exported here so it lives in this lazy chunk.
 export { decodeRecords, isoToSerial, recordEvents, RECORD_LIMITS, VALUE_TAG } from './engine/records'
 export type { RecordColumn, RecordLimits, RecordResult, RecordStore } from './engine/records'
@@ -21,4 +22,4 @@ export { computeValues } from './engine/values'
 export { checkSavedLayout, engineEligibility, pagedCellReader, sheetCellReader } from './engine/faithful'
 export type { CellDiff, CellReader, FaithfulOptions, FaithfulResult, SavedCell } from './engine/faithful'
 
-registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl })
+registerPivotEngine({ regions: pivotStyleRegions, paintButtons: paintPivotButtons, sheetControls: loadSheetControls, paintControl, runtimeFor: pivotRuntimeFor })

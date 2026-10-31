@@ -6,7 +6,12 @@
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { OfficePackage } from '../src/core/zip'
+import { parseXlsx } from '../src/xlsx/parse'
+import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
+import { decodeRecords, RECORD_LIMITS } from '../src/xlsx/pivots/engine/records'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import { applyDelta, type PivotDelta } from '../src/xlsx/pivots/session/delta'
 import { captionRule, resolveCaptions, savedCaptions } from '../src/xlsx/pivots/session/captions'
 import { sheetCellReader, type CellReader } from '../src/xlsx/pivots/engine/faithful'
@@ -14,7 +19,7 @@ import type { PivotLayout } from '../src/xlsx/pivots/engine/place'
 import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { initialViewState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
 import type { PivotFilter } from '../src/xlsx/pivots/model'
-import { loadAll, type Loaded } from './helpers/xlsx-pivots-load'
+import { loadAll, once, type Loaded } from './helpers/xlsx-pivots-load'
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const ENGINE = resolve(FIXTURES, 'engine')
@@ -222,5 +227,102 @@ describe('captions', () => {
       }
     }
     expect(slots).toBeGreaterThan(100)
+  })
+})
+
+/** A resident package that records every read of a part's bytes: `bytes`/`text` calls and zip-entry reads. */
+async function countingPackage(file: string) {
+  const pkg = await OfficePackage.load(new Uint8Array(readFileSync(file)))
+  const reads: string[] = []
+  const bytes = pkg.bytes.bind(pkg), text = pkg.text.bind(pkg), entry = pkg.entry.bind(pkg)
+  pkg.bytes = async (path, max) => { reads.push(`bytes:${path}`); return bytes(path, max) }
+  pkg.text = async path => { reads.push(`text:${path}`); return text(path) }
+  pkg.entry = path => {
+    const found = entry(path)
+    if (!found) return found
+    const handle = found as unknown as { internalStream(type: string): unknown; async(type: string): Promise<unknown> }
+    const stream = handle.internalStream.bind(found), whole = handle.async.bind(found)
+    handle.internalStream = type => { reads.push(`stream:${path}`); return stream(type) }
+    handle.async = type => { reads.push(`async:${path}`); return whole(type) }
+    return found
+  }
+  return { pkg, reads }
+}
+const recordsReads = (reads: readonly string[], path: string) => reads.filter(read => read.endsWith(`:${path}`))
+
+describe('runtime', () => {
+  it('runtime retains caches and streams records on resident load', async () => {
+    const { pkg, reads } = await countingPackage(resolve(ENGINE, 'baseline.xlsx'))
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets.find(s => s.pivotTables?.length)!
+    const def = sheet.pivotTables![0]!
+    const runtime = pivotRuntimeFor(doc)!
+    expect(runtime).toBeDefined()
+    // Reachable from the document and from its sheet; never stored on the structured-cloneable sheet.
+    expect(pivotRuntimeFor(sheet)).toBe(runtime)
+    expect(Object.values(sheet).includes(runtime)).toBe(false)
+    const cache = runtime.cache(def)!
+    expect(cache.cacheId).toBe(def.cacheId)
+    expect(cache.partPath).toBe(def.cachePartPath)
+    const path = cache.recordsPartPath!
+    // A sheet that never opens a session reads no record bytes.
+    expect(recordsReads(reads, path)).toEqual([])
+    const ledger = new MainMemoryLedger()
+    expect(ledger.snapshot().byPool.document).toBe(0)
+
+    const result = await runtime.records(cache, new AbortController().signal)
+    expect(result.ok).toBe(true)
+    // Streamed from the zip entry (never pkg.bytes, which would keep the inflated part in the package's cache).
+    expect(recordsReads(reads, path)).toEqual([`stream:${path}`])
+    const direct = await decodeRecords(once((await (await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx'))))).bytes(path))!), cache, RECORD_LIMITS.D, false)
+    expect(result).toEqual(direct)
+    // records() itself charges nothing; a lease charges the store once while any lease holds it.
+    expect(ledger.snapshot().byPool.document).toBe(0)
+  })
+
+  it('pivots on one cache share one leased store, charged to the main ledger until the last release', async () => {
+    const { pkg, reads } = await countingPackage(resolve(ENGINE, 'baseline.xlsx'))
+    const doc = await parseXlsx(pkg)
+    const def = doc.sheets.find(s => s.pivotTables?.length)!.pivotTables![0]!
+    const runtime = pivotRuntimeFor(doc)!, cache = runtime.cache(def)!, path = cache.recordsPartPath!
+    const ledger = new MainMemoryLedger(), signal = new AbortController().signal
+    const [a, b] = await Promise.all([runtime.lease(cache, ledger, signal), runtime.lease(cache, ledger, signal)])
+    if (!a.ok || !b.ok) throw new Error('lease refused')
+    expect(a.lease.store).toBe(b.lease.store)
+    expect(recordsReads(reads, path)).toHaveLength(1)
+    const bytes = a.lease.store.bytes
+    expect(bytes).toBeGreaterThan(0)
+    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    a.lease.release()
+    a.lease.release()
+    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    b.lease.release()
+    expect(ledger.snapshot().byPool.document).toBe(0)
+    // After the last release the store is dropped: the next lease decodes again and charges again.
+    const c = await runtime.lease(cache, ledger, signal)
+    if (!c.ok) throw new Error('lease refused')
+    expect(c.lease.store).not.toBe(a.lease.store)
+    expect(recordsReads(reads, path)).toHaveLength(2)
+    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    c.lease.release()
+    expect(ledger.snapshot().byPool.document).toBe(0)
+  })
+
+  it('records refuse over the cap and without a records part; an aborted lease is cancelled', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx')))))
+    const runtime = pivotRuntimeFor(doc)!, cache = runtime.cache(doc.sheets.find(s => s.pivotTables?.length)!.pivotTables![0]!)!
+    const signal = new AbortController().signal
+    const capped = await runtime.records(cache, signal, { ...RECORD_LIMITS.M, maxBytes: 64 })
+    expect(capped.ok ? 'ok' : capped.diagnostic.feature).toBe('pivot-records-limit')
+    const ledger = new MainMemoryLedger()
+    const leased = await runtime.lease(cache, ledger, signal, { ...RECORD_LIMITS.M, maxBytes: 64 })
+    expect(leased.ok ? 'ok' : leased.diagnostic.feature).toBe('pivot-records-limit')
+    expect(ledger.snapshot().byPool.document).toBe(0)
+    const absent = await runtime.records({ ...cache, recordsPartPath: undefined }, signal)
+    expect(absent.ok ? 'ok' : absent.diagnostic.feature).toBe('pivot-records-absent')
+    const aborted = new AbortController()
+    aborted.abort()
+    await expect(runtime.lease(cache, ledger, aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
+    expect(ledger.snapshot().byPool.document).toBe(0)
   })
 })

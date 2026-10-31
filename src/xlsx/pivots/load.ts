@@ -2,7 +2,8 @@
  * Resolves a workbook's pivot parts into a PivotWorkbook (spec §3, §6.2). Lazy
  * chunk `pivots`: `parseXlsx` awaits it on the resident path, once the sheets
  * locate a pivot (Ruling AD: attachPivotTables), and the worker runs it over
- * `RangePackage`. Records are not read in Stage 1.
+ * `RangePackage`. Records are not read at load: on the resident path `retainPivotRuntime` keeps the parsed caches
+ * and each records part's zip entry, streamed only when a session asks (Task 25).
  *
  * Failure policy, per part:
  * - workbook `pivotCaches` unreadable: diagnostic; each table falls back to its own cache relationship;
@@ -14,12 +15,15 @@
  * - a declared `count` that disagrees with the children: `pivot-count-mismatch`, the children win;
  * - unknown constructs in either part: recorded in `PivotTableDefinition.unsupported`, table kept.
  */
+import type JSZip from 'jszip'
 import { attrs, getChild, getChildren, type XmlNode } from '../../core/xml'
+import { PackageError } from '../../core/package-error'
 import { resolvePartTarget } from '../../drawing/parts'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotTableDefinition, PivotWorkbook } from './model'
 import type { PivotRegionRef } from './stub'
 import { parseCacheDefinition, pushDiagnostic } from './parseCacheDefinition'
 import { parsePivotTable, validateIndices } from './parsePivotTable'
+import { bindPivotRuntime, createPivotRuntime, type PivotRuntime, type RecordsSource } from './session/runtime'
 
 /**
  * The part access both `OfficePackage` and the worker's `RangePackage` provide.
@@ -138,4 +142,59 @@ export async function loadPivotWorkbook(pkg: PackageReader, regions: ReadonlyMap
     }
   }
   return { caches, tables, diagnostics }
+}
+
+/** A resident package (`OfficePackage`): its zip entries, read on demand. The worker's `RangePackage` has none. */
+export interface EntryPackage { entry(path: string): JSZip.JSZipObject | null }
+const hasEntries = (pkg: PackageReader): pkg is PackageReader & EntryPackage => typeof (pkg as Partial<EntryPackage>).entry === 'function'
+type StreamHelper = { on(event: 'data', fn: (chunk: Uint8Array) => void): StreamHelper; on(event: 'end', fn: () => void): StreamHelper; on(event: 'error', fn: (error: Error) => void): StreamHelper; pause(): StreamHelper; resume(): StreamHelper }
+
+/** A zip entry's inflated bytes, chunk by chunk, paused while the consumer works (no whole-part copy, nothing cached). */
+export async function* entryChunks(entry: JSZip.JSZipObject, signal: AbortSignal): AsyncIterable<Uint8Array> {
+  const stream = (entry as unknown as { internalStream(type: 'uint8array'): StreamHelper }).internalStream('uint8array')
+  const queue: Uint8Array[] = []
+  let done = false, failure: Error | undefined, wake: (() => void) | undefined
+  const notify = () => { const fn = wake; wake = undefined; fn?.() }
+  stream.on('data', chunk => { queue.push(chunk); stream.pause(); notify() })
+  stream.on('end', () => { done = true; notify() })
+  stream.on('error', error => { failure = error; done = true; notify() })
+  signal.addEventListener('abort', notify)
+  try {
+    stream.resume()
+    for (;;) {
+      if (signal.aborted) throw new PackageError('cancelled', 'operation cancelled')
+      const chunk = queue.shift()
+      if (chunk) { if (!queue.length && !done) stream.resume(); yield chunk; continue }
+      if (failure) throw failure
+      if (done) return
+      await new Promise<void>(resolve => { wake = resolve })
+    }
+  } finally {
+    signal.removeEventListener('abort', notify)
+    if (!done) stream.pause()
+  }
+}
+
+/**
+ * Resident load: keep the workbook's caches (by cacheId and part path) and a records source over the package's zip
+ * entries, in the runtime registered under `owners` (the document's sheets array and its sheets). Each records part's
+ * entry is looked up now (no read); its bytes are inflated only when `records()` streams them. Undefined for a package
+ * without zip entries (the worker's, Task 27).
+ *
+ * Memory: a JSZip entry keeps a view of the archive it came from, so a workbook with records keeps its compressed
+ * file bytes alive for the document's lifetime (report, Task 25).
+ */
+export function retainPivotRuntime(owners: readonly object[], book: Pick<PivotWorkbook, 'caches'>, pkg: PackageReader, date1904: () => boolean): PivotRuntime | undefined {
+  if (!hasEntries(pkg) || !book.caches.size) return undefined
+  const entries = new Map<string, JSZip.JSZipObject>()
+  for (const cache of book.caches.values()) {
+    const path = cache.recordsPartPath
+    if (path === undefined || entries.has(path)) continue
+    const entry = pkg.entry(path)
+    if (entry) entries.set(path, entry)
+  }
+  const source: RecordsSource = (path, signal) => { const entry = entries.get(path); return entry ? entryChunks(entry, signal) : undefined }
+  const runtime = createPivotRuntime(book.caches, source, date1904)
+  bindPivotRuntime(owners, runtime)
+  return runtime
 }

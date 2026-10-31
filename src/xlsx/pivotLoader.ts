@@ -6,6 +6,7 @@ import type { SheetControls, SheetControlsRequest, XlsxControlContent } from './
 import { controlIds } from './pivots/stub'
 import type { Rect } from './view/textLayout'
 import type { PackageReader } from './pivots/load'
+import type { PivotRuntime } from './pivots/session/runtime'
 import type { RegionStyleMode, StyleRegion } from './tableStyles/regionLayer'
 import type { StylesExtras, TableStyleDiagnostic, TableStyleSource } from './tableStyles/model'
 import type { ThemeContext } from '../drawing/style'
@@ -16,6 +17,7 @@ export interface PivotEngine {
   paintButtons(ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cellRect: (row: number, col: number) => Rect | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, mode: RegionStyleMode): void
   sheetControls(pkg: PackageReader, request: SheetControlsRequest): Promise<SheetControls>
   paintControl(ctx: CanvasRenderingContext2D, content: XlsxControlContent, width: number, height: number, familyCss?: (family: string) => string): void
+  runtimeFor(doc: object): PivotRuntime | undefined
 }
 let engine: PivotEngine | undefined
 let pending: Promise<typeof import('./pivots/index')> | undefined
@@ -68,7 +70,12 @@ export async function attachPivotTables(pkg: PackageReader, sheets: readonly Xls
   const owners = sheets.filter(sheet => sheet.pivotRegions?.length)
   if (!owners.length) return
   try {
-    const book = await (await load()).loadPivotWorkbook(pkg, new Map(owners.map(sheet => [sheet.name, sheet.pivotRegions!])))
+    const chunk = await load()
+    const book = await chunk.loadPivotWorkbook(pkg, new Map(owners.map(sheet => [sheet.name, sheet.pivotRegions!])))
+    // The caches and a records source stay in the lazy chunk, keyed by the sheets array (the document's `sheets`) and
+    // each sheet, never on the sheet itself (Task 25). The date system is decided later in the parse, so it is read
+    // lazily. Without a runtime the pivots still display; they are just never interactive.
+    try { chunk.retainPivotRuntime([sheets, ...sheets], book, pkg, () => sheets[0]?.semantics?.dateSystem === '1904') } catch { /* display only */ }
     for (const sheet of owners) {
       const tables = book.tables.filter(table => table.sheet === sheet.name)
       if (tables.length) sheet.pivotTables = tables
@@ -81,6 +88,10 @@ export async function attachPivotTables(pkg: PackageReader, sheets: readonly Xls
     for (const sheet of owners) (sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-engine-unavailable', message: 'Pivot definitions could not be loaded; pivot cells paint with their stored formatting only' })
   }
 }
+
+/** The interaction runtime of a resident workbook (its caches and records source), by document or sheet; undefined
+ * when the chunk is not loaded or the workbook has no pivot cache. Only through the lazy engine. */
+export function pivotRuntimeFor(doc: object): PivotRuntime | undefined { return engine?.runtimeFor(doc) }
 
 /** The pivot button pass (after cell content, before drawings); false when the chunk is not loaded. */
 export function paintPivotButtonsIn(ctx: CanvasRenderingContext2D, sheet: XlsxSheet, cellRect: (row: number, col: number) => Rect | undefined, visible: { r0: number; c0: number; r1: number; c1: number }, mode: RegionStyleMode): boolean {
