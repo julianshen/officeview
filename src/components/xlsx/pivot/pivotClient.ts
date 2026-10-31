@@ -65,7 +65,11 @@ export interface PivotCommit {
   /** The pivot's linked charts refilled for this revision (Task 30's gate), in the order the client collected them
    * (`doc.sheets` × drawing order); the viewer installs them with `installPivotCharts`. */
   charts?: readonly ChartModel[]
+  /** Paged (Task 29): the pivot's shown cells before and after the change, for the main thread's column autofit. */
+  fit?: { before: PivotShownLayout; after: PivotShownLayout }
 }
+/** A pivot's definition and its layout cells as the worker replies carry them. */
+export interface PivotShownLayout { def: PivotTableDefinition; cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
 export type PivotOpenResult =
   | { ok: true; revision: number; def: PivotTableDefinition; verifiedKinds: ReadonlySet<PivotDeltaKind>; model: PivotMenuModel }
   | { ok: false; diagnostic: PivotDiagnostic }
@@ -107,8 +111,8 @@ export interface RemotePivotPort {
 }
 /** Task 27's `RemotePivotSessions` as this module reads it (its `sheetId` is the worker's sheet id as a number). */
 export interface RemotePivotSessionsLike {
-  open(sheetId: number, pivot: number, signal: AbortSignal): Promise<{ kind: 'open'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel } | { kind: 'refused'; message: string }>
-  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<{ kind: 'committed'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel; notice?: string } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
+  open(sheetId: number, pivot: number, signal: AbortSignal): Promise<{ kind: 'open'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel; cells?: PivotShownLayout['cells'] } | { kind: 'refused'; message: string }>
+  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<{ kind: 'committed'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel; notice?: string; cells?: PivotShownLayout['cells'] } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
   release(sheetId: number, pivot: number): void
 }
 const OPEN_FIRST = 'Open the pivot before changing it.'
@@ -120,6 +124,8 @@ const OPEN_FIRST = 'Open the pivot before changing it.'
  */
 export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(sheetId: number): number | undefined; sheet(sheetId: number): XlsxSheet | undefined }): RemotePivotPort {
   const models = new Map<string, PivotMenuModel>(), opened = new Set<string>()
+  // The cells each open pivot shows (its last committed or opened layout): the "before" of the next change's autofit.
+  const shown = new Map<string, PivotShownLayout>()
   const key = (sheetId: number, pivot: number) => `${sheetId}:${pivot}`
   const refusedAs = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
   const port: RemotePivotPort = {
@@ -130,6 +136,7 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       if (result.kind === 'refused') return refusedAs('pivot-remote-refused', result.message)
       const model = formatMenu(result.menu, sheets.sheet(sheetId))
       models.set(key(sheetId, pivot), model); opened.add(key(sheetId, pivot))
+      if (result.cells) shown.set(key(sheetId, pivot), { def: result.def, cells: result.cells })
       return { ok: true, revision: result.revision, def: result.def, verifiedKinds: ORACLE_VERIFIED_KINDS, model }
     },
     async apply(sheetId, pivot, delta) {
@@ -139,17 +146,20 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       if (result.kind === 'refused' && result.message === OPEN_FIRST) {
         const reopened = await sessions.open(id, pivot, new AbortController().signal)
         if (reopened.kind === 'refused') return refusedAs('pivot-remote-refused', reopened.message)
+        if (reopened.cells) shown.set(key(sheetId, pivot), { def: reopened.def, cells: reopened.cells })
         result = await sessions.apply(id, pivot, delta)
       }
       if (result.kind === 'refused') return refusedAs('pivot-remote-refused', result.message)
       if (result.kind !== 'committed') return refusedAs('pivot-session-released', 'The pivot table changed meanwhile; try again.')
       const model = formatMenu(result.menu, sheets.sheet(sheetId))
       models.set(key(sheetId, pivot), model)
-      return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def }, ...(result.notice ? { notice: result.notice } : {}) }
+      const before = shown.get(key(sheetId, pivot)), after = result.cells ? { def: result.def, cells: result.cells } : undefined
+      if (after) shown.set(key(sheetId, pivot), after); else shown.delete(key(sheetId, pivot))
+      return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def, ...(before && after ? { fit: { before, after } } : {}) }, ...(result.notice ? { notice: result.notice } : {}) }
     },
     release(sheetId, pivot) {
       const k = key(sheetId, pivot), id = sheets.id(sheetId)
-      models.delete(k)
+      models.delete(k); shown.delete(k)
       if (opened.delete(k) && id !== undefined) sessions.release(id, pivot)
     },
     labels(sheetId, pivot) {

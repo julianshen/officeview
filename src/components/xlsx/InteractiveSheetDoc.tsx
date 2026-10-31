@@ -502,7 +502,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * autofit compares with, and they go back to the workbook's when the pivots do. */
   const pivotAutofitChars = useRef(new Map<string, Map<number, number>>()).current
   const autofitMeasure = useRef<CanvasRenderingContext2D | null | undefined>(undefined)
-  const autofitPivot = (sheetId: string, sheet: XlsxSheet, before: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['before'], after: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['after']) => {
+  const autofitPivot = (sheetId: string, sheet: XlsxSheet, before: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['before'], after: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['after'], shownChars?: (col: number) => number | undefined) => {
     if (!pivotUi) return
     if (autofitMeasure.current === undefined) { try { autofitMeasure.current = globalThis.document.createElement('canvas').getContext('2d') } catch { autofitMeasure.current = null } }
     const ctx = autofitMeasure.current
@@ -510,7 +510,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const mdw = sheet.columnMetrics?.maxDigitWidthPx ?? 7, sizes = sizesOf(sheetId)
     let fitted = pivotAutofitChars.get(sheetId)
     if (!fitted) pivotAutofitChars.set(sheetId, fitted = new Map())
-    const authored = (col: number) => sheet.cols.find(spec => col >= spec.min && col <= spec.max)?.widthChars
+    const authored = shownChars ?? ((col: number) => sheet.cols.find(spec => col >= spec.min && col <= spec.max)?.widthChars)
     const widths = pivotUi.pivotAutofitColumns({ sheet, before, after, mdwPx: mdw,
       measure: (font, text) => { ctx.font = font; return ctx.measureText(text).width },
       font: style => cellFont(style).font,
@@ -519,8 +519,26 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Like a user resize, but never user-set: the next render rebuilds the geometry for the new sizes.
     for (const [col, chars] of widths) if (sizes.set('col', col, columnWidthPx(chars, mdw), 'autofit')) fitted.set(col, chars)
   }
+  /** Paged commits waiting for their sheet's refreshed pivot display before the autofit (Task 29). */
+  const pendingPagedFits = useRef(new Map<string, { fit: NonNullable<PivotUi.PivotCommit['fit']>; styleAt: ReturnType<typeof pivotStyleAt>; styleGen: string }>()).current
+  useEffect(() => {
+    if (!remote || !pivotUi || !pendingPagedFits.size) return
+    for (const [sheetId, pending] of pendingPagedFits) {
+      const shownEntry = entries.get(sheetId)
+      if (!shownEntry || shownEntry.regionStyleGen === pending.styleGen || !shownEntry.sheet.regionStyles) continue
+      pendingPagedFits.delete(sheetId)
+      const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7, metrics = shownEntry.metrics
+      const { before, after } = pending.fit
+      autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(pending.styleAt ? { styleAt: pending.styleAt } : {}) },
+        { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
+        col => metrics.cols.size(col) / mdw)
+      dropTiles(sheetId, null)
+      rerender()
+    }
+  })
   const restorePivots = () => {
     pivotLifecycle.current++
+    pendingPagedFits.clear()
     for (const [sheetId, fitted] of pivotAutofitChars) {
       const sizes = sheetSizes.get(sheetId)
       for (const col of fitted.keys()) if (sizes && !sizes.userSet('col', col)) sizes.restore('col', col, undefined)
@@ -1320,6 +1338,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         } catch { return [] }
       })
       if (sheet) setPagedDependentNoticeSheets(current => markPagedDependentsStale(current, commit.sheetId, sheet, pivotRects, remote.hasFormulaCellsOutsidePivots ?? false))
+      // §7.8 (Task 29): autofit once the worker's new pivot display (its styles) has arrived; the old styles now.
+      const shownEntry = entries.get(sheetId)
+      if (pivotUi && commit.fit && shownEntry) pendingPagedFits.set(sheetId, { fit: commit.fit, styleAt: pivotStyleAt(shownEntry.sheet.regionStyles), styleGen: shownEntry.regionStyleGen })
       cancelCopy(); dropTiles(sheetId, null); rerender(); return
     }
     if (!sheet?.pivotTables) return
@@ -2371,4 +2392,13 @@ function pivotShownReader(sheet: XlsxSheet, overlay: ValueOverlay | undefined): 
 /** A region style layer's resolution for screen, as a pivot autofit reads it. */
 function pivotStyleAt(layer: ReturnType<typeof regionStylesFor>): ((row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) | undefined {
   return layer ? (row, col, own) => layer.styleAt(row, col, own, 'screen') ?? own : undefined
+}
+
+/** A worker reply's layout cells as a pivot autofit reads them (values and number formats; no own styles). */
+function pivotCellsReader(cells: readonly { row: number; col: number; value: { value: unknown; numFmtId?: number } | null }[]): (row: number, col: number) => { value: unknown; style?: XlsxCellStyle } | undefined {
+  const byCell = new Map(cells.map(cell => [`${cell.row},${cell.col}`, cell.value]))
+  return (row, col) => {
+    const shown = byCell.get(`${row},${col}`)
+    return shown ? { value: shown.value, ...(shown.numFmtId !== undefined ? { style: { numFmtId: shown.numFmtId } } : {}) } : undefined
+  }
 }

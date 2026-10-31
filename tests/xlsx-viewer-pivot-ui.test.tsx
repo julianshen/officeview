@@ -596,6 +596,23 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
     invalidate.mockRestore()
   }, 60_000)
 
+  it('Task 29: a paged change autofits the pivot\'s columns too', async () => {
+    const h = workerHarness()
+    const ui = await renderPaged(h, BASELINE)
+    const header = (col: number) => ui.container.querySelector<HTMLElement>(`[role=columnheader][aria-colindex="${col + 2}"]`)
+    await ui.findByRole('button', { name: /^Collapse East/ }, FIRST_PAINT_WAIT)
+    await waitFor(() => expect(header(0)).not.toBeNull())
+    const width = () => Number.parseFloat(header(0)!.style.width)
+    const saved = width()
+    // The first use opens the worker session (its labels then name the menu).
+    fireEvent.click(ui.getByRole('button', { name: /^Collapse East/ }))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, FIRST_PAINT_WAIT)
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
+    await waitFor(() => expect(width()).toBeLessThan(saved), FIRST_PAINT_WAIT)
+    ui.unmount()
+  }, 60_000)
+
   it('a pivot the worker refuses names its reason on every button, with one notice', async () => {
     const file = `${FIXTURES}interaction/chart-hide-item.xlsx`
     const h = workerHarness({

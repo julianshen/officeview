@@ -289,7 +289,7 @@ interface WorkerPivotHandle {
   serial: number
 }
 export type WorkerPivotOutcome =
-  | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
+  | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[]; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
   | { kind: 'apply'; revision: number; /** A refreshed pivot's one-line notice (Task 32). */ notice?: string; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
   | { kind: 'commit'; revision: number; valueGen: number }
   | { kind: 'stale' }
@@ -823,6 +823,11 @@ function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotAppl
     cell: (row: number, col: number) => cells.get(pivotCellKey(row, col)) ?? null,
   })
 }
+/** A layout's cells as the replies carry them (Task 29: the main thread fits the shown cells). */
+function layoutCells(layout: import('../xlsx/pivots/engine/place').PivotLayout): { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] {
+  return layout.cells.map(cell => ({ row: cell.row, col: cell.col, value: cell.value.kind === 'empty' ? null
+    : { value: cell.value.value, ...(cell.value.kind === 'error' ? { valueIsError: true } : {}), ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }) } }))
+}
 function pivotOverlayBytes(overlay: import('../xlsx/view/contracts').ValueOverlay, layout: import('../xlsx/pivots/engine/place').PivotLayout): number {
   const area = overlay.rects.reduce((sum, rect) => sum + (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1), 0)
   if (!Number.isSafeInteger(area)) return Number.POSITIVE_INFINITY
@@ -1284,7 +1289,7 @@ export class DocumentSession {
     if (!cache) return early({ kind: 'refused', feature: 'pivot-cache-unreadable', message: `Pivot ${def.name} has no readable cache definition.` })
     const handleKey = pivotHandleKey(sheetId, pivot)
     const prior = this.pivotHandles.get(handleKey)
-    if (prior) return early({ kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), created: false })
+    if (prior) return early({ kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, menu: prior.menu(prior.session.def, prior.cache, prior.session.view, prior.assets.date1904), cells: layoutCells(prior.session.layout), created: false })
     const runtimeKey = assets.runtimeKey
     const runtimeBytes = assets.retainedBytes + assets.metadataBytes
     let runtimeHeld = false
@@ -1398,7 +1403,7 @@ export class DocumentSession {
     catch (cause) { releaseShare(); return signal.aborted ? { kind: 'cancelled' } : { kind: 'refused', feature: 'pivot-saved-cells-unavailable', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Saved pivot cells could not be read.' } }
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     const existing = this.pivotHandles.get(handleKey)
-    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), created: false } }
+    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, menu: existing.menu(existing.session.def, existing.cache, existing.session.view, existing.assets.date1904), cells: layoutCells(existing.session.layout), created: false } }
     const [{ openPivotSession }, { pivotMenuModel }] = await Promise.all([import('../xlsx/pivots/session/session'), import('../xlsx/pivots/session/menu')])
     if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     // By sheet and name (R2-4); an unqualified source naming same-named pivots on several sheets links none (S3-Q).
@@ -1434,7 +1439,7 @@ export class DocumentSession {
     shareHeld = false
     runtimeTransferred = true
     assetsTransferred = true
-    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), created: true, handle }
+    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), cells: layoutCells(opened.value.layout), created: true, handle }
     } finally {
       releaseShare()
       releaseRuntime()

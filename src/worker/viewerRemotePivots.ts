@@ -8,7 +8,7 @@ import type { SourceRect } from '../xlsx/view/coordinates'
 import type { ViewerClient } from './viewerClient'
 import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
 
-export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition; /** The menus' model (Task 28). */ readonly menu: PivotMenuModel }
+export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition; /** The menus' model (Task 28). */ readonly menu: PivotMenuModel; /** The session's layout cells (Task 29 autofit). */ readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
 export type RemotePivotApply =
   | { readonly kind: 'committed'; readonly revision: number; readonly notice?: string; readonly def: PivotTableDefinition; readonly menu: PivotMenuModel; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
   | { readonly kind: 'stale' | 'cancelled' }
@@ -67,7 +67,7 @@ export class RemotePivotSessions {
       if (reply.kind !== 'complete' || reply.result.kind !== 'pivotOpen') return { kind: 'refused' as const, message: messageOf(reply) }
       entry!.revision = reply.result.revision
       entry!.opened = true
-      return { kind: 'open' as const, revision: reply.result.revision, def: reply.result.def, menu: reply.result.menu }
+      return { kind: 'open' as const, revision: reply.result.revision, def: reply.result.def, menu: reply.result.menu, cells: reply.result.cells }
     }).finally(() => { if (this.entries.get(key) === entry) { entry!.open = undefined; entry!.openRequest = undefined } })
     return entry.open
   }
