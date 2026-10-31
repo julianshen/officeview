@@ -37,6 +37,7 @@ import {
 import { addRecord, answerOverview, emptyAggregate, type OverviewCellSource } from '../storage/overviewIndex'
 import { cellDisplayText } from '../render'
 import { CheckpointBudget, type CooperativeOptions } from './scheduler'
+import { estimatePayloadBytes } from './payloadBytes'
 
 /** Row-page bounds: at most 200 rows and 262,144 cells (matches the fixture store). */
 export const READ_ROWS_PAGE_ROWS = 200
@@ -51,6 +52,12 @@ export interface ObjectSourceOptions {
   pacing?: StorePacing
 }
 export type StorePacing = Pick<CooperativeOptions, 'now' | 'yield'>
+function collectObjectPivotCharts(sheetId: string, drawings: readonly XlsxDrawing[] | undefined, out: Array<{ sheetId: string; partPath: string; treePath: string; chart: import('../../charts/model').ChartModel }>): void {
+  for (const node of drawings ?? []) {
+    if (node.content?.kind === 'xlsxChart') out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
+    if (node.children) collectObjectPivotCharts(sheetId, node.children, out)
+  }
+}
 /** A request's decode stopped at a checkpoint (cancelled or a stale owner). */
 export class SourceStop extends Error {
   constructor(readonly failure: SourceFailure) { super(failure.message) }
@@ -993,7 +1000,9 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       if (!runtime) return undefined
       const { sheetCellReader } = await import('../pivots/engine/faithful')
       const cells = new Set<number>()
-      let metadataBytes = 512
+      const linkedCharts: Array<{ sheetId: string; partPath: string; treePath: string; chart: import('../../charts/model').ChartModel }> = []
+      doc.sheets.forEach((candidate, index) => collectObjectPivotCharts(String(candidate.sheetId ?? index + 1), candidate.drawings, linkedCharts))
+      let metadataBytes = 512 + estimatePayloadBytes(linkedCharts)
       if (memory && !memory.set(metadataBytes)) return undefined
       for (const row of sheet.rows) for (const cell of row.cells) {
         if (cell.value !== null || cell.formula !== undefined) {
@@ -1004,7 +1013,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
       }
       const { RECORD_LIMITS } = await import('../pivots/engine/records')
       return {
-        tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes,
+        tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes, linkedCharts,
         metadataBytes, runtimeKey: runtime,
         cache: def => runtime.cache(def),
         records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),

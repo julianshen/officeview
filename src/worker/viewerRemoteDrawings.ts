@@ -17,6 +17,7 @@
  */
 import type { CacheIdentity, SheetDrawings, WorkerDiagnostic, WorkerReply } from '../xlsx/view/contracts'
 import type { XlsxDocument, XlsxDrawing, XlsxImage, XlsxSheet } from '../xlsx/types'
+import type { ChartModel } from '../charts/model'
 import type { ThemeContext } from '../drawing/style'
 import { drawingQuery, type SheetGeometry } from '../xlsx/view/viewport'
 import { DRAWINGS_UNAVAILABLE } from '../xlsx/view/drawingPayload'
@@ -76,12 +77,16 @@ interface Entry {
   shells?: { gen: number; base: XlsxSheet; sheet: XlsxSheet }
   /** Sheets a chart of this payload still waits on: read again once they complete. */
   pendingSheets?: readonly string[]
+  baseCharts: Map<string, ChartModel>
 }
 const none: SheetGeometry['drawingsIn'] = () => []
 const sameOwner = (a: CacheIdentity, b: CacheIdentity) => a.docId === b.docId && a.sheetId === b.sheetId && a.valueGen === b.valueGen
+const chartKey = (sheetId: string, partPath: string, treePath: string) => JSON.stringify([sheetId, partPath, treePath])
+const pivotName = (chart: ChartModel) => { const name = chart.pivot?.name ?? ''; return name.slice(name.lastIndexOf('!') + 1) }
 
 export class RemoteDrawingCache {
   private readonly entries = new Map<string, Entry>()
+  private readonly pivotChartOverrides = new Map<string, Map<string, ChartModel>>()
   private closed = false
   constructor(private readonly host: DrawingHost, readonly budgetBytes: number) {}
 
@@ -93,7 +98,7 @@ export class RemoteDrawingCache {
       this.entries.delete(sheetId)
       this.entries.set(sheetId, entry)
     } else {
-      entry = { state: 'waiting', gen: 0, drawings: [], images: [], diagnostics: [], bytes: 0, drawingsIn: none, seq: 0, attempts: 0, limit: MAX_ATTEMPTS }
+      entry = { state: 'waiting', gen: 0, drawings: [], images: [], diagnostics: [], bytes: 0, drawingsIn: none, seq: 0, attempts: 0, limit: MAX_ATTEMPTS, baseCharts: new Map() }
       this.entries.set(sheetId, entry)
     }
     if (entry.state === 'failed' && entry.rearmAt !== undefined && Date.now() >= entry.rearmAt) {
@@ -134,6 +139,20 @@ export class RemoteDrawingCache {
     this.closed = true
     for (const entry of this.entries.values()) this.reset(entry)
     this.entries.clear()
+    this.pivotChartOverrides.clear()
+  }
+
+  /** Swaps committed worker chart models into their source drawing nodes and repaints each affected sheet. */
+  setPivotCharts(ownerKey: string, charts: readonly { sheetId: string; partPath: string; treePath: string; chart: ChartModel }[]): void {
+    if (this.closed) return
+    if (charts.length) this.pivotChartOverrides.set(ownerKey, new Map(charts.map(item => [chartKey(item.sheetId, item.partPath, item.treePath), item.chart])))
+    else this.pivotChartOverrides.delete(ownerKey)
+    for (const [sheetId, entry] of this.entries) {
+      if (entry.state !== 'ready' || !this.applyPivotCharts(sheetId, entry)) continue
+      entry.gen++
+      entry.shells = undefined
+      this.host.changed(sheetId)
+    }
   }
 
   private reset(entry: Entry): void {
@@ -154,6 +173,7 @@ export class RemoteDrawingCache {
     entry.drawingsIn = none
     entry.shells = undefined
     entry.pendingSheets = undefined
+    entry.baseCharts.clear()
   }
 
   private async load(sheetId: string, entry: Entry): Promise<void> {
@@ -194,6 +214,8 @@ export class RemoteDrawingCache {
   private adopt(sheetId: string, entry: Entry, result: SheetDrawings): void {
     entry.state = 'ready'
     entry.drawings = result.drawings
+    entry.baseCharts.clear()
+    this.applyPivotCharts(sheetId, entry)
     entry.images = result.images
     entry.theme = result.theme
     entry.diagnostics = result.diagnostics
@@ -211,6 +233,36 @@ export class RemoteDrawingCache {
       this.host.changed(id)
     }
     this.host.changed(sheetId)
+  }
+
+  private applyPivotCharts(sheetId: string, entry: Entry): boolean {
+    let changed = false
+    const replacementFor = (key: string) => {
+      for (const replacements of this.pivotChartOverrides.values()) {
+        const chart = replacements.get(key)
+        if (chart) return chart
+      }
+      return undefined
+    }
+    const visit = (nodes: readonly XlsxDrawing[]) => {
+      for (const node of nodes) {
+        if (node.content?.kind === 'xlsxChart') {
+          const key = chartKey(sheetId, node.source.partPath, node.source.treePath)
+          const original = entry.baseCharts.get(key) ?? node.content.chart
+          const replacement = replacementFor(key)
+          if (replacement && pivotName(replacement) !== pivotName(original)) continue
+          const next = replacement ?? original
+          if (node.content.chart !== next) {
+            entry.baseCharts.set(key, original)
+            node.content = { ...node.content, chart: next }
+            changed = true
+          } else if (replacement) entry.baseCharts.set(key, original)
+        }
+        if (node.children) visit(node.children)
+      }
+    }
+    visit(entry.drawings)
+    return changed
   }
 }
 

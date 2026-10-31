@@ -22,7 +22,7 @@
 import type {
   AuthoritativeCell, CacheIdentity, CellRead, ColumnEntry, ColumnQuery, FilterKeySet, FilterSpec, LogicalCellBox, OperationRefusal, Page,
   PopulatedQuery, RangeCompletion, ReadOptions, RowOrder, SheetLayout, SortSpec, SourceFailure, SourceReadQuery, SourceReadResult,
-  SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValueOverlay, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
+  SourceStamp, SourceStore, SparseRowPage, StructuralResult, ValuePolicy, ViewCommitDelta, WorkbookFormatting, WorkbookOwner, WorkerDiagnostic, WorkerReply,
   ProfileId, GridSelection, OverviewGroup, OverviewQuery, LogicalViewport, SearchQuery,
 } from '../xlsx/view/contracts'
 import type { RangeDetection } from '../xlsx/view/rangeDetection'
@@ -57,6 +57,13 @@ export const ROW_CHUNK_COLS = 256
  * quarter of the main-thread profile budget (§12.4; D 16 MiB, M 8 MiB). */
 export function rowCacheBudget(profile: ProfileId): number { return MAIN_THREAD_BUDGETS[profile] / 4 }
 const DRAWING_MEMORY_MESSAGE = "This sheet's drawings need more main-thread memory than the document has free and are not shown"
+function unionUsedRect(base: SourceRect | undefined, overlays: readonly SourceRect[]): SourceRect | undefined {
+  let used = base && { ...base }
+  for (const rect of overlays) used = used
+    ? { r0: Math.min(used.r0, rect.r0), r1: Math.max(used.r1, rect.r1), c0: Math.min(used.c0, rect.c0), c1: Math.max(used.c1, rect.c1) }
+    : { ...rect }
+  return used
+}
 /** FC-T2: no receiving grant fits now; nothing (more) is sent, and the cache may ask again. */
 const DRAWING_WORKER_MEMORY_MESSAGE = "This sheet's drawings could not be prepared within the viewer worker's free memory and are not shown yet"
 function drawingGrantRefusal(command: CommandOf<'read'>, message = DRAWING_MEMORY_MESSAGE): WorkerReply<'read'> {
@@ -186,7 +193,8 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly listeners = new Set<() => void>()
   private readonly structures = new Map<string, { gen: number; merges: readonly XlsxMergeRange[]; sourceMerges: readonly XlsxMergeRange[]; state: 'loading' | 'done'; timer?: ReturnType<typeof setTimeout> }>()
   private readonly pivotMerges = new Map<string, Map<number, readonly XlsxMergeRange[]>>()
-  private readonly pivotUsedExtents = new Map<string, Map<number, { rows: number; cols: number }>>()
+  private readonly pivotUsedExtents = new Map<string, Map<number, SourceRect | null>>()
+  private readonly pivotProtectedRects = new Map<string, Map<number, readonly SourceRect[]>>()
   private readonly pivotBaseUsed = new Map<string, SourceRect | undefined>()
   private readonly layouts: Map<string, SheetLayout>
   private statusInFlight = false
@@ -208,7 +216,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly sparklineEvictionListeners = new Set<(sheetId: string) => void>()
   private readonly regionStyleEvictionListeners = new Set<(sheetId: string) => void>()
 
-  constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}, mirrorPivotOverlay?: (sheetId: string, overlay: ValueOverlay | undefined) => void) {
+  constructor(private readonly client: ViewerClient, open: RemoteOpen, private readonly onRelease: () => Promise<void> | void = () => {}) {
     this.docId = open.docId
     this.valuePolicy = open.valuePolicy
     this.sheets = open.sheets
@@ -299,7 +307,6 @@ export class RemoteWorkbook implements WorkbookSource {
     this.pivotDisplayCache = new RemoteRegionStyleCache(regionStyleHost, MAIN_THREAD_BUDGETS[this.profile] / 4, 'pivotDisplay')
     this.pivots = new RemotePivotSessions({
       docId: this.docId, profile: this.profile, client: this.client, isClosed: () => this.closed,
-      mirror: (sheetId, overlay) => mirrorPivotOverlay?.(String(sheetId), overlay),
       committed: (sheetId, pivot, result, valueGen) => this.publishPivotCommit(String(sheetId), pivot, result, valueGen),
       released: (sheetId, pivot, valueGen) => this.withdrawPivotCommit(String(sheetId), pivot, valueGen),
     })
@@ -531,21 +538,24 @@ export class RemoteWorkbook implements WorkbookSource {
     let pivots = this.pivotMerges.get(sheetId)
     if (!pivots) this.pivotMerges.set(sheetId, pivots = new Map())
     pivots.set(pivot, result.merges.map(rect => ({ minRow: rect.r0, maxRow: rect.r1, minCol: rect.c0, maxCol: rect.c1 })))
-    const entry = this.merges(sheetId)
-    this.refreshPivotMerges(sheetId, entry)
     const current = this.layout(sheetId)
     if (!this.pivotBaseUsed.has(sheetId)) this.pivotBaseUsed.set(sheetId, current.used)
     let extents = this.pivotUsedExtents.get(sheetId)
     if (!extents) this.pivotUsedExtents.set(sheetId, extents = new Map())
-    extents.set(pivot, { rows: result.usedRows, cols: result.usedCols })
-    const r1 = Math.max(current.used?.r1 ?? -1, result.usedRows - 1)
-    const c1 = Math.max(current.used?.c1 ?? -1, result.usedCols - 1)
-    const used = r1 >= 0 && c1 >= 0 ? { r0: Math.min(0, current.used?.r0 ?? 0), r1, c0: Math.min(0, current.used?.c0 ?? 0), c1 } : current.used
-    this.setLayout(sheetId, { ...current, ...(used ? { used } : {}) })
+    extents.set(pivot, result.overlayExtent)
+    let protectedByPivot = this.pivotProtectedRects.get(sheetId)
+    if (!protectedByPivot) this.pivotProtectedRects.set(sheetId, protectedByPivot = new Map())
+    protectedByPivot.set(pivot, result.protectedRects)
+    const used = unionUsedRect(this.pivotBaseUsed.get(sheetId), [...extents.values()].filter((rect): rect is SourceRect => rect !== null))
+    const { used: _oldUsed, ...withoutUsed } = current
+    this.setLayout(sheetId, { ...withoutUsed, ...(used ? { used } : {}) })
+    const entry = this.merges(sheetId)
+    this.refreshPivotMerges(sheetId, entry)
     const old = this.identity(sheetId)
     if (valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
     this.owner = { ...this.owner, workbookValueGen: Math.max(this.owner.workbookValueGen + 1, valueGen), sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId ? { ...item, valueGen } : item) }
     this.stores.get(sheetId)?.clear()
+    this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), result.charts)
     entry.gen++
     this.invalidateRegionStyles(sheetId)
     this.notify()
@@ -559,12 +569,11 @@ export class RemoteWorkbook implements WorkbookSource {
     const extents = this.pivotUsedExtents.get(sheetId)
     extents?.delete(pivot)
     if (!extents?.size) this.pivotUsedExtents.delete(sheetId)
+    const protectedByPivot = this.pivotProtectedRects.get(sheetId)
+    protectedByPivot?.delete(pivot)
+    if (!protectedByPivot?.size) this.pivotProtectedRects.delete(sheetId)
     const current = this.layout(sheetId), base = this.pivotBaseUsed.get(sheetId)
-    let used = base
-    for (const extent of extents?.values() ?? []) {
-      const next = { r0: 0, c0: 0, r1: extent.rows - 1, c1: extent.cols - 1 }
-      used = used ? { r0: Math.min(used.r0, next.r0), c0: Math.min(used.c0, next.c0), r1: Math.max(used.r1, next.r1), c1: Math.max(used.c1, next.c1) } : next
-    }
+    const used = unionUsedRect(base, [...(extents?.values() ?? [])].filter((rect): rect is SourceRect => rect !== null))
     if (hadExtent) {
       const { used: _oldUsed, ...withoutUsed } = current
       this.setLayout(sheetId, { ...withoutUsed, ...(used ? { used } : {}) })
@@ -577,13 +586,16 @@ export class RemoteWorkbook implements WorkbookSource {
     if (valueGen !== undefined && valueGen > old.valueGen) this.identities.set(sheetId, { ...old, valueGen })
     this.owner = { ...this.owner, workbookValueGen: this.owner.workbookValueGen + (valueGen === undefined ? 0 : 1), sheetVector: this.owner.sheetVector.map(item => item.sheetId === sheetId && valueGen !== undefined ? { ...item, valueGen } : item) }
     this.stores.get(sheetId)?.clear()
+    this.drawingCache.setPivotCharts(JSON.stringify([sheetId, pivot]), [])
     this.invalidateRegionStyles(sheetId)
     this.notify()
   }
   private refreshPivotMerges(sheetId: string, entry: { merges: readonly XlsxMergeRange[]; sourceMerges?: readonly XlsxMergeRange[] }): void {
     const additions = [...(this.pivotMerges.get(sheetId)?.values() ?? [])].flat()
+    const protectedRects = [...(this.pivotProtectedRects.get(sheetId)?.values() ?? [])].flat()
     const seen = new Set<string>()
-    entry.merges = [...(entry.sourceMerges ?? entry.merges), ...additions].filter(merge => {
+    entry.merges = [...(entry.sourceMerges ?? entry.merges).filter(merge => !protectedRects.some(rect =>
+      merge.minRow <= rect.r1 && merge.maxRow >= rect.r0 && merge.minCol <= rect.c1 && merge.maxCol >= rect.c0)), ...additions].filter(merge => {
       const key = JSON.stringify([merge.minRow, merge.maxRow, merge.minCol, merge.maxCol])
       if (seen.has(key)) return false
       seen.add(key); return true
@@ -973,7 +985,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.layouts.clear()
     this.structures.clear()
     this.pivotMerges.clear()
-    this.pivotUsedExtents.clear(); this.pivotBaseUsed.clear()
+    this.pivotUsedExtents.clear(); this.pivotProtectedRects.clear(); this.pivotBaseUsed.clear()
     this.latestQueries.clear()
     this.failures.clear()
     try {

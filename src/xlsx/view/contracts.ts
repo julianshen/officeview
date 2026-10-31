@@ -109,6 +109,14 @@ export function overlayUsedCounts(rects: readonly SourceRect[]): { usedRows: num
   for (const rect of rects) { usedRows = Math.max(usedRows, rect.r1 + 1); usedCols = Math.max(usedCols, rect.c1 + 1) }
   return { usedRows, usedCols }
 }
+/** Bounding worksheet rectangle occupied by saved/current pivot areas. `null` means no overlay extent. */
+export function overlayUsedExtent(rects: readonly SourceRect[]): SourceRect | null {
+  if (!rects.length) return null
+  return rects.reduce((bounds, rect) => ({
+    r0: Math.min(bounds.r0, rect.r0), r1: Math.max(bounds.r1, rect.r1),
+    c0: Math.min(bounds.c0, rect.c0), c1: Math.max(bounds.c1, rect.c1),
+  }), { ...rects[0]! })
+}
 export interface ReadOptions { signal: AbortSignal; stamp: SourceStamp }
 /** Cursors belong to the original query/stamp; owner changes invalidate them (§4.1).
  * readRows/queryColumn/scanPopulated/queryOverview publish expected operational
@@ -674,7 +682,7 @@ export type WorkerCommand =
   | { kind: 'search'; requestId: string; owner: WorkbookOwner; query: SearchQuery; cursor?: string }
   | { kind: 'read'; requestId: string; owner: CacheIdentity; query: SourceReadQuery }
   | { kind: 'pivotOpen'; requestId: string; docId: string; sheetId: string; pivot: number; grantBytes: number }
-  | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number; delta: PivotDelta | 'reset'; grantBytes: number }
+  | { kind: 'pivotApply'; requestId: string; docId: string; sheetId: string; pivot: number; /** Latest revision the receiver has committed. */ baseRevision: number; /** Unique receiver request sequence, used only to cancel its stage. */ revision: number; delta: PivotDelta | 'reset'; grantBytes: number }
   | { kind: 'pivotCommit'; requestId: string; docId: string; sheetId: string; pivot: number; revision: number }
   | { kind: 'pivotRelease'; requestId: string; docId: string; sheetId: string; pivot: number }
   | { kind: 'cancel'; requestId: string; targetRequestId: string }
@@ -721,8 +729,8 @@ export type WorkerResult =
   | { kind: 'valueQuery'; page: Page<ColumnEntry> }
   | { kind: 'search'; items: readonly SearchHit[]; nextCursor?: string; unavailableCount: number; page?: FindPage }
   | { kind: 'read'; result: SourceReadResult }
-  | { kind: 'pivotOpen'; revision: number; def: PivotTableDefinition }
-  | { kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly ChartModel[]; cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
+  | { kind: 'pivotOpen'; /** Last worker-committed wire revision. */ revision: number; def: PivotTableDefinition }
+  | { kind: 'pivotApply'; /** Worker-assigned candidate revision; commit only this value. */ revision: number; def: PivotTableDefinition; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: ChartModel }[]; cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
   | { kind: 'pivotCommit'; revision: number; valueGen: number } | { kind: 'pivotCommit'; refused: 'stale' }
   | { kind: 'pivotRelease'; released: boolean; valueGen?: number }
   | { kind: 'close' }

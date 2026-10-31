@@ -1408,6 +1408,12 @@ function forEachChart(drawings: readonly XlsxDrawing[], visit: (chart: ChartMode
     if (node.children) forEachChart(node.children, visit)
   }
 }
+function collectPivotChartRefs(sheetId: string, drawings: readonly XlsxDrawing[], out: Array<{ sheetId: string; partPath: string; treePath: string; chart: ChartModel }>): void {
+  for (const node of drawings) {
+    if (node.content?.kind === 'xlsxChart') out.push({ sheetId, partPath: node.source.partPath, treePath: node.source.treePath, chart: node.content.chart })
+    if (node.children) collectPivotChartRefs(sheetId, node.children, out)
+  }
+}
 /** Whether a cell sits in an authored hidden row or column (chart `plotVisOnly` provenance, as buildGeometry reads them). */
 function hiddenCell(meta: SheetMetadata | undefined, row: number, col: number): boolean {
   if (!meta) return false
@@ -1423,6 +1429,8 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
   const displaySheet: XlsxSheet = { name: '', rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(workbook.formatting.dateSystem) }
   const stores = new Map<string, PagedXlsxSheetAdapter>()
   const geometries = new Map<string, SheetGeometry>()
+  const pivotAssetCache = new Map<string, { assets: WorkerPivotAssets; entry?: PoolEntry; refs: number; retired: boolean }>()
+  const currentPivotAssets = new Map<string, string>()
   const drawingState: PagedDrawingState = { nodes: new DrawingNodeLedger(), ...(options.drawingPayloadBytes !== undefined ? { payloadBytes: options.drawingPayloadBytes } : {}) }
   const find = (sheetId: string) => {
     const found = workbook.sheets.find(s => s.sheetId === sheetId)
@@ -1457,6 +1465,14 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
       const sheet = find(sheetId)
       if (signal.aborted || sheet.state !== 'complete' || !sheet.metadata.pivotRegions?.length) return undefined
+      const store = storeFor(sheetId)
+      const generation = store.stamp.valueGen
+      const cacheKey = JSON.stringify([sheetId, generation])
+      const cached = pivotAssetCache.get(cacheKey)
+      if (cached) {
+        if (memory && !memory.set(0)) return undefined
+        return cached.assets
+      }
       const { readPagedPivotDisplayParts } = await import('../storage/pagedDrawings')
       const parsed = await readPagedPivotDisplayParts(workbook.parts, { sheetId, sheetName: sheet.name,
         pivotRegions: new Map([[sheet.name, sheet.metadata.pivotRegions]]) }, profile, signal, memory, workbook.pivotPartBytes)
@@ -1468,7 +1484,6 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
         const entry = workbook.parts.inventory.find(path)
         return entry ? openPart(workbook.parts.src, entry, { signal: readSignal, budget: { charge: () => {} } }) : undefined
       }, () => workbook.formatting.dateSystem === '1904')
-      const store = storeFor(sheetId)
       const used = sheet.used
       if (!used || !store.scanOccupied) return undefined
       const occupied = new Set<number>()
@@ -1488,17 +1503,73 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
         }
         cursor = next
       } while (cursor !== undefined)
+      const linkedCharts: Array<{ sheetId: string; partPath: string; treePath: string; chart: ChartModel }> = []
+      for (const chartSheet of workbook.sheets) {
+        if (chartSheet.state !== 'complete') return undefined
+        if (!chartSheet.metadata.drawingIds.length && !chartSheet.metadata.legacyDrawingIds?.length) continue
+        const chartStore = storeFor(chartSheet.sheetId)
+        if (!chartStore.readDrawings) return undefined
+        const drawings = await chartStore.readDrawings({ signal, stamp: chartStore.stamp }, profile, memory)
+        if (drawings.completeness !== 'complete' || signal.aborted) return undefined
+        collectPivotChartRefs(chartSheet.sheetId, drawings.drawings, linkedCharts)
+        if (memory && !memory.set(0)) return undefined
+      }
+      if (store.stamp.valueGen !== generation || signal.aborted) return undefined
       const { pagedCellReader } = await import('../pivots/engine/faithful')
       const { RECORD_LIMITS } = await import('../pivots/engine/records')
-      return {
-        tables: parsed.pivotTables, date1904: runtime.date1904, retainedBytes: 0, metadataBytes: 512 + count * 32,
+      const metadataBytes = 512 + count * 32 + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts })
+      const previousKey = currentPivotAssets.get(sheetId)
+      if (previousKey && previousKey !== cacheKey) {
+        const previous = pivotAssetCache.get(previousKey)
+        if (previous) {
+          previous.retired = true
+          if (previous.refs === 0) { previous.entry?.release(); pivotAssetCache.delete(previousKey) }
+        }
+      }
+      currentPivotAssets.set(sheetId, cacheKey)
+      const pool = drawingState.pool
+      let chargedMetadataBytes = metadataBytes
+      let entry: PoolEntry | undefined
+      if (pool) {
+        entry = pool.retain(`pivot-assets:${workbook.docId}:${sheetId}:${generation}`, {
+          tier: 'source', owner: sheetId, bytes: metadataBytes, evictable: false,
+          onRelease: () => {
+            pivotAssetCache.delete(cacheKey)
+            if (currentPivotAssets.get(sheetId) === cacheKey) currentPivotAssets.delete(sheetId)
+          },
+        }) ?? undefined
+        if (!entry) throw Object.assign(new Error('Pivot metadata exceeds the worker memory budget.'), {
+          code: 'resource-limit', requiredBytes: metadataBytes, limitBytes: pool.limitBytes,
+        })
+        chargedMetadataBytes = 0
+      }
+      const assets: WorkerPivotAssets = {
+        tables: parsed.pivotTables, date1904: runtime.date1904, retainedBytes: 0, metadataBytes: chargedMetadataBytes,
+        linkedCharts,
         runtimeKey: runtime,
+        retain: () => {
+          const cachedAssets = pivotAssetCache.get(cacheKey)
+          if (!cachedAssets) return () => {}
+          cachedAssets.refs++
+          let released = false
+          return () => {
+            if (released) return
+            released = true
+            cachedAssets.refs--
+            if (cachedAssets.retired && cachedAssets.refs === 0) {
+              cachedAssets.entry?.release()
+              pivotAssetCache.delete(cacheKey)
+            }
+          }
+        },
         cache: def => runtime.cache(def),
         records: (cache, readSignal, limits = RECORD_LIMITS[profile]) => runtime.records(cache, readSignal, limits),
         saved: (def, readSignal) => pagedCellReader(store, def, { signal: readSignal, stamp: store.stamp }, profile),
         occupied: (row, col) => occupied.has(row * MAX_COLS + col),
         store: storeFor,
       }
+      pivotAssetCache.set(cacheKey, { assets, ...(entry ? { entry } : {}), refs: 0, retired: false })
+      return assets
     },
     store: storeFor,
     geometry(sheetId) {
@@ -1523,6 +1594,9 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
     declaredFilters: () => workbook.sheets.flatMap(s => s.declared ? [s.declared] : []),
     bindMemory(pool: MemoryPool) { workbook.store.bindMemory(pool); drawingState.pool = pool },
     async release() {
+      for (const cached of pivotAssetCache.values()) cached.entry?.release()
+      pivotAssetCache.clear()
+      currentPivotAssets.clear()
       await Promise.all([...stores.values()].map(store => store.release()))
       stores.clear()
       geometries.clear()

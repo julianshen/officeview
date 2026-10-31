@@ -61,7 +61,7 @@ import { ValueIndexError } from '../xlsx/view/valueRuns'
 import { INITIAL_GENERATION as INITIAL_VALUE_GEN, isUint32Array, validateBitset } from './viewerProtocol'
 import { LaneBuilder } from '../xlsx/view/source'
 import { unavailableDrawings } from '../xlsx/view/drawingPayload'
-import { PAGED_CELL_BYTES_ESTIMATE, overlayUsedCounts, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
+import { PAGED_CELL_BYTES_ESTIMATE, overlayUsedCounts, overlayUsedExtent, type DrawingMemory, type ReadOptions, type SheetDrawings } from '../xlsx/view/contracts'
 import { BOUNDED_SORT_LANES, type BoundedSortLaneStore } from '../xlsx/view/sortLanes'
 import { PREPARED_SORT_READER, type PreparedSortStore, type PreparedSortLease } from '../xlsx/view/sortPrepared'
 import { compactPreparedPage, preparedRowAt, preparedMetadataAt, visitPreparedRows, PREPARED_PAGE_ENTRIES, PREPARED_PAGE_OVERHEAD, PREPARED_ENCODING_OVERHEAD, TAG_NULL, TAG_NUMBER, TAG_STRING, TAG_BOOLEAN, F_CACHED_SET, F_CACHED, F_ERROR_SET, F_ERROR, F_PROV_ENGINE, F_PROV_CACHED, F_UNAVAILABLE, type PreparedPage } from './preparedColumn'
@@ -230,6 +230,9 @@ export interface WorkerPivotAssets {
   readonly retainedBytes: number
   readonly metadataBytes: number
   readonly runtimeKey: object
+  readonly linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]
+  /** Pins source-owned per-generation metadata while a worker pivot handle references it. */
+  retain?(): () => void
   cache(def: PivotTableDefinition): PivotCacheDefinition | undefined
   records(cache: PivotCacheDefinition, signal: AbortSignal, limits: RecordLimits): Promise<RecordResult>
   saved(def: PivotTableDefinition, signal: AbortSignal): Promise<CellReader>
@@ -241,11 +244,16 @@ interface PivotStoreShare {
   key: string
   store?: import('../xlsx/pivots/engine/records').RecordStore
   entry?: PoolEntry
+  /** Opening reservations count as refs too, so a failing sibling cannot retire a store another opener uses. */
   refs: number
+  controller?: AbortController
+  quota?: { requiredBytes: number; limitBytes: number }
   pending?: Promise<PivotStoreShare | undefined>
 }
+interface PivotRuntimeShare { entry: PoolEntry; refs: number }
 interface WorkerPivotStage {
   wireRevision: number
+  requestRevision: number
   result: import('../xlsx/pivots/session/session').PivotApplyResult
   overlay: import('../xlsx/view/contracts').ValueOverlay
   entry: PoolEntry
@@ -256,16 +264,21 @@ interface WorkerPivotHandle {
   assets: WorkerPivotAssets
   def: PivotTableDefinition
   cache: PivotCacheDefinition
+  linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string }[]
+  releaseAssets?: () => void
   session: import('../xlsx/pivots/session/session').PivotSession
   share: PivotStoreShare
+  runtimeHeld: boolean
   committed?: WorkerPivotStage
   staged?: WorkerPivotStage
-  wireRevision: number
+  highestWireRevision: number
+  committedWireRevision: number
+  requestRevision: number
   serial: number
 }
 export type WorkerPivotOutcome =
-  | { kind: 'open'; revision: number; def: PivotTableDefinition }
-  | { kind: 'apply'; revision: number; def: PivotTableDefinition; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly import('../charts/model').ChartModel[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
+  | { kind: 'open'; revision: number; def: PivotTableDefinition; created?: boolean }
+  | { kind: 'apply'; revision: number; def: PivotTableDefinition; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
   | { kind: 'commit'; revision: number; valueGen: number }
   | { kind: 'stale' }
   | { kind: 'release'; released: boolean; valueGen?: number }
@@ -790,8 +803,10 @@ function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotAppl
           : { value: value.value, valueIsError: true, ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }) })
   }
   const merges = result.layout.merges.map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))
+  const protectedRects = [...(previous?.protectedRects ?? []), ...currentRects]
+  const protectedUnique = [...new Map(protectedRects.map(rect => [JSON.stringify([rect.r0, rect.r1, rect.c0, rect.c1]), rect])).values()]
   return Object.freeze({
-    rects: Object.freeze(rects), protectedRects: Object.freeze(currentRects), merges: Object.freeze(merges),
+    rects: Object.freeze(rects), protectedRects: Object.freeze(protectedUnique), merges: Object.freeze(merges),
     cell: (row: number, col: number) => cells.get(pivotCellKey(row, col)) ?? null,
   })
 }
@@ -868,7 +883,7 @@ export class DocumentSession {
   private readonly structureEntries = new Map<string, PoolEntry>()
   private readonly pivotHandles = new Map<string, WorkerPivotHandle>()
   private readonly pivotStores = new Map<string, PivotStoreShare>()
-  private readonly pivotRuntimeEntries = new WeakMap<object, PoolEntry>()
+  private readonly pivotRuntimeEntries = new Map<object, PivotRuntimeShare>()
   private pivotSerial = 0
   /** The single document-wide worker budget (§12.4): every sheet, operation and
    * retained cache of this document charges it. */
@@ -1220,13 +1235,29 @@ export class DocumentSession {
     }
     this.dropStructure(sheetId)
   }
+  private releasePivotRuntime(key: object): void {
+    const shared = this.pivotRuntimeEntries.get(key)
+    if (!shared) return
+    shared.refs--
+    if (shared.refs <= 0) {
+      shared.entry.release()
+      this.pivotRuntimeEntries.delete(key)
+    }
+  }
   async pivotOpen(sheetId: string, pivot: number, grantBytes: number, signal: AbortSignal): Promise<WorkerPivotOutcome> {
     if (this.closed || signal.aborted) return { kind: 'cancelled' }
     if (!Number.isSafeInteger(pivot) || pivot < 0 || !Number.isSafeInteger(grantBytes) || grantBytes <= 0) return { kind: 'refused', feature: 'pivot-protocol-invalid', message: 'The pivot session request is invalid.' }
     let assets: WorkerPivotAssets | undefined
     const construction = this.memory.charge()
     try { assets = await this.source.pivotAssets?.(sheetId, signal, this.options.profile ?? 'D', construction) }
-    catch (cause) { return signal.aborted ? { kind: 'cancelled' } : { kind: 'refused', feature: 'pivot-open-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Pivot data could not be opened.' } }
+    catch (cause) {
+      if (signal.aborted) return { kind: 'cancelled' }
+      const quota = cause as { code?: unknown; requiredBytes?: unknown; limitBytes?: unknown }
+      if (quota.code === 'resource-limit' && typeof quota.requiredBytes === 'number' && typeof quota.limitBytes === 'number') {
+        return { kind: 'quota', requiredBytes: quota.requiredBytes, limitBytes: quota.limitBytes }
+      }
+      return { kind: 'refused', feature: 'pivot-open-failed', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Pivot data could not be opened.' }
+    }
     finally { construction.release() }
     if (signal.aborted || this.closed) return { kind: 'cancelled' }
     if (!assets) return { kind: 'refused', feature: 'pivot-source-unavailable', message: 'This worker source has no interactive pivot runtime.' }
@@ -1236,82 +1267,143 @@ export class DocumentSession {
     if (!cache) return { kind: 'refused', feature: 'pivot-cache-unreadable', message: `Pivot ${def.name} has no readable cache definition.` }
     const handleKey = pivotHandleKey(sheetId, pivot)
     const prior = this.pivotHandles.get(handleKey)
-    if (prior) return { kind: 'open', revision: prior.session.revision, def: prior.session.def }
-
-    if ((assets.retainedBytes + assets.metadataBytes) > 0 && !this.pivotRuntimeEntries.has(assets.runtimeKey)) {
-      const bytes = assets.retainedBytes + assets.metadataBytes
-      const entry = this.memory.retain(`pivot-runtime:${this.docId}:${this.pivotSerial++}`, {
-        tier: 'source', owner: sheetId, bytes, evictable: false,
-      })
-      if (!entry) return { kind: 'quota', requiredBytes: bytes, limitBytes: this.memory.limitBytes }
-      this.pivotRuntimeEntries.set(assets.runtimeKey, entry)
+    if (prior) return { kind: 'open', revision: prior.committedWireRevision, def: prior.session.def, created: false }
+    const runtimeKey = assets.runtimeKey
+    const runtimeBytes = assets.retainedBytes + assets.metadataBytes
+    let runtimeHeld = false
+    if (runtimeBytes > 0) {
+      const sharedRuntime = this.pivotRuntimeEntries.get(runtimeKey)
+      if (sharedRuntime) sharedRuntime.refs++
+      else {
+        const entry = this.memory.retain(`pivot-runtime:${this.docId}:${this.pivotSerial++}`, {
+          tier: 'source', owner: sheetId, bytes: runtimeBytes, evictable: false,
+        })
+        if (!entry) return { kind: 'quota', requiredBytes: runtimeBytes, limitBytes: this.memory.limitBytes }
+        this.pivotRuntimeEntries.set(runtimeKey, { entry, refs: 1 })
+      }
+      runtimeHeld = true
+    }
+    const releaseAssets = assets.retain?.()
+    let assetsTransferred = false
+    let runtimeTransferred = false
+    let share: PivotStoreShare | undefined
+    let shareHeld = false
+    const releaseShare = () => {
+      if (!shareHeld || !share) return
+      shareHeld = false
+      share.refs--
+      if (share.refs > 0) return
+      if (share.pending && !share.store) share.controller?.abort()
+      share.entry?.release()
+      if (this.pivotStores.get(share.key) === share) this.pivotStores.delete(share.key)
+    }
+    const releaseRuntime = () => {
+      if (!runtimeHeld || runtimeTransferred) return
+      runtimeHeld = false
+      this.releasePivotRuntime(runtimeKey)
     }
     try {
     const { RECORD_LIMITS } = await import('../xlsx/pivots/engine/records')
     const profile = this.options.profile ?? 'D'
     const limits = { ...RECORD_LIMITS[profile], maxBytes: Math.min(RECORD_LIMITS[profile].maxBytes, grantBytes) }
     const cacheKey = JSON.stringify([cache.cacheId, cache.partPath, cache.recordsPartPath ?? ''])
-    let share = this.pivotStores.get(cacheKey)
-    if (share?.pending) share = await share.pending
-    if (signal.aborted || this.closed) return { kind: 'cancelled' }
-    if (!share?.store || !share.entry?.live) {
-      share = { key: cacheKey, refs: 0 }
+    share = this.pivotStores.get(cacheKey)
+    if (share && !share.pending && (!share.store || !share.entry?.live)) {
+      if (this.pivotStores.get(cacheKey) === share) this.pivotStores.delete(cacheKey)
+      share = undefined
+    }
+    if (!share) {
+      share = { key: cacheKey, refs: 0, controller: new AbortController() }
       const current = share
       current.pending = (async () => {
         const decode = this.memory.charge()
-        if (!decode.set(limits.maxBytes)) { decode.release(); return undefined }
         try {
-          const records = await assets!.records(cache, signal, limits)
-          if (signal.aborted || this.closed) return undefined
-          if (!records.ok) return undefined
+          const decodeLimits = { ...limits, admitBytes: (bytes: number) => decode.set(bytes) }
+          const records = await assets!.records(cache, current.controller!.signal, decodeLimits)
+          if (current.controller!.signal.aborted || this.closed || this.pivotStores.get(cacheKey) !== current || current.refs === 0) return undefined
+          if (!records.ok) { current.quota = records.quota ? { ...records.quota, limitBytes: this.memory.limitBytes } : undefined; return undefined }
           const key = `pivot-record-store:${this.docId}:${this.pivotSerial++}`
           const entry = this.memory.retain(key, { tier: 'source', owner: sheetId, bytes: records.store.bytes, evictable: false })
-          if (!entry) return undefined
+          if (!entry) { current.quota = { requiredBytes: records.store.bytes, limitBytes: this.memory.limitBytes }; return undefined }
           current.store = records.store
           current.entry = entry
-          this.pivotStores.set(cacheKey, current)
           return current
         } finally { decode.release() }
-      })()
+      })().catch(() => {
+        if (this.pivotStores.get(cacheKey) === current) this.pivotStores.delete(cacheKey)
+        return undefined
+      }).finally(() => { current.pending = undefined })
       this.pivotStores.set(cacheKey, current)
-      share = await current.pending
     }
-    if (!share?.store || !share.entry?.live) {
-      const latest = this.pivotStores.get(cacheKey)
-      if (latest?.pending) await latest.pending
-      if (signal.aborted || this.closed) return { kind: 'cancelled' }
-      return { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
+    // Count this open before any await. It protects a shared decode/store from a failing sibling.
+    share.refs++
+    shareHeld = true
+    if (share.pending) {
+      let abortListener: (() => void) | undefined
+      const reservedShare = share, pending = share.pending
+      const result = await Promise.race([
+        pending.then(value => ({ value })),
+        new Promise<{ aborted: true }>(resolve => {
+          abortListener = () => resolve({ aborted: true })
+          signal.addEventListener('abort', abortListener, { once: true })
+        }),
+      ])
+      if (abortListener) signal.removeEventListener('abort', abortListener)
+      if ('aborted' in result) { releaseShare(); return { kind: 'cancelled' } }
+      share = result.value ?? reservedShare
+      // A decode failure removes the shared slot; this opener still releases its reservation.
+      if (!result.value) {
+        const quota = share.quota
+        releaseShare()
+        return signal.aborted || this.closed ? { kind: 'cancelled' } : quota ? { kind: 'quota', ...quota }
+          : { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
+      }
     }
-    const releaseUnusedShare = () => {
-      if (share!.refs !== 0) return
-      share!.entry?.release()
-      if (this.pivotStores.get(cacheKey) === share) this.pivotStores.delete(cacheKey)
+    if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
+    if (!share.store || !share.entry?.live) {
+      const quota = share.quota
+      releaseShare()
+      return quota ? { kind: 'quota', ...quota } : { kind: 'refused', feature: 'pivot-records-limit', message: `Pivot cache ${cache.cacheId} could not be admitted under the worker profile cap.` }
     }
     let saved: CellReader
     try { saved = await assets.saved(def, signal) }
-    catch (cause) { releaseUnusedShare(); return signal.aborted ? { kind: 'cancelled' } : { kind: 'refused', feature: 'pivot-saved-cells-unavailable', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Saved pivot cells could not be read.' } }
-    if (signal.aborted || this.closed) { releaseUnusedShare(); return { kind: 'cancelled' } }
+    catch (cause) { releaseShare(); return signal.aborted ? { kind: 'cancelled' } : { kind: 'refused', feature: 'pivot-saved-cells-unavailable', message: cause instanceof Error ? cause.message.slice(0, 256) : 'Saved pivot cells could not be read.' } }
+    if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
     const existing = this.pivotHandles.get(handleKey)
-    if (existing) { releaseUnusedShare(); return { kind: 'open', revision: existing.session.revision, def: existing.session.def } }
+    if (existing) { releaseShare(); return { kind: 'open', revision: existing.committedWireRevision, def: existing.session.def, created: false } }
     const { openPivotSession } = await import('../xlsx/pivots/session/session')
+    if (signal.aborted || this.closed) { releaseShare(); return { kind: 'cancelled' } }
+    const linked = assets.linkedCharts.filter(item => {
+      const name = item.chart.pivot?.name ?? ''
+      return name.slice(name.lastIndexOf('!') + 1) === def.name
+    })
+    const linkedCharts = linked.map(item => item.chart)
+    const chartGate = linkedCharts.length ? (await import('../xlsx/pivots/session/charts')).pivotChartGate : undefined
     const opened = openPivotSession({ def, cache, store: share.store, date1904: assets.date1904, saved,
-      occupied: assets.occupied, linkedCharts: [] })
-    if (!opened.ok) { releaseUnusedShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
-    share.refs++
-    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, share, wireRevision: 0, serial: 0 }
+      occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}) })
+    if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
+    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, share, runtimeHeld,
+      linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),
+      releaseAssets,
+      highestWireRevision: 0, committedWireRevision: 0, requestRevision: 0, serial: 0 }
     this.pivotHandles.set(handleKey, handle)
-    return { kind: 'open', revision: 0, def: opened.value.def }
+    shareHeld = false
+    runtimeTransferred = true
+    assetsTransferred = true
+    return { kind: 'open', revision: 0, def: opened.value.def, created: true }
     } finally {
-      if (![...this.pivotHandles.values()].some(handle => handle.assets.runtimeKey === assets!.runtimeKey)) {
-        this.pivotRuntimeEntries.get(assets.runtimeKey)?.release()
-        this.pivotRuntimeEntries.delete(assets.runtimeKey)
-      }
+      releaseShare()
+      releaseRuntime()
+      if (!assetsTransferred) releaseAssets?.()
     }
   }
-  pivotApply(sheetId: string, pivot: number, revision: number, delta: import('../xlsx/pivots/session/delta').PivotDelta | 'reset', grantBytes: number): WorkerPivotOutcome {
+  pivotApply(sheetId: string, pivot: number, baseRevision: number, requestRevision: number, delta: import('../xlsx/pivots/session/delta').PivotDelta | 'reset', grantBytes: number): WorkerPivotOutcome {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot))
     if (!handle || this.closed) return { kind: 'refused', feature: 'pivot-session-released', message: 'The pivot session is not open.' }
-    if (!Number.isSafeInteger(revision) || revision <= handle.wireRevision || !Number.isSafeInteger(grantBytes) || grantBytes <= 0) return { kind: 'stale' }
+    if (!Number.isSafeInteger(baseRevision) || baseRevision < 0 || baseRevision > handle.committedWireRevision
+      || !Number.isSafeInteger(requestRevision) || requestRevision <= handle.requestRevision
+      || !Number.isSafeInteger(grantBytes) || grantBytes <= 0) return { kind: 'stale' }
+    handle.requestRevision = requestRevision
     handle.staged?.entry.release()
     handle.staged = undefined
     const applied = delta === 'reset' ? { ok: true as const, value: handle.session.reset() } : handle.session.apply(delta)
@@ -1320,16 +1412,17 @@ export class DocumentSession {
     const overlay = pivotOverlay(applied.value, previous)
     const bytes = pivotOverlayBytes(overlay, applied.value.layout)
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes) return { kind: 'quota', requiredBytes: bytes, limitBytes: grantBytes }
+    const revision = Math.max(handle.highestWireRevision, handle.committedWireRevision, handle.session.revision) + 1
     const entry = this.memory.retain(`pivot-overlay:${this.docId}:${sheetId}:${pivot}:${revision}:${handle.serial++}`, {
       tier: 'source', owner: sheetId, bytes, evictable: false,
     })
     if (!entry) return { kind: 'quota', requiredBytes: bytes, limitBytes: this.memory.limitBytes }
-    handle.wireRevision = revision
-    handle.staged = { wireRevision: revision, result: applied.value, overlay, entry }
+    handle.highestWireRevision = revision
+    handle.staged = { wireRevision: revision, requestRevision, result: applied.value, overlay, entry }
     const cells = applied.value.layout.cells.map(cell => ({ row: cell.row, col: cell.col, value: overlay.cell(cell.row, cell.col) ?? null }))
     // The published extent is the overlay's protected bounds, exactly as the stores' `extent` reads it (S3-H).
     return { kind: 'apply', revision, def: applied.value.def, rects: overlay.rects, merges: overlay.merges,
-      ...overlayUsedCounts(overlay.protectedRects), charts: applied.value.charts, cells,
+      ...overlayUsedCounts(overlay.protectedRects), overlayExtent: overlayUsedExtent(overlay.protectedRects), charts: applied.value.charts.map((chart, index) => ({ ...handle.linkedCharts[index]!, chart })), cells,
       protectedRects: overlay.protectedRects }
   }
   pivotCommit(sheetId: string, pivot: number, revision: number): WorkerPivotOutcome {
@@ -1340,6 +1433,7 @@ export class DocumentSession {
     if (!handle.session.commit(staged.result)) return { kind: 'stale' }
     const previous = handle.committed
     handle.committed = staged; handle.staged = undefined; handle.def = staged.result.def
+    handle.committedWireRevision = revision
     store.setValueOverlay(this.combinedPivotOverlay(sheetId))
     this.publishValues(sheetId)
     if (previous && previous !== staged && previous.entry !== staged.entry) previous.entry.release()
@@ -1362,17 +1456,15 @@ export class DocumentSession {
     handle.share.refs--
     if (handle.share.refs <= 0) {
       handle.share.entry?.release()
-      this.pivotStores.delete(handle.share.key)
+      if (this.pivotStores.get(handle.share.key) === handle.share) this.pivotStores.delete(handle.share.key)
     }
-    if (![...this.pivotHandles.values()].some(other => other.assets.runtimeKey === handle.assets.runtimeKey)) {
-      this.pivotRuntimeEntries.get(handle.assets.runtimeKey)?.release()
-      this.pivotRuntimeEntries.delete(handle.assets.runtimeKey)
-    }
+    if (handle.runtimeHeld) this.releasePivotRuntime(handle.assets.runtimeKey)
+    handle.releaseAssets?.()
     return { kind: 'release', released: true, ...(valueGen === undefined ? {} : { valueGen }) }
   }
   cancelPivotApply(sheetId: string, pivot: number, revision: number): void {
     const handle = this.pivotHandles.get(pivotHandleKey(sheetId, pivot))
-    if (handle?.staged?.wireRevision !== revision) return
+    if (handle?.staged?.requestRevision !== revision) return
     handle.staged.entry.release()
     handle.staged = undefined
   }

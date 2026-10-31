@@ -96,6 +96,7 @@ interface InFlight {
   /** Supersession scope: a newer current command with the same key aborts this. */
   key: string | undefined
   reason?: CancelReason
+  pivotOpenCreated?: boolean
 }
 type Report = (completed: number, total: number) => void
 
@@ -285,7 +286,7 @@ export class ViewerKernel {
         deadline = setTimeout(() => { this.abort(captured, 'query-timeout'); expired.abort() }, QUERY_DEADLINE_MS)
       }
       report = this.reporter(command, entry, emit)
-      const work = this.dispatch(command, entry.controller.signal, report, retain)
+      const work = this.dispatch(command, entry.controller.signal, report, retain, () => { entry!.pivotOpenCreated = true })
       const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, expired.signal)
       dispatched = out
       const after = this.env.afterDispatch?.(command)
@@ -333,6 +334,9 @@ export class ViewerKernel {
       }
       if (command.kind === 'pivotApply' && entry?.controller.signal.aborted) {
         entry.session?.cancelPivotApply(command.sheetId, command.pivot, command.revision)
+      }
+      if (command.kind === 'pivotOpen' && entry?.controller.signal.aborted && entry.pivotOpenCreated) {
+        entry.session?.pivotRelease(command.sheetId, command.pivot)
       }
       if (entry) {
         this.foreground.delete(entry.controller.signal)
@@ -491,7 +495,7 @@ export class ViewerKernel {
     }
   }
 
-  private async dispatch(command: Exclude<WorkerCommand, { kind: 'cancel' }>, signal: AbortSignal, report: Report, retain: (release: () => void) => void): Promise<WorkerReply> {
+  private async dispatch(command: Exclude<WorkerCommand, { kind: 'cancel' }>, signal: AbortSignal, report: Report, retain: (release: () => void) => void, onPivotOpenCreated?: () => void): Promise<WorkerReply> {
     switch (command.kind) {
       case 'open': return this.open(command, signal)
       case 'close': return this.close(command)
@@ -512,8 +516,8 @@ export class ViewerKernel {
         }
         let outcome
         switch (command.kind) {
-          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); break
-          case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.revision, command.delta, command.grantBytes); break
+          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); if (outcome.kind === 'open' && outcome.created) onPivotOpenCreated?.(); break
+          case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.baseRevision, command.revision, command.delta, command.grantBytes); break
           case 'pivotCommit': outcome = session.pivotCommit(command.sheetId, command.pivot, command.revision); break
           case 'pivotRelease': outcome = session.pivotRelease(command.sheetId, command.pivot); break
         }
@@ -521,7 +525,7 @@ export class ViewerKernel {
         if (outcome.kind === 'quota') return reply(command as never, owner, { kind: 'quota', resource: 'memory', limitBytes: outcome.limitBytes, ...(outcome.requiredBytes === undefined ? {} : { requiredBytes: outcome.requiredBytes }) } as never)
         if (outcome.kind === 'refused') return errorReply(command as never, owner, 'operation-refused', false, [{ code: outcome.feature, message: outcome.message }])
         const result = outcome.kind === 'open' ? { kind: 'pivotOpen', revision: outcome.revision, def: outcome.def }
-          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, def: outcome.def, rects: outcome.rects, protectedRects: outcome.protectedRects, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, cells: outcome.cells }
+          : outcome.kind === 'apply' ? { kind: 'pivotApply', revision: outcome.revision, def: outcome.def, rects: outcome.rects, protectedRects: outcome.protectedRects, overlayExtent: outcome.overlayExtent, merges: outcome.merges, usedRows: outcome.usedRows, usedCols: outcome.usedCols, charts: outcome.charts, cells: outcome.cells }
           : outcome.kind === 'commit' ? { kind: 'pivotCommit', revision: outcome.revision, valueGen: outcome.valueGen }
           : outcome.kind === 'stale' ? (command.kind === 'pivotCommit' ? { kind: 'pivotCommit', refused: 'stale' } : undefined)
           : { kind: 'pivotRelease', released: outcome.released, ...(outcome.valueGen === undefined ? {} : { valueGen: outcome.valueGen }) }

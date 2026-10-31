@@ -2,14 +2,14 @@
 import type { PivotDelta } from '../xlsx/pivots/session/delta'
 import type { PivotTableDefinition } from '../xlsx/pivots/model'
 import type { ChartModel } from '../charts/model'
-import type { ValueOverlayCell, WorkerReply, ValueOverlay } from '../xlsx/view/contracts'
+import type { ValueOverlayCell, WorkerReply } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
 import type { ViewerClient } from './viewerClient'
 import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
 
 export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition }
 export type RemotePivotApply =
-  | { readonly kind: 'committed'; readonly revision: number; readonly def: PivotTableDefinition; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly ChartModel[]; readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
+  | { readonly kind: 'committed'; readonly revision: number; readonly def: PivotTableDefinition; readonly rects: readonly SourceRect[]; readonly protectedRects: readonly SourceRect[]; readonly overlayExtent: SourceRect | null; readonly merges: readonly SourceRect[]; readonly usedRows: number; readonly usedCols: number; readonly charts: readonly RemotePivotChart[]; readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]; readonly valueGen: number }
   | { readonly kind: 'stale' | 'cancelled' }
   | { readonly kind: 'refused'; readonly message: string }
 
@@ -18,12 +18,14 @@ export interface RemotePivotApplyPayload {
   readonly def: PivotTableDefinition
   readonly rects: readonly SourceRect[]
   readonly protectedRects: readonly SourceRect[]
+  readonly overlayExtent: SourceRect | null
   readonly merges: readonly SourceRect[]
   readonly usedRows: number
   readonly usedCols: number
-  readonly charts: readonly ChartModel[]
+  readonly charts: readonly RemotePivotChart[]
   readonly cells: readonly { row: number; col: number; value: ValueOverlayCell | null }[]
 }
+export interface RemotePivotChart { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: ChartModel }
 export interface RemotePivotHost {
   readonly docId: string
   readonly profile: 'D' | 'M'
@@ -31,12 +33,9 @@ export interface RemotePivotHost {
   isClosed(): boolean
   /** Invoked only after the worker acknowledges the matching commit. */
   committed?(sheetId: number, pivot: number, result: RemotePivotApplyPayload, valueGen: number): void
-  /** Non-paged object documents are cloned to the main thread. Mirror the accepted
-   * worker commit into that clone's store; paged workers omit this hook. */
-  mirror?(sheetId: number, overlay: ValueOverlay | undefined): void
   released?(sheetId: number, pivot: number, valueGen?: number): void
 }
-interface Entry { generation: number; revision: number; opened: boolean; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }> }
+interface Entry { generation: number; revision: number; requestRevision: number; opened: boolean; openRequest?: string; applyRequest?: string; open?: Promise<RemotePivotOpen | { kind: 'refused'; message: string }> }
 const keyOf = (sheetId: number, pivot: number) => JSON.stringify([sheetId, pivot])
 const messageOf = (reply: WorkerReply): string => reply.kind === 'error'
   ? reply.diagnostics[0]?.message ?? `Pivot request failed (${reply.code})`
@@ -47,7 +46,6 @@ const messageOf = (reply: WorkerReply): string => reply.kind === 'error'
  * it is still the latest request when its reply arrives; sending is not commit. */
 export class RemotePivotSessions {
   private readonly entries = new Map<string, Entry>()
-  private readonly mirrored = new Map<number, Map<number, ValueOverlay>>()
   private closed = false
   constructor(private readonly host: RemotePivotHost) {}
 
@@ -55,7 +53,7 @@ export class RemotePivotSessions {
     const key = keyOf(sheetId, pivot)
     let entry = this.entries.get(key)
     if (entry?.open) return entry.open
-    if (!entry) this.entries.set(key, entry = { generation: 0, revision: 0, opened: false })
+    if (!entry) this.entries.set(key, entry = { generation: 0, revision: 0, requestRevision: 0, opened: false })
     if (this.closed || this.host.isClosed()) return Promise.resolve({ kind: 'refused', message: 'The workbook is closed.' })
     const requestId = this.host.client.nextRequestId()
     const generation = entry.generation
@@ -75,26 +73,29 @@ export class RemotePivotSessions {
   async apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<RemotePivotApply> {
     const key = keyOf(sheetId, pivot), entry = this.entries.get(key)
     if (this.closed || this.host.isClosed() || !entry?.opened) return { kind: 'refused', message: 'Open the pivot before changing it.' }
-    const generation = ++entry.generation, revision = entry.revision + 1
+    const generation = ++entry.generation, baseRevision = entry.revision, requestRevision = ++entry.requestRevision
     const requestId = this.host.client.nextRequestId()
     entry.applyRequest = requestId
     let staged: RemotePivotApplyPayload | undefined
     try {
-      const reply = await this.host.client.send({ kind: 'pivotApply', requestId, docId: this.host.docId, sheetId: String(sheetId), pivot, revision, delta, grantBytes: WORKER_BUDGETS[this.host.profile] / 4 })
+      const reply = await this.host.client.send({ kind: 'pivotApply', requestId, docId: this.host.docId, sheetId: String(sheetId), pivot, baseRevision, revision: requestRevision, delta, grantBytes: WORKER_BUDGETS[this.host.profile] / 4 })
       if (generation !== entry.generation) return { kind: 'stale' }
       if (reply.kind !== 'complete' || reply.result.kind !== 'pivotApply') return reply.kind === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', message: messageOf(reply) }
       staged = reply.result
+      const revision = staged.revision
       const committed = await this.host.client.send({ kind: 'pivotCommit', requestId: this.host.client.nextRequestId(), docId: this.host.docId, sheetId: String(sheetId), pivot, revision })
-      if (generation !== entry.generation) return { kind: 'stale' }
       if (committed.kind !== 'complete' || committed.result.kind !== 'pivotCommit') return committed.kind === 'cancelled' ? { kind: 'cancelled' } : { kind: 'refused', message: messageOf(committed) }
       if ('refused' in committed.result) return { kind: 'stale' }
-      entry.revision = revision
-      let sheetOverlays = this.mirrored.get(sheetId)
-      if (!sheetOverlays) this.mirrored.set(sheetId, sheetOverlays = new Map())
-      sheetOverlays.set(pivot, valueOverlayFromPivotApply(staged))
-      this.host.mirror?.(sheetId, this.combinedMirror(sheetId))
-      this.host.committed?.(sheetId, pivot, staged, committed.result.valueGen)
-      return { ...staged, kind: 'committed', valueGen: committed.result.valueGen }
+      // An acknowledgement is the worker's committed fact. Publish it even when a newer
+      // request was sent; only suppress an older acknowledgement already overtaken by a
+      // later committed revision, or one whose owner was released.
+      const registered = this.entries.get(key) === entry
+      const publish = registered && revision > entry.revision
+      if (publish) {
+        entry.revision = revision
+        this.host.committed?.(sheetId, pivot, staged, committed.result.valueGen)
+      }
+      return generation !== entry.generation || !registered ? { kind: 'stale' } : { ...staged, kind: 'committed', valueGen: committed.result.valueGen }
     } finally { if (entry.applyRequest === requestId) entry.applyRequest = undefined }
   }
 
@@ -104,10 +105,6 @@ export class RemotePivotSessions {
     this.entries.delete(key); entry.generation++
     if (entry.openRequest) void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: entry.openRequest }).catch(() => {})
     if (entry.applyRequest) void this.host.client.send({ kind: 'cancel', requestId: this.host.client.nextRequestId(), targetRequestId: entry.applyRequest }).catch(() => {})
-    const sheetOverlays = this.mirrored.get(sheetId)
-    sheetOverlays?.delete(pivot)
-    if (!sheetOverlays?.size) this.mirrored.delete(sheetId)
-    this.host.mirror?.(sheetId, this.combinedMirror(sheetId))
     this.host.released?.(sheetId, pivot)
     if (!this.closed && !this.host.isClosed()) void this.host.client.send({ kind: 'pivotRelease', requestId: this.host.client.nextRequestId(), docId: this.host.docId, sheetId: String(sheetId), pivot }).then(reply => {
       if (reply.kind === 'complete' && reply.result.kind === 'pivotRelease') this.host.released?.(sheetId, pivot, reply.result.valueGen)
@@ -119,23 +116,6 @@ export class RemotePivotSessions {
       const [candidate, pivot] = JSON.parse(key) as [number, number]
       if (candidate !== sheetId) this.release(candidate, pivot)
     }
-  }
-
-  private combinedMirror(sheetId: number): ValueOverlay | undefined {
-    const overlays = [...(this.mirrored.get(sheetId)?.values() ?? [])]
-    if (!overlays.length) return undefined
-    return Object.freeze({
-      rects: overlays.flatMap(overlay => overlay.rects),
-      protectedRects: overlays.flatMap(overlay => overlay.protectedRects),
-      merges: overlays.flatMap(overlay => overlay.merges),
-      cell(row: number, col: number) {
-        for (let i = overlays.length - 1; i >= 0; i--) {
-          const overlay = overlays[i]!
-          if (overlay.rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)) return overlay.cell(row, col)
-        }
-        return undefined
-      },
-    })
   }
 
   close(): void {
@@ -164,13 +144,4 @@ export class RemotePivotSessions {
     try { return await Promise.race([request, aborted]) }
     finally { signal.removeEventListener('abort', abort) }
   }
-}
-
-/** Rebuild the callable overlay only on the main thread after its worker commit. */
-export function valueOverlayFromPivotApply(result: RemotePivotApplyPayload): ValueOverlay {
-  const values = new Map(result.cells.map(cell => [`${cell.row},${cell.col}`, cell.value]))
-  return Object.freeze({
-    rects: result.rects, protectedRects: result.protectedRects, merges: result.merges,
-    cell: (row: number, col: number) => values.get(`${row},${col}`) ?? null,
-  })
 }
