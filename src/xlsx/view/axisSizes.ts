@@ -104,6 +104,17 @@ export class SheetSizes {
     const next = new Map(map).set(index, clampSize(axis, sizeCss))
     return Object.freeze(axis === 'row' ? { rows: next, cols: new Map(this.cols) } : { rows: new Map(this.rows), cols: next })
   }
+  /** The snapshot with several entries of one axis set (clamped), the entries a full axis cap refuses left out
+   * (as `set` refuses them), and the entries kept; nothing changes. */
+  previewMany(axis: ResizeAxis, entries: Iterable<readonly [number, number]>): { sizes: SessionSizes; kept: Map<number, number> } {
+    const next = new Map(axis === 'row' ? this.rows : this.cols), kept = new Map<number, number>()
+    for (const [index, sizeCss] of entries) {
+      if (!next.has(index) && next.size >= MAX_SESSION_SIZES) continue
+      const value = clampSize(axis, sizeCss)
+      next.set(index, value); kept.set(index, value)
+    }
+    return { sizes: Object.freeze(axis === 'row' ? { rows: next, cols: new Map(this.cols) } : { rows: new Map(this.rows), cols: next }), kept }
+  }
   /** Puts one entry back to `previous` (undefined: removes it), e.g. when the
    * geometry refused a size it cannot represent. */
   restore(axis: ResizeAxis, index: number, previous: number | undefined): void {

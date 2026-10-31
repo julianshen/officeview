@@ -506,24 +506,47 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   /** Columns a pivot autofit sized, per sheet, in characters (Task 29): their widths are the "current" a later
    * autofit compares with, and they go back to the workbook's when the pivots do. */
   const pivotAutofitChars = useRef(new Map<string, Map<number, number>>()).current
-  const autofitMeasure = useRef<CanvasRenderingContext2D | null | undefined>(undefined)
-  const autofitPivot = (sheetId: string, sheet: XlsxSheet, before: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['before'], after: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['after'], shownChars?: (col: number) => number | undefined) => {
-    if (!pivotUi) return
-    if (autofitMeasure.current === undefined) { try { autofitMeasure.current = globalThis.document.createElement('canvas').getContext('2d') } catch { autofitMeasure.current = null } }
-    const ctx = autofitMeasure.current
-    if (!ctx) return
+  /** Resizes the changed pivot's columns; returns why it did not, when memory refused it (announced by the caller). */
+  const autofitPivot = (sheetId: string, sheet: XlsxSheet, before: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['before'], after: Parameters<typeof PivotUi.pivotAutofitColumns>[0]['after'], shownChars?: (col: number) => number | undefined): string | undefined => {
+    // No laid-out sheet to resize (it is not shown): the change keeps the widths.
+    if (!pivotUi || !entries.get(sheetId)) return undefined
     const mdw = sheet.columnMetrics?.maxDigitWidthPx ?? 7, sizes = sizesOf(sheetId)
     let fitted = pivotAutofitChars.get(sheetId)
     if (!fitted) pivotAutofitChars.set(sheetId, fitted = new Map())
     const authored = shownChars ?? ((col: number) => sheet.cols.find(spec => col >= spec.min && col <= spec.max)?.widthChars)
-    const widths = pivotUi.pivotAutofitColumns({ sheet, before, after, mdwPx: mdw,
-      measure: (font, text) => { ctx.font = font; return ctx.measureText(text).width },
-      font: style => cellFont(style).font,
-      current: col => fitted!.get(col) ?? authored(col),
-      userSet: col => sizes.userSet('col', col) })
-    // Like a user resize, but never user-set: the next render rebuilds the geometry for the new sizes.
-    for (const [col, chars] of widths) if (sizes.set('col', col, columnWidthPx(chars, mdw), 'autofit')) fitted.set(col, chars)
+    // The measurement, as a fit gesture's (codex review T29-4): a per-fit context whose texts and shaping are admitted
+    // to the main ledger as they grow, released when the fit ends; the context goes with it.
+    let heldHeap = 0, heldNative = 0
+    const fit = createFitMeasure({ sheet, admit: ({ heap, native }) => {
+      if (mainLedger.bytes - heldHeap - heldNative + heap + native > MAIN_THREAD_BUDGETS[budgetProfile]) return false
+      mainLedger.set('layout', 'pivot-autofit-measure', heldHeap = heap)
+      mainLedger.set('canvasText', 'pivot-autofit-measure', heldNative = native)
+      return true
+    } })
+    let widths: Map<number, number>
+    try {
+      widths = pivotUi.pivotAutofitColumns({ sheet, before, after, mdwPx: mdw,
+        measure: fit.measure,
+        font: style => cellFont(style).font,
+        current: col => fitted!.get(col) ?? authored(col),
+        userSet: col => sizes.userSet('col', col) })
+    } catch (error) {
+      if (!(error instanceof AutoFitRefusedError)) throw error
+      return PIVOT_FIT_REFUSED
+    } finally { mainLedger.release('layout', 'pivot-autofit-measure'); mainLedger.release('canvasText', 'pivot-autofit-measure') }
+    if (!widths.size) return undefined
+    // Like a resize (codex review T29-5): the geometry for the new sizes is reserved and admitted before it is built,
+    // and published only if it fits; the sizes are never user-set.
+    const { sizes: prospective, kept } = sizes.previewMany('col', [...widths].map(([col, chars]) => [col, columnWidthPx(chars, mdw)] as const))
+    if (!kept.size) return undefined
+    const candidate = admitCandidate(sheetId, prospective, 'The pivot table\'s column width', shown => [...kept].every(([col, px]) => shown.cols.size(col) === px), 'the fitted widths cannot be represented beside this sheet\'s sizes', true)
+    if (!candidate) return PIVOT_FIT_REFUSED
+    for (const col of kept.keys()) if (sizes.set('col', col, kept.get(col)!, 'autofit')) fitted.set(col, widths.get(col)!)
+    publishEntry(candidate, sizes.gen)
+    return undefined
   }
+  /** A resident autofit's refusal, said with the change's own announcement (it is made during the commit). */
+  const autofitNotice = useRef<string | undefined>(undefined)
   /** Paged commits waiting for their sheet's refreshed pivot display before the autofit (Task 29). */
   // One per pivot, so a second pivot's commit before the refresh does not drop the first's fit (codex review T29-6).
   const pendingPagedFits = useRef<PivotUi.PendingPivotFits<ReturnType<typeof pivotStyleAt>> | null>(null)
@@ -538,9 +561,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       const mdw = shownEntry.sheet.columnMetrics?.maxDigitWidthPx ?? 7
       for (const { fit: { before, after }, styleAt } of ready) {
         const metrics = entries.get(sheetId)!.metrics
-        autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(styleAt ? { styleAt } : {}) },
+        const refused = autofitPivot(sheetId, shownEntry.sheet, { def: before.def, read: pivotCellsReader(before.cells), ...(styleAt ? { styleAt } : {}) },
           { def: after.def, read: pivotCellsReader(after.cells), ...(shownEntry.sheet.regionStyles ? { styleAt: pivotStyleAt(shownEntry.sheet.regionStyles)! } : {}) },
           col => metrics.cols.size(col) / mdw)
+        if (refused) setAnnouncement(refused)
       }
       dropTiles(sheetId, null)
       rerender()
@@ -1372,7 +1396,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
       source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
     }
-    if (pivotUi && beforeFit) autofitPivot(sheetId, sheet, beforeFit, { def: commit.def, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) })
+    if (pivotUi && beforeFit) autofitNotice.current = autofitPivot(sheetId, sheet, beforeFit, { def: commit.def, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) })
     if (commit.layout && commit.cache && commit.changedRects?.length) {
       const contextKey = `${commit.sheetId}:${commit.pivot}`
       pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache: commit.cache, layout: commit.layout, layoutCells: new Map(commit.layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])), date1904: commit.date1904 ?? false, rects: commit.changedRects, overlay: commit.overlay ?? undefined })
@@ -1478,7 +1502,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     rerender()
   }
   const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup })
-  pivotHost.current = { installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
+  pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
   const pivotKinds = props.pivotVerifiedKinds
   // One controller (and client, with its sessions) per mount of these inputs; created in an effect so a StrictMode
   // re-run gets a fresh one instead of a disposed one.
@@ -2040,9 +2064,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * next display commits). A candidate that does not fit, or does not show the
    * size, is discarded unpublished and the refusal is announced.
    */
-  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string): Candidate | null => {
+  const admitCandidate = (sheetId: string, sizes: SessionSizes, name: string, represents: (metrics: ProjectedSheetMetrics) => boolean, unrepresentable: string, quiet = false): Candidate | null => {
     const budget = MAIN_THREAD_BUDGETS[budgetProfile], current = entries.get(sheetId)!
-    const refuse = () => { setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`); return null }
+    const refuse = () => { if (!quiet) setAnnouncement(`${name} was not resized: not enough memory to lay the sheet out again (main memory budget).`); return null }
     // 1. Provisional reservation BEFORE construction: an upper bound of what
     //    building the candidate allocates, derived from its inputs alone.
     const upper = constructionUpperBytes(sheetId, current, sizes)
@@ -2054,7 +2078,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       if ('candidate' in prepared) candidate = prepared.candidate
     } finally { if (!candidate) mainLedger.release('geometry', 'resize-candidate') }
     if (!candidate) return null
-    if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
+    if (!represents(candidate.built.metrics)) { mainLedger.release('geometry', 'resize-candidate'); if (!quiet) setAnnouncement(`${name} was not resized: ${unrepresentable}.`); return null }
     // 2. Exact admission: the candidate's measured charge plus the semantic DOM
     //    it reveals, beside everything held now. Repaint memory (layout records,
     //    formatted text) is admitted per record where it is built (LayoutCache
@@ -2415,6 +2439,7 @@ function pivotShownReader(sheet: XlsxSheet, overlay: ValueOverlay | undefined): 
     return cell ? { value: cell.value, ...(cell.style ? { style: cell.style } : {}) } : undefined
   }
 }
+const PIVOT_FIT_REFUSED = 'Its columns were not fitted: not enough memory to measure them or lay the sheet out again (main memory budget).'
 /** A region style layer's resolution for screen, as a pivot autofit reads it. */
 function pivotStyleAt(layer: ReturnType<typeof regionStylesFor>): ((row: number, col: number, own: XlsxCellStyle | undefined) => XlsxCellStyle | undefined) | undefined {
   return layer ? (row, col, own) => layer.styleAt(row, col, own, 'screen') ?? own : undefined

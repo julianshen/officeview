@@ -492,6 +492,40 @@ describe('the interactive viewer', () => {
     ui.unmount()
   })
 
+  it('Task 29 r1: an autofit measures in its own admitted, per-fit context and admits its geometry before building; short of memory it is refused', async () => {
+    const doc = await load(BASELINE)
+    let ledger: MainMemoryLedger | undefined
+    const ui = render(<InteractiveSheetDoc doc={doc} onMainLedger={value => { ledger = value }} />)
+    const header = (col: number) => ui.container.querySelector<HTMLElement>(`[role=columnheader][aria-colindex="${col + 2}"]`)
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(header(0)).not.toBeNull())
+    const width = () => Number.parseFloat(header(0)!.style.width)
+    const saved = width()
+    const set = vi.spyOn(ledger!, 'set'), release = vi.spyOn(ledger!, 'release')
+    const contexts = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
+    await waitFor(() => expect(width()).toBeLessThan(saved))
+    const owners = set.mock.calls.map(([pool, owner]) => `${pool}:${owner}`)
+    expect(owners).toContain('canvasText:pivot-autofit-measure')
+    expect(owners).toContain('geometry:resize-candidate')
+    expect(release.mock.calls.map(([pool, owner]) => `${pool}:${owner}`)).toEqual(expect.arrayContaining(['canvasText:pivot-autofit-measure', 'layout:pivot-autofit-measure']))
+    const made = contexts.mock.calls.length
+    expect(made).toBeGreaterThan(0)
+    set.mockRestore(); release.mockRestore()
+    // Expanding again with no main memory left: the change shows, its autofit is refused and the width stays.
+    const narrowed = width()
+    ledger!.set('copy', 'filler', Math.max(0, 64 * 1024 * 1024 - ledger!.bytes))
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Expand entire field' }))
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    await waitFor(() => expect(ui.container.textContent).toContain('Pivot table changed (view only; the file is unchanged). Its columns were not fitted: not enough memory'))
+    expect(width()).toBe(narrowed)
+    contexts.mockRestore()
+    ledger!.set('copy', 'filler', 0)
+    ui.unmount()
+  })
+
   it('reset returns the saved view', async () => {
     const doc = await load(BASELINE)
     const saved = doc.sheets[pivotSheet(doc)]!.pivotTables![0]

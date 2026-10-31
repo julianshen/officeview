@@ -218,6 +218,14 @@ describe('SheetSizes records which sizes the user set', () => {
     sizes.reset()
     expect(sizes.userSet('col', 2)).toBe(false)
   })
+  it('previewMany: several columns at once, clamped, changing nothing (an autofit\'s candidate sizes)', () => {
+    const sizes = new SheetSizes()
+    sizes.set('col', 1, 120)
+    const { sizes: next, kept } = sizes.previewMany('col', [[2, 90], [3, 1e9]])
+    expect([...next.cols]).toEqual([[1, 120], [2, 90], [3, kept.get(3)]])
+    expect(kept.get(3)).toBeLessThan(1e9)
+    expect(sizes.get('col', 2)).toBeUndefined()
+  })
 })
 
 describe('§7.8 autofit after a change', () => {
