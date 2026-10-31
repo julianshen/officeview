@@ -9,6 +9,15 @@
  *                                                           (REACHED / FAILED); writes probe files under engine/.probes
  *   --no-fallback                                           with --case: skip the xml fallback (to see the AppleScript route alone)
  *
+ * Stage 3 interaction oracle (pivots plan Task 24; cases in interaction-cases.ts):
+ *   bun scripts/xlsx-refs/build-engine.ts --interaction [--case id[,id…]]
+ *                                    build the seeds the selected cases need and are missing (getpivotdata-seed,
+ *                                    refresh-seed, refresh-seed-nodata under recipes/), then the cases into
+ *                                    interaction/<id>.xlsx and interaction/manifest.json (InteractionCase entries)
+ *   … --interaction --seeds          (re)build every built seed, nothing else
+ *   … --interaction --dry-run [--case …]   print seeds, routes, AppleScript, xml diffs and resolved deltas; touch nothing
+ *   … --interaction --probes         one case per unconfirmed incantation (AppleScript only); files under interaction/.probes
+ *
  * Each case: copy the seed → (xml route: optional AppleScript prep, saved, then the part edit) → open in Excel → apply
  * the case's AppleScript → `refresh table` → save as engine/<id>.xlsx → close → check the markers in the saved parts.
  * A failed route (script error or missing marker) falls back to the case's xml route, then to its owner recipe.
@@ -28,6 +37,10 @@ import {
   ENGINE_CASES, PROBES_TO_CONFIRM, SEED_CACHE_MARKERS, SEED_PIVOT_MARKERS, SEED_RECORD_MARKERS, SOURCE_REF, engineSeedStandIn, seedDataLines, seedSourceLines, xmlDiffSummary,
   type EngineCase, type EngineRoute, type PivotParts, type Target,
 } from './engine-cases'
+import {
+  INTERACTION_CASES, INTERACTION_PROBES, SEED_BUILDS, resolveDelta, startOf, startShapeOf, type InteractionCase, type PivotDelta, type SeedBuild, type SheetMarker,
+} from './interaction-cases'
+import { CHART_RE, fixturePath, loadPivot, sheetXml } from './pivot-files'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const PIVOT_DIR = join(ROOT, 'tests/fixtures/xlsx-pivots')
@@ -86,12 +99,13 @@ function closeAny(names: string[]): void {
     for (const open of workbookNames() ?? []) if (names.includes(open)) closeWorkbook(open, false)
   } catch { /* Excel busy or gone: the next open retries */ }
 }
-/** Opens `input`, runs `lines` then `refresh table`, saves as `saved` and closes. */
-function session(input: string, saved: string, lines: (t: Target) => string[]): void {
+/** Opens `input`, runs `lines` then `refresh table` (unless `refresh` is false), saves as `saved` and closes. */
+function session(input: string, saved: string, lines: (t: Target) => string[], refresh = true): void {
   const name = openWorkbook(input)
   const t = target(name)
   try {
-    runScript([...lines(t), `refresh table ${t.p}`], 180_000)
+    const script = [...lines(t), ...(refresh ? [`refresh table ${t.p}`] : [])]
+    if (script.length) runScript(script, 180_000)
     if (existsSync(saved)) rmSync(saved)
     saveAs(name, saved)
     // Excel writes the file after the script returns.
@@ -315,9 +329,320 @@ async function probes(): Promise<void> {
   rmSync(WORK_DIR, { recursive: true, force: true })
 }
 
+// ---- Stage 3 interaction oracle (Task 24) -----------------------------------------------------------------------
+
+const INTERACTION_DIR = join(PIVOT_DIR, 'interaction')
+const INTERACTION_MANIFEST = join(INTERACTION_DIR, 'manifest.json')
+
+/** One `interaction/manifest.json` entry: the plan's `InteractionCase` (Task 24 interfaces) plus where the case starts
+ * (`base`), what non-UI change it made (`setup`), and how it was built. */
+export interface InteractionManifestEntry {
+  case: string
+  file: string
+  pivot: string
+  task: InteractionCase['task']
+  seed: InteractionCase['seed']
+  delta: PivotDelta[]
+  measures?: string
+  /** The start file when it is not the seed's own (relative to tests/fixtures/xlsx-pivots, without .xlsx). */
+  base?: string
+  /** A change no PivotDelta expresses, made before `delta`: the case is a measurement or a base, not a delta oracle. */
+  setup?: string
+  route: 'applescript' | 'xml'
+  status: 'built' | 'pending'
+  error?: string
+}
+
+async function verifySheets(file: string, markers: readonly SheetMarker[] = []): Promise<void> {
+  if (!markers.length) return
+  const zip = await loadZip(file)
+  for (const m of markers) {
+    const xml = await sheetXml(zip, m.sheet)
+    if (xml === undefined) throw new Error(`saved file has no sheet ${m.sheet}`)
+    if (m.absent ? m.re.test(xml) : !m.re.test(xml)) throw new Error(`saved sheet ${m.sheet} ${m.absent ? 'has' : 'lacks'} ${m.re}`)
+  }
+}
+async function verifyRecordsAbsent(file: string, absent: readonly RegExp[]): Promise<void> {
+  const zip = await loadZip(file)
+  const part = partName(zip, RECORDS_RE)
+  if (!part) throw new Error(`${relative(ROOT, file)} has no cache records`)
+  const records = await zip.file(part)!.async('string')
+  for (const m of absent) if (m.test(records)) throw new Error(`saved records have ${m}`)
+}
+async function verifyNoRecords(file: string): Promise<void> {
+  if (partName(await loadZip(file), RECORDS_RE)) throw new Error('saved file still has a records part (saveData="0" not kept)')
+}
+async function verifyChart(file: string): Promise<void> {
+  const zip = await loadZip(file)
+  const charts = await Promise.all(Object.keys(zip.files).filter(n => CHART_RE.test(n)).map(n => zip.file(n)!.async('string')))
+  if (!charts.some(c => /<c:pivotSource>/.test(c))) throw new Error('saved file has no pivot chart (c:pivotSource)')
+}
+
+/** Cache-definition attributes set and, with `dropRecords`, the records part removed with its relationship, the
+ * definition's r:id and its content-type override (the refresh seeds' xml fallback). */
+async function editCachePackage(input: string, output: string, attrs: Record<string, string>, dropRecords: boolean): Promise<void> {
+  const zip = await loadZip(input)
+  const parts = await readParts(input)
+  let cache = parts.cache.replace(/<pivotCacheDefinition\b[^>]*>/, open => {
+    for (const [k, v] of Object.entries(attrs)) open = new RegExp(`\\s${k}="`).test(open) ? open.replace(new RegExp(`\\s${k}="[^"]*"`), ` ${k}="${v}"`) : open.replace(/>$/, ` ${k}="${v}">`)
+    return open
+  })
+  if (dropRecords) {
+    const records = partName(zip, RECORDS_RE)
+    if (records) {
+      const relsPath = parts.cachePart.replace(/([^/]+)$/, '_rels/$1.rels')
+      const rels = await zip.file(relsPath)?.async('string')
+      const id = rels && new RegExp(`<Relationship [^>]*Id="([^"]+)"[^>]*Target="[^"]*${basename(records)}"`).exec(rels)?.[1]
+      if (rels && id) {
+        const kept = rels.replace(new RegExp(`<Relationship [^>]*Id="${id}"[^>]*/>`), '')
+        if (/<Relationship /.test(kept)) zip.file(relsPath, kept); else zip.remove(relsPath)
+        cache = cache.replace(new RegExp(`\\sr:id="${id}"`), '')
+      }
+      zip.remove(records)
+      const types = await zip.file('[Content_Types].xml')!.async('string')
+      zip.file('[Content_Types].xml', types.replace(new RegExp(`<Override [^>]*PartName="/${records.replace(/[.]/g, '\\.')}"[^>]*/>`), ''))
+    }
+  }
+  zip.file(parts.cachePart, cache)
+  writeFileSync(output, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
+}
+
+async function verifySeedBuild(s: SeedBuild, out: string): Promise<void> {
+  await verify(out, s.markers, s.cacheMarkers)
+  if (s.recordMarkers) await verifyRecords(out, s.recordMarkers)
+  if (s.recordAbsent) await verifyRecordsAbsent(out, s.recordAbsent)
+  if (s.noRecords) await verifyNoRecords(out)
+  await verifySheets(out, s.sheetMarkers)
+}
+export async function buildInteractionSeed(s: SeedBuild, fallback = true): Promise<void> {
+  mkdirSync(WORK_DIR, { recursive: true })
+  const out = fixturePath(s.file), input = join(WORK_DIR, `${s.id}-in.xlsx`), staged = join(WORK_DIR, `${s.id}-staged.xlsx`)
+  try {
+    copyFileSync(ENGINE_SEED, input)
+    try {
+      session(input, out, s.lines, s.refresh)
+      await verifySeedBuild(s, out)
+      console.log(`built ${relative(ROOT, out)} (applescript)`)
+      return
+    } catch (e) {
+      console.log(`${s.id}: applescript failed: ${message(e)}`)
+      if (!s.fallback || !fallback) { rmSync(out, { force: true }); throw e }
+    }
+    // The reachable part through AppleScript (the data edit, no refresh), then the cache flags in the package.
+    copyFileSync(ENGINE_SEED, input)
+    session(input, staged, s.fallback.lines, false)
+    await editCachePackage(staged, out, s.fallback.cache, s.fallback.dropRecords ?? false)
+    await verifySeedBuild(s, out)
+    console.log(`built ${relative(ROOT, out)} (xml fallback: Excel has not opened this file; the first case that starts from it does)`)
+  } finally {
+    for (const f of [input, staged]) rmSync(f, { force: true })
+  }
+}
+
+async function runInteraction(c: InteractionCase, route: 'applescript' | 'xml', out: string): Promise<void> {
+  const start = fixturePath(startOf(c))
+  if (!existsSync(start)) throw new Error(`start file ${startOf(c)}.xlsx is not built`)
+  const input = join(WORK_DIR, `${c.id}-in.xlsx`), prepped = join(WORK_DIR, `${c.id}-prep.xlsx`), edited = join(WORK_DIR, `${c.id}-xml.xlsx`)
+  copyFileSync(start, input)
+  try {
+    if (route === 'applescript') return session(input, out, c.lines ?? (() => []))
+    if (!c.xmlEdit) throw new Error('no xml edit')
+    let source = input
+    if (c.xmlPrep) { session(input, prepped, c.xmlPrep); source = prepped }
+    await writeEdited(source, edited, c.xmlEdit)
+    session(edited, out, c.post ?? (() => []))
+  } finally {
+    for (const f of [input, prepped, edited]) rmSync(f, { force: true })
+  }
+}
+async function verifyInteraction(c: InteractionCase, out: string): Promise<string> {
+  const pivot = await verify(out, c.markers, c.cacheMarkers, c.absent)
+  if (c.recordMarkers) await verifyRecords(out, c.recordMarkers)
+  await verifySheets(out, c.sheetMarkers)
+  if (c.chart) await verifyChart(out)
+  return pivot
+}
+
+/** The case's deltas in engine indices, resolved against its start file; a filter delta takes the filter Excel saved
+ * for that field in the case file when there is exactly one (what Excel applied, `filterVal` and all). */
+async function manifestDelta(c: InteractionCase, out?: string): Promise<PivotDelta[]> {
+  const shape = startShapeOf(await readParts(fixturePath(startOf(c))))
+  const delta = c.delta.map(spec => resolveDelta(spec, shape))
+  if (!out || !delta.some(d => d.kind === 'filter')) return delta
+  try {
+    const { def } = await loadPivot(out)
+    return delta.map(d => {
+      if (d.kind !== 'filter') return d
+      const saved = def.filters.filter(f => f.fld === d.field)
+      return saved.length === 1 ? { ...d, filter: saved[0]! } : d
+    })
+  } catch (e) {
+    console.log(`${c.id}: kept the literal filter (${message(e)})`)
+    return delta
+  }
+}
+
+export async function buildInteractionCase(c: InteractionCase, fallback = true): Promise<InteractionManifestEntry> {
+  const out = join(INTERACTION_DIR, `${c.id}.xlsx`)
+  const entry = async (route: InteractionManifestEntry['route'], status: InteractionManifestEntry['status'], pivot = '', error?: string): Promise<InteractionManifestEntry> => {
+    let delta: PivotDelta[] = []
+    try { delta = existsSync(fixturePath(startOf(c))) ? await manifestDelta(c, status === 'built' ? out : undefined) : [] }
+    catch (e) { error = [error, `delta: ${message(e)}`].filter(Boolean).join('; '); status = 'pending' }
+    return {
+      case: c.id, file: relative(ROOT, out), pivot, task: c.task, seed: c.seed, delta, measures: c.measures,
+      ...(c.base ? { base: c.base } : {}), ...(c.setup ? { setup: c.setup } : {}), route, status, ...(error ? { error } : {}),
+    }
+  }
+  const routes: Array<'applescript' | 'xml'> = c.route === 'xml' ? ['xml'] : ['applescript', ...(fallback && c.fallback === 'xml' ? ['xml' as const] : [])]
+  const errors: string[] = []
+  for (const route of routes) {
+    try {
+      await runInteraction(c, route, out)
+      const pivot = await verifyInteraction(c, out)
+      console.log(`built ${c.id} (${route})`)
+      return entry(route, 'built', pivot)
+    } catch (e) {
+      errors.push(`${route}: ${message(e)}`)
+      console.log(`${c.id}: ${route} failed: ${message(e)}`)
+      if (/is not built/.test(message(e))) break
+    }
+  }
+  rmSync(out, { force: true })
+  return entry(routes[routes.length - 1]!, 'pending', undefined, errors.join('; '))
+}
+
+function loadInteractionManifest(): InteractionManifestEntry[] {
+  return existsSync(INTERACTION_MANIFEST) ? JSON.parse(readFileSync(INTERACTION_MANIFEST, 'utf8')) as InteractionManifestEntry[] : []
+}
+function writeInteractionManifest(entries: InteractionManifestEntry[]): void {
+  const order = new Map(INTERACTION_CASES.map((c, i) => [c.id, i]))
+  entries.sort((a, b) => (order.get(a.case) ?? 1e9) - (order.get(b.case) ?? 1e9))
+  writeFileSync(INTERACTION_MANIFEST, `${JSON.stringify(entries, null, 2)}\n`)
+}
+
+/** The parts the dry run diffs a case against: its start file when built, else the nearest built ancestor (a base
+ * that is itself an interaction case falls back to its own start), else the engine seed stand-in. */
+async function startPartsForDryRun(c: InteractionCase): Promise<{ parts: PivotParts; source: string; exact: boolean }> {
+  let rel: string | undefined = startOf(c)
+  for (let guard = 0; rel && guard < 8; guard++) {
+    if (existsSync(fixturePath(rel))) return { parts: await readParts(fixturePath(rel)), source: rel, exact: rel === startOf(c) }
+    const parent: InteractionCase | undefined = rel.startsWith('interaction/') ? INTERACTION_CASES.find(x => `interaction/${x.id}` === rel) : undefined
+    rel = parent ? startOf(parent) : undefined
+  }
+  const seed = await seedPartsForDryRun()
+  return { parts: seed.parts, source: seed.source, exact: false }
+}
+
+export async function interactionDryRun(cases: readonly InteractionCase[], seeds: readonly SeedBuild[]): Promise<number> {
+  const t = target('<case>-in.xlsx')
+  let failures = 0
+  for (const s of seeds) {
+    console.log(`== seed ${s.id}  [engine-seed → ${s.file}.xlsx${s.refresh ? '' : ', saved without refresh'}${existsSync(fixturePath(s.file)) ? ', built' : ', not built'}, probe ${s.probe}]`)
+    console.log(`   measures: ${s.measures}`)
+    for (const l of s.lines(t)) console.log(`   as> ${clip(l, 220)}`)
+    if (s.fallback) console.log(`   fallback: ${s.fallback.lines(t).length} data lines, then cache ${JSON.stringify(s.fallback.cache)}${s.fallback.dropRecords ? ' and the records part dropped' : ''}`)
+    console.log(`   markers: ${[...s.markers.map(m => `pivot ${m}`), ...(s.cacheMarkers ?? []).map(m => `cache ${m}`), ...(s.recordAbsent ?? []).map(m => `records not ${m}`),
+      ...(s.noRecords ? ['no records part'] : []), ...(s.sheetMarkers ?? []).map(m => `${m.sheet} ${m.absent ? 'not ' : ''}${m.re}`)].map(x => clip(x, 120)).join(' | ')}`)
+  }
+  const routes = new Map<string, number>()
+  for (const c of cases) {
+    const tag = c.route === 'applescript' && c.fallback ? 'applescript→xml' : c.route
+    routes.set(tag, (routes.get(tag) ?? 0) + 1)
+    console.log(`== ${c.id}  [task ${c.task}, seed ${c.seed}${c.base ? `, base ${c.base}` : ''}, route ${c.route}${c.fallback ? `, fallback ${c.fallback}` : ''}${c.probe ? `, probe ${c.probe}` : ''}]`)
+    if (c.setup) console.log(`   setup: ${c.setup}`)
+    console.log(`   measures: ${c.measures}`)
+    if (c.lines) for (const l of [...c.lines(t), `refresh table ${t.p}`]) console.log(`   as> ${clip(l, 220)}`)
+    if (c.xmlPrep) for (const l of c.xmlPrep(t)) console.log(`   prep> ${clip(l, 220)}`)
+    if (c.post) for (const l of c.post(t)) console.log(`   post> ${clip(l, 220)}`)
+    const { parts, source, exact } = await startPartsForDryRun(c)
+    if (c.xmlEdit) {
+      try {
+        const next = c.xmlEdit({ ...parts })
+        console.log(`   xml diff against ${source}${exact ? '' : ' (stand-in: the start file is not built yet)'}`)
+        for (const [label, before, after] of [['pivot', parts.pivot, next.pivot], ['cache', parts.cache, next.cache]] as const) {
+          const { added, removed } = xmlDiffSummary(before, after)
+          if (!added.length && !removed.length) continue
+          console.log(`   xml ${label}: +${added.length} -${removed.length}`)
+          for (const a of added.slice(0, 6)) console.log(`     + ${clip(a)}`)
+          if (added.length > 6) console.log(`     + … ${added.length - 6} more`)
+          for (const r of removed.slice(0, 4)) console.log(`     - ${clip(r)}`)
+          if (removed.length > 4) console.log(`     - … ${removed.length - 4} more`)
+        }
+      } catch (e) {
+        if (exact) failures++
+        console.log(`   xml EDIT FAILED${exact ? '' : ' (on a stand-in)'}: ${(e as Error).message}`)
+      }
+    }
+    console.log(`   markers: ${[...c.markers.map(m => `pivot ${m}`), ...(c.cacheMarkers ?? []).map(m => `cache ${m}`), ...(c.absent ?? []).map(m => `not ${m}`),
+      ...(c.recordMarkers ?? []).map(m => `records ${m}`), ...(c.sheetMarkers ?? []).map(m => `${m.sheet} ${m.re}`), ...(c.chart ? ['pivot chart'] : [])].map(s => clip(s, 120)).join(' | ')}`)
+    if (exact) {
+      try { console.log(`   delta: ${JSON.stringify(c.delta.map(spec => resolveDelta(spec, startShapeOf(parts))).map(d => d.kind === 'filter' ? { ...d, filter: `${d.filter.type} (literal; Excel's saved filter replaces it)` } : d))}`) }
+      catch (e) { failures++; console.log(`   delta RESOLUTION FAILED: ${(e as Error).message}`) }
+    } else console.log(`   delta (by name; resolved once ${startOf(c)} is built): ${JSON.stringify(c.delta)}`)
+  }
+  console.log(`\n${seeds.length} seeds, ${cases.length} cases: ${[...routes].map(([r, n]) => `${n} ${r}`).join(', ')}; ` +
+    `${cases.filter(c => c.setup).length} with a setup, ${cases.filter(c => c.base).length} with a base`)
+  console.log('probe first:')
+  for (const p of new Set([...seeds.map(s => s.probe), ...cases.map(c => c.probe).filter((p): p is string => !!p)])) console.log(`  ${p}: ${INTERACTION_PROBES[p] ?? ''}`)
+  if (failures) console.log(`${failures} xml edits or deltas FAILED`)
+  return failures
+}
+
+/** The first AppleScript case per unconfirmed incantation whose start file exists; nothing is recorded. */
+async function interactionProbes(): Promise<void> {
+  const dir = join(INTERACTION_DIR, '.probes')
+  mkdirSync(WORK_DIR, { recursive: true }); mkdirSync(dir, { recursive: true })
+  const seen = new Set<string>()
+  for (const c of INTERACTION_CASES) {
+    if (!c.probe || seen.has(c.probe) || c.route !== 'applescript' || !existsSync(fixturePath(startOf(c)))) continue
+    seen.add(c.probe)
+    let status: string
+    try { await runInteraction(c, 'applescript', join(dir, `${c.id}.xlsx`)); await verifyInteraction(c, join(dir, `${c.id}.xlsx`)); status = 'REACHED' }
+    catch (e) { status = `FAILED ${message(e)}` }
+    console.log(`${c.probe} (${c.id}): ${status}`)
+  }
+  for (const s of SEED_BUILDS) if (!seen.has(s.probe)) console.log(`${s.probe} (${s.id}): run --interaction --seeds (the seed build is the probe)`)
+  rmSync(WORK_DIR, { recursive: true, force: true })
+}
+
+async function interactionCli(args: string[]): Promise<number> {
+  const ids = args.includes('--case') ? args[args.indexOf('--case') + 1]!.split(',') : undefined
+  const unknown = ids?.filter(id => !INTERACTION_CASES.some(c => c.id === id)) ?? []
+  if (unknown.length) { console.error(`unknown interaction case ${unknown.join(', ')}`); return 2 }
+  const cases = INTERACTION_CASES.filter(c => !ids || ids.includes(c.id))
+  const seedFiles = new Set(cases.map(startOf))
+  const needed = SEED_BUILDS.filter(s => seedFiles.has(s.file))
+  if (args.includes('--dry-run')) return await interactionDryRun(cases, ids ? needed : SEED_BUILDS) ? 1 : 0
+  if (!existsSync(ENGINE_SEED)) { console.error(`${relative(ROOT, ENGINE_SEED)} is missing: run --seed first`); return 2 }
+  if (args.includes('--probes')) { await interactionProbes(); return 0 }
+  const fallback = !args.includes('--no-fallback')
+  if (args.includes('--seeds')) {
+    for (const s of SEED_BUILDS) await buildInteractionSeed(s, fallback)
+    rmSync(WORK_DIR, { recursive: true, force: true })
+    return 0
+  }
+  mkdirSync(INTERACTION_DIR, { recursive: true }); mkdirSync(WORK_DIR, { recursive: true })
+  for (const s of needed) {
+    if (existsSync(fixturePath(s.file))) continue
+    try { await buildInteractionSeed(s, fallback) } catch (e) { console.log(`seed ${s.id} not built: ${message(e)}`) }
+  }
+  const entries = new Map(loadInteractionManifest().map(e => [e.case, e]))
+  for (const c of cases) {
+    entries.set(c.id, await buildInteractionCase(c, fallback))
+    writeInteractionManifest([...entries.values()])   // after every case, so an interrupted batch keeps what it built
+  }
+  rmSync(WORK_DIR, { recursive: true, force: true })
+  const built = cases.filter(c => entries.get(c.id)?.status === 'built')
+  console.log(`${built.length}/${cases.length} built; manifest ${relative(ROOT, INTERACTION_MANIFEST)}`)
+  for (const c of cases) { const e = entries.get(c.id); if (e?.status === 'pending') console.log(`  pending ${c.id}: ${e.error ?? ''}`) }
+  return 0
+}
+
 // ---- CLI --------------------------------------------------------------------------------------------------------
 
-if ((import.meta as { main?: boolean }).main) {
+if ((import.meta as { main?: boolean }).main && process.argv.includes('--interaction')) {
+  process.exit(await interactionCli(process.argv.slice(2)))
+} else if ((import.meta as { main?: boolean }).main) {
   const args = process.argv.slice(2)
   const ids = args.includes('--case') ? args[args.indexOf('--case') + 1]!.split(',') : undefined
   const unknown = ids?.filter(id => !ENGINE_CASES.some(c => c.id === id)) ?? []
