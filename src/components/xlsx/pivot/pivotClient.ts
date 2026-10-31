@@ -25,7 +25,9 @@
  *   opened, its saved rectangles) is occupied; a cell another pivot vacated is free; anything else is occupied when
  *   the sheet as loaded has a value there (`sheetCellReader`, as the oracle does).
  * - Linked charts: every chart on any sheet whose `c:pivotSource` names this pivot (the name after the last `!`),
- *   whatever sheet it names: over-linking only makes a pivot display-only, never stale (fail closed, §6.6).
+ *   whatever sheet it names: over-linking only makes a pivot display-only, never stale (fail closed, §6.6). They go
+ *   through Task 30's `pivotChartGate` (lazily loaded); a commit carries the refilled models, in the same order as
+ *   `installPivotCharts` walks them.
  */
 import type { XlsxCellStyle, XlsxDocument, XlsxSheet } from '../../../xlsx/types'
 import type { StyledValueOverlayCell } from '../../../xlsx/view/viewport'
@@ -77,7 +79,12 @@ export interface PivotMenuModel {
 /** What a commit installs in the viewer (spec §7.9): the live definition and, on the resident path, the sheet's
  * composite overlay (`null` once every pivot of the sheet is back to its saved view: the saved cells show again,
  * their own styles included). The paged path's overlay lives in the worker (Task 27); its commit carries none. */
-export interface PivotCommit { sheetId: number; pivot: number; revision: number; def: PivotTableDefinition; overlay?: ValueOverlay | null }
+export interface PivotCommit {
+  sheetId: number; pivot: number; revision: number; def: PivotTableDefinition; overlay?: ValueOverlay | null
+  /** The pivot's linked charts refilled for this revision (Task 30's gate), in the order the client collected them
+   * (`doc.sheets` × drawing order); the viewer installs them with `installPivotCharts`. */
+  charts?: readonly ChartModel[]
+}
 export type PivotOpenResult =
   | { ok: true; revision: number; def: PivotTableDefinition; verifiedKinds: ReadonlySet<PivotDeltaKind>; model: PivotMenuModel }
   | { ok: false; diagnostic: PivotDiagnostic }
@@ -267,10 +274,8 @@ export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay {
   // included); a vacated saved area reads blank but is still the pivot's.
   const protectedRects = owned.flatMap(part => part.rects).filter((rect, k, all) => all.findIndex(other => other.r0 === rect.r0 && other.r1 === rect.r1 && other.c0 === rect.c0 && other.c1 === rect.c1) === k)
   const merges = parts.flatMap(part => part.layout.merges.map(toSource))
-  const usedRows = rects.reduce((max, rect) => Math.max(max, rect.r1 + 1), 0)
-  const usedCols = rects.reduce((max, rect) => Math.max(max, rect.c1 + 1), 0)
   return Object.freeze({
-    rects, protectedRects, merges, usedRows, usedCols,
+    rects, protectedRects, merges,
     cell(row: number, col: number) {
       // The pivot whose current area holds the cell answers first, so a pivot growing into a cell another one vacated wins.
       for (const part of owned) if (within(part.current, row, col)) return part.cell(row, col)
@@ -371,9 +376,16 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         const leased = await runtime.lease(cache, ledger, signal, RECORD_LIMITS[options.profile ?? 'D'])
         if (!leased.ok) return { ok: false, diagnostic: leased.diagnostic }
         const date1904 = runtime.date1904
+        // Task 30's chart gate, loaded only for a pivot with linked charts (its module statically imports the charts chunk).
+        const linked = linkedCharts(def)
+        let chartGate = options.chartGate
+        if (!chartGate && linked.length) {
+          try { chartGate = (await import('../../../xlsx/pivots/session/charts')).pivotChartGate } catch { /* no gate: the session refuses pivot-chart-mapping */ }
+          if (signal.aborted) { leased.lease.release(); return refusal('pivot-session-released', `${nameOf(def)}: opening was cancelled`) }
+        }
         const session = openPivotSession({
           def, cache, store: leased.lease.store, date1904, saved: sheetCellReader(sheet), occupied: occupiedFor(sheetId, pivot),
-          linkedCharts: linkedCharts(def), lease: leased.lease, verifiedKinds: verified, ...(options.chartGate ? { chartGate: options.chartGate } : {}),
+          linkedCharts: linked, lease: leased.lease, verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
         })
         if (!session.ok) { leased.lease.release(); return session }
         const saved = savedPivotLayout(def)
@@ -401,7 +413,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       if (!session.commit(result)) return refusal('pivot-session-released', `${nameOf(entry.savedDef)}: the change is out of date`)
       entry.current = layoutArea(session.layout)
       const owned = parts(sheetId)
-      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null }
+      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null, ...(result.charts.length ? { charts: result.charts } : {}) }
       options.install(commit)
       return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit }
     },

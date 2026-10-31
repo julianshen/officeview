@@ -59,7 +59,8 @@ import { gridGeometryToViewport, gridSelectionOverlay, paintGridSelectionOverlay
 import { normalizeWatermark, type WatermarkOptions } from '../../core/watermark'
 import type { FallbackFontsOptions } from '../../core/fonts/fallback'
 import type { FontDiagnostic } from '../../core/fonts/types'
-import { SheetImageCache, imageBudgetFor, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import { SheetImageCache, imageBudgetFor, installPivotCharts, mainChartParent, preparePrintUnits, prepareSheetAssets, type PrintUnitsOptions, type SheetAssetsLease } from './sheetAssets'
+import type { ChartModel } from '../../charts/model'
 import type { Paintable, PaintableArray } from '../../render/paint'
 import { GridSemantics, STATUS_BAR_HEIGHT, type GridTransition } from './GridSemantics'
 import { GRID_HEADER_SIZE, columnHeaderHeight, rowGutterWidth } from './GridHeaders'
@@ -479,6 +480,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
+  // The saved models of pivot charts a commit replaced (Task 30), by pivot name, in installPivotCharts' order.
+  const savedPivotCharts = useRef(new Map<string, ChartModel[]>()).current
   /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
    * outlives the sessions that made it (unmount, or a new client). */
   const restorePivots = () => {
@@ -490,6 +493,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     })
     for (const sheetId of pivotOverlays.keys()) { try { source.store(sheetId).setValueOverlay?.(undefined) } catch { /* released with the viewer */ } }
     pivotOverlays.clear()
+    for (const [name, charts] of savedPivotCharts) for (const index of installPivotCharts(doc, name, charts)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+    savedPivotCharts.clear()
   }
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
@@ -1254,6 +1259,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (sheet.pivotRegions) sheet.pivotRegions = sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
     invalidateRegionStyles(sheet)
     regionStylesFor(sheet)
+    // Task 30: the refilled pivot charts replace their saved models (charts may sit on other sheets: their tiles go too).
+    if (commit.charts?.length) {
+      const name = String(commit.def.name ?? '')
+      if (!savedPivotCharts.has(name)) savedPivotCharts.set(name, linkedPivotCharts(doc, name))
+      for (const index of installPivotCharts(doc, name, commit.charts)) { const id = sheetIds[index]; if (id !== undefined && id !== sheetId) dropTiles(id, null) }
+    }
     if (!remote && commit.overlay !== undefined) {
       if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
       source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
@@ -2150,4 +2161,9 @@ function lastVisibleRowLabel(metrics: ProjectedSheetMetrics, window: ScrollWindo
 function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.PivotMenuRequest): string {
   const state = controller.state(request.sheet, request.pivot)
   return (state.status === 'open' ? state.model.fields.find(field => field.index === request.field)?.name : undefined) ?? 'Pivot table field'
+}
+
+/** A pivot's linked charts in `installPivotCharts`' order (sheets, then drawing order), by the name after the last `!`. */
+function linkedPivotCharts(doc: XlsxDocument, name: string): ChartModel[] {
+  return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => { const source = chart.pivot?.name ?? ''; return Boolean(chart.pivot) && source.slice(source.lastIndexOf('!') + 1) === name })
 }

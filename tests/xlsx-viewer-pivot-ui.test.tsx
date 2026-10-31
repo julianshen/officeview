@@ -21,6 +21,9 @@ import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
 import type { XlsxDocument } from '../src/xlsx/types'
 import type { PivotDeltaKind } from '../src/xlsx/pivots/session/delta'
+import { sheetCharts } from '../src/components/xlsx/sheetCharts'
+import { chartDescription } from '../src/charts/describe'
+import type { ChartModel, ChartPoints, ChartSeries } from '../src/charts/model'
 import { StructuralIndex, fromStoreScan } from '../src/xlsx/view/structure'
 import { guardFilter, guardSort } from '../src/xlsx/view/operationGuard'
 import { createAxisMetrics } from '../src/xlsx/view/axes'
@@ -33,6 +36,22 @@ const FIXTURES = `${__dirname}/fixtures/xlsx-pivots/`
 const BASELINE = `${FIXTURES}engine/baseline.xlsx`
 const PAGE_SINGLE = `${FIXTURES}engine/quirk-page-single.xlsx`
 const CHART_LINKED = `${FIXTURES}interaction/chart-baseline.xlsx`
+const chartCase = (name: string) => `${FIXTURES}interaction/${name}.xlsx`
+const linkedCharts = (doc: XlsxDocument) => doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => chart.pivot)
+/** A chart line Task 30's gate does not cover: the pivot is display-only, refused `pivot-chart-mapping`. */
+async function lineChartDoc(): Promise<XlsxDocument> {
+  const doc = await load(CHART_LINKED)
+  for (const chart of linkedCharts(doc)) for (const group of chart.groups) (group as { family: string }).family = 'line'
+  return doc
+}
+const n15 = (v: number) => Number(v.toPrecision(15))
+const points = (p: ChartPoints) => Array.from({ length: p.length }, (_, i) => p.states[i] === 1 ? n15(p.values[i]!) : p.states[i])
+/** What a pivot chart shows (Task 30's comparison): categories, levels, references, each series' name, colour and points. */
+const chartData = (chart: ChartModel) => ({
+  categories: chart.categories, categoryRef: chart.categoryRef,
+  levels: (chart.categoryLevels ?? []).map(level => ({ starts: [...level.starts], labels: level.labels })),
+  series: chart.groups.flatMap(group => group.series.map((s: ChartSeries) => ({ index: s.index, name: s.name, color: s.color, ref: s.refs?.values, values: points(s.values) }))),
+})
 const signal = () => new AbortController().signal
 
 async function load(file: string): Promise<XlsxDocument> {
@@ -146,9 +165,25 @@ describe('resident pivot client (headless)', () => {
     expect(overlay.protectedRects).toEqual([{ r0: 0, r1: 5, c0: 0, c1: 1 }, { r0: 0, r1: 2, c0: 0, c1: 1 }, { r0: 6, r1: 8, c0: 0, c1: 1 }, { r0: 5, r1: 8, c0: 0, c1: 1 }])
   })
 
-  it('a pivot whose records cannot be leased, or with a linked chart, refuses at open with its feature', async () => {
+  it('a chart-linked pivot follows Excel: an apply refills its chart as Excel saved it, reset gives the saved chart back', async () => {
     const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
     const doc = await load(CHART_LINKED), sheet = pivotSheet(doc)
+    const saved = linkedCharts(doc)
+    expect(saved).toHaveLength(1)
+    const commits: any[] = []
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: commit => commits.push(commit) })
+    const opened = await client.open(sheet, 0, signal())
+    expect(opened.ok, JSON.stringify(opened)).toBe(true)
+    expect((await client.apply(sheet, 0, { kind: 'items', field: 0, hidden: [3] })).ok).toBe(true)
+    expect(commits[0].charts).toHaveLength(1)
+    expect(chartData(commits[0].charts[0])).toEqual(chartData(linkedCharts(await load(chartCase('chart-hide-item')))[0]!))
+    expect((await client.apply(sheet, 0, 'reset')).ok).toBe(true)
+    expect(chartData(commits[1].charts[0])).toEqual(chartData(saved[0]!))
+  })
+
+  it('a pivot whose records cannot be leased, or whose linked chart is not covered, refuses at open with its feature', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const doc = await lineChartDoc(), sheet = pivotSheet(doc)
     const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: () => {} })
     const opened = await client.open(sheet, 0, signal())
     expect(opened.ok).toBe(false)
@@ -220,7 +255,7 @@ describe('the interactive viewer', () => {
   })
 
   it('a refused pivot names its reason on every button and shows one notice', async () => {
-    const doc = await load(CHART_LINKED)
+    const doc = await lineChartDoc()
     const sheet = doc.sheets[pivotSheet(doc)]!
     ;(sheet.diagnostics ??= []).push({ kind: 'unsupported', feature: 'pivot-definition-unsupported', message: 'Load-time pivot notice: an unknown construct.' })
     const ui = render(<InteractiveSheetDoc doc={doc} />)
@@ -231,15 +266,39 @@ describe('the interactive viewer', () => {
       return found
     }, { timeout: 10_000 })
     fireEvent.click(buttons[0]!)
-    await waitFor(() => expect(buttons[0]!.getAttribute('aria-label')).toMatch(/linked chart/))
+    await waitFor(() => expect(buttons[0]!.getAttribute('aria-label')).toMatch(/pivot chart .* cannot follow its changes/))
     for (const button of ui.container.querySelectorAll<HTMLButtonElement>('button[data-officeview-ui="pivot-button"]')) {
-      expect(button.getAttribute('aria-label')).toMatch(/linked chart/)
+      expect(button.getAttribute('aria-label')).toMatch(/pivot chart .* cannot follow its changes/)
       expect(button.getAttribute('title')).toBe(button.getAttribute('aria-label'))
       expect(button.getAttribute('aria-disabled')).toBe('true')
     }
     const text = status(ui.container)
-    expect(text.split('linked chart').length - 1).toBe(1)
+    expect(text.split('cannot follow its changes').length - 1).toBe(1)
     expect(ui.queryByRole('dialog')).toBeNull()
+  })
+
+  it('in the viewer a pivot chart repaints with its pivot: the committed chart is installed, reset and unmount restore the saved one', async () => {
+    const doc = await load(CHART_LINKED)
+    const saved = linkedCharts(doc)[0]!
+    const expected = linkedCharts(await load(chartCase('chart-collapse-item')))[0]!
+    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const described = () => ui.container.querySelector('[data-testid="officeview-sheet-charts"] li')?.getAttribute('aria-label')
+    await waitFor(() => expect(described()).toBe(chartDescription(saved)), { timeout: 10_000 })
+    fireEvent.click(await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 }))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+    const live = linkedCharts(doc)[0]!
+    expect(live).not.toBe(saved)
+    expect(chartData(live)).toEqual(chartData(expected))
+    await waitFor(() => expect(described()).toBe(chartDescription(live)))
+    expect(described()).not.toBe(chartDescription(saved))
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Reset to saved view' }))
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+    expect(chartData(linkedCharts(doc)[0]!)).toEqual(chartData(saved))
+    fireEvent.click(ui.getByRole('button', { name: 'Collapse East (Region)' }))
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, { timeout: 10_000 })
+    ui.unmount()
+    expect(linkedCharts(doc)[0]).toBe(saved)
   })
 
   it('a workbook loaded without its pivot runtime (parsed elsewhere) is honest before any click', async () => {

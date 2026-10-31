@@ -319,6 +319,34 @@ test('click collapse → repaint equals the oracle case on resident, worker and 
   }
 })
 
+/** Task 30 wired (Task 28 follow-up): a chart-linked pivot's chart repaints with its pivot. The whole captured grid (the
+ * pivot and its chart) after clicking East's collapse on chart-baseline equals Excel's chart-collapse-item save. */
+test('click collapse on a chart-linked pivot → pivot and chart repaint as the oracle case', async ({ context }) => {
+  for (const leg of LEGS.filter(entry => !entry.paged)) {
+    await test.step(leg.name, async () => {
+      // The oracle first: the change then settles when it reaches it (the chart repaints after the pivot, once the
+      // lazy chart gate and painter are in), or at the deadline.
+      const oracle = await open(context, 'interaction/chart-collapse-item', leg)
+      let saved: Img
+      try { saved = await settledGrid(oracle, () => true) } finally { await oracle.close() }
+      const changed = await open(context, 'interaction/chart-baseline', leg)
+      let before: Img, after: Img
+      try {
+        const button = changed.getByRole('button', { name: COLLAPSE_EAST })
+        await expect(button).toBeAttached({ timeout: 30_000 })
+        before = await settledGrid(changed, () => true)
+        await button.click()
+        await expect(changed.getByRole('button', { name: 'Expand East (Region)' })).toBeAttached({ timeout: 30_000 })
+        after = await settledGrid(changed, img => diff(img, saved).share <= PARITY_MAX_SHARE)
+      } finally { await changed.close() }
+      const result = diff(after, saved)
+      console.log(`[chart collapse] ${leg.name}: max channel diff ${result.max}, ${result.differing} px differ (${(result.share * 100).toFixed(4)}%)`)
+      expect(diff(before, saved).share, 'the change is visible').toBeGreaterThan(PARITY_MAX_SHARE)
+      expect(result.share, `${leg.name}: pivot and chart repaint vs Excel's saved collapse`).toBeLessThanOrEqual(PARITY_MAX_SHARE)
+    })
+  }
+})
+
 /** Where a field-dropdown button sits: the right edge of the cell (docs/validation/xlsx-pivots.md, "Compact indent and buttons"). */
 function boxAtRightEdge(cell: Rect): Rect {
   return { x: cell.x + cell.width - BUTTON_ZONE_WIDTH, y: cell.y, width: BUTTON_ZONE_WIDTH, height: cell.height }

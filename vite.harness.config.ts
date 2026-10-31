@@ -58,6 +58,8 @@ function lazyPagedChunks(): Plugin {
         '/src/xlsx/pivots/index.ts',
         // The pivot controls (client, button layer, menus), InteractiveSheetDoc's dynamic import on a sheet with pivots.
         '/src/components/xlsx/pivot/PivotButtonLayer.tsx',
+        // Task 30's pivot chart gate, which the pivot client imports for a pivot with linked charts.
+        '/src/xlsx/pivots/session/charts.ts',
         '/src/xlsx/pivots/load.ts',
         '/src/xlsx/storage/pagedDrawings.ts',
         '/src/xlsx/tableStyles/regionLayer.ts',
