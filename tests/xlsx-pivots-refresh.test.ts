@@ -153,6 +153,9 @@ describe('session refresh route (§7.7)', () => {
     const cell = (b: Book, row: number, col: number) => sheetCellReader(b.sheet)(row, col)
     expect(cell(seed, 5, 1)).not.toEqual(cell(target, 5, 1))
     expect(seed.sheet.pivotTables![0]!.rowItems).toEqual(seed.def.rowItems)
+    // One load diagnostic says Excel would refresh it on open (§7.7); a pivot without refreshOnLoad has none.
+    expect(seed.sheet.diagnostics?.filter(d => d.feature === 'pivot-refresh-on-load')).toHaveLength(1)
+    expect((await book('engine/baseline')).sheet.diagnostics?.some(d => d.feature === 'pivot-refresh-on-load') ?? false).toBe(false)
     // Opening a session changes nothing shown: the first change is measured from the saved area, and the saved
     // definition and cells are untouched.
     const before = JSON.stringify(seed.sheet.rows)

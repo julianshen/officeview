@@ -134,6 +134,8 @@ export async function loadPivotWorkbook(pkg: PackageReader, regions: ReadonlyMap
       } else {
         pushDiagnostic(diagnostics, { kind: 'parse', feature: 'pivot-cache-unreadable', message: `Pivot cache ${table.cacheId} has no definition part (${partPath})`, partPath })
       }
+      // §7.7: display always shows the saved cells; this notes that Excel would refresh the pivot on open (Task 32).
+      if (cache?.refreshOnLoad) pushDiagnostic(diagnostics, { kind: 'unsupported', feature: 'pivot-refresh-on-load', message: `Pivot table ${table.name} is refreshed when Excel opens this file; it shows its saved cells here until it is changed`, partPath })
       const invalid = validateIndices(table, cache)
       if (invalid.length) {
         table.unsupported = [...new Set([...table.unsupported, ...invalid])]
