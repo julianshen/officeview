@@ -25,7 +25,9 @@
  *   axis carrying the Values field (pivot-layout-compact);
  * - page fields sit above the location, one blank row between (savedPivotLayout's placement).
  * Captions follow the Stage 2 caption ruling: an explicit name in the definition, else the saved text for the slot
- * (`savedCaption`), else Excel's English default marked `caption: 'implicit'` with `captionsUnverified` set.
+ * (`savedCaption`), else Excel's English default marked `caption: 'implicit'` with `captionsUnverified` set; each such
+ * cell is listed in `captionSlots` with its kind and arguments, which the Stage 3 captions rule (session/captions.ts)
+ * localises from the pivot's own file.
  * - merged labels (`mergeItem`, Task 15 layout-merge-labels, tabular fields): an outer row label is merged down over
  *   its item's lines (A6:A8), a row subtotal or grand caption across the label columns from its own (A9:B9, A24:B24);
  *   an outer column label across its item's columns (C4:D4), a column grand caption down to the last header row
@@ -46,7 +48,20 @@ import type { PivotViewState } from './view'
 export type PivotCellValue = { kind: 'empty' } | { kind: 'number'; value: number } | { kind: 'text'; value: string } | { kind: 'error'; value: string }
 export interface PivotValueGrid { get(rowLine: number, colLine: number, data: number): PivotCellValue }
 export interface PivotLayoutCell { row: number; col: number; value: PivotCellValue; numFmtId?: number; caption?: 'implicit' }
-export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean }
+/**
+ * What an implicit caption says, independent of its language (Task 25 captions rule): its kind, the function variant
+ * (`fn`: a data field's or a named subtotal's function, part of the pattern's identity) and its arguments, each a text
+ * or a nested implicit caption ("Total <data>" over a default-named data field).
+ */
+export type CaptionKind = 'rowLabels' | 'columnLabels' | 'grandTotal' | 'valuesTotal' | 'subtotal' | 'subtotalData' | 'subtotalFunction'
+  | 'subtotalFunctionData' | 'dataField' | 'blank' | 'classicTotal' | 'all' | 'multipleItems'
+export type CaptionArg = string | CaptionRef
+export interface CaptionArgs { item?: CaptionArg; data?: CaptionArg; field?: CaptionArg; fn?: string }
+export interface CaptionRef { kind: CaptionKind; args: CaptionArgs }
+/** An implicit caption cell of a layout: where it is and what it says. */
+export interface CaptionSlot extends CaptionRef { row: number; col: number }
+/** `captionSlots` lists every `caption: 'implicit'` cell, in cell order (absent on layouts built elsewhere). */
+export interface PivotLayout { rect: SheetRect; axes: PivotAxes; cells: PivotLayoutCell[]; merges: SheetRect[]; captionsUnverified: boolean; captionSlots?: CaptionSlot[] }
 /** Ruling S2-J: the workbook's date system is explicit (the cache does not know it). `savedCaption` is the saved text
  * of a caption slot, for the saved state only (Stage 2 caption ruling). */
 export interface PlaceOptions { date1904: boolean; savedCaption?: (row: number, col: number) => string | undefined }
@@ -127,11 +142,13 @@ export function pageFieldsFit(def: PivotTableDefinition, view: PivotViewState): 
 /** Classic layout (`gridDropZones`) with no column field: two header rows (see the header). */
 const classicNoColumns = (def: PivotTableDefinition, view: PivotViewState) => def.gridDropZones && view.cols.length === 0
 
-interface Label { value: PivotCellValue; numFmtId?: number; implicit?: string }
+interface Label { value: PivotCellValue; numFmtId?: number; implicit?: CaptionRef }
 const text = (value: string): Label => ({ value: { kind: 'text', value } })
-const implicit = (english: string): Label => ({ value: { kind: 'text', value: english }, implicit: english })
+const implicit = (english: string, kind: CaptionKind, args: CaptionArgs = {}): Label => ({ value: { kind: 'text', value: english }, implicit: { kind, args } })
 /** A label's text for composing a caption ("<item> Total"). */
 const labelText = (label: Label) => label.value.kind === 'empty' ? '' : String(label.value.value)
+/** A label as a caption argument: its nested implicit caption, else its text. */
+const argOf = (label: Label): CaptionArg => label.implicit ?? labelText(label)
 
 export function placeCells(def: PivotTableDefinition, view: PivotViewState, cache: PivotCacheDefinition, axes: PivotAxes, values: PivotValueGrid,
   options: PlaceOptions): PivotLayout {
@@ -139,11 +156,13 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   const geo = geometry(def, view, axes)
   const { rect, dataRow0, dataCol0, itemRow0, labelCol } = geo
   const cells = new Map<string, PivotLayoutCell>()
+  const refs = new Map<string, CaptionRef>()
   const put = (row: number, col: number, label: Label) => {
     let cell: PivotLayoutCell = { row, col, value: label.value, ...(label.numFmtId !== undefined ? { numFmtId: label.numFmtId } : {}) }
     if (label.implicit !== undefined) {
       const saved = savedCaption?.(row, col)
       cell = saved !== undefined ? { row, col, value: { kind: 'text', value: saved } } : { ...cell, caption: 'implicit' }
+      if (saved === undefined) refs.set(`${row},${col}`, label.implicit)
     }
     cells.set(`${row},${col}`, cell)
   }
@@ -152,7 +171,8 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   const dataName = (d: number): Label => {
     const data = view.data[d]
     if (!data) return text('')
-    return data.name ? text(data.name) : implicit(`${FUNCTION_NAMES[data.fn] ?? data.fn} of ${fieldName(data.field)}`)
+    const field = fieldName(data.field)
+    return data.name ? text(data.name) : implicit(`${FUNCTION_NAMES[data.fn] ?? data.fn} of ${field}`, 'dataField', { fn: data.fn, field })
   }
   const itemLabel = (field: number, item: number): Label => {
     if (field === PIVOT_VALUES_FIELD) return dataName(item)
@@ -165,7 +185,7 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
     if (value.caption !== undefined) return text(value.caption)
     const numFmtId = def.fields[field]?.numFmtId ?? cacheField?.numFmtId
     switch (value.type) {
-      case 'missing': return implicit('(blank)')
+      case 'missing': return implicit('(blank)', 'blank')
       case 'number': return { value: { kind: 'number', value: value.value }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
       // Date items show as serials in the field's number format (lo-calc-pivot_dark1), in the workbook's date system.
       case 'date': return { value: { kind: 'number', value: isoToSerial(value.value, date1904) }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
@@ -175,27 +195,33 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
       case 'string': return text(value.value)
     }
   }
-  const explicitOr = (explicit: string | undefined, english: string): Label => explicit !== undefined ? text(explicit) : implicit(english)
+  const explicitOr = (explicit: string | undefined, english: string, kind: CaptionKind): Label => explicit !== undefined ? text(explicit) : implicit(english, kind)
   /** A subtotal or grand line's caption. */
   const totalCaption = (fields: readonly number[], line: PivotLine): Label => {
     const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
     if (line.type === 'grand') {
-      if (valuesLevel < 0) return explicitOr(def.grandTotalCaption, 'Grand Total')
+      if (valuesLevel < 0) return explicitOr(def.grandTotalCaption, 'Grand Total', 'grandTotal')
       const name = dataName(line.data)
-      return implicit(`Total ${labelText(name)}`)
+      return implicit(`Total ${labelText(name)}`, 'valuesTotal', { data: argOf(name) })
     }
     const level = line.items.length - 1, field = fields[level]!
     const item = itemLabel(field, line.items[level]!)
     const custom = def.fields[field]?.subtotalCaption
     if (custom !== undefined) return text(custom)
     if (line.type === 'default') {
-      if (valuesLevel <= level) return implicit(`${labelText(item)} Total`)
+      if (valuesLevel <= level) return implicit(`${labelText(item)} Total`, 'subtotal', { item: argOf(item) })
       // With the Values field deeper, the caption names the data field (pivot-values-on-rows: "East Sum of Sales").
       const name = dataName(line.data)
       const caption = `${labelText(item)} ${labelText(name)}`
-      return item.implicit === undefined && name.implicit === undefined && item.value.kind === 'text' ? text(caption) : implicit(caption)
+      return item.implicit === undefined && name.implicit === undefined && item.value.kind === 'text' ? text(caption)
+        : implicit(caption, 'subtotalData', { item: argOf(item), data: argOf(name) })
     }
-    return implicit(`${labelText(item)} ${FUNCTION_NAMES[line.type] ?? line.type}`)
+    const english = `${labelText(item)} ${FUNCTION_NAMES[line.type] ?? line.type}`
+    // With the Values field deeper, Excel's caption names the data field's source field too
+    // (values-named-subtotals-intersecting: "2022 平均值 - Sales"); the English text is Stage 2's, compared for presence only.
+    const source = view.data[line.data]
+    if (valuesLevel > level && source) return implicit(english, 'subtotalFunctionData', { item: argOf(item), fn: line.type, field: fieldName(source.field) })
+    return implicit(english, 'subtotalFunction', { item: argOf(item), fn: line.type })
   }
 
   const valuesOnRows = view.rows.includes(PIVOT_VALUES_FIELD), valuesOnCols = view.cols.includes(PIVOT_VALUES_FIELD)
@@ -210,18 +236,18 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   if (def.showHeaders) {
     // The column header row: "Column Labels" in compact form, else each column field's name.
     if (view.cols.length && geo.firstHeaderRow > 0) {
-      if (shares(def, view, view.cols[0]!)) put(rect.minRow, dataCol0, explicitOr(def.colHeaderCaption, 'Column Labels'))
+      if (shares(def, view, view.cols[0]!)) put(rect.minRow, dataCol0, explicitOr(def.colHeaderCaption, 'Column Labels', 'columnLabels'))
       else view.cols.forEach((field, k) => { if (dataCol0 + k <= rect.maxCol) put(rect.minRow, dataCol0 + k, text(fieldName(field))) })
     }
     // The row header over each label column.
     labelCol.forEach((col, level) => {
       if (labelCol.indexOf(col) !== level) return
       const field = view.rows[level]!
-      put(dataRow0 - 1, col, shares(def, view, field) ? explicitOr(def.rowHeaderCaption, 'Row Labels') : text(fieldName(field)))
+      put(dataRow0 - 1, col, shares(def, view, field) ? explicitOr(def.rowHeaderCaption, 'Row Labels', 'rowLabels') : text(fieldName(field)))
     })
   }
   // Classic layout with no column field: Excel's "Total" over the value column (layout-classic-single-data B4).
-  if (classicNoColumns(def, view) && view.data.length) put(dataRow0 - 1, dataCol0, implicit('Total'))
+  if (classicNoColumns(def, view) && view.data.length) put(dataRow0 - 1, dataCol0, implicit('Total', 'classicTotal'))
   // Column item labels.
   axes.cols.forEach((line, m) => {
     const col = dataCol0 + m
@@ -255,7 +281,7 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
       ? def.fields[page.field]!.items!.flatMap((item, k) => item.type === 'data' ? [k] : [])
       : (cache.fields[page.field]?.sharedItems?.items ?? []).map((_, k) => k)
     const shown = page.selected === 'all' ? order.filter(k => !state?.hidden[k]) : page.selected
-    put(row, col + 1, shown.length === 1 ? itemLabel(page.field, shown[0]!) : page.selected === 'all' && shown.length === order.length ? implicit('(All)') : implicit('(Multiple Items)'))
+    put(row, col + 1, shown.length === 1 ? itemLabel(page.field, shown[0]!) : page.selected === 'all' && shown.length === order.length ? implicit('(All)', 'all') : implicit('(Multiple Items)', 'multipleItems'))
   }
   // Value cells.
   if (view.data.length) {
@@ -275,7 +301,11 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
   }
 
   const list = [...cells.values()].sort((a, b) => a.row - b.row || a.col - b.col)
-  return { rect, axes, cells: list, merges: def.mergeItem ? mergedLabels(axes, geo) : [], captionsUnverified: list.some(cell => cell.caption === 'implicit') }
+  const captionSlots = list.flatMap((cell): CaptionSlot[] => {
+    const ref = cell.caption === 'implicit' ? refs.get(`${cell.row},${cell.col}`) : undefined
+    return ref ? [{ row: cell.row, col: cell.col, ...ref }] : []
+  })
+  return { rect, axes, cells: list, merges: def.mergeItem ? mergedLabels(axes, geo) : [], captionsUnverified: list.some(cell => cell.caption === 'implicit'), captionSlots }
 }
 
 /** The merged label ranges of a `mergeItem` pivot (see the header; layout-merge-labels). Only the shapes computeAxes

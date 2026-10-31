@@ -6,7 +6,11 @@
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readdirSync } from 'node:fs'
 import { applyDelta, type PivotDelta } from '../src/xlsx/pivots/session/delta'
+import { captionRule, resolveCaptions, savedCaptions } from '../src/xlsx/pivots/session/captions'
+import { sheetCellReader, type CellReader } from '../src/xlsx/pivots/engine/faithful'
+import type { PivotLayout } from '../src/xlsx/pivots/engine/place'
 import { computePivot } from '../src/xlsx/pivots/engine/compute'
 import { initialViewState, type PivotViewState } from '../src/xlsx/pivots/engine/view'
 import type { PivotFilter } from '../src/xlsx/pivots/model'
@@ -137,5 +141,86 @@ describe('applyDelta maps each kind onto the view', () => {
     expect(ok(apply(p, byValue, { kind: 'sort', field: REGION, order: 'ascending' })).fields[REGION]!.autoSortScope).toBeUndefined()
     expect(refusal(apply(p, view, { kind: 'sort', field: REGION, order: 'descending', byData: 2 }))).toBe('pivot-delta-invalid')
     expect(refusal(apply(p, view, { kind: 'sort', field: 3, order: 'descending' }))).toBe('pivot-delta-invalid')
+  })
+})
+
+/** The saved state laid out without saved captions: its implicit captions keep their slots. */
+const savedLayout = (p: Loaded, view: PivotViewState = initialViewState(p.def, p.cache)) => ok(computePivot(p.store, p.cache, p.def, view, { date1904: p.date1904 }))
+const textAt = (layout: PivotLayout, row: number, col: number) => { const cell = layout.cells.find(c => c.row === row && c.col === col); return cell?.value.kind === 'text' ? cell.value.value : undefined }
+/** Region with its subtotals at the bottom: a view the seed does not save, needing the "<item> Total" kind. */
+const bottomSubtotals = (view: PivotViewState): PivotViewState => ({ ...view, fields: view.fields.map((f, k) => k === REGION ? { ...f, subtotalTop: false } : f) })
+
+describe('captions', () => {
+  it('captions: zh-TW table from the file', async () => {
+    const p = await baseline()
+    const layout = savedLayout(p), saved = sheetCellReader(p.sheet)
+    // The saved implicit captions ("Sum of Sales 的加總", "Sum of Units 的加總") all render through the table.
+    const table = { 'zh-TW': { valuesTotal: '{data} 的加總', subtotal: '{item} 合計' } }
+    const rule = captionRule(p.def, saved, layout, table)
+    expect(rule.locale).toBe('zh-TW')
+    // A kind the file never shows comes from the measured table.
+    expect(rule.caption('subtotal', { item: 'East' })).toBe('East 合計')
+    expect(ok(resolveCaptions(savedLayout(p, bottomSubtotals(initialViewState(p.def, p.cache))), rule)).captionsUnverified).toBe(false)
+    // A table the saved captions contradict is not this pivot's locale.
+    expect(captionRule(p.def, saved, layout, { 'zh-TW': { valuesTotal: 'Total {data}' } }).locale).toBe('file')
+    // Until Task 24 measures it the shipped table is empty: no pivot matches it.
+    expect(captionRule(p.def, saved, layout).locale).toBe('file')
+  })
+
+  it('a pivot with no matching table uses its own patterns', async () => {
+    const p = await baseline()
+    const rule = captionRule(p.def, sheetCellReader(p.sheet), savedLayout(p))
+    expect(rule.locale).toBe('file')
+    expect(rule.caption('valuesTotal', { data: 'Sum of Units' })).toBe('Sum of Units 的加總')
+    expect(rule.caption('subtotal', { item: 'East' })).toBeUndefined()
+    // Another Excel save of the same cache shows the bottom subtotal: its own pattern reproduces its saved cells.
+    const bottom = (await load('layout-subtotals-bottom-compact'))[0]!
+    const own = captionRule(bottom.def, sheetCellReader(bottom.sheet), savedLayout(bottom))
+    expect(own.caption('subtotal', { item: 'East' })).toBe('East 合計')
+  })
+
+  it('nested implicit arguments render through the same rule', () => {
+    const slot = (row: number, kind: 'dataField' | 'valuesTotal', args: object) => ({ row, col: 0, kind, args } as never)
+    const layout = {
+      rect: { minRow: 0, minCol: 0, maxRow: 1, maxCol: 0 }, cells: [], merges: [], captionsUnverified: true,
+      captionSlots: [slot(0, 'dataField', { fn: 'sum', field: 'Sales' }), slot(1, 'valuesTotal', { data: { kind: 'dataField', args: { fn: 'sum', field: 'Sales' } } })],
+    } as unknown as PivotLayout
+    const texts = ['加總 - Sales', '加總 - Sales 的加總']
+    const reader: CellReader = (row, col) => col === 0 && texts[row] ? { kind: 'text', value: texts[row]! } : undefined
+    const rule = captionRule({} as never, reader, layout)
+    expect(rule.caption('valuesTotal', { data: { kind: 'dataField', args: { fn: 'sum', field: 'Units' } } })).toBe('加總 - Units 的加總')
+    // The function is part of the pattern: Count has no sample.
+    expect(rule.caption('dataField', { fn: 'count', field: 'Units' })).toBeUndefined()
+  })
+
+  it('a needed kind with no pattern refuses pivot-caption-locale', async () => {
+    const p = await baseline()
+    const rule = captionRule(p.def, sheetCellReader(p.sheet), savedLayout(p))
+    const layout = savedLayout(p, bottomSubtotals(initialViewState(p.def, p.cache)))
+    expect(layout.captionSlots!.some(slot => slot.kind === 'subtotal')).toBe(true)
+    const refused = resolveCaptions(layout, rule)
+    expect(refused.ok ? 'ok' : refused.diagnostic.feature).toBe('pivot-caption-locale')
+    // The case that saved that layout knows the pattern: the same layout then shows exactly its saved captions.
+    const bottom = (await load('layout-subtotals-bottom-compact'))[0]!
+    const filled = ok(resolveCaptions(layout, captionRule(bottom.def, sheetCellReader(bottom.sheet), savedLayout(bottom))))
+    const saved = sheetCellReader(bottom.sheet)
+    for (const slot of layout.captionSlots!) expect(textAt(filled, slot.row, slot.col)).toBe((saved(slot.row, slot.col) as { value: string }).value)
+  })
+
+  it('every engine oracle case\'s own patterns reproduce its saved captions', async () => {
+    let slots = 0
+    for (const name of readdirSync(ENGINE).filter(file => file.endsWith('.xlsx')).sort()) {
+      for (const p of await loadAll(resolve(ENGINE, name), 'skip')) {
+        const computed = computePivot(p.store, p.cache, p.def, initialViewState(p.def, p.cache), { date1904: p.date1904 })
+        if (!computed.ok) continue
+        const layout = computed.value, saved = sheetCellReader(p.sheet)
+        // Every implicit cell carries its slot.
+        expect(layout.captionSlots!.length, name).toBe(layout.cells.filter(cell => cell.caption === 'implicit').length)
+        const filled = ok(resolveCaptions(layout, captionRule(p.def, saved, layout)))
+        expect(filled, name).toEqual(savedCaptions(layout, saved))
+        for (const slot of layout.captionSlots!) { slots++; expect(textAt(filled, slot.row, slot.col), `${name} R${slot.row + 1}C${slot.col + 1}`).toBe((saved(slot.row, slot.col) as { value: string }).value) }
+      }
+    }
+    expect(slots).toBeGreaterThan(100)
   })
 })
