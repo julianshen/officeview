@@ -1,6 +1,7 @@
 /** Pure filter predicates shared by computeAxes. */
 import type { PivotFilter, PivotFilterColumn, PivotFilterType, PivotValue } from '../model'
 import { compareEnglishLabels, hasMeasuredEnglishOrder } from './sort'
+import { matchWildcard, tokenizeWildcardPattern } from '../../formula/functions/wildcard'
 
 const CAPTION_TYPES = new Set<PivotFilterType>([
   'captionEqual', 'captionNotEqual', 'captionBeginsWith', 'captionNotBeginsWith', 'captionEndsWith', 'captionNotEndsWith',
@@ -29,25 +30,18 @@ function criterion(filter: PivotFilter, column: PivotFilterColumn | undefined, w
   const values = column?.customFilters?.filters ?? []
   return values[which - 1]?.val
 }
-function wildcardRegex(pattern: string, mode: 'exact' | 'prefix' | 'contains' | 'suffix'): RegExp {
-  const key = `${mode}\u0000${pattern}`
-  const cached = WILDCARD_CACHE.get(key)
-  if (cached) return cached
-  let source = mode === 'contains' || mode === 'suffix' ? '.*' : ''
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i]!
-    if (ch === '~' && i + 1 < pattern.length) source += pattern[++i]!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    else if (ch === '*') source += '.*'
-    else if (ch === '?') source += '.'
-    else source += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  }
-  if (mode === 'contains' || mode === 'prefix') source += '.*'
-  const regex = new RegExp(`^${source}$`, 'isu')
-  if (WILDCARD_CACHE.size >= 128) WILDCARD_CACHE.clear()
-  WILDCARD_CACHE.set(key, regex)
-  return regex
+/**
+ * Excel wildcard match (`?`, `*`, `~` escapes) through the bounded matcher shared with the formula engine: no RegExp
+ * is built from workbook text (a saved pattern like `*a*a…b` would backtrack exponentially), and work is capped.
+ * The pattern is validated alone first, so a dangling `~` refuses instead of escaping the star a mode appends.
+ * `undefined` = not decided (undocumented tilde form, non-ASCII, or the matcher's work budget).
+ */
+function wildcardMatch(pattern: string, label: string, mode: 'exact' | 'prefix' | 'contains' | 'suffix'): boolean | undefined {
+  if (!Array.isArray(tokenizeWildcardPattern(pattern))) return undefined
+  const full = mode === 'prefix' ? `${pattern}*` : mode === 'suffix' ? `*${pattern}` : mode === 'contains' ? `*${pattern}*` : pattern
+  const result = matchWildcard(full, label)
+  return result.status === 'matched' ? true : result.status === 'not-matched' ? false : undefined
 }
-const WILDCARD_CACHE = new Map<string, RegExp>()
 const printableAscii = (text: string) => /^[\x20-\x7e]*$/u.test(text)
 function captionCompare(label: string, op: PivotFilterType, a: string, b?: string): boolean | undefined {
   const usesOrder = op === 'captionGreaterThan' || op === 'captionGreaterThanOrEqual' || op === 'captionLessThan' ||
@@ -55,18 +49,19 @@ function captionCompare(label: string, op: PivotFilterType, a: string, b?: strin
   if (usesOrder && (!hasMeasuredEnglishOrder(label) || !hasMeasuredEnglishOrder(a) || (b !== undefined && !hasMeasuredEnglishOrder(b)))) return undefined
   const firstVsLabel = compareEnglishLabels(label, a), secondVsLabel = b === undefined ? undefined : compareEnglishLabels(label, b)
   if (usesOrder && (firstVsLabel === undefined || (b !== undefined && secondVsLabel === undefined))) return undefined
-  const glob = wildcardRegex(a, op === 'captionBeginsWith' || op === 'captionNotBeginsWith' ? 'prefix'
-    : op === 'captionEndsWith' || op === 'captionNotEndsWith' ? 'suffix'
-      : op === 'captionContains' || op === 'captionNotContains' ? 'contains' : 'exact')
+  const glob = (mode: 'exact' | 'prefix' | 'contains' | 'suffix', negate: boolean) => {
+    const matched = wildcardMatch(a, label, mode)
+    return matched === undefined ? undefined : matched !== negate
+  }
   switch (op) {
-    case 'captionEqual': return glob.test(label)
-    case 'captionNotEqual': return !glob.test(label)
-    case 'captionBeginsWith': return glob.test(label)
-    case 'captionNotBeginsWith': return !glob.test(label)
-    case 'captionEndsWith': return glob.test(label)
-    case 'captionNotEndsWith': return !glob.test(label)
-    case 'captionContains': return glob.test(label)
-    case 'captionNotContains': return !glob.test(label)
+    case 'captionEqual': return glob('exact', false)
+    case 'captionNotEqual': return glob('exact', true)
+    case 'captionBeginsWith': return glob('prefix', false)
+    case 'captionNotBeginsWith': return glob('prefix', true)
+    case 'captionEndsWith': return glob('suffix', false)
+    case 'captionNotEndsWith': return glob('suffix', true)
+    case 'captionContains': return glob('contains', false)
+    case 'captionNotContains': return glob('contains', true)
     case 'captionGreaterThan': return firstVsLabel > 0
     case 'captionGreaterThanOrEqual': return firstVsLabel >= 0
     case 'captionLessThan': return firstVsLabel < 0

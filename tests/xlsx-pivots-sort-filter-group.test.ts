@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { computeAxes, NO_LINE } from '../src/xlsx/pivots/engine/axes'
 import { groupColumn } from '../src/xlsx/pivots/engine/groups'
+import { matchesLabelFilter } from '../src/xlsx/pivots/engine/filters'
 import { initialViewState } from '../src/xlsx/pivots/engine/view'
 import type { FieldState } from '../src/xlsx/pivots/engine/view'
 import type { PivotCacheDefinition, PivotFilter, PivotTableDefinition, PivotValue } from '../src/xlsx/pivots/model'
@@ -163,6 +164,19 @@ describe('Task 21 sort, filters and group mapping', () => {
     const escapedAxes = result(escaped)
     expect(escapedAxes.ok).toBe(true)
     if (escapedAxes.ok) expect([...escapedAxes.value.rowKey]).toEqual([0, NO_LINE])
+  })
+
+  it('wildcard label filters are bounded: repeated stars on a non-matching label finish fast (PR #56 review)', () => {
+    const pattern = '*a'.repeat(20) + 'b'
+    const started = performance.now()
+    const equal = matchesLabelFilter(filter({ type: 'captionEqual', stringValue1: pattern }), { type: 'string', value: 'a'.repeat(40) })
+    const contains = matchesLabelFilter(filter({ type: 'captionContains', stringValue1: pattern }), { type: 'string', value: 'a'.repeat(40) })
+    expect(performance.now() - started).toBeLessThan(250)
+    expect([equal, contains]).toEqual([false, false])
+    expect(matchesLabelFilter(filter({ type: 'captionContains', stringValue1: 'p*e' }), { type: 'string', value: 'Apple' })).toBe(true)
+    expect(matchesLabelFilter(filter({ type: 'captionEndsWith', stringValue1: 'L?' }), { type: 'string', value: 'Apple' })).toBe(true)
+    // A dangling tilde has no documented meaning (and would escape the appended star): refused, not guessed.
+    expect(matchesLabelFilter(filter({ type: 'captionBeginsWith', stringValue1: 'A~' }), { type: 'string', value: 'A~pple' })).toBeUndefined()
   })
 
   it('compares caption spaces using measured Excel ordering', () => {
