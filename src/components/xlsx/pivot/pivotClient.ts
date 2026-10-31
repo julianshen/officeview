@@ -304,7 +304,8 @@ function savedStyles(doc: XlsxDocument, sheet: XlsxSheet, savedDef: PivotTableDe
   }
 }
 /** The sheet's composite overlay over every committed pivot part (see the header's ruling). */
-export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay {
+/** `indexBytes`: the retained bytes of its two cell indexes (the caller charges them while it keeps the overlay). */
+export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay & { readonly indexBytes: number } {
   const owned = parts.map(part => ({ rects: [...part.saved, ...part.current], cell: overlayCell(part), current: part.current }))
   const rects = owned.flatMap(part => part.rects)
   // Ruling S3-G: sheet sort and filter stay refused over every saved pivot area and every current one (page cells
@@ -315,7 +316,7 @@ export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay {
   const currents = new OwnedRects(owned.flatMap((part, k) => part.current.map(rect => ({ rect, owner: k }))))
   const areas = new OwnedRects(owned.flatMap((part, k) => part.rects.map(rect => ({ rect, owner: k }))))
   return Object.freeze({
-    rects, protectedRects, merges,
+    rects, protectedRects, merges, indexBytes: currents.estimatedBytes + areas.estimatedBytes,
     cell(row: number, col: number) {
       // The pivot whose current area holds the cell answers first, so a pivot growing into a cell another one vacated
       // wins; among several, the first part (as the parts are listed).
@@ -385,6 +386,8 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       if (sheet === sheetId && shows(entry)) for (const rect of entry.current) entries.push({ rect, owner: pivot })
     }
     blockers.set(sheetId, index = new OwnedRects(entries))
+    // Charged while the client keeps it (perf round 2); replaced after a commit or release, it is collected.
+    ledger.chargeWhileReachable('structure', [index], index.estimatedBytes)
     return index
   }
   const occupiedFor = (sheetId: number, pivot: number) => {
@@ -490,7 +493,10 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       entry.current = layoutArea(session.layout)
       blockers.delete(sheetId)
       const owned = parts(sheetId)
-      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null, ...(delta === 'reset' ? { reset: true } : {}),
+      const overlay = owned.length ? compositeOverlay(owned) : null
+      // Its cell indexes are charged while the viewer keeps the overlay (perf round 2).
+      if (overlay) ledger.chargeWhileReachable('structure', [overlay], overlay.indexBytes)
+      const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay, ...(delta === 'reset' ? { reset: true } : {}),
         layout: result.layout, cache: entry.cache, date1904: entry.date1904,
         changedRects: [...entry.saved, ...before, ...entry.current], allSaved: ![...open.values()].some(shows),
         ...(result.charts.length ? { charts: result.charts } : {}) }

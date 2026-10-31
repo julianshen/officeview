@@ -803,6 +803,10 @@ function pivotOutputRects(layout: import('../xlsx/pivots/engine/place').PivotLay
   }
   return rects
 }
+/** The sheet's pivot blocker index could not be admitted to the worker pool (the apply is refused for memory). */
+class PivotIndexQuota extends Error {
+  constructor(readonly requiredBytes: number, readonly limitBytes: number) { super('The pivot overlap index exceeds the worker memory budget.') }
+}
 /** A sheet's committed pivot overlays as one: a cell is answered by the last overlay whose rectangles hold it,
  * found with one point query over all of them (Task 33 perf: not a walk over every overlay). */
 export function combinePivotOverlays(overlays: readonly import('../xlsx/view/contracts').ValueOverlay[]): import('../xlsx/view/contracts').ValueOverlay | undefined {
@@ -1495,11 +1499,17 @@ export class DocumentSession {
     handle.requestRevision = requestRevision
     handle.staged?.entry.release()
     handle.staged = undefined
-    const applied = delta === 'reset' ? { ok: true as const, value: handle.session.reset() } : handle.session.apply(delta)
+    let applied: ReturnType<typeof handle.session.apply>
+    try { applied = delta === 'reset' ? { ok: true as const, value: handle.session.reset() } : handle.session.apply(delta) }
+    catch (error) {
+      if (error instanceof PivotIndexQuota) return { kind: 'quota', requiredBytes: error.requiredBytes, limitBytes: error.limitBytes }
+      throw error
+    }
     if (!applied.ok) return { kind: 'refused', feature: applied.diagnostic.feature, message: applied.diagnostic.message }
     const previous = handle.committed?.overlay
     const overlay = pivotOverlay(applied.value, handle.savedRects, previous)
-    const bytes = pivotOverlayBytes(overlay, applied.value.layout)
+    // Plus its share of the sheet's composite overlay index, built when it commits (perf round 2).
+    const bytes = pivotOverlayBytes(overlay, applied.value.layout) + OwnedRects.upperBytesFor(overlay.rects.length)
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes) return { kind: 'quota', requiredBytes: bytes, limitBytes: grantBytes }
     const revision = Math.max(handle.highestWireRevision, handle.committedWireRevision, handle.session.revision) + 1
     const entry = this.memory.retain(`pivot-overlay:${this.docId}:${sheetId}:${pivot}:${revision}:${handle.serial++}`, {
@@ -1577,6 +1587,7 @@ export class DocumentSession {
     const key = pivotHandleKey(sheetId, pivot), handle = this.pivotHandles.get(key)
     if (!handle) return { kind: 'release', released: false }
     this.pivotHandles.delete(key)
+    this.dropPivotBlockers(sheetId)
     handle.staged?.entry.release()
     let valueGen: number | undefined
     if (handle.committed) {
@@ -1608,21 +1619,43 @@ export class DocumentSession {
   /** The sheet's committed overlays combined (called on every commit and release, so the sheet's blocker index, which
    * reads the commits, is rebuilt with it). */
   private combinedPivotOverlay(sheetId: string): import('../xlsx/view/contracts').ValueOverlay | undefined {
-    this.pivotBlockerIndexes.delete(sheetId)
+    this.dropPivotBlockers(sheetId)
     return combinePivotOverlays([...this.pivotHandles.values()].filter(handle => handle.sheetId === sheetId && handle.committed).map(handle => handle.committed!.overlay))
   }
-  private readonly pivotBlockerIndexes = new Map<string, OwnedRects<number>>()
-  /** Per sheet: every pivot's saved area and each committed pivot's protected rectangles, by pivot (Task 33 perf). */
+  private readonly pivotBlockerIndexes = new Map<string, { index: OwnedRects<number>; entry: PoolEntry }>()
+  private pivotBlockerSerial = 0
+  /** Per sheet: every pivot's saved area and each committed pivot's protected rectangles, by pivot (Task 33 perf).
+   * Retained in the pool as rebuildable (perf round 2): evicted, it is rebuilt by the next check; refused, the apply
+   * that asked is refused for memory. */
   private pivotBlockers(sheetId: string, tables: readonly PivotTableDefinition[], savedRects: (table: PivotTableDefinition) => SourceRect[]): OwnedRects<number> {
-    let index = this.pivotBlockerIndexes.get(sheetId)
-    if (index) return index
+    const cached = this.pivotBlockerIndexes.get(sheetId)
+    if (cached?.entry.live) return cached.index
     const entries: { rect: SourceRect; owner: number }[] = []
     tables.forEach((table, pivot) => { for (const rect of savedRects(table)) entries.push({ rect, owner: pivot }) })
     for (const handle of this.pivotHandles.values()) {
       if (handle.sheetId === sheetId && handle.committed) for (const rect of handle.committed.overlay.protectedRects) entries.push({ rect, owner: handle.pivot })
     }
-    this.pivotBlockerIndexes.set(sheetId, index = new OwnedRects(entries))
+    // Admitted before it is built (its upper bound, transiently), then kept at its measured size.
+    this.dropPivotBlockers(sheetId)
+    const upper = OwnedRects.upperBytesFor(entries.length)
+    const charge = this.memory.charge()
+    let index: OwnedRects<number>
+    try {
+      if (!charge.set(upper)) throw new PivotIndexQuota(upper, this.memory.limitBytes)
+      index = new OwnedRects(entries)
+    } finally { charge.release() }
+    const key = `pivot-blockers:${this.docId}:${sheetId}:${++this.pivotBlockerSerial}`
+    const entry = this.memory.retain(key, { tier: 'rebuildable', owner: sheetId, bytes: index.estimatedBytes, evictable: true,
+      onRelease: () => { if (this.pivotBlockerIndexes.get(sheetId)?.entry.key === key) this.pivotBlockerIndexes.delete(sheetId) } })
+    if (!entry) throw new PivotIndexQuota(index.estimatedBytes, this.memory.limitBytes)
+    this.pivotBlockerIndexes.set(sheetId, { index, entry })
     return index
+  }
+  private dropPivotBlockers(sheetId: string): void {
+    const cached = this.pivotBlockerIndexes.get(sheetId)
+    if (!cached) return
+    this.pivotBlockerIndexes.delete(sheetId)
+    cached.entry.release()
   }
   /** Font readiness (§10.1): advances fontGen only; no view revision, order or
    * mask changes, but every owner captured before it is superseded. */

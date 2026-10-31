@@ -12,7 +12,7 @@ import { parseXlsx } from '../src/xlsx/parse'
 import type { XlsxDocument } from '../src/xlsx/types'
 import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
 import { compositeOverlay, createResidentPivotClient } from '../src/components/xlsx/pivot/pivotClient'
-import { ownedRectsWork } from '../src/xlsx/view/rectIndex'
+import { OwnedRects, ownedRectsWork } from '../src/xlsx/view/rectIndex'
 import { assertOverlayCellsProtected, createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { combinePivotOverlays } from '../src/worker/viewerSession'
 import { ViewerKernel } from '../src/worker/viewerKernel'
@@ -173,5 +173,104 @@ describe('finding 6: a resident sheet\'s saved pivot bounds are the file\'s, not
     const after = await query()
     expect(after).toContainEqual({ r0: 2, r1: 20, c0: 0, c1: 8 })
     expect(after).not.toContainEqual({ r0: 39, r1: 40, c0: 10, c1: 11 })
+  })
+})
+
+describe('perf round 2: pivots side by side in one row band do not defeat the index', () => {
+  it('OwnedRects: 1,000 rectangles over rows 0–100 with distinct columns, bounded work per query; edges inclusive, duplicates kept', () => {
+    const owned = new OwnedRects(Array.from({ length: 1_000 }, (_, k) => ({ rect: { r0: 0, r1: 100, c0: 4 * k, c1: 4 * k + 2 }, owner: k })))
+    const { queries, perQuery } = work(() => {
+      for (let n = 0; n < 10_000; n++) {
+        const k = n % 1_000
+        expect(owned.at(n % 101, 4 * k + (n % 3))).toEqual([k])
+        expect(owned.has(n % 101, 4 * k + 3)).toBe(false)
+      }
+      expect(owned.at(101, 0)).toEqual([])
+    })
+    expect(queries).toBeGreaterThanOrEqual(20_000)
+    expect(perQuery).toBeLessThanOrEqual(PER_QUERY)
+    const twice = new OwnedRects([{ rect: { r0: 1, r1: 2, c0: 1, c1: 2 }, owner: 'a' }, { rect: { r0: 1, r1: 2, c0: 1, c1: 2 }, owner: 'a' }, { rect: { r0: 2, r1: 9, c0: 2, c1: 9 }, owner: 'b' }])
+    expect([...twice.at(2, 2)].sort()).toEqual(['a', 'a', 'b'])
+    expect(twice.at(1, 1)).toEqual(['a', 'a'])
+    expect(twice.at(9, 9)).toEqual(['b'])
+    expect(twice.at(0, 1)).toEqual([])
+    expect(twice.find(2, 2, owner => owner === 'b')).toBe('b')
+  })
+
+  it('RectCover: 5,000 same-row rectangles against 5,000 reverse-ordered same-row bounds', () => {
+    const rects: SourceRect[] = Array.from({ length: 5_000 }, (_, k) => ({ r0: 0, r1: 3, c0: 3 * k, c1: 3 * k + 1 }))
+    const overlay: ValueOverlay = { rects, protectedRects: [...rects].reverse().map(rect => ({ ...rect, c1: rect.c1 + 1 })), merges: [], cell: () => ({ value: 1 }) }
+    const { queries, perQuery } = work(() => assertOverlayCellsProtected(overlay))
+    expect(queries).toBe(5_000)
+    expect(perQuery).toBeLessThanOrEqual(PER_QUERY)
+  })
+
+  it('100 pivot parts side by side in one row band: composite reads and the worker composite stay bounded', () => {
+    const side = Array.from({ length: PIVOTS }, (_, k) => {
+      const rect = { minRow: 0, maxRow: 99, minCol: 5 * k, maxCol: 5 * k + 3 }
+      const area = [{ r0: 0, r1: 99, c0: 5 * k, c1: 5 * k + 3 }]
+      return { saved: area, current: area, layout: { rect, cells: [{ row: 7, col: 5 * k, value: { kind: 'text' as const, value: `p${k}` } }], merges: [] } as never }
+    })
+    const overlay = compositeOverlay(side)
+    const combined = combinePivotOverlays(side.map((part, k) => ({ rects: part.saved, protectedRects: part.saved, merges: [], cell: () => ({ value: `w${k}` }) })))!
+    const { queries, perQuery } = work(() => {
+      for (let n = 0; n < 10_000; n++) {
+        const k = n % PIVOTS
+        expect(overlay.cell(7, 5 * k)).toEqual({ value: `p${k}` })
+        expect(combined.cell(n % 100, 5 * k + 1)).toEqual({ value: `w${k}` })
+      }
+      expect(overlay.cell(7, 5 * 3 + 4)).toBeUndefined()
+    })
+    expect(queries).toBeGreaterThanOrEqual(20_000)
+    expect(perQuery).toBeLessThanOrEqual(PER_QUERY)
+  })
+
+  it('resident overlap check: 100 pivots side by side to the right of the growing one', async () => {
+    const parsed = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
+    const sheet = parsed.sheets.findIndex(candidate => candidate.pivotTables?.length), s = parsed.sheets[sheet]!
+    const def = s.pivotTables![0]!
+    const col = (n: number) => { let name = '', c = n + 1; while (c > 0) { name = String.fromCharCode(65 + (c - 1) % 26) + name; c = Math.floor((c - 1) / 26) } return name }
+    // Columns K onward, rows 3–40, 10 columns apart: every candidate row of pivot 0 crosses all 100 of them.
+    s.pivotTables = [def, ...Array.from({ length: PIVOTS }, (_, k) => ({ ...def, name: `Side ${k}`, location: { ...def.location, ref: `${col(10 + 10 * k)}3:${col(18 + 10 * k)}40` } }))]
+    const client = createResidentPivotClient({ doc: parsed, ledger: new MainMemoryLedger(), install: () => {} })
+    expect((await client.open(sheet, 0, new AbortController().signal)).ok).toBe(true)
+    const { result, queries, perQuery } = await workAsync(() => client.apply(sheet, 0, EXPAND))
+    expect(result).toMatchObject({ ok: true })
+    expect(queries).toBeGreaterThanOrEqual(27)
+    expect(perQuery).toBeLessThanOrEqual(PER_QUERY)
+  })
+})
+
+describe('perf round 2: the indexes are charged', () => {
+  it('resident: the overlap index and the composite overlay\'s indexes are charged to the main ledger', async () => {
+    const { doc, sheet } = await manyPivots()
+    const ledger = new MainMemoryLedger(), installs: any[] = []
+    const client = createResidentPivotClient({ doc, ledger, install: commit => installs.push(commit) })
+    expect((await client.open(sheet, 0, new AbortController().signal)).ok).toBe(true)
+    const before = ledger.snapshot().byPool.structure
+    expect((await client.apply(sheet, 0, EXPAND)).ok).toBe(true)
+    const overlay = installs[0].overlay as { indexBytes: number }
+    expect(overlay.indexBytes).toBeGreaterThan(0)
+    // The blocker index holds 101 saved rectangles; the composite's two indexes hold pivot 0's.
+    expect(ledger.snapshot().byPool.structure - before).toBeGreaterThanOrEqual(overlay.indexBytes + new OwnedRects(Array.from({ length: PIVOTS + 1 }, (_, k) => ({ rect: { r0: k, r1: k, c0: 0, c1: 0 }, owner: k }))).estimatedBytes / 2)
+  })
+
+  it('worker: the overlap index is a rebuildable pool entry, released with the pivot', async () => {
+    const { doc, sheet } = await manyPivots()
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)) }, { yield: async () => {} })
+    let serial = 0
+    const id = () => `perf-charge-${++serial}`
+    const run = async (command: WorkerCommand) => { const replies: WorkerReply[] = []; await kernel.handle(command, reply => replies.push(reply)); return replies[0]! }
+    const docId = id(), sheetId = doc.sheets[sheet]!.sheetId ?? String(sheet + 1)
+    await run({ kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const slots = () => [...((kernel.session(docId) as unknown as { memory: { slots: Map<string, { init: { bytes: number; tier: string } }> } }).memory.slots)].filter(([key]) => key.startsWith('pivot-blockers:'))
+    expect(await run({ kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 })).toMatchObject({ kind: 'complete' })
+    expect(await run({ kind: 'pivotApply', requestId: id(), docId, sheetId, pivot: 0, baseRevision: 0, revision: 1, delta: EXPAND, grantBytes: 16 * 1024 * 1024 })).toMatchObject({ kind: 'complete' })
+    expect(slots()).toHaveLength(1)
+    expect(slots()[0]![1].init).toMatchObject({ tier: 'rebuildable', evictable: true })
+    expect(slots()[0]![1].init.bytes).toBeGreaterThan(0)
+    await run({ kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    expect(slots()).toHaveLength(0)
+    await run({ kind: 'close', requestId: id(), docId })
   })
 })
