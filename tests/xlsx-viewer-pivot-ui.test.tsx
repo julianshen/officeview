@@ -537,6 +537,31 @@ describe('the paged path (worker sessions through RemotePivotSessions)', () => {
     await waitFor(() => expect(h.posted.some(command => command.kind === 'pivotRelease')).toBe(true))
   }, 60_000)
 
+  it('a chart sheet whose drawings changed while inactive drops its cached tiles when shown again', async () => {
+    const { TileCache } = await import('../src/xlsx/view/tileCache')
+    const h = workerHarness()
+    const doc = await openPagedWorkbook(pagedFile(`${FIXTURES}interaction/chart-hide-item.xlsx`), { port: h.port as never, profile: 'D', signal: new AbortController().signal })
+    const handle = doc && pagedWorkbookOf(doc)
+    if (!doc || !handle) throw new Error('the workbook did not open paged')
+    const frames: string[] = []
+    const ui = render(<InteractiveSheetDoc doc={doc} source={handle.source} onFrame={stats => frames.push(stats.activeSheetId)} />)
+    const remote = handle.source as unknown as { drawings(sheetId: string): { state: string; gen: number } }
+    const chartSheet = doc.sheets[0]!.sheetId ?? '1', otherSheet = doc.sheets[1]!.sheetId ?? '2'
+    await waitFor(() => expect(remote.drawings(chartSheet).state).toBe('ready'), FIRST_PAINT_WAIT)
+    await waitFor(() => expect(frames.includes(chartSheet)).toBe(true), FIRST_PAINT_WAIT)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: otherSheet } })
+    await waitFor(() => expect(frames.at(-1)).toBe(otherSheet), FIRST_PAINT_WAIT)
+    // Only the chart sheet's drawing generation moves (a chart swapped while it is not shown; no other generation).
+    ;(remote.drawings(chartSheet) as { gen: number }).gen++
+    const invalidate = vi.spyOn(TileCache.prototype, 'invalidate')
+    fireEvent.change(ui.getByRole('combobox', { name: 'Worksheet' }), { target: { value: chartSheet } })
+    await waitFor(() => expect(frames.at(-1)).toBe(chartSheet), FIRST_PAINT_WAIT)
+    const key = (sheetId: string) => ({ identity: { docId: '', sheetId, valueGen: 0, fontGen: 0, viewGen: 0 }, col: 0, row: 0, zoom: 1, dpr: 1 }) as never
+    expect(invalidate.mock.calls.some(([predicate]) => predicate(key(chartSheet)) && !predicate(key(otherSheet)))).toBe(true)
+    invalidate.mockRestore()
+  }, 60_000)
+
   it('a pivot the worker refuses names its reason on every button, with one notice', async () => {
     const file = `${FIXTURES}interaction/chart-hide-item.xlsx`
     const h = workerHarness({

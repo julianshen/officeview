@@ -423,6 +423,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // Tiles painted under an older worker layout/merge generation are stale (§10.1).
   const structureGens = useRef(new Map<string, number>()).current
   const presentedLease = useRef<{ sheetId: string; lease: SheetAssetsLease } | null>(null)
+  // The drawing generation each sheet's cached tiles were painted under: a worker sheet's drawings can change while
+  // it is not shown (its pivot chart replaced by a commit on another sheet), and its tiles are then stale.
+  const paintedDrawingGens = useRef(new Map<string, number>()).current
   // View-only session sizes per sheet (spec §5.6): they outlive scroll, zoom,
   // sort/filter commits and sheet switches, and end with the viewer.
   const sheetSizes = useRef(new Map<string, SheetSizes>()).current
@@ -935,6 +938,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (seenGen !== undefined && seenGen !== frame.structureGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     // A new asset lease for the same sheet (a worker sheet's drawings arrived, a pivot's charts were replaced) may paint
     // what an older one could not (the lazy chart painter, pictures): tiles painted under the older lease are stale.
+    const drawingGen = entry?.drawingGen ?? 0, paintedGen = paintedDrawingGens.get(activeSheetId)
+    if (paintedGen !== undefined && paintedGen !== drawingGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    paintedDrawingGens.set(activeSheetId, drawingGen)
     const leased = presentedLease.current
     if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
     presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
