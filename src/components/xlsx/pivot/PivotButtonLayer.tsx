@@ -111,7 +111,9 @@ export class PivotController {
       if (!outcome.ok) { this.host.announce(outcome.diagnostic.message); return false }
       const state = this.state(sheet, pivot)
       if (state.status === 'open') this.set(sheet, pivot, { ...state, revision: outcome.revision, model: outcome.model })
-      this.host.announce(delta === 'reset' ? PIVOT_RESET : PIVOT_APPLIED)
+      const done = delta === 'reset' ? PIVOT_RESET : PIVOT_APPLIED
+      // A refreshOnLoad pivot's first change says it was refreshed from the workbook's data (§7.7), once.
+      this.host.announce(outcome.notice ? `${outcome.notice} ${done}` : done)
       return true
     }).catch(error => { this.host.announce(error instanceof Error ? error.message.slice(0, 256) : 'Pivot change failed.'); return false })
     this.queue = run

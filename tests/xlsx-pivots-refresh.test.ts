@@ -198,3 +198,58 @@ describe('session refresh route (§7.7)', () => {
     expect(featureOf(openPivotSession(await refreshInput(seed, { admitStore: () => undefined })))).toBe('pivot-records-limit')
   })
 })
+
+// ---- the resident viewer's client -------------------------------------------------------------------------------
+import { createResidentPivotClient, type PivotCommit } from '../src/components/xlsx/pivot/pivotClient'
+import { MainMemoryLedger } from '../src/xlsx/view/mainLedger'
+import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
+
+describe('resident client refresh route', () => {
+  it.each([['recipes/refresh-seed'], ['recipes/refresh-seed-nodata']])('%s: refreshed on the first change from the Data sheet, with one notice', async seedName => {
+    const pkg = await OfficePackage.load(new Uint8Array(readFileSync(file(seedName))))
+    const doc = await parseXlsx(pkg)
+    const sheet = doc.sheets.findIndex(s => s.pivotTables?.length)
+    const installs: PivotCommit[] = []
+    const ledger = new MainMemoryLedger()
+    const client = createResidentPivotClient({ doc, ledger, install: commit => { installs.push(commit) } })
+    const opened = await client.open(sheet, 0, new AbortController().signal)
+    if (!opened.ok) throw new Error(`${opened.diagnostic.feature}: ${opened.diagnostic.message}`)
+    // Opening shows nothing new: no install until the first change.
+    expect(installs).toHaveLength(0)
+    // The rebuilt store is charged to the document pool (with the runtime's retained copy).
+    expect(ledger.snapshot().byPool.document).toBeGreaterThan(pivotRuntimeFor(doc)!.retainedBytes)
+    const applied = await client.apply(sheet, 0, { kind: 'collapse', field: REGION, item: EAST, collapsed: true })
+    if (!applied.ok) throw new Error(applied.diagnostic.message)
+    expect(applied.notice).toMatch(/refreshed from the workbook's data/)
+    // The overlay holds Excel's refreshed-and-collapsed cells.
+    const target = await book('interaction/refresh-on-load-collapse')
+    const saved = sheetCellReader(target.sheet)
+    for (const [row, col] of [[5, 1], [6, 0], [20, 8]] as const) expect(installs[0]!.overlay!.cell(row, col)?.value, `R${row + 1}C${col + 1}`).toEqual((saved(row, col) as { value: unknown }).value)
+    const second = await client.apply(sheet, 0, { kind: 'collapse', field: REGION, item: EAST, collapsed: false })
+    expect(second.ok && second.notice).toBeUndefined()
+    client.dispose?.()
+    expect(ledger.snapshot().byPool.document).toBe(pivotRuntimeFor(doc)!.retainedBytes)
+  })
+})
+
+describe('the refresh notice in the viewer', () => {
+  it('the controller announces the notice with the first change only', async () => {
+    const { PivotController, PIVOT_APPLIED } = await import('../src/components/xlsx/pivot/PivotButtonLayer')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file('recipes/refresh-seed')))))
+    const sheet = doc.sheets.findIndex(s => s.pivotTables?.length)
+    const announced: string[] = []
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: () => {} })
+    const controller = new PivotController({ client, announce: message => { announced.push(message) }, openMenu: () => {}, closeMenu: () => {} })
+    expect(await controller.apply(sheet, 0, { kind: 'collapse', field: REGION, item: EAST, collapsed: true })).toBe(false)
+    // The controller opens first (as the buttons do).
+    expect((await client.open(sheet, 0, new AbortController().signal)).ok).toBe(true)
+    expect(await controller.apply(sheet, 0, { kind: 'collapse', field: REGION, item: EAST, collapsed: true })).toBe(true)
+    expect(await controller.apply(sheet, 0, { kind: 'collapse', field: REGION, item: EAST, collapsed: false })).toBe(true)
+    const changes = announced.filter(message => message.endsWith(PIVOT_APPLIED))
+    expect(changes).toHaveLength(2)
+    expect(changes[0]).toMatch(/^Pivot table .* was refreshed from the workbook's data/)
+    expect(changes[1]).toBe(PIVOT_APPLIED)
+    controller.dispose()
+    client.dispose?.()
+  })
+})

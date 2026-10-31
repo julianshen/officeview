@@ -40,7 +40,7 @@ import type { RuntimeLedger } from '../../../xlsx/pivots/session/runtime'
 import type { PivotCacheDefinition, PivotDiagnostic, PivotFilter, PivotTableDefinition } from '../../../xlsx/pivots/model'
 import type { SavedPivotLayout } from '../../../xlsx/pivots/savedLayout'
 import {
-  openPivotSession, ORACLE_VERIFIED_KINDS, RECORD_LIMITS, savedPivotLayout, sheetCellReader,
+  openPivotSession, ORACLE_VERIFIED_KINDS, RECORD_LIMITS, savedPivotLayout, sheetCellReader, worksheetSourceRange,
   type ChartGate, type PivotDelta, type PivotDeltaKind, type PivotLayout, type PivotSession, type PivotViewState,
 } from '../../../xlsx/pivots/index'
 import { sheetCharts } from '../sheetCharts'
@@ -62,8 +62,9 @@ export interface PivotCommit {
 export type PivotOpenResult =
   | { ok: true; revision: number; def: PivotTableDefinition; verifiedKinds: ReadonlySet<PivotDeltaKind>; model: PivotMenuModel }
   | { ok: false; diagnostic: PivotDiagnostic }
+/** `notice`: a refreshOnLoad pivot's one-line notice, on its first committed change (§7.7, Task 32). */
 export type PivotApplyOutcome =
-  | { ok: true; revision: number; def: PivotTableDefinition; model: PivotMenuModel; commit: PivotCommit }
+  | { ok: true; revision: number; def: PivotTableDefinition; model: PivotMenuModel; commit: PivotCommit; notice?: string }
   | { ok: false; diagnostic: PivotDiagnostic }
 /** Field and item names for button labels before any session opens (no records are read). */
 export interface PivotLabels { field(field: number): string; item(field: number, item: number): string | undefined }
@@ -100,7 +101,7 @@ export interface RemotePivotPort {
 /** Task 27's `RemotePivotSessions` as this module reads it (its `sheetId` is the worker's sheet id as a number). */
 export interface RemotePivotSessionsLike {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<{ kind: 'open'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel } | { kind: 'refused'; message: string }>
-  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<{ kind: 'committed'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
+  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<{ kind: 'committed'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel; notice?: string } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
   release(sheetId: number, pivot: number): void
 }
 const OPEN_FIRST = 'Open the pivot before changing it.'
@@ -137,7 +138,7 @@ export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(
       if (result.kind !== 'committed') return refusedAs('pivot-session-released', 'The pivot table changed meanwhile; try again.')
       const model = formatMenu(result.menu, sheets.sheet(sheetId))
       models.set(key(sheetId, pivot), model)
-      return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def } }
+      return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def }, ...(result.notice ? { notice: result.notice } : {}) }
     },
     release(sheetId, pivot) {
       const k = key(sheetId, pivot), id = sheets.id(sheetId)
@@ -321,10 +322,13 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     if (!runtime.cache(def)) return { kind: 'unsupported', feature: 'pivot-cache-absent', message: `${nameOf(def)} is shown as saved: its pivot cache is not in the file.` }
     return undefined
   }
+  /** Whether a pivot shows its live layout: it committed a change, and is not back at its saved view (a refreshed
+   * pivot's reset shows the refreshed view; an uncommitted refreshed session still shows the saved cells). */
+  const shows = (entry: OpenPivot) => entry.session.revision > 0 && entry.session.def !== entry.savedDef
   const parts = (sheetId: number): PivotPart[] => {
     const out: PivotPart[] = []
     // A pivot back at its saved view (reset carries the saved definition) owns no overlay: the saved cells show.
-    for (const [id, entry] of open) if (id.startsWith(`${sheetId}:`) && entry.session.def !== entry.savedDef) out.push({ saved: entry.saved, current: entry.current, layout: entry.session.layout, style: entry.style(savedPivotLayout(entry.session.def)) })
+    for (const [id, entry] of open) if (id.startsWith(`${sheetId}:`) && shows(entry)) out.push({ saved: entry.saved, current: entry.current, layout: entry.session.layout, style: entry.style(savedPivotLayout(entry.session.def)) })
     return out
   }
   const occupiedFor = (sheetId: number, pivot: number) => {
@@ -335,7 +339,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     return (row: number, col: number): boolean => {
       for (const { index } of others) {
         const live = open.get(key(sheetId, index))
-        if (live && live.session.def !== live.savedDef) {
+        if (live && shows(live)) {
           if (within(live.current, row, col)) return true
           if (within(live.saved, row, col)) return false
         } else if (within(savedRects.get(index)!, row, col)) return true
@@ -371,27 +375,42 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
         if (refused) return { ok: false, diagnostic: refused }
         const runtime = pivotRuntimeFor(doc)!
         const sheet = sheetOf(sheetId)!, def = savedDefs[sheetId]![pivot]!, cache = runtime.cache(def)!
-        const leased = await runtime.lease(cache, ledger, signal, RECORD_LIMITS[options.profile ?? 'D'])
-        if (!leased.ok) return { ok: false, diagnostic: leased.diagnostic }
+        const limits = RECORD_LIMITS[options.profile ?? 'D']
+        // §7.7 (Task 32): a refreshOnLoad pivot whose source range is a sheet of this workbook is rebuilt from that
+        // sheet's cells by the session; its saved records (stale, or absent with saveData="0") are not read.
+        const range = cache.refreshOnLoad ? worksheetSourceRange(cache) : undefined
+        const sourceSheet = range ? doc.sheets.find(candidate => candidate.name === range.sheet) : undefined
+        let leased: { release(): void; store?: import('../../../xlsx/pivots/engine/records').RecordStore } | undefined
+        if (!sourceSheet) {
+          const result = await runtime.lease(cache, ledger, signal, limits)
+          if (!result.ok) return { ok: false, diagnostic: result.diagnostic }
+          leased = result.lease
+        } else runtime.chargeRetained(ledger)
         const date1904 = runtime.date1904
         // Task 30's chart gate, loaded only for a pivot with linked charts (its module statically imports the charts chunk).
         const links = linkedCharts(def)
-        if (links.ambiguous) { leased.lease.release(); return refusal('pivot-chart-mapping', `${nameOf(def)} cannot follow its charts: a chart names "${String(def.name ?? '')}" without its sheet, and more than one sheet has a pivot table of that name.`) }
+        if (links.ambiguous) { leased?.release(); return refusal('pivot-chart-mapping', `${nameOf(def)} cannot follow its charts: a chart names "${String(def.name ?? '')}" without its sheet, and more than one sheet has a pivot table of that name.`) }
         const linked = links.charts
         let chartGate = options.chartGate
         if (!chartGate && linked.length) {
           try { chartGate = (await import('../../../xlsx/pivots/session/charts')).pivotChartGate } catch { /* no gate: the session refuses pivot-chart-mapping */ }
-          if (signal.aborted) { leased.lease.release(); return refusal('pivot-session-released', `${nameOf(def)}: opening was cancelled`) }
+          if (signal.aborted) { leased?.release(); return refusal('pivot-session-released', `${nameOf(def)}: opening was cancelled`) }
         }
         const session = openPivotSession({
-          def, cache, store: leased.lease.store, date1904, saved: sheetCellReader(sheet), occupied: occupiedFor(sheetId, pivot),
-          linkedCharts: linked, lease: leased.lease, verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
+          def, cache, ...(leased?.store ? { store: leased.store } : {}), date1904, saved: sheetCellReader(sheet), occupied: occupiedFor(sheetId, pivot),
+          linkedCharts: linked, ...(leased ? { lease: leased } : {}), verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
+          ...(sourceSheet ? {
+            source: sheetCellReader(sourceSheet), limits,
+            // The rebuilt store is charged to the document pool while the session holds it.
+            admitStore: store => { ledger.chargeWhileHeld('document', [store], store.bytes); return ledger.hold(store) ?? undefined },
+          } : {}),
         })
-        if (!session.ok) { leased.lease.release(); return session }
+        if (!session.ok) { leased?.release(); return session }
         const saved = savedPivotLayout(def)
-        const current = layoutArea(session.value.layout)
-        const savedArea = saved ? saved.rects.map(toSource) : current
-        const opened: OpenPivot = { session: session.value, savedDef: def, cache, saved: savedArea, current, date1904, style: savedStyles(doc, sheet, def, savedArea) }
+        const savedArea = saved ? saved.rects.map(toSource) : layoutArea(session.value.layout)
+        // Until its first commit the sheet shows the saved cells (a refreshed pivot's revision 0 is not shown yet).
+        const current = savedArea
+        const opened: OpenPivot = { session: session.value, savedDef: def, cache: session.value.cache, saved: savedArea, current, date1904, style: savedStyles(doc, sheet, def, savedArea) }
         if (signal.aborted) { session.value.release(); return refusal('pivot-session-released', `${nameOf(def)}: opening was cancelled`) }
         open.set(id, opened)
         return { ok: true, revision: 0, def: session.value.def, verifiedKinds: verified, model: modelOf(sheetId, opened) }
@@ -415,7 +434,7 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
       const owned = parts(sheetId)
       const commit: PivotCommit = { sheetId, pivot, revision: session.revision, def: session.def, overlay: owned.length ? compositeOverlay(owned) : null, ...(result.charts.length ? { charts: result.charts } : {}) }
       options.install(commit)
-      return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit }
+      return { ok: true, revision: session.revision, def: session.def, model: modelOf(sheetId, entry), commit, ...(result.notice ? { notice: result.notice } : {}) }
     },
     release(sheetId, pivot) {
       const id = key(sheetId, pivot)
