@@ -954,7 +954,7 @@ export interface PivotSessionInput {
   chartGate?: ChartGate                 // Task 30; absent → a pivot with linked charts refuses pivot-chart-mapping at open
 }
 export type ChartGate = (charts: readonly ChartModel[], layout: PivotLayout, def: PivotTableDefinition) => EngineResult<readonly ChartModel[]>
-export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[] }
+export interface PivotApplyResult { revision: number; view: PivotViewState; def: PivotTableDefinition; layout: PivotLayout; vacated: readonly SheetRect[]; charts: readonly ChartModel[] }
 export interface PivotSession {
   readonly revision: number; readonly view: PivotViewState; readonly def: PivotTableDefinition; readonly layout: PivotLayout
   apply(delta: PivotDelta): EngineResult<PivotApplyResult>   // pure: does not change the session
@@ -967,7 +967,7 @@ export function openPivotSession(input: PivotSessionInput): EngineResult<PivotSe
 export interface PivotRuntime { cache(def: PivotTableDefinition): PivotCacheDefinition | undefined; records(cache: PivotCacheDefinition, signal: AbortSignal): Promise<RecordResult> }
 export function pivotRuntimeFor(doc: object): PivotRuntime | undefined   // WeakMap keyed by the document
 ```
-- Open runs the chart gate on the saved layout, and every apply runs it on the new layout. A pivot with linked charts and no gate refuses at open with `pivot-chart-mapping`, so it is never interactive before Task 30's gate exists. `PivotApplyResult` gains `charts: readonly ChartModel[]`, the gate's refilled charts.
+- Open runs the chart gate on the saved layout, and every apply runs it on the new layout. A pivot with linked charts and no gate refuses at open with `pivot-chart-mapping`, so it is never interactive before Task 30's gate exists. `PivotApplyResult.charts` holds the gate's refilled charts.
 - `apply` refuses each of these as a typed result:
   - an interaction kind whose Task 24 oracle did not pass;
   - captions with no rule;
@@ -1070,10 +1070,12 @@ export function invalidateRegionStyles(sheet: XlsxSheet): void
 // commands
 { kind: 'pivotOpen'; docId; sheetId; pivot: number; grantBytes: number }
 { kind: 'pivotApply'; docId; sheetId; pivot: number; revision: number; delta: PivotDelta | 'reset'; grantBytes: number }
+{ kind: 'pivotCommit'; docId; sheetId; pivot: number; revision: number }   // installs the staged candidate
 { kind: 'pivotRelease'; docId; sheetId; pivot: number }
 // results
 { kind: 'pivotOpen'; revision: number; def: PivotTableDefinition } | refusal with its diagnostic
-{ kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: SheetRect[]; merges: SheetRect[]; usedRows: number; usedCols: number; valueGen: number; charts: ChartModel[] } | refusal
+{ kind: 'pivotApply'; revision: number; def: PivotTableDefinition; rects: SheetRect[]; merges: SheetRect[]; usedRows: number; usedCols: number; charts: ChartModel[] } | refusal   // a staged candidate
+{ kind: 'pivotCommit'; revision: number; valueGen: number } | { kind: 'pivotCommit'; refused: 'stale' }
 // main side
 export class RemotePivotSessions {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<RemotePivotOpen>
@@ -1082,10 +1084,16 @@ export class RemotePivotSessions {
 }
 ```
 - The worker runs Task 25's session. Records stream: `openPart` → `recordEvents(cache, RECORD_LIMITS[profile], date1904)` via `tokenizeBytes`, never `RangePackage.bytes`, which caps whole parts and refuses as a side effect.
-- The committed apply sets the worker store's overlay (Task 26). The reply carries the live definition, the rectangles, the overlay's merges and its used extent, and the refilled charts. On commit the main side:
+- **Two-phase apply (§6.8, CODEX-5).**
+  - `pivotApply` only stages a candidate in the worker, held under its grant. At most one candidate per pivot: a newer apply replaces it and refunds its grant.
+  - A candidate is never readable. Row reads always answer from the committed overlay.
+  - The main thread sends `pivotCommit` only for the reply it accepts: the latest apply for an open session. The worker installs that candidate's overlay and bumps the store's `valueGen` in one step, then replies with the new `valueGen`.
+  - A `pivotCommit` whose revision is not the staged candidate's refuses as `stale`.
+  - Release and close drop any candidate.
+- The staged reply carries the live definition, the rectangles, the overlay's merges and its used extent, and the refilled charts. On the commit reply the main side:
   1. publishes the merges through `RemoteWorkbook.merges(sheetId)`, bumping its `gen` (the viewer's `structureGen`) when they change;
   2. extends `remote.geometry(sheetId)`'s extent to `usedRows`/`usedCols`;
-  3. refetches rows with the new `valueGen`.
+  3. refetches rows with the new `valueGen`, then bumps its own `valueGen` and invalidates tiles.
 
   The paged geometry (`pagedSheetGeometry`) takes its merges and axes from those two APIs, so refetching rows alone would leave them stale.
 
@@ -1093,6 +1101,8 @@ export class RemotePivotSessions {
   - `open streams records under the profile cap and charges the worker pool`.
   - `apply commits only the current revision`.
   - `stale apply reply is dropped and refunded`: a second apply sent before the first's reply arrives; the first reply is discarded, its grant refunded, `valueGen` unchanged.
+  - `a staged candidate is never readable`. Apply A is staged, then superseded by B. A row read after A is rejected but before B commits returns the committed (base) values and the old `valueGen`. After B's commit it returns B's values.
+  - `pivotCommit with a revision that is not staged refuses as stale`.
   - `pivots on one cache share one store until the last release` (§7.4).
   - `release on every exit`: close, sheet switch, abort and owner change.
   - `paged layout equals resident layout` for every interaction oracle case, through the paged shell.
