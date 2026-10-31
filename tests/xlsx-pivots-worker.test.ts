@@ -285,6 +285,28 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
+  it('R2-3: an aborted open that created a handle releases only that handle, never a newer reopen', async () => {
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
+    const sheetId = doc.sheets.find(candidate => candidate.pivotTables?.length)!.sheetId ?? '1'
+    const docId = id()
+    let kernel!: ViewerKernel, first = true
+    kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), afterDispatch: async command => {
+      if (command.kind !== 'pivotOpen' || !first) return
+      first = false
+      // The client cancels open1 (it created H1), releases the pivot and opens it again (H2) before open1's cleanup runs.
+      await kernel.handle({ kind: 'cancel', requestId: id(), targetRequestId: command.requestId } as WorkerCommand, () => {})
+      const session = kernel.session(docId)!
+      session.pivotRelease(sheetId, 0)
+      expect(await session.pivotOpen(sheetId, 0, 16 * 1024 * 1024, new AbortController().signal)).toMatchObject({ kind: 'open', created: true })
+    } }, quiet)
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    await kernel.handle({ kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }, () => {})
+    // H2 survives open1's cleanup: an apply on it is staged, not refused as released.
+    const staged = kernel.session(docId)!.pivotApply(sheetId, 0, 0, 1, { kind: 'collapse', field: 0, item: 0, collapsed: true }, 16 * 1024 * 1024)
+    expect(staged.kind).toBe('apply')
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+
   it('apply commits only the current revision', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!

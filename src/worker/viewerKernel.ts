@@ -96,7 +96,8 @@ interface InFlight {
   /** Supersession scope: a newer current command with the same key aborts this. */
   key: string | undefined
   reason?: CancelReason
-  pivotOpenCreated?: boolean
+  /** The pivot handle this open created (R2-3: its cleanup releases that handle, not whatever holds the key later). */
+  pivotOpenCreated?: object
 }
 type Report = (completed: number, total: number) => void
 
@@ -286,7 +287,7 @@ export class ViewerKernel {
         deadline = setTimeout(() => { this.abort(captured, 'query-timeout'); expired.abort() }, QUERY_DEADLINE_MS)
       }
       report = this.reporter(command, entry, emit)
-      const work = this.dispatch(command, entry.controller.signal, report, retain, () => { entry!.pivotOpenCreated = true })
+      const work = this.dispatch(command, entry.controller.signal, report, retain, handle => { entry!.pivotOpenCreated = handle })
       const out = command.kind === 'open' || command.kind === 'close' ? await work : await awaitAbortable(work, expired.signal)
       dispatched = out
       const after = this.env.afterDispatch?.(command)
@@ -336,7 +337,7 @@ export class ViewerKernel {
         entry.session?.cancelPivotApply(command.sheetId, command.pivot, command.revision)
       }
       if (command.kind === 'pivotOpen' && entry?.controller.signal.aborted && entry.pivotOpenCreated) {
-        entry.session?.pivotRelease(command.sheetId, command.pivot)
+        entry.session?.pivotReleaseHandle(command.sheetId, command.pivot, entry.pivotOpenCreated)
       }
       if (entry) {
         this.foreground.delete(entry.controller.signal)
@@ -405,8 +406,8 @@ export class ViewerKernel {
         const session = this.sessions.get(command.docId)
         if (command.kind === 'pivotApply' && result?.kind === 'pivotApply') {
           session?.cancelPivotApply(command.sheetId, command.pivot, command.revision)
-        } else if (command.kind === 'pivotOpen' && result?.kind === 'pivotOpen') {
-          session?.pivotRelease(command.sheetId, command.pivot)
+        } else if (command.kind === 'pivotOpen' && result?.kind === 'pivotOpen' && entry.pivotOpenCreated) {
+          session?.pivotReleaseHandle(command.sheetId, command.pivot, entry.pivotOpenCreated)
         }
       }
     }
@@ -495,7 +496,7 @@ export class ViewerKernel {
     }
   }
 
-  private async dispatch(command: Exclude<WorkerCommand, { kind: 'cancel' }>, signal: AbortSignal, report: Report, retain: (release: () => void) => void, onPivotOpenCreated?: () => void): Promise<WorkerReply> {
+  private async dispatch(command: Exclude<WorkerCommand, { kind: 'cancel' }>, signal: AbortSignal, report: Report, retain: (release: () => void) => void, onPivotOpenCreated?: (handle: object) => void): Promise<WorkerReply> {
     switch (command.kind) {
       case 'open': return this.open(command, signal)
       case 'close': return this.close(command)
@@ -516,7 +517,7 @@ export class ViewerKernel {
         }
         let outcome
         switch (command.kind) {
-          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); if (outcome.kind === 'open' && outcome.created) onPivotOpenCreated?.(); break
+          case 'pivotOpen': outcome = await session.pivotOpen(command.sheetId, command.pivot, command.grantBytes, signal); if (outcome.kind === 'open' && outcome.created && outcome.handle) onPivotOpenCreated?.(outcome.handle); break
           case 'pivotApply': outcome = session.pivotApply(command.sheetId, command.pivot, command.baseRevision, command.revision, command.delta, command.grantBytes); break
           case 'pivotCommit': outcome = session.pivotCommit(command.sheetId, command.pivot, command.revision); break
           case 'pivotRelease': outcome = session.pivotRelease(command.sheetId, command.pivot); break

@@ -281,7 +281,7 @@ interface WorkerPivotHandle {
   serial: number
 }
 export type WorkerPivotOutcome =
-  | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; created?: boolean }
+  | { kind: 'open'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; created?: boolean; /** The handle this open created (its cleanup releases only it, R2-3). */ handle?: object }
   | { kind: 'apply'; revision: number; def: PivotTableDefinition; menu: import('../xlsx/pivots/session/menu').PivotMenuModel; rects: readonly SourceRect[]; protectedRects: readonly SourceRect[]; overlayExtent: SourceRect | null; merges: readonly SourceRect[]; usedRows: number; usedCols: number; charts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string; readonly chart: import('../charts/model').ChartModel }[]; cells: readonly { row: number; col: number; value: import('../xlsx/view/contracts').ValueOverlayCell | null }[] }
   | { kind: 'commit'; revision: number; valueGen: number }
   | { kind: 'stale' }
@@ -1397,7 +1397,7 @@ export class DocumentSession {
     shareHeld = false
     runtimeTransferred = true
     assetsTransferred = true
-    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), created: true }
+    return { kind: 'open', revision: 0, def: opened.value.def, menu: pivotMenuModel(opened.value.def, cache, opened.value.view, assets.date1904), created: true, handle }
     } finally {
       releaseShare()
       releaseRuntime()
@@ -1452,6 +1452,10 @@ export class DocumentSession {
     const live = new Map<string, PivotTableDefinition>()
     for (const handle of this.pivotHandles.values()) if (handle.sheetId === sheetId && handle.committed) live.set(handle.def.partPath, handle.def)
     return live.size ? { ...payload, pivotTables: payload.pivotTables.map(def => live.get(def.partPath) ?? def) } : payload
+  }
+  /** Releases the pivot only while `handle` is still its session: an open's cleanup never ends a later reopen (R2-3). */
+  pivotReleaseHandle(sheetId: string, pivot: number, handle: object): void {
+    if (this.pivotHandles.get(pivotHandleKey(sheetId, pivot)) === handle) this.pivotRelease(sheetId, pivot)
   }
   pivotRelease(sheetId: string, pivot: number): WorkerPivotOutcome {
     const key = pivotHandleKey(sheetId, pivot), handle = this.pivotHandles.get(key)
