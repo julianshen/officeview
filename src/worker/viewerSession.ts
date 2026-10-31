@@ -191,6 +191,8 @@ export interface SheetGeometry {
 export interface WorkbookSource {
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
+  /** Workbook-level formula scan for the paged dependent fallback, excluding saved pivot rectangles. */
+  scanFormulaCellsOutsidePivots?(): boolean | Promise<boolean>
   hasSparklines?(sheetId: string): boolean
   hasRegionStyles?(sheetId: string): boolean
   regionStyleTableCount?(sheetId: string): number

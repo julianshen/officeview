@@ -721,7 +721,7 @@ export type WorkerReplyBase<K extends WorkerCommandKind> =
     replyBytes?: number
   } : never
 export type WorkerResult =
-  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; formatting?: WorkbookFormatting }
+  | { kind: 'open'; valuePolicy: ValuePolicy; sheets: readonly { sheetId: string; name: string }[]; hasFormulaCellsOutsidePivots?: boolean; formatting?: WorkbookFormatting }
   | { kind: 'activateSheet'; sheetId: string; layout?: SheetLayout }
   | { kind: 'prepareColumns'; cols: Uint16Array }
   | { kind: 'view'; delta: ViewCommitDelta }

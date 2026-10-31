@@ -56,9 +56,12 @@ export interface WorkbookEvaluationOptions {
   /** Explicit date-system override (wins over the parsed workbookPr date1904). */
   date1904?: boolean
   /** Lazy pivot adapter; absent on load so GETPIVOTDATA retains its shipped value. */
-  getPivotData?: (args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue) => EvaluationValue
+  getPivotData?: (args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet: string) => EvaluationValue
   /** Optional view-only cell values, used by a resident pivot commit without mutating saved sheet cells. */
   readCellValue?: (sheetName: string, col: number, row: number) => EvaluationValue | undefined
+  /** Sparse cells owned by the currently committed view overlay, including cells
+   * that were absent in the saved worksheet. Used by range aggregates. */
+  overlayEntries?: readonly { sheetName: string; col: number; row: number; value: EvaluationValue }[]
 }
 
 function capturedWorkbookZone(): string {
@@ -158,8 +161,14 @@ interface DocSpillState {
   valueDeps: Map<string, Set<string>>
   /** Actual reads including readers that consumed a memoized formula value. */
   formulaDeps: Map<string, Set<string>>
+  runtimeIndex?: {
+    sheetsByName: Map<string, XlsxSheet>; cellMap: Map<string, XlsxCell>; cellSheets: Map<string, string>
+    sheetMaxCols: Map<string, number>; sheetMaxRows: Map<string, number>; inputKeys: Set<string>; formulaKeys: Set<string>; mergeKeys: Set<string>
+    identitySheets: { sheetId: SheetId; name: string; workbookIndex: number }[]
+  }
 }
 const docSpillStates = new WeakMap<XlsxDocument, DocSpillState>()
+const liveFormulaSnapshots = new WeakMap<XlsxDocument, Map<string, { cell: XlsxCell; content: CellContent }>>()
 
 /** Engine-published spill footprint of one owner: the bounding box of its anchor and live generated cells. */
 export interface EngineSpillFootprint { anchor: { row: number; col: number }; r0: number; r1: number; c0: number; c1: number }
@@ -293,14 +302,95 @@ function affectedReaders(changed: ReadonlySet<string>, deps: Map<string, Set<str
 
 export interface ChangedSheetRect { sheetId: number; rect: { minRow: number; minCol: number; maxRow: number; maxCol: number } }
 
+type FormulaReference = { sheet: string; minRow: number; minCol: number; maxRow: number; maxCol: number }
+type IndexedFormula = { key: string; sheet: string; row: number; col: number; refs: FormulaReference[]; pivotAnchorRefs: FormulaReference[] }
+type FormulaReferenceIndex = { formulas: IndexedFormula[]; byKey: Map<string, IndexedFormula> }
+const formulaReferenceIndexes = new WeakMap<XlsxDocument, FormulaReferenceIndex>()
+
+function referenceIndexFor(doc: XlsxDocument): FormulaReferenceIndex {
+  const cached = formulaReferenceIndexes.get(doc)
+  if (cached) return cached
+  const formulas: IndexedFormula[] = []
+  const byKey = new Map<string, IndexedFormula>()
+  for (const sheet of doc.sheets) resolveSheetSharedFormulas(sheet, doc)
+  const nameStack = new Set<string>()
+  const collect = (node: AstNode, currentSheet: string, out: FormulaReference[], pivotOnly?: FormulaReference[]): void => {
+    const add = (sheetName: string, minCol: number, minRow: number, maxCol: number, maxRow: number, target = out) => {
+      target.push({ sheet: sheetName.toLowerCase(), minRow: Math.min(minRow, maxRow), minCol: Math.min(minCol, maxCol), maxRow: Math.max(minRow, maxRow), maxCol: Math.max(minCol, maxCol) })
+    }
+    switch (node.type) {
+      case 'cell': add(node.ref.sheet ?? currentSheet, node.ref.col, node.ref.row, node.ref.col, node.ref.row); return
+      case 'spill': add(node.anchor.sheet ?? currentSheet, node.anchor.col, node.anchor.row, node.anchor.col, node.anchor.row); return
+      case 'range': add(node.ref.sheet ?? node.ref.from.sheet ?? currentSheet, node.ref.from.col, node.ref.from.row, node.ref.to.col, node.ref.to.row); return
+      case 'wholeCol': add(node.ref.sheet ?? currentSheet, node.ref.from.index, 0, node.ref.to.index, 1_048_575); return
+      case 'wholeRow': add(node.ref.sheet ?? currentSheet, 0, node.ref.from.index, 16_383, node.ref.to.index); return
+      case 'ref3d': {
+        const from = doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === node.sheets.fromSheet.toLowerCase())
+        const to = doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === node.sheets.toSheet.toLowerCase())
+        const names = from >= 0 && to >= 0 ? doc.sheets.slice(Math.min(from, to), Math.max(from, to) + 1).map(sheet => sheet.name) : []
+        for (const name of names) collect(node.target as AstNode, name, out, pivotOnly)
+        return
+      }
+      case 'name': {
+        const localIndex = node.ref.sheet ? doc.sheets.findIndex(s => s.name.toLowerCase() === node.ref.sheet!.toLowerCase()) : doc.sheets.findIndex(s => s.name.toLowerCase() === currentSheet.toLowerCase())
+        const match = (doc.definedNames ?? []).find(name => name.name.toLowerCase() === node.ref.name.toLowerCase() && name.localSheetIndex === localIndex)
+          ?? (doc.definedNames ?? []).find(name => name.name.toLowerCase() === node.ref.name.toLowerCase() && name.localSheetIndex === undefined)
+        if (match) {
+          const id = `${match.localSheetIndex ?? 'w'}:${match.name.toLowerCase()}`
+          if (!nameStack.has(id)) {
+            nameStack.add(id)
+            try { collect(parseFormula(match.source.replace(/^=/, '')), node.ref.sheet ?? currentSheet, out, pivotOnly) } catch { /* unsupported name remains governed by evaluator */ }
+            nameStack.delete(id)
+          }
+        }
+        return
+      }
+      case 'call': {
+        if (node.name.toUpperCase() === 'GETPIVOTDATA') {
+          const anchor = node.args[1]
+          if (anchor?.type === 'cell') add(anchor.ref.sheet ?? currentSheet, anchor.ref.col, anchor.ref.row, anchor.ref.col, anchor.ref.row, pivotOnly ?? out)
+        }
+        for (const arg of node.args) collect(arg, currentSheet, out, pivotOnly)
+        return
+      }
+      case 'binary': case 'intersect': collect(node.left, currentSheet, out, pivotOnly); collect(node.right, currentSheet, out, pivotOnly); return
+      case 'unary': case 'implicitIntersect': collect(node.expr, currentSheet, out, pivotOnly); return
+      case 'union': for (const ref of node.refs) collect(ref, currentSheet, out, pivotOnly); return
+      default: return
+    }
+  }
+  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
+    if (!cell.formula) continue
+    const key = makeCellKey(sheet.name, cell.col, cell.row)
+    const entry: IndexedFormula = { key, sheet: sheet.name.toLowerCase(), row: cell.row, col: cell.col, refs: [], pivotAnchorRefs: [] }
+    try { collect(parseFormula(cell.formula), sheet.name, entry.refs, entry.pivotAnchorRefs) } catch { /* malformed formulas are handled by the evaluator */ }
+    formulas.push(entry); byKey.set(key, entry)
+  }
+  const result = { formulas, byKey }
+  formulaReferenceIndexes.set(doc, result)
+  return result
+}
+
+function referenceTouchesChanged(ref: FormulaReference, changed: readonly ChangedSheetRect[], sheets: readonly XlsxSheet[]): boolean {
+  return changed.some(({ sheetId, rect }) => sheets[sheetId]?.name.toLowerCase() === ref.sheet
+    && ref.minRow <= rect.maxRow && ref.maxRow >= rect.minRow && ref.minCol <= rect.maxCol && ref.maxCol >= rect.minCol)
+}
+function referenceContainsKey(ref: FormulaReference, key: string): boolean {
+  const bang = key.lastIndexOf('!'), coords = /^(-?\d+):(-?\d+)$/.exec(key.slice(bang + 1))
+  if (bang < 0 || !coords || key.slice(0, bang) !== ref.sheet) return false
+  const col = Number(coords[1]), row = Number(coords[2])
+  return row >= ref.minRow && row <= ref.maxRow && col >= ref.minCol && col <= ref.maxCol
+}
+
 /** Paged sheets cannot build the resident formula graph; record one sheet-level
  * stale notice when any formula cell is outside the pivot rectangles. */
 export function markPagedDependentsStale(
   prior: ReadonlySet<number>, sheetId: number, sheet: XlsxSheet,
   pivotRects: readonly { minRow: number; minCol: number; maxRow: number; maxCol: number }[],
+  workbookHasFormulaOutsidePivots = false,
 ): ReadonlySet<number> {
   if (prior.has(sheetId)) return prior
-  const hasDependent = sheet.rows.some(row => row.cells.some(cell => Boolean(cell.formula)
+  const hasDependent = workbookHasFormulaOutsidePivots || sheet.rows.some(row => row.cells.some(cell => Boolean(cell.formula)
     && !pivotRects.some(rect => cell.row >= rect.minRow && cell.row <= rect.maxRow && cell.col >= rect.minCol && cell.col <= rect.maxCol)))
   return hasDependent ? new Set([...prior, sheetId]) : prior
 }
@@ -319,27 +409,6 @@ function keyInChangedRect(key: string, changed: readonly ChangedSheetRect[], she
     if (!sheet || sheet.name.toLowerCase() !== sheetName) continue
     const { minRow, minCol, maxRow, maxCol } = entry.rect
     if (row >= minRow && row <= maxRow && col >= minCol && col <= maxCol) return true
-  }
-  return false
-}
-
-function containsGetPivotDataReference(node: AstNode, currentSheet: string, changed: readonly ChangedSheetRect[], sheets: readonly XlsxSheet[]): boolean {
-  const pending = [node]
-  while (pending.length) {
-    const at = pending.pop()!
-    if (at.type === 'call') {
-      if (at.name.toUpperCase() === 'GETPIVOTDATA') {
-        const ref = at.args[1]
-        if (ref?.type === 'cell') {
-          const sheet = ref.ref.sheet ?? currentSheet
-          const key = makeCellKey(sheet, ref.ref.col, ref.ref.row)
-          if (keyInChangedRect(key, changed, sheets)) return true
-        }
-      }
-      pending.push(...at.args)
-    } else if (at.type === 'binary' || at.type === 'intersect') pending.push(at.left, at.right)
-    else if (at.type === 'unary' || at.type === 'implicitIntersect') pending.push(at.expr)
-    else if (at.type === 'union') pending.push(...at.refs)
   }
   return false
 }
@@ -391,27 +460,79 @@ export function recomputeDependents(
   doc: XlsxDocument,
   changed: readonly ChangedSheetRect[],
   options?: WorkbookEvaluationOptions,
-): { recomputed: number; charts: readonly number[] } {
+): { recomputed: number; charts: readonly number[]; sheets: readonly number[] } {
   if (workbookValuePolicy(doc) === 'cached') {
     throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   }
   const prior = docSpillStates.get(doc)
+  const index = referenceIndexFor(doc)
+  const formulaKeys = new Set<string>()
+  const queue: string[] = []
+  for (const formula of index.formulas) {
+    if (formula.refs.some(ref => referenceTouchesChanged(ref, changed, doc.sheets)) || formula.pivotAnchorRefs.some(ref => referenceTouchesChanged(ref, changed, doc.sheets))) {
+      if (!formulaKeys.has(formula.key)) { formulaKeys.add(formula.key); queue.push(formula.key) }
+    }
+  }
+  // Keep observed dynamic edges too, then use the syntactic index to discover
+  // transitive readers even when cached values meant no formula ran at load.
   const seeds = new Set<string>()
   for (const targets of prior?.formulaDeps.values() ?? []) for (const target of targets) {
     if (keyInChangedRect(target, changed, doc.sheets)) seeds.add(target)
   }
-  const formulaKeys = new Set<string>()
-  for (const sheet of doc.sheets) for (const row of sheet.rows) for (const cell of row.cells) {
-    if (!cell.formula) continue
-    const key = makeCellKey(sheet.name, cell.col, cell.row)
-    try {
-      if (containsGetPivotDataReference(parseFormula(cell.formula), sheet.name, changed, doc.sheets)) formulaKeys.add(key)
-    } catch { /* malformed formula remains governed by the ordinary evaluator */ }
+  for (const reader of affectedReaders(seeds, prior?.formulaDeps ?? new Map())) if (!formulaKeys.has(reader)) { formulaKeys.add(reader); queue.push(reader) }
+  while (queue.length) {
+    const target = queue.shift()!
+    // A formula anchor may publish spill followers. Readers of those generated
+    // cells must join the same closure even though no worksheet formula owns them.
+    for (const generated of prior?.generated ?? []) {
+      if (generated.ownerKey === target) {
+        const follower = makeCellKey(generated.sheet.name, generated.cell.col, generated.cell.row)
+        if (!seeds.has(follower)) {
+          seeds.add(follower)
+          for (const formula of index.formulas) if (!formulaKeys.has(formula.key) && formula.refs.some(ref => referenceContainsKey(ref, follower))) {
+            formulaKeys.add(formula.key); queue.push(formula.key)
+          }
+        }
+      }
+    }
+    if (seeds.size) {
+      const dynamicReaders = affectedReaders(seeds, prior?.formulaDeps ?? new Map())
+      for (const reader of dynamicReaders) if (!formulaKeys.has(reader)) { formulaKeys.add(reader); queue.push(reader) }
+    }
+    for (const formula of index.formulas) {
+      if (!formulaKeys.has(formula.key) && formula.refs.some(ref => referenceContainsKey(ref, target))) {
+        formulaKeys.add(formula.key); queue.push(formula.key)
+      }
+    }
   }
-  for (const reader of affectedReaders(seeds, prior?.formulaDeps ?? new Map())) formulaKeys.add(reader)
-  if (!formulaKeys.size) return { recomputed: 0, charts: [] }
+  if (!formulaKeys.size) return { recomputed: 0, charts: [], sheets: [] }
+  let snapshots = liveFormulaSnapshots.get(doc)
+  if (!snapshots) liveFormulaSnapshots.set(doc, snapshots = new Map())
+  for (const key of formulaKeys) {
+    if (snapshots.has(key)) continue
+    const bang = key.lastIndexOf('!'), coords = /^(\d+):(\d+)$/.exec(key.slice(bang + 1))
+    if (bang < 0 || !coords) continue
+    const sheet = doc.sheets.find(candidate => candidate.name.toLowerCase() === key.slice(0, bang))
+    const row = Number(coords[2]), col = Number(coords[1])
+    const cell = sheet?.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
+    if (cell) snapshots.set(key, { cell, content: snapshotCell(cell) })
+  }
   evaluateWorkbookFormulasInternal(doc, { ...options, forceRecalc: true, intent: 'explicit-recalc' }, formulaKeys)
-  return { recomputed: formulaKeys.size, charts: chartsUsing(doc, formulaKeys) }
+  const affectedSheets = [...new Set([...formulaKeys].map(key => {
+    const bang = key.lastIndexOf('!')
+    return doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, bang))
+  }).filter(index => index >= 0))]
+  return { recomputed: formulaKeys.size, charts: chartsUsing(doc, formulaKeys), sheets: affectedSheets }
+}
+
+/** Restore the saved formula values after a resident viewer releases its live pivot contexts. */
+export function restoreDependentFormulaValues(doc: XlsxDocument): void {
+  const snapshots = liveFormulaSnapshots.get(doc)
+  if (!snapshots) return
+  for (const { cell, content } of snapshots.values()) restoreCell(cell, content)
+  snapshots.clear()
+  liveFormulaSnapshots.delete(doc)
+  formulaReferenceIndexes.delete(doc)
 }
 
 /**
@@ -526,8 +647,8 @@ function evaluateWorkbookFormulasInternal(
   // still unsupported and must be diagnosed, so the actual what-if type keeps
   // the scan from exiting before the diagnosis branch. Ordinary formula-less,
   // type-less content (the common case) still exits cheaply here.
-  let hasFormulas = false
-  for (const sheet of doc.sheets) {
+  let hasFormulas = Boolean(onlyKeys?.size)
+  if (!onlyKeys) for (const sheet of doc.sheets) {
     for (const row of sheet.rows) {
       for (const cell of row.cells) {
         if (cell.formula !== undefined || cell.sharedFormula !== undefined || isWhatIfDataTable(cell.formulaType)) {
@@ -582,7 +703,11 @@ function evaluateWorkbookFormulasInternal(
       if (!rowObj || !rowObj.cells.includes(g.cell)) continue // replaced object → user input
       if (!cellContentMatches(g.cell, g.written)) continue // user content edit → user input
       if (g.original) restoreCell(g.cell, g.original)
-      else removeCell(g.sheet, g.cell)
+      else {
+        removeCell(g.sheet, g.cell)
+        prior.runtimeIndex?.cellMap.delete(g.key)
+        prior.runtimeIndex?.cellSheets.delete(g.key)
+      }
       removedKeys.add(g.key)
     }
     for (const row of prior.createdRows) {
@@ -590,13 +715,9 @@ function evaluateWorkbookFormulasInternal(
       removeCreatedRow(row.sheet, row.index)
     }
   }
-  const valueDeps = onlyKeys && prior
-    ? new Map([...prior.valueDeps].map(([key, deps]) => [key, new Set(deps)]))
-    : prior?.valueDeps ?? new Map<string, Set<string>>()
+  const valueDeps = prior?.valueDeps ?? new Map<string, Set<string>>()
   if (onlyKeys) for (const key of onlyKeys) valueDeps.delete(key)
-  const formulaDeps = onlyKeys && prior
-    ? new Map([...prior.formulaDeps].map(([key, deps]) => [key, new Set(deps)]))
-    : prior?.formulaDeps ?? new Map<string, Set<string>>()
+  const formulaDeps = prior?.formulaDeps ?? new Map<string, Set<string>>()
   if (onlyKeys) for (const key of onlyKeys) formulaDeps.delete(key)
   /** ACTUAL (lazily discovered) dependency edges for this generation, kept
    * separate from `valueDeps` so established spill-cleanup semantics are
@@ -604,14 +725,15 @@ function evaluateWorkbookFormulasInternal(
   const generationDeps = new Map<string, Set<string>>()
   const forceKeys = prior && removedKeys.size > 0 ? affectedReaders(removedKeys, prior.valueDeps) : new Set<string>()
 
-  const sheetsByName = new Map<string, XlsxSheet>()
-  const cellMap = new Map<string, XlsxCell>()
-  const cellSheets = new Map<string, string>()
-  const sheetMaxCols = new Map<string, number>()
-  const sheetMaxRows = new Map<string, number>()
+  const cachedIndex = onlyKeys ? prior?.runtimeIndex : undefined
+  const sheetsByName = cachedIndex?.sheetsByName ?? new Map<string, XlsxSheet>()
+  const cellMap = cachedIndex?.cellMap ?? new Map<string, XlsxCell>()
+  const cellSheets = cachedIndex?.cellSheets ?? new Map<string, string>()
+  const sheetMaxCols = cachedIndex?.sheetMaxCols ?? new Map<string, number>()
+  const sheetMaxRows = cachedIndex?.sheetMaxRows ?? new Map<string, number>()
 
   // 1. Resolve shared formulas on all sheets and index sheets, cells, and bounds
-  for (const sheet of doc.sheets) {
+  if (!cachedIndex) for (const sheet of doc.sheets) {
     resolveSheetSharedFormulas(sheet, doc)
     sheetsByName.set(sheet.name.toLowerCase(), sheet)
 
@@ -646,10 +768,10 @@ function evaluateWorkbookFormulasInternal(
   // 2. Original occupancy snapshot BEFORE any formula evaluation. Generated
   //    cells from a prior generation were already removed above, so every
   //    remaining cell is an original input/formula or a user-preserved cell.
-  const inputKeys = new Set<string>()
-  const formulaKeys = new Set<string>()
-  const mergeKeys = new Set<string>()
-  for (const sheet of doc.sheets) {
+  const inputKeys = cachedIndex?.inputKeys ?? new Set<string>()
+  const formulaKeys = cachedIndex?.formulaKeys ?? new Set<string>()
+  const mergeKeys = cachedIndex?.mergeKeys ?? new Set<string>()
+  if (!cachedIndex) for (const sheet of doc.sheets) {
     for (const row of sheet.rows) {
       for (const cell of row.cells) {
         const key = makeCellKey(sheet.name, cell.col, cell.row)
@@ -667,7 +789,7 @@ function evaluateWorkbookFormulasInternal(
   }
 
   // 3. Identities + spill engine (before the frame loop).
-  const identitySheets = (doc.workbookSheets ?? doc.sheets.map((s, i) => ({
+  const identitySheets = cachedIndex?.identitySheets ?? (doc.workbookSheets ?? doc.sheets.map((s, i) => ({
     sheetId: s.sheetId ?? s.name,
     name: s.name,
     workbookIndex: s.workbookIndex ?? i,
@@ -1209,14 +1331,22 @@ function evaluateWorkbookFormulasInternal(
         return { value: scalarProjection(value), origin: isFormulaCell ? 'formula' : isGenerated ? 'spill' : 'input' }
       },
       stored: function* () {
+        const overlayByKey = new Map<string, { sheetName: string; col: number; row: number; value: EvaluationValue }>()
+        for (const entry of options?.overlayEntries ?? []) overlayByKey.set(makeCellKey(entry.sheetName, entry.col, entry.row), entry)
+        const seen = new Set<string>()
         for (const [key, cell] of cellMap) {
+          if (seen.has(key)) continue
+          const overlaid = overlayByKey.get(key)
           const name = cellSheets.get(key)
           if (name === undefined) continue
           const sheetId = sheetIdOfName(name)
           if (sheetId === undefined) continue
           const isFormulaCell = cell.formula !== undefined || cell.sharedFormula !== undefined
           if (!isFormulaCell && (cell.value === null || cell.value === undefined)) continue
-          let value: ElementValue = cell.value
+          const viewValue = options?.readCellValue?.(name, cell.col, cell.row)
+          if (viewValue === null) continue
+          let value: ElementValue = overlaid ? scalarProjection(overlaid.value) : viewValue !== undefined ? scalarProjection(viewValue) : cell.value
+          if (overlaid && value === null) continue
           if (!isFormulaCell) {
             const error = cell.valueIsError ?? isFormulaError(cell.value)
             value = error && isFormulaError(cell.value) ? formulaError(cell.value) : cell.value
@@ -1226,6 +1356,13 @@ function evaluateWorkbookFormulasInternal(
             value,
             origin: isFormulaCell ? 'formula' : 'input',
           }
+          seen.add(key)
+        }
+        for (const [key, entry] of overlayByKey) {
+          if (seen.has(key) || scalarProjection(entry.value) === null) continue
+          const sheetId = sheetIdOfName(entry.sheetName)
+          if (sheetId === undefined) continue
+          yield { address: { sheetId, col: entry.col, row: entry.row }, value: scalarProjection(entry.value), origin: 'input' }
         }
       },
     },
@@ -1778,5 +1915,6 @@ function evaluateWorkbookFormulasInternal(
 
   docSpillStates.set(doc, manualFileLoadNoOp && prior
     ? prior
-    : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyKeys && prior ? [...prior.createdRows.filter(row => !onlyKeys.has(row.ownerKey)), ...createdRows] : createdRows, valueDeps, formulaDeps })
+    : { generated: [...retainedGenerated, ...generatedList], createdRows: onlyKeys && prior ? [...prior.createdRows.filter(row => !onlyKeys.has(row.ownerKey)), ...createdRows] : createdRows,
+      valueDeps, formulaDeps, runtimeIndex: { sheetsByName, cellMap, cellSheets, sheetMaxCols, sheetMaxRows, inputKeys, formulaKeys, mergeKeys, identitySheets } })
 }

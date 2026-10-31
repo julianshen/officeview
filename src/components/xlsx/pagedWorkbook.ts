@@ -73,6 +73,7 @@ export async function openPagedWorkbook(blob: Blob, options: PagedOpenOptions): 
   const remote = new RemoteWorkbook(client, opened, () => end(true))
   if (options.signal.aborted) { await remote.close(); return undefined }
   const doc: XlsxDocument = {
+    ...(opened.hasFormulaCellsOutsidePivots !== undefined ? { hasFormulaCellsOutsidePivots: opened.hasFormulaCellsOutsidePivots } : {}),
     sheets: opened.sheets.map((sheet, index) => ({ name: sheet.name, sheetId: sheet.sheetId, workbookIndex: index, rows: [], cols: [], merges: [], mergeRanges: [], semantics: semanticsFor(opened.formatting?.dateSystem ?? '1900'),
       // The indent unit of the main-thread layout host (render.ts layoutCellBody).
       ...(opened.formatting?.maxDigitWidthPx !== undefined ? { maxDigitWidthPx: opened.formatting.maxDigitWidthPx } : {}) })),

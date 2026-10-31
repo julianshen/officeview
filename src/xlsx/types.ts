@@ -206,6 +206,8 @@ export interface XlsxSheet {
 }
 
 export interface XlsxDocument {
+  /** Worker scan used for the paged pivot dependent-formula fallback notice. */
+  hasFormulaCellsOutsidePivots?: boolean
   drawingCoverage?: DrawingCoverageEntry[]
   sheets: XlsxSheet[]
   images?: XlsxImage[]

@@ -717,7 +717,9 @@ export class ViewerKernel {
     this.sessions.set(command.docId, session)
     this.stats.opens++
     const formatting = source.formatting?.()
-    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets, ...(formatting ? { formatting } : {}) } }, source.openDiagnostics ?? [])
+    const hasFormulaCellsOutsidePivots = await source.scanFormulaCellsOutsidePivots?.()
+    return reply(command, owner, { kind: 'complete', result: { kind: 'open', valuePolicy: source.valuePolicy, sheets: source.sheets,
+      ...(hasFormulaCellsOutsidePivots !== undefined ? { hasFormulaCellsOutsidePivots } : {}), ...(formatting ? { formatting } : {}) } }, source.openDiagnostics ?? [])
   }
   /** Open is the only place source bytes are read or parsed. A blob is copied
    * into worker memory exactly once (accounted), parsed, then dropped. */

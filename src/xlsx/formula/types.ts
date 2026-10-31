@@ -124,7 +124,7 @@ export interface EvaluationContext {
    */
   getRangeValues?(sheet: string | undefined, from: CellRef, to: CellRef): EvaluationValue[][]
   /** Supplied by the lazy pivot chunk only during a committed-pivot recompute. */
-  getPivotData?(args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue): EvaluationValue
+  getPivotData?(args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet: string): EvaluationValue
   currentSheet?: string
   currentCell?: CellRef
   /** Resolved workbook identity; does not replace currentSheet/currentCell. */

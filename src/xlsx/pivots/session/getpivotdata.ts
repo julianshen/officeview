@@ -53,7 +53,7 @@ function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: Rea
   const matches = (fields: readonly number[], lines: PivotLayout['axes']['rows']) => {
     const axisPairs = new Map([...pairs].filter(([field]) => fields.includes(field)))
     if (fields.includes(PIVOT_VALUES_FIELD)) return lines.map((line, index) => ({ line, index }))
-      .filter(({ line }) => line.data === dataIndex && (axisPairs.size ? lineMatches(context, fields, line, axisPairs) : line.type === 'grand'))
+      .filter(({ line }) => line.data === dataIndex && (axisPairs.size ? lineMatches(context, fields, line, axisPairs) : (fields.length === 1 ? true : line.type === 'grand')))
     const candidates = lines.map((line, index) => ({ line, index })).filter(({ line }) => axisPairs.size
       ? lineMatches(context, fields, line, axisPairs) : line.type === 'grand')
     // An omitted axis field means its visible grand-total line; never sum or
@@ -82,23 +82,31 @@ function pivotValue(context: LivePivotDataContext, dataIndex: number, pairs: Rea
 }
 
 export function getPivotData(contexts: readonly LivePivotDataContext[], args: readonly AstNode[], evaluate: (node: AstNode) => EvaluationValue, currentSheet?: string): EvaluationValue {
-  if (args.length < 2 || args.length % 2 !== 0) return formulaError('#VALUE!')
-  const dataName = text(evaluate(args[0]!))
+  if (args.length < 2 || args.length % 2 !== 0) return formulaError('#NAME?')
+  const evaluatedName = evaluate(args[0]!)
+  if (typeof evaluatedName === 'object' && evaluatedName !== null && 'kind' in evaluatedName && evaluatedName.kind === 'formula-error') return evaluatedName
+  const dataName = text(evaluatedName)
   const anchor = args[1]
-  if (dataName === undefined || anchor?.type !== 'cell') return formulaError('#REF!')
+  if (dataName === undefined || anchor?.type !== 'cell') return formulaError('#NAME?')
   const sheet = anchor.ref.sheet ?? currentSheet
   const context = contexts.find(candidate => candidate.sheet.toLocaleLowerCase() === sheet?.toLocaleLowerCase()
     && candidate.layout.rect.minRow <= anchor.ref.row && candidate.layout.rect.maxRow >= anchor.ref.row
     && candidate.layout.rect.minCol <= anchor.ref.col && candidate.layout.rect.maxCol >= anchor.ref.col)
-  if (!context) return formulaError('#REF!')
+  if (!context) return formulaError('#NAME?')
   const dataIndex = dataByName(context, dataName)
-  if (dataIndex < 0) return formulaError('#REF!')
+  if (dataIndex < 0) return formulaError('#NAME?')
   const pairs = new Map<number, EvaluationValue>()
   for (let index = 2; index < args.length; index += 2) {
     const fieldName = text(evaluate(args[index]!)), value = evaluate(args[index + 1]!)
     if (fieldName === undefined) return formulaError('#VALUE!')
     const field = fieldByName(context.def, context.cache, fieldName)
-    if (field < 0 || pairs.has(field)) return formulaError('#REF!')
+    if (field < 0 || pairs.has(field)) return formulaError('#NAME?')
+    if (!context.def.rowFields.includes(field) && !context.def.colFields.includes(field) && !context.def.pageFields.some(page => page.fld === field)) return formulaError('#NAME?')
+    if (typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'formula-error') return value
+    const items = (context.def.fields[field]?.items ?? []).flatMap(item => typeof item.x === 'number' ? [item.x] : [])
+    const labels = items.map(item => pivotItemLabel(context.def, context.cache, field, item, context.date1904).value)
+    if (!items.some(item => labelMatches(context, field, item, value))
+      && ((typeof value === 'string' && labels.some(label => label.kind === 'number')) || (typeof value === 'number' && labels.some(label => label.kind === 'text')))) return formulaError('#NAME?')
     pairs.set(field, value)
   }
   // Page fields are visible only when the requested item is the current page
@@ -107,9 +115,16 @@ export function getPivotData(contexts: readonly LivePivotDataContext[], args: re
     const requested = pairs.get(page.fld)
     if (requested === undefined && !pairs.has(page.fld)) continue
     const index = page.item
-    if (index === undefined || !labelMatches(context, page.fld, index, requested!)) return formulaError('#REF!')
+    if (index === undefined || !labelMatches(context, page.fld, index, requested!)) return formulaError('#NAME?')
   }
-  return pivotValue(context, dataIndex, pairs)
+  const value = pivotValue(context, dataIndex, pairs)
+  const innerWithoutParent = [...pairs.keys()].some(field => {
+    const axis = context.def.rowFields.includes(field) ? context.def.rowFields : context.def.colFields
+    const level = axis.indexOf(field)
+    return level > 0 && axis.slice(0, level).some(parent => !pairs.has(parent))
+  })
+  if (innerWithoutParent && !(typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'formula-error')) return formulaError('#NAME?')
+  return value
 }
 
 export function registerGetPivotData(): void {
@@ -120,7 +135,9 @@ export function registerGetPivotData(): void {
       markUnsupported(ctx, 'GETPIVOTDATA')
       return formulaError('#NAME?')
     }
-    return ctx.getPivotData(args, evaluate)
+    const result = ctx.getPivotData(args, evaluate, ctx.currentSheet ?? '')
+    if (typeof result === 'object' && result !== null && 'kind' in result && result.kind === 'formula-error' && result.code === '#NAME?') markUnsupported(ctx, 'GETPIVOTDATA')
+    return result
   })
 }
 

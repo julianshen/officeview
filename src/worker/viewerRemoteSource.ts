@@ -124,6 +124,7 @@ export interface RemoteOpen {
   docId: string
   valuePolicy: ValuePolicy
   sheets: readonly { sheetId: string; name: string }[]
+  hasFormulaCellsOutsidePivots?: boolean
   diagnostics: readonly WorkerDiagnostic[]
   layouts: ReadonlyMap<string, SheetLayout>
   formatting?: WorkbookFormatting
@@ -144,7 +145,7 @@ type RemoteKind = 'read' | 'valueQuery' | 'sort' | 'filter' | 'prepareColumns' |
 export async function openRemoteWorkbook(client: ViewerClient, docId: string, blob: Blob, profile: 'D' | 'M'): Promise<WorkerReply<'open'> | RemoteOpen> {
   const open = await client.send({ kind: 'open', requestId: client.nextRequestId(), docId, source: { kind: 'blob', blob }, profile })
   if (open.kind !== 'complete' || open.result.kind !== 'open') return open
-  const { sheets, valuePolicy, formatting } = open.result
+  const { sheets, valuePolicy, formatting, hasFormulaCellsOutsidePivots } = open.result
   const layouts = new Map<string, SheetLayout>()
   const owner = initialWorkbookOwner(docId, sheets)
   for (const sheet of [...sheets.slice(1), ...sheets.slice(0, 1)]) {
@@ -155,7 +156,7 @@ export async function openRemoteWorkbook(client: ViewerClient, docId: string, bl
     }
     layouts.set(sheet.sheetId, active.result.layout)
   }
-  return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts, profile, ...(formatting ? { formatting } : {}) }
+  return { docId, valuePolicy, sheets, diagnostics: open.diagnostics, layouts, profile, ...(hasFormulaCellsOutsidePivots !== undefined ? { hasFormulaCellsOutsidePivots } : {}), ...(formatting ? { formatting } : {}) }
 }
 
 export function isRemoteWorkbook(source: WorkbookSource | undefined): source is RemoteWorkbook {
@@ -168,6 +169,7 @@ export class RemoteWorkbook implements WorkbookSource {
   private readonly latestQueries = new Map<string, string>()
   readonly valuePolicy: ValuePolicy
   readonly sheets: readonly { sheetId: string; name: string }[]
+  readonly hasFormulaCellsOutsidePivots?: boolean
   readonly openDiagnostics: readonly WorkerDiagnostic[]
   readonly docId: string
   readonly profile: ProfileId
@@ -220,6 +222,7 @@ export class RemoteWorkbook implements WorkbookSource {
     this.docId = open.docId
     this.valuePolicy = open.valuePolicy
     this.sheets = open.sheets
+    this.hasFormulaCellsOutsidePivots = open.hasFormulaCellsOutsidePivots
     this.openDiagnostics = open.diagnostics.filter(d => d.code !== 'cached-value-policy')
     this.statusMessage = open.diagnostics.find(d => d.code === 'cached-value-policy')?.message
     this.owner = initialWorkbookOwner(open.docId, open.sheets)

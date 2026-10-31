@@ -992,6 +992,19 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
     valueStatus: () => status,
     ...(status.message === undefined ? {} : { openDiagnostics: Object.freeze([{ code: SAVED_VALUES_DIAGNOSTIC, message: status.message }]) }),
     sheets: Object.freeze(sheets.map(({ sheet, sheetId }) => Object.freeze({ sheetId, name: sheet.name }))),
+    scanFormulaCellsOutsidePivots() {
+      for (const { sheet } of sheets) {
+        const refs = [...(sheet.pivotTables ?? []).map(def => String(def.location.ref)), ...(sheet.pivotRegions ?? []).map(region => region.ref)]
+        const pivots = refs.flatMap(ref => {
+          const [a, b = a] = ref.split(':')
+          try { const first = parseA1(a!.replace(/\$/g, '')), last = parseA1(b!.replace(/\$/g, '')); return [{ r0: Math.min(first.row, last.row), r1: Math.max(first.row, last.row), c0: Math.min(first.col, last.col), c1: Math.max(first.col, last.col) }] } catch { return [] }
+        })
+        for (const row of sheet.rows) for (const cell of row.cells) if (cell.formula || cell.sharedFormula) {
+          if (!pivots.some(r => cell.row >= r.r0 && cell.row <= r.r1 && cell.col >= r.c0 && cell.col <= r.c1)) return true
+        }
+      }
+      return false
+    },
     async pivotAssets(sheetId, signal, profile, memory): Promise<WorkerPivotAssets | undefined> {
       if (signal.aborted) return undefined
       const sheet = find(sheetId).sheet
