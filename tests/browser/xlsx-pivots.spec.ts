@@ -276,28 +276,16 @@ for (const { fixture, regions, buttons } of CASES) {
 /**
  * Task 28: a pivot button is a control. Clicking East's collapse button on the engine seed (engine/baseline.xlsx) must
  * repaint the pivot as Excel saved the same change (engine/layout-collapsed-item.xlsx, the seed with East collapsed),
- * compared in the same browser on the same leg. The paged leg waits for Task 27's worker pivot protocol: until then its
- * buttons are painted and named "not interactive", which this test checks instead.
+ * compared in the same browser on the same leg (the paged leg through the worker's pivot session).
  */
-const COLLAPSE_EAST = 'Collapse East (Region)'
+// A worker session's labels arrive with its open: before it, a paged ± button is named by its item alone.
+const COLLAPSE_EAST = /^Collapse East/
 // A3:I24 at 100%: columns A..I and rows 3..24 of the seed's sheet (the collapsed pivot ends at row 21; the rows it
 // vacates must repaint empty, so the crop keeps the seed's full height).
 const PIVOT_AREA: Rect = { x: 0, y: 40, width: 900, height: 440 }
 test('click collapse → repaint equals the oracle case on resident, worker and paged legs', async ({ context }) => {
   for (const leg of LEGS) {
     await test.step(leg.name, async () => {
-      if (leg.paged) {
-        // Pending (Task 27): the worker pivot protocol is not built; the paged leg is honest about it.
-        const page = await open(context, 'engine/baseline', leg)
-        try {
-          const buttons = page.locator('button[data-officeview-ui="pivot-button"]')
-          await expect(buttons.first()).toBeAttached({ timeout: 30_000 })
-          await expect(buttons.first()).toHaveAttribute('aria-label', /not available in the large-file view/)
-          await expect(page.getByRole('status').filter({ hasText: 'not available in the large-file view' }).first()).toBeVisible()
-        } finally { await page.close() }
-        test.info().annotations.push({ type: 'pending', description: 'paged leg: click → apply waits for Task 27 (worker pivot protocol)' })
-        return
-      }
       const changed = await open(context, 'engine/baseline', leg)
       let after: Img
       try {
@@ -321,20 +309,26 @@ test('click collapse → repaint equals the oracle case on resident, worker and 
 
 /** Task 30 wired (Task 28 follow-up): a chart-linked pivot's chart repaints with its pivot. The whole captured grid (the
  * pivot and its chart) after clicking East's collapse on chart-baseline equals Excel's chart-collapse-item save. */
+/** The chart of interaction/chart-*.xlsx, right of the pivot (canvas px at 100%). */
+const CHART_AREA: Rect = { x: 610, y: 30, width: 380, height: 320 }
 test('click collapse on a chart-linked pivot → pivot and chart repaint as the oracle case', async ({ context }) => {
-  for (const leg of LEGS.filter(entry => !entry.paged)) {
+  for (const leg of LEGS) {
     await test.step(leg.name, async () => {
       // The oracle first: the change then settles when it reaches it (the chart repaints after the pivot, once the
       // lazy chart gate and painter are in), or at the deadline.
-      const oracle = await open(context, 'interaction/chart-collapse-item', leg)
+      // The chart is painted, not its "Chart not loaded" placeholder (its #F7F7F7 card fills the chart area).
+      const painted = (img: Img) => countColour(img, CHART_AREA, [0xf7, 0xf7, 0xf7], 0) < CHART_AREA.width * CHART_AREA.height * 0.3
       let saved: Img
-      try { saved = await settledGrid(oracle, () => true) } finally { await oracle.close() }
+      const oracle = await open(context, 'interaction/chart-collapse-item', leg)
+      try { saved = await settledGrid(oracle, painted) } finally { await oracle.close() }
+      expect(painted(saved), `${leg.name}: the oracle's chart painted`).toBe(true)
       const changed = await open(context, 'interaction/chart-baseline', leg)
       let before: Img, after: Img
       try {
         const button = changed.getByRole('button', { name: COLLAPSE_EAST })
         await expect(button).toBeAttached({ timeout: 30_000 })
-        before = await settledGrid(changed, () => true)
+        before = await settledGrid(changed, painted)
+        expect(painted(before), `${leg.name}: the chart painted before the change`).toBe(true)
         await button.click()
         await expect(changed.getByRole('button', { name: 'Expand East (Region)' })).toBeAttached({ timeout: 30_000 })
         after = await settledGrid(changed, img => diff(img, saved).share <= PARITY_MAX_SHARE)

@@ -37,45 +37,18 @@ import type { SourceRect } from '../../../xlsx/view/coordinates'
 import { cellDisplayText } from '../../../xlsx/render'
 import { pivotRuntimeFor } from '../../../xlsx/pivotLoader'
 import type { RuntimeLedger } from '../../../xlsx/pivots/session/runtime'
-import {
-  PIVOT_VALUES_FIELD,
-  type PivotCacheDefinition, type PivotDiagnostic, type PivotFieldSortType, type PivotFilter, type PivotTableDefinition,
-} from '../../../xlsx/pivots/model'
+import type { PivotCacheDefinition, PivotDiagnostic, PivotFilter, PivotTableDefinition } from '../../../xlsx/pivots/model'
 import type { SavedPivotLayout } from '../../../xlsx/pivots/savedLayout'
 import {
-  openPivotSession, ORACLE_VERIFIED_KINDS, pivotItemLabel, RECORD_LIMITS, savedPivotLayout, sheetCellReader,
+  openPivotSession, ORACLE_VERIFIED_KINDS, RECORD_LIMITS, savedPivotLayout, sheetCellReader,
   type ChartGate, type PivotDelta, type PivotDeltaKind, type PivotLayout, type PivotSession, type PivotViewState,
 } from '../../../xlsx/pivots/index'
 import { sheetCharts } from '../sheetCharts'
+import { pivotFieldName, pivotMenuItemLabel, pivotMenuModel, type PivotMenuField, type PivotMenuItem, type PivotMenuModel } from '../../../xlsx/pivots/session/menu'
 
 export type { PivotDelta, PivotDeltaKind }
 
-/** One item of a field, by its pivot-item index (the index a delta names). */
-export interface PivotMenuItem { index: number; label: string; hidden: boolean; collapsed: boolean }
-export interface PivotMenuField {
-  index: number
-  name: string
-  axis: 'row' | 'col' | 'page' | 'none'
-  /** The field's data items (subtotal items are not listed). */
-  items: PivotMenuItem[]
-  sort: PivotFieldSortType
-  /** The data field a value sort follows. */
-  byData?: number
-  filters: readonly PivotFilter[]
-  /** What the label/date filter compares: the cache field's item types. */
-  values: 'text' | 'number' | 'date'
-  /** A level lies below this field on its axis (collapse entire field applies). */
-  expandable: boolean
-  /** A page field's selection. */
-  page?: readonly number[] | 'all'
-}
-export interface PivotMenuModel {
-  name: string
-  fields: PivotMenuField[]
-  data: Array<{ index: number; name: string }>
-  /** The id a new filter takes (Excel's filter ids are unique in the pivot). */
-  nextFilterId: number
-}
+export type { PivotMenuField, PivotMenuItem, PivotMenuModel }
 /** What a commit installs in the viewer (spec §7.9): the live definition and, on the resident path, the sheet's
  * composite overlay (`null` once every pivot of the sheet is back to its saved view: the saved cells show again,
  * their own styles included). The paged path's overlay lives in the worker (Task 27); its commit carries none. */
@@ -111,19 +84,78 @@ const nameOf = (def: PivotTableDefinition | undefined) => `Pivot table ${String(
 // ---- the remote seam (Task 27) ---------------------------------------------------------------------------------------
 
 /**
- * What the paged path must supply (Task 27's `RemotePivotSessions`, plan "Interfaces"): open, apply and release over
- * the worker protocol, the apply resolving only after the worker committed the staged candidate (`pivotCommit`), so
- * the viewer installs a committed revision. The worker owns the overlay; the main side publishes merges and extent
- * through `RemoteWorkbook` and bumps its `valueGen` (plan Task 27 "On the commit reply"). The menu model (item
- * labels, the view state) is built in the worker from the cache it holds.
+ * What the paged path supplies: open, apply and release over the worker protocol, the apply resolving only after the
+ * worker committed the staged candidate (`pivotCommit`), so the viewer installs a committed revision. The worker owns
+ * the overlay; `RemoteWorkbook` publishes its merges, extent, valueGen and the refilled pivot charts (S3-M) on the
+ * acknowledged commit. The menu model is built in the worker, where the cache is (`session/menu.ts`).
  */
 export interface RemotePivotPort {
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<PivotOpenResult>
   apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<PivotApplyOutcome>
   release(sheetId: number, pivot: number): void
   labels?(sheetId: number, pivot: number): PivotLabels | undefined
+  dispose?(): void
 }
-/** The paged client: the port as-is, the viewer's install run on each committed outcome. */
+/** Task 27's `RemotePivotSessions` as this module reads it (its `sheetId` is the worker's sheet id as a number). */
+export interface RemotePivotSessionsLike {
+  open(sheetId: number, pivot: number, signal: AbortSignal): Promise<{ kind: 'open'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel } | { kind: 'refused'; message: string }>
+  apply(sheetId: number, pivot: number, delta: PivotDelta | 'reset'): Promise<{ kind: 'committed'; revision: number; def: PivotTableDefinition; menu: PivotMenuModel } | { kind: 'stale' | 'cancelled' } | { kind: 'refused'; message: string }>
+  release(sheetId: number, pivot: number): void
+}
+const OPEN_FIRST = 'Open the pivot before changing it.'
+/**
+ * The port over `RemotePivotSessions`. Sheets are addressed here by position (`doc.sheets`), there by the worker's
+ * numeric sheet id. A session the workbook released (a sheet switch releases the others, `releaseExcept`) is opened
+ * again before an apply; a stale or cancelled apply is refused with a retry message (a newer one won). The menu
+ * model's numbers and dates are labelled on this thread (`formatMenu`).
+ */
+export function remotePivotPort(sessions: RemotePivotSessionsLike, sheets: { id(sheetId: number): number | undefined; sheet(sheetId: number): XlsxSheet | undefined }): RemotePivotPort {
+  const models = new Map<string, PivotMenuModel>(), opened = new Set<string>()
+  const key = (sheetId: number, pivot: number) => `${sheetId}:${pivot}`
+  const refusedAs = (feature: string, message: string): { ok: false; diagnostic: PivotDiagnostic } => ({ ok: false, diagnostic: { kind: 'unsupported', feature, message } })
+  const port: RemotePivotPort = {
+    async open(sheetId, pivot, signal) {
+      const id = sheets.id(sheetId)
+      if (id === undefined) return refusedAs('pivot-remote-unavailable', REMOTE_PIVOTS_UNAVAILABLE.message)
+      const result = await sessions.open(id, pivot, signal)
+      if (result.kind === 'refused') return refusedAs('pivot-remote-refused', result.message)
+      const model = formatMenu(result.menu, sheets.sheet(sheetId))
+      models.set(key(sheetId, pivot), model); opened.add(key(sheetId, pivot))
+      return { ok: true, revision: result.revision, def: result.def, verifiedKinds: ORACLE_VERIFIED_KINDS, model }
+    },
+    async apply(sheetId, pivot, delta) {
+      const id = sheets.id(sheetId)
+      if (id === undefined) return refusedAs('pivot-remote-unavailable', REMOTE_PIVOTS_UNAVAILABLE.message)
+      let result = await sessions.apply(id, pivot, delta)
+      if (result.kind === 'refused' && result.message === OPEN_FIRST) {
+        const reopened = await sessions.open(id, pivot, new AbortController().signal)
+        if (reopened.kind === 'refused') return refusedAs('pivot-remote-refused', reopened.message)
+        result = await sessions.apply(id, pivot, delta)
+      }
+      if (result.kind === 'refused') return refusedAs('pivot-remote-refused', result.message)
+      if (result.kind !== 'committed') return refusedAs('pivot-session-released', 'The pivot table changed meanwhile; try again.')
+      const model = formatMenu(result.menu, sheets.sheet(sheetId))
+      models.set(key(sheetId, pivot), model)
+      return { ok: true, revision: result.revision, def: result.def, model, commit: { sheetId, pivot, revision: result.revision, def: result.def } }
+    },
+    release(sheetId, pivot) {
+      const k = key(sheetId, pivot), id = sheets.id(sheetId)
+      models.delete(k)
+      if (opened.delete(k) && id !== undefined) sessions.release(id, pivot)
+    },
+    labels(sheetId, pivot) {
+      const model = models.get(key(sheetId, pivot))
+      if (!model) return undefined
+      return {
+        field: field => model.fields.find(entry => entry.index === field)?.name ?? `Field ${field + 1}`,
+        item: (field, item) => model.fields.find(entry => entry.index === field)?.items.find(entry => entry.index === item)?.label,
+      }
+    },
+    dispose() { for (const k of [...opened]) { const [sheetId, pivot] = k.split(':').map(Number) as [number, number]; port.release(sheetId, pivot) } },
+  }
+  return port
+}
+/** The paged client: the port, the viewer's install run on each committed outcome. */
 export function createRemotePivotClient(port: RemotePivotPort, install: (commit: PivotCommit) => void): PivotClient {
   return {
     open: (sheetId, pivot, signal) => port.open(sheetId, pivot, signal),
@@ -134,6 +166,7 @@ export function createRemotePivotClient(port: RemotePivotPort, install: (commit:
     },
     release: (sheetId, pivot) => port.release(sheetId, pivot),
     ...(port.labels ? { labels: port.labels.bind(port) } : {}),
+    dispose: () => port.dispose?.(),
   }
 }
 /** Not interactive here, with one reason (the paged path until Task 27's port lands). */
@@ -150,53 +183,20 @@ export const REMOTE_PIVOTS_UNAVAILABLE = { feature: 'pivot-remote-unavailable', 
 
 // ---- the menu model --------------------------------------------------------------------------------------------------
 
-const FUNCTION_NAMES: Record<string, string> = {
-  sum: 'Sum', count: 'Count', average: 'Average', max: 'Max', min: 'Min', product: 'Product', countNums: 'Count', stdDev: 'StdDev', stdDevp: 'StdDevp', var: 'Var', varp: 'Varp',
+/** A number or date item's label in its format (the model carries the value; the menus show this). */
+function formatItem(sheet: XlsxSheet | undefined, item: Pick<PivotMenuItem, 'label' | 'number'>): string {
+  if (!item.number || !sheet) return item.label
+  try { return cellDisplayText(sheet, { value: item.number.value, style: { numFmtId: item.number.numFmtId } }) } catch { return item.label }
 }
-function fieldName(def: PivotTableDefinition, cache: PivotCacheDefinition | undefined, field: number): string {
-  if (field === PIVOT_VALUES_FIELD) return def.dataCaption || 'Values'
-  return def.fields[field]?.name ?? cache?.fields[field]?.name ?? `Field ${field + 1}`
+/** The model with its number and date items labelled in their formats. */
+export function formatMenu(model: PivotMenuModel, sheet: XlsxSheet | undefined): PivotMenuModel {
+  return { ...model, fields: model.fields.map(field => ({ ...field, items: field.items.map(item => item.number ? { ...item, label: formatItem(sheet, item) } : item) })) }
 }
-function itemText(sheet: XlsxSheet, def: PivotTableDefinition, cache: PivotCacheDefinition, field: number, item: number, date1904: boolean): string {
-  const label = pivotItemLabel(def, cache, field, item, date1904)
-  if (label.value.kind === 'empty') return ''
-  if (label.value.kind !== 'number') return label.value.value
-  const shared = cache.fields[field]?.sharedItems
-  const dates = Boolean(shared?.containsDate && !shared.containsString && !shared.containsNumber)
-  // A custom format id has no format code here: dates fall back to the built-in short date, numbers to General.
-  const numFmtId = label.numFmtId !== undefined && label.numFmtId < 164 ? label.numFmtId : dates ? 14 : 0
-  try { return cellDisplayText(sheet, { value: label.value.value, style: { numFmtId } }) } catch { return String(label.value.value) }
-}
-function valuesOf(cache: PivotCacheDefinition, field: number): PivotMenuField['values'] {
-  const shared = cache.fields[field]?.sharedItems
-  if (!shared || shared.containsString || shared.containsMixedTypes) return 'text'
-  if (shared.containsDate && !shared.containsNumber) return 'date'
-  if (shared.containsNumber && !shared.containsDate) return 'number'
-  return 'text'
-}
-export function menuModel(sheet: XlsxSheet, def: PivotTableDefinition, cache: PivotCacheDefinition, view: PivotViewState, date1904: boolean): PivotMenuModel {
-  const axisOf = (field: number): PivotMenuField['axis'] => view.rows.includes(field) ? 'row' : view.cols.includes(field) ? 'col' : view.pages.some(page => page.field === field) ? 'page' : 'none'
-  const below = (fields: readonly number[], field: number) => { const at = fields.indexOf(field); return at >= 0 && fields.slice(at + 1).length > 0 }
-  const used = [...new Set([...view.rows, ...view.cols, ...view.pages.map(page => page.field)])].filter(field => field !== PIVOT_VALUES_FIELD)
-  const fields = used.map((field): PivotMenuField => {
-    const state = view.fields[field]
-    const list = def.fields[field]?.items
-    const indices = list ? list.flatMap((item, k) => item.type === 'data' ? [k] : []) : (state?.hidden ?? []).map((_, k) => k)
-    const scope = state?.autoSortScope?.references.find(ref => ref.field === PIVOT_VALUES_FIELD)?.x[0]
-    const page = view.pages.find(entry => entry.field === field)
-    return {
-      index: field, name: fieldName(def, cache, field), axis: axisOf(field),
-      items: indices.map(k => ({ index: k, label: itemText(sheet, def, cache, field, k, date1904), hidden: state?.hidden[k] ?? false, collapsed: state?.collapsed[k] ?? false })),
-      sort: state?.sortType ?? 'manual', ...(scope !== undefined ? { byData: scope } : {}),
-      filters: view.filters.filter(filter => filter.fld === field), values: valuesOf(cache, field),
-      expandable: below(view.rows, field) || below(view.cols, field),
-      ...(page ? { page: page.selected } : {}),
-    }
-  })
-  const data = view.data.map((entry, index) => ({ index, name: entry.name || `${FUNCTION_NAMES[entry.fn] ?? entry.fn} of ${fieldName(def, cache, entry.field)}` }))
-  const nextFilterId = view.filters.reduce((max, filter) => Math.max(max, filter.id), 0) + 1
-  return { name: String(def.name ?? ''), fields, data, nextFilterId }
-}
+export const menuModel = (sheet: XlsxSheet, def: PivotTableDefinition, cache: PivotCacheDefinition, view: PivotViewState, date1904: boolean): PivotMenuModel =>
+  formatMenu(pivotMenuModel(def, cache, view, date1904), sheet)
+const fieldName = pivotFieldName
+const itemText = (sheet: XlsxSheet, def: PivotTableDefinition, cache: PivotCacheDefinition, field: number, item: number, date1904: boolean): string =>
+  formatItem(sheet, pivotMenuItemLabel(def, cache, field, item, date1904))
 
 // ---- the overlay -----------------------------------------------------------------------------------------------------
 

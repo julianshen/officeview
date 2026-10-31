@@ -25,7 +25,7 @@ import type { PivotClient, PivotDelta, PivotDeltaKind, PivotMenuModel } from './
 import { PivotFieldMenu } from './PivotFieldMenu'
 import { PivotPageMenu } from './PivotPageMenu'
 
-export { createResidentPivotClient, createRemotePivotClient, unavailablePivotClient, REMOTE_PIVOTS_UNAVAILABLE } from './pivotClient'
+export { createResidentPivotClient, createRemotePivotClient, remotePivotPort, unavailablePivotClient, REMOTE_PIVOTS_UNAVAILABLE } from './pivotClient'
 export type { PivotClient, PivotCommit, PivotOpenResult, PivotApplyOutcome, RemotePivotPort, PivotDeltaKind } from './pivotClient'
 
 export type PivotUiState =
@@ -200,7 +200,8 @@ function actionName(controller: PivotController, sheet: number, pivot: number, b
   if (button.kind === 'filter') return `Filter and sort ${field}`
   if (button.kind === 'page') return `Report filter ${field}`
   const item = (button.item !== undefined ? labels?.item(button.field, button.item) : undefined) || cellText?.(button.row, button.col) || `item ${(button.item ?? 0) + 1}`
-  return `${button.kind === 'collapse' ? 'Collapse' : 'Expand'} ${item} (${field})`
+  // Without labels (a worker session not opened yet) the field's name is unknown here: the item's text alone.
+  return `${button.kind === 'collapse' ? 'Collapse' : 'Expand'} ${item}${labels ? ` (${field})` : ''}`
 }
 
 export function PivotButtonLayer(props: PivotButtonLayerProps): ReactElement | null {

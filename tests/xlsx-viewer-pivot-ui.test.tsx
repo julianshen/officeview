@@ -31,6 +31,14 @@ import { createSheetMetrics } from '../src/xlsx/view/projection'
 import { createIdentityOrder } from '../src/xlsx/view/order'
 import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
 import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
+import { openPagedWorkbook } from '../src/components/xlsx/pagedWorkbook'
+import { pagedWorkbookOf } from '../src/components/pagedDocument'
+import { FORCE_PAGED_LIMITS } from '../src/debug/forcePaged'
+import { ViewerKernel } from '../src/worker/viewerKernel'
+import { openImportSession } from '../src/xlsx/storage/pagedImport'
+import { createPagedWorkbookSource } from '../src/xlsx/view/pagedSource'
+import type { WorkerCommand, WorkerReply } from '../src/xlsx/view/contracts'
+import { FIRST_PAINT_WAIT } from './helpers/viewer-timing'
 
 const FIXTURES = `${__dirname}/fixtures/xlsx-pivots/`
 const BASELINE = `${FIXTURES}engine/baseline.xlsx`
@@ -281,7 +289,11 @@ describe('the interactive viewer', () => {
     const doc = await load(CHART_LINKED)
     const saved = linkedCharts(doc)[0]!
     const expected = linkedCharts(await load(chartCase('chart-collapse-item')))[0]!
-    const ui = render(<InteractiveSheetDoc doc={doc} />)
+    const savedDef = doc.sheets[pivotSheet(doc)]!.pivotTables![0]!
+    const printed: XlsxDocument[] = []
+    const printLoader = async (printDoc: XlsxDocument) => { printed.push(printDoc); return Object.assign([], { dispose() {}, refusedImages: [] }) as never }
+    vi.stubGlobal('print', () => {})
+    const ui = render(<InteractiveSheetDoc doc={doc} printLoader={printLoader} />)
     const described = () => ui.container.querySelector('[data-testid="officeview-sheet-charts"] li')?.getAttribute('aria-label')
     await waitFor(() => expect(described()).toBe(chartDescription(saved)), { timeout: 10_000 })
     fireEvent.click(await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 }))
@@ -291,6 +303,13 @@ describe('the interactive viewer', () => {
     expect(chartData(live)).toEqual(chartData(expected))
     await waitFor(() => expect(described()).toBe(chartDescription(live)))
     expect(described()).not.toBe(chartDescription(saved))
+    // Print never runs a session (§7.10): it is handed the saved pivot and its saved chart.
+    fireEvent.keyDown(ui.getByRole('region', { name: 'Spreadsheet viewer' }), { key: 'p', ctrlKey: true })
+    await waitFor(() => expect(printed).toHaveLength(1))
+    const printedSheet = printed[0]!.sheets[pivotSheet(doc)]!
+    expect(printedSheet.pivotTables![0]).toBe(savedDef)
+    expect(printed[0]!.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).find(chart => chart.pivot)).toBe(saved)
+    expect(linkedCharts(doc)[0]).toBe(live)
     fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
     fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Reset to saved view' }))
     await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
@@ -418,4 +437,89 @@ describe('the interactive viewer', () => {
     expect(doc.sheets[pivotSheet(doc)]!.pivotTables![0]).toBe(saved)
     expect(doc.sheets[pivotSheet(doc)]!.pivotRegions![0]!.ref).toBe('A3:I24')
   })
+})
+
+/** An in-process worker port over a ViewerKernel (tests/xlsx-viewer-paged-viewer.test.tsx's harness, trimmed). */
+function workerHarness(env?: ConstructorParameters<typeof ViewerKernel>[0]) {
+  // Admission forced paged (src/debug/forcePaged.ts): these small fixtures take the worker-backed paged path.
+  const kernel = new ViewerKernel({ parse: async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)), importLimits: FORCE_PAGED_LIMITS, ...env }, { yield: async () => {} })
+  const listeners = new Set<(event: MessageEvent) => void>()
+  const posted: WorkerCommand[] = []
+  const port = {
+    postMessage(message: unknown, transfer: Transferable[]) {
+      const open = message as { kind: string; source?: { kind: string; blob?: Blob } }
+      const blob = open.kind === 'open' && open.source?.kind === 'blob' ? open.source.blob : undefined
+      const command = structuredClone(blob ? { ...open, source: { kind: 'blob' } } : message, { transfer: transfer as ArrayBuffer[] }) as WorkerCommand
+      if (blob && command.kind === 'open') command.source = { kind: 'blob', blob }
+      posted.push(command)
+      void kernel.handle(command, (out: WorkerReply, replyTransfer) => {
+        const data = structuredClone(out, { transfer: replyTransfer })
+        for (const listener of [...listeners]) listener({ data } as MessageEvent)
+      })
+    },
+    addEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.add(listener) },
+    removeEventListener(type: string, listener: (event: MessageEvent) => void) { if (type === 'message') listeners.delete(listener) },
+    terminate: vi.fn(),
+  }
+  return { port, posted }
+}
+const pagedFile = (file: string) => new Blob([new Uint8Array(readFileSync(file))])
+/** The paged route OfficeDoc takes: the worker-backed shell document and its source. */
+async function renderPaged(h: ReturnType<typeof workerHarness>, file: string) {
+  const doc = await openPagedWorkbook(pagedFile(file), { port: h.port as never, profile: 'D', signal: new AbortController().signal })
+  const handle = doc && pagedWorkbookOf(doc)
+  if (!doc || !handle) throw new Error('the workbook did not open paged')
+  return render(<InteractiveSheetDoc doc={doc} source={handle.source} />)
+}
+
+describe('the paged path (worker sessions through RemotePivotSessions)', () => {
+  it('opens, applies, commits and resets in the worker; the menus carry the worker’s model', async () => {
+    const h = workerHarness()
+    const ui = await renderPaged(h, BASELINE)
+    // Before the session opens the worker's labels are unknown: the item's own text names its button.
+    const collapse = await ui.findByRole('button', { name: /^Collapse East/ }, FIRST_PAINT_WAIT)
+    await waitFor(() => expect(cellText(ui.container, 6, 0)).toContain('Apples'), FIRST_PAINT_WAIT)
+    fireEvent.click(collapse)
+    await ui.findByRole('button', { name: 'Expand East (Region)' }, FIRST_PAINT_WAIT)
+    expect(h.posted.map(command => command.kind)).toEqual(expect.arrayContaining(['pivotOpen', 'pivotApply', 'pivotCommit']))
+    await waitFor(() => expect(cellText(ui.container, 6, 0)).toContain('North'), FIRST_PAINT_WAIT)
+    // The field menu: item labels from the worker's model; a sort applies through the worker.
+    fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+    const menu = await ui.findByRole('dialog', { name: 'Region' })
+    expect(within(menu).getAllByRole('checkbox').map(box => box.getAttribute('aria-label'))).toEqual(expect.arrayContaining(['East', 'North', 'South', 'West', 'Central']))
+    fireEvent.click(within(menu).getByRole('button', { name: 'Reset to saved view' }))
+    await ui.findByRole('button', { name: 'Collapse East (Region)' }, FIRST_PAINT_WAIT)
+    await waitFor(() => expect(cellText(ui.container, 6, 0)).toContain('Apples'), FIRST_PAINT_WAIT)
+    ui.unmount()
+    await waitFor(() => expect(h.posted.some(command => command.kind === 'pivotRelease')).toBe(true))
+  }, 60_000)
+
+  it('a pivot the worker refuses names its reason on every button, with one notice', async () => {
+    const file = `${FIXTURES}interaction/chart-hide-item.xlsx`
+    const h = workerHarness({
+      parse: async (bytes: Uint8Array) => parseXlsx(await OfficePackage.load(bytes)),
+      openSource: async (source, docId) => {
+        if (source.kind !== 'blob') throw new Error('test expects a blob source')
+        const session = await openImportSession(source, { docId, profile: 'D' })
+        await session.done
+        const paged = createPagedWorkbookSource(session)
+        const assets = paged.pivotAssets!.bind(paged)
+        // The linked chart as a line chart: Task 30's gate does not cover it, so the worker refuses at open.
+        paged.pivotAssets = async (...args) => {
+          const found = await assets(...args)
+          return found && { ...found, linkedCharts: found.linkedCharts.map(item => ({ ...item, chart: { ...item.chart, groups: item.chart.groups.map(group => ({ ...group, family: 'line' as const })) } })) }
+        }
+        return paged
+      },
+    })
+    const ui = await renderPaged(h, file)
+    const button = await ui.findByRole('button', { name: /^Collapse East/ }, FIRST_PAINT_WAIT)
+    fireEvent.click(button)
+    await waitFor(() => expect(button.getAttribute('aria-label')).toMatch(/cannot follow its changes/), FIRST_PAINT_WAIT)
+    for (const other of ui.container.querySelectorAll<HTMLButtonElement>('button[data-officeview-ui="pivot-button"]')) {
+      expect(other.getAttribute('aria-label')).toMatch(/cannot follow its changes/)
+      expect(other.getAttribute('aria-disabled')).toBe('true')
+    }
+    expect(status(ui.container).split('cannot follow its changes').length - 1).toBe(1)
+  }, 60_000)
 })

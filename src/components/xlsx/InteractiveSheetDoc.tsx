@@ -419,6 +419,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }, [remote, entries])
   // Tiles painted under an older worker layout/merge generation are stale (§10.1).
   const structureGens = useRef(new Map<string, number>()).current
+  const presentedLease = useRef<{ sheetId: string; lease: SheetAssetsLease } | null>(null)
   // View-only session sizes per sheet (spec §5.6): they outlive scroll, zoom,
   // sort/filter commits and sheet switches, and end with the viewer.
   const sheetSizes = useRef(new Map<string, SheetSizes>()).current
@@ -928,6 +929,11 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     }
     const seenGen = structureGens.get(activeSheetId)
     if (seenGen !== undefined && seenGen !== frame.structureGen) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    // A new asset lease for the same sheet (a worker sheet's drawings arrived, a pivot's charts were replaced) may paint
+    // what an older one could not (the lazy chart painter, pictures): tiles painted under the older lease are stale.
+    const leased = presentedLease.current
+    if (leased && leased.sheetId === activeSheetId && leased.lease !== assets.lease) renderer.cache.invalidate(key => key.identity.sheetId === activeSheetId)
+    presentedLease.current = { sheetId: activeSheetId, lease: assets.lease }
     structureGens.set(activeSheetId, frame.structureGen ?? 0)
     sizeCanvas(canvas, device.width, device.height)
     const ctx = canvas.getContext('2d')
@@ -1253,7 +1259,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
    * geometry re-key); 5. the sheet's tiles dropped. The paged path's overlay is the worker's (Task 27). */
   const installPivot = (commit: PivotUi.PivotCommit) => {
     const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
-    if (!sheet?.pivotTables || sheetId === undefined) return
+    if (sheetId === undefined) return
+    // Paged: the workbook already published the worker's commit (merges, extent, valueGen, pivot display and charts).
+    if (remote) { cancelCopy(); dropTiles(sheetId, null); rerender(); return }
+    if (!sheet?.pivotTables) return
     sheet.pivotTables = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def)
     // The pivot's region (gridlines hidden inside it, regionGrid) follows its live location.
     if (sheet.pivotRegions) sheet.pivotRegions = sheet.pivotRegions.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
@@ -1281,8 +1290,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const [pivotController, setPivotController] = useState<PivotUi.PivotController | null>(null)
   useEffect(() => {
     if (!pivotUi) return
-    // A resident workbook parsed on this thread has its runtime; a paged (worker) one waits for Task 27's port.
-    const client = remote ? pivotUi.unavailablePivotClient(pivotUi.REMOTE_PIVOTS_UNAVAILABLE.feature, pivotUi.REMOTE_PIVOTS_UNAVAILABLE.message)
+    // A resident workbook parsed on this thread has its runtime; a paged or worker-parsed one runs its sessions in
+    // the worker (Task 27's RemotePivotSessions, addressed by the worker's numeric sheet id).
+    const client = remote ? pivotUi.createRemotePivotClient(pivotUi.remotePivotPort(remote.pivots, {
+      id: index => { const id = Number(sheetIds[index]); return Number.isSafeInteger(id) ? id : undefined },
+      sheet: index => doc.sheets[index],
+    }), commit => pivotHost.current.installPivot(commit))
       : pivotUi.createResidentPivotClient({ doc, saved: savedPivotDefs, ledger: mainLedger, profile: budgetProfile, install: commit => pivotHost.current.installPivot(commit), ...(pivotKinds ? { verifiedKinds: pivotKinds } : {}) })
     const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu() })
     setPivotController(controller)
@@ -1650,7 +1663,14 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
     const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
     setPrintPivotNote(changed ? 'Printing shows the pivot as saved.' : '')
-    const printed = changed ? { ...doc, sheets: doc.sheets.map((sheet, index) => sheet.pivotTables === savedPivotDefs[index] ? sheet : { ...sheet, pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false }) } : doc
+    // Its linked charts print as saved too: each live chart model maps back to the saved one it replaced.
+    const savedChart = new Map<ChartModel, ChartModel>()
+    for (const [name, charts] of savedPivotCharts) linkedPivotCharts(doc, name).forEach((live, k) => { const saved = charts[k]; if (saved && saved !== live) savedChart.set(live, saved) })
+    const printed = changed || savedChart.size ? { ...doc, sheets: doc.sheets.map((sheet, index) => {
+      const drawings = savedChart.size ? withSavedCharts(sheet.drawings, savedChart) : sheet.drawings
+      if (sheet.pivotTables === savedPivotDefs[index] && drawings === sheet.drawings) return sheet
+      return { ...sheet, ...(drawings !== sheet.drawings ? { drawings } : {}), ...(sheet.pivotTables !== savedPivotDefs[index] ? { pivotTables: savedPivotDefs[index], pivotRegions: savedPivotRegions[index], regionStyles: undefined, regionStylesResolved: false } : {}) }
+    }) } : doc
     try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
     }) } catch (error) {
@@ -2166,4 +2186,18 @@ function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.Pi
 /** A pivot's linked charts in `installPivotCharts`' order (sheets, then drawing order), by the name after the last `!`. */
 function linkedPivotCharts(doc: XlsxDocument, name: string): ChartModel[] {
   return doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)).filter(chart => { const source = chart.pivot?.name ?? ''; return Boolean(chart.pivot) && source.slice(source.lastIndexOf('!') + 1) === name })
+}
+
+/** Drawing nodes with the given chart models swapped back (copies only along the changed paths; print of a changed pivot). */
+function withSavedCharts(nodes: XlsxSheet['drawings'], saved: ReadonlyMap<ChartModel, ChartModel>): XlsxSheet['drawings'] {
+  if (!nodes) return nodes
+  let changed = false
+  const out = nodes.map(node => {
+    const content = node.content?.kind === 'xlsxChart' ? saved.get(node.content.chart) : undefined
+    const children = node.children?.length ? withSavedCharts(node.children, saved) : node.children
+    if (!content && children === node.children) return node
+    changed = true
+    return { ...node, ...(content ? { content: { ...node.content!, chart: content } } : {}), ...(children !== node.children ? { children } : {}) } as typeof node
+  })
+  return changed ? out : nodes
 }
