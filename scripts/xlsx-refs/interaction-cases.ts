@@ -18,6 +18,7 @@
  * captions, column widths). Its saved file is a measurement, or the `base` of later cases; it is not a delta oracle.
  */
 import type { PivotFilter } from '../../src/xlsx/pivots/model'
+import type { PivotDelta } from '../../src/xlsx/pivots/session/delta'
 import {
   F, SEED_PIVOT_MARKERS, UNITS, addFilter, attrOf, autoSort, childrenOf, custom, dataField, editItem, editPivotField, editRoot, fieldAttr, fieldHas, fieldItem,
   fieldItems, find, form, hideItem, labelFilter, must, onlyRows, rowField, setFieldItems, sharedItemValues, splice, str, subtotalsAt, toPage, valueFilter,
@@ -28,19 +29,8 @@ import {
 // PivotDelta (Task 25)
 // ---------------------------------------------------------------------------------------------------------------
 
-/**
- * Task 25's `PivotDelta` (plan, Task 25 interfaces), copied verbatim (ruling S3-A).
- * TODO(Task 25): import it from src/xlsx/pivots/session/delta.ts once that file is committed, and delete this copy.
- */
-export type PivotDelta =
-  | { kind: 'collapse'; field: number; item: number; collapsed: boolean }
-  | { kind: 'collapseField'; field: number; collapsed: boolean }
-  | { kind: 'collapseAll'; collapsed: boolean }
-  | { kind: 'items'; field: number; hidden: readonly number[] }          // pivot-item indices hidden
-  | { kind: 'page'; field: number; selected: readonly number[] | 'all' }
-  | { kind: 'filter'; field: number; filter: PivotFilter }               // label | value | date | top-10
-  | { kind: 'clearFilters'; field: number }
-  | { kind: 'sort'; field: number; order: 'ascending' | 'descending'; byData?: number }
+/** Task 25's delta type (src/xlsx/pivots/session/delta.ts), the manifest's `delta` entries (ruling S3-A). */
+export type { PivotDelta }
 
 /** An item named by its caption (a number item by its value, e.g. Year 2023). */
 export type ItemName = string | number
