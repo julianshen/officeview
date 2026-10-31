@@ -21,6 +21,13 @@ import { createObjectWorkbookSource } from '../src/xlsx/view/source'
 import { MainMemoryLedger, estimatePayloadBytes } from '../src/xlsx/view/mainLedger'
 import type { XlsxDocument } from '../src/xlsx/types'
 import type { PivotDeltaKind } from '../src/xlsx/pivots/session/delta'
+import { StructuralIndex, fromStoreScan } from '../src/xlsx/view/structure'
+import { guardFilter, guardSort } from '../src/xlsx/view/operationGuard'
+import { createAxisMetrics } from '../src/xlsx/view/axes'
+import { createSheetMetrics } from '../src/xlsx/view/projection'
+import { createIdentityOrder } from '../src/xlsx/view/order'
+import { createIntervalSet, visibilityFromHidden } from '../src/xlsx/view/visibility'
+import { MAX_COLS, MAX_ROWS } from '../src/xlsx/view/coordinates'
 
 const FIXTURES = `${__dirname}/fixtures/xlsx-pivots/`
 const BASELINE = `${FIXTURES}engine/baseline.xlsx`
@@ -91,6 +98,35 @@ describe('resident pivot client (headless)', () => {
     expect((await client.apply(sheet, 0, 'reset')).ok).toBe(false)
   })
 
+  it('S3-G: after a commit the vacated saved area stays protected from sheet sort and filter', async () => {
+    const { createResidentPivotClient } = await import('../src/components/xlsx/pivot/pivotClient')
+    const doc = await load(BASELINE), sheet = pivotSheet(doc), source = createObjectWorkbookSource(doc, 'pivot-guard')
+    const target = doc.sheets[sheet]!, store: any = source.store(target.sheetId ?? String(sheet + 1))
+    // The viewer's install: the live definition and region, then the overlay.
+    const client = createResidentPivotClient({ doc, ledger: new MainMemoryLedger(), install: commit => {
+      target.pivotTables = target.pivotTables!.map((def, k) => k === commit.pivot ? commit.def : def)
+      target.pivotRegions = target.pivotRegions?.map(region => region.partPath === commit.def.partPath ? { ...region, ref: commit.def.location.ref } : region)
+      store.setValueOverlay(commit.overlay ?? undefined)
+    } })
+    expect((await client.open(sheet, 0, signal())).ok).toBe(true)
+    expect((await client.apply(sheet, 0, { kind: 'collapse', field: 0, item: 0, collapsed: true })).ok).toBe(true)
+    expect(target.pivotTables![0]!.location.ref).toBe('A3:I21')
+    // Rows 22–24 (A22:I24) were the saved pivot's and are blank now: still a pivot's for sheet sort and filter.
+    const vacated = { r0: 21, r1: 23, c0: 0, c1: 8, headerRows: 0 as const, totalsRows: 0 as const }
+    const structure = new StructuralIndex(await store.queryStructural({ r0: 20, r1: 26, c0: 0, c1: 10 }, options(store)))
+    expect(await guardSort(vacated, structure, fromStoreScan(store, options(store)))).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+    const axes = { rows: createAxisMetrics({ logicalCount: MAX_ROWS, defaultSizeCss: 20 }), cols: createAxisMetrics({ logicalCount: MAX_COLS, defaultSizeCss: 64 }) }
+    const before = visibilityFromHidden(createIntervalSet([])), after = visibilityFromHidden(createIntervalSet([{ r0: 22, r1: 22 }]))
+    const filter = await guardFilter({ range: vacated, candidateVisibility: after, currentVisibility: before, structure,
+      projectionBefore: createSheetMetrics({ ...axes, order: createIdentityOrder(), visibility: before }), projectionAfter: createSheetMetrics({ ...axes, order: createIdentityOrder(), visibility: after }) })
+    expect(filter).toMatchObject({ ok: false, refusal: { reason: 'pivot' } })
+    // A range wholly beside both areas is not refused for a pivot.
+    const beside = { r0: 30, r1: 32, c0: 0, c1: 1, headerRows: 0 as const, totalsRows: 0 as const }
+    const away = new StructuralIndex(await store.queryStructural({ r0: 30, r1: 32, c0: 0, c1: 1 }, options(store)))
+    expect(await guardSort(beside, away, fromStoreScan(store, options(store)))).not.toMatchObject({ refusal: { reason: 'pivot' } })
+    await source.release()
+  })
+
   it('the composite overlay over two pivots: the current area answers first, a vacated saved cell reads blank', async () => {
     const { compositeOverlay } = await import('../src/components/xlsx/pivot/pivotClient')
     const layout = (minRow: number, maxRow: number, minCol: number, maxCol: number, cells: Array<[number, number, number]>) =>
@@ -106,7 +142,8 @@ describe('resident pivot client (headless)', () => {
     expect(overlay.cell(5, 0)).toEqual({ value: 50 })  // B's current area wins over A's vacated saved area
     expect(overlay.cell(8, 1)).toEqual({ value: 80 })
     expect(overlay.cell(9, 0)).toBeUndefined()     // owned by neither
-    expect(overlay.protectedRects).toEqual([{ r0: 0, r1: 2, c0: 0, c1: 1 }, { r0: 5, r1: 8, c0: 0, c1: 1 }])
+    // Ruling S3-G: protection is every saved area ∪ every current area.
+    expect(overlay.protectedRects).toEqual([{ r0: 0, r1: 5, c0: 0, c1: 1 }, { r0: 0, r1: 2, c0: 0, c1: 1 }, { r0: 6, r1: 8, c0: 0, c1: 1 }, { r0: 5, r1: 8, c0: 0, c1: 1 }])
   })
 
   it('a pivot whose records cannot be leased, or with a linked chart, refuses at open with its feature', async () => {

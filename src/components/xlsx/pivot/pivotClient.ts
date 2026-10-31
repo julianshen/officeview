@@ -19,6 +19,8 @@
  *   (`savedPivotLayout(savedDef).rects`, page cells included) and its current area: a cell of the current layout reads
  *   the layout's value, any other cell of either area reads blank (`null`). Owning the whole saved area, not only the
  *   last change's `vacated`, keeps rows an earlier change vacated blank through every later change.
+ * - Protection (Ruling S3-G): the overlay's `protectedRects` are every committed pivot's saved area ∪ its current area,
+ *   so a sheet sort or filter never reaches the base cells a vacated (blank) saved area still holds.
  * - Overlap (`occupied`, §7.1, refined by Task 29): a cell inside another pivot's current area (or, for a pivot never
  *   opened, its saved rectangles) is occupied; a cell another pivot vacated is free; anything else is occupied when
  *   the sheet as loaded has a value there (`sheetCellReader`, as the oracle does).
@@ -261,7 +263,9 @@ function savedStyles(doc: XlsxDocument, sheet: XlsxSheet, savedDef: PivotTableDe
 export function compositeOverlay(parts: readonly PivotPart[]): ValueOverlay {
   const owned = parts.map(part => ({ rects: [...part.saved, ...part.current], cell: overlayCell(part), current: part.current }))
   const rects = owned.flatMap(part => part.rects)
-  const protectedRects = owned.flatMap(part => part.current)
+  // Ruling S3-G: sheet sort and filter stay refused over every saved pivot area and every current one (page cells
+  // included); a vacated saved area reads blank but is still the pivot's.
+  const protectedRects = owned.flatMap(part => part.rects).filter((rect, k, all) => all.findIndex(other => other.r0 === rect.r0 && other.r1 === rect.r1 && other.c0 === rect.c0 && other.c1 === rect.c1) === k)
   const merges = parts.flatMap(part => part.layout.merges.map(toSource))
   const usedRows = rects.reduce((max, rect) => Math.max(max, rect.r1 + 1), 0)
   const usedCols = rects.reduce((max, rect) => Math.max(max, rect.c1 + 1), 0)
