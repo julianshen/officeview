@@ -489,10 +489,25 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
 
   // ---- pivots (Task 28): committed overlays per resident sheet; the saved definitions the host's document gets back ----
   const pivotOverlays = useRef(new Map<string, ValueOverlay>()).current
-  const pivotFormulaContexts = useRef(new Map<string, { sheet: string; def: import('../../xlsx/pivots/model').PivotTableDefinition; cache: import('../../xlsx/pivots/model').PivotCacheDefinition; layout: import('../../xlsx/pivots/engine/place').PivotLayout; layoutCells: Map<string, import('../../xlsx/pivots/engine/place').PivotLayout['cells'][number]>; date1904: boolean; rects: readonly { r0: number; r1: number; c0: number; c1: number }[]; overlay?: ValueOverlay }>()).current
+  const pivotFormulaContexts = useRef(new Map<string, { sheet: string; def: import('../../xlsx/pivots/model').PivotTableDefinition; cache: import('../../xlsx/pivots/model').PivotCacheDefinition; layout: import('../../xlsx/pivots/engine/place').PivotLayout; layoutCells: Map<string, import('../../xlsx/pivots/engine/place').PivotLayout['cells'][number]>; date1904: boolean; rects: readonly { r0: number; r1: number; c0: number; c1: number }[]; /** A pivot reset to its saved view while others are live (S3-AF): its saved layout answers GETPIVOTDATA; its cells are the sheet's own. */ saved?: true }>()).current
+  /** Document-wide dependent generation: a restore of every pivot drops all in-flight dependent work. */
   const pivotLifecycle = useRef(0)
+  /** Per-pivot dependent generation (S3-AF): a pivot's newer commit or reset drops only that pivot's in-flight work. */
+  const pivotFormulaGens = useRef(new Map<string, number>()).current
+  /** Changed rectangles whose recompute a newer commit of the same pivot dropped: the newer one recomputes them too. */
+  const pendingDependentRects = useRef(new Map<string, { r0: number; r1: number; c0: number; c1: number }[]>()).current
+  /** Which pivots' commits refilled each dependent chart: a reset puts back only the charts no other live pivot feeds. */
+  const dependentChartOwners = useRef(new Map<XlsxDrawing, Set<string>>()).current
+  /** The resident stale marks each pivot's commits caused, by sheet index: `unsupported` readers keep their saved
+   * value (S3-T, S3-Z); `outdated` ones were over the work budget and keep whatever they showed (S3-AE, M-4). */
+  const dependentStaleMarks = useRef(new Map<string, { unsupported: Set<number>; outdated: Set<number> }>()).current
   const [pagedDependentNoticeSheets, setPagedDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
-  const [residentDependentNoticeSheets, setResidentDependentNoticeSheets] = useState<ReadonlySet<number>>(() => new Set())
+  const [residentDependentNotices, setResidentDependentNotices] = useState<{ unsupported: ReadonlySet<number>; outdated: ReadonlySet<number> }>(() => ({ unsupported: new Set(), outdated: new Set() }))
+  const publishDependentNotices = () => {
+    const unsupported = new Set<number>(), outdated = new Set<number>()
+    for (const marks of dependentStaleMarks.values()) { for (const index of marks.unsupported) unsupported.add(index); for (const index of marks.outdated) outdated.add(index) }
+    setResidentDependentNotices({ unsupported, outdated })
+  }
   const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
   const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
   const savedPivotRegions = useMemo(() => doc.sheets.map(sheet => sheet.pivotRegions), [doc])
@@ -608,16 +623,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       } else for (const col of cols) sizes.restore('col', col, undefined)
     }
     pivotAutofitChars.clear()
-    pivotFormulaContexts.clear()
-    restoreDependentFormulaValues(doc)
-    const restoredDependentCharts = restoreDependentCharts(savedDependentCharts)
-    if (restoredDependentCharts.length) {
-      for (const [index, sheet] of doc.sheets.entries()) if (restoredDependentCharts.some(node => sheet.drawings?.includes(node))) {
-        const id = sheetIds[index]
-        if (id !== undefined) dropTiles(id, null)
-      }
-      if (!unmounting.current) setResidentDrawingGen(generation => generation + 1)
-    }
+    restoreAllDependents()
     doc.sheets.forEach((sheet, index) => {
       if (sheet.pivotTables === savedPivotDefs[index]) return
       sheet.pivotTables = savedPivotDefs[index]
@@ -628,7 +634,38 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     pivotOverlays.clear()
     for (const { sheet, name, charts } of savedPivotCharts.values()) for (const index of installPivotCharts(doc, name, charts, sheet)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
     savedPivotCharts.clear()
-    if (!unmounting.current) setResidentDependentNoticeSheets(new Set())
+  }
+  /** The document-wide restore (S3-AF): every saved formula value and dependent chart back, every stale mark gone,
+   * every in-flight dependent recompute dropped. Only when every pivot is back to its saved view, or on teardown. */
+  const restoreAllDependents = () => {
+    pivotLifecycle.current++
+    pivotFormulaContexts.clear(); pivotFormulaGens.clear(); pendingDependentRects.clear(); dependentChartOwners.clear(); dependentStaleMarks.clear()
+    for (const index of restoreDependentFormulaValues(doc)) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+    dropDependentChartTiles(restoreDependentCharts(savedDependentCharts))
+    if (!unmounting.current) setResidentDependentNotices({ unsupported: new Set(), outdated: new Set() })
+  }
+  const dropDependentChartTiles = (restored: readonly XlsxDrawing[]) => {
+    if (!restored.length) return
+    for (const [index, sheet] of doc.sheets.entries()) if (restored.some(node => sheet.drawings?.includes(node))) {
+      const id = sheetIds[index]
+      if (id !== undefined) dropTiles(id, null)
+    }
+    if (!unmounting.current) setResidentDrawingGen(generation => generation + 1)
+  }
+  /** One pivot back to its saved view while others stay live (S3-AF): its stale marks go, and the dependent charts only
+   * it fed get their saved models back; charts another live pivot also feeds are refilled by the reset's recompute. */
+  const releaseDependentsOf = (key: string) => {
+    if (dependentStaleMarks.delete(key)) publishDependentNotices()
+    const restored: XlsxDrawing[] = []
+    for (const [node, owners] of [...dependentChartOwners]) {
+      owners.delete(key)
+      if (owners.size) continue
+      dependentChartOwners.delete(node)
+      const saved = savedDependentCharts.get(node)
+      savedDependentCharts.delete(node)
+      if (saved && node.content?.kind === 'xlsxChart') { node.content.chart = saved; restored.push(node) }
+    }
+    dropDependentChartTiles(restored)
   }
 
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
@@ -1391,25 +1428,129 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     import('./pivot/PivotButtonLayer').then(module => { if (live) setPivotUi(module) }, () => { /* buttons stay painted, display only */ })
     return () => { live = false }
   }, [wantsPivotUi])
+  /** Each sheet's committed composite overlay, by lower-cased sheet name, as installed now (every pivot of the sheet). */
+  const overlaysByName = () => {
+    const out = new Map<string, ValueOverlay>()
+    doc.sheets.forEach((owner, index) => { const id = sheetIds[index], overlay = id === undefined ? undefined : pivotOverlays.get(id); if (overlay) out.set(owner.name.toLocaleLowerCase(), overlay) })
+    return out
+  }
+  const overlayValue = (cell: NonNullable<ReturnType<ValueOverlay['cell']>>) => cell.valueIsError ? formulaError(String(cell.value) as Parameters<typeof formulaError>[0]) : cell.value
+  /** Task 31 resident dependents of one pivot commit (Ruling S3-AF). A change recomputes the readers of the pivot's
+   * saved and shown areas against every pivot's live layout. A reset does the same with this pivot's overlay gone (its
+   * cells are the sheet's own again; its saved layout answers GETPIVOTDATA) while the other pivots stay live: only
+   * the charts and stale marks this pivot caused go, and no other pivot's in-flight work is dropped. When every pivot
+   * is back to its saved view, the document-wide restore runs instead. */
+  const installDependents = (commit: PivotUi.PivotCommit, sheet: XlsxSheet, layout: NonNullable<PivotUi.PivotCommit['layout']>, cache: NonNullable<PivotUi.PivotCommit['cache']>, changedRects: NonNullable<PivotUi.PivotCommit['changedRects']>) => {
+    const contextKey = `${commit.sheetId}:${commit.pivot}`
+    const generation = (pivotFormulaGens.get(contextKey) ?? 0) + 1
+    pivotFormulaGens.set(contextKey, generation)
+    if (commit.reset && commit.allSaved) { restoreAllDependents(); return }
+    pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache, layout, layoutCells: new Map(layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])), date1904: commit.date1904 ?? false, rects: changedRects, ...(commit.reset ? { saved: true as const } : {}) })
+    if (commit.reset) releaseDependentsOf(contextKey)
+    // A superseded commit's rectangles stay owed until a recompute of this pivot runs.
+    const rects = [...(pendingDependentRects.get(contextKey) ?? []), ...changedRects]
+    pendingDependentRects.set(contextKey, rects)
+    const changed = rects.map(rect => ({ sheetId: commit.sheetId, rect: { minRow: rect.r0, minCol: rect.c0, maxRow: rect.r1, maxCol: rect.c1 } }))
+    const lifecycle = pivotLifecycle.current
+    const current = () => lifecycle === pivotLifecycle.current && pivotFormulaGens.get(contextKey) === generation
+    // The viewer's pivot chunk is already loaded here; keep formula support out
+    // of the eager graph by resolving its adapter from a lazy import.
+    void import('../../xlsx/pivots/session/getpivotdata').then(({ getPivotData }) => {
+      if (!current()) return
+      pendingDependentRects.delete(contextKey)
+      // The pivots as they are when this runs (a later commit of another pivot included).
+      const contexts = [...pivotFormulaContexts.values()], live = contexts.filter(context => !context.saved), overlays = overlaysByName()
+      const overlayEntries = live.flatMap(context => context.layout.cells.map(cell => ({ sheetName: context.sheet, col: cell.col, row: cell.row, value: cell.value.kind === 'error' ? formulaError(cell.value.value as Parameters<typeof formulaError>[0]) : cell.value.kind === 'empty' ? null : cell.value.value })))
+      const result = recomputeDependents(doc, changed, {
+        getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData(contexts, args, evaluate, currentSheet, markStale),
+        overlayEntries,
+        readCellValue: (name, col, row) => {
+          const lower = name.toLocaleLowerCase()
+          // The sheet's composite overlay, sheet-scoped: never a same-coordinate cell of another worksheet (R2-1).
+          const shown = overlays.get(lower)?.cell(row, col)
+          if (shown !== undefined) return shown === null ? null : overlayValue(shown)
+          for (const context of live) {
+            if (context.sheet.toLocaleLowerCase() !== lower) continue
+            const cell = context.layoutCells.get(`${row}:${col}`)
+            if (!cell) {
+              if (context.rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)) return null
+              continue
+            }
+            if (cell.value.kind === 'empty') return null
+            if (cell.value.kind === 'error') return formulaError(cell.value.value as Parameters<typeof formulaError>[0])
+            return cell.value.value
+          }
+          return undefined
+        },
+      })
+      // Stale marks are this pivot's: a change adds them; a reset recomputes against saved cells, so only an
+      // over-budget reset leaves readers out of date (an unsupported reader keeps its saved value, which is right now).
+      const staleSheets = new Set(result.stale.map(key => {
+        const bang = key.lastIndexOf('!')
+        return doc.sheets.findIndex(candidate => candidate.name.toLocaleLowerCase() === key.slice(0, bang))
+      }).filter(index => index >= 0))
+      if (staleSheets.size && (result.overBudget || !commit.reset)) {
+        const marks = dependentStaleMarks.get(contextKey) ?? { unsupported: new Set<number>(), outdated: new Set<number>() }
+        for (const index of staleSheets) (result.overBudget ? marks.outdated : marks.unsupported).add(index)
+        dependentStaleMarks.set(contextKey, marks)
+        publishDependentNotices()
+      }
+      if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+      if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges, refillChartModel }) => {
+        if (!current()) return
+        const wanted = new Set(result.charts), changedSheets = new Set<number>(), chartOverlays = overlaysByName()
+        let chartIndex = 0
+        const refill = (nodes: XlsxSheet['drawings'], sheetIndex: number) => {
+          for (const node of nodes ?? []) {
+            if (node.content?.kind === 'xlsxChart' && node.content.chart) {
+              const owners = dependentChartOwners.get(node)
+              // A reset refills only the charts another live pivot still feeds; the rest show their saved models.
+              if (wanted.has(chartIndex) && (!commit.reset || owners?.size)) {
+                const ownerSheet = doc.sheets[sheetIndex]!
+                const sourceChart = node.content.chart
+                const pendingChart = { ...sourceChart,
+                  categoryPending: sourceChart.categoryRef ?? sourceChart.categoryPending,
+                  groups: sourceChart.groups.map(group => ({ ...group, series: group.series.map(series => ({ ...series, pending: series.refs ?? series.pending })) })),
+                }
+                const refilled = refillChartModel(sourceChart, () => fillChartRanges(pendingChart, ownerSheet.name, (name, row, col, needsText) => {
+                  const target = doc.sheets.find(candidate => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())
+                  const shown = chartOverlays.get(name.toLocaleLowerCase())?.cell(row, col)
+                  if (shown === null) return { value: null }
+                  const cell = target?.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
+                  if (shown && target) {
+                    return overlayChartCell(target, row, col, shown.value, shown.valueIsError ? String(shown.value) : undefined, needsText)
+                  }
+                  if (!cell) return undefined
+                  const style = cell.style
+                  return { value: cell.value, ...(cell.valueIsError ? { error: String(cell.value) } : {}),
+                    ...(style?.formatCode ? { formatCode: style.formatCode } : {}),
+                    ...(needsText ? { text: cellDisplayText(target!, { value: cell.value, style }) } : {}) }
+                }))
+                rememberDependentChart(savedDependentCharts, node, sourceChart)
+                if (!commit.reset) { if (owners) owners.add(contextKey); else dependentChartOwners.set(node, new Set([contextKey])) }
+                mainLedger.chargeWhileReachable('drawings', [refilled], estimatePayloadBytes(refilled))
+                node.content.chart = refilled
+                changedSheets.add(sheetIndex)
+              }
+              chartIndex++
+            }
+            if (node.children?.length) refill(node.children, sheetIndex)
+          }
+        }
+        doc.sheets.forEach((owner, index) => refill(owner.drawings, index))
+        for (const index of changedSheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
+        if (changedSheets.size) setResidentDrawingGen(generation => generation + 1)
+        rerender()
+      }).catch(() => setAnnouncement('Some charts that depend on this pivot may still show saved values.'))
+      rerender()
+    }).catch(() => setAnnouncement('Some formulas that depend on this pivot may still show saved values.'))
+  }
   /** Installs a committed pivot change (spec §7.9): 1. the sheet's live definition; 2. its region styles rebuilt;
    * 3. the overlay on the source store (resident), which 4. bumps the store's valueGen (tiles, find, copy and the
    * geometry re-key); 5. the sheet's tiles dropped. The paged path's overlay is the worker's (Task 27). */
   const installPivot = (commit: PivotUi.PivotCommit) => {
     const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
     if (sheetId === undefined) return
-    if (commit.reset) {
-      // The saved pivot view restores cached formula values; do not leave a
-      // notice from the transient dependent recalculation on screen.
-      pivotLifecycle.current++
-      restoreDependentFormulaValues(doc)
-      const restored = restoreDependentCharts(savedDependentCharts)
-      for (const [index, owner] of doc.sheets.entries()) if (restored.some(node => owner.drawings?.includes(node))) {
-        const id = sheetIds[index]
-        if (id !== undefined) dropTiles(id, null)
-      }
-      if (restored.length) setResidentDrawingGen(generation => generation + 1)
-      setResidentDependentNoticeSheets(new Set())
-    }
     // Paged: the workbook already published the worker's commit (merges, extent, valueGen, pivot display and charts).
     if (remote) {
       const defs = [...(sheet?.pivotTables ?? [])]
@@ -1448,106 +1589,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
     }
     if (pivotUi && beforeFit) autofitNotice.current = autofitPivot(sheetId, sheet, beforeFit, { def: commit.def, read: pivotShownReader(sheet, pivotOverlays.get(sheetId)), styleAt: pivotStyleAt(regionStylesFor(sheet)) })
-    if (commit.layout && commit.cache && commit.changedRects?.length) {
-      const contextKey = `${commit.sheetId}:${commit.pivot}`
-      pivotFormulaContexts.set(contextKey, { sheet: sheet.name, def: commit.def, cache: commit.cache, layout: commit.layout, layoutCells: new Map(commit.layout.cells.map(cell => [`${cell.row}:${cell.col}`, cell])), date1904: commit.date1904 ?? false, rects: commit.changedRects, overlay: commit.overlay ?? undefined })
-      const changed = commit.changedRects.map(rect => ({ sheetId: commit.sheetId, rect: { minRow: rect.r0, minCol: rect.c0, maxRow: rect.r1, maxCol: rect.c1 } }))
-      const contexts = [...pivotFormulaContexts.values()]
-      const lifecycle = pivotLifecycle.current
-      const overlayEntries = contexts.flatMap(context => context.layout.cells.map(cell => ({ sheetName: context.sheet, col: cell.col, row: cell.row, value: cell.value.kind === 'error' ? formulaError(cell.value.value as Parameters<typeof formulaError>[0]) : cell.value.kind === 'empty' ? null : cell.value.value })))
-      // The viewer's pivot chunk is already loaded here; keep formula support out
-      // of the eager graph by resolving its adapter from a lazy import.
-      void import('../../xlsx/pivots/session/getpivotdata').then(({ getPivotData }) => {
-        if (lifecycle !== pivotLifecycle.current) return
-        const result = recomputeDependents(doc, changed, {
-          getPivotData: (args, evaluate, currentSheet, markStale) => getPivotData(contexts, args, evaluate, currentSheet, markStale),
-          overlayEntries,
-          readCellValue: (name, col, row) => {
-            // The composite overlay is sheet-scoped. Never let a later commit
-            // on one worksheet shadow a same-coordinate read on another.
-            const composite = [...contexts].reverse().find(context => context.overlay && context.sheet.toLocaleLowerCase() === name.toLocaleLowerCase())?.overlay
-            const current = composite?.cell(row, col)
-            if (current !== undefined) {
-              if (current === null) return null
-              if (current.valueIsError) return formulaError(String(current.value) as Parameters<typeof formulaError>[0])
-              return current.value
-            }
-            for (const context of contexts) {
-              if (context.sheet.toLocaleLowerCase() !== name.toLocaleLowerCase()) continue
-              const overlayValue = context.overlay?.cell(row, col)
-              if (overlayValue !== undefined) {
-                if (overlayValue === null) return null
-                if (overlayValue.valueIsError) return formulaError(String(overlayValue.value) as Parameters<typeof formulaError>[0])
-                return overlayValue.value
-              }
-              const cell = context.layoutCells.get(`${row}:${col}`)
-              if (!cell) {
-                if (context.rects.some(rect => row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1)) return null
-                continue
-              }
-              if (cell.value.kind === 'empty') return null
-              if (cell.value.kind === 'error') return formulaError(cell.value.value as Parameters<typeof formulaError>[0])
-              return cell.value.value
-            }
-            return undefined
-          },
-        })
-        if (lifecycle !== pivotLifecycle.current) return
-        if (result.stale.length && !commit.reset) {
-          const staleSheets = new Set(result.stale.map(key => {
-            const bang = key.lastIndexOf('!')
-            return doc.sheets.findIndex(candidate => candidate.name.toLocaleLowerCase() === key.slice(0, bang))
-          }).filter(index => index >= 0))
-          if (staleSheets.size) setResidentDependentNoticeSheets(current => new Set([...current, ...staleSheets]))
-        }
-        if (result.recomputed) for (const index of result.sheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
-        if (result.charts.length) void import('../../charts/fill').then(({ fillChartRanges, refillChartModel }) => {
-          if (lifecycle !== pivotLifecycle.current) return
-          const wanted = new Set(result.charts), changedSheets = new Set<number>()
-          let chartIndex = 0
-          const refill = (nodes: XlsxSheet['drawings'], sheetIndex: number) => {
-            for (const node of nodes ?? []) {
-              if (node.content?.kind === 'xlsxChart' && node.content.chart) {
-                if (wanted.has(chartIndex)) {
-                  const ownerSheet = doc.sheets[sheetIndex]!
-                  const sourceChart = node.content.chart
-                  const pendingChart = { ...sourceChart,
-                    categoryPending: sourceChart.categoryRef ?? sourceChart.categoryPending,
-                    groups: sourceChart.groups.map(group => ({ ...group, series: group.series.map(series => ({ ...series, pending: series.refs ?? series.pending })) })),
-                  }
-                  const refilled = refillChartModel(sourceChart, () => fillChartRanges(pendingChart, ownerSheet.name, (name, row, col, needsText) => {
-                    const target = doc.sheets.find(candidate => candidate.name.toLocaleLowerCase() === name.toLocaleLowerCase())
-                    const context = contexts.find(candidate => candidate.sheet.toLocaleLowerCase() === name.toLocaleLowerCase())
-                    const overlayValue = context?.overlay?.cell(row, col)
-                    if (overlayValue === null) return { value: null }
-                    const cell = target?.rows.find(entry => entry.index === row)?.cells.find(entry => entry.col === col)
-                    if (overlayValue && target) {
-                      return overlayChartCell(target, row, col, overlayValue.value, overlayValue.valueIsError ? String(overlayValue.value) : undefined, needsText)
-                    }
-                    if (!cell) return undefined
-                    const style = cell.style
-                    return { value: cell.value, ...(cell.valueIsError ? { error: String(cell.value) } : {}),
-                      ...(style?.formatCode ? { formatCode: style.formatCode } : {}),
-                      ...(needsText ? { text: cellDisplayText(target!, { value: cell.value, style }) } : {}) }
-                  }))
-                  rememberDependentChart(savedDependentCharts, node, sourceChart)
-                  mainLedger.chargeWhileReachable('drawings', [refilled], estimatePayloadBytes(refilled))
-                  node.content.chart = refilled
-                  changedSheets.add(sheetIndex)
-                }
-                chartIndex++
-              }
-              if (node.children?.length) refill(node.children, sheetIndex)
-            }
-          }
-          doc.sheets.forEach((owner, index) => refill(owner.drawings, index))
-          for (const index of changedSheets) { const id = sheetIds[index]; if (id !== undefined) dropTiles(id, null) }
-          if (changedSheets.size) setResidentDrawingGen(generation => generation + 1)
-          rerender()
-        }).catch(() => setAnnouncement('Some charts that depend on this pivot may still show saved values.'))
-        rerender()
-      }).catch(() => setAnnouncement('Some formulas that depend on this pivot may still show saved values.'))
-    }
+    if (commit.layout && commit.cache && commit.changedRects?.length) installDependents(commit, sheet, commit.layout, commit.cache, commit.changedRects)
     cancelCopy()
     dropTiles(sheetId, null)
     rerender()
@@ -1728,7 +1770,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
     ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
     ...(pagedDependentNoticeSheets.has(activeIndex) || Boolean(activeSheetId && remote?.pivotFormulaNoticeSheets.has(activeSheetId)) ? ['Formulas outside this pivot may still show saved values (paged workbook).'] : []),
-    ...(residentDependentNoticeSheets.has(activeIndex) ? ['Some formulas still show saved values because their pivot reference is unsupported.'] : []),
+    ...(residentDependentNotices.unsupported.has(activeIndex) ? ['Some formulas still show saved values because their pivot reference is unsupported.'] : []),
+    // M-4: over the work budget a reader keeps what it showed, which may be an earlier change's live value.
+    ...(residentDependentNotices.outdated.has(activeIndex) ? ['Some formulas that depend on a pivot may be out of date: recalculating them would take too long.'] : []),
   ])] : []
 
   // Overlay layer: selection and search highlights in viewport space.

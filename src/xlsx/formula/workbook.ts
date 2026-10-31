@@ -612,7 +612,7 @@ export function recomputeDependents(
   doc: XlsxDocument,
   changed: readonly ChangedSheetRect[],
   options?: WorkbookEvaluationOptions,
-): { recomputed: number; charts: readonly number[]; sheets: readonly number[]; stale: readonly string[] } {
+): { recomputed: number; charts: readonly number[]; sheets: readonly number[]; stale: readonly string[]; /** Over the work budget (S3-AE): nothing ran, and the stale readers keep whatever value they showed (maybe an earlier commit's live value), not necessarily the saved one (T31 r4 M-4). */ overBudget?: true } {
   if (workbookValuePolicy(doc) === 'cached') throw new RangeError('This workbook shows saved values only; its formulas are never evaluated')
   const prior = docSpillStates.get(doc)
   const index = referenceIndexFor(doc)
@@ -666,7 +666,7 @@ export function recomputeDependents(
     for (const key of formulaKeys) retained.add(key)
     if (prior) prior.retainedUnsupportedKeys = retained
     const sheets = [...new Set([...formulaKeys].map(key => doc.sheets.findIndex(sheet => sheet.name.toLowerCase() === key.slice(0, key.lastIndexOf('!')))).filter(i => i >= 0))]
-    return { recomputed: 0, charts: [], sheets, stale: [...staleKeys] }
+    return { recomputed: 0, charts: [], sheets, stale: [...staleKeys], overBudget: true }
   }
   const recomputeKeys = formulaKeys
   let snapshots = liveFormulaSnapshots.get(doc)
@@ -707,14 +707,17 @@ export function recomputeDependents(
   return { recomputed: recomputeKeys.size, charts: chartsUsing(doc, recomputeKeys), sheets: affectedSheets, stale: [...new Set([...staleKeys, ...recomputeKeys].filter(key => retained.has(key)))] }
 }
 
-/** Restore the saved formula values after a resident viewer releases its live pivot contexts. */
-export function restoreDependentFormulaValues(doc: XlsxDocument): void {
+/** Restore the saved formula values after a resident viewer releases its live pivot contexts; returns the indexes of
+ * the sheets whose cells it restored. */
+export function restoreDependentFormulaValues(doc: XlsxDocument): number[] {
   const snapshots = liveFormulaSnapshots.get(doc)
-  if (!snapshots) return
-  for (const { cell, content } of snapshots.values()) restoreCell(cell, content)
+  if (!snapshots) return []
+  const names = new Set<string>()
+  for (const [key, { cell, content }] of snapshots) { restoreCell(cell, content); names.add(key.slice(0, key.lastIndexOf('!'))) }
   snapshots.clear()
   liveFormulaSnapshots.delete(doc)
   // The restored cells carry the same formula text: the syntactic index stays valid (M-1).
+  return doc.sheets.flatMap((sheet, index) => names.has(sheet.name.toLowerCase()) ? [index] : [])
 }
 
 /**
