@@ -186,8 +186,8 @@ describe('calculatedValue', () => {
     const loop = { ...cyclic, fields: cyclic.fields.map((field, k) => k === 3 ? { ...field, formula: "'Twice'*1" } : field) } as PivotCacheDefinition
     const other = compileCalculatedField("'Ratio'+1", { ...loop, fields: [...loop.fields, { name: 'Third', databaseField: false, formula: "'Ratio'+1" }] } as PivotCacheDefinition, 6)
     expect(other.ok ? undefined : other.diagnostic.message).toBe('calculated field 6: calculated field Ratio refers back to itself')
-    // A formula over no field (`2/0`): whether every cell shows it is not measured.
-    expect(feature('2/0')).toBe('unsupported:pivot-engine-unmeasured')
+    // A formula over no field (`2/0`) fills every value cell (oracle round B2, calc-constant).
+    expect(feature('2/0')).toBe('ok')
   })
 })
 
@@ -221,11 +221,12 @@ describe('calculated fields in the pivot', () => {
     })
   })
 
-  it('division by zero gives #DIV/0! per measurement: unmeasured, so the pivot fails closed', () => {
-    // West's Q'ty sums to 0. Excel's display of an error in a calculated cell (#DIV/0! or errorCaption) has no
-    // Excel-written oracle yet (S2-M).
+  it('division by zero gives #DIV/0! per measurement', () => {
+    // West's Q'ty sums to 0. With showError off Excel shows the error value (oracle round B2, calc-division-by-zero).
     const records: Array<[number, number, number]> = [[0, 10, 2], [1, 5, 0], [2, 3, 1]]
-    expect(diagnostic(run(fixture({}, records)))).toEqual(UNMEASURED)
+    const result = run(fixture({}, records))
+    expect(result.ok && result.cells['data:1/data:1']).toEqual({ kind: 'error', value: '#DIV/0!' })
+    expect(result.ok && result.cells['grand:/data:1']).toBe(6)
   })
 
   it('an unsupported function makes the pivot unsupported', () => {
@@ -242,23 +243,28 @@ describe('calculated fields in the pivot', () => {
     expect(diagnostic(run(f))).toEqual(UNMEASURED)
   })
 
-  it('fails closed on every unmeasured calculated-field behaviour', () => {
+
+  it('fails closed on the unmeasured calculated-field behaviour and follows the B2 measurements', () => {
     const f = fixture()
-    // Show-as and a function other than sum on the calculated field.
+    // Show-as on the calculated field: unmeasured.
     expect(diagnostic(run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), showAs: 'percentOfTotal' }] }))).toEqual(UNMEASURED)
-    expect(diagnostic(run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), fn: 'count' }] }))).toEqual(UNMEASURED)
-    // A formula over no field (its every-cell rule is measured, calc-constant, but values.ts needs a field to sum).
-    expect(diagnostic(run(fixture({ 3: '2/0' })))).toEqual(UNMEASURED)
-    // A text result.
+    // A text result: unmeasured.
     expect(diagnostic(run(fixture({ 3: 'IF(\'Unit Price\'>1,"big","small")' })))).toEqual(UNMEASURED)
-    // A text-valued source field ('Name'*2): Excel's sum-of-text rule for calculated fields is not measured.
-    expect(diagnostic(run(fixture({ 3: "'Note'*2" }, RECORDS, ['a', 1, 1, 1, 1])))).toEqual(UNMEASURED)
-    // A named subtotal line: which function a calculated cell takes there is not measured.
+    // The data field's function is ignored (calc-function-count).
+    const counted = run(f, { ...f.view, data: [sumOf(1), { ...sumOf(3), fn: 'count' }] })
+    expect(counted.ok && counted.cells['grand:/data:1']).toBe(45 / 12)
+    // A formula over no field fills every cell (calc-constant): here 2/0 is #DIV/0! everywhere.
+    const constant = run(fixture({ 3: '2/0' }))
+    expect(constant.ok && constant.cells['data:1/data:1']).toEqual({ kind: 'error', value: '#DIV/0!' })
+    // Text values are left out of the sum (calc-text-field): East's 'Note' sum is 1, so 'Note'*2 is 2.
+    const text = run(fixture({ 3: "'Note'*2" }, RECORDS, ['a', 1, 1, 1, 1]))
+    expect(text.ok && [text.cells['data:0/data:1'], text.cells['grand:/data:1']]).toEqual([2, 8])
+    // A named subtotal line leaves the calculated cell blank away from the column grand (calc-named-subtotals).
     const n = nestedFixture()
-    const named = { ...n.view, fields: n.view.fields.map((field, k) => k === 0 ? { ...field, subtotals: ['avg' as const] } : field) }
-    expect(diagnostic(run(n, named))).toEqual(UNMEASURED)
+    const named = run(n, { ...n.view, fields: n.view.fields.map((field, k) => k === 0 ? { ...field, subtotals: ['avg' as const] } : field) })
+    expect(named.ok && [named.cells['avg:0/data:0'], named.cells['avg:0/data:1']]).toEqual([15, undefined])
     // An empty intersection: with Note on columns and East's records moved to item 1, North x item 0 has no
-    // records. Excel fills calculated cells without records; not measured.
+    // records. Its calculated cell is the formula over zero sums (calc-cell-without-records), here 0/0.
     const sparse = nestedFixture()
     const twoNotes = {
       ...sparse,
@@ -268,7 +274,8 @@ describe('calculated fields in the pivot', () => {
     }
     const columns = { ...twoNotes.view, rows: [0], cols: [5, -2], fields: twoNotes.view.fields.map((field, k) => k === 5 ? fieldState(2) : field) }
     expect(run(twoNotes, { ...columns, data: [sumOf(1)] }).ok).toBe(true)
-    expect(diagnostic(run(twoNotes, columns))).toEqual(UNMEASURED)
+    const empty = run(twoNotes, columns)
+    expect(empty.ok && Object.values(empty.cells)).toContainEqual({ kind: 'error', value: '#DIV/0!' })
   })
 
   it('a calculated field on an axis or page is unsupported; calculated items keep their feature', () => {
@@ -290,13 +297,13 @@ describe('calculated fields in the pivot', () => {
 
 const CORPUS_FILE = resolve(process.cwd(), 'corpus/lo-calc-calcfields.xlsx')
 describe.skipIf(!existsSync(CORPUS_FILE))('corpus calcfields.xlsx (Collabora-written: recorded, not an oracle)', () => {
-  it('is written by Collabora, and its pivot fails closed on the unmeasured fields', async () => {
+  it('is written by Collabora, and its pivot fails closed as a mismatch (Collabora computes it, not Excel)', async () => {
     const zip = await JSZip.loadAsync(readFileSync(CORPUS_FILE))
     expect(await zip.file('docProps/app.xml')!.async('string')).toMatch(/<Application>Collabora_Office/)
     const [p] = await loadAll(CORPUS_FILE)
     // Field3 'Name'*2 (a text field), Field4 2/0 (no field), Field5 'Field4'/1 (a calculated field).
     expect(checkSavedLayout(p!.store, p!.cache, p!.def, sheetCellReader(p!.sheet), { date1904: p!.date1904 }))
-      .toMatchObject({ status: 'unverified', reason: 'unsupported', detail: 'pivot-engine-unmeasured' })
+      .toMatchObject({ status: 'mismatch' })
   })
 
   it('Field1 and Field2 are the formula over hand-summed Field A and Field B', async () => {
@@ -326,16 +333,7 @@ describe.skipIf(!existsSync(CORPUS_FILE))('corpus calcfields.xlsx (Collabora-wri
  * the report gives the exact change. `kept` marks a gate Excel's file does not settle.
  */
 const TASK22_REFUSED: Record<string, { refusal: string; why: string }> = {
-  'calc-cell-without-records': { refusal: 'pivot-engine-unmeasured: a calculated cell without records is not measured', why: 'lane A: measured, the formula over zero sums (R22C4 = 0); values.ts gate' },
-  'calc-quoted-field-name': { refusal: 'pivot-engine-unmeasured: a calculated cell without records is not measured', why: 'lane A: measured, 0/0 shows #DIV/0! (R22C4); values.ts gate' },
-  'calc-division-by-zero': { refusal: 'pivot-engine-unmeasured: calculated data field 2 gives error #DIV/0!; its display is not measured', why: 'lane A: measured, the error value shows (R20C4) with showError off; values.ts gate' },
-  'calc-references-calculated': { refusal: 'pivot-engine-unmeasured: calculated data field 2 gives error #DIV/0!; its display is not measured', why: 'reference lifted in calculated.ts; lane A: Central shows #DIV/0! (R20C4); values.ts gate' },
-  'calc-constant': { refusal: 'pivot-engine-unmeasured: calculated field 12 uses no field; its cells without records are not measured', why: 'measured (1 in every cell, R22C4 included), kept in calculated.ts until values.ts can sum no field (lane A)' },
-  'calc-text-field': { refusal: 'pivot-engine-unmeasured: field 6 has text values; their sum in a calculated field is not measured', why: 'lane A: measured, text is left out of the sum (R13C13 = 84); values.ts gate' },
-  'calc-function-count': { refusal: 'pivot-engine-unmeasured: calculated data field 2 with function count is not measured', why: 'lane A: measured, the function is ignored (R10C7 = Sales*2); values.ts gate' },
   'calc-show-as': { refusal: 'pivot-engine-unmeasured: show-as on calculated data field 2 is not measured', why: 'kept: percent of the calculated grand total, but 10 of 76 cells differ at the 15th digit (the percent-of-total rounding lane A also refuses)' },
-  'calc-named-subtotals': { refusal: 'pivot-engine-unmeasured: a named subtotal of a calculated data field is not measured', why: 'lane A: measured, blank on named lines except at the column grand (R10C13 = R11C13 = 96237.92); values.ts gate' },
-  'calc-value-sort': { refusal: 'pivot-engine-unmeasured: a filter or sort by calculated data field 2 is not measured', why: 'lane A: measured, the order is the formula over each item\'s sums (West, South, North, East, Central); values.ts aggregateByKey gate' },
   'calc-item': { refusal: "pivot-calculated-item: field 1 has a calculated item; Excel's saved layout lists it under every parent and includes it in totals, which this engine does not reproduce", why: 'kept: the item is listed under every parent and counted in its totals (calc-item R6, R28); needs axes and values work outside this lane' },
 }
 

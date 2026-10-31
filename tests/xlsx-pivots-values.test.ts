@@ -16,23 +16,15 @@ import type { PivotCellValue, PlaceOptions } from '../src/xlsx/pivots/engine/pla
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/xlsx-pivots/', import.meta.url))
 const MANIFEST = resolve(FIXTURES, 'engine/manifest.json')
+// S2-AA: the only Task 18 refusals left. Their leaf cells match the textbook variance forms, but every tested
+// accumulation of the leaf moments (S2-AB leaf rollup, records in display order, per-row or per-column partials,
+// Welford with a parallel merge, two-pass, fused multiply-add) leaves 1-9 total cells off in the 15th digit.
+const VARIANCE_REFUSAL = 'variance subtotal rounding differs from Excel: its total cells differ in the 15th digit'
 const TASK18_UNMEASURED: Record<string, string> = {
-  'values-fn-stdev': 'variance subtotal rounding differs from Excel',
-  'values-fn-stdevp': 'variance subtotal rounding differs from Excel',
-  'values-fn-var': 'variance subtotal rounding differs from Excel',
-  'values-fn-varp': 'variance subtotal rounding differs from Excel',
-  'values-fn-countnums-mixed': 'Count Numbers in mixed text and numeric data fields',
-  'values-average-hidden-item': 'average rounding with filtered or hidden source records',
-  'values-showas-difference-previous': 'difference against the previous item',
-  'values-showas-difference-item': 'difference with an explicit base item',
-  'values-showas-percent-of-item': 'percent-of-item and percent-difference arithmetic',
-  'values-showas-percent-diff-zero-base': 'percent-of-item and percent-difference arithmetic',
-  'values-showas-percent-of-total': 'percent-of-total and index rounding',
-  'values-showas-index': 'percent-of-total and index rounding',
-  'values-showas-index-zero-total': 'percent-of-total and index rounding',
-  'values-showas-percent-of-parent-region': 'percent-of-parent at a grand line',
-  'values-showas-on-named-subtotals': 'percent-of-total and index rounding',
-  'values-named-subtotals-intersecting': 'intersections across named subtotal axes',
+  'values-fn-stdev': VARIANCE_REFUSAL,
+  'values-fn-stdevp': VARIANCE_REFUSAL,
+  'values-fn-var': VARIANCE_REFUSAL,
+  'values-fn-varp': VARIANCE_REFUSAL,
 }
 const referenceNames = readdirSync(FIXTURES).filter(name => /^pivot-.*\.xlsx$/.test(name)).sort()
 const loadedReferences = new Map<string, Promise<Loaded[]>>()
@@ -93,7 +85,7 @@ function fixture(values: Array<number | string | null>, data: DataFieldState[] =
 }
 
 describe('pivot value aggregation', () => {
-  it('refuses non-normal show-as on a named sum subtotal', () => {
+  it('applies show-as to a named sum subtotal (values-showas-on-named-subtotals R10C4)', () => {
     const rows: PivotAxes['rows'] = [
       { type: 'data', first: 0, items: [0, 0], data: 0 },
       { type: 'data', first: 1, items: [0, 1], data: 0 },
@@ -109,7 +101,9 @@ describe('pivot value aggregation', () => {
     f.view.fields = [{ ...fieldState, subtotals: ['sum'] }, fieldState]
     const axes = { ...f.axes, rowKey: Uint32Array.from([0, 1, 3, 4]) }
     const result = computeValues(f.store, f.cache, f.def, f.view, axes)
-    expect(result.ok ? null : result.diagnostic.feature).toBe('pivot-engine-unmeasured')
+    expect(result.ok && [result.value.get(2, 0, 0), result.value.get(5, 0, 0)]).toEqual([
+      { kind: 'number', value: 3 / 10 }, { kind: 'number', value: 7 / 10 },
+    ])
   })
 
   it('fails closed for non-finite inline values that would collide with the NaN empty sentinel', () => {
@@ -240,11 +234,6 @@ describe('pivot value aggregation', () => {
       const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
       expect(result.ok && result.value.get(0, 0, 0), fn).toEqual({ kind: 'empty' })
     }
-    for (const fn of ['stdDev', 'var'] as const) {
-      const f = fixture([10], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
-      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
-      expect(result.ok && result.value.get(0, 0, 0), fn).toEqual({ kind: 'empty' })
-    }
   })
 
   it('excludes filtered records from data, subtotal and grand totals without losing the 1M scan path', () => {
@@ -358,6 +347,117 @@ describe('pivot value aggregation', () => {
     }
   })
 
+  it('rolls sum totals as the sum over leaf rows of each leaf row\'s sum over leaf columns (S2-AB, bit-exact)', () => {
+    // Leaf cells a b / c d = 0.1 0.1 / 0.2 0.7: (a+b)+(c+d) = 1.0999999999999999, while a row-major running sum
+    // and a column-first sum both give 1.1. Excel's baseline R24C8 and R6C8 follow the row-partial order.
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 }, { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    const cols: PivotAxes['cols'] = [
+      { type: 'data', first: 0, items: [0], data: 0 }, { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    for (const showAs of ['normal', 'percentOfTotal'] as const) {
+      const f = fixture([0.1, 0.1, 0.2, 0.7], [{ field: 1, fn: 'sum', showAs, baseField: -1, baseItem: 1048832, name: '' }], rows, [0, 0, 1, 1], cols, [0, 1, 0, 1])
+      f.view.cols = [0]
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok, showAs).toBe(true)
+      if (!result.ok) continue
+      if (showAs === 'normal') {
+        expect(result.value.get(2, 2, 0)).toEqual({ kind: 'number', value: (0.1 + 0.1) + (0.2 + 0.7) })
+        expect(result.value.get(2, 2, 0)).not.toEqual({ kind: 'number', value: 1.1 })
+      } else expect(result.value.get(1, 1, 0)).toEqual({ kind: 'number', value: 0.7 / ((0.1 + 0.1) + (0.2 + 0.7)) })
+    }
+  })
+
+  it('sums an average total row record by record, leaf row after leaf row (values-average-hidden-item R20C6)', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 }, { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    // Records A 0.1, B 0.1, B 1: (0.1 + 0.1) + 1 = 1.2, while leaf sums 0.1 + (0.1 + 1) = 1.2000000000000002.
+    const f = fixture([0.1, 0.1, 1], [{ field: 1, fn: 'average', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }], rows, [0, 1, 1])
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.get(2, 0, 0)).toEqual({ kind: 'number', value: ((0.1 + 0.1) + 1) / 3 })
+  })
+
+  it('shows Count Numbers as 0 over text and blank without values; Count is blank without values', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 }, { type: 'data', first: 0, items: [1], data: 0 },
+    ]
+    for (const fn of ['countNums', 'count'] as const) {
+      const f = fixture(['text', null], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }], rows, [0, 1])
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok && [result.value.get(0, 0, 0), result.value.get(1, 0, 0)], fn).toEqual([
+        { kind: 'number', value: fn === 'countNums' ? 0 : 1 }, { kind: 'empty' },
+      ])
+    }
+  })
+
+  it('applies the measured difference, % of and % difference rules to blank, own and missing base cells', () => {
+    // Rows: item 0 (base), item 1 (records), item 2 (no records); explicit base item 0.
+    const rows: PivotAxes['rows'] = [0, 1, 2].map(x => ({ type: 'data' as const, first: 0, items: [x], data: 0 }))
+    const run = (showAs: DataFieldState['showAs'], values: Array<number | null>, keys: number[], baseItem = 0) => {
+      const f = fixture(values, [{ field: 1, fn: 'sum', showAs, baseField: 0, baseItem, name: '' }], rows, keys)
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      return result.ok ? [0, 1, 2].map(row => result.value.get(row, 0, 0)) : result.diagnostic.message
+    }
+    // Difference: own line blank; blank current counts as 0.
+    expect(run('difference', [10, 30], [0, 1])).toEqual([{ kind: 'empty' }, { kind: 'number', value: 20 }, { kind: 'number', value: -10 }])
+    // % of: own line 1; blank current with a base value is #NULL!.
+    expect(run('percent', [10, 30], [0, 1])).toEqual([{ kind: 'number', value: 1 }, { kind: 'number', value: 3 }, { kind: 'error', value: '#NULL!' }])
+    // % difference: own line blank; a zero base is #DIV/0!; a blank base leaves the cell blank.
+    expect(run('percentDiff', [0, 30, 5], [0, 1, 2])).toEqual([{ kind: 'empty' }, { kind: 'error', value: '#DIV/0!' }, { kind: 'error', value: '#DIV/0!' }])
+    // Unmeasured, so refused: % difference of a blank cell from a base value, and % of a blank base cell.
+    expect(run('percentDiff', [10, 30], [0, 1])).toBe('% difference of a blank cell from its base item is not measured')
+    expect(run('percent', [30], [1])).toBe('% of a base item with a blank base cell is not measured')
+    expect(run('percentDiff', [30, 40], [1, 2])).toEqual([{ kind: 'empty' }, { kind: 'empty' }, { kind: 'empty' }])
+    // Difference from previous: a blank base counts as 0 (difference-previous R22C4).
+    expect(run('difference', [30], [1], 1048828)).toEqual([{ kind: 'empty' }, { kind: 'number', value: 30 }, { kind: 'number', value: -30 }])
+    // An explicit base item without a line is #N/A (difference-item R23).
+    expect(run('difference', [30], [1], 3)).toEqual([{ kind: 'error', value: '#N/A' }, { kind: 'error', value: '#N/A' }, { kind: 'error', value: '#N/A' }])
+  })
+
+  it('computes index as value × grand ÷ row total ÷ column total, and 0 for a cell without records', () => {
+    const rows: PivotAxes['rows'] = [0, 1].map(x => ({ type: 'data' as const, first: 0, items: [x], data: 0 }))
+    const cols: PivotAxes['cols'] = [0, 1].map(x => ({ type: 'data' as const, first: 0, items: [x], data: 0 }))
+    const f = fixture([10, 30, 20], [{ field: 1, fn: 'sum', showAs: 'index', baseField: -1, baseItem: 1048832, name: '' }], rows, [0, 0, 1], cols, [0, 1, 0])
+    f.view.cols = [0]
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 10 * 60 / 40 / 30 })
+    expect(result.value.get(1, 1, 0)).toEqual({ kind: 'number', value: 0 })
+  })
+
+  it('leaves % of parent total with a base field blank on the grand line (percent-of-parent-region R60C2)', () => {
+    const rows: PivotAxes['rows'] = [
+      { type: 'data', first: 0, items: [0], data: 0 }, { type: 'data', first: 0, items: [1], data: 0 },
+      { type: 'grand', first: 0, items: [], data: 0 },
+    ]
+    const f = fixture([10, 30], [{ field: 1, fn: 'sum', showAs: 'percentOfParent', baseField: 0, baseItem: 1048832, name: '' }], rows, [0, 1])
+    const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+    expect(result.ok && result.value.get(2, 0, 0)).toEqual({ kind: 'empty' })
+  })
+
+  it('shows #DIV/0! for a sample statistic over one number and uses the measured textbook variance forms', () => {
+    for (const fn of ['stdDev', 'var'] as const) {
+      const f = fixture([10], [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok && result.value.get(0, 0, 0), fn).toEqual({ kind: 'error', value: '#DIV/0!' })
+    }
+    // values-fn-stdevp R12C2: Excel 27.65999999999757 for a two-record leaf, the textbook n·Σx² − (Σx)² form.
+    const xs = [1e6 + 0.1, 1e6 + 55.42]
+    const n = 2, s = xs[0]! + xs[1]!, q = xs[0]! * xs[0]! + xs[1]! * xs[1]!
+    for (const [fn, expected] of [['varp', (n * q - s * s) / (n * n)], ['var', (q - s * s / n) / (n - 1)]] as const) {
+      const f = fixture(xs, [{ field: 1, fn, showAs: 'normal', baseField: -1, baseItem: 1048832, name: fn }])
+      const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
+      expect(result.ok && result.value.get(0, 0, 0), fn).toEqual({ kind: 'number', value: expected })
+    }
+  })
+
   it('fails closed when the aggregate or the default show-as base overflows or is unmeasured', () => {
     const sum = fixture([Number.MAX_VALUE, Number.MAX_VALUE], [{ field: 1, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: '' }])
     const overflow = computeValues(sum.store, sum.cache, sum.def, sum.view, sum.axes)
@@ -432,13 +532,13 @@ describe('pivot value aggregation', () => {
     ])
   })
 
-  it('returns zero for difference-from the selected base item', () => {
+  it('leaves the selected base item\'s own difference cells blank (values-showas-difference-item rows 10-13)', () => {
     const data = [{ field: 1, fn: 'sum' as const, showAs: 'difference' as const, baseField: 0, baseItem: 0, name: '' }]
     const rows: PivotAxes['rows'] = [0, 1].map(x => ({ type: 'data', first: 0, items: [x], data: 0 }))
     const f = fixture([10, 30], data, rows, [0, 1])
     const result = computeValues(f.store, f.cache, f.def, f.view, f.axes)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.value.get(0, 0, 0)).toEqual({ kind: 'number', value: 0 })
+    if (result.ok) expect(result.value.get(0, 0, 0)).toEqual({ kind: 'empty' })
   })
 
   it('computes percent of row, percent of column, and index from record-based totals', () => {
@@ -456,7 +556,7 @@ describe('pivot value aggregation', () => {
     expect([result.value.get(0, 0, 1), result.value.get(1, 0, 1)]).toEqual([
       { kind: 'number', value: 1 / 3 }, { kind: 'number', value: 2 / 3 },
     ])
-    expect(result.value.get(0, 0, 2)).toEqual({ kind: 'number', value: 1000 / 1200 })
+    expect(result.value.get(0, 0, 2)).toEqual({ kind: 'number', value: 10 * 100 / 40 / 30 })
   })
 
   it('computes ascending and descending ranks when the compared values have no ties', () => {

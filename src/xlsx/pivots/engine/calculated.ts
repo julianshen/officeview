@@ -101,7 +101,7 @@ export function compileCalculatedField(formula: string, cache: PivotCacheDefinit
   const ast = parseFormula(tokenize(formula, { quotedNames: true }))
   walk(ast)
   if (unsupported) return fail('pivot-calculated-field', `calculated field ${self}: ${unsupported}`)
-  if (!fields.size) return fail('pivot-engine-unmeasured', `calculated field ${self} uses no field; its cells without records are not measured`)
+  // A formula over no field (=1) fills every value cell, those without records included (Task 22 calc-constant R22C4).
   return { ok: true, value: { ast, names, nested, fields: [...fields].sort((a, b) => a - b) } }
 }
 

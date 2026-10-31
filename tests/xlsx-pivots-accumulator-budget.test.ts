@@ -77,8 +77,8 @@ describe('pivot accumulator budget', () => {
     const grandCol = axes.value.cols.findIndex(line => line.type === 'grand')
     expect(grandRow).toBeGreaterThanOrEqual(0)
     expect(grandCol).toBeGreaterThanOrEqual(0)
-    // S2-AB: grand totals sum the already-rounded leaf cells in display order,
-    // which differs from summing every record in source order for this seeded layout.
+    // S2-AB: each leaf row sums its leaf cells across the columns, then the grand total sums those leaf-row
+    // totals down the rows, both in display order (bit-exact on baseline R24C8), never the records directly.
     const cellSums = [new Float64Array(axes.value.rows.length * axes.value.cols.length),
       new Float64Array(axes.value.rows.length * axes.value.cols.length)]
     for (let record = 0; record < count; record++) {
@@ -90,8 +90,78 @@ describe('pivot accumulator budget', () => {
     const leafCols = axes.value.cols.map((line, index) => line.type === 'data' && line.items.length === 1 ? index : -1).filter(index => index >= 0)
     for (let data = 0; data < 2; data++) {
       let expected = 0
-      for (const row of leafRows) for (const col of leafCols) expected += cellSums[data]![row * axes.value.cols.length + col]!
+      for (const row of leafRows) {
+        let rowTotal = 0
+        for (const col of leafCols) rowTotal += cellSums[data]![row * axes.value.cols.length + col]!
+        expected += rowTotal
+      }
       expect(grid.value.get(grandRow, grandCol, data)).toEqual({ kind: 'number', value: expected })
+    }
+  })
+
+  it('gives bit-identical Sum cells on the fast path, the general path and an independent S2-AB reference', () => {
+    // Random two-level row and one-level column pivots, with blanks and decimals whose sums depend on addition order.
+    for (const [seed, subtotalTop] of [[1, false], [2, true], [3, false], [4, true], [5, false]] as const) {
+      let state = seed * 2654435761 >>> 0
+      const rand = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296
+      const count = 400, cardinalities = [4, 5, 3]
+      const sharedItems = cardinalities.map(size => ({ inline: false, items: Array.from({ length: size }, (_, i) => ({ type: 'string', value: String(i) })) }))
+      const cache = {
+        source: { type: 'worksheet' }, olap: false,
+        fields: [...sharedItems.map(items => ({ databaseField: true, sharedItems: items })), { databaseField: true, sharedItems: { inline: true, items: [] } }],
+      } as unknown as PivotCacheDefinition
+      const def = {
+        fields: [...cardinalities.map(size => ({ items: Array.from({ length: size }, (_, x) => ({ type: 'data', x })), defaultSubtotal: true })), { items: [] }],
+        rowGrandTotals: true, colGrandTotals: true,
+      } as unknown as PivotTableDefinition
+      const fields = cardinalities.map((size, field) => ({ ...makeFieldState(size, field < 2), subtotalTop }))
+      fields.push(makeFieldState(0, false))
+      const index = cardinalities.map(size => Uint32Array.from({ length: count }, () => Math.floor(rand() * size)))
+      const tag = Uint8Array.from({ length: count }, () => rand() < 0.1 ? VALUE_TAG.missing : VALUE_TAG.number)
+      const num = Float64Array.from({ length: count }, () => Math.round((rand() - 0.3) * 1e6) / 100)
+      const store: RecordStore = {
+        count, bytes: 0,
+        columns: [...index.map(column => ({ kind: 'shared' as const, index: column })), { kind: 'inline', tag, num, text: [], textIndex: new Uint32Array(count) }],
+      }
+      const sum = { field: 3, fn: 'sum', showAs: 'normal', baseField: -1, baseItem: 1048832, name: 'Sum' }
+      const view = { rows: [0, 1], cols: [2], pages: [], filters: [], fields, data: [sum] } as unknown as PivotViewState
+      const axes = computeAxes(store, cache, def, view)
+      expect(axes.ok).toBe(true)
+      if (!axes.ok) return
+      const fast = computeValues(store, cache, def, view, axes.value)
+      const general = computeValues(store, cache, def, { ...view, data: [sum, { ...sum, fn: 'count', name: 'Count' }] } as unknown as PivotViewState, axes.value)
+      expect(fast.ok && general.ok).toBe(true)
+      if (!fast.ok || !general.ok) return
+      // Reference: leaf cells in record order; any total = Σ over its leaf rows of (Σ over its leaf columns).
+      const { rows, cols, rowKey, colKey } = axes.value
+      const leaf = new Map<string, number>()
+      for (let record = 0; record < count; record++) {
+        if (tag[record] !== VALUE_TAG.number) continue
+        const key = `${rowKey[record]},${colKey[record]}`
+        leaf.set(key, (leaf.get(key) ?? 0) + num[record]!)
+      }
+      const isLeaf = (lines: typeof rows, line: number) => lines[line]!.type === 'data'
+        && !lines.some((other, k) => k !== line && other.items.length > lines[line]!.items.length && lines[line]!.items.every((item, n) => other.items[n] === item))
+      const leavesOf = (lines: typeof rows, line: number) => lines.flatMap((other, k) => isLeaf(lines, k)
+        && (lines[line]!.type === 'grand' || lines[line]!.items.every((item, n) => other.items[n] === item)) ? [k] : [])
+      let compared = 0
+      rows.forEach((_, row) => cols.forEach((__, col) => {
+        let total = 0, present = false
+        for (const leafRow of leavesOf(rows, row)) {
+          let rowTotal = 0
+          for (const leafCol of leavesOf(cols, col)) {
+            const value = leaf.get(`${leafRow},${leafCol}`)
+            if (value !== undefined) { rowTotal += value; present = true }
+          }
+          total += rowTotal
+        }
+        const fastCell = fast.value.get(row, col, 0)
+        expect(general.value.get(row, col, 0), `seed ${seed} ${row},${col}`).toEqual(fastCell)
+        if (fastCell.kind === 'empty') return
+        compared++
+        expect(fastCell, `seed ${seed} ${row},${col}`).toEqual(present ? { kind: 'number', value: total } : { kind: 'empty' })
+      }))
+      expect(compared).toBeGreaterThan(40)
     }
   })
 
