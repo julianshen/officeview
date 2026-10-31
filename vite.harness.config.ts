@@ -56,6 +56,8 @@ function lazyPagedChunks(): Plugin {
         '/src/charts/index.ts',
         // The pivot, table-style and slicer/timeline engines (xlsx/pivotLoader, tableStyleLoader, pagedSource, pagedDrawings, pagedFormatting).
         '/src/xlsx/pivots/index.ts',
+        // The pivot controls (client, button layer, menus), InteractiveSheetDoc's dynamic import on a sheet with pivots.
+        '/src/components/xlsx/pivot/PivotButtonLayer.tsx',
         '/src/xlsx/pivots/load.ts',
         '/src/xlsx/storage/pagedDrawings.ts',
         '/src/xlsx/tableStyles/regionLayer.ts',

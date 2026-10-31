@@ -273,6 +273,52 @@ for (const { fixture, regions, buttons } of CASES) {
   })
 }
 
+/**
+ * Task 28: a pivot button is a control. Clicking East's collapse button on the engine seed (engine/baseline.xlsx) must
+ * repaint the pivot as Excel saved the same change (engine/layout-collapsed-item.xlsx, the seed with East collapsed),
+ * compared in the same browser on the same leg. The paged leg waits for Task 27's worker pivot protocol: until then its
+ * buttons are painted and named "not interactive", which this test checks instead.
+ */
+const COLLAPSE_EAST = 'Collapse East (Region)'
+// A3:I24 at 100%: columns A..I and rows 3..24 of the seed's sheet (the collapsed pivot ends at row 21; the rows it
+// vacates must repaint empty, so the crop keeps the seed's full height).
+const PIVOT_AREA: Rect = { x: 0, y: 40, width: 900, height: 440 }
+test('click collapse → repaint equals the oracle case on resident, worker and paged legs', async ({ context }) => {
+  for (const leg of LEGS) {
+    await test.step(leg.name, async () => {
+      if (leg.paged) {
+        // Pending (Task 27): the worker pivot protocol is not built; the paged leg is honest about it.
+        const page = await open(context, 'engine/baseline', leg)
+        try {
+          const buttons = page.locator('button[data-officeview-ui="pivot-button"]')
+          await expect(buttons.first()).toBeAttached({ timeout: 30_000 })
+          await expect(buttons.first()).toHaveAttribute('aria-label', /not available in the large-file view/)
+          await expect(page.getByRole('status').filter({ hasText: 'not available in the large-file view' }).first()).toBeVisible()
+        } finally { await page.close() }
+        test.info().annotations.push({ type: 'pending', description: 'paged leg: click → apply waits for Task 27 (worker pivot protocol)' })
+        return
+      }
+      const changed = await open(context, 'engine/baseline', leg)
+      let after: Img
+      try {
+        const button = changed.getByRole('button', { name: COLLAPSE_EAST })
+        await expect(button).toBeAttached({ timeout: 30_000 })
+        const before = await settledGrid(changed, () => true)
+        await button.click()
+        await expect(changed.getByRole('button', { name: 'Expand East (Region)' })).toBeAttached({ timeout: 30_000 })
+        after = await settledGrid(changed, img => diff(crop(img, PIVOT_AREA), crop(before, PIVOT_AREA)).share > 0.001)
+        await expect(changed.getByRole('alert')).toHaveCount(0)
+      } finally { await changed.close() }
+      const oracle = await open(context, 'engine/layout-collapsed-item', leg)
+      let saved: Img
+      try { saved = await settledGrid(oracle, () => true) } finally { await oracle.close() }
+      const result = diff(crop(after, PIVOT_AREA), crop(saved, PIVOT_AREA))
+      console.log(`[collapse] ${leg.name}: max channel diff ${result.max}, ${result.differing} px differ (${(result.share * 100).toFixed(4)}%)`)
+      expect(result.share, `${leg.name}: collapse repaint vs Excel's saved collapse`).toBeLessThanOrEqual(PARITY_MAX_SHARE)
+    })
+  }
+})
+
 /** Where a field-dropdown button sits: the right edge of the cell (docs/validation/xlsx-pivots.md, "Compact indent and buttons"). */
 function boxAtRightEdge(cell: Rect): Rect {
   return { x: cell.x + cell.width - BUTTON_ZONE_WIDTH, y: cell.y, width: BUTTON_ZONE_WIDTH, height: cell.height }
