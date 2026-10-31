@@ -19,16 +19,20 @@ import type { MainMemoryLedger } from '../../view/mainLedger'
 /** One holder's claim on a shared store. Releasing twice is a no-op. */
 export interface RecordLease { readonly store: RecordStore; release(): void }
 export type RecordLeaseResult = { ok: true; lease: RecordLease } | { ok: false; diagnostic: PivotDiagnostic }
-export type RuntimeLedger = Pick<MainMemoryLedger, 'chargeWhileHeld' | 'hold'>
+export type RuntimeLedger = Pick<MainMemoryLedger, 'chargeWhileHeld' | 'hold' | 'chargeWhileReachable'>
 export interface PivotRuntime {
   /** The workbook's date system (decided after the pivots load; read when needed). */
   readonly date1904: boolean
+  /** Bytes the runtime itself retains for its lifetime (the records parts' compressed copies, Ruling S3-E). */
+  readonly retainedBytes: number
+  /** Charges `retainedBytes` to `ledger`'s document pool while the runtime is reachable; once per ledger. */
+  chargeRetained(ledger: RuntimeLedger): void
   cache(def: PivotTableDefinition): PivotCacheDefinition | undefined
   records(cache: PivotCacheDefinition, signal: AbortSignal, limits?: RecordLimits): Promise<RecordResult>
   lease(cache: PivotCacheDefinition, ledger: RuntimeLedger, signal: AbortSignal, limits?: RecordLimits): Promise<RecordLeaseResult>
 }
 /** A records part's bytes as a stream, or undefined when the part is not in the package. */
-export type RecordsSource = (path: string, signal: AbortSignal) => AsyncIterable<Uint8Array> | undefined
+export type RecordsSource = (path: string, signal: AbortSignal) => AsyncIterable<Uint8Array> | PivotDiagnostic | undefined
 
 const cancelled = () => new PackageError('cancelled', 'operation cancelled')
 const absent = (cache: PivotCacheDefinition): RecordResult => ({ ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-records-absent', message: `Pivot cache ${cache.cacheId} has no records part`, partPath: cache.partPath } })
@@ -45,7 +49,8 @@ function waitOrAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
 
 interface SharedStore { pending: Promise<RecordResult>; controller: AbortController; waiting: number; holders: number }
 
-export function createPivotRuntime(caches: ReadonlyMap<number, PivotCacheDefinition>, source: RecordsSource, date1904: () => boolean): PivotRuntime {
+export function createPivotRuntime(caches: ReadonlyMap<number, PivotCacheDefinition>, source: RecordsSource, date1904: () => boolean, retainedBytes = 0): PivotRuntime {
+  const charged = new WeakSet<object>()
   const byPath = new Map<string, PivotCacheDefinition>()
   for (const cache of caches.values()) if (!byPath.has(cache.partPath)) byPath.set(cache.partPath, cache)
   const shared = new Map<PivotCacheDefinition, SharedStore>()
@@ -56,6 +61,12 @@ export function createPivotRuntime(caches: ReadonlyMap<number, PivotCacheDefinit
   }
   const runtime: PivotRuntime = {
     get date1904() { return date1904() },
+    retainedBytes,
+    chargeRetained(ledger) {
+      if (charged.has(ledger)) return
+      charged.add(ledger)
+      if (retainedBytes > 0) ledger.chargeWhileReachable('document', [runtime], retainedBytes)
+    },
     cache(def) {
       return (def.cachePartPath !== undefined ? byPath.get(def.cachePartPath) : undefined) ?? caches.get(def.cacheId)
     },
@@ -64,12 +75,14 @@ export function createPivotRuntime(caches: ReadonlyMap<number, PivotCacheDefinit
       const path = cache.saveData ? cache.recordsPartPath : undefined
       const chunks = path === undefined ? undefined : source(path, signal)
       if (!chunks) return absent(cache)
+      if ('feature' in chunks) return { ok: false, diagnostic: chunks }
       const result = await decodeRecords(chunks, cache, limits, date1904(), signal)
       if (signal.aborted) throw cancelled()
       return result
     },
     async lease(cache, ledger, signal, limits) {
       if (signal.aborted) throw cancelled()
+      runtime.chargeRetained(ledger)
       let entry = shared.get(cache)
       if (!entry) {
         const controller = new AbortController()

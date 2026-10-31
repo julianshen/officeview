@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
@@ -320,40 +322,42 @@ describe('runtime', () => {
 
     const result = await runtime.records(cache, new AbortController().signal)
     expect(result.ok).toBe(true)
-    // Streamed from the zip entry (never pkg.bytes, which would keep the inflated part in the package's cache).
-    expect(recordsReads(reads, path)).toEqual([`stream:${path}`])
+    // Streamed from the runtime's own copy of the compressed part (Ruling S3-E): the package is never read again,
+    // and never through pkg.bytes, which would keep the inflated part in the package's cache.
+    expect(recordsReads(reads, path)).toEqual([])
     const direct = await decodeRecords(once((await (await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx'))))).bytes(path))!), cache, RECORD_LIMITS.D, false)
     expect(result).toEqual(direct)
     // records() itself charges nothing; a lease charges the store once while any lease holds it.
     expect(ledger.snapshot().byPool.document).toBe(0)
+    expect(runtime.retainedBytes).toBeGreaterThan(0)
   })
 
   it('pivots on one cache share one leased store, charged to the main ledger until the last release', async () => {
-    const { pkg, reads } = await countingPackage(resolve(ENGINE, 'baseline.xlsx'))
-    const doc = await parseXlsx(pkg)
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx')))))
     const def = doc.sheets.find(s => s.pivotTables?.length)!.pivotTables![0]!
-    const runtime = pivotRuntimeFor(doc)!, cache = runtime.cache(def)!, path = cache.recordsPartPath!
+    const runtime = pivotRuntimeFor(doc)!, cache = runtime.cache(def)!
     const ledger = new MainMemoryLedger(), signal = new AbortController().signal
+    // The runtime's retained copy is charged by the first lease, for the runtime's lifetime; the store on top of it.
+    const retained = runtime.retainedBytes
     const [a, b] = await Promise.all([runtime.lease(cache, ledger, signal), runtime.lease(cache, ledger, signal)])
     if (!a.ok || !b.ok) throw new Error('lease refused')
     expect(a.lease.store).toBe(b.lease.store)
-    expect(recordsReads(reads, path)).toHaveLength(1)
     const bytes = a.lease.store.bytes
     expect(bytes).toBeGreaterThan(0)
-    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    expect(ledger.snapshot().byPool.document).toBe(retained + bytes)
     a.lease.release()
     a.lease.release()
-    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    expect(ledger.snapshot().byPool.document).toBe(retained + bytes)
     b.lease.release()
-    expect(ledger.snapshot().byPool.document).toBe(0)
+    expect(ledger.snapshot().byPool.document).toBe(retained)
     // After the last release the store is dropped: the next lease decodes again and charges again.
     const c = await runtime.lease(cache, ledger, signal)
     if (!c.ok) throw new Error('lease refused')
     expect(c.lease.store).not.toBe(a.lease.store)
-    expect(recordsReads(reads, path)).toHaveLength(2)
-    expect(ledger.snapshot().byPool.document).toBe(bytes)
+    expect(c.lease.store).toEqual(a.lease.store)
+    expect(ledger.snapshot().byPool.document).toBe(retained + bytes)
     c.lease.release()
-    expect(ledger.snapshot().byPool.document).toBe(0)
+    expect(ledger.snapshot().byPool.document).toBe(retained)
   })
 
   it('records refuse over the cap and without a records part; an aborted lease is cancelled', async () => {
@@ -365,13 +369,13 @@ describe('runtime', () => {
     const ledger = new MainMemoryLedger()
     const leased = await runtime.lease(cache, ledger, signal, { ...RECORD_LIMITS.M, maxBytes: 64 })
     expect(leased.ok ? 'ok' : leased.diagnostic.feature).toBe('pivot-records-limit')
-    expect(ledger.snapshot().byPool.document).toBe(0)
+    expect(ledger.snapshot().byPool.document).toBe(runtime.retainedBytes)
     const absent = await runtime.records({ ...cache, recordsPartPath: undefined }, signal)
     expect(absent.ok ? 'ok' : absent.diagnostic.feature).toBe('pivot-records-absent')
     const aborted = new AbortController()
     aborted.abort()
     await expect(runtime.lease(cache, ledger, aborted.signal)).rejects.toMatchObject({ code: 'cancelled' })
-    expect(ledger.snapshot().byPool.document).toBe(0)
+    expect(ledger.snapshot().byPool.document).toBe(runtime.retainedBytes)
   })
 })
 
@@ -387,6 +391,73 @@ function open(input: PivotSessionInput): PivotSession {
 const openRefusal = (input: PivotSessionInput) => { const r = openPivotSession(input); return r.ok ? 'ok' : r.diagnostic.feature }
 const COLLAPSE_EAST: PivotDelta = { kind: 'collapse', field: REGION, item: 0, collapsed: true }
 const EXPAND_EAST: PivotDelta = { kind: 'collapse', field: REGION, item: 0, collapsed: false }
+
+/** A real collector (Ruling S3-E's proof that the runtime pins no archive). */
+setFlagsFromString('--expose_gc')
+const collect = runInNewContext('gc') as () => void
+async function settle() { for (let k = 0; k < 6; k++) { collect(); await new Promise(resolve => setTimeout(resolve, 0)) } }
+/** A records part's compressed size, read off a fresh load of the file. */
+async function compressedSize(file: string, path: string) {
+  const pkg = await OfficePackage.load(new Uint8Array(readFileSync(file)))
+  return (pkg.entry(path) as unknown as { _data: { compressedSize: number } })._data.compressedSize
+}
+
+describe('runtime retention (Ruling S3-E)', () => {
+  it('after load the runtime holds an owned copy of each records part, never the archive, and charges exactly it', async () => {
+    const file = resolve(ENGINE, 'baseline.xlsx')
+    const opened = async () => {
+      const bytes = new Uint8Array(readFileSync(file))
+      const pkg = await OfficePackage.load(bytes)
+      const doc = await parseXlsx(pkg)
+      const zip = (pkg as unknown as { zip: object }).zip
+      return { doc, refs: { archive: new WeakRef(bytes.buffer), pkg: new WeakRef(pkg), zip: new WeakRef(zip) } }
+    }
+    const { doc, refs } = await opened()
+    const runtime = pivotRuntimeFor(doc)!
+    await settle()
+    expect(refs.archive.deref(), 'the archive buffer').toBeUndefined()
+    expect(refs.pkg.deref(), 'the OfficePackage').toBeUndefined()
+    expect(refs.zip.deref(), 'the JSZip object').toBeUndefined()
+    const cache = runtime.cache(doc.sheets.find(sheet => sheet.pivotTables?.length)!.pivotTables![0]!)!
+    expect(runtime.retainedBytes).toBe(await compressedSize(file, cache.recordsPartPath!))
+    // The copy still decodes, to the same store as the part bytes.
+    const direct = await decodeRecords(once((await (await OfficePackage.load(new Uint8Array(readFileSync(file)))).bytes(cache.recordsPartPath!))!), cache, RECORD_LIMITS.D, false)
+    expect(await runtime.records(cache, new AbortController().signal)).toEqual(direct)
+    // The retained copy is charged to the document pool for the runtime's lifetime, once per ledger; a lease adds the store.
+    const ledger = new MainMemoryLedger()
+    runtime.chargeRetained(ledger)
+    runtime.chargeRetained(ledger)
+    expect(ledger.snapshot().byPool.document).toBe(runtime.retainedBytes)
+    const leased = await runtime.lease(cache, ledger, new AbortController().signal)
+    if (!leased.ok) throw new Error(leased.diagnostic.message)
+    expect(ledger.snapshot().byPool.document).toBe(runtime.retainedBytes + leased.lease.store.bytes)
+    leased.lease.release()
+    expect(ledger.snapshot().byPool.document).toBe(runtime.retainedBytes)
+    // A lease on a fresh ledger charges the retained copy first.
+    const other = new MainMemoryLedger()
+    const second = await runtime.lease(cache, other, new AbortController().signal)
+    if (!second.ok) throw new Error(second.diagnostic.message)
+    expect(other.snapshot().byPool.document).toBe(runtime.retainedBytes + second.lease.store.bytes)
+    second.lease.release()
+  })
+
+  it('a records part over the retention cap is not kept: the pivot stays display-only with pivot-records-limit', async () => {
+    const { loadPivotWorkbook, retainPivotRuntime } = await import('../src/xlsx/pivots/load')
+    const pkg = await OfficePackage.load(new Uint8Array(readFileSync(resolve(ENGINE, 'baseline.xlsx'))))
+    const doc = await parseXlsx(pkg)
+    const book = await loadPivotWorkbook(pkg, new Map(doc.sheets.filter(s => s.pivotRegions?.length).map(s => [s.name, s.pivotRegions!])))
+    const owner = {}
+    const runtime = retainPivotRuntime([owner], book, pkg, () => false, { ...RECORD_LIMITS.D, maxBytes: 16 })!
+    expect(runtime.retainedBytes).toBe(0)
+    const cache = [...book.caches.values()][0]!
+    const result = await runtime.records(cache, new AbortController().signal)
+    expect(result.ok ? 'ok' : result.diagnostic.feature).toBe('pivot-records-limit')
+    const ledger = new MainMemoryLedger()
+    const leased = await runtime.lease(cache, ledger, new AbortController().signal)
+    expect(leased.ok ? 'ok' : leased.diagnostic.feature).toBe('pivot-records-limit')
+    expect(ledger.snapshot().byPool.document).toBe(0)
+  })
+})
 
 describe('session', () => {
   it('open refuses each §7.6 case with its feature', async () => {
@@ -538,12 +609,12 @@ describe('session', () => {
     }
     const [one, two] = [await openOne(), await openOne()]
     const bytes = ledger.snapshot().byPool.document
-    expect(bytes).toBeGreaterThan(0)
+    expect(bytes - runtime.retainedBytes).toBeGreaterThan(0)
     expect(ok(one.apply(COLLAPSE_EAST)).layout.rect.maxRow).toBe(20)
     one.release()
     expect(ledger.snapshot().byPool.document).toBe(bytes)
     two.release()
-    expect(ledger.snapshot().byPool.document).toBe(0)
+    expect(ledger.snapshot().byPool.document).toBe(runtime.retainedBytes)
   })
 
   it('release releases the lease once and closes the session', async () => {

@@ -15,7 +15,7 @@
  * - a declared `count` that disagrees with the children: `pivot-count-mismatch`, the children win;
  * - unknown constructs in either part: recorded in `PivotTableDefinition.unsupported`, table kept.
  */
-import type JSZip from 'jszip'
+import JSZip from 'jszip'
 import { attrs, getChild, getChildren, type XmlNode } from '../../core/xml'
 import { PackageError } from '../../core/package-error'
 import { resolvePartTarget } from '../../drawing/parts'
@@ -24,6 +24,7 @@ import type { PivotRegionRef } from './stub'
 import { parseCacheDefinition, pushDiagnostic } from './parseCacheDefinition'
 import { parsePivotTable, validateIndices } from './parsePivotTable'
 import { bindPivotRuntime, createPivotRuntime, type PivotRuntime, type RecordsSource } from './session/runtime'
+import { RECORD_LIMITS, type RecordLimits } from './engine/records'
 
 /**
  * The part access both `OfficePackage` and the worker's `RangePackage` provide.
@@ -175,26 +176,57 @@ export async function* entryChunks(entry: JSZip.JSZipObject, signal: AbortSignal
   }
 }
 
+/** JSZip's compressed form of a loaded entry (`entry._data`, a `CompressedObject`): what inflating it needs. */
+interface CompressedPart { compressedSize: number; uncompressedSize: number; crc32: number; compression: object; compressedContent: unknown }
+const compressedOf = (entry: JSZip.JSZipObject): CompressedPart | undefined => {
+  const data = (entry as unknown as { _data?: Partial<CompressedPart> })._data
+  return data && Number.isSafeInteger(data.compressedSize) && ArrayBuffer.isView(data.compressedContent) && data.compression ? data as CompressedPart : undefined
+}
+
 /**
- * Resident load: keep the workbook's caches (by cacheId and part path) and a records source over the package's zip
- * entries, in the runtime registered under `owners` (the document's sheets array and its sheets). Each records part's
- * entry is looked up now (no read); its bytes are inflated only when `records()` streams them. Undefined for a package
- * without zip entries (the worker's, Task 27).
- *
- * Memory: a JSZip entry keeps a view of the archive it came from, so a workbook with records keeps its compressed
- * file bytes alive for the document's lifetime (report, Task 25).
+ * Resident load (Ruling S3-E): keep the workbook's caches (by cacheId and part path) and, per records part, an
+ * independently owned copy of its COMPRESSED bytes, in the runtime registered under `owners` (the document's sheets
+ * array and its sheets). Nothing of the package or its archive is retained: a JSZip entry's content is a view of the
+ * whole loaded file, so the slice is copied into its own buffer and wrapped in a one-file JSZip that inflates it on
+ * demand (`records()` streams it). The copies are bounded by `limits.maxBytes` in all (a part past it is not kept, and
+ * its pivot stays display-only with `pivot-records-limit`), and the runtime charges `retainedBytes` to a viewer's
+ * main-thread ledger for its lifetime (`chargeRetained`; every lease does it first). Parsing has no ledger, so the
+ * copies are admitted against the cap here and charged when a viewer first takes the runtime, as the document itself
+ * is. Undefined for a package without zip entries (the worker's, Task 27).
  */
-export function retainPivotRuntime(owners: readonly object[], book: Pick<PivotWorkbook, 'caches'>, pkg: PackageReader, date1904: () => boolean): PivotRuntime | undefined {
+export function retainPivotRuntime(owners: readonly object[], book: Pick<PivotWorkbook, 'caches'>, pkg: PackageReader, date1904: () => boolean,
+  limits: RecordLimits = RECORD_LIMITS.D): PivotRuntime | undefined {
   if (!hasEntries(pkg) || !book.caches.size) return undefined
-  const entries = new Map<string, JSZip.JSZipObject>()
+  const parts = new Map<string, JSZip.JSZipObject | PivotDiagnostic>()
+  let retained = 0
   for (const cache of book.caches.values()) {
     const path = cache.recordsPartPath
-    if (path === undefined || entries.has(path)) continue
+    if (path === undefined || parts.has(path)) continue
     const entry = pkg.entry(path)
-    if (entry) entries.set(path, entry)
+    if (!entry) continue
+    const part = compressedOf(entry)
+    if (!part) { parts.set(path, { kind: 'unsupported', feature: 'pivot-records-unretained', message: `Pivot records ${path} could not be kept for interaction`, partPath: path }); continue }
+    if (retained + part.compressedSize > limits.maxBytes) {
+      parts.set(path, { kind: 'unsupported', feature: 'pivot-records-limit', message: `Pivot records ${path} (${part.compressedSize} compressed bytes) exceed the ${limits.maxBytes}-byte retention cap`, partPath: path })
+      continue
+    }
+    const content = part.compressedContent as ArrayBufferView
+    const copy = new Uint8Array(part.compressedSize)
+    copy.set(new Uint8Array(content.buffer, content.byteOffset, Math.min(content.byteLength, part.compressedSize)))
+    // A CompressedObject over the copy (JSZip replaces the class's prototype, so it is built from the prototype; JSZip
+    // recognises it by `instanceof`). The compression object is JSZip's shared codec, not part of the archive.
+    const detachedPart = Object.assign(Object.create(Object.getPrototypeOf(part) as object) as CompressedPart,
+      { compressedSize: part.compressedSize, uncompressedSize: part.uncompressedSize, crc32: part.crc32, compression: part.compression, compressedContent: copy })
+    const detached = new JSZip().file(path, detachedPart as never, { binary: true }).file(path)
+    if (!detached) continue
+    parts.set(path, detached)
+    retained += part.compressedSize
   }
-  const source: RecordsSource = (path, signal) => { const entry = entries.get(path); return entry ? entryChunks(entry, signal) : undefined }
-  const runtime = createPivotRuntime(book.caches, source, date1904)
+  const source: RecordsSource = (path, signal) => {
+    const part = parts.get(path)
+    return part === undefined ? undefined : 'feature' in part ? part : entryChunks(part, signal)
+  }
+  const runtime = createPivotRuntime(book.caches, source, date1904, retained)
   bindPivotRuntime(owners, runtime)
   return runtime
 }
