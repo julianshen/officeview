@@ -8,7 +8,7 @@ import { OfficePackage } from '../src/core/zip'
 import { parseXlsx } from '../src/xlsx/parse'
 import { ViewerKernel } from '../src/worker/viewerKernel'
 import { createObjectWorkbookSource } from '../src/worker/viewerObjectSource'
-import { ViewerClient } from '../src/worker/viewerClient'
+import { ViewerClient, ViewerNotSentError } from '../src/worker/viewerClient'
 import { connectInProcess } from '../src/worker/viewerKernel'
 import { RemotePivotSessions } from '../src/worker/viewerRemotePivots'
 import { pivotRuntimeFor } from '../src/xlsx/pivotLoader'
@@ -845,6 +845,19 @@ describe('worker pivot protocol', () => {
     } finally {
       await remote.close()
       await port.idle()
+    }
+  })
+
+  it('Task 29 r3: the fit grant is refunded only when the command provably never left', async () => {
+    for (const [error, refunded] of [[new ViewerNotSentError('not sent'), true], [new Error('Viewer client disposed'), false]] as const) {
+      const held = new Map<string, number>()
+      let serial = 0
+      const client = { nextRequestId: () => `r${++serial}`, send: () => Promise.reject(error) }
+      const pivots = new RemotePivotSessions({ docId: 'd', profile: 'D', client: client as never, isClosed: () => false,
+        replyGrant: { reserve: (owner, bytes) => { held.set(owner, bytes); return true }, settle: owner => { held.delete(owner) }, release: owner => { held.delete(owner) } } })
+      await pivots.open(1, 0, new AbortController().signal).catch(() => undefined)
+      // Posted, then the client was disposed (a close that timed out): the worker may still be producing the reply.
+      expect(held.size, error.name).toBe(refunded ? 0 : 1)
     }
   })
 

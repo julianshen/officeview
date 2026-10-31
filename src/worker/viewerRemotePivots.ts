@@ -5,7 +5,7 @@ import type { PivotMenuModel } from '../xlsx/pivots/session/menu'
 import type { ChartModel } from '../charts/model'
 import { PIVOT_FIT_REPLY_BYTES, type ValueOverlayCell, type WorkerReply } from '../xlsx/view/contracts'
 import type { SourceRect } from '../xlsx/view/coordinates'
-import type { ViewerClient } from './viewerClient'
+import { ViewerNotSentError, type ViewerClient } from './viewerClient'
 import { WORKER_BUDGETS } from '../xlsx/view/tileCache'
 
 export interface RemotePivotOpen { readonly kind: 'open'; readonly revision: number; readonly def: PivotTableDefinition; /** The menus' model (Task 28). */ readonly menu: PivotMenuModel; /** The session's value cells a fit reads (Task 29 autofit; absent past the payload cap). */ readonly cells?: readonly { row: number; col: number; value: ValueOverlayCell | null }[] }
@@ -66,7 +66,9 @@ export class RemotePivotSessions {
     const fitGrantBytes = grant.reserve(owner, PIVOT_FIT_REPLY_BYTES) ? PIVOT_FIT_REPLY_BYTES : 0
     return send({ ...command, fitGrantBytes }).then(
       reply => { grant.settle(owner, reply); return reply },
-      error => { grant.release(owner); throw error })
+      // Refunded only when the command provably never left (as `RemoteWorkbook.request`): a disposed client may still
+      // have the reply in flight, so its reservation stays until the reply arrives or the ledger is torn down.
+      error => { if (error instanceof ViewerNotSentError) grant.release(owner); throw error })
   }
 
   open(sheetId: number, pivot: number, signal: AbortSignal): Promise<RemotePivotOpen | { kind: 'refused'; message: string }> {
