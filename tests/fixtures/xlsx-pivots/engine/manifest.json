@@ -1276,6 +1276,18 @@
     "status": "built"
   },
   {
+    "case": "filter-top-percent-30",
+    "file": "tests/fixtures/xlsx-pivots/engine/filter-top-percent-30.xlsx",
+    "features": [
+      "top10-filter",
+      "top-percent"
+    ],
+    "task": 21,
+    "pivot": "樞紐分析表2",
+    "route": "xml",
+    "status": "built"
+  },
+  {
     "case": "filter-top-sum",
     "file": "tests/fixtures/xlsx-pivots/engine/filter-top-sum.xlsx",
     "features": [

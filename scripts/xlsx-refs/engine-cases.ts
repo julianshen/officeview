@@ -992,6 +992,12 @@ filterCase('top-percent', ['top10-filter', 'top-percent'], {
   script: t => makeFilter(t, 'Region', `filter type:pivot top percent, data field:${dataField(t, SALES)}, value1:50`),
   edit: x => top10Filter(x, F.Region, 0, 'percent', 50), type: 'percent', measures: 'top 50 percent threshold',
 })
+// 30 % separates the two readings of Percent on the seed: N % of the item count keeps West only; items whose values
+// reach N % of the total keep West + South (West alone is 27.6 %). 50 % selects West + South under both.
+filterCase('top-percent-30', ['top10-filter', 'top-percent'], {
+  script: t => makeFilter(t, 'Region', `filter type:pivot top percent, data field:${dataField(t, SALES)}, value1:30`),
+  edit: x => top10Filter(x, F.Region, 0, 'percent', 30), type: 'percent', measures: 'top percent: share of the total or of the item count',
+})
 filterCase('top-sum', ['top10-filter', 'top-sum'], {
   script: t => makeFilter(t, 'Region', `filter type:pivot top sum, data field:${dataField(t, SALES)}, value1:${T.regionTopSum}`),
   edit: x => top10Filter(x, F.Region, 0, 'sum', T.regionTopSum), type: 'sum', measures: 'top sum threshold that falls inside the second item',
