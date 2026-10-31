@@ -15,9 +15,14 @@ import { ResizeHandles, type ResizeRequest } from './sheetResize'
 import { RESIZE_KEY_STEP } from '../../xlsx/view/axisSizes'
 import { fade, Pop, Presence } from '../motion/presets'
 
-export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable' }
+/** `expanded`: the cell carries a pivot ± button (spec §8: expanded/collapsed state on row headers). */
+export interface GridCellPresentation { text: string; state?: 'loading' | 'error' | 'unavailable'; expanded?: boolean }
 export interface GridTransition { selection: GridSelection; window: ScrollWindow; announcement: string }
-export interface GridPopup { content: ReactNode; invoker: HTMLElement | null; close: () => void; /** Accessible name of the popup (default "Column filter"). */ label?: string }
+export interface GridPopup {
+  content: ReactNode; invoker: HTMLElement | null; close: () => void; /** Accessible name of the popup (default "Column filter"). */ label?: string
+  /** Where it opens: under the invoking column header (default), or under the invoker itself (a pivot button over a cell). */
+  anchor?: 'header' | 'invoker'
+}
 export interface GridSemanticsProps {
   owner: CacheIdentity
   projection: ProjectedSheetMetrics
@@ -51,6 +56,9 @@ export interface GridSemanticsProps {
   /** Fill the positioned parent (the viewer pane), so the status line follows the
    * pane's size at once instead of a render later. */
   fill?: boolean
+  /** Controls over the cell area that are not grid content (pivot buttons): outside the grid's ARIA tree and its
+   * pointer selection, positioned over the cells (left: gutter, top: header). */
+  cellControls?: ReactNode
 }
 const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = {
   ArrowLeft: { kind: 'column', delta: -RESIZE_KEY_STEP }, ArrowRight: { kind: 'column', delta: RESIZE_KEY_STEP },
@@ -60,6 +68,8 @@ const resizeArrows: Record<string, { kind: 'row' | 'column'; delta: number }> = 
 export const STATUS_BAR_HEIGHT = 24
 /** Desktop column popup width cap (the filter dropdown's own min(420px, …)). */
 const POPUP_MAX_WIDTH = 420
+/** An invoker-anchored popup opens no lower than this many px above the cell area's bottom. */
+const POPUP_MIN_ROOM = 240
 const navigationKeys = new Set<string>(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'PageUp', 'PageDown'])
 /** The parent commits viewport and selection together, so the new descendant
  * is represented in the same React publication as its ID. */
@@ -168,7 +178,8 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
         // A header invoker is a native control, so restoring it re-enters control mode.
         if (invoker !== gridRef.current) setControlMode(true)
         invoker.focus()
-      } else gridRef.current?.focus()
+      } else if (owner === ownerKey && invoker?.isConnected && wrapperRef.current?.contains(invoker)) invoker.focus()   // a cell control (pivot button)
+      else gridRef.current?.focus()
     }
     previousPopup.current = props.popup ? { popup: props.popup, owner: previousPopup.current?.owner ?? ownerKey } : null
   }, [ownerKey, props.popup])
@@ -179,15 +190,22 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
   popupWasOpen.current = Boolean(props.popup)
   // A popup fading out unmounts after the next one mounted: never let its detach clear the live ref.
   const keepPopupRef = useCallback((node: HTMLDivElement | null) => { if (node) popupRef.current = node }, [])
-  // Desktop popup anchor: under the invoking column, clamped inside the wrapper.
-  const [popupLeft, setPopupLeft] = useState(0)
+  // Desktop popup anchor: under the invoking column, clamped inside the wrapper; an invoker anchor (a pivot
+  // button over a cell) opens under the invoker, keeping room for the popup in the cell area.
+  const [popupLeft, setPopupLeft] = useState(0), [popupTop, setPopupTop] = useState<number | null>(null)
   useLayoutEffect(() => {
     const wrapper = wrapperRef.current, invoker = props.popup?.invoker
     if (!props.popup || !wrapper) return
-    const header = invoker && invoker !== gridRef.current ? invoker.closest('[role=columnheader]') ?? invoker : null
+    const below = props.popup.anchor === 'invoker' && invoker && invoker !== gridRef.current
+    const header = invoker && invoker !== gridRef.current ? below ? invoker : invoker.closest('[role=columnheader]') ?? invoker : null
     const width = Math.min(POPUP_MAX_WIDTH, wrapper.clientWidth)
-    const x = header ? header.getBoundingClientRect().left - wrapper.getBoundingClientRect().left : gutter
+    const bounds = wrapper.getBoundingClientRect()
+    const x = header ? header.getBoundingClientRect().left - bounds.left : gutter
     setPopupLeft(Math.max(0, Math.min(x, wrapper.clientWidth - width)))
+    if (below) {
+      const bottom = invoker.getBoundingClientRect().bottom - bounds.top
+      setPopupTop(Math.max(headerHeight, Math.min(bottom, headerHeight + Math.max(0, viewport.height - POPUP_MIN_ROOM))))
+    } else setPopupTop(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.popup])
   const current = reconcileSelection(props.selection, projection, view), selection = current.selection
@@ -395,12 +413,13 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
             // Name from contents: the visually hidden text IS the name, so VoiceOver
             // reads the value once (no label + contents) and never "blank" (S13 V1/V5).
             return <div key={col} role="gridcell" id={`${prefix}-cell-${cellId(row, col)}`} aria-colindex={col + 2}
-              aria-selected={isSelected} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
+              aria-selected={isSelected} aria-expanded={value.expanded} aria-description={[value.state, multiSelected && isSelected ? 'selected' : ''].filter(Boolean).join(', ') || undefined}
               style={offscreen ? { ...hiddenText, top: 0, left: 0 } : { position: 'absolute', top: 0, left: column.x, width: column.width, height: box.height, transform: pinned ? `translateX(${-rowShift}px)` : undefined }}><span style={hiddenText}>{activeAnnouncement(projection, at, value.text)}</span></div>
           })}
         </div>
       })}
     </div>
+    {props.cellControls && <div style={{ position: 'absolute', left: gutter, top: headerHeight, width: viewport.width, height: viewport.height, pointerEvents: 'none', zIndex: 3 }}>{props.cellControls}</div>}
     {/* Bounded by the cell area (below the header row, above the status line): a taller popup scrolls
         instead of losing its controls. Anchored at the top under its column: content that arrives later
         (a loading value list) grows the popup downward, never moving what is already shown. */}
@@ -409,7 +428,7 @@ export function GridSemantics(props: GridSemanticsProps): ReactElement {
     <Presence>{props.popup && <Pop key={popupSeq.current} v={fade} ref={keepPopupRef} role="dialog" aria-label={props.popup.label ?? 'Column filter'} data-officeview-ui="grid-popup"
       className="ov:rounded-panel ov:shadow-popover ov:bg-surface ov:border ov:border-border"
       onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-      style={{ position: 'absolute', zIndex: 7, top: headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height, overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</Pop>}</Presence>
+      style={{ position: 'absolute', zIndex: 7, top: popupTop ?? headerHeight, left: popupLeft, maxWidth: '100%', maxHeight: viewport.height + headerHeight - (popupTop ?? headerHeight), overflowY: 'auto', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)' }}>{props.popup.content}</Pop>}</Presence>
     <ViewerStatus {...props.status} motionKey={sheetId} records={props.status?.records ?? recordCounts(projection, props.body)} announcement={status} inspection={props.inspection ?? props.status?.inspection}
       style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: STATUS_BAR_HEIGHT, lineHeight: `${STATUS_BAR_HEIGHT}px`, boxSizing: 'border-box', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} />
   </div>

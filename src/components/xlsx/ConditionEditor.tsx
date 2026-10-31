@@ -27,9 +27,12 @@ export function typedCondition(input: ConditionInput): TypedCondition {
 }
 const operators = { number: ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between'], text: ['eq', 'neq', 'begins', 'ends', 'contains', 'not-contains'], date: ['eq', 'neq', 'before', 'after', 'between'], datePreset: [] }
 const names: Record<string, string> = { eq: 'Equals', neq: 'Does not equal', gt: 'Greater than', gte: 'Greater than or equal', lt: 'Less than', lte: 'Less than or equal', between: 'Between (inclusive)', begins: 'Begins with', ends: 'Ends with', contains: 'Contains', 'not-contains': 'Does not contain', before: 'Before', after: 'After' }
-export function ConditionEditor({ value, onChange, classification, index, invalid }: { value: ConditionInput; onChange: (value: ConditionInput) => void; classification: ColumnClassification; index: number; invalid: boolean }): ReactElement {
-  const types: TypedCondition['kind'][] = classification.kind === 'date' ? ['date', 'datePreset', 'number'] : classification.kind === 'number' ? ['number'] : classification.hasNumeric ? ['text', 'number'] : ['text']
-  const prefix = `Condition ${index}`
+/** `kinds` narrows the condition types the classification offers (a pivot label, value or date filter takes one), and
+ * `label` names the fieldset (default "Condition <index>"). */
+export function ConditionEditor({ value, onChange, classification, index, invalid, kinds, label }: { value: ConditionInput; onChange: (value: ConditionInput) => void; classification: ColumnClassification; index: number; invalid: boolean; kinds?: readonly TypedCondition['kind'][]; label?: string }): ReactElement {
+  const offered: TypedCondition['kind'][] = classification.kind === 'date' ? ['date', 'datePreset', 'number'] : classification.kind === 'number' ? ['number'] : classification.hasNumeric ? ['text', 'number'] : ['text']
+  const types = kinds ? offered.filter(kind => kinds.includes(kind)) : offered
+  const prefix = label ?? `Condition ${index}`
   // The second condition fades in when the user adds it; the first mounts with its dropdown.
   const motion = useMotionProps(fade, index > 1)
   return <m.fieldset {...motion}><legend>{prefix}</legend>

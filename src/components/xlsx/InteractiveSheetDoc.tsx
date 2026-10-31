@@ -97,6 +97,12 @@ import { SheetSizes, NO_SESSION_SIZES, RESIZE_LIMITS, SIZED_DRAWING_BYTES, axisU
 import { AutoFitRefusedError, autoFitSize, createFitMeasure, resizeRegion, type ResizeRequest } from './sheetResize'
 import { tileLogicalBox } from '../../xlsx/view/tileCache'
 import { sparklineInvalidationBox } from '../../xlsx/view/sparklineInvalidation'
+import type { ValueOverlay } from '../../xlsx/view/contracts'
+import { invalidateRegionStyles, regionStylesFor } from '../../xlsx/tableStyleLoader'
+import { pivotRuntimeFor } from '../../xlsx/pivotLoader'
+// Type-only: the pivot controls (client, layer, menus) are a lazy chunk loaded on a sheet with pivots (Task 28).
+import type * as PivotUi from './pivot/PivotButtonLayer'
+import type { PivotDeltaKind } from '../../xlsx/pivots/session/delta'
 
 /** A committed sheet view (the S9.1 sort/filter commit seam). `revision` must
  * increase with every commit; it becomes the sheet's viewGen. */
@@ -159,6 +165,8 @@ export interface InteractiveSheetDocProps {
   assetLoader?: typeof prepareSheetAssets
   /** @internal Static print unit factory (tests inject delayed units). */
   printLoader?: (doc: XlsxDocument, options: PrintUnitsOptions) => Promise<PaintableArray & { refusedImages?: number[] }>
+  /** @internal The pivot interaction kinds the menus offer (default: the session's oracle-verified set). */
+  pivotVerifiedKinds?: ReadonlySet<PivotDeltaKind>
 }
 
 // Document identity alone owns zoom reset (§10.1): a stable id per document object.
@@ -281,8 +289,10 @@ interface SheetEntry {
   /** Generation of the worker-resolved table-style layer. */
   regionStyleGen: string
   revision: number
-  /** Worker-backed sheets: generation of the merged ranges the geometry holds. */
+  /** Generation of the merged ranges the geometry holds (worker merges; a resident pivot overlay's merges). */
   structureGen: number
+  /** The source store's value generation the geometry holds (a committed pivot overlay, spec §7.9). */
+  valueGen: number
   /** View-only session size generation the geometry holds (spec §5.6). */
   resizeGen: number
   /** The view input this entry shows (rebuilt with it when only sizes change). */
@@ -389,7 +399,12 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     mainLedger.release('merges', 'caches')
   }, [mainLedger])
   // A resident document's parsed model lives on the main thread while reachable.
-  useMemo(() => { if (!remote) mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc)) }, [mainLedger, remote, doc])
+  useMemo(() => {
+    if (remote) return
+    mainLedger.chargeWhileReachable('document', [doc], estimatePayloadBytes(doc))
+    // Ruling S3-F: the pivot runtime's retained records copy (Ruling S3-E) is charged from mount, not first lease.
+    if (doc.sheets.some(sheet => sheet.pivotTables?.length)) pivotRuntimeFor(doc)?.chargeRetained(mainLedger)
+  }, [mainLedger, remote, doc])
   const onMainLedger = props.onMainLedger
   useEffect(() => { onMainLedger?.(mainLedger) }, [mainLedger, onMainLedger])
   const [loadTick, setLoadTick] = useState(0)
@@ -459,6 +474,22 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   // The published font generation; a sheet switch (lease pending) never resets it.
   const fontGen = fontGenRef.current.gen
 
+  // ---- pivots (Task 28): committed overlays per resident sheet; the saved definitions the host's document gets back ----
+  const pivotOverlays = useRef(new Map<string, ValueOverlay>()).current
+  const hasPivots = useMemo(() => doc.sheets.some(sheet => sheet.pivotTables?.length || sheet.pivotRegions?.length), [doc])
+  const savedPivotDefs = useMemo(() => doc.sheets.map(sheet => sheet.pivotTables), [doc])
+  /** Back to the file's pivots: the saved definitions on the host's document and no overlay. A live definition never
+   * outlives the sessions that made it (unmount, or a new client). */
+  const restorePivots = () => {
+    doc.sheets.forEach((sheet, index) => {
+      if (sheet.pivotTables === savedPivotDefs[index]) return
+      sheet.pivotTables = savedPivotDefs[index]
+      invalidateRegionStyles(sheet)
+    })
+    for (const sheetId of pivotOverlays.keys()) { try { source.store(sheetId).setValueOverlay?.(undefined) } catch { /* released with the viewer */ } }
+    pivotOverlays.clear()
+  }
+
   // ---- per-sheet committed views and geometry (one geometry per viewGen) ----
   const localViews = useRef(new Map<string, SheetViewInput>()).current
   const viewInput = (sheetId: string): SheetViewInput => {
@@ -488,7 +519,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   /** A sheet entry built off to the side: nothing is charged, held or published. */
   interface Candidate {
-    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; previous: SheetEntry | undefined
+    sheetId: string; sheet: XlsxSheet; sparklineGen: number; regionStyleGen: string; input: SheetViewInput; structureGen: number; valueGen: number; previous: SheetEntry | undefined
     order: SheetView['order']; baseHidden: SheetView['baseHidden']; visibility: SheetView['visibility']
     built: SheetGeometry & { readonly chargeBytes?: number }
     /** Exactly what publishing charges (the entry charge functions). */
@@ -512,13 +543,16 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     if (sparklineContent) sheet = sheetWithSparklines(sheet, sparklineContent)
     let input = viewInput(sheetId)
     const previous = entries.get(sheetId)
-    const structureGen = remote ? remote.merges(sheetId).gen : 0
+    // A resident pivot overlay (Task 28) moves the store's value and merge generations: the geometry is rebuilt over it.
+    const structureGen = remote ? remote.merges(sheetId).gen : source.store(sheetId).structureGen ?? 0
+    const valueGen = remote ? 0 : source.store(sheetId).stamp.valueGen
     const sized = sheetSizes.get(sheetId), resizeGen = sized?.gen ?? 0
-    if (!override && previous && previous.revision === input.revision && previous.structureGen === structureGen && previous.resizeGen === resizeGen && previous.sparklineGen === sparklineGen && previous.regionStyleGen === regionStyleGen) return { entry: previous }
+    const same = (entry: SheetEntry) => entry.structureGen === structureGen && entry.valueGen === valueGen && entry.resizeGen === resizeGen && entry.sparklineGen === sparklineGen && entry.regionStyleGen === regionStyleGen
+    if (!override && previous && previous.revision === input.revision && same(previous)) return { entry: previous }
     if (previous && input.revision < previous.revision) {
       // Stale commit: never publish an older view. Session sizes or structure
       // that changed since are still applied, to the view already shown.
-      if (!override && previous.resizeGen === resizeGen && previous.structureGen === structureGen && previous.sparklineGen === sparklineGen && previous.regionStyleGen === regionStyleGen) return { entry: previous }
+      if (!override && same(previous)) return { entry: previous }
       input = previous.input
     }
     // A rebuild for session sizes alone keeps the view buffers it already shows
@@ -536,16 +570,17 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
       : input.visibility ? (remote && sameView ? intersectVisibility(input.visibility, authored()) : input.visibility)
         : authored()
     const sizes = override ?? (sized && !sized.empty ? sized.snapshot() : NO_SESSION_SIZES)
-    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes })
+    const overlay = remote ? undefined : pivotOverlays.get(sheetId)
+    const built = remote ? pagedSheetGeometry(remote, sheetId, order, visibility, overflowFor(), sizes, true) : buildSheetGeometry(sheet, { order, ...(input.visibility ? { visibility } : {}), sizes, ...(overlay ? { overlay } : {}) })
     if (built.kind !== 'ready') throw new Error(built.diagnostics.map(d => d.message).join('; ') || 'This sheet cannot be laid out')
     const geometryBytes = remote ? (built as unknown as { chargeBytes: number }).chargeBytes : projectionBytes(built.metrics) + axisBytes(built.metrics.cols) + (built.cellIndexBytes ?? 0) + built.merges.estimatedBytes
     const bytes = geometryBytes + (built.sizedDrawings?.length ?? 0) * SIZED_DRAWING_BYTES + viewBufferBytes(remote ? null : order, remote && visibility === input.visibility ? null : visibility)
-    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, previous, order, baseHidden, visibility, built, bytes } }
+    return { candidate: { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, previous, order, baseHidden, visibility, built, bytes } }
   }
   /** Publishes a candidate: charges exactly its measured owners, holds it and
    * retires the previous entry on the next display commit. */
   const publishEntry = (candidate: Candidate, resizeGen: number): SheetEntry => {
-    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, previous, order, baseHidden, visibility, built } = candidate
+    const { sheetId, sheet, sparklineGen, regionStyleGen, input, structureGen, valueGen, previous, order, baseHidden, visibility, built } = candidate
     bindOverflowCache(built, overflowFor())
     // A resident geometry is charged for its lifetime: the row projection (it
     // keeps its own copied segments; the build's row axis is dropped), the
@@ -564,7 +599,7 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const view: SheetView = { sheetId, revision: input.revision, order, baseHidden, visibility, sort: input.sort ?? null, filter: input.filter ?? null, selection }
     const used = remote?.layout(sheetId).used
     const entry: SheetEntry = {
-      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
+      sheet, sparklineGen, regionStyleGen, revision: input.revision, structureGen, valueGen, resizeGen, input, view, geometry: built, metrics: built.metrics, body: input.filter || input.sort ? { r0: (input.filter?.range ?? input.sort!.range).r0 + (input.filter?.range ?? input.sort!.range).headerRows, r1: (input.filter?.range ?? input.sort!.range).r1 - (input.filter?.range ?? input.sort!.range).totalsRows } : remote ? used ? { r0: used.r0, r1: used.r1 } : null : usedBody(sheet),
       // Layout records are keyed by complete identity; a new view gets its own merge cache.
       // A worker layout/merge publication changes record boxes: fresh layouts then.
       layoutCache: previous && previous.structureGen === structureGen ? previous.layoutCache : new LayoutCache(), merges: new MergeQueryCache(64, mergeFormatBudget),
@@ -593,7 +628,8 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   })
   const ownerRef = useRef(ownerOf)
   ownerRef.current = ownerOf
-  const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(revisionOf)])
+  // Value generations too: a committed pivot change re-runs find (and every owner-keyed consumer) over the new values.
+  const ownerKey = JSON.stringify([globalViewGen, fontGen, sheetIds.map(revisionOf), sheetIds.map(sheetId => source.store(sheetId).stamp.valueGen)])
   const sparklineViewKey = hasResolvedSparklines ? ownerKey : ''
   const sparklineViewKeyRef = useRef(sparklineViewKey)
 
@@ -1192,8 +1228,56 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     return () => abort.abort()
   }, [activeSheetId, source])
   useEffect(() => () => { for (const port of controlPorts.values()) port.dispose(); controlPorts.clear(); controlResources.current?.dispose(); controlResources.current = null }, [])
-  const [popup, setPopup] = useState<{ kind: 'filter' | 'sort'; col: number; invoker: HTMLElement } | null>(null)
+  const [popup, setPopup] = useState<{ kind: 'filter' | 'sort'; col: number; invoker: HTMLElement } | { kind: 'pivot'; request: PivotUi.PivotMenuRequest; invoker: HTMLElement } | null>(null)
   const closePopup = () => setPopup(null)
+
+  // ---- pivot controls (Task 28): a lazy chunk with the client, the button layer and the menus ----
+  const [pivotUi, setPivotUi] = useState<typeof PivotUi | null>(null)
+  // A paged shell's pivots arrive with the worker's display parts: the active sheet's entry says so.
+  const wantsPivotUi = hasPivots || Boolean(entry?.sheet.pivotTables?.length)
+  useEffect(() => {
+    if (!wantsPivotUi) return
+    let live = true
+    import('./pivot/PivotButtonLayer').then(module => { if (live) setPivotUi(module) }, () => { /* buttons stay painted, display only */ })
+    return () => { live = false }
+  }, [wantsPivotUi])
+  /** Installs a committed pivot change (spec §7.9): 1. the sheet's live definition; 2. its region styles rebuilt;
+   * 3. the overlay on the source store (resident), which 4. bumps the store's valueGen (tiles, find, copy and the
+   * geometry re-key); 5. the sheet's tiles dropped. The paged path's overlay is the worker's (Task 27). */
+  const installPivot = (commit: PivotUi.PivotCommit) => {
+    const sheet = doc.sheets[commit.sheetId], sheetId = sheetIds[commit.sheetId]
+    if (!sheet?.pivotTables || sheetId === undefined) return
+    sheet.pivotTables = sheet.pivotTables.map((def, index) => index === commit.pivot ? commit.def : def)
+    invalidateRegionStyles(sheet)
+    regionStylesFor(sheet)
+    if (!remote && commit.overlay !== undefined) {
+      if (commit.overlay) pivotOverlays.set(sheetId, commit.overlay); else pivotOverlays.delete(sheetId)
+      source.store(sheetId).setValueOverlay?.(commit.overlay ?? undefined)
+    }
+    cancelCopy()
+    dropTiles(sheetId, null)
+    rerender()
+  }
+  const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup })
+  pivotHost.current = { installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
+  const pivotKinds = props.pivotVerifiedKinds
+  // One controller (and client, with its sessions) per mount of these inputs; created in an effect so a StrictMode
+  // re-run gets a fresh one instead of a disposed one.
+  const [pivotController, setPivotController] = useState<PivotUi.PivotController | null>(null)
+  useEffect(() => {
+    if (!pivotUi) return
+    // A resident workbook parsed on this thread has its runtime; a paged (worker) one waits for Task 27's port.
+    const client = remote ? pivotUi.unavailablePivotClient(pivotUi.REMOTE_PIVOTS_UNAVAILABLE.feature, pivotUi.REMOTE_PIVOTS_UNAVAILABLE.message)
+      : pivotUi.createResidentPivotClient({ doc, saved: savedPivotDefs, ledger: mainLedger, profile: budgetProfile, install: commit => pivotHost.current.installPivot(commit), ...(pivotKinds ? { verifiedKinds: pivotKinds } : {}) })
+    const controller = new pivotUi.PivotController({ client, announce: message => pivotHost.current.announce(message), openMenu: request => pivotHost.current.openMenu(request), closeMenu: () => pivotHost.current.closeMenu() })
+    setPivotController(controller)
+    return () => {
+      controller.dispose()
+      pivotHost.current.restore()
+      setPivotController(current => current === controller ? null : current)
+    }
+  }, [pivotUi, doc, remote, mainLedger, budgetProfile, pivotKinds])
+  useEffect(() => pivotController?.subscribe(rerender), [pivotController, rerender])
   const controlJob = useRef<AbortController | null>(null)
   // The header sort in flight (spec §12.2 acknowledgment): shown with the click,
   // cleared when its own job ends; any newer job or a sheet switch replaces it.
@@ -1335,6 +1419,13 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const pagedDrawingNotices = activeDrawings ? drawingNotices(activeDrawings) : []
   const activeCharts = entry ? sheetCharts(entry.sheet.drawings) : []
   const fontNotices = fontNotice(assets && assets.sheetId === activeSheetId ? assets.lease.fontDiagnostics : [])
+  // Pivots on the active sheet (Task 28): load-time pivot-* diagnostics, and one notice per pivot not interactive.
+  const activeIndex = sheetIds.indexOf(activeSheetId)
+  const activePivots = entry?.sheet.pivotTables
+  const pivotNotices = entry ? [...new Set([
+    ...(entry.sheet.diagnostics ?? []).filter(d => d.feature.startsWith('pivot-')).map(d => d.message),
+    ...(pivotController && activePivots ? pivotController.notices(activeIndex, activePivots.length) : []),
+  ])] : []
 
   // Overlay layer: selection and search highlights in viewport space.
   useLayoutEffect(() => {
@@ -1539,7 +1630,10 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
     const token = ++printToken.current
     const loader = props.printLoader ?? preparePrintUnits
     let pages: Awaited<ReturnType<typeof loader>>
-    try { pages = await loader(doc, {
+    // Print never runs a pivot session (§7.10): a changed pivot prints as saved, its saved definition over its saved cells.
+    const changed = doc.sheets.some((sheet, index) => sheet.pivotTables !== savedPivotDefs[index])
+    const printed = changed ? { ...doc, sheets: doc.sheets.map((sheet, index) => sheet.pivotTables === savedPivotDefs[index] ? sheet : { ...sheet, pivotTables: savedPivotDefs[index], regionStyles: undefined, regionStylesResolved: false }) } : doc
+    try { pages = await loader(printed, {
       ...(markKey ? { watermark } : {}), ...(fontKey ? { fallbackFonts } : {}), profile, imageCache: imageCacheFor(), assetLoader: loadAssets, allowed: () => allowPrintRef.current,
     }) } catch (error) {
       if (token === printToken.current && allowPrintRef.current) setAnnouncement(error instanceof Error ? error.message : 'Print unavailable; try again.')
@@ -1871,14 +1965,19 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
         <div ref={paneRef} data-testid="officeview-sheet-pane" style={{ position: 'relative', flex: `1 1 ${FALLBACK_PANE.height}px`, minHeight: 0, overflow: 'hidden', background: '#ffffff' }}>
           {entry && scroll && (
             <GridSemantics fill gutter={gutter} owner={identity} projection={entry.metrics} view={entry.view} selection={selection} window={scroll} viewport={viewport}
-              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
+              body={entry.body} onChange={onGridChange} status={{ records: { ...snapshot(activeSheetId).records, completeness: loadState?.completeness ?? 'complete' }, countMode: 'body', loadReport: { status: 'ready', notices: [...notices, ...pivotNotices, ...fontNotices, ...pagedDrawingNotices, ...(activeSparklines ? sparklineNotices(activeSparklines) : []), ...chartNotices(activeCharts), ...(loadState?.failure ? [loadFailureNotice(loadState.failure, loadState.code)] : [])] } }}
               onResize={resizeLine}
               onSortCycle={(col, shift) => void sortCycle(col, shift)} pendingSortColumn={sortPending?.col ?? null} onFilter={(col, invoker) => { setPopup({ kind: 'filter', col, invoker }) }} onSortDialog={(col, invoker) => { setPopup({ kind: 'sort', col, invoker }) }} onNotice={setAnnouncement}
-              popup={popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
+              popup={popup?.kind === 'pivot' ? pivotUi && pivotController ? { invoker: popup.invoker, close: closePopup, anchor: 'invoker', label: pivotMenuLabel(pivotController, popup.request), content: <pivotUi.PivotMenu controller={pivotController} request={popup.request} owner={identity} onClose={closePopup} onNotice={setAnnouncement} /> } : undefined
+                : popup && controls ? { invoker: popup.invoker, close: closePopup, label: popup.kind === 'filter' ? 'Column filter' : 'Sort worksheet', content: popup.kind === 'filter' ? <FilterDropdown owner={identity} client={controls.client} applied={entry.view.filter} appliedSort={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> : <SortDialog owner={identity} client={controls.client} applied={entry.view.sort} col={popup.col} invoker={popup.invoker} embedded onClose={closePopup} onApplied={() => rerender()} onNotice={setAnnouncement} /> } : undefined}
+              cellControls={pivotUi && pivotController && activePivots?.length && scroll ? <pivotUi.PivotButtonLayer controller={pivotController} sheet={activeIndex} defs={activePivots} projection={entry.metrics} window={scroll} viewport={viewport} touch={touchControls}
+                cellText={(row, col) => { const cell = cellAt(entry, { row, col }); return cell ? presentCell(cell).text : '' }} onEscape={() => (rootRef.current?.querySelector<HTMLElement>('[data-officeview-grid]'))?.focus()} /> : undefined} announcement={[sortPending ? `Sorting column ${columnToLetters(sortPending.col)}…` : '', resourceNotice, overflowNotice, findOverflowNotice === overflowNotice ? '' : findOverflowNotice, assets?.sheetId !== activeSheetId ? 'Loading sheet…' : '', assets && assets.sheetId === activeSheetId && assets.lease.refusedImages > 0 ? `${assets.lease.refusedImages} picture${assets.lease.refusedImages === 1 ? ' is' : 's are'} not shown (image memory budget).` : '', assets && assets.sheetId === activeSheetId && assets.lease.chartsUnavailable ? 'Charts are shown as placeholders: the chart engine could not be loaded.' : '', selectionIncomplete ? 'Selection highlight is incomplete at this zoom; zoom in for detail.' : '', remote?.queryNotice === announcement ? '' : remote?.queryNotice, announcement].filter(Boolean).join(' ')} inspection={inspection} profile={profile} label={`Worksheet ${entry.sheet.name}`}
               cellPresentation={at => {
                 const cell = cellAt(entry, at)
                 if (!cell && remote && !remote.store(activeSheetId).isKnown(at)) return { text: 'Loading…' }
-                return cell ? presentCell(cell) : { text: '' }
+                const shown = cell ? presentCell(cell) : { text: '' }
+                const expanded = pivotUi && activePivots?.length ? pivotUi.expandedAt(activePivots, at.row, at.col) : undefined
+                return expanded === undefined ? shown : { ...shown, expanded }
               }}>
               <canvas ref={baseRef} data-testid="officeview-sheet-base" style={canvasStyle} />
               <canvas ref={overlayRef} data-testid="officeview-sheet-overlay" style={canvasStyle} />
@@ -2024,4 +2123,10 @@ function lastVisibleRowLabel(metrics: ProjectedSheetMetrics, window: ScrollWindo
   let last = 0
   for (const run of rows.runs) last = Math.max(last, run.end + 1)
   return last || 1
+}
+
+/** A pivot menu's accessible name: its field's. */
+function pivotMenuLabel(controller: PivotUi.PivotController, request: PivotUi.PivotMenuRequest): string {
+  const state = controller.state(request.sheet, request.pivot)
+  return (state.status === 'open' ? state.model.fields.find(field => field.index === request.field)?.name : undefined) ?? 'Pivot table field'
 }
