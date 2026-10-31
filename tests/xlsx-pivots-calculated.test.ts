@@ -336,7 +336,7 @@ const TASK22_REFUSED: Record<string, { refusal: string; why: string }> = {
   'calc-show-as': { refusal: 'pivot-engine-unmeasured: show-as on calculated data field 2 is not measured', why: 'kept: percent of the calculated grand total, but 10 of 76 cells differ at the 15th digit (the percent-of-total rounding lane A also refuses)' },
   'calc-named-subtotals': { refusal: 'pivot-engine-unmeasured: a named subtotal of a calculated data field is not measured', why: 'lane A: measured, blank on named lines except at the column grand (R10C13 = R11C13 = 96237.92); values.ts gate' },
   'calc-value-sort': { refusal: 'pivot-engine-unmeasured: a filter or sort by calculated data field 2 is not measured', why: 'lane A: measured, the order is the formula over each item\'s sums (West, South, North, East, Central); values.ts aggregateByKey gate' },
-  'calc-item': { refusal: 'pivot-calculated-item: field 1 has calculated items (no Excel oracle, spec §5.6)', why: 'kept: the item is listed under every parent and counted in its totals (calc-item R6, R28); needs axes and values work outside this lane' },
+  'calc-item': { refusal: "pivot-calculated-item: field 1 has a calculated item; Excel's saved layout lists it under every parent and includes it in totals, which this engine does not reproduce", why: 'kept: the item is listed under every parent and counted in its totals (calc-item R6, R28); needs axes and values work outside this lane' },
 }
 
 describe('Task 22 Excel manifest cases', () => {
