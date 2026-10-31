@@ -552,6 +552,40 @@ describe('the interactive viewer', () => {
     ui.unmount()
   }, 20_000)
 
+  it('Task 29 r2: putting the autofit widths back when the pivots go is admitted like any resize; short of memory the widths stay', async () => {
+    for (const squeezed of [false, true]) {
+      const doc = await load(BASELINE)
+      let ledger: MainMemoryLedger | undefined
+      const kinds = new Set<PivotDeltaKind>(['collapse', 'collapseField', 'collapseAll', 'items', 'page', 'filter', 'clearFilters', 'sort'])
+      const view = (verified: ReadonlySet<PivotDeltaKind>) => <InteractiveSheetDoc doc={doc} pivotVerifiedKinds={verified} onMainLedger={value => { ledger = value }} />
+      const ui = render(view(kinds))
+      const header = () => ui.container.querySelector<HTMLElement>('[role=columnheader][aria-colindex="2"]')
+      await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+      await waitFor(() => expect(header()).not.toBeNull())
+      const width = () => Number.parseFloat(header()!.style.width)
+      const saved = width()
+      fireEvent.click(ui.getByRole('button', { name: 'Filter and sort Region' }))
+      fireEvent.click(within(await ui.findByRole('dialog', { name: 'Region' })).getByRole('button', { name: 'Collapse entire field' }))
+      await waitFor(() => expect(width()).toBeLessThan(saved))
+      const narrowed = width()
+      const set = vi.spyOn(ledger!, 'set')
+      // No room at all (the filler alone is the whole budget): nothing the restore asks for can be admitted.
+      if (squeezed) ledger!.set('copy', 'filler', 64 * 1024 * 1024)
+      // A new pivot client (the verified kinds changed): the old one's pivots go back to the file, widths too.
+      ui.rerender(view(new Set(kinds)))
+      await ui.findByRole('button', { name: 'Collapse East (Region)' }, { timeout: 10_000 })
+      // Reserved before it is built (refused before even that when there is no room).
+      expect(set.mock.calls.some(([pool, owner]) => pool === 'geometry' && owner === 'resize-candidate')).toBe(!squeezed)
+      if (squeezed) {
+        expect(width()).toBe(narrowed)
+        expect(ui.container.textContent).toContain('fitted column widths were kept: not enough memory')
+        ledger!.set('copy', 'filler', 0)
+      } else await waitFor(() => expect(width()).toBe(saved))
+      set.mockRestore()
+      ui.unmount()
+    }
+  }, 30_000)
+
   it('reset returns the saved view', async () => {
     const doc = await load(BASELINE)
     const saved = doc.sheets[pivotSheet(doc)]!.pivotTables![0]

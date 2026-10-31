@@ -592,9 +592,20 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   const restorePivots = () => {
     pivotLifecycle.current++
     pendingPagedFits.current?.clear()
-    for (const [sheetId, fitted] of pivotAutofitChars) {
+    // The autofit widths go back to the workbook's, admitted like a reset (codex re-review T29-R2-1): a shown sheet's
+    // geometry for the restored sizes is reserved and admitted before it is built; refused, the widths stay (as
+    // session sizes "Reset sizes" can restore). Unmounting rebuilds nothing: the sizes go with the viewer.
+    if (!unmounting.current) for (const [sheetId, fitted] of pivotAutofitChars) {
       const sizes = sheetSizes.get(sheetId)
-      for (const col of fitted.keys()) if (sizes && !sizes.userSet('col', col)) sizes.restore('col', col, undefined)
+      const cols = sizes ? [...fitted.keys()].filter(col => !sizes.userSet('col', col) && sizes.get('col', col) !== undefined) : []
+      if (!sizes || !cols.length) continue
+      if (entries.get(sheetId)) {
+        const candidate = admitCandidate(sheetId, sizes.previewWithout('col', cols), 'The pivot table\'s column width', () => true, '', true)
+        if (!candidate) { setAnnouncement('The pivot table\'s fitted column widths were kept: not enough memory to lay the sheet out again (main memory budget).'); continue }
+        for (const col of cols) sizes.restore('col', col, undefined)
+        publishEntry(candidate, sizes.gen)
+        dropTiles(sheetId, null)
+      } else for (const col of cols) sizes.restore('col', col, undefined)
     }
     pivotAutofitChars.clear()
     pivotFormulaContexts.clear()
@@ -1522,6 +1533,9 @@ function SheetViewer(props: InteractiveSheetDocProps & { docId: string }): React
   }
   const pivotHost = useRef({ installPivot, restore: restorePivots, announce: setAnnouncement, openMenu: (request: PivotUi.PivotMenuRequest) => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup })
   pivotHost.current = { installPivot, restore: restorePivots, announce: message => { const note = autofitNotice.current; autofitNotice.current = undefined; setAnnouncement(note ? `${message} ${note}` : message) }, openMenu: request => setPopup({ kind: 'pivot', request, invoker: request.invoker }), closeMenu: closePopup }
+  // Declared before the pivot controller's effect, so on unmount this cleanup runs first (restorePivots reads it).
+  const unmounting = useRef(false)
+  useEffect(() => { unmounting.current = false; return () => { unmounting.current = true } }, [])
   const pivotKinds = props.pivotVerifiedKinds
   // One controller (and client, with its sessions) per mount of these inputs; created in an effect so a StrictMode
   // re-run gets a fresh one instead of a disposed one.

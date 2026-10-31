@@ -115,6 +115,12 @@ export class SheetSizes {
     }
     return { sizes: Object.freeze(axis === 'row' ? { rows: next, cols: new Map(this.cols) } : { rows: new Map(this.rows), cols: next }), kept }
   }
+  /** The snapshot with these entries of one axis removed (back to the workbook's sizes); nothing changes. */
+  previewWithout(axis: ResizeAxis, indexes: Iterable<number>): SessionSizes {
+    const next = new Map(axis === 'row' ? this.rows : this.cols)
+    for (const index of indexes) next.delete(index)
+    return Object.freeze(axis === 'row' ? { rows: next, cols: new Map(this.cols) } : { rows: new Map(this.rows), cols: next })
+  }
   /** Puts one entry back to `previous` (undefined: removes it), e.g. when the
    * geometry refused a size it cannot represent. */
   restore(axis: ResizeAxis, index: number, previous: number | undefined): void {
