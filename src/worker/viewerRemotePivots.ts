@@ -117,17 +117,29 @@ export class RemotePivotSessions {
         entry.revision = revision
         staged = { ...staged, ...(committed.result.hasFormulaCellsOutsidePivots === undefined ? {} : { hasFormulaCellsOutsidePivots: committed.result.hasFormulaCellsOutsidePivots }) }
         this.host.committed?.(sheetId, pivot, staged, committed.result.valueGen)
-        if (committed.result.hasFormulaCellsOutsidePivots === undefined) {
-          const statusRevision = revision
-          void this.host.client.send({ kind: 'pivotFormulaStatus', requestId: this.host.client.nextRequestId(), docId: this.host.docId, sheetId: String(sheetId) }).then(reply => {
-            if (this.closed || this.host.isClosed() || this.entries.get(key) !== entry || entry.revision !== statusRevision
-              || reply.kind !== 'complete' || reply.result.kind !== 'pivotFormulaStatus' || reply.result.hasFormulaCellsOutsidePivots === undefined) return
-            this.host.formulaFlagChanged?.(sheetId, reply.result.hasFormulaCellsOutsidePivots)
-          }).catch(() => {})
-        }
+        if (committed.result.hasFormulaCellsOutsidePivots === undefined) this.followFormulaFlag(sheetId)
       }
       return generation !== entry.generation || !registered ? { kind: 'stale' } : { ...staged, kind: 'committed', valueGen: committed.result.valueGen }
     } finally { if (entry.applyRequest === requestId) entry.applyRequest = undefined }
+  }
+
+  /** The workbook formula flag (S3-S) once the worker has reported it: it is document-wide and does not depend on the
+   * commit or the pivot entry that asked (S3-AG), so it is kept for the document's life. */
+  private formulaFlag?: boolean
+  /** The one outstanding status request; every committed sheet waiting on it, each told when it settles. */
+  private formulaStatus?: { sheets: Set<number> }
+  /** A committed sheet's notice status (M-5): applied however the sheet's pivot entries change meanwhile (a release
+   * right after the commit, a reopen); only the workbook's close drops it. */
+  private followFormulaFlag(sheetId: number): void {
+    if (this.formulaFlag !== undefined) { this.host.formulaFlagChanged?.(sheetId, this.formulaFlag); return }
+    if (this.formulaStatus) { this.formulaStatus.sheets.add(sheetId); return }
+    const pending = this.formulaStatus = { sheets: new Set([sheetId]) }
+    void this.host.client.send({ kind: 'pivotFormulaStatus', requestId: this.host.client.nextRequestId(), docId: this.host.docId, sheetId: String(sheetId) }).then(reply => {
+      if (this.formulaStatus === pending) this.formulaStatus = undefined
+      if (this.closed || this.host.isClosed() || reply.kind !== 'complete' || reply.result.kind !== 'pivotFormulaStatus' || reply.result.hasFormulaCellsOutsidePivots === undefined) return
+      const flag = this.formulaFlag = reply.result.hasFormulaCellsOutsidePivots
+      for (const sheet of pending.sheets) this.host.formulaFlagChanged?.(sheet, flag)
+    }, () => { if (this.formulaStatus === pending) this.formulaStatus = undefined })
   }
 
   release(sheetId: number, pivot: number): void {

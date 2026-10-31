@@ -1519,9 +1519,12 @@ export class DocumentSession {
     this.startFormulaOutsidePivotsScan()
     return { kind: 'commit', revision, valueGen: store.stamp.valueGen }
   }
+  /** Ruling S3-AG: one workbook formula scan per document. The flag is workbook-level and computed from the saved
+   * pivot regions, so it does not depend on the commit that asked for it: a later commit reuses the in-flight scan (or
+   * the cached flag) and never restarts it; only close (`release`) aborts it. A scan that could not decide (undefined)
+   * leaves the flag unknown, and the next commit starts a fresh one. */
   private startFormulaOutsidePivotsScan(): void {
-    if (this.closed || this.formulaOutsidePivots !== undefined || !this.source.scanFormulaCellsOutsidePivots) return
-    this.formulaOutsidePivotsAbort?.abort()
+    if (this.closed || this.formulaOutsidePivots !== undefined || this.formulaOutsidePivotsScan || !this.source.scanFormulaCellsOutsidePivots) return
     const controller = new AbortController(), epoch = ++this.formulaOutsidePivotsEpoch
     this.formulaOutsidePivotsAbort = controller
     const scan = Promise.resolve().then(() => this.source.scanFormulaCellsOutsidePivots!(controller.signal)).then(result => {

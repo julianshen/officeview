@@ -24,11 +24,12 @@ it('R3-1: commit acknowledgement is immediate and cancellation/close of the late
   let scanStarted!: () => void
   const started = new Promise<void>(resolve => { scanStarted = resolve })
   const scanSignals: AbortSignal[] = []
-  // A large paged workbook's first scan remains pending until a newer commit supersedes it.
+  let finishScan!: (value: boolean) => void
+  // A large paged workbook's scan remains pending across later commits (S3-AG: they reuse it, never restart it).
   source.scanFormulaCellsOutsidePivots = (signal?: AbortSignal) => new Promise<boolean | undefined>(resolve => {
     scanSignals.push(signal!)
-    if (scanSignals.length === 1) { scanStarted(); signal?.addEventListener('abort', () => resolve(undefined)) }
-    else resolve(true)
+    finishScan = resolve
+    scanStarted(); signal?.addEventListener('abort', () => resolve(undefined))
   })
   const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, { yield: async () => {} })
   const sheetId = sheet.sheetId ?? '1'
@@ -52,8 +53,12 @@ it('R3-1: commit acknowledgement is immediate and cancellation/close of the late
   if (stagedAgain.kind !== 'complete' || stagedAgain.result.kind !== 'pivotApply') throw new Error(JSON.stringify(stagedAgain))
   const nextCommit = await run(kernel, { kind: 'pivotCommit', requestId: id(), docId, sheetId, pivot: 0, revision: stagedAgain.result.revision })
   expect(nextCommit.kind).toBe('complete')
-  expect(scanSignals[0]!.aborted).toBe(true)
-  const flag = await run(kernel, { kind: 'pivotFormulaStatus', requestId: id(), docId, sheetId })
+  // Ruling S3-AG: the newer commit reuses the running scan; neither the cancelled status request nor the commit aborts it.
+  expect(scanSignals.length).toBe(1)
+  expect(scanSignals[0]!.aborted).toBe(false)
+  const pendingFlag = run(kernel, { kind: 'pivotFormulaStatus', requestId: id(), docId, sheetId })
+  finishScan(true)
+  const flag = await pendingFlag
   expect(flag).toMatchObject({ kind: 'complete', result: { kind: 'pivotFormulaStatus', hasFormulaCellsOutsidePivots: true } })
   const workerCommitted = store.stamp.valueGen !== valueGenBefore
   // Ack is already complete before scan settles; closing cancels only the background scan.

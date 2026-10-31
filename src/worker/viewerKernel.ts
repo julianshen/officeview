@@ -458,7 +458,8 @@ export class ViewerKernel {
       case 'close':
         return out
       case 'pivotOpen': case 'pivotApply': case 'pivotCommit': case 'pivotFormulaStatus': case 'pivotRelease':
-        if (signal.aborted) return reply(command, { docId: command.docId }, { kind: 'cancelled' })
+        // An installed commit is a fact the main thread must hear (T31 M-2): a late cancel never turns it into `cancelled`.
+        if (signal.aborted && !(command.kind === 'pivotCommit' && out.result.kind === 'pivotCommit' && !('refused' in out.result))) return reply(command, { docId: command.docId }, { kind: 'cancelled' })
         return live(command.docId) ? out : errorReply(command, { docId: command.docId }, 'stale-source', false, [{ code: 'unknown-document', message: 'Document closed' }])
       case 'sort':
       case 'filter': {
