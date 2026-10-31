@@ -345,3 +345,53 @@ describe('refresh fix round 1', () => {
     expect(message).toMatch(/refreshed from the workbook's data on its first change/)
   })
 })
+
+// ---- fix round 2 (codex re-review of Task 32) -------------------------------------------------------------------
+import { refreshedCacheBytes } from '../src/xlsx/pivots/session/refresh'
+
+describe('refresh fix round 2', () => {
+  it('an oversized source text is admitted (and refused) before it is case-folded', async () => {
+    const seed = await book('recipes/refresh-seed')
+    const range = worksheetSourceRange(seed.cache)!, cells = sheetCellReader(seed.source('Data')!)
+    const huge = 'A'.repeat(40_000_000)
+    const reader = (row: number, col: number) => row === 3 && col === 8 ? { kind: 'text' as const, value: huge } : cells(row, col)
+    let admitted = 0
+    const limits = { ...RECORD_LIMITS.D, admitBytes: (bytes: number) => { admitted = Math.max(admitted, bytes); return true } }
+    const { value: result, grown } = await heapGrowth(() => recordsFromSource(seed.cache, reader, range.ref, false, limits))
+    expect(result.ok ? 'ok' : result.diagnostic.feature).toBe('pivot-records-limit')
+    // Refused on its reservation: no folded copies of the 40M characters were made.
+    expect(grown).toBeLessThan(16 * 1024 * 1024)
+    // A text within the limit is admitted before it is kept.
+    const long = 'B'.repeat(1_000_000)
+    let before = 0
+    const fits = recordsFromSource(seed.cache, (row, col) => row === 3 && col === 8 ? { kind: 'text', value: long } : cells(row, col), range.ref, false,
+      { ...RECORD_LIMITS.D, admitBytes: bytes => { before = Math.max(before, bytes); return true } })
+    expect(fits.ok).toBe(true)
+    expect(before).toBeGreaterThanOrEqual(2 * long.length)
+  })
+
+  it('the refreshed cache\'s metadata stays charged with the store for the session\'s life', async () => {
+    const seed = await book('recipes/refresh-seed')
+    const range = worksheetSourceRange(seed.cache)!
+    const rebuilt = recordsFromSource(seed.cache, sheetCellReader(seed.source('Data')!), range.ref, false, RECORD_LIMITS.D)
+    if (!rebuilt.ok) throw new Error(rebuilt.diagnostic.message)
+    const meta = refreshedCacheBytes(rebuilt.value.cache)
+    // Every listed item counts (Region 5, Product 4, Year 3).
+    expect(meta).toBeGreaterThanOrEqual(12 * 64)
+    let admitted: [number, number] | undefined, released = 0
+    const session = openPivotSession(await refreshInput(seed, { admitStore: (store, metadataBytes) => { admitted = [store.bytes, metadataBytes]; return { release: () => { released++ } } } }))
+    if (!session.ok) throw new Error(session.diagnostic.message)
+    expect(admitted).toEqual([rebuilt.value.store.bytes, meta])
+    session.value.release()
+    expect(released).toBe(1)
+    // The resident client charges both, until the session ends.
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(file('recipes/refresh-seed')))))
+    const sheet = doc.sheets.findIndex(s => s.pivotTables?.length)
+    const ledger = new MainMemoryLedger()
+    const client = createResidentPivotClient({ doc, ledger, install: () => {} })
+    expect((await client.open(sheet, 0, new AbortController().signal)).ok).toBe(true)
+    expect(ledger.snapshot().byPool.document).toBe(pivotRuntimeFor(doc)!.retainedBytes + rebuilt.value.store.bytes + meta)
+    client.dispose?.()
+    expect(ledger.snapshot().byPool.document).toBe(pivotRuntimeFor(doc)!.retainedBytes)
+  })
+})

@@ -997,3 +997,27 @@ describe('worker refresh construction is bounded (Task 32 fix round 1)', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 })
+
+describe('worker refreshed cache metadata stays charged (Task 32 fix round 2)', () => {
+  it('the refresh store entry holds the store and the rebuilt cache metadata until release', async () => {
+    const { recordsFromSource, refreshedCacheBytes, worksheetSourceRange } = await import('../src/xlsx/pivots/session/refresh')
+    const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(resolve(FIXTURE_ROOT, 'recipes/refresh-seed.xlsx')))))
+    const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
+    const cache = pivotRuntimeFor(doc)!.cache(sheet.pivotTables![0]!)!, range = worksheetSourceRange(cache)!
+    const rebuilt = recordsFromSource(cache, sheetCellReader(doc.sheets.find(s => s.name === range.sheet)!), range.ref, false, RECORD_LIMITS.D)
+    if (!rebuilt.ok) throw new Error(rebuilt.diagnostic.message)
+    const kernel = new ViewerKernel({ parse: async input => parseXlsx(await OfficePackage.load(input)) }, quiet)
+    const docId = id(), sheetId = sheet.sheetId ?? '1'
+    await run(kernel, { kind: 'open', requestId: id(), docId, source: { kind: 'object', document: doc }, profile: 'D' })
+    const session = kernel.session(docId)!
+    const memory = (session as unknown as { memory: { retain(key: string, options: { bytes: number }): unknown } }).memory
+    const retain = vi.spyOn(memory, 'retain')
+    expect(completed(await run(kernel, { kind: 'pivotOpen', requestId: id(), docId, sheetId, pivot: 0, grantBytes: 16 * 1024 * 1024 }))).toMatchObject({ kind: 'pivotOpen' })
+    const store = retain.mock.calls.find(([key]) => key.startsWith('pivot-refresh-store:'))!
+    expect(store[1].bytes).toBe(rebuilt.value.store.bytes + refreshedCacheBytes(rebuilt.value.cache))
+    retain.mockRestore()
+    await run(kernel, { kind: 'pivotRelease', requestId: id(), docId, sheetId, pivot: 0 })
+    expect([...((session as unknown as { memory: { slots: Map<string, unknown> } }).memory.slots.keys())].filter(key => key.startsWith('pivot-refresh'))).toEqual([])
+    await run(kernel, { kind: 'close', requestId: id(), docId })
+  })
+})

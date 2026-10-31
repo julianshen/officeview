@@ -1415,8 +1415,9 @@ export class DocumentSession {
       occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}),
       ...(refreshSource ? {
         source: refreshSource, limits: { ...limits, admitBytes: (bytes: number) => building!.set(bytes) },
-        admitStore: (store: import('../xlsx/pivots/engine/records').RecordStore) => {
-          const entry = this.memory.retain(`pivot-refresh-store:${this.docId}:${this.pivotSerial++}`, { tier: 'source', owner: sheetId, bytes: store.bytes, evictable: false })
+        admitStore: (store: import('../xlsx/pivots/engine/records').RecordStore, metadataBytes: number) => {
+          // The rebuilt cache's metadata is retained with the store for the handle's life (codex re-review T32-R2-2).
+          const entry = this.memory.retain(`pivot-refresh-store:${this.docId}:${this.pivotSerial++}`, { tier: 'source', owner: sheetId, bytes: store.bytes + metadataBytes, evictable: false })
           if (!entry) return undefined
           held.store = store
           held.entry = entry

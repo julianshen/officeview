@@ -412,8 +412,8 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
           linkedCharts: linked, ...(leased ? { lease: leased } : {}), verifiedKinds: verified, ...(chartGate ? { chartGate } : {}),
           ...(sourceSheet ? {
             source: sheetCellReader(sourceSheet), limits: { ...limits, admitBytes: bytes => { ledger.set('document', building, bytes); return true } },
-            // The rebuilt store is charged to the document pool while the session holds it.
-            admitStore: store => { ledger.chargeWhileHeld('document', [store], store.bytes); return ledger.hold(store) ?? undefined },
+            // The rebuilt store and cache metadata are charged to the document pool while the session holds them.
+            admitStore: (store, metadataBytes) => { ledger.chargeWhileHeld('document', [store], store.bytes + metadataBytes); return ledger.hold(store) ?? undefined },
           } : {}),
         })
         ledger.set('document', building, 0)

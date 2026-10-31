@@ -87,7 +87,8 @@ function spellings() {
 }
 const itemKey = (value: PivotValue) => value.type === 'missing' ? 'm' : `${value.type}:${String(value.value)}`
 
-/** Bytes the build keeps besides the store, per distinct text (its spellings and keys) and per listed item. */
+/** Bytes the build keeps besides the store, per distinct text (its spellings and keys) and per listed item; a listed
+ * item stays in the refreshed cache for the session's life (`refreshedCacheBytes`). */
 const TEXT_BYTES = (text: string) => 3 * (48 + 2 * text.length)
 const ITEM_BYTES = 96
 
@@ -181,13 +182,16 @@ export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader
   // store (texts' first spellings, listed items) is counted, admitted as it grows, and left out of the decoder's share.
   const spelling = database.map(() => spellings())
   let kept = 0, inlineTexts = 0
-  const keep = (bytes: number): EngineResult<never> | undefined => {
+  /** Admits `kept + bytes` (a reservation, or a keep when `commit`): refused past `maxBytes` or by the pool. */
+  const admit = (bytes: number, commit: boolean): EngineResult<never> | undefined => {
     if (!bytes) return undefined
-    kept += bytes
-    if (kept > limits.maxBytes) return limit(`refreshing needs more than the ${limits.maxBytes} bytes allowed`)
-    if (limits.admitBytes && !limits.admitBytes(kept)) return { ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-worker-quota', message: 'Refreshing the pivot exceeds the memory budget.' } }
+    const total = kept + bytes
+    if (total > limits.maxBytes) return limit(`refreshing needs more than the ${limits.maxBytes} bytes allowed`)
+    if (limits.admitBytes && !limits.admitBytes(total)) return { ok: false, diagnostic: { kind: 'unsupported', feature: 'pivot-worker-quota', message: 'Refreshing the pivot exceeds the memory budget.' } }
+    if (commit) kept = total
     return undefined
   }
+  const keep = (bytes: number) => admit(bytes, true)
   const valueAt = (row: number, k: number): PivotValue | EngineResult<never> => {
     const field = cache.fields[database[k]!]!, cell = cells(row, ref.minCol + k)
     const datesOnly = isDatesOnly(field)
@@ -200,6 +204,10 @@ export function recordsFromSource(cache: PivotCacheDefinition, cells: CellReader
     if (datesOnly) return refuse(`field ${field.name} held dates only and now has ${cell.kind} values`)
     if (cell.kind === 'error') return { type: 'error', value: cell.value }
     if (cell.kind === 'bool') return { type: 'boolean', value: cell.value }
+    // Case folding copies the text twice and may keep both keys: reserve that before folding (codex re-review T32-R2-1).
+    const reserve = TEXT_BYTES(cell.value)
+    const refusedReserve = admit(reserve, false)
+    if (refusedReserve) return refusedReserve
     const before = spelling[k]!.size
     const spelled = spelling[k]!.of(cell.value)
     if (spelled === undefined) return refuse(`field ${field.name} has texts that differ only in non-ASCII case, whose item identity is not measured`)
@@ -291,4 +299,18 @@ export function savedCaptionLayout(def: PivotTableDefinition, cache: PivotCacheD
   if (!saved) return undefined
   const axes = { rows: saved.rows, cols: saved.cols, rowKey: new Uint32Array(0), colKey: new Uint32Array(0) }
   return placeCells(def, initialViewState(def, cache), cache, axes, { get: () => ({ kind: 'empty' }) }, { date1904 })
+}
+
+/**
+ * The retained bytes of a refreshed cache's rebuilt metadata, which the record store's `bytes` does not count: each
+ * listed field's item objects and arrays (their text counted too: on the paged path no sheet holds it), plus a fixed
+ * share for the field and cache objects. Charged with the store for the session's life (codex re-review T32-R2-2).
+ */
+export function refreshedCacheBytes(cache: PivotCacheDefinition): number {
+  let bytes = 512
+  for (const field of cache.fields) {
+    bytes += 256
+    for (const item of field.sharedItems?.items ?? []) bytes += ITEM_BYTES + (item.type === 'string' || item.type === 'error' || item.type === 'date' ? 2 * String(item.value).length : 0)
+  }
+  return bytes
 }

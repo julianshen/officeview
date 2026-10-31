@@ -39,7 +39,7 @@ import { RECORD_LIMITS, type RecordLimits, type RecordStore } from '../engine/re
 import { initialViewState, type PivotViewState } from '../engine/view'
 import { captionRule, MEASURED_CAPTION_TABLES, resolveCaptions, savedCaptions, type CaptionTable } from './captions'
 import { applyDelta, type PivotDelta, type PivotDeltaKind } from './delta'
-import { recordsFromSource, refreshDefinition, savedCaptionLayout, worksheetSourceRange } from './refresh'
+import { recordsFromSource, refreshDefinition, refreshedCacheBytes, savedCaptionLayout, worksheetSourceRange } from './refresh'
 import { savedPivotLayout } from '../savedLayout'
 
 export interface PivotSessionInput {
@@ -59,9 +59,10 @@ export interface PivotSessionInput {
   source?: CellReader
   /** The rebuild's record limits (default `RECORD_LIMITS.D`). */
   limits?: RecordLimits
-  /** Admits a rebuilt store before the session holds it (the caller's ledger or pool); undefined refuses
+  /** Admits a rebuilt store, and the rebuilt cache's `metadataBytes` (`refreshedCacheBytes`), before the session
+   * holds them (the caller's ledger or pool), for the session's life; undefined refuses
    * `pivot-records-limit`. The returned hold is released with the session. */
-  admitStore?: (store: RecordStore) => { release(): void } | undefined
+  admitStore?: (store: RecordStore, metadataBytes: number) => { release(): void } | undefined
 }
 export type ChartGate = (charts: readonly ChartModel[], layout: PivotLayout, def: PivotTableDefinition) => EngineResult<readonly ChartModel[]>
 /** `notice`: the one-line notice a refreshed pivot shows with its first change (§7.7), on every result issued before
@@ -201,7 +202,7 @@ function openRefreshed(input: PivotSessionInput, source: CellReader): EngineResu
   if (!layout0.ok) return layout0
   let hold: { release(): void } | undefined
   if (input.admitStore) {
-    hold = input.admitStore(store)
+    hold = input.admitStore(store, refreshedCacheBytes(refreshed))
     if (!hold) return refuse('pivot-records-limit', `${name}'s refreshed records (${store.bytes} bytes) could not be admitted`)
   }
   const def0 = liveDefinition(live.value, view0, computed.value.axes, layout0.value)
