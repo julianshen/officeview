@@ -267,6 +267,8 @@ interface WorkerPivotHandle {
   linkedCharts: readonly { readonly sheetId: string; readonly partPath: string; readonly treePath: string }[]
   releaseAssets?: () => void
   session: import('../xlsx/pivots/session/session').PivotSession
+  /** The saved area (the revision-0 layout's rectangle and page cells): protected by every overlay (S3-L). */
+  savedRects: readonly SourceRect[]
   /** The menus' model builder (Task 28), loaded with the session. */
   menu: typeof import('../xlsx/pivots/session/menu').pivotMenuModel
   share: PivotStoreShare
@@ -788,7 +790,8 @@ function pivotOutputRects(layout: import('../xlsx/pivots/engine/place').PivotLay
   }
   return rects
 }
-function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotApplyResult, previous?: import('../xlsx/view/contracts').ValueOverlay): import('../xlsx/view/contracts').ValueOverlay {
+/** `saved`: the session's saved area (rectangle and page cells): protected from the first commit on (Ruling S3-L). */
+function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotApplyResult, saved: readonly SourceRect[], previous?: import('../xlsx/view/contracts').ValueOverlay): import('../xlsx/view/contracts').ValueOverlay {
   const currentRects = pivotOutputRects(result.layout)
   const candidates = [...(previous?.rects ?? []), ...currentRects, ...result.vacated.map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))]
   const unique = [...new Map(candidates.map(rect => [JSON.stringify([rect.r0, rect.r1, rect.c0, rect.c1]), rect])).values()]
@@ -805,7 +808,7 @@ function pivotOverlay(result: import('../xlsx/pivots/session/session').PivotAppl
           : { value: value.value, valueIsError: true, ...(cell.numFmtId === undefined ? {} : { numFmtId: cell.numFmtId }) })
   }
   const merges = result.layout.merges.map(rect => ({ r0: rect.minRow, r1: rect.maxRow, c0: rect.minCol, c1: rect.maxCol }))
-  const protectedRects = [...(previous?.protectedRects ?? []), ...currentRects]
+  const protectedRects = [...saved, ...(previous?.protectedRects ?? []), ...currentRects]
   const protectedUnique = [...new Map(protectedRects.map(rect => [JSON.stringify([rect.r0, rect.r1, rect.c0, rect.c1]), rect])).values()]
   return Object.freeze({
     rects: Object.freeze(rects), protectedRects: Object.freeze(protectedUnique), merges: Object.freeze(merges),
@@ -1384,7 +1387,7 @@ export class DocumentSession {
     const opened = openPivotSession({ def, cache, store: share.store, date1904: assets.date1904, saved,
       occupied: assets.occupied, linkedCharts, ...(chartGate ? { chartGate } : {}) })
     if (!opened.ok) { releaseShare(); return { kind: 'refused', feature: opened.diagnostic.feature, message: opened.diagnostic.message } }
-    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, menu: pivotMenuModel, share, runtimeHeld,
+    const handle: WorkerPivotHandle = { sheetId, pivot, assets, def, cache, session: opened.value, savedRects: pivotOutputRects(opened.value.layout), menu: pivotMenuModel, share, runtimeHeld,
       linkedCharts: linked.map(({ sheetId, partPath, treePath }) => ({ sheetId, partPath, treePath })),
       releaseAssets,
       highestWireRevision: 0, committedWireRevision: 0, requestRevision: 0, serial: 0 }
@@ -1411,7 +1414,7 @@ export class DocumentSession {
     const applied = delta === 'reset' ? { ok: true as const, value: handle.session.reset() } : handle.session.apply(delta)
     if (!applied.ok) return { kind: 'refused', feature: applied.diagnostic.feature, message: applied.diagnostic.message }
     const previous = handle.committed?.overlay
-    const overlay = pivotOverlay(applied.value, previous)
+    const overlay = pivotOverlay(applied.value, handle.savedRects, previous)
     const bytes = pivotOverlayBytes(overlay, applied.value.layout)
     if (!Number.isSafeInteger(bytes) || bytes > grantBytes) return { kind: 'quota', requiredBytes: bytes, limitBytes: grantBytes }
     const revision = Math.max(handle.highestWireRevision, handle.committedWireRevision, handle.session.revision) + 1

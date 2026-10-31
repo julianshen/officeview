@@ -220,6 +220,41 @@ describe('worker pivot protocol', () => {
     await run(kernel, { kind: 'close', requestId: id(), docId })
   })
 
+  it('R2-1 (S3-L): the first commit protects the saved area, end to end, and main publishes no stale saved merge', async () => {
+    const file = resolve(FIXTURE_ROOT, 'engine/layout-merge-labels.xlsx')
+    const blob = new Blob([new Uint8Array(readFileSync(file))])
+    const docId = id()
+    const imported = await openImportSession({ kind: 'blob', blob }, { docId, profile: 'D' })
+    await imported.done
+    const source = createPagedWorkbookSource(imported)
+    const kernel = new ViewerKernel({ parse: async bytes => parseXlsx(await OfficePackage.load(bytes)), openSource: async () => source }, quiet)
+    const port = connectInProcess(kernel), client = new ViewerClient(port)
+    const opened = await openRemoteWorkbook(client, docId, blob, 'D')
+    if ('kind' in opened) throw new Error(`Open refused: ${JSON.stringify(opened)}`)
+    const remote = new RemoteWorkbook(client, opened)
+    try {
+      const sheet = source.sheets.find(candidate => candidate.name === 'Pivot') ?? source.sheets[0]!
+      const assets = (await pivotAssets(source, sheet.sheetId))!
+      const pivot = assets.tables.findIndex(def => def.name === '樞紐分析表2')
+      const saved = assets.tables[pivot]!.location.ref
+      expect(saved).toBe('A3:J24')
+      remote.merges(sheet.sheetId)
+      await vi.waitFor(() => expect(remote.merges(sheet.sheetId).merges.length).toBeGreaterThan(0))
+      expect((await remote.pivots.open(Number(sheet.sheetId), pivot, new AbortController().signal)).kind).toBe('open')
+      const result = await remote.pivots.apply(Number(sheet.sheetId), pivot, { kind: 'items', field: 0, hidden: [0] })
+      if (result.kind !== 'committed') throw new Error(JSON.stringify(result))
+      // Every saved row (2–23) and column (0–9) is inside the protected set the worker produced.
+      for (let row = 2; row <= 23; row++) expect(result.protectedRects.some(rect => rect.r0 <= row && row <= rect.r1 && rect.c0 <= 0 && 9 <= rect.c1), `row ${row}`).toBe(true)
+      // Main and worker agree: no saved label merge survives over the vacated rows.
+      const fresh = new Set(result.merges.map(rect => JSON.stringify([rect.r0, rect.r1, rect.c0, rect.c1])))
+      const stale = remote.merges(sheet.sheetId).merges.filter(merge => !fresh.has(JSON.stringify([merge.minRow, merge.maxRow, merge.minCol, merge.maxCol])) && merge.minRow >= 2 && merge.maxRow <= 23 && merge.maxCol <= 9)
+      expect(stale).toEqual([])
+    } finally {
+      await remote.close()
+      await port.idle()
+    }
+  }, 60_000)
+
   it('apply commits only the current revision', async () => {
     const doc = await parseXlsx(await OfficePackage.load(new Uint8Array(readFileSync(FIXTURE))))
     const sheet = doc.sheets.find(candidate => candidate.pivotTables?.length)!
