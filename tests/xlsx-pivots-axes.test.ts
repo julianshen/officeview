@@ -433,11 +433,13 @@ describe('fix round B1: layout rules measured on the Excel oracle', () => {
     // Without showAll Central goes (quirk-cross-hidden-item).
     const plain = await engine('quirk-cross-hidden-item')
     expect(okAxes(plain).rows.some(line => line.items[0] === 4)).toBe(false)
-    // A showAll parent with no passing children still lists items represented by source records under
-    // another parent, as the saved Excel case above demonstrates. Truly absent cache items remain gated.
+    // Final review I4: with every other region hidden, Apples, Bananas and Cherries have no record that passes the
+    // hidden items anywhere. Excel's listing there is unmeasured, so it refuses (the saved case above lists items
+    // that have passing records under other regions).
     const view = initialViewState(p.def, p.cache)
     const none = withFields(view, { 0: { hidden: view.fields[0]!.hidden.map((_, k) => k < 4) } })
-    expect(axesOf(p, none).ok).toBe(true)
+    const refused = axesOf(p, none)
+    expect(refused.ok ? 'ok' : refused.diagnostic.message).toMatch(/^an item without records under showAll lists field 1 item 0, which no passing record has/)
   })
 })
 

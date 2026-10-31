@@ -618,16 +618,15 @@ All 126 manifest cases go through `checkSavedLayout` (`tests/xlsx-pivots-*.test.
 |---|---|---|---|---|
 | 17 layout and data quirks | 33 | 33 | 0 | 0 |
 | 18 values and show-as | 38 | 34 | 4 | 0 |
-| 21 sort, filter, group | 44 | 42 | 2 | 0 |
+| 21 sort, filter, group | 44 | 43 | 1 | 0 |
 | 22 calculated | 11 | 10 | 1 | 0 |
-| **All** | **126** | **119** | **7** | **0** |
+| **All** | **126** | **120** | **6** | **0** |
 
 The refused cases, each asserted with its exact message in its test file:
 
 | Case | Refusal | Why Excel's file does not settle it |
 |---|---|---|
 | `values-fn-stdev`, `values-fn-stdevp`, `values-fn-var`, `values-fn-varp` | `pivot-engine-unmeasured` | Every leaf cell matches. The total cells differ in the 15th digit under every accumulation tried: leaf-moment rollup, records in display order, row or column partials, Welford, two-pass, fused multiply-add. |
-| `sort-error-item` | `pivot-engine-unmeasured` | Excel saves an error-valued item's label as text, but placement emits a worksheet error cell. The sort itself is reproduced. |
 | `sort-value-showall-no-data` | `pivot-engine-unmeasured` | Several no-data items under one parent; their tie order is not measured. |
 | `calc-item` | `pivot-calculated-item` | Excel lists a calculated item under every parent and counts it in totals. Spec §5.6 recomputes calculated items only once the oracle passes (ruling S2-AD). |
 
@@ -640,10 +639,23 @@ Beyond the manifest, the engine refuses with a named reason, rather than guessin
 - booleans and dates in mixed sorts;
 - date filters in a 1904 workbook;
 - date groups below serial 61;
-- variance totals.
+- variance totals;
+- Average, Product and variance on a collapsed item;
+- error-valued records under any function but Sum and Count, under a named subtotal of another function, or under show-as;
+- % of parent total with its base field on the columns, or on a cell without a parent line (grand totals off);
+- error captions (`showError`) and missing-value captions (`showMissing` off or a `missingCaption`); the oracle files keep Excel's defaults, which compute;
+- value filters, top-10 filters and value sorts on a data field with show-as;
+- date grouping by days, hours, minutes or seconds;
+- calculated items on any field, used or not;
+- a collapsed item above Values with more than one unfilled level, and `mergeItem` beyond two tabular row fields and one column field;
+- the record-less showAll listing outside its measured shape (rows, second level, last row field, compact parent), or when a listed item has no record past the hidden items and page selections.
+
+Show-as modes that scan sibling or parent lines (previous/next and explicit base items, running totals, rank, % of parent) refuse as `pivot-values-limit` when cells × axis lines would exceed 5×10⁷. An indexed sibling lookup is a Stage 3 entry item.
+
+Error-valued item labels are placed as text, as Excel saves them (`sort-error-item`, now ok).
 
 ### Speed and size (Task 23, 2026-10-31)
-- **§6.3 gate.** `bun scripts/pivot-bench.ts --runs 3` runs 1,000,000 spec-shaped records (3 row fields of 10/50/200 items, 1 column field of 12, 2 sum data fields). `computeAxes + computeValues` gives a median-of-medians of **140.93 ms**, against a limit of 200 and an internal bar of 180. Decoding the records is reported separately.
-- **Bundles.** The eager bundle is 35,968 B gzip, unchanged from `main` (budget 38,720). The engine lives in the lazy pivots chunk, which grows from 40,823 B raw / 12,702 B gzip on `main` to 161,560 / 46,267 (+33,565 B gzip).
+- **§6.3 gate.** `bun scripts/pivot-bench.ts --runs 3` runs 1,000,000 spec-shaped records (3 row fields of 10/50/200 items, 1 column field of 12, 2 sum data fields). `computeAxes + computeValues` gives a median-of-medians of **135.89 ms** (final-review fix round; 140.93 ms at Task 23), against a limit of 200 and an internal bar of 180. Decoding the records is reported separately.
+- **Bundles.** The eager bundle is 35,968 B gzip, unchanged from `main` (budget 38,720). The engine lives in the lazy pivots chunk, which grows from 40,823 B raw / 12,702 B gzip on `main` to 161,560 / 46,267 at Task 23 (+33,565 B gzip), and to 164,065 B raw / 46.98 kB gzip (Vite's report) after the final-review fix round's refusals.
 
 **LibreOffice and POI files** (`corpus/`, recorded, never tuned toward): see `CORPUS_STATUS` in `tests/xlsx-pivots-faithful.test.ts`. Collabora's `calcfields` reports a `colItems` mismatch, so its saved cells stay shown.

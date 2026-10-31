@@ -29,12 +29,15 @@
  * - another field's hidden item or page selection drops an item it leaves without records (Task 15
  *   quirk-cross-hidden-item, quirk-page-single, quirk-page-multiple), unless its field has `showAll`
  *   (quirk-page-single-showall, quirk-cross-hidden-item-showall).
- * Unmeasured (Task 15 cases decide): named subtotals (one line per function in schema order, always at the bottom),
- * blank rows (one `blank` line after each item block of a field with a deeper field), a showAll item with no records
- * whose next field has no visible item (its line alone in tabular form).
- * Refused as `pivot-engine-unmeasured` until measured: `mergeItem` outside tabular fields with totals only after
- * outer items, classic layout without a column field beyond one data field with row fields, a hidden item on a field
- * on no axis or page, a collapsed item above Values on columns, in tabular form or above a Values level that is not
+ * Measured by Task 15: named subtotals (one line per function in schema order, at the bottom; values-showas-on-
+ * named-subtotals, values-named-subtotals-intersecting) and blank rows (one `blank` line after each item block of a
+ * field with a deeper field). Error-valued item labels are text (sort-error-item).
+ * Refused as `pivot-engine-unmeasured` until measured: `mergeItem` beyond two tabular row fields and one column
+ * field with totals only after outer items, a collapsed item above Values with more than one unfilled level, the
+ * record-less showAll listing outside rows / second level / last row field / compact parent, or listing an item with
+ * no record past the hidden items and page selections, calculated items on any field (pivot-calculated-item),
+ * classic layout without a column field beyond one data field with row fields, a hidden item on a field on no axis
+ * or page, a collapsed item above Values on columns, in tabular form or above a Values level that is not
  * the last, unmeasured mixed-type/custom-list sort order, unsupported showAll value-sort empty-item placements, and
  * unmeasured group boundaries. Dynamic date filters use the dedicated feature refusal.
  */
@@ -153,10 +156,14 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
   const used = new Set([...axisUsed, ...filterFields])
   const offAxis = view.fields.findIndex((field, index) => field.hidden.includes(true) && !axisUsed.has(index) && !filterFields.has(index))
   if (offAxis >= 0) return unmeasured(`field ${offAxis} is on no axis but has hidden items`)
+  // Calculated items on any field, used or not (final review M3): whether Excel counts an unused field's
+  // calculated items in totals is unmeasured.
+  const calculatedItems = def.fields.findIndex((field, index) => field.items?.some(item => item.calculated)
+    || cache.fields[index]?.sharedItems?.items.some(item => item.calculated))
+  if (calculatedItems >= 0) return fail('unsupported', 'pivot-calculated-item', `field ${calculatedItems} has a calculated item; Excel's saved layout lists it under every parent and includes it in totals, which this engine does not reproduce`)
   for (const field of used) {
     const state = view.fields[field], cacheField = cache.fields[field]
     if (!state || !cacheField || !def.fields[field]) return invalid(`field ${field} does not exist`)
-    if (def.fields[field]!.items?.some(item => item.calculated) || cacheField.sharedItems?.items.some(item => item.calculated)) return fail('unsupported', 'pivot-calculated-item', `field ${field} has a calculated item; Excel's saved layout lists it under every parent and includes it in totals, which this engine does not reproduce`)
     // Sorting changes the layout only on rows and columns (a page field's order is its dropdown's).
     if (!axisFields.includes(field)) continue
   }
@@ -188,6 +195,10 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     const item = pivotItemAt(entry.map, r)
     if (item === undefined || item < 0 || entry.state.hidden[item] || (entry.selected !== 'all' && !entry.selected.has(item))) passes[r] = 0
   }
+  // Records that pass the hidden items and page selections, before the label, value and top-10 filters: a
+  // record-less showAll item lists the items with such a record (final review I4; filter-label-cross-field-showall
+  // lists Bananas, Cherries and Elderberries under Central although its label filter keeps only Apples).
+  const visibleRecords = passes.slice()
 
   // Apply pivot filters in their declared evaluation order. Each accepted filter narrows
   // the input to the next filter, while the field map provides the aggregate bucket.
@@ -421,16 +432,14 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
     }
     if (state.sortType === 'manual') continue
     const fieldValuesByItem = itemValuesByPivotIndex(fieldValues(cache, field), def.fields[field]?.items)
-    if (fieldValuesByItem.some(value => value?.type === 'error'))
-      return unmeasured(`error-valued pivot item field ${field} is saved by Excel as text but place.ts currently emits a worksheet error cell`)
     const sorted = sortItemOrder(map.order, fieldValuesByItem, state.sortType, field, def.customListSort !== false)
     if (!sorted.ok) return sorted
     sortedOrders.set(field, sorted.value)
   }
 
-  const rows = axis(store, def, view, 'rows', maps, passes, sortedOrders, nestedSortOrders, allowedByField)
+  const rows = axis(store, def, view, 'rows', maps, passes, visibleRecords, sortedOrders, nestedSortOrders, allowedByField)
   if (!rows.ok) return rows
-  const cols = axis(store, def, view, 'cols', maps, passes, sortedOrders, nestedSortOrders, allowedByField)
+  const cols = axis(store, def, view, 'cols', maps, passes, visibleRecords, sortedOrders, nestedSortOrders, allowedByField)
   if (!cols.ok) return cols
   if (def.mergeItem && !mergeMeasured(view, rows.value.lines, cols.value.lines))
     return unmeasured('merged item labels (mergeItem) are measured for tabular axis fields with totals only after outer items')
@@ -442,6 +451,8 @@ export function computeAxes(store: RecordStore, cache: PivotCacheDefinition, def
  * items (default subtotal) and column totals only as the grand total. */
 function mergeMeasured(view: PivotViewState, rows: readonly PivotLine[], cols: readonly PivotLine[]): boolean {
   if (view.rows.includes(PIVOT_VALUES_FIELD)) return false
+  // The case has two row fields and one column field (final review M4).
+  if (view.rows.length !== 2 || view.cols.filter(field => field !== PIVOT_VALUES_FIELD).length !== 1) return false
   if (view.cols.includes(PIVOT_VALUES_FIELD) && view.cols.indexOf(PIVOT_VALUES_FIELD) !== view.cols.length - 1) return false
   for (const field of [...view.rows, ...view.cols]) {
     if (field === PIVOT_VALUES_FIELD) continue
@@ -489,7 +500,7 @@ function pivotItemAt(map: ItemMap, record: number): number | undefined {
   return raw === NO_GROUP ? -1 : map.toPivot[raw]
 }
 
-function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewState, which: 'rows' | 'cols', maps: Map<number, ItemMap>, passes: Uint8Array, sortedOrders: Map<number, readonly number[]>, nestedSortOrders: Map<number, Map<string, readonly number[]>>, allowedByField: Map<number, Set<number>>): EngineResult<{ lines: PivotLine[]; key: Uint32Array }> {
+function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewState, which: 'rows' | 'cols', maps: Map<number, ItemMap>, passes: Uint8Array, visibleRecords: Uint8Array, sortedOrders: Map<number, readonly number[]>, nestedSortOrders: Map<number, Map<string, readonly number[]>>, allowedByField: Map<number, Set<number>>): EngineResult<{ lines: PivotLine[]; key: Uint32Array }> {
   const fields = which === 'rows' ? view.rows : view.cols
   const valuesLevel = fields.indexOf(PIVOT_VALUES_FIELD)
   const dataCount = view.data.length
@@ -595,6 +606,12 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     let children: number[]
     if (node && !state.showAll) children = [...node.children.keys()].sort((a, b) => rankOf ? (rankOf.get(a) ?? a) - (rankOf.get(b) ?? b) : a - b)
     else {
+      // The record-less listing is measured on rows, at the second level and last row field, under a compact parent
+      // (quirk-cross-hidden-item-showall); elsewhere it is unmeasured (final review M4).
+      if (!node && !(which === 'rows' && level === 1 && !hasFieldAfter(fields, level) && view.fields[fields[0]!]?.outline)) {
+        refusal ??= `a record-less showAll item listing field ${field} at ${which} level ${level} is not measured`
+        return
+      }
       children = (rank ?? maps.get(field)!.order).filter(item => !state.hidden[item] && (!node || (allowedByField.get(field)?.has(item) ?? true)))
       if (!node && !state.showAll) {
         const present = itemsWithRecords(field)
@@ -624,6 +641,8 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
         push('data', items, data)
         const padded = [...items]
         while (padded.length < valuesLevel) padded.push(-1)
+        // Measured with one unfilled level (layout-collapsed-item-above-values); more is unmeasured (final review M4).
+        if (valuesLevel - items.length > 1) { refusal ??= `a collapsed item above Values with ${valuesLevel - items.length} unfilled levels is not measured`; return }
         let leaf = NO_LINE
         for (let d = 0; d < dataCount; d++) { const line = push('data', [...padded, d], d); if (d === 0) leaf = line }
         if (child && child.leaf === NO_LINE) child.leaf = leaf
@@ -644,7 +663,8 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
       if (deeper && which === 'rows' && state.insertBlankRow) push('blank', items, data)
     }
   }
-  // Pivot items with at least one passing record, per field (built on first use: only under a record-less showAll item).
+  // Pivot items with at least one record passing the hidden items and page selections, per field (built on first use:
+  // only under a record-less showAll item).
   let refusal: string | undefined
   const withRecords = new Map<number, Set<number>>()
   const itemsWithRecords = (field: number) => {
@@ -652,7 +672,11 @@ function axis(store: RecordStore, def: PivotTableDefinition, view: PivotViewStat
     if (!present) {
       present = new Set()
       const map = maps.get(field)!
-      for (let r = 0; r < store.count; r++) { const item = pivotItemAt(map, r); if (item !== undefined && item >= 0) present.add(item) }
+      for (let r = 0; r < store.count; r++) {
+        if (!visibleRecords[r]) continue
+        const item = pivotItemAt(map, r)
+        if (item !== undefined && item >= 0) present.add(item)
+      }
       withRecords.set(field, present)
     }
     return present

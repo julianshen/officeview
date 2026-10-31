@@ -398,7 +398,6 @@ describe('Task 21 Excel manifest cases', () => {
   const raw = JSON.parse(readFileSync(manifestPath, 'utf8')) as { cases?: Array<{ task: number; status?: string; case: string; file: string; pivot: string }> } | Array<{ task: number; status?: string; case: string; file: string; pivot: string }>
   const cases = (Array.isArray(raw) ? raw : raw.cases ?? []).filter(entry => entry.task === 21 && entry.status !== 'pending')
   const exactRefusals: Record<string, string> = {
-    'sort-error-item': 'error-valued pivot item field 0 is saved by Excel as text but place.ts currently emits a worksheet error cell',
     'sort-value-showall-no-data': "showAll value sort for field 1 has multiple no-data items under parent 4, whose tie order is not measured",
   }
   if (!cases.length) it.skip('SKIPPED: Task 21 has no runnable Excel manifest cases', () => {})

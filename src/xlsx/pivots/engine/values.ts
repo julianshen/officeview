@@ -14,6 +14,8 @@ const MAX_ACCUMULATOR_BYTES = 128 * 1024 * 1024
 // One computeValues call is capped at 128 MiB, one quarter of the 512 MiB
 // desktop worker pool, leaving room for axes, source pages and other worker jobs.
 const OUTPUT_BYTES_PER_SLOT = 9
+/** Final review I7: line comparisons a sibling-scanning show-as mode may make (cells × axis lines). */
+const SHOW_AS_SCAN_CAP = 5e7
 
 const fail = (feature: string, message: string): EngineResult<never> => ({
   ok: false, diagnostic: { kind: 'unsupported', feature, message } satisfies PivotDiagnostic,
@@ -285,6 +287,10 @@ export function aggregateByKey(store: RecordStore, cache: PivotCacheDefinition, 
   if (!view.data[dataIndex] || keys.length !== store.count || passes.length !== store.count)
     return invalid('filter aggregate inputs do not match the pivot view')
   const data = view.data[dataIndex]!, sourceField = data.field
+  // S2-AA (final review I6): every value filter, top-10 filter and value sort case uses a normal data field; whether
+  // Excel ranks by the shown (show-as) value or the aggregate is unmeasured.
+  if (data.showAs !== 'normal')
+    return unmeasured(`a value filter or value sort by data field ${dataIndex} with show-as ${data.showAs} is not measured`)
   const formula = cache.fields[sourceField]?.formula
   if (formula !== undefined) {
     // B2 rule (calc-value-sort): each item's value is the formula over that item's field sums.
@@ -620,6 +626,12 @@ function cellIndex(row: number, col: number, data: number, colCount: number, dat
  * formula over each cell's field sums (calculated.ts). */
 export function computeValues(store: RecordStore, cache: PivotCacheDefinition, def: PivotTableDefinition,
   view: PivotViewState, axes: PivotAxes): EngineResult<PivotValueGrid> {
+  // S2-AA (final review I5): no Excel case sets an error or missing-value caption. Every oracle file keeps the
+  // defaults (showError off, showMissing on, no missingCaption), which compute; any other setting changes the
+  // text of error or empty cells and is refused.
+  if (def.showError === true) return unmeasured('error captions (showError) are not measured: no Excel case shows them')
+  if (def.showMissing === false || (def.missingCaption ?? '') !== '')
+    return unmeasured('missing-value captions (showMissing off or a missingCaption) are not measured: no Excel case shows them')
   return view.data.some(data => cache.fields[data.field]?.formula !== undefined)
     ? computeCalculatedValues(store, cache, def, view, axes)
     : computeSourceValues(store, cache, def, view, axes)
@@ -801,6 +813,16 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
   const sourceItems = view.data.map(data => cache.fields[data.field]?.sharedItems?.items)
   const hasErrorValues = sourceItems.some(items => items?.some(item => item.type === 'error'))
     || sourceColumns.some(column => column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))
+  // S2-AA (final review I1): over error records only Sum (quirk-error-value) and Count (quirk-error-value-count) are
+  // measured, as the data function and as every subtotal function of the slot, and only without show-as.
+  for (let d = 0; d < dataCount; d++) {
+    const items = sourceItems[d], column = sourceColumns[d]
+    const errors = items?.some(item => item.type === 'error') || (column?.kind === 'inline' && column.tag.includes(VALUE_TAG.error))
+    if (!errors) continue
+    const codes = new Set([...gridCodes[d]!, ...rowCodes[d]!, ...colCodes[d]!])
+    if ([...codes].some(code => code !== VALUE_FN.sum && code !== VALUE_FN.count) || view.data[d]!.showAs !== 'normal')
+      return unmeasured(`data field ${d} has error-valued records: only Sum and Count over them, without show-as, are measured`)
+  }
   const fastSumCandidate = !view.rows.includes(PIVOT_VALUES_FIELD) && !view.cols.includes(PIVOT_VALUES_FIELD)
     && view.data.every(data => data.showAs === 'normal')
     && functions.every(fn => fn === VALUE_FN.sum)
@@ -1075,6 +1097,26 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
     return dataLine
   }
 
+  for (let d = 0; d < dataCount; d++) {
+    const data = view.data[d]!, mode = data.showAs
+    // S2-AA (final review I2): % of parent total is measured with its base field on the rows only
+    // (values-showas-percent-of-parent-region).
+    if (mode === 'percentOfParent' && data.baseField !== -1 && !rowFields.includes(data.baseField))
+      return unmeasured(`% of parent total with base field ${data.baseField} on the ${colFields.includes(data.baseField) ? 'columns' : 'no axis'} is not measured`)
+    // Final review I7: these modes scan the sibling or parent lines of every cell, O(cells × lines). Until the
+    // indexed lookup (Stage 3 entry item) lands, refuse beyond a work cap rather than stall.
+    const scanAxis = mode === 'percentOfParentCol' ? 'cols'
+      : mode === 'percentOfParent' || mode === 'percentOfParentRow' ? 'rows'
+        : mode === 'difference' || mode === 'percent' || mode === 'percentDiff' || mode === 'runTotal'
+          || mode === 'percentOfRunningTotal' || mode === 'rankAscending' || mode === 'rankDescending'
+          ? (rowFields.includes(data.baseField) ? 'rows' : 'cols') : undefined
+    if (scanAxis) {
+      const work = rowCount * colCount * (scanAxis === 'rows' ? rowCount : colCount)
+      if (work > SHOW_AS_SCAN_CAP)
+        return fail('pivot-values-limit', `show-as ${mode} on data field ${d} would scan ${work} sibling lines, above the ${SHOW_AS_SCAN_CAP} work cap`)
+    }
+  }
+
   for (let row = 0; row < rowCount; row++) for (let col = 0; col < colCount; col++) for (let d = 0; d < dataCount; d++) {
     const at = cellIndex(row, col, d, colCount, dataCount)
     const data = view.data[d]!, mode = data.showAs as PivotShowDataAs | string
@@ -1174,7 +1216,10 @@ function computeSourceValues(store: RecordStore, cache: PivotCacheDefinition, _d
       // R60C2); without a base field the grand line is its own parent (100%).
       if (baseField !== undefined && (axis === 'rows' ? rowLine : colLine).type === 'grand') { outputPresent[at] = 0; continue }
       const parent = parentLine(axis, axis === 'rows' ? row : col, baseField)
-      if (parent === undefined) { outputPresent[at] = 0; continue }
+      // S2-AA (final review I3): a cell without a parent line (grand totals off, or a line shallower than its base
+      // field) is unmeasured; it must not show as a blank.
+      if (parent === undefined)
+        return unmeasured(`% of parent (${mode}) at ${axis === 'rows' ? 'row' : 'column'} line ${axis === 'rows' ? row : col} has no parent line`)
       const parentAt = axis === 'rows' ? cellIndex(parent, col, d, colCount, dataCount) : cellIndex(row, parent, d, colCount, dataCount)
       if (!present[parentAt]) { outputPresent[at] = 0; continue }
       denominator = raw[parentAt]!

@@ -42,9 +42,9 @@ in git history.
   as" mode, sorting, label/value/top-10/date filters, date and number grouping, and calculated fields. A
   faithfulness check compares the result with the file's saved cells. Nothing calls the engine yet; pivot
   interaction (Stage 3) will use it, and only when a pivot is proven faithful.
-  - The engine is checked against 126 Excel-saved cases built by driving Excel for Mac 16.114; 119 match Excel
-    cell for cell, and the other 7 are refused with a named reason: variance and standard-deviation totals, two
-    sort cases and calculated items. No case mismatches. Behaviours Excel was not measured on are refused, not
+  - The engine is checked against 126 Excel-saved cases built by driving Excel for Mac 16.114; 120 match Excel
+    cell for cell, and the other 6 are refused with a named reason: variance and standard-deviation totals, one
+    sort case and calculated items. No case mismatches. Behaviours Excel was not measured on are refused, not
     guessed.
   - 1,000,000 records compute in about 140 ms (axes and values). The code is in the lazy pivots chunk; the eager
     bundle is unchanged.

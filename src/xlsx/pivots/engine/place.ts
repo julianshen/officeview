@@ -161,7 +161,8 @@ export function placeCells(def: PivotTableDefinition, view: PivotViewState, cach
       // Date items show as serials in the field's number format (lo-calc-pivot_dark1), in the workbook's date system.
       case 'date': return { value: { kind: 'number', value: isoToSerial(value.value, date1904) }, ...(numFmtId !== undefined ? { numFmtId } : {}) }
       case 'boolean': return text(value.value ? 'TRUE' : 'FALSE')
-      case 'error': return { value: { kind: 'error', value: value.value } }
+      // Excel saves an error-valued item's label as text (Task 15 sort-error-item R24C1: the text #N/A).
+      case 'error': return text(value.value)
       case 'string': return text(value.value)
     }
   }

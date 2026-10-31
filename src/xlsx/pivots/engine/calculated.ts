@@ -14,9 +14,8 @@
  * Refused as `pivot-calculated-field` (the engine cannot evaluate it): a parse error, a cell/range/table/array or
  * other reference construct, a function the engine lacks or one whose value depends on the cell, the clock, chance or
  * the workbook's date system, a name that is no cache field (or more than one), and a cycle of calculated fields.
- * Refused as `pivot-engine-unmeasured`: a formula over no field. Excel fills every value cell with it (calc-constant:
- * `=1` shows 1 in every cell, cells without records included), but values.ts sums a named field to place the cells
- * (lane A's change, oracle-b2-report).
+ * A formula over no field fills every value cell, cells without records included (calc-constant: `=1` shows 1 in
+ * every cell). Results are not rounded to 15 digits: Excel saves calculated cells as full doubles (calc-show-as).
  */
 import { tokenize } from '../../formula/lexer'
 import { parseFormula } from '../../formula/parser'

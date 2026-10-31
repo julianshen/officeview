@@ -132,6 +132,9 @@ export function groupColumn(store: RecordStore, cache: PivotCacheDefinition, fie
 
   const range = fieldGroup.rangePr
   if (!range) return invalid(`group field ${field} has neither rangePr nor discretePr`)
+  // The Task 15 cases measure number ranges and date years, quarters and months only (final review M2).
+  if (range.groupBy !== 'range' && range.groupBy !== 'years' && range.groupBy !== 'quarters' && range.groupBy !== 'months')
+    return unmeasured(`date grouping by ${range.groupBy} on field ${field} is not measured`)
   for (let row = 0; row < store.count; row++) {
     const value = sourceValue(store, cache, base, row)
     if (!value) return invalid(`group field ${field} has an invalid base value at record ${row}`)
