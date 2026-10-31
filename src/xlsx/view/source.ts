@@ -1027,7 +1027,11 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
           cells.add(cell.row * MAX_COLS + cell.col)
         }
       }
-      const { RECORD_LIMITS } = await import('../pivots/engine/records')
+      const [{ RECORD_LIMITS }, { sheetBlockers, structuralOccupancy }] = await Promise.all([import('../pivots/engine/records'), import('../pivots/session/occupancy')])
+      // Merges, array and spill ranges and noted cells count too (S3-AC), charged with the metadata.
+      const structure = structuralOccupancy(sheetBlockers(sheet, spillFootprints()?.get(sheet)))
+      metadataBytes += structure.bytes
+      if (memory && !memory.set(metadataBytes)) return undefined
       return {
         tables: sheet.pivotTables, date1904: runtime.date1904, retainedBytes: runtime.retainedBytes, linkedCharts,
         pivots: doc.sheets.flatMap(candidate => (candidate.pivotTables ?? []).map(table => ({ sheet: candidate.name, name: String(table.name ?? '') }))),
@@ -1041,7 +1045,7 @@ export function createObjectWorkbookSource(doc: XlsxDocument, docId: string, opt
           const sourceSheet = range ? doc.sheets.find(candidate => candidate.name === range.sheet) : undefined
           return sourceSheet ? sheetCellReader(sourceSheet) : undefined
         },
-        occupied: (row, col) => cells.has(row * MAX_COLS + col),
+        occupied: (row, col) => cells.has(row * MAX_COLS + col) || structure.occupied(row, col),
         store: storeFor,
       }
     },

@@ -47,6 +47,8 @@ import { sheetCharts } from '../sheetCharts'
 import { linkPivotCharts } from '../../../xlsx/pivotChartLink'
 import { pivotFieldName, pivotMenuItemLabel, pivotMenuModel, type PivotMenuField, type PivotMenuItem, type PivotMenuModel } from '../../../xlsx/pivots/session/menu'
 import { registerGetPivotData } from '../../../xlsx/pivots/session/getpivotdata'
+import { sheetBlockers, structuralOccupancy } from '../../../xlsx/pivots/session/occupancy'
+import { engineSpillFootprints } from '../../../xlsx/formula/workbook'
 
 registerGetPivotData()
 
@@ -354,16 +356,20 @@ export function createResidentPivotClient(options: ResidentPivotClientOptions): 
     const saved = sheetCellReader(sheet)
     const others = savedDefs[sheetId]!.map((def, index) => ({ index, def })).filter(entry => entry.index !== pivot)
     const savedRects = new Map(others.map(entry => [entry.index, (savedPivotLayout(entry.def)?.rects ?? []).map(toSource)]))
+    // Merges, array and spill ranges and noted cells (S3-AC), charged while the session holds the check.
+    const structure = structuralOccupancy(sheetBlockers(sheet, engineSpillFootprints(doc)?.get(sheet)))
     // Ruling S3-AC: another pivot's current area always counts, and so does its saved area — vacated cells too, which
     // it protects while it is open (the composite overlay's protected rectangles) and gets back on a reset.
-    return (row: number, col: number): boolean => {
+    const occupied = (row: number, col: number): boolean => {
       for (const { index } of others) {
         if (within(savedRects.get(index)!, row, col)) return true
         const live = open.get(key(sheetId, index))
         if (live && shows(live) && within(live.current, row, col)) return true
       }
-      return saved(row, col) !== undefined
+      return saved(row, col) !== undefined || structure.occupied(row, col)
     }
+    ledger.chargeWhileReachable('structure', [occupied], structure.bytes)
+    return occupied
   }
   // Ruling S3-Q: an unqualified source naming same-named pivots on several sheets links none, and they refuse.
   const linkedCharts = (def: PivotTableDefinition) => linkPivotCharts(doc.sheets.flatMap(sheet => sheetCharts(sheet.drawings)), { sheet: def.sheet, name: String(def.name ?? '') },

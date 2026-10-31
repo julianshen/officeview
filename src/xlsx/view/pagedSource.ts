@@ -1504,7 +1504,10 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
       if (store.stamp.valueGen !== generation || signal.aborted) return undefined
       const { pagedCellReader, pagedRangeReader } = await import('../pivots/engine/faithful')
       const { RECORD_LIMITS } = await import('../pivots/engine/records')
-      const metadataBytes = 512 + count * 32 + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts })
+      // Merges, array and spill ranges and noted cells count too (S3-AC), charged with the metadata.
+      const { pagedBlockers, structuralOccupancy } = await import('../pivots/session/occupancy')
+      const structure = structuralOccupancy(pagedBlockers(sheet))
+      const metadataBytes = 512 + count * 32 + structure.bytes + estimatePayloadBytes({ tables: parsed.pivotTables, caches: parsed.pivotCaches, linkedCharts })
       const previousKey = currentPivotAssets.get(sheetId)
       if (previousKey && previousKey !== cacheKey) {
         const previous = pivotAssetCache.get(previousKey)
@@ -1564,7 +1567,7 @@ export function createPagedWorkbookSource(session: PagedImportSession, options: 
           const sourceStore = storeFor(target.sheetId)
           return pagedRangeReader(sourceStore, range.ref, { signal: readSignal, stamp: sourceStore.stamp }, profile)
         },
-        occupied: (row, col) => occupied.has(row * MAX_COLS + col),
+        occupied: (row, col) => occupied.has(row * MAX_COLS + col) || structure.occupied(row, col),
         store: storeFor,
       }
       pivotAssetCache.set(cacheKey, { assets, ...(entry ? { entry } : {}), refs: 0, retired: false })

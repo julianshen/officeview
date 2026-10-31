@@ -244,6 +244,7 @@ export interface WorkerPivotAssets {
   /** Task 32: the cells of a refreshOnLoad cache's worksheet source range, read through the worker's store for that
    * sheet; undefined when the source is not a sheet of this workbook. */
   source?(cache: PivotCacheDefinition, signal: AbortSignal): Promise<CellReader | undefined>
+  /** The sheet's nonblank cells, and its merges, array and spill ranges and noted cells (Ruling S3-AC). */
   occupied(row: number, col: number): boolean
   store(sheetId: string): SourceStore
 }

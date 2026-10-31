@@ -42,7 +42,8 @@ export function sheetHasRegionStyles(sheet: XlsxSheet): boolean {
   return Boolean(sheet.regionStyles || sheet.tables?.some(table => Boolean(table.styleInfo?.name)) || sheet.pivotRegions?.length || sheet.pivotTables?.length || sheet.slicerRefs?.length || sheet.timelineRefs?.length)
 }
 
-function cellCoords(cell: string): { row: number; col: number } | undefined {
+/** An A1 cell's 1-based row and column, within the sheet's bounds. */
+export function cellCoords(cell: string): { row: number; col: number } | undefined {
   const m = /^\$?([A-Z]{1,3})\$?([1-9][0-9]*)$/.exec(cell)
   if (!m) return undefined
   const col = [...m[1]].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0)
@@ -73,6 +74,31 @@ function decodeXmlEntities(value: string): string {
     return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
       ? String.fromCodePoint(codePoint) : entity
   })
+}
+
+/** The prefix of a comments (or threaded comments) part a pivot sheet's overlap check reads (Ruling S3-AC). */
+export const NOTE_PART_MAX_BYTES = 4 * 1024 * 1024
+/** Noted cells kept per sheet; past this the sheet's notes are unknown (every cell then counts as occupied). */
+export const MAX_NOTE_CELLS = 65_536
+/** Bounded scan of a comments or threaded comments part: the cells its comments are on (row * MAX_COLS + col, 0-based);
+ * undefined when the text is absent, cut short (no closing root tag) or names a cell it cannot place. */
+export function noteCells(text: string | undefined): number[] | undefined {
+  if (text === undefined || !/<\/(?:[A-Za-z_][\w.-]*:)?(?:comments|ThreadedComments)\s*>\s*$/.test(text)) return undefined
+  const out: number[] = []
+  const comment = /<(?:[A-Za-z_][\w.-]*:)?(?:comment|threadedComment)\b([^>]*)>/g
+  for (let m = comment.exec(text); m; m = comment.exec(text)) {
+    const at = cellCoords(attr(m[1]!, 'ref') ?? '')
+    if (!at || out.length >= MAX_NOTE_CELLS) return undefined
+    out.push((at.row - 1) * MAX_COLS + at.col - 1)
+  }
+  return out
+}
+/** A worksheet relationship to a comments or threaded comments part. */
+export const isNoteRelationship = (type: string) => type.endsWith('/comments') || type.endsWith('/threadedComment')
+/** Adds one part's noted cells to a sheet's (undefined: the part was unreadable, and the sheet's notes are unknown). */
+export function recordNoteCells(sheet: { noteCells?: number[]; notesUnknown?: boolean }, cells: number[] | undefined): void {
+  if (cells && (sheet.noteCells?.length ?? 0) + cells.length <= MAX_NOTE_CELLS) (sheet.noteCells ??= []).push(...cells)
+  else { sheet.notesUnknown = true; sheet.noteCells = undefined }
 }
 
 /** Bounded scan: never constructs an XML tree for a pivot definition. */

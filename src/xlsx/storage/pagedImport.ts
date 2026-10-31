@@ -15,7 +15,7 @@ import { dynamicMetadataIndices } from '../metadata'
 import { isTablePartSource, parseTableMetadata } from '../formula/tables'
 import type { TableMetadata } from '../formula/types'
 import type { XlsxDrawingAnchors } from '../types'
-import { PIVOT_PART_MAX_BYTES, parsePivotRegion, type ControlPartRef } from '../pivots/stub'
+import { isNoteRelationship, NOTE_PART_MAX_BYTES, noteCells, PIVOT_PART_MAX_BYTES, parsePivotRegion, recordNoteCells, type ControlPartRef } from '../pivots/stub'
 import { anchorId, anchorRecord } from '../anchorRecords'
 import type { SheetColorContext } from '../sheetColors'
 import type { ThemeContext } from '../../drawing/style'
@@ -57,6 +57,10 @@ export interface PagedSheet {
   /** Merge ranges parsed once at the end of the sheet; unreadable refs are counted, not kept. */
   mergeRects: SourceRect[]
   invalidMerges: number
+  /** A pivot sheet's cells with a comment or note (row * MAX_COLS + col; Ruling S3-AC); `notesUnknown` when a
+   * comments part could not be read whole within the cap. */
+  noteCells?: number[]
+  notesUnknown?: boolean
   failure?: SourceFailure
 }
 export interface PagedWorkbook {
@@ -526,6 +530,20 @@ export async function openImportSession(source: Extract<SourceHandle, { kind: 'b
         const parsed = parsePivotRegion(text, partPath)
         if (parsed.region) (sheet.metadata.pivotRegions ??= []).push(parsed.region)
         else workbook.diagnostics.push({ code: 'pivot-location-unreadable', message: `Pivot location could not be read from ${partPath}`, partId: partPath })
+      }
+      // Ruling S3-AC: a pivot sheet's noted cells count as occupied when the pivot grows (unreadable: all of them).
+      if (sheet.metadata.pivotRegions?.length) for (const rel of wsRels?.values() ?? []) {
+        if (!isNoteRelationship(rel.type)) continue
+        const notePath = resolvePartTarget(sheet.partPath, rel.target), noteEntry = inventory.find(notePath)
+        const cap = Math.min(NOTE_PART_MAX_BYTES, limits.paged.pivotPartBytes)
+        let cells: number[] | undefined
+        if (noteEntry && noteEntry.uncompressedSize <= cap) {
+          plan(notePath)
+          try { cells = noteCells(utf8.decode(await readPartPrefixBytes(src, noteEntry, cap, partOpts(notePath, cap)))) } catch (error) {
+            if (isPackageError(error) && error.code === 'cancelled') throw error
+          } finally { ledger.drainQueue() }
+        }
+        recordNoteCells(sheet, cells)
       }
       // Placement-only anchor records (S3.3), as drawing.ts reads them: an
       // unresolvable or unreadable part counts unresolved, never "no anchors".

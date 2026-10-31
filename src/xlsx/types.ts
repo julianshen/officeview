@@ -175,6 +175,10 @@ export interface XlsxSheet {
   pivotRegions?: import('./pivots/stub').PivotRegionRef[]
   slicerRefs?: import('./pivots/stub').ControlPartRef[]
   timelineRefs?: import('./pivots/stub').ControlPartRef[]
+  /** A pivot sheet's cells with a comment or note (row * MAX_COLS + col; Ruling S3-AC), read at parse time from its
+   * comments parts; `notesUnknown` when a part could not be read whole within the caps (every cell then counts). */
+  noteCells?: number[]
+  notesUnknown?: boolean
   /** Resident pivot definitions, loaded at parse time from the lazy pivots chunk (structured-cloneable). */
   pivotTables?: import('./pivots/model').PivotTableDefinition[]
   workbookIndex?: number
